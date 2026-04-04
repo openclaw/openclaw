@@ -1,12 +1,12 @@
-import { resolveCommandSecretRefsViaGateway } from "../../cli/command-secret-gateway.js";
-import { getModelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
+import type { RuntimeEnv } from "../../runtime.js";
 import {
-  loadConfig,
-  readConfigFileSnapshotForWrite,
+  getRuntimeConfig,
+  readSourceConfigSnapshotForWrite,
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
-} from "../../config/config.js";
-import type { RuntimeEnv } from "../../runtime.js";
+  getModelsCommandSecretTargetIds,
+  resolveCommandSecretRefsViaGateway,
+} from "./load-config.runtime.js";
 
 export type LoadedModelsConfig = {
   sourceConfig: OpenClawConfig;
@@ -16,9 +16,9 @@ export type LoadedModelsConfig = {
 
 async function loadSourceConfigSnapshot(fallback: OpenClawConfig): Promise<OpenClawConfig> {
   try {
-    const { snapshot } = await readConfigFileSnapshotForWrite();
+    const { snapshot } = await readSourceConfigSnapshotForWrite();
     if (snapshot.valid) {
-      return snapshot.resolved;
+      return snapshot.sourceConfig;
     }
   } catch {
     // Fall back to runtime-loaded config if source snapshot cannot be read.
@@ -30,7 +30,7 @@ export async function loadModelsConfigWithSource(params: {
   commandName: string;
   runtime?: RuntimeEnv;
 }): Promise<LoadedModelsConfig> {
-  const runtimeConfig = loadConfig();
+  const runtimeConfig = getRuntimeConfig();
   const sourceConfig = await loadSourceConfigSnapshot(runtimeConfig);
   const { resolvedConfig, diagnostics } = await resolveCommandSecretRefsViaGateway({
     config: runtimeConfig,

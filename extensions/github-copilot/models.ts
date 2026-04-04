@@ -2,7 +2,7 @@ import type {
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/core";
-import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-models";
+import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-model-shared";
 
 export const PROVIDER_ID = "github-copilot";
 const CODEX_GPT_54_MODEL_ID = "gpt-5.4";
@@ -10,6 +10,14 @@ const CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.2-codex"] as const;
 
 const DEFAULT_CONTEXT_WINDOW = 128_000;
 const DEFAULT_MAX_TOKENS = 8192;
+
+export function resolveCopilotTransportApi(
+  modelId: string,
+): "anthropic-messages" | "openai-responses" {
+  return modelId.trim().toLowerCase().includes("claude")
+    ? "anthropic-messages"
+    : "openai-responses";
+}
 
 export function resolveCopilotForwardCompatModel(
   ctx: ProviderResolveDynamicModelContext,
@@ -56,7 +64,7 @@ export function resolveCopilotForwardCompatModel(
     id: trimmedModelId,
     name: trimmedModelId,
     provider: PROVIDER_ID,
-    api: "openai-responses",
+    api: resolveCopilotTransportApi(trimmedModelId),
     reasoning,
     // Optimistic: most Copilot models support images, and the API rejects
     // image payloads for text-only models rather than failing silently.

@@ -1,10 +1,18 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { Api, Model } from "@mariozechner/pi-ai";
 import * as PiCodingAgent from "@mariozechner/pi-coding-agent";
 import type {
   AuthStorage as PiAuthStorage,
   ModelRegistry as PiModelRegistry,
 } from "@mariozechner/pi-coding-agent";
+import { normalizeModelCompat } from "../plugins/provider-model-compat.js";
+import {
+  applyProviderResolvedModelCompatWithPlugins,
+  applyProviderResolvedTransportWithPlugin,
+  normalizeProviderResolvedModelWithPlugin,
+} from "../plugins/provider-runtime.js";
+import type { ProviderRuntimeModel } from "../plugins/types.js";
 import { ensureAuthProfileStore } from "./auth-profiles.js";
 import { PROVIDER_ENV_API_KEY_CANDIDATES } from "./model-auth-env-vars.js";
 import { resolveEnvApiKey } from "./model-auth-env.js";
@@ -46,6 +54,88 @@ function createInMemoryAuthStorageBackend(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeRegistryModel<T>(value: T, agentDir: string): T {
+  if (!isRecord(value)) {
+    return value;
+  }
+  if (
+    typeof value.id !== "string" ||
+    typeof value.name !== "string" ||
+    typeof value.provider !== "string" ||
+    typeof value.api !== "string"
+  ) {
+    return value;
+  }
+  const model = value as unknown as ProviderRuntimeModel;
+  const pluginNormalized =
+    normalizeProviderResolvedModelWithPlugin({
+      provider: model.provider,
+      context: {
+        provider: model.provider,
+        modelId: model.id,
+        model,
+        agentDir,
+      },
+    }) ?? model;
+  const compatNormalized =
+    applyProviderResolvedModelCompatWithPlugins({
+      provider: model.provider,
+      context: {
+        provider: model.provider,
+        modelId: model.id,
+        model: pluginNormalized,
+        agentDir,
+      },
+    }) ?? pluginNormalized;
+  const transportNormalized =
+    applyProviderResolvedTransportWithPlugin({
+      provider: model.provider,
+      context: {
+        provider: model.provider,
+        modelId: model.id,
+        model: compatNormalized,
+        agentDir,
+      },
+    }) ?? compatNormalized;
+  return normalizeModelCompat(transportNormalized as Model<Api>) as T;
+}
+
+type PiModelRegistryClassLike = {
+  create?: (authStorage: PiAuthStorage, modelsJsonPath: string) => PiModelRegistry;
+  new (authStorage: PiAuthStorage, modelsJsonPath: string): PiModelRegistry;
+};
+
+function instantiatePiModelRegistry(
+  authStorage: PiAuthStorage,
+  modelsJsonPath: string,
+): PiModelRegistry {
+  const Registry = PiModelRegistryClass as unknown as PiModelRegistryClassLike;
+  if (typeof Registry.create === "function") {
+    return Registry.create(authStorage, modelsJsonPath);
+  }
+  return new Registry(authStorage, modelsJsonPath);
+}
+
+function createOpenClawModelRegistry(
+  authStorage: PiAuthStorage,
+  modelsJsonPath: string,
+  agentDir: string,
+): PiModelRegistry {
+  const registry = instantiatePiModelRegistry(authStorage, modelsJsonPath);
+  const getAll = registry.getAll.bind(registry);
+  const getAvailable = registry.getAvailable.bind(registry);
+  const find = registry.find.bind(registry);
+
+  registry.getAll = () =>
+    getAll().map((entry: Model<Api>) => normalizeRegistryModel(entry, agentDir));
+  registry.getAvailable = () =>
+    getAvailable().map((entry: Model<Api>) => normalizeRegistryModel(entry, agentDir));
+  registry.find = (provider: string, modelId: string) =>
+    normalizeRegistryModel(find(provider, modelId), agentDir);
+
+  return registry;
 }
 
 function scrubLegacyStaticAuthJsonEntries(pathname: string): void {
@@ -167,5 +257,5 @@ export function discoverAuthStorage(agentDir: string): PiAuthStorage {
 }
 
 export function discoverModels(authStorage: PiAuthStorage, agentDir: string): PiModelRegistry {
-  return new PiModelRegistryClass(authStorage, path.join(agentDir, "models.json"));
+  return createOpenClawModelRegistry(authStorage, path.join(agentDir, "models.json"), agentDir);
 }

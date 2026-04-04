@@ -2,7 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../extensions/public-artifacts.js";
+import { bundledDistPluginFile } from "../../test/helpers/bundled-plugin-paths.js";
+import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/runtime-sidecar-paths.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { pathExists } from "../utils.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
@@ -10,6 +11,7 @@ import { runGatewayUpdate } from "./update-runner.js";
 
 type CommandResponse = { stdout?: string; stderr?: string; code?: number | null };
 type CommandResult = { stdout: string; stderr: string; code: number | null };
+const WHATSAPP_LIGHT_RUNTIME_API = bundledDistPluginFile("whatsapp", "light-runtime-api.js");
 
 function toCommandResult(response?: CommandResponse): CommandResult {
   return {
@@ -688,7 +690,7 @@ describe("runGatewayUpdate", () => {
     expect(result.status).toBe("error");
     expect(result.reason).toBe("global install verify");
     expect(result.steps.at(-1)?.stderrTail).toContain(
-      "missing bundled runtime sidecar dist/extensions/whatsapp/light-runtime-api.js",
+      `missing bundled runtime sidecar ${WHATSAPP_LIGHT_RUNTIME_API}`,
     );
   });
 

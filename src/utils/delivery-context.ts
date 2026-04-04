@@ -1,3 +1,4 @@
+import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import { normalizeAccountId } from "./account-id.js";
 import { normalizeMessageChannel } from "./message-channel.js";
 
@@ -14,6 +15,11 @@ export type DeliveryContextSessionSource = {
   lastTo?: string;
   lastAccountId?: string;
   lastThreadId?: string | number;
+  origin?: {
+    provider?: string;
+    accountId?: string;
+    threadId?: string | number;
+  };
   deliveryContext?: DeliveryContext;
 };
 
@@ -67,19 +73,20 @@ export function formatConversationTarget(params: {
   if (!channel || !conversationId) {
     return undefined;
   }
-  if (channel === "matrix") {
-    const parentConversationId =
-      typeof params.parentConversationId === "number" &&
-      Number.isFinite(params.parentConversationId)
-        ? String(Math.trunc(params.parentConversationId))
-        : typeof params.parentConversationId === "string"
-          ? params.parentConversationId.trim()
-          : undefined;
-    const roomId =
-      parentConversationId && parentConversationId !== conversationId
-        ? parentConversationId
-        : conversationId;
-    return `room:${roomId}`;
+  const parentConversationId =
+    typeof params.parentConversationId === "number" && Number.isFinite(params.parentConversationId)
+      ? String(Math.trunc(params.parentConversationId))
+      : typeof params.parentConversationId === "string"
+        ? params.parentConversationId.trim()
+        : undefined;
+  const pluginTarget = normalizeChannelId(channel)
+    ? getChannelPlugin(normalizeChannelId(channel)!)?.messaging?.resolveDeliveryTarget?.({
+        conversationId,
+        parentConversationId,
+      })
+    : null;
+  if (pluginTarget?.to?.trim()) {
+    return pluginTarget.to.trim();
   }
   return `channel:${conversationId}`;
 }
@@ -89,7 +96,6 @@ export function resolveConversationDeliveryTarget(params: {
   conversationId?: string | number;
   parentConversationId?: string | number;
 }): { to?: string; threadId?: string } {
-  const to = formatConversationTarget(params);
   const channel =
     typeof params.channel === "string"
       ? (normalizeMessageChannel(params.channel) ?? params.channel.trim())
@@ -106,15 +112,22 @@ export function resolveConversationDeliveryTarget(params: {
       : typeof params.parentConversationId === "string"
         ? params.parentConversationId.trim()
         : undefined;
-  if (
-    channel === "matrix" &&
-    to &&
-    conversationId &&
-    parentConversationId &&
-    parentConversationId !== conversationId
-  ) {
-    return { to, threadId: conversationId };
+  const pluginTarget =
+    channel && conversationId
+      ? getChannelPlugin(
+          normalizeChannelId(channel) ?? channel,
+        )?.messaging?.resolveDeliveryTarget?.({
+          conversationId,
+          parentConversationId,
+        })
+      : null;
+  if (pluginTarget) {
+    return {
+      ...(pluginTarget.to?.trim() ? { to: pluginTarget.to.trim() } : {}),
+      ...(pluginTarget.threadId?.trim() ? { threadId: pluginTarget.threadId.trim() } : {}),
+    };
   }
+  const to = formatConversationTarget(params);
   return { to };
 }
 
@@ -165,17 +178,18 @@ export function normalizeSessionDeliveryFields(source?: DeliveryContextSessionSo
 }
 
 export function deliveryContextFromSession(
-  entry?: DeliveryContextSessionSource & { origin?: { threadId?: string | number } },
+  entry?: DeliveryContextSessionSource,
 ): DeliveryContext | undefined {
   if (!entry) {
     return undefined;
   }
   const source: DeliveryContextSessionSource = {
-    channel: entry.channel,
+    channel: entry.channel ?? entry.origin?.provider,
     lastChannel: entry.lastChannel,
     lastTo: entry.lastTo,
-    lastAccountId: entry.lastAccountId,
+    lastAccountId: entry.lastAccountId ?? entry.origin?.accountId,
     lastThreadId: entry.lastThreadId ?? entry.deliveryContext?.threadId ?? entry.origin?.threadId,
+    origin: entry.origin,
     deliveryContext: entry.deliveryContext,
   };
   return normalizeSessionDeliveryFields(source).deliveryContext;

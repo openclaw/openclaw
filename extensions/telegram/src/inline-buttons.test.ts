@@ -8,7 +8,7 @@ describe("telegram approval buttons", () => {
     expect(buildTelegramExecApprovalButtons("fbd8daf7")).toEqual([
       [
         { text: "Allow Once", callback_data: "/approve fbd8daf7 allow-once" },
-        { text: "Allow Always", callback_data: "/approve fbd8daf7 allow-always" },
+        { text: "Allow Always", callback_data: "/approve fbd8daf7 always" },
       ],
       [{ text: "Deny", callback_data: "/approve fbd8daf7 deny" }],
     ]);
@@ -82,6 +82,50 @@ describe("buildTelegramInteractiveButtons", () => {
       ],
       [{ text: "Archive", callback_data: "archive", style: undefined }],
       [{ text: "Alpha", callback_data: "alpha", style: undefined }],
+    ]);
+  });
+
+  it("drops shared buttons whose callback data exceeds Telegram's limit", () => {
+    expect(
+      buildTelegramInteractiveButtons({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              { label: "Keep", value: "keep" },
+              { label: "Too long", value: `a${"b".repeat(64)}` },
+            ],
+          },
+        ],
+      }),
+    ).toEqual([[{ text: "Keep", callback_data: "keep", style: undefined }]]);
+  });
+
+  it("rewrites /approve allow-always callbacks to always so plugin IDs fit Telegram limits", () => {
+    const pluginApprovalId = `plugin:${"a".repeat(36)}`;
+    expect(
+      buildTelegramInteractiveButtons({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Allow Always",
+                value: `/approve ${pluginApprovalId} allow-always`,
+                style: "primary",
+              },
+            ],
+          },
+        ],
+      }),
+    ).toEqual([
+      [
+        {
+          text: "Allow Always",
+          callback_data: `/approve ${pluginApprovalId} always`,
+          style: "primary",
+        },
+      ],
     ]);
   });
 });

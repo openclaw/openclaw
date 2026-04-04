@@ -29,40 +29,78 @@ if [[ -f "$PROFILE_FILE" ]]; then
 fi
 
 AUTH_DIRS=()
+AUTH_FILES=()
 if [[ -n "${OPENCLAW_DOCKER_AUTH_DIRS:-}" ]]; then
   while IFS= read -r auth_dir; do
     [[ -n "$auth_dir" ]] || continue
     AUTH_DIRS+=("$auth_dir")
   done < <(openclaw_live_collect_auth_dirs)
+  while IFS= read -r auth_file; do
+    [[ -n "$auth_file" ]] || continue
+    AUTH_FILES+=("$auth_file")
+  done < <(openclaw_live_collect_auth_files)
 else
   while IFS= read -r auth_dir; do
     [[ -n "$auth_dir" ]] || continue
     AUTH_DIRS+=("$auth_dir")
   done < <(openclaw_live_collect_auth_dirs_from_csv "$CLI_PROVIDER")
+  while IFS= read -r auth_file; do
+    [[ -n "$auth_file" ]] || continue
+    AUTH_FILES+=("$auth_file")
+  done < <(openclaw_live_collect_auth_files_from_csv "$CLI_PROVIDER")
 fi
-AUTH_DIRS_CSV="$(openclaw_live_join_csv "${AUTH_DIRS[@]}")"
+AUTH_DIRS_CSV=""
+if ((${#AUTH_DIRS[@]} > 0)); then
+  AUTH_DIRS_CSV="$(openclaw_live_join_csv "${AUTH_DIRS[@]}")"
+fi
+AUTH_FILES_CSV=""
+if ((${#AUTH_FILES[@]} > 0)); then
+  AUTH_FILES_CSV="$(openclaw_live_join_csv "${AUTH_FILES[@]}")"
+fi
 
 EXTERNAL_AUTH_MOUNTS=()
-for auth_dir in "${AUTH_DIRS[@]}"; do
-  host_path="$HOME/$auth_dir"
-  if [[ -d "$host_path" ]]; then
-    EXTERNAL_AUTH_MOUNTS+=(-v "$host_path":/host-auth/"$auth_dir":ro)
-  fi
-done
+if ((${#AUTH_DIRS[@]} > 0)); then
+  for auth_dir in "${AUTH_DIRS[@]}"; do
+    host_path="$HOME/$auth_dir"
+    if [[ -d "$host_path" ]]; then
+      EXTERNAL_AUTH_MOUNTS+=(-v "$host_path":/host-auth/"$auth_dir":ro)
+    fi
+  done
+fi
+if ((${#AUTH_FILES[@]} > 0)); then
+  for auth_file in "${AUTH_FILES[@]}"; do
+    host_path="$HOME/$auth_file"
+    if [[ -f "$host_path" ]]; then
+      EXTERNAL_AUTH_MOUNTS+=(-v "$host_path":/host-auth-files/"$auth_file":ro)
+    fi
+  done
+fi
 
 read -r -d '' LIVE_TEST_CMD <<'EOF' || true
 set -euo pipefail
 [ -f "$HOME/.profile" ] && source "$HOME/.profile" || true
 export PATH="$HOME/.npm-global/bin:$PATH"
 IFS=',' read -r -a auth_dirs <<<"${OPENCLAW_DOCKER_AUTH_DIRS_RESOLVED:-}"
-for auth_dir in "${auth_dirs[@]}"; do
-  [ -n "$auth_dir" ] || continue
-  if [ -d "/host-auth/$auth_dir" ]; then
-    mkdir -p "$HOME/$auth_dir"
-    cp -R "/host-auth/$auth_dir/." "$HOME/$auth_dir"
-    chmod -R u+rwX "$HOME/$auth_dir" || true
-  fi
-done
+IFS=',' read -r -a auth_files <<<"${OPENCLAW_DOCKER_AUTH_FILES_RESOLVED:-}"
+if ((${#auth_dirs[@]} > 0)); then
+  for auth_dir in "${auth_dirs[@]}"; do
+    [ -n "$auth_dir" ] || continue
+    if [ -d "/host-auth/$auth_dir" ]; then
+      mkdir -p "$HOME/$auth_dir"
+      cp -R "/host-auth/$auth_dir/." "$HOME/$auth_dir"
+      chmod -R u+rwX "$HOME/$auth_dir" || true
+    fi
+  done
+fi
+if ((${#auth_files[@]} > 0)); then
+  for auth_file in "${auth_files[@]}"; do
+    [ -n "$auth_file" ] || continue
+    if [ -f "/host-auth-files/$auth_file" ]; then
+      cp "/host-auth-files/$auth_file" "$HOME/$auth_file"
+      chmod u+rw "$HOME/$auth_file" || true
+    fi
+  done
+fi
 provider="${OPENCLAW_DOCKER_CLI_BACKEND_PROVIDER:-claude-cli}"
 if [ "$provider" = "claude-cli" ]; then
   if [ -z "${OPENCLAW_LIVE_CLI_BACKEND_COMMAND:-}" ]; then
@@ -70,6 +108,24 @@ if [ "$provider" = "claude-cli" ]; then
   fi
   if [ ! -x "${OPENCLAW_LIVE_CLI_BACKEND_COMMAND}" ]; then
     npm_config_prefix="$HOME/.npm-global" npm install -g @anthropic-ai/claude-code
+  fi
+  real_claude="$HOME/.npm-global/bin/claude-real"
+  if [ ! -x "$real_claude" ] && [ -x "$HOME/.npm-global/bin/claude" ]; then
+    mv "$HOME/.npm-global/bin/claude" "$real_claude"
+  fi
+  if [ -x "$real_claude" ]; then
+    cat > "$HOME/.npm-global/bin/claude" <<WRAP
+#!/usr/bin/env bash
+script_dir="\$(CDPATH= cd -- "\$(dirname -- "\$0")" && pwd)"
+if [ -n "\${OPENCLAW_LIVE_CLI_BACKEND_ANTHROPIC_API_KEY:-}" ]; then
+  export ANTHROPIC_API_KEY="\${OPENCLAW_LIVE_CLI_BACKEND_ANTHROPIC_API_KEY}"
+fi
+if [ -n "\${OPENCLAW_LIVE_CLI_BACKEND_ANTHROPIC_API_KEY_OLD:-}" ]; then
+  export ANTHROPIC_API_KEY_OLD="\${OPENCLAW_LIVE_CLI_BACKEND_ANTHROPIC_API_KEY_OLD}"
+fi
+exec "\$script_dir/claude-real" "\$@"
+WRAP
+    chmod +x "$HOME/.npm-global/bin/claude"
   fi
   if [ -z "${OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV:-}" ]; then
     export OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV='["ANTHROPIC_API_KEY","ANTHROPIC_API_KEY_OLD"]'
@@ -106,17 +162,21 @@ echo "==> Run CLI backend live test in Docker"
 echo "==> Model: $CLI_MODEL"
 echo "==> Provider: $CLI_PROVIDER"
 echo "==> External auth dirs: ${AUTH_DIRS_CSV:-none}"
+echo "==> External auth files: ${AUTH_FILES_CSV:-none}"
 docker run --rm -t \
   -u node \
   --entrypoint bash \
   -e ANTHROPIC_API_KEY \
   -e ANTHROPIC_API_KEY_OLD \
+  -e OPENCLAW_LIVE_CLI_BACKEND_ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}" \
+  -e OPENCLAW_LIVE_CLI_BACKEND_ANTHROPIC_API_KEY_OLD="${ANTHROPIC_API_KEY_OLD:-}" \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e HOME=/home/node \
   -e NODE_OPTIONS=--disable-warning=ExperimentalWarning \
   -e OPENCLAW_SKIP_CHANNELS=1 \
   -e OPENCLAW_VITEST_FS_MODULE_CACHE=0 \
   -e OPENCLAW_DOCKER_AUTH_DIRS_RESOLVED="$AUTH_DIRS_CSV" \
+  -e OPENCLAW_DOCKER_AUTH_FILES_RESOLVED="$AUTH_FILES_CSV" \
   -e OPENCLAW_DOCKER_CLI_BACKEND_PROVIDER="$CLI_PROVIDER" \
   -e OPENCLAW_LIVE_TEST=1 \
   -e OPENCLAW_LIVE_CLI_BACKEND=1 \

@@ -11,6 +11,20 @@ export function unscopedPackageName(name: string): string {
   return trimmed.includes("/") ? (trimmed.split("/").pop() ?? trimmed) : trimmed;
 }
 
+export function packageNameMatchesId(packageName: string, id: string): boolean {
+  const trimmedId = id.trim();
+  if (!trimmedId) {
+    return false;
+  }
+
+  const trimmedPackageName = packageName.trim();
+  if (!trimmedPackageName) {
+    return false;
+  }
+
+  return trimmedId === trimmedPackageName || trimmedId === unscopedPackageName(trimmedPackageName);
+}
+
 export function safeDirName(input: string): string {
   const trimmed = input.trim();
   if (!trimmed) {

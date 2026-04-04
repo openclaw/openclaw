@@ -25,8 +25,12 @@ openclaw models scan
 ```
 
 `openclaw models status` shows the resolved default/fallbacks plus an auth overview.
-When provider usage snapshots are available, the OAuth/token status section includes
-provider usage headers.
+When provider usage snapshots are available, the OAuth/API-key status section includes
+provider usage windows and quota snapshots.
+Current usage-window providers: Anthropic, GitHub Copilot, Gemini CLI, OpenAI
+Codex, MiniMax, Xiaomi, and z.ai. Usage auth comes from provider-specific hooks
+when available; otherwise OpenClaw falls back to matching OAuth/API-key
+credentials from auth profiles, env, or config.
 Add `--probe` to run live auth probes against each configured provider profile.
 Probes are real requests (may consume tokens and trigger rate limits).
 Use `--agent <id>` to inspect a configured agent’s model/auth state. When omitted,
@@ -37,7 +41,9 @@ Notes:
 
 - `models set <model-or-alias>` accepts `provider/model` or an alias.
 - Model refs are parsed by splitting on the **first** `/`. If the model ID includes `/` (OpenRouter-style), include the provider prefix (example: `openrouter/moonshotai/kimi-k2`).
-- If you omit the provider, OpenClaw treats the input as an alias or a model for the **default provider** (only works when there is no `/` in the model ID).
+- If you omit the provider, OpenClaw resolves the input as an alias first, then
+  as a unique configured-provider match for that exact model id, and only then
+  falls back to the configured default provider with a deprecation warning.
 - `models status` may show `marker(<value>)` in auth output for non-secret placeholders (for example `OPENAI_API_KEY`, `secretref-managed`, `minimax-oauth`, `oauth:chutes`, `ollama-local`) instead of masking them as secrets.
 
 ### `models status`
@@ -67,9 +73,13 @@ openclaw models fallbacks list
 ```bash
 openclaw models auth add
 openclaw models auth login --provider <id>
-openclaw models auth setup-token
+openclaw models auth setup-token --provider <id>
 openclaw models auth paste-token
 ```
+
+`models auth add` is the interactive auth helper. It can launch a provider auth
+flow (OAuth/API key) or guide you into manual token paste, depending on the
+provider you choose.
 
 `models auth login` runs a provider plugin’s auth flow (OAuth/API key). Use
 `openclaw plugins list` to see which providers are installed.
@@ -85,6 +95,8 @@ Notes:
 
 - `login --provider anthropic --method cli --set-default` reuses a local Claude
   CLI login and rewrites the main Anthropic default-model path to `claude-cli/...`.
-- `setup-token` prompts for a setup-token value (generate it with `claude setup-token` on any machine).
+- `setup-token` and `paste-token` remain generic token commands for providers
+  that expose token auth methods.
 - `paste-token` accepts a token string generated elsewhere or from automation.
-- Anthropic policy note: setup-token support is technical compatibility. Anthropic has blocked some subscription usage outside Claude Code in the past, so verify current terms before using it broadly.
+- Anthropic billing note: Anthropic changed third-party harness billing on **April 4, 2026 at 12:00 PM PT / 8:00 PM BST**. Anthropic says Claude subscription limits no longer cover OpenClaw, and Claude CLI traffic in OpenClaw now requires **Extra Usage** billed separately from the subscription.
+- Existing legacy Anthropic token profiles still run if already configured, but Anthropic no longer supports `setup-token` or `paste-token` as a new OpenClaw auth path.

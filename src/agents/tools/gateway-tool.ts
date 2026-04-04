@@ -167,8 +167,8 @@ export function createGatewayTool(opts?: {
             : undefined;
         const note =
           typeof params.note === "string" && params.note.trim() ? params.note.trim() : undefined;
-        // Extract channel + threadId for routing after restart
-        // Supports both :thread: (most channels) and :topic: (Telegram)
+        // Extract channel + threadId for routing after restart.
+        // Uses generic :thread: parsing plus plugin-owned session grammars.
         const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey);
         const payload: RestartSentinelPayload = {
           kind: "restart",

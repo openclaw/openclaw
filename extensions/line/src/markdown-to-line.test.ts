@@ -148,6 +148,32 @@ describe("stripMarkdown", () => {
     }
   });
 
+  it("preserves underscores inside words", () => {
+    expect(stripMarkdown("here_is_a_message")).toBe("here_is_a_message");
+    expect(stripMarkdown("snake_case_var")).toBe("snake_case_var");
+    expect(stripMarkdown("use foo_bar_baz in code")).toBe("use foo_bar_baz in code");
+  });
+
+  it("still strips proper italic _text_", () => {
+    expect(stripMarkdown("This is _italic_ text")).toBe("This is italic text");
+    expect(stripMarkdown("_italic_ at start")).toBe("italic at start");
+    expect(stripMarkdown("end _italic_")).toBe("end italic");
+  });
+
+  it("strips italic between underscored words", () => {
+    expect(stripMarkdown("foo_bar _italic_ baz_qux")).toBe("foo_bar italic baz_qux");
+  });
+
+  it("preserves underscores inside non-Latin words", () => {
+    expect(stripMarkdown("привет_мир_тест")).toBe("привет_мир_тест");
+    expect(stripMarkdown("東京_駅_前")).toBe("東京_駅_前");
+    expect(stripMarkdown("var_123_end")).toBe("var_123_end");
+  });
+
+  it("strips standalone italic between non-Latin words", () => {
+    expect(stripMarkdown("こんにちは _italic_ テスト")).toBe("こんにちは italic テスト");
+  });
+
   it("handles complex markdown", () => {
     const input = `# Title
 

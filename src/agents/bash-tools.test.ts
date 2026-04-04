@@ -44,7 +44,11 @@ const COMMAND_PRINT_PATH = isWin ? "Write-Output $env:PATH" : "echo $PATH";
 const COMMAND_EXIT_WITH_ERROR = "exit 1";
 const SCOPE_KEY_ALPHA = "agent:alpha";
 const SCOPE_KEY_BETA = "agent:beta";
-const TEST_EXEC_DEFAULTS = { security: "full" as const, ask: "off" as const };
+const TEST_EXEC_DEFAULTS = {
+  host: "gateway" as const,
+  security: "full" as const,
+  ask: "off" as const,
+};
 const DEFAULT_NOTIFY_SESSION_KEY = "agent:main:main";
 const ECHO_HI_COMMAND = shellEcho("hi");
 let callIdCounter = 0;
@@ -405,6 +409,22 @@ const runNotifyNoopCase = async ({ label, notifyOnExitEmptySuccess }: NotifyNoop
   const events = peekSystemEvents(DEFAULT_NOTIFY_SESSION_KEY);
   expectNotifyNoopEvents(events, notifyOnExitEmptySuccess, label);
 };
+
+describe("tool descriptions", () => {
+  it("adds cron-specific deferred follow-up guidance only when cron is available", () => {
+    const execWithCron = createTestExecTool({ hasCronTool: true });
+    const processWithCron = createProcessTool({ hasCronTool: true });
+
+    expect(execWithCron.description).toContain(
+      "Do not use exec sleep or delay loops for reminders or deferred follow-ups; use cron instead.",
+    );
+    expect(processWithCron.description).toContain(
+      "Do not use process polling to emulate timers or reminders; use cron for scheduled follow-ups.",
+    );
+    expect(execTool.description).not.toContain("use cron instead");
+    expect(processTool.description).not.toContain("scheduled follow-ups");
+  });
+});
 
 beforeEach(() => {
   callIdCounter = 0;

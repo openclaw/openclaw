@@ -434,6 +434,7 @@ export async function runPreflightCompactionIfNeeded(params: {
   }
 
   await incrementCompactionCount({
+    cfg: params.cfg,
     sessionEntry: entry,
     sessionStore: params.sessionStore,
     sessionKey: params.sessionKey,
@@ -696,6 +697,7 @@ export async function runMemoryFlushIfNeeded(params: {
           ...senderContext,
           ...runBaseParams,
           allowGatewaySubagentBinding: true,
+          silentExpected: true,
           trigger: "memory",
           memoryFlushWritePath,
           prompt: activeMemoryFlushPlan.prompt,
@@ -728,6 +730,7 @@ export async function runMemoryFlushIfNeeded(params: {
     if (memoryCompactionCompleted) {
       const previousSessionId = activeSessionEntry?.sessionId ?? params.followupRun.run.sessionId;
       const nextCount = await incrementCompactionCount({
+        cfg: params.cfg,
         sessionEntry: activeSessionEntry,
         sessionStore: activeSessionStore,
         sessionKey: params.sessionKey,

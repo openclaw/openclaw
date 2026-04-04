@@ -2,10 +2,9 @@ import "./test-helpers.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import * as ssrf from "openclaw/plugin-sdk/infra-runtime";
 import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
-import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, vi, type Mock } from "vitest";
 import type { WebInboundMessage, WebListenerCloseReason } from "./inbound.js";
 import {
   resetBaileysMocks as _resetBaileysMocks,
@@ -26,21 +25,34 @@ type MockWebListener = {
   sendReaction: () => Promise<void>;
   sendComposingTo: () => Promise<void>;
 };
+type UnknownMock = Mock<(...args: unknown[]) => unknown>;
+type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
+type WebAutoReplyRuntime = {
+  log: UnknownMock;
+  error: UnknownMock;
+  exit: UnknownMock;
+};
+type WebAutoReplyMonitorHarness = {
+  runtime: WebAutoReplyRuntime;
+  controller: AbortController;
+  run: Promise<unknown>;
+};
 
 export const TEST_NET_IP = "203.0.113.10";
 
-vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-runtime")>();
-  return {
-    ...actual,
-    abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
-    isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
-    isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
-    runEmbeddedPiAgent: vi.fn(),
-    queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
-    resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
-  };
-});
+vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
+  abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
+  appendCronStyleCurrentTimeLine: (text: string) => text,
+  isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
+  isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
+  queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
+  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
+  resolveIdentityNamePrefix: (cfg: { messages?: { responsePrefix?: string } }, _agentId: string) =>
+    cfg.messages?.responsePrefix,
+  resolveMessagePrefix: (cfg: { messages?: { messagePrefix?: string } }) =>
+    cfg.messages?.messagePrefix,
+  runEmbeddedPiAgent: vi.fn(),
+}));
 
 export async function rmDirWithRetries(
   dir: string,
@@ -131,11 +143,12 @@ export async function makeSessionStore(
 export function installWebAutoReplyUnitTestHooks(opts?: { pinDns?: boolean }) {
   let resolvePinnedHostnameSpy: { mockRestore: () => unknown } | undefined;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     _resetBaileysMocks();
     _resetLoadConfigMock();
     if (opts?.pinDns) {
+      const ssrf = await import("../../../src/infra/net/ssrf.js");
       resolvePinnedHostnameSpy = vi
         .spyOn(ssrf, "resolvePinnedHostname")
         .mockImplementation(async (hostname) => {
@@ -227,7 +240,7 @@ export function createWebInboundDeliverySpies(): AnyExport {
   };
 }
 
-export function createWebAutoReplyRuntime() {
+export function createWebAutoReplyRuntime(): WebAutoReplyRuntime {
   return {
     log: vi.fn(),
     error: vi.fn(),
@@ -238,13 +251,13 @@ export function createWebAutoReplyRuntime() {
 export function startWebAutoReplyMonitor(params: {
   monitorWebChannelFn: (...args: unknown[]) => Promise<unknown>;
   listenerFactory: unknown;
-  sleep: ReturnType<typeof vi.fn>;
+  sleep: UnknownMock | AsyncUnknownMock;
   signal?: AbortSignal;
   heartbeatSeconds?: number;
   messageTimeoutMs?: number;
   watchdogCheckMs?: number;
   reconnect?: { initialMs: number; maxMs: number; maxAttempts: number; factor: number };
-}) {
+}): WebAutoReplyMonitorHarness {
   const runtime = createWebAutoReplyRuntime();
   const controller = new AbortController();
   const run = params.monitorWebChannelFn(

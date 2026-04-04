@@ -1,8 +1,9 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
-import { usesMoonshotThinkingPayloadCompat } from "../provider-capabilities.js";
+import { resolveProviderRequestCapabilities } from "../provider-attribution.js";
 import { normalizeProviderId } from "../provider-id.js";
+import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
 export {
   createMoonshotThinkingWrapper,
@@ -26,34 +27,22 @@ export function shouldApplyMoonshotPayloadCompat(params: {
   modelId: string;
 }): boolean {
   const normalizedProvider = normalizeProviderId(params.provider);
-  const normalizedModelId = params.modelId.trim().toLowerCase();
-
-  if (usesMoonshotThinkingPayloadCompat(normalizedProvider)) {
-    return true;
-  }
-
   return (
-    normalizedProvider === "ollama" &&
-    normalizedModelId.startsWith("kimi-k") &&
-    normalizedModelId.includes(":cloud")
+    resolveProviderRequestCapabilities({
+      provider: normalizedProvider,
+      modelId: params.modelId,
+      capability: "llm",
+      transport: "stream",
+    }).compatibilityFamily === "moonshot"
   );
 }
 
 export function createSiliconFlowThinkingWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
-  return (model, context, options) => {
-    const originalOnPayload = options?.onPayload;
-    return underlying(model, context, {
-      ...options,
-      onPayload: (payload) => {
-        if (payload && typeof payload === "object") {
-          const payloadObj = payload as Record<string, unknown>;
-          if (payloadObj.thinking === "off") {
-            payloadObj.thinking = null;
-          }
-        }
-        return originalOnPayload?.(payload, model);
-      },
+  return (model, context, options) =>
+    streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+      if (payloadObj.thinking === "off") {
+        payloadObj.thinking = null;
+      }
     });
-  };
 }

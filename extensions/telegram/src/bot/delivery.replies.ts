@@ -9,7 +9,6 @@ import {
   toPluginMessageContext,
   toPluginMessageSentEvent,
 } from "openclaw/plugin-sdk/hook-runtime";
-import { formatErrorMessage } from "openclaw/plugin-sdk/infra-runtime";
 import { buildOutboundMediaLoadOptions } from "openclaw/plugin-sdk/media-runtime";
 import { isGifMedia, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
@@ -17,6 +16,7 @@ import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import type { TelegramInlineButtons } from "../button-types.js";
 import { splitTelegramCaption } from "../caption.js";
@@ -92,6 +92,12 @@ function markDelivered(progress: DeliveryProgress): void {
   progress.deliveredCount += 1;
 }
 
+function filterEmptyTelegramTextChunks<T extends { text: string }>(chunks: readonly T[]): T[] {
+  // Telegram rejects whitespace-only text payloads; drop them before sendMessage so
+  // hook-mutated or model-emitted empty replies become a no-op instead of a 400.
+  return chunks.filter((chunk) => chunk.text.trim().length > 0);
+}
+
 async function deliverTextReply(params: {
   bot: Bot;
   chatId: string;
@@ -108,8 +114,9 @@ async function deliverTextReply(params: {
   progress: DeliveryProgress;
 }): Promise<number | undefined> {
   let firstDeliveredMessageId: number | undefined;
+  const chunks = filterEmptyTelegramTextChunks(params.chunkText(params.replyText));
   await sendChunkedTelegramReplyText({
-    chunks: params.chunkText(params.replyText),
+    chunks,
     progress: params.progress,
     replyToId: params.replyToId,
     replyToMode: params.replyToMode,
@@ -155,8 +162,9 @@ async function sendPendingFollowUpText(params: {
   replyToMode: ReplyToMode;
   progress: DeliveryProgress;
 }): Promise<void> {
+  const chunks = filterEmptyTelegramTextChunks(params.chunkText(params.text));
   await sendChunkedTelegramReplyText({
-    chunks: params.chunkText(params.text),
+    chunks,
     progress: params.progress,
     replyToId: params.replyToId,
     replyToMode: params.replyToMode,
@@ -204,7 +212,7 @@ async function sendTelegramVoiceFallbackText(opts: {
   replyQuoteText?: string;
 }): Promise<number | undefined> {
   let firstDeliveredMessageId: number | undefined;
-  const chunks = opts.chunkText(opts.text);
+  const chunks = filterEmptyTelegramTextChunks(opts.chunkText(opts.text));
   let appliedReplyTo = false;
   for (let i = 0; i < chunks.length; i += 1) {
     const chunk = chunks[i];
@@ -560,6 +568,15 @@ function emitMessageSentHooks(
     );
   }
   emitInternalMessageSentHook(params);
+}
+
+export function emitTelegramMessageSentHooks(params: EmitMessageSentHookParams): void {
+  const hookRunner = getGlobalHookRunner();
+  emitMessageSentHooks({
+    ...params,
+    hookRunner,
+    enabled: hookRunner?.hasHooks("message_sent") ?? false,
+  });
 }
 
 export async function deliverReplies(params: {

@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
 import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { ChannelOutboundAdapter } from "../channels/plugins/types.js";
-import { clearConfigCache } from "../config/config.js";
+import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { resolveCanvasHostUrl } from "../infra/canvas-host-url.js";
 import { GatewayLockError } from "../infra/gateway-lock.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -173,6 +173,7 @@ describe("gateway server models + voicewake", () => {
     try {
       await fs.mkdir(path.dirname(configPath), { recursive: true });
       await fs.writeFile(configPath, JSON.stringify(config, null, 2), "utf-8");
+      clearRuntimeConfigSnapshot();
       clearConfigCache();
       return await run();
     } finally {
@@ -181,6 +182,7 @@ describe("gateway server models + voicewake", () => {
       } else {
         await fs.writeFile(configPath, previousConfig, "utf-8");
       }
+      clearRuntimeConfigSnapshot();
       clearConfigCache();
     }
   };
@@ -231,7 +233,7 @@ describe("gateway server models + voicewake", () => {
           (o) => o.type === "event" && o.event === "voicewake.changed",
         );
 
-        const setRes = await rpcReq<{ triggers: string[] }>(ws, "voicewake.set", {
+        const setRes = await rpcReq(ws, "voicewake.set", {
           triggers: ["  hi  ", "", "there"],
         });
         expect(setRes.ok).toBe(true);
@@ -288,7 +290,7 @@ describe("gateway server models + voicewake", () => {
         nodeWs,
         (o) => o.type === "event" && o.event === "voicewake.changed",
       );
-      const setRes = await rpcReq<{ triggers: string[] }>(ws, "voicewake.set", {
+      const setRes = await rpcReq(ws, "voicewake.set", {
         triggers: ["openclaw", "computer"],
       });
       expect(setRes.ok).toBe(true);

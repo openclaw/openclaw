@@ -4,10 +4,8 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
-import {
-  enforceSourceManagedProviderSecrets,
-  normalizeProviders,
-} from "./models-config.providers.js";
+import { normalizeProviders } from "./models-config.providers.normalize.js";
+import { enforceSourceManagedProviderSecrets } from "./models-config.providers.source-managed.js";
 
 describe("normalizeProviders", () => {
   it("trims provider keys so image models remain discoverable for custom providers", async () => {

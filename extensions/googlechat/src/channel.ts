@@ -18,41 +18,43 @@ import {
 } from "openclaw/plugin-sdk/directory-runtime";
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
+import { sanitizeForPlainText } from "openclaw/plugin-sdk/outbound-runtime";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
+import { googlechatMessageActions } from "./actions.js";
+import { googleChatApprovalAuth } from "./approval-auth.js";
 import {
   buildChannelConfigSchema,
-  DEFAULT_ACCOUNT_ID,
+  chunkTextForOutbound,
   createAccountStatusSink,
+  DEFAULT_ACCOUNT_ID,
+  fetchRemoteMedia,
   getChatChannelMeta,
+  GoogleChatConfigSchema,
+  listGoogleChatAccountIds,
+  loadOutboundMediaFromUrl,
   missingTargetError,
   PAIRING_APPROVED_MESSAGE,
   resolveChannelMediaMaxBytes,
+  resolveDefaultGoogleChatAccountId,
+  resolveGoogleChatAccount,
+  resolveGoogleChatOutboundSpace,
   runPassiveAccountLifecycle,
+  isGoogleChatSpaceTarget,
+  isGoogleChatUserTarget,
+  normalizeGoogleChatTarget,
   type ChannelMessageActionAdapter,
   type ChannelStatusIssue,
   type OpenClawConfig,
-} from "../runtime-api.js";
-import { GoogleChatConfigSchema } from "../runtime-api.js";
-import {
-  listGoogleChatAccountIds,
-  resolveDefaultGoogleChatAccountId,
-  resolveGoogleChatAccount,
   type ResolvedGoogleChatAccount,
-} from "./accounts.js";
-import { googlechatMessageActions } from "./actions.js";
+} from "./channel.deps.runtime.js";
+import { collectGoogleChatMutableAllowlistWarnings } from "./doctor.js";
 import { resolveGoogleChatGroupRequireMention } from "./group-policy.js";
 import { getGoogleChatRuntime } from "./runtime.js";
 import { googlechatSetupAdapter } from "./setup-core.js";
 import { googlechatSetupWizard } from "./setup-surface.js";
-import {
-  isGoogleChatSpaceTarget,
-  isGoogleChatUserTarget,
-  normalizeGoogleChatTarget,
-  resolveGoogleChatOutboundSpace,
-} from "./targets.js";
 
 const meta = getChatChannelMeta("googlechat");
 
@@ -160,6 +162,7 @@ export const googlechatPlugin = createChatChannelPlugin({
           },
         }),
     },
+    auth: googleChatApprovalAuth,
     groups: {
       resolveRequireMention: resolveGoogleChatGroupRequireMention,
     },
@@ -211,6 +214,13 @@ export const googlechatPlugin = createChatChannelPlugin({
       },
     },
     actions: googlechatActions,
+    doctor: {
+      dmAllowFromMode: "nestedOnly",
+      groupModel: "route",
+      groupAllowFromFallbackToAllowFrom: false,
+      warnOnEmptyGroupSenderAllowlist: false,
+      collectMutableAllowlistWarnings: collectGoogleChatMutableAllowlistWarnings,
+    },
     status: createComputedAccountStatusAdapter<ResolvedGoogleChatAccount>({
       defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
       collectStatusIssues: (accounts): ChannelStatusIssue[] =>
@@ -314,8 +324,8 @@ export const googlechatPlugin = createChatChannelPlugin({
       idLabel: "googlechatUserId",
       message: PAIRING_APPROVED_MESSAGE,
       normalizeAllowEntry: (entry) => formatAllowFromEntry(entry),
-      notify: async ({ cfg, id, message }) => {
-        const account = resolveGoogleChatAccount({ cfg: cfg });
+      notify: async ({ cfg, id, message, accountId }) => {
+        const account = resolveGoogleChatAccount({ cfg: cfg, accountId });
         if (account.credentialSource === "none") {
           return;
         }
@@ -342,14 +352,19 @@ export const googlechatPlugin = createChatChannelPlugin({
     collectWarnings: collectGoogleChatSecurityWarnings,
   },
   threading: {
-    topLevelReplyToMode: "googlechat",
+    scopedAccountReplyToMode: {
+      resolveAccount: (cfg, accountId) => resolveGoogleChatAccount({ cfg, accountId }),
+      resolveReplyToMode: (account) => account.config.replyToMode,
+      fallback: "off",
+    },
   },
   outbound: {
     base: {
       deliveryMode: "direct",
-      chunker: (text, limit) => getGoogleChatRuntime().channel.text.chunkMarkdownText(text, limit),
+      chunker: chunkTextForOutbound,
       chunkerMode: "markdown",
       textChunkLimit: 4000,
+      sanitizeText: ({ text }) => sanitizeForPlainText(text),
       resolveTarget: ({ to }) => {
         const trimmed = to?.trim() ?? "";
 
@@ -396,7 +411,9 @@ export const googlechatPlugin = createChatChannelPlugin({
         to,
         text,
         mediaUrl,
+        mediaAccess,
         mediaLocalRoots,
+        mediaReadFile,
         accountId,
         replyToId,
         threadId,
@@ -410,7 +427,6 @@ export const googlechatPlugin = createChatChannelPlugin({
         });
         const space = await resolveGoogleChatOutboundSpace({ account, target: to });
         const thread = (threadId ?? replyToId ?? undefined) as string | undefined;
-        const runtime = getGoogleChatRuntime();
         const maxBytes = resolveChannelMediaMaxBytes({
           cfg: cfg,
           resolveChannelLimitMb: ({ cfg, accountId }) =>
@@ -424,13 +440,15 @@ export const googlechatPlugin = createChatChannelPlugin({
         });
         const effectiveMaxBytes = maxBytes ?? (account.config.mediaMaxMb ?? 20) * 1024 * 1024;
         const loaded = /^https?:\/\//i.test(mediaUrl)
-          ? await runtime.channel.media.fetchRemoteMedia({
+          ? await fetchRemoteMedia({
               url: mediaUrl,
               maxBytes: effectiveMaxBytes,
             })
-          : await runtime.media.loadWebMedia(mediaUrl, {
+          : await loadOutboundMediaFromUrl(mediaUrl, {
               maxBytes: effectiveMaxBytes,
-              localRoots: mediaLocalRoots?.length ? mediaLocalRoots : undefined,
+              mediaAccess,
+              mediaLocalRoots,
+              mediaReadFile,
             });
         const { sendGoogleChatMessage, uploadGoogleChatAttachment } =
           await loadGoogleChatChannelRuntime();

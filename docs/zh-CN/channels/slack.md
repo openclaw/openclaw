@@ -4,7 +4,7 @@ summary: Slack 的 socket 或 HTTP webhook 模式设置
 title: Slack
 x-i18n:
   generated_at: "2026-02-03T07:45:49Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 703b4b4333bebfef26b64710ba452bdfc3e7d2115048d4e552e8659425b3609b
   source_path: channels/slack.md

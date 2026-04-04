@@ -1,12 +1,15 @@
-import { BUNDLED_PLUGIN_METADATA } from "./bundled-plugin-metadata.js";
+import { listBundledPluginMetadata } from "./bundled-plugin-metadata.js";
 
 export type BundledPluginContractSnapshot = {
   pluginId: string;
   cliBackendIds: string[];
   providerIds: string[];
   speechProviderIds: string[];
+  realtimeTranscriptionProviderIds: string[];
+  realtimeVoiceProviderIds: string[];
   mediaUnderstandingProviderIds: string[];
   imageGenerationProviderIds: string[];
+  webFetchProviderIds: string[];
   webSearchProviderIds: string[];
   toolNames: string[];
 };
@@ -25,14 +28,24 @@ function uniqueStrings(values: readonly string[] | undefined): string[] {
   return result;
 }
 
+const BUNDLED_PLUGIN_METADATA_FOR_CAPABILITIES = listBundledPluginMetadata({
+  includeChannelConfigs: false,
+  includeSyntheticChannelConfigs: false,
+});
+
 export const BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS: readonly BundledPluginContractSnapshot[] =
-  BUNDLED_PLUGIN_METADATA.map(({ manifest }) => ({
+  BUNDLED_PLUGIN_METADATA_FOR_CAPABILITIES.map(({ manifest }) => ({
     pluginId: manifest.id,
     cliBackendIds: uniqueStrings(manifest.cliBackends),
     providerIds: uniqueStrings(manifest.providers),
     speechProviderIds: uniqueStrings(manifest.contracts?.speechProviders),
+    realtimeTranscriptionProviderIds: uniqueStrings(
+      manifest.contracts?.realtimeTranscriptionProviders,
+    ),
+    realtimeVoiceProviderIds: uniqueStrings(manifest.contracts?.realtimeVoiceProviders),
     mediaUnderstandingProviderIds: uniqueStrings(manifest.contracts?.mediaUnderstandingProviders),
     imageGenerationProviderIds: uniqueStrings(manifest.contracts?.imageGenerationProviders),
+    webFetchProviderIds: uniqueStrings(manifest.contracts?.webFetchProviders),
     webSearchProviderIds: uniqueStrings(manifest.contracts?.webSearchProviders),
     toolNames: uniqueStrings(manifest.contracts?.tools),
   }))
@@ -41,8 +54,11 @@ export const BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS: readonly BundledPluginContractSn
         entry.cliBackendIds.length > 0 ||
         entry.providerIds.length > 0 ||
         entry.speechProviderIds.length > 0 ||
+        entry.realtimeTranscriptionProviderIds.length > 0 ||
+        entry.realtimeVoiceProviderIds.length > 0 ||
         entry.mediaUnderstandingProviderIds.length > 0 ||
         entry.imageGenerationProviderIds.length > 0 ||
+        entry.webFetchProviderIds.length > 0 ||
         entry.webSearchProviderIds.length > 0 ||
         entry.toolNames.length > 0,
     )
@@ -60,6 +76,14 @@ export const BUNDLED_PROVIDER_PLUGIN_IDS = collectPluginIds((entry) => entry.pro
 
 export const BUNDLED_SPEECH_PLUGIN_IDS = collectPluginIds((entry) => entry.speechProviderIds);
 
+export const BUNDLED_REALTIME_TRANSCRIPTION_PLUGIN_IDS = collectPluginIds(
+  (entry) => entry.realtimeTranscriptionProviderIds,
+);
+
+export const BUNDLED_REALTIME_VOICE_PLUGIN_IDS = collectPluginIds(
+  (entry) => entry.realtimeVoiceProviderIds,
+);
+
 export const BUNDLED_MEDIA_UNDERSTANDING_PLUGIN_IDS = collectPluginIds(
   (entry) => entry.mediaUnderstandingProviderIds,
 );
@@ -68,14 +92,19 @@ export const BUNDLED_IMAGE_GENERATION_PLUGIN_IDS = collectPluginIds(
   (entry) => entry.imageGenerationProviderIds,
 );
 
+export const BUNDLED_WEB_FETCH_PLUGIN_IDS = collectPluginIds((entry) => entry.webFetchProviderIds);
+
 export const BUNDLED_RUNTIME_CONTRACT_PLUGIN_IDS = [
   ...new Set(
     BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.filter(
       (entry) =>
         entry.providerIds.length > 0 ||
         entry.speechProviderIds.length > 0 ||
+        entry.realtimeTranscriptionProviderIds.length > 0 ||
+        entry.realtimeVoiceProviderIds.length > 0 ||
         entry.mediaUnderstandingProviderIds.length > 0 ||
         entry.imageGenerationProviderIds.length > 0 ||
+        entry.webFetchProviderIds.length > 0 ||
         entry.webSearchProviderIds.length > 0,
     ).map((entry) => entry.pluginId),
   ),
@@ -88,5 +117,30 @@ export const BUNDLED_WEB_SEARCH_PLUGIN_IDS = collectPluginIds(
 export const BUNDLED_WEB_SEARCH_PROVIDER_PLUGIN_IDS = Object.fromEntries(
   BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.flatMap((entry) =>
     entry.webSearchProviderIds.map((providerId) => [providerId, entry.pluginId] as const),
+  ).toSorted(([left], [right]) => left.localeCompare(right)),
+) as Readonly<Record<string, string>>;
+
+export const BUNDLED_PROVIDER_PLUGIN_ID_ALIASES = Object.fromEntries(
+  BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.flatMap((entry) =>
+    entry.providerIds
+      .filter((providerId) => providerId !== entry.pluginId)
+      .map((providerId) => [providerId, entry.pluginId] as const),
+  ).toSorted(([left], [right]) => left.localeCompare(right)),
+) as Readonly<Record<string, string>>;
+
+export const BUNDLED_LEGACY_PLUGIN_ID_ALIASES = Object.fromEntries(
+  BUNDLED_PLUGIN_METADATA_FOR_CAPABILITIES.flatMap(({ manifest }) =>
+    (manifest.legacyPluginIds ?? []).map(
+      (legacyPluginId) => [legacyPluginId, manifest.id] as const,
+    ),
+  ).toSorted(([left], [right]) => left.localeCompare(right)),
+) as Readonly<Record<string, string>>;
+
+export const BUNDLED_AUTO_ENABLE_PROVIDER_PLUGIN_IDS = Object.fromEntries(
+  BUNDLED_PLUGIN_METADATA_FOR_CAPABILITIES.flatMap(({ manifest }) =>
+    (manifest.autoEnableWhenConfiguredProviders ?? []).map((providerId) => [
+      providerId,
+      manifest.id,
+    ]),
   ).toSorted(([left], [right]) => left.localeCompare(right)),
 ) as Readonly<Record<string, string>>;

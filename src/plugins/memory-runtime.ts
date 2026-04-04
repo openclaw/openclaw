@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { loadOpenClawPlugins } from "./loader.js";
+import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import { resolveRuntimePluginRegistry } from "./loader.js";
 import { getMemoryRuntime } from "./memory-state.js";
 
 function ensureMemoryRuntime(cfg?: OpenClawConfig) {
@@ -7,7 +8,12 @@ function ensureMemoryRuntime(cfg?: OpenClawConfig) {
   if (current || !cfg) {
     return current;
   }
-  loadOpenClawPlugins({ config: cfg });
+  const autoEnabled = applyPluginAutoEnable({ config: cfg, env: process.env });
+  resolveRuntimePluginRegistry({
+    config: autoEnabled.config,
+    activationSourceConfig: cfg,
+    autoEnabledReasons: autoEnabled.autoEnabledReasons,
+  });
   return getMemoryRuntime();
 }
 
@@ -28,6 +34,7 @@ export function resolveActiveMemoryBackendConfig(params: { cfg: OpenClawConfig; 
 }
 
 export async function closeActiveMemorySearchManagers(cfg?: OpenClawConfig): Promise<void> {
-  const runtime = ensureMemoryRuntime(cfg);
+  void cfg;
+  const runtime = getMemoryRuntime();
   await runtime?.closeAllMemorySearchManagers?.();
 }

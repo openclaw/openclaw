@@ -3,6 +3,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { augmentModelCatalogWithProviderPlugins } from "../plugins/provider-runtime.runtime.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
+import { normalizeProviderId } from "./provider-id.js";
 
 const log = createSubsystemLogger("model-catalog");
 
@@ -27,6 +28,15 @@ type DiscoveredModel = {
 };
 
 type PiSdkModule = typeof import("./pi-model-discovery.js");
+type PiRegistryInstance =
+  | Array<DiscoveredModel>
+  | {
+      getAll: () => Array<DiscoveredModel>;
+    };
+type PiRegistryClassLike = {
+  create?: (authStorage: unknown, modelsFile: string) => PiRegistryInstance;
+  new (authStorage: unknown, modelsFile: string): PiRegistryInstance;
+};
 
 let modelCatalogPromise: Promise<ModelCatalogEntry[]> | null = null;
 let hasLoggedModelCatalogError = false;
@@ -34,7 +44,7 @@ const defaultImportPiSdk = () => import("./pi-model-discovery-runtime.js");
 let importPiSdk = defaultImportPiSdk;
 let modelSuppressionPromise: Promise<typeof import("./model-suppression.runtime.js")> | undefined;
 
-const NON_PI_NATIVE_MODEL_PROVIDERS = new Set(["deepseek", "kilocode"]);
+const NON_PI_NATIVE_MODEL_PROVIDERS = new Set(["deepseek", "kilocode", "ollama"]);
 
 function shouldLogModelCatalogTiming(): boolean {
   return process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
@@ -139,6 +149,18 @@ export function __setModelCatalogImportForTest(loader?: () => Promise<PiSdkModul
   importPiSdk = loader ?? defaultImportPiSdk;
 }
 
+function instantiatePiModelRegistry(
+  piSdk: PiSdkModule,
+  authStorage: unknown,
+  modelsFile: string,
+): PiRegistryInstance {
+  const Registry = piSdk.ModelRegistry as unknown as PiRegistryClassLike;
+  if (typeof Registry.create === "function") {
+    return Registry.create(authStorage, modelsFile);
+  }
+  return new Registry(authStorage, modelsFile);
+}
+
 export async function loadModelCatalog(params?: {
   config?: OpenClawConfig;
   useCache?: boolean;
@@ -185,16 +207,11 @@ export async function loadModelCatalog(params?: {
       const { join } = await import("node:path");
       const authStorage = piSdk.discoverAuthStorage(agentDir);
       logStage("auth-storage-ready");
-      const registry = new (piSdk.ModelRegistry as unknown as {
-        new (
-          authStorage: unknown,
-          modelsFile: string,
-        ):
-          | Array<DiscoveredModel>
-          | {
-              getAll: () => Array<DiscoveredModel>;
-            };
-      })(authStorage, join(agentDir, "models.json"));
+      const registry = instantiatePiModelRegistry(
+        piSdk,
+        authStorage,
+        join(agentDir, "models.json"),
+      );
       logStage("registry-ready");
       const entries = Array.isArray(registry) ? registry : registry.getAll();
       logStage("registry-read", `entries=${entries.length}`);
@@ -295,11 +312,11 @@ export function findModelInCatalog(
   provider: string,
   modelId: string,
 ): ModelCatalogEntry | undefined {
-  const normalizedProvider = provider.toLowerCase().trim();
+  const normalizedProvider = normalizeProviderId(provider);
   const normalizedModelId = modelId.toLowerCase().trim();
   return catalog.find(
     (entry) =>
-      entry.provider.toLowerCase() === normalizedProvider &&
+      normalizeProviderId(entry.provider) === normalizedProvider &&
       entry.id.toLowerCase() === normalizedModelId,
   );
 }

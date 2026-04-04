@@ -204,7 +204,7 @@ function isSenderAllowed(senderId: string | undefined, allowFrom: string[]): boo
 function resolveGroupRequireMention(params: {
   groupId: string;
   groupName?: string | null;
-  groups: Record<string, { allow?: boolean; enabled?: boolean; requireMention?: boolean }>;
+  groups: Record<string, { enabled?: boolean; requireMention?: boolean }>;
   allowNameMatching?: boolean;
 }): boolean {
   const entry = findZalouserGroupEntry(
@@ -311,6 +311,7 @@ async function processMessage(
   });
 
   const groups = account.config.groups ?? {};
+  const routeAllowlistConfigured = Object.keys(groups).length > 0;
   const allowNameMatching = isDangerousNameMatchingEnabled(account.config);
   if (isGroup) {
     const groupEntry = findZalouserGroupEntry(
@@ -325,7 +326,7 @@ async function processMessage(
     );
     const routeAccess = evaluateGroupRouteAccessForPolicy({
       groupPolicy,
-      routeAllowlistConfigured: Object.keys(groups).length > 0,
+      routeAllowlistConfigured,
       routeMatched: Boolean(groupEntry),
       routeEnabled: isZalouserGroupEntryAllowed(groupEntry),
     });
@@ -350,10 +351,13 @@ async function processMessage(
   const dmPolicy = account.config.dmPolicy ?? "pairing";
   const configAllowFrom = (account.config.allowFrom ?? []).map((v) => String(v));
   const configGroupAllowFrom = (account.config.groupAllowFrom ?? []).map((v) => String(v));
-  const senderGroupPolicy = resolveSenderScopedGroupPolicy({
-    groupPolicy,
-    groupAllowFrom: configGroupAllowFrom,
-  });
+  const senderGroupPolicy =
+    routeAllowlistConfigured && configGroupAllowFrom.length === 0
+      ? groupPolicy
+      : resolveSenderScopedGroupPolicy({
+          groupPolicy,
+          groupAllowFrom: configGroupAllowFrom,
+        });
   const shouldComputeCommandAuth = core.channel.commands.shouldComputeCommandAuthorized(
     commandBody,
     config,

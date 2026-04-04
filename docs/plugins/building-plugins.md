@@ -38,6 +38,12 @@ falls back to npm automatically.
   </Card>
 </CardGroup>
 
+If a channel plugin is optional and may not be installed when onboarding/setup
+runs, use `createOptionalChannelSetupSurface(...)` from
+`openclaw/plugin-sdk/channel-setup`. It produces a setup adapter + wizard pair
+that advertises the install requirement and fails closed on real config writes
+until the plugin is installed.
+
 ## Quick start: tool plugin
 
 This walkthrough creates a minimal plugin that registers an agent tool. Channel
@@ -52,7 +58,15 @@ and provider plugins have dedicated guides linked above.
       "version": "1.0.0",
       "type": "module",
       "openclaw": {
-        "extensions": ["./index.ts"]
+        "extensions": ["./index.ts"],
+        "compat": {
+          "pluginApi": ">=2026.3.24-beta.2",
+          "minGatewayVersion": "2026.3.24-beta.2"
+        },
+        "build": {
+          "openclawVersion": "2026.3.24-beta.2",
+          "pluginSdkVersion": "2026.3.24-beta.2"
+        }
       }
     }
     ```
@@ -71,7 +85,8 @@ and provider plugins have dedicated guides linked above.
     </CodeGroup>
 
     Every plugin needs a manifest, even with no config. See
-    [Manifest](/plugins/manifest) for the full schema.
+    [Manifest](/plugins/manifest) for the full schema. The canonical ClawHub
+    publish snippets live in `docs/snippets/plugin-publish/`.
 
   </Step>
 
@@ -107,18 +122,21 @@ and provider plugins have dedicated guides linked above.
 
   <Step title="Test and publish">
 
-    **External plugins:** publish to [ClawHub](/tools/clawhub) or npm, then install:
+    **External plugins:** validate and publish with ClawHub, then install:
 
     ```bash
-    openclaw plugins install @myorg/openclaw-my-plugin
+    clawhub package publish your-org/your-plugin --dry-run
+    clawhub package publish your-org/your-plugin
+    openclaw plugins install clawhub:@myorg/openclaw-my-plugin
     ```
 
-    OpenClaw checks ClawHub first, then falls back to npm.
+    OpenClaw also checks ClawHub before npm for bare package specs like
+    `@myorg/openclaw-my-plugin`.
 
-    **In-repo plugins:** place under `extensions/` — automatically discovered.
+    **In-repo plugins:** place under the bundled plugin workspace tree — automatically discovered.
 
     ```bash
-    pnpm test -- extensions/my-plugin/
+    pnpm test -- <bundled-plugin-root>/my-plugin/
     ```
 
   </Step>
@@ -134,6 +152,7 @@ A single plugin can register any number of capabilities via the `api` object:
 | CLI inference backend | `api.registerCliBackend(...)`                 | [CLI Backends](/gateway/cli-backends)                                           |
 | Channel / messaging   | `api.registerChannel(...)`                    | [Channel Plugins](/plugins/sdk-channel-plugins)                                 |
 | Speech (TTS/STT)      | `api.registerSpeechProvider(...)`             | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
+| Realtime voice        | `api.registerRealtimeVoiceProvider(...)`      | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
 | Media understanding   | `api.registerMediaUnderstandingProvider(...)` | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
 | Image generation      | `api.registerImageGenerationProvider(...)`    | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
 | Web search            | `api.registerWebSearchProvider(...)`          | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
@@ -145,12 +164,22 @@ A single plugin can register any number of capabilities via the `api` object:
 
 For the full registration API, see [SDK Overview](/plugins/sdk-overview#registration-api).
 
+If your plugin registers custom gateway RPC methods, keep them on a
+plugin-specific prefix. Core admin namespaces (`config.*`,
+`exec.approvals.*`, `wizard.*`, `update.*`) stay reserved and always resolve to
+`operator.admin`, even if a plugin asks for a narrower scope.
+
 Hook guard semantics to keep in mind:
 
 - `before_tool_call`: `{ block: true }` is terminal and stops lower-priority handlers.
 - `before_tool_call`: `{ block: false }` is treated as no decision.
+- `before_tool_call`: `{ requireApproval: true }` pauses agent execution and prompts the user for approval via the exec approval overlay, Telegram buttons, Discord interactions, or the `/approve` command on any channel.
+- `before_install`: `{ block: true }` is terminal and stops lower-priority handlers.
+- `before_install`: `{ block: false }` is treated as no decision.
 - `message_sending`: `{ cancel: true }` is terminal and stops lower-priority handlers.
 - `message_sending`: `{ cancel: false }` is treated as no decision.
+
+The `/approve` command handles both exec and plugin approvals with automatic fallback. Plugin approval forwarding can be configured independently via `approvals.plugin` in config.
 
 See [SDK Overview hook decision semantics](/plugins/sdk-overview#hook-decision-semantics) for details.
 
@@ -215,6 +244,21 @@ For the full subpath reference, see [SDK Overview](/plugins/sdk-overview).
 Within your plugin, use local barrel files (`api.ts`, `runtime-api.ts`) for
 internal imports — never import your own plugin through its SDK path.
 
+For provider plugins, keep provider-specific helpers in those package-root
+barrels unless the seam is truly generic. Current bundled examples:
+
+- Anthropic: Claude stream wrappers and `service_tier` / beta helpers
+- OpenAI: provider builders, default-model helpers, realtime providers
+- OpenRouter: provider builder plus onboarding/config helpers
+
+If a helper is only useful inside one bundled provider package, keep it on that
+package-root seam instead of promoting it into `openclaw/plugin-sdk/*`.
+
+Some generated `openclaw/plugin-sdk/<bundled-id>` helper seams still exist for
+bundled-plugin maintenance and compatibility, for example
+`plugin-sdk/feishu-setup` or `plugin-sdk/zalo-setup`. Treat those as reserved
+surfaces, not as the default pattern for new third-party plugins.
+
 ## Pre-submission checklist
 
 <Check>**package.json** has correct `openclaw` metadata</Check>
@@ -222,7 +266,7 @@ internal imports — never import your own plugin through its SDK path.
 <Check>Entry point uses `defineChannelPluginEntry` or `definePluginEntry`</Check>
 <Check>All imports use focused `plugin-sdk/<subpath>` paths</Check>
 <Check>Internal imports use local modules, not SDK self-imports</Check>
-<Check>Tests pass (`pnpm test -- extensions/my-plugin/`)</Check>
+<Check>Tests pass (`pnpm test -- <bundled-plugin-root>/my-plugin/`)</Check>
 <Check>`pnpm check` passes (in-repo plugins)</Check>
 
 ## Beta Release Testing
@@ -256,3 +300,11 @@ internal imports — never import your own plugin through its SDK path.
     Full manifest schema reference
   </Card>
 </CardGroup>
+
+## Related
+
+- [Plugin Architecture](/plugins/architecture) — internal architecture deep dive
+- [SDK Overview](/plugins/sdk-overview) — Plugin SDK reference
+- [Manifest](/plugins/manifest) — plugin manifest format
+- [Channel Plugins](/plugins/sdk-channel-plugins) — building channel plugins
+- [Provider Plugins](/plugins/sdk-provider-plugins) — building provider plugins

@@ -1,5 +1,5 @@
 import type { SlackEventMiddlewareArgs } from "@slack/bolt";
-import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-helpers";
+import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-writes";
 import { loadConfig, writeConfigFile } from "openclaw/plugin-sdk/config-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
 import { danger, warn } from "openclaw/plugin-sdk/runtime-env";

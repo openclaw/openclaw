@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MatrixAuth } from "./types.js";
 
 const resolveMatrixAuthMock = vi.hoisted(() => vi.fn());
@@ -14,14 +14,12 @@ vi.mock("./create-client.js", () => ({
   createMatrixClient: createMatrixClientMock,
 }));
 
-import {
-  acquireSharedMatrixClient,
-  releaseSharedClientInstance,
-  resolveSharedMatrixClient,
-  stopSharedClient,
-  stopSharedClientForAccount,
-  stopSharedClientInstance,
-} from "./shared.js";
+let acquireSharedMatrixClient: typeof import("./shared.js").acquireSharedMatrixClient;
+let releaseSharedClientInstance: typeof import("./shared.js").releaseSharedClientInstance;
+let resolveSharedMatrixClient: typeof import("./shared.js").resolveSharedMatrixClient;
+let stopSharedClient: typeof import("./shared.js").stopSharedClient;
+let stopSharedClientForAccount: typeof import("./shared.js").stopSharedClientForAccount;
+let stopSharedClientInstance: typeof import("./shared.js").stopSharedClientInstance;
 
 function authFor(accountId: string): MatrixAuth {
   return {
@@ -73,6 +71,17 @@ function primeAccountClientMocks(params?: {
 }
 
 describe("resolveSharedMatrixClient", () => {
+  beforeAll(async () => {
+    ({
+      acquireSharedMatrixClient,
+      releaseSharedClientInstance,
+      resolveSharedMatrixClient,
+      stopSharedClient,
+      stopSharedClientForAccount,
+      stopSharedClientInstance,
+    } = await import("./shared.js"));
+  });
+
   beforeEach(() => {
     resolveMatrixAuthMock.mockReset();
     resolveMatrixAuthContextMock.mockReset();
@@ -222,5 +231,34 @@ describe("resolveSharedMatrixClient", () => {
         startClient: false,
       }),
     ).rejects.toThrow("Matrix shared client account mismatch");
+  });
+
+  it("recreates the shared client when dispatcherPolicy changes", async () => {
+    const firstAuth = {
+      ...authFor("main"),
+      dispatcherPolicy: {
+        mode: "explicit-proxy" as const,
+        proxyUrl: "http://127.0.0.1:7890",
+      },
+    };
+    const secondAuth = {
+      ...authFor("main"),
+      dispatcherPolicy: {
+        mode: "explicit-proxy" as const,
+        proxyUrl: "http://127.0.0.1:7891",
+      },
+    };
+    const firstClient = createMockClient("main-first");
+    const secondClient = createMockClient("main-second");
+
+    resolveMatrixAuthMock.mockResolvedValueOnce(firstAuth).mockResolvedValueOnce(secondAuth);
+    createMatrixClientMock.mockResolvedValueOnce(firstClient).mockResolvedValueOnce(secondClient);
+
+    const first = await resolveSharedMatrixClient({ accountId: "main", startClient: false });
+    const second = await resolveSharedMatrixClient({ accountId: "main", startClient: false });
+
+    expect(first).toBe(firstClient);
+    expect(second).toBe(secondClient);
+    expect(createMatrixClientMock).toHaveBeenCalledTimes(2);
   });
 });

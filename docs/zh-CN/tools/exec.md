@@ -6,7 +6,7 @@ summary: Exec 工具用法、stdin 模式和 TTY 支持
 title: Exec 工具
 x-i18n:
   generated_at: "2026-02-03T09:26:51Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 3b32238dd8dce93d4f24100eaa521ce9f8485eff6d8498e2680ce9ed6045d25f
   source_path: tools/exec.md
@@ -156,7 +156,7 @@ openclaw config set agents.list[0].tools.exec.node "node-id-or-name"
 {
   tools: {
     exec: {
-      applyPatch: { enabled: true, allowModels: ["gpt-5.2"] },
+      applyPatch: { enabled: true, allowModels: ["gpt-5.4"] },
     },
   },
 }

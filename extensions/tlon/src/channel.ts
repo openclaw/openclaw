@@ -31,13 +31,19 @@ const TLON_CHANNEL_ID = "tlon" as const;
 const loadTlonChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
 
 const tlonSetupWizardProxy = createTlonSetupWizardBase({
-  resolveConfigured: async ({ cfg }) =>
-    await (await loadTlonChannelRuntime()).tlonSetupWizard.status.resolveConfigured({ cfg }),
-  resolveStatusLines: async ({ cfg, configured }) =>
+  resolveConfigured: async ({ cfg, accountId }) =>
+    await (
+      await loadTlonChannelRuntime()
+    ).tlonSetupWizard.status.resolveConfigured({
+      cfg,
+      accountId,
+    }),
+  resolveStatusLines: async ({ cfg, accountId, configured }) =>
     (await (
       await loadTlonChannelRuntime()
     ).tlonSetupWizard.status.resolveStatusLines?.({
       cfg,
+      accountId,
       configured,
     })) ?? [],
   finalize: async (params) =>

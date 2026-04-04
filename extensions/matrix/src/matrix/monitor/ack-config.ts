@@ -1,6 +1,6 @@
-import { resolveAckReaction, type OpenClawConfig } from "../../runtime-api.js";
 import type { CoreConfig } from "../../types.js";
-import { resolveMatrixAccountConfig } from "../accounts.js";
+import { resolveMatrixAccountConfig } from "../account-config.js";
+import { resolveAckReaction, type OpenClawConfig } from "./runtime-api.js";
 
 type MatrixAckReactionScope = "group-mentions" | "group-all" | "direct" | "all" | "none" | "off";
 

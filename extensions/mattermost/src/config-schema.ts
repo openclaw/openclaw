@@ -1,4 +1,3 @@
-import { requireChannelOpenAllowFrom } from "openclaw/plugin-sdk/extension-shared";
 import { z } from "openclaw/plugin-sdk/zod";
 import {
   BlockStreamingCoalesceSchema,
@@ -6,8 +5,30 @@ import {
   GroupPolicySchema,
   MarkdownConfigSchema,
   requireOpenAllowFrom,
-} from "./runtime-api.js";
+} from "./config-runtime.js";
 import { buildSecretInputSchema } from "./secret-input.js";
+
+const MattermostGroupSchema = z
+  .object({
+    /** Whether mentions are required to trigger the bot in this group. */
+    requireMention: z.boolean().optional(),
+  })
+  .strict();
+
+function requireMattermostOpenAllowFrom(params: {
+  policy?: string;
+  allowFrom?: Array<string | number>;
+  ctx: z.RefinementCtx;
+}) {
+  requireOpenAllowFrom({
+    policy: params.policy,
+    allowFrom: params.allowFrom,
+    ctx: params.ctx,
+    path: ["allowFrom"],
+    message:
+      'channels.mattermost.dmPolicy="open" requires channels.mattermost.allowFrom to include "*"',
+  });
+}
 
 const DmChannelRetrySchema = z
   .object({
@@ -84,6 +105,8 @@ const MattermostAccountSchemaBase = z
         allowedSourceIps: z.array(z.string()).optional(),
       })
       .optional(),
+    /** Per-group configuration (keyed by Mattermost channel ID or "*" for default). */
+    groups: z.record(z.string(), MattermostGroupSchema.optional()).optional(),
     /** Allow fetching from private/internal IP addresses (e.g. localhost). Required for self-hosted Mattermost on LAN/VPN. */
     allowPrivateNetwork: z.boolean().optional(),
     /** Retry configuration for DM channel creation */
@@ -92,12 +115,10 @@ const MattermostAccountSchemaBase = z
   .strict();
 
 const MattermostAccountSchema = MattermostAccountSchemaBase.superRefine((value, ctx) => {
-  requireChannelOpenAllowFrom({
-    channel: "mattermost",
+  requireMattermostOpenAllowFrom({
     policy: value.dmPolicy,
     allowFrom: value.allowFrom,
     ctx,
-    requireOpenAllowFrom,
   });
 });
 
@@ -105,11 +126,9 @@ export const MattermostConfigSchema = MattermostAccountSchemaBase.extend({
   accounts: z.record(z.string(), MattermostAccountSchema.optional()).optional(),
   defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
-  requireChannelOpenAllowFrom({
-    channel: "mattermost",
+  requireMattermostOpenAllowFrom({
     policy: value.dmPolicy,
     allowFrom: value.allowFrom,
     ctx,
-    requireOpenAllowFrom,
   });
 });

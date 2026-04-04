@@ -1,11 +1,9 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { getSessionBindingService, __testing } from "openclaw/plugin-sdk/conversation-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  getSessionBindingService,
-  __testing,
-} from "../../../../src/infra/outbound/session-binding-service.js";
 import type { PluginRuntime } from "../../runtime-api.js";
 import { setMatrixRuntime } from "../runtime.js";
 import { resolveMatrixStateFilePath, resolveMatrixStoragePaths } from "./client/storage.js";
@@ -25,10 +23,8 @@ const sendMessageMatrixMock = vi.hoisted(() =>
 const actualRename = fs.rename.bind(fs);
 const renameMock = vi.spyOn(fs, "rename");
 
-vi.mock("./send.js", async () => {
-  const actual = await vi.importActual<typeof import("./send.js")>("./send.js");
+vi.mock("./send.js", () => {
   return {
-    ...actual,
     sendMessageMatrix: sendMessageMatrixMock,
   };
 });
@@ -103,8 +99,8 @@ describe("matrix thread bindings", () => {
     return parsed.bindings?.[0]?.lastActivityAt;
   }
 
-  beforeEach(async () => {
-    stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "matrix-thread-bindings-"));
+  beforeEach(() => {
+    stateDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "matrix-thread-bindings-"));
     __testing.resetSessionBindingAdaptersForTests();
     resetMatrixThreadBindingsForTests();
     sendMessageMatrixMock.mockClear();

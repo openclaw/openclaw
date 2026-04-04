@@ -1,10 +1,13 @@
-import type { ChannelPlugin } from "../api.js";
+import { describeWebhookAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
+import { hasLineCredentials, parseLineAllowFromId } from "./account-helpers.js";
 import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
   resolveLineAccount,
+  type ChannelPlugin,
   type OpenClawConfig,
   type ResolvedLineAccount,
-} from "../runtime-api.js";
-import { hasLineCredentials, parseLineAllowFromId } from "./account-helpers.js";
+} from "./channel-api.js";
 import { lineConfigAdapter } from "./config-adapter.js";
 import { LineChannelConfigSchema } from "./config-schema.js";
 
@@ -37,13 +40,14 @@ export const lineChannelPluginCommon = {
   config: {
     ...lineConfigAdapter,
     isConfigured: (account: ResolvedLineAccount) => hasLineCredentials(account),
-    describeAccount: (account: ResolvedLineAccount) => ({
-      accountId: account.accountId,
-      name: account.name,
-      enabled: account.enabled,
-      configured: hasLineCredentials(account),
-      tokenSource: account.tokenSource ?? undefined,
-    }),
+    describeAccount: (account: ResolvedLineAccount) =>
+      describeWebhookAccountSnapshot({
+        account,
+        configured: hasLineCredentials(account),
+        extra: {
+          tokenSource: account.tokenSource ?? undefined,
+        },
+      }),
   },
 } satisfies Pick<
   ChannelPlugin<ResolvedLineAccount>,
@@ -54,5 +58,4 @@ export function isLineConfigured(cfg: OpenClawConfig, accountId: string): boolea
   return hasLineCredentials(resolveLineAccount({ cfg, accountId }));
 }
 
-export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../runtime-api.js";
 export { parseLineAllowFromId };

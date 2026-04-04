@@ -30,6 +30,23 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
     });
   }
 
+  function setDefaultAllowAgents(allowAgents: string[]) {
+    setSessionsSpawnConfigOverride({
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      agents: {
+        defaults: {
+          subagents: {
+            allowAgents,
+          },
+        },
+        list: [{ id: "main" }],
+      },
+    });
+  }
+
   function mockAcceptedSpawn(acceptedAt: number) {
     let childSessionKey: string | undefined;
     callGatewayMock.mockImplementation(async (opts: unknown) => {
@@ -189,6 +206,19 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
     });
   });
 
+  it("sessions_spawn falls back to default allowlist when agent config omits allowAgents", async () => {
+    setDefaultAllowAgents(["beta"]);
+    const getChildSessionKey = mockAcceptedSpawn(5050);
+
+    const result = await executeSpawn("call7b", "beta");
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      runId: "run-1",
+    });
+    expect(getChildSessionKey()?.startsWith("agent:beta:subagent:")).toBe(true);
+  });
+
   it("sessions_spawn allows any agent when allowlist is *", async () => {
     await expectAllowedSpawn({
       allowAgents: ["*"],
@@ -231,6 +261,92 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
   // ---------------------------------------------------------------------------
   // agentId format validation (#31311)
   // ---------------------------------------------------------------------------
+
+  it("sessions_spawn forbids omit agentId when requireAgentId is configured", async () => {
+    setSessionsSpawnConfigOverride({
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      agents: {
+        defaults: {
+          subagents: { requireAgentId: true },
+        },
+        list: [{ id: "main" }],
+      },
+    });
+
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "main",
+      agentChannel: "whatsapp",
+    });
+
+    const result = await tool.execute("call13", { task: "do thing" });
+    expect(result.details).toMatchObject({
+      status: "forbidden",
+      error: expect.stringContaining("sessions_spawn requires explicit agentId"),
+    });
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("sessions_spawn allows omit agentId when requireAgentId is false", async () => {
+    setSessionsSpawnConfigOverride({
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      agents: {
+        defaults: {
+          subagents: { requireAgentId: false },
+        },
+        list: [{ id: "main" }],
+      },
+    });
+
+    const getChildSessionKey = mockAcceptedSpawn(5300);
+
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "main",
+      agentChannel: "whatsapp",
+    });
+
+    const result = await tool.execute("call14", { task: "do thing" });
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      runId: "run-1",
+    });
+    expect(getChildSessionKey()?.startsWith("agent:main:subagent:")).toBe(true);
+  });
+
+  it("sessions_spawn allows explicit agentId when requireAgentId is configured", async () => {
+    setSessionsSpawnConfigOverride({
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      agents: {
+        list: [
+          {
+            id: "main",
+            subagents: {
+              allowAgents: ["worker"],
+              requireAgentId: true,
+            },
+          },
+        ],
+      },
+    });
+
+    mockAcceptedSpawn(5400);
+
+    const result = await executeSpawn("call15", "worker");
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      runId: "run-1",
+    });
+    expect(callGatewayMock).toHaveBeenCalled();
+  });
 
   it("rejects error-message-like strings as agentId (#31311)", async () => {
     setSessionsSpawnConfigOverride({

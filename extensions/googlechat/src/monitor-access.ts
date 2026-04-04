@@ -63,7 +63,6 @@ export function isSenderAllowed(
 
 type GoogleChatGroupEntry = {
   requireMention?: boolean;
-  allow?: boolean;
   enabled?: boolean;
   users?: Array<string | number>;
   systemPrompt?: string;
@@ -242,7 +241,7 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
       groupPolicy,
       routeAllowlistConfigured: groupAllowlistConfigured,
       routeMatched: Boolean(groupEntry),
-      routeEnabled: groupEntry?.enabled !== false && groupEntry?.allow !== false,
+      routeEnabled: groupEntry?.enabled !== false,
     });
     if (!routeAccess.allowed) {
       if (routeAccess.reason === "disabled") {
@@ -271,10 +270,13 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
   const dmPolicy = account.config.dm?.policy ?? "pairing";
   const configAllowFrom = (account.config.dm?.allowFrom ?? []).map((v) => String(v));
   const normalizedGroupUsers = groupUsers.map((v) => String(v));
-  const senderGroupPolicy = resolveSenderScopedGroupPolicy({
-    groupPolicy,
-    groupAllowFrom: normalizedGroupUsers,
-  });
+  const senderGroupPolicy =
+    groupConfigResolved.allowlistConfigured && normalizedGroupUsers.length === 0
+      ? groupPolicy
+      : resolveSenderScopedGroupPolicy({
+          groupPolicy,
+          groupAllowFrom: normalizedGroupUsers,
+        });
   const shouldComputeAuth = core.channel.commands.shouldComputeCommandAuthorized(rawBody, config);
   const storeAllowFrom =
     !isGroup && dmPolicy !== "allowlist" && (dmPolicy !== "open" || shouldComputeAuth)

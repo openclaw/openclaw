@@ -1,4 +1,8 @@
 import { resolveHeartbeatPrompt } from "../../auto-reply/heartbeat.js";
+import {
+  createMcpLoopbackServerConfig,
+  getActiveMcpLoopbackRuntime,
+} from "../../gateway/mcp-http.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
 import {
   buildBootstrapInjectionStats,
@@ -6,7 +10,10 @@ import {
   buildBootstrapTruncationReportMeta,
   analyzeBootstrapBudget,
 } from "../bootstrap-budget.js";
-import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../bootstrap-files.js";
+import {
+  makeBootstrapWarn as makeBootstrapWarnImpl,
+  resolveBootstrapContextForRun as resolveBootstrapContextForRunImpl,
+} from "../bootstrap-files.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
 import { hashCliSessionText, resolveCliSessionReuse } from "../cli-session.js";
 import { resolveOpenClawDocsPath } from "../docs-path.js";
@@ -21,6 +28,17 @@ import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 import { buildSystemPrompt, normalizeCliModel } from "./helpers.js";
 import { cliBackendLog } from "./log.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./types.js";
+
+const prepareDeps = {
+  makeBootstrapWarn: makeBootstrapWarnImpl,
+  resolveBootstrapContextForRun: resolveBootstrapContextForRunImpl,
+  getActiveMcpLoopbackRuntime,
+  createMcpLoopbackServerConfig,
+};
+
+export function setCliRunnerPrepareTestDeps(overrides: Partial<typeof prepareDeps>): void {
+  Object.assign(prepareDeps, overrides);
+}
 
 export async function prepareCliRunContext(
   params: RunCliAgentParams,
@@ -47,39 +65,22 @@ export async function prepareCliRunContext(
   if (!backendResolved) {
     throw new Error(`Unknown CLI backend: ${params.provider}`);
   }
-  const preparedBackend = await prepareCliBundleMcpConfig({
-    enabled: backendResolved.bundleMcp,
-    backend: backendResolved.config,
-    workspaceDir,
-    config: params.config,
-    warn: (message) => cliBackendLog.warn(message),
-  });
   const extraSystemPrompt = params.extraSystemPrompt?.trim() ?? "";
   const extraSystemPromptHash = hashCliSessionText(extraSystemPrompt);
-  const reusableCliSession = resolveCliSessionReuse({
-    binding:
-      params.cliSessionBinding ??
-      (params.cliSessionId ? { sessionId: params.cliSessionId } : undefined),
-    authProfileId: params.authProfileId,
-    extraSystemPromptHash,
-    mcpConfigHash: preparedBackend.mcpConfigHash,
-  });
-  if (reusableCliSession.invalidatedReason) {
-    cliBackendLog.info(
-      `cli session reset: provider=${params.provider} reason=${reusableCliSession.invalidatedReason}`,
-    );
-  }
   const modelId = (params.model ?? "default").trim() || "default";
-  const normalizedModel = normalizeCliModel(modelId, preparedBackend.backend);
+  const normalizedModel = normalizeCliModel(modelId, backendResolved.config);
   const modelDisplay = `${params.provider}/${modelId}`;
 
   const sessionLabel = params.sessionKey ?? params.sessionId;
-  const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForRun({
+  const { bootstrapFiles, contextFiles } = await prepareDeps.resolveBootstrapContextForRun({
     workspaceDir,
     config: params.config,
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
-    warn: makeBootstrapWarn({ sessionLabel, warn: (message) => cliBackendLog.warn(message) }),
+    warn: prepareDeps.makeBootstrapWarn({
+      sessionLabel,
+      warn: (message) => cliBackendLog.warn(message),
+    }),
   });
   const bootstrapMaxChars = resolveBootstrapMaxChars(params.config);
   const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config);
@@ -103,6 +104,40 @@ export async function prepareCliRunContext(
     config: params.config,
     agentId: params.agentId,
   });
+  const mcpLoopbackRuntime =
+    backendResolved.id === "claude-cli" ? prepareDeps.getActiveMcpLoopbackRuntime() : undefined;
+  const preparedBackend = await prepareCliBundleMcpConfig({
+    enabled: backendResolved.bundleMcp,
+    backend: backendResolved.config,
+    workspaceDir,
+    config: params.config,
+    additionalConfig: mcpLoopbackRuntime
+      ? prepareDeps.createMcpLoopbackServerConfig(mcpLoopbackRuntime.port)
+      : undefined,
+    env: mcpLoopbackRuntime
+      ? {
+          OPENCLAW_MCP_TOKEN: mcpLoopbackRuntime.token,
+          OPENCLAW_MCP_AGENT_ID: sessionAgentId ?? "",
+          OPENCLAW_MCP_ACCOUNT_ID: params.agentAccountId ?? "",
+          OPENCLAW_MCP_SESSION_KEY: params.sessionKey ?? "",
+          OPENCLAW_MCP_MESSAGE_CHANNEL: params.messageProvider ?? "",
+        }
+      : undefined,
+    warn: (message) => cliBackendLog.warn(message),
+  });
+  const reusableCliSession = resolveCliSessionReuse({
+    binding:
+      params.cliSessionBinding ??
+      (params.cliSessionId ? { sessionId: params.cliSessionId } : undefined),
+    authProfileId: params.authProfileId,
+    extraSystemPromptHash,
+    mcpConfigHash: preparedBackend.mcpConfigHash,
+  });
+  if (reusableCliSession.invalidatedReason) {
+    cliBackendLog.info(
+      `cli session reset: provider=${params.provider} reason=${reusableCliSession.invalidatedReason}`,
+    );
+  }
   const heartbeatPrompt =
     sessionAgentId === defaultAgentId
       ? resolveHeartbeatPrompt(params.config?.agents?.defaults?.heartbeat?.prompt)

@@ -5,13 +5,13 @@ import {
   TRUSTED_CLIENT_TOKEN,
   generateSecMsGecToken,
 } from "node-edge-tts/dist/drm.js";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/llm-task";
 import { isVoiceCompatibleAudio } from "openclaw/plugin-sdk/media-runtime";
 import type {
   SpeechProviderConfig,
   SpeechProviderPlugin,
   SpeechVoiceOption,
-} from "openclaw/plugin-sdk/speech-core";
+} from "openclaw/plugin-sdk/speech";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { edgeTTS, inferEdgeExtension } from "./tts.js";
 
 const DEFAULT_EDGE_VOICE = "en-US-MichelleNeural";
@@ -122,6 +122,29 @@ function formatMicrosoftVoiceDescription(entry: MicrosoftVoiceListEntry): string
   return personalities.length > 0 ? personalities.join(", ") : undefined;
 }
 
+export function isCjkDominant(text: string): boolean {
+  const stripped = text.replace(/\s+/g, "");
+  if (stripped.length === 0) {
+    return false;
+  }
+  let cjkCount = 0;
+  for (const ch of stripped) {
+    const code = ch.codePointAt(0) ?? 0;
+    if (
+      (code >= 0x4e00 && code <= 0x9fff) ||
+      (code >= 0x3400 && code <= 0x4dbf) ||
+      (code >= 0x3000 && code <= 0x303f) ||
+      (code >= 0xff00 && code <= 0xffef)
+    ) {
+      cjkCount += 1;
+    }
+  }
+  return cjkCount / stripped.length > 0.3;
+}
+
+const DEFAULT_CHINESE_EDGE_VOICE = "zh-CN-XiaoxiaoNeural";
+const DEFAULT_CHINESE_EDGE_LANG = "zh-CN";
+
 export async function listMicrosoftVoices(): Promise<SpeechVoiceOption[]> {
   const response = await fetch(
     "https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/voices/list" +
@@ -205,10 +228,17 @@ export function buildMicrosoftSpeechProvider(): SpeechProviderPlugin {
       mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
       const tempDir = mkdtempSync(path.join(tempRoot, "tts-microsoft-"));
       const overrideVoice = trimToUndefined(req.providerOverrides?.voice);
+      let voice = overrideVoice ?? config.voice;
+      let lang = config.lang;
       let outputFormat =
         trimToUndefined(req.providerOverrides?.outputFormat) ?? config.outputFormat;
       const fallbackOutputFormat =
         outputFormat !== DEFAULT_EDGE_OUTPUT_FORMAT ? DEFAULT_EDGE_OUTPUT_FORMAT : undefined;
+
+      if (!overrideVoice && voice === DEFAULT_EDGE_VOICE && isCjkDominant(req.text)) {
+        voice = DEFAULT_CHINESE_EDGE_VOICE;
+        lang = DEFAULT_CHINESE_EDGE_LANG;
+      }
 
       try {
         const runEdge = async (format: string) => {
@@ -219,7 +249,8 @@ export function buildMicrosoftSpeechProvider(): SpeechProviderPlugin {
             outputPath,
             config: {
               ...config,
-              voice: overrideVoice ?? config.voice,
+              voice,
+              lang,
               outputFormat: format,
             },
             timeoutMs: req.timeoutMs,

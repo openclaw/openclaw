@@ -1,0 +1,10 @@
+{
+  "id": "anthropic-vertex",
+  "enabledByDefault": true,
+  "providers": ["anthropic-vertex"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

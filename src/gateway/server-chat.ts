@@ -5,11 +5,10 @@ import { loadConfig } from "../config/config.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
-import {
-  deriveGatewaySessionLifecycleSnapshot,
-  persistGatewaySessionLifecycleEvent,
-} from "./session-lifecycle-state.js";
-import { loadGatewaySessionRow, loadSessionEntry } from "./session-utils.js";
+import { loadGatewaySessionRow } from "./server-chat.load-gateway-session-row.runtime.js";
+import { persistGatewaySessionLifecycleEvent } from "./server-chat.persist-session-lifecycle.runtime.js";
+import { deriveGatewaySessionLifecycleSnapshot } from "./session-lifecycle-state.js";
+import { loadSessionEntry } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
 function resolveHeartbeatAckMaxChars(): number {
@@ -494,6 +493,11 @@ export function createAgentEventHandler({
       chatType: row?.chatType,
       origin: row?.origin,
       spawnedBy: row?.spawnedBy,
+      spawnedWorkspaceDir: row?.spawnedWorkspaceDir,
+      forkedFromParent: row?.forkedFromParent,
+      spawnDepth: row?.spawnDepth,
+      subagentRole: row?.subagentRole,
+      subagentControlScope: row?.subagentControlScope,
       label: row?.label,
       displayName: row?.displayName,
       deliveryContext: row?.deliveryContext,
@@ -511,6 +515,7 @@ export function createAgentEventHandler({
       lastChannel: row?.lastChannel,
       lastTo: row?.lastTo,
       lastAccountId: row?.lastAccountId,
+      lastThreadId: row?.lastThreadId,
       totalTokens: row?.totalTokens,
       totalTokensFresh: row?.totalTokensFresh,
       contextTokens: row?.contextTokens,
@@ -764,7 +769,11 @@ export function createAgentEventHandler({
       // messages to messaging surfaces (Telegram, Discord, etc.).
       const recipients = toolEventRecipients.get(evt.runId);
       if (recipients && recipients.size > 0) {
-        broadcastToConnIds("agent", toolPayload, recipients);
+        broadcastToConnIds(
+          "agent",
+          sessionKey ? { ...toolPayload, ...buildSessionEventSnapshot(sessionKey) } : toolPayload,
+          recipients,
+        );
       }
       // Session subscribers power operator UIs that attach to an existing
       // in-flight session after the run has already started. Those clients do
@@ -774,7 +783,12 @@ export function createAgentEventHandler({
       if (sessionKey) {
         const sessionSubscribers = sessionEventSubscribers.getAll();
         if (sessionSubscribers.size > 0) {
-          broadcastToConnIds("session.tool", toolPayload, sessionSubscribers, { dropIfSlow: true });
+          broadcastToConnIds(
+            "session.tool",
+            { ...toolPayload, ...buildSessionEventSnapshot(sessionKey) },
+            sessionSubscribers,
+            { dropIfSlow: true },
+          );
         }
       }
     } else {
@@ -788,7 +802,11 @@ export function createAgentEventHandler({
       // Send tool events to node/channel subscribers only when verbose is enabled;
       // WS clients already received the event above via broadcastToConnIds.
       if (!isToolEvent || toolVerbose !== "off") {
-        nodeSendToSession(sessionKey, "agent", isToolEvent ? toolPayload : agentPayload);
+        nodeSendToSession(
+          sessionKey,
+          "agent",
+          isToolEvent ? { ...toolPayload, ...buildSessionEventSnapshot(sessionKey) } : agentPayload,
+        );
       }
       if (!isAborted && evt.stream === "assistant" && typeof evt.data?.text === "string") {
         emitChatDelta(sessionKey, clientRunId, evt.runId, evt.seq, evt.data.text, evt.data.delta);

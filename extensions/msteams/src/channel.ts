@@ -20,14 +20,20 @@ import {
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/outbound-runtime";
 import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
-import type { ChannelMessageActionName, ChannelPlugin, OpenClawConfig } from "../runtime-api.js";
+import { msTeamsApprovalAuth } from "./approval-auth.js";
 import {
   buildProbeChannelStatusSummary,
+  chunkTextForOutbound,
   createDefaultChannelRuntimeState,
   DEFAULT_ACCOUNT_ID,
   PAIRING_APPROVED_MESSAGE,
-} from "../runtime-api.js";
+  type ChannelMessageActionName,
+  type ChannelPlugin,
+  type OpenClawConfig,
+} from "./channel-api.js";
 import { MSTeamsChannelConfigSchema } from "./config-schema.js";
+import { collectMSTeamsMutableAllowlistWarnings } from "./doctor.js";
+import { formatUnknownError } from "./errors.js";
 import { resolveMSTeamsGroupToolPolicy } from "./policy.js";
 import type { ProbeMSTeamsResult } from "./probe.js";
 import {
@@ -327,6 +333,9 @@ function describeMSTeamsMessageTool({
           "react",
           "reactions",
           "search",
+          "member-info",
+          "channel-list",
+          "channel-info",
         ] satisfies ChannelMessageActionName[])
       : [],
     capabilities: enabled ? ["cards"] : [],
@@ -355,6 +364,9 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
         threads: true,
         media: true,
       },
+      streaming: {
+        blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
+      },
       agentPrompt: {
         messageToolHints: () => [
           "- Adaptive Cards supported. Use `action=send` with `card={type,version,body}` to send rich cards.",
@@ -374,6 +386,14 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
             account,
             configured: account.configured,
           }),
+      },
+      auth: msTeamsApprovalAuth,
+      doctor: {
+        dmAllowFromMode: "topOnly",
+        groupModel: "hybrid",
+        groupAllowFromFallbackToAllowFrom: false,
+        warnOnEmptyGroupSenderAllowlist: true,
+        collectMutableAllowlistWarnings: collectMSTeamsMutableAllowlistWarnings,
       },
       setup: msteamsSetupAdapter,
       messaging: {
@@ -481,7 +501,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
                 applyResolvedEntry(target, entry);
               });
             } catch (err) {
-              runtime.error?.(`msteams resolve failed: ${String(err)}`);
+              runtime.error?.(`msteams resolve failed: ${formatUnknownError(err)}`);
               markPendingLookupFailed(pending);
             }
           };
@@ -618,6 +638,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
                     readOptionalTrimmedString(ctx.params, "filename") ??
                     readOptionalTrimmedString(ctx.params, "title"),
                   mediaLocalRoots: ctx.mediaLocalRoots,
+                  mediaReadFile: ctx.mediaReadFile,
                 });
                 return jsonActionResultWithDetails(
                   {
@@ -836,6 +857,44 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
             });
           }
 
+          if (ctx.action === "member-info") {
+            const userId = typeof ctx.params.userId === "string" ? ctx.params.userId.trim() : "";
+            if (!userId) {
+              return actionError("member-info requires a userId.");
+            }
+            const { getMemberInfoMSTeams } = await loadMSTeamsChannelRuntime();
+            const result = await getMemberInfoMSTeams({ cfg: ctx.cfg, userId });
+            return jsonMSTeamsOkActionResult("member-info", result);
+          }
+
+          if (ctx.action === "channel-list") {
+            const teamId = typeof ctx.params.teamId === "string" ? ctx.params.teamId.trim() : "";
+            if (!teamId) {
+              return actionError("channel-list requires a teamId.");
+            }
+            const { listChannelsMSTeams } = await loadMSTeamsChannelRuntime();
+            const result = await listChannelsMSTeams({ cfg: ctx.cfg, teamId });
+            return jsonMSTeamsOkActionResult("channel-list", result);
+          }
+
+          if (ctx.action === "channel-info") {
+            const teamId = typeof ctx.params.teamId === "string" ? ctx.params.teamId.trim() : "";
+            const channelId =
+              typeof ctx.params.channelId === "string" ? ctx.params.channelId.trim() : "";
+            if (!teamId || !channelId) {
+              return actionError("channel-info requires teamId and channelId.");
+            }
+            const { getChannelInfoMSTeams } = await loadMSTeamsChannelRuntime();
+            const result = await getChannelInfoMSTeams({
+              cfg: ctx.cfg,
+              teamId,
+              channelId,
+            });
+            return jsonMSTeamsOkActionResult("channel-info", {
+              channelInfo: result.channel,
+            });
+          }
+
           // Return null to fall through to default handler
           return null as never;
         },
@@ -934,7 +993,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
     },
     outbound: {
       deliveryMode: "direct",
-      chunker: (text, limit) => getMSTeamsRuntime().channel.text.chunkMarkdownText(text, limit),
+      chunker: chunkTextForOutbound,
       chunkerMode: "markdown",
       textChunkLimit: 4000,
       pollMaxOptions: 12,

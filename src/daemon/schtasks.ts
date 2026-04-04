@@ -4,6 +4,7 @@ import path from "node:path";
 import { isGatewayArgv } from "../infra/gateway-process-argv.js";
 import { findVerifiedGatewayListenerPidsOnPortSync } from "../infra/gateway-processes.js";
 import { inspectPortUsage } from "../infra/ports.js";
+import { getWindowsInstallRoots } from "../infra/windows-install-roots.js";
 import { killProcessTree } from "../process/kill-tree.js";
 import { sleep } from "../utils.js";
 import { parseCmdScriptCommandLine, quoteCmdScriptArg } from "./cmd-argv.js";
@@ -438,11 +439,7 @@ async function terminateGatewayProcessTree(pid: number, graceMs: number): Promis
     killProcessTree(pid, { graceMs });
     return;
   }
-  const taskkillPath = path.join(
-    process.env.SystemRoot ?? "C:\\Windows",
-    "System32",
-    "taskkill.exe",
-  );
+  const taskkillPath = path.join(getWindowsInstallRoots().systemRoot, "System32", "taskkill.exe");
   spawnSync(taskkillPath, ["/T", "/PID", String(pid)], {
     stdio: "ignore",
     timeout: 5_000,
@@ -584,6 +581,45 @@ export async function stageScheduledTask({
   return { scriptPath };
 }
 
+async function updateExistingScheduledTask(params: {
+  env: GatewayServiceEnv;
+  stdout: NodeJS.WritableStream;
+  taskName: string;
+  quotedScript: string;
+  scriptPath: string;
+}): Promise<boolean> {
+  if (!(await isRegisteredScheduledTask(params.env))) {
+    return false;
+  }
+  const change = await execSchtasks([
+    "/Change",
+    "/TN",
+    params.taskName,
+    "/TR",
+    params.quotedScript,
+  ]);
+  if (change.code !== 0) {
+    return false;
+  }
+  await runScheduledTaskOrThrow(params.taskName);
+  writeFormattedLines(
+    params.stdout,
+    [
+      { label: "Updated Scheduled Task", value: params.taskName },
+      { label: "Task script", value: params.scriptPath },
+    ],
+    { leadingBlankLine: true },
+  );
+  return true;
+}
+
+async function runScheduledTaskOrThrow(taskName: string): Promise<void> {
+  const run = await execSchtasks(["/Run", "/TN", taskName]);
+  if (run.code !== 0) {
+    throw new Error(`schtasks run failed: ${run.stderr || run.stdout}`.trim());
+  }
+}
+
 async function activateScheduledTask(params: {
   env: GatewayServiceEnv;
   stdout: NodeJS.WritableStream;
@@ -594,6 +630,11 @@ async function activateScheduledTask(params: {
 
   const taskName = resolveTaskName(params.env);
   const quotedScript = quoteSchtasksArg(params.scriptPath);
+
+  if (await updateExistingScheduledTask({ ...params, taskName, quotedScript })) {
+    return;
+  }
+
   const baseArgs = [
     "/Create",
     "/F",
@@ -637,7 +678,7 @@ async function activateScheduledTask(params: {
     throw new Error(`schtasks create failed: ${detail}`.trim());
   }
 
-  await execSchtasks(["/Run", "/TN", taskName]);
+  await runScheduledTaskOrThrow(taskName);
   // Ensure we don't end up writing to a clack spinner line (wizards show progress without a newline).
   writeFormattedLines(
     params.stdout,
@@ -764,10 +805,7 @@ export async function restartScheduledTask({
       }
     }
   }
-  const res = await execSchtasks(["/Run", "/TN", taskName]);
-  if (res.code !== 0) {
-    throw new Error(`schtasks run failed: ${res.stderr || res.stdout}`.trim());
-  }
+  await runScheduledTaskOrThrow(taskName);
   stdout.write(`${formatLine("Restarted Scheduled Task", taskName)}\n`);
   return { outcome: "completed" };
 }

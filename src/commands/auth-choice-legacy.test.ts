@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  resolveLegacyAuthChoiceAliasesForCli,
   formatDeprecatedNonInteractiveAuthChoiceError,
   normalizeLegacyOnboardAuthChoice,
   resolveDeprecatedAuthChoiceReplacement,
@@ -15,5 +16,9 @@ describe("auth choice legacy aliases", () => {
     expect(formatDeprecatedNonInteractiveAuthChoiceError("claude-cli")).toBe(
       'Auth choice "claude-cli" is deprecated.\nUse "--auth-choice anthropic-cli".',
     );
+  });
+
+  it("sources deprecated cli aliases from plugin manifests", () => {
+    expect(resolveLegacyAuthChoiceAliasesForCli()).toEqual(["claude-cli", "codex-cli"]);
   });
 });

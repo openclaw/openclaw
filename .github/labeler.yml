@@ -59,6 +59,11 @@
       - any-glob-to-any-file:
           - "extensions/nostr/**"
           - "docs/channels/nostr.md"
+"channel: qqbot":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/qqbot/**"
+          - "docs/channels/qqbot.md"
 "channel: signal":
   - changed-files:
       - any-glob-to-any-file:
@@ -241,6 +246,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/deepseek/**"
+"extensions: stepfun":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/stepfun/**"
 "extensions: anthropic":
   - changed-files:
       - any-glob-to-any-file:

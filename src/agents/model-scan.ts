@@ -9,6 +9,7 @@ import {
 } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
 import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
+import { normalizeProviderId } from "./provider-id.js";
 
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
 const DEFAULT_TIMEOUT_MS = 12_000;
@@ -408,7 +409,7 @@ export async function scanOpenRouterModels(
   const concurrency = Math.max(1, Math.floor(options.concurrency ?? DEFAULT_CONCURRENCY));
   const minParamB = Math.max(0, Math.floor(options.minParamB ?? 0));
   const maxAgeDays = Math.max(0, Math.floor(options.maxAgeDays ?? 0));
-  const providerFilter = options.providerFilter?.trim().toLowerCase() ?? "";
+  const providerFilter = normalizeProviderId(options.providerFilter ?? "");
 
   const catalog = await fetchOpenRouterModels(fetchImpl);
   const now = Date.now();
@@ -418,7 +419,7 @@ export async function scanOpenRouterModels(
       return false;
     }
     if (providerFilter) {
-      const prefix = entry.id.split("/")[0]?.toLowerCase() ?? "";
+      const prefix = normalizeProviderId(entry.id.split("/")[0] ?? "");
       if (prefix !== providerFilter) {
         return false;
       }

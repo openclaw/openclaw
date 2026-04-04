@@ -9,11 +9,14 @@ import type {
 } from "../gateway/server-methods/types.js";
 import { registerInternalHook } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
+import { normalizePluginGatewayMethodScope } from "../shared/gateway-method-policy.js";
 import { resolveUserPath } from "../utils.js";
+import { buildPluginApi } from "./api-builder.js";
 import { registerPluginCommand, validatePluginCommandDefinition } from "./command-registration.js";
+import type { PluginActivationSource } from "./config-state.js";
 import { normalizePluginHttpPath } from "./http-path.js";
 import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
-import { registerPluginInteractiveHandler } from "./interactive.js";
+import { registerPluginInteractiveHandler } from "./interactive-registry.js";
 import {
   getRegisteredMemoryEmbeddingProvider,
   registerMemoryEmbeddingProvider,
@@ -27,7 +30,7 @@ import { normalizeRegisteredProvider } from "./provider-validation.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { withPluginRuntimePluginIdScope } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
-import { defaultSlotIdForKey } from "./slots.js";
+import { defaultSlotIdForKey, hasKind } from "./slots.js";
 import {
   isPluginHookName,
   isPromptInjectionHookName,
@@ -36,6 +39,7 @@ import {
 import type {
   CliBackendPlugin,
   ImageGenerationProviderPlugin,
+  RealtimeTranscriptionProviderPlugin,
   OpenClawPluginApi,
   OpenClawPluginChannelRegistration,
   OpenClawPluginCliCommandDescriptor,
@@ -49,6 +53,7 @@ import type {
   OpenClawPluginHookOptions,
   MediaUnderstandingProviderPlugin,
   ProviderPlugin,
+  RealtimeVoiceProviderPlugin,
   OpenClawPluginService,
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
@@ -64,6 +69,7 @@ import type {
   PluginHookHandlerMap,
   PluginHookRegistration as TypedPluginHookRegistration,
   SpeechProviderPlugin,
+  WebFetchProviderPlugin,
   WebSearchProviderPlugin,
 } from "./types.js";
 
@@ -139,10 +145,16 @@ type PluginOwnedProviderRegistration<T extends { id: string }> = {
 
 export type PluginSpeechProviderRegistration =
   PluginOwnedProviderRegistration<SpeechProviderPlugin>;
+export type PluginRealtimeTranscriptionProviderRegistration =
+  PluginOwnedProviderRegistration<RealtimeTranscriptionProviderPlugin>;
+export type PluginRealtimeVoiceProviderRegistration =
+  PluginOwnedProviderRegistration<RealtimeVoiceProviderPlugin>;
 export type PluginMediaUnderstandingProviderRegistration =
   PluginOwnedProviderRegistration<MediaUnderstandingProviderPlugin>;
 export type PluginImageGenerationProviderRegistration =
   PluginOwnedProviderRegistration<ImageGenerationProviderPlugin>;
+export type PluginWebFetchProviderRegistration =
+  PluginOwnedProviderRegistration<WebFetchProviderPlugin>;
 export type PluginWebSearchProviderRegistration =
   PluginOwnedProviderRegistration<WebSearchProviderPlugin>;
 
@@ -187,22 +199,32 @@ export type PluginRecord = {
   format?: PluginFormat;
   bundleFormat?: PluginBundleFormat;
   bundleCapabilities?: string[];
-  kind?: PluginKind;
+  kind?: PluginKind | PluginKind[];
   source: string;
   rootDir?: string;
   origin: PluginOrigin;
   workspaceDir?: string;
   enabled: boolean;
+  explicitlyEnabled?: boolean;
+  activated?: boolean;
+  imported?: boolean;
+  activationSource?: PluginActivationSource;
+  activationReason?: string;
   status: "loaded" | "disabled" | "error";
   error?: string;
+  failedAt?: Date;
+  failurePhase?: "validation" | "load" | "register";
   toolNames: string[];
   hookNames: string[];
   channelIds: string[];
   cliBackendIds: string[];
   providerIds: string[];
   speechProviderIds: string[];
+  realtimeTranscriptionProviderIds: string[];
+  realtimeVoiceProviderIds: string[];
   mediaUnderstandingProviderIds: string[];
   imageGenerationProviderIds: string[];
+  webFetchProviderIds: string[];
   webSearchProviderIds: string[];
   gatewayMethods: string[];
   cliCommands: string[];
@@ -213,6 +235,7 @@ export type PluginRecord = {
   configSchema: boolean;
   configUiHints?: Record<string, PluginConfigUiHint>;
   configJsonSchema?: Record<string, unknown>;
+  memorySlotSelected?: boolean;
 };
 
 export type PluginRegistry = {
@@ -225,8 +248,11 @@ export type PluginRegistry = {
   providers: PluginProviderRegistration[];
   cliBackends?: PluginCliBackendRegistration[];
   speechProviders: PluginSpeechProviderRegistration[];
+  realtimeTranscriptionProviders: PluginRealtimeTranscriptionProviderRegistration[];
+  realtimeVoiceProviders: PluginRealtimeVoiceProviderRegistration[];
   mediaUnderstandingProviders: PluginMediaUnderstandingProviderRegistration[];
   imageGenerationProviders: PluginImageGenerationProviderRegistration[];
+  webFetchProviders: PluginWebFetchProviderRegistration[];
   webSearchProviders: PluginWebSearchProviderRegistration[];
   gatewayHandlers: GatewayRequestHandlers;
   gatewayMethodScopes?: Partial<Record<string, OperatorScope>>;
@@ -242,9 +268,9 @@ export type PluginRegistryParams = {
   logger: PluginLogger;
   coreGatewayHandlers?: GatewayRequestHandlers;
   runtime: PluginRuntime;
-  // When true, skip writing to the global plugin command registry during register().
-  // Used by non-activating snapshot loads to avoid leaking commands into the running gateway.
-  suppressGlobalCommands?: boolean;
+  // When false, keep registration local to the returned registry and avoid mutating
+  // process-global command/hook state during non-activating snapshot loads.
+  activateGlobalSideEffects?: boolean;
 };
 
 type PluginTypedHookPolicy = {
@@ -374,8 +400,12 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       source: record.source,
     });
 
-    const hookSystemEnabled = config?.hooks?.internal?.enabled === true;
-    if (!hookSystemEnabled || opts?.register === false) {
+    const hookSystemEnabled = config?.hooks?.internal?.enabled !== false;
+    if (
+      !registryParams.activateGlobalSideEffects ||
+      !hookSystemEnabled ||
+      opts?.register === false
+    ) {
       return;
     }
 
@@ -404,9 +434,19 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       return;
     }
     registry.gatewayHandlers[trimmed] = handler;
-    if (opts?.scope) {
+    const normalizedScope = normalizePluginGatewayMethodScope(trimmed, opts?.scope);
+    if (normalizedScope.coercedToReservedAdmin) {
+      pushDiagnostic({
+        level: "warn",
+        pluginId: record.id,
+        source: record.source,
+        message: `gateway method scope coerced to operator.admin for reserved core namespace: ${trimmed}`,
+      });
+    }
+    const effectiveScope = normalizedScope.scope;
+    if (effectiveScope) {
       registry.gatewayMethodScopes ??= {};
-      registry.gatewayMethodScopes[trimmed] = opts.scope;
+      registry.gatewayMethodScopes[trimmed] = effectiveScope;
     }
     record.gatewayMethods.push(trimmed);
   };
@@ -680,6 +720,32 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
   };
 
+  const registerRealtimeTranscriptionProvider = (
+    record: PluginRecord,
+    provider: RealtimeTranscriptionProviderPlugin,
+  ) => {
+    registerUniqueProviderLike({
+      record,
+      provider,
+      kindLabel: "realtime transcription provider",
+      registrations: registry.realtimeTranscriptionProviders,
+      ownedIds: record.realtimeTranscriptionProviderIds,
+    });
+  };
+
+  const registerRealtimeVoiceProvider = (
+    record: PluginRecord,
+    provider: RealtimeVoiceProviderPlugin,
+  ) => {
+    registerUniqueProviderLike({
+      record,
+      provider,
+      kindLabel: "realtime voice provider",
+      registrations: registry.realtimeVoiceProviders,
+      ownedIds: record.realtimeVoiceProviderIds,
+    });
+  };
+
   const registerMediaUnderstandingProvider = (
     record: PluginRecord,
     provider: MediaUnderstandingProviderPlugin,
@@ -703,6 +769,16 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       kindLabel: "image-generation provider",
       registrations: registry.imageGenerationProviders,
       ownedIds: record.imageGenerationProviderIds,
+    });
+  };
+
+  const registerWebFetchProvider = (record: PluginRecord, provider: WebFetchProviderPlugin) => {
+    registerUniqueProviderLike({
+      record,
+      provider,
+      kindLabel: "web fetch provider",
+      registrations: registry.webFetchProviders,
+      ownedIds: record.webFetchProviderIds,
     });
   };
 
@@ -811,7 +887,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     // NOTE: cross-plugin duplicate command detection is intentionally skipped here because
     // snapshot registries are isolated and never write to the global command table. Conflicts
     // will surface when the plugin is loaded via the normal activation path at gateway startup.
-    if (registryParams.suppressGlobalCommands) {
+    if (!registryParams.activateGlobalSideEffects) {
       const validationError = validatePluginCommandDefinition(command);
       if (validationError) {
         pushDiagnostic({
@@ -958,7 +1034,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     },
   ): OpenClawPluginApi => {
     const registrationMode = params.registrationMode ?? "full";
-    return {
+    return buildPluginApi({
       id: record.id,
       name: record.name,
       version: record.version,
@@ -970,172 +1046,198 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginConfig: params.pluginConfig,
       runtime: resolvePluginRuntime(record.id),
       logger: normalizeLogger(registryParams.logger),
-      registerTool:
-        registrationMode === "full" ? (tool, opts) => registerTool(record, tool, opts) : () => {},
-      registerHook:
-        registrationMode === "full"
-          ? (events, handler, opts) => registerHook(record, events, handler, opts, params.config)
-          : () => {},
-      registerHttpRoute:
-        registrationMode === "full" ? (params) => registerHttpRoute(record, params) : () => {},
-      registerChannel: (registration) => registerChannel(record, registration, registrationMode),
-      registerProvider:
-        registrationMode === "full" ? (provider) => registerProvider(record, provider) : () => {},
-      registerSpeechProvider:
-        registrationMode === "full"
-          ? (provider) => registerSpeechProvider(record, provider)
-          : () => {},
-      registerMediaUnderstandingProvider:
-        registrationMode === "full"
-          ? (provider) => registerMediaUnderstandingProvider(record, provider)
-          : () => {},
-      registerImageGenerationProvider:
-        registrationMode === "full"
-          ? (provider) => registerImageGenerationProvider(record, provider)
-          : () => {},
-      registerWebSearchProvider:
-        registrationMode === "full"
-          ? (provider) => registerWebSearchProvider(record, provider)
-          : () => {},
-      registerGatewayMethod:
-        registrationMode === "full"
-          ? (method, handler, opts) => registerGatewayMethod(record, method, handler, opts)
-          : () => {},
-      registerCli:
-        registrationMode === "full"
-          ? (registrar, opts) => registerCli(record, registrar, opts)
-          : () => {},
-      registerService:
-        registrationMode === "full" ? (service) => registerService(record, service) : () => {},
-      registerCliBackend:
-        registrationMode === "full" ? (backend) => registerCliBackend(record, backend) : () => {},
-      registerInteractiveHandler:
-        registrationMode === "full"
-          ? (registration) => {
-              const result = registerPluginInteractiveHandler(record.id, registration, {
-                pluginName: record.name,
-                pluginRoot: record.rootDir,
-              });
-              if (!result.ok) {
-                pushDiagnostic({
-                  level: "warn",
-                  pluginId: record.id,
-                  source: record.source,
-                  message: result.error ?? "interactive handler registration failed",
-                });
-              }
-            }
-          : () => {},
-      onConversationBindingResolved:
-        registrationMode === "full"
-          ? (handler) => registerConversationBindingResolvedHandler(record, handler)
-          : () => {},
-      registerCommand:
-        registrationMode === "full" ? (command) => registerCommand(record, command) : () => {},
-      registerContextEngine: (id, factory) => {
-        if (registrationMode !== "full") {
-          return;
-        }
-        if (id === defaultSlotIdForKey("contextEngine")) {
-          pushDiagnostic({
-            level: "error",
-            pluginId: record.id,
-            source: record.source,
-            message: `context engine id reserved by core: ${id}`,
-          });
-          return;
-        }
-        const result = registerContextEngineForOwner(id, factory, `plugin:${record.id}`, {
-          allowSameOwnerRefresh: true,
-        });
-        if (!result.ok) {
-          pushDiagnostic({
-            level: "error",
-            pluginId: record.id,
-            source: record.source,
-            message: `context engine already registered: ${id} (${result.existingOwner})`,
-          });
-        }
-      },
-      registerMemoryPromptSection: (builder) => {
-        if (registrationMode !== "full") {
-          return;
-        }
-        if (record.kind !== "memory") {
-          pushDiagnostic({
-            level: "error",
-            pluginId: record.id,
-            source: record.source,
-            message: "only memory plugins can register a memory prompt section",
-          });
-          return;
-        }
-        registerMemoryPromptSection(builder);
-      },
-      registerMemoryFlushPlan: (resolver) => {
-        if (registrationMode !== "full") {
-          return;
-        }
-        if (record.kind !== "memory") {
-          pushDiagnostic({
-            level: "error",
-            pluginId: record.id,
-            source: record.source,
-            message: "only memory plugins can register a memory flush plan",
-          });
-          return;
-        }
-        registerMemoryFlushPlanResolver(resolver);
-      },
-      registerMemoryRuntime: (runtime) => {
-        if (registrationMode !== "full") {
-          return;
-        }
-        if (record.kind !== "memory") {
-          pushDiagnostic({
-            level: "error",
-            pluginId: record.id,
-            source: record.source,
-            message: "only memory plugins can register a memory runtime",
-          });
-          return;
-        }
-        registerMemoryRuntime(runtime);
-      },
-      registerMemoryEmbeddingProvider: (adapter) => {
-        if (registrationMode !== "full") {
-          return;
-        }
-        if (record.kind !== "memory") {
-          pushDiagnostic({
-            level: "error",
-            pluginId: record.id,
-            source: record.source,
-            message: "only memory plugins can register memory embedding providers",
-          });
-          return;
-        }
-        const existing = getRegisteredMemoryEmbeddingProvider(adapter.id);
-        if (existing) {
-          const ownerDetail = existing.ownerPluginId ? ` (owner: ${existing.ownerPluginId})` : "";
-          pushDiagnostic({
-            level: "error",
-            pluginId: record.id,
-            source: record.source,
-            message: `memory embedding provider already registered: ${adapter.id}${ownerDetail}`,
-          });
-          return;
-        }
-        registerMemoryEmbeddingProvider(adapter, {
-          ownerPluginId: record.id,
-        });
-      },
       resolvePath: (input: string) => resolveUserPath(input),
-      on: (hookName, handler, opts) =>
-        registrationMode === "full"
-          ? registerTypedHook(record, hookName, handler, opts, params.hookPolicy)
-          : undefined,
-    };
+      handlers: {
+        ...(registrationMode === "full"
+          ? {
+              registerTool: (tool, opts) => registerTool(record, tool, opts),
+              registerHook: (events, handler, opts) =>
+                registerHook(record, events, handler, opts, params.config),
+              registerHttpRoute: (routeParams) => registerHttpRoute(record, routeParams),
+              registerProvider: (provider) => registerProvider(record, provider),
+              registerSpeechProvider: (provider) => registerSpeechProvider(record, provider),
+              registerRealtimeTranscriptionProvider: (provider) =>
+                registerRealtimeTranscriptionProvider(record, provider),
+              registerRealtimeVoiceProvider: (provider) =>
+                registerRealtimeVoiceProvider(record, provider),
+              registerMediaUnderstandingProvider: (provider) =>
+                registerMediaUnderstandingProvider(record, provider),
+              registerImageGenerationProvider: (provider) =>
+                registerImageGenerationProvider(record, provider),
+              registerWebFetchProvider: (provider) => registerWebFetchProvider(record, provider),
+              registerWebSearchProvider: (provider) => registerWebSearchProvider(record, provider),
+              registerGatewayMethod: (method, handler, opts) =>
+                registerGatewayMethod(record, method, handler, opts),
+              registerService: (service) => registerService(record, service),
+              registerCliBackend: (backend) => registerCliBackend(record, backend),
+              registerInteractiveHandler: (registration) => {
+                const result = registerPluginInteractiveHandler(record.id, registration, {
+                  pluginName: record.name,
+                  pluginRoot: record.rootDir,
+                });
+                if (!result.ok) {
+                  pushDiagnostic({
+                    level: "warn",
+                    pluginId: record.id,
+                    source: record.source,
+                    message: result.error ?? "interactive handler registration failed",
+                  });
+                }
+              },
+              onConversationBindingResolved: (handler) =>
+                registerConversationBindingResolvedHandler(record, handler),
+              registerCommand: (command) => registerCommand(record, command),
+              registerContextEngine: (id, factory) => {
+                if (id === defaultSlotIdForKey("contextEngine")) {
+                  pushDiagnostic({
+                    level: "error",
+                    pluginId: record.id,
+                    source: record.source,
+                    message: `context engine id reserved by core: ${id}`,
+                  });
+                  return;
+                }
+                const result = registerContextEngineForOwner(id, factory, `plugin:${record.id}`, {
+                  allowSameOwnerRefresh: true,
+                });
+                if (!result.ok) {
+                  pushDiagnostic({
+                    level: "error",
+                    pluginId: record.id,
+                    source: record.source,
+                    message: `context engine already registered: ${id} (${result.existingOwner})`,
+                  });
+                }
+              },
+              registerMemoryPromptSection: (builder) => {
+                if (!hasKind(record.kind, "memory")) {
+                  pushDiagnostic({
+                    level: "error",
+                    pluginId: record.id,
+                    source: record.source,
+                    message: "only memory plugins can register a memory prompt section",
+                  });
+                  return;
+                }
+                if (
+                  Array.isArray(record.kind) &&
+                  record.kind.length > 1 &&
+                  !record.memorySlotSelected
+                ) {
+                  pushDiagnostic({
+                    level: "warn",
+                    pluginId: record.id,
+                    source: record.source,
+                    message:
+                      "dual-kind plugin not selected for memory slot; skipping memory prompt section registration",
+                  });
+                  return;
+                }
+                registerMemoryPromptSection(builder);
+              },
+              registerMemoryFlushPlan: (resolver) => {
+                if (!hasKind(record.kind, "memory")) {
+                  pushDiagnostic({
+                    level: "error",
+                    pluginId: record.id,
+                    source: record.source,
+                    message: "only memory plugins can register a memory flush plan",
+                  });
+                  return;
+                }
+                if (
+                  Array.isArray(record.kind) &&
+                  record.kind.length > 1 &&
+                  !record.memorySlotSelected
+                ) {
+                  pushDiagnostic({
+                    level: "warn",
+                    pluginId: record.id,
+                    source: record.source,
+                    message:
+                      "dual-kind plugin not selected for memory slot; skipping memory flush plan registration",
+                  });
+                  return;
+                }
+                registerMemoryFlushPlanResolver(resolver);
+              },
+              registerMemoryRuntime: (runtime) => {
+                if (!hasKind(record.kind, "memory")) {
+                  pushDiagnostic({
+                    level: "error",
+                    pluginId: record.id,
+                    source: record.source,
+                    message: "only memory plugins can register a memory runtime",
+                  });
+                  return;
+                }
+                if (
+                  Array.isArray(record.kind) &&
+                  record.kind.length > 1 &&
+                  !record.memorySlotSelected
+                ) {
+                  pushDiagnostic({
+                    level: "warn",
+                    pluginId: record.id,
+                    source: record.source,
+                    message:
+                      "dual-kind plugin not selected for memory slot; skipping memory runtime registration",
+                  });
+                  return;
+                }
+                registerMemoryRuntime(runtime);
+              },
+              registerMemoryEmbeddingProvider: (adapter) => {
+                if (!hasKind(record.kind, "memory")) {
+                  pushDiagnostic({
+                    level: "error",
+                    pluginId: record.id,
+                    source: record.source,
+                    message: "only memory plugins can register memory embedding providers",
+                  });
+                  return;
+                }
+                if (
+                  Array.isArray(record.kind) &&
+                  record.kind.length > 1 &&
+                  !record.memorySlotSelected
+                ) {
+                  pushDiagnostic({
+                    level: "warn",
+                    pluginId: record.id,
+                    source: record.source,
+                    message:
+                      "dual-kind plugin not selected for memory slot; skipping memory embedding provider registration",
+                  });
+                  return;
+                }
+                const existing = getRegisteredMemoryEmbeddingProvider(adapter.id);
+                if (existing) {
+                  const ownerDetail = existing.ownerPluginId
+                    ? ` (owner: ${existing.ownerPluginId})`
+                    : "";
+                  pushDiagnostic({
+                    level: "error",
+                    pluginId: record.id,
+                    source: record.source,
+                    message: `memory embedding provider already registered: ${adapter.id}${ownerDetail}`,
+                  });
+                  return;
+                }
+                registerMemoryEmbeddingProvider(adapter, {
+                  ownerPluginId: record.id,
+                });
+              },
+              on: (hookName, handler, opts) =>
+                registerTypedHook(record, hookName, handler, opts, params.hookPolicy),
+            }
+          : {}),
+        // Allow setup-only/setup-runtime paths to surface parse-time CLI metadata
+        // without opting into the wider full-registration surface.
+        registerCli: (registrar, opts) => registerCli(record, registrar, opts),
+        registerChannel: (registration) => registerChannel(record, registration, registrationMode),
+      },
+    });
   };
 
   return {
@@ -1147,6 +1249,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerProvider,
     registerCliBackend,
     registerSpeechProvider,
+    registerRealtimeTranscriptionProvider,
+    registerRealtimeVoiceProvider,
     registerMediaUnderstandingProvider,
     registerImageGenerationProvider,
     registerWebSearchProvider,

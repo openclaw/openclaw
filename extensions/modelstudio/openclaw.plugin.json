@@ -1,5 +1,6 @@
 {
   "id": "modelstudio",
+  "enabledByDefault": true,
   "providers": ["modelstudio"],
   "providerAuthEnvVars": {
     "modelstudio": ["MODELSTUDIO_API_KEY"]

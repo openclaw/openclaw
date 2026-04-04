@@ -1,8 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AcpRuntimeError } from "../../acp/runtime/errors.js";
-import { setDefaultChannelPluginRegistryForTests } from "../../commands/channel-test-helpers.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 
 const hoisted = vi.hoisted(() => {
@@ -96,9 +100,10 @@ vi.mock("../../config/sessions.js", async () => {
   };
 });
 
-vi.mock("../../infra/outbound/session-binding-service.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../infra/outbound/session-binding-service.js")>();
+vi.mock("../../infra/outbound/session-binding-service.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../infra/outbound/session-binding-service.js")
+  >("../../infra/outbound/session-binding-service.js");
   const patched = { ...actual } as typeof actual & {
     getSessionBindingService: () => ReturnType<typeof createAcpCommandSessionBindingService>;
   };
@@ -106,22 +111,217 @@ vi.mock("../../infra/outbound/session-binding-service.js", async (importOriginal
   return patched;
 });
 
-// Prevent transitive import chain from reaching discord/monitor which needs https-proxy-agent.
-vi.mock("../../../extensions/discord/src/monitor/gateway-plugin.js", () => ({
-  createDiscordGatewayPlugin: () => ({}),
-}));
-
 const { handleAcpCommand } = await import("./commands-acp.js");
 const { buildCommandTestParams } = await import("./commands-spawn.test-harness.js");
 const { __testing: acpManagerTesting } = await import("../../acp/control-plane/manager.js");
-const { __testing: acpResetTargetTesting } = await import("./acp-reset-target.js");
+const { __testing: acpResetTargetTesting, resolveEffectiveResetTargetSessionKey } =
+  await import("./acp-reset-target.js");
+const { createTaskRecord, resetTaskRegistryForTests } =
+  await import("../../tasks/task-registry.js");
+const { failTaskRunByRunId } = await import("../../tasks/task-executor.js");
+
+function parseTelegramChatIdForTest(raw?: string | null): string | undefined {
+  const trimmed = raw?.trim().replace(/^telegram:/i, "");
+  if (!trimmed) {
+    return undefined;
+  }
+  const topicMatch = /^(.*):topic:\d+$/i.exec(trimmed);
+  return (topicMatch?.[1] ?? trimmed).trim() || undefined;
+}
+
+function parseDiscordConversationIdForTest(
+  targets: Array<string | undefined | null>,
+): string | undefined {
+  for (const rawTarget of targets) {
+    const target = rawTarget?.trim();
+    if (!target) {
+      continue;
+    }
+    const mentionMatch = /^<#(\d+)>$/.exec(target);
+    if (mentionMatch?.[1]) {
+      return mentionMatch[1];
+    }
+    if (/^channel:/i.test(target)) {
+      return target;
+    }
+  }
+  return undefined;
+}
+
+function parseDiscordParentChannelFromSessionKeyForTest(raw?: string | null): string | undefined {
+  const sessionKey = raw?.trim().toLowerCase() ?? "";
+  const match = sessionKey.match(/(?:^|:)channel:([^:]+)$/);
+  return match?.[1] ? `channel:${match[1]}` : undefined;
+}
+
+function setMinimalAcpCommandRegistryForTests(): void {
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "telegram",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
+          conversationBindings: {
+            defaultTopLevelPlacement: "current",
+            buildBoundReplyChannelData: ({
+              operation,
+              conversation,
+            }: {
+              operation: "acp-spawn";
+              conversation: { conversationId: string };
+            }) =>
+              operation === "acp-spawn" && conversation.conversationId.includes(":topic:")
+                ? { telegram: { pin: true } }
+                : null,
+          },
+          bindings: {
+            resolveCommandConversation: ({
+              threadId,
+              originatingTo,
+              commandTo,
+              fallbackTo,
+            }: {
+              threadId?: string;
+              originatingTo?: string;
+              commandTo?: string;
+              fallbackTo?: string;
+            }) => {
+              const chatId = [originatingTo, commandTo, fallbackTo]
+                .map((candidate) => parseTelegramChatIdForTest(candidate))
+                .find(Boolean);
+              if (!chatId) {
+                return null;
+              }
+              if (threadId) {
+                return {
+                  conversationId: `${chatId}:topic:${threadId}`,
+                  parentConversationId: chatId,
+                };
+              }
+              if (chatId.startsWith("-")) {
+                return null;
+              }
+              return { conversationId: chatId, parentConversationId: chatId };
+            },
+          },
+        },
+      },
+      {
+        pluginId: "discord",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "discord", label: "Discord" }),
+          conversationBindings: {
+            defaultTopLevelPlacement: "child",
+          },
+          bindings: {
+            resolveCommandConversation: ({
+              threadId,
+              threadParentId,
+              parentSessionKey,
+              originatingTo,
+              commandTo,
+              fallbackTo,
+            }: {
+              threadId?: string;
+              threadParentId?: string;
+              parentSessionKey?: string;
+              originatingTo?: string;
+              commandTo?: string;
+              fallbackTo?: string;
+            }) => {
+              if (threadId) {
+                const parentConversationId =
+                  (threadParentId?.trim()
+                    ? `channel:${threadParentId.trim().replace(/^channel:/i, "")}`
+                    : undefined) ??
+                  parseDiscordParentChannelFromSessionKeyForTest(parentSessionKey) ??
+                  parseDiscordConversationIdForTest([originatingTo, commandTo, fallbackTo]);
+                return {
+                  conversationId: threadId,
+                  ...(parentConversationId && parentConversationId !== threadId
+                    ? { parentConversationId }
+                    : {}),
+                };
+              }
+              const conversationId = parseDiscordConversationIdForTest([
+                originatingTo,
+                commandTo,
+                fallbackTo,
+              ]);
+              return conversationId ? { conversationId } : null;
+            },
+          },
+        },
+      },
+      {
+        pluginId: "slack",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "slack", label: "Slack" }),
+          bindings: {
+            resolveCommandConversation: ({
+              originatingTo,
+              commandTo,
+              fallbackTo,
+            }: {
+              originatingTo?: string;
+              commandTo?: string;
+              fallbackTo?: string;
+            }) => {
+              const conversationId = [originatingTo, commandTo, fallbackTo]
+                .map((candidate) => candidate?.trim())
+                .find((candidate) => candidate && candidate.length > 0);
+              return conversationId ? { conversationId } : null;
+            },
+          },
+        },
+      },
+      {
+        pluginId: "matrix",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "matrix", label: "Matrix" }),
+          conversationBindings: {
+            defaultTopLevelPlacement: "child",
+          },
+          bindings: {
+            resolveCommandConversation: ({
+              threadId,
+              originatingTo,
+              commandTo,
+              fallbackTo,
+            }: {
+              threadId?: string;
+              originatingTo?: string;
+              commandTo?: string;
+              fallbackTo?: string;
+            }) => {
+              const roomId = [originatingTo, commandTo, fallbackTo]
+                .map((candidate) => candidate?.trim().replace(/^room:/i, ""))
+                .find((candidate) => candidate && candidate.length > 0);
+              if (!threadId || !roomId) {
+                return null;
+              }
+              return {
+                conversationId: threadId,
+                parentConversationId: roomId,
+              };
+            },
+          },
+        },
+      },
+    ]),
+  );
+}
 
 type FakeBinding = {
   bindingId: string;
   targetSessionKey: string;
   targetKind: "subagent" | "session";
   conversation: {
-    channel: "discord" | "matrix" | "telegram" | "feishu";
+    channel: string;
     accountId: string;
     conversationId: string;
     parentConversationId?: string;
@@ -246,7 +446,7 @@ function createSessionBindingCapabilities() {
 type AcpBindInput = {
   targetSessionKey: string;
   conversation: {
-    channel?: "discord" | "matrix" | "telegram" | "feishu";
+    channel?: string;
     accountId: string;
     conversationId: string;
     parentConversationId?: string;
@@ -260,35 +460,16 @@ function createAcpThreadBinding(input: AcpBindInput): FakeBinding {
     input.placement === "child" ? "thread-created" : input.conversation.conversationId;
   const boundBy = typeof input.metadata?.boundBy === "string" ? input.metadata.boundBy : "user-1";
   const channel = input.conversation.channel ?? "discord";
-  const conversation =
-    channel === "discord"
-      ? {
-          channel: "discord" as const,
-          accountId: input.conversation.accountId,
-          conversationId: nextConversationId,
-          parentConversationId: "parent-1",
-        }
-      : channel === "matrix"
-        ? {
-            channel: "matrix" as const,
-            accountId: input.conversation.accountId,
-            conversationId: nextConversationId,
-            parentConversationId:
-              input.placement === "child"
-                ? input.conversation.conversationId
-                : input.conversation.parentConversationId,
-          }
-        : channel === "feishu"
-          ? {
-              channel: "feishu" as const,
-              accountId: input.conversation.accountId,
-              conversationId: nextConversationId,
-            }
-          : {
-              channel: "telegram" as const,
-              accountId: input.conversation.accountId,
-              conversationId: nextConversationId,
-            };
+  const nextParentConversationId =
+    input.placement === "child"
+      ? input.conversation.conversationId
+      : input.conversation.parentConversationId;
+  const conversation = {
+    channel,
+    accountId: input.conversation.accountId,
+    conversationId: nextConversationId,
+    ...(nextParentConversationId ? { parentConversationId: nextParentConversationId } : {}),
+  };
   return createSessionBinding({
     targetSessionKey: input.targetSessionKey,
     conversation,
@@ -330,28 +511,33 @@ function createThreadParams(commandBody: string, cfg: OpenClawConfig = baseCfg) 
   return params;
 }
 
-function createTelegramTopicParams(commandBody: string, cfg: OpenClawConfig = baseCfg) {
-  const params = buildCommandTestParams(commandBody, cfg, {
-    Provider: "telegram",
-    Surface: "telegram",
-    OriginatingChannel: "telegram",
-    OriginatingTo: "telegram:-1003841603622",
-    AccountId: "default",
-    MessageThreadId: "498",
-  });
-  params.command.senderId = "user-1";
-  return params;
-}
+type ConversationCommandFixture = {
+  accountId?: string;
+  channel: string;
+  originatingTo: string;
+  senderId?: string;
+  sessionKey?: string;
+  threadId?: string;
+  threadParentId?: string;
+};
 
-function createTelegramDmParams(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+function createConversationParams(
+  commandBody: string,
+  fixture: ConversationCommandFixture,
+  cfg: OpenClawConfig = baseCfg,
+) {
   const params = buildCommandTestParams(commandBody, cfg, {
-    Provider: "telegram",
-    Surface: "telegram",
-    OriginatingChannel: "telegram",
-    OriginatingTo: "telegram:123456789",
-    AccountId: "default",
+    Provider: fixture.channel,
+    Surface: fixture.channel,
+    OriginatingChannel: fixture.channel,
+    OriginatingTo: fixture.originatingTo,
+    AccountId: fixture.accountId ?? "default",
+    ...(fixture.senderId ? { SenderId: fixture.senderId } : {}),
+    ...(fixture.sessionKey ? { SessionKey: fixture.sessionKey } : {}),
+    ...(fixture.threadId ? { MessageThreadId: fixture.threadId } : {}),
+    ...(fixture.threadParentId ? { ThreadParentId: fixture.threadParentId } : {}),
   });
-  params.command.senderId = "user-1";
+  params.command.senderId = fixture.senderId ?? "user-1";
   return params;
 }
 
@@ -364,54 +550,136 @@ async function runThreadAcpCommand(commandBody: string, cfg: OpenClawConfig = ba
 }
 
 async function runTelegramAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
-  return handleAcpCommand(createTelegramTopicParams(commandBody, cfg), true);
+  return handleAcpCommand(
+    createConversationParams(
+      commandBody,
+      {
+        channel: "telegram",
+        originatingTo: "telegram:-1003841603622",
+        threadId: "498",
+      },
+      cfg,
+    ),
+    true,
+  );
 }
 
 async function runTelegramDmAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
-  return handleAcpCommand(createTelegramDmParams(commandBody, cfg), true);
+  return handleAcpCommand(
+    createConversationParams(
+      commandBody,
+      {
+        channel: "telegram",
+        originatingTo: "telegram:123456789",
+      },
+      cfg,
+    ),
+    true,
+  );
 }
 
-function createMatrixRoomParams(commandBody: string, cfg: OpenClawConfig = baseCfg) {
-  const params = buildCommandTestParams(commandBody, cfg, {
-    Provider: "matrix",
-    Surface: "matrix",
-    OriginatingChannel: "matrix",
-    OriginatingTo: "room:!room:example.org",
-    AccountId: "default",
-  });
-  params.command.senderId = "user-1";
-  return params;
+async function runSlackDmAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+  return handleAcpCommand(
+    createConversationParams(
+      commandBody,
+      {
+        channel: "slack",
+        originatingTo: "user:U123",
+        senderId: "U123",
+      },
+      cfg,
+    ),
+    true,
+  );
 }
 
 function createMatrixThreadParams(commandBody: string, cfg: OpenClawConfig = baseCfg) {
-  const params = createMatrixRoomParams(commandBody, cfg);
+  const params = createConversationParams(
+    commandBody,
+    {
+      channel: "matrix",
+      originatingTo: "room:!room:example.org",
+    },
+    cfg,
+  );
   params.ctx.MessageThreadId = "$thread-root";
   return params;
 }
 
 async function runMatrixAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
-  return handleAcpCommand(createMatrixRoomParams(commandBody, cfg), true);
+  return handleAcpCommand(
+    createConversationParams(
+      commandBody,
+      {
+        channel: "matrix",
+        originatingTo: "room:!room:example.org",
+      },
+      cfg,
+    ),
+    true,
+  );
 }
 
 async function runMatrixThreadAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
   return handleAcpCommand(createMatrixThreadParams(commandBody, cfg), true);
 }
 
-function createFeishuDmParams(commandBody: string, cfg: OpenClawConfig = baseCfg) {
-  const params = buildCommandTestParams(commandBody, cfg, {
-    Provider: "feishu",
-    Surface: "feishu",
-    OriginatingChannel: "feishu",
-    OriginatingTo: "user:ou_sender_1",
-    AccountId: "default",
-    SenderId: "ou_sender_1",
-  });
-  params.command.senderId = "user-1";
-  return params;
+async function runFeishuDmAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+  return handleAcpCommand(
+    createConversationParams(
+      commandBody,
+      {
+        channel: "feishu",
+        originatingTo: "user:ou_sender_1",
+        senderId: "ou_sender_1",
+      },
+      cfg,
+    ),
+    true,
+  );
 }
 
-async function runFeishuDmAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
-  return handleAcpCommand(createFeishuDmParams(commandBody, cfg), true);
+async function runLineDmAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+  return handleAcpCommand(
+    createConversationParams(
+      commandBody,
+      {
+        channel: "line",
+        originatingTo: "U1234567890abcdef1234567890abcdef",
+        senderId: "U1234567890abcdef1234567890abcdef",
+      },
+      cfg,
+    ),
+    true,
+  );
+}
+
+async function runBlueBubblesDmAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+  return handleAcpCommand(
+    createConversationParams(
+      commandBody,
+      {
+        channel: "bluebubbles",
+        originatingTo: "bluebubbles:+15555550123",
+      },
+      cfg,
+    ),
+    true,
+  );
+}
+
+async function runIMessageDmAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+  return handleAcpCommand(
+    createConversationParams(
+      commandBody,
+      {
+        channel: "imessage",
+        originatingTo: "imessage:+15555550123",
+      },
+      cfg,
+    ),
+    true,
+  );
 }
 
 async function runInternalAcpCommand(params: {
@@ -434,8 +702,9 @@ async function runInternalAcpCommand(params: {
 
 describe("/acp command", () => {
   beforeEach(() => {
-    setDefaultChannelPluginRegistryForTests();
+    setMinimalAcpCommandRegistryForTests();
     acpManagerTesting.resetAcpSessionManagerForTests();
+    resetTaskRegistryForTests();
     acpResetTargetTesting.setDepsForTest({
       getSessionBindingService: () => createAcpCommandSessionBindingService() as never,
     });
@@ -699,7 +968,7 @@ describe("/acp command", () => {
       }),
     );
     expectBoundIntroTextToExclude("session ids: pending (available after the first reply)");
-    expect(hoisted.callGatewayMock).toHaveBeenCalledWith(
+    expect(hoisted.callGatewayMock).not.toHaveBeenCalledWith(
       expect.objectContaining({
         method: "sessions.patch",
       }),
@@ -723,6 +992,19 @@ describe("/acp command", () => {
     expect(seededWithoutEntry?.runtimeSessionName).toContain(":runtime");
   });
 
+  it("persists ACP spawn labels without a nested gateway self-call", async () => {
+    const params = createDiscordParams("/acp spawn codex --bind here --label inbox");
+
+    const result = await handleAcpCommand(params, true);
+
+    expect(result?.reply?.text).toContain("Bound this conversation to");
+    expect(hoisted.callGatewayMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "sessions.patch",
+      }),
+    );
+  });
+
   it("accepts unicode dash option prefixes in /acp spawn args", async () => {
     const result = await runThreadAcpCommand(
       "/acp spawn codex \u2014mode oneshot \u2014thread here \u2014cwd /home/bob/clawd \u2014label jeerreview",
@@ -742,6 +1024,82 @@ describe("/acp command", () => {
         placement: "current",
         metadata: expect.objectContaining({
           label: "jeerreview",
+        }),
+      }),
+    );
+  });
+
+  it("binds the current Discord channel with --bind here without creating a child thread", async () => {
+    const cfg = {
+      ...baseCfg,
+      channels: {
+        discord: {
+          threadBindings: {
+            enabled: true,
+            spawnAcpSessions: false,
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const result = await runDiscordAcpCommand("/acp spawn codex --bind here", cfg);
+
+    expect(result?.reply?.text).toContain("Bound this conversation to");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "current",
+        conversation: expect.objectContaining({
+          channel: "discord",
+          accountId: "default",
+          conversationId: "channel:parent-1",
+        }),
+      }),
+    );
+  });
+
+  it("binds BlueBubbles DMs with --bind here", async () => {
+    const result = await runBlueBubblesDmAcpCommand("/acp spawn codex --bind here");
+
+    expect(result?.reply?.text).toContain("Bound this conversation to");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "current",
+        conversation: expect.objectContaining({
+          channel: "bluebubbles",
+          accountId: "default",
+          conversationId: "+15555550123",
+        }),
+      }),
+    );
+  });
+
+  it("binds Slack DMs with --bind here through the generic conversation path", async () => {
+    const result = await runSlackDmAcpCommand("/acp spawn codex --bind here");
+
+    expect(result?.reply?.text).toContain("Bound this conversation to");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "current",
+        conversation: expect.objectContaining({
+          channel: "slack",
+          accountId: "default",
+          conversationId: "user:U123",
+        }),
+      }),
+    );
+  });
+
+  it("binds iMessage DMs with --bind here", async () => {
+    const result = await runIMessageDmAcpCommand("/acp spawn codex --bind here");
+
+    expect(result?.reply?.text).toContain("Bound this conversation to");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "current",
+        conversation: expect.objectContaining({
+          channel: "imessage",
+          accountId: "default",
+          conversationId: "+15555550123",
         }),
       }),
     );
@@ -783,6 +1141,34 @@ describe("/acp command", () => {
     );
   });
 
+  it("binds Matrix rooms with --bind here without requiring thread spawn", async () => {
+    const cfg = {
+      ...baseCfg,
+      channels: {
+        matrix: {
+          threadBindings: {
+            enabled: true,
+            spawnAcpSessions: false,
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const result = await runMatrixAcpCommand("/acp spawn codex --bind here", cfg);
+
+    expect(result?.reply?.text).toContain("Bound this conversation to");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "current",
+        conversation: expect.objectContaining({
+          channel: "matrix",
+          accountId: "default",
+          conversationId: "room:!room:example.org",
+        }),
+      }),
+    );
+  });
+
   it("creates Matrix thread-bound ACP spawns from top-level rooms when enabled", async () => {
     const cfg = {
       ...baseCfg,
@@ -805,7 +1191,7 @@ describe("/acp command", () => {
         conversation: expect.objectContaining({
           channel: "matrix",
           accountId: "default",
-          conversationId: "!room:example.org",
+          conversationId: "room:!room:example.org",
         }),
       }),
     );
@@ -844,14 +1230,31 @@ describe("/acp command", () => {
     const result = await runFeishuDmAcpCommand("/acp spawn codex --thread here");
 
     expect(result?.reply?.text).toContain("Spawned ACP session agent:codex:acp:");
-    expect(result?.reply?.text).toContain("Bound this thread to");
+    expect(result?.reply?.text).toContain("Bound this conversation to");
     expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
       expect.objectContaining({
         placement: "current",
         conversation: expect.objectContaining({
           channel: "feishu",
           accountId: "default",
-          conversationId: "ou_sender_1",
+          conversationId: "user:ou_sender_1",
+        }),
+      }),
+    );
+  });
+
+  it("binds LINE DM ACP spawns to the current conversation", async () => {
+    const result = await runLineDmAcpCommand("/acp spawn codex --thread here");
+
+    expect(result?.reply?.text).toContain("Spawned ACP session agent:codex:acp:");
+    expect(result?.reply?.text).toContain("Bound this conversation to");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "current",
+        conversation: expect.objectContaining({
+          channel: "line",
+          accountId: "default",
+          conversationId: "U1234567890abcdef1234567890abcdef",
         }),
       }),
     );
@@ -862,6 +1265,14 @@ describe("/acp command", () => {
 
     expect(result?.reply?.text).toContain("ACP target harness id is required");
     expect(hoisted.ensureSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects mixing --thread and --bind on the same /acp spawn", async () => {
+    const result = await runDiscordAcpCommand("/acp spawn codex --thread here --bind here");
+
+    expect(result?.reply?.text).toContain("Use either --thread or --bind");
+    expect(hoisted.ensureSessionMock).not.toHaveBeenCalled();
+    expect(hoisted.sessionBindingBindMock).not.toHaveBeenCalled();
   });
 
   it("rejects thread-bound ACP spawn when spawnAcpSessions is disabled", async () => {
@@ -881,7 +1292,9 @@ describe("/acp command", () => {
 
     expect(result?.reply?.text).toContain("spawnAcpSessions=true");
     expect(hoisted.closeMock).toHaveBeenCalledTimes(2);
-    expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
+    expect(hoisted.callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({ method: "sessions.delete" }),
+    );
     expect(hoisted.callGatewayMock).not.toHaveBeenCalledWith(
       expect.objectContaining({ method: "sessions.patch" }),
     );
@@ -998,6 +1411,58 @@ describe("/acp command", () => {
     expect(result?.reply?.text).toContain("Viewed diver package.");
   });
 
+  it("resolves ACP reset targets through the configured default account when AccountId is omitted", () => {
+    const cfg = {
+      ...baseCfg,
+      channels: {
+        ...baseCfg.channels,
+        discord: {
+          ...baseCfg.channels.discord,
+          defaultAccount: "work",
+        },
+      },
+    } satisfies OpenClawConfig;
+    hoisted.sessionBindingResolveByConversationMock.mockImplementation(
+      (ref: {
+        channel?: string;
+        accountId?: string;
+        conversationId?: string;
+        parentConversationId?: string;
+      }) =>
+        ref.channel === "discord" &&
+        ref.accountId === "work" &&
+        ref.conversationId === defaultThreadId &&
+        ref.parentConversationId === "parent-1"
+          ? createSessionBinding({
+              targetSessionKey: defaultAcpSessionKey,
+              conversation: {
+                channel: "discord",
+                accountId: "work",
+                conversationId: defaultThreadId,
+                parentConversationId: "parent-1",
+              },
+            })
+          : null,
+    );
+
+    const result = resolveEffectiveResetTargetSessionKey({
+      cfg,
+      channel: "discord",
+      conversationId: defaultThreadId,
+      parentConversationId: "parent-1",
+    });
+
+    expect(hoisted.sessionBindingResolveByConversationMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        accountId: "work",
+        conversationId: defaultThreadId,
+        parentConversationId: "parent-1",
+      }),
+    );
+    expect(result).toBe(defaultAcpSessionKey);
+  });
+
   it("blocks /acp steer when ACP dispatch is disabled by policy", async () => {
     const cfg = {
       ...baseCfg,
@@ -1071,14 +1536,112 @@ describe("/acp command", () => {
         lastUpdatedAt: Date.now(),
       },
     });
+    createTaskRecord({
+      runtime: "acp",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: defaultAcpSessionKey,
+      runId: "acp-run-1",
+      task: "Inspect ACP backlog",
+      status: "running",
+      progressSummary: "Fetching the latest runtime state",
+    });
     const result = await runThreadAcpCommand("/acp status", baseCfg);
 
     expect(result?.reply?.text).toContain("ACP status:");
     expect(result?.reply?.text).toContain(`session: ${defaultAcpSessionKey}`);
     expect(result?.reply?.text).toContain("agent session id: codex-sid-1");
     expect(result?.reply?.text).toContain("acpx session id: acpx-sid-1");
+    expect(result?.reply?.text).toContain("taskStatus: running");
+    expect(result?.reply?.text).toContain("taskProgress: Fetching the latest runtime state");
     expect(result?.reply?.text).toContain("capabilities:");
     expect(hoisted.getStatusMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("sanitizes leaked task and runtime details in ACP status output", async () => {
+    mockBoundThreadSession({
+      identity: {
+        state: "resolved",
+        source: "status",
+        acpxSessionId: "acpx-sid-1",
+        agentSessionId: "codex-sid-1",
+        lastUpdatedAt: Date.now(),
+      },
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      ...createAcpSessionEntry({
+        identity: {
+          state: "resolved",
+          source: "status",
+          acpxSessionId: "acpx-sid-1",
+          agentSessionId: "codex-sid-1",
+          lastUpdatedAt: Date.now(),
+        },
+      }),
+      acp: {
+        ...createAcpSessionEntry().acp,
+        identity: {
+          state: "resolved",
+          source: "status",
+          acpxSessionId: "acpx-sid-1",
+          agentSessionId: "codex-sid-1",
+          lastUpdatedAt: Date.now(),
+        },
+        lastError: [
+          "OpenClaw runtime context (internal):",
+          "This context is runtime-generated, not user-authored. Keep internal details private.",
+          "",
+          "[Internal task completion event]",
+          "source: subagent",
+        ].join("\n"),
+      },
+    });
+    hoisted.getStatusMock.mockResolvedValue({
+      summary: [
+        "OpenClaw runtime context (internal):",
+        "This context is runtime-generated, not user-authored. Keep internal details private.",
+        "",
+        "[Internal task completion event]",
+        "source: subagent",
+      ].join("\n"),
+      details: {
+        payload: [
+          "OpenClaw runtime context (internal):",
+          "This context is runtime-generated, not user-authored. Keep internal details private.",
+          "",
+          "[Internal task completion event]",
+          "source: subagent",
+        ].join("\n"),
+      },
+    });
+    createTaskRecord({
+      runtime: "acp",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: defaultAcpSessionKey,
+      runId: "acp-run-1",
+      task: "Inspect ACP backlog",
+      status: "running",
+    });
+    failTaskRunByRunId({
+      runId: "acp-run-1",
+      endedAt: Date.now(),
+      error: [
+        "OpenClaw runtime context (internal):",
+        "This context is runtime-generated, not user-authored. Keep internal details private.",
+        "",
+        "[Internal task completion event]",
+        "source: subagent",
+      ].join("\n"),
+      terminalSummary: "Needs approval to continue.",
+    });
+
+    const result = await runThreadAcpCommand("/acp status", baseCfg);
+
+    expect(result?.reply?.text).toContain("ACP status:");
+    expect(result?.reply?.text).toContain("taskSummary: Needs approval to continue.");
+    expect(result?.reply?.text).not.toContain("OpenClaw runtime context (internal):");
+    expect(result?.reply?.text).not.toContain("Internal task completion event");
   });
 
   it("updates ACP runtime mode via /acp set-mode", async () => {

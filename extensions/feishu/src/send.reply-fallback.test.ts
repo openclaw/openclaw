@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveFeishuSendTargetMock = vi.hoisted(() => vi.fn());
 const resolveMarkdownTableModeMock = vi.hoisted(() => vi.fn(() => "preserve"));
@@ -9,6 +9,7 @@ vi.mock("./send-target.js", () => ({
 }));
 
 vi.mock("./runtime.js", () => ({
+  setFeishuRuntime: vi.fn(),
   getFeishuRuntime: () => ({
     channel: {
       text: {
@@ -19,7 +20,13 @@ vi.mock("./runtime.js", () => ({
   }),
 }));
 
-import { sendCardFeishu, sendMessageFeishu } from "./send.js";
+vi.mock("../../../src/channels/plugins/bundled.js", () => ({
+  bundledChannelPlugins: [],
+  bundledChannelSetupPlugins: [],
+}));
+
+let sendCardFeishu: typeof import("./send.js").sendCardFeishu;
+let sendMessageFeishu: typeof import("./send.js").sendMessageFeishu;
 
 describe("Feishu reply fallback for withdrawn/deleted targets", () => {
   const replyMock = vi.fn();
@@ -34,6 +41,10 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
     expect(createMock).toHaveBeenCalledTimes(1);
     expect(result.messageId).toBe(expectedMessageId);
   }
+
+  beforeAll(async () => {
+    ({ sendCardFeishu, sendMessageFeishu } = await import("./send.js"));
+  });
 
   beforeEach(() => {
     vi.clearAllMocks();

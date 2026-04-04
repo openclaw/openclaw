@@ -1,10 +1,6 @@
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type { OpenClawPluginApi } from "../runtime-api.js";
-import { registerFeishuBitableTools } from "./bitable.js";
-import { registerFeishuDriveTools } from "./drive.js";
-import { registerFeishuPermTools } from "./perm.js";
 import { createToolFactoryHarness } from "./tool-factory-test-harness.js";
-import { registerFeishuWikiTools } from "./wiki.js";
 
 const createFeishuClientMock = vi.fn((account: { appId?: string } | undefined) => ({
   __appId: account?.appId,
@@ -13,6 +9,11 @@ const createFeishuClientMock = vi.fn((account: { appId?: string } | undefined) =
 vi.mock("./client.js", () => ({
   createFeishuClient: (account: { appId?: string } | undefined) => createFeishuClientMock(account),
 }));
+
+let registerFeishuBitableTools: typeof import("./bitable.js").registerFeishuBitableTools;
+let registerFeishuDriveTools: typeof import("./drive.js").registerFeishuDriveTools;
+let registerFeishuPermTools: typeof import("./perm.js").registerFeishuPermTools;
+let registerFeishuWikiTools: typeof import("./wiki.js").registerFeishuWikiTools;
 
 function createConfig(params: {
   toolsA?: {
@@ -50,6 +51,17 @@ function createConfig(params: {
 }
 
 describe("feishu tool account routing", () => {
+  beforeAll(async () => {
+    ({ registerFeishuBitableTools, registerFeishuDriveTools, registerFeishuPermTools } =
+      await import("./bitable.js").then(async ({ registerFeishuBitableTools }) => ({
+        registerFeishuBitableTools,
+        ...(await import("./drive.js")),
+        ...(await import("./perm.js")),
+        ...(await import("./wiki.js")),
+      })));
+    ({ registerFeishuWikiTools } = await import("./wiki.js"));
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -69,7 +81,7 @@ describe("feishu tool account routing", () => {
     expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-b");
   });
 
-  test("wiki tool prefers configured defaultAccount over inherited default account context", async () => {
+  test("wiki tool prefers the active contextual account over configured defaultAccount", async () => {
     const { api, resolveTool } = createToolFactoryHarness(
       createConfig({
         defaultAccount: "b",
@@ -82,7 +94,7 @@ describe("feishu tool account routing", () => {
     const tool = resolveTool("feishu_wiki", { agentAccountId: "a" });
     await tool.execute("call", { action: "search" });
 
-    expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-b");
+    expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-a");
   });
 
   test("drive tool registers when first account disables it and routes to agentAccountId", async () => {

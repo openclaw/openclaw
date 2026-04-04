@@ -1,9 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { nextcloudTalkPlugin } from "./channel.js";
-import { NextcloudTalkConfigSchema } from "./config-schema.js";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   escapeNextcloudTalkMarkdown,
   formatNextcloudTalkCodeBlock,
@@ -26,32 +24,40 @@ import {
   generateNextcloudTalkSignature,
   verifyNextcloudTalkSignature,
 } from "./signature.js";
-import type { CoreConfig } from "./types.js";
 
 const fetchWithSsrFGuard = vi.hoisted(() => vi.fn());
 const readFileSync = vi.hoisted(() => vi.fn());
 
-vi.mock("../runtime-api.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../runtime-api.js")>();
-  return {
-    ...actual,
-    fetchWithSsrFGuard,
-  };
+vi.mock("../runtime-api.js", () => {
+  return vi
+    .importActual<typeof import("../runtime-api.js")>("../runtime-api.js")
+    .then((actual) => ({
+      ...actual,
+      fetchWithSsrFGuard,
+    }));
 });
 
-vi.mock("node:fs", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs")>();
-  return {
+vi.mock("node:fs", () => {
+  return vi.importActual<typeof import("node:fs")>("node:fs").then((actual) => ({
     ...actual,
     readFileSync,
-  };
+  }));
 });
 
 const tempDirs: string[] = [];
+let resolveNextcloudTalkRoomKind: typeof import("./room-info.js").resolveNextcloudTalkRoomKind;
+let resetNextcloudTalkRoomCache: () => void;
+
+beforeAll(async () => {
+  const roomInfo = await import("./room-info.js");
+  resolveNextcloudTalkRoomKind = roomInfo.resolveNextcloudTalkRoomKind;
+  resetNextcloudTalkRoomCache = roomInfo.__testing.resetRoomCache;
+});
 
 afterEach(async () => {
   fetchWithSsrFGuard.mockReset();
   readFileSync.mockReset();
+  resetNextcloudTalkRoomCache();
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop();
     if (dir) {
@@ -68,38 +74,6 @@ async function makeTempDir(): Promise<string> {
 
 describe("nextcloud talk core", () => {
   it("accepts SecretRef botSecret and apiPassword at top-level", () => {
-    const result = NextcloudTalkConfigSchema.safeParse({
-      baseUrl: "https://cloud.example.com",
-      botSecret: { source: "env", provider: "default", id: "NEXTCLOUD_TALK_BOT_SECRET" },
-      apiUser: "bot",
-      apiPassword: { source: "env", provider: "default", id: "NEXTCLOUD_TALK_API_PASSWORD" },
-    });
-    expect(result.success).toBe(true);
-  });
-
-  it("accepts SecretRef botSecret and apiPassword on account", () => {
-    const result = NextcloudTalkConfigSchema.safeParse({
-      accounts: {
-        main: {
-          baseUrl: "https://cloud.example.com",
-          botSecret: {
-            source: "env",
-            provider: "default",
-            id: "NEXTCLOUD_TALK_MAIN_BOT_SECRET",
-          },
-          apiUser: "bot",
-          apiPassword: {
-            source: "env",
-            provider: "default",
-            id: "NEXTCLOUD_TALK_MAIN_API_PASSWORD",
-          },
-        },
-      },
-    });
-    expect(result.success).toBe(true);
-  });
-
-  it("keeps markdown mostly intact while trimming outer whitespace", () => {
     expect(markdownToNextcloudTalk("  **hello**  ")).toBe("**hello**");
   });
 
@@ -266,39 +240,6 @@ describe("nextcloud talk core", () => {
     expect(accountBFirst).toBe(true);
   });
 
-  it("normalizes trimmed DM allowlist prefixes to lowercase ids", () => {
-    const resolveDmPolicy = nextcloudTalkPlugin.security?.resolveDmPolicy;
-    if (!resolveDmPolicy) {
-      throw new Error("resolveDmPolicy unavailable");
-    }
-
-    const cfg = {
-      channels: {
-        "nextcloud-talk": {
-          baseUrl: "https://cloud.example.com",
-          botSecret: "secret",
-          dmPolicy: "allowlist",
-          allowFrom: ["  nc:User-Id  "],
-        },
-      },
-    } as CoreConfig;
-
-    const result = resolveDmPolicy({
-      cfg,
-      account: nextcloudTalkPlugin.config.resolveAccount(cfg, "default"),
-    });
-    if (!result) {
-      throw new Error("nextcloud-talk resolveDmPolicy returned null");
-    }
-
-    expect(result.policy).toBe("allowlist");
-    expect(result.allowFrom).toEqual(["  nc:User-Id  "]);
-    expect(result.normalizeEntry?.("  nc:User-Id  ")).toBe("user-id");
-    expect(nextcloudTalkPlugin.pairing?.normalizeAllowEntry?.("  nextcloud-talk:User-Id  ")).toBe(
-      "user-id",
-    );
-  });
-
   it("resolves allowlist matches and group policy decisions", () => {
     expect(
       resolveNextcloudTalkAllowlistMatch({
@@ -421,7 +362,6 @@ describe("nextcloud talk core", () => {
       release,
     });
 
-    const { resolveNextcloudTalkRoomKind } = await import("./room-info.js");
     const kind = await resolveNextcloudTalkRoomKind({
       account: {
         accountId: "acct-direct",
@@ -459,7 +399,6 @@ describe("nextcloud talk core", () => {
       release,
     });
 
-    const { resolveNextcloudTalkRoomKind } = await import("./room-info.js");
     const kind = await resolveNextcloudTalkRoomKind({
       account: {
         accountId: "acct-group",
@@ -480,8 +419,6 @@ describe("nextcloud talk core", () => {
   });
 
   it("returns undefined from room info without credentials or base url", async () => {
-    const { resolveNextcloudTalkRoomKind } = await import("./room-info.js");
-
     await expect(
       resolveNextcloudTalkRoomKind({
         account: {

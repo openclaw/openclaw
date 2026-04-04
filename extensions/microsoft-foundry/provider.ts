@@ -1,5 +1,8 @@
 import type { ProviderNormalizeResolvedModelContext } from "openclaw/plugin-sdk/core";
-import type { ModelProviderConfig, ProviderPlugin } from "openclaw/plugin-sdk/provider-models";
+import type {
+  ModelProviderConfig,
+  ProviderPlugin,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import { apiKeyAuthMethod, entraIdAuthMethod } from "./auth.js";
 import { prepareFoundryRuntimeAuth } from "./runtime.js";
 import {
@@ -23,9 +26,6 @@ export function buildMicrosoftFoundryProvider(): ProviderPlugin {
     docsPath: "/providers/models",
     envVars: ["AZURE_OPENAI_API_KEY", "AZURE_OPENAI_ENDPOINT"],
     auth: [entraIdAuthMethod, apiKeyAuthMethod],
-    capabilities: {
-      providerFamily: "openai" as const,
-    },
     onModelSelected: async (ctx) => {
       const providerConfig = ctx.config.models?.providers?.[PROVIDER_ID];
       if (!providerConfig || !ctx.model.startsWith(`${PROVIDER_ID}/`)) {

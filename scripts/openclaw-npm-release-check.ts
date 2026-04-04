@@ -4,6 +4,11 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+  compareReleaseVersions as compareReleaseVersionsBase,
+  resolveNpmDistTagMirrorAuth as resolveNpmDistTagMirrorAuthBase,
+  parseReleaseVersion as parseReleaseVersionBase,
+} from "./lib/npm-publish-plan.mjs";
 
 type PackageJson = {
   name?: string;
@@ -37,16 +42,23 @@ export type ParsedReleaseTag = {
   date: Date;
 };
 
-const STABLE_VERSION_REGEX = /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<day>[1-9]\d?)$/;
-const BETA_VERSION_REGEX =
-  /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<day>[1-9]\d?)-beta\.(?<beta>[1-9]\d*)$/;
-const CORRECTION_VERSION_REGEX =
-  /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<day>[1-9]\d?)-(?<correction>[1-9]\d*)$/;
+export type NpmPublishPlan = {
+  channel: "stable" | "beta";
+  publishTag: "latest" | "beta";
+  mirrorDistTags: ("latest" | "beta")[];
+};
+
+export type NpmDistTagMirrorAuth = {
+  hasAuth: boolean;
+  source: "node-auth-token" | "npm-token" | "none";
+};
 const EXPECTED_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
 const MAX_CALVER_DISTANCE_DAYS = 2;
 const REQUIRED_PACKED_PATHS = ["dist/control-ui/index.html"];
 const CONTROL_UI_ASSET_PREFIX = "dist/control-ui/assets/";
+const FORBIDDEN_PACKED_PATH_PREFIXES = ["docs/.generated/"] as const;
 const NPM_PACK_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
+const skipPackValidationEnv = "OPENCLAW_NPM_RELEASE_SKIP_PACK_CHECK";
 
 function normalizeRepoUrl(value: unknown): string {
   if (typeof value !== "string") {
@@ -60,83 +72,63 @@ function normalizeRepoUrl(value: unknown): string {
     .replace(/\/+$/, "");
 }
 
-function parseDateParts(
-  version: string,
-  groups: Record<string, string | undefined>,
-  channel: "stable" | "beta",
-): ParsedReleaseVersion | null {
-  const year = Number.parseInt(groups.year ?? "", 10);
-  const month = Number.parseInt(groups.month ?? "", 10);
-  const day = Number.parseInt(groups.day ?? "", 10);
-  const betaNumber = channel === "beta" ? Number.parseInt(groups.beta ?? "", 10) : undefined;
-
-  if (
-    !Number.isInteger(year) ||
-    !Number.isInteger(month) ||
-    !Number.isInteger(day) ||
-    month < 1 ||
-    month > 12 ||
-    day < 1 ||
-    day > 31
-  ) {
-    return null;
-  }
-  if (channel === "beta" && (!Number.isInteger(betaNumber) || (betaNumber ?? 0) < 1)) {
-    return null;
-  }
-
-  const date = new Date(Date.UTC(year, month - 1, day));
-  if (
-    date.getUTCFullYear() !== year ||
-    date.getUTCMonth() !== month - 1 ||
-    date.getUTCDate() !== day
-  ) {
-    return null;
-  }
-
-  return {
-    version,
-    baseVersion: `${year}.${month}.${day}`,
-    channel,
-    year,
-    month,
-    day,
-    betaNumber,
-    date,
-  };
+export function parseReleaseVersion(version: string): ParsedReleaseVersion | null {
+  return parseReleaseVersionBase(version) as ParsedReleaseVersion | null;
 }
 
-export function parseReleaseVersion(version: string): ParsedReleaseVersion | null {
-  const trimmed = version.trim();
-  if (!trimmed) {
-    return null;
+export function compareReleaseVersions(left: string, right: string): number | null {
+  return compareReleaseVersionsBase(left, right);
+}
+
+export function resolveNpmPublishPlan(
+  version: string,
+  _currentBetaVersion?: string | null,
+  requestedPublishTag?: "latest" | "beta" | null,
+): NpmPublishPlan {
+  const parsedVersion = parseReleaseVersion(version);
+  if (parsedVersion === null) {
+    throw new Error(`Unsupported release version "${version}".`);
   }
 
-  const stableMatch = STABLE_VERSION_REGEX.exec(trimmed);
-  if (stableMatch?.groups) {
-    return parseDateParts(trimmed, stableMatch.groups, "stable");
-  }
+  const publishTag = requestedPublishTag?.trim() === "latest" ? "latest" : "beta";
 
-  const betaMatch = BETA_VERSION_REGEX.exec(trimmed);
-  if (betaMatch?.groups) {
-    return parseDateParts(trimmed, betaMatch.groups, "beta");
-  }
-
-  const correctionMatch = CORRECTION_VERSION_REGEX.exec(trimmed);
-  if (correctionMatch?.groups) {
-    const parsedCorrection = parseDateParts(trimmed, correctionMatch.groups, "stable");
-    const correctionNumber = Number.parseInt(correctionMatch.groups.correction ?? "", 10);
-    if (parsedCorrection === null || !Number.isInteger(correctionNumber) || correctionNumber < 1) {
-      return null;
+  if (parsedVersion.channel === "beta") {
+    if (publishTag !== "beta") {
+      throw new Error("Beta prereleases must publish to the beta dist-tag.");
     }
-
     return {
-      ...parsedCorrection,
-      correctionNumber,
+      channel: "beta",
+      publishTag: "beta",
+      mirrorDistTags: [],
     };
   }
 
-  return null;
+  return {
+    channel: "stable",
+    publishTag,
+    mirrorDistTags: [],
+  };
+}
+
+export function resolveNpmDistTagMirrorAuth(params?: {
+  nodeAuthToken?: string | null;
+  npmToken?: string | null;
+}): NpmDistTagMirrorAuth {
+  const nodeAuthToken =
+    params && "nodeAuthToken" in params ? params.nodeAuthToken : process.env.NODE_AUTH_TOKEN;
+  const npmToken = params && "npmToken" in params ? params.npmToken : process.env.NPM_TOKEN;
+  return resolveNpmDistTagMirrorAuthBase({
+    nodeAuthToken,
+    npmToken,
+  }) as NpmDistTagMirrorAuth;
+}
+
+export function shouldSkipPackedTarballValidation(env = process.env): boolean {
+  const raw = env[skipPackValidationEnv];
+  if (!raw) {
+    return false;
+  }
+  return !/^(0|false)$/i.test(raw);
 }
 
 export function parseReleaseTagVersion(version: string): ParsedReleaseTag | null {
@@ -418,23 +410,25 @@ function collectPackedTarballErrors(): string[] {
   const errors: string[] = [];
   let stdout = "";
   try {
-    stdout = runNpmCommand(["pack", "--json", "--dry-run"]);
+    stdout = runNpmCommand(["pack", "--json", "--dry-run", "--ignore-scripts"]);
   } catch (error) {
     const message = describeExecFailure(error);
     errors.push(
-      `Failed to inspect npm tarball contents via \`npm pack --json --dry-run\`: ${message}`,
+      `Failed to inspect npm tarball contents via \`npm pack --json --dry-run --ignore-scripts\`: ${message}`,
     );
     return errors;
   }
 
   const packResults = parseNpmPackJsonOutput(stdout);
   if (!packResults) {
-    errors.push("Failed to parse JSON output from `npm pack --json --dry-run`.");
+    errors.push("Failed to parse JSON output from `npm pack --json --dry-run --ignore-scripts`.");
     return errors;
   }
   const firstResult = packResults[0];
   if (!firstResult || !Array.isArray(firstResult.files)) {
-    errors.push("`npm pack --json --dry-run` did not return a files list to validate.");
+    errors.push(
+      "`npm pack --json --dry-run --ignore-scripts` did not return a files list to validate.",
+    );
     return errors;
   }
 
@@ -444,12 +438,27 @@ function collectPackedTarballErrors(): string[] {
       .filter((path): path is string => typeof path === "string" && path.length > 0),
   );
 
-  return collectControlUiPackErrors(packedPaths);
+  return [
+    ...collectControlUiPackErrors(packedPaths),
+    ...collectForbiddenPackedPathErrors(packedPaths),
+  ];
+}
+
+export function collectForbiddenPackedPathErrors(paths: Iterable<string>): string[] {
+  const errors: string[] = [];
+  for (const packedPath of paths) {
+    if (!FORBIDDEN_PACKED_PATH_PREFIXES.some((prefix) => packedPath.startsWith(prefix))) {
+      continue;
+    }
+    errors.push(`npm package must not include generated docs artifact "${packedPath}".`);
+  }
+  return errors.toSorted((left, right) => left.localeCompare(right));
 }
 
 function main(): number {
   const pkg = loadPackageJson();
   const now = new Date();
+  const skipPackValidation = shouldSkipPackedTarballValidation();
   const metadataErrors = collectReleasePackageMetadataErrors(pkg);
   const tagErrors = collectReleaseTagErrors({
     packageVersion: pkg.version ?? "",
@@ -458,7 +467,7 @@ function main(): number {
     releaseMainRef: process.env.RELEASE_MAIN_REF,
     now,
   });
-  const tarballErrors = collectPackedTarballErrors();
+  const tarballErrors = skipPackValidation ? [] : collectPackedTarballErrors();
   const errors = [...metadataErrors, ...tagErrors, ...tarballErrors];
 
   if (errors.length > 0) {
@@ -473,7 +482,7 @@ function main(): number {
   const dayDistance =
     parsedVersion === null ? "unknown" : String(utcCalendarDayDistance(parsedVersion.date, now));
   console.log(
-    `openclaw-npm-release-check: validated ${channel} release ${pkg.version} (${dayDistance} day UTC delta).`,
+    `openclaw-npm-release-check: validated ${channel} release ${pkg.version} (${dayDistance} day UTC delta${skipPackValidation ? "; metadata-only" : ""}).`,
   );
   return 0;
 }

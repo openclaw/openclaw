@@ -1,21 +1,41 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { runRegisteredCli } from "../test-utils/command-runner.js";
-import { formatLogTimestamp } from "./logs-cli.js";
+import { formatLogTimestamp, registerLogsCli } from "./logs-cli.js";
 
 const callGatewayFromCli = vi.fn();
+const readConfiguredLogTail = vi.fn();
+const buildGatewayConnectionDetails = vi.fn(
+  (_options?: {
+    configPath?: string;
+    config?: unknown;
+    url?: string;
+    urlSource?: "cli" | "env";
+  }) => ({
+    url: "ws://127.0.0.1:18789",
+    urlSource: "local loopback",
+    message: "",
+  }),
+);
+
+vi.mock("../gateway/call.js", () => ({
+  buildGatewayConnectionDetails: (
+    ...args: Parameters<typeof import("../gateway/call.js").buildGatewayConnectionDetails>
+  ) => buildGatewayConnectionDetails(...args),
+}));
+
+vi.mock("../logging/log-tail.js", () => ({
+  readConfiguredLogTail: (
+    ...args: Parameters<typeof import("../logging/log-tail.js").readConfiguredLogTail>
+  ) => readConfiguredLogTail(...args),
+}));
 
 vi.mock("./gateway-rpc.js", async () => {
   const actual = await vi.importActual<typeof import("./gateway-rpc.js")>("./gateway-rpc.js");
   return {
     ...actual,
-    callGatewayFromCli: (...args: unknown[]) => callGatewayFromCli(...args),
+    callGatewayFromCli: (...args: Parameters<typeof actual.callGatewayFromCli>) =>
+      callGatewayFromCli(...args),
   };
-});
-
-let registerLogsCli: typeof import("./logs-cli.js").registerLogsCli;
-
-beforeAll(async () => {
-  ({ registerLogsCli } = await import("./logs-cli.js"));
 });
 
 async function runLogsCli(argv: string[]) {
@@ -28,6 +48,8 @@ async function runLogsCli(argv: string[]) {
 describe("logs cli", () => {
   afterEach(() => {
     callGatewayFromCli.mockClear();
+    readConfiguredLogTail.mockClear();
+    buildGatewayConnectionDetails.mockClear();
     vi.restoreAllMocks();
   });
 
@@ -107,6 +129,39 @@ describe("logs cli", () => {
     await runLogsCli(["logs"]);
 
     expect(stderrWrites.join("")).toContain("output stdout closed");
+  });
+
+  it("falls back to the local log file on loopback pairing-required errors", async () => {
+    callGatewayFromCli.mockRejectedValueOnce(new Error("gateway closed (1008): pairing required"));
+    readConfiguredLogTail.mockResolvedValueOnce({
+      file: "/tmp/openclaw.log",
+      cursor: 5,
+      size: 5,
+      lines: ["local fallback line"],
+      truncated: false,
+      reset: false,
+    });
+
+    const stdoutWrites: string[] = [];
+    const stderrWrites: string[] = [];
+    vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
+      stdoutWrites.push(String(chunk));
+      return true;
+    });
+    vi.spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => {
+      stderrWrites.push(String(chunk));
+      return true;
+    });
+
+    await runLogsCli(["logs"]);
+
+    expect(readConfiguredLogTail).toHaveBeenCalledWith({
+      cursor: undefined,
+      limit: 200,
+      maxBytes: 250_000,
+    });
+    expect(stdoutWrites.join("")).toContain("local fallback line");
+    expect(stderrWrites.join("")).toContain("reading local log file instead");
   });
 
   describe("formatLogTimestamp", () => {

@@ -6,13 +6,13 @@ import {
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createRestrictSendersChannelSecurity } from "openclaw/plugin-sdk/channel-policy";
 import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
-import { getChatChannelMeta, type ChannelPlugin } from "../runtime-api.js";
 import {
   listIMessageAccountIds,
   resolveDefaultIMessageAccountId,
   resolveIMessageAccount,
   type ResolvedIMessageAccount,
 } from "./accounts.js";
+import { getChatChannelMeta, type ChannelPlugin } from "./channel-api.js";
 import { IMessageChannelConfigSchema } from "./config-schema.js";
 import { createIMessageSetupWizardProxy } from "./setup-core.js";
 

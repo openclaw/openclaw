@@ -27,8 +27,9 @@ function parseList(value: string): string[] {
 export { tlonSetupAdapter } from "./setup-core.js";
 
 export const tlonSetupWizard = createTlonSetupWizardBase({
-  resolveConfigured: async ({ cfg }) => await resolveTlonSetupConfigured(cfg),
-  resolveStatusLines: async ({ cfg }) => await resolveTlonSetupStatusLines(cfg),
+  resolveConfigured: async ({ cfg, accountId }) => await resolveTlonSetupConfigured(cfg, accountId),
+  resolveStatusLines: async ({ cfg, accountId }) =>
+    await resolveTlonSetupStatusLines(cfg, accountId),
   finalize: async ({ cfg, accountId, prompter }) => {
     let next = cfg;
     const resolved = resolveTlonAccount(next, accountId);

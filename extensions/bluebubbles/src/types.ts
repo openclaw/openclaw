@@ -1,7 +1,7 @@
-import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/infra-runtime";
 import type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/setup";
+import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 
-export type { SsrFPolicy } from "openclaw/plugin-sdk/infra-runtime";
+export type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 export type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/setup";
 
 export type BlueBubblesGroupConfig = {
@@ -9,6 +9,20 @@ export type BlueBubblesGroupConfig = {
   requireMention?: boolean;
   /** Optional tool policy overrides for this group. */
   tools?: { allow?: string[]; deny?: string[] };
+};
+
+export type BlueBubblesActionConfig = {
+  reactions?: boolean;
+  edit?: boolean;
+  unsend?: boolean;
+  reply?: boolean;
+  sendWithEffect?: boolean;
+  renameGroup?: boolean;
+  setGroupIcon?: boolean;
+  addParticipant?: boolean;
+  removeParticipant?: boolean;
+  leaveGroup?: boolean;
+  sendAttachment?: boolean;
 };
 
 export type BlueBubblesAccountConfig = {
@@ -61,33 +75,22 @@ export type BlueBubblesAccountConfig = {
   allowPrivateNetwork?: boolean;
   /** Per-group configuration keyed by chat GUID or identifier. */
   groups?: Record<string, BlueBubblesGroupConfig>;
+  /** Per-action tool gating (default: true for all). */
+  actions?: BlueBubblesActionConfig;
   /** Channel health monitor overrides for this channel/account. */
   healthMonitor?: {
     enabled?: boolean;
   };
 };
 
-export type BlueBubblesActionConfig = {
-  reactions?: boolean;
-  edit?: boolean;
-  unsend?: boolean;
-  reply?: boolean;
-  sendWithEffect?: boolean;
-  renameGroup?: boolean;
-  addParticipant?: boolean;
-  removeParticipant?: boolean;
-  leaveGroup?: boolean;
-  sendAttachment?: boolean;
-};
-
-export type BlueBubblesConfig = {
+export type BlueBubblesConfig = Omit<BlueBubblesAccountConfig, "actions"> & {
   /** Optional per-account BlueBubbles configuration (multi-account). */
   accounts?: Record<string, BlueBubblesAccountConfig>;
   /** Optional default account id when multiple accounts are configured. */
   defaultAccount?: string;
   /** Per-action tool gating (default: true for all). */
   actions?: BlueBubblesActionConfig;
-} & BlueBubblesAccountConfig;
+};
 
 export type BlueBubblesSendTarget =
   | { kind: "chat_id"; chatId: number }

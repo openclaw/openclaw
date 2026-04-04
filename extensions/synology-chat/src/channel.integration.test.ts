@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   dispatchReplyWithBufferedBlockDispatcher,
   finalizeInboundContextMock,
@@ -14,8 +14,12 @@ type RegisteredRoute = {
   handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
 };
 
-const { createSynologyChatPlugin } = await import("./channel.js");
+let createSynologyChatPlugin: typeof import("./channel.js").createSynologyChatPlugin;
 describe("Synology channel wiring integration", () => {
+  beforeAll(async () => {
+    ({ createSynologyChatPlugin } = await import("./channel.js"));
+  });
+
   beforeEach(() => {
     registerPluginHttpRouteMock.mockClear();
     dispatchReplyWithBufferedBlockDispatcher.mockClear();

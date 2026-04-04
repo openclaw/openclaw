@@ -1,4 +1,5 @@
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
+import { applyModelStudioNativeStreamingUsageCompat } from "./api.js";
 import {
   applyModelStudioConfig,
   applyModelStudioConfigCn,
@@ -31,7 +32,7 @@ export default defineSingleProviderPluginEntry({
         noteMessage: [
           "Get your API key at: https://bailian.console.aliyun.com/",
           "Endpoint: dashscope.aliyuncs.com/compatible-mode/v1",
-          "Models: qwen3.5-plus, qwen3-coder-plus, qwen3-coder-next, etc.",
+          "Models: qwen3.6-plus, qwen3.5-plus, qwen3-coder-plus, etc.",
         ].join("\n"),
         noteTitle: "Alibaba Cloud Model Studio Standard (China)",
         wizard: {
@@ -53,7 +54,7 @@ export default defineSingleProviderPluginEntry({
         noteMessage: [
           "Get your API key at: https://modelstudio.console.alibabacloud.com/",
           "Endpoint: dashscope-intl.aliyuncs.com/compatible-mode/v1",
-          "Models: qwen3.5-plus, qwen3-coder-plus, qwen3-coder-next, etc.",
+          "Models: qwen3.6-plus, qwen3.5-plus, qwen3-coder-plus, etc.",
         ].join("\n"),
         noteTitle: "Alibaba Cloud Model Studio Standard (Global/Intl)",
         wizard: {
@@ -75,7 +76,7 @@ export default defineSingleProviderPluginEntry({
         noteMessage: [
           "Get your API key at: https://bailian.console.aliyun.com/",
           "Endpoint: coding.dashscope.aliyuncs.com",
-          "Models: qwen3.5-plus, glm-5, kimi-k2.5, MiniMax-M2.5, etc.",
+          "Models: qwen3.6-plus, glm-5, kimi-k2.5, MiniMax-M2.5, etc.",
         ].join("\n"),
         noteTitle: "Alibaba Cloud Model Studio Coding Plan (China)",
         wizard: {
@@ -97,7 +98,7 @@ export default defineSingleProviderPluginEntry({
         noteMessage: [
           "Get your API key at: https://bailian.console.aliyun.com/",
           "Endpoint: coding-intl.dashscope.aliyuncs.com",
-          "Models: qwen3.5-plus, glm-5, kimi-k2.5, MiniMax-M2.5, etc.",
+          "Models: qwen3.6-plus, glm-5, kimi-k2.5, MiniMax-M2.5, etc.",
         ].join("\n"),
         noteTitle: "Alibaba Cloud Model Studio Coding Plan (Global/Intl)",
         wizard: {
@@ -111,5 +112,7 @@ export default defineSingleProviderPluginEntry({
       buildProvider: buildModelStudioProvider,
       allowExplicitBaseUrl: true,
     },
+    applyNativeStreamingUsageCompat: ({ providerConfig }) =>
+      applyModelStudioNativeStreamingUsageCompat(providerConfig),
   },
 });

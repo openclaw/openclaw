@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resolvePreferredOpenClawTmpDir } from "../../../src/infra/tmp-openclaw-dir.js";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
@@ -42,12 +42,15 @@ vi.mock("./runtime.js", () => ({
   }),
 }));
 
-import {
-  downloadImageFeishu,
-  downloadMessageResourceFeishu,
-  sanitizeFileNameForUpload,
-  sendMediaFeishu,
-} from "./media.js";
+vi.mock("../../../src/channels/plugins/bundled.js", () => ({
+  bundledChannelPlugins: [],
+  bundledChannelSetupPlugins: [],
+}));
+
+let downloadImageFeishu: typeof import("./media.js").downloadImageFeishu;
+let downloadMessageResourceFeishu: typeof import("./media.js").downloadMessageResourceFeishu;
+let sanitizeFileNameForUpload: typeof import("./media.js").sanitizeFileNameForUpload;
+let sendMediaFeishu: typeof import("./media.js").sendMediaFeishu;
 
 function expectPathIsolatedToTmpRoot(pathValue: string, key: string): void {
   expect(pathValue).not.toContain(key);
@@ -79,6 +82,15 @@ function mockResolvedFeishuAccount() {
 }
 
 describe("sendMediaFeishu msg_type routing", () => {
+  beforeAll(async () => {
+    ({
+      downloadImageFeishu,
+      downloadMessageResourceFeishu,
+      sanitizeFileNameForUpload,
+      sendMediaFeishu,
+    } = await import("./media.js"));
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     mockResolvedFeishuAccount();

@@ -15,6 +15,10 @@ let originalStateDir: string | undefined;
 let originalUpdateInProgress: string | undefined;
 let tempStateDir: string | undefined;
 
+function buildBundledPluginModuleId(pluginId: string, artifactBasename: string): string {
+  return ["..", "..", "extensions", pluginId, artifactBasename].join("/");
+}
+
 function setStdinTty(value: boolean | undefined) {
   try {
     Object.defineProperty(process.stdin, "isTTY", {
@@ -129,7 +133,9 @@ export const autoMigrateLegacyStateDir = vi.fn().mockResolvedValue({
   changes: [],
   warnings: [],
 }) as unknown as MockFn;
-export const runStartupMatrixMigration = vi.fn().mockResolvedValue(undefined) as unknown as MockFn;
+export const runChannelPluginStartupMaintenance = vi
+  .fn()
+  .mockResolvedValue(undefined) as unknown as MockFn;
 
 function createLegacyStateMigrationDetectionResult(params?: {
   hasLegacySessions?: boolean;
@@ -154,14 +160,9 @@ function createLegacyStateMigrationDetectionResult(params?: {
       targetDir: "/tmp/state/agents/main/agent",
       hasLegacy: false,
     },
-    whatsappAuth: {
-      legacyDir: "/tmp/oauth",
-      targetDir: "/tmp/oauth/whatsapp/default",
+    channelPlans: {
       hasLegacy: false,
-    },
-    pairingAllowFrom: {
-      hasLegacyTelegram: false,
-      copyPlans: [],
+      plans: [],
     },
     preview: params?.preview ?? [],
   };
@@ -203,8 +204,8 @@ vi.mock("../plugins/loader.js", () => ({
   loadOpenClawPlugins: () => createEmptyPluginRegistry(),
 }));
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
+vi.mock("../config/config.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
     CONFIG_PATH: "/tmp/openclaw.json",
@@ -245,8 +246,8 @@ vi.mock("./doctor-gateway-auth-token.js", () => ({
   resolveGatewayAuthTokenForService,
 }));
 
-vi.mock("../gateway/call.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../gateway/call.js")>();
+vi.mock("../gateway/call.js", async () => {
+  const actual = await vi.importActual<typeof import("../gateway/call.js")>("../gateway/call.js");
   return {
     ...actual,
     callGateway,
@@ -266,8 +267,10 @@ vi.mock("../infra/update-runner.js", () => ({
   runGatewayUpdate,
 }));
 
-vi.mock("../agents/auth-profiles.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../agents/auth-profiles.js")>();
+vi.mock("../agents/auth-profiles.js", async () => {
+  const actual = await vi.importActual<typeof import("../agents/auth-profiles.js")>(
+    "../agents/auth-profiles.js",
+  );
   return {
     ...actual,
     ensureAuthProfileStore,
@@ -294,7 +297,7 @@ vi.mock("../pairing/pairing-store.js", () => ({
   upsertChannelPairingRequest: vi.fn().mockResolvedValue({ code: "000000", created: false }),
 }));
 
-vi.mock("../../extensions/telegram/api.js", () => ({
+vi.mock(buildBundledPluginModuleId("telegram", "api.js"), () => ({
   resolveTelegramToken: vi.fn(() => ({ token: "", source: "none" })),
 }));
 
@@ -308,8 +311,8 @@ vi.mock("../runtime.js", () => ({
   },
 }));
 
-vi.mock("../utils.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../utils.js")>();
+vi.mock("../utils.js", async () => {
+  const actual = await vi.importActual<typeof import("../utils.js")>("../utils.js");
   return {
     ...actual,
     resolveUserPath: (value: string) => value,
@@ -335,8 +338,8 @@ vi.mock("./doctor-state-migrations.js", () => ({
   runLegacyStateMigrations,
 }));
 
-vi.mock("../gateway/server-startup-matrix-migration.js", () => ({
-  runStartupMatrixMigration,
+vi.mock("../channels/plugins/lifecycle-startup.js", () => ({
+  runChannelPluginStartupMaintenance,
 }));
 
 export function mockDoctorConfigSnapshot(
@@ -441,7 +444,7 @@ beforeEach(() => {
   serviceUninstall.mockReset().mockResolvedValue(undefined);
   serviceReadCommand.mockReset().mockResolvedValue(null);
   callGateway.mockReset().mockRejectedValue(new Error("gateway closed"));
-  runStartupMatrixMigration.mockReset().mockResolvedValue(undefined);
+  runChannelPluginStartupMaintenance.mockReset().mockResolvedValue(undefined);
 
   originalIsTTY = process.stdin.isTTY;
   setStdinTty(true);

@@ -28,6 +28,16 @@ export const AgentSummarySchema = Type.Object(
         { additionalProperties: false },
       ),
     ),
+    workspace: Type.Optional(NonEmptyString),
+    model: Type.Optional(
+      Type.Object(
+        {
+          primary: Type.Optional(NonEmptyString),
+          fallbacks: Type.Optional(Type.Array(NonEmptyString)),
+        },
+        { additionalProperties: false },
+      ),
+    ),
   },
   { additionalProperties: false },
 );
@@ -194,6 +204,7 @@ export const SkillsInstallParamsSchema = Type.Union([
     {
       name: NonEmptyString,
       installId: NonEmptyString,
+      dangerouslyForceUnsafeInstall: Type.Optional(Type.Boolean()),
       timeoutMs: Type.Optional(Type.Integer({ minimum: 1000 })),
     },
     { additionalProperties: false },
@@ -229,6 +240,98 @@ export const SkillsUpdateParamsSchema = Type.Union([
     { additionalProperties: false },
   ),
 ]);
+
+export const SkillsSearchParamsSchema = Type.Object(
+  {
+    query: Type.Optional(NonEmptyString),
+    limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+  },
+  { additionalProperties: false },
+);
+
+export const SkillsSearchResultSchema = Type.Object(
+  {
+    results: Type.Array(
+      Type.Object(
+        {
+          score: Type.Number(),
+          slug: NonEmptyString,
+          displayName: NonEmptyString,
+          summary: Type.Optional(Type.String()),
+          version: Type.Optional(NonEmptyString),
+          updatedAt: Type.Optional(Type.Integer()),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+  },
+  { additionalProperties: false },
+);
+
+export const SkillsDetailParamsSchema = Type.Object(
+  {
+    slug: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const SkillsDetailResultSchema = Type.Object(
+  {
+    skill: Type.Union([
+      Type.Object(
+        {
+          slug: NonEmptyString,
+          displayName: NonEmptyString,
+          summary: Type.Optional(Type.String()),
+          tags: Type.Optional(Type.Record(NonEmptyString, Type.String())),
+          createdAt: Type.Integer(),
+          updatedAt: Type.Integer(),
+        },
+        { additionalProperties: false },
+      ),
+      Type.Null(),
+    ]),
+    latestVersion: Type.Optional(
+      Type.Union([
+        Type.Object(
+          {
+            version: NonEmptyString,
+            createdAt: Type.Integer(),
+            changelog: Type.Optional(Type.String()),
+          },
+          { additionalProperties: false },
+        ),
+        Type.Null(),
+      ]),
+    ),
+    metadata: Type.Optional(
+      Type.Union([
+        Type.Object(
+          {
+            os: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])),
+            systems: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])),
+          },
+          { additionalProperties: false },
+        ),
+        Type.Null(),
+      ]),
+    ),
+    owner: Type.Optional(
+      Type.Union([
+        Type.Object(
+          {
+            handle: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+            displayName: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+            image: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+          },
+          { additionalProperties: false },
+        ),
+        Type.Null(),
+      ]),
+    ),
+  },
+  { additionalProperties: false },
+);
 
 export const ToolsCatalogParamsSchema = Type.Object(
   {

@@ -2,6 +2,7 @@ import type { Dispatcher } from "undici";
 import { logWarn } from "../../logger.js";
 import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
 import { hasProxyEnvConfigured } from "./proxy-env.js";
+import { retainSafeHeadersForCrossOriginRedirect as retainSafeRedirectHeaders } from "./redirect-headers.js";
 import {
   closeDispatcher,
   createPinnedDispatcher,
@@ -55,21 +56,6 @@ type GuardedFetchPresetOptions = Omit<
 >;
 
 const DEFAULT_MAX_REDIRECTS = 3;
-const CROSS_ORIGIN_REDIRECT_SAFE_HEADERS = new Set([
-  "accept",
-  "accept-encoding",
-  "accept-language",
-  "cache-control",
-  "content-language",
-  "content-type",
-  "if-match",
-  "if-modified-since",
-  "if-none-match",
-  "if-unmodified-since",
-  "pragma",
-  "range",
-  "user-agent",
-]);
 
 export function withStrictGuardedFetchMode(params: GuardedFetchPresetOptions): GuardedFetchOptions {
   return { ...params, mode: GUARDED_FETCH_MODE.STRICT };
@@ -107,22 +93,91 @@ function assertExplicitProxySupportsPinnedDns(
   }
 }
 
+async function assertExplicitProxyAllowed(
+  dispatcherPolicy: PinnedDispatcherPolicy | undefined,
+  lookupFn: LookupFn | undefined,
+  policy: SsrFPolicy | undefined,
+): Promise<void> {
+  if (!dispatcherPolicy || dispatcherPolicy.mode !== "explicit-proxy") {
+    return;
+  }
+  let parsedProxyUrl: URL;
+  try {
+    parsedProxyUrl = new URL(dispatcherPolicy.proxyUrl);
+  } catch {
+    throw new Error("Invalid explicit proxy URL");
+  }
+  if (!["http:", "https:"].includes(parsedProxyUrl.protocol)) {
+    throw new Error("Explicit proxy URL must use http or https");
+  }
+  await resolvePinnedHostnameWithPolicy(parsedProxyUrl.hostname, {
+    lookupFn,
+    policy:
+      dispatcherPolicy.allowPrivateProxy === true
+        ? {
+            ...policy,
+            allowPrivateNetwork: true,
+          }
+        : policy,
+  });
+}
+
 function isRedirectStatus(status: number): boolean {
   return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
+}
+
+export function retainSafeHeadersForCrossOriginRedirectHeaders(
+  headers?: HeadersInit,
+): Record<string, string> | undefined {
+  return retainSafeRedirectHeaders(headers);
 }
 
 function retainSafeHeadersForCrossOriginRedirect(init?: RequestInit): RequestInit | undefined {
   if (!init?.headers) {
     return init;
   }
-  const incoming = new Headers(init.headers);
-  const headers = new Headers();
-  for (const [key, value] of incoming.entries()) {
-    if (CROSS_ORIGIN_REDIRECT_SAFE_HEADERS.has(key.toLowerCase())) {
-      headers.set(key, value);
-    }
+  return { ...init, headers: retainSafeRedirectHeaders(init.headers) };
+}
+
+function dropBodyHeaders(headers?: HeadersInit): HeadersInit | undefined {
+  if (!headers) {
+    return headers;
   }
-  return { ...init, headers };
+  const nextHeaders = new Headers(headers);
+  nextHeaders.delete("content-encoding");
+  nextHeaders.delete("content-language");
+  nextHeaders.delete("content-length");
+  nextHeaders.delete("content-location");
+  nextHeaders.delete("content-type");
+  nextHeaders.delete("transfer-encoding");
+  return nextHeaders;
+}
+
+function rewriteRedirectInitForMethod(params: {
+  init?: RequestInit;
+  status: number;
+}): RequestInit | undefined {
+  const { init, status } = params;
+  if (!init) {
+    return init;
+  }
+
+  const currentMethod = init.method?.toUpperCase() ?? "GET";
+  const shouldForceGet =
+    status === 303
+      ? currentMethod !== "GET" && currentMethod !== "HEAD"
+      : (status === 301 || status === 302) && currentMethod === "POST";
+
+  if (!shouldForceGet) {
+    return init;
+  }
+
+  return {
+    ...init,
+    method: "GET",
+    body: undefined,
+    headers: dropBodyHeaders(init.headers),
+  };
 }
 
 export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<GuardedFetchResult> {
@@ -152,7 +207,7 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
     await closeDispatcher(dispatcher ?? undefined);
   };
 
-  const visited = new Set<string>();
+  const visited = new Set<string>([params.url]);
   let currentUrl = params.url;
   let currentInit = params.init ? { ...params.init } : undefined;
   let redirectCount = 0;
@@ -173,6 +228,7 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
     let dispatcher: Dispatcher | null = null;
     try {
       assertExplicitProxySupportsPinnedDns(parsedUrl, params.dispatcherPolicy, params.pinDns);
+      await assertExplicitProxyAllowed(params.dispatcherPolicy, params.lookupFn, params.policy);
       const pinned = await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
         lookupFn: params.lookupFn,
         policy: params.policy,
@@ -212,6 +268,7 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
           await release(dispatcher);
           throw new Error("Redirect loop detected");
         }
+        currentInit = rewriteRedirectInitForMethod({ init: currentInit, status: response.status });
         if (nextParsedUrl.origin !== parsedUrl.origin) {
           currentInit = retainSafeHeadersForCrossOriginRedirect(currentInit);
         }

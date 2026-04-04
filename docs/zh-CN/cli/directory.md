@@ -6,7 +6,7 @@ summary: "`openclaw directory` 的 CLI 参考（self、peers、groups）"
 title: directory
 x-i18n:
   generated_at: "2026-02-01T19:58:58Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 7c878d9013aeaa22c8a21563fac30b465a86be85d8c917c5d4591b5c3d4b2025
   source_path: cli/directory.md

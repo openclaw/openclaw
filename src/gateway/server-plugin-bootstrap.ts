@@ -1,5 +1,6 @@
 import { primeConfiguredBindingRegistry } from "../channels/plugins/binding-registry.js";
 import type { loadConfig } from "../config/config.js";
+import { resolvePluginActivationSnapshot } from "../plugins/activation-context.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { pinActivePluginChannelRegistry } from "../plugins/runtime.js";
 import { setGatewaySubagentRuntime } from "../plugins/runtime/index.js";
@@ -19,10 +20,12 @@ type GatewayPluginBootstrapLog = {
 
 type GatewayPluginBootstrapParams = {
   cfg: ReturnType<typeof loadConfig>;
+  activationSourceConfig?: ReturnType<typeof loadConfig>;
   workspaceDir: string;
   log: GatewayPluginBootstrapLog;
   coreGatewayHandlers: Record<string, GatewayRequestHandler>;
   baseMethods: string[];
+  pluginIds?: string[];
   preferSetupRuntimeForChannelPlugins?: boolean;
   logDiagnostics?: boolean;
   beforePrimeRegistry?: (pluginRegistry: PluginRegistry) => void;
@@ -56,17 +59,26 @@ function logGatewayPluginDiagnostics(params: {
 }
 
 export function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
-  installGatewayPluginRuntimeEnvironment(params.cfg);
+  const activation = resolvePluginActivationSnapshot({
+    rawConfig: params.activationSourceConfig ?? params.cfg,
+    env: process.env,
+    applyAutoEnable: true,
+  });
+  const resolvedConfig = activation.config ?? params.cfg;
+  installGatewayPluginRuntimeEnvironment(resolvedConfig);
   const loaded = loadGatewayPlugins({
-    cfg: params.cfg,
+    cfg: resolvedConfig,
+    activationSourceConfig: params.activationSourceConfig ?? params.cfg,
+    autoEnabledReasons: activation.autoEnabledReasons,
     workspaceDir: params.workspaceDir,
     log: params.log,
     coreGatewayHandlers: params.coreGatewayHandlers,
     baseMethods: params.baseMethods,
+    pluginIds: params.pluginIds,
     preferSetupRuntimeForChannelPlugins: params.preferSetupRuntimeForChannelPlugins,
   });
   params.beforePrimeRegistry?.(loaded.pluginRegistry);
-  primeConfiguredBindingRegistry({ cfg: params.cfg });
+  primeConfiguredBindingRegistry({ cfg: resolvedConfig });
   if ((params.logDiagnostics ?? true) && loaded.pluginRegistry.diagnostics.length > 0) {
     logGatewayPluginDiagnostics({
       diagnostics: loaded.pluginRegistry.diagnostics,

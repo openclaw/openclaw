@@ -31,15 +31,20 @@ if [[ -n "${OPENCLAW_DOCKER_AUTH_DIRS:-}" ]]; then
     AUTH_DIRS+=("$auth_dir")
   done < <(openclaw_live_collect_auth_dirs)
 fi
-AUTH_DIRS_CSV="$(openclaw_live_join_csv "${AUTH_DIRS[@]}")"
+AUTH_DIRS_CSV=""
+if ((${#AUTH_DIRS[@]} > 0)); then
+  AUTH_DIRS_CSV="$(openclaw_live_join_csv "${AUTH_DIRS[@]}")"
+fi
 
 EXTERNAL_AUTH_MOUNTS=()
-for auth_dir in "${AUTH_DIRS[@]}"; do
-  host_path="$HOME/$auth_dir"
-  if [[ -d "$host_path" ]]; then
-    EXTERNAL_AUTH_MOUNTS+=(-v "$host_path":/host-auth/"$auth_dir":ro)
-  fi
-done
+if ((${#AUTH_DIRS[@]} > 0)); then
+  for auth_dir in "${AUTH_DIRS[@]}"; do
+    host_path="$HOME/$auth_dir"
+    if [[ -d "$host_path" ]]; then
+      EXTERNAL_AUTH_MOUNTS+=(-v "$host_path":/host-auth/"$auth_dir":ro)
+    fi
+  done
+fi
 
 cleanup() {
   docker rm -f "$OW_NAME" >/dev/null 2>&1 || true
@@ -75,14 +80,16 @@ docker run -d \
     set -euo pipefail
     [ -f "$HOME/.profile" ] && source "$HOME/.profile" || true
     IFS="," read -r -a auth_dirs <<<"${OPENCLAW_DOCKER_AUTH_DIRS_RESOLVED:-}"
-    for auth_dir in "${auth_dirs[@]}"; do
-      [ -n "$auth_dir" ] || continue
-      if [ -d "/host-auth/$auth_dir" ]; then
-        mkdir -p "$HOME/$auth_dir"
-        cp -R "/host-auth/$auth_dir/." "$HOME/$auth_dir"
-        chmod -R u+rwX "$HOME/$auth_dir" || true
-      fi
-    done
+    if ((${#auth_dirs[@]} > 0)); then
+      for auth_dir in "${auth_dirs[@]}"; do
+        [ -n "$auth_dir" ] || continue
+        if [ -d "/host-auth/$auth_dir" ]; then
+          mkdir -p "$HOME/$auth_dir"
+          cp -R "/host-auth/$auth_dir/." "$HOME/$auth_dir"
+          chmod -R u+rwX "$HOME/$auth_dir" || true
+        fi
+      done
+    fi
 
     entry=dist/index.mjs
     [ -f "$entry" ] || entry=dist/index.js

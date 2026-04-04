@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
-import { __setModelCatalogImportForTest, loadModelCatalog } from "./model-catalog.js";
+import {
+  __setModelCatalogImportForTest,
+  findModelInCatalog,
+  loadModelCatalog,
+} from "./model-catalog.js";
 import {
   installModelCatalogTestHooks,
   mockCatalogImportFailThenRecover,
@@ -243,6 +247,12 @@ describe("loadModelCatalog", () => {
         id: "gpt-5.4",
       }),
     );
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        provider: "openai-codex",
+        id: "gpt-5.4-mini",
+      }),
+    );
   });
 
   it("merges configured models for opted-in non-pi-native providers", async () => {
@@ -278,6 +288,38 @@ describe("loadModelCatalog", () => {
         id: "google/gemini-3-pro-preview",
         name: "Gemini 3 Pro Preview",
       }),
+    );
+  });
+
+  it("merges configured models for opted-in ollama provider", async () => {
+    mockSingleOpenAiCatalogModel();
+
+    const result = await loadModelCatalog({
+      config: {
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "http://127.0.0.1:11434",
+              api: "ollama",
+              models: [
+                {
+                  id: "llama3.2",
+                  name: "Llama 3.2",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 1048576,
+                  maxTokens: 65536,
+                },
+              ],
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(result).toContainEqual(
+      expect.objectContaining({ provider: "ollama", id: "llama3.2", name: "Llama 3.2" }),
     );
   });
 
@@ -351,5 +393,15 @@ describe("loadModelCatalog", () => {
     );
     expect(matches).toHaveLength(1);
     expect(matches[0]?.name).toBe("Kilo Auto");
+  });
+
+  it("matches models across canonical provider aliases", () => {
+    expect(
+      findModelInCatalog([{ provider: "z.ai", id: "glm-5", name: "GLM-5" }], "z-ai", "glm-5"),
+    ).toEqual({
+      provider: "z.ai",
+      id: "glm-5",
+      name: "GLM-5",
+    });
   });
 });

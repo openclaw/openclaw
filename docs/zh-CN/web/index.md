@@ -6,7 +6,7 @@ summary: Gateway 网关 Web 界面：Control UI、绑定模式和安全
 title: Web
 x-i18n:
   generated_at: "2026-02-03T10:13:29Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 4da8bc9831018c482ac918a759b9739f75ca130f70993f81911818bc60a685d1
   source_path: web/index.md

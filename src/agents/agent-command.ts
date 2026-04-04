@@ -57,6 +57,7 @@ import {
   persistSessionEntry as persistSessionEntryBase,
   prependInternalEventContext,
   runAgentAttempt,
+  sessionFileHasContent,
 } from "./command/attempt-execution.js";
 import { deliverAgentCommandResult } from "./command/delivery.js";
 import { resolveAgentRunContext } from "./command/run-context.js";
@@ -77,7 +78,8 @@ import {
   resolveThinkingDefault,
 } from "./model-selection.js";
 import { buildWorkspaceSkillSnapshot } from "./skills.js";
-import { getSkillsSnapshotVersion } from "./skills/refresh.js";
+import { matchesSkillFilter } from "./skills/filter.js";
+import { getSkillsSnapshotVersion, shouldRefreshSnapshotForVersion } from "./skills/refresh.js";
 import { normalizeSpawnedRunMetadata } from "./spawned-context.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 import { ensureAgentWorkspace } from "./workspace.js";
@@ -496,17 +498,23 @@ async function agentCommandInternal(
       });
     }
 
-    const needsSkillsSnapshot = isNewSession || !sessionEntry?.skillsSnapshot;
     const skillsSnapshotVersion = getSkillsSnapshotVersion(workspaceDir);
     const skillFilter = resolveAgentSkillsFilter(cfg, sessionAgentId);
+    const currentSkillsSnapshot = sessionEntry?.skillsSnapshot;
+    const shouldRefreshSkillsSnapshot =
+      !currentSkillsSnapshot ||
+      shouldRefreshSnapshotForVersion(currentSkillsSnapshot.version, skillsSnapshotVersion) ||
+      !matchesSkillFilter(currentSkillsSnapshot.skillFilter, skillFilter);
+    const needsSkillsSnapshot = isNewSession || shouldRefreshSkillsSnapshot;
     const skillsSnapshot = needsSkillsSnapshot
       ? buildWorkspaceSkillSnapshot(workspaceDir, {
           config: cfg,
           eligibility: { remote: getRemoteSkillEligibility() },
           snapshotVersion: skillsSnapshotVersion,
           skillFilter,
+          agentId: sessionAgentId,
         })
-      : sessionEntry?.skillsSnapshot;
+      : currentSkillsSnapshot;
 
     if (skillsSnapshot && sessionStore && sessionKey && needsSkillsSnapshot) {
       const current = sessionEntry ?? {
@@ -756,7 +764,7 @@ async function agentCommandInternal(
         runId,
         agentDir,
         fallbacksOverride: effectiveFallbacksOverride,
-        run: (providerOverride, modelOverride, runOptions) => {
+        run: async (providerOverride, modelOverride, runOptions) => {
           const isFallbackRetry = fallbackAttemptIndex > 0;
           fallbackAttemptIndex += 1;
           return runAgentAttempt({
@@ -785,6 +793,7 @@ async function agentCommandInternal(
             sessionStore,
             storePath,
             allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
+            sessionHasHistory: !isNewSession || (await sessionFileHasContent(sessionFile)),
             onAgentEvent: (evt) => {
               // Track lifecycle end for fallback emission below.
               if (

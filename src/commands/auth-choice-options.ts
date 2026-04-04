@@ -16,6 +16,12 @@ function compareOptionLabels(a: AuthChoiceOption, b: AuthChoiceOption): number {
   return a.label.localeCompare(b.label);
 }
 
+function compareAssistantOptions(a: AuthChoiceOption, b: AuthChoiceOption): number {
+  const priorityA = a.assistantPriority ?? 0;
+  const priorityB = b.assistantPriority ?? 0;
+  return priorityA - priorityB || compareOptionLabels(a, b);
+}
+
 function compareGroupLabels(a: AuthChoiceGroup, b: AuthChoiceGroup): number {
   return a.label.localeCompare(b.label);
 }
@@ -63,6 +69,7 @@ export function formatAuthChoiceChoicesForCli(params?: {
 export function buildAuthChoiceOptions(params: {
   store: AuthProfileStore;
   includeSkip: boolean;
+  assistantVisibleOnly?: boolean;
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -80,9 +87,11 @@ export function buildAuthChoiceOptions(params: {
     optionByValue.set(option.value, option);
   }
 
-  const options: AuthChoiceOption[] = Array.from(optionByValue.values()).toSorted(
-    compareOptionLabels,
-  );
+  const options: AuthChoiceOption[] = Array.from(optionByValue.values())
+    .toSorted(compareOptionLabels)
+    .filter((option) =>
+      params.assistantVisibleOnly ? option.assistantVisibility !== "manual-only" : true,
+    );
 
   if (params.includeSkip) {
     options.push({ value: "skip", label: "Skip for now" });
@@ -104,6 +113,7 @@ export function buildAuthChoiceGroups(params: {
   const options = buildAuthChoiceOptions({
     ...params,
     includeSkip: false,
+    assistantVisibleOnly: true,
   });
   const groupsById = new Map<AuthChoiceGroupId, AuthChoiceGroup>();
 
@@ -126,7 +136,7 @@ export function buildAuthChoiceGroups(params: {
   const groups = Array.from(groupsById.values())
     .map((group) => ({
       ...group,
-      options: [...group.options].toSorted(compareOptionLabels),
+      options: [...group.options].toSorted(compareAssistantOptions),
     }))
     .toSorted(compareGroupLabels);
 
