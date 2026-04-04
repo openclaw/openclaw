@@ -177,6 +177,7 @@ Deploy OpenClaw on a cloud server or VPS:
   <Card title="Railway" href="/install/railway">Railway</Card>
   <Card title="Render" href="/install/render">Render</Card>
   <Card title="Northflank" href="/install/northflank">Northflank</Card>
+  <Card title="islo.dev" href="/install/islo-dev">islo.dev</Card>
 </CardGroup>
 
 ## Update, migrate, or uninstall
