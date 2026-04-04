@@ -3,7 +3,6 @@ import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/config-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import {
   jsonResult,
-  readProviderEnvValue,
   readStringParam,
 } from "openclaw/plugin-sdk/provider-web-search";
 import {
@@ -12,7 +11,7 @@ import {
   resolveXaiCodeExecutionMaxTurns,
   resolveXaiCodeExecutionModel,
 } from "./src/code-execution-shared.js";
-import { resolveFallbackXaiApiKey } from "./src/tool-auth-shared.js";
+import { isXaiToolEnabled, resolveXaiToolApiKey } from "./src/tool-auth-shared.js";
 
 type XaiPluginConfig = NonNullable<
   NonNullable<OpenClawConfig["plugins"]>["entries"]
@@ -60,14 +59,11 @@ function resolveCodeExecutionEnabled(params: {
   runtimeConfig?: OpenClawConfig;
   config?: CodeExecutionConfig;
 }): boolean {
-  if (readCodeExecutionConfigRecord(params.config)?.enabled === false) {
-    return false;
-  }
-  return Boolean(
-    resolveFallbackXaiApiKey(params.runtimeConfig) ??
-    resolveFallbackXaiApiKey(params.sourceConfig) ??
-    readProviderEnvValue(["XAI_API_KEY"]),
-  );
+  return isXaiToolEnabled({
+    enabled: readCodeExecutionConfigRecord(params.config)?.enabled as boolean | undefined,
+    runtimeConfig: params.runtimeConfig,
+    sourceConfig: params.sourceConfig,
+  });
 }
 
 export function createCodeExecutionTool(options?: {
@@ -100,10 +96,10 @@ export function createCodeExecutionTool(options?: {
       }),
     }),
     execute: async (_toolCallId: string, args: Record<string, unknown>) => {
-      const apiKey =
-        resolveFallbackXaiApiKey(runtimeConfig ?? undefined) ??
-        resolveFallbackXaiApiKey(options?.config) ??
-        readProviderEnvValue(["XAI_API_KEY"]);
+      const apiKey = resolveXaiToolApiKey({
+        runtimeConfig: runtimeConfig ?? undefined,
+        sourceConfig: options?.config,
+      });
       if (!apiKey) {
         return jsonResult({
           error: "missing_xai_api_key",

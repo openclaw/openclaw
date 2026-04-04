@@ -4,7 +4,6 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import {
   jsonResult,
   readCache,
-  readProviderEnvValue,
   readStringArrayParam,
   readStringParam,
   resolveCacheTtlMs,
@@ -15,7 +14,7 @@ import {
   resolveEffectiveXSearchConfig,
   resolveLegacyXSearchConfig,
 } from "./src/x-search-config.js";
-import { resolveFallbackXaiApiKey } from "./src/tool-auth-shared.js";
+import { isXaiToolEnabled, resolveXaiToolApiKey } from "./src/tool-auth-shared.js";
 import {
   buildXaiXSearchPayload,
   requestXaiXSearch,
@@ -62,24 +61,18 @@ function resolveXSearchEnabled(params: {
   config?: Record<string, unknown>;
   runtimeConfig?: OpenClawConfig;
 }): boolean {
-  if (params.config?.enabled === false) {
-    return false;
-  }
-  if (resolveFallbackXaiApiKey(params.runtimeConfig)) {
-    return true;
-  }
-  return Boolean(resolveFallbackXaiApiKey(params.cfg) || readProviderEnvValue(["XAI_API_KEY"]));
+  return isXaiToolEnabled({
+    enabled: params.config?.enabled as boolean | undefined,
+    runtimeConfig: params.runtimeConfig,
+    sourceConfig: params.cfg,
+  });
 }
 
 function resolveXSearchApiKey(params: {
   sourceConfig?: OpenClawConfig;
   runtimeConfig?: OpenClawConfig;
 }): string | undefined {
-  return (
-    resolveFallbackXaiApiKey(params.runtimeConfig) ??
-    resolveFallbackXaiApiKey(params.sourceConfig) ??
-    readProviderEnvValue(["XAI_API_KEY"])
-  );
+  return resolveXaiToolApiKey(params);
 }
 
 function normalizeOptionalIsoDate(value: string | undefined, label: string): string | undefined {

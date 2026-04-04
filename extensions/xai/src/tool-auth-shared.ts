@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import {
+  readProviderEnvValue,
   readConfiguredSecretString,
   resolveProviderWebSearchPluginConfig,
 } from "openclaw/plugin-sdk/provider-web-search";
@@ -25,4 +26,26 @@ export function readPluginXaiWebSearchApiKey(cfg?: OpenClawConfig): string | und
 
 export function resolveFallbackXaiApiKey(cfg?: OpenClawConfig): string | undefined {
   return readPluginXaiWebSearchApiKey(cfg) ?? readLegacyGrokApiKey(cfg);
+}
+
+export function resolveXaiToolApiKey(params: {
+  runtimeConfig?: OpenClawConfig;
+  sourceConfig?: OpenClawConfig;
+}): string | undefined {
+  return (
+    resolveFallbackXaiApiKey(params.runtimeConfig) ??
+    resolveFallbackXaiApiKey(params.sourceConfig) ??
+    readProviderEnvValue(["XAI_API_KEY"])
+  );
+}
+
+export function isXaiToolEnabled(params: {
+  enabled?: boolean;
+  runtimeConfig?: OpenClawConfig;
+  sourceConfig?: OpenClawConfig;
+}): boolean {
+  if (params.enabled === false) {
+    return false;
+  }
+  return Boolean(resolveXaiToolApiKey(params));
 }
