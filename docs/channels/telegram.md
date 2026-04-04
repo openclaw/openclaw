@@ -832,6 +832,16 @@ openclaw message poll --channel telegram --target -1001234567890:topic:42 \
 
     Only resolved approvers can approve or deny. Non-approvers cannot use `/approve` and cannot use Telegram approval buttons.
 
+    Approval resolution behavior:
+
+    - IDs prefixed with `plugin:` always resolve through plugin approvals.
+    - Other approval IDs try `exec.approval.resolve` first.
+    - If Telegram is also authorized for plugin approvals and the gateway says
+      the exec approval is unknown/expired, Telegram retries once through
+      `plugin.approval.resolve`.
+    - Real exec approval denials/errors do not silently fall through to plugin
+      approval resolution.
+
     Channel delivery shows the command text in the chat, so only enable `channel` or `both` in trusted groups/topics. When the prompt lands in a forum topic, OpenClaw preserves the topic for both the approval prompt and the post-approval follow-up. Exec approvals expire after 30 minutes by default.
 
     Inline approval buttons also depend on `channels.telegram.capabilities.inlineButtons` allowing the target surface (`dm`, `group`, or `all`).

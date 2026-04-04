@@ -456,7 +456,7 @@ Reply in chat:
 /approve <id> deny
 ```
 
-The `/approve` command handles both exec approvals and plugin approvals. If the ID does not match a pending exec approval, it automatically checks plugin approvals.
+The `/approve` command handles both exec approvals and plugin approvals. If the ID does not match a pending exec approval, it automatically checks plugin approvals instead.
 
 ### Plugin approval forwarding
 
@@ -499,6 +499,10 @@ separate native delivery adapter just to stay pending.
 Discord and Telegram also support same-chat `/approve`, but those channels still use their
 resolved approver list for authorization even when native approval delivery is disabled.
 
+For Telegram and other native approval clients that call the Gateway directly,
+this fallback is intentionally bounded to "approval not found" failures. A real
+exec approval denial/error does not silently retry as a plugin approval.
+
 ### Native approval delivery
 
 Some channels can also act as native approval clients. Native clients add approver DMs, origin-chat
@@ -540,6 +544,7 @@ Shared behavior:
 - Slack approvers can be explicit (`execApprovals.approvers`) or inferred from `commands.ownerAllowFrom`
 - the requester does not need to be an approver
 - the originating chat can approve directly with `/approve` when that chat already supports commands and replies
+- native Telegram approval buttons follow the same bounded exec-to-plugin fallback as `/approve`
 - when native `target` enables origin-chat delivery, approval prompts include the command text
 - pending exec approvals expire after 30 minutes by default
 - if no operator UI or configured approval client can accept the request, the prompt falls back to `askFallback`
