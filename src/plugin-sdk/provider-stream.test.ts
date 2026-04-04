@@ -143,11 +143,7 @@ describe("buildProviderStreamFamilyHooks", () => {
         thinkingLevel: "off",
       } as never),
     );
-    await moonshotStream(
-      { api: "openai-completions", id: "kimi-k2.5" } as never,
-      {} as never,
-      {},
-    );
+    await moonshotStream({ api: "openai-completions", id: "kimi-k2.5" } as never, {} as never, {});
     expect(capturedPayload).toMatchObject({
       config: { thinkingConfig: { thinkingBudget: -1 } },
       thinking: { type: "disabled" },

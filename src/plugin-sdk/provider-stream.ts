@@ -9,12 +9,6 @@ import {
   resolveMoonshotThinkingType,
 } from "../agents/pi-embedded-runner/moonshot-thinking-stream-wrappers.js";
 import {
-  createKilocodeWrapper,
-  createOpenRouterSystemCacheWrapper,
-  createOpenRouterWrapper,
-  isProxyReasoningUnsupported,
-} from "../agents/pi-embedded-runner/proxy-stream-wrappers.js";
-import {
   createCodexNativeWebSearchWrapper,
   createOpenAIAttributionHeadersWrapper,
   createOpenAIFastModeWrapper,
@@ -26,6 +20,12 @@ import {
   resolveOpenAIServiceTier,
   resolveOpenAITextVerbosity,
 } from "../agents/pi-embedded-runner/openai-stream-wrappers.js";
+import {
+  createKilocodeWrapper,
+  createOpenRouterSystemCacheWrapper,
+  createOpenRouterWrapper,
+  isProxyReasoningUnsupported,
+} from "../agents/pi-embedded-runner/proxy-stream-wrappers.js";
 import {
   createToolStreamWrapper,
   createZaiToolStreamWrapper,
