@@ -738,6 +738,7 @@ export const OpenClawSchema = z
         channelHealthCheckMinutes: z.number().int().min(0).optional(),
         channelStaleEventThresholdMinutes: z.number().int().min(1).optional(),
         channelMaxRestartsPerHour: z.number().int().min(1).optional(),
+connectChallengeTimeoutMs: z.number().int().min(1).describe("WebSocket pre-auth/connect handshake timeout in milliseconds for gateway clients and server-side handshake enforcement (default: 10000). Raise this when local control-plane stalls can delay connect challenge completion.").optional(),
         tailscale: z
           .object({
             mode: z.union([z.literal("off"), z.literal("serve"), z.literal("funnel")]).optional(),

@@ -2831,6 +2831,8 @@ See [Plugins](/tools/plugin).
 
 ## Gateway
 
+- `gateway.connectChallengeTimeoutMs`: WebSocket pre-auth/connect handshake timeout in milliseconds. Default: `10000`. Raise this when local control-plane stalls can delay connect challenge completion enough to trip a handshake-timeout before the session is connected.
+
 ```json5
 {
   gateway: {

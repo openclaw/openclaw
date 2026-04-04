@@ -10,6 +10,7 @@ import { isWebchatClient } from "../../utils/message-channel.js";
 import type { AuthRateLimiter } from "../auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "../auth.js";
 import { getPreauthHandshakeTimeoutMsFromEnv } from "../handshake-timeouts.js";
+import { loadConfig } from "../../config/validation.js";
 import { isLoopbackAddress } from "../net.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../server-methods/types.js";
 import { formatError } from "../server-utils.js";
@@ -297,7 +298,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       close();
     });
 
-    const handshakeTimeoutMs = getPreauthHandshakeTimeoutMsFromEnv();
+    const handshakeTimeoutMs = getPreauthHandshakeTimeoutMsFromEnv(process.env, loadConfig().gateway?.connectChallengeTimeoutMs);
     const handshakeTimer = setTimeout(() => {
       if (!client) {
         handshakeState = "failed";
