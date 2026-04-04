@@ -109,7 +109,10 @@ export async function checkPathGuardStrict(
   // Helper to check if a path matches a policy entry (literal path or glob).
   const normalizedRealPath = toPosixPath(realPath);
 
-  const matchesEntry = async (entry: string): Promise<boolean> => {
+  const matchesEntry = async (
+    entry: string,
+    strictWorkspaceBoundaries: boolean,
+  ): Promise<boolean> => {
     if (path.isAbsolute(entry)) {
       const normalizedEntryPattern = toPosixPath(entry);
       const hasGlobMagic = new Minimatch(normalizedEntryPattern, {
@@ -218,11 +221,19 @@ export async function checkPathGuardStrict(
 
     // Relative policy entries are workspace-anchored by intent.
     // If the canonicalized entry escapes the workspace (e.g. entry points at a symlinked dir outside),
-    // it must NOT match outside-workspace targets.
+    // the behavior depends on whether this is a deny or allow rule:
+    // - For deny rules: we must still match to prevent access to the symlinked target.
+    // - For allow rules: workspace boundary is strict; outside-workspace entries cannot grant access.
+    // The caller passes strictWorkspaceBoundaries=true for allow rules.
     if (
       !isPathInside(normalizedWorkspaceRoot, normalizedCanonicalAbsoluteEntry)
     ) {
-      return false;
+      if (strictWorkspaceBoundaries) {
+        return false;
+      }
+      // For deny rules with workspaceOnly=false, the entry resolves outside workspace.
+      // We still check if the target is inside the canonical entry (symlink target).
+      // This prevents bypassing deny rules via symlinks that point outside.
     }
 
     const normalizedPattern = toPosixPath(entry);
@@ -260,7 +271,7 @@ export async function checkPathGuardStrict(
   // 2) Deny list (takes precedence)
   if (policy.denyPaths && policy.denyPaths.length > 0) {
     for (const denyEntry of policy.denyPaths) {
-      if (await matchesEntry(denyEntry)) {
+      if (await matchesEntry(denyEntry, false)) {
         throw new PathGuardError({
           message: `PathGuard security violation: Access to path "${requestedPath}" is explicitly denied by pattern "${denyEntry}".`,
           requestedPath,
@@ -278,7 +289,7 @@ export async function checkPathGuardStrict(
   if (policy.allowedPaths !== undefined) {
     let allowed = false;
     for (const allowEntry of policy.allowedPaths) {
-      if (await matchesEntry(allowEntry)) {
+      if (await matchesEntry(allowEntry, true)) {
         allowed = true;
         break;
       }
