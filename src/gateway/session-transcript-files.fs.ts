@@ -19,7 +19,7 @@ export type ArchivedSessionTranscript = {
   archivedPath: string;
 };
 
-function classifySessionTranscriptCandidate(
+export function classifySessionTranscriptCandidate(
   sessionId: string,
   sessionFile?: string,
 ): "current" | "stale" | "custom" {

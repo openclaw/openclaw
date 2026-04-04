@@ -14,6 +14,7 @@ import {
   archiveFileOnDisk,
   archiveSessionTranscripts,
   cleanupArchivedSessionTranscripts,
+  classifySessionTranscriptCandidate,
   findLatestResetArchive,
 } from "./session-transcript-files.fs.js";
 import type { SessionPreviewItem } from "./session-utils.types.js";
@@ -108,7 +109,11 @@ export function readSessionMessages(
   // primary transcript resolution (including legacy ~/.openclaw/sessions).
   if (!filePath && sessionId) {
     const searchDirs = Array.from(new Set(candidates.map((c) => path.dirname(c))));
-    const candidateBasenames = candidates.map((c) => path.basename(c));
+    // Exclude stale candidates (paths whose embedded session ID belongs to a different session)
+    // to prevent returning another session's archived messages.
+    const candidateBasenames = candidates
+      .filter((c) => classifySessionTranscriptCandidate(sessionId, c) !== "stale")
+      .map((c) => path.basename(c));
     filePath = findLatestResetArchive(sessionId, searchDirs, candidateBasenames);
   }
   if (!filePath) {

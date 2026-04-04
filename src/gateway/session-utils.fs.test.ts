@@ -761,6 +761,37 @@ describe("readSessionMessages — reset archive fallback", () => {
       fs.rmSync(archivePath, { force: true });
     }
   });
+
+  test("does not return archive belonging to a stale (different) session", () => {
+    // resolveSessionTranscriptCandidates includes a stale sessionFile (a path whose
+    // embedded session ID differs from the requested one) for compatibility.
+    // The reset-archive fallback must not pick up archives for that stale basename,
+    // or it would return another session's messages.
+    const sessionId = "aa000000-0000-4000-8000-000000000007";
+    const staleSessionId = "bb000000-0000-4000-8000-000000000008";
+    const realTmpDir = fs.realpathSync(tmpDir);
+    const realStorePath = path.join(realTmpDir, "sessions.json");
+    // Stale sessionFile: belongs to a different session.
+    const staleSessionFile = path.join(realTmpDir, `${staleSessionId}.jsonl`);
+    // Only a reset archive for the stale file exists — no archive for sessionId.
+    const staleArchivePath = `${staleSessionFile}.reset.2026-03-12T04-00-00.000Z`;
+    fs.writeFileSync(
+      staleArchivePath,
+      [
+        JSON.stringify({ type: "session", version: 1, id: staleSessionId }),
+        JSON.stringify({ message: { role: "user", content: "stale session message" } }),
+      ].join("\n"),
+      "utf-8",
+    );
+    try {
+      // Pass the stale sessionFile so it appears as a candidate.
+      const out = readSessionMessages(sessionId, realStorePath, staleSessionFile);
+      // Must not return the stale session's archive content.
+      expect(out).toHaveLength(0);
+    } finally {
+      fs.rmSync(staleArchivePath, { force: true });
+    }
+  });
 });
 
 describe("readSessionPreviewItemsFromTranscript", () => {
