@@ -975,12 +975,12 @@ export async function runEmbeddedAttempt(
         settingsManager,
         effectiveExtraParams,
       });
+      const effectiveAgentTransport = agentTransportOverride ?? activeSession.agent.transport;
       if (agentTransportOverride && activeSession.agent.transport !== agentTransportOverride) {
         log.debug(
           `embedded agent transport override: ${activeSession.agent.transport} -> ${agentTransportOverride} ` +
             `(${params.provider}/${params.modelId})`,
         );
-        activeSession.agent.transport = agentTransportOverride;
       }
 
       const cacheObservabilityEnabled = Boolean(cacheTrace) || log.isEnabled("debug");
@@ -1522,7 +1522,7 @@ export async function runEmbeddedAttempt(
               params.modelId,
             ),
             streamStrategy,
-            transport: activeSession.agent.transport,
+            transport: effectiveAgentTransport,
             systemPrompt: systemPromptText,
             toolNames: promptCacheToolNames,
           });
