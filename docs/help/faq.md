@@ -2476,8 +2476,10 @@ for usage/billing and raise limits as needed.
 
     The rate-limit bucket includes more than plain `429` responses. OpenClaw
     also treats messages like `Too many concurrent requests`,
-    `ThrottlingException`, `resource exhausted`, and periodic usage-window
-    limits (`weekly/monthly limit reached`) as failover-worthy rate limits.
+    `ThrottlingException`, `concurrency limit reached`,
+    `workers_ai ... quota limit exceeded`, `resource exhausted`, and periodic
+    usage-window limits (`weekly/monthly limit reached`) as failover-worthy
+    rate limits.
 
     Some billing-looking responses are not `402`, and some HTTP `402`
     responses also stay in that transient bucket. If a provider returns
@@ -2490,17 +2492,21 @@ for usage/billing and raise limits as needed.
     `rate_limit`, not a long billing disable.
 
     Context-overflow errors are different: signatures such as
-    `request_too_large`, `input exceeds the maximum number of tokens`, or
-    `input is too long for the model` stay on the compaction/retry path instead
-    of advancing model fallback.
+    `request_too_large`, `input exceeds the maximum number of tokens`,
+    `input token count exceeds the maximum number of input tokens`,
+    `input is too long for the model`, or `ollama error: context length
+    exceeded` stay on the compaction/retry path instead of advancing model
+    fallback.
 
     Generic server-error text is intentionally narrower than "anything with
     unknown/error in it". OpenClaw does treat provider-scoped transient shapes
     such as Anthropic bare `An unknown error occurred`, OpenRouter bare
     `Provider returned error`, stop-reason errors like `Unhandled stop reason:
-    error`, and JSON `api_error` payloads with transient server text
+    error`, JSON `api_error` payloads with transient server text
     (`internal server error`, `unknown error, 520`, `upstream error`, `backend
-    error`) as timeout/failover signals when the provider context matches.
+    error`), and provider-busy errors such as `ModelNotReadyException` as
+    failover-worthy timeout/overloaded signals when the provider context
+    matches.
     Generic internal fallback text like `LLM request failed with an unknown
     error.` stays conservative and does not trigger model fallback by itself.
 

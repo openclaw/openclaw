@@ -122,6 +122,7 @@ When a profile fails due to auth/rate‑limit errors (or a timeout that looks
 like rate limiting), OpenClaw marks it in cooldown and moves to the next profile.
 That rate-limit bucket is broader than plain `429`: it also includes provider
 messages such as `Too many concurrent requests`, `ThrottlingException`,
+`concurrency limit reached`, `workers_ai ... quota limit exceeded`,
 `throttled`, `resource exhausted`, and periodic usage-window limits such as
 `weekly/monthly limit reached`.
 Format/invalid‑request errors (for example Cloud Code Assist tool call ID
@@ -203,8 +204,9 @@ timeouts that exhausted profile rotation (other errors do not advance fallback).
 
 Overloaded and rate-limit errors are handled more aggressively than billing
 cooldowns. By default, OpenClaw allows one same-provider auth-profile retry,
-then switches to the next configured model fallback without waiting. Tune this
-with `auth.cooldowns.overloadedProfileRotations`,
+then switches to the next configured model fallback without waiting.
+Provider-busy signals such as `ModelNotReadyException` land in that overloaded
+bucket. Tune this with `auth.cooldowns.overloadedProfileRotations`,
 `auth.cooldowns.overloadedBackoffMs`, and
 `auth.cooldowns.rateLimitedProfileRotations`.
 
@@ -248,7 +250,9 @@ Model fallback does not continue on:
 - explicit aborts that are not timeout/failover-shaped
 - context overflow errors that should stay inside compaction/retry logic
   (for example `request_too_large`, `INVALID_ARGUMENT: input exceeds the maximum
-number of tokens`, or `The input is too long for the model`)
+number of tokens`, `input token count exceeds the maximum number of input
+tokens`, `The input is too long for the model`, or `ollama error: context
+length exceeded`)
 - a final unknown error when there are no candidates left
 
 ### Cooldown skip vs probe behavior

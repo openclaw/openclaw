@@ -32,7 +32,9 @@ Auto-compaction is on by default. It runs when the session nears the context
 limit, or when the model returns a context-overflow error (in which case
 OpenClaw compacts and retries). Typical overflow signatures include
 `request_too_large`, `context length exceeded`, `input exceeds the maximum
-number of tokens`, and `input is too long for the model`.
+number of tokens`, `input token count exceeds the maximum number of input
+tokens`, `input is too long for the model`, and `ollama error: context length
+exceeded`.
 
 <Info>
 Before compacting, OpenClaw automatically reminds the agent to save important
