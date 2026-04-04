@@ -2481,7 +2481,7 @@ See [Local Models](/gateway/local-models). TL;DR: run a large local model via LM
     },
     install: {
       preferBrew: true,
-      nodeManager: "npm", // npm | pnpm | yarn
+      nodeManager: "npm", // npm | pnpm | yarn | bun
     },
     entries: {
       "image-lab": {
@@ -2496,6 +2496,11 @@ See [Local Models](/gateway/local-models). TL;DR: run a large local model via LM
 ```
 
 - `allowBundled`: optional allowlist for bundled skills only (managed/workspace skills unaffected).
+- `load.extraDirs`: extra shared skill roots (lowest precedence).
+- `install.preferBrew`: when true, prefer Homebrew installers when `brew` is
+  available before falling back to other installer kinds.
+- `install.nodeManager`: node installer preference for `metadata.openclaw.install`
+  specs (`npm` | `pnpm` | `yarn` | `bun`).
 - `entries.<skillKey>.enabled: false` disables a skill even if bundled/installed.
 - `entries.<skillKey>.apiKey`: convenience for skills declaring a primary env var (plaintext string or SecretRef object).
 

@@ -220,6 +220,23 @@ The Gateway treats these as **claims** and enforces server-side allowlists.
     caller-supplied auth or delivery context.
   - The response is session-scoped and reflects what the active conversation can use right now,
     including core, plugin, and channel tools.
+- Operators may call `skills.status` (`operator.read`) to fetch the visible
+  skill inventory for an agent.
+  - `agentId` is optional; omit it to read the default agent workspace.
+  - The response includes eligibility, missing requirements, config checks, and
+    sanitized install options without exposing raw secret values.
+- Operators may call `skills.search` and `skills.detail` (`operator.read`) for
+  ClawHub discovery metadata.
+- Operators may call `skills.install` (`operator.admin`) in two modes:
+  - ClawHub mode: `{ source: "clawhub", slug, version?, force? }` installs a
+    skill folder into the default agent workspace `skills/` directory.
+  - Gateway installer mode: `{ name, installId, dangerouslyForceUnsafeInstall?, timeoutMs? }`
+    runs a declared `metadata.openclaw.install` action on the gateway host.
+- Operators may call `skills.update` (`operator.admin`) in two modes:
+  - ClawHub mode updates one tracked slug or all tracked ClawHub installs in
+    the default agent workspace.
+  - Config mode patches `skills.entries.<skillKey>` values such as `enabled`,
+    `apiKey`, and `env`.
 
 ## Exec approvals
 
