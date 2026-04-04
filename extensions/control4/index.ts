@@ -11,6 +11,10 @@ export default definePluginEntry({
     api.registerTool(() => createCommandTool(), { name: "control4_command" });
     api.registerTool(() => createStatusTool(), { name: "control4_status" });
 
+    // Pre-warm the device inventory and system prompt cache at plugin load time.
+    // Fire-and-forget; errors are handled inside buildControl4Prompt.
+    buildControl4Prompt().catch(() => {});
+
     api.on("before_prompt_build", async () => ({
       prependSystemContext: await buildControl4Prompt(),
     }));

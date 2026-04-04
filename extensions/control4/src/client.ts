@@ -8,6 +8,11 @@ export type C4Item = {
   roomId?: number;
   roomName?: string;
   parentId?: number;
+  categories?: string[];
+  proxy?: string;
+  floorName?: string;
+  buildingName?: string;
+  isOnline?: boolean;
 };
 
 export type C4Variable = {

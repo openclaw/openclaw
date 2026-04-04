@@ -13,14 +13,22 @@ const QUERY_STOP_WORDS = new Set([
   "to", "for", "of", "off", "turn", "set", "get", "show", "tell", "with",
 ]);
 
+/** Strip a trailing 's' for simple English plural → singular normalisation. */
+function normalizeTerm(t: string): string {
+  return t.length > 3 && t.endsWith("s") ? t.slice(0, -1) : t;
+}
+
 function itemMatchesQuery(item: C4Item, query: string): boolean {
   // Split the query into meaningful tokens; each token is OR-ed across fields.
-  const terms = query
+  // Also try de-pluralised form so "lights" matches "light"/"lighting".
+  const raw = query
     .toLowerCase()
     .split(/\s+/)
     .filter((t) => t.length > 1 && !QUERY_STOP_WORDS.has(t));
 
-  if (terms.length === 0) return true;
+  if (raw.length === 0) return true;
+
+  const terms = [...new Set(raw.flatMap((t) => [t, normalizeTerm(t)]))];
 
   const name = item.name.toLowerCase();
   const room = (item.roomName ?? "").toLowerCase();

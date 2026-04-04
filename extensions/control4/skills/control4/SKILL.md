@@ -3,18 +3,45 @@ name: control4
 description: Use Control4 tools to control home automation devices — lights, thermostats, locks, and more — via natural language.
 ---
 
-When the user asks to control their home (lights, thermostat, locks, scenes, etc.), use the Control4 tools in this order:
+## Key principle
+Your system context already lists every room and its device IDs. **Use those IDs directly** in `control4_command` — you do not need to call `control4_find` first for lights, thermostats, or locks in named rooms.
 
-1. **control4_find** — Find the device(s) by name, room, or type. Pass the user's description as `query`. Optionally narrow by `roomName` or `deviceType`. Returns device IDs.
+## Room + device inventory
+The system prompt includes a full map like:
+```
+[42] Kitchen
+  Lights: Wireless Dimmer[43], Cans dining room side[44], Kitchen Sink[46], ...
+```
 
-2. **control4_command** — Send a command to the device IDs returned by control4_find.
-   - Lights on/off: command `ON` or `OFF`
-   - Dim a light: command `RAMP_TO_LEVEL` with `params.LEVEL` = "0"–"100"
-   - Set brightness: command `SET_SCALE` with `params.SCALE` = "0"–"100"
-   - Thermostat mode: command `SET_HVAC_MODE` with `params.MODE` = `"COOL"` | `"HEAT"` | `"AUTO"` | `"OFF"`
+When the user asks to control a named room, extract the device IDs from the map and call `control4_command` immediately.
 
-3. **control4_status** — Query current state of a device (light level, temperature reading, lock state).
+## Workflow
 
-Room IDs and names are injected into system context — use them to pre-filter control4_find when the user mentions a specific room.
+**Turning off kitchen lights** — do this:
+1. Read IDs from context: 43, 44, 45, 46, 47, 48, 49, 50, 53, 54, 61, 62
+2. Call `control4_command(deviceIds=[43,44,45,...], command="OFF")`
+— Do NOT call `control4_find` when you already have the IDs.
 
-Always chain find → command for natural language requests. Do not guess device IDs.
+**Dimming living room** — do this:
+1. Read IDs: 508, 509
+2. Call `control4_command(deviceIds=[508,509], command="RAMP_TO_LEVEL", params={LEVEL:"50"})`
+
+**Only use `control4_find`** when:
+- The user mentions a specific device by an ambiguous name not in the context
+- You need to search by manufacturer, model, or a non-obvious attribute
+
+## Commands reference
+| Action | command | params |
+|---|---|---|
+| Turn on/off | `ON` or `OFF` | — |
+| Dim to level | `RAMP_TO_LEVEL` | `{LEVEL: "0"–"100"}` |
+| Set brightness | `SET_SCALE` | `{SCALE: "0"–"100"}` |
+| Thermostat mode | `SET_HVAC_MODE` | `{MODE: "COOL"\|"HEAT"\|"AUTO"\|"OFF"}` |
+
+## Querying state
+Use `control4_status(deviceIds=[...])` to read current light level, temperature, or lock state.
+
+## Notes
+- "Wireless Dimmer" entries are individual dimmer circuits — send to all in a room to control all lights.
+- Thermostat IDs: Lower Floor [306], Main [652], Library [649/650], Upper [650].
+- Treehouse locks: Front Door [920], Back Door [921].

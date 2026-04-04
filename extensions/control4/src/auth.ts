@@ -11,6 +11,29 @@ type TokenCache = {
 let accountTokenCache: TokenCache | null = null;
 let directorTokenCache: TokenCache | null = null;
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function httpsRequestWithRetry(
+  method: string,
+  host: string,
+  path: string,
+  body: unknown,
+  token?: string,
+  maxRetries = 2,
+): Promise<{ status: number; body: string }> {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await httpsRequest(method, host, path, body, token);
+    } catch (err) {
+      if (attempt === maxRetries) throw err;
+      await sleep(600 * (attempt + 1));
+    }
+  }
+  throw new Error("unreachable");
+}
+
 function httpsRequest(
   method: string,
   host: string,
@@ -82,7 +105,7 @@ async function getAccountToken(): Promise<string> {
     },
   };
 
-  const response = await httpsRequest(
+  const response = await httpsRequestWithRetry(
     "POST",
     C4_CLOUD_HOST,
     "/authentication/v1/rest",
@@ -119,7 +142,7 @@ export async function getDirectorToken(): Promise<string> {
 
   const accountToken = await getAccountToken();
 
-  const response = await httpsRequest(
+  const response = await httpsRequestWithRetry(
     "POST",
     C4_CLOUD_HOST,
     "/authentication/v1/rest/authorization",
