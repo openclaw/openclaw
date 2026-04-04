@@ -520,6 +520,7 @@ function resolveHeartbeatRunPrompt(params: {
   canRelayToUser: boolean;
   workspaceDir: string;
   startedAt: number;
+  heartbeatFileContent?: string;
 }): HeartbeatPromptResolution {
   const pendingEventEntries = params.preflight.pendingEventEntries;
   const pendingEvents = params.preflight.shouldInspectPendingEvents
@@ -548,11 +549,21 @@ function resolveHeartbeatRunPrompt(params: {
 
     if (dueTasks.length > 0) {
       const taskList = dueTasks.map((task) => `- ${task.name}: ${task.prompt}`).join("\n");
-      const prompt = `Run the following periodic tasks (only those due based on their intervals):
+      let prompt = `Run the following periodic tasks (only those due based on their intervals):
 
 ${taskList}
 
 After completing all due tasks, reply HEARTBEAT_OK.`;
+
+      // Preserve HEARTBEAT.md directives (non-task content)
+      if (params.heartbeatFileContent) {
+        const directives = params.heartbeatFileContent
+          .replace(/^tasks:\n(?:[ \t].*\n)*/m, "")
+          .trim();
+        if (directives) {
+          prompt += `\n\nAdditional context from HEARTBEAT.md:\n${directives}`;
+        }
+      }
       return { prompt, hasExecCompletion: false, hasCronEvents: false };
     }
     // No tasks due - skip this heartbeat to avoid wasteful API calls
@@ -696,6 +707,7 @@ export async function runHeartbeatOnce(opts: {
     canRelayToUser,
     workspaceDir,
     startedAt,
+    heartbeatFileContent: preflight.heartbeatFileContent,
   });
 
   // If no tasks are due, skip heartbeat entirely
