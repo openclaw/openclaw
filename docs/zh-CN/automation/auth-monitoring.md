@@ -6,7 +6,7 @@ summary: 监控模型提供商的 OAuth 过期状态
 title: 认证监控
 x-i18n:
   generated_at: "2026-02-03T10:03:53Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: eef179af9545ed7ab881f3ccbef998869437fb50cdb4088de8da7223b614fa2b
   source_path: automation/auth-monitoring.md

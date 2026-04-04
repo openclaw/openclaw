@@ -8821,22 +8821,6 @@
       "hasChildren": false
     },
     {
-      "path": "channels.googlechat.accounts.*.streamMode",
-      "kind": "channel",
-      "type": "string",
-      "required": true,
-      "enumValues": [
-        "replace",
-        "status_final",
-        "append"
-      ],
-      "defaultValue": "replace",
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
       "path": "channels.googlechat.accounts.*.textChunkLimit",
       "kind": "channel",
       "type": "integer",
@@ -9486,22 +9470,6 @@
       "kind": "channel",
       "type": "string",
       "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.googlechat.streamMode",
-      "kind": "channel",
-      "type": "string",
-      "required": true,
-      "enumValues": [
-        "replace",
-        "status_final",
-        "append"
-      ],
-      "defaultValue": "replace",
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -25709,6 +25677,26 @@
       "hasChildren": false
     },
     {
+      "path": "channels.telegram.accounts.*.trustedLocalFileRoots",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.telegram.accounts.*.trustedLocalFileRoots.*",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.telegram.accounts.*.webhookCertPath",
       "kind": "channel",
       "type": "string",
@@ -28021,6 +28009,32 @@
     },
     {
       "path": "channels.telegram.tokenFile",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.trustedLocalFileRoots",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "channels",
+        "network",
+        "storage"
+      ],
+      "label": "Telegram Trusted Local File Roots",
+      "help": "Trusted local filesystem roots for self-hosted Telegram Bot API absolute file_path values. Only absolute paths inside these roots are read directly; all other absolute paths are rejected.",
+      "hasChildren": true
+    },
+    {
+      "path": "channels.telegram.trustedLocalFileRoots.*",
       "kind": "channel",
       "type": "string",
       "required": false,

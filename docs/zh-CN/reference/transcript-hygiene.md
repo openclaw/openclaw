@@ -7,7 +7,7 @@ summary: 参考：提供商特定的对话记录清理与修复规则
 title: 对话记录清理
 x-i18n:
   generated_at: "2026-02-01T21:38:16Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 6ce62fad0b07c4d8575c9cdb1c8c2663695ef2d4221cf4a0964fce03461523af
   source_path: reference/transcript-hygiene.md

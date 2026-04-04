@@ -6,7 +6,7 @@ summary: 用于工作流的纯 JSON LLM 任务（可选插件工具）
 title: LLM 任务
 x-i18n:
   generated_at: "2026-02-01T21:42:34Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: d81b74fcfd5491a9edb4bfadb47d404067020990b1f6d6d8fed652fbc860f646
   source_path: tools/llm-task.md
@@ -58,9 +58,9 @@ x-i18n:
         "enabled": true,
         "config": {
           "defaultProvider": "openai-codex",
-          "defaultModel": "gpt-5.2",
+          "defaultModel": "gpt-5.4",
           "defaultAuthProfileId": "main",
-          "allowedModels": ["openai-codex/gpt-5.2"],
+          "allowedModels": ["openai-codex/gpt-5.4"],
           "maxTokens": 800,
           "timeoutMs": 30000
         }

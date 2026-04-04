@@ -162,8 +162,6 @@ export type SlackAccountConfig = {
    * - "progress": show progress status, then send final text
    */
   streaming?: SlackStreamingMode;
-  /** @deprecated Legacy draft streaming mode; normalized into `streaming` on load. */
-  streamMode?: "replace" | "status_final" | "append";
   /**
    * Slack native text streaming toggle (`chat.startStream` / `chat.appendStream` / `chat.stopStream`).
    * Used when `streaming` is `partial`. Default: true.

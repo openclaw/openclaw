@@ -136,7 +136,7 @@ describe("prepareSimpleCompletionModel", () => {
     hoisted.resolveModelMock.mockReturnValueOnce({
       model: {
         provider: "amazon-bedrock",
-        id: "anthropic.claude-sonnet-4-5",
+        id: "anthropic.claude-sonnet-4-6",
       },
       authStorage: {
         setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
@@ -151,7 +151,7 @@ describe("prepareSimpleCompletionModel", () => {
     const result = await prepareSimpleCompletionModel({
       cfg: undefined,
       provider: "amazon-bedrock",
-      modelId: "anthropic.claude-sonnet-4-5",
+      modelId: "anthropic.claude-sonnet-4-6",
       allowMissingApiKeyModes: ["aws-sdk"],
     });
 
@@ -159,7 +159,7 @@ describe("prepareSimpleCompletionModel", () => {
       expect.objectContaining({
         model: expect.objectContaining({
           provider: "amazon-bedrock",
-          id: "anthropic.claude-sonnet-4-5",
+          id: "anthropic.claude-sonnet-4-6",
         }),
         auth: {
           source: "aws-sdk default chain",

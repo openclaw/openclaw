@@ -7,7 +7,7 @@ summary: 执行审批、允许列表和沙箱逃逸提示
 title: 执行审批
 x-i18n:
   generated_at: "2026-02-03T08:19:51Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 97736427752eb905bb5d1f5b54bddbdea38eb5ac5824e2bf99258fcf44ee393c
   source_path: tools/exec-approvals.md

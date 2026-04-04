@@ -293,6 +293,7 @@ Learn more about session keys at [/concepts/session](/concepts/session).
 - `--require-existing`: fail if the session key/label does not exist.
 - `--reset-session`: reset the session key before first use.
 - `--no-prefix-cwd`: do not prefix prompts with the working directory.
+- `--provenance <off|meta|meta+receipt>`: include ACP provenance metadata or receipts.
 - `--verbose, -v`: verbose logging to stderr.
 
 Security note:

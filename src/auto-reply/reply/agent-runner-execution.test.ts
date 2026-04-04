@@ -377,13 +377,13 @@ describe("runAgentTurnWithFallback", () => {
     state.runWithModelFallbackMock.mockRejectedValueOnce(
       Object.assign(
         new Error(
-          "All models failed (2): anthropic/claude: 429 (rate_limit) | openai/gpt-5.2: 402 (billing)",
+          "All models failed (2): anthropic/claude: 429 (rate_limit) | openai/gpt-5.4: 402 (billing)",
         ),
         {
           name: "FallbackSummaryError",
           attempts: [
             { provider: "anthropic", model: "claude", error: "429", reason: "rate_limit" },
-            { provider: "openai", model: "gpt-5.2", error: "402", reason: "billing" },
+            { provider: "openai", model: "gpt-5.4", error: "402", reason: "billing" },
           ],
           soonestCooldownExpiry: Date.now() + 60_000,
         },

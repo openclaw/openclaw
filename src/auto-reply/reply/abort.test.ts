@@ -153,7 +153,7 @@ describe("abort detection", () => {
         workspaceDir: path.join(params.root, "workspace"),
         config: params.cfg,
         provider: "anthropic",
-        model: "claude-opus-4-5",
+        model: "claude-opus-4-6",
         timeoutMs: 1000,
         blockReplyBreak: "text_end",
       },
