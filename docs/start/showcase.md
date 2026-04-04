@@ -1,7 +1,7 @@
 ---
 title: "Showcase"
 description: "Real-world OpenClaw projects from the community"
-summary: "Community-built projects and integrations powered by OpenClaw"
+summary: "Community-built projects and integrations powered by OpenClaw, including self-hosted AI assistants, browser automation, multi-agent workflows, and bot runtimes."
 read_when:
   - Looking for real OpenClaw usage examples
   - Updating community project highlights
@@ -9,7 +9,9 @@ read_when:
 
 # Showcase
 
-Real projects from the community. See what people are building with OpenClaw.
+Real projects from the community. See what people are building with OpenClaw as
+a self-hosted AI assistant, MCP-compatible gateway, browser automation runtime,
+and multi-agent bot platform.
 
 <Info>
 **Want to be featured?** Share your project in [#showcase on Discord](https://discord.gg/clawd) or [tag @openclaw on X](https://x.com/openclaw).

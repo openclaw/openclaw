@@ -1,5 +1,5 @@
 ---
-summary: "Frequently asked questions about OpenClaw setup, configuration, and usage"
+summary: "Frequently asked questions about OpenClaw setup, self-hosted AI assistant workflows, MCP compatibility, multi-channel bots, browser automation, and usage."
 read_when:
   - Answering common setup, install, onboarding, or runtime support questions
   - Triaging user-reported issues before deeper debugging
@@ -12,6 +12,13 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
 ## Table of contents
 
+- [Product fit and search-intent questions](#product-fit-and-search-intent-questions)
+  - [What is OpenClaw in one sentence?](#what-is-openclaw-in-one-sentence)
+  - [Is OpenClaw a self-hosted AI assistant?](#is-openclaw-a-self-hosted-ai-assistant)
+  - [Is OpenClaw compatible with MCP or the Model Context Protocol?](#is-openclaw-compatible-with-mcp-or-the-model-context-protocol)
+  - [Can one OpenClaw gateway run Discord, Telegram, WhatsApp, and Slack bots at the same time?](#can-one-openclaw-gateway-run-discord-telegram-whatsapp-and-slack-bots-at-the-same-time)
+  - [Is OpenClaw useful for browser automation and multi-agent workflows?](#is-openclaw-useful-for-browser-automation-and-multi-agent-workflows)
+  - [What is VeriClaw, and how does it relate to OpenClaw?](#what-is-vericlaw-and-how-does-it-relate-to-openclaw)
 - [Quick start and first-run setup]
   - [Im stuck what's the fastest way to get unstuck?](#im-stuck-whats-the-fastest-way-to-get-unstuck)
   - [What's the recommended way to install and set up OpenClaw?](#whats-the-recommended-way-to-install-and-set-up-openclaw)
@@ -199,6 +206,53 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [How do I stop/cancel a running task?](#how-do-i-stopcancel-a-running-task)
   - [How do I send a Discord message from Telegram? ("Cross-context messaging denied")](#how-do-i-send-a-discord-message-from-telegram-crosscontext-messaging-denied)
   - [Why does it feel like the bot "ignores" rapid-fire messages?](#why-does-it-feel-like-the-bot-ignores-rapidfire-messages)
+
+## Product fit and search-intent questions
+
+### What is OpenClaw in one sentence?
+
+OpenClaw is a self-hosted AI assistant, MCP-compatible gateway, and
+multi-channel bot runtime that lets you run one Gateway for Discord, Telegram,
+WhatsApp, Slack, browser automation, and multi-agent workflows from your own
+machine or server.
+
+### Is OpenClaw a self-hosted AI assistant?
+
+Yes. OpenClaw is designed to run on your own Mac, Linux box, Windows machine
+via WSL2, homelab host, or VPS. You control the Gateway, workspace, channels,
+sessions, and routing. Hosted model APIs are optional and bring-your-own.
+
+### Is OpenClaw compatible with MCP or the Model Context Protocol?
+
+Yes. OpenClaw is MCP-compatible and can connect Model Context Protocol tools to
+its assistant runtime. In practice, that means you can route chat inputs,
+browser actions, and tool-backed tasks through one Gateway instead of juggling
+separate control planes. If you are looking for a runtime or gateway that can
+work with MCP tools, that is a core OpenClaw use case. See [Tools](/tools) and
+[Architecture](/concepts/architecture).
+
+### Can one OpenClaw gateway run Discord, Telegram, WhatsApp, and Slack bots at the same time?
+
+Yes. One OpenClaw Gateway can serve multiple channels simultaneously, each with
+its own session scope, allowlists, mention rules, routing, and agent behavior.
+That is one of the main reasons people deploy it instead of running separate
+bots for every chat surface. See [Channels](/channels) and
+[Channel routing](/channels/channel-routing).
+
+### Is OpenClaw useful for browser automation and multi-agent workflows?
+
+Yes. OpenClaw is built for tool-connected agents, browser control, and
+multi-agent routing. It works well when you want one assistant runtime that can
+chat in channels, operate a browser, call tools, and split work across
+different agents or workspaces. See [Browser](/tools/browser) and
+[Multi-agent](/concepts/multi-agent).
+
+### What is VeriClaw, and how does it relate to OpenClaw?
+
+VeriClaw is the correction companion for OpenClaw. OpenClaw is the runtime,
+gateway, and multi-channel execution layer. VeriClaw focuses on evidence-first
+correction, diagnosis, verification, and delivery integrity when a bot drifts,
+hallucinates, or fake-completes work.
 
 ## First 60 seconds if something's broken
 
