@@ -1107,6 +1107,9 @@ export function renderChat(props: ChatProps) {
         if (prev !== null) {
           e.preventDefault();
           props.onDraftChange(prev);
+          // chatMessage is non-reactive; explicitly refresh so the
+          // textarea reflects the recalled history entry.
+          requestUpdate();
         }
         return;
       }
@@ -1114,6 +1117,9 @@ export function renderChat(props: ChatProps) {
         const next = inputHistory.down();
         e.preventDefault();
         props.onDraftChange(next ?? "");
+        // chatMessage is non-reactive; explicitly refresh so the
+        // textarea reflects the recalled history entry.
+        requestUpdate();
         return;
       }
     }
