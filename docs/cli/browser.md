@@ -42,6 +42,14 @@ openclaw browser stop
 openclaw browser --browser-profile openclaw reset-profile
 ```
 
+Notes:
+
+- For `attachOnly` and remote CDP profiles, `openclaw browser stop` closes the
+  active control session and clears temporary emulation overrides even when
+  OpenClaw did not launch the browser process itself.
+- For local managed profiles, `openclaw browser stop` stops the spawned browser
+  process.
+
 ## If the command is missing
 
 If `openclaw browser` is an unknown command, check `plugins.allow` in

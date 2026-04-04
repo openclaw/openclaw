@@ -245,6 +245,15 @@ openclaw config set browser.executablePath "/usr/bin/google-chrome"
 - **Remote CDP:** set `browser.profiles.<name>.cdpUrl` (or `browser.cdpUrl`) to
   attach to a remote Chromium-based browser. In this case, OpenClaw will not launch a local browser.
 
+Stopping behavior differs by profile mode:
+
+- local managed profiles: `openclaw browser stop` stops the browser process that
+  OpenClaw launched
+- attach-only and remote CDP profiles: `openclaw browser stop` closes the active
+  control session and releases Playwright/CDP emulation overrides (viewport,
+  color scheme, locale, timezone, offline mode, and similar state), even
+  though no browser process was launched by OpenClaw
+
 Remote CDP URLs can include auth:
 
 - Query tokens (e.g., `https://provider.example?token=<token>`)
@@ -638,6 +647,13 @@ Inspection:
 - `openclaw browser snapshot --selector "#main" --interactive`
 - `openclaw browser snapshot --frame "iframe#main" --interactive`
 - `openclaw browser console --level error`
+
+Lifecycle note:
+
+- For attach-only and remote CDP profiles, `openclaw browser stop` is still the
+  right cleanup command after tests. It closes the active control session and
+  clears temporary emulation overrides instead of killing the underlying
+  browser.
 - `openclaw browser errors --clear`
 - `openclaw browser requests --filter api --clear`
 - `openclaw browser pdf`
