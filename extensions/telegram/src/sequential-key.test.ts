@@ -102,11 +102,11 @@ describe("getTelegramSequentialKey", () => {
     ],
     // per-message key: different message_ids produce different keys
     [
-      { message: mockMessage({ chat: mockChat({ id: 123 }), message_id: 42 } as Partial<Message>) },
+      { message: mockMessage({ chat: mockChat({ id: 123 }), message_id: 42 }) },
       "telegram:123:42",
     ],
     [
-      { message: mockMessage({ chat: mockChat({ id: 123 }), message_id: 43 } as Partial<Message>) },
+      { message: mockMessage({ chat: mockChat({ id: 123 }), message_id: 43 }) },
       "telegram:123:43",
     ],
     // fallback when no message is present (chat-only context — no messageId suffix)
