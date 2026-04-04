@@ -170,7 +170,25 @@ async function resolveProviderUsageAuthFallback(params: {
   state: UsageAuthState;
   provider: UsageProviderId;
 }): Promise<ProviderAuth | null> {
-  void params;
+  const oauthToken = await resolveOAuthToken({
+    state: params.state,
+    provider: params.provider,
+  });
+  if (oauthToken) {
+    return oauthToken;
+  }
+
+  const apiKey = resolveProviderApiKeyFromConfigAndStore({
+    state: params.state,
+    providerIds: [params.provider],
+  });
+  if (apiKey) {
+    return {
+      provider: params.provider,
+      token: apiKey,
+    };
+  }
+
   return null;
 }
 
