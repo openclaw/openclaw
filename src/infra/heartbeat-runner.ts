@@ -879,6 +879,8 @@ export async function runHeartbeatOnce(opts: {
         silent: !okSent,
         indicatorType: visibility.useIndicator ? resolveIndicatorType("ok-token") : undefined,
       });
+      heartbeatSuccess = true;
+      await updateTaskTimestamps();
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
@@ -915,6 +917,8 @@ export async function runHeartbeatOnce(opts: {
         channel: delivery.channel !== "none" ? delivery.channel : undefined,
         accountId: delivery.accountId,
       });
+      heartbeatSuccess = true;
+      await updateTaskTimestamps();
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
@@ -935,6 +939,8 @@ export async function runHeartbeatOnce(opts: {
         hasMedia: mediaUrls.length > 0,
         accountId: delivery.accountId,
       });
+      heartbeatSuccess = true;
+      await updateTaskTimestamps();
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 

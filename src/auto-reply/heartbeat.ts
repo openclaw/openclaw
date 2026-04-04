@@ -277,31 +277,3 @@ export function isTaskDue(lastRunMs: number | undefined, interval: string, nowMs
     return false;
   }
 }
-
-/**
- * Get or initialize last run time for a task from session store.
- */
-export function getTaskLastRunMs(
-  taskName: string,
-  sessionEntry: Record<string, unknown> | undefined,
-): number | undefined {
-  if (!sessionEntry?.heartbeatTaskState) {
-    return undefined;
-  }
-  const taskState = sessionEntry.heartbeatTaskState as Record<string, number>;
-  return taskState[taskName];
-}
-
-/**
- * Update last run time for a task in session store.
- */
-export function updateTaskLastRunMs(
-  taskName: string,
-  nowMs: number,
-  sessionEntry: Record<string, unknown>,
-): void {
-  if (!sessionEntry.heartbeatTaskState) {
-    sessionEntry.heartbeatTaskState = {};
-  }
-  (sessionEntry.heartbeatTaskState as Record<string, number>)[taskName] = nowMs;
-}
