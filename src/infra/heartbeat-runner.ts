@@ -35,6 +35,7 @@ import { saveSessionStore, updateSessionStore } from "../config/sessions/store.j
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import { resolveCronSession } from "../cron/isolated-agent/session.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { startHeartbeatFlowTrace, finalizeSessionFlowTrace } from "../meta-harness/hooks.js";
 import { getQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import {
@@ -737,6 +738,10 @@ export async function runHeartbeatOnce(opts: {
       : { isHeartbeat: true, suppressToolErrorWarnings, bootstrapContextMode };
     const getReplyFromConfig =
       opts.deps?.getReplyFromConfig ?? (await loadHeartbeatRunnerRuntime()).getReplyFromConfig;
+
+    // Start meta-harness flow trace for heartbeat (fire-and-forget, never blocks)
+    startHeartbeatFlowTrace(runSessionKey, workspaceDir, opts.reason);
+
     const replyResult = await getReplyFromConfig(ctx, replyOpts, cfg);
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
     const includeReasoning = heartbeat?.includeReasoning === true;
@@ -960,6 +965,9 @@ export async function runHeartbeatOnce(opts: {
     });
     log.error(`heartbeat failed: ${reason}`, { error: reason });
     return { status: "failed", reason };
+  } finally {
+    // Finalize meta-harness flow trace (fire-and-forget)
+    finalizeSessionFlowTrace(runSessionKey, workspaceDir, "completed").catch(() => {});
   }
 }
 

@@ -24,6 +24,7 @@ import {
 } from "../hooks/internal-hooks.js";
 import { loadInternalHooks } from "../hooks/loader.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { registerMetaHarnessHooks } from "../meta-harness/hooks.js";
 import type { loadOpenClawPlugins } from "../plugins/loader.js";
 import { type PluginServicesHandle, startPluginServices } from "../plugins/services.js";
 import {
@@ -136,6 +137,8 @@ export async function startGatewaySidecars(params: {
   try {
     // Clear any previously registered hooks to ensure fresh loading
     clearInternalHooks();
+    // Register meta-harness built-in hooks (before user hooks load)
+    registerMetaHarnessHooks();
     const loadedCount = await loadInternalHooks(params.cfg, params.defaultWorkspaceDir);
     if (loadedCount > 0) {
       params.logHooks.info(

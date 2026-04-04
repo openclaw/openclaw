@@ -1,6 +1,6 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { isParentOwnedBackgroundAcpSession } from "../../acp/session-interaction-mode.js";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveSessionAgentId, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import {
   resolveConversationBindingRecord,
   touchConversationBindingRecord,
@@ -25,6 +25,7 @@ import {
   logMessageQueued,
   logSessionStateChange,
 } from "../../logging/diagnostic.js";
+import { wrapMetaHarnessOnToolResult, finalizeSessionFlowTrace } from "../../meta-harness/hooks.js";
 import {
   buildPluginBindingDeclinedText,
   buildPluginBindingErrorText,
@@ -171,7 +172,9 @@ export async function dispatchReplyFromConfig(params: {
   const channel = String(ctx.Surface ?? ctx.Provider ?? "unknown").toLowerCase();
   const chatId = ctx.To ?? ctx.From;
   const messageId = ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
-  const sessionKey = ctx.SessionKey;
+  const sessionKey = ctx.SessionKey ?? "";
+  const agentId = resolveSessionAgentId({ sessionKey, config: cfg });
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
   const startTime = diagnosticsEnabled ? Date.now() : 0;
   const canTrackSession = diagnosticsEnabled && Boolean(sessionKey);
 
@@ -677,28 +680,32 @@ export async function dispatchReplyFromConfig(params: {
         ...params.replyOptions,
         typingPolicy: typing.typingPolicy,
         suppressTyping: typing.suppressTyping,
-        onToolResult: (payload: ReplyPayload) => {
-          const run = async () => {
-            const ttsPayload = await maybeApplyTtsToPayload({
-              payload,
-              cfg,
-              channel: ttsChannel,
-              kind: "tool",
-              inboundAudio,
-              ttsAuto: sessionTtsAuto,
-            });
-            const deliveryPayload = resolveToolDeliveryPayload(ttsPayload);
-            if (!deliveryPayload) {
-              return;
-            }
-            if (shouldRouteToOriginating) {
-              await sendPayloadAsync(deliveryPayload, undefined, false);
-            } else {
-              dispatcher.sendToolResult(deliveryPayload);
-            }
-          };
-          return run();
-        },
+        onToolResult: wrapMetaHarnessOnToolResult(
+          sessionKey,
+          workspaceDir,
+          (payload: ReplyPayload) => {
+            const run = async () => {
+              const ttsPayload = await maybeApplyTtsToPayload({
+                payload,
+                cfg,
+                channel: ttsChannel,
+                kind: "tool",
+                inboundAudio,
+                ttsAuto: sessionTtsAuto,
+              });
+              const deliveryPayload = resolveToolDeliveryPayload(ttsPayload);
+              if (!deliveryPayload) {
+                return;
+              }
+              if (shouldRouteToOriginating) {
+                await sendPayloadAsync(deliveryPayload, undefined, false);
+              } else {
+                dispatcher.sendToolResult(deliveryPayload);
+              }
+            };
+            return run();
+          },
+        ),
         onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => {
           const run = async () => {
             // Suppress reasoning payloads — channels using this generic dispatch
@@ -858,10 +865,14 @@ export async function dispatchReplyFromConfig(params: {
       pluginFallbackReason ? { reason: pluginFallbackReason } : undefined,
     );
     markIdle("message_completed");
+    // Finalize meta-harness flow trace (fire-and-forget)
+    finalizeSessionFlowTrace(sessionKey, workspaceDir, "completed").catch(() => {});
     return { queuedFinal, counts };
   } catch (err) {
     recordProcessed("error", { error: String(err) });
     markIdle("message_error");
+    // Finalize meta-harness flow trace as failed (fire-and-forget)
+    finalizeSessionFlowTrace(sessionKey, workspaceDir, "failed").catch(() => {});
     throw err;
   }
 }
