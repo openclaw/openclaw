@@ -101,11 +101,24 @@ export async function resolveDeliveryTarget(
     if (preliminary.lastChannel) {
       fallbackChannel = preliminary.lastChannel;
     } else {
+      // An explicit channel was requested (e.g. delivery.channel: "wecom") but the
+      // session-based resolution had no channel context.  Try the explicitly-requested
+      // channel directly before falling back to auto-detection, so that an isolated
+      // session with a configured channel can still deliver.
+      const explicitRequested =
+        requestedChannel !== "last" && typeof jobPayload.channel === "string"
+          ? jobPayload.channel
+          : undefined;
       try {
         const { resolveMessageChannelSelection } = await loadChannelSelectionRuntime();
-        const selection = await resolveMessageChannelSelection({ cfg });
+        const selection = await resolveMessageChannelSelection({
+          cfg,
+          channel: explicitRequested,
+        });
         fallbackChannel = selection.channel;
       } catch (err) {
+        // If an explicit channel was given but unavailable, surface a clear error;
+        // otherwise use the generic message.
         const detail = err instanceof Error ? err.message : String(err);
         channelResolutionError = new Error(
           `${detail} Set delivery.channel explicitly or use a main session with a previous channel.`,
