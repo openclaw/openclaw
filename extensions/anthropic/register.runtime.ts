@@ -18,7 +18,6 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { cloneFirstTemplateModel } from "openclaw/plugin-sdk/provider-model-shared";
-import { composeProviderStreamWrappers } from "openclaw/plugin-sdk/provider-stream";
 import { fetchClaudeUsage } from "openclaw/plugin-sdk/provider-usage";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 import { buildAnthropicCliMigrationResult, hasClaudeCliAuth } from "./cli-migration.js";
@@ -29,12 +28,7 @@ import {
 import { anthropicMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { buildAnthropicReplayPolicy } from "./replay-policy.js";
 import {
-  createAnthropicBetaHeadersWrapper,
-  createAnthropicFastModeWrapper,
-  createAnthropicServiceTierWrapper,
-  resolveAnthropicBetas,
-  resolveAnthropicFastMode,
-  resolveAnthropicServiceTier,
+  wrapAnthropicProviderStream,
 } from "./stream-wrappers.js";
 
 const PROVIDER_ID = "anthropic";
@@ -281,23 +275,7 @@ export async function registerAnthropicPlugin(api: OpenClawPluginApi): Promise<v
     buildReplayPolicy: (ctx) => buildAnthropicReplayPolicy(ctx),
     isModernModelRef: ({ modelId }) => matchesAnthropicModernModel(modelId),
     resolveReasoningOutputMode: () => "native",
-    wrapStreamFn: (ctx) => {
-      const anthropicBetas = resolveAnthropicBetas(ctx.extraParams, ctx.modelId);
-      const serviceTier = resolveAnthropicServiceTier(ctx.extraParams);
-      const fastMode = resolveAnthropicFastMode(ctx.extraParams);
-      return composeProviderStreamWrappers(
-        ctx.streamFn,
-        anthropicBetas?.length
-          ? (streamFn) => createAnthropicBetaHeadersWrapper(streamFn, anthropicBetas)
-          : undefined,
-        serviceTier
-          ? (streamFn) => createAnthropicServiceTierWrapper(streamFn, serviceTier)
-          : undefined,
-        fastMode !== undefined
-          ? (streamFn) => createAnthropicFastModeWrapper(streamFn, fastMode)
-          : undefined,
-      );
-    },
+    wrapStreamFn: (ctx) => wrapAnthropicProviderStream(ctx),
     resolveDefaultThinkingLevel: ({ modelId }) =>
       matchesAnthropicModernModel(modelId) &&
       (modelId.toLowerCase().startsWith(ANTHROPIC_OPUS_46_MODEL_ID) ||

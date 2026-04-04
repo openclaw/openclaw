@@ -1,7 +1,9 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
+import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   applyAnthropicPayloadPolicyToParams,
+  composeProviderStreamWrappers,
   resolveAnthropicPayloadPolicy,
   streamWithPayloadPatch,
 } from "openclaw/plugin-sdk/provider-stream";
@@ -206,6 +208,24 @@ export function resolveAnthropicServiceTier(
     log.warn(`ignoring invalid Anthropic service tier param: ${rawSummary}`);
   }
   return normalized;
+}
+
+export function wrapAnthropicProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
+  const anthropicBetas = resolveAnthropicBetas(ctx.extraParams, ctx.modelId);
+  const serviceTier = resolveAnthropicServiceTier(ctx.extraParams);
+  const fastMode = resolveAnthropicFastMode(ctx.extraParams);
+  return composeProviderStreamWrappers(
+    ctx.streamFn,
+    anthropicBetas?.length
+      ? (streamFn) => createAnthropicBetaHeadersWrapper(streamFn, anthropicBetas)
+      : undefined,
+    serviceTier
+      ? (streamFn) => createAnthropicServiceTierWrapper(streamFn, serviceTier)
+      : undefined,
+    fastMode !== undefined
+      ? (streamFn) => createAnthropicFastModeWrapper(streamFn, fastMode)
+      : undefined,
+  );
 }
 
 export const __testing = { log };
