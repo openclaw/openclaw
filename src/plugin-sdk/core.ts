@@ -1,4 +1,5 @@
 import { CHAT_CHANNEL_ORDER, type ChatChannelId } from "../channels/ids.js";
+import { emptyChannelConfigSchema } from "../channels/plugins/config-schema.js";
 import { buildAccountScopedDmSecurityPolicy } from "../channels/plugins/helpers.js";
 import {
   createScopedAccountReplyToModeResolver,
@@ -22,7 +23,6 @@ import type { ReplyToMode } from "../config/types.base.js";
 import { buildOutboundBaseSessionKey } from "../infra/outbound/base-session-key.js";
 import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
 import { listBundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
-import { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 import type { PluginPackageChannel } from "../plugins/manifest.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { OpenClawPluginApi } from "../plugins/types.js";
@@ -144,7 +144,10 @@ export { createDedupeCache, resolveGlobalDedupeCache } from "../infra/dedupe.js"
 export { generateSecureToken, generateSecureUuid } from "../infra/secure-random.js";
 export { delegateCompactionToRuntime } from "../context-engine/delegate.js";
 export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
-export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
+export {
+  buildChannelConfigSchema,
+  emptyChannelConfigSchema,
+} from "../channels/plugins/config-schema.js";
 export {
   applyAccountNameToChannelSection,
   migrateBaseNameToDefaultAccount,
@@ -356,35 +359,18 @@ export function buildChannelOutboundSessionRoute(params: {
   };
 }
 
-const emptyChannelConfigSchema: ChannelConfigSchema = {
-  schema: {
-    type: "object",
-    additionalProperties: false,
-    properties: {},
-  },
-  runtime: {
-    safeParse(value: unknown) {
-      if (value === undefined) {
-        return { success: true, data: undefined };
-      }
-      if (!value || typeof value !== "object" || Array.isArray(value)) {
-        return { success: false, issues: [{ path: [], message: "expected config object" }] };
-      }
-      if (Object.keys(value as Record<string, unknown>).length > 0) {
-        return { success: false, issues: [{ path: [], message: "config must be empty" }] };
-      }
-      return { success: true, data: value };
-    },
-  },
-};
-
 /** Options for a channel plugin entry that should register a channel capability. */
+type ChannelEntryConfigSchema<TPlugin> =
+  TPlugin extends ChannelPlugin<unknown>
+    ? NonNullable<TPlugin["configSchema"]>
+    : ChannelConfigSchema;
+
 type DefineChannelPluginEntryOptions<TPlugin = ChannelPlugin> = {
   id: string;
   name: string;
   description: string;
   plugin: TPlugin;
-  configSchema?: ChannelConfigSchema | (() => ChannelConfigSchema);
+  configSchema?: ChannelEntryConfigSchema<TPlugin> | (() => ChannelEntryConfigSchema<TPlugin>);
   setRuntime?: (runtime: PluginRuntime) => void;
   registerCliMetadata?: (api: OpenClawPluginApi) => void;
   registerFull?: (api: OpenClawPluginApi) => void;
@@ -394,7 +380,7 @@ type DefinedChannelPluginEntry<TPlugin> = {
   id: string;
   name: string;
   description: string;
-  configSchema: ChannelConfigSchema;
+  configSchema: ChannelEntryConfigSchema<TPlugin>;
   register: (api: OpenClawPluginApi) => void;
   channelPlugin: TPlugin;
   setChannelRuntime?: (runtime: PluginRuntime) => void;
@@ -452,25 +438,20 @@ export function defineChannelPluginEntry<TPlugin>({
   name,
   description,
   plugin,
-  configSchema = emptyChannelConfigSchema,
+  configSchema,
   setRuntime,
   registerCliMetadata,
   registerFull,
 }: DefineChannelPluginEntryOptions<TPlugin>): DefinedChannelPluginEntry<TPlugin> {
-  let resolvedConfigSchema: ChannelConfigSchema | undefined;
-  const getConfigSchema = (): ChannelConfigSchema => {
-    resolvedConfigSchema ??=
-      (typeof configSchema === "function" ? configSchema() : configSchema) ??
-      emptyChannelConfigSchema;
-    return resolvedConfigSchema;
-  };
+  const resolvedConfigSchema: ChannelEntryConfigSchema<TPlugin> =
+    typeof configSchema === "function"
+      ? configSchema()
+      : ((configSchema ?? emptyChannelConfigSchema()) as ChannelEntryConfigSchema<TPlugin>);
   const entry = {
     id,
     name,
     description,
-    get configSchema() {
-      return getConfigSchema();
-    },
+    configSchema: resolvedConfigSchema,
     register(api: OpenClawPluginApi) {
       if (api.registrationMode === "cli-metadata") {
         registerCliMetadata?.(api);

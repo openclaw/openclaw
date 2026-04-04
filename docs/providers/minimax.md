@@ -12,8 +12,8 @@ OpenClaw's MiniMax provider defaults to **MiniMax M2.7**.
 
 ## Model lineup
 
-- `MiniMax-M2.7`: default hosted text model.
-- `MiniMax-M2.7-highspeed`: faster M2.7 text tier.
+- `MiniMax-M2.7`: default hosted multimodal model (text + image input).
+- `MiniMax-M2.7-highspeed`: faster M2.7 multimodal tier (text + image input).
 - `image-01`: image generation model (generate and image-to-image editing).
 
 ## Image generation
@@ -37,6 +37,8 @@ To use MiniMax for image generation, set it as the image generation provider:
 ```
 
 The plugin uses the same `MINIMAX_API_KEY` or OAuth auth as the text models. No additional configuration is needed if MiniMax is already set up.
+
+For chat/inference models, both `MiniMax-M2.7` and `MiniMax-M2.7-highspeed` accept image input in addition to text.
 
 ## Choose a setup
 
@@ -85,19 +87,19 @@ Configure via CLI:
             id: "MiniMax-M2.7",
             name: "MiniMax M2.7",
             reasoning: true,
-            input: ["text"],
-            cost: { input: 0.3, output: 1.2, cacheRead: 0.03, cacheWrite: 0.12 },
-            contextWindow: 200000,
-            maxTokens: 8192,
+            input: ["text", "image"],
+            cost: { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0.375 },
+            contextWindow: 204800,
+            maxTokens: 131072,
           },
           {
             id: "MiniMax-M2.7-highspeed",
             name: "MiniMax M2.7 Highspeed",
             reasoning: true,
-            input: ["text"],
-            cost: { input: 0.3, output: 1.2, cacheRead: 0.03, cacheWrite: 0.12 },
-            contextWindow: 200000,
-            maxTokens: 8192,
+            input: ["text", "image"],
+            cost: { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0.375 },
+            contextWindow: 204800,
+            maxTokens: 131072,
           },
         ],
       },
@@ -150,8 +152,8 @@ Use the interactive config wizard to set MiniMax without editing JSON:
 ## Notes
 
 - Model refs are `minimax/<model>`.
-- Default text model: `MiniMax-M2.7`.
-- Alternate text model: `MiniMax-M2.7-highspeed`.
+- Default chat model: `MiniMax-M2.7` (text + image input).
+- Alternate chat model: `MiniMax-M2.7-highspeed` (text + image input).
 - Coding Plan usage API: `https://api.minimaxi.com/v1/api/openplatform/coding_plan/remains` (requires a coding plan key).
 - Update pricing values in `models.json` if you need exact cost tracking.
 - Referral link for MiniMax Coding Plan (10% off): [https://platform.minimax.io/subscribe/coding-plan?code=DbXJTRClnb&source=link](https://platform.minimax.io/subscribe/coding-plan?code=DbXJTRClnb&source=link)

@@ -1,4 +1,4 @@
-import { buildPluginApprovalPendingReplyPayload } from "openclaw/plugin-sdk/approval-runtime";
+import { buildPluginApprovalPendingReplyPayload } from "openclaw/plugin-sdk/approval-reply-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   createChannelNativeApprovalRuntime,

@@ -31,7 +31,14 @@ function buildDefaultTableModes(): Map<string, MarkdownTableMode> {
   );
 }
 
-export const DEFAULT_TABLE_MODES = buildDefaultTableModes();
+let cachedDefaultTableModes: Map<string, MarkdownTableMode> | null = null;
+
+function getDefaultTableModes(): Map<string, MarkdownTableMode> {
+  cachedDefaultTableModes ??= buildDefaultTableModes();
+  return cachedDefaultTableModes;
+}
+
+export const DEFAULT_TABLE_MODES = getDefaultTableModes();
 
 const isMarkdownTableMode = (value: unknown): value is MarkdownTableMode =>
   value === "off" || value === "bullets" || value === "code" || value === "block";

@@ -274,6 +274,13 @@ function buildEmbeddedCachePrompt(suffix: string, sections = 48): string {
   return lines.join("\n");
 }
 
+function buildNoisyStructuredPromptVariant(text: string): string {
+  return `\r\n${text
+    .split("\n")
+    .map((line) => `${line}  \t`)
+    .join("\r\n")}\r\n\r\n`;
+}
+
 function extractRunPayloadText(payloads: Array<{ text?: string } | undefined> | undefined): string {
   return (
     payloads
@@ -998,6 +1005,51 @@ describeCacheLive("pi embedded runner prompt caching (live)", () => {
       },
       8 * 60_000,
     );
+
+    it(
+      "keeps cache reuse when structured system context only changes by whitespace and line endings",
+      async () => {
+        const sessionId = `${OPENAI_SESSION_ID}-structured-normalization`;
+        const warmup = await runEmbeddedCacheProbe({
+          ...fixture,
+          cacheRetention: "short",
+          prefix: OPENAI_PREFIX,
+          providerTag: "openai",
+          sessionId,
+          suffix: "structured-warmup",
+        });
+        logLiveCache(
+          `openai structured warmup cacheRead=${warmup.usage.cacheRead} input=${warmup.usage.input} rate=${warmup.hitRate.toFixed(3)}`,
+        );
+
+        const noisyPrefix = buildNoisyStructuredPromptVariant(OPENAI_PREFIX);
+        const hitA = await runEmbeddedCacheProbe({
+          ...fixture,
+          cacheRetention: "short",
+          prefix: noisyPrefix,
+          providerTag: "openai",
+          sessionId,
+          suffix: "structured-hit-a",
+        });
+        const hitB = await runEmbeddedCacheProbe({
+          ...fixture,
+          cacheRetention: "short",
+          prefix: noisyPrefix,
+          providerTag: "openai",
+          sessionId,
+          suffix: "structured-hit-b",
+        });
+        const bestHit = (hitA.usage.cacheRead ?? 0) >= (hitB.usage.cacheRead ?? 0) ? hitA : hitB;
+        logLiveCache(
+          `openai structured best-hit suffix=${bestHit.suffix} cacheRead=${bestHit.usage.cacheRead} input=${bestHit.usage.input} rate=${bestHit.hitRate.toFixed(3)}`,
+        );
+
+        expect(bestHit.usage.cacheRead ?? 0).toBeGreaterThan(1_024);
+        expect(bestHit.hitRate).toBeGreaterThanOrEqual(0.35);
+        await expectCacheTraceStages(sessionId, ["cache:state", "cache:result"]);
+      },
+      8 * 60_000,
+    );
   });
 
   describe("anthropic", () => {
@@ -1244,6 +1296,52 @@ describeCacheLive("pi embedded runner prompt caching (live)", () => {
         await expectCacheTraceStages(sessionId, ["cache:state", "cache:result"]);
       },
       10 * 60_000,
+    );
+
+    it(
+      "keeps cache reuse when structured system context only changes by whitespace and line endings",
+      async () => {
+        const sessionId = `${ANTHROPIC_SESSION_ID}-structured-normalization`;
+        const warmup = await runEmbeddedCacheProbe({
+          ...fixture,
+          cacheRetention: "short",
+          prefix: ANTHROPIC_PREFIX,
+          providerTag: "anthropic",
+          sessionId,
+          suffix: "structured-warmup",
+        });
+        logLiveCache(
+          `anthropic structured warmup cacheWrite=${warmup.usage.cacheWrite} cacheRead=${warmup.usage.cacheRead} input=${warmup.usage.input} rate=${warmup.hitRate.toFixed(3)}`,
+        );
+        expect(warmup.usage.cacheWrite ?? 0).toBeGreaterThan(0);
+
+        const noisyPrefix = buildNoisyStructuredPromptVariant(ANTHROPIC_PREFIX);
+        const hitA = await runEmbeddedCacheProbe({
+          ...fixture,
+          cacheRetention: "short",
+          prefix: noisyPrefix,
+          providerTag: "anthropic",
+          sessionId,
+          suffix: "structured-hit-a",
+        });
+        const hitB = await runEmbeddedCacheProbe({
+          ...fixture,
+          cacheRetention: "short",
+          prefix: noisyPrefix,
+          providerTag: "anthropic",
+          sessionId,
+          suffix: "structured-hit-b",
+        });
+        const bestHit = (hitA.usage.cacheRead ?? 0) >= (hitB.usage.cacheRead ?? 0) ? hitA : hitB;
+        logLiveCache(
+          `anthropic structured best-hit suffix=${bestHit.suffix} cacheWrite=${bestHit.usage.cacheWrite} cacheRead=${bestHit.usage.cacheRead} input=${bestHit.usage.input} rate=${bestHit.hitRate.toFixed(3)}`,
+        );
+
+        expect(bestHit.usage.cacheRead ?? 0).toBeGreaterThan(1_024);
+        expect(bestHit.hitRate).toBeGreaterThanOrEqual(0.35);
+        await expectCacheTraceStages(sessionId, ["cache:state", "cache:result"]);
+      },
+      8 * 60_000,
     );
   });
 });
