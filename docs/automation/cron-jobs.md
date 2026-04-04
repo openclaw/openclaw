@@ -37,6 +37,11 @@ openclaw cron runs --id <job-id>
 - All cron executions create [background task](/automation/tasks) records.
 - One-shot jobs (`--at`) auto-delete after success by default.
 
+Task reconciliation for cron is runtime-owned: an active cron task stays live while the
+cron runtime still tracks that job as running, even if an old child session row still exists.
+Once the runtime stops owning the job and the 5-minute grace window expires, maintenance can
+mark the task `lost`.
+
 ## Schedule types
 
 | Kind    | CLI flag  | Description                                             |
