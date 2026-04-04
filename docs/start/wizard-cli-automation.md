@@ -51,6 +51,19 @@ openclaw onboard --non-interactive \
 ## Provider-specific examples
 
 <AccordionGroup>
+  <Accordion title="Anthropic Claude CLI example">
+    ```bash
+    openclaw onboard --non-interactive \
+      --mode local \
+      --auth-choice anthropic-cli \
+      --gateway-port 18789 \
+      --gateway-bind loopback
+    ```
+
+    Requires Claude CLI already installed and signed in on the same gateway
+    host.
+
+  </Accordion>
   <Accordion title="Gemini example">
     ```bash
     openclaw onboard --non-interactive \
@@ -182,6 +195,11 @@ openclaw onboard --non-interactive \
   </Accordion>
 </AccordionGroup>
 
+Anthropic setup-token remains supported for manual flows, but interactive
+onboarding/configure no longer offers it as an assistant choice. Use
+`openclaw models auth setup-token --provider anthropic` or
+`openclaw models auth paste-token --provider anthropic` when you need it.
+
 ## Add another agent
 
 Use `openclaw agents add <name>` to create a separate agent with its own workspace,
@@ -190,7 +208,7 @@ sessions, and auth profiles. Running without `--workspace` launches the wizard.
 ```bash
 openclaw agents add work \
   --workspace ~/.openclaw/workspace-work \
-  --model openai/gpt-5.2 \
+  --model openai/gpt-5.4 \
   --bind whatsapp:biz \
   --non-interactive \
   --json

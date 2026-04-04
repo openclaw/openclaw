@@ -17,6 +17,7 @@
       "deprecatedChoiceIds": ["claude-cli"],
       "choiceLabel": "Anthropic Claude CLI",
       "choiceHint": "Reuse a local Claude CLI login on this host",
+      "assistantPriority": -20,
       "groupId": "anthropic",
       "groupLabel": "Anthropic",
       "groupHint": "Claude CLI + setup-token + API key"
@@ -27,6 +28,7 @@
       "choiceId": "token",
       "choiceLabel": "Anthropic token (paste setup-token)",
       "choiceHint": "Run `claude setup-token` elsewhere, then paste the token here",
+      "assistantVisibility": "manual-only",
       "groupId": "anthropic",
       "groupLabel": "Anthropic",
       "groupHint": "Claude CLI + setup-token + API key"

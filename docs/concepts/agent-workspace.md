@@ -73,6 +73,7 @@ These are the standard files OpenClaw expects inside the workspace:
 - `SOUL.md`
   - Persona, tone, and boundaries.
   - Loaded every session.
+  - Guide: [SOUL.md Personality Guide](/concepts/soul)
 
 - `USER.md`
   - Who the user is and how to address them.

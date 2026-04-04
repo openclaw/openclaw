@@ -451,6 +451,7 @@ describe("resolveTelegramMediaRuntimeOptions", () => {
             network: {
               dangerouslyAllowPrivateNetwork: false,
             },
+            trustedLocalFileRoots: ["/srv/telegram/cache"],
             accounts: {
               work: {
                 botToken: "123:work",
@@ -458,6 +459,7 @@ describe("resolveTelegramMediaRuntimeOptions", () => {
                 network: {
                   dangerouslyAllowPrivateNetwork: true,
                 },
+                trustedLocalFileRoots: ["/var/lib/telegram-bot-api"],
               },
             },
           },
@@ -470,6 +472,7 @@ describe("resolveTelegramMediaRuntimeOptions", () => {
     expect(resolved).toEqual({
       token: "123:work",
       apiRoot: "http://tg-proxy.internal:8081",
+      trustedLocalFileRoots: ["/var/lib/telegram-bot-api"],
       dangerouslyAllowPrivateNetwork: true,
       transport: undefined,
     });
@@ -484,6 +487,7 @@ describe("resolveTelegramMediaRuntimeOptions", () => {
             network: {
               dangerouslyAllowPrivateNetwork: true,
             },
+            trustedLocalFileRoots: ["/srv/telegram/cache"],
             accounts: {
               work: {
                 botToken: "123:work",
@@ -499,6 +503,7 @@ describe("resolveTelegramMediaRuntimeOptions", () => {
     expect(resolved).toEqual({
       token: "123:work",
       apiRoot: "http://tg-proxy.internal:8081",
+      trustedLocalFileRoots: ["/srv/telegram/cache"],
       dangerouslyAllowPrivateNetwork: true,
       transport: undefined,
     });

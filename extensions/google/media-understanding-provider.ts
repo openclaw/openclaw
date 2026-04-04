@@ -155,6 +155,13 @@ export async function describeGeminiVideo(
 export const googleMediaUnderstandingProvider: MediaUnderstandingProvider = {
   id: "google",
   capabilities: ["image", "audio", "video"],
+  defaultModels: {
+    image: DEFAULT_GOOGLE_VIDEO_MODEL,
+    audio: DEFAULT_GOOGLE_AUDIO_MODEL,
+    video: DEFAULT_GOOGLE_VIDEO_MODEL,
+  },
+  autoPriority: { image: 30, audio: 40, video: 10 },
+  nativeDocumentInputs: ["pdf"],
   describeImage: describeImageWithModel,
   describeImages: describeImagesWithModel,
   transcribeAudio: transcribeGeminiAudio,

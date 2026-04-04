@@ -204,7 +204,6 @@ Some categories are exclusive (only one active at a time):
 openclaw plugins list                    # compact inventory
 openclaw plugins inspect <id>            # deep detail
 openclaw plugins inspect <id> --json     # machine-readable
-openclaw plugins status                  # operational summary
 openclaw plugins doctor                  # diagnostics
 
 openclaw plugins install <package>        # install (ClawHub first, then npm)

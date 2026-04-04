@@ -172,12 +172,19 @@ export function definePluginEntry({
   configSchema = emptyPluginConfigSchema,
   register,
 }: DefinePluginEntryOptions): DefinedPluginEntry {
+  let resolvedConfigSchema: OpenClawPluginConfigSchema | undefined;
+  const getConfigSchema = (): OpenClawPluginConfigSchema => {
+    resolvedConfigSchema ??= resolvePluginConfigSchema(configSchema);
+    return resolvedConfigSchema;
+  };
   return {
     id,
     name,
     description,
     ...(kind ? { kind } : {}),
-    configSchema: resolvePluginConfigSchema(configSchema),
+    get configSchema() {
+      return getConfigSchema();
+    },
     register,
   };
 }

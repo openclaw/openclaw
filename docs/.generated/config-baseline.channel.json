@@ -31146,16 +31146,6 @@
       "hasChildren": true
     },
     {
-      "path": "channels.zalouser.accounts.*.groups.*.allow",
-      "kind": "channel",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
       "path": "channels.zalouser.accounts.*.groups.*.enabled",
       "kind": "channel",
       "type": "boolean",
@@ -31448,16 +31438,6 @@
       "sensitive": false,
       "tags": [],
       "hasChildren": true
-    },
-    {
-      "path": "channels.zalouser.groups.*.allow",
-      "kind": "channel",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
     },
     {
       "path": "channels.zalouser.groups.*.enabled",

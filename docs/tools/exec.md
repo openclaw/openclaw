@@ -201,7 +201,7 @@ when you want to disable it or restrict it to specific models:
 {
   tools: {
     exec: {
-      applyPatch: { workspaceOnly: true, allowModels: ["gpt-5.2"] },
+      applyPatch: { workspaceOnly: true, allowModels: ["gpt-5.4"] },
     },
   },
 }

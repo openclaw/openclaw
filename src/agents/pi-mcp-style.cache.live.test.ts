@@ -2,6 +2,7 @@ import type { AssistantMessage, Tool } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
 import { describe, expect, it } from "vitest";
 import {
+  buildAssistantHistoryTurn,
   buildStableCachePrefix,
   completeSimpleWithLiveTimeout,
   computeCacheHitRate,
@@ -15,6 +16,8 @@ const describeCacheLive = LIVE_CACHE_TEST_ENABLED ? describe : describe.skip;
 const OPENAI_TIMEOUT_MS = 120_000;
 const OPENAI_SESSION_ID = "live-cache-openai-mcp-style-session";
 const OPENAI_PREFIX = buildStableCachePrefix("openai-mcp-style");
+const OPENAI_MCP_STYLE_MIN_CACHE_READ = 4_096;
+const OPENAI_MCP_STYLE_MIN_HIT_RATE = 0.85;
 
 const MCP_TOOL: Tool = {
   name: "bundleProbe__bundle_probe",
@@ -122,21 +125,13 @@ async function runOpenAiMcpStyleCacheProbe(params: {
         { role: "user", content: toolTurn.prompt, timestamp: Date.now() },
         toolTurn.response,
         buildToolResultMessage(toolTurn.toolCall.id),
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "MCP TOOL HISTORY ACKNOWLEDGED" }],
-          timestamp: Date.now(),
-        },
+        buildAssistantHistoryTurn("MCP TOOL HISTORY ACKNOWLEDGED", params.model),
         {
           role: "user",
           content: "Keep the MCP tool output stable in history.",
           timestamp: Date.now(),
         },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "MCP TOOL HISTORY PRESERVED" }],
-          timestamp: Date.now(),
-        },
+        buildAssistantHistoryTurn("MCP TOOL HISTORY PRESERVED", params.model),
         {
           role: "user",
           content: `Reply with exactly CACHE-OK ${params.suffix}.`,
@@ -168,7 +163,7 @@ async function runOpenAiMcpStyleCacheProbe(params: {
 
 describeCacheLive("MCP-style prompt caching (live)", () => {
   it(
-    "keeps high cache-read rates across MCP-style followup turns",
+    "keeps an OpenAI cache plateau across MCP-style followup turns",
     async () => {
       const fixture = await resolveLiveDirectModel({
         provider: "openai",
@@ -199,11 +194,11 @@ describeCacheLive("MCP-style prompt caching (live)", () => {
       });
       const bestHit = (hitA.usage.cacheRead ?? 0) >= (hitB.usage.cacheRead ?? 0) ? hitA : hitB;
       logLiveCache(
-        `openai mcp-style best-hit suffix=${bestHit.suffix} cacheRead=${bestHit.usage.cacheRead} input=${bestHit.usage.input} rate=${bestHit.hitRate.toFixed(3)}`,
+        `openai mcp-style plateau suffix=${bestHit.suffix} cacheRead=${bestHit.usage.cacheRead} input=${bestHit.usage.input} rate=${bestHit.hitRate.toFixed(3)}`,
       );
 
-      expect(bestHit.usage.cacheRead ?? 0).toBeGreaterThan(1_024);
-      expect(bestHit.hitRate).toBeGreaterThanOrEqual(0.6);
+      expect(bestHit.usage.cacheRead ?? 0).toBeGreaterThanOrEqual(OPENAI_MCP_STYLE_MIN_CACHE_READ);
+      expect(bestHit.hitRate).toBeGreaterThanOrEqual(OPENAI_MCP_STYLE_MIN_HIT_RATE);
     },
     10 * 60_000,
   );

@@ -107,10 +107,10 @@ import {
 import {
   resolveDeviceSignaturePayloadVersion,
   resolveHandshakeBrowserSecurityContext,
+  resolvePairingLocality,
   resolveUnauthorizedHandshakeContext,
   shouldAllowSilentLocalPairing,
-  shouldSkipBackendSelfPairing,
-  shouldTreatCliContainerHostAsLocal,
+  shouldSkipLocalBackendSelfPairing,
 } from "./handshake-auth-helpers.js";
 import { isUnauthorizedRoleError, UnauthorizedFloodGuard } from "./unauthorized-flood-guard.js";
 
@@ -726,8 +726,9 @@ export function attachGatewayWsMessageHandler(params: {
           authOk,
           authMethod,
         });
-        const allowCliContainerLocalPairing = shouldTreatCliContainerHostAsLocal({
+        const pairingLocality = resolvePairingLocality({
           connectParams,
+          isLocalClient,
           requestHost,
           remoteAddress: remoteAddr,
           hasProxyHeaders,
@@ -735,11 +736,10 @@ export function attachGatewayWsMessageHandler(params: {
           sharedAuthOk,
           authMethod,
         });
-        const effectiveIsLocalClient = isLocalClient || allowCliContainerLocalPairing;
         const skipPairing =
-          shouldSkipBackendSelfPairing({
+          shouldSkipLocalBackendSelfPairing({
             connectParams,
-            isLocalClient,
+            locality: pairingLocality,
             hasBrowserOriginHeader,
             sharedAuthOk,
             authMethod,
@@ -825,7 +825,7 @@ export function attachGatewayWsMessageHandler(params: {
               });
             };
             const allowSilentLocalPairing = shouldAllowSilentLocalPairing({
-              isLocalClient: effectiveIsLocalClient,
+              locality: pairingLocality,
               hasBrowserOriginHeader,
               isControlUi,
               isWebchat,

@@ -149,8 +149,8 @@ function normalizeMatrixCompatibilityConfig(cfg: OpenClawConfig): ChannelDoctorC
     config: {
       ...cfg,
       channels: {
-        ...cfg.channels,
-        matrix: updatedMatrix as OpenClawConfig["channels"]["matrix"],
+        ...(cfg.channels ?? {}),
+        matrix: updatedMatrix as NonNullable<OpenClawConfig["channels"]>["matrix"],
       },
     },
     changes,

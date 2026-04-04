@@ -736,10 +736,16 @@ describe("POST /tools/invoke", () => {
 
   it("requires operator.write scope for HTTP tool invocation", async () => {
     allowAgentsListForMain();
+    vi.mocked(authorizeHttpGatewayConnect).mockResolvedValueOnce({
+      ok: true,
+      method: "trusted-proxy",
+    });
 
     const res = await invokeTool({
       port: sharedPort,
-      headers: {},
+      headers: {
+        "x-openclaw-scopes": "",
+      },
       tool: "agents_list",
       sessionKey: "main",
     });

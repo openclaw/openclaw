@@ -15,6 +15,8 @@ import {
   composeSystemPromptWithHookContext,
   decodeHtmlEntitiesInObject,
   prependSystemPromptAddition,
+  resetEmbeddedAgentBaseStreamFnCacheForTest,
+  resolveEmbeddedAgentBaseStreamFn,
   resolveAttemptFsWorkspaceOnly,
   resolveEmbeddedAgentStreamFn,
   resolvePromptBuildHookResult,
@@ -240,6 +242,21 @@ describe("shouldWarnOnOrphanedUserRepair", () => {
 });
 
 describe("resolveEmbeddedAgentStreamFn", () => {
+  it("reuses the session's original base stream across later wrapper mutations", () => {
+    resetEmbeddedAgentBaseStreamFnCacheForTest();
+    const baseStreamFn = vi.fn();
+    const wrapperStreamFn = vi.fn();
+    const session = {
+      agent: {
+        streamFn: baseStreamFn,
+      },
+    };
+
+    expect(resolveEmbeddedAgentBaseStreamFn({ session })).toBe(baseStreamFn);
+    session.agent.streamFn = wrapperStreamFn;
+    expect(resolveEmbeddedAgentBaseStreamFn({ session })).toBe(baseStreamFn);
+  });
+
   it("injects authStorage api keys into provider-owned stream functions", async () => {
     const providerStreamFn = vi.fn(async (_model, _context, options) => options);
     const streamFn = resolveEmbeddedAgentStreamFn({
@@ -292,7 +309,6 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     });
     expect(providerStreamFn).toHaveBeenCalledTimes(1);
   });
-
   it("routes supported default streamSimple fallbacks through boundary-aware transports", () => {
     const streamFn = resolveEmbeddedAgentStreamFn({
       currentStreamFn: undefined,

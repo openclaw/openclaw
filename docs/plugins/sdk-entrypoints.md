@@ -55,6 +55,8 @@ export default definePluginEntry({
 - `id` must match your `openclaw.plugin.json` manifest.
 - `kind` is for exclusive slots: `"memory"` or `"context-engine"`.
 - `configSchema` can be a function for lazy evaluation.
+- OpenClaw resolves and memoizes that schema on first access, so expensive schema
+  builders only run once.
 
 ## `defineChannelPluginEntry`
 
@@ -103,6 +105,8 @@ export default defineChannelPluginEntry({
   with full plugin loads.
 - `registerFull` only runs when `api.registrationMode === "full"`. It is skipped
   during setup-only loading.
+- Like `definePluginEntry`, `configSchema` can be a lazy factory and OpenClaw
+  memoizes the resolved schema on first access.
 - For plugin-owned root CLI commands, prefer `api.registerCli(..., { descriptors: [...] })`
   when you want the command to stay lazy-loaded without disappearing from the
   root CLI parse tree. For channel plugins, prefer registering those descriptors

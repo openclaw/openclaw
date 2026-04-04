@@ -378,6 +378,51 @@ describe("buildAuthChoiceOptions", () => {
     expect(litellmGroup?.options.some((opt) => opt.value === "litellm-api-key")).toBe(true);
   });
 
+  it("prefers Anthropic Claude CLI over API key and hides manual-only setup-token in grouped selection", () => {
+    resolveManifestProviderAuthChoices.mockReturnValue([
+      {
+        pluginId: "anthropic",
+        providerId: "anthropic",
+        methodId: "api-key",
+        choiceId: "apiKey",
+        choiceLabel: "Anthropic API key",
+        groupId: "anthropic",
+        groupLabel: "Anthropic",
+      },
+      {
+        pluginId: "anthropic",
+        providerId: "anthropic",
+        methodId: "cli",
+        choiceId: "anthropic-cli",
+        choiceLabel: "Anthropic Claude CLI",
+        assistantPriority: -20,
+        groupId: "anthropic",
+        groupLabel: "Anthropic",
+      },
+      {
+        pluginId: "anthropic",
+        providerId: "anthropic",
+        methodId: "setup-token",
+        choiceId: "token",
+        choiceLabel: "Anthropic token (paste setup-token)",
+        assistantVisibility: "manual-only",
+        groupId: "anthropic",
+        groupLabel: "Anthropic",
+      },
+    ]);
+    const { groups } = buildAuthChoiceGroups({
+      store: EMPTY_STORE,
+      includeSkip: false,
+    });
+    const anthropicGroup = groups.find((group) => group.value === "anthropic");
+
+    expect(anthropicGroup).toBeDefined();
+    expect(anthropicGroup?.options.map((option) => option.value)).toEqual([
+      "anthropic-cli",
+      "apiKey",
+    ]);
+  });
+
   it("groups OpenCode Zen and Go under one OpenCode entry", () => {
     resolveManifestProviderAuthChoices.mockReturnValue([
       {

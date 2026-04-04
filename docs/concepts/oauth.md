@@ -3,7 +3,7 @@ summary: "OAuth in OpenClaw: token exchange, storage, and multi-account patterns
 read_when:
   - You want to understand OpenClaw OAuth end-to-end
   - You hit token invalidation / logout issues
-  - You want setup-token or OAuth auth flows
+  - You want setup-token, Claude CLI, or OAuth auth flows
   - You want multiple accounts or profile routing
 title: "OAuth"
 ---
@@ -153,10 +153,14 @@ Claude CLI path:
 3. store no new auth profile; switch model selection to `claude-cli/...`
 4. keep existing Anthropic auth profiles for rollback
 
-Wizard paths:
+Interactive assistant path:
 
-- `openclaw onboard` → auth choice `anthropic-cli`
-- `openclaw onboard` → auth choice `setup-token` (Anthropic)
+- `openclaw onboard` / `openclaw configure` → auth choice `anthropic-cli`
+
+Manual setup-token path:
+
+- `openclaw models auth setup-token --provider anthropic`
+- `openclaw models auth paste-token --provider anthropic`
 
 ### OpenAI Codex (ChatGPT OAuth)
 
