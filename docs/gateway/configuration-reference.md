@@ -1049,7 +1049,7 @@ Periodic heartbeat runs.
     defaults: {
       heartbeat: {
         every: "30m", // 0m disables
-        model: "openai/gpt-5.2-mini",
+        model: "openai/gpt-5.4-mini",
         includeReasoning: false,
         lightContext: false, // default: false; true keeps only HEARTBEAT.md from workspace bootstrap files
         isolatedSession: false, // default: false; true runs each heartbeat in a fresh session (no conversation history)
@@ -1912,7 +1912,7 @@ Further restrict tools for specific providers or models. Order: base profile →
     profile: "coding",
     byProvider: {
       "google-antigravity": { profile: "minimal" },
-      "openai/gpt-5.2": { allow: ["group:fs", "sessions_list"] },
+      "openai/gpt-5.4": { allow: ["group:fs", "sessions_list"] },
     },
   },
 }
@@ -1953,7 +1953,7 @@ Controls elevated (host) exec access:
       notifyOnExitEmptySuccess: false,
       applyPatch: {
         enabled: false,
-        allowModels: ["gpt-5.2"],
+        allowModels: ["gpt-5.4"],
       },
     },
   },
@@ -2803,7 +2803,7 @@ See [Multiple Gateways](/gateway/multiple-gateways).
         messageTemplate: "From: {{messages[0].from}}\nSubject: {{messages[0].subject}}\n{{messages[0].snippet}}",
         deliver: true,
         channel: "last",
-        model: "openai/gpt-5.2-mini",
+        model: "openai/gpt-5.4-mini",
       },
     ],
   },
