@@ -1,4 +1,4 @@
-import { readConfigFileSnapshot } from "../../config/config.js";
+import { loadConfig, readConfigFileSnapshot } from "../../config/config.js";
 import { redactConfigObject } from "../../config/redact-snapshot.js";
 import { buildTalkConfigResponse, resolveActiveTalkProviderConfig } from "../../config/talk.js";
 import type { TalkProviderConfig } from "../../config/types.gateway.js";
@@ -302,8 +302,8 @@ export const talkHandlers: GatewayRequestHandlers = {
     }
 
     try {
-      const snapshot = await readConfigFileSnapshot();
-      const setup = buildTalkTtsConfig(snapshot.config);
+      const runtimeConfig = loadConfig();
+      const setup = buildTalkTtsConfig(runtimeConfig);
       if ("error" in setup) {
         respond(false, undefined, talkSpeakError(setup.reason, setup.error));
         return;
@@ -312,7 +312,7 @@ export const talkHandlers: GatewayRequestHandlers = {
       const overrides = buildTalkSpeakOverrides(
         setup.provider,
         setup.providerConfig,
-        snapshot.config,
+        runtimeConfig,
         typedParams,
       );
       const result = await synthesizeSpeech({
