@@ -49,6 +49,15 @@ describe("enablePluginInConfig", () => {
       },
     },
     {
+      name: "initializes plugins.allow when undefined",
+      cfg: {} as OpenClawConfig,
+      pluginId: "google",
+      expectedEnabled: true,
+      assert: (result: ReturnType<typeof enablePluginInConfig>) => {
+        expectEnabledAllowlist(result, ["google"]);
+      },
+    },
+    {
       name: "adds plugin to allowlist when allowlist is configured",
       cfg: {
         plugins: {
