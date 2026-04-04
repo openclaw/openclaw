@@ -105,7 +105,7 @@ local while `web_search` and `x_search` can use xAI Responses under the hood.
 | [Gemini](/tools/gemini-search)            | AI-synthesized + citations | --                                               | `GEMINI_API_KEY`                            |
 | [Grok](/tools/grok-search)                | AI-synthesized + citations | --                                               | `XAI_API_KEY`                               |
 | [Kimi](/tools/kimi-search)                | AI-synthesized + citations | --                                               | `KIMI_API_KEY` / `MOONSHOT_API_KEY`         |
-| [Ollama Web Search](/tools/ollama-search) | Structured snippets        | --                                               | None (`ollama signin` required)             |
+| [Ollama Web Search](/tools/ollama-search) | Structured snippets        | --                                               | None by default; `ollama signin` required   |
 | [Perplexity](/tools/perplexity-search)    | Structured snippets        | Country, language, time, domains, content limits | `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` |
 | [SearXNG](/tools/searxng-search)          | Structured snippets        | Categories, language                             | None (self-hosted)                          |
 | [Tavily](/tools/tavily)                   | Structured snippets        | Via `tavily_search` tool                         | `TAVILY_API_KEY`                            |
@@ -164,7 +164,7 @@ first one that is ready:
 7. **Exa** -- `EXA_API_KEY` or `plugins.entries.exa.config.webSearch.apiKey`
 8. **Tavily** -- `TAVILY_API_KEY` or `plugins.entries.tavily.config.webSearch.apiKey`
 9. **DuckDuckGo** -- key-free HTML fallback with no account or API key
-10. **Ollama Web Search** -- key-free fallback via your configured Ollama host; requires Ollama to be reachable and signed in with `ollama signin`
+10. **Ollama Web Search** -- key-free fallback via your configured Ollama host; requires Ollama to be reachable and signed in with `ollama signin` (reuses Ollama provider auth if the host needs bearer auth)
 
 Key-free providers are checked after API-backed providers:
 
@@ -278,6 +278,8 @@ show the `x_search` prompt.
   Perplexity behaves the same way when you use the Sonar/OpenRouter
   compatibility path (`plugins.entries.perplexity.config.webSearch.baseUrl` /
   `model` or `OPENROUTER_API_KEY`).
+  SearXNG accepts `http://` only for trusted private-network or loopback hosts;
+  public SearXNG endpoints must use `https://`.
   Firecrawl and Tavily only support `query` and `count` through `web_search`
   -- use their dedicated tools for advanced options.
 </Warning>

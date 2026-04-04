@@ -82,6 +82,12 @@ Plugin-level settings for the SearXNG instance:
 
 The `baseUrl` field also accepts SecretRef objects.
 
+Transport rules:
+
+- `https://` works for public or private SearXNG hosts
+- `http://` is only accepted for trusted private-network or loopback hosts
+- public SearXNG hosts must use `https://`
+
 ## Environment variable
 
 Set `SEARXNG_BASE_URL` as an alternative to config:
@@ -106,6 +112,8 @@ key wins first).
 
 - **JSON API** -- uses SearXNG's native `format=json` endpoint, not HTML scraping
 - **No API key** -- works with any SearXNG instance out of the box
+- **Base URL validation** -- `baseUrl` must be a valid `http://` or `https://`
+  URL; public hosts must use `https://`
 - **Auto-detection order** -- SearXNG is checked last (order 200) in auto-detection,
   so any API-backed provider with a key takes priority over SearXNG, and SearXNG sits
   behind DuckDuckGo (order 100) as well
