@@ -76,12 +76,23 @@ explicitly promotes one as public.
     | `plugin-sdk/setup-runtime` | Account-scoped setup runtime helpers, delegated setup proxies, setup status builders |
     | `plugin-sdk/setup-adapter-runtime` | `createEnvPatchedAccountSetupAdapter` |
     | `plugin-sdk/setup-tools` | Setup CLI/archive/docs helpers |
+    | `plugin-sdk/account-core` | Multi-account config/action-gate helpers, default-account fallback helpers |
+    | `plugin-sdk/account-id` | `DEFAULT_ACCOUNT_ID`, account-id normalization helpers |
+    | `plugin-sdk/account-resolution` | Account lookup + default-fallback helpers |
+    | `plugin-sdk/account-helpers` | Narrow account-list/account-action helpers |
     | `plugin-sdk/channel-pairing` | `createChannelPairingController` |
     | `plugin-sdk/channel-reply-pipeline` | `createChannelReplyPipeline` |
     | `plugin-sdk/channel-config-helpers` | `createHybridChannelConfigAdapter` |
     | `plugin-sdk/channel-config-schema` | Channel config schema types |
     | `plugin-sdk/channel-policy` | `resolveChannelGroupRequireMention` |
     | `plugin-sdk/channel-lifecycle` | `createAccountStatusSink` |
+    | `plugin-sdk/inbound-envelope` | Shared inbound route + envelope builder helpers |
+    | `plugin-sdk/inbound-reply-dispatch` | Shared inbound record-and-dispatch helpers |
+    | `plugin-sdk/messaging-targets` | Target parsing/matching helpers |
+    | `plugin-sdk/outbound-media` | Shared outbound media loading helpers |
+    | `plugin-sdk/outbound-runtime` | Outbound identity/send delegate helpers |
+    | `plugin-sdk/thread-bindings-runtime` | Thread-binding lifecycle and adapter helpers |
+    | `plugin-sdk/agent-media-payload` | Legacy agent media payload builder |
     | `plugin-sdk/channel-inbound` | Debounce, mention matching, envelope helpers |
     | `plugin-sdk/channel-send-result` | Reply result types |
     | `plugin-sdk/channel-actions` | `createMessageToolButtonsSchema`, `createMessageToolCardSchema` |
