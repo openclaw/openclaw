@@ -290,8 +290,10 @@ describe("OpenAIWebSocketManager", () => {
     it("resolves when the connection opens", async () => {
       const manager = buildManager();
       const connectPromise = manager.connect("sk-test");
+      expect(manager.connectionState).toBe("connecting");
       lastSocket().simulateOpen();
       await expect(connectPromise).resolves.toBeUndefined();
+      expect(manager.connectionState).toBe("open");
     });
 
     it("rejects when the initial connection fails (maxRetries=0)", async () => {
@@ -516,6 +518,7 @@ describe("OpenAIWebSocketManager", () => {
     it("is safe to call before connect()", () => {
       const manager = buildManager();
       expect(() => manager.close()).not.toThrow();
+      expect(manager.connectionState).toBe("closed");
     });
   });
 
@@ -533,6 +536,12 @@ describe("OpenAIWebSocketManager", () => {
 
       // Simulate a network drop
       sock1.simulateClose(1006, "Network error");
+      expect(manager.connectionState).toBe("reconnecting");
+      expect(manager.lastCloseInfo).toEqual({
+        code: 1006,
+        reason: "Network error",
+        retryable: true,
+      });
 
       // Advance time to trigger first retry (10ms delay)
       await vi.advanceTimersByTimeAsync(15);
@@ -540,6 +549,27 @@ describe("OpenAIWebSocketManager", () => {
       // A new socket should have been created
       expect(MockWebSocket.instances.length).toBeGreaterThan(instancesBefore);
       expect(lastSocket()).not.toBe(sock1);
+    });
+
+    it("does not reconnect on non-retryable close codes", async () => {
+      const manager = buildManager({ backoffDelaysMs: [10, 20] });
+      const p = manager.connect("sk-test");
+      lastSocket().simulateOpen();
+      await p;
+
+      const sock = lastSocket();
+      const instancesBefore = MockWebSocket.instances.length;
+      sock.simulateClose(1008, "policy violation");
+
+      await vi.advanceTimersByTimeAsync(25);
+
+      expect(MockWebSocket.instances.length).toBe(instancesBefore);
+      expect(manager.connectionState).toBe("closed");
+      expect(manager.lastCloseInfo).toEqual({
+        code: 1008,
+        reason: "policy violation",
+        retryable: false,
+      });
     });
 
     it("stops retrying after maxRetries", async () => {
@@ -642,6 +672,7 @@ describe("OpenAIWebSocketManager", () => {
       expect(sent["type"]).toBe("response.create");
       expect(sent["generate"]).toBe(false);
       expect(sent["model"]).toBe("gpt-5.2");
+      expect(sent["input"]).toEqual([]);
       expect(sent["instructions"]).toBe("You are helpful.");
     });
 
