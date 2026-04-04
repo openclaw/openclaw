@@ -31,6 +31,10 @@ import { useSearchIndex } from "@/lib/search-index";
 import { parseWorkspaceLink, isWorkspaceLink, parseUrlState, buildUrl, buildWorkspaceSyncParams, type WorkspaceUrlState } from "@/lib/workspace-links";
 import { isCodeFile } from "@/lib/report-utils";
 import { CronDashboard } from "../components/cron/cron-dashboard";
+import { SkillStorePanel } from "../components/skill-store/skill-store-panel";
+import { IntegrationsPanel } from "../components/integrations/integrations-panel";
+import { ChatComposioModalHost } from "../components/integrations/chat-composio-modal-host";
+import { CloudSettingsPanel } from "../components/settings/cloud-settings-panel";
 import { CronJobDetail } from "../components/cron/cron-job-detail";
 import { CronSessionView } from "../components/cron/cron-session-view";
 import type { CronJob, CronJobsResponse } from "../types/cron";
@@ -91,6 +95,7 @@ import {
   isVirtualPath,
 } from "@/lib/workspace-paths";
 import dynamic from "next/dynamic";
+import type { ComposioChatAction } from "@/lib/composio-chat-actions";
 
 const TerminalDrawer = dynamic(
   () => import("../components/terminal/terminal-drawer"),
@@ -171,6 +176,9 @@ type ContentState =
   | { kind: "report"; reportPath: string; filename: string }
   | { kind: "directory"; node: TreeNode }
   | { kind: "cron-dashboard" }
+  | { kind: "skill-store" }
+  | { kind: "integrations" }
+  | { kind: "cloud" }
   | { kind: "cron-job"; jobId: string; job: CronJob }
   | { kind: "cron-session"; jobId: string; job: CronJob; sessionId: string; run: import("../types/cron").CronRunLogEntry }
   | { kind: "duckdb-missing" }
@@ -495,6 +503,7 @@ function WorkspacePageInner() {
 
   // Terminal drawer state
   const [terminalOpen, setTerminalOpen] = useState(false);
+  const [pendingComposioAction, setPendingComposioAction] = useState<ComposioChatAction | null>(null);
 
   // Tab state -- always starts with the home tab
   const [tabState, setTabState] = useState<TabState>({ tabs: [HOME_TAB], activeTabId: HOME_TAB_ID });
@@ -1215,6 +1224,30 @@ function WorkspacePageInner() {
     [],
   );
 
+  const handleNavigate = useCallback((target: "cloud" | "integrations" | "skills" | "cron") => {
+    const config = {
+      cloud: { path: "~cloud", name: "Cloud", kind: "cloud" as const },
+      integrations: { path: "~integrations", name: "Integrations", kind: "integrations" as const },
+      skills: { path: "~skills", name: "Skills", kind: "skill-store" as const },
+      cron: { path: "~cron", name: "Cron", kind: "cron-dashboard" as const },
+    }[target];
+    openTabForNode({ path: config.path, name: config.name, type: "folder" });
+    setActivePath(config.path);
+    setContent({ kind: config.kind });
+  }, [openTabForNode]);
+
+  const handleComposioActionFromChat = useCallback((action: ComposioChatAction) => {
+    setPendingComposioAction({
+      action: action.action,
+      toolkitSlug: action.toolkitSlug ?? null,
+      toolkitName: action.toolkitName ?? null,
+    });
+  }, []);
+
+  const handleComposioFallbackToIntegrations = useCallback(() => {
+    handleNavigate("integrations");
+  }, [handleNavigate]);
+
   const handleNodeSelect = useCallback(
     (node: TreeNode) => {
       // --- Browse-mode: detect special OpenClaw directories ---
@@ -1228,14 +1261,6 @@ function WorkspacePageInner() {
           return;
         }
         if (openclawDir) {
-          // Clicking the cron directory → show cron dashboard
-          if (node.path === openclawDir + "/cron") {
-            setBrowseDir(null);
-            openTabForNode({ path: "~cron", name: "Cron", type: "folder" });
-            setActivePath("~cron");
-            setContent({ kind: "cron-dashboard" });
-            return;
-          }
           // Clicking any web-chat directory → switch to workspace mode & open chats
           if (openclawDir && node.path.startsWith(openclawDir + "/web-chat")) {
             setBrowseDir(null);
@@ -1288,10 +1313,22 @@ function WorkspacePageInner() {
         setContent({ kind: "cron-dashboard" });
         return;
       }
+      if (node.path === "~skills") {
+        handleNavigate("skills");
+        return;
+      }
+      if (node.path === "~integrations") {
+        handleNavigate("integrations");
+        return;
+      }
+      if (node.path === "~cloud") {
+        handleNavigate("cloud");
+        return;
+      }
       openTabForNode(node);
       void loadContent(node);
     },
-    [loadContent, openBlankChatTab, openSessionChatTab, openTabForNode, cronJobs, browseDir, workspaceRoot, openclawDir, setBrowseDir],
+    [loadContent, openBlankChatTab, openSessionChatTab, openTabForNode, cronJobs, browseDir, workspaceRoot, openclawDir, setBrowseDir, handleNavigate],
   );
 
   const applyActivatedTab = useCallback((tab: Tab | undefined) => {
@@ -1317,6 +1354,12 @@ function WorkspacePageInner() {
         void loadContent(node);
       } else if (tab.path === "~cron") {
         setContent({ kind: "cron-dashboard" });
+      } else if (tab.path === "~skills") {
+        setContent({ kind: "skill-store" });
+      } else if (tab.path === "~integrations") {
+        setContent({ kind: "integrations" });
+      } else if (tab.path === "~cloud") {
+        setContent({ kind: "cloud" });
       } else if (tab.path.startsWith("~cron/")) {
         const jobId = tab.path.slice("~cron/".length);
         const job = cronJobs.find((j) => j.id === jobId);
@@ -1565,39 +1608,10 @@ function WorkspacePageInner() {
     [tree, handleNodeSelect, workspaceRoot],
   );
 
-  // Build the enhanced tree: real tree + Cron virtual folder at the bottom
+  // Build the enhanced tree: real tree + workspace management virtual folders
   // (Chat sessions live in the right sidebar, not in the tree.)
   // In browse mode, skip virtual folders (they only apply to workspace mode)
-  const enhancedTree = useMemo(() => {
-    if (browseDir) {
-      return tree;
-    }
-
-    const cronStatusIcon = (job: CronJob) => {
-      if (!job.enabled) {return "\u25CB";} // circle outline
-      if (job.state.runningAtMs) {return "\u25CF";} // filled circle
-      if (job.state.lastStatus === "error") {return "\u25C6";} // diamond
-      if (job.state.lastStatus === "ok") {return "\u2713";} // check
-      return "\u25CB";
-    };
-
-    const cronChildren: TreeNode[] = cronJobs.map((j) => ({
-      name: `${cronStatusIcon(j)} ${j.name}`,
-      path: `~cron/${j.id}`,
-      type: "file" as const,
-      virtual: true,
-    }));
-
-    const cronFolder: TreeNode = {
-      name: "Cron",
-      path: "~cron",
-      type: "folder",
-      virtual: true,
-      children: cronChildren.length > 0 ? cronChildren : undefined,
-    };
-
-    return [...tree, cronFolder];
-  }, [tree, cronJobs, browseDir]);
+  const enhancedTree = useMemo(() => tree, [tree]);
 
   // Compute the effective parentDir for ".." navigation.
   // In browse mode: use browseParentDir from the API.
@@ -1794,6 +1808,18 @@ function WorkspacePageInner() {
         setContent({ kind: "cron-dashboard" });
         if (urlState.cronRunFilter) setCronRunFilter(urlState.cronRunFilter);
         if (urlState.cronRun != null) setCronRun(urlState.cronRun);
+      } else if (urlState.path === "~skills") {
+        openTabForNode({ path: "~skills", name: "Skills", type: "folder" });
+        setActivePath("~skills");
+        setContent({ kind: "skill-store" });
+      } else if (urlState.path === "~integrations") {
+        openTabForNode({ path: "~integrations", name: "Integrations", type: "folder" });
+        setActivePath("~integrations");
+        setContent({ kind: "integrations" });
+      } else if (urlState.path === "~cloud") {
+        openTabForNode({ path: "~cloud", name: "Cloud", type: "folder" });
+        setActivePath("~cloud");
+        setContent({ kind: "cloud" });
       } else if (isAbsolutePath(urlState.path) || isHomeRelativePath(urlState.path)) {
         const name = urlState.path.split("/").pop() || urlState.path;
         const syntheticNode: TreeNode = { name, path: urlState.path, type: "file" };
@@ -1881,6 +1907,18 @@ function WorkspacePageInner() {
           } else {
             setContent({ kind: "cron-dashboard" });
           }
+        } else if (urlState.path === "~skills") {
+          openTabForNode({ path: "~skills", name: "Skills", type: "folder" });
+          setActivePath("~skills");
+          setContent({ kind: "skill-store" });
+        } else if (urlState.path === "~integrations") {
+          openTabForNode({ path: "~integrations", name: "Integrations", type: "folder" });
+          setActivePath("~integrations");
+          setContent({ kind: "integrations" });
+        } else if (urlState.path === "~cloud") {
+          openTabForNode({ path: "~cloud", name: "Cloud", type: "folder" });
+          setActivePath("~cloud");
+          setContent({ kind: "cloud" });
         } else if (isAbsolutePath(urlState.path) || isHomeRelativePath(urlState.path)) {
           const name = urlState.path.split("/").pop() || urlState.path;
           const synNode: TreeNode = { name, path: urlState.path, type: "file" };
@@ -2336,6 +2374,7 @@ function WorkspacePageInner() {
             chatHeartbeatInfo={heartbeatInfo}
             activeTab={sidebarTab}
             onTabChange={setSidebarTab}
+            onNavigate={(target) => { handleNavigate(target); setSidebarOpen(false); }}
             mobile
             onClose={() => setSidebarOpen(false)}
           />
@@ -2406,6 +2445,7 @@ function WorkspacePageInner() {
                 chatHeartbeatInfo={heartbeatInfo}
                 activeTab={sidebarTab}
                 onTabChange={setSidebarTab}
+                onNavigate={handleNavigate}
               />
             </div>
           </div>
@@ -2702,6 +2742,7 @@ function WorkspacePageInner() {
                         onConversationActivity={() => promoteTabById(tab.id)}
                         onSubagentClick={handleSubagentClickFromChat}
                         onFilePathClick={handleFilePathClickFromChat}
+                        onComposioAction={handleComposioActionFromChat}
                         onDeleteSession={isGateway || tab.sessionKey ? undefined : handleDeleteSession}
                         onRenameSession={isGateway || tab.sessionKey ? undefined : handleRenameSession}
                         compact={isMobile}
@@ -2911,6 +2952,7 @@ function WorkspacePageInner() {
                   initialSessionId={fileChatSessionId ?? undefined}
                   onFileChanged={handleFileChanged}
                   onFilePathClick={handleFilePathClickFromChat}
+                  onComposioAction={handleComposioActionFromChat}
                   onActiveSessionChange={setFileChatSessionId}
                 />
               </div>
@@ -2974,12 +3016,18 @@ function WorkspacePageInner() {
                   initialSessionId={fileChatSessionId ?? undefined}
                   onFileChanged={handleFileChanged}
                   onFilePathClick={(path) => { handleFilePathClickFromChat(path); setMobileFileChatOpen(false); }}
+                  onComposioAction={(action) => { handleComposioActionFromChat(action); setMobileFileChatOpen(false); }}
                   onActiveSessionChange={setFileChatSessionId}
                 />
               </div>
             </div>
           </div>
         )}
+
+        <ChatComposioModalHost
+          request={pendingComposioAction}
+          onFallbackToIntegrations={handleComposioFallbackToIntegrations}
+        />
 
         {/* Terminal drawer (Cmd+J) */}
         {terminalOpen && (
@@ -3543,6 +3591,37 @@ function ContentRenderer({
           calendarDate={cronDate}
           onCalendarDateChange={onCronDateChange}
         />
+      );
+
+    case "skill-store":
+      return (
+        <div className="h-full overflow-y-auto">
+          <div className="mx-auto max-w-5xl p-6">
+            <SkillStorePanel />
+          </div>
+        </div>
+      );
+
+    case "integrations":
+      return (
+        <div className="h-full overflow-y-auto">
+          <div className="mx-auto max-w-5xl p-6">
+            <IntegrationsPanel />
+          </div>
+        </div>
+      );
+
+    case "cloud":
+      return (
+        <div className="h-full overflow-y-auto">
+          <div className="mx-auto max-w-5xl p-6">
+            <div className="mb-6">
+              <h1 className="font-instrument text-3xl tracking-tight" style={{ color: "var(--color-text)" }}>Cloud</h1>
+              <p className="mt-1 text-sm" style={{ color: "var(--color-text-muted)" }}>Manage your Dench Cloud connection and model settings.</p>
+            </div>
+            <CloudSettingsPanel />
+          </div>
+        </div>
       );
 
     case "cron-job":

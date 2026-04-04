@@ -11,17 +11,14 @@ import {
 	useRef,
 	useState,
 } from "react";
-import {
-	Mail, Users, DollarSign, Calendar, Zap, FileText, Database,
-	Code, Bug, Clock, BarChart3, PenTool, Globe, Search, Sparkles,
-	FolderOpen, Table, BrainCircuit, MessageSquare, Workflow,
-} from "lucide-react";
+import { HeroSuggestions } from "./hero-suggestions";
 import { ChatMessage } from "./chat-message";
 import {
 	FilePickerModal,
 	type SelectedFile,
 } from "./file-picker-modal";
 import { ChatEditor, type ChatEditorHandle } from "./tiptap/chat-editor";
+import { ChatVoiceInputButton } from "./chat-voice-input-button";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -34,131 +31,9 @@ import {
 	getStreamActivityLabel,
 	hasAssistantText,
 } from "./chat-stream-status";
+import type { ComposioChatAction } from "@/lib/composio-chat-actions";
+import type { ChatModelOption } from "@/lib/chat-models";
 
-// ── Prompt suggestions for new chat hero ──
-
-const PROMPT_SUGGESTIONS = [
-	{
-		id: "email-draft",
-		label: "Draft an Email",
-		icon: Mail,
-		prompt: "Draft a professional follow-up email to a client after our initial meeting, thanking them and summarizing the next steps we discussed",
-	},
-	{
-		id: "enrich-contacts",
-		label: "Enrich Leads",
-		icon: Users,
-		prompt: "When a new contact is added to my CRM, find their LinkedIn profile and company details and update the record",
-	},
-	{
-		id: "invoice-reminder",
-		label: "Invoice Reminder",
-		icon: DollarSign,
-		prompt: "Draft a friendly payment reminder email for an invoice that is 7 days overdue, including the invoice number and amount",
-	},
-	{
-		id: "schedule-report",
-		label: "Weekly Report",
-		icon: Calendar,
-		prompt: "Set up a cron job that runs every Friday at 4pm to compile a summary of all completed tasks this week and email it to the team",
-	},
-	{
-		id: "auto-tasks",
-		label: "Auto Tasks",
-		icon: Zap,
-		prompt: "Create a workflow that automatically creates a task whenever someone mentions me in an email with a request or action item",
-	},
-	{
-		id: "summarize-docs",
-		label: "Summarize Docs",
-		icon: FileText,
-		prompt: "Read through all the documents in my workspace and create a concise summary of the key information across all files",
-	},
-	{
-		id: "query-data",
-		label: "Query Database",
-		icon: Database,
-		prompt: "Connect to my database and show me the top 10 customers by revenue this quarter, including their contact details",
-	},
-	{
-		id: "code-review",
-		label: "Review Code",
-		icon: Code,
-		prompt: "Review the code in my workspace for potential bugs, security issues, and performance improvements. Prioritize critical findings",
-	},
-	{
-		id: "debug-error",
-		label: "Debug Error",
-		icon: Bug,
-		prompt: "Help me debug this error I'm seeing in production. Walk me through the likely causes and how to fix each one",
-	},
-	{
-		id: "daily-digest",
-		label: "Daily Digest",
-		icon: Clock,
-		prompt: "Set up a daily digest that runs every morning at 9am summarizing my unread emails, calendar events, and pending tasks",
-	},
-	{
-		id: "analyze-csv",
-		label: "Analyze Data",
-		icon: BarChart3,
-		prompt: "Analyze the CSV file in my workspace — find trends, outliers, and generate a visual report with key insights",
-	},
-	{
-		id: "write-content",
-		label: "Write Content",
-		icon: PenTool,
-		prompt: "Write a compelling blog post about how AI automation is transforming small business operations in 2026",
-	},
-	{
-		id: "web-research",
-		label: "Web Research",
-		icon: Globe,
-		prompt: "Research the top 5 competitors in my industry and create a comparison table with their pricing, features, and market position",
-	},
-	{
-		id: "search-files",
-		label: "Search Files",
-		icon: Search,
-		prompt: "Search through all files in my workspace and find every mention of customer feedback, complaints, or feature requests",
-	},
-	{
-		id: "brainstorm",
-		label: "Brainstorm Ideas",
-		icon: Sparkles,
-		prompt: "Help me brainstorm 10 creative marketing campaign ideas for launching a new product to our existing customer base",
-	},
-	{
-		id: "organize-files",
-		label: "Organize Files",
-		icon: FolderOpen,
-		prompt: "Look at all the files in my workspace and suggest a better folder structure. Then reorganize them for me",
-	},
-	{
-		id: "create-spreadsheet",
-		label: "Build Spreadsheet",
-		icon: Table,
-		prompt: "Create a project tracking spreadsheet with columns for task name, assignee, status, priority, due date, and notes",
-	},
-	{
-		id: "ai-strategy",
-		label: "AI Strategy",
-		icon: BrainCircuit,
-		prompt: "Help me create an AI adoption strategy for my team — which tasks should we automate first for the biggest impact?",
-	},
-	{
-		id: "meeting-prep",
-		label: "Meeting Prep",
-		icon: MessageSquare,
-		prompt: "Prepare a briefing document for my upcoming client meeting. Include their recent activity, open issues, and talking points",
-	},
-	{
-		id: "build-workflow",
-		label: "Build Workflow",
-		icon: Workflow,
-		prompt: "Design an automated onboarding workflow for new clients — from welcome email to document collection to account setup",
-	},
-];
 
 // ── Attachment types & helpers ──
 
@@ -171,6 +46,80 @@ type AttachedFile = {
 	/** Local blob URL for instant preview before upload completes. */
 	localUrl?: string;
 };
+
+type ChatCloudState = {
+	status: "no_key" | "invalid_key" | "valid";
+	isDenchPrimary: boolean;
+	elevenLabsEnabled: boolean;
+	selectedDenchModel: string | null;
+	models: ChatModelOption[];
+};
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		return null;
+	}
+	return value as Record<string, unknown>;
+}
+
+function normalizeChatModelOption(value: unknown): ChatModelOption | null {
+	const record = asRecord(value);
+	if (!record) {
+		return null;
+	}
+	const stableId =
+		typeof record.stableId === "string" && record.stableId.trim()
+			? record.stableId.trim()
+			: null;
+	const displayName =
+		typeof record.displayName === "string" && record.displayName.trim()
+			? record.displayName.trim()
+			: null;
+	const provider =
+		typeof record.provider === "string" && record.provider.trim()
+			? record.provider.trim()
+			: null;
+	if (!stableId || !displayName || !provider) {
+		return null;
+	}
+	const catalogIdRaw =
+		typeof record.id === "string" && record.id.trim() ? record.id.trim() : null;
+	const catalogId =
+		catalogIdRaw && catalogIdRaw !== stableId ? catalogIdRaw : undefined;
+	return {
+		stableId,
+		...(catalogId ? { catalogId } : {}),
+		displayName,
+		provider,
+		reasoning: Boolean(record.reasoning),
+	};
+}
+
+function normalizeChatCloudState(value: unknown): ChatCloudState | null {
+	const record = asRecord(value);
+	if (!record) {
+		return null;
+	}
+	const models = Array.isArray(record.models)
+		? record.models
+				.map(normalizeChatModelOption)
+				.filter((model): model is ChatModelOption => model !== null)
+		: [];
+	return {
+		status:
+			record.status === "no_key" || record.status === "invalid_key" || record.status === "valid"
+				? record.status
+				: "no_key",
+		isDenchPrimary: Boolean(record.isDenchPrimary),
+		elevenLabsEnabled: Boolean(record.elevenLabsEnabled),
+		selectedDenchModel:
+			typeof record.selectedDenchModel === "string" &&
+			record.selectedDenchModel.trim()
+				? record.selectedDenchModel.trim()
+				: null,
+		models,
+	};
+}
 
 function getFileCategory(
 	name: string,
@@ -813,6 +762,8 @@ type ChatPanelProps = {
 	onSubagentClick?: (task: string) => void;
 	/** Called when user clicks an inline file path in chat output. */
 	onFilePathClick?: (path: string) => Promise<boolean | void> | boolean | void;
+	/** Called when the assistant emits a Composio connect/reconnect action link. */
+	onComposioAction?: (action: ComposioChatAction) => void;
 	/** Called when user deletes the current session (e.g. from header menu). */
 	onDeleteSession?: (sessionId: string) => void;
 	/** Called when user renames the current session. */
@@ -854,6 +805,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 			onSubagentSpawned,
 			onSubagentClick,
 			onFilePathClick,
+			onComposioAction,
 			onDeleteSession,
 			onRenameSession: _onRenameSession,
 			sessionKey: subagentSessionKey,
@@ -924,15 +876,17 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 		// ── Message queue (messages to send after current run completes) ──
 		const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([]);
 		const [rawView, _setRawView] = useState(false);
-
+		const [cloudState, setCloudState] = useState<ChatCloudState | null>(null);
 		// ── Hero state (new chat screen) ──
 		const greeting = "What can I help with?";
-		const visiblePrompts = PROMPT_SUGGESTIONS.slice(0, 7);
 
-		const handlePromptClick = useCallback((promptId: string) => {
-			const prompt = PROMPT_SUGGESTIONS.find((p) => p.id === promptId);
-			if (!prompt) return;
-			editorRef.current?.setText(prompt.prompt);
+		const handlePromptClick = useCallback((prompt: string) => {
+			editorRef.current?.setText(prompt);
+			setEditorEmpty(false);
+		}, []);
+
+		const handleVoiceTranscript = useCallback((text: string) => {
+			editorRef.current?.appendText(text);
 			setEditorEmpty(false);
 		}, []);
 
@@ -977,6 +931,45 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 			status === "streaming" ||
 			status === "submitted" ||
 			isReconnecting;
+
+		// Keep cloud catalog + primary model in sync (hero, session switches, and after
+		// completed turns — agent tools may change agents.defaults.model.primary).
+		useEffect(() => {
+			if (status !== "ready") {
+				return;
+			}
+			let cancelled = false;
+			const controller = new AbortController();
+			void (async () => {
+				try {
+					const res = await fetch("/api/settings/cloud", {
+						cache: "no-store",
+						signal: controller.signal,
+					});
+					if (!res.ok) {
+						return;
+					}
+					const raw = await res.json();
+					const next = normalizeChatCloudState(raw);
+					if (!cancelled && next) {
+						setCloudState(next);
+					}
+				} catch {
+					// Best-effort only; the chat should work even if cloud state is unavailable.
+				}
+			})();
+			return () => {
+				cancelled = true;
+				controller.abort();
+			};
+		}, [status, messages.length, currentSessionId]);
+
+		const preferServerVoiceInput = Boolean(
+			cloudState?.status === "valid" && cloudState.elevenLabsEnabled,
+		);
+		const voicePlaybackEnabled = Boolean(
+			cloudState?.status === "valid" && cloudState.elevenLabsEnabled,
+		);
 
 		const onRuntimeStateChangeRef = useRef(onRuntimeStateChange);
 		onRuntimeStateChangeRef.current = onRuntimeStateChange;
@@ -1529,10 +1522,11 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 		// so we only refresh the file sessions list and notify the parent
 		// when the file content may have changed.
 		const prevStatusRef = useRef(status);
+		const previousStatus = prevStatusRef.current;
 		useEffect(() => {
 			const wasStreaming =
-				prevStatusRef.current === "streaming" ||
-				prevStatusRef.current === "submitted";
+				previousStatus === "streaming" ||
+				previousStatus === "submitted";
 			const isNowReady = status === "ready";
 
 			if (wasStreaming && isNowReady && currentSessionId) {
@@ -1565,8 +1559,8 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 
 				onSessionsChange?.();
 			}
-			prevStatusRef.current = status;
 		}, [
+			previousStatus,
 			status,
 			messages,
 			currentSessionId,
@@ -1581,8 +1575,8 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 		// the request was lost.
 		useEffect(() => {
 			const wasActive =
-				prevStatusRef.current === "streaming" ||
-				prevStatusRef.current === "submitted";
+				previousStatus === "streaming" ||
+				previousStatus === "submitted";
 			const isNowReady = status === "ready";
 
 			if (wasActive && isNowReady) {
@@ -1603,7 +1597,11 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 			if (status === "submitted") {
 				setStreamError(null);
 			}
-		}, [status, messages, error]);
+		}, [previousStatus, status, messages, error]);
+
+		useEffect(() => {
+			prevStatusRef.current = status;
+		}, [status]);
 
 		// ── Actions ──
 
@@ -1761,6 +1759,8 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 				gatewaySessionKey,
 				attemptReconnect,
 				onConversationActivity,
+				isSubagentMode,
+				setMessages,
 			],
 		);
 
@@ -2181,6 +2181,12 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 						)}
 					</div>
 					<div className="flex items-center gap-1.5">
+						<ChatVoiceInputButton
+							compact={compact}
+							disabled={loadingSession}
+							preferServerTranscription={preferServerVoiceInput}
+							onTranscript={handleVoiceTranscript}
+						/>
 						{isStreaming ? (
 							<button
 								type="button"
@@ -2197,7 +2203,10 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 							<button
 								type="button"
 								onClick={() => editorRef.current?.submit()}
-								disabled={(editorEmpty && attachedFiles.length === 0) || loadingSession}
+								disabled={
+									(editorEmpty && attachedFiles.length === 0) ||
+									loadingSession
+								}
 								className={`${compact ? "w-6 h-6" : "w-7 h-7"} rounded-full flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed`}
 								style={{
 									background: !editorEmpty || attachedFiles.length > 0 ? "linear-gradient(to top, #0065A2, #0075AA)" : "var(--color-text-muted)",
@@ -2478,50 +2487,10 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 							</div>
 
 							{/* Prompt suggestion pills */}
-							<div className={`mt-4 md:mt-6 flex flex-col gap-2 md:gap-2.5 w-full max-w-[720px] mx-auto ${compact ? "px-2" : "px-4"}`}>
-								<div className="flex items-center justify-center gap-2 flex-wrap overflow-x-auto">
-									{visiblePrompts.slice(0, compact ? 4 : 3).map((template) => {
-										const Icon = template.icon;
-										return (
-											<button
-												key={template.id}
-												type="button"
-												onClick={() => handlePromptClick(template.id)}
-												className="group flex items-center gap-1.5 px-3 md:px-3.5 py-1.5 md:py-2 text-[11px] md:text-xs font-medium whitespace-nowrap rounded-xl transition-all duration-200 border shrink-0"
-												style={{
-													background: "var(--color-surface)",
-													borderColor: "var(--color-border)",
-													color: "var(--color-text-secondary)",
-												}}
-											>
-												<Icon className="w-3.5 h-3.5 opacity-50 group-hover:opacity-100 transition-opacity duration-200" />
-												{template.label}
-											</button>
-										);
-									})}
-								</div>
-								<div className="flex items-center justify-center gap-2 flex-wrap overflow-x-auto">
-									{visiblePrompts.slice(compact ? 4 : 3, 7).map((template) => {
-										const Icon = template.icon;
-										return (
-											<button
-												key={template.id}
-												type="button"
-												onClick={() => handlePromptClick(template.id)}
-												className="group flex items-center gap-1.5 px-3 md:px-3.5 py-1.5 md:py-2 text-[11px] md:text-xs font-medium whitespace-nowrap rounded-xl transition-all duration-200 border shrink-0"
-												style={{
-													background: "var(--color-surface)",
-													borderColor: "var(--color-border)",
-													color: "var(--color-text-secondary)",
-												}}
-											>
-												<Icon className="w-3.5 h-3.5 opacity-50 group-hover:opacity-100 transition-opacity duration-200" />
-												{template.label}
-											</button>
-										);
-									})}
-								</div>
-							</div>
+							<HeroSuggestions
+								compact={!!compact}
+								onPromptClick={handlePromptClick}
+							/>
 						</div>
 					) : messages.length === 0 ? (
 						<div className="flex items-center justify-center h-full min-h-[60vh]">
@@ -2554,7 +2523,9 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 								isStreaming={isStreaming && i === messages.length - 1}
 								onSubagentClick={onSubagentClick}
 								onFilePathClick={onFilePathClick}
+								onComposioAction={onComposioAction}
 								sessionId={currentSessionId}
+								voicePlaybackEnabled={voicePlaybackEnabled}
 								userHtmlMap={userHtmlMapRef.current}
 							/>
 						))}

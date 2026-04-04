@@ -18,7 +18,17 @@ import {
 import { trackServer } from "@/lib/telemetry";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { getSessionMeta } from "@/app/api/web-sessions/shared";
+import {
+	getSessionMeta,
+	hasRotatedGatewayThread,
+	rotateGatewaySessionThreadForModelReset,
+} from "@/app/api/web-sessions/shared";
+import { getAgentSession } from "@/app/api/sessions/shared";
+import {
+	classifyOpenAiModelSwitch,
+	isLikelyOpenAiModelId,
+	needsOpenAiSwitchAcknowledgement,
+} from "@/lib/chat-models";
 
 export const runtime = "nodejs";
 
@@ -66,7 +76,17 @@ export async function POST(req: Request) {
 		sessionKey,
 		distinctId,
 		userHtml,
-	}: { messages: UIMessage[]; sessionId?: string; sessionKey?: string; distinctId?: string; userHtml?: string } = await req.json();
+		modelOverride,
+		acknowledgeUnsafeOpenAiSwitch,
+	}: {
+		messages: UIMessage[];
+		sessionId?: string;
+		sessionKey?: string;
+		distinctId?: string;
+		userHtml?: string;
+		modelOverride?: string;
+		acknowledgeUnsafeOpenAiSwitch?: boolean;
+	} = await req.json();
 
 	const lastUserMessage = messages.filter((m) => m.role === "user").pop();
 	const userText =
@@ -92,6 +112,44 @@ export async function POST(req: Request) {
 	);
 
 	const isSubagentSession = typeof sessionKey === "string" && sessionKey.includes(":subagent:");
+	const normalizedModelOverride =
+		typeof modelOverride === "string" && modelOverride.trim()
+			? modelOverride.trim()
+			: undefined;
+
+	if (
+		sessionId &&
+		normalizedModelOverride &&
+		isLikelyOpenAiModelId(normalizedModelOverride) &&
+		!isSubagentSession
+	) {
+		const hasAssistantHistory = messages.some((m) => m.role === "assistant");
+		const runtimeSession = getAgentSession(sessionId);
+		const meta = getSessionMeta(sessionId);
+		const kind = classifyOpenAiModelSwitch({
+			sessionModel: runtimeSession?.model ?? null,
+			sessionModelProvider: runtimeSession?.modelProvider ?? null,
+			targetModel: normalizedModelOverride,
+		});
+		const alreadyReset = hasRotatedGatewayThread(meta, sessionId);
+		const needsAck =
+			!alreadyReset &&
+			needsOpenAiSwitchAcknowledgement(kind, hasAssistantHistory);
+
+		if (needsAck && !acknowledgeUnsafeOpenAiSwitch) {
+			return Response.json(
+				{
+					code: "openai_unsafe_switch",
+					message:
+						"Switching this chat to ChatGPT can invalidate earlier tool-call history from other models. Confirm below to continue with a fresh model context for this thread.",
+				},
+				{ status: 409 },
+			);
+		}
+		if (needsAck && acknowledgeUnsafeOpenAiSwitch) {
+			rotateGatewaySessionThreadForModelReset(sessionId);
+		}
+	}
 
 	if (!isSubagentSession && sessionId && hasActiveRun(sessionId)) {
 		return new Response("Active run in progress", { status: 409 });
@@ -144,13 +202,15 @@ export async function POST(req: Request) {
 		const effectiveAgentId =
 			sessionMeta?.workspaceAgentId
 			?? resolveActiveAgentId();
+		const gatewayThreadId = sessionMeta?.gatewaySessionId ?? sessionId;
 
 		try {
 			startRun({
 				sessionId,
 				message: agentMessage,
-				agentSessionId: sessionId,
+				agentSessionId: gatewayThreadId,
 				overrideAgentId: effectiveAgentId,
+				modelOverride: normalizedModelOverride,
 			});
 		} catch (err) {
 			return new Response(
@@ -194,7 +254,7 @@ export async function POST(req: Request) {
 						controller.enqueue(encoder.encode(`data: ${json}\n\n`));
 					} catch { /* ignore */ }
 				},
-				{ replay: false },
+				{ replay: false, replayTerminalBuffer: true },
 			);
 
 			if (!unsubscribe) {

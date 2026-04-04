@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
-import { bootstrapCommand } from "./bootstrap-external.js";
+import { bootstrapCommand, buildBootstrapDiagnostics } from "./bootstrap-external.js";
 
 const promptMocks = vi.hoisted(() => {
   const cancelSignal = Symbol("clack-cancel");
@@ -816,6 +816,28 @@ describe("bootstrapCommand always-onboard behavior", () => {
         installPath: expect.stringContaining(path.join("extensions", "dench-ai-gateway")),
       }),
     );
+    expect(updatedConfig.plugins.entries["exa-search"]).toEqual(
+      expect.objectContaining({ enabled: true }),
+    );
+    expect(updatedConfig.plugins.entries["apollo-enrichment"]).toEqual(
+      expect.objectContaining({ enabled: true }),
+    );
+    expect(updatedConfig.tools.web.search.enabled).toBe(false);
+    expect(updatedConfig.tools.deny).toContain("web_search");
+    expect(updatedConfig.messages.tts.provider).toBe("elevenlabs");
+    expect(updatedConfig.messages.tts.providers.elevenlabs).toEqual(
+      expect.objectContaining({
+        baseUrl: "https://gateway.merseoriginals.com",
+        apiKey: "dench_live_key",
+      }),
+    );
+    const integrationsMetadata = JSON.parse(
+      readFileSync(path.join(stateDir, ".dench-integrations.json"), "utf-8"),
+    );
+    expect(integrationsMetadata.exa).toEqual({
+      ownsSearch: true,
+      fallbackProvider: "duckduckgo",
+    });
     expect(existsSync(path.join(stateDir, "extensions", "dench-cloud-provider"))).toBe(false);
   });
 
@@ -868,6 +890,54 @@ describe("bootstrapCommand always-onboard behavior", () => {
         expect.objectContaining({ id: "anthropic.claude-sonnet-4-6-v1" }),
       ]),
     );
+  });
+
+  it("keeps Dench-only integrations off when Dench Cloud is declined", async () => {
+    promptMocks.confirmDecision = false;
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    await withForcedStdinTty(true, async () => {
+      await bootstrapCommand(
+        {
+          noOpen: true,
+          skipUpdate: true,
+        },
+        runtime,
+      );
+    });
+
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("D E N C H   C L O U D"),
+    );
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("App Integrations"));
+    expect(promptMocks.confirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("Continue with Dench Cloud? Recommended. API key: dench.com/api"),
+      }),
+    );
+
+    const updatedConfig = JSON.parse(readFileSync(path.join(stateDir, "openclaw.json"), "utf-8"));
+    expect(updatedConfig.plugins.entries["exa-search"]).toEqual(
+      expect.objectContaining({ enabled: false }),
+    );
+    expect(updatedConfig.plugins.entries["apollo-enrichment"]).toEqual(
+      expect.objectContaining({ enabled: false }),
+    );
+    expect(updatedConfig.tools.web.search.enabled).toBe(true);
+    expect(updatedConfig.tools.deny ?? []).not.toContain("web_search");
+    expect(updatedConfig.messages?.tts?.provider).toBeUndefined();
+    expect(updatedConfig.messages?.tts?.providers?.elevenlabs).toBeUndefined();
+    const integrationsMetadata = JSON.parse(
+      readFileSync(path.join(stateDir, ".dench-integrations.json"), "utf-8"),
+    );
+    expect(integrationsMetadata.exa).toEqual({
+      ownsSearch: false,
+      fallbackProvider: "duckduckgo",
+    });
   });
 
   it("re-prompts for Dench Cloud every bootstrap and pre-fills the saved key and model", async () => {
@@ -2102,5 +2172,63 @@ describe("bootstrapCommand always-onboard behavior", () => {
         expect(leakedKeys).toEqual([]);
       }
     }
+  });
+});
+
+describe("buildBootstrapDiagnostics", () => {
+  let stateDir = "";
+
+  beforeEach(() => {
+    stateDir = createTempStateDir();
+    writeBootstrapFixtures(stateDir);
+  });
+
+  afterEach(() => {
+    rmSync(stateDir, { recursive: true, force: true });
+  });
+
+  function buildDiagnostics(params?: {
+    denchCloudEnabled?: boolean;
+    composioConfigured?: boolean;
+  }) {
+    return buildBootstrapDiagnostics({
+      profile: "dench",
+      openClawCliAvailable: true,
+      openClawVersion: "OpenClaw 2026.3.31",
+      gatewayPort: 19001,
+      gatewayUrl: "http://127.0.0.1:19001",
+      gatewayProbe: { ok: true },
+      denchCloudEnabled: params?.denchCloudEnabled ?? true,
+      composioConfigured: params?.composioConfigured ?? true,
+      webPort: 3100,
+      webReachable: true,
+      rolloutStage: "default",
+      legacyFallbackEnabled: false,
+      stateDir,
+      env: process.env,
+    });
+  }
+
+  it("reports Composio as configured when Dench Cloud is enabled", () => {
+    const diagnostics = buildDiagnostics();
+    const check = diagnostics.checks.find((entry) => entry.id === "composio");
+    expect(check).toMatchObject({
+      id: "composio",
+      status: "pass",
+      detail: "Composio MCP configured via Dench Cloud gateway.",
+    });
+  });
+
+  it("warns when Dench Cloud is enabled but Composio is not configured", () => {
+    const diagnostics = buildDiagnostics({ composioConfigured: false });
+    const check = diagnostics.checks.find((entry) => entry.id === "composio");
+    expect(check?.status).toBe("warn");
+    expect(check?.detail).toContain("Composio MCP not configured");
+    expect(check?.remediation).toContain("Settings > Integrations");
+  });
+
+  it("omits the Composio check when Dench Cloud is disabled", () => {
+    const diagnostics = buildDiagnostics({ denchCloudEnabled: false, composioConfigured: false });
+    expect(diagnostics.checks.some((entry) => entry.id === "composio")).toBe(false);
   });
 });

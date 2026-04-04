@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState, useRef, useCallback } from "react";
+import { GoTools } from "react-icons/go";
+import { RiApps2AiLine } from "react-icons/ri";
 import { useTheme } from "next-themes";
 import { FileManagerTree, type TreeNode } from "./file-manager-tree";
 import { ProfileSwitcher } from "./profile-switcher";
@@ -76,6 +78,8 @@ type WorkspaceSidebarProps = {
   /** Which tab is active. Controlled from parent if provided. */
   activeTab?: "files" | "chats";
   onTabChange?: (tab: "files" | "chats") => void;
+  /** Navigate to a sidebar section (cloud, integrations, skills, cron). */
+  onNavigate?: (target: "cloud" | "integrations" | "skills" | "cron") => void;
 };
 
 function HomeIcon() {
@@ -288,7 +292,7 @@ function FileSearch({ onSelect }: { onSelect: (item: SuggestItem) => void }) {
 	);
 
 	return (
-		<div ref={containerRef} className="relative px-3 pt-2 pb-1">
+		<div ref={containerRef} className="relative">
 			<div className="relative">
 				<span
 					className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none"
@@ -324,7 +328,7 @@ function FileSearch({ onSelect }: { onSelect: (item: SuggestItem) => void }) {
 
 			{open && results.length > 0 && (
 				<div
-					className="absolute left-3 right-3 mt-1 rounded-lg shadow-lg border overflow-hidden z-50 max-h-[300px] overflow-y-auto"
+					className="absolute left-0 right-0 mt-1 rounded-lg shadow-lg border overflow-hidden z-50 max-h-[300px] overflow-y-auto"
 					style={{ background: "var(--color-surface)", borderColor: "var(--color-border)" }}
 				>
 					{results.map((item, i) => (
@@ -361,7 +365,7 @@ function FileSearch({ onSelect }: { onSelect: (item: SuggestItem) => void }) {
 
 			{open && query.trim() && !loading && results.length === 0 && (
 				<div
-					className="absolute left-3 right-3 mt-1 rounded-lg shadow-lg border z-50 px-3 py-3 text-center"
+					className="absolute left-0 right-0 mt-1 rounded-lg shadow-lg border z-50 px-3 py-3 text-center"
 					style={{ background: "var(--color-surface)", borderColor: "var(--color-border)" }}
 				>
 					<p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
@@ -416,6 +420,7 @@ export function WorkspaceSidebar({
   onRenameChatSession,
   activeTab: activeTabProp,
   onTabChange,
+  onNavigate,
 }: WorkspaceSidebarProps) {
 	const isBrowsing = browseDir != null;
 	const width = mobile ? "280px" : (widthProp ?? 260);
@@ -535,9 +540,11 @@ export function WorkspaceSidebar({
 				)}
 			</div>
 
-			{onFileSearchSelect && (
+		{onFileSearchSelect && (
+			<div className="px-3 pt-2 pb-1">
 				<FileSearch onSelect={onFileSearchSelect} />
-			)}
+			</div>
+		)}
 
 			<div className="flex-1 overflow-y-auto px-1">
 				{loading ? (
@@ -563,11 +570,49 @@ export function WorkspaceSidebar({
 				)}
 			</div>
 
-			{/* Footer */}
+		{/* Navigation */}
+		{onNavigate && (
 			<div
-				className="px-3 py-2.5 border-t flex items-center justify-between"
+				className="px-2 py-1.5 border-t space-y-0.5"
 				style={{ borderColor: "var(--color-border)" }}
 			>
+				{([
+					{ id: "cloud" as const, label: "Cloud", icon: (
+						<svg className="h-4 w-4 shrink-0" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+							<path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z" />
+						</svg>
+					)},
+					{ id: "integrations" as const, label: "Integrations", icon: (
+						<RiApps2AiLine className="h-4 w-4 shrink-0" aria-hidden />
+					)},
+					{ id: "skills" as const, label: "Skills", icon: (
+						<GoTools className="h-4 w-4 shrink-0" aria-hidden />
+					)},
+					{ id: "cron" as const, label: "Cron", icon: (
+						<svg className="h-4 w-4 shrink-0" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+							<circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
+						</svg>
+					)},
+				]).map((item) => (
+					<button
+						key={item.id}
+						type="button"
+						onClick={() => onNavigate(item.id)}
+						className="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-sm font-medium transition-colors hover:bg-stone-200/60 dark:hover:bg-stone-700/60 hover:[color:var(--color-text)]"
+						style={{ color: "var(--color-text-secondary)" }}
+					>
+						<span className="shrink-0">{item.icon}</span>
+						{item.label}
+					</button>
+				))}
+			</div>
+		)}
+
+		{/* Footer */}
+		<div
+			className="px-3 py-2.5 border-t flex items-center justify-between"
+			style={{ borderColor: "var(--color-border)" }}
+		>
 				<a
 					href="https://dench.com"
 					target="_blank"

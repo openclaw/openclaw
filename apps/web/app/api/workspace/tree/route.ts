@@ -20,7 +20,7 @@ export type TreeNode = {
   icon?: string;
   defaultView?: "table" | "kanban";
   children?: TreeNode[];
-  /** Virtual nodes live outside the main workspace (e.g. Skills, Memories). */
+  /** Virtual nodes live outside the main workspace. */
   virtual?: boolean;
   /** True when the entry is a symbolic link. */
   symlink?: boolean;
@@ -238,77 +238,6 @@ async function buildTree(
   return nodes;
 }
 
-// --- Virtual folder builders ---
-
-/** Parse YAML frontmatter from a SKILL.md file (lightweight). */
-function parseSkillFrontmatter(content: string): { name?: string; emoji?: string } {
-  const match = content.match(/^---\s*\n([\s\S]*?)\n---/);
-  if (!match) {return {};}
-  const yaml = match[1];
-  const result: Record<string, string> = {};
-  for (const line of yaml.split("\n")) {
-    const kv = line.match(/^(\w+)\s*:\s*(.+)/);
-    if (kv) {result[kv[1]] = kv[2].replace(/^["']|["']$/g, "").trim();}
-  }
-  return { name: result.name, emoji: result.emoji };
-}
-
-/** Build a virtual "Skills" folder from <workspace>/skills/. */
-async function buildSkillsVirtualFolder(): Promise<TreeNode | null> {
-  const workspaceRoot = resolveWorkspaceRoot();
-  if (!workspaceRoot) {
-    return null;
-  }
-  const dirs = [join(workspaceRoot, "skills")];
-
-  const children: TreeNode[] = [];
-  const seen = new Set<string>();
-
-  for (const dir of dirs) {
-    if (!await pathExists(dir)) {continue;}
-    try {
-      const entries = await readdir(dir, { withFileTypes: true });
-      for (const entry of entries) {
-        if (!entry.isDirectory() || seen.has(entry.name)) {continue;}
-        if (entry.name === "crm" || entry.name === "browser") {continue;}
-        const skillMdPath = join(dir, entry.name, "SKILL.md");
-        if (!await pathExists(skillMdPath)) {continue;}
-
-        seen.add(entry.name);
-        let displayName = entry.name;
-        try {
-          const content = await readFile(skillMdPath, "utf-8");
-          const meta = parseSkillFrontmatter(content);
-          if (meta.name) {displayName = meta.name;}
-          if (meta.emoji) {displayName = `${meta.emoji} ${displayName}`;}
-        } catch {
-          // skip
-        }
-
-        children.push({
-          name: displayName,
-          path: `~skills/${entry.name}/SKILL.md`,
-          type: "document",
-          virtual: true,
-        });
-      }
-    } catch {
-      // dir unreadable
-    }
-  }
-
-  if (children.length === 0) {return null;}
-  children.sort((a, b) => a.name.localeCompare(b.name));
-
-  return {
-    name: "Skills",
-    path: "~skills",
-    type: "folder",
-    virtual: true,
-    children,
-  };
-}
-
 
 export async function GET(req: Request) {
   const url = new URL(req.url);
@@ -319,17 +248,12 @@ export async function GET(req: Request) {
   const root = resolveWorkspaceRoot();
   if (!root) {
     const tree: TreeNode[] = [];
-    const skillsFolder = await buildSkillsVirtualFolder();
-    if (skillsFolder) {tree.push(skillsFolder);}
     return Response.json({ tree, exists: false, workspaceRoot: null, openclawDir, workspace });
   }
 
   const dbObjects = await loadDbObjects();
 
   const tree = await buildTree(root, "", dbObjects, showHidden);
-
-  const skillsFolder = await buildSkillsVirtualFolder();
-  if (skillsFolder) {tree.push(skillsFolder);}
 
   return Response.json({ tree, exists: true, workspaceRoot: root, openclawDir, workspace });
 }

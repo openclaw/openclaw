@@ -260,6 +260,34 @@ describe("agent-runner", () => {
 			proc.kill("SIGTERM");
 		});
 
+		it("patches the selected Dench Cloud model before sending the chat request", async () => {
+			const MockWs = installMockWsModule();
+			const { spawnAgentProcess } = await import("./agent-runner.js");
+
+			const proc = spawnAgentProcess("hello", "sess-model", undefined, "gpt-5.4");
+			await waitFor(() => MockWs.instances[0]?.methods.includes("chat.send"));
+
+			const ws = MockWs.instances[0];
+			const patchFrame = ws.requestFrames.find(
+				(frame) => frame.method === "sessions.patch",
+			);
+			const sendFrame = ws.requestFrames.find(
+				(frame) => frame.method === "chat.send",
+			);
+
+			expect(patchFrame?.params).toMatchObject({
+				key: "agent:main:web:sess-model",
+				model: "dench-cloud/gpt-5.4",
+			});
+			expect(sendFrame?.params).toMatchObject({
+				message: "hello",
+				sessionKey: "agent:main:web:sess-model",
+			});
+			expect(sendFrame?.params).not.toHaveProperty("model");
+
+			proc.kill("SIGTERM");
+		});
+
 		it("connects to wss: URL for TLS gateways", async () => {
 			const MockWs = installMockWsModule();
 			process.env.OPENCLAW_GATEWAY_URL = "wss://gateway.example.com:443";

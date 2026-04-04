@@ -1,0 +1,16 @@
+{
+  "id": "apollo-enrichment",
+  "name": "Apollo Enrichment",
+  "version": "1.0.0",
+  "description": "Registers an agent tool for Apollo person and company enrichment via the Dench Cloud gateway.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "default": true
+      }
+    }
+  }
+}

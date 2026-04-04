@@ -9,6 +9,9 @@
  *   Subagent:    /?chat=parent-id&subagent=child-key
  *   Browse:      /?browse=/abs/path&hidden=1
  *   Cron:        /?path=~cron  or  /?path=~cron/job-id
+ *   Cloud:       /?path=~cloud
+ *   Integrations:/?path=~integrations
+ *   Skills:      /?path=~skills
  *   Cron views:  /?path=~cron&cronView=calendar&cronCalMode=week&cronDate=2026-03-05
  *   Object view: /?path=leads&viewType=kanban&filters=...&sort=...&search=...&page=1&pageSize=50&cols=a,b,c&view=MyView
  *   Preview:     /?path=file.md&preview=other.md

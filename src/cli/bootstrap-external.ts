@@ -13,13 +13,15 @@ import path from "node:path";
 import process from "node:process";
 import { confirm, isCancel, select, spinner, text } from "@clack/prompts";
 import json5 from "json5";
+import gradient from "gradient-string";
 import { isDaemonlessMode } from "../config/paths.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { readTelemetryConfig, markNoticeShown } from "../telemetry/config.js";
 import { track } from "../telemetry/telemetry.js";
+import { visibleWidth } from "../terminal/ansi.js";
 import { stylePromptMessage } from "../terminal/prompt-style.js";
-import { theme } from "../terminal/theme.js";
+import { isRich, theme } from "../terminal/theme.js";
 import { VERSION } from "../version.js";
 import {
   buildDenchCloudConfigPatch,
@@ -72,6 +74,7 @@ export type BootstrapCheck = {
     | "openclaw-cli"
     | "profile"
     | "gateway"
+    | "composio"
     | "agent-auth"
     | "web-ui"
     | "state-isolation"
@@ -556,6 +559,124 @@ async function setOpenClawConfigJson(params: {
     timeoutMs: 30_000,
     errorMessage: params.errorMessage,
   });
+}
+
+function readDenchIntegrationsMetadata(stateDir: string): Record<string, unknown> | undefined {
+  const metadataPath = path.join(stateDir, ".dench-integrations.json");
+  if (!existsSync(metadataPath)) {
+    return undefined;
+  }
+  try {
+    const raw = JSON.parse(readFileSync(metadataPath, "utf-8"));
+    return raw && typeof raw === "object" ? (raw as Record<string, unknown>) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function disableDenchElevenLabsOverride(tts: Record<string, unknown>, gatewayUrl?: string, apiKey?: string): void {
+  const providers = asRecord(tts.providers);
+  const elevenlabs = asRecord(providers?.elevenlabs);
+  if (elevenlabs) {
+    if (
+      typeof elevenlabs.baseUrl === "string" &&
+      (!gatewayUrl || elevenlabs.baseUrl === gatewayUrl)
+    ) {
+      delete elevenlabs.baseUrl;
+    }
+    if (
+      typeof elevenlabs.apiKey === "string" &&
+      (!apiKey || elevenlabs.apiKey === apiKey)
+    ) {
+      delete elevenlabs.apiKey;
+    }
+    if (Object.keys(elevenlabs).length === 0 && providers) {
+      delete providers.elevenlabs;
+    }
+  }
+  if (tts.provider === "elevenlabs") {
+    delete tts.provider;
+  }
+  if (providers && Object.keys(providers).length === 0) {
+    delete tts.providers;
+  }
+}
+
+function applyDenchManagedIntegrationDefaults(params: {
+  stateDir: string;
+  denchEnabled: boolean;
+  gatewayUrl?: string;
+  apiKey?: string;
+}): void {
+  const rawConfig = readBootstrapConfig(params.stateDir) ?? {};
+  const nextConfig = { ...rawConfig };
+
+  const plugins = { ...(asRecord(nextConfig.plugins) ?? {}) };
+  const entries = { ...(asRecord(plugins.entries) ?? {}) };
+  entries["exa-search"] = {
+    ...(asRecord(entries["exa-search"]) ?? {}),
+    enabled: params.denchEnabled,
+  };
+  entries["apollo-enrichment"] = {
+    ...(asRecord(entries["apollo-enrichment"]) ?? {}),
+    enabled: params.denchEnabled,
+  };
+  plugins.entries = entries;
+  nextConfig.plugins = plugins;
+
+  const tools = { ...(asRecord(nextConfig.tools) ?? {}) };
+  const deny = Array.isArray(tools.deny)
+    ? (tools.deny.filter((value): value is string => typeof value === "string"))
+    : [];
+  const web = { ...(asRecord(tools.web) ?? {}) };
+  const search = { ...(asRecord(web.search) ?? {}) };
+  search.enabled = !params.denchEnabled;
+  web.search = search;
+  tools.web = web;
+  tools.deny = params.denchEnabled
+    ? uniqueStrings([...deny, "web_search"])
+    : deny.filter((value) => value !== "web_search");
+  nextConfig.tools = tools;
+
+  const messages = { ...(asRecord(nextConfig.messages) ?? {}) };
+  const tts = { ...(asRecord(messages.tts) ?? {}) };
+  const providers = { ...(asRecord(tts.providers) ?? {}) };
+  const elevenlabs = { ...(asRecord(providers.elevenlabs) ?? {}) };
+  if (params.denchEnabled && params.gatewayUrl && params.apiKey) {
+    tts.provider = "elevenlabs";
+    elevenlabs.baseUrl = params.gatewayUrl;
+    elevenlabs.apiKey = params.apiKey;
+    providers.elevenlabs = elevenlabs;
+    tts.providers = providers;
+  } else {
+    tts.providers = providers;
+    disableDenchElevenLabsOverride(tts, params.gatewayUrl, params.apiKey);
+  }
+  messages.tts = tts;
+  nextConfig.messages = messages;
+
+  writeFileSync(
+    path.join(params.stateDir, "openclaw.json"),
+    `${JSON.stringify(nextConfig, null, 2)}\n`,
+  );
+
+  const currentMetadata = readDenchIntegrationsMetadata(params.stateDir) ?? {};
+  const nextMetadata = {
+    ...currentMetadata,
+    schemaVersion: 1,
+    exa: {
+      ...(asRecord(currentMetadata.exa) ?? {}),
+      ownsSearch: params.denchEnabled,
+      fallbackProvider:
+        typeof asRecord(currentMetadata.exa)?.fallbackProvider === "string"
+          ? asRecord(currentMetadata.exa)?.fallbackProvider
+          : "duckduckgo",
+    },
+  };
+  writeFileSync(
+    path.join(params.stateDir, ".dench-integrations.json"),
+    `${JSON.stringify(nextMetadata, null, 2)}\n`,
+  );
 }
 
 async function syncBundledPlugins(params: {
@@ -1825,6 +1946,14 @@ function readBootstrapConfig(stateDir: string): Record<string, unknown> | undefi
   return undefined;
 }
 
+function hasConfiguredComposioServer(stateDir: string): boolean {
+  const raw = readBootstrapConfig(stateDir);
+  const mcp = asRecord(raw?.mcp);
+  const servers = asRecord(mcp?.servers);
+  const composio = asRecord(servers?.composio);
+  return typeof composio?.url === "string" && composio.url.trim().length > 0;
+}
+
 function resolveBootstrapWorkspaceDir(stateDir: string): string {
   return path.join(stateDir, "workspace");
 }
@@ -1915,6 +2044,8 @@ export function buildBootstrapDiagnostics(params: {
   gatewayPort: number;
   gatewayUrl: string;
   gatewayProbe: { ok: boolean; detail?: string };
+  denchCloudEnabled: boolean;
+  composioConfigured: boolean;
   webPort: number;
   webReachable: boolean;
   rolloutStage: BootstrapRolloutStage;
@@ -1971,6 +2102,21 @@ export function buildBootstrapDiagnostics(params: {
           params.gatewayPort,
           params.profile,
         ),
+      ),
+    );
+  }
+
+  if (params.denchCloudEnabled) {
+    checks.push(
+      createCheck(
+        "composio",
+        params.composioConfigured ? "pass" : "warn",
+        params.composioConfigured
+          ? "Composio MCP configured via Dench Cloud gateway."
+          : "Composio MCP not configured. Check mcp.servers.composio in openclaw.json.",
+        params.composioConfigured
+          ? undefined
+          : `Open Settings > Integrations and repair the Composio MCP setup, or run \`openclaw --profile ${DEFAULT_DENCHCLAW_PROFILE} gateway restart\` after restoring the Dench Cloud config.`,
       ),
     );
   }
@@ -2159,6 +2305,86 @@ async function promptForDenchCloudModel(params: {
   return String(selection);
 }
 
+function renderDenchCloudRecommendationBanner(): string {
+  const rich = isRich();
+  const W = 74;
+
+  const bdr = (s: string) => (rich ? theme.accentDim(s) : s);
+  const ironShimmer = rich
+    ? gradient(["#374151", "#6B7280", "#9CA3AF", "#D1D5DB", "#9CA3AF", "#6B7280", "#374151"])
+    : (s: string) => s;
+  const topBar = ironShimmer("─".repeat(W));
+  const botBar = ironShimmer("─".repeat(W));
+  const top = `  ${bdr("╭")}${topBar}${bdr("╮")}`;
+  const bot = `  ${bdr("╰")}${botBar}${bdr("╯")}`;
+  const blank = `  ${bdr("│")}${" ".repeat(W)}${bdr("│")}`;
+
+  const row = (content: string, indent = 4): string => {
+    const vis = visibleWidth(content);
+    const right = Math.max(1, W - indent - vis);
+    return `  ${bdr("│")}${" ".repeat(indent)}${content}${" ".repeat(right)}${bdr("│")}`;
+  };
+
+  const title = rich
+    ? gradient(["#38BDF8", "#2DD4BF", "#34D399"])("D E N C H   C L O U D")
+    : "D E N C H   C L O U D";
+  const subtitle = rich
+    ? theme.muted("The recommended way to run DenchClaw. Everything is managed for you.")
+    : "The recommended way to run DenchClaw. Everything is managed for you.";
+
+  const bullet = rich ? theme.info("▸") : "▸";
+  const lbl = (s: string) => (rich ? theme.accentBright(s) : s);
+  const dim = (s: string) => (rich ? theme.muted(s) : s);
+  const COL = 14;
+  const features: [string, string][] = [
+    [lbl("AI Models"), dim("Claude, GPT, Kimi & more — no API keys needed")],
+    [lbl("Voice"), dim("ElevenLabs built in — no account required")],
+    [lbl("Web Search"), dim("Exa ready out of the box — no key to manage")],
+    [lbl("Skills Store"), dim("Browse & install skills instantly")],
+    [lbl("Image Gen"), dim("State-of-the-art models from day one")],
+  ];
+  const featureLines = features.map(([name, desc]) => {
+    const gap = " ".repeat(Math.max(1, COL - visibleWidth(name)));
+    return `${bullet}  ${name}${gap}${desc}`;
+  });
+
+  const star = rich ? theme.warn("★") : "★";
+  const intTitle = rich ? theme.warn("1,000+ App Integrations") : "1,000+ App Integrations";
+  const dot = rich ? theme.accentDim(" · ") : " · ";
+  const apps = [
+    rich ? theme.info("Gmail") : "Gmail",
+    rich ? theme.accentBright("Notion") : "Notion",
+    rich ? theme.success("HubSpot") : "HubSpot",
+    rich ? theme.warn("PostHog") : "PostHog",
+    rich ? theme.accent("Stripe") : "Stripe",
+    rich ? theme.success("Salesforce") : "Salesforce",
+    rich ? theme.muted("…") : "…",
+  ].join(dot);
+
+  const check = rich ? theme.success("✓") : "✓";
+  const cta = rich
+    ? theme.success("Recommended for most users")
+    : "Recommended for most users";
+
+  return [
+    "",
+    top,
+    blank,
+    row(title),
+    row(subtitle),
+    blank,
+    ...featureLines.map((l) => row(l)),
+    blank,
+    row(`${star}  ${intTitle}`),
+    row(apps, 7),
+    blank,
+    row(`${check}  ${cta}`),
+    blank,
+    bot,
+    "",
+  ].join("\n");
+}
+
 async function applyDenchCloudBootstrapConfig(params: {
   openclawCommand: string;
   profile: string;
@@ -2225,6 +2451,44 @@ async function applyDenchCloudBootstrapConfig(params: {
     value: nextAgentModels,
     errorMessage: "Failed to update agents.defaults.models for Dench Cloud.",
   });
+
+  await setOpenClawConfigJson({
+    openclawCommand: params.openclawCommand,
+    profile: params.profile,
+    key: "messages.tts.provider",
+    value: configPatch.messages.tts.provider,
+    errorMessage: "Failed to set ElevenLabs as TTS provider.",
+  });
+
+  await setOpenClawConfigJson({
+    openclawCommand: params.openclawCommand,
+    profile: params.profile,
+    key: "messages.tts.providers.elevenlabs",
+    value: configPatch.messages.tts.providers.elevenlabs,
+    errorMessage: "Failed to configure ElevenLabs TTS via Dench Cloud gateway.",
+  });
+
+  if ((configPatch as Record<string, unknown>).mcp) {
+    const mcpPatch = (configPatch as Record<string, unknown>).mcp as Record<string, unknown>;
+    const servers = mcpPatch.servers as Record<string, unknown> | undefined;
+    if (servers?.composio) {
+      try {
+        await setOpenClawConfigJson({
+          openclawCommand: params.openclawCommand,
+          profile: params.profile,
+          key: "mcp.servers.composio",
+          value: servers.composio,
+          errorMessage: "Failed to configure Composio MCP server via Dench Cloud gateway.",
+        });
+      } catch {
+        console.warn(
+          theme.warn(
+            "Could not configure the Composio MCP server during bootstrap. You can repair it later in Settings > Integrations.",
+          ),
+        );
+      }
+    }
+  }
 }
 
 async function resolveDenchCloudBootstrapSelection(params: {
@@ -2281,12 +2545,13 @@ async function resolveDenchCloudBootstrapSelection(params: {
     };
   }
 
+  if (!explicitRequest) {
+    params.runtime.log(renderDenchCloudRecommendationBanner());
+  }
   const wantsDenchCloud = explicitRequest
     ? true
     : await confirm({
-      message: stylePromptMessage(
-        "Use Dench Cloud for inference? Get your API key at dench.com/api",
-      ),
+      message: stylePromptMessage("Continue with Dench Cloud? Recommended. API key: dench.com/api"),
       initialValue: existingDenchConfigured || !currentProvider,
     });
   if (isCancel(wantsDenchCloud) || !wantsDenchCloud) {
@@ -2594,6 +2859,16 @@ export async function bootstrapCommand(
       sourceDirName: "dench-identity",
       enabled: true,
     },
+    {
+      pluginId: "apollo-enrichment",
+      sourceDirName: "apollo-enrichment",
+      enabled: denchCloudSelection.enabled,
+    },
+    {
+      pluginId: "exa-search",
+      sourceDirName: "exa-search",
+      enabled: denchCloudSelection.enabled,
+    },
   ];
 
   // Trust managed bundled plugins BEFORE onboard so the gateway daemon never
@@ -2635,6 +2910,8 @@ export async function bootstrapCommand(
   }
   if (denchCloudSelection.enabled) {
     onboardArgv.push("--auth-choice", "skip");
+    onboardArgv.push("--skip-search");
+    onboardArgv.push("--skip-skills");
   }
 
   onboardArgv.push("--accept-risk", "--skip-ui");
@@ -2708,6 +2985,14 @@ export async function bootstrapCommand(
 
   postOnboardSpinner?.message("Configuring agent defaults…");
   await ensureAgentDefaults(openclawCommand, profile);
+
+  postOnboardSpinner?.message("Applying Dench integration defaults…");
+  applyDenchManagedIntegrationDefaults({
+    stateDir,
+    denchEnabled: denchCloudSelection.enabled,
+    gatewayUrl: denchCloudSelection.gatewayUrl,
+    apiKey: denchCloudSelection.apiKey,
+  });
 
   // ── Gateway daemon restart + readiness verification ──
   // Skipped entirely in daemonless mode — the user manages the gateway process
@@ -2804,6 +3089,9 @@ export async function bootstrapCommand(
   );
   const webReachable = webRuntimeStatus.ready;
   const webUrl = `http://localhost:${preferredWebPort}`;
+  const composioConfigured = denchCloudSelection.enabled
+    ? hasConfiguredComposioServer(stateDir)
+    : false;
   const diagnostics = buildBootstrapDiagnostics({
     profile,
     openClawCliAvailable: installResult.available,
@@ -2811,6 +3099,8 @@ export async function bootstrapCommand(
     gatewayPort,
     gatewayUrl,
     gatewayProbe,
+    denchCloudEnabled: denchCloudSelection.enabled,
+    composioConfigured,
     webPort: preferredWebPort,
     webReachable,
     rolloutStage,

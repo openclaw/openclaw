@@ -15,7 +15,7 @@ export type DenchCloudCatalogModel = {
   displayName: string;
   provider: string;
   transportProvider: string;
-  api: "openai-completions";
+  api: "openai-completions" | "openai-responses";
   input: Array<"text" | "image">;
   reasoning: boolean;
   contextWindow: number;
@@ -127,7 +127,7 @@ export const FALLBACK_DENCH_CLOUD_MODELS: DenchCloudCatalogModel[] = [
     displayName: "Claude Opus 4.6",
     provider: "anthropic",
     transportProvider: "bedrock",
-    api: "openai-completions",
+    api: "openai-responses",
     input: ["text", "image"],
     reasoning: false,
     contextWindow: 200000,
@@ -150,7 +150,7 @@ export const FALLBACK_DENCH_CLOUD_MODELS: DenchCloudCatalogModel[] = [
     displayName: "GPT-5.4",
     provider: "openai",
     transportProvider: "openai",
-    api: "openai-completions",
+    api: "openai-responses",
     input: ["text", "image"],
     reasoning: false,
     contextWindow: 128000,
@@ -173,7 +173,7 @@ export const FALLBACK_DENCH_CLOUD_MODELS: DenchCloudCatalogModel[] = [
     displayName: "Claude Sonnet 4.6",
     provider: "anthropic",
     transportProvider: "bedrock",
-    api: "openai-completions",
+    api: "openai-responses",
     input: ["text", "image"],
     reasoning: false,
     contextWindow: 200000,
@@ -237,7 +237,7 @@ export function normalizeDenchCloudCatalogModel(input: unknown): DenchCloudCatal
     displayName,
     provider,
     transportProvider,
-    api: "openai-completions",
+    api: record.api === "openai-completions" ? "openai-completions" : "openai-responses",
     input: normalizeInputKinds(record.input, supportsImages),
     reasoning: supportsReasoning,
     contextWindow,

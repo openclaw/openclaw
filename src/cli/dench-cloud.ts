@@ -15,7 +15,7 @@ export type DenchCloudCatalogModel = {
   displayName: string;
   provider: string;
   transportProvider: string;
-  api: "openai-completions";
+  api: "openai-completions" | "openai-responses";
   input: Array<"text" | "image">;
   reasoning: boolean;
   contextWindow: number;
@@ -135,7 +135,7 @@ export const FALLBACK_DENCH_CLOUD_MODELS: DenchCloudCatalogModel[] = [
     displayName: "Claude Opus 4.6",
     provider: "anthropic",
     transportProvider: "bedrock",
-    api: "openai-completions",
+    api: "openai-responses",
     input: ["text", "image"],
     reasoning: false,
     contextWindow: 200000,
@@ -158,7 +158,7 @@ export const FALLBACK_DENCH_CLOUD_MODELS: DenchCloudCatalogModel[] = [
     displayName: "GPT-5.4",
     provider: "openai",
     transportProvider: "openai",
-    api: "openai-completions",
+    api: "openai-responses",
     input: ["text", "image"],
     reasoning: false,
     contextWindow: 128000,
@@ -181,7 +181,7 @@ export const FALLBACK_DENCH_CLOUD_MODELS: DenchCloudCatalogModel[] = [
     displayName: "Claude Sonnet 4.6",
     provider: "anthropic",
     transportProvider: "bedrock",
-    api: "openai-completions",
+    api: "openai-responses",
     input: ["text", "image"],
     reasoning: false,
     contextWindow: 200000,
@@ -245,7 +245,7 @@ export function normalizeDenchCloudCatalogModel(input: unknown): DenchCloudCatal
     displayName,
     provider,
     transportProvider,
-    api: "openai-completions",
+    api: record.api === "openai-completions" ? "openai-completions" : "openai-responses",
     input: normalizeInputKinds(record.input, supportsImages),
     reasoning: supportsReasoning,
     contextWindow,
@@ -360,15 +360,43 @@ export function buildDenchCloudAgentModelEntries(models: DenchCloudCatalogModel[
   );
 }
 
+export type DenchCloudProviderConfig = {
+  baseUrl: string;
+  apiKey: string;
+  api: "openai-completions" | "openai-responses";
+  models: ReturnType<typeof buildDenchCloudProviderModels>;
+};
+
+export type ComposioMcpServerConfig = {
+  url: string;
+  transport: "streamable-http";
+  headers: {
+    Authorization: string;
+  };
+};
+
+export function buildComposioMcpServerConfig(
+  gatewayUrl: string,
+  apiKey: string,
+): ComposioMcpServerConfig {
+  return {
+    url: `${gatewayUrl}/v1/composio/mcp`,
+    transport: "streamable-http",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+    },
+  };
+}
+
 export function buildDenchCloudProviderConfig(params: {
   gatewayUrl: string;
   apiKey: string;
   models: DenchCloudCatalogModel[];
-}) {
+}): DenchCloudProviderConfig {
   return {
     baseUrl: buildDenchGatewayApiBaseUrl(params.gatewayUrl),
     apiKey: params.apiKey,
-    api: "openai-completions",
+    api: "openai-responses",
     models: buildDenchCloudProviderModels(params.models),
   };
 }
@@ -380,7 +408,7 @@ export function buildDenchCloudConfigPatch(params: {
 }) {
   return {
     models: {
-      mode: "merge",
+      mode: "merge" as const,
       providers: {
         "dench-cloud": buildDenchCloudProviderConfig(params),
       },
@@ -388,6 +416,22 @@ export function buildDenchCloudConfigPatch(params: {
     agents: {
       defaults: {
         models: buildDenchCloudAgentModelEntries(params.models),
+      },
+    },
+    messages: {
+      tts: {
+        provider: "elevenlabs",
+        providers: {
+          elevenlabs: {
+            baseUrl: params.gatewayUrl,
+            apiKey: params.apiKey,
+          },
+        },
+      },
+    },
+    mcp: {
+      servers: {
+        composio: buildComposioMcpServerConfig(params.gatewayUrl, params.apiKey),
       },
     },
   };
@@ -421,6 +465,7 @@ export function readConfiguredDenchCloudSettings(
   gatewayUrl?: string;
   apiKey?: string;
   selectedModel?: string;
+  ttsElevenLabsBaseUrl?: string;
 } {
   const provider = asRecord(
     asRecord(asRecord(rawConfig?.models)?.providers)?.["dench-cloud"],
@@ -441,9 +486,13 @@ export function readConfiguredDenchCloudSettings(
       : undefined;
 
   const baseUrl = readString(provider ?? {}, "baseUrl", "base_url");
+  const tts = asRecord(asRecord(rawConfig?.messages)?.tts);
+  const ttsProviders = asRecord(tts?.providers);
+  const ttsElevenlabs = asRecord(ttsProviders?.elevenlabs);
   return {
     gatewayUrl: baseUrl ? normalizeDenchGatewayUrl(baseUrl) : undefined,
     apiKey: readString(provider ?? {}, "apiKey", "api_key"),
     selectedModel,
+    ttsElevenLabsBaseUrl: readString(ttsElevenlabs ?? {}, "baseUrl", "base_url"),
   };
 }

@@ -6,6 +6,7 @@ import {
   readConfiguredDenchCloudSettings,
   validateDenchCloudApiKey,
 } from "./dench-cloud.js";
+import { buildDenchCloudConfigPatch as buildRuntimePluginConfigPatch } from "../../extensions/dench-ai-gateway/index.js";
 
 function createJsonResponse(params?: {
   status?: number;
@@ -104,7 +105,7 @@ describe("dench-cloud helpers", () => {
           displayName: "Claude Opus 4.6",
           provider: "anthropic",
           transportProvider: "bedrock",
-          api: "openai-completions",
+          api: "openai-responses",
           input: ["text", "image"],
           reasoning: false,
           contextWindow: 200000,
@@ -128,7 +129,7 @@ describe("dench-cloud helpers", () => {
       expect.objectContaining({
         baseUrl: "https://gateway.merseoriginals.com/v1",
         apiKey: "dench_live_key",
-        api: "openai-completions",
+        api: "openai-responses",
         models: [
           expect.objectContaining({
             id: "anthropic.claude-opus-4-6-v1",
@@ -142,6 +143,53 @@ describe("dench-cloud helpers", () => {
         alias: "Claude Opus 4.6 (Dench Cloud)",
       }),
     );
+    expect(patch.messages.tts.provider).toBe("elevenlabs");
+    expect(patch.messages.tts.providers.elevenlabs).toEqual({
+      baseUrl: "https://gateway.merseoriginals.com",
+      apiKey: "dench_live_key",
+    });
+    expect((patch.messages.tts as Record<string, unknown>).elevenlabs).toBeUndefined();
+    expect(patch.mcp.servers.composio).toEqual({
+      url: "https://gateway.merseoriginals.com/v1/composio/mcp",
+      transport: "streamable-http",
+      headers: {
+        Authorization: "Bearer dench_live_key",
+      },
+    });
+  });
+
+  it("keeps the runtime plugin patch in parity with the CLI/web helper", () => {
+    const params = {
+      gatewayUrl: "https://gateway.merseoriginals.com",
+      apiKey: "dench_live_key",
+      models: [
+        {
+          id: "claude-opus-4.6",
+          stableId: "anthropic.claude-opus-4-6-v1",
+          displayName: "Claude Opus 4.6",
+          provider: "anthropic",
+          transportProvider: "bedrock",
+          api: "openai-responses" as const,
+          input: ["text" as const, "image" as const],
+          reasoning: false,
+          contextWindow: 200000,
+          maxTokens: 64000,
+          supportsStreaming: true,
+          supportsImages: true,
+          supportsResponses: true,
+          supportsReasoning: false,
+          cost: {
+            input: 6.75,
+            output: 33.75,
+            cacheRead: 0,
+            cacheWrite: 0,
+            marginPercent: 0.35,
+          },
+        },
+      ],
+    };
+
+    expect(buildRuntimePluginConfigPatch(params)).toEqual(buildDenchCloudConfigPatch(params));
   });
 
   it("reads existing Dench Cloud gateway config from openclaw.json", () => {
@@ -167,6 +215,40 @@ describe("dench-cloud helpers", () => {
       gatewayUrl: "https://gateway.merseoriginals.com",
       apiKey: "dench_cfg_key",
       selectedModel: "anthropic.claude-opus-4-6-v1",
+      ttsElevenLabsBaseUrl: undefined,
     });
+  });
+
+  it("reads existing TTS ElevenLabs baseUrl from openclaw.json", () => {
+    const result = readConfiguredDenchCloudSettings({
+      models: {
+        providers: {
+          "dench-cloud": {
+            baseUrl: "https://gateway.merseoriginals.com/v1",
+            apiKey: "dench_cfg_key",
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          model: {
+            primary: "dench-cloud/gpt-5.4",
+          },
+        },
+      },
+      messages: {
+        tts: {
+          provider: "elevenlabs",
+          providers: {
+            elevenlabs: {
+              baseUrl: "https://gateway.merseoriginals.com",
+              apiKey: "dench_cfg_key",
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.ttsElevenLabsBaseUrl).toBe("https://gateway.merseoriginals.com");
   });
 });

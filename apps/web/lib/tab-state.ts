@@ -5,7 +5,7 @@
  * The URL reflects only the active tab's content (backward compatible).
  */
 
-export type TabType = "home" | "file" | "chat" | "app" | "object" | "cron" | "gateway-chat";
+export type TabType = "home" | "file" | "chat" | "app" | "object" | "cron" | "integrations" | "cloud" | "skills" | "gateway-chat";
 
 export const HOME_TAB_ID = "__home__";
 
@@ -343,6 +343,9 @@ export function updateTabTitle(state: TabState, tabId: string, title: string): T
 export function inferTabType(path: string): TabType {
   if (path.includes(".dench.app")) return "app";
   if (path.startsWith("~cron")) return "cron";
+  if (path.startsWith("~cloud")) return "cloud";
+  if (path.startsWith("~integrations")) return "integrations";
+  if (path.startsWith("~skills")) return "skills";
   return "file";
 }
 

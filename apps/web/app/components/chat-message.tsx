@@ -7,7 +7,7 @@ import { useThumbSurvey } from "posthog-js/react/surveys";
 import { memo, useCallback, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import type { Components } from "react-markdown";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ChainOfThought, type ChainPart } from "./chain-of-thought";
 import { isStatusReasoningText } from "./chat-stream-status";
@@ -15,7 +15,12 @@ import { splitReportBlocks, hasReportBlocks } from "@/lib/report-blocks";
 import { splitDiffBlocks, hasDiffBlocks } from "@/lib/diff-blocks";
 import type { ReportConfig } from "./charts/types";
 import { DiffCard } from "./diff-viewer";
+import { MessageVoiceButton } from "./message-voice-button";
 import { SyntaxBlock } from "./syntax-block";
+import {
+	type ComposioChatAction,
+	parseComposioChatAction,
+} from "@/lib/composio-chat-actions";
 
 // Lazy-load ReportCard (uses Recharts which is heavy)
 const ReportCard = dynamic(
@@ -244,6 +249,27 @@ function parseAttachments(
 		.map((p) => p.trim())
 		.filter(Boolean);
 	return { paths, message };
+}
+
+function normalizeSpeechText(text: string): string {
+	return text
+		.replace(/```[\s\S]*?```/g, " Code block omitted. ")
+		.replace(/`([^`]+)`/g, "$1")
+		.replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1")
+		.replace(/^#{1,6}\s+/gm, "")
+		.replace(/[*_~]/g, "")
+		.replace(/\n{3,}/g, "\n\n")
+		.replace(/\s+/g, " ")
+		.trim();
+}
+
+function extractSpeechText(segments: MessageSegment[]): string {
+	return normalizeSpeechText(
+		segments
+			.filter((segment): segment is { type: "text"; text: string } => segment.type === "text")
+			.map((segment) => segment.text)
+			.join("\n\n"),
+	);
 }
 
 function getCategoryFromPath(
@@ -571,11 +597,13 @@ function FilePathCode({
 
 function createMarkdownComponents(
 	onFilePathClick?: FilePathClickHandler,
+	onComposioAction?: (action: ComposioChatAction) => void,
 ): Components {
 	return {
 		// Open external links in new tab; intercept local file-path links
 		a: ({ href, children, ...props }) => {
 			const rawHref = typeof href === "string" ? href : "";
+			const composioAction = parseComposioChatAction(rawHref);
 			const normalizedHref = normalizePathReference(rawHref);
 			const isExternal =
 				rawHref && (rawHref.startsWith("http://") || rawHref.startsWith("https://") || rawHref.startsWith("//"));
@@ -584,6 +612,22 @@ function createMarkdownComponents(
 				!isWorkspaceAppLink &&
 				(Boolean(rawHref.startsWith("file://")) ||
 					looksLikeFilePath(normalizedHref));
+			if (composioAction) {
+				return (
+					<button
+						type="button"
+						className="inline-flex items-center rounded-md px-2 py-0.5 text-sm font-medium no-underline transition-colors hover:opacity-90"
+						style={{
+							color: "rgb(147 197 253)",
+							background: "rgba(59, 130, 246, 0.12)",
+							border: "1px solid rgba(59, 130, 246, 0.2)",
+						}}
+						onClick={() => onComposioAction?.(composioAction)}
+					>
+						{children}
+					</button>
+				);
+			}
 			return (
 				<a
 					href={href}
@@ -732,7 +776,7 @@ function FeedbackButtons({ messageId, sessionId }: { messageId: string; sessionI
 	const btnBase = "p-1 rounded-md transition-colors";
 
 	return (
-		<div ref={triggerRef} className="flex items-center gap-0.5 mt-1 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
+		<div ref={triggerRef} className="flex items-center gap-0.5">
 			<button
 				type="button"
 				onClick={() => respond("up")}
@@ -767,12 +811,13 @@ function FeedbackButtons({ messageId, sessionId }: { messageId: string; sessionI
 
 /* ─── Chat message ─── */
 
-export const ChatMessage = memo(function ChatMessage({ message, isStreaming, onSubagentClick, onFilePathClick, sessionId, userHtmlMap }: { message: UIMessage; isStreaming?: boolean; onSubagentClick?: (task: string) => void; onFilePathClick?: FilePathClickHandler; sessionId?: string | null; userHtmlMap?: Map<string, string> }) {
+export const ChatMessage = memo(function ChatMessage({ message, isStreaming, onSubagentClick, onFilePathClick, onComposioAction, sessionId, voicePlaybackEnabled = false, userHtmlMap }: { message: UIMessage; isStreaming?: boolean; onSubagentClick?: (task: string) => void; onFilePathClick?: FilePathClickHandler; onComposioAction?: (action: ComposioChatAction) => void; sessionId?: string | null; voicePlaybackEnabled?: boolean; userHtmlMap?: Map<string, string> }) {
 	const isUser = message.role === "user";
 	const segments = groupParts(message.parts);
+	const speechText = useMemo(() => extractSpeechText(segments), [segments]);
 	const markdownComponents = useMemo(
-		() => createMarkdownComponents(onFilePathClick),
-		[onFilePathClick],
+		() => createMarkdownComponents(onFilePathClick, onComposioAction),
+		[onComposioAction, onFilePathClick],
 	);
 
 	if (isUser) {
@@ -898,6 +943,11 @@ export const ChatMessage = memo(function ChatMessage({ message, isStreaming, onS
 				<ReactMarkdown
 					remarkPlugins={[remarkGfm]}
 					components={markdownComponents}
+					urlTransform={(url) =>
+						parseComposioChatAction(url)
+							? url
+							: defaultUrlTransform(url)
+					}
 				>
 					{segment.text}
 				</ReactMarkdown>
@@ -991,7 +1041,12 @@ export const ChatMessage = memo(function ChatMessage({ message, isStreaming, onS
 			);
 			})}
 			</AnimatePresence>
-			{!isStreaming && POSTHOG_KEY && <FeedbackButtons messageId={message.id} sessionId={sessionId} />}
+			{!isStreaming && (POSTHOG_KEY || (voicePlaybackEnabled && speechText)) && (
+				<div className="flex items-center gap-1 mt-1 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
+					{voicePlaybackEnabled && speechText && <MessageVoiceButton text={speechText} />}
+					{POSTHOG_KEY && <FeedbackButtons messageId={message.id} sessionId={sessionId} />}
+				</div>
+			)}
 		</div>
 	);
 });

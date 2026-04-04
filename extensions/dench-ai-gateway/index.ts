@@ -1,6 +1,4 @@
 import {
-  buildDenchCloudAgentModelEntries,
-  buildDenchCloudProviderModels,
   buildDenchGatewayApiBaseUrl,
   buildDenchGatewayCatalogUrl,
   cloneFallbackDenchCloudModels,
@@ -11,6 +9,12 @@ import {
   resolveDenchCloudModel,
   type DenchCloudCatalogModel,
 } from "./models.js";
+import {
+  buildDenchCloudConfigPatch,
+  buildDenchCloudProviderConfig,
+} from "./config-patch.js";
+import { registerCuratedComposioBridge } from "./composio-bridge.js";
+export { buildDenchCloudConfigPatch } from "./config-patch.js";
 
 export const id = "dench-ai-gateway";
 
@@ -53,39 +57,6 @@ function resolveEnvApiKey(): string | undefined {
     }
   }
   return undefined;
-}
-
-function buildProviderConfig(
-  gatewayUrl: string,
-  apiKey: string,
-  models: DenchCloudCatalogModel[],
-) {
-  return {
-    baseUrl: buildDenchGatewayApiBaseUrl(gatewayUrl),
-    apiKey,
-    api: "openai-completions",
-    models: buildDenchCloudProviderModels(models),
-  };
-}
-
-export function buildDenchCloudConfigPatch(params: {
-  gatewayUrl: string;
-  apiKey: string;
-  models: DenchCloudCatalogModel[];
-}) {
-  return {
-    models: {
-      mode: "merge",
-      providers: {
-        [PROVIDER_ID]: buildProviderConfig(params.gatewayUrl, params.apiKey, params.models),
-      },
-    },
-    agents: {
-      defaults: {
-        models: buildDenchCloudAgentModelEntries(params.models),
-      },
-    },
-  };
 }
 
 async function promptForApiKey(prompter: any): Promise<string> {
@@ -285,7 +256,7 @@ function buildDiscoveryProvider(api: any, gatewayUrl: string) {
   }
 
   const models = cloneFallbackDenchCloudModels();
-  return buildProviderConfig(gatewayUrl, apiKey, models);
+  return buildDenchCloudProviderConfig({ gatewayUrl, apiKey, models });
 }
 
 export default function register(api: any) {
@@ -339,6 +310,8 @@ export default function register(api: any) {
       },
     },
   } as any);
+
+  registerCuratedComposioBridge(api, gatewayUrl);
 
   api.registerService({
     id: "dench-ai-gateway",

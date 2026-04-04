@@ -1,6 +1,7 @@
+import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { resolveWebChatDir } from "@/lib/workspace";
+import { resolveActiveAgentId, resolveWebChatDir } from "@/lib/workspace";
 
 export type WebSessionMeta = {
   id: string;
@@ -20,6 +21,12 @@ export type WebSessionMeta = {
   chatAgentId?: string;
   /** The full gateway session key used for this chat. */
   gatewaySessionKey?: string;
+  /**
+   * Optional gateway thread id (suffix of `agent:{agentId}:web:{id}`).
+   * When unset, the web session `id` is used. Rotating this gives the gateway a
+   * fresh context without changing the web chat id or transcript file.
+   */
+  gatewaySessionId?: string;
   /** Which agent model is in use: "workspace" (shared) or "ephemeral" (per-chat). */
   agentMode?: "workspace" | "ephemeral";
   /** Last time the session had active traffic. */
@@ -113,13 +120,36 @@ export function resolveSessionAgentId(sessionId: string, fallbackAgentId: string
   return meta?.workspaceAgentId ?? fallbackAgentId;
 }
 
-/** Resolve the gateway session key for a session.
- *  Uses pinned metadata when available, constructs from the given agent ID otherwise. */
+/** Effective gateway thread id (defaults to the web session id). */
+export function resolveGatewayThreadId(sessionId: string): string {
+  const meta = getSessionMeta(sessionId);
+  return meta?.gatewaySessionId ?? sessionId;
+}
+
+/** True when the gateway thread was rotated away from the web session id (fresh gateway context). */
+export function hasRotatedGatewayThread(meta: WebSessionMeta | undefined, webSessionId: string): boolean {
+  return typeof meta?.gatewaySessionId === "string" && meta.gatewaySessionId !== webSessionId;
+}
+
+/** Allocate a new gateway thread id and persist it (same web chat id and transcript path). */
+export function rotateGatewaySessionThreadForModelReset(webSessionId: string): void {
+  const sessions = readIndex();
+  const session = sessions.find((s) => s.id === webSessionId);
+  if (!session) {
+    return;
+  }
+  const agentId = session.workspaceAgentId ?? resolveActiveAgentId();
+  const newThreadId = randomUUID();
+  session.gatewaySessionId = newThreadId;
+  session.gatewaySessionKey = `agent:${agentId}:web:${newThreadId}`;
+  session.updatedAt = Date.now();
+  writeIndex(sessions);
+}
+
+/** Resolve the gateway session key for a session. */
 export function resolveSessionKey(sessionId: string, fallbackAgentId: string): string {
   const meta = getSessionMeta(sessionId);
-  if (meta?.gatewaySessionKey && !meta.gatewaySessionKey.includes(":chat-slot-")) {
-    return meta.gatewaySessionKey;
-  }
   const agentId = meta?.workspaceAgentId ?? fallbackAgentId;
-  return `agent:${agentId}:web:${sessionId}`;
+  const threadId = meta?.gatewaySessionId ?? sessionId;
+  return `agent:${agentId}:web:${threadId}`;
 }

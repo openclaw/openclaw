@@ -1,0 +1,8 @@
+{
+  "name": "@denchclaw/apollo-enrichment",
+  "version": "1.0.0",
+  "private": true,
+  "openclaw": {
+    "extensions": ["./index.ts"]
+  }
+}

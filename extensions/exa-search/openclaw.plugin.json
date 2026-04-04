@@ -1,0 +1,16 @@
+{
+  "id": "exa-search",
+  "name": "Exa Search",
+  "version": "1.0.0",
+  "description": "Registers agent tools for Exa web search, content extraction, and answer generation via the Dench Cloud gateway.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "default": true
+      }
+    }
+  }
+}

@@ -145,6 +145,7 @@ type SpawnGatewayProcessParams = {
 	sessionKey?: string;
 	afterSeq: number;
 	lane?: string;
+	modelOverride?: string;
 };
 
 type BuildConnectParamsOptions = {
@@ -169,6 +170,16 @@ const GATEWAY_RECONNECT_MAX_ATTEMPTS = 6;
 const GATEWAY_RPC_RETRY_BASE_MS = 250;
 const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
 const RETRYABLE_GATEWAY_CLOSE_CODES = new Set([1000, 1005, 1006, 1012]);
+
+function normalizeModelOverride(modelOverride?: string): string | undefined {
+	if (typeof modelOverride !== "string" || !modelOverride.trim()) {
+		return undefined;
+	}
+	const normalized = modelOverride.trim();
+	return normalized.startsWith("dench-cloud/")
+		? normalized
+		: `dench-cloud/${normalized}`;
+}
 
 type AgentSubscribeSupport = "unknown" | "supported" | "unsupported";
 let cachedAgentSubscribeSupport: AgentSubscribeSupport = "unknown";
@@ -909,11 +920,17 @@ class GatewayProcessHandle
 		if (this.params.sessionKey) {
 			// Pre-patch verbose for existing sessions (best-effort; new
 			// sessions don't exist yet so this may fail — we retry below).
-			await this.ensureFullToolVerbose(this.params.sessionKey);
+			await this.ensureFullToolVerbose(
+				this.params.sessionKey,
+				this.params.modelOverride,
+			);
 		}
 
 		const sessionKey = this.params.sessionKey;
 		const msg = this.params.message ?? "";
+		const normalizedModelOverride = normalizeModelOverride(
+			this.params.modelOverride,
+		);
 		// Always use chat.send so runs are registered in the gateway's
 		// session-level tracking.  The `agent` RPC scopes runs to the
 		// originating WebSocket, making them invisible to chat.abort
@@ -952,7 +969,7 @@ class GatewayProcessHandle
 		// session.  This is the critical path for first-message-in-chat
 		// where the pre-patch above failed.
 		if (sessionKey) {
-			await this.ensureFullToolVerbose(sessionKey);
+			await this.ensureFullToolVerbose(sessionKey, this.params.modelOverride);
 		}
 	}
 
@@ -1042,7 +1059,10 @@ class GatewayProcessHandle
 		}
 	}
 
-	private async ensureFullToolVerbose(sessionKey: string): Promise<void> {
+	private async ensureFullToolVerbose(
+		sessionKey: string,
+		modelOverride?: string,
+	): Promise<void> {
 		if (!this.client || !sessionKey.trim()) {
 			return;
 		}
@@ -1053,6 +1073,10 @@ class GatewayProcessHandle
 			verboseLevel: "full",
 			reasoningLevel: "on",
 		};
+		const normalizedModelOverride = normalizeModelOverride(modelOverride);
+		if (normalizedModelOverride) {
+			patchParams.model = normalizedModelOverride;
+		}
 
 		let attempt = 0;
 		let lastMessage = "";
@@ -1486,6 +1510,7 @@ export function spawnAgentProcess(
 	message: string,
 	agentSessionId?: string,
 	overrideAgentId?: string,
+	modelOverride?: string,
 ): AgentProcessHandle {
 	const agentId = overrideAgentId ?? resolveActiveAgentId();
 	const sessionKey = agentSessionId
@@ -1497,6 +1522,7 @@ export function spawnAgentProcess(
 		sessionKey,
 		afterSeq: 0,
 		lane: agentSessionId ? `web:${agentSessionId}` : "web",
+		modelOverride,
 	});
 }
 

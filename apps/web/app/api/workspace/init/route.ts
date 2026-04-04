@@ -4,7 +4,7 @@ import {
   writeFileSync,
   readFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import {
   discoverWorkspaces,
   setUIActiveWorkspace,
@@ -22,6 +22,7 @@ import {
 import {
   seedWorkspaceFromAssets,
 } from "@/lib/workspace-seed";
+import { resolveDenchPackageRoot } from "@/lib/project-root";
 import { trackServer } from "@/lib/telemetry";
 
 export const dynamic = "force-dynamic";
@@ -41,7 +42,6 @@ const BOOTSTRAP_FILENAMES = [
   "BOOTSTRAP.md",
 ] as const;
 
-const ROOT_MARKER = join("assets", "seed", "workspace.duckdb");
 const TEMPLATE_DIR = join("assets", "seed", "templates");
 
 const WORKSPACE_NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
@@ -55,23 +55,6 @@ function stripFrontMatter(content: string): string {
   const endIndex = content.indexOf("\n---", 3);
   if (endIndex === -1) {return content;}
   return content.slice(endIndex + "\n---".length).replace(/^\s+/, "");
-}
-
-/** Try multiple candidate paths to find the monorepo root. */
-function resolveProjectRoot(): string | null {
-  let dir = process.cwd();
-  for (let index = 0; index < 10; index += 1) {
-    if (existsSync(join(dir, "package.json")) && existsSync(join(dir, ROOT_MARKER))) {
-      return dir;
-    }
-    const parent = dirname(dir);
-    if (parent === dir) {
-      break;
-    }
-    dir = parent;
-  }
-
-  return null;
 }
 
 function loadTemplateContent(filename: string, projectRoot: string | null): string {
@@ -135,7 +118,7 @@ export async function POST(req: Request) {
   const seeded: string[] = [];
   const copiedFiles: string[] = [];
 
-  const projectRoot = resolveProjectRoot();
+  const projectRoot = resolveDenchPackageRoot();
 
   try {
     mkdirSync(stateDir, { recursive: true });

@@ -10,6 +10,7 @@ import {
   reorderTabs,
   saveTabs,
   togglePinTab,
+  inferTabType,
   type Tab,
   type TabState,
 } from "./tab-state";
@@ -32,6 +33,32 @@ function fileTab(params: { id: string; path: string; title: string }): Tab {
 
 beforeEach(() => {
   window.localStorage.clear();
+});
+
+describe("inferTabType", () => {
+  it("recognizes cloud virtual tabs", () => {
+    expect(inferTabType("~cloud")).toBe("cloud");
+  });
+
+  it("recognizes integrations virtual tabs", () => {
+    expect(inferTabType("~integrations")).toBe("integrations");
+  });
+
+  it("recognizes skills virtual tabs", () => {
+    expect(inferTabType("~skills")).toBe("skills");
+  });
+
+  it("keeps cron virtual tabs recognized", () => {
+    expect(inferTabType("~cron/job-1")).toBe("cron");
+  });
+
+  it("returns file for regular paths", () => {
+    expect(inferTabType("knowledge/notes.md")).toBe("file");
+  });
+
+  it("returns app for .dench.app paths", () => {
+    expect(inferTabType("myapp.dench.app")).toBe("app");
+  });
 });
 
 describe("tab preview behavior", () => {

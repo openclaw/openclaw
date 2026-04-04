@@ -161,30 +161,24 @@ describe("Workspace Tree & Browse API", () => {
       expect(paths).toContain("notes.md");
     });
 
-    it("omits managed crm skill from the virtual skills folder", async () => {
+    it("does not inject a virtual skills folder into the workspace tree", async () => {
       const { resolveWorkspaceRoot } = await import("@/lib/workspace");
       vi.mocked(resolveWorkspaceRoot).mockReturnValue("/ws");
-      const { readdir: mockReaddir, access: mockAccess } = await import("node:fs/promises");
-      vi.mocked(mockAccess).mockImplementation(async (p) => {
-        const value = String(p);
-        if (
-          value === "/ws" ||
-          value === "/ws/skills" ||
-          value === "/ws/skills/alpha/SKILL.md" ||
-          value === "/ws/skills/crm/SKILL.md"
-        ) {
-          return;
-        }
-        throw new Error("ENOENT");
-      });
+      const { readdir: mockReaddir } = await import("node:fs/promises");
       vi.mocked(mockReaddir).mockImplementation((dir) => {
         if (String(dir) === "/ws") {
-          return Promise.resolve([] as unknown as Dirent[]);
+          return Promise.resolve([
+            makeDirent("skills", true),
+          ] as unknown as Dirent[]);
         }
         if (String(dir) === "/ws/skills") {
           return Promise.resolve([
             makeDirent("alpha", true),
-            makeDirent("crm", true),
+          ] as unknown as Dirent[]);
+        }
+        if (String(dir) === "/ws/skills/alpha") {
+          return Promise.resolve([
+            makeDirent("SKILL.md", false),
           ] as unknown as Dirent[]);
         }
         return Promise.resolve([] as unknown as Dirent[]);
@@ -194,12 +188,9 @@ describe("Workspace Tree & Browse API", () => {
       const req = new Request("http://localhost/api/workspace/tree");
       const res = await GET(req);
       const json = await res.json();
-      const skillsFolder = (json.tree as Array<{ path: string; children?: Array<{ path: string }> }>).find(
-        (node) => node.path === "~skills",
-      );
-      const skillPaths = (skillsFolder?.children ?? []).map((child) => child.path);
-      expect(skillPaths).toContain("~skills/alpha/SKILL.md");
-      expect(skillPaths).not.toContain("~skills/crm/SKILL.md");
+      const rootPaths = (json.tree as Array<{ path: string }>).map((node) => node.path);
+      expect(rootPaths).toContain("skills");
+      expect(rootPaths).not.toContain("~skills");
     });
 
     it("yields before tree discovery completes (prevents UI freeze during active agent runs)", async () => {

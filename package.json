@@ -47,7 +47,7 @@
     "prepack": "pnpm build:plugin-env && pnpm build && pnpm web:build && pnpm web:prepack",
     "start": "node denchclaw.mjs",
     "test": "pnpm test:cli && pnpm --dir apps/web test",
-    "test:cli": "vitest run --config vitest.unit.config.ts src/cli/run-main.test.ts src/cli/bootstrap-external.test.ts src/cli/bootstrap-external.bootstrap-command.test.ts src/cli/dench-cloud.test.ts src/cli/workspace-seed.test.ts src/cli/web-runtime.test.ts src/cli/web-runtime-command.test.ts src/cli/flatten-standalone-deps.test.ts",
+    "test:cli": "vitest run --config vitest.unit.config.ts src/cli/run-main.test.ts src/cli/bootstrap-external.test.ts src/cli/bootstrap-external.bootstrap-command.test.ts src/cli/dench-cloud.test.ts src/cli/workspace-seed.test.ts src/cli/web-runtime.test.ts src/cli/web-runtime-command.test.ts src/cli/flatten-standalone-deps.test.ts && vitest run --config extensions/vitest.config.ts extensions/dench-identity/index.test.ts extensions/dench-identity/composio-cheat-sheet.test.ts extensions/dench-ai-gateway/index.test.ts",
     "test:web": "pnpm --dir apps/web test",
     "web:build": "pnpm --dir apps/web build",
     "web:dev": "pnpm --dir apps/web dev",
