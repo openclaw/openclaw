@@ -23,7 +23,7 @@ export function createQuickActionLauncherCard(params: {
   return {
     schema: "2.0",
     config: {
-      enable_forward: true,
+      width_mode: "fill",
     },
     header: {
       title: {

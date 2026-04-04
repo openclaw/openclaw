@@ -818,4 +818,3 @@ describe("slackPlugin config", () => {
     expect(snapshot?.signingSecretStatus).toBe("configured_unavailable");
   });
 });
-
