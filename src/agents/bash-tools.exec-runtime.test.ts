@@ -86,24 +86,72 @@ describe("resolveExecTarget", () => {
     });
   });
 
-  it("rejects host overrides when configured host is auto", () => {
-    expect(() =>
+  it("allows per-call host=node override when configured host is auto", () => {
+    expect(
       resolveExecTarget({
         configuredTarget: "auto",
         requestedTarget: "node",
         elevatedRequested: false,
         sandboxAvailable: false,
       }),
-    ).toThrow("exec host not allowed");
+    ).toMatchObject({
+      configuredTarget: "auto",
+      requestedTarget: "node",
+      selectedTarget: "node",
+      effectiveHost: "node",
+    });
   });
 
-  it("also rejects gateway override when configured host is auto", () => {
+  it("allows per-call host=gateway override when configured host is auto and no sandbox", () => {
+    expect(
+      resolveExecTarget({
+        configuredTarget: "auto",
+        requestedTarget: "gateway",
+        elevatedRequested: false,
+        sandboxAvailable: false,
+      }),
+    ).toMatchObject({
+      configuredTarget: "auto",
+      requestedTarget: "gateway",
+      selectedTarget: "gateway",
+      effectiveHost: "gateway",
+    });
+  });
+
+  it("rejects per-call host=gateway override from auto when sandbox is available", () => {
     expect(() =>
       resolveExecTarget({
         configuredTarget: "auto",
         requestedTarget: "gateway",
         elevatedRequested: false,
         sandboxAvailable: true,
+      }),
+    ).toThrow("exec host not allowed");
+  });
+
+  it("allows per-call host=sandbox override when configured host is auto", () => {
+    expect(
+      resolveExecTarget({
+        configuredTarget: "auto",
+        requestedTarget: "sandbox",
+        elevatedRequested: false,
+        sandboxAvailable: true,
+      }),
+    ).toMatchObject({
+      configuredTarget: "auto",
+      requestedTarget: "sandbox",
+      selectedTarget: "sandbox",
+      effectiveHost: "sandbox",
+    });
+  });
+
+  it("rejects cross-host override when configured target is a concrete host", () => {
+    expect(() =>
+      resolveExecTarget({
+        configuredTarget: "node",
+        requestedTarget: "gateway",
+        elevatedRequested: false,
+        sandboxAvailable: false,
       }),
     ).toThrow("exec host not allowed");
   });
@@ -151,7 +199,7 @@ describe("resolveExecTarget", () => {
     });
   });
 
-  it("still forces elevated requests onto the gateway host", () => {
+  it("forces elevated requests onto the gateway host when configured target is auto", () => {
     expect(
       resolveExecTarget({
         configuredTarget: "auto",
@@ -164,6 +212,56 @@ describe("resolveExecTarget", () => {
       requestedTarget: "sandbox",
       selectedTarget: "gateway",
       effectiveHost: "gateway",
+    });
+  });
+
+  it("honours node target for elevated requests when configured target is node", () => {
+    expect(
+      resolveExecTarget({
+        configuredTarget: "node",
+        requestedTarget: "node",
+        elevatedRequested: true,
+        sandboxAvailable: false,
+      }),
+    ).toMatchObject({
+      configuredTarget: "node",
+      requestedTarget: "node",
+      selectedTarget: "node",
+      effectiveHost: "node",
+    });
+  });
+
+  it("routes to node for elevated when configured=node and no per-call override", () => {
+    expect(
+      resolveExecTarget({
+        configuredTarget: "node",
+        elevatedRequested: true,
+        sandboxAvailable: false,
+      }),
+    ).toMatchObject({
+      configuredTarget: "node",
+      requestedTarget: null,
+      selectedTarget: "node",
+      effectiveHost: "node",
+    });
+  });
+
+  it("silently discards mismatched requestedTarget under elevated+node", () => {
+    // When elevated is requested and configuredTarget is "node", the elevated
+    // path always returns "node" regardless of requestedTarget. This is
+    // intentional — elevated overrides per-call host selection.
+    expect(
+      resolveExecTarget({
+        configuredTarget: "node",
+        requestedTarget: "gateway",
+        elevatedRequested: true,
+        sandboxAvailable: false,
+      }),
+    ).toMatchObject({
+      configuredTarget: "node",
+      requestedTarget: "gateway",
+      selectedTarget: "node",
+      effectiveHost: "node",
     });
   });
 });
