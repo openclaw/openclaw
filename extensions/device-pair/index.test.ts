@@ -53,6 +53,14 @@ vi.mock("./notify.js", () => ({
 import { approveDevicePairing, listDevicePairing } from "./api.js";
 import registerDevicePair from "./index.js";
 
+type ListedPendingPairingRequest = Awaited<ReturnType<typeof listDevicePairing>>["pending"][number];
+type ApproveDevicePairingResolved = Awaited<ReturnType<typeof approveDevicePairing>>;
+type ApprovedPairingResult = Extract<
+  NonNullable<ApproveDevicePairingResolved>,
+  { status: "approved" }
+>;
+type ApprovedPairingDevice = ApprovedPairingResult["device"];
+
 function createApi(params?: {
   runtime?: OpenClawPluginApi["runtime"];
   pluginConfig?: Record<string, unknown>;
@@ -141,6 +149,60 @@ function createCommandContext(params?: Partial<PluginCommandContext>): PluginCom
     detachConversationBinding: async () => ({ removed: false }),
     getCurrentConversationBinding: async () => null,
     ...params,
+  };
+}
+
+function makePendingPairingRequest(
+  overrides: Partial<ListedPendingPairingRequest> = {},
+): ListedPendingPairingRequest {
+  return {
+    requestId: "req-1",
+    deviceId: "victim-phone",
+    publicKey: "victim-public-key",
+    displayName: "Victim Phone",
+    platform: "ios",
+    ts: Date.now(),
+    ...overrides,
+  };
+}
+
+function makeApprovedPairingDevice(
+  overrides: Partial<ApprovedPairingDevice> = {},
+): ApprovedPairingDevice {
+  return {
+    deviceId: "victim-phone",
+    publicKey: "victim-public-key",
+    displayName: "Victim Phone",
+    platform: "ios",
+    role: "operator",
+    roles: ["operator"],
+    scopes: ["operator.pairing"],
+    approvedScopes: ["operator.pairing"],
+    tokens: {
+      operator: {
+        token: "token-1",
+        role: "operator",
+        scopes: ["operator.pairing"],
+        createdAtMs: Date.now(),
+      },
+    },
+    createdAtMs: Date.now(),
+    approvedAtMs: Date.now(),
+    ...overrides,
+  };
+}
+
+function makeApprovedPairingResult(
+  overrides: Omit<Partial<ApprovedPairingResult>, "device"> & {
+    device?: Partial<ApprovedPairingDevice>;
+  } = {},
+): ApprovedPairingResult {
+  const { device, ...resultOverrides } = overrides;
+  return {
+    status: "approved",
+    requestId: "req-1",
+    device: makeApprovedPairingDevice(device),
+    ...resultOverrides,
   };
 }
 
@@ -567,16 +629,7 @@ describe("device-pair /pair approve", () => {
 
   it("rejects internal gateway callers without operator.pairing", async () => {
     vi.mocked(listDevicePairing).mockResolvedValueOnce({
-      pending: [
-        {
-          requestId: "req-1",
-          deviceId: "victim-phone",
-          publicKey: "victim-public-key",
-          displayName: "Victim Phone",
-          platform: "ios",
-          ts: Date.now(),
-        },
-      ],
+      pending: [makePendingPairingRequest()],
       paired: [],
     });
 
@@ -598,42 +651,10 @@ describe("device-pair /pair approve", () => {
 
   it("allows internal gateway callers with operator.pairing", async () => {
     vi.mocked(listDevicePairing).mockResolvedValueOnce({
-      pending: [
-        {
-          requestId: "req-1",
-          deviceId: "victim-phone",
-          publicKey: "victim-public-key",
-          displayName: "Victim Phone",
-          platform: "ios",
-          ts: Date.now(),
-        },
-      ],
+      pending: [makePendingPairingRequest()],
       paired: [],
     });
-    vi.mocked(approveDevicePairing).mockResolvedValueOnce({
-      status: "approved",
-      requestId: "req-1",
-      device: {
-        deviceId: "victim-phone",
-        publicKey: "victim-public-key",
-        displayName: "Victim Phone",
-        platform: "ios",
-        role: "operator",
-        roles: ["operator"],
-        scopes: ["operator.pairing"],
-        approvedScopes: ["operator.pairing"],
-        tokens: {
-          operator: {
-            token: "token-1",
-            role: "operator",
-            scopes: ["operator.pairing"],
-            createdAtMs: Date.now(),
-          },
-        },
-        createdAtMs: Date.now(),
-        approvedAtMs: Date.now(),
-      },
-    });
+    vi.mocked(approveDevicePairing).mockResolvedValueOnce(makeApprovedPairingResult());
 
     const command = registerPairCommand();
     const result = await command.handler(
@@ -653,42 +674,10 @@ describe("device-pair /pair approve", () => {
 
   it("does not force an empty caller scope context for external approvals", async () => {
     vi.mocked(listDevicePairing).mockResolvedValueOnce({
-      pending: [
-        {
-          requestId: "req-1",
-          deviceId: "victim-phone",
-          publicKey: "victim-public-key",
-          displayName: "Victim Phone",
-          platform: "ios",
-          ts: Date.now(),
-        },
-      ],
+      pending: [makePendingPairingRequest()],
       paired: [],
     });
-    vi.mocked(approveDevicePairing).mockResolvedValueOnce({
-      status: "approved",
-      requestId: "req-1",
-      device: {
-        deviceId: "victim-phone",
-        publicKey: "victim-public-key",
-        displayName: "Victim Phone",
-        platform: "ios",
-        role: "operator",
-        roles: ["operator"],
-        scopes: ["operator.pairing"],
-        approvedScopes: ["operator.pairing"],
-        tokens: {
-          operator: {
-            token: "token-1",
-            role: "operator",
-            scopes: ["operator.pairing"],
-            createdAtMs: Date.now(),
-          },
-        },
-        createdAtMs: Date.now(),
-        approvedAtMs: Date.now(),
-      },
-    });
+    vi.mocked(approveDevicePairing).mockResolvedValueOnce(makeApprovedPairingResult());
 
     const command = registerPairCommand();
     const result = await command.handler(
@@ -706,16 +695,7 @@ describe("device-pair /pair approve", () => {
 
   it("fails closed for approvals when internal gateway scopes are absent", async () => {
     vi.mocked(listDevicePairing).mockResolvedValueOnce({
-      pending: [
-        {
-          requestId: "req-1",
-          deviceId: "victim-phone",
-          publicKey: "victim-public-key",
-          displayName: "Victim Phone",
-          platform: "ios",
-          ts: Date.now(),
-        },
-      ],
+      pending: [makePendingPairingRequest()],
       paired: [],
     });
 
@@ -737,16 +717,7 @@ describe("device-pair /pair approve", () => {
 
   it("rejects approvals that request scopes above the caller session", async () => {
     vi.mocked(listDevicePairing).mockResolvedValueOnce({
-      pending: [
-        {
-          requestId: "req-1",
-          deviceId: "victim-phone",
-          publicKey: "victim-public-key",
-          displayName: "Victim Phone",
-          platform: "ios",
-          ts: Date.now(),
-        },
-      ],
+      pending: [makePendingPairingRequest()],
       paired: [],
     });
     vi.mocked(approveDevicePairing).mockResolvedValueOnce({
@@ -774,42 +745,25 @@ describe("device-pair /pair approve", () => {
 
   it("preserves approvals for non-gateway command surfaces", async () => {
     vi.mocked(listDevicePairing).mockResolvedValueOnce({
-      pending: [
-        {
-          requestId: "req-1",
-          deviceId: "victim-phone",
-          publicKey: "victim-public-key",
-          displayName: "Victim Phone",
-          platform: "ios",
-          ts: Date.now(),
-        },
-      ],
+      pending: [makePendingPairingRequest()],
       paired: [],
     });
-    vi.mocked(approveDevicePairing).mockResolvedValueOnce({
-      status: "approved",
-      requestId: "req-1",
-      device: {
-        deviceId: "victim-phone",
-        publicKey: "victim-public-key",
-        displayName: "Victim Phone",
-        platform: "ios",
-        role: "operator",
-        roles: ["operator"],
-        scopes: ["operator.admin"],
-        approvedScopes: ["operator.admin"],
-        tokens: {
-          operator: {
-            token: "token-1",
-            role: "operator",
-            scopes: ["operator.admin"],
-            createdAtMs: Date.now(),
+    vi.mocked(approveDevicePairing).mockResolvedValueOnce(
+      makeApprovedPairingResult({
+        device: {
+          scopes: ["operator.admin"],
+          approvedScopes: ["operator.admin"],
+          tokens: {
+            operator: {
+              token: "token-1",
+              role: "operator",
+              scopes: ["operator.admin"],
+              createdAtMs: Date.now(),
+            },
           },
         },
-        createdAtMs: Date.now(),
-        approvedAtMs: Date.now(),
-      },
-    });
+      }),
+    );
 
     const command = registerPairCommand();
     const result = await command.handler(
