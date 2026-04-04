@@ -127,8 +127,9 @@ describe("listThinkingLevelLabels", () => {
     expect(listThinkingLevelLabels("zai", "glm-4.7")).toEqual(["off", "on"]);
   });
 
-  it("keeps built-in binary thinking fallback without provider runtime", () => {
-    expect(listThinkingLevelLabels("zai", "glm-4.7")).toEqual(["off", "on"]);
+  it("does not assume binary thinking without provider runtime", () => {
+    expect(listThinkingLevelLabels("zai", "glm-4.7")).toContain("low");
+    expect(listThinkingLevelLabels("zai", "glm-4.7")).not.toContain("on");
   });
 
   it("returns full levels for non-ZAI", () => {
@@ -170,13 +171,13 @@ describe("resolveThinkingDefaultForModel", () => {
     ).toBe("adaptive");
   });
 
-  it("keeps built-in adaptive defaults without provider runtime", () => {
+  it("does not assume adaptive defaults without provider runtime", () => {
     expect(
       resolveThinkingDefaultForModel({ provider: "anthropic", model: "claude-opus-4-6" }),
-    ).toBe("adaptive");
+    ).toBe("off");
     expect(
       resolveThinkingDefaultForModel({ provider: "aws-bedrock", model: "claude-sonnet-4-6" }),
-    ).toBe("adaptive");
+    ).toBe("off");
   });
 
   it("defaults reasoning-capable catalog models to low", () => {
