@@ -23,6 +23,8 @@ import {
   readSessionMessages,
   resolveFreshestSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTarget,
+  resolveSessionModelRef,
+  resolveSessionAgentId,
   resolveSessionTranscriptCandidates,
 } from "./session-utils.js";
 
@@ -207,10 +209,14 @@ export async function handleSessionHistoryHttpRequest(
     limit,
     cursor,
   );
+  const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
+  const resolvedModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
 
   if (!shouldStreamSse(req)) {
     sendJson(res, 200, {
       sessionKey: target.canonicalKey,
+      model: resolvedModel.model,
+      provider: resolvedModel.provider,
       ...history,
     });
     return true;
