@@ -72,6 +72,7 @@ Docs: https://docs.openclaw.ai
 - Tasks/maintenance: reconcile stale cron and chat-backed CLI task rows against live cron-job and agent-run ownership instead of treating any persisted session key as proof that the task is still running. (#60310) Thanks @lml2468.
 - Providers/GitHub Copilot: send IDE identity headers on runtime model requests and GitHub token exchange so IDE-authenticated Copilot runs stop failing with missing `Editor-Version`. (#60641) Thanks @VACInc and @vincentkoc.
 - Prompt caching: route Codex Responses and Anthropic Vertex through boundary-aware cache shaping, and report the actual outbound system prompt in cache traces so cache reuse and misses line up with what providers really receive. Thanks @vincentkoc.
+- Google CLI: parse Gemini JSON `response` and `stats` usage fields so reply text and cache-aware token reporting work correctly in CLI-backed runs. (#60801) Thanks @vincentkoc.
 
 ## 2026.4.2
 
