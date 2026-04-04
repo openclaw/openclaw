@@ -37,6 +37,8 @@ Docs: https://docs.openclaw.ai
 - Providers/OpenAI Codex: split native `contextWindow` from runtime `contextTokens` for `openai-codex/gpt-5.4`, keep the default effective cap at `272000`, and expose a per-model config override via `models.providers.*.models[].contextTokens`.
 - Android/Talk Mode: restore spoken assistant replies on node-scoped sessions by keeping reply routing synced to the resolved node session key and pausing mic capture during reply playback. (#60306) Thanks @MKV21.
 - Agents/fallback: persist selected fallback overrides before retry attempts start, prefer persisted overrides during live-session reconciliation, and keep provider-scoped auth-profile failover from snapping retries back to stale primary selections.
+- Skills/uv install: block workspace `.env` from overriding `UV_PYTHON` and strip related interpreter override keys from uv skill-install subprocesses so repository-controlled env files cannot steer the selected Python runtime. (#59178) Thanks @pgondhi987.
+- Telegram/reactions: preserve `reactionNotifications: "own"` across gateway restarts by persisting sent-message ownership state instead of treating cold cache as a permissive fallback. (#59207) Thanks @samzong.
 - Gateway/startup: detect PID recycling in gateway lock files on Windows and macOS, and add startup progress so stale lock conflicts no longer block healthy restarts. (#59843) Thanks @TonyDerek-dot.
 - Providers/compat: stop forcing OpenAI-only payload defaults on proxy and custom OpenAI-compatible routes, and preserve native vendor-specific reasoning, tool, and streaming behavior for Anthropic-compatible, Moonshot, Mistral, ModelStudio, OpenRouter, xAI, Z.ai, and other routed provider paths.
 - Providers/GitHub Copilot: route Claude models through Anthropic Messages with Copilot-compatible headers and Anthropic prompt-cache markers instead of forcing the OpenAI Responses transport.
@@ -137,6 +139,7 @@ Docs: https://docs.openclaw.ai
 - Auto-reply/reasoning: preserve reasoning and compaction markers while coalescing adjacent reply blocks so hidden reasoning does not leak when mixed with visible text on channels like WhatsApp. Thanks @mcaxtr.
 - Exec/gateway: reuse durable exact-command `allow-always` approvals in allowlist mode so repeated gateway exec reruns stop re-prompting or failing on allowlist misses. (#59880) Thanks @luoyanglang.
 - Telegram/local Bot API: trust absolute Bot API `file_path` values only under explicit `channels.telegram.trustedLocalFileRoots`, copy trusted local media into inbound storage, and reject untrusted absolute paths instead of reading arbitrary host files. (#60705) Thanks @jzakirov.
+- Mobile/bootstrap auth: preserve durable primary device-token persistence on iOS and Android while storing bounded QR bootstrap handoff tokens only on trusted bootstrap transports, so shared-auth drift recovery and QR onboarding both keep working. (#60238) Thanks @ngutman.
 
 ## 2026.4.2
 

@@ -190,6 +190,7 @@ private actor SeqGapProbe {
     func value() -> Bool { self.saw }
 }
 
+@Suite(.serialized)
 struct GatewayNodeSessionTests {
     @Test
     func scannedSetupCodePrefersBootstrapAuthOverStoredDeviceToken() async throws {
@@ -321,7 +322,7 @@ struct GatewayNodeSessionTests {
     }
 
     @Test
-    func nonBootstrapHelloDoesNotOverwriteStoredDeviceTokens() async throws {
+    func nonBootstrapHelloStoresPrimaryDeviceTokenButNotAdditionalBootstrapTokens() async throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
@@ -365,6 +366,71 @@ struct GatewayNodeSessionTests {
             url: URL(string: "wss://example.invalid")!,
             token: "shared-token",
             bootstrapToken: nil,
+            password: nil,
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { req in
+                BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil)
+            })
+
+        let nodeEntry = try #require(DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: "node"))
+        #expect(nodeEntry.token == "server-node-token")
+        #expect(nodeEntry.scopes == [])
+        #expect(DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: "operator") == nil)
+
+        await gateway.disconnect()
+    }
+
+    @Test
+    func untrustedBootstrapHelloDoesNotPersistBootstrapHandoffTokens() async throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let previousStateDir = ProcessInfo.processInfo.environment["OPENCLAW_STATE_DIR"]
+        setenv("OPENCLAW_STATE_DIR", tempDir.path, 1)
+        defer {
+            if let previousStateDir {
+                setenv("OPENCLAW_STATE_DIR", previousStateDir, 1)
+            } else {
+                unsetenv("OPENCLAW_STATE_DIR")
+            }
+            try? FileManager.default.removeItem(at: tempDir)
+        }
+
+        let identity = DeviceIdentityStore.loadOrCreate()
+        let session = FakeGatewayWebSocketSession(helloAuth: [
+            "deviceToken": "untrusted-node-token",
+            "role": "node",
+            "scopes": [],
+            "deviceTokens": [
+                [
+                    "deviceToken": "untrusted-operator-token",
+                    "role": "operator",
+                    "scopes": [
+                        "operator.approvals",
+                        "operator.read",
+                    ],
+                ],
+            ],
+        ])
+        let gateway = GatewayNodeSession()
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: [],
+            commands: [],
+            permissions: [:],
+            clientId: "openclaw-ios-test",
+            clientMode: "node",
+            clientDisplayName: "iOS Test",
+            includeDeviceIdentity: true)
+
+        try await gateway.connect(
+            url: URL(string: "ws://example.invalid")!,
+            token: nil,
+            bootstrapToken: "fresh-bootstrap-token",
             password: nil,
             connectOptions: options,
             sessionBox: WebSocketSessionBox(session: session),
