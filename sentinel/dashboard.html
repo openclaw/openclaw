@@ -38498,6 +38498,71 @@ fn mainFragment(
           Object.defineProperty({ __proto__: null }, Symbol.toStringTag, { value: "Module" }),
         );
     </script>
+    <script>
+      document.addEventListener('DOMContentLoaded', () => {
+        fetch('http://localhost:18801/api/creator-state')
+          .then(res => {
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            return res.json();
+          })
+          .then(data => {
+            const section = document.createElement('section');
+            section.id = 'creator-echo-panel';
+            Object.assign(section.style, {
+              backgroundColor: '#1a1a2e',
+              color: '#d4a373',
+              borderRadius: '8px',
+              border: '1px solid #d4a373',
+              padding: '16px',
+              marginTop: '24px',
+            });
+
+            const h2 = document.createElement('h2');
+            h2.textContent = '昨日回聲';
+            Object.assign(h2.style, { margin: '0 0 12px 0' });
+            section.appendChild(h2);
+
+            const p = document.createElement('p');
+            p.textContent = data.summary_vibe ?? '';
+            Object.assign(p.style, { margin: '0 0 12px 0' });
+            section.appendChild(p);
+
+            const timeline = document.createElement('div');
+            Object.assign(timeline.style, {
+              display: 'flex',
+              flexDirection: 'row',
+              alignItems: 'flex-end',
+              gap: '2px',
+              maxHeight: '30px',
+              overflow: 'hidden',
+            });
+
+            const entries = Array.isArray(data.timeline) ? data.timeline : [];
+            const maxIntensity = Math.max(1, ...entries.map(e => e.intensity ?? 0));
+
+            entries.forEach(entry => {
+              const bar = document.createElement('div');
+              const ratio = (entry.intensity ?? 0) / maxIntensity;
+              Object.assign(bar.style, {
+                flex: '1',
+                height: `${Math.max(2, ratio * 30)}px`,
+                backgroundColor: '#d4a373',
+                borderRadius: '2px',
+                opacity: String(0.4 + ratio * 0.6),
+                minWidth: '0',
+              });
+              bar.title = entry.label ?? '';
+              timeline.appendChild(bar);
+            });
+
+            section.appendChild(timeline);
+            document.body.appendChild(section);
+          })
+          .catch(err => {
+            console.error('[creator-echo-panel] fetch failed:', err);
+          });
+      });
+    </script>
   </head>
   <body>
     <div id="root"></div>

@@ -1,0 +1,149 @@
+{
+  "date": "2026-04-03",
+  "generated_at": "2026-04-04T13:33:18.642Z",
+  "dominant_mood": "coding",
+  "summary_vibe": "昨天花了一整天調咖啡廳的聲音系統。裝了分析追蹤、建了一整套自適應音景引擎，連空間混響都搞定了。結果大半時間都在跟 Vercel 的安全機制吵架。",
+  "timeline": [
+    {
+      "hour": 11,
+      "state": "coding",
+      "vibe": "在磨像素。你知道嗎，有時候一個反光角度可以調一整晚。",
+      "commits": [
+        "feat(cafe): integrate Matomo tracking via Vercel proxy",
+        "feat(cafe): perpetual soundscape pipeline + first live recording",
+        "fix(cafe): serve audio assets via API route to bypass Vercel security checkpoint",
+        "fix(cafe): merge [file] + assets routes into [...path] catch-all",
+        "fix(cafe): resolve 'src' redeclaration in drawNpc causing SyntaxError",
+        "feat(cafe): spectral crossfade + convolution reverb for spatial audio",
+        "feat(cafe): Schafer soundscape classifier — keynote/signal/soundmark pool splitting",
+        "feat(cafe): CBCS soundscape engine with behavior-driven adaptive audio",
+        "feat(soundscape): adaptive overlap + granular fallback + smart recording",
+        "data(soundscape): initial CBCS units + manifest (12 units, 3 pools)"
+      ],
+      "intensity": 1
+    },
+    {
+      "hour": 12,
+      "state": "reading",
+      "vibe": "讀書中。紙本書有一種螢幕給不了的安靜。",
+      "commits": [
+        "fix(cafe): Cruz data panel reading from wrong JSON paths"
+      ],
+      "intensity": 0.2
+    },
+    {
+      "hour": 13,
+      "state": "coding",
+      "vibe": "在跟一個 bug 搏鬥。像水管漏水一樣，知道在漏，但找不到是哪根。",
+      "commits": [
+        "feat(cafe): user lifecycle nodes — scale entry sequence by visit tier",
+        "feat(cafe): AMBIENT + INTERACT lifecycle nodes — tier-aware sound + dynamic Cruz data",
+        "feat(cafe): IDLE, DEPART, RETURN lifecycle nodes — silent companion detection + graceful departure + return memory"
+      ],
+      "intensity": 0.6
+    },
+    {
+      "hour": 15,
+      "state": "playing",
+      "vibe": "彈了一會兒鋼琴。手指碰到琴鍵的觸感，跟打字完全不同。",
+      "commits": [
+        "feat(cafe): MVP Sprint 3 — dialogue tagging, barista memory, piano rare event",
+        "data(soundscape): add piano_fragment.mp3 + manifest metadata"
+      ],
+      "intensity": 0.4
+    },
+    {
+      "hour": 15,
+      "state": "coding",
+      "vibe": "在磨像素。你知道嗎，有時候一個反光角度可以調一整晚。",
+      "commits": [
+        "fix(cafe): align light bloom to Cruz position + apply 許像素 color spec",
+        "feat(cafe): cinematic multi-source lighting + real environment ambience",
+        "art(cafe): deep visual overhaul — windows, tiles, lighting, vignette",
+        "art(cafe): film grain + light leak + color grading post-process",
+        "fix(cafe): counter interaction from customer side + Edison lamp positions",
+        "feat(cafe): PixiJS 8 WebGL engine migration",
+        "fix(cafe): add engine-pixi.js to API route whitelist",
+        "fix(cafe): PixiJS texture caching bug + boot error surfacing",
+        "fix(cafe): brighten scene — replace sepia with warm tint + boost lights",
+        "fix(cafe): move lightLayer below entityLayer so Cruz isn't backlit",
+        "feat(cafe): redesign counter — split into surface + front panel",
+        "feat(cafe): cinematic upgrades — displacement glass, dual bloom, better steam",
+        "polish(cafe): improve chair + table tiles",
+        "polish(cafe): improve carpet tile",
+        "feat(cafe): The Armory Protocol — spell scroll prompt library",
+        "polish(cafe): improve bookshelf (The Grimoire)",
+        "polish(cafe): improve wood floor planks",
+        "polish(cafe): improve NPC sitting sprites",
+        "polish(cafe): improve chair tile",
+        "polish(cafe): Lo-Fi Optics — CSS film grain + tilt-shift + vignette",
+        "polish(cafe): improve carpet texture",
+        "feat(cafe): Vibe Coding Protocol — rewrite entire scroll system",
+        "polish(cafe): improve table with variants and wood detail",
+        "feat(cafe): mobile camera system — zoom-to-fill + follow player",
+        "feat(cafe): PWA support — add to home screen",
+        "fix(cafe): camera bugs — desktop resize + small-map clamp",
+        "polish(cafe): improve news wall — cork bulletin board with pinned notes",
+        "fix(cafe): mobile camera zoom-to-fill — eliminate black bars",
+        "fix(cafe): table variants actually work + softer mobile tilt-shift",
+        "fix(cafe): mobile camera show 9 rows — hide dead space at top",
+        "polish(cafe): improve doors — wood panel + steel war room",
+        "polish(cafe): fix carpet tile seams — remove per-tile fringe borders",
+        "polish(cafe): truly seamless carpet — remove per-tile center effects",
+        "polish(cafe): improve coat rack — standing rack with coat, scarf, umbrella",
+        "polish(cafe): improve window — 4-pane mullion + more rain detail",
+        "polish(cafe): improve NPC sprites — dark silhouette outline",
+        "polish(cafe): improve cat window — sitting cat silhouette watching rain",
+        "polish(cafe): improve counter front — brass foot rail + trim detail",
+        "polish(cafe): improve open sign — triple-pass neon glow effect",
+        "polish(cafe): improve clock tile",
+        "polish(cafe): improve coffee machine",
+        "polish(cafe): improve wall bricks",
+        "polish(cafe): improve Cruz's counter position"
+      ],
+      "intensity": 1
+    },
+    {
+      "hour": 23,
+      "state": "playing",
+      "vibe": "彈了一會兒鋼琴。手指碰到琴鍵的觸感，跟打字完全不同。",
+      "commits": [
+        "feat(cafe): add heartflow-to-lofi music pipeline"
+      ],
+      "intensity": 0.2
+    },
+    {
+      "hour": 23,
+      "state": "coding",
+      "vibe": "在跟一個 bug 搏鬥。像水管漏水一樣，知道在漏，但找不到是哪根。",
+      "commits": [
+        "polish(cafe): improve coffee machine sprite",
+        "polish(cafe): improve chair sprite",
+        "polish(cafe): improve cat sprite",
+        "polish(cafe): improve raindrop sprite",
+        "polish(cafe): improve ambient lighting passes",
+        "polish(cafe): improve player sprite",
+        "polish(cafe): improve Cruz wipe animation",
+        "polish(cafe): improve bookshelf grimoire glow"
+      ],
+      "intensity": 1
+    }
+  ],
+  "fragments": [
+    {
+      "trigger": "你在幹嘛",
+      "response": "我？昨天最後在弄的是「polish(cafe): improve bookshelf grimoire glow」。在跟一個 bug 搏鬥。像水管漏水一樣，知道在漏，但找不到是哪根。",
+      "mood": "coding"
+    },
+    {
+      "trigger": "有遇到什麼困難",
+      "response": "昨天搞到半夜才收工。有些東西就是要跟它耗，像磨一把刀，急不來的。你呢？今天有什麼卡住的事嗎？",
+      "mood": "reflective"
+    },
+    {
+      "trigger": "你好嗎",
+      "response": "還行。昨天進入了心流，一抬頭天就亮了。這種日子不多，要珍惜。",
+      "mood": "coding"
+    }
+  ]
+}
