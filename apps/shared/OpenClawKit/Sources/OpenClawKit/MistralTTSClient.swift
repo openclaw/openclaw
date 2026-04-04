@@ -85,22 +85,17 @@ public actor MistralTTSClient {
     }
 
     public func resolveVoiceId(requested: String, fallback: String? = nil) async throws -> String? {
-        if requested.isEmpty {
-            return fallback
-        }
-        
-        // Step 1: Already a UUID?
-        if requested.count >= 32 && requested.contains("-") {
+        // 1. Fail fast for empty input
+        guard !requested.isEmpty else { return fallback }        
+
+        // 2. If it's a valid UUID, return it immediately.
+        if UUID(uuidString: requested) != nil {
             return requested
         }
         
-        // Step 2: Slug match
+        // 3. Only fetch the list if we haven't found a UUID match
         let voices = try await self.listVoices()
-        if let matched = voices.first(where: { $0.slug == requested }) {
-            return matched.id
-        }
-        
-        return fallback
+        return voices.first { $0.slug == requested }?.id ?? fallback
     }
 
     public func listVoices() async throws -> [MistralTTSVoice] {
@@ -144,7 +139,7 @@ public actor MistralTTSClient {
     /// Returns an asynchronous stream of audio data.
     /// Note: Mistral TTS currently provides a single-shot response in JSON.
     /// This method wraps it in an AsyncThrowingStream for compatibility with streaming players.
-    public func streamSynthesize(voiceId: String?, request: MistralTTSRequest) -> AsyncThrowingStream<Data, Error> {
+    public func streamSynthesize(request: MistralTTSRequest) -> AsyncThrowingStream<Data, Error> {
         AsyncThrowingStream { continuation in
             Task {
                 do {

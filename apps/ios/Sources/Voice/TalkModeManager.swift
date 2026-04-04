@@ -87,7 +87,7 @@ final class TalkModeManager: NSObject {
     private var voiceAliases: [String: String] = [:]
     private var interruptOnSpeech: Bool = true
     private var mainSessionKey: String = "main"
-    private var fallbackVoiceId: String?
+    private var fallbackElevenLabsVoiceId: String?
     private var lastPlaybackWasPCM: Bool = false
     /// Set when the ElevenLabs API rejects PCM format (e.g. 403 subscription_required).
     /// Once set, all subsequent requests in this session use MP3 instead of re-trying PCM.
@@ -1042,7 +1042,7 @@ final class TalkModeManager: NSObject {
                     responseFormat: outputFormat)
                 
                 let client = self.getOrCreateMistralClient(apiKey: apiKey)
-                let rawStream = await client.streamSynthesize(voiceId: voiceId, request: request)
+                let rawStream = await client.streamSynthesize(request: request)
                 
                 if self.interruptOnSpeech {
                     do {
@@ -1688,7 +1688,7 @@ final class TalkModeManager: NSObject {
         if context.canUseMistral, let apiKey = context.apiKey {
             let request = self.makeMistralTTSRequest(text: text, context: context, outputFormat: context.outputFormat)
             let client = self.getOrCreateMistralClient(apiKey: apiKey)
-            let rawStream = await client.streamSynthesize(voiceId: context.voiceId, request: request)
+            let rawStream = await client.streamSynthesize(request: request)
             
             self.lastPlaybackWasPCM = false
             let result = await self.mp3Player.play(stream: rawStream)
@@ -2016,7 +2016,7 @@ extension TalkModeManager {
 
         if provider == "mistral" {
             let client = self.getOrCreateMistralClient(apiKey: apiKey)
-            return try? await client.resolveVoiceId(requested: trimmed, fallback: self.fallbackVoiceId ?? MistralTTSClient.defaultVoiceId)
+            return try? await client.resolveVoiceId(requested: trimmed, fallback: MistralTTSClient.defaultVoiceId)
         } else {
             return await resolveElevenLabsVoice(requested: trimmed, apiKey: apiKey)
         }
@@ -2032,7 +2032,7 @@ extension TalkModeManager {
     }
 
     private func resolveElevenLabsVoice(requested: String, apiKey: String) async -> String? {
-        if let fallbackVoiceId { return fallbackVoiceId }
+        if let fallbackElevenLabsVoiceId { return fallbackElevenLabsVoiceId }
 
         do {
             let voices = try await ElevenLabsTTSClient(apiKey: apiKey).listVoices()
@@ -2040,7 +2040,7 @@ extension TalkModeManager {
                 self.logger.warning("elevenlabs voices list empty")
                 return nil
             }
-            self.fallbackVoiceId = first.voiceId
+            self.fallbackElevenLabsVoiceId = first.voiceId
             if self.defaultVoiceId == nil {
                 self.defaultVoiceId = first.voiceId
             }
