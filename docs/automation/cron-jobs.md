@@ -75,6 +75,12 @@ For isolated jobs, runtime teardown now includes best-effort browser cleanup for
 - `--light-context`: skip workspace bootstrap file injection
 - `--tools exec,read`: restrict which tools the job can use
 
+`--model` uses the selected allowed model for that job. If the requested model
+is not allowed, cron logs a warning and falls back to the job's agent/default
+model selection instead. Configured fallback chains still apply, but a plain
+model override with no explicit per-job fallback list no longer appends the
+agent primary as a hidden extra retry target.
+
 ## Delivery and output
 
 | Mode       | What happens                                             |
@@ -281,6 +287,17 @@ openclaw cron remove <jobId>
 openclaw cron add --name "Ops sweep" --cron "0 6 * * *" --session isolated --message "Check ops queue" --agent ops
 openclaw cron edit <jobId> --clear-agent
 ```
+
+Model override note:
+
+- `openclaw cron add|edit --model ...` changes the job's selected model.
+- If the model is allowed, that exact provider/model reaches the isolated agent
+  run.
+- If it is not allowed, cron warns and falls back to the job's agent/default
+  model selection.
+- Configured fallback chains still apply, but a plain `--model` override with
+  no explicit per-job fallback list no longer falls through to the agent
+  primary as a silent extra retry target.
 
 ## Configuration
 

@@ -35,6 +35,12 @@ Note: `openclaw cron run` now returns as soon as the manual run is queued for ex
 Note: `openclaw cron run <job-id>` force-runs by default. Use `--due` to keep the
 older "only run if due" behavior.
 
+Note: `cron add|edit --model ...` uses that selected allowed model for the job.
+If the model is not allowed, cron warns and falls back to the job's agent/default
+model selection instead. Configured fallback chains still apply, but a plain
+model override with no explicit per-job fallback list no longer appends the
+agent primary as a hidden extra retry target.
+
 Note: failure notifications use `delivery.failureDestination` first, then
 global `cron.failureDestination`, and finally fall back to the job's primary
 announce target when no explicit failure destination is configured.
