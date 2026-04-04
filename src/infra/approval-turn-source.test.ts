@@ -26,12 +26,14 @@ describe("hasApprovalTurnSourceRoute", () => {
 
     expect(
       hasApprovalTurnSourceRoute({
+        approvalKind: "exec",
         turnSourceChannel: "slack",
         turnSourceAccountId: "work",
       }),
     ).toBe(true);
     expect(resolveExecApprovalInitiatingSurfaceStateMock).toHaveBeenCalledWith(
       expect.objectContaining({
+        approvalKind: "exec",
         channel: "slack",
         accountId: "work",
         cfg: { loaded: true },
@@ -41,14 +43,20 @@ describe("hasApprovalTurnSourceRoute", () => {
 
   it("returns false when the initiating surface is disabled or unsupported", () => {
     resolveExecApprovalInitiatingSurfaceStateMock.mockReturnValueOnce({ kind: "disabled" });
-    expect(hasApprovalTurnSourceRoute({ turnSourceChannel: "discord" })).toBe(false);
+    expect(hasApprovalTurnSourceRoute({ approvalKind: "exec", turnSourceChannel: "discord" })).toBe(
+      false,
+    );
 
     resolveExecApprovalInitiatingSurfaceStateMock.mockReturnValueOnce({ kind: "unsupported" });
-    expect(hasApprovalTurnSourceRoute({ turnSourceChannel: "unknown-channel" })).toBe(false);
+    expect(
+      hasApprovalTurnSourceRoute({ approvalKind: "exec", turnSourceChannel: "unknown-channel" }),
+    ).toBe(false);
   });
 
   it("returns false when there is no turn-source channel", () => {
-    expect(hasApprovalTurnSourceRoute({ turnSourceChannel: undefined })).toBe(false);
+    expect(
+      hasApprovalTurnSourceRoute({ approvalKind: "plugin", turnSourceChannel: undefined }),
+    ).toBe(false);
     expect(resolveExecApprovalInitiatingSurfaceStateMock).not.toHaveBeenCalled();
   });
 });

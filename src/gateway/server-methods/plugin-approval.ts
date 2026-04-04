@@ -96,6 +96,14 @@ export function createPluginApprovalHandlers(
         return;
       }
 
+      const hasTurnSourceRoute = hasApprovalTurnSourceRoute({
+        approvalKind: "plugin",
+        turnSourceChannel: record.request.turnSourceChannel,
+        turnSourceTo: record.request.turnSourceTo,
+        turnSourceAccountId: record.request.turnSourceAccountId,
+        sessionKey: record.request.sessionKey,
+      });
+
       let forwarded = false;
       if (opts?.forwarder?.handlePluginApprovalRequested) {
         try {
@@ -109,12 +117,6 @@ export function createPluginApprovalHandlers(
           context.logGateway?.error?.(`plugin approvals: forward request failed: ${String(err)}`);
         }
       }
-      const hasTurnSourceRoute = hasApprovalTurnSourceRoute({
-        turnSourceChannel: record.request.turnSourceChannel,
-        turnSourceTo: record.request.turnSourceTo,
-        turnSourceAccountId: record.request.turnSourceAccountId,
-        sessionKey: record.request.sessionKey,
-      });
       const shouldBroadcastApprovalClients = !(forwarded && !hasTurnSourceRoute);
       if (shouldBroadcastApprovalClients) {
         context.broadcast(

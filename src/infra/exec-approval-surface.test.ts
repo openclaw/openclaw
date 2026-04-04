@@ -279,6 +279,56 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
     });
   });
 
+  it("keeps plugin initiating surface enabled when exec approvals are targets-only", () => {
+    const cfg = {
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "targets",
+          targets: [{ channel: "telegram", to: "1234567890", accountId: "default" }],
+        },
+      },
+    };
+
+    expect(
+      resolveExecApprovalInitiatingSurfaceState({
+        approvalKind: "plugin",
+        channel: "bluebubbles",
+        sessionKey: "agent:main:bluebubbles:dm:+15555550123",
+        cfg: cfg as never,
+      }),
+    ).toEqual({
+      kind: "enabled",
+      channel: "bluebubbles",
+      channelLabel: "Bluebubbles",
+    });
+  });
+
+  it("keeps plugin fallback surface enabled when exec approvals are targets-only", () => {
+    const cfg = {
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "targets",
+          targets: [{ channel: "telegram", to: "1234567890", accountId: "default" }],
+        },
+      },
+    };
+
+    expect(
+      resolveExecApprovalInitiatingSurfaceState({
+        approvalKind: "plugin",
+        channel: undefined,
+        sessionKey: "agent:main:bluebubbles:dm:+15555550123",
+        cfg: cfg as never,
+      }),
+    ).toEqual({
+      kind: "enabled",
+      channel: undefined,
+      channelLabel: "this platform",
+    });
+  });
+
   it("keeps initiating surface enabled when forwarding mode is both", () => {
     const cfg = {
       approvals: {

@@ -18,6 +18,8 @@ export type ExecApprovalInitiatingSurfaceState =
   | { kind: "disabled"; channel: string; channelLabel: string }
   | { kind: "unsupported"; channel: string; channelLabel: string };
 
+type ApprovalKind = "exec" | "plugin";
+
 function labelForChannel(channel?: string): string {
   if (channel === "tui") {
     return "terminal UI";
@@ -104,6 +106,7 @@ export function resolveExecApprovalInitiatingSurfaceState(params: {
   accountId?: string | null;
   turnSourceTo?: string | null;
   sessionKey?: string | null;
+  approvalKind?: ApprovalKind;
   cfg?: OpenClawConfig;
 }): ExecApprovalInitiatingSurfaceState {
   const channel = normalizeMessageChannel(params.channel);
@@ -114,6 +117,7 @@ export function resolveExecApprovalInitiatingSurfaceState(params: {
     // means approvals should be handled by configured approval targets.
     if (
       !channel &&
+      (params.approvalKind ?? "exec") === "exec" &&
       shouldDisableInitiatingSurfaceForExecTargetsOnly({
         cfg,
         sessionKey: params.sessionKey,
@@ -126,6 +130,7 @@ export function resolveExecApprovalInitiatingSurfaceState(params: {
 
   // In explicit targets-only mode, keep approvals centralized in configured targets.
   if (
+    (params.approvalKind ?? "exec") === "exec" &&
     shouldDisableInitiatingSurfaceForExecTargetsOnly({
       cfg,
       sessionKey: params.sessionKey,

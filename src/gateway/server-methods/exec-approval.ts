@@ -182,6 +182,7 @@ export function createExecApprovalHandlers(
         return;
       }
       const hasTurnSourceRoute = hasApprovalTurnSourceRoute({
+        approvalKind: "exec",
         turnSourceChannel: record.request.turnSourceChannel,
         turnSourceTo: record.request.turnSourceTo,
         turnSourceAccountId: record.request.turnSourceAccountId,

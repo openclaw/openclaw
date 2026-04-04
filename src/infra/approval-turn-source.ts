@@ -2,6 +2,7 @@ import { loadConfig } from "../config/config.js";
 import { resolveExecApprovalInitiatingSurfaceState } from "./exec-approval-surface.js";
 
 export function hasApprovalTurnSourceRoute(params: {
+  approvalKind: "exec" | "plugin";
   turnSourceChannel?: string | null;
   turnSourceAccountId?: string | null;
   turnSourceTo?: string | null;
@@ -16,6 +17,7 @@ export function hasApprovalTurnSourceRoute(params: {
       accountId: params.turnSourceAccountId,
       turnSourceTo: params.turnSourceTo,
       sessionKey: params.sessionKey,
+      approvalKind: params.approvalKind,
       cfg: loadConfig(),
     }).kind === "enabled"
   );
