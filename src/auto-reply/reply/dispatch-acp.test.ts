@@ -1033,6 +1033,48 @@ describe("tryDispatchAcpReply", () => {
     expect(result?.queuedFinal).toBe(true);
   });
 
+  it("honors the configured default account for ACP projector chunking when AccountId is omitted", async () => {
+    setReadyAcpResolution();
+    const cfg = createAcpTestConfig({
+      channels: {
+        discord: {
+          defaultAccount: "work",
+          accounts: {
+            work: {
+              textChunkLimit: 5,
+            },
+          },
+        },
+      },
+    });
+    managerMocks.runTurn.mockImplementation(
+      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+        await onEvent({ type: "text_delta", text: "abcdef", tag: "agent_message_chunk" });
+        await onEvent({ type: "done" });
+      },
+    );
+
+    const { dispatcher } = createDispatcher();
+    await runDispatch({
+      bodyForAgent: "reply",
+      cfg,
+      dispatcher,
+      ctxOverrides: {
+        Provider: "discord",
+        Surface: "discord",
+      },
+    });
+
+    expect(dispatcher.sendBlockReply).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ text: "abcde" }),
+    );
+    expect(dispatcher.sendBlockReply).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ text: "f" }),
+    );
+  });
+
   it("does not add text fallback when final TTS already delivered audio", async () => {
     setReadyAcpResolution();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });

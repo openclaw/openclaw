@@ -8,6 +8,7 @@ import { lineChannelPluginCommon } from "./channel-shared.js";
 import { lineGatewayAdapter } from "./gateway.js";
 import { resolveLineGroupRequireMention } from "./group-policy.js";
 import { lineOutboundAdapter } from "./outbound.js";
+import { hasLineDirectives, parseLineDirectives } from "./reply-payload-transform.js";
 import { getLineRuntime } from "./runtime.js";
 import { pushMessageLine } from "./send.js";
 import { lineSetupAdapter } from "./setup-core.js";
@@ -74,6 +75,12 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelP
       },
       resolveInboundConversation: ({ to, conversationId }) =>
         resolveLineInboundConversation({ to, conversationId }),
+      transformReplyPayload: ({ payload }) => {
+        if (!payload.text || !hasLineDirectives(payload.text)) {
+          return payload;
+        }
+        return parseLineDirectives(payload);
+      },
       targetResolver: {
         looksLikeId: (id) => {
           const trimmed = id?.trim();

@@ -16,6 +16,10 @@ For model selection rules, see [/concepts/models](/concepts/models).
 - Model refs use `provider/model` (example: `opencode/claude-opus-4-6`).
 - If you set `agents.defaults.models`, it becomes the allowlist.
 - CLI helpers: `openclaw onboard`, `openclaw models list`, `openclaw models set <provider/model>`.
+- Fallback runtime rules, cooldown probes, and session-override persistence are
+  documented in [/concepts/model-failover](/concepts/model-failover).
+- `models.providers.*.models[].contextWindow` is native model metadata;
+  `models.providers.*.models[].contextTokens` is the effective runtime cap.
 - Provider plugins can inject model catalogs via `registerProvider({ catalog })`;
   OpenClaw merges that output into `models.providers` before writing
   `models.json`.
@@ -165,7 +169,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Example model: `anthropic/claude-opus-4-6`
 - CLI: `openclaw onboard --auth-choice token` (paste setup-token) or `openclaw models auth paste-token --provider anthropic`
 - Direct public Anthropic requests support the shared `/fast` toggle and `params.fastMode`, including API-key and OAuth-authenticated traffic sent to `api.anthropic.com`; OpenClaw maps that to Anthropic `service_tier` (`auto` vs `standard_only`)
-- Policy note: setup-token support is technical compatibility; Anthropic has blocked some subscription usage outside Claude Code in the past. Verify current Anthropic terms and decide based on your risk tolerance.
+- Billing note: Anthropic changed third-party harness billing on **April 4, 2026 at 12:00 PM PT / 8:00 PM BST**. Anthropic says Claude subscription limits no longer cover OpenClaw, and subscription-auth traffic now requires **Extra Usage** billed separately from the subscription.
 - Recommendation: Anthropic API key auth is the safer, recommended path over subscription setup-token auth.
 
 ```json5
@@ -185,6 +189,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - `params.serviceTier` is also forwarded on native Codex Responses requests (`chatgpt.com/backend-api`)
 - Shares the same `/fast` toggle and `params.fastMode` config as direct `openai/*`; OpenClaw maps that to `service_tier=priority`
 - `openai-codex/gpt-5.3-codex-spark` remains available when the Codex OAuth catalog exposes it; entitlement-dependent
+- `openai-codex/gpt-5.4` keeps native `contextWindow = 1050000` and a default runtime `contextTokens = 272000`; override the runtime cap with `models.providers.openai-codex.models[].contextTokens`
 - Policy note: OpenAI Codex OAuth is explicitly supported for external tools/workflows like OpenClaw.
 
 ```json5
@@ -192,6 +197,24 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
   agents: { defaults: { model: { primary: "openai-codex/gpt-5.4" } } },
 }
 ```
+
+```json5
+{
+  models: {
+    providers: {
+      "openai-codex": {
+        models: [{ id: "gpt-5.4", contextTokens: 160000 }],
+      },
+    },
+  },
+}
+```
+
+### Other subscription-style hosted options
+
+- [Qwen / Model Studio](/providers/qwen_modelstudio): Alibaba Cloud Standard pay-as-you-go and Coding Plan subscription endpoints
+- [MiniMax](/providers/minimax): MiniMax Coding Plan OAuth or API key access
+- [GLM Models](/providers/glm): Z.AI Coding Plan or general API endpoints
 
 ### OpenCode
 

@@ -115,7 +115,10 @@ const hoisted = vi.hoisted(() => {
         plugin: {
           id: threadChannel,
           meta: {},
-          config: { hasPersistedAuthState: () => false },
+          config: {
+            hasPersistedAuthState: () => false,
+            defaultAccountId: () => "default",
+          },
           bindings: { resolveCommandConversation: resolveThreadCommandConversation },
         },
       },
@@ -123,7 +126,10 @@ const hoisted = vi.hoisted(() => {
         plugin: {
           id: roomChannel,
           meta: {},
-          config: { hasPersistedAuthState: () => false },
+          config: {
+            hasPersistedAuthState: () => false,
+            defaultAccountId: () => "default",
+          },
           conversationBindings: { defaultTopLevelPlacement: "child" },
           bindings: { resolveCommandConversation: resolveRoomCommandConversation },
         },
@@ -132,7 +138,10 @@ const hoisted = vi.hoisted(() => {
         plugin: {
           id: topicChannel,
           meta: {},
-          config: { hasPersistedAuthState: () => false },
+          config: {
+            hasPersistedAuthState: () => false,
+            defaultAccountId: () => "default",
+          },
           conversationBindings: { defaultTopLevelPlacement: "current" },
           bindings: { resolveCommandConversation: resolveTopicCommandConversation },
         },
@@ -227,7 +236,10 @@ function createThreadCommandParams(commandBody: string) {
   return params;
 }
 
-function createThreadCommandParamsWithoutAccountId(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+function createThreadCommandParamsWithoutAccountId(
+  commandBody: string,
+  cfg: OpenClawConfig = baseCfg,
+) {
   const params = buildCommandTestParams(commandBody, cfg, {
     Provider: THREAD_CHANNEL,
     Surface: THREAD_CHANNEL,
@@ -689,7 +701,7 @@ describe("/focus, /unfocus, /agents", () => {
   });
 
   it("/agents honors the plugin default account when AccountId is omitted", async () => {
-    hoisted.runtimeChannelRegistry.channels[0]!.plugin.config.defaultAccountId = () => "work";
+    hoisted.runtimeChannelRegistry.channels[0].plugin.config.defaultAccountId = () => "work";
     addSubagentRunForTests({
       runId: "run-work-1",
       childSessionKey: "agent:main:subagent:work-1",

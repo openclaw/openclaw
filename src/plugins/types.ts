@@ -313,7 +313,9 @@ export type ProviderPluginCatalog = {
  * Runtime hooks below operate on the final `pi-ai` model object after
  * discovery/override merging, just before inference runs.
  */
-export type ProviderRuntimeModel = Model<Api>;
+export type ProviderRuntimeModel = Model<Api> & {
+  contextTokens?: number;
+};
 
 export type ProviderRuntimeProviderConfig = {
   baseUrl?: string;
@@ -2000,6 +2002,10 @@ export type PluginHookAgentContext = {
   sessionKey?: string;
   sessionId?: string;
   workspaceDir?: string;
+  /** Resolved model provider for this run (for example "openai"). */
+  modelProviderId?: string;
+  /** Resolved model id for this run (for example "gpt-5.4"). */
+  modelId?: string;
   messageProvider?: string;
   /** What initiated this agent run: "user", "heartbeat", "cron", or "memory". */
   trigger?: string;

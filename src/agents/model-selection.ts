@@ -6,8 +6,10 @@ import {
   toAgentModelListLike,
 } from "../config/model-input.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { normalizeGoogleModelId } from "../plugin-sdk/google-model-id.js";
-import { normalizeXaiModelId } from "../plugin-sdk/xai-model-id.js";
+import {
+  normalizeGooglePreviewModelId,
+  normalizeNativeXaiModelId,
+} from "../plugin-sdk/provider-model-shared.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import {
   resolveAgentConfig,
@@ -142,7 +144,7 @@ function normalizeProviderModelId(provider: string, model: string): string {
     return normalizeAnthropicModelId(model);
   }
   if (provider === "google" || provider === "google-vertex") {
-    return normalizeGoogleModelId(model);
+    return normalizeGooglePreviewModelId(model);
   }
   if (provider === "openai") {
     return model;
@@ -151,7 +153,7 @@ function normalizeProviderModelId(provider: string, model: string): string {
     return model.includes("/") ? model : `openrouter/${model}`;
   }
   if (provider === "xai") {
-    return normalizeXaiModelId(model);
+    return normalizeNativeXaiModelId(model);
   }
   if (provider === "vercel-ai-gateway" && !model.includes("/")) {
     // Allow Vercel-specific Claude refs without an upstream prefix.

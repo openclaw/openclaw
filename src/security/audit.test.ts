@@ -2,11 +2,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { collectDiscordSecurityAuditFindings } from "../../extensions/discord/api.js";
-import { collectSlackSecurityAuditFindings } from "../../extensions/slack/api.js";
-import { collectSynologyChatSecurityAuditFindings } from "../../extensions/synology-chat/api.js";
-import { collectTelegramSecurityAuditFindings } from "../../extensions/telegram/api.js";
-import { collectZalouserSecurityAuditFindings } from "../../extensions/zalouser/api.js";
+import {
+  collectDiscordSecurityAuditFindings,
+  collectSlackSecurityAuditFindings,
+  collectSynologyChatSecurityAuditFindings,
+  collectTelegramSecurityAuditFindings,
+  collectZalouserSecurityAuditFindings,
+} from "../../test/helpers/channels/security-audit-contract.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { saveExecApprovals } from "../infra/exec-approvals.js";
