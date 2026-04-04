@@ -686,6 +686,11 @@ Subcommands:
 - `pairing approve <channel> <code> [--account <id>] [--notify]`
 - `pairing approve --channel <channel> [--account <id>] <code> [--notify]`
 
+Notes:
+
+- If exactly one pairing-capable channel is configured, `pairing approve <code>` is also allowed.
+- `list` and `approve` both support `--account <id>` for multi-account channels.
+
 ### `devices`
 
 Manage gateway device pairing entries and per-role device tokens.
@@ -699,6 +704,12 @@ Subcommands:
 - `devices clear --yes [--pending]`
 - `devices rotate --device <id> --role <role> [--scope <scope...>]`
 - `devices revoke --device <id> --role <role>`
+
+Notes:
+
+- `devices list` and `devices approve` can fall back to local pairing files on local loopback when direct pairing scope is unavailable.
+- `devices approve` auto-selects the newest pending request when no `requestId` is passed or `--latest` is set.
+- `devices rotate` and `devices revoke` return JSON payloads.
 
 ### `hooks`
 
@@ -745,7 +756,13 @@ Wide-area discovery DNS helper (CoreDNS + Tailscale). See [/gateway/discovery](/
 
 Options:
 
+- `--domain <domain>`
 - `--apply`: install/update CoreDNS config (requires sudo; macOS only).
+
+Notes:
+
+- Without `--apply`, this is a planning helper that prints the recommended OpenClaw + Tailscale DNS config.
+- `--apply` currently supports macOS with Homebrew CoreDNS only.
 
 ## Messaging + agent
 
