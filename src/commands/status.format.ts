@@ -21,9 +21,6 @@ export const formatTokensCompact = (
 ) => {
   const used = sess.totalTokens;
   const ctx = sess.contextTokens;
-  const cacheRead = sess.cacheRead;
-  const cacheWrite = sess.cacheWrite;
-  const inputTokens = sess.inputTokens;
 
   let result = "";
   if (used == null) {
@@ -75,10 +72,13 @@ function resolvePromptCacheStats(
     return null;
   }
   const inputTokens =
-    typeof sess.inputTokens === "number" && Number.isFinite(sess.inputTokens) && sess.inputTokens >= 0
+    typeof sess.inputTokens === "number" &&
+    Number.isFinite(sess.inputTokens) &&
+    sess.inputTokens >= 0
       ? sess.inputTokens
       : undefined;
-  const promptTokensFromParts = inputTokens != null ? inputTokens + cacheRead + cacheWrite : undefined;
+  const promptTokensFromParts =
+    inputTokens != null ? inputTokens + cacheRead + cacheWrite : undefined;
   const used = sess.totalTokens;
   // Legacy entries can carry an undersized totalTokens value. Keep the cache
   // denominator aligned with the prompt-side token fields when available, and
