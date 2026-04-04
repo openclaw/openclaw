@@ -14,7 +14,7 @@ import {
   describeInterpreterInlineEval,
   detectInterpreterInlineEvalArgv,
 } from "../infra/exec-inline-eval.js";
-import { detectCommandObfuscation } from "../infra/exec-obfuscation-detect.js";
+import { detectCommandObfuscation, OBFUSCATION_NOT_DETECTED } from "../infra/exec-obfuscation-detect.js";
 import { buildNodeShellCommand } from "../infra/node-shell.js";
 import { parsePreparedSystemRunPayload } from "../infra/system-run-approval-context.js";
 import { logInfo } from "../logger.js";
@@ -197,7 +197,7 @@ export async function executeNodeHostCommand(
   const obfuscation =
     params.obfuscationCheck !== false
       ? detectCommandObfuscation(params.command)
-      : { detected: false, reasons: [] as string[], matchedPatterns: [] as string[] };
+      : OBFUSCATION_NOT_DETECTED;
   if (obfuscation.detected) {
     logInfo(
       `exec: obfuscation detected (node=${nodeQuery ?? "default"}): ${obfuscation.reasons.join(", ")}`,

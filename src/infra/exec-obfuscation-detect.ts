@@ -11,6 +11,13 @@ export type ObfuscationDetection = {
   matchedPatterns: string[];
 };
 
+/** Pre-built result for when obfuscation detection is skipped or not applicable. */
+export const OBFUSCATION_NOT_DETECTED: Readonly<ObfuscationDetection> = {
+  detected: false,
+  reasons: [],
+  matchedPatterns: [],
+};
+
 type ObfuscationPattern = {
   id: string;
   description: string;

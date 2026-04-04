@@ -83,12 +83,21 @@ vi.mock("../infra/exec-inline-eval.js", () => ({
   detectInterpreterInlineEvalArgv: vi.fn(() => null),
 }));
 
+const detectCommandObfuscationMock = vi.hoisted(() =>
+  vi.fn(() => ({
+    detected: false,
+    reasons: [] as string[],
+    matchedPatterns: [] as string[],
+  })),
+);
+
 vi.mock("../infra/exec-obfuscation-detect.js", () => ({
-  detectCommandObfuscation: vi.fn(() => ({
+  detectCommandObfuscation: detectCommandObfuscationMock,
+  OBFUSCATION_NOT_DETECTED: {
     detected: false,
     reasons: [],
     matchedPatterns: [],
-  })),
+  },
 }));
 
 let processGatewayAllowlist: typeof import("./bash-tools.exec-host-gateway.js").processGatewayAllowlist;
@@ -99,6 +108,12 @@ describe("processGatewayAllowlist", () => {
   });
 
   beforeEach(() => {
+    detectCommandObfuscationMock.mockReset();
+    detectCommandObfuscationMock.mockReturnValue({
+      detected: false,
+      reasons: [],
+      matchedPatterns: [],
+    });
     buildExecApprovalPendingToolResultMock.mockReset();
     buildExecApprovalFollowupTargetMock.mockReset();
     buildExecApprovalFollowupTargetMock.mockReturnValue(null);
@@ -249,5 +264,46 @@ describe("processGatewayAllowlist", () => {
         sessionKey: "agent:main:telegram:direct:123",
       }),
     );
+  });
+
+  it("skips obfuscation detection when obfuscationCheck is false", async () => {
+    await processGatewayAllowlist({
+      command: "echo ok",
+      workdir: process.cwd(),
+      env: process.env as Record<string, string>,
+      pty: false,
+      defaultTimeoutSec: 30,
+      security: "allowlist",
+      ask: "off",
+      safeBins: new Set(),
+      safeBinProfiles: {},
+      warnings: [],
+      approvalRunningNoticeMs: 0,
+      maxOutput: 1000,
+      pendingMaxOutput: 1000,
+      obfuscationCheck: false,
+    });
+
+    expect(detectCommandObfuscationMock).not.toHaveBeenCalled();
+  });
+
+  it("runs obfuscation detection by default when obfuscationCheck is not set", async () => {
+    await processGatewayAllowlist({
+      command: "echo ok",
+      workdir: process.cwd(),
+      env: process.env as Record<string, string>,
+      pty: false,
+      defaultTimeoutSec: 30,
+      security: "allowlist",
+      ask: "off",
+      safeBins: new Set(),
+      safeBinProfiles: {},
+      warnings: [],
+      approvalRunningNoticeMs: 0,
+      maxOutput: 1000,
+      pendingMaxOutput: 1000,
+    });
+
+    expect(detectCommandObfuscationMock).toHaveBeenCalledWith("echo ok");
   });
 });
