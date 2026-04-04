@@ -10,7 +10,7 @@ import {
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
-import { logModelApiRequest, logModelApiResponse } from "../../../infra/model-api-log.js";
+import { isModelApiInfoEnabled, logModelApiRequest, logModelApiResponse } from "../../../infra/model-api-log.js";
 import {
   ensureGlobalUndiciEnvProxyDispatcher,
   ensureGlobalUndiciStreamTimeouts,
@@ -1654,7 +1654,7 @@ export async function runEmbeddedAttempt(
 
           // Only pass images option if there are actually images to pass
           // This avoids potential issues with models that don't expect the images parameter
-          logModelApiRequest({
+          if (isModelApiInfoEnabled()) logModelApiRequest({
             runId: params.runId,
             provider: params.provider,
             model: params.modelId,
@@ -1742,7 +1742,7 @@ export async function runEmbeddedAttempt(
           // Only emit the response log if we actually reached the model API call.
           // modelCallStartedAt remains 0 when an earlier step (e.g. image loading)
           // throws before the call site — in that case there is no API response to log.
-          if (modelCallStartedAt > 0) {
+          if (modelCallStartedAt > 0 && isModelApiInfoEnabled()) {
             const modelCallDurationMs = Date.now() - modelCallStartedAt;
             const responseChars =
               assistantTexts.reduce((sum, t) => sum + t.length, 0) +

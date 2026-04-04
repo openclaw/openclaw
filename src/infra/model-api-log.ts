@@ -22,6 +22,11 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const log = createSubsystemLogger("model/api");
 
+/** Returns true when INFO-level model/api logging is active. Use to skip expensive payload sizing. */
+export function isModelApiInfoEnabled(): boolean {
+  return log.isEnabled("info");
+}
+
 /** Convert a character count to a human-readable KB string (1 decimal place). */
 export function charsToKbString(chars: number): string {
   return `${(chars / 1024).toFixed(1)} KB`;

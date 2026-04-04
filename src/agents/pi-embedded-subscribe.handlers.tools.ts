@@ -7,6 +7,7 @@ import {
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
+import { isModelApiInfoEnabled } from "../../infra/model-api-log.js";
 import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
 import { isMessagingTool, isMessagingToolSendAction } from "./pi-embedded-messaging.js";
 import type {
@@ -52,8 +53,9 @@ function isCronAddAction(args: unknown): boolean {
 function buildToolCallSummary(toolName: string, args: unknown, meta?: string): ToolCallSummary {
   const mutation = buildToolMutationState(toolName, args, meta);
   // Estimate serialized argument size for payload-size telemetry.
+  // Only compute when INFO logging is active to avoid JSON.stringify on every tool call.
   let argChars: number | undefined;
-  if (args != null) {
+  if (args != null && isModelApiInfoEnabled()) {
     argChars = typeof args === "string" ? args.length : JSON.stringify(args).length;
   }
   return {
