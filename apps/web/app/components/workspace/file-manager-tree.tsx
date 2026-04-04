@@ -55,9 +55,6 @@ export type TreeNode = {
   };
 };
 
-/** Folder names reserved for virtual sections -- cannot be created/renamed to. */
-const RESERVED_FOLDER_NAMES = new Set(["Chats", "Skills", "Memories"]);
-
 /** Check if a node (or any of its ancestors) is virtual. */
 function isVirtualNode(node: TreeNode): boolean {
   return !!node.virtual || isVirtualPath(node.path);
@@ -1074,12 +1071,6 @@ export function FileManagerTree({ tree, activePath, onSelect, onRefresh, compact
   const handleCommitRename = useCallback(
     async (newName: string) => {
       if (!renamingPath) {return;}
-      // Block reserved folder names
-      if (RESERVED_FOLDER_NAMES.has(newName)) {
-        alert(`"${newName}" is a reserved name and cannot be used.`);
-        setRenamingPath(null);
-        return;
-      }
       const result = await apiRename(renamingPath, newName);
       setRenamingPath(null);
       if (result.ok) {onRefresh();}
@@ -1103,12 +1094,6 @@ export function FileManagerTree({ tree, activePath, onSelect, onRefresh, compact
   const handleNewItemSubmit = useCallback(
     async (name: string) => {
       if (!newItemPrompt || !name) {return;}
-
-      // Block reserved folder names
-      if (RESERVED_FOLDER_NAMES.has(name)) {
-        alert(`"${name}" is a reserved name and cannot be used.`);
-        return;
-      }
 
       const fullPath = newItemPrompt.parentPath ? `${newItemPrompt.parentPath}/${name}` : name;
 
