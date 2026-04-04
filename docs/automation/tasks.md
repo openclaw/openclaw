@@ -27,6 +27,9 @@ Not every agent run creates a task. Heartbeat turns and normal interactive chat 
 - Each task moves through `queued → running → terminal` (succeeded, failed, timed_out, cancelled, or lost).
 - Cron tasks stay live while the cron runtime still owns the job; chat-backed CLI tasks stay live only while their owning run context is still active.
 - Isolated cron runs and subagent completions best-effort clean up tracked browser tabs/processes for their child session before final cleanup bookkeeping.
+- Isolated cron delivery suppresses stale interim parent replies while
+  descendant subagent work is still draining, and it prefers final descendant
+  output when that arrives before delivery.
 - Completion notifications are delivered directly to a channel or queued for the next heartbeat.
 - `openclaw tasks list` shows all tasks; `openclaw tasks audit` surfaces issues.
 - Terminal records are kept for 7 days, then automatically pruned.
@@ -210,6 +213,8 @@ Completion cleanup is also runtime-aware:
 
 - Subagent completion best-effort closes tracked browser tabs/processes for the child session before announce cleanup continues.
 - Isolated cron completion best-effort closes tracked browser tabs/processes for the cron session before the run fully tears down.
+- Isolated cron delivery waits out descendant subagent follow-up when needed and
+  suppresses stale parent acknowledgement text instead of announcing it.
 - Cleanup failures do not mask the real task outcome.
 
 ### `tasks flow list|show|cancel`

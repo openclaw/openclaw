@@ -37,6 +37,11 @@ openclaw cron runs --id <job-id>
 - All cron executions create [background task](/automation/tasks) records.
 - One-shot jobs (`--at`) auto-delete after success by default.
 - Isolated cron runs best-effort close tracked browser tabs/processes for their `cron:<jobId>` session when the run completes, so detached browser automation does not leave orphaned processes behind.
+- Isolated cron runs also guard against stale acknowledgement replies. If the
+  first result is just an interim status update (`on it`, `pulling everything
+together`, and similar hints) and no descendant subagent run is still
+  responsible for the final answer, OpenClaw re-prompts once for the actual
+  result before delivery.
 
 Task reconciliation for cron is runtime-owned: an active cron task stays live while the
 cron runtime still tracks that job as running, even if an old child session row still exists.
@@ -67,6 +72,10 @@ Recurring top-of-hour expressions are automatically staggered by up to 5 minutes
 **Main session** jobs enqueue a system event and optionally wake the heartbeat (`--wake now` or `--wake next-heartbeat`). **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
 
 For isolated jobs, runtime teardown now includes best-effort browser cleanup for that cron session. Cleanup failures are ignored so the actual cron result still wins.
+
+When isolated cron runs orchestrate subagents, delivery also prefers the final
+descendant output over stale parent interim text. If descendants are still
+running, OpenClaw suppresses that partial parent update instead of announcing it.
 
 ### Payload options for isolated jobs
 
