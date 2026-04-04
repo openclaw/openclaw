@@ -84,6 +84,8 @@ Tool params:
 - `model?` (optional; overrides the sub-agent model; invalid values are skipped and the sub-agent runs on the default model with a warning in the tool result)
 - `thinking?` (optional; overrides thinking level for the sub-agent run)
 - `runTimeoutSeconds?` (defaults to `agents.defaults.subagents.runTimeoutSeconds` when set, otherwise `0`; when set, the sub-agent run is aborted after N seconds)
+- `announceTimeoutMs?` (defaults to `agents.defaults.subagents.announceTimeoutMs`, default: 90000ms; controls how long the announce step waits before giving up)
+- `streamTo?` (`"parent"` — streams output to parent in real-time instead of waiting for announce)
 - `thread?` (default `false`; when `true`, requests channel thread binding for this sub-agent session)
 - `mode?` (`run|session`)
   - default is `run`
@@ -141,7 +143,7 @@ Auto-archive:
 - `cleanup: "delete"` archives immediately after announce (still keeps the transcript via rename).
 - Auto-archive is best-effort; pending timers are lost if the gateway restarts.
 - `runTimeoutSeconds` does **not** auto-archive; it only stops the run. The session remains until auto-archive.
-- Auto-archive applies equally to depth-1 and depth-2 sessions.
+- Auto-archive applies to sub-agent sessions at any depth.
 
 ## Nested Sub-Agents
 
@@ -171,6 +173,9 @@ By default, sub-agents cannot spawn their own sub-agents (`maxSpawnDepth: 1`). Y
 | 0     | `agent:<id>:main`                            | Main agent                                    | Always                       |
 | 1     | `agent:<id>:subagent:<uuid>`                 | Sub-agent (orchestrator when depth 2 allowed) | Only if `maxSpawnDepth >= 2` |
 | 2     | `agent:<id>:subagent:<uuid>:subagent:<uuid>` | Sub-sub-agent (leaf worker)                   | Never                        |
+| 3-5   | `agent:<id>:subagent:...:subagent:...`        | Deep sub-agents                               | Only if `maxSpawnDepth > current depth` |
+
+Note: `maxSpawnDepth` supports 1-5 per config schema. Spawning is allowed when `maxSpawnDepth > current depth`.
 
 ### Announce chain
 
@@ -187,7 +192,7 @@ Each level only sees announces from its direct children.
 - Role and control scope are written into session metadata at spawn time. That keeps flat or restored session keys from accidentally regaining orchestrator privileges.
 - **Depth 1 (orchestrator, when `maxSpawnDepth >= 2`)**: Gets `sessions_spawn`, `subagents`, `sessions_list`, `sessions_history` so it can manage its children. Other session/system tools remain denied.
 - **Depth 1 (leaf, when `maxSpawnDepth == 1`)**: No session tools (current default behavior).
-- **Depth 2 (leaf worker)**: No session tools — `sessions_spawn` is always denied at depth 2. Cannot spawn further children.
+- **Depth 2 (leaf worker)**: No session tools — `sessions_spawn` is denied at depth 2 unless `maxSpawnDepth >= 3`. Cannot spawn further children when `maxSpawnDepth == 2`.
 
 ### Per-agent spawn limit
 
@@ -242,14 +247,13 @@ Announce payloads include a stats line at the end (even when wrapped):
 
 ## Tool Policy (sub-agent tools)
 
-By default, sub-agents get **all tools except session tools** and system tools:
-
+By default, sub-agents get **all tools except session tools and system tools**. The denied session tools are:
 - `sessions_list`
 - `sessions_history`
 - `sessions_send`
 - `sessions_spawn`
 
-When `maxSpawnDepth >= 2`, depth-1 orchestrator sub-agents additionally receive `sessions_spawn`, `subagents`, `sessions_list`, and `sessions_history` so they can manage their children.
+When `maxSpawnDepth >= 2`, depth-1 orchestrator sub-agents additionally receive `sessions_spawn`, `subagents`, `sessions_list`, and `sessions_history` so they can manage their children. Note that `sessions_send` remains denied at all depths even for orchestrators.
 
 Override via config:
 
