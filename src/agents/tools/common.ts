@@ -26,10 +26,22 @@ export const OWNER_ONLY_TOOL_ERROR = "Tool restricted to owner senders.";
 
 export class ToolInputError extends Error {
   readonly status: number = 400;
+  readonly help?: string;
 
-  constructor(message: string) {
+  constructor(message: string, help?: string) {
     super(message);
     this.name = "ToolInputError";
+    this.help = help;
+  }
+
+  /**
+   * Format error with optional help text for self-debugging
+   */
+  toUserMessage(): string {
+    if (this.help) {
+      return `${this.message}\n\n💡 ${this.help}`;
+    }
+    return this.message;
   }
 }
 
