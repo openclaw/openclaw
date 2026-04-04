@@ -8,7 +8,7 @@ const RUNTIME_SHIMS: Partial<Record<string, string>> = {
     "  hasConfiguredSecretInput,",
     "  normalizeResolvedSecretInputString,",
     "  normalizeSecretInputString,",
-    '} from "./config-runtime.js";',
+    '} from "./secret-input.js";',
     "",
   ].join("\n"),
   "webhook-path": [
@@ -51,7 +51,7 @@ const TYPE_SHIMS: Partial<Record<string, string>> = {
     "  hasConfiguredSecretInput,",
     "  normalizeResolvedSecretInputString,",
     "  normalizeSecretInputString,",
-    '} from "./config-runtime.js";',
+    '} from "./secret-input.js";',
     "",
   ].join("\n"),
 };
