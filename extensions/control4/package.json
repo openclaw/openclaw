@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/control4",
+  "version": "2026.3.30",
+  "private": true,
+  "description": "Control4 home automation plugin for OpenClaw",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.49"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

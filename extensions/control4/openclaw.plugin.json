@@ -1,0 +1,11 @@
+{
+  "id": "control4",
+  "name": "Control4",
+  "description": "Control4 home automation integration",
+  "skills": ["./skills"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
