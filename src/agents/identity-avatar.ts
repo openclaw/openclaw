@@ -24,7 +24,17 @@ function normalizeAvatarValue(value: string | undefined | null): string | null {
   return trimmed ? trimmed : null;
 }
 
-function resolveAvatarSource(cfg: OpenClawConfig, agentId: string): string | null {
+function resolveAvatarSource(
+  cfg: OpenClawConfig,
+  agentId: string,
+  opts?: { includeUiOverride?: boolean },
+): string | null {
+  if (opts?.includeUiOverride) {
+    const fromUiConfig = normalizeAvatarValue(cfg.ui?.assistant?.avatar);
+    if (fromUiConfig) {
+      return fromUiConfig;
+    }
+  }
   const fromConfig = normalizeAvatarValue(resolveAgentIdentity(cfg, agentId)?.avatar);
   if (fromConfig) {
     return fromConfig;
@@ -73,8 +83,12 @@ function resolveLocalAvatarPath(params: {
   return { ok: true, filePath: realPath };
 }
 
-export function resolveAgentAvatar(cfg: OpenClawConfig, agentId: string): AgentAvatarResolution {
-  const source = resolveAvatarSource(cfg, agentId);
+export function resolveAgentAvatar(
+  cfg: OpenClawConfig,
+  agentId: string,
+  opts?: { includeUiOverride?: boolean },
+): AgentAvatarResolution {
+  const source = resolveAvatarSource(cfg, agentId, opts);
   if (!source) {
     return { kind: "none", reason: "missing" };
   }
