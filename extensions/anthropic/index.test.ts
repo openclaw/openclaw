@@ -3,6 +3,18 @@ import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-
 import anthropicPlugin from "./index.js";
 
 describe("anthropic provider replay hooks", () => {
+  it("owns native reasoning output mode for Claude transports", () => {
+    const provider = registerSingleProviderPlugin(anthropicPlugin);
+
+    expect(
+      provider.resolveReasoningOutputMode?.({
+        provider: "anthropic",
+        modelApi: "anthropic-messages",
+        modelId: "claude-sonnet-4-6",
+      } as never),
+    ).toBe("native");
+  });
+
   it("owns replay policy for Claude transports", () => {
     const provider = registerSingleProviderPlugin(anthropicPlugin);
 

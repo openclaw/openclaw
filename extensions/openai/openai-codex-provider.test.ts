@@ -87,6 +87,18 @@ describe("openai codex provider", () => {
     );
   });
 
+  it("owns native reasoning output mode for Codex responses", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    expect(
+      provider.resolveReasoningOutputMode?.({
+        provider: "openai-codex",
+        modelApi: "openai-codex-responses",
+        modelId: "gpt-5.4",
+      } as never),
+    ).toBe("native");
+  });
+
   it("resolves gpt-5.4 with native contextWindow plus default contextTokens cap", () => {
     const provider = buildOpenAICodexProviderPlugin();
 
