@@ -1,1 +1,1 @@
-First App Store release of OpenClaw for iPhone. Pair with your OpenClaw Gateway to use chat, voice, sharing, and device actions from iOS.
+First App Store release of VeriClaw 爪印. Pair it with your OpenClaw Gateway to review suspicious bot output, capture evidence, and send role-aware correction follow-up from iPhone.

@@ -1,0 +1,31 @@
+{
+  "name": "freeride",
+  "displayName": "FreeRide - Free AI for OpenClaw",
+  "version": "1.0.1",
+  "description": "Unlimited free AI access for OpenClaw via OpenRouter's free models with automatic fallback switching",
+  "author": "Shaishav Pidadi",
+  "repository": "https://github.com/Shaivpidadi/FreeRide",
+  "license": "MIT",
+  "commands": ["list", "switch", "auto", "status", "refresh", "fallbacks"],
+  "binaries": {
+    "freeride": "main:main",
+    "freeride-watcher": "watcher:main"
+  },
+  "dependencies": {
+    "requests": ">=2.31.0"
+  },
+  "config": {
+    "OPENROUTER_API_KEY": {
+      "description": "Your OpenRouter API key (get free at openrouter.ai/keys)",
+      "required": true,
+      "env": true
+    }
+  },
+  "openclaw": {
+    "compatible": true,
+    "minVersion": "1.0.0",
+    "configPath": "~/.openclaw/openclaw.json",
+    "configKeys": ["agents.defaults.model", "agents.defaults.models"]
+  },
+  "install": "npx clawhub@latest install freeride && cd ~/.openclaw/workspace/skills/free-ride && pip install -e ."
+}

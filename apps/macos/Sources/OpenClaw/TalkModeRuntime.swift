@@ -14,6 +14,12 @@ actor TalkModeRuntime {
     private static let defaultTalkProvider = "elevenlabs"
     private static let defaultSilenceTimeoutMs = TalkDefaults.silenceTimeoutMs
 
+    private enum SessionMode {
+        case inactive
+        case manual
+        case wakeWord
+    }
+
     private final class RMSMeter: @unchecked Sendable {
         private let lock = NSLock()
         private var latestRMS: Double = 0
@@ -42,10 +48,13 @@ actor TalkModeRuntime {
 
     private var captureTask: Task<Void, Never>?
     private var silenceTask: Task<Void, Never>?
+    private var wakeConversationIdleTask: Task<Void, Never>?
     private var phase: TalkModePhase = .idle
     private var isEnabled = false
     private var isPaused = false
     private var lifecycleGeneration: Int = 0
+    private var sessionMode: SessionMode = .inactive
+    private var listeningStartedAt: Date?
 
     private var lastHeard: Date?
     private var noiseFloorRMS: Double = 1e-4
@@ -66,10 +75,15 @@ actor TalkModeRuntime {
     private var apiKey: String?
     private var fallbackVoiceId: String?
     private var lastPlaybackWasPCM: Bool = false
+    private var defaultSystemVoiceIdentifier: String?
+    private var defaultSystemVoiceLanguage: String?
+    private var defaultSystemVoiceRate: Float?
+    private var defaultSystemVoicePitchMultiplier: Float?
 
     private var silenceWindow: TimeInterval = .init(TalkModeRuntime.defaultSilenceTimeoutMs) / 1000
     private let minSpeechRMS: Double = 1e-3
     private let speechBoostFactor: Double = 6.0
+    private let wakeConversationIdleTimeout: TimeInterval = 12.0
 
     static func configureRecognitionRequest(_ request: SFSpeechAudioBufferRecognitionRequest) {
         request.shouldReportPartialResults = true
@@ -79,19 +93,95 @@ actor TalkModeRuntime {
     // MARK: - Lifecycle
 
     func setEnabled(_ enabled: Bool) async {
-        guard enabled != self.isEnabled else { return }
-        self.isEnabled = enabled
-        self.lifecycleGeneration &+= 1
         if enabled {
+            self.sessionMode = .manual
+            guard !self.isEnabled else {
+                self.isPaused = false
+                await MainActor.run {
+                    TalkOverlayController.shared.present()
+                    TalkOverlayController.shared.updatePaused(false)
+                }
+                return
+            }
+            self.isEnabled = true
+            self.isPaused = false
+            self.lifecycleGeneration &+= 1
             await self.start()
         } else {
+            guard self.isEnabled else {
+                self.sessionMode = .inactive
+                return
+            }
+            self.sessionMode = .inactive
+            self.isEnabled = false
+            self.lifecycleGeneration &+= 1
             await self.stop()
         }
+    }
+
+    func beginWakeConversation(initialTranscript: String) async {
+        let trimmed = initialTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        self.logger.info("talk wake handoff start chars=\(trimmed.count, privacy: .public)")
+        self.sessionMode = .wakeWord
+        self.isEnabled = true
+        self.isPaused = false
+        self.lifecycleGeneration &+= 1
+
+        self.captureTask?.cancel()
+        self.captureTask = nil
+        self.silenceTask?.cancel()
+        self.silenceTask = nil
+        self.wakeConversationIdleTask?.cancel()
+        self.wakeConversationIdleTask = nil
+
+        await self.stopRecognition()
+        await self.stopSpeaking(reason: .manual)
+
+        self.lastTranscript = ""
+        self.lastHeard = nil
+        self.lastSpeechEnergyAt = nil
+        self.listeningStartedAt = nil
+        self.phase = .thinking
+
+        await MainActor.run {
+            TalkOverlayController.shared.present()
+            TalkOverlayController.shared.updatePaused(false)
+            TalkModeController.shared.updateLevel(0)
+            TalkModeController.shared.updatePhase(.thinking)
+        }
+
+        self.startSilenceMonitor()
+        await self.sendAndSpeak(trimmed)
+    }
+
+    func blocksVoiceWake() -> Bool {
+        self.isEnabled && !self.isPaused
+    }
+
+    func stopTransientConversation(reason: String) async {
+        guard self.sessionMode == .wakeWord else { return }
+        self.logger.info("talk wake handoff stop reason=\(reason, privacy: .public)")
+        self.sessionMode = .inactive
+        self.isEnabled = false
+        self.lifecycleGeneration &+= 1
+        await self.stop()
+        await MainActor.run {
+            TalkOverlayController.shared.updatePaused(false)
+            TalkOverlayController.shared.dismiss()
+        }
+        await VoiceWakeRuntime.shared.refresh(state: AppStateStore.shared)
     }
 
     func setPaused(_ paused: Bool) async {
         guard paused != self.isPaused else { return }
         self.isPaused = paused
+        if paused {
+            self.listeningStartedAt = nil
+            self.wakeConversationIdleTask?.cancel()
+            self.wakeConversationIdleTask = nil
+        }
         await MainActor.run { TalkModeController.shared.updateLevel(0) }
 
         guard self.isEnabled else { return }
@@ -106,8 +196,7 @@ actor TalkModeRuntime {
 
         if self.phase == .idle || self.phase == .listening {
             await self.startRecognition()
-            self.phase = .listening
-            await MainActor.run { TalkModeController.shared.updatePhase(.listening) }
+            await self.startListening()
             self.startSilenceMonitor()
         }
     }
@@ -135,8 +224,7 @@ actor TalkModeRuntime {
         }
         await self.startRecognition()
         guard self.isCurrent(gen) else { return }
-        self.phase = .listening
-        await MainActor.run { TalkModeController.shared.updatePhase(.listening) }
+        await self.startListening()
         self.startSilenceMonitor()
     }
 
@@ -145,6 +233,8 @@ actor TalkModeRuntime {
         self.captureTask = nil
         self.silenceTask?.cancel()
         self.silenceTask = nil
+        self.wakeConversationIdleTask?.cancel()
+        self.wakeConversationIdleTask = nil
 
         // Stop audio before changing phase (stopSpeaking is gated on .speaking).
         await self.stopSpeaking(reason: .manual)
@@ -152,6 +242,7 @@ actor TalkModeRuntime {
         self.lastTranscript = ""
         self.lastHeard = nil
         self.lastSpeechEnergyAt = nil
+        self.listeningStartedAt = nil
         self.phase = .idle
         await self.stopRecognition()
         await MainActor.run {
@@ -319,6 +410,8 @@ actor TalkModeRuntime {
         self.phase = .listening
         self.lastTranscript = ""
         self.lastHeard = nil
+        self.listeningStartedAt = Date()
+        self.scheduleWakeConversationIdleMonitor()
         await MainActor.run {
             TalkModeController.shared.updatePhase(.listening)
             TalkModeController.shared.updateLevel(0)
@@ -328,6 +421,9 @@ actor TalkModeRuntime {
     private func finalizeTranscript(_ text: String) async {
         self.lastTranscript = ""
         self.lastHeard = nil
+        self.listeningStartedAt = nil
+        self.wakeConversationIdleTask?.cancel()
+        self.wakeConversationIdleTask = nil
         self.phase = .thinking
         await MainActor.run { TalkModeController.shared.updatePhase(.thinking) }
         await self.stopRecognition()
@@ -395,6 +491,7 @@ actor TalkModeRuntime {
             self.lastTranscript = ""
             self.lastHeard = nil
             self.lastSpeechEnergyAt = nil
+            self.listeningStartedAt = nil
             await MainActor.run {
                 TalkModeController.shared.updateLevel(0)
             }
@@ -482,6 +579,10 @@ actor TalkModeRuntime {
         let apiKey: String?
         let voiceId: String?
         let language: String?
+        let systemVoiceIdentifier: String?
+        let systemVoiceLanguage: String?
+        let systemVoiceRate: Float?
+        let systemVoicePitchMultiplier: Float?
         let synthTimeoutSeconds: Double
     }
 
@@ -561,6 +662,10 @@ actor TalkModeRuntime {
             apiKey: apiKey,
             voiceId: voiceId,
             language: language,
+            systemVoiceIdentifier: self.defaultSystemVoiceIdentifier,
+            systemVoiceLanguage: self.defaultSystemVoiceLanguage,
+            systemVoiceRate: self.defaultSystemVoiceRate,
+            systemVoicePitchMultiplier: self.defaultSystemVoicePitchMultiplier,
             synthTimeoutSeconds: synthTimeoutSeconds)
     }
 
@@ -666,7 +771,10 @@ actor TalkModeRuntime {
         await TalkSystemSpeechSynthesizer.shared.stop()
         try await TalkSystemSpeechSynthesizer.shared.speak(
             text: input.cleanedText,
-            language: input.language)
+            language: input.language ?? input.systemVoiceLanguage,
+            voiceIdentifier: input.systemVoiceIdentifier,
+            rate: input.systemVoiceRate,
+            pitchMultiplier: input.systemVoicePitchMultiplier)
         self.ttsLogger.info("talk system voice done")
     }
 
@@ -783,17 +891,23 @@ extension TalkModeRuntime {
             self.currentModelId = cfg.modelId
         }
         self.defaultOutputFormat = cfg.outputFormat
+        self.defaultSystemVoiceIdentifier = cfg.systemVoiceIdentifier
+        self.defaultSystemVoiceLanguage = cfg.systemVoiceLanguage
+        self.defaultSystemVoiceRate = cfg.systemVoiceRate
+        self.defaultSystemVoicePitchMultiplier = cfg.systemVoicePitchMultiplier
         self.interruptOnSpeech = cfg.interruptOnSpeech
         self.silenceWindow = TimeInterval(cfg.silenceTimeoutMs) / 1000
         self.apiKey = cfg.apiKey
         let hasApiKey = (cfg.apiKey?.isEmpty == false)
         let voiceLabel = (cfg.voiceId?.isEmpty == false) ? cfg.voiceId! : "none"
         let modelLabel = (cfg.modelId?.isEmpty == false) ? cfg.modelId! : "none"
+        let systemVoiceLabel = (cfg.systemVoiceIdentifier?.isEmpty == false) ? cfg.systemVoiceIdentifier! : "auto"
         self.logger
             .info(
                 "talk config voiceId=\(voiceLabel, privacy: .public) " +
                     "modelId=\(modelLabel, privacy: .public) " +
                     "apiKey=\(hasApiKey, privacy: .public) " +
+                    "systemVoice=\(systemVoiceLabel, privacy: .public) " +
                     "interrupt=\(cfg.interruptOnSpeech, privacy: .public) " +
                     "silenceTimeoutMs=\(cfg.silenceTimeoutMs, privacy: .public)")
     }
@@ -868,6 +982,29 @@ extension TalkModeRuntime {
             let clamped = min(1.0, max(0.0, rms / max(self.minSpeechRMS, threshold)))
             await MainActor.run { TalkModeController.shared.updateLevel(clamped) }
         }
+    }
+
+    private func scheduleWakeConversationIdleMonitor() {
+        self.wakeConversationIdleTask?.cancel()
+        guard self.sessionMode == .wakeWord else { return }
+        let generation = self.lifecycleGeneration
+        self.wakeConversationIdleTask = Task { [weak self, generation] in
+            while let self {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                if Task.isCancelled { return }
+                await self.checkWakeConversationIdle(generation: generation)
+            }
+        }
+    }
+
+    private func checkWakeConversationIdle(generation: Int) async {
+        guard generation == self.lifecycleGeneration else { return }
+        guard self.sessionMode == .wakeWord else { return }
+        guard self.isEnabled, !self.isPaused, self.phase == .listening else { return }
+        guard self.lastTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        guard let listeningStartedAt else { return }
+        guard Date().timeIntervalSince(listeningStartedAt) >= self.wakeConversationIdleTimeout else { return }
+        await self.stopTransientConversation(reason: "idle_timeout")
     }
 
     private static func rmsLevel(buffer: AVAudioPCMBuffer) -> Double? {
@@ -948,4 +1085,10 @@ extension TalkModeRuntime {
         }
         return normalized
     }
+
+    #if DEBUG
+    static func _testShouldBlockVoiceWake(isEnabled: Bool, isPaused: Bool) -> Bool {
+        isEnabled && !isPaused
+    }
+    #endif
 }

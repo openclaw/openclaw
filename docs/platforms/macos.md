@@ -138,7 +138,7 @@ Safety:
 
 ## Onboarding flow (typical)
 
-1. Install and launch **OpenClaw.app**.
+1. Install and launch **VeriClaw 爪印.app**.
 2. Complete the permissions checklist (TCC prompts).
 3. Ensure **Local** mode is active and the Gateway is running.
 4. Install the CLI if you want terminal access.
@@ -164,8 +164,8 @@ it will warn and recommend moving back to a local path.
 
 ## Build & dev workflow (native)
 
-- `cd apps/macos && swift build`
-- `swift run OpenClaw` (or Xcode)
+- `scripts/macos-swift.sh build`
+- `scripts/macos-swift.sh run OpenClaw` (or Xcode)
 - Package app: `scripts/package-mac-app.sh`
 
 ## Debug gateway connectivity (macOS CLI)
@@ -174,9 +174,8 @@ Use the debug CLI to exercise the same Gateway WebSocket handshake and discovery
 logic that the macOS app uses, without launching the app.
 
 ```bash
-cd apps/macos
-swift run openclaw-mac connect --json
-swift run openclaw-mac discover --timeout 3000 --json
+scripts/macos-swift.sh run openclaw-mac connect --json
+scripts/macos-swift.sh run openclaw-mac discover --timeout 3000 --json
 ```
 
 Connect options:

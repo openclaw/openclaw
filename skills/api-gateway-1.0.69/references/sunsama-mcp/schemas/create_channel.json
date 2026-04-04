@@ -1,0 +1,14 @@
+{
+  "name": "create_channel",
+  "description": "Create a new channel/context for tasks",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "channelName": {
+        "type": "string",
+        "description": "The name of the channel"
+      }
+    },
+    "required": ["channelName"]
+  }
+}

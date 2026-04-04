@@ -1,0 +1,238 @@
+html,
+body {
+  margin: 0;
+  padding: 0;
+  width: 368px;
+  min-height: 100%;
+  background:
+    radial-gradient(circle at top left, rgba(255, 187, 133, 0.24), transparent 28%),
+    radial-gradient(circle at top right, rgba(201, 136, 170, 0.18), transparent 30%),
+    linear-gradient(180deg, #fdf7ef 0%, #f5ecdf 48%, #ecdfcf 100%);
+  color: #201913;
+  font: 13px/1.5 "Avenir Next", "Helvetica Neue", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  position: relative;
+  overflow: hidden;
+}
+
+body::before,
+body::after {
+  content: "";
+  position: absolute;
+  pointer-events: none;
+}
+
+body::before {
+  inset: 0;
+  background:
+    linear-gradient(90deg, rgba(32, 25, 19, 0.03) 0, rgba(32, 25, 19, 0.03) 1px, transparent 1px, transparent 88px),
+    linear-gradient(rgba(32, 25, 19, 0.024) 0, rgba(32, 25, 19, 0.024) 1px, transparent 1px, transparent 88px);
+  opacity: 0.42;
+  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.46), transparent 82%);
+}
+
+body::after {
+  top: -56px;
+  right: -44px;
+  width: 220px;
+  height: 220px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 213, 156, 0.56), rgba(255, 213, 156, 0) 68%);
+  filter: blur(8px);
+}
+
+.popup {
+  position: relative;
+  display: grid;
+  gap: 16px;
+  padding: 18px;
+}
+
+.hero,
+.control-card,
+.note-card {
+  position: relative;
+  overflow: hidden;
+  border-radius: 28px;
+  border: 1px solid rgba(32, 25, 19, 0.08);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.84), rgba(255, 249, 242, 0.56)),
+    rgba(255, 255, 255, 0.18);
+  box-shadow:
+    0 24px 44px rgba(43, 27, 18, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(14px);
+}
+
+.hero {
+  padding: 18px 18px 16px;
+}
+
+.hero::after {
+  content: "";
+  position: absolute;
+  inset: auto -32px -56px auto;
+  width: 168px;
+  height: 168px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(201, 136, 170, 0.24), rgba(201, 136, 170, 0) 70%);
+}
+
+.eyebrow {
+  margin: 0;
+  color: rgba(32, 25, 19, 0.52);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+h1,
+p {
+  margin: 0;
+}
+
+h1 {
+  margin-top: 10px;
+  max-width: 9ch;
+  font-family: "Iowan Old Style", "Palatino Linotype", serif;
+  font-size: 2rem;
+  line-height: 0.95;
+  letter-spacing: -0.06em;
+}
+
+.lead {
+  margin-top: 10px;
+  max-width: 25ch;
+  color: rgba(32, 25, 19, 0.7);
+}
+
+.chip-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: rgba(32, 25, 19, 0.06);
+  color: rgba(32, 25, 19, 0.68);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.control-card {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+}
+
+.field {
+  display: grid;
+  gap: 6px;
+}
+
+.field span {
+  color: rgba(32, 25, 19, 0.62);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+input {
+  width: 100%;
+  border: 1px solid rgba(32, 25, 19, 0.12);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.74);
+  color: #201913;
+  padding: 11px 12px;
+  font: inherit;
+}
+
+input:focus {
+  outline: none;
+  border-color: rgba(164, 92, 119, 0.34);
+  box-shadow: 0 0 0 3px rgba(164, 92, 119, 0.08);
+}
+
+.action-column {
+  display: grid;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.primary-button,
+.ghost-button {
+  appearance: none;
+  min-height: 44px;
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+  font: 700 12px/1 "Avenir Next", "Helvetica Neue", sans-serif;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  transition:
+    transform 180ms ease,
+    box-shadow 180ms ease,
+    opacity 180ms ease;
+}
+
+.primary-button {
+  background: linear-gradient(135deg, #ffbc77, #dd7aa7);
+  color: #1f1612;
+  box-shadow: 0 16px 28px rgba(189, 103, 140, 0.2);
+}
+
+.ghost-button {
+  background: rgba(255, 255, 255, 0.66);
+  color: #201913;
+  border: 1px solid rgba(32, 25, 19, 0.1);
+}
+
+.primary-button:hover,
+.ghost-button:hover {
+  transform: translateY(-1px);
+}
+
+.note-card {
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px;
+}
+
+.note-row {
+  display: grid;
+  gap: 2px;
+}
+
+.note-label {
+  color: rgba(32, 25, 19, 0.48);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.note-row strong {
+  font-weight: 700;
+}
+
+.status {
+  margin: 0;
+  padding: 0 4px;
+  color: rgba(32, 25, 19, 0.66);
+}

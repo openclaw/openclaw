@@ -104,4 +104,17 @@ struct LowCoverageViewSmokeTests {
     @Test func `debug settings exercises helpers`() async {
         await DebugSettings.exerciseForTesting()
     }
+
+    @Test func `correction workspace builds body`() {
+        let state = AppState(preview: true)
+        let view = CorrectionWorkspaceView(state: state)
+        _ = view.body
+    }
+
+    @Test func `control dashboard builds body`() {
+        let state = AppState(preview: true)
+        let router = WebChatWorkspaceRouter(selectedMode: .control)
+        let view = ControlDashboardView(router: router, state: state)
+        _ = view.body
+    }
 }

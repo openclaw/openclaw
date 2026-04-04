@@ -492,6 +492,8 @@ export const agentHandlers: GatewayRequestHandlers = {
       explicitTo,
       explicitThreadId,
       accountId: request.replyAccountId ?? request.accountId,
+      cfg: cfgForAgent ?? cfg,
+      agentId: agentId ?? resolveAgentIdFromSessionKey(resolvedSessionKey ?? requestedSessionKey),
       wantsDelivery,
       turnSourceChannel,
       turnSourceTo,

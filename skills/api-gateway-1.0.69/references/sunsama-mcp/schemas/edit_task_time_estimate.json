@@ -1,0 +1,18 @@
+{
+  "name": "edit_task_time_estimate",
+  "description": "Set the time estimate for a task",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "taskId": {
+        "type": "string",
+        "description": "The ID of the task"
+      },
+      "timeEstimate": {
+        "type": "number",
+        "description": "The time estimate in minutes"
+      }
+    },
+    "required": ["taskId", "timeEstimate"]
+  }
+}

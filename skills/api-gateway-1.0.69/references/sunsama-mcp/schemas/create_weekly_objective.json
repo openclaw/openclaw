@@ -1,0 +1,18 @@
+{
+  "name": "create_weekly_objective",
+  "description": "Create a weekly objective/goal",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "title": {
+        "type": "string",
+        "description": "The title of the objective"
+      },
+      "weekStartDay": {
+        "type": "string",
+        "description": "The start date of the week (YYYY-MM-DD format)"
+      }
+    },
+    "required": ["title", "weekStartDay"]
+  }
+}

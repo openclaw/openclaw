@@ -92,4 +92,22 @@ struct VoiceWakeRuntimeTests {
                 segments: segments,
                 triggerEndTime: 0.3) == "do thing")
     }
+
+    @Test func `runtime pauses while talk mode is active`() {
+        #expect(
+            !VoiceWakeRuntime._testShouldRun(
+                supported: true,
+                wakeEnabled: true,
+                talkBlocksWake: true,
+                permissionsGranted: true))
+    }
+
+    @Test func `runtime runs when wake is enabled and talk mode is off`() {
+        #expect(
+            VoiceWakeRuntime._testShouldRun(
+                supported: true,
+                wakeEnabled: true,
+                talkBlocksWake: false,
+                permissionsGranted: true))
+    }
 }

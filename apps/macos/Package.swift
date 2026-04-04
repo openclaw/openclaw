@@ -19,7 +19,9 @@ let package = Package(
         .package(url: "https://github.com/swiftlang/swift-subprocess.git", from: "0.1.0"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.8.0"),
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.8.1"),
-        .package(url: "https://github.com/steipete/Peekaboo.git", branch: "main"),
+        .package(
+            url: "https://github.com/steipete/Peekaboo.git",
+            revision: "8659b70d386d02f831e277386b3216023ccc707e"),
         .package(path: "../shared/OpenClawKit"),
         .package(path: "../../Swabble"),
     ],
@@ -57,9 +59,11 @@ let package = Package(
             ],
             exclude: [
                 "Resources/Info.plist",
+                "Resources/OpenClaw.icns",
             ],
             resources: [
-                .copy("Resources/OpenClaw.icns"),
+                .copy("Resources/VeriClaw.icns"),
+                .copy("Resources/VeriClawBrandMark.png"),
                 .copy("Resources/DeviceModels"),
             ],
             swiftSettings: [

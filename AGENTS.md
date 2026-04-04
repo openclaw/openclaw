@@ -11,6 +11,30 @@
 - Security advisory analysis: before triage/severity decisions, read `SECURITY.md` to align with OpenClaw's trust model and design boundaries.
 - Do not edit files covered by security-focused `CODEOWNERS` rules unless a listed owner explicitly asked for the change or is already reviewing it with you. Treat those paths as restricted surfaces, not drive-by cleanup.
 
+## Interaction Freeze
+
+- Current user directive: freeze the interaction work produced in session `019d3825-4d57-7d72-a65c-6225857638c5`; do not let other sessions redesign or overwrite that interaction pass without explicit user approval.
+- Preserve the interaction information architecture, visual tone, and confirmation flow from session `019d3825-4d57-7d72-a65c-6225857638c5` unless the user explicitly reopens that scope.
+- Preserve the approved visual direction from that session: Apple-native app feel, warm sand + warm charcoal palette aligned to the current logo, and the existing confirmation-first send flow.
+- Treat these files as protected interaction surfaces for that freeze rule unless the user explicitly asks otherwise: `ui/src/ui/views/overview.ts`, `ui/src/ui/views/overview-cards.ts`, `ui/src/ui/views/overview-attention.ts`, `ui/src/ui/views/chat.ts`, `ui/src/ui/app-render.ts`, `ui/src/styles/components.css`, `ui/src/styles/chat/layout.css`.
+
+## Correction Product Freeze
+
+- Current user directive from session `019d346c-c72f-77d1-83ec-5b36dbfb5e91`: do not reduce the app to a watchdog/alarm console. The product skeleton is a real-time, case-based bot correction system.
+- Required product shape:
+  1. evidence chain,
+  2. diagnosis,
+  3. one-line prescription,
+  4. per-bot medical record or casebook,
+  5. recurrence tracking,
+  6. reusable correction template validation and promotion.
+- The shell and the engine are both required:
+  - session `019d3825-4d57-7d72-a65c-6225857638c5` defines the approved Apple-native logo/UI direction
+  - session `019d346c-c72f-77d1-83ec-5b36dbfb5e91` defines the approved remediation logic and validation loop
+- Preserve `Summary / Seats needing attention / Detail / intervention` as the native surface, but the detail pane must drive real remediation, not passive monitoring.
+- Preferred architecture target is a single native correction workspace; do not keep treating dashboard, chat, canvas, and settings as separate products unless the user explicitly asks for that split.
+- Reference the shared product note in `CASE_BASED_CORRECTION_WORKSPACE.md` before changing architecture, data model, or correction flows.
+
 ## Auto-close labels (issues and PRs)
 
 - If an issue/PR matches one of the reasons below, apply the label and let `.github/workflows/auto-response.yml` handle comment/close/lock.
@@ -204,6 +228,12 @@
 
 ## Agent-Specific Notes
 
+- When this workspace is used by OpenClaw as the persistent ACP runtime for `Max`, operate as `Max`, Head of Engineering and Infrastructure for the OpenClaw Company server.
+- In that runtime, default lane is `dept-max-engineering`; use the `Max` persona files in this workspace (`SOUL.md`, `IDENTITY.md`, `USER.md`, `MEMORY.md`, `HEARTBEAT.md`) together with these repo guidelines.
+- Company Discord now allows Max to see other bot messages across allowed lanes without waiting for direct mention.
+- If Max needs another seat to act in Discord, `@mention` that seat explicitly instead of posting a generic handoff.
+- Outside `agent-lounge`, keep all Max messages work-relevant.
+- In company runtime, prefer short technical operating messages: symptom, path, fix, verification, remaining risk.
 - Vocabulary: "makeup" = "mac app".
 - Parallels macOS retests: use the snapshot most closely named like `macOS 26.3.1 fresh` when the user asks for a clean/fresh macOS rerun; avoid older Tahoe snapshots unless explicitly requested.
 - Parallels beta smoke: use `--target-package-spec openclaw@<beta-version>` for the beta artifact, and pin the stable side with both `--install-version <stable-version>` and `--latest-version <stable-version>` for upgrade runs. npm dist-tags can move mid-run.

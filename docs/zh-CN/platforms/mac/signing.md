@@ -51,4 +51,4 @@ DISABLE_LIBRARY_VALIDATION=1 scripts/package-mac-app.sh   # 仅限开发的 Spar
 
 ## 原因
 
-TCC 权限与 Bundle 标识符*和*代码签名绑定。使用不断变化的 UUID 的未签名调试构建会导致 macOS 在每次重新构建后忘记授权。对二进制文件进行签名（默认临时签名）并保持固定的 Bundle ID/路径（`dist/OpenClaw.app`）可以在构建之间保留授权，与 VibeTunnel 的方案一致。
+TCC 权限与 Bundle 标识符*和*代码签名绑定。使用不断变化的 UUID 的未签名调试构建会导致 macOS 在每次重新构建后忘记授权。对二进制文件进行签名（默认临时签名）并保持固定的 Bundle ID/路径（`dist/VeriClaw 爪印.app`）可以在构建之间保留授权，与 VibeTunnel 的方案一致。

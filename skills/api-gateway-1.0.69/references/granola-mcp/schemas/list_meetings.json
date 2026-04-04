@@ -1,0 +1,26 @@
+{
+  "name": "list_meetings",
+  "title": "List the user's Granola meeting notes within a time range. R",
+  "description": "List the user's Granola meeting notes within a time range. Returns meeting titles and metadata.\n\nIMPORTANT: For short-term questions about recent meeting details, prefer using query_granola_meetings instead.\n\nWhen to use:\n- User asks to list their meetings\n- User asks about action items, decisions, or summaries from meetings over a longer or specific date range\n- User asks about content from their meeting transcripts\n- User references 'Granola notes' or 'meeting notes' or 'transcripts'\n\nWhen NOT to use:\n- User is asking about upcoming calendar events or scheduling\n- User wants to create/modify calendar invites\n\nUse get_meetings to retrieve detailed meeting content after identifying relevant meetings.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "time_range": {
+        "type": "string",
+        "enum": ["this_week", "last_week", "last_30_days", "custom"],
+        "default": "last_30_days",
+        "description": "Time range to query meetings from"
+      },
+      "custom_start": {
+        "type": "string",
+        "description": "ISO date for custom range start (required if time_range is 'custom')"
+      },
+      "custom_end": {
+        "type": "string",
+        "description": "ISO date for custom range end (required if time_range is 'custom')"
+      }
+    },
+    "additionalProperties": false,
+    "$schema": "http://json-schema.org/draft-07/schema#"
+  }
+}

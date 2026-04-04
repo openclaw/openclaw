@@ -1,0 +1,27 @@
+{
+  "name": "notion-get-comments",
+  "title": "Get page comments",
+  "description": "Get comments and discussions from a Notion page.\nReturns discussions with full comment content in XML format. By default, returns page-level discussions only.\nTip: Use the `fetch` tool with `include_discussions: true` first to see where discussions are anchored in the page content, then use this tool to retrieve full discussion threads. The `discussion://` URLs in the fetch output match the discussion IDs returned here.\nParameters:\n- `include_all_blocks`: Include discussions on child blocks (default: false)\n- `include_resolved`: Include resolved discussions (default: false)\n- `discussion_id`: Fetch a specific discussion by ID or URL\n\n<example>{\"page_id\": \"page-uuid\"}</example>\n<example>{\"page_id\": \"page-uuid\", \"include_all_blocks\": true}</example>\n<example>{\"page_id\": \"page-uuid\", \"discussion_id\": \"discussion://pageId/blockId/discussionId\"}</example>",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "page_id": {
+        "type": "string",
+        "description": "Identifier for a Notion page."
+      },
+      "include_resolved": {
+        "type": "boolean"
+      },
+      "include_all_blocks": {
+        "type": "boolean"
+      },
+      "discussion_id": {
+        "type": "string",
+        "description": "Fetch a specific discussion by ID or discussion URL (e.g., discussion://pageId/blockId/discussionId)."
+      }
+    },
+    "required": ["page_id"],
+    "additionalProperties": false,
+    "$schema": "http://json-schema.org/draft-07/schema#"
+  }
+}

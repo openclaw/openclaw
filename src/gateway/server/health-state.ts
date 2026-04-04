@@ -11,8 +11,18 @@ import type { Snapshot } from "../protocol/index.js";
 let presenceVersion = 1;
 let healthVersion = 1;
 let healthCache: HealthSummary | null = null;
-let healthRefresh: Promise<HealthSummary> | null = null;
+let healthSnapshotRefresh: Promise<HealthSummary> | null = null;
+let healthProbeRefresh: Promise<HealthSummary> | null = null;
 let broadcastHealthUpdate: ((snap: HealthSummary) => void) | null = null;
+
+function commitHealthSnapshot(snap: HealthSummary): HealthSummary {
+  healthCache = snap;
+  healthVersion += 1;
+  if (broadcastHealthUpdate) {
+    broadcastHealthUpdate(snap);
+  }
+  return snap;
+}
 
 export function buildGatewaySnapshot(): Snapshot {
   const cfg = loadConfig();
@@ -68,18 +78,43 @@ export function setBroadcastHealthUpdate(fn: ((snap: HealthSummary) => void) | n
 }
 
 export async function refreshGatewayHealthSnapshot(opts?: { probe?: boolean }) {
-  if (!healthRefresh) {
-    healthRefresh = (async () => {
-      const snap = await getHealthSnapshot({ probe: opts?.probe });
-      healthCache = snap;
-      healthVersion += 1;
-      if (broadcastHealthUpdate) {
-        broadcastHealthUpdate(snap);
-      }
-      return snap;
-    })().finally(() => {
-      healthRefresh = null;
-    });
+  const wantsProbe = opts?.probe === true;
+  const inFlight = wantsProbe ? healthProbeRefresh : healthSnapshotRefresh;
+  if (inFlight) {
+    return inFlight;
   }
-  return healthRefresh;
+
+  const refresh = (async () => {
+    const snap = await getHealthSnapshot({ probe: wantsProbe });
+    return commitHealthSnapshot(snap);
+  })().finally(() => {
+    if (wantsProbe) {
+      if (healthProbeRefresh === refresh) {
+        healthProbeRefresh = null;
+      }
+      return;
+    }
+    if (healthSnapshotRefresh === refresh) {
+      healthSnapshotRefresh = null;
+    }
+  });
+
+  if (wantsProbe) {
+    healthProbeRefresh = refresh;
+  } else {
+    healthSnapshotRefresh = refresh;
+  }
+  return refresh;
+}
+
+export function __resetHealthStateForTest(): void {
+  if (!process.env.VITEST && process.env.NODE_ENV !== "test") {
+    return;
+  }
+  presenceVersion = 1;
+  healthVersion = 1;
+  healthCache = null;
+  healthSnapshotRefresh = null;
+  healthProbeRefresh = null;
+  broadcastHealthUpdate = null;
 }

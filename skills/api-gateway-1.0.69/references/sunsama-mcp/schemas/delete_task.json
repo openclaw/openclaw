@@ -1,0 +1,14 @@
+{
+  "name": "delete_task",
+  "description": "Delete a task",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "taskId": {
+        "type": "string",
+        "description": "The ID of the task to delete"
+      }
+    },
+    "required": ["taskId"]
+  }
+}

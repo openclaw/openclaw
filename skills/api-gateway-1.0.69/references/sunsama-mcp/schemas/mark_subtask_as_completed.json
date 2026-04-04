@@ -1,0 +1,18 @@
+{
+  "name": "mark_subtask_as_completed",
+  "description": "Mark a subtask as completed",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "taskId": {
+        "type": "string",
+        "description": "The ID of the parent task"
+      },
+      "subtaskId": {
+        "type": "string",
+        "description": "The ID of the subtask"
+      }
+    },
+    "required": ["taskId", "subtaskId"]
+  }
+}

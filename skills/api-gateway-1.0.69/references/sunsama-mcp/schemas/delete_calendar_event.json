@@ -1,0 +1,14 @@
+{
+  "name": "delete_calendar_event",
+  "description": "Delete a calendar event",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "eventId": {
+        "type": "string",
+        "description": "The ID of the calendar event"
+      }
+    },
+    "required": ["eventId"]
+  }
+}

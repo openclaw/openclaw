@@ -60,7 +60,7 @@ struct OnboardingWizardView: View {
     @State private var gatewayToken: String = ""
     @State private var gatewayPassword: String = ""
     @State private var connectMessage: String?
-    @State private var statusLine: String = "In your OpenClaw chat, run /pair qr, then scan the code here."
+    @State private var statusLine: String = "In your OpenClaw chat, run /pair qr, then scan the code here in VeriClaw 爪印."
     @State private var connectingGatewayID: String?
     @State private var issue: GatewayConnectionIssue = .none
     @State private var didMarkCompleted = false
@@ -313,12 +313,12 @@ struct OnboardingWizardView: View {
                 .foregroundStyle(.tint)
                 .padding(.bottom, 18)
 
-            Text("Welcome to OpenClaw")
+            Text("Welcome to VeriClaw 爪印")
                 .font(.largeTitle.weight(.bold))
                 .multilineTextAlignment(.center)
                 .padding(.bottom, 10)
 
-            Text("Turn this iPhone into a secure OpenClaw node for chat, voice, camera, and device tools.")
+            Text("Turn this iPhone into a secure VeriClaw 爪印 companion for review, evidence capture, and role-aware correction follow-up.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -328,7 +328,7 @@ struct OnboardingWizardView: View {
             VStack(alignment: .leading, spacing: 14) {
                 Label("Connect to your gateway", systemImage: "link")
                 Label("Choose device permissions", systemImage: "hand.raised")
-                Label("Use OpenClaw from your phone", systemImage: "message.fill")
+                Label("Review live cases and corrective follow-up", systemImage: "message.fill")
             }
             .font(.subheadline.weight(.semibold))
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -351,7 +351,7 @@ struct OnboardingWizardView: View {
                     Text("Security notice")
                         .font(.headline)
                     Text(
-                        "The connected OpenClaw agent can use device capabilities you enable, such as camera, microphone, photos, contacts, calendar, and location. Continue only if you trust the gateway and agent you connect to.")
+                        "The paired OpenClaw gateway can use device capabilities you enable inside VeriClaw 爪印, such as camera, microphone, photos, contacts, calendar, and location. Continue only if you trust the gateway and agent you connect to.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -394,7 +394,7 @@ struct OnboardingWizardView: View {
                 .font(.largeTitle.weight(.bold))
                 .padding(.bottom, 8)
 
-            Text("Scan a QR code from your OpenClaw gateway or continue with manual setup.")
+            Text("Scan a QR code from your paired OpenClaw gateway or continue with manual setup.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -645,7 +645,7 @@ struct OnboardingWizardView: View {
                             + "1) `openclaw devices approve` (or `openclaw devices approve <requestId>`)\n"
                             + "2) `/pair approve` in your OpenClaw chat\n"
                             + "\(requestLine)\n"
-                            + "OpenClaw will also retry automatically when you return to this app.")
+                            + "VeriClaw 爪印 will also retry automatically when you return to this app.")
                 }
             }
 
@@ -702,7 +702,7 @@ struct OnboardingWizardView: View {
             Button {
                 self.onClose()
             } label: {
-                Text("Open OpenClaw")
+                Text("Open VeriClaw 爪印")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
@@ -836,7 +836,7 @@ struct OnboardingWizardView: View {
 
     private func advanceFromIntro() {
         OnboardingStateStore.markFirstRunIntroSeen()
-        self.statusLine = "In your OpenClaw chat, run /pair qr, then scan the code here."
+        self.statusLine = "In your OpenClaw chat, run /pair qr, then scan the code here in VeriClaw 爪印."
         self.step = .welcome
     }
 
@@ -889,7 +889,7 @@ struct OnboardingWizardView: View {
         let hasToken = !self.gatewayToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let hasPassword = !self.gatewayPassword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         if !hasSavedGateway, !hasToken, !hasPassword {
-            self.statusLine = "No saved pairing found. In your OpenClaw chat, run /pair qr, then scan the code here."
+            self.statusLine = "No saved pairing found. In your OpenClaw chat, run /pair qr, then scan the code here in VeriClaw 爪印."
         }
     }
 

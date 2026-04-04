@@ -1,0 +1,67 @@
+{
+  "id": "wig-forge",
+  "name": "Wig Forge",
+  "description": "Capture-backed asset forging, inventory, and equip tools for bot rewards.",
+  "version": "2026.3.14",
+  "skills": ["skills"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "storageDir": {
+        "type": "string",
+        "description": "Optional absolute directory for forged asset storage."
+      },
+      "maxSourceBytes": {
+        "type": "integer",
+        "minimum": 1024,
+        "maximum": 10485760
+      },
+      "defaultTaskQuality": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1
+      },
+      "defaultMaskQuality": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1
+      },
+      "defaultNovelty": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1
+      },
+      "r2": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "accountId": {
+            "type": "string",
+            "description": "Cloudflare account ID for the target R2 endpoint."
+          },
+          "bucket": {
+            "type": "string",
+            "description": "R2 bucket name used for mirrored wig-forge asset files."
+          },
+          "accessKeyId": {
+            "type": "string",
+            "description": "R2 access key ID with object write permission."
+          },
+          "secretAccessKey": {
+            "type": "string",
+            "description": "R2 secret access key with object write permission."
+          },
+          "publicBaseUrl": {
+            "type": "string",
+            "description": "Optional public/custom-domain base URL for direct asset delivery."
+          },
+          "keyPrefix": {
+            "type": "string",
+            "description": "Optional object key prefix. Defaults to wig-forge."
+          }
+        }
+      }
+    }
+  }
+}

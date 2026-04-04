@@ -1,19 +1,48 @@
-# OpenClaw iOS (Super Alpha)
+# VeriClaw 爪印 iOS (Pre-Release Hardening)
 
-This iPhone app is super-alpha and internal-use only. It connects to an OpenClaw Gateway as a `role: node`.
+This iPhone app is in pre-release hardening and connects to an OpenClaw Gateway as a `role: node` companion for review, evidence capture, and role-aware correction follow-up.
 
 ## Distribution Status
 
-- Public distribution: not available.
+- Public distribution target: synchronized GitHub + App Store release after Apple release gates are closed.
 - Internal beta distribution: local archive + TestFlight upload via Fastlane.
 - Local/manual deploy from source via Xcode remains the default development path.
 
-## Super-Alpha Disclaimer
+## Synchronized Release Gate
+
+Run all three checks before calling the shared GitHub + App Store ship point ready:
+
+- `pnpm release:apple:repo-check`
+  Validates repository-side Apple release basics: icon asset references, required wrapper scripts,
+  and release-facing README expectations.
+- `pnpm mac:test`
+  Runs the macOS package tests through the full Xcode toolchain wrapper instead of raw
+  `swift test`.
+- `pnpm ios:doctor`
+  Validates local Apple release prerequisites such as simulator runtime, Team ID, code-signing
+  identities, and App Store Connect API auth.
+- `pnpm release:apple:submit-check`
+  Runs the environment gate above plus the local App Review metadata/contact preflight needed on
+  the actual submission Mac.
+- Full runbook: [docs/platforms/apple-release-readiness.md](../../docs/platforms/apple-release-readiness.md)
+
+Interpretation:
+
+- `release:apple:repo-check` green means the repo is not missing obvious Apple release assets or
+  docs.
+- `ios:doctor` can still block even when repo-side checks are green; that means the remaining
+  blocker is environment, signing, or App Store Connect setup.
+- `release:apple:submit-check` is the compact "can this Mac actually stage the iPhone submission"
+  gate because it also validates local review-contact metadata injection.
+- Synchronized launch readiness requires both the repo-side checks and the local Apple environment
+  checks to pass.
+
+## Current Release Caveats
 
 - Breaking changes are expected.
 - UI and onboarding flows can change without migration guarantees.
-- Foreground use is the only reliable mode right now.
-- Treat this build as sensitive while permissions and background behavior are still being hardened.
+- Foreground use remains the best-supported mode right now.
+- Treat current builds as pre-release while permissions, background behavior, and reconnect hardening are still being completed.
 
 ## Exact Xcode Manual Deploy Flow
 
@@ -31,6 +60,10 @@ cd apps/ios
 xcodegen generate
 open OpenClaw.xcodeproj
 ```
+
+If you recently changed the Apple account or Team in Xcode, rerun
+`./scripts/ios-configure-signing.sh` before opening the project so the local
+git-ignored signing override refreshes to the currently resolved Team ID.
 
 3. In Xcode:
    - Scheme: `OpenClaw`
@@ -61,7 +94,7 @@ Prereqs:
 Release behavior:
 
 - Local development keeps using unique per-developer bundle IDs from `scripts/ios-configure-signing.sh`.
-- Beta release uses canonical `ai.openclaw.client*` bundle IDs through a temporary generated xcconfig in `apps/ios/build/BetaRelease.xcconfig`.
+- Beta release uses canonical `ai.vericlaw.client*` bundle IDs through a temporary generated xcconfig in `apps/ios/build/BetaRelease.xcconfig`.
 - Beta release also switches the app to `OpenClawPushTransport=relay`, `OpenClawPushDistribution=official`, and `OpenClawPushAPNsEnvironment=production`.
 - The beta flow does not modify `apps/ios/.local-signing.xcconfig` or `apps/ios/LocalSigning.xcconfig`.
 - Root `package.json.version` is the only version source for iOS.
@@ -139,7 +172,7 @@ gateway can only send pushes for iOS devices that paired with that gateway.
 
 - Pairing via setup code flow (`/pair` then `/pair approve` in Telegram).
 - Gateway connection via discovery or manual host/port with TLS fingerprint trust prompt.
-- Chat + Talk surfaces through the operator gateway session.
+- Chat + Talk surfaces through the operator gateway session for manual review and corrective follow-up.
 - iPhone node commands in foreground: camera snap/clip, canvas present/navigate/eval/snapshot, screen record, location, contacts, calendar, reminders, photos, motion, local notifications.
 - Share extension deep-link forwarding into the connected gateway session.
 

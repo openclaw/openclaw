@@ -364,7 +364,15 @@ describe("runDiscordGatewayLifecycle", () => {
             waitParams.registerForceStop?.((err) => reject(err));
           }),
       );
-      const { lifecycleParams } = createLifecycleHarness({ gateway });
+      const {
+        lifecycleParams,
+        runtimeError,
+        releaseEarlyGatewayErrorGuard,
+        start,
+        statusSink,
+        stop,
+        threadStop,
+      } = createLifecycleHarness({ gateway });
 
       const lifecyclePromise = runDiscordGatewayLifecycle(lifecycleParams);
       lifecyclePromise.catch(() => {});
@@ -372,6 +380,41 @@ describe("runDiscordGatewayLifecycle", () => {
 
       await vi.advanceTimersByTimeAsync(5 * 60_000 + 1_000);
       await expect(lifecyclePromise).rejects.toThrow("reconnect watchdog timeout");
+      expect(runtimeError).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "discord: reconnect watchdog timeout: idle 300000ms (limit 300000ms); force-stopping monitor task",
+        ),
+      );
+      const closePatch = statusSink.mock.calls.find((call) => {
+        const patch = (call[0] ?? {}) as {
+          connected?: boolean;
+          lastDisconnect?: { status?: number };
+        };
+        return patch.connected === false && patch.lastDisconnect?.status === 1006;
+      });
+      expect(closePatch).toBeDefined();
+      const watchdogPatch = statusSink.mock.calls.find((call) => {
+        const patch = (call[0] ?? {}) as {
+          connected?: boolean;
+          lastError?: string;
+          lastDisconnect?: { error?: string };
+        };
+        return (
+          patch.connected === false &&
+          patch.lastError ===
+            "discord reconnect watchdog timeout: idle 300000ms (limit 300000ms)" &&
+          patch.lastDisconnect?.error ===
+            "discord reconnect watchdog timeout: idle 300000ms (limit 300000ms)"
+        );
+      });
+      expect(watchdogPatch).toBeDefined();
+      expectLifecycleCleanup({
+        start,
+        stop,
+        threadStop,
+        waitCalls: 1,
+        releaseEarlyGatewayErrorGuard,
+      });
     } finally {
       vi.useRealTimers();
     }

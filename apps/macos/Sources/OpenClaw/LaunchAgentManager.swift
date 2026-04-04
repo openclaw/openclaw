@@ -3,7 +3,12 @@ import Foundation
 enum LaunchAgentManager {
     private static var plistURL: URL {
         FileManager().homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/LaunchAgents/ai.openclaw.mac.plist")
+            .appendingPathComponent("Library/LaunchAgents/\(launchdLabel).plist")
+    }
+
+    private static var legacyPlistURL: URL {
+        FileManager().homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/LaunchAgents/\(legacyLaunchdLabel).plist")
     }
 
     static func status() async -> Bool {
@@ -15,6 +20,8 @@ enum LaunchAgentManager {
     static func set(enabled: Bool, bundlePath: String) async {
         if enabled {
             self.writePlist(bundlePath: bundlePath)
+            _ = await self.runLaunchctl(["bootout", "gui/\(getuid())/\(legacyLaunchdLabel)"])
+            try? FileManager().removeItem(at: self.legacyPlistURL)
             _ = await self.runLaunchctl(["bootout", "gui/\(getuid())/\(launchdLabel)"])
             _ = await self.runLaunchctl(["bootstrap", "gui/\(getuid())", self.plistURL.path])
             _ = await self.runLaunchctl(["kickstart", "-k", "gui/\(getuid())/\(launchdLabel)"])
@@ -22,6 +29,7 @@ enum LaunchAgentManager {
             // Disable autostart going forward but leave the current app running.
             // bootout would terminate the launchd job immediately (and crash the app if launched via agent).
             try? FileManager().removeItem(at: self.plistURL)
+            try? FileManager().removeItem(at: self.legacyPlistURL)
         }
     }
 
@@ -32,10 +40,10 @@ enum LaunchAgentManager {
         <plist version="1.0">
         <dict>
           <key>Label</key>
-          <string>ai.openclaw.mac</string>
+          <string>\(launchdLabel)</string>
           <key>ProgramArguments</key>
           <array>
-            <string>\(bundlePath)/Contents/MacOS/OpenClaw</string>
+            <string>\(bundlePath)/Contents/MacOS/\(Branding.executableName)</string>
           </array>
           <key>WorkingDirectory</key>
           <string>\(FileManager().homeDirectoryForCurrentUser.path)</string>

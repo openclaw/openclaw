@@ -11,10 +11,40 @@ private let webChatSwiftLogger = Logger(subsystem: "ai.openclaw", category: "Web
 private let webChatThinkingLevelDefaultsKey = "openclaw.webchat.thinkingLevel"
 
 private enum WebChatSwiftUILayout {
-    static let windowSize = NSSize(width: 500, height: 840)
-    static let panelSize = NSSize(width: 480, height: 640)
-    static let windowMinSize = NSSize(width: 480, height: 360)
+    static let windowIdealSize = NSSize(width: 780, height: 760)
+    static let correctionWindowIdealSize = NSSize(width: 1180, height: 780)
+    static let panelIdealSize = NSSize(width: 520, height: 660)
+    static let windowMinSize = NSSize(width: 620, height: 420)
+    static let correctionWindowMinSize = NSSize(width: 980, height: 680)
+    static let panelMinSize = NSSize(width: 420, height: 480)
     static let anchorPadding: CGFloat = 8
+
+    @MainActor
+    static func windowSize(for screen: NSScreen?) -> NSSize {
+        AdaptiveWindowSizing.clampedSize(
+            ideal: self.windowIdealSize,
+            minimum: self.windowMinSize,
+            padding: 40,
+            on: screen)
+    }
+
+    @MainActor
+    static func correctionWindowSize(for screen: NSScreen?) -> NSSize {
+        AdaptiveWindowSizing.clampedSize(
+            ideal: self.correctionWindowIdealSize,
+            minimum: self.correctionWindowMinSize,
+            padding: 40,
+            on: screen)
+    }
+
+    @MainActor
+    static func panelSize(for screen: NSScreen?) -> NSSize {
+        AdaptiveWindowSizing.clampedSize(
+            ideal: self.panelIdealSize,
+            minimum: self.panelMinSize,
+            padding: 20,
+            on: screen)
+    }
 }
 
 struct MacGatewayChatTransport: OpenClawChatTransport {
@@ -208,20 +238,40 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
 
 @MainActor
 final class WebChatSwiftUIWindowController {
+    private static let workspaceWindowCollectionBehavior: NSWindow.CollectionBehavior = [
+        .primary,
+        .canJoinAllSpaces,
+        .fullScreenAuxiliary,
+    ]
+
     private let presentation: WebChatPresentation
     private let sessionKey: String
-    private let hosting: NSHostingController<OpenClawChatView>
+    private let workspaceRouter: WebChatWorkspaceRouter?
+    private let hosting: NSHostingController<AnyView>
     private let contentController: NSViewController
     private var window: NSWindow?
     private var dismissMonitor: Any?
     var onClosed: (() -> Void)?
     var onVisibilityChanged: ((Bool) -> Void)?
 
-    convenience init(sessionKey: String, presentation: WebChatPresentation) {
-        self.init(sessionKey: sessionKey, presentation: presentation, transport: MacGatewayChatTransport())
+    convenience init(
+        sessionKey: String,
+        presentation: WebChatPresentation,
+        initialMode: WebChatWorkspaceMode = .control)
+    {
+        self.init(
+            sessionKey: sessionKey,
+            presentation: presentation,
+            transport: MacGatewayChatTransport(),
+            initialMode: initialMode)
     }
 
-    init(sessionKey: String, presentation: WebChatPresentation, transport: any OpenClawChatTransport) {
+    init(
+        sessionKey: String,
+        presentation: WebChatPresentation,
+        transport: any OpenClawChatTransport,
+        initialMode: WebChatWorkspaceMode = .control)
+    {
         self.sessionKey = sessionKey
         self.presentation = presentation
         let vm = OpenClawChatViewModel(
@@ -232,12 +282,29 @@ final class WebChatSwiftUIWindowController {
                 UserDefaults.standard.set(level, forKey: webChatThinkingLevelDefaultsKey)
             })
         let accent = Self.color(fromHex: AppStateStore.shared.seamColorHex)
-        self.hosting = NSHostingController(rootView: OpenClawChatView(
-            viewModel: vm,
-            showsSessionSwitcher: true,
-            userAccent: accent))
+        switch presentation {
+        case .window:
+            let workspaceRouter = WebChatWorkspaceRouter(selectedMode: initialMode)
+            self.workspaceRouter = workspaceRouter
+            self.hosting = NSHostingController(rootView: AnyView(
+                WebChatWorkspaceRootView(
+                    router: workspaceRouter,
+                    state: AppStateStore.shared,
+                    chatViewModel: vm,
+                    userAccent: accent)))
+        case .panel:
+            self.workspaceRouter = nil
+            self.hosting = NSHostingController(rootView: AnyView(OpenClawChatView(
+                viewModel: vm,
+                showsSessionSwitcher: true,
+                userAccent: accent)))
+        }
+        if #available(macOS 13.0, *) {
+            self.hosting.sizingOptions = []
+        }
         self.contentController = Self.makeContentController(for: presentation, hosting: self.hosting)
         self.window = Self.makeWindow(for: presentation, contentViewController: self.contentController)
+        self.applyWorkspaceMode(initialMode, animate: false)
     }
 
     deinit {}
@@ -246,12 +313,56 @@ final class WebChatSwiftUIWindowController {
         self.window?.isVisible ?? false
     }
 
-    func show() {
+    func show(mode: WebChatWorkspaceMode = .control) {
         guard let window else { return }
-        self.ensureWindowSize()
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        let wasVisible = window.isVisible
+        let deferCorrectionMode: Bool
+        if case .window = self.presentation {
+            deferCorrectionMode = mode == .correction && !window.isVisible
+        } else {
+            deferCorrectionMode = false
+        }
+        if !deferCorrectionMode {
+            self.applyWorkspaceMode(mode, animate: true)
+        }
+        switch self.presentation {
+        case .window:
+            DockIconManager.shared.temporarilyShowDockNow()
+            self.ensureWindowSize(mode: mode, force: !wasVisible)
+            self.promoteWindowToForeground(window)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                self.ensureWindowSize(mode: mode, force: !wasVisible)
+                self.promoteWindowToForeground(window)
+            }
+        case .panel:
+            self.ensureWindowSize()
+            window.makeKeyAndOrderFront(nil)
+            window.orderFrontRegardless()
+            DockIconManager.shared.updateDockVisibilityNow()
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        if deferCorrectionMode {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                self?.applyWorkspaceMode(mode, animate: true)
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self, weak window] in
+            guard let self, let window else { return }
+            if case .window = self.presentation,
+               (!window.isKeyWindow || !window.isMainWindow || !window.isVisible)
+            {
+                self.promoteWindowToForeground(window)
+            }
+        }
         self.onVisibilityChanged?(true)
+    }
+
+    private func promoteWindowToForeground(_ window: NSWindow) {
+        DockIconManager.shared.temporarilyShowDockNow()
+        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
+        NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps, .activateAllWindows])
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     func presentAnchored(anchorProvider: () -> NSRect?) {
@@ -264,6 +375,7 @@ final class WebChatSwiftUIWindowController {
             window.setFrame(start, display: true)
             window.alphaValue = 0
             window.makeKeyAndOrderFront(nil)
+            DockIconManager.shared.updateDockVisibilityNow()
             NSApp.activate(ignoringOtherApps: true)
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.18
@@ -273,6 +385,7 @@ final class WebChatSwiftUIWindowController {
             }
         } else {
             window.makeKeyAndOrderFront(nil)
+            DockIconManager.shared.updateDockVisibilityNow()
             NSApp.activate(ignoringOtherApps: true)
         }
 
@@ -281,6 +394,7 @@ final class WebChatSwiftUIWindowController {
 
     func close() {
         self.window?.orderOut(nil)
+        DockIconManager.shared.updateDockVisibilityNow()
         self.onVisibilityChanged?(false)
         self.onClosed?()
         self.removeDismissMonitor()
@@ -289,21 +403,24 @@ final class WebChatSwiftUIWindowController {
     @discardableResult
     private func reposition(using anchorProvider: () -> NSRect?) -> NSRect {
         guard let window else { return .zero }
+        let screen = window.screen ?? NSScreen.main
+        let panelSize = WebChatSwiftUILayout.panelSize(for: screen)
         guard let anchor = anchorProvider() else {
             let frame = WindowPlacement.topRightFrame(
-                size: WebChatSwiftUILayout.panelSize,
-                padding: WebChatSwiftUILayout.anchorPadding)
+                size: panelSize,
+                padding: WebChatSwiftUILayout.anchorPadding,
+                on: screen)
             window.setFrame(frame, display: false)
             return frame
         }
-        let screen = NSScreen.screens.first { screen in
+        let targetScreen = NSScreen.screens.first { screen in
             screen.frame.contains(anchor.origin) || screen.frame.contains(NSPoint(x: anchor.midX, y: anchor.midY))
-        } ?? NSScreen.main
-        let bounds = (screen?.visibleFrame ?? .zero).insetBy(
+        } ?? screen
+        let bounds = (targetScreen?.visibleFrame ?? .zero).insetBy(
             dx: WebChatSwiftUILayout.anchorPadding,
             dy: WebChatSwiftUILayout.anchorPadding)
         let frame = WindowPlacement.anchoredBelowFrame(
-            size: WebChatSwiftUILayout.panelSize,
+            size: WebChatSwiftUILayout.panelSize(for: targetScreen),
             anchor: anchor,
             padding: WebChatSwiftUILayout.anchorPadding,
             in: bounds)
@@ -345,27 +462,30 @@ final class WebChatSwiftUIWindowController {
     {
         switch presentation {
         case .window:
+            let windowSize = WebChatSwiftUILayout.windowSize(for: NSScreen.main)
             let window = NSWindow(
-                contentRect: NSRect(origin: .zero, size: WebChatSwiftUILayout.windowSize),
+                contentRect: NSRect(origin: .zero, size: windowSize),
                 styleMask: [.titled, .closable, .resizable, .miniaturizable],
                 backing: .buffered,
                 defer: false)
-            window.title = "OpenClaw Chat"
+            window.title = Branding.chatWindowTitle
             window.contentViewController = contentViewController
             window.isReleasedWhenClosed = false
             window.titleVisibility = .visible
             window.titlebarAppearsTransparent = false
             window.backgroundColor = .clear
             window.isOpaque = false
+            window.collectionBehavior = Self.workspaceWindowCollectionBehavior
             window.center()
-            WindowPlacement.ensureOnScreen(window: window, defaultSize: WebChatSwiftUILayout.windowSize)
+            WindowPlacement.ensureOnScreen(window: window, defaultSize: windowSize)
             window.minSize = WebChatSwiftUILayout.windowMinSize
             window.contentView?.wantsLayer = true
             window.contentView?.layer?.backgroundColor = NSColor.clear.cgColor
             return window
         case .panel:
+            let panelSize = WebChatSwiftUILayout.panelSize(for: NSScreen.main)
             let panel = WebChatPanel(
-                contentRect: NSRect(origin: .zero, size: WebChatSwiftUILayout.panelSize),
+                contentRect: NSRect(origin: .zero, size: panelSize),
                 styleMask: [.borderless],
                 backing: .buffered,
                 defer: false)
@@ -384,8 +504,9 @@ final class WebChatSwiftUIWindowController {
             panel.contentView?.layer?.backgroundColor = NSColor.clear.cgColor
             panel.setFrame(
                 WindowPlacement.topRightFrame(
-                    size: WebChatSwiftUILayout.panelSize,
-                    padding: WebChatSwiftUILayout.anchorPadding),
+                    size: panelSize,
+                    padding: WebChatSwiftUILayout.anchorPadding,
+                    on: NSScreen.main),
                 display: false)
             return panel
         }
@@ -393,7 +514,7 @@ final class WebChatSwiftUIWindowController {
 
     private static func makeContentController(
         for presentation: WebChatPresentation,
-        hosting: NSHostingController<OpenClawChatView>) -> NSViewController
+        hosting: NSHostingController<AnyView>) -> NSViewController
     {
         let controller = NSViewController()
         let effectView = NSVisualEffectView()
@@ -443,16 +564,68 @@ final class WebChatSwiftUIWindowController {
     }
 
     private func ensureWindowSize() {
+        guard case .window = self.presentation else { return }
+        self.ensureWindowSize(mode: self.workspaceRouter?.selectedMode ?? .control, force: false)
+    }
+
+    private func ensureWindowSize(mode: WebChatWorkspaceMode, force: Bool) {
         guard case .window = self.presentation, let window else { return }
         let current = window.frame.size
-        let min = WebChatSwiftUILayout.windowMinSize
-        if current.width < min.width || current.height < min.height {
-            let frame = WindowPlacement.centeredFrame(size: WebChatSwiftUILayout.windowSize)
-            window.setFrame(frame, display: false)
+        let isCorrection = mode == .correction
+        let min = isCorrection
+            ? WebChatSwiftUILayout.correctionWindowMinSize
+            : WebChatSwiftUILayout.windowMinSize
+        let screen = window.screen ?? NSScreen.main
+        let targetSize = isCorrection
+                ? WebChatSwiftUILayout.correctionWindowSize(for: screen)
+                : WebChatSwiftUILayout.windowSize(for: screen)
+        let visibleSize = screen?.visibleFrame.size ?? targetSize
+        let exceedsVisibleFrame = current.width > visibleSize.width || current.height > visibleSize.height
+        let centeredFrame = WindowPlacement.centeredFrame(size: targetSize, on: screen)
+
+        if !Self.isFrameVisibleOnAnyScreen(window.frame) {
+            window.setFrame(centeredFrame, display: false)
+            return
+        }
+
+        guard force || current.width < min.width || current.height < min.height || exceedsVisibleFrame else { return }
+
+        window.setFrame(centeredFrame, display: false)
+    }
+
+    private func applyWorkspaceMode(_ mode: WebChatWorkspaceMode, animate: Bool) {
+        guard case .window = self.presentation, let window else { return }
+        self.workspaceRouter?.selectedMode = mode
+        window.title = mode.windowTitle
+        window.minSize = mode == .correction
+            ? WebChatSwiftUILayout.correctionWindowMinSize
+            : WebChatSwiftUILayout.windowMinSize
+
+        guard mode == .correction else { return }
+        let minSize = WebChatSwiftUILayout.correctionWindowMinSize
+        guard window.frame.width < minSize.width || window.frame.height < minSize.height else { return }
+
+        let screen = window.screen ?? NSScreen.main
+        let frame = WindowPlacement.centeredFrame(
+            size: WebChatSwiftUILayout.correctionWindowSize(for: screen),
+            on: screen)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            window.setFrame(frame, display: true, animate: false)
         }
     }
 
     private static func color(fromHex raw: String?) -> Color? {
         ColorHexSupport.color(fromHex: raw)
+    }
+
+    private static func isFrameVisibleOnAnyScreen(_ frame: NSRect) -> Bool {
+        let screens = NSScreen.screens
+        if screens.isEmpty {
+            return frame.width > 1 && frame.height > 1
+        }
+
+        return screens.contains { screen in
+            frame.intersects(screen.visibleFrame.insetBy(dx: 12, dy: 12))
+        }
     }
 }

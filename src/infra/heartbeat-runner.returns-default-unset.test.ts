@@ -672,6 +672,97 @@ describe("runHeartbeatOnce", () => {
     }
   });
 
+  it("falls back to the most recent routed session when the main heartbeat session is missing", async () => {
+    const tmpDir = await createCaseDir("hb-route-fallback");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    try {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            heartbeat: { every: "30m" },
+          },
+          list: [
+            { id: "main", default: true },
+            {
+              id: "ops",
+              workspace: tmpDir,
+              heartbeat: {
+                every: "5m",
+                target: "last",
+                isolatedSession: true,
+                accountId: "ops",
+              },
+            },
+          ],
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const latestRouteKey = buildAgentPeerSessionKey({
+        agentId: "ops",
+        channel: "whatsapp",
+        accountId: "ops",
+        peerKind: "channel",
+        peerId: "team-room",
+      });
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [latestRouteKey]: {
+            sessionId: "sid-route",
+            updatedAt: Date.now(),
+            lastChannel: "whatsapp",
+            lastTo: "120363401234567890@g.us",
+            lastAccountId: "ops",
+          },
+        }),
+      );
+
+      replySpy.mockResolvedValue([{ text: "Final alert" }]);
+      const sendWhatsApp = vi
+        .fn<
+          (
+            to: string,
+            text: string,
+            opts?: unknown,
+          ) => Promise<{ messageId: string; toJid: string }>
+        >()
+        .mockResolvedValue({
+          messageId: "m1",
+          toJid: "jid",
+        });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        agentId: "ops",
+        deps: createHeartbeatDeps(sendWhatsApp),
+      });
+
+      expect(result.status).toBe("ran");
+      expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+      expect(sendWhatsApp).toHaveBeenCalledWith(
+        "120363401234567890@g.us",
+        "Final alert",
+        expect.any(Object),
+      );
+      expect(replySpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          From: "120363401234567890@g.us",
+          To: "120363401234567890@g.us",
+          OriginatingChannel: "whatsapp",
+          OriginatingTo: "120363401234567890@g.us",
+          SessionKey: "agent:ops:main:heartbeat",
+        }),
+        expect.objectContaining({ isHeartbeat: true, suppressToolErrorWarnings: false }),
+        cfg,
+      );
+    } finally {
+      replySpy.mockRestore();
+    }
+  });
+
   it("reuses non-default agent sessionFile from templated stores", async () => {
     const tmpDir = await createCaseDir("hb-templated-store");
     const storeTemplate = path.join(tmpDir, "agents", "{agentId}", "sessions", "sessions.json");

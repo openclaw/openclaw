@@ -5,6 +5,7 @@ import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import type { SkillCommandSpec } from "../../agents/skills.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import type { AgentDefaultsLikeConfig } from "../../config/types.agents.js";
 import { listChatCommands, shouldHandleTextCommands } from "../commands-registry.js";
 import { listSkillCommandsForWorkspace } from "../skill-commands.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
@@ -22,7 +23,6 @@ import { formatElevatedUnavailableMessage, resolveElevatedPermissions } from "./
 import { stripInlineStatus } from "./reply-inline.js";
 import type { TypingController } from "./typing.js";
 
-type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
 
 export type ReplyDirectiveContinuation = {
@@ -92,7 +92,7 @@ export async function resolveReplyDirectives(params: {
   agentId: string;
   agentDir: string;
   workspaceDir: string;
-  agentCfg: AgentDefaults;
+  agentCfg: AgentDefaultsLikeConfig;
   sessionCtx: TemplateContext;
   sessionEntry: SessionEntry;
   sessionStore: Record<string, SessionEntry>;
@@ -351,6 +351,7 @@ export async function resolveReplyDirectives(params: {
       provider,
       model,
       sessionEntry,
+      agentCfg,
     }).enabled;
 
   const resolvedVerboseLevel =
@@ -360,6 +361,7 @@ export async function resolveReplyDirectives(params: {
   let resolvedReasoningLevel: ReasoningLevel =
     directives.reasoningLevel ??
     (sessionEntry?.reasoningLevel as ReasoningLevel | undefined) ??
+    (agentCfg?.reasoningDefault as ReasoningLevel | undefined) ??
     "off";
   const resolvedElevatedLevel = elevatedAllowed
     ? (directives.elevatedLevel ??

@@ -1,0 +1,22 @@
+{
+  "name": "edit_subtask_title",
+  "description": "Update the title of a subtask",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "taskId": {
+        "type": "string",
+        "description": "The ID of the parent task"
+      },
+      "subtaskId": {
+        "type": "string",
+        "description": "The ID of the subtask"
+      },
+      "newTitle": {
+        "type": "string",
+        "description": "The new title for the subtask"
+      }
+    },
+    "required": ["taskId", "subtaskId", "newTitle"]
+  }
+}

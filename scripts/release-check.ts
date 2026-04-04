@@ -17,6 +17,7 @@ export { collectBundledExtensionManifestErrors } from "./lib/bundled-extension-m
 
 type PackFile = { path: string };
 type PackResult = { files?: PackFile[]; filename?: string; unpackedSize?: number };
+type RequiredPathGroup = string | string[];
 
 const requiredPathGroups = [
   ["dist/index.js", "dist/index.mjs"],
@@ -25,7 +26,21 @@ const requiredPathGroups = [
   "dist/plugin-sdk/root-alias.cjs",
   "dist/build-info.json",
 ];
-const forbiddenPrefixes = ["dist-runtime/", "dist/OpenClaw.app/"];
+const requiredLegalPackPaths = [
+  "ATTRIBUTION.md",
+  "INFRINGEMENT.md",
+  "LEGAL_ENFORCEMENT.md",
+  "NOTICE",
+  "PATENTS.md",
+  "SECURITY.md",
+  "TRADEMARKS.md",
+] as const;
+const forbiddenPrefixes = [
+  "dist-runtime/",
+  "dist/OpenClaw.app/",
+  "dist/Vericlaw.app/",
+  "dist/VeriClaw 爪印.app/",
+];
 // 2026.3.12 ballooned to ~213.6 MiB unpacked and correlated with low-memory
 // startup/doctor OOM reports. Keep enough headroom for the current pack while
 // failing fast if duplicate/shim content sneaks back into the release artifact.
@@ -143,6 +158,21 @@ export function collectForbiddenPackPaths(paths: Iterable<string>): string[] {
         forbiddenPrefixes.some((prefix) => path.startsWith(prefix)) ||
         /(^|\/)node_modules\//.test(path),
     )
+    .toSorted();
+}
+
+export function collectMissingPackPaths(
+  paths: Iterable<string>,
+  requiredGroups: ReadonlyArray<RequiredPathGroup>,
+): string[] {
+  const pathSet = paths instanceof Set ? paths : new Set(paths);
+  return requiredGroups
+    .flatMap((group) => {
+      if (Array.isArray(group)) {
+        return group.some((path) => pathSet.has(path)) ? [] : [group.join(" or ")];
+      }
+      return pathSet.has(group) ? [] : [group];
+    })
     .toSorted();
 }
 
@@ -386,14 +416,10 @@ function main() {
   const files = results.flatMap((entry) => entry.files ?? []);
   const paths = new Set(files.map((file) => file.path));
 
-  const missing = requiredPathGroups
-    .flatMap((group) => {
-      if (Array.isArray(group)) {
-        return group.some((path) => paths.has(path)) ? [] : [group.join(" or ")];
-      }
-      return paths.has(group) ? [] : [group];
-    })
-    .toSorted();
+  const missing = [
+    ...collectMissingPackPaths(paths, requiredPathGroups),
+    ...collectMissingPackPaths(paths, requiredLegalPackPaths),
+  ].toSorted();
   const forbidden = collectForbiddenPackPaths(paths);
   const sizeErrors = collectPackUnpackedSizeErrors(results);
 

@@ -1,0 +1,21 @@
+{
+  "name": "reorder_tasks",
+  "description": "Reorder tasks for a specific day",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "taskIds": {
+        "type": "array",
+        "description": "Array of task IDs in the desired order",
+        "items": {
+          "type": "string"
+        }
+      },
+      "calendarDay": {
+        "type": "string",
+        "description": "The date (YYYY-MM-DD format)"
+      }
+    },
+    "required": ["taskIds", "calendarDay"]
+  }
+}

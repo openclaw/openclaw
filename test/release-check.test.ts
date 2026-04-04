@@ -4,6 +4,7 @@ import {
   collectBundledExtensionManifestErrors,
   collectBundledExtensionRootDependencyGapErrors,
   collectForbiddenPackPaths,
+  collectMissingPackPaths,
   collectPackUnpackedSizeErrors,
 } from "../scripts/release-check.ts";
 
@@ -166,6 +167,23 @@ describe("collectForbiddenPackPaths", () => {
         "node_modules/.bin/openclaw",
       ]),
     ).toEqual(["extensions/tlon/node_modules/.bin/tlon", "node_modules/.bin/openclaw"]);
+  });
+});
+
+describe("collectMissingPackPaths", () => {
+  it("accepts alternative required path groups when one variant is present", () => {
+    expect(
+      collectMissingPackPaths(["dist/index.mjs"], [["dist/index.js", "dist/index.mjs"]]),
+    ).toEqual([]);
+  });
+
+  it("flags missing required legal release files", () => {
+    expect(
+      collectMissingPackPaths(
+        ["LICENSE", "README.md"],
+        ["NOTICE", "TRADEMARKS.md", "INFRINGEMENT.md", "PATENTS.md"],
+      ),
+    ).toEqual(["INFRINGEMENT.md", "NOTICE", "PATENTS.md", "TRADEMARKS.md"]);
   });
 });
 

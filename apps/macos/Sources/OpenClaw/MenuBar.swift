@@ -12,10 +12,12 @@ struct OpenClawApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @State private var state: AppState
     private static let logger = Logger(subsystem: "ai.openclaw", category: "app")
+    private static let shouldDeferPinnedWidgetRecoveryAtLaunch = Self.computePinnedWidgetRecoveryDeferral()
     private let gatewayManager = GatewayProcessManager.shared
     private let controlChannel = ControlChannel.shared
     private let activityStore = WorkActivityStore.shared
     private let connectivityCoordinator = GatewayConnectivityCoordinator.shared
+    private let hoverHUD = HoverHUDController.shared
     @State private var statusItem: NSStatusItem?
     @State private var isMenuPresented = false
     @State private var isPanelVisible = false
@@ -23,7 +25,10 @@ struct OpenClawApp: App {
 
     @MainActor
     private func updateStatusHighlight() {
-        self.statusItem?.button?.highlight(self.isPanelVisible)
+        self.statusItem?.button?.highlight(
+            self.isPanelVisible ||
+                self.hoverHUD.model.isVisible ||
+                self.hoverHUD.model.isCharm)
     }
 
     @MainActor
@@ -40,16 +45,15 @@ struct OpenClawApp: App {
 
     var body: some Scene {
         MenuBarExtra { MenuContent(state: self.state, updater: self.delegate.updaterController) } label: {
-            CritterStatusLabel(
+            MenuBarStatusLabel(
                 isPaused: self.state.isPaused,
                 isSleeping: self.isGatewaySleeping,
                 isWorking: self.state.isWorking,
-                earBoostActive: self.state.earBoostActive,
-                blinkTick: self.state.blinkTick,
-                sendCelebrationTick: self.state.sendCelebrationTick,
                 gatewayStatus: self.gatewayManager.status,
-                animationsEnabled: self.state.iconAnimationsEnabled && !self.isGatewaySleeping,
-                iconState: self.effectiveIconState)
+                iconState: self.effectiveIconState,
+                isWidgetVisible: self.hoverHUD.model.isVisible,
+                isWidgetCollapsedToMenuBar: self.hoverHUD.model.isCharm,
+                isStatusItemHovered: self.hoverHUD.model.hoveringStatusItem)
         }
         .menuBarExtraStyle(.menu)
         .menuBarExtraAccess(isPresented: self.$isMenuPresented) { item in
@@ -58,6 +62,9 @@ struct OpenClawApp: App {
             self.applyStatusItemAppearance(paused: self.state.isPaused, sleeping: self.isGatewaySleeping)
             self.installStatusItemMouseHandler(for: item)
             self.updateHoverHUDSuppression()
+            if !Self.shouldDeferPinnedWidgetRecoveryAtLaunch {
+                HoverHUDController.shared.schedulePinnedWidgetRecovery()
+            }
         }
         .onChange(of: self.state.isPaused) { _, paused in
             self.applyStatusItemAppearance(paused: paused, sleeping: self.isGatewaySleeping)
@@ -77,17 +84,34 @@ struct OpenClawApp: App {
             Task { await ConnectionModeCoordinator.shared.apply(mode: mode, paused: self.state.isPaused) }
             CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "connection-mode")
         }
-
-        Settings {
-            SettingsRootView(state: self.state, updater: self.delegate.updaterController)
-                .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight, alignment: .topLeading)
-                .environment(self.tailscaleService)
-        }
-        .defaultSize(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight)
-        .windowResizability(.contentSize)
         .onChange(of: self.isMenuPresented) { _, _ in
             self.updateStatusHighlight()
             self.updateHoverHUDSuppression()
+        }
+        .onChange(of: self.hoverHUD.model.isVisible) { _, _ in
+            self.updateStatusHighlight()
+            self.updateHoverHUDSuppression()
+        }
+        .onChange(of: self.hoverHUD.model.isCharm) { _, _ in
+            self.updateStatusHighlight()
+        }
+
+        Settings {
+            SettingsRootView(state: self.state, updater: self.delegate.updaterController)
+                .frame(
+                    minWidth: SettingsTab.minWindowWidth,
+                    idealWidth: SettingsTab.windowWidth,
+                    maxWidth: .infinity,
+                    minHeight: SettingsTab.minWindowHeight,
+                    idealHeight: SettingsTab.windowHeight,
+                    maxHeight: .infinity,
+                    alignment: .topLeading)
+                .environment(self.tailscaleService)
+        }
+        .defaultSize(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight)
+        .windowResizability(.contentMinSize)
+        .commands {
+            CompanionCommands()
         }
     }
 
@@ -109,6 +133,27 @@ struct OpenClawApp: App {
                 port: GatewayEnvironment.gatewayPort())
         }
         Self.logger.info("attach-only flag enabled")
+    }
+
+    private static func computePinnedWidgetRecoveryDeferral() -> Bool {
+        let args = CommandLine.arguments
+        let shouldShowOnboarding = {
+            let seenVersion = UserDefaults.standard.integer(forKey: onboardingVersionKey)
+            return seenVersion < currentOnboardingVersion || !AppStateStore.shared.onboardingSeen
+        }()
+        let settingsTab = SettingsTab.launchArgument(from: args)
+        let hasExplicitWorkspaceLaunchArg =
+            args.contains("--control") ||
+            args.contains("--chat") ||
+            args.contains("--webchat") ||
+            args.contains("--correction") ||
+            args.contains("--workspace")
+        let opensPrimarySurface =
+            hasExplicitWorkspaceLaunchArg ||
+            settingsTab != nil ||
+            (!shouldShowOnboarding && settingsTab == nil &&
+                !hasExplicitWorkspaceLaunchArg && !AppStateStore.shared.launchAtLogin)
+        return opensPrimarySurface
     }
 
     private var isGatewaySleeping: Bool {
@@ -148,8 +193,9 @@ struct OpenClawApp: App {
         let handler = StatusItemMouseHandlerView()
         handler.translatesAutoresizingMaskIntoConstraints = false
         handler.onLeftClick = { [self] in
-            HoverHUDController.shared.dismiss(reason: "statusItemClick")
-            self.toggleWebChatPanel()
+            WebChatManager.shared.closePanel()
+            HoverHUDController.shared.openExpandedFromStatusItem(
+                anchorProvider: { [self] in self.statusButtonScreenFrame() })
         }
         handler.onRightClick = { [self] in
             HoverHUDController.shared.dismiss(reason: "statusItemRightClick")
@@ -206,6 +252,133 @@ struct OpenClawApp: App {
     }
 }
 
+private struct MenuBarStatusLabel: View {
+    let isPaused: Bool
+    let isSleeping: Bool
+    let isWorking: Bool
+    let gatewayStatus: GatewayProcessManager.Status
+    let iconState: IconState
+    let isWidgetVisible: Bool
+    let isWidgetCollapsedToMenuBar: Bool
+    let isStatusItemHovered: Bool
+
+    private var activeTint: Color {
+        switch self.gatewayStatus {
+        case .failed:
+            return Color(nsColor: .systemRed)
+        case .stopped:
+            return Color(nsColor: .systemOrange)
+        case .starting:
+            return Color(nsColor: .systemYellow)
+        case .running, .attachedExisting:
+            if self.iconState.isWorking || self.isWorking {
+                return Color(nsColor: .systemMint)
+            }
+            return Color(nsColor: .systemBlue)
+        }
+    }
+
+    private var showsAccentDot: Bool {
+        self.isWidgetCollapsedToMenuBar || self.gatewayNeedsAttention || self.iconState.isWorking || self.isWorking
+    }
+
+    private var gatewayNeedsAttention: Bool {
+        switch self.gatewayStatus {
+        case .failed, .stopped:
+            return !self.isPaused
+        case .starting, .running, .attachedExisting:
+            return false
+        }
+    }
+
+    private var showsBackdrop: Bool {
+        self.isWidgetVisible || self.isWidgetCollapsedToMenuBar || self.isStatusItemHovered
+    }
+
+    private var backdropFillOpacity: Double {
+        if self.isWidgetVisible { return 0.14 }
+        if self.isWidgetCollapsedToMenuBar { return 0.10 }
+        if self.isStatusItemHovered { return 0.06 }
+        return 0
+    }
+
+    var body: some View {
+        ZStack {
+            if self.showsBackdrop {
+                Capsule(style: .continuous)
+                    .fill(Color(nsColor: .labelColor).opacity(self.backdropFillOpacity))
+                    .overlay(
+                        Capsule(style: .continuous)
+                            .strokeBorder(Color.white.opacity(self.isWidgetVisible ? 0.20 : 0.10), lineWidth: 0.8))
+                    .frame(
+                        width: self.showsAccentDot ? 34 : 28,
+                        height: 24)
+                    .shadow(
+                        color: self.activeTint.opacity(self.isWidgetCollapsedToMenuBar ? 0.14 : 0.05),
+                        radius: self.isWidgetCollapsedToMenuBar ? 8 : 4,
+                        y: self.isWidgetCollapsedToMenuBar ? 2 : 1)
+                    .transition(.opacity.combined(with: .scale(scale: 0.94)))
+            }
+
+            HStack(spacing: self.showsAccentDot ? 5 : 0) {
+                MenuBarTemplateGlyph(
+                    isPaused: self.isPaused,
+                    isSleeping: self.isSleeping,
+                    isWorking: self.iconState.isWorking || self.isWorking)
+
+                if self.showsAccentDot {
+                    Circle()
+                        .fill(self.activeTint)
+                        .frame(width: 4.5, height: 4.5)
+                        .overlay(
+                            Circle()
+                                .fill(Color.white.opacity(0.35))
+                                .frame(width: 2, height: 2)
+                                .offset(x: -0.4, y: -0.7))
+                        .transition(.scale.combined(with: .opacity))
+                    }
+            }
+            .padding(.horizontal, self.showsAccentDot ? 6 : (self.isWidgetVisible ? 4 : 0))
+            .padding(.vertical, 2)
+        }
+        .scaleEffect(self.isWidgetVisible ? 1.02 : 1)
+        .animation(.spring(response: 0.28, dampingFraction: 0.86), value: self.isWidgetCollapsedToMenuBar)
+        .animation(.easeOut(duration: 0.16), value: self.isWidgetVisible)
+        .animation(.easeOut(duration: 0.18), value: self.isStatusItemHovered)
+        .animation(.easeOut(duration: 0.18), value: self.showsAccentDot)
+    }
+}
+
+private struct MenuBarTemplateGlyph: View {
+    let isPaused: Bool
+    let isSleeping: Bool
+    let isWorking: Bool
+
+    private static let baseImage = CritterIconRenderer.makeIcon(blink: 0)
+
+    private var iconOpacity: Double {
+        if self.isPaused { return 0.58 }
+        if self.isSleeping { return 0.44 }
+        return 1
+    }
+
+    private var iconScale: CGFloat {
+        self.isWorking ? 1.02 : 1
+    }
+
+    var body: some View {
+        Image(nsImage: Self.baseImage)
+            .renderingMode(.template)
+            .interpolation(.high)
+            .resizable()
+            .aspectRatio(contentMode: .fit)
+            .frame(width: 18, height: 18)
+            .opacity(self.iconOpacity)
+            .scaleEffect(self.iconScale)
+            .animation(.easeOut(duration: 0.16), value: self.isWorking)
+    }
+}
+
 /// Transparent overlay that intercepts clicks without stealing MenuBarExtra ownership.
 private final class StatusItemMouseHandlerView: NSView {
     var onLeftClick: (() -> Void)?
@@ -244,6 +417,7 @@ private final class StatusItemMouseHandlerView: NSView {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var state: AppState?
     private let webChatAutoLogger = Logger(subsystem: "ai.openclaw", category: "Chat")
+    private let settingsLaunchLogger = Logger(subsystem: "ai.openclaw", category: "SettingsLaunch")
     let updaterController: UpdaterProviding = makeUpdaterController()
 
     func application(_: NSApplication, open urls: [URL]) {
@@ -281,13 +455,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "launch")
         }
 
-        // Developer/testing helper: auto-open chat when launched with --chat (or legacy --webchat).
-        if CommandLine.arguments.contains("--chat") || CommandLine.arguments.contains("--webchat") {
+        let shouldShowOnboarding = {
+            let seenVersion = UserDefaults.standard.integer(forKey: onboardingVersionKey)
+            return seenVersion < currentOnboardingVersion || !AppStateStore.shared.onboardingSeen
+        }()
+        let settingsTab = SettingsTab.launchArgument(from: CommandLine.arguments)
+        let shouldOpenDeskWidget = CommandLine.arguments.contains("--desk-widget")
+        let shouldOpenWidgetPanel = CommandLine.arguments.contains("--widget-panel")
+        let hasExplicitWorkspaceLaunchArg =
+            CommandLine.arguments.contains("--control") ||
+            CommandLine.arguments.contains("--chat") ||
+            CommandLine.arguments.contains("--webchat") ||
+            CommandLine.arguments.contains("--correction") ||
+            CommandLine.arguments.contains("--workspace")
+        let shouldPromotePrimaryWindowLaunch =
+            hasExplicitWorkspaceLaunchArg ||
+            settingsTab != nil ||
+            (!shouldShowOnboarding && settingsTab == nil &&
+                !hasExplicitWorkspaceLaunchArg && !AppStateStore.shared.launchAtLogin)
+
+        if shouldPromotePrimaryWindowLaunch {
+            DockIconManager.shared.temporarilyShowDockNow()
+            NSApp.activate(ignoringOtherApps: true)
+        }
+
+        // Developer/testing helper: auto-open a primary workspace window after the app scene settles.
+        if shouldOpenDeskWidget {
+            self.webChatAutoLogger.debug("Auto-opening desk widget via CLI flag")
+            self.scheduleHoverHUDOpen(compact: true)
+        } else if shouldOpenWidgetPanel {
+            self.webChatAutoLogger.debug("Auto-opening widget panel via CLI flag")
+            self.scheduleHoverHUDOpen(compact: false)
+        } else if CommandLine.arguments.contains("--control") {
+            self.webChatAutoLogger.debug("Auto-opening control workspace via CLI flag")
+            self.scheduleWorkspaceOpen(for: .control)
+        } else if CommandLine.arguments.contains("--chat") || CommandLine.arguments.contains("--webchat") {
             self.webChatAutoLogger.debug("Auto-opening chat via CLI flag")
-            Task { @MainActor in
-                let sessionKey = await WebChatManager.shared.preferredSessionKey()
-                WebChatManager.shared.show(sessionKey: sessionKey)
-            }
+            self.scheduleWorkspaceOpen(for: .chat)
+        } else if CommandLine.arguments.contains("--correction") || CommandLine.arguments.contains("--workspace") {
+            self.webChatAutoLogger.debug("Auto-opening correction workspace via CLI flag")
+            self.scheduleWorkspaceOpen(for: .correction)
+        } else if !shouldShowOnboarding && settingsTab == nil &&
+            !hasExplicitWorkspaceLaunchArg && !AppStateStore.shared.launchAtLogin
+        {
+            self.webChatAutoLogger.debug("Auto-opening control center on standard app launch")
+            self.scheduleWorkspaceOpen(for: .control)
+        }
+
+        if let settingsTab {
+            self.settingsLaunchLogger.debug("Auto-opening settings tab via CLI flag: \(settingsTab.title, privacy: .public)")
+            self.scheduleSettingsOpen(for: settingsTab)
+        }
+
+        if !shouldPromotePrimaryWindowLaunch && !shouldOpenDeskWidget && !shouldOpenWidgetPanel {
+            HoverHUDController.shared.schedulePinnedWidgetRecovery()
         }
     }
 
@@ -317,10 +538,74 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    @MainActor
+    private func scheduleHoverHUDOpen(compact: Bool) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) {
+            HoverHUDController.shared.openWidgetFromMenu(compact: compact)
+        }
+    }
+
+    @MainActor
+    private func scheduleSettingsOpen(for tab: SettingsTab) {
+        SettingsTabRouter.request(tab)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
+            SettingsWindowOpener.shared.open()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                NotificationCenter.default.post(name: .openclawSelectSettingsTab, object: tab)
+            }
+        }
+    }
+
+    @MainActor
+    private func scheduleWorkspaceOpen(for mode: WebChatWorkspaceMode) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
+            DockIconManager.shared.temporarilyShowDockNow()
+            NSApp.activate(ignoringOtherApps: true)
+            NSRunningApplication.current.activate(options: [.activateAllWindows])
+            let sessionKey = WebChatManager.shared.preferredSessionKeyImmediate()
+            WebChatManager.shared.show(sessionKey: sessionKey, mode: mode)
+            WebChatManager.shared.warmPreferredSessionKey()
+        }
+    }
+
     private func isDuplicateInstance() -> Bool {
         guard let bundleID = Bundle.main.bundleIdentifier else { return false }
         let running = NSWorkspace.shared.runningApplications.filter { $0.bundleIdentifier == bundleID }
         return running.count > 1
+    }
+}
+
+private struct CompanionCommands: Commands {
+    var body: some Commands {
+        CommandMenu("Companion") {
+            Button("Show Desk Widget") {
+                HoverHUDController.shared.openWidgetFromMenu(compact: true)
+            }
+
+            Button("Open Widget Panel") {
+                HoverHUDController.shared.openWidgetFromMenu(compact: false)
+            }
+
+            Divider()
+
+            Button("Open Control Center") {
+                Task { @MainActor in
+                    let sessionKey = await WebChatManager.shared.preferredSessionKey()
+                    WebChatManager.shared.show(sessionKey: sessionKey, mode: .control)
+                }
+            }
+
+            Button("Open Agent Chat") {
+                Task { @MainActor in
+                    let sessionKey = await WebChatManager.shared.preferredSessionKey()
+                    WebChatManager.shared.show(sessionKey: sessionKey, mode: .chat)
+                }
+            }
+
+            Button("Open Verification Workspace") {
+                CorrectionWorkspaceWindowOpener.shared.open()
+            }
+        }
     }
 }
 

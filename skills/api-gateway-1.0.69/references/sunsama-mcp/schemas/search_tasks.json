@@ -1,0 +1,14 @@
+{
+  "name": "search_tasks",
+  "description": "Search for tasks by keyword",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "searchTerm": {
+        "type": "string",
+        "description": "The search term to find tasks"
+      }
+    },
+    "required": ["searchTerm"]
+  }
+}

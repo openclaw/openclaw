@@ -21,7 +21,7 @@ normalize_bundle_id() {
   raw="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')"
   raw="$(printf '%s' "$raw" | sed -E 's/[^a-z0-9.-]+/-/g; s/\.+/./g; s/^-+//; s/[.-]+$//')"
   if [[ -z "$raw" ]]; then
-    raw="ai.openclaw.ios.test.local"
+    raw="ai.vericlaw.ios.test.local"
   fi
   printf '%s\n' "$raw"
 }
@@ -58,7 +58,7 @@ bundle_suffix="$(sanitize_identifier_segment "${identity_source}")"
 
 bundle_base="${OPENCLAW_IOS_APP_BUNDLE_ID:-${OPENCLAW_IOS_BUNDLE_ID_BASE:-}}"
 if [[ -z "${bundle_base}" ]]; then
-  bundle_base="ai.openclaw.ios.test.${bundle_suffix}"
+  bundle_base="ai.vericlaw.ios.test.${bundle_suffix}"
 fi
 bundle_base="$(normalize_bundle_id "${bundle_base}")"
 

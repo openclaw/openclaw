@@ -1,0 +1,14 @@
+{
+  "name": "restore_task",
+  "description": "Restore a deleted task",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "taskId": {
+        "type": "string",
+        "description": "The ID of the task to restore"
+      }
+    },
+    "required": ["taskId"]
+  }
+}

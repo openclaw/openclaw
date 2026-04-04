@@ -1,0 +1,22 @@
+{
+  "name": "create_follow_up_task_from_email",
+  "description": "Create a follow-up task from an email thread",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "accountId": {
+        "type": "string",
+        "description": "The email account ID"
+      },
+      "accountService": {
+        "type": "string",
+        "description": "The email service (e.g., gmail, outlook)"
+      },
+      "threadId": {
+        "type": "string",
+        "description": "The email thread ID"
+      }
+    },
+    "required": ["accountId", "accountService", "threadId"]
+  }
+}

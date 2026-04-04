@@ -1,6 +1,18 @@
 import Foundation
 
 public enum OpenClawNodeStorage {
+    private static let directoryName = "Vericlaw"
+    private static let legacyDirectoryName = "OpenClaw"
+
+    private static func resolveBrandDirectory(in base: URL) -> URL {
+        let preferred = base.appendingPathComponent(self.directoryName, isDirectory: true)
+        let legacy = base.appendingPathComponent(self.legacyDirectoryName, isDirectory: true)
+        if FileManager.default.fileExists(atPath: preferred.path) || !FileManager.default.fileExists(atPath: legacy.path) {
+            return preferred
+        }
+        return legacy
+    }
+
     public static func appSupportDir() throws -> URL {
         let base = FileManager().urls(for: .applicationSupportDirectory, in: .userDomainMask).first
         guard let base else {
@@ -8,7 +20,7 @@ public enum OpenClawNodeStorage {
                 NSLocalizedDescriptionKey: "Application Support directory unavailable",
             ])
         }
-        return base.appendingPathComponent("OpenClaw", isDirectory: true)
+        return self.resolveBrandDirectory(in: base)
     }
 
     public static func canvasRoot(sessionKey: String) throws -> URL {
@@ -25,7 +37,7 @@ public enum OpenClawNodeStorage {
                 NSLocalizedDescriptionKey: "Caches directory unavailable",
             ])
         }
-        return base.appendingPathComponent("OpenClaw", isDirectory: true)
+        return self.resolveBrandDirectory(in: base)
     }
 
     public static func canvasSnapshotsRoot(sessionKey: String) throws -> URL {

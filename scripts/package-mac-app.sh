@@ -1,14 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build and bundle OpenClaw into a minimal .app we can open.
-# Outputs to dist/OpenClaw.app
+# Build and bundle the macOS companion app into a minimal .app we can open.
+# Outputs to dist/VeriClaw 爪印.app
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-APP_ROOT="$ROOT_DIR/dist/OpenClaw.app"
+WITH_XCODE_DEVELOPER_DIR="$ROOT_DIR/scripts/with-xcode-developer-dir.sh"
+RESOLVE_XCODE_DEVELOPER_DIR="$ROOT_DIR/scripts/resolve-xcode-developer-dir.sh"
+APP_DISPLAY_NAME="${APP_DISPLAY_NAME:-VeriClaw 爪印}"
+APP_BUNDLE_NAME="${APP_BUNDLE_NAME:-${APP_DISPLAY_NAME}.app}"
+EXECUTABLE_NAME="${EXECUTABLE_NAME:-VeriClaw}"
+ICON_BASENAME="${ICON_BASENAME:-VeriClaw}"
+APP_ROOT="$ROOT_DIR/dist/$APP_BUNDLE_NAME"
 BUILD_ROOT="$ROOT_DIR/apps/macos/.build"
 PRODUCT="OpenClaw"
-BUNDLE_ID="${BUNDLE_ID:-ai.openclaw.mac.debug}"
+BUNDLE_ID="${BUNDLE_ID:-ai.vericlaw.mac.debug}"
 PKG_VERSION="$(cd "$ROOT_DIR" && node -p "require('./package.json').version" 2>/dev/null || echo "0.0.0")"
 BUILD_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 GIT_COMMIT=$(cd "$ROOT_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
@@ -51,6 +57,28 @@ bin_for_arch() {
 
 sparkle_framework_for_arch() {
   echo "$(build_path_for_arch "$1")/$BUILD_CONFIG/Sparkle.framework"
+}
+
+cleanup_stale_packaging() {
+  local stale_paths=(
+    "$ROOT_DIR/dist/legacy-branding"
+    "$ROOT_DIR/dist/Vericlaw.app"
+    "$ROOT_DIR/dist/OpenClaw.app"
+  )
+  local removed=0
+
+  for stale_path in "${stale_paths[@]}"; do
+    if [[ "$stale_path" == "$APP_ROOT" ]]; then
+      continue
+    fi
+    if [[ -e "$stale_path" ]]; then
+      if [[ "$removed" -eq 0 ]]; then
+        echo "🧹 Removing legacy app bundle residue"
+        removed=1
+      fi
+      rm -rf "$stale_path"
+    fi
+  done
 }
 
 merge_framework_machos() {
@@ -114,8 +142,12 @@ merge_framework_machos() {
   done < <(find "$primary" -type f -print0)
 }
 
-echo "📦 Ensuring deps (pnpm install)"
-(cd "$ROOT_DIR" && pnpm install --no-frozen-lockfile --config.node-linker=hoisted)
+if [[ "${SKIP_PNPM_INSTALL:-0}" != "1" ]]; then
+  echo "📦 Ensuring deps (pnpm install)"
+  (cd "$ROOT_DIR" && pnpm install --no-frozen-lockfile --config.node-linker=hoisted)
+else
+  echo "📦 Skipping pnpm install (SKIP_PNPM_INSTALL=1)"
+fi
 
 if [[ -z "${APP_BUILD:-}" ]]; then
   APP_BUILD="$GIT_BUILD_NUMBER"
@@ -154,11 +186,12 @@ cd "$ROOT_DIR/apps/macos"
 echo "🔨 Building $PRODUCT ($BUILD_CONFIG) [${BUILD_ARCHS[*]}]"
 for arch in "${BUILD_ARCHS[@]}"; do
   BUILD_PATH="$(build_path_for_arch "$arch")"
-  swift build -c "$BUILD_CONFIG" --product "$PRODUCT" --build-path "$BUILD_PATH" --arch "$arch" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
+  "$WITH_XCODE_DEVELOPER_DIR" swift build -c "$BUILD_CONFIG" --product "$PRODUCT" --build-path "$BUILD_PATH" --arch "$arch" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
 done
 
 BIN_PRIMARY="$(bin_for_arch "$PRIMARY_ARCH")"
 echo "pkg: binary $BIN_PRIMARY" >&2
+cleanup_stale_packaging
 echo "🧹 Cleaning old app bundle"
 rm -rf "$APP_ROOT"
 mkdir -p "$APP_ROOT/Contents/MacOS"
@@ -188,17 +221,17 @@ else
 fi
 
 echo "🚚 Copying binary"
-cp "$BIN_PRIMARY" "$APP_ROOT/Contents/MacOS/OpenClaw"
+cp "$BIN_PRIMARY" "$APP_ROOT/Contents/MacOS/$EXECUTABLE_NAME"
 if [[ "${#BUILD_ARCHS[@]}" -gt 1 ]]; then
   BIN_INPUTS=()
   for arch in "${BUILD_ARCHS[@]}"; do
     BIN_INPUTS+=("$(bin_for_arch "$arch")")
   done
-  /usr/bin/lipo -create "${BIN_INPUTS[@]}" -output "$APP_ROOT/Contents/MacOS/OpenClaw"
+  /usr/bin/lipo -create "${BIN_INPUTS[@]}" -output "$APP_ROOT/Contents/MacOS/$EXECUTABLE_NAME"
 fi
-chmod +x "$APP_ROOT/Contents/MacOS/OpenClaw"
+chmod +x "$APP_ROOT/Contents/MacOS/$EXECUTABLE_NAME"
 # SwiftPM outputs ad-hoc signed binaries; strip the signature before install_name_tool to avoid warnings.
-/usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/OpenClaw" 2>/dev/null || true
+/usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/$EXECUTABLE_NAME" 2>/dev/null || true
 
 SPARKLE_FRAMEWORK_PRIMARY="$(sparkle_framework_for_arch "$PRIMARY_ARCH")"
 if [ -d "$SPARKLE_FRAMEWORK_PRIMARY" ]; then
@@ -218,7 +251,8 @@ if [ -d "$SPARKLE_FRAMEWORK_PRIMARY" ]; then
 fi
 
 echo "📦 Copying Swift 6.2 compatibility libraries"
-SWIFT_COMPAT_LIB="$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-6.2/macosx/libswiftCompatibilitySpan.dylib"
+DEVELOPER_DIR_PATH="${DEVELOPER_DIR:-$("$RESOLVE_XCODE_DEVELOPER_DIR" 2>/dev/null || xcode-select -p)}"
+SWIFT_COMPAT_LIB="${DEVELOPER_DIR_PATH}/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-6.2/macosx/libswiftCompatibilitySpan.dylib"
 if [ -f "$SWIFT_COMPAT_LIB" ]; then
   cp "$SWIFT_COMPAT_LIB" "$APP_ROOT/Contents/Frameworks/"
   chmod +x "$APP_ROOT/Contents/Frameworks/libswiftCompatibilitySpan.dylib"
@@ -227,7 +261,7 @@ else
 fi
 
 echo "🖼  Copying app icon"
-cp "$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/OpenClaw.icns" "$APP_ROOT/Contents/Resources/OpenClaw.icns"
+cp "$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/VeriClaw.icns" "$APP_ROOT/Contents/Resources/${ICON_BASENAME}.icns"
 
 echo "📦 Copying device model resources"
 rm -rf "$APP_ROOT/Contents/Resources/DeviceModels"
@@ -249,6 +283,15 @@ if [ -d "$OPENCLAWKIT_BUNDLE" ]; then
   cp -R "$OPENCLAWKIT_BUNDLE" "$APP_ROOT/Contents/Resources/OpenClawKit_OpenClawKit.bundle"
 else
   echo "WARN: OpenClawKit resource bundle not found at $OPENCLAWKIT_BUNDLE (continuing)" >&2
+fi
+
+echo "📦 Copying OpenClaw app resources"
+OPENCLAW_APP_BUNDLE="$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG/OpenClaw_OpenClaw.bundle"
+if [ -d "$OPENCLAW_APP_BUNDLE" ]; then
+  rm -rf "$APP_ROOT/Contents/Resources/OpenClaw_OpenClaw.bundle"
+  cp -R "$OPENCLAW_APP_BUNDLE" "$APP_ROOT/Contents/Resources/OpenClaw_OpenClaw.bundle"
+else
+  echo "WARN: OpenClaw app resource bundle not found at $OPENCLAW_APP_BUNDLE (continuing)" >&2
 fi
 
 echo "📦 Copying Textual resources"
@@ -278,7 +321,9 @@ else
   fi
 fi
 
-echo "⏹  Stopping any running OpenClaw"
+echo "⏹  Stopping any running VeriClaw/OpenClaw"
+killall -q "$EXECUTABLE_NAME" 2>/dev/null || true
+killall -q Vericlaw 2>/dev/null || true
 killall -q OpenClaw 2>/dev/null || true
 
 echo "🔏 Signing bundle (auto-selects signing identity if SIGN_IDENTITY is unset)"

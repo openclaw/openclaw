@@ -329,9 +329,10 @@ enum ExecApprovalsStore {
 
     static func saveFile(_ file: ExecApprovalsFile) {
         do {
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            let data = try encoder.encode(file)
+            guard let data = self.encodedFileData(file, prettyPrinted: true) else {
+                struct EncodingFailedError: Error {}
+                throw EncodingFailedError()
+            }
             let url = self.fileURL()
             self.ensureSecureStateDirectory()
             try FileManager().createDirectory(
@@ -348,8 +349,8 @@ enum ExecApprovalsStore {
         self.ensureSecureStateDirectory()
         let url = self.fileURL()
         let existed = FileManager().fileExists(atPath: url.path)
+        let currentData = existed ? (try? Data(contentsOf: url)) : nil
         let loaded = self.loadFile()
-        let loadedHash = self.hashFile(loaded)
 
         var file = self.normalizeIncoming(loaded)
         if file.socket == nil { file.socket = ExecApprovalsSocketConfig(path: nil, token: nil) }
@@ -362,7 +363,8 @@ enum ExecApprovalsStore {
             file.socket?.token = self.generateToken()
         }
         if file.agents == nil { file.agents = [:] }
-        if !existed || loadedHash != self.hashFile(file) {
+        let encoded = self.encodedFileData(file, prettyPrinted: true)
+        if !existed || encoded == nil || currentData != encoded {
             self.saveFile(file)
         }
         return file
@@ -579,6 +581,12 @@ enum ExecApprovalsStore {
         let data = (try? encoder.encode(file)) ?? Data()
         let digest = SHA256.hash(data: data)
         return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func encodedFileData(_ file: ExecApprovalsFile, prettyPrinted: Bool) -> Data? {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = prettyPrinted ? [.prettyPrinted, .sortedKeys] : [.sortedKeys]
+        return try? encoder.encode(file)
     }
 
     private static func expandPath(_ raw: String) -> String {

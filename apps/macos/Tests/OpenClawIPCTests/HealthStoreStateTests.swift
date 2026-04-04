@@ -39,4 +39,35 @@ struct HealthStoreStateTests {
 
         #expect(store.summaryLine.contains("probe degraded"))
     }
+
+    @Test @MainActor func `configured healthy channel without linking metadata is ok`() {
+        let snap = HealthSnapshot(
+            ok: true,
+            ts: 0,
+            durationMs: 1,
+            channels: [
+                "discord": .init(
+                    configured: true,
+                    linked: nil,
+                    authAgeMs: nil,
+                    probe: .init(
+                        ok: true,
+                        status: nil,
+                        error: nil,
+                        elapsedMs: 12,
+                        bot: nil,
+                        webhook: nil),
+                    lastProbeAt: 0),
+            ],
+            channelOrder: ["discord"],
+            channelLabels: ["discord": "Discord"],
+            heartbeatSeconds: 0,
+            sessions: .init(path: "/tmp/sessions.json", count: 0, recent: []))
+
+        let store = HealthStore.shared
+        store.__setSnapshotForTest(snap, lastError: nil)
+
+        #expect(store.state == .ok)
+        #expect(store.summaryLine == "Discord ready")
+    }
 }

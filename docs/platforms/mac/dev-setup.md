@@ -26,7 +26,7 @@ pnpm install
 
 ## 2. Build and Package the App
 
-To build the macOS app and package it into `dist/OpenClaw.app`, run:
+To build the macOS app and package it into `dist/VeriClaw 爪印.app`, run:
 
 ```bash
 ./scripts/package-mac-app.sh
@@ -45,7 +45,7 @@ The macOS app expects a global `openclaw` CLI install to manage background tasks
 
 **To install it (recommended):**
 
-1. Open the OpenClaw app.
+1. Open the VeriClaw 爪印 app.
 2. Go to the **General** settings tab.
 3. Click **"Install CLI"**.
 

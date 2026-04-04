@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Veil</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main class="popup">
+      <section class="hero">
+        <p class="eyebrow">Veil</p>
+        <h1>Lift something out of the page.</h1>
+        <p class="lead">
+          Capture a visible fragment, let the forge roll its finish, then send the drop into your bot's room.
+        </p>
+        <div class="chip-row">
+          <span class="chip">capture</span>
+          <span class="chip">glint</span>
+          <span class="chip">figure</span>
+        </div>
+      </section>
+
+      <section class="control-card">
+        <label class="field">
+          <span>Gateway URL</span>
+          <input id="gateway-url" type="url" placeholder="http://127.0.0.1:18789" />
+        </label>
+        <label class="field">
+          <span>Inventory Key</span>
+          <input id="inventory-key" type="text" placeholder="openclaw-designer" />
+        </label>
+        <div class="action-column">
+          <button id="start-button" class="primary-button" type="button">Start Capture</button>
+          <button id="room-button" class="ghost-button" type="button">Enter Veil</button>
+        </div>
+      </section>
+
+      <section class="note-card">
+        <div class="note-row">
+          <span class="note-label">Gesture</span>
+          <strong>Click the exact object you want.</strong>
+        </div>
+        <div class="note-row">
+          <span class="note-label">Shortcut</span>
+          <strong>Cmd/Ctrl + Shift + K once to arm, again to forge the hovered fragment.</strong>
+        </div>
+        <div class="note-row">
+          <span class="note-label">Result</span>
+          <strong>Rarity, finish, and slot roll after cutout.</strong>
+        </div>
+      </section>
+
+      <p id="status" class="status">
+        Select a visible page first, then click the fragment you want to turn into a drop.
+      </p>
+    </main>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

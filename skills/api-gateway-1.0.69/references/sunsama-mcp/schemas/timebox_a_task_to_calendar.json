@@ -1,0 +1,22 @@
+{
+  "name": "timebox_a_task_to_calendar",
+  "description": "Block time for a task on the calendar",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "taskId": {
+        "type": "string",
+        "description": "The ID of the task to timebox"
+      },
+      "startDate": {
+        "type": "string",
+        "description": "The date (YYYY-MM-DD format)"
+      },
+      "startTime": {
+        "type": "string",
+        "description": "The start time (HH:MM format)"
+      }
+    },
+    "required": ["taskId", "startDate", "startTime"]
+  }
+}

@@ -15,7 +15,7 @@ macOS treats the app as new and may drop or hide prompts.
 
 ## Requirements for stable permissions
 
-- Same path: run the app from a fixed location (for OpenClaw, `dist/OpenClaw.app`).
+- Same path: run the app from a fixed location (for VeriClaw 爪印, `dist/VeriClaw 爪印.app`).
 - Same bundle identifier: changing the bundle ID creates a new permission identity.
 - Signed app: unsigned or ad-hoc signed builds do not persist permissions.
 - Consistent signature: use a real Apple Development or Developer ID certificate

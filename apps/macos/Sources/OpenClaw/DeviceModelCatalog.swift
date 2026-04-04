@@ -128,7 +128,7 @@ enum DeviceModelCatalog {
             return bundle
         }
 
-        if let bundle = self.bundleIfContainsDeviceModels(Bundle.module) {
+        if let bundle = self.bundleIfContainsDeviceModels(OpenClawResources.bundle) {
             return bundle
         }
         return nil

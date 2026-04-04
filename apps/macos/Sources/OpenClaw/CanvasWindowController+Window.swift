@@ -12,7 +12,7 @@ extension CanvasWindowController {
                 styleMask: [.titled, .closable, .resizable, .miniaturizable],
                 backing: .buffered,
                 defer: false)
-            window.title = "OpenClaw Canvas"
+            window.title = Branding.canvasWindowTitle
             window.isReleasedWhenClosed = false
             window.contentView = contentView
             window.center()
@@ -46,6 +46,7 @@ extension CanvasWindowController {
         guard case .panel = self.presentation, let window else { return }
         self.repositionPanel(using: anchorProvider)
         window.makeKeyAndOrderFront(nil)
+        DockIconManager.shared.updateDockVisibilityNow()
         NSApp.activate(ignoringOtherApps: true)
         window.makeFirstResponder(self.webView)
         VoiceWakeOverlayController.shared.bringToFrontIfVisible()

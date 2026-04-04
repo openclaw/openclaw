@@ -1,10 +1,20 @@
 require "shellwords"
 require "open3"
 require "json"
+require "fileutils"
 
 default_platform(:ios)
 
-BETA_APP_IDENTIFIER = "ai.openclaw.client"
+BETA_APP_IDENTIFIER = "ai.vericlaw.client"
+REQUIRED_REVIEW_INFO_ENV_MAP = {
+  "review_information/first_name.txt" => "IOS_APP_REVIEW_FIRST_NAME",
+  "review_information/last_name.txt" => "IOS_APP_REVIEW_LAST_NAME",
+  "review_information/email_address.txt" => "IOS_APP_REVIEW_EMAIL",
+  "review_information/phone_number.txt" => "IOS_APP_REVIEW_PHONE",
+}.freeze
+OPTIONAL_REVIEW_INFO_ENV_MAP = {
+  "review_information/notes.txt" => "IOS_APP_REVIEW_NOTES_APPEND",
+}.freeze
 
 def load_env_file(path)
   return unless File.exist?(path)
@@ -95,6 +105,53 @@ def ios_root
   File.expand_path("..", __dir__)
 end
 
+def stage_metadata_directory
+  source_dir = File.join(__dir__, "metadata")
+  staged_dir = File.join(ios_root, "build", "app-store-metadata")
+
+  UI.user_error!("Missing metadata directory at #{source_dir}.") unless File.directory?(source_dir)
+
+  FileUtils.rm_rf(staged_dir)
+  FileUtils.mkdir_p(staged_dir)
+
+  Dir.children(source_dir).sort.each do |entry|
+    FileUtils.cp_r(File.join(source_dir, entry), staged_dir)
+  end
+
+  REQUIRED_REVIEW_INFO_ENV_MAP.each do |relative_path, env_key|
+    clear_empty_env_var(env_key)
+    value = ENV[env_key]
+    UI.user_error!(
+      "Missing #{env_key}. Set it in apps/ios/fastlane/.env before running `fastlane ios metadata`."
+    ) unless env_present?(value)
+
+    staged_file = File.join(staged_dir, relative_path)
+    token = "__#{env_key}__"
+    content = File.read(staged_file)
+    UI.user_error!("Expected token #{token} in #{staged_file}.") unless content.include?(token)
+
+    File.write(staged_file, content.gsub(token, value.strip))
+  end
+
+  OPTIONAL_REVIEW_INFO_ENV_MAP.each do |relative_path, env_key|
+    clear_empty_env_var(env_key)
+    staged_file = File.join(staged_dir, relative_path)
+    token = "__#{env_key}__"
+    content = File.read(staged_file)
+    UI.user_error!("Expected token #{token} in #{staged_file}.") unless content.include?(token)
+
+    value = ENV[env_key]&.strip
+    UI.important(
+      "Missing #{env_key}; staging review notes without submission-specific demo details."
+    ) unless env_present?(value)
+
+    replacement = env_present?(value) ? value : ""
+    File.write(staged_file, content.gsub(token, replacement))
+  end
+
+  staged_dir
+end
+
 def normalize_release_version(raw_value)
   version = raw_value.to_s.strip.sub(/\Av/, "")
   UI.user_error!("Missing root package.json version.") unless env_present?(version)
@@ -163,7 +220,7 @@ end
 def build_beta_release(context)
   version = context[:version]
   output_directory = File.join("build", "beta")
-  archive_path = File.join(output_directory, "OpenClaw-#{version}.xcarchive")
+  archive_path = File.join(output_directory, "VeriClaw-#{version}.xcarchive")
 
   build_app(
     project: "OpenClaw.xcodeproj",
@@ -175,7 +232,7 @@ def build_beta_release(context)
     build_path: "build",
     archive_path: archive_path,
     output_directory: output_directory,
-    output_name: "OpenClaw-#{version}.ipa",
+    output_name: "VeriClaw-#{version}.ipa",
     xcargs: "-allowProvisioningUpdates",
     export_xcargs: "-allowProvisioningUpdates",
     export_options: {
@@ -290,6 +347,7 @@ platform :ios do
     clear_empty_env_var("APP_STORE_CONNECT_API_KEY_PATH")
     app_identifier = ENV["ASC_APP_IDENTIFIER"]
     app_id = ENV["ASC_APP_ID"]
+    metadata_path = ENV["DELIVER_METADATA"] == "1" ? stage_metadata_directory : nil
     app_identifier = nil unless env_present?(app_identifier)
     app_id = nil unless env_present?(app_id)
 
@@ -300,6 +358,7 @@ platform :ios do
       skip_metadata: ENV["DELIVER_METADATA"] != "1",
       run_precheck_before_submit: false
     }
+    deliver_options[:metadata_path] = metadata_path if metadata_path
     deliver_options[:app_identifier] = app_identifier if app_identifier
     if app_id && app_identifier.nil?
       # `deliver` prefers app_identifier from Appfile unless explicitly blanked.

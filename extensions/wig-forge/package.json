@@ -1,0 +1,18 @@
+{
+  "name": "@openclaw/wig-forge",
+  "version": "2026.3.14",
+  "private": true,
+  "description": "OpenClaw asset forge plugin for turning captures into wearable bot loot",
+  "type": "module",
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1000.0",
+    "@mediapipe/tasks-vision": "^0.10.34",
+    "@sinclair/typebox": "0.34.48",
+    "sharp": "^0.34.5"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

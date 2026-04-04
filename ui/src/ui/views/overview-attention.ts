@@ -6,6 +6,9 @@ import type { AttentionItem } from "../types.ts";
 
 export type OverviewAttentionProps = {
   items: AttentionItem[];
+  embedded?: boolean;
+  title?: string;
+  emptyState?: ReturnType<typeof html>;
 };
 
 function severityClass(severity: string) {
@@ -27,35 +30,43 @@ function attentionIcon(name: string) {
 
 export function renderOverviewAttention(props: OverviewAttentionProps) {
   if (props.items.length === 0) {
-    return nothing;
+    return props.emptyState ?? nothing;
+  }
+
+  const content = html`
+    <div class="ov-attention-list">
+      ${props.items.map(
+        (item) => html`
+          <div class="ov-attention-item ${severityClass(item.severity)}">
+            <span class="ov-attention-icon">${attentionIcon(item.icon)}</span>
+            <div class="ov-attention-body">
+              <div class="ov-attention-title">${item.title}</div>
+              <div class="muted">${item.description}</div>
+            </div>
+            ${
+              item.href
+                ? html`<a
+                  class="ov-attention-link"
+                  href=${item.href}
+                  target=${item.external ? EXTERNAL_LINK_TARGET : nothing}
+                  rel=${item.external ? buildExternalLinkRel() : nothing}
+                >${t("common.docs")}</a>`
+                : nothing
+            }
+          </div>
+        `,
+      )}
+    </div>
+  `;
+
+  if (props.embedded) {
+    return content;
   }
 
   return html`
     <section class="card ov-attention">
-      <div class="card-title">${t("overview.attention.title")}</div>
-      <div class="ov-attention-list">
-        ${props.items.map(
-          (item) => html`
-            <div class="ov-attention-item ${severityClass(item.severity)}">
-              <span class="ov-attention-icon">${attentionIcon(item.icon)}</span>
-              <div class="ov-attention-body">
-                <div class="ov-attention-title">${item.title}</div>
-                <div class="muted">${item.description}</div>
-              </div>
-              ${
-                item.href
-                  ? html`<a
-                    class="ov-attention-link"
-                    href=${item.href}
-                    target=${item.external ? EXTERNAL_LINK_TARGET : nothing}
-                    rel=${item.external ? buildExternalLinkRel() : nothing}
-                  >${t("common.docs")}</a>`
-                  : nothing
-              }
-            </div>
-          `,
-        )}
-      </div>
+      <div class="card-title">${props.title ?? t("overview.attention.title")}</div>
+      ${content}
     </section>
   `;
 }

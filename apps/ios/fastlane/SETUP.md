@@ -1,4 +1,4 @@
-# fastlane setup (OpenClaw iOS)
+# fastlane setup (VeriClaw 爪印 iOS)
 
 Install:
 
@@ -32,7 +32,7 @@ ASC_KEYCHAIN_ACCOUNT=YOUR_MAC_USERNAME
 Optional app targeting variables (helpful if Fastlane cannot auto-resolve app by bundle):
 
 ```bash
-ASC_APP_IDENTIFIER=ai.openclaw.client
+ASC_APP_IDENTIFIER=ai.vericlaw.client
 # or
 ASC_APP_ID=YOUR_APP_STORE_CONNECT_APP_ID
 ```
@@ -51,7 +51,42 @@ Code signing variable (optional in `.env`):
 IOS_DEVELOPMENT_TEAM=YOUR_TEAM_ID
 ```
 
-Tip: run `scripts/ios-team-id.sh` from repo root to print a Team ID for `.env`. The helper prefers the canonical OpenClaw team (`Y5PE65HELJ`) when present locally; otherwise it prefers the first non-personal team from your Xcode account (then personal team if needed). Fastlane uses this helper automatically if `IOS_DEVELOPMENT_TEAM` is missing.
+App Review contact variables for metadata submission:
+
+```bash
+IOS_APP_REVIEW_FIRST_NAME=YOUR_FIRST_NAME
+IOS_APP_REVIEW_LAST_NAME=YOUR_LAST_NAME
+IOS_APP_REVIEW_EMAIL=YOUR_REVIEW_EMAIL
+IOS_APP_REVIEW_PHONE=+1 415 555 0101
+IOS_APP_REVIEW_NOTES_APPEND=PAIRING_OR_DEMO_ACCOUNT_DETAILS_FOR_APP_REVIEW
+```
+
+The `fastlane ios metadata` lane stages `apps/ios/fastlane/metadata` into
+`apps/ios/build/app-store-metadata` and injects those four values into the
+templated `review_information/*.txt` files locally. Contact details are required.
+`IOS_APP_REVIEW_NOTES_APPEND` is strongly recommended for this app because App Review
+will likely need pairing or demo-gateway details to exercise the full flow.
+Real review details do not need to live in git.
+
+Local preflight before metadata upload:
+
+```bash
+pnpm ios:review:local-check
+```
+
+Render the local App Review metadata exactly as it will be staged:
+
+```bash
+pnpm ios:review:preview
+```
+
+Preview output path:
+
+```bash
+apps/ios/build/app-store-metadata-preview
+```
+
+Tip: run `scripts/ios-team-id.sh` from repo root to print a Team ID for `.env`. The helper prefers the configured release team when it is available locally; if that team has changed and exactly one other non-free team is visible in Xcode, it falls back to that team automatically. Fastlane uses this helper automatically if `IOS_DEVELOPMENT_TEAM` is missing.
 
 Validate auth:
 
@@ -84,6 +119,13 @@ Direct Fastlane entry point:
 ```bash
 cd apps/ios
 fastlane ios beta
+```
+
+Upload metadata (and optionally screenshots):
+
+```bash
+cd apps/ios
+DELIVER_METADATA=1 fastlane ios metadata
 ```
 
 Versioning rules:

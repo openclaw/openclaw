@@ -5,13 +5,15 @@
     <key>CFBundleDevelopmentRegion</key>
     <string>en</string>
     <key>CFBundleExecutable</key>
-    <string>OpenClaw</string>
+    <string>VeriClaw</string>
     <key>CFBundleIdentifier</key>
-    <string>ai.openclaw.mac</string>
+    <string>ai.vericlaw.mac</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
+    <key>CFBundleDisplayName</key>
+    <string>VeriClaw 爪印</string>
     <key>CFBundleName</key>
-    <string>OpenClaw</string>
+    <string>VeriClaw 爪印</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
@@ -19,15 +21,15 @@
     <key>CFBundleVersion</key>
     <string>202603140</string>
     <key>CFBundleIconFile</key>
-    <string>OpenClaw</string>
+    <string>VeriClaw</string>
     <key>CFBundleURLTypes</key>
     <array>
         <dict>
             <key>CFBundleURLName</key>
-            <string>ai.openclaw.mac.deeplink</string>
+            <string>ai.vericlaw.mac.deeplink</string>
             <key>CFBundleURLSchemes</key>
             <array>
-                <string>openclaw</string>
+                <string>vericlaw</string>
             </array>
         </dict>
     </array>
@@ -42,25 +44,25 @@
     <string></string>
 
     <key>NSUserNotificationUsageDescription</key>
-    <string>OpenClaw needs notification permission to show alerts for agent actions.</string>
+    <string>VeriClaw 爪印 needs notification permission to surface verification alerts and companion actions.</string>
     <key>NSScreenCaptureDescription</key>
-    <string>OpenClaw captures the screen when the agent needs screenshots for context.</string>
+    <string>VeriClaw 爪印 captures the screen when you ask it to verify evidence or reconstruct an incident.</string>
     <key>NSCameraUsageDescription</key>
-    <string>OpenClaw can capture photos or short video clips when requested by the agent.</string>
+    <string>VeriClaw 爪印 can capture photos or short clips when you attach evidence to a verification case.</string>
 	<key>NSLocationUsageDescription</key>
-	<string>OpenClaw can share your location when requested by the agent.</string>
+	<string>VeriClaw 爪印 can share your location when a verification workflow needs location-aware context.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>OpenClaw can share your location when requested by the agent.</string>
+	<string>VeriClaw 爪印 can share your location when a verification workflow needs location-aware context.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>OpenClaw can share your location when requested by the agent.</string>
+	<string>VeriClaw 爪印 can share your location when a verification workflow needs background context.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>OpenClaw needs the mic for Voice Wake tests and agent audio capture.</string>
+	<string>VeriClaw 爪印 needs the microphone for voice-triggered review capture and companion audio workflows.</string>
     <key>NSSpeechRecognitionUsageDescription</key>
-    <string>OpenClaw uses speech recognition to detect your Voice Wake trigger phrase.</string>
+    <string>VeriClaw 爪印 uses speech recognition to detect your review wake phrase.</string>
     <key>NSAppleEventsUsageDescription</key>
-    <string>OpenClaw needs Automation (AppleScript) permission to drive Terminal and other apps for agent actions.</string>
+    <string>VeriClaw 爪印 needs Automation permission to collect evidence and hand verified actions back to your active runtime.</string>
     <key>NSRemindersUsageDescription</key>
-    <string>OpenClaw can access Reminders when requested by the agent for the apple-reminders skill.</string>
+    <string>VeriClaw 爪印 can access Reminders when a verification workflow needs reminder evidence.</string>
 
     <key>NSAppTransportSecurity</key>
     <dict>

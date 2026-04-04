@@ -9,6 +9,7 @@ import type { RuntimeEnv } from "../../../../src/runtime.js";
 
 const DISCORD_GATEWAY_BOT_URL = "https://discord.com/api/v10/gateway/bot";
 const DEFAULT_DISCORD_GATEWAY_URL = "wss://gateway.discord.gg/";
+const PREMATURE_WS_CLOSE_ERROR = "WebSocket was closed before the connection was established";
 
 type DiscordGatewayMetadataResponse = Pick<Response, "ok" | "status" | "text">;
 type DiscordGatewayFetchInit = Record<string, unknown> & {
@@ -144,6 +145,9 @@ function createGatewayPlugin(params: {
   fetchInit?: DiscordGatewayFetchInit;
   wsAgent?: HttpsProxyAgent<string>;
 }): GatewayPlugin {
+  const isPrematureWebSocketCloseError = (error: unknown) =>
+    error instanceof Error && error.message.includes(PREMATURE_WS_CLOSE_ERROR);
+
   class SafeGatewayPlugin extends GatewayPlugin {
     constructor() {
       super(params.options);
@@ -165,6 +169,17 @@ function createGatewayPlugin(params: {
         return super.createWebSocket(url);
       }
       return new WebSocket(url, { agent: params.wsAgent });
+    }
+
+    override disconnect() {
+      try {
+        return super.disconnect();
+      } catch (error) {
+        if (isPrematureWebSocketCloseError(error)) {
+          return;
+        }
+        throw error;
+      }
     }
   }
 

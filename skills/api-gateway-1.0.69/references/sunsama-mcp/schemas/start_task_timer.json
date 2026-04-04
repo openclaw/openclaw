@@ -1,0 +1,14 @@
+{
+  "name": "start_task_timer",
+  "description": "Start the timer for a task",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "taskId": {
+        "type": "string",
+        "description": "The ID of the task"
+      }
+    },
+    "required": ["taskId"]
+  }
+}

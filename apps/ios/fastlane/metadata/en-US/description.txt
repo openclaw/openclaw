@@ -1,18 +1,19 @@
-OpenClaw is a personal AI assistant you run on your own devices.
+VeriClaw 爪印 is an iPhone verification and correction companion for OpenClaw.
 
-Pair this iPhone app with your OpenClaw Gateway to connect your phone as a secure node for voice, camera, and device automation.
+Pair this app with your OpenClaw Gateway to review suspicious output, capture evidence, and send grounded follow-up when a named bot drifts off task, overreaches, or stops honoring its professional role.
 
 What you can do:
-- Chat with your assistant from iPhone
-- Use voice wake and push-to-talk
-- Capture photos and short clips on request
-- Record screen snippets for troubleshooting and workflows
-- Share text, links, and media directly from iOS into OpenClaw
-- Run location-aware and device-aware automations
+- Review queued verification and follow-up work from iPhone
+- Send role-aware correction follow-up back through your paired gateway
+- Use voice wake and push-to-talk for paired workflows
+- Capture photos and short clips as verification evidence
+- Record screen snippets for reconstruction and troubleshooting
+- Share text, links, and media into the review queue
+- Run device-aware verification steps when you explicitly enable them
 
-OpenClaw is local-first: you control your gateway, keys, and configuration.
+VeriClaw 爪印 is local-first: you control your gateway, keys, permissions, and routing.
 
 Getting started:
 1) Set up your OpenClaw Gateway
-2) Open the iOS app and pair with your gateway
-3) Start using commands and automations from your phone
+2) Open VeriClaw 爪印 and pair it with your gateway
+3) Review, capture, and send correction follow-up from your phone

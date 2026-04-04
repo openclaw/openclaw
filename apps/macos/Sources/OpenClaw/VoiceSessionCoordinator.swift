@@ -8,6 +8,10 @@ final class VoiceSessionCoordinator {
     static let shared = VoiceSessionCoordinator()
 
     enum Source: String { case wakeWord, pushToTalk }
+    enum Route {
+        case forward
+        case talkMode
+    }
 
     struct Session {
         let token: UUID
@@ -93,8 +97,16 @@ final class VoiceSessionCoordinator {
             return
         }
         VoiceWakeOverlayController.shared.beginSendUI(token: token, sendChime: session.sendChime)
+        let route = Self.route(for: session.source)
         Task.detached {
-            _ = await VoiceWakeForwarder.forward(transcript: text)
+            switch route {
+            case .forward:
+                _ = await VoiceWakeForwarder.forward(transcript: text)
+            case .talkMode:
+                await MainActor.run {
+                    TalkModeController.shared.beginWakeConversation(transcript: text)
+                }
+            }
         }
     }
 
@@ -130,5 +142,14 @@ final class VoiceSessionCoordinator {
             self.clearSession()
         }
         Task { await VoiceWakeRuntime.shared.refresh(state: AppStateStore.shared) }
+    }
+
+    static func route(for source: Source) -> Route {
+        switch source {
+        case .wakeWord:
+            .talkMode
+        case .pushToTalk:
+            .forward
+        }
     }
 }

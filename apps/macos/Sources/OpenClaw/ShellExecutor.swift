@@ -2,6 +2,10 @@ import Foundation
 import OpenClawIPC
 
 enum ShellExecutor {
+    private final class DataBox: @unchecked Sendable {
+        var value = Data()
+    }
+
     struct ShellResult {
         var stdout: String
         var stderr: String
@@ -27,69 +31,79 @@ enum ShellExecutor {
                 errorMessage: "empty command")
         }
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = command
-        if let cwd { process.currentDirectoryURL = URL(fileURLWithPath: cwd) }
-        if let env { process.environment = env }
+        return await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .utility).async {
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+                process.arguments = command
+                if let cwd { process.currentDirectoryURL = URL(fileURLWithPath: cwd) }
+                if let env { process.environment = env }
 
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
+                let stdoutPipe = Pipe()
+                let stderrPipe = Pipe()
+                process.standardOutput = stdoutPipe
+                process.standardError = stderrPipe
 
-        do {
-            try process.run()
-        } catch {
-            return ShellResult(
-                stdout: "",
-                stderr: "",
-                exitCode: nil,
-                timedOut: false,
-                success: false,
-                errorMessage: "failed to start: \(error.localizedDescription)")
-        }
+                let processGroup = DispatchGroup()
+                processGroup.enter()
+                process.terminationHandler = { _ in
+                    processGroup.leave()
+                }
 
-        let outTask = Task { stdoutPipe.fileHandleForReading.readToEndSafely() }
-        let errTask = Task { stderrPipe.fileHandleForReading.readToEndSafely() }
-
-        let waitTask = Task { () -> ShellResult in
-            process.waitUntilExit()
-            let out = await outTask.value
-            let err = await errTask.value
-            let status = Int(process.terminationStatus)
-            return ShellResult(
-                stdout: String(bytes: out, encoding: .utf8) ?? "",
-                stderr: String(bytes: err, encoding: .utf8) ?? "",
-                exitCode: status,
-                timedOut: false,
-                success: status == 0,
-                errorMessage: status == 0 ? nil : "exit \(status)")
-        }
-
-        if let timeout, timeout > 0 {
-            let nanos = UInt64(timeout * 1_000_000_000)
-            return await withTaskGroup(of: ShellResult.self) { group in
-                group.addTask { await waitTask.value }
-                group.addTask {
-                    try? await Task.sleep(nanoseconds: nanos)
-                    if process.isRunning { process.terminate() }
-                    _ = await waitTask.value // drain pipes after termination
-                    return ShellResult(
+                do {
+                    try process.run()
+                } catch {
+                    continuation.resume(returning: ShellResult(
                         stdout: "",
                         stderr: "",
                         exitCode: nil,
-                        timedOut: true,
+                        timedOut: false,
                         success: false,
-                        errorMessage: "timeout")
+                        errorMessage: "failed to start: \(error.localizedDescription)"))
+                    return
                 }
-                let first = await group.next()!
-                group.cancelAll()
-                return first
+
+                let stdoutBox = DataBox()
+                let stderrBox = DataBox()
+                let ioGroup = DispatchGroup()
+
+                ioGroup.enter()
+                DispatchQueue.global(qos: .utility).async {
+                    stdoutBox.value = stdoutPipe.fileHandleForReading.readToEndSafely()
+                    ioGroup.leave()
+                }
+
+                ioGroup.enter()
+                DispatchQueue.global(qos: .utility).async {
+                    stderrBox.value = stderrPipe.fileHandleForReading.readToEndSafely()
+                    ioGroup.leave()
+                }
+
+                let timedOut: Bool
+                if let timeout, timeout > 0 {
+                    timedOut = processGroup.wait(timeout: .now() + timeout) == .timedOut
+                } else {
+                    processGroup.wait()
+                    timedOut = false
+                }
+
+                if timedOut, process.isRunning {
+                    process.terminate()
+                    processGroup.wait()
+                }
+
+                ioGroup.wait()
+
+                let status = Int(process.terminationStatus)
+                continuation.resume(returning: ShellResult(
+                    stdout: String(bytes: stdoutBox.value, encoding: .utf8) ?? "",
+                    stderr: String(bytes: stderrBox.value, encoding: .utf8) ?? "",
+                    exitCode: timedOut ? nil : status,
+                    timedOut: timedOut,
+                    success: !timedOut && status == 0,
+                    errorMessage: timedOut ? "timeout" : (status == 0 ? nil : "exit \(status)")))
             }
         }
-
-        return await waitTask.value
     }
 
     static func run(command: [String], cwd: String?, env: [String: String]?, timeout: Double?) async -> Response {

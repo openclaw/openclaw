@@ -1,0 +1,9 @@
+{
+  "name": "get_backlog_tasks",
+  "description": "List all tasks in the backlog",
+  "inputSchema": {
+    "type": "object",
+    "properties": {},
+    "required": []
+  }
+}

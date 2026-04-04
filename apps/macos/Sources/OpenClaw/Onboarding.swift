@@ -6,7 +6,7 @@ import OpenClawIPC
 import SwiftUI
 
 enum UIStrings {
-    static let welcomeTitle = "Welcome to OpenClaw"
+    static let welcomeTitle = "Welcome to \(Branding.appName)"
 }
 
 enum RemoteOnboardingProbeState: Equatable {
@@ -30,7 +30,7 @@ final class OnboardingController {
             return
         }
         if let window {
-            DockIconManager.shared.temporarilyShowDock()
+            DockIconManager.shared.temporarilyShowDockNow()
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             return
@@ -44,7 +44,7 @@ final class OnboardingController {
         window.titleVisibility = .hidden
         window.isMovableByWindowBackground = true
         window.center()
-        DockIconManager.shared.temporarilyShowDock()
+        DockIconManager.shared.temporarilyShowDockNow()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         self.window = window
@@ -91,7 +91,7 @@ struct OnboardingView: View {
     @Bindable var state: AppState
     var permissionMonitor: PermissionMonitor
 
-    static let windowWidth: CGFloat = 630
+    static let windowWidth: CGFloat = 720
     static let windowHeight: CGFloat = 752 // ~+10% to fit full onboarding content
 
     let pageWidth: CGFloat = Self.windowWidth

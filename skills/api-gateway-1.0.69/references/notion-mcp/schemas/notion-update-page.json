@@ -1,0 +1,59 @@
+{
+  "name": "notion-update-page",
+  "title": "Update Notion page",
+  "description": "## Overview\nUpdate a Notion page's properties or content.\n## Properties\nNotion page properties are a JSON map of property names to SQLite values.\nFor pages in a database:\n- ALWAYS use the \"fetch\" tool first to get the data source schema and the\texact property names.\n- Provide a non-null value to update a property's value.\n- Omitted properties are left unchanged.\n\n**IMPORTANT**: Some property types require expanded formats:\n- Date properties: Split into \"date:{property}:start\", \"date:{property}:end\" (optional), and \"date:{property}:is_datetime\" (0 or 1)\n- Place properties: Split into \"place:{property}:name\", \"place:{property}:address\", \"place:{property}:latitude\", \"place:{property}:longitude\", and \"place:{property}:google_place_id\" (optional)\n- Number properties: Use JavaScript numbers (not strings)\n- Checkbox properties: Use \"__YES__\" for checked, \"__NO__\" for unchecked\n\n**Special property naming**: Properties named \"id\" or \"url\" (case insensitive) must be prefixed with \"userDefined:\" (e.g., \"userDefined:URL\", \"userDefined:id\")\nFor pages outside of a database:\n- The only allowed property is \"title\",\twhich is the title of the page in inline markdown format.\n\n## Content\nNotion page content is a string in Notion-flavored Markdown format.\n**IMPORTANT**: For the complete Markdown specification, first fetch the MCP resource at `notion://docs/enhanced-markdown-spec`. Do NOT guess or hallucinate Markdown syntax.\nBefore updating a page's content with this tool, use the \"fetch\" tool first to get the existing content to find out the Markdown snippets to use in the \"replace_content_range\" or \"insert_content_after\" commands.\n### Preserving Child Pages and Databases\nWhen using \"replace_content\" or \"replace_content_range\", the operation will check if any child pages or databases would be deleted. If so, it will fail with an error listing the affected items.\nTo preserve child pages/databases, include them in new_str using `<page url=\"...\">` or `<database url=\"...\">` tags. Get the exact URLs from the \"fetch\" tool output.\n**CRITICAL**: To intentionally delete child content: if the call failed with validation and requires `allow_deleting_content` to be true, DO NOT automatically assume the content should be deleted. ALWAYS show the list of pages to be deleted and ask for user confirmation before proceeding.\n## Examples\n\t\t<example description=\"Update page properties\">\n\t\t{\n\t\t\t\"page_id\": \"f336d0bc-b841-465b-8045-024475c079dd\",\n\t\t\t\"command\": \"update_properties\",\n\t\t\t\"properties\": {\n\t\t\t\t\"title\": \"New Page Title\",\n\t\t\t\t\"status\": \"In Progress\",\n\t\t\t\t\"priority\": 5,\n\t\t\t\t\"checkbox\": \"__YES__\",\n\t\t\t\t\"date:deadline:start\": \"2024-12-25\",\n\t\t\t\t\"date:deadline:is_datetime\": 0,\n\t\t\t\t\"place:office:name\": \"HQ\",\n\t\t\t\t\"place:office:latitude\": 37.7749,\n\t\t\t\t\"place:office:longitude\": -122.4194\n\t\t\t}\n\t\t}\n\t\t</example>\n\t\t<example description=\"Replace the entire content of a page\">\n\t\t{\n\t\t\t\"page_id\": \"f336d0bc-b841-465b-8045-024475c079dd\",\n\t\t\t\"command\": \"replace_content\",\n\t\t\t\"new_str\": \"# New Section\nUpdated content goes here\"\n\t\t}\n\t\t</example>\n\t\t<example description=\"Replace specific content in a page\">\n\t\t{\n\t\t\t\"page_id\": \"f336d0bc-b841-465b-8045-024475c079dd\",\n\t\t\t\"command\": \"replace_content_range\",\n\t\t\t\"selection_with_ellipsis\": \"# Old Section...end of section\",\n\t\t\t\"new_str\": \"# New Section\nUpdated content goes here\"\n\t\t}\n\t\t</example>\n\t\t<example description=\"Insert content after specific text\">\n\t\t{\n\t\t\t\"page_id\": \"f336d0bc-b841-465b-8045-024475c079dd\",\n\t\t\t\"command\": \"insert_content_after\",\n\t\t\t\"selection_with_ellipsis\": \"## Previous section...\",\n\t\t\t\"new_str\": \"\n## New Section\nContent to insert goes here\"\n\t\t}\n\t\t</example>\n**Note**: For selection_with_ellipsis, provide only the first ~10 characters, an ellipsis, and the last ~10 characters. Ensure the selection is unique; use longer snippets if needed to avoid ambiguity.\n## Templates\nYou can apply a template to an existing page using the \"apply_template\" command. The template content is appended to the page asynchronously. Get template IDs from the <templates> section in the fetch tool results for a database, or use any page ID as a template.\n\t\t<example description=\"Apply a template to an existing page\">\n\t\t{\n\t\t\t\"page_id\": \"f336d0bc-b841-465b-8045-024475c079dd\",\n\t\t\t\"command\": \"apply_template\",\n\t\t\t\"template_id\": \"a5da15f6-b853-455d-8827-f906fb52db2b\"\n\t\t}\n\t\t</example>\n## Verification\nYou can verify or unverify a page using the \"update_verification\" command. Verification marks a page as reviewed and up-to-date. Requires a Business or Enterprise plan (or the page must be in a wiki).\n\t\t<example description=\"Verify a page for 90 days\">\n\t\t{\n\t\t\t\"page_id\": \"f336d0bc-b841-465b-8045-024475c079dd\",\n\t\t\t\"command\": \"update_verification\",\n\t\t\t\"verification_status\": \"verified\",\n\t\t\t\"verification_expiry_days\": 90\n\t\t}\n\t\t</example>\n\t\t<example description=\"Verify a page indefinitely\">\n\t\t{\n\t\t\t\"page_id\": \"f336d0bc-b841-465b-8045-024475c079dd\",\n\t\t\t\"command\": \"update_verification\",\n\t\t\t\"verification_status\": \"verified\"\n\t\t}\n\t\t</example>\n\t\t<example description=\"Remove verification from a page\">\n\t\t{\n\t\t\t\"page_id\": \"f336d0bc-b841-465b-8045-024475c079dd\",\n\t\t\t\"command\": \"update_verification\",\n\t\t\t\"verification_status\": \"unverified\"\n\t\t}\n\t\t</example>",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "page_id": {
+        "type": "string",
+        "description": "The ID of the page to update, with or without dashes."
+      },
+      "command": {
+        "type": "string",
+        "enum": [
+          "update_properties",
+          "replace_content",
+          "replace_content_range",
+          "insert_content_after",
+          "apply_template",
+          "update_verification"
+        ]
+      },
+      "properties": {
+        "type": "object",
+        "additionalProperties": {
+          "type": ["string", "number", "null"]
+        },
+        "description": "Required for \"update_properties\" command. A JSON object that updates the page's properties. For pages in a database, use the SQLite schema definition shown in <database>. For pages outside of a database, the only allowed property is \"title\", which is the title of the page in inline markdown format. Use null to remove a property's value."
+      },
+      "new_str": {
+        "type": "string",
+        "description": "Required for \"replace_content\", \"replace_content_range\", and \"insert_content_after\" commands. The new content string."
+      },
+      "selection_with_ellipsis": {
+        "type": "string",
+        "description": "Required for \"replace_content_range\" and \"insert_content_after\" commands. Unique start and end snippet of the string to match in the page content, including whitespace. DO NOT provide the entire string to match. Instead, provide up to the first ~10 characters of the string to match, an ellipsis, and then up to the last ~10 characters of the string to match. Make sure you provide enough of the start and end snippet to uniquely identify the string to match. For example, to replace an entire section, use \"selection_with_ellipsis\":\"# Section heading...last paragraph.\""
+      },
+      "allow_deleting_content": {
+        "type": "boolean"
+      },
+      "template_id": {
+        "type": "string",
+        "description": "Required for \"apply_template\" command. The ID of a template to apply to this page. Template content is appended to any existing page content."
+      },
+      "verification_status": {
+        "type": "string",
+        "enum": ["verified", "unverified"]
+      },
+      "verification_expiry_days": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "Optional for \"update_verification\" command when verification_status is \"verified\". Number of days until verification expires (e.g. 7, 30, 90). Omit for indefinite verification."
+      }
+    },
+    "required": ["page_id", "command"],
+    "additionalProperties": false,
+    "$schema": "http://json-schema.org/draft-07/schema#"
+  }
+}

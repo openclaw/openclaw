@@ -1,0 +1,14 @@
+{
+  "name": "import_task_from_calendar_event",
+  "description": "Create a task from a calendar event",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "eventId": {
+        "type": "string",
+        "description": "The ID of the calendar event"
+      }
+    },
+    "required": ["eventId"]
+  }
+}

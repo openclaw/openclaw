@@ -1,0 +1,14 @@
+{
+  "name": "accept_meeting_invite",
+  "description": "Accept a calendar meeting invite",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "eventId": {
+        "type": "string",
+        "description": "The ID of the calendar event"
+      }
+    },
+    "required": ["eventId"]
+  }
+}

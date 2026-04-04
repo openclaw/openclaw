@@ -516,7 +516,7 @@
 
 .chat-send-btn:hover:not(:disabled) {
   background: var(--accent-hover);
-  box-shadow: 0 2px 10px rgba(255, 92, 92, 0.25);
+  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.16);
 }
 
 .chat-send-btn:disabled {
@@ -530,6 +530,59 @@
 
 .chat-send-btn--stop:hover:not(:disabled) {
   background: color-mix(in srgb, var(--danger) 85%, #fff);
+}
+
+.chat-send-confirm__card {
+  width: min(520px, 100%);
+}
+
+.chat-send-confirm__meta {
+  margin-top: 14px;
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg-elevated) 78%, transparent);
+}
+
+.chat-send-confirm__meta-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.chat-send-confirm__meta-row span:last-child {
+  color: var(--text);
+  text-align: right;
+}
+
+.chat-send-confirm__preview {
+  margin-top: 14px;
+}
+
+.chat-send-confirm__preview-label {
+  margin-bottom: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.chat-send-confirm__preview-body {
+  min-height: 88px;
+  max-height: 220px;
+  overflow: auto;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg-elevated) 78%, transparent);
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text);
 }
 
 .slash-menu {

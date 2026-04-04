@@ -46,7 +46,7 @@ struct ExecCommandResolution {
             return resolutions
         }
 
-        guard let resolution = self.resolve(command: command, rawCommand: rawCommand, cwd: cwd, env: env) else {
+        guard let resolution = self.resolveForAllowlistDirectCommand(command: command, cwd: cwd, env: env) else {
             return []
         }
         return [resolution]
@@ -94,7 +94,19 @@ struct ExecCommandResolution {
     {
         let tokens = self.tokenizeShellWords(segment)
         guard !tokens.isEmpty else { return nil }
-        let effective = ExecEnvInvocationUnwrapper.unwrapDispatchWrappersForResolution(tokens)
+        let effective = ExecEnvInvocationUnwrapper.unwrapDispatchWrappersForAllowlist(tokens)
+        guard let raw = effective.first?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
+            return nil
+        }
+        return self.resolveExecutable(rawExecutable: raw, cwd: cwd, env: env)
+    }
+
+    private static func resolveForAllowlistDirectCommand(
+        command: [String],
+        cwd: String?,
+        env: [String: String]?) -> ExecCommandResolution?
+    {
+        let effective = ExecEnvInvocationUnwrapper.unwrapDispatchWrappersForAllowlist(command)
         guard let raw = effective.first?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
             return nil
         }

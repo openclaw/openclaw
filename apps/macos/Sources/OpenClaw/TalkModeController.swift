@@ -53,12 +53,22 @@ final class TalkModeController {
         self.setPaused(!self.isPaused)
     }
 
+    func beginWakeConversation(transcript: String) {
+        Task { await TalkModeRuntime.shared.beginWakeConversation(initialTranscript: transcript) }
+    }
+
     func stopSpeaking(reason: TalkStopReason = .userTap) {
         Task { await TalkModeRuntime.shared.stopSpeaking(reason: reason) }
     }
 
     func exitTalkMode() {
-        Task { await AppStateStore.shared.setTalkEnabled(false) }
+        Task {
+            if AppStateStore.shared.talkEnabled {
+                await AppStateStore.shared.setTalkEnabled(false)
+            } else {
+                await TalkModeRuntime.shared.stopTransientConversation(reason: "user_exit")
+            }
+        }
     }
 }
 

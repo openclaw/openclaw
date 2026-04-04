@@ -104,13 +104,20 @@ actor VoiceWakeRuntime {
             return (enabled, config)
         }
 
-        guard voiceWakeSupported, snapshot.0 else {
-            self.stop()
-            return
-        }
+        let permissionsGranted = PermissionManager.voiceWakePermissionsGranted()
+        let talkBlocksWake = await TalkModeRuntime.shared.blocksVoiceWake()
 
-        guard PermissionManager.voiceWakePermissionsGranted() else {
-            self.logger.debug("voicewake runtime not starting: permissions missing")
+        guard Self.shouldRun(
+            supported: voiceWakeSupported,
+            wakeEnabled: snapshot.0,
+            talkBlocksWake: talkBlocksWake,
+            permissionsGranted: permissionsGranted)
+        else {
+            if talkBlocksWake {
+                self.logger.debug("voicewake runtime paused: talk session active")
+            } else if !permissionsGranted {
+                self.logger.debug("voicewake runtime not starting: permissions missing")
+            }
             self.stop()
             return
         }
@@ -758,6 +765,17 @@ actor VoiceWakeRuntime {
         return trimmed.isEmpty ? self.trimmedAfterTrigger(transcript, triggers: triggers) : trimmed
     }
 
+    private static func shouldRun(
+        supported: Bool,
+        wakeEnabled: Bool,
+        talkBlocksWake: Bool,
+        permissionsGranted: Bool) -> Bool
+    {
+        guard supported, wakeEnabled else { return false }
+        guard !talkBlocksWake else { return false }
+        return permissionsGranted
+    }
+
     #if DEBUG
     static func _testTrimmedAfterTrigger(_ text: String, triggers: [String]) -> String {
         self.trimmedAfterTrigger(text, triggers: triggers)
@@ -770,6 +788,19 @@ actor VoiceWakeRuntime {
     static func _testAttributedColor(isFinal: Bool) -> NSColor {
         VoiceOverlayTextFormatting.makeAttributed(committed: "sample", volatile: "", isFinal: isFinal)
             .attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor ?? .clear
+    }
+
+    static func _testShouldRun(
+        supported: Bool,
+        wakeEnabled: Bool,
+        talkBlocksWake: Bool,
+        permissionsGranted: Bool) -> Bool
+    {
+        self.shouldRun(
+            supported: supported,
+            wakeEnabled: wakeEnabled,
+            talkBlocksWake: talkBlocksWake,
+            permissionsGranted: permissionsGranted)
     }
 
     #endif

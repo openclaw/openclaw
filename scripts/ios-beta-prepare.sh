@@ -21,6 +21,7 @@ BUILD_DIR="${IOS_DIR}/build"
 BETA_XCCONFIG="${IOS_DIR}/build/BetaRelease.xcconfig"
 TEAM_HELPER="${ROOT_DIR}/scripts/ios-team-id.sh"
 VERSION_HELPER="${ROOT_DIR}/scripts/ios-write-version-xcconfig.sh"
+XCODE_WRAPPER="${ROOT_DIR}/scripts/with-xcode-developer-dir.sh"
 
 BUILD_NUMBER=""
 TEAM_ID="${IOS_DEVELOPMENT_TEAM:-}"
@@ -142,11 +143,11 @@ write_generated_file "${BETA_XCCONFIG}" <<EOF
 OPENCLAW_CODE_SIGN_STYLE = Automatic
 OPENCLAW_DEVELOPMENT_TEAM = ${TEAM_ID}
 OPENCLAW_IOS_SELECTED_TEAM = ${TEAM_ID}
-OPENCLAW_APP_BUNDLE_ID = ai.openclaw.client
-OPENCLAW_SHARE_BUNDLE_ID = ai.openclaw.client.share
-OPENCLAW_ACTIVITY_WIDGET_BUNDLE_ID = ai.openclaw.client.activitywidget
-OPENCLAW_WATCH_APP_BUNDLE_ID = ai.openclaw.client.watchkitapp
-OPENCLAW_WATCH_EXTENSION_BUNDLE_ID = ai.openclaw.client.watchkitapp.extension
+OPENCLAW_APP_BUNDLE_ID = ai.vericlaw.client
+OPENCLAW_SHARE_BUNDLE_ID = ai.vericlaw.client.share
+OPENCLAW_ACTIVITY_WIDGET_BUNDLE_ID = ai.vericlaw.client.activitywidget
+OPENCLAW_WATCH_APP_BUNDLE_ID = ai.vericlaw.client.watchkitapp
+OPENCLAW_WATCH_EXTENSION_BUNDLE_ID = ai.vericlaw.client.watchkitapp.extension
 OPENCLAW_APP_PROFILE =
 OPENCLAW_SHARE_PROFILE =
 OPENCLAW_PUSH_TRANSPORT = relay
@@ -158,7 +159,7 @@ EOF
 
 (
   cd "${IOS_DIR}"
-  xcodegen generate
+  "${XCODE_WRAPPER}" xcodegen generate
 )
 
 echo "Prepared iOS beta release: version=${PACKAGE_VERSION} build=${BUILD_NUMBER} team=${TEAM_ID}"

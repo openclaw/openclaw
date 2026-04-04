@@ -71,6 +71,11 @@ enum HealthState: Equatable {
 @Observable
 final class HealthStore {
     static let shared = HealthStore()
+    private typealias ResolvedHealthChannel = (
+        id: String,
+        summary: HealthSnapshot.ChannelSummary,
+        supportsLinking: Bool
+    )
 
     private static let logger = Logger(subsystem: "ai.openclaw", category: "health")
 
@@ -80,7 +85,10 @@ final class HealthStore {
     private(set) var isRefreshing = false
 
     private var loopTask: Task<Void, Never>?
+    private let bootstrapRefreshTimeout: TimeInterval = 30
+    private let refreshTimeout: TimeInterval = 15
     private let refreshInterval: TimeInterval = 60
+    private let recoveryRefreshInterval: TimeInterval = 5
 
     private init() {
         // Avoid background health polling in SwiftUI previews and tests.
@@ -102,7 +110,8 @@ final class HealthStore {
             guard let self else { return }
             while !Task.isCancelled {
                 await self.refresh()
-                try? await Task.sleep(nanoseconds: UInt64(self.refreshInterval * 1_000_000_000))
+                let interval = self.nextRefreshInterval
+                try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
             }
         }
     }
@@ -116,31 +125,66 @@ final class HealthStore {
         guard !self.isRefreshing else { return }
         self.isRefreshing = true
         defer { self.isRefreshing = false }
+        let previousSnapshot = self.snapshot
         let previousError = self.lastError
+        let timeout = self.snapshot == nil ? self.bootstrapRefreshTimeout : self.refreshTimeout
 
         do {
-            let data = try await ControlChannel.shared.health(timeout: 15)
+            let data = try await ControlChannel.shared.health(timeout: timeout)
             if let decoded = decodeHealthSnapshot(from: data) {
-                self.snapshot = decoded
-                self.lastSuccess = Date()
-                self.lastError = nil
-                if previousError != nil {
-                    Self.logger.info("health refresh recovered")
-                }
+                self.apply(snapshot: decoded, previousError: previousError)
             } else {
+                if self.shouldRetainSnapshotAfterRefreshFailure(previousSnapshot) {
+                    self.lastError = nil
+                    Self.logger.warning("health refresh returned non-JSON; keeping cached snapshot")
+                    return
+                }
                 self.lastError = "health output not JSON"
-                if onDemand { self.snapshot = nil }
+                if onDemand, previousSnapshot == nil { self.snapshot = nil }
                 if previousError != self.lastError {
                     Self.logger.warning("health refresh failed: output not JSON")
                 }
             }
         } catch {
             let desc = error.localizedDescription
+            if self.shouldRetainSnapshotAfterRefreshFailure(previousSnapshot) {
+                self.lastError = nil
+                Self.logger.warning("health refresh failed; keeping cached snapshot: \(desc, privacy: .public)")
+                return
+            }
             self.lastError = desc
-            if onDemand { self.snapshot = nil }
+            if onDemand, previousSnapshot == nil { self.snapshot = nil }
             if previousError != desc {
                 Self.logger.error("health refresh failed \(desc, privacy: .public)")
             }
+        }
+    }
+
+    func apply(snapshot: HealthSnapshot) {
+        self.apply(snapshot: snapshot, previousError: self.lastError)
+    }
+
+    private var nextRefreshInterval: TimeInterval {
+        if self.snapshot == nil || (self.lastError?.isEmpty == false) {
+            return self.recoveryRefreshInterval
+        }
+        return self.refreshInterval
+    }
+
+    private func shouldRetainSnapshotAfterRefreshFailure(_ snapshot: HealthSnapshot?) -> Bool {
+        guard snapshot != nil else { return false }
+        if case .connected = ControlChannel.shared.state {
+            return true
+        }
+        return false
+    }
+
+    private func apply(snapshot: HealthSnapshot, previousError: String?) {
+        self.snapshot = snapshot
+        self.lastSuccess = Date()
+        self.lastError = nil
+        if previousError != nil {
+            Self.logger.info("health refresh recovered")
         }
     }
 
@@ -162,18 +206,33 @@ final class HealthStore {
         return "\(reason) (\(code))"
     }
 
-    private func resolveLinkChannel(
-        _ snap: HealthSnapshot) -> (id: String, summary: HealthSnapshot.ChannelSummary)?
+    private func resolvePrimaryChannel(_ snap: HealthSnapshot) -> ResolvedHealthChannel?
     {
         let order = snap.channelOrder ?? Array(snap.channels.keys)
         for id in order {
             if let summary = snap.channels[id], summary.linked == true {
-                return (id: id, summary: summary)
+                return (id: id, summary: summary, supportsLinking: true)
             }
         }
         for id in order {
             if let summary = snap.channels[id], summary.linked != nil {
-                return (id: id, summary: summary)
+                return (id: id, summary: summary, supportsLinking: true)
+            }
+        }
+        for id in order {
+            guard let summary = snap.channels[id] else { continue }
+            if Self.isChannelHealthy(summary) {
+                return (id: id, summary: summary, supportsLinking: false)
+            }
+        }
+        for id in order {
+            if let summary = snap.channels[id], summary.configured == true {
+                return (id: id, summary: summary, supportsLinking: false)
+            }
+        }
+        for id in order {
+            if let summary = snap.channels[id] {
+                return (id: id, summary: summary, supportsLinking: false)
             }
         }
         return nil
@@ -199,39 +258,46 @@ final class HealthStore {
             return .degraded(error)
         }
         guard let snap = self.snapshot else { return .unknown }
-        guard let link = self.resolveLinkChannel(snap) else { return .unknown }
-        if link.summary.linked != true {
+        guard let channel = self.resolvePrimaryChannel(snap) else { return .unknown }
+        if channel.supportsLinking, channel.summary.linked != true {
             // Linking is optional if any other channel is healthy; don't paint the whole app red.
-            let fallback = self.resolveFallbackChannel(snap, excluding: link.id)
+            let fallback = self.resolveFallbackChannel(snap, excluding: channel.id)
             return fallback != nil ? .degraded("Not linked") : .linkingNeeded
         }
         // A channel can be "linked" but still unhealthy (failed probe / cannot connect).
-        if let probe = link.summary.probe, probe.ok == false {
+        if let probe = channel.summary.probe, probe.ok == false {
             return .degraded(Self.describeProbeFailure(probe))
         }
-        return .ok
+        return Self.isChannelHealthy(channel.summary) ? .ok : .unknown
     }
 
     var summaryLine: String {
         if self.isRefreshing { return "Health check running…" }
         if let error = self.lastError { return "Health check failed: \(error)" }
         guard let snap = self.snapshot else { return "Health check pending" }
-        guard let link = self.resolveLinkChannel(snap) else { return "Health check pending" }
-        if link.summary.linked != true {
-            if let fallback = self.resolveFallbackChannel(snap, excluding: link.id) {
+        guard let channel = self.resolvePrimaryChannel(snap) else { return "Health check pending" }
+        if channel.supportsLinking, channel.summary.linked != true {
+            if let fallback = self.resolveFallbackChannel(snap, excluding: channel.id) {
                 let fallbackLabel = snap.channelLabels?[fallback.id] ?? fallback.id.capitalized
                 let fallbackState = (fallback.summary.probe?.ok ?? true) ? "ok" : "degraded"
                 return "\(fallbackLabel) \(fallbackState) · Not linked — run openclaw login"
             }
             return "Not linked — run openclaw login"
         }
-        let auth = link.summary.authAgeMs.map { msToAge($0) } ?? "unknown"
-        if let probe = link.summary.probe, probe.ok == false {
+        let label = snap.channelLabels?[channel.id] ?? channel.id.capitalized
+        let auth = channel.summary.authAgeMs.map { msToAge($0) }
+        if let probe = channel.summary.probe, probe.ok == false {
             let status = probe.status.map(String.init) ?? "?"
             let suffix = probe.status == nil ? "probe degraded" : "probe degraded · status \(status)"
-            return "linked · auth \(auth) · \(suffix)"
+            if let auth {
+                return "\(label) · auth \(auth) · \(suffix)"
+            }
+            return "\(label) · \(suffix)"
         }
-        return "linked · auth \(auth)"
+        if let auth {
+            return channel.supportsLinking ? "linked · auth \(auth)" : "\(label) ready · auth \(auth)"
+        }
+        return channel.supportsLinking ? "linked" : "\(label) ready"
     }
 
     /// Short, human-friendly detail for the last failure, used in the UI.
@@ -241,7 +307,7 @@ final class HealthStore {
             if lower.contains("connection refused") {
                 let port = GatewayEnvironment.gatewayPort()
                 let host = GatewayConnectivityCoordinator.shared.localEndpointHostLabel ?? "127.0.0.1:\(port)"
-                return "The gateway control port (\(host)) isn’t listening — restart OpenClaw to bring it back."
+                return "The gateway control port (\(host)) isn’t listening — restart \(Branding.appName) to bring it back."
             }
             if lower.contains("timeout") {
                 return "Timed out waiting for the control server; the gateway may be crashed or still starting."
@@ -252,10 +318,10 @@ final class HealthStore {
     }
 
     func describeFailure(from snap: HealthSnapshot, fallback: String?) -> String {
-        if let link = self.resolveLinkChannel(snap), link.summary.linked != true {
+        if let channel = self.resolvePrimaryChannel(snap), channel.supportsLinking, channel.summary.linked != true {
             return "Not linked — run openclaw login"
         }
-        if let link = self.resolveLinkChannel(snap), let probe = link.summary.probe, probe.ok == false {
+        if let channel = self.resolvePrimaryChannel(snap), let probe = channel.summary.probe, probe.ok == false {
             return Self.describeProbeFailure(probe)
         }
         if let fallback, !fallback.isEmpty {

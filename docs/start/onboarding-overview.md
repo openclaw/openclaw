@@ -33,7 +33,7 @@ channels, and skills. Docs:
 
 ## macOS app onboarding
 
-Use the OpenClaw app when you want a fully guided setup on macOS. Docs:
+Use the VeriClaw 爪印 app when you want a fully guided setup on macOS. Docs:
 
 - [Onboarding (macOS App)](/start/onboarding)
 

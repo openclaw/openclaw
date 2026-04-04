@@ -5,11 +5,16 @@ import UIKit
 #endif
 
 public enum InstanceIdentity {
-    private static let suiteName = "ai.openclaw.shared"
+    private static let suiteName = "ai.vericlaw.shared"
+    private static let legacySuiteName = "ai.openclaw.shared"
     private static let instanceIdKey = "instanceId"
 
     private static var defaults: UserDefaults {
         UserDefaults(suiteName: suiteName) ?? .standard
+    }
+
+    private static var legacyDefaults: UserDefaults? {
+        UserDefaults(suiteName: self.legacySuiteName)
     }
 
 #if canImport(UIKit)
@@ -31,6 +36,14 @@ public enum InstanceIdentity {
         {
             return existing
         }
+        if let legacy = Self.legacyDefaults?.string(forKey: instanceIdKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !legacy.isEmpty
+        {
+            defaults.set(legacy, forKey: instanceIdKey)
+            Self.legacyDefaults?.removeObject(forKey: instanceIdKey)
+            return legacy
+        }
 
         let id = UUID().uuidString.lowercased()
         defaults.set(id, forKey: instanceIdKey)
@@ -42,14 +55,14 @@ public enum InstanceIdentity {
         let name = Self.readMainActor {
             UIDevice.current.name.trimmingCharacters(in: .whitespacesAndNewlines)
         }
-        return name.isEmpty ? "openclaw" : name
+        return name.isEmpty ? "vericlaw" : name
 #else
         if let name = Host.current().localizedName?.trimmingCharacters(in: .whitespacesAndNewlines),
            !name.isEmpty
         {
             return name
         }
-        return "openclaw"
+        return "vericlaw"
 #endif
     }()
 

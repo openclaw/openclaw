@@ -1,0 +1,18 @@
+{
+  "name": "unarchive_task",
+  "description": "Restore an archived task to a specific day",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "taskId": {
+        "type": "string",
+        "description": "The ID of the task to unarchive"
+      },
+      "calendarDay": {
+        "type": "string",
+        "description": "The date to restore the task to (YYYY-MM-DD format)"
+      }
+    },
+    "required": ["taskId", "calendarDay"]
+  }
+}

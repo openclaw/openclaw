@@ -334,7 +334,7 @@ enum WatchPromptNotificationBridge {
         }
 
         let content = UNMutableNotificationContent()
-        content.title = title.isEmpty ? "OpenClaw" : title
+        content.title = title.isEmpty ? "VeriClaw 爪印" : title
         content.body = body
         content.sound = .default
         content.userInfo = userInfo

@@ -244,7 +244,7 @@ openclaw logs --follow
 
 捆绑的 mac 应用：
 
-- OpenClaw.app 可以捆绑基于 Node 的 Gateway 网关中继并安装标记为
+- VeriClaw 爪印.app 可以捆绑基于 Node 的 Gateway 网关中继并安装标记为
   `bot.molt.gateway`（或 `bot.molt.<profile>`；旧版 `com.openclaw.*` 标签仍能干净卸载）的按用户 LaunchAgent。
 - 要干净地停止它，使用 `openclaw gateway stop`（或 `launchctl bootout gui/$UID/bot.molt.gateway`）。
 - 要重启，使用 `openclaw gateway restart`（或 `launchctl kickstart -k gui/$UID/bot.molt.gateway`）。

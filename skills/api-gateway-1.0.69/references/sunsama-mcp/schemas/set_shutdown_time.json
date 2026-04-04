@@ -1,0 +1,22 @@
+{
+  "name": "set_shutdown_time",
+  "description": "Set the shutdown time for a day",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "calendarDay": {
+        "type": "string",
+        "description": "The date (YYYY-MM-DD format)"
+      },
+      "hour": {
+        "type": "number",
+        "description": "The hour (0-23)"
+      },
+      "minute": {
+        "type": "number",
+        "description": "The minute (0-59)"
+      }
+    },
+    "required": ["calendarDay", "hour", "minute"]
+  }
+}

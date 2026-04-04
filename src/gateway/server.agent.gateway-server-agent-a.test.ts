@@ -455,6 +455,43 @@ describe("gateway server agent", () => {
     }
   });
 
+  test("agent uses uniquely bound channel when delivery requested and no last channel exists", async () => {
+    setRegistry(defaultRegistry);
+    testState.allowFrom = ["+1555"];
+    testState.bindingsConfig = [
+      {
+        agentId: "main",
+        match: { channel: "discord", accountId: "kaiser_hq" },
+      },
+    ];
+    try {
+      await setTestSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main-bound-discord",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+      const res = await rpcReq(ws, "agent", {
+        message: "hi",
+        sessionKey: "main",
+        deliver: true,
+        idempotencyKey: "idem-agent-bound-discord",
+      });
+      expect(res.ok).toBe(true);
+
+      const call = latestAgentCall();
+      expectChannels(call, "discord");
+      expect(call.accountId).toBe("kaiser_hq");
+      expect(call.deliver).toBe(true);
+      expect(call.bestEffortDeliver).toBe(true);
+    } finally {
+      testState.allowFrom = undefined;
+      testState.bindingsConfig = undefined;
+    }
+  });
+
   test.each([
     {
       name: "whatsapp",

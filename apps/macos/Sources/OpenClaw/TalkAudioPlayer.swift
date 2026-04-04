@@ -3,12 +3,63 @@ import Foundation
 import OSLog
 
 @MainActor
+protocol TalkAudioPlayable: AnyObject {
+    var delegate: AVAudioPlayerDelegate? { get set }
+    var isPlaying: Bool { get }
+    var duration: TimeInterval { get }
+    var currentTime: TimeInterval { get }
+
+    @discardableResult func prepareToPlay() -> Bool
+    @discardableResult func play() -> Bool
+    func stop()
+}
+
+private final class AVAudioPlayerWrapper: TalkAudioPlayable {
+    private let base: AVAudioPlayer
+
+    init(data: Data) throws {
+        self.base = try AVAudioPlayer(data: data)
+    }
+
+    var delegate: AVAudioPlayerDelegate? {
+        get { self.base.delegate }
+        set { self.base.delegate = newValue }
+    }
+
+    var isPlaying: Bool { self.base.isPlaying }
+    var duration: TimeInterval { self.base.duration }
+    var currentTime: TimeInterval { self.base.currentTime }
+
+    @discardableResult
+    func prepareToPlay() -> Bool {
+        self.base.prepareToPlay()
+    }
+
+    @discardableResult
+    func play() -> Bool {
+        self.base.play()
+    }
+
+    func stop() {
+        self.base.stop()
+    }
+}
+
+@MainActor
 final class TalkAudioPlayer: NSObject, @preconcurrency AVAudioPlayerDelegate {
     static let shared = TalkAudioPlayer()
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "talk.tts")
-    private var player: AVAudioPlayer?
+    private var playerFactory: (Data) throws -> any TalkAudioPlayable = { data in
+        try AVAudioPlayerWrapper(data: data)
+    }
+    private var player: (any TalkAudioPlayable)?
     private var playback: Playback?
+
+    private enum WatchdogDecision {
+        case stop
+        case waitForCompletion(timeoutSeconds: Double)
+    }
 
     private final class Playback: @unchecked Sendable {
         private let lock = NSLock()
@@ -58,7 +109,7 @@ final class TalkAudioPlayer: NSObject, @preconcurrency AVAudioPlayerDelegate {
         return await withCheckedContinuation { continuation in
             playback.setContinuation(continuation)
             do {
-                let player = try AVAudioPlayer(data: data)
+                let player = try self.playerFactory(data)
                 self.player = player
 
                 player.delegate = self
@@ -78,15 +129,38 @@ final class TalkAudioPlayer: NSObject, @preconcurrency AVAudioPlayerDelegate {
         }
     }
 
+    func installPlayerFactoryForTesting(_ factory: @escaping (Data) throws -> any TalkAudioPlayable) {
+        self.playerFactory = factory
+    }
+
+    func resetPlayerFactoryForTesting() {
+        self.playerFactory = { data in
+            try AVAudioPlayerWrapper(data: data)
+        }
+    }
+
     func stop() -> Double? {
-        guard let player else { return nil }
-        let time = player.currentTime
-        self.stopInternal(interruptedAt: time)
+        let time = self.player?.currentTime
+        if self.playback != nil {
+            self.stopInternal(interruptedAt: time)
+        } else {
+            self.player?.stop()
+            self.player = nil
+        }
         return time
     }
 
     func audioPlayerDidFinishPlaying(_: AVAudioPlayer, successfully flag: Bool) {
         self.stopInternal(finished: flag)
+    }
+
+    func audioPlayerDecodeErrorDidOccur(_: AVAudioPlayer, error: Error?) {
+        if let error {
+            self.logger.error("talk audio player decode error: \(error.localizedDescription, privacy: .public)")
+        } else {
+            self.logger.error("talk audio player decode error")
+        }
+        self.stopInternal(finished: false)
     }
 
     private func stopInternal(finished: Bool = false, interruptedAt: Double? = nil) {
@@ -118,9 +192,7 @@ final class TalkAudioPlayer: NSObject, @preconcurrency AVAudioPlayerDelegate {
     }
 
     private func armWatchdog(playback: Playback) {
-        playback.setWatchdog(Task { @MainActor [weak self] in
-            guard let self else { return }
-
+        playback.setWatchdog(Task { [weak self] in
             do {
                 try await Task.sleep(nanoseconds: 650_000_000)
             } catch {
@@ -128,15 +200,21 @@ final class TalkAudioPlayer: NSObject, @preconcurrency AVAudioPlayerDelegate {
             }
             if Task.isCancelled { return }
 
-            guard self.playback === playback else { return }
-            if self.player?.isPlaying != true {
-                self.logger.error("talk audio player did not start playing")
-                self.finish(playback: playback, result: TalkPlaybackResult(finished: false, interruptedAt: nil))
-                return
-            }
+            let decision = await MainActor.run { [weak self] () -> WatchdogDecision in
+                guard let self else { return .stop }
+                guard self.playback === playback else { return .stop }
+                guard self.player?.isPlaying == true else {
+                    self.logger.error("talk audio player stopped before delegate completion")
+                    self.finish(playback: playback, result: self.resultForStoppedPlayback())
+                    return .stop
+                }
 
-            let duration = self.player?.duration ?? 0
-            let timeoutSeconds = min(max(2.0, duration + 2.0), 5 * 60.0)
+                let duration = self.player?.duration ?? 0
+                let timeoutSeconds = min(max(2.0, duration + 2.0), 5 * 60.0)
+                return .waitForCompletion(timeoutSeconds: timeoutSeconds)
+            }
+            guard case let .waitForCompletion(timeoutSeconds) = decision else { return }
+
             do {
                 try await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
             } catch {
@@ -144,11 +222,29 @@ final class TalkAudioPlayer: NSObject, @preconcurrency AVAudioPlayerDelegate {
             }
             if Task.isCancelled { return }
 
-            guard self.playback === playback else { return }
-            guard self.player?.isPlaying == true else { return }
-            self.logger.error("talk audio player watchdog fired")
-            self.finish(playback: playback, result: TalkPlaybackResult(finished: false, interruptedAt: nil))
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                guard self.playback === playback else { return }
+                guard self.player?.isPlaying == true else {
+                    self.finish(playback: playback, result: self.resultForStoppedPlayback())
+                    return
+                }
+                self.logger.error("talk audio player watchdog fired")
+                self.finish(
+                    playback: playback,
+                    result: TalkPlaybackResult(finished: false, interruptedAt: nil))
+            }
         })
+    }
+
+    private func resultForStoppedPlayback() -> TalkPlaybackResult {
+        let currentTime = self.player?.currentTime
+        let duration = self.player?.duration ?? 0
+        let tolerance = max(0.05, duration * 0.1)
+        let finished = (currentTime ?? 0) + tolerance >= duration && duration > 0
+        return TalkPlaybackResult(
+            finished: finished,
+            interruptedAt: finished ? nil : currentTime)
     }
 }
 

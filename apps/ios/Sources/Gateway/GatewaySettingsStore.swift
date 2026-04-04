@@ -2,9 +2,12 @@ import Foundation
 import os
 
 enum GatewaySettingsStore {
-    private static let gatewayService = "ai.openclaw.gateway"
-    private static let nodeService = "ai.openclaw.node"
-    private static let talkService = "ai.openclaw.talk"
+    private static let gatewayService = "ai.vericlaw.gateway"
+    private static let legacyGatewayService = "ai.openclaw.gateway"
+    private static let nodeService = "ai.vericlaw.node"
+    private static let legacyNodeService = "ai.openclaw.node"
+    private static let talkService = "ai.vericlaw.talk"
+    private static let legacyTalkService = "ai.openclaw.talk"
 
     private static let instanceIdDefaultsKey = "node.instanceId"
     private static let preferredGatewayStableIDDefaultsKey = "gateway.preferredStableID"
@@ -34,8 +37,30 @@ enum GatewaySettingsStore {
         self.ensureLastDiscoveredGatewayStableID()
     }
 
+    private static func loadKeychainString(service: String, legacyService: String, account: String) -> String? {
+        KeychainStore.loadString(service: service, account: account)
+            ?? KeychainStore.loadString(service: legacyService, account: account)
+    }
+
+    @discardableResult
+    private static func saveKeychainString(_ value: String, service: String, legacyService: String, account: String) -> Bool {
+        let saved = KeychainStore.saveString(value, service: service, account: account)
+        _ = KeychainStore.delete(service: legacyService, account: account)
+        return saved
+    }
+
+    @discardableResult
+    private static func deleteKeychainString(service: String, legacyService: String, account: String) -> Bool {
+        let deletedCurrent = KeychainStore.delete(service: service, account: account)
+        let deletedLegacy = KeychainStore.delete(service: legacyService, account: account)
+        return deletedCurrent || deletedLegacy
+    }
+
     static func loadStableInstanceID() -> String? {
-        if let value = KeychainStore.loadString(service: self.nodeService, account: self.instanceIdAccount)?
+        if let value = self.loadKeychainString(
+            service: self.nodeService,
+            legacyService: self.legacyNodeService,
+            account: self.instanceIdAccount)?
             .trimmingCharacters(in: .whitespacesAndNewlines),
             !value.isEmpty
         {
@@ -46,12 +71,17 @@ enum GatewaySettingsStore {
     }
 
     static func saveStableInstanceID(_ instanceId: String) {
-        _ = KeychainStore.saveString(instanceId, service: self.nodeService, account: self.instanceIdAccount)
+        _ = self.saveKeychainString(
+            instanceId,
+            service: self.nodeService,
+            legacyService: self.legacyNodeService,
+            account: self.instanceIdAccount)
     }
 
     static func loadPreferredGatewayStableID() -> String? {
-        if let value = KeychainStore.loadString(
+        if let value = self.loadKeychainString(
             service: self.gatewayService,
+            legacyService: self.legacyGatewayService,
             account: self.preferredGatewayStableIDAccount
         )?.trimmingCharacters(in: .whitespacesAndNewlines),
             !value.isEmpty
@@ -63,15 +93,17 @@ enum GatewaySettingsStore {
     }
 
     static func savePreferredGatewayStableID(_ stableID: String) {
-        _ = KeychainStore.saveString(
+        _ = self.saveKeychainString(
             stableID,
             service: self.gatewayService,
+            legacyService: self.legacyGatewayService,
             account: self.preferredGatewayStableIDAccount)
     }
 
     static func loadLastDiscoveredGatewayStableID() -> String? {
-        if let value = KeychainStore.loadString(
+        if let value = self.loadKeychainString(
             service: self.gatewayService,
+            legacyService: self.legacyGatewayService,
             account: self.lastDiscoveredGatewayStableIDAccount
         )?.trimmingCharacters(in: .whitespacesAndNewlines),
             !value.isEmpty
@@ -83,53 +115,64 @@ enum GatewaySettingsStore {
     }
 
     static func saveLastDiscoveredGatewayStableID(_ stableID: String) {
-        _ = KeychainStore.saveString(
+        _ = self.saveKeychainString(
             stableID,
             service: self.gatewayService,
+            legacyService: self.legacyGatewayService,
             account: self.lastDiscoveredGatewayStableIDAccount)
     }
 
     static func loadGatewayToken(instanceId: String) -> String? {
         let account = self.gatewayTokenAccount(instanceId: instanceId)
-        let token = KeychainStore.loadString(service: self.gatewayService, account: account)?
+        let token = self.loadKeychainString(
+            service: self.gatewayService,
+            legacyService: self.legacyGatewayService,
+            account: account)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if token?.isEmpty == false { return token }
         return nil
     }
 
     static func saveGatewayToken(_ token: String, instanceId: String) {
-        _ = KeychainStore.saveString(
+        _ = self.saveKeychainString(
             token,
             service: self.gatewayService,
+            legacyService: self.legacyGatewayService,
             account: self.gatewayTokenAccount(instanceId: instanceId))
     }
 
     static func loadGatewayBootstrapToken(instanceId: String) -> String? {
         let account = self.gatewayBootstrapTokenAccount(instanceId: instanceId)
-        let token = KeychainStore.loadString(service: self.gatewayService, account: account)?
+        let token = self.loadKeychainString(
+            service: self.gatewayService,
+            legacyService: self.legacyGatewayService,
+            account: account)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if token?.isEmpty == false { return token }
         return nil
     }
 
     static func saveGatewayBootstrapToken(_ token: String, instanceId: String) {
-        _ = KeychainStore.saveString(
+        _ = self.saveKeychainString(
             token,
             service: self.gatewayService,
+            legacyService: self.legacyGatewayService,
             account: self.gatewayBootstrapTokenAccount(instanceId: instanceId))
     }
 
     static func loadGatewayPassword(instanceId: String) -> String? {
-        KeychainStore.loadString(
+        self.loadKeychainString(
             service: self.gatewayService,
+            legacyService: self.legacyGatewayService,
             account: self.gatewayPasswordAccount(instanceId: instanceId))?
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     static func saveGatewayPassword(_ password: String, instanceId: String) {
-        _ = KeychainStore.saveString(
+        _ = self.saveKeychainString(
             password,
             service: self.gatewayService,
+            legacyService: self.legacyGatewayService,
             account: self.gatewayPasswordAccount(instanceId: instanceId))
     }
 
@@ -173,8 +216,9 @@ enum GatewaySettingsStore {
     static func loadTalkProviderApiKey(provider: String) -> String? {
         guard let providerId = self.normalizedTalkProviderID(provider) else { return nil }
         let account = self.talkProviderApiKeyAccount(providerId: providerId)
-        let value = KeychainStore.loadString(
+        let value = self.loadKeychainString(
             service: self.talkService,
+            legacyService: self.legacyTalkService,
             account: account)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if value?.isEmpty == false { return value }
@@ -186,10 +230,17 @@ enum GatewaySettingsStore {
         let account = self.talkProviderApiKeyAccount(providerId: providerId)
         let trimmed = apiKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if trimmed.isEmpty {
-            _ = KeychainStore.delete(service: self.talkService, account: account)
+            _ = self.deleteKeychainString(
+                service: self.talkService,
+                legacyService: self.legacyTalkService,
+                account: account)
             return
         }
-        _ = KeychainStore.saveString(trimmed, service: self.talkService, account: account)
+        _ = self.saveKeychainString(
+            trimmed,
+            service: self.talkService,
+            legacyService: self.legacyTalkService,
+            account: account)
     }
 
     static func saveLastGatewayConnectionManual(host: String, port: Int, useTLS: Bool, stableID: String) {
@@ -208,8 +259,10 @@ enum GatewaySettingsStore {
         // Migrate legacy UserDefaults entries on first access.
         self.migrateLastGatewayFromUserDefaultsIfNeeded()
 
-        guard let json = KeychainStore.loadString(
-            service: self.gatewayService, account: self.lastGatewayConnectionAccount),
+        guard let json = self.loadKeychainString(
+            service: self.gatewayService,
+            legacyService: self.legacyGatewayService,
+            account: self.lastGatewayConnectionAccount),
             let data = json.data(using: .utf8),
             let stored = try? JSONDecoder().decode(LastGatewayConnectionData.self, from: data)
         else { return nil }
@@ -228,8 +281,10 @@ enum GatewaySettingsStore {
     }
 
     static func clearLastGatewayConnection(defaults: UserDefaults = .standard) {
-        _ = KeychainStore.delete(
-            service: self.gatewayService, account: self.lastGatewayConnectionAccount)
+        _ = self.deleteKeychainString(
+            service: self.gatewayService,
+            legacyService: self.legacyGatewayService,
+            account: self.lastGatewayConnectionAccount)
         // Clean up any legacy UserDefaults entries.
         defaults.removeObject(forKey: self.lastGatewayKindDefaultsKey)
         defaults.removeObject(forKey: self.lastGatewayHostDefaultsKey)
@@ -243,8 +298,11 @@ enum GatewaySettingsStore {
         guard let data = try? JSONEncoder().encode(payload),
               let json = String(data: data, encoding: .utf8)
         else { return false }
-        return KeychainStore.saveString(
-            json, service: self.gatewayService, account: self.lastGatewayConnectionAccount)
+        return self.saveKeychainString(
+            json,
+            service: self.gatewayService,
+            legacyService: self.legacyGatewayService,
+            account: self.lastGatewayConnectionAccount)
     }
 
     /// Migrate legacy UserDefaults gateway.last.* keys into a single Keychain entry.
@@ -255,8 +313,10 @@ enum GatewaySettingsStore {
         guard !stableID.isEmpty else { return }
 
         // Already migrated if Keychain entry exists.
-        if KeychainStore.loadString(
-            service: self.gatewayService, account: self.lastGatewayConnectionAccount) != nil
+        if self.loadKeychainString(
+            service: self.gatewayService,
+            legacyService: self.legacyGatewayService,
+            account: self.lastGatewayConnectionAccount) != nil
         {
             // Clean up legacy keys.
             self.removeLastGatewayDefaults(defaults)
@@ -290,14 +350,17 @@ enum GatewaySettingsStore {
     static func deleteGatewayCredentials(instanceId: String) {
         let trimmed = instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        _ = KeychainStore.delete(
+        _ = self.deleteKeychainString(
             service: self.gatewayService,
+            legacyService: self.legacyGatewayService,
             account: self.gatewayTokenAccount(instanceId: trimmed))
-        _ = KeychainStore.delete(
+        _ = self.deleteKeychainString(
             service: self.gatewayService,
+            legacyService: self.legacyGatewayService,
             account: self.gatewayBootstrapTokenAccount(instanceId: trimmed))
-        _ = KeychainStore.delete(
+        _ = self.deleteKeychainString(
             service: self.gatewayService,
+            legacyService: self.legacyGatewayService,
             account: self.gatewayPasswordAccount(instanceId: trimmed))
     }
 

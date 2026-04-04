@@ -12,14 +12,20 @@ enum ExecCommandToken {
 enum ExecEnvInvocationUnwrapper {
     static let maxWrapperDepth = 4
 
+    struct EnvUnwrapResult {
+        let argv: [String]
+        let usesModifiers: Bool
+    }
+
     private static func isEnvAssignment(_ token: String) -> Bool {
         let pattern = #"^[A-Za-z_][A-Za-z0-9_]*=.*"#
         return token.range(of: pattern, options: .regularExpression) != nil
     }
 
-    static func unwrap(_ command: [String]) -> [String]? {
+    static func unwrapWithMetadata(_ command: [String]) -> EnvUnwrapResult? {
         var idx = 1
         var expectsOptionValue = false
+        var usesModifiers = false
         while idx < command.count {
             let token = command[idx].trimmingCharacters(in: .whitespacesAndNewlines)
             if token.isEmpty {
@@ -28,6 +34,7 @@ enum ExecEnvInvocationUnwrapper {
             }
             if expectsOptionValue {
                 expectsOptionValue = false
+                usesModifiers = true
                 idx += 1
                 continue
             }
@@ -36,6 +43,7 @@ enum ExecEnvInvocationUnwrapper {
                 break
             }
             if self.isEnvAssignment(token) {
+                usesModifiers = true
                 idx += 1
                 continue
             }
@@ -43,10 +51,12 @@ enum ExecEnvInvocationUnwrapper {
                 let lower = token.lowercased()
                 let flag = lower.split(separator: "=", maxSplits: 1).first.map(String.init) ?? lower
                 if ExecEnvOptions.flagOnly.contains(flag) {
+                    usesModifiers = true
                     idx += 1
                     continue
                 }
                 if ExecEnvOptions.withValue.contains(flag) {
+                    usesModifiers = true
                     if !lower.contains("=") {
                         expectsOptionValue = true
                     }
@@ -63,6 +73,7 @@ enum ExecEnvInvocationUnwrapper {
                     lower.hasPrefix("--ignore-signal=") ||
                     lower.hasPrefix("--block-signal=")
                 {
+                    usesModifiers = true
                     idx += 1
                     continue
                 }
@@ -71,10 +82,36 @@ enum ExecEnvInvocationUnwrapper {
             break
         }
         guard idx < command.count else { return nil }
-        return Array(command[idx...])
+        return EnvUnwrapResult(argv: Array(command[idx...]), usesModifiers: usesModifiers)
+    }
+
+    static func unwrap(_ command: [String]) -> [String]? {
+        self.unwrapWithMetadata(command)?.argv
     }
 
     static func unwrapDispatchWrappersForResolution(_ command: [String]) -> [String] {
+        var current = command
+        var depth = 0
+        while depth < self.maxWrapperDepth {
+            guard let token = current.first?.trimmingCharacters(in: .whitespacesAndNewlines), !token.isEmpty else {
+                break
+            }
+            guard ExecCommandToken.basenameLower(token) == "env" else {
+                break
+            }
+            guard let envUnwrap = self.unwrapWithMetadata(current),
+                  !envUnwrap.usesModifiers,
+                  !envUnwrap.argv.isEmpty
+            else {
+                break
+            }
+            current = envUnwrap.argv
+            depth += 1
+        }
+        return current
+    }
+
+    static func unwrapDispatchWrappersForAllowlist(_ command: [String]) -> [String] {
         var current = command
         var depth = 0
         while depth < self.maxWrapperDepth {

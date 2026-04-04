@@ -71,6 +71,17 @@ struct VoiceWakeSettings: View {
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                 }
 
+                if self.state.talkEnabled {
+                    Label(
+                        "Voice Wake pauses whenever Talk Mode is actively holding the mic, then resumes after the voice conversation settles.",
+                        systemImage: "waveform.badge.mic")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .padding(8)
+                        .background(Color.secondary.opacity(0.12))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+
                 self.localePicker
                 self.micPicker
                 self.levelMeter
@@ -203,7 +214,7 @@ struct VoiceWakeSettings: View {
                     .stroke(Color.secondary.opacity(0.25), lineWidth: 1))
 
             Text(
-                "OpenClaw reacts when any trigger appears in a transcription. "
+                "\(Branding.appName) reacts when any trigger appears in a transcription. "
                     + "Keep them short to avoid false positives.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)

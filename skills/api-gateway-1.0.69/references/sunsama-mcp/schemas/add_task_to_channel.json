@@ -1,0 +1,18 @@
+{
+  "name": "add_task_to_channel",
+  "description": "Assign a task to a channel",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "taskId": {
+        "type": "string",
+        "description": "The ID of the task"
+      },
+      "channel": {
+        "type": "string",
+        "description": "The channel name"
+      }
+    },
+    "required": ["taskId", "channel"]
+  }
+}

@@ -67,7 +67,7 @@ bun remove -g openclaw
 6. If you installed the macOS app:
 
 ```bash
-rm -rf /Applications/OpenClaw.app
+rm -rf /Applications/VeriClaw\ 爪印.app
 ```
 
 Notes:

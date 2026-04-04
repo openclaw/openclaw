@@ -4,7 +4,7 @@ import Foundation
 import Observation
 import SwiftUI
 
-/// Menu contents for the OpenClaw menu bar extra.
+/// Menu contents for the VeriClaw menu bar extra.
 struct MenuContent: View {
     @Bindable var state: AppState
     let updater: UpdaterProviding?
@@ -16,6 +16,7 @@ struct MenuContent: View {
     private let activityStore = WorkActivityStore.shared
     @Bindable private var pairingPrompter = NodePairingApprovalPrompter.shared
     @Bindable private var devicePairingPrompter = DevicePairingApprovalPrompter.shared
+    @Bindable private var hoverHUD = HoverHUDController.shared
     @Environment(\.openSettings) private var openSettings
     @State private var availableMics: [AudioInputDevice] = []
     @State private var loadingMics = false
@@ -107,19 +108,43 @@ struct MenuContent: View {
             }
             Divider()
             Button {
-                Task { @MainActor in
-                    await self.openDashboard()
-                }
+                HoverHUDController.shared.openWidgetFromMenu(compact: true)
             } label: {
-                Label("Open Dashboard", systemImage: "gauge")
+                Label(
+                    (self.hoverHUD.model.isVisible && self.hoverHUD.model.isCompact) ? "Focus Desk Widget" : "Show Desk Widget",
+                    systemImage: "rectangle.3.group.fill")
+            }
+            Button {
+                HoverHUDController.shared.openWidgetFromMenu(compact: false)
+            } label: {
+                Label(
+                    ((self.hoverHUD.model.isVisible && !self.hoverHUD.model.isCompact) || self.hoverHUD.model.isCharm)
+                        ? "Focus Widget Panel"
+                        : "Open Widget Panel",
+                    systemImage: ((self.hoverHUD.model.isVisible && !self.hoverHUD.model.isCompact) || self.hoverHUD.model.isCharm)
+                        ? "macwindow.on.rectangle"
+                        : "rectangle.3.group")
             }
             Button {
                 Task { @MainActor in
                     let sessionKey = await WebChatManager.shared.preferredSessionKey()
-                    WebChatManager.shared.show(sessionKey: sessionKey)
+                    WebChatManager.shared.show(sessionKey: sessionKey, mode: .control)
                 }
             } label: {
-                Label("Open Chat", systemImage: "bubble.left.and.bubble.right")
+                Label("Open Control Center", systemImage: "switch.2")
+            }
+            Button {
+                self.openCorrectionWorkspace()
+            } label: {
+                Label("Open Verification Workspace", systemImage: "cross.case")
+            }
+            Button {
+                Task { @MainActor in
+                    let sessionKey = await WebChatManager.shared.preferredSessionKey()
+                    WebChatManager.shared.show(sessionKey: sessionKey, mode: .chat)
+                }
+            } label: {
+                Label("Open Agent Chat", systemImage: "bubble.left.and.bubble.right")
             }
             if self.state.canvasEnabled {
                 Button {
@@ -149,7 +174,7 @@ struct MenuContent: View {
             Button("Settings…") { self.open(tab: .general) }
                 .keyboardShortcut(",", modifiers: [.command])
             self.debugMenu
-            Button("About OpenClaw") { self.open(tab: .about) }
+            Button("About \(Branding.appName)") { self.open(tab: .about) }
             if let updater, updater.isAvailable, self.updateStatus.isUpdateReady {
                 Button("Update ready, restart now?") { updater.checkForUpdates(nil) }
             }
@@ -189,11 +214,11 @@ struct MenuContent: View {
     private var connectionLabel: String {
         switch self.state.connectionMode {
         case .unconfigured:
-            "OpenClaw Not Configured"
+            "\(Branding.appName) Not Configured"
         case .remote:
-            "Remote OpenClaw Active"
+            "Remote \(Branding.appName) Active"
         case .local:
-            "OpenClaw Active"
+            "\(Branding.appName) Active"
         }
     }
 
@@ -335,6 +360,10 @@ struct MenuContent: View {
         DispatchQueue.main.async {
             NotificationCenter.default.post(name: .openclawSelectSettingsTab, object: tab)
         }
+    }
+
+    private func openCorrectionWorkspace() {
+        CorrectionWorkspaceWindowOpener.shared.open()
     }
 
     @MainActor

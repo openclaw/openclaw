@@ -180,7 +180,7 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
     error: null,
     sessions: createSessions(),
     focusMode: false,
-    assistantName: "OpenClaw",
+    assistantName: "VeriClaw 爪印",
     assistantAvatar: null,
     onRefresh: () => undefined,
     onToggleFocusMode: () => undefined,
@@ -457,6 +457,38 @@ describe("chat view", () => {
     newSessionButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onNewSession).toHaveBeenCalledTimes(1);
     expect(container.textContent).not.toContain("Stop");
+  });
+
+  it("opens a confirmation sheet before sending a draft", async () => {
+    const container = document.createElement("div");
+    const onSend = vi.fn();
+    const props = createProps({
+      assistantName: "Watchdog",
+      draft: "Investigate the stalled seat.",
+      onSend,
+    });
+    const rerender = () => {
+      render(renderChat(props), container);
+    };
+    props.onRequestUpdate = rerender;
+
+    rerender();
+
+    const sendButton = container.querySelector<HTMLButtonElement>(".chat-send-btn");
+    sendButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await flushTasks();
+
+    expect(onSend).not.toHaveBeenCalled();
+    expect(container.querySelector(".chat-send-confirm")).not.toBeNull();
+    expect(container.textContent).toContain("Investigate the stalled seat.");
+
+    const confirmButton = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(".chat-send-confirm .btn"),
+    ).find((button) => button.textContent?.includes("Send now"));
+    confirmButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await flushTasks();
+
+    expect(onSend).toHaveBeenCalledTimes(1);
   });
 
   it("shows sender labels from sanitized gateway messages instead of generic You", () => {

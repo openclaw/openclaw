@@ -1,78 +1,85 @@
 :root {
-  /* Background - Deep, rich dark with layered depth */
-  --bg: #0e1015;
-  --bg-accent: #13151b;
-  --bg-elevated: #191c24;
-  --bg-hover: #1f2330;
-  --bg-muted: #1f2330;
+  /* Background - Warm charcoal that matches the logo mark */
+  --bg: #12100e;
+  --bg-accent: #171411;
+  --bg-elevated: #1d1915;
+  --bg-hover: #27221c;
+  --bg-muted: #24201a;
 
-  /* Card / Surface - Clear hierarchy between levels */
-  --card: #161920;
-  --card-foreground: #f0f0f2;
-  --card-highlight: rgba(255, 255, 255, 0.04);
-  --popover: #191c24;
-  --popover-foreground: #f0f0f2;
+  /* Card / Surface - Warm layered neutrals */
+  --card: #1a1612;
+  --card-foreground: #f1e8da;
+  --card-highlight: rgba(255, 247, 234, 0.05);
+  --popover: #1d1915;
+  --popover-foreground: #f1e8da;
 
   /* Panel */
-  --panel: #0e1015;
-  --panel-strong: #191c24;
-  --panel-hover: #1f2330;
-  --chrome: rgba(14, 16, 21, 0.96);
-  --chrome-strong: rgba(14, 16, 21, 0.98);
+  --panel: #12100e;
+  --panel-strong: #1d1915;
+  --panel-hover: #27221c;
+  --chrome: rgba(18, 16, 14, 0.96);
+  --chrome-strong: rgba(18, 16, 14, 0.98);
 
-  /* Text - Clean contrast */
-  --text: #d4d4d8;
-  --text-strong: #f4f4f5;
-  --chat-text: #d4d4d8;
-  --muted: #636370;
-  --muted-strong: #4e4e5a;
-  --muted-foreground: #636370;
+  /* Text - Warm parchment contrast */
+  --text: #ddd2c2;
+  --text-strong: #f7efe4;
+  --chat-text: #ddd2c2;
+  --muted: #9b8d79;
+  --muted-strong: #7f715f;
+  --muted-foreground: #9b8d79;
 
-  /* Border - Whisper-thin, barely there */
-  --border: #1e2028;
-  --border-strong: #2e3040;
-  --border-hover: #3e4050;
-  --input: #1e2028;
-  --ring: #ff5c5c;
+  /* Border - Warm metal */
+  --border: #2d261d;
+  --border-strong: #433728;
+  --border-hover: #5a4a36;
+  --input: #251f18;
+  --ring: #eacda2;
 
-  /* Accent - Punchy signature red */
-  --accent: #ff5c5c;
-  --accent-hover: #ff7070;
-  --accent-muted: #ff5c5c;
-  --accent-subtle: rgba(255, 92, 92, 0.1);
-  --accent-foreground: #fafafa;
-  --accent-glow: rgba(255, 92, 92, 0.2);
-  --primary: #ff5c5c;
-  --primary-foreground: #ffffff;
+  /* Accent - Sandstone from the selected logo */
+  --accent: #eacda2;
+  --accent-hover: #f2d9b4;
+  --accent-muted: #cfb690;
+  --accent-subtle: rgba(234, 205, 162, 0.14);
+  --accent-foreground: #0e1011;
+  --accent-glow: rgba(234, 205, 162, 0.22);
+  --primary: #eacda2;
+  --primary-foreground: #0e1011;
 
   /* Secondary */
-  --secondary: #161920;
-  --secondary-foreground: #f0f0f2;
-  --accent-2: #14b8a6;
-  --accent-2-muted: rgba(20, 184, 166, 0.7);
-  --accent-2-subtle: rgba(20, 184, 166, 0.1);
+  --secondary: #201b16;
+  --secondary-foreground: #f1e8da;
+  --accent-2: #a39073;
+  --accent-2-muted: rgba(163, 144, 115, 0.78);
+  --accent-2-subtle: rgba(163, 144, 115, 0.12);
 
   /* Semantic */
-  --ok: #22c55e;
-  --ok-muted: rgba(34, 197, 94, 0.75);
-  --ok-subtle: rgba(34, 197, 94, 0.08);
-  --destructive: #ef4444;
+  --ok: #30d158;
+  --ok-muted: rgba(48, 209, 88, 0.75);
+  --ok-subtle: rgba(48, 209, 88, 0.08);
+  --destructive: #ff453a;
   --destructive-foreground: #fafafa;
-  --warn: #f59e0b;
-  --warn-muted: rgba(245, 158, 11, 0.75);
-  --warn-subtle: rgba(245, 158, 11, 0.08);
-  --danger: #ef4444;
-  --danger-muted: rgba(239, 68, 68, 0.75);
-  --danger-subtle: rgba(239, 68, 68, 0.08);
-  --info: #3b82f6;
+  --warn: #ff9f0a;
+  --warn-muted: rgba(255, 159, 10, 0.75);
+  --warn-subtle: rgba(255, 159, 10, 0.08);
+  --danger: #ff453a;
+  --danger-muted: rgba(255, 69, 58, 0.75);
+  --danger-subtle: rgba(255, 69, 58, 0.08);
+  --info: #0a84ff;
+
+  /* Compatibility aliases for older component styles */
+  --color-accent: var(--accent);
+  --success-color: var(--ok);
+  --danger-color: var(--danger);
+  --warn-color: var(--warn);
+  --info-color: var(--info);
 
   /* Focus */
-  --focus: rgba(255, 92, 92, 0.2);
+  --focus: rgba(234, 205, 162, 0.22);
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 60%, transparent);
   --focus-glow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 16px var(--accent-glow);
 
   /* Grid */
-  --grid-line: rgba(255, 255, 255, 0.03);
+  --grid-line: rgba(255, 247, 234, 0.035);
 
   /* Theme transition */
   --theme-switch-x: 50%;
@@ -81,7 +88,13 @@
   /* Typography */
   --mono:
     "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
-  --font-body: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-body:
+    "SF Pro Text",
+    "SF Pro Display",
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
   --font-display: var(--font-body);
 
   /* Shadows - Subtle, layered depth */
@@ -112,70 +125,77 @@
 
 /* Light theme tokens apply to every light-mode family. */
 :root[data-theme-mode="light"] {
-  --bg: #f8f9fa;
-  --bg-accent: #f1f3f5;
-  --bg-elevated: #ffffff;
-  --bg-hover: #eceef0;
-  --bg-muted: #eceef0;
-  --bg-content: #f1f3f5;
+  --bg: #f5efe4;
+  --bg-accent: #ede3d4;
+  --bg-elevated: #fffaf2;
+  --bg-hover: #e8ddcd;
+  --bg-muted: #e8ddcd;
+  --bg-content: #f1e7d8;
 
-  --card: #ffffff;
-  --card-foreground: #1a1a1e;
-  --card-highlight: rgba(0, 0, 0, 0.02);
-  --popover: #ffffff;
-  --popover-foreground: #1a1a1e;
+  --card: #fffaf2;
+  --card-foreground: #241d14;
+  --card-highlight: rgba(53, 42, 27, 0.03);
+  --popover: #fffaf2;
+  --popover-foreground: #241d14;
 
-  --panel: #f8f9fa;
-  --panel-strong: #f1f3f5;
-  --panel-hover: #e6e8eb;
-  --chrome: rgba(248, 249, 250, 0.96);
-  --chrome-strong: rgba(248, 249, 250, 0.98);
+  --panel: #f5efe4;
+  --panel-strong: #ede3d4;
+  --panel-hover: #e6dac8;
+  --chrome: rgba(245, 239, 228, 0.96);
+  --chrome-strong: rgba(245, 239, 228, 0.98);
 
-  --text: #3c3c43;
-  --text-strong: #1a1a1e;
-  --chat-text: #3c3c43;
-  --muted: #8e8e93;
-  --muted-strong: #636366;
-  --muted-foreground: #8e8e93;
+  --text: #3d3227;
+  --text-strong: #17120d;
+  --chat-text: #3d3227;
+  --muted: #8d7d68;
+  --muted-strong: #6f604d;
+  --muted-foreground: #8d7d68;
 
-  --border: #e5e5ea;
-  --border-strong: #d1d1d6;
-  --border-hover: #aeaeb2;
-  --input: #e5e5ea;
+  --border: #dccdb8;
+  --border-strong: #cbb79a;
+  --border-hover: #b49c7a;
+  --input: #e7dac7;
+  --ring: #6a5f4d;
 
-  --accent: #dc2626;
-  --accent-hover: #ef4444;
-  --accent-muted: #dc2626;
-  --accent-subtle: rgba(220, 38, 38, 0.08);
-  --accent-foreground: #ffffff;
-  --accent-glow: rgba(220, 38, 38, 0.1);
-  --primary: #dc2626;
-  --primary-foreground: #ffffff;
+  --accent: #6a5f4d;
+  --accent-hover: #564b3b;
+  --accent-muted: #877760;
+  --accent-subtle: rgba(106, 95, 77, 0.1);
+  --accent-foreground: #fffaf2;
+  --accent-glow: rgba(106, 95, 77, 0.14);
+  --primary: #6a5f4d;
+  --primary-foreground: #fffaf2;
 
-  --secondary: #f1f3f5;
-  --secondary-foreground: #3c3c43;
-  --accent-2: #0d9488;
-  --accent-2-muted: rgba(13, 148, 136, 0.75);
-  --accent-2-subtle: rgba(13, 148, 136, 0.08);
+  --secondary: #ede3d4;
+  --secondary-foreground: #3d3227;
+  --accent-2: #877760;
+  --accent-2-muted: rgba(135, 119, 96, 0.75);
+  --accent-2-subtle: rgba(135, 119, 96, 0.1);
 
-  --ok: #16a34a;
-  --ok-muted: rgba(22, 163, 74, 0.75);
-  --ok-subtle: rgba(22, 163, 74, 0.08);
-  --destructive: #dc2626;
+  --ok: #34c759;
+  --ok-muted: rgba(52, 199, 89, 0.75);
+  --ok-subtle: rgba(52, 199, 89, 0.08);
+  --destructive: #ff3b30;
   --destructive-foreground: #fafafa;
-  --warn: #d97706;
-  --warn-muted: rgba(217, 119, 6, 0.75);
-  --warn-subtle: rgba(217, 119, 6, 0.08);
-  --danger: #dc2626;
-  --danger-muted: rgba(220, 38, 38, 0.75);
-  --danger-subtle: rgba(220, 38, 38, 0.08);
-  --info: #2563eb;
+  --warn: #ff9500;
+  --warn-muted: rgba(255, 149, 0, 0.75);
+  --warn-subtle: rgba(255, 149, 0, 0.08);
+  --danger: #ff3b30;
+  --danger-muted: rgba(255, 59, 48, 0.75);
+  --danger-subtle: rgba(255, 59, 48, 0.08);
+  --info: #007aff;
 
-  --focus: rgba(220, 38, 38, 0.15);
+  --color-accent: var(--accent);
+  --success-color: var(--ok);
+  --danger-color: var(--danger);
+  --warn-color: var(--warn);
+  --info-color: var(--info);
+
+  --focus: rgba(106, 95, 77, 0.12);
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 50%, transparent);
   --focus-glow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 12px var(--accent-glow);
 
-  --grid-line: rgba(0, 0, 0, 0.04);
+  --grid-line: rgba(53, 42, 27, 0.05);
 
   /* Light shadows - Subtle, clean */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);

@@ -1,0 +1,22 @@
+{
+  "name": "mark_email_thread_as_read",
+  "description": "Mark an email thread as read",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "accountId": {
+        "type": "string",
+        "description": "The email account ID"
+      },
+      "accountService": {
+        "type": "string",
+        "description": "The email service (e.g., gmail, outlook)"
+      },
+      "threadId": {
+        "type": "string",
+        "description": "The email thread ID"
+      }
+    },
+    "required": ["accountId", "accountService", "threadId"]
+  }
+}

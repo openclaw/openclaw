@@ -1,0 +1,14 @@
+{
+  "name": "toggle_auto_import_events",
+  "description": "Toggle automatic calendar event import",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "description": "Whether to enable auto-import"
+      }
+    },
+    "required": ["enabled"]
+  }
+}

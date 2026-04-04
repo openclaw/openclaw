@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
-cd "$(dirname "$0")/../apps/macos"
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+cd "${ROOT_DIR}/apps/macos"
 
 BUILD_PATH=".build-local"
 PRODUCT="OpenClaw"
 BIN="$BUILD_PATH/debug/$PRODUCT"
+MAC_SWIFT="${ROOT_DIR}/scripts/macos-swift.sh"
 
 printf "\n▶️  Building $PRODUCT (debug, build path: $BUILD_PATH)\n"
-swift build -c debug --product "$PRODUCT" --build-path "$BUILD_PATH"
+"$MAC_SWIFT" build -c debug --product "$PRODUCT" --build-path "$BUILD_PATH"
 
 printf "\n⏹  Stopping existing $PRODUCT...\n"
 killall -q "$PRODUCT" 2>/dev/null || true

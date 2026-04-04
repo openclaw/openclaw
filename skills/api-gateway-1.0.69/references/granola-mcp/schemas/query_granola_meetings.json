@@ -1,0 +1,26 @@
+{
+  "name": "query_granola_meetings",
+  "title": "Query Granola about the user's meetings using natural langua",
+  "description": "Query Granola about the user's meetings using natural language. Returns a tailored response with inline citation links in mark  (e.g. [[0]](url)) that reference source meeting notes.\n\nIMPORTANT: The response includes numbered citation links to specific Granola meeting notes. These citations MUST be preserved in your response to the user \u2014 they provide transparency and allow the user to verify information by clicking through to the original notes.\n\nWhen to use:\n- User asks about what was discussed, decided, or action-items from meetings\n- User asks about follow-ups, todos, or commitments from recent meetings\n- User references 'Granola notes' or 'meeting notes'\n\nWhen NOT to use:\n- User is asking about calendar scheduling or upcoming events\n- User explicitly asks for a specific meeting by ID (use get_meetings instead)\n\nPrioritize using query_granola_meetings over list_meetings/get_meetings for open-ended or natural language queries about meeting content.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "query": {
+        "type": "string",
+        "minLength": 1,
+        "description": "The query to run on Granola meeting notes"
+      },
+      "document_ids": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "description": "Optional list of specific meeting IDs to limit context to"
+      }
+    },
+    "required": ["query"],
+    "additionalProperties": false,
+    "$schema": "http://json-schema.org/draft-07/schema#"
+  }
+}

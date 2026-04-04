@@ -1,0 +1,43 @@
+{
+  "manifest_version": 3,
+  "name": "Wig Forge Capture",
+  "version": "0.1.0",
+  "description": "Select an element on a web page and forge it into an OpenClaw bot asset.",
+  "permissions": ["activeTab", "storage", "tabs"],
+  "host_permissions": ["<all_urls>"],
+  "action": {
+    "default_title": "Wig Forge",
+    "default_popup": "popup.html"
+  },
+  "commands": {
+    "start-capture": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+K",
+        "mac": "Command+Shift+K"
+      },
+      "description": "Start Veil capture on the active page"
+    }
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["segmentation.js", "content-script.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "mediapipe-worker.js",
+        "vendor/mediapipe/*.mjs",
+        "vendor/mediapipe/wasm/*",
+        "vendor/models/*"
+      ],
+      "matches": ["http://*/*", "https://*/*"]
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "name": "delete_all_incomplete_recurring_task_instances",
+  "description": "Delete all future instances of a recurring task",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "taskId": {
+        "type": "string",
+        "description": "The ID of the recurring task"
+      }
+    },
+    "required": ["taskId"]
+  }
+}

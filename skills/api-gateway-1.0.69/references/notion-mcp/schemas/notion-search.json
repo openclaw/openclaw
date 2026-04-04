@@ -1,0 +1,70 @@
+{
+  "name": "notion-search",
+  "title": "Search Notion and connected sources",
+  "description": "Perform a search over:\n- \"internal\": Semantic search over Notion workspace and connected sources (Slack, Google Drive, Github, Jira, Microsoft Teams, Sharepoint, OneDrive, Linear). Supports filtering by creation date and creator.\n- \"user\": Search for users by name or email.\n\nAuto-selects AI search (with connected sources) or workspace search (workspace-only, faster) based on user's access to Notion AI. Use content_search_mode to override.\nUse \"fetch\" tool for full page/database contents after getting search results.\nTo search within a database: First fetch the database to get the data source URL (collection://...) from <data-source url=\"...\"> tags, then use that as data_source_url. For multi-source databases, match by view ID (?v=...) in URL or search all sources separately.\nDon't combine database URL/ID with collection:// prefix for data_source_url. Don't use database URL as page_url.\n\t\t<example description=\"Search with date range filter (only documents created in 2024)\">\n\t\t{\n\t\t\t\"query\": \"quarterly revenue report\",\n\t\t\t\"query_type\": \"internal\",\n\t\t\t\"filters\": {\n\t\t\t\t\"created_date_range\": {\n\t\t\t\t\t\"start_date\": \"2024-01-01\",\n\t\t\t\t\t\"end_date\": \"2025-01-01\"\n\t\t\t\t}\n\t\t\t}\n\t\t}\n\t\t</example>\n\t\t<example description=\"Teamspace + creator filter\">\n\t\t{\"query\": \"project updates\", \"query_type\": \"internal\", \"teamspace_id\": \"f336d0bc-b841-465b-8045-024475c079dd\", \"filters\": {\"created_by_user_ids\": [\"a1b2c3d4-e5f6-7890-abcd-ef1234567890\"]}}\n\t\t</example>\n\t\t<example description=\"Database with date + creator filters\">\n\t\t{\"query\": \"design review\", \"data_source_url\": \"collection://f336d0bc-b841-465b-8045-024475c079dd\", \"filters\": {\"created_date_range\": {\"start_date\": \"2024-10-01\"}, \"created_by_user_ids\": [\"a1b2c3d4-e5f6-7890-abcd-ef1234567890\", \"b2c3d4e5-f6a7-8901-bcde-f12345678901\"]}}\n\t\t</example>\n\t\t<example description=\"User search\">\n\t\t{\"query\": \"john@example.com\", \"query_type\": \"user\"}\n\t\t</example>",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "query": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Semantic search query over your entire Notion workspace and connected sources (Slack, Google Drive, Github, Jira, Microsoft Teams, Sharepoint, OneDrive, or Linear). For best results, don't provide more than one question per tool call. Use a separate \"search\" tool call for each search you want to perform.\nAlternatively, the query can be a substring or keyword to find users by matching against their name or email address. For example: \"john\" or \"john@example.com\""
+      },
+      "query_type": {
+        "type": "string",
+        "enum": ["internal", "user"]
+      },
+      "content_search_mode": {
+        "type": "string",
+        "enum": ["workspace_search", "ai_search"]
+      },
+      "data_source_url": {
+        "type": "string",
+        "description": "Optionally, provide the URL of a Data source to search. This will perform a semantic search over the pages in the Data Source. Note: must be a Data Source, not a Database. <data-source> tags are part of the Notion flavored Markdown format returned by tools like fetch. The full spec is available in the create-pages tool description."
+      },
+      "page_url": {
+        "type": "string",
+        "description": "Optionally, provide the URL or ID of a page to search within. This will perform a semantic search over the content within and under the specified page. Accepts either a full page URL (e.g. https://notion.so/workspace/Page-Title-1234567890) or just the page ID (UUIDv4) with or without dashes."
+      },
+      "teamspace_id": {
+        "type": "string",
+        "description": "Optionally, provide the ID of a teamspace to restrict search results to. This will perform a search over content within the specified teamspace only. Accepts the teamspace ID (UUIDv4) with or without dashes."
+      },
+      "filters": {
+        "type": "object",
+        "properties": {
+          "created_date_range": {
+            "type": "object",
+            "properties": {
+              "start_date": {
+                "type": "string",
+                "format": "date",
+                "description": "The start date of the date range as an ISO 8601 date string, if any."
+              },
+              "end_date": {
+                "type": "string",
+                "format": "date",
+                "description": "The end date of the date range as an ISO 8601 date string, if any."
+              }
+            },
+            "additionalProperties": true,
+            "description": "Optional filter to only produce search results created within the specified date range."
+          },
+          "created_by_user_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 100,
+            "description": "Optional filter to only produce search results created by the Notion users that have the specified user IDs."
+          }
+        },
+        "additionalProperties": true,
+        "description": "Optionally provide filters to apply to the search results. Only valid when query_type is 'internal'."
+      }
+    },
+    "required": ["query"],
+    "additionalProperties": false,
+    "$schema": "http://json-schema.org/draft-07/schema#"
+  }
+}

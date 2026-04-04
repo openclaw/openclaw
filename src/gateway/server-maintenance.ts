@@ -62,16 +62,17 @@ export function startGatewayMaintenanceTimers(params: {
     params.nodeSendToAllSubscribed("tick", payload);
   }, TICK_INTERVAL_MS);
 
-  // periodic health refresh to keep cached snapshot warm
+  // Keep the UI snapshot warm with a fast refresh. Deep probes stay on-demand
+  // so connect/health calls do not inherit a slow network-bound probe cycle.
   const healthInterval = setInterval(() => {
     void params
-      .refreshGatewayHealthSnapshot({ probe: true })
+      .refreshGatewayHealthSnapshot({ probe: false })
       .catch((err) => params.logHealth.error(`refresh failed: ${formatError(err)}`));
   }, HEALTH_REFRESH_INTERVAL_MS);
 
-  // Prime cache so first client gets a snapshot without waiting.
+  // Prime cache so first client gets a quick snapshot without waiting.
   void params
-    .refreshGatewayHealthSnapshot({ probe: true })
+    .refreshGatewayHealthSnapshot({ probe: false })
     .catch((err) => params.logHealth.error(`initial refresh failed: ${formatError(err)}`));
 
   // dedupe cache cleanup

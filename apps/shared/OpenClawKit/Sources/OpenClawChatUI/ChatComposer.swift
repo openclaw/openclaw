@@ -23,21 +23,9 @@ struct OpenClawChatComposer: View {
     #endif
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: self.style == .workspace ? 10 : 4) {
             if self.showsToolbar {
-                HStack(spacing: 6) {
-                    if self.showsSessionSwitcher {
-                        self.sessionPicker
-                    }
-                    if self.viewModel.showsModelPicker {
-                        self.modelPicker
-                    }
-                    self.thinkingPicker
-                    Spacer()
-                    self.refreshButton
-                    self.attachmentPicker
-                }
-                .padding(.horizontal, 10)
+                self.toolbarContent
             }
 
             if self.showsAttachments, !self.viewModel.attachments.isEmpty {
@@ -51,7 +39,13 @@ struct OpenClawChatComposer: View {
             let cornerRadius: CGFloat = 18
 
             #if os(macOS)
-            if self.style == .standard {
+            if self.style == .workspace {
+                let shape = RoundedRectangle(cornerRadius: 22, style: .continuous)
+                shape
+                    .fill(OpenClawChatTheme.workspacePanel)
+                    .overlay(shape.strokeBorder(OpenClawChatTheme.workspacePanelBorder, lineWidth: 1))
+                    .shadow(color: .black.opacity(0.08), radius: 18, y: 10)
+            } else if self.style == .standard {
                 let shape = UnevenRoundedRectangle(
                     cornerRadii: RectangleCornerRadii(
                         topLeading: 0,
@@ -86,6 +80,96 @@ struct OpenClawChatComposer: View {
             self.shouldFocusTextView = true
         }
         #endif
+    }
+
+    @ViewBuilder
+    private var toolbarContent: some View {
+        if self.style == .workspace {
+            self.workspaceToolbar
+        } else {
+            HStack(spacing: 6) {
+                if self.showsSessionSwitcher {
+                    self.sessionPicker
+                }
+                if self.viewModel.showsModelPicker {
+                    self.modelPicker
+                }
+                self.thinkingPicker
+                Spacer()
+                self.refreshButton
+                self.attachmentPicker
+            }
+            .padding(.horizontal, 10)
+        }
+    }
+
+    private var workspaceToolbar: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Manual Controls")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Text("Choose the live session, model, and reasoning level before you intervene.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer(minLength: 0)
+
+                self.refreshButton
+                self.attachmentPicker
+            }
+
+            HStack(alignment: .top, spacing: 10) {
+                if self.showsSessionSwitcher {
+                    self.workspaceControlCard(title: "Session", minWidth: 170) {
+                        self.sessionPicker
+                    }
+                }
+
+                if self.viewModel.showsModelPicker {
+                    self.workspaceControlCard(title: "Model", minWidth: 250) {
+                        self.modelPicker
+                    }
+                }
+
+                self.workspaceControlCard(title: "Thinking", minWidth: 130) {
+                    self.thinkingPicker
+                }
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(OpenClawChatTheme.workspacePanelSecondary)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .strokeBorder(OpenClawChatTheme.workspacePanelBorder, lineWidth: 1)))
+    }
+
+    private func workspaceControlCard<Content: View>(
+        title: String,
+        minWidth: CGFloat,
+        @ViewBuilder content: () -> Content)
+        -> some View
+    {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+            content()
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .frame(minWidth: minWidth, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(OpenClawChatTheme.workspaceSoftFill)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(OpenClawChatTheme.workspacePanelBorder, lineWidth: 1)))
     }
 
     private var thinkingPicker: some View {
@@ -154,7 +238,11 @@ struct OpenClawChatComposer: View {
         Button {
             self.pickFilesMac()
         } label: {
-            Image(systemName: "paperclip")
+            if self.style == .workspace {
+                Label("Attach", systemImage: "paperclip")
+            } else {
+                Image(systemName: "paperclip")
+            }
         }
         .help("Add Image")
         .buttonStyle(.bordered)
@@ -200,9 +288,12 @@ struct OpenClawChatComposer: View {
                         }
                         .buttonStyle(.plain)
                     }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 5)
-                    .background(Color.accentColor.opacity(0.08))
+                    .padding(.horizontal, self.style == .workspace ? 10 : 8)
+                    .padding(.vertical, self.style == .workspace ? 7 : 5)
+                    .background(self.attachmentChipBackground)
+                    .overlay(
+                        Capsule(style: .continuous)
+                            .strokeBorder(self.style == .workspace ? OpenClawChatTheme.workspacePanelBorder : .clear, lineWidth: self.style == .workspace ? 1 : 0))
                     .clipShape(Capsule())
                 }
             }
@@ -211,6 +302,10 @@ struct OpenClawChatComposer: View {
 
     private var editor: some View {
         VStack(alignment: .leading, spacing: 8) {
+            if self.style == .workspace {
+                self.draftHeader
+            }
+
             self.editorOverlay
 
             if !self.isComposerCompacted {
@@ -227,15 +322,22 @@ struct OpenClawChatComposer: View {
                 Spacer(minLength: 0)
                 self.sendButton
             }
+
+            if self.style == .workspace {
+                Text("Manual Chat is for retries, redirects, and explicit status requests. Return sends, Shift-Return starts a new line.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(OpenClawChatTheme.composerField)
+                .fill(self.editorBackground)
                 .overlay(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .strokeBorder(OpenClawChatTheme.composerBorder)))
+                        .strokeBorder(self.editorBorder)))
         .padding(self.editorPadding)
     }
 
@@ -252,8 +354,36 @@ struct OpenClawChatComposer: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
-        .background(OpenClawChatTheme.subtleCard)
+        .background(self.connectionPillBackground)
+        .overlay(
+            Capsule()
+                .strokeBorder(self.style == .workspace ? OpenClawChatTheme.workspacePanelBorder : .clear, lineWidth: self.style == .workspace ? 1 : 0))
         .clipShape(Capsule())
+    }
+
+    @ViewBuilder
+    private var draftHeader: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Draft")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Text(self.draftMetaLine)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 0)
+
+            if self.hasDraftContent {
+                Button("Clear") {
+                    self.clearDraft()
+                }
+                .buttonStyle(.plain)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            }
+        }
     }
 
     private var activeSessionLabel: String {
@@ -265,7 +395,7 @@ struct OpenClawChatComposer: View {
     private var editorOverlay: some View {
         ZStack(alignment: .topLeading) {
             if self.viewModel.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                Text("Message OpenClaw…")
+                Text(self.placeholderText)
                     .foregroundStyle(.tertiary)
                     .padding(.horizontal, 4)
                     .padding(.vertical, 4)
@@ -305,33 +435,69 @@ struct OpenClawChatComposer: View {
                 Button {
                     self.viewModel.abort()
                 } label: {
-                    if self.viewModel.isAborting {
-                        ProgressView().controlSize(.mini)
+                    if self.style == .workspace {
+                        Label {
+                            if self.viewModel.isAborting {
+                                Text("Stopping…")
+                            } else {
+                                Text("Stop")
+                            }
+                        } icon: {
+                            if self.viewModel.isAborting {
+                                ProgressView().controlSize(.mini)
+                            } else {
+                                Image(systemName: "stop.fill")
+                                    .font(.system(size: 13, weight: .semibold))
+                            }
+                        }
                     } else {
-                        Image(systemName: "stop.fill")
-                            .font(.system(size: 13, weight: .semibold))
+                        if self.viewModel.isAborting {
+                            ProgressView().controlSize(.mini)
+                        } else {
+                            Image(systemName: "stop.fill")
+                                .font(.system(size: 13, weight: .semibold))
+                        }
                     }
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.white)
-                .padding(6)
-                .background(Circle().fill(Color.red))
+                .padding(self.sendButtonPadding)
+                .background(self.sendButtonBackground(color: .red))
+                .opacity(self.viewModel.isAborting ? 0.85 : 1)
                 .disabled(self.viewModel.isAborting)
             } else {
                 Button {
                     self.viewModel.send()
                 } label: {
-                    if self.viewModel.isSending {
-                        ProgressView().controlSize(.mini)
+                    if self.style == .workspace {
+                        Label {
+                            if self.viewModel.isSending {
+                                Text("Sending…")
+                            } else {
+                                Text("Send")
+                            }
+                        } icon: {
+                            if self.viewModel.isSending {
+                                ProgressView().controlSize(.mini)
+                            } else {
+                                Image(systemName: "arrow.up")
+                                    .font(.system(size: 13, weight: .semibold))
+                            }
+                        }
                     } else {
-                        Image(systemName: "arrow.up")
-                            .font(.system(size: 13, weight: .semibold))
+                        if self.viewModel.isSending {
+                            ProgressView().controlSize(.mini)
+                        } else {
+                            Image(systemName: "arrow.up")
+                                .font(.system(size: 13, weight: .semibold))
+                        }
                     }
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.white)
-                .padding(6)
-                .background(Circle().fill(Color.accentColor))
+                .padding(self.sendButtonPadding)
+                .background(self.sendButtonBackground(color: Color.accentColor))
+                .opacity(self.viewModel.canSend ? 1 : 0.54)
                 .disabled(!self.viewModel.canSend)
             }
         }
@@ -341,7 +507,11 @@ struct OpenClawChatComposer: View {
         Button {
             self.viewModel.refresh()
         } label: {
-            Image(systemName: "arrow.clockwise")
+            if self.style == .workspace {
+                Label("Refresh", systemImage: "arrow.clockwise")
+            } else {
+                Image(systemName: "arrow.clockwise")
+            }
         }
         .buttonStyle(.bordered)
         .controlSize(.small)
@@ -349,31 +519,35 @@ struct OpenClawChatComposer: View {
     }
 
     private var showsToolbar: Bool {
-        self.style == .standard && !self.isComposerCompacted
+        (self.style == .standard || self.style == .workspace) && !self.isComposerCompacted
     }
 
     private var showsAttachments: Bool {
-        self.style == .standard
+        self.style == .standard || self.style == .workspace
     }
 
     private var showsConnectionPill: Bool {
-        self.style == .standard && !self.isComposerCompacted
+        (self.style == .standard || self.style == .workspace) && !self.isComposerCompacted
     }
 
     private var composerPadding: CGFloat {
-        self.style == .onboarding ? 5 : (self.isComposerCompacted ? 4 : 6)
+        if self.style == .workspace { return 0 }
+        return self.style == .onboarding ? 5 : (self.isComposerCompacted ? 4 : 6)
     }
 
     private var editorPadding: CGFloat {
-        self.style == .onboarding ? 5 : (self.isComposerCompacted ? 4 : 6)
+        if self.style == .workspace { return 0 }
+        return self.style == .onboarding ? 5 : (self.isComposerCompacted ? 4 : 6)
     }
 
     private var textMinHeight: CGFloat {
-        self.style == .onboarding ? 24 : 28
+        if self.style == .workspace { return 72 }
+        return self.style == .onboarding ? 24 : 28
     }
 
     private var textMaxHeight: CGFloat {
-        self.style == .onboarding ? 52 : 64
+        if self.style == .workspace { return 180 }
+        return self.style == .onboarding ? 52 : 64
     }
 
     private var isComposerCompacted: Bool {
@@ -382,6 +556,68 @@ struct OpenClawChatComposer: View {
         #else
         self.style == .standard && self.isFocused
         #endif
+    }
+
+    private var editorBackground: AnyShapeStyle {
+        self.style == .workspace ? OpenClawChatTheme.workspacePanelSecondary : OpenClawChatTheme.composerField
+    }
+
+    private var editorBorder: Color {
+        self.style == .workspace ? OpenClawChatTheme.workspacePanelBorder : OpenClawChatTheme.composerBorder
+    }
+
+    private var connectionPillBackground: AnyShapeStyle {
+        self.style == .workspace ? OpenClawChatTheme.workspaceSoftFill : OpenClawChatTheme.subtleCard
+    }
+
+    private var attachmentChipBackground: AnyShapeStyle {
+        self.style == .workspace ? OpenClawChatTheme.workspaceSoftFill : AnyShapeStyle(Color.accentColor.opacity(0.08))
+    }
+
+    private var placeholderText: String {
+        if self.style == .workspace {
+            return "Describe the intervention, retry request, or status question for the active session…"
+        }
+        return "Message OpenClaw…"
+    }
+
+    private var sendButtonPadding: CGFloat {
+        self.style == .workspace ? 10 : 6
+    }
+
+    private func sendButtonBackground(color: Color) -> some View {
+        Group {
+            if self.style == .workspace {
+                Capsule(style: .continuous)
+                    .fill(color)
+            } else {
+                Circle()
+                    .fill(color)
+            }
+        }
+    }
+
+    private var hasDraftContent: Bool {
+        !self.viewModel.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !self.viewModel.attachments.isEmpty
+    }
+
+    private var draftMetaLine: String {
+        let trimmed = self.viewModel.input.trimmingCharacters(in: .whitespacesAndNewlines)
+        var parts: [String] = []
+        if trimmed.isEmpty {
+            parts.append("No text yet")
+        } else {
+            parts.append("\(trimmed.count) characters")
+        }
+        if !self.viewModel.attachments.isEmpty {
+            parts.append(self.viewModel.attachments.count == 1 ? "1 attachment" : "\(self.viewModel.attachments.count) attachments")
+        }
+        return parts.joined(separator: " • ")
+    }
+
+    private func clearDraft() {
+        self.viewModel.input = ""
+        self.viewModel.attachments = []
     }
 
     #if os(macOS)

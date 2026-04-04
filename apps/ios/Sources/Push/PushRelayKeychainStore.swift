@@ -13,10 +13,30 @@ private struct StoredPushRelayRegistrationState: Codable {
 }
 
 enum PushRelayRegistrationStore {
-    private static let service = "ai.openclaw.pushrelay"
+    private static let service = "ai.vericlaw.pushrelay"
+    private static let legacyService = "ai.openclaw.pushrelay"
     private static let registrationStateAccount = "registration-state"
     private static let appAttestKeyIDAccount = "app-attest-key-id"
     private static let appAttestedKeyIDAccount = "app-attested-key-id"
+
+    private static func loadString(account: String) -> String? {
+        KeychainStore.loadString(service: self.service, account: account)
+            ?? KeychainStore.loadString(service: self.legacyService, account: account)
+    }
+
+    @discardableResult
+    private static func saveString(_ value: String, account: String) -> Bool {
+        let saved = KeychainStore.saveString(value, service: self.service, account: account)
+        _ = KeychainStore.delete(service: self.legacyService, account: account)
+        return saved
+    }
+
+    @discardableResult
+    private static func deleteString(account: String) -> Bool {
+        let deletedCurrent = KeychainStore.delete(service: self.service, account: account)
+        let deletedLegacy = KeychainStore.delete(service: self.legacyService, account: account)
+        return deletedCurrent || deletedLegacy
+    }
 
     struct RegistrationState: Codable {
         var relayHandle: String
@@ -31,9 +51,7 @@ enum PushRelayRegistrationStore {
     }
 
     static func loadRegistrationState() -> RegistrationState? {
-        guard let raw = KeychainStore.loadString(
-            service: self.service,
-            account: self.registrationStateAccount),
+        guard let raw = self.loadString(account: self.registrationStateAccount),
             let data = raw.data(using: .utf8),
             let decoded = try? JSONDecoder().decode(StoredPushRelayRegistrationState.self, from: data)
         else {
@@ -68,16 +86,16 @@ enum PushRelayRegistrationStore {
         else {
             return false
         }
-        return KeychainStore.saveString(raw, service: self.service, account: self.registrationStateAccount)
+        return self.saveString(raw, account: self.registrationStateAccount)
     }
 
     @discardableResult
     static func clearRegistrationState() -> Bool {
-        KeychainStore.delete(service: self.service, account: self.registrationStateAccount)
+        self.deleteString(account: self.registrationStateAccount)
     }
 
     static func loadAppAttestKeyID() -> String? {
-        let value = KeychainStore.loadString(service: self.service, account: self.appAttestKeyIDAccount)?
+        let value = self.loadString(account: self.appAttestKeyIDAccount)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if value?.isEmpty == false { return value }
         return nil
@@ -85,16 +103,16 @@ enum PushRelayRegistrationStore {
 
     @discardableResult
     static func saveAppAttestKeyID(_ keyID: String) -> Bool {
-        KeychainStore.saveString(keyID, service: self.service, account: self.appAttestKeyIDAccount)
+        self.saveString(keyID, account: self.appAttestKeyIDAccount)
     }
 
     @discardableResult
     static func clearAppAttestKeyID() -> Bool {
-        KeychainStore.delete(service: self.service, account: self.appAttestKeyIDAccount)
+        self.deleteString(account: self.appAttestKeyIDAccount)
     }
 
     static func loadAttestedKeyID() -> String? {
-        let value = KeychainStore.loadString(service: self.service, account: self.appAttestedKeyIDAccount)?
+        let value = self.loadString(account: self.appAttestedKeyIDAccount)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if value?.isEmpty == false { return value }
         return nil
@@ -102,11 +120,11 @@ enum PushRelayRegistrationStore {
 
     @discardableResult
     static func saveAttestedKeyID(_ keyID: String) -> Bool {
-        KeychainStore.saveString(keyID, service: self.service, account: self.appAttestedKeyIDAccount)
+        self.saveString(keyID, account: self.appAttestedKeyIDAccount)
     }
 
     @discardableResult
     static func clearAttestedKeyID() -> Bool {
-        KeychainStore.delete(service: self.service, account: self.appAttestedKeyIDAccount)
+        self.deleteString(account: self.appAttestedKeyIDAccount)
     }
 }

@@ -2,7 +2,7 @@ import { AGENT_LANE_NESTED } from "../../agents/lanes.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import { resolveAgentIdFromSessionKey, type SessionEntry } from "../../config/sessions.js";
 import {
   resolveAgentDeliveryPlan,
   resolveAgentOutboundTarget,
@@ -82,8 +82,12 @@ export async function deliverAgentCommandResult(params: {
   const turnSourceTo = opts.runContext?.currentChannelId ?? opts.to;
   const turnSourceAccountId = opts.runContext?.accountId ?? opts.accountId;
   const turnSourceThreadId = opts.runContext?.currentThreadTs ?? opts.threadId;
+  const deliveryAgentId =
+    outboundSession?.agentId ?? resolveAgentIdFromSessionKey(effectiveSessionKey ?? opts.sessionId);
   const deliveryPlan = resolveAgentDeliveryPlan({
     sessionEntry,
+    cfg,
+    agentId: deliveryAgentId,
     requestedChannel: opts.replyChannel ?? opts.channel,
     explicitTo: opts.replyTo ?? opts.to,
     explicitThreadId: opts.threadId,

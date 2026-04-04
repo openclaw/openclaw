@@ -1,0 +1,23 @@
+{
+  "name": "notion-fetch",
+  "title": "Fetch Notion entities",
+  "description": "Retrieves details about a Notion entity (page, database, or data source) by URL or ID.\nProvide URL or ID in `id` parameter. Make multiple calls to fetch multiple entities.\nPages use enhanced Markdown format. For the complete specification, fetch the MCP resource at `notion://docs/enhanced-markdown-spec`.\nDatabases return all data sources (collections). Each data source has a unique ID shown in `<data-source url=\"collection://...\">` tags. You can pass a data source ID directly to this tool to fetch details about that specific data source, including its schema and properties. Use data source IDs with update_data_source and query_data_sources tools. Multi-source databases (e.g., with linked sources) will show multiple data sources.\nSet `include_discussions` to true to see discussion counts and inline discussion markers that correlate with the `get_comments` tool. The page output will include a `<page-discussions>` summary tag with discussion count, preview snippets, and `discussion://` URLs that match the discussion IDs returned by `get_comments`.\n<example>{\"id\": \"https://notion.so/workspace/Page-a1b2c3d4e5f67890\"}</example>\n<example>{\"id\": \"12345678-90ab-cdef-1234-567890abcdef\"}</example>\n<example>{\"id\": \"https://myspace.notion.site/Page-Title-abc123def456\"}</example>\n<example>{\"id\": \"page-uuid\", \"include_discussions\": true}</example>\n<example>{\"id\": \"collection://12345678-90ab-cdef-1234-567890abcdef\"}</example>",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "description": "The ID or URL of the Notion page, database, or data source to fetch. Supports notion.so URLs, Notion Sites URLs (*.notion.site), raw UUIDs, and data source URLs (collection://...)."
+      },
+      "include_transcript": {
+        "type": "boolean"
+      },
+      "include_discussions": {
+        "type": "boolean"
+      }
+    },
+    "required": ["id"],
+    "additionalProperties": false,
+    "$schema": "http://json-schema.org/draft-07/schema#"
+  }
+}

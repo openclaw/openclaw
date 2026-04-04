@@ -2,6 +2,9 @@
 
 If you believe you've found a security issue in OpenClaw, please report it privately.
 
+For copyright, trademark, patent, or takedown notices, use
+[INFRINGEMENT.md](INFRINGEMENT.md) instead of this security process.
+
 ## Reporting
 
 Report vulnerabilities directly to the repository where the issue lives:

@@ -3510,6 +3510,92 @@
    Overview Cards
    =========================================== */
 
+.ov-shell {
+  display: grid;
+  gap: 18px;
+}
+
+.ov-summary-section,
+.ov-attention-section,
+.ov-detail-sidebar,
+.ov-detail-pane {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--card) 88%, transparent), color-mix(in srgb, var(--panel) 92%, transparent));
+  border-color: color-mix(in srgb, var(--border) 82%, transparent);
+  backdrop-filter: blur(18px) saturate(1.08);
+  -webkit-backdrop-filter: blur(18px) saturate(1.08);
+}
+
+.ov-section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.ov-section-head--summary {
+  margin-bottom: 18px;
+}
+
+.ov-section-kicker {
+  margin-bottom: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.ov-summary-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.ov-summary-pills .pill {
+  min-height: 30px;
+  padding: 6px 10px;
+  background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
+  border-color: color-mix(in srgb, var(--border) 82%, transparent);
+}
+
+.ov-summary-strip {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  margin-bottom: 16px;
+}
+
+.ov-summary-stat {
+  display: grid;
+  gap: 4px;
+  padding: 14px 16px;
+  border-radius: calc(var(--radius-lg) - 2px);
+  background: color-mix(in srgb, var(--bg-elevated) 82%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+}
+
+.ov-summary-stat__label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.ov-summary-stat__value {
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--text-strong);
+}
+
+.ov-summary-callout {
+  margin-bottom: 16px;
+}
+
 .ov-cards {
   display: grid;
   gap: 12px;
@@ -3520,9 +3606,9 @@
   display: grid;
   gap: 6px;
   padding: 16px;
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
   border-radius: var(--radius-lg);
-  background: var(--card);
+  background: color-mix(in srgb, var(--bg-elevated) 80%, transparent);
   cursor: pointer;
   text-align: left;
   transition:
@@ -3533,8 +3619,8 @@
 }
 
 .ov-card:hover {
-  border-color: var(--border-strong);
-  box-shadow: var(--shadow-sm);
+  border-color: color-mix(in srgb, var(--border-strong) 78%, transparent);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.14);
   transform: translateY(-1px);
 }
 
@@ -3587,27 +3673,35 @@
 .ov-attention-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
 
 .ov-attention-item {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
-  padding: 10px 12px;
-  border-radius: var(--radius-md);
-  background: var(--bg-hover);
-  border: 1px solid var(--border);
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: calc(var(--radius-lg) - 2px);
+  background: color-mix(in srgb, var(--bg-elevated) 78%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  transition:
+    border-color var(--duration-fast) ease,
+    background var(--duration-fast) ease;
+}
+
+.ov-attention-item:hover {
+  border-color: color-mix(in srgb, var(--border-strong) 72%, transparent);
+  background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
 }
 
 .ov-attention-item.warn {
-  border-color: var(--warning-subtle, rgba(234, 179, 8, 0.2));
-  background: rgba(234, 179, 8, 0.05);
+  border-color: color-mix(in srgb, var(--warn) 34%, var(--border));
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--warn) 62%, transparent);
 }
 
 .ov-attention-item.danger {
-  border-color: var(--danger-subtle, rgba(239, 68, 68, 0.2));
-  background: rgba(239, 68, 68, 0.05);
+  border-color: color-mix(in srgb, var(--warn) 46%, var(--border));
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--warn) 84%, transparent);
 }
 
 .ov-attention-icon {
@@ -3622,11 +3716,11 @@
 }
 
 .ov-attention-item.warn .ov-attention-icon {
-  color: var(--warning, #eab308);
+  color: var(--warn);
 }
 
 .ov-attention-item.danger .ov-attention-icon {
-  color: var(--danger, #ef4444);
+  color: var(--warn);
 }
 
 .ov-attention-icon svg {
@@ -3661,7 +3755,7 @@
 
 /* Recent sessions widget */
 .ov-recent {
-  margin-top: 18px;
+  margin: 0;
 }
 
 .ov-recent__title {
@@ -3685,10 +3779,10 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 12px;
-  padding: 8px 12px;
-  border: 1px solid var(--border);
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
   border-radius: var(--radius-md);
-  background: var(--card);
+  background: color-mix(in srgb, var(--bg-elevated) 72%, transparent);
   font-size: 13px;
   align-items: center;
   transition: border-color var(--duration-fast) ease;
@@ -3723,13 +3817,195 @@
   user-select: none;
 }
 
-/* Section divider */
-.ov-section-divider {
-  border-top: 1px solid var(--border);
-  margin: 18px 0 0;
+.ov-segmented {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
+  background: color-mix(in srgb, var(--bg-elevated) 84%, transparent);
 }
 
-/* Access grid */
+.ov-segmented__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) ease,
+    border-color var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+
+.ov-segmented__btn:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+}
+
+.ov-segmented__btn.active {
+  color: var(--text-strong);
+  border-color: color-mix(in srgb, var(--border-strong) 68%, transparent);
+  background: color-mix(in srgb, var(--bg) 48%, white 6%);
+}
+
+.ov-segmented__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ov-segmented__icon svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.75px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.ov-detail-layout {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+}
+
+.ov-detail-sidebar {
+  align-self: start;
+}
+
+.ov-detail-nav {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.ov-detail-nav .ov-segmented__btn {
+  justify-content: flex-start;
+  min-height: 38px;
+  padding: 0 14px;
+  border-radius: var(--radius-md);
+}
+
+.ov-intervention-actions {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.ov-intervention-action {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 40px;
+  padding: 0 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
+  background: color-mix(in srgb, var(--bg-elevated) 76%, transparent);
+  color: var(--text);
+  cursor: pointer;
+  transition:
+    border-color var(--duration-fast) ease,
+    background var(--duration-fast) ease,
+    transform var(--duration-fast) ease;
+}
+
+.ov-intervention-action:hover {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  border-color: color-mix(in srgb, var(--border-strong) 78%, transparent);
+  transform: translateY(-1px);
+}
+
+.ov-intervention-action--primary {
+  color: var(--accent-foreground);
+  background: color-mix(in srgb, var(--accent) 88%, black 12%);
+  border-color: color-mix(in srgb, var(--accent) 78%, black 8%);
+}
+
+.ov-intervention-action--primary:hover {
+  background: color-mix(in srgb, var(--accent-hover) 88%, black 12%);
+  border-color: color-mix(in srgb, var(--accent-hover) 78%, black 8%);
+}
+
+.ov-intervention-action__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ov-intervention-action__icon svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.75px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.ov-detail-pane {
+  min-height: 420px;
+}
+
+.ov-pane-header {
+  margin-bottom: 18px;
+}
+
+.ov-pane-eyebrow {
+  margin-bottom: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.ov-pane-title {
+  margin: 0;
+  font-size: 20px;
+  line-height: 1.15;
+  letter-spacing: -0.03em;
+}
+
+.ov-pane-sub {
+  margin-top: 8px;
+  color: var(--muted);
+  max-width: 60ch;
+}
+
+.ov-detail-stack {
+  display: grid;
+  gap: 14px;
+}
+
+.ov-empty-state {
+  display: grid;
+  gap: 6px;
+  padding: 18px;
+  border-radius: var(--radius-lg);
+  border: 1px dashed color-mix(in srgb, var(--border) 76%, transparent);
+  background: color-mix(in srgb, var(--bg-elevated) 56%, transparent);
+}
+
+.ov-empty-state__title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.ov-empty-state__copy {
+  font-size: 13px;
+  color: var(--muted);
+}
+
 .ov-access-grid {
   display: grid;
   gap: 12px;
@@ -3740,14 +4016,43 @@
   grid-column: 1 / -1;
 }
 
-/* Bottom grid (event log + log tail) */
-.ov-bottom-grid {
-  display: grid;
-  gap: 20px;
-  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+.ov-secret-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ov-secret-field input {
+  flex: 1;
+}
+
+.ov-secret-field .btn--icon {
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+}
+
+.ov-access-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+}
+
+.ov-pane-callout {
+  margin-top: 16px;
+}
+
+.ov-pane-help {
+  margin-top: 18px;
 }
 
 @media (max-width: 600px) {
+  .ov-section-head {
+    flex-direction: column;
+  }
+
   .ov-cards {
     grid-template-columns: repeat(2, 1fr);
     gap: 8px;
@@ -3761,12 +4066,19 @@
     font-size: 18px;
   }
 
-  .ov-bottom-grid {
+  .ov-summary-strip,
+  .ov-access-grid,
+  .ov-detail-layout {
     grid-template-columns: 1fr;
   }
 
-  .ov-access-grid {
-    grid-template-columns: 1fr;
+  .ov-summary-pills {
+    justify-content: flex-start;
+  }
+
+  .ov-segmented {
+    width: 100%;
+    overflow-x: auto;
   }
 
   .ov-recent__row {

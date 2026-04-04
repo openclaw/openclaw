@@ -42,10 +42,20 @@ export function resolveFastModeState(params: {
   provider: string;
   model: string;
   sessionEntry?: Pick<SessionEntry, "fastMode"> | undefined;
+  agentCfg?: {
+    fastModeDefault?: unknown;
+  };
 }): FastModeState {
   const sessionOverride = normalizeFastMode(params.sessionEntry?.fastMode);
   if (sessionOverride !== undefined) {
     return { enabled: sessionOverride, source: "session" };
+  }
+
+  const agentDefault = normalizeFastMode(
+    params.agentCfg?.fastModeDefault as string | boolean | null | undefined,
+  );
+  if (agentDefault !== undefined) {
+    return { enabled: agentDefault, source: "config" };
   }
 
   const configuredRaw = resolveConfiguredFastModeRaw(params);

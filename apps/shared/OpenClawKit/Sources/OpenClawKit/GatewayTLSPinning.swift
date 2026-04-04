@@ -17,7 +17,8 @@ public struct GatewayTLSParams: Sendable {
 }
 
 public enum GatewayTLSStore {
-    private static let keychainService = "ai.openclaw.tls-pinning"
+    private static let keychainService = "ai.vericlaw.tls-pinning"
+    private static let legacyKeychainService = "ai.openclaw.tls-pinning"
 
     // Legacy UserDefaults location used before Keychain migration.
     private static let legacySuiteName = "ai.openclaw.shared"
@@ -25,7 +26,10 @@ public enum GatewayTLSStore {
 
     public static func loadFingerprint(stableID: String) -> String? {
         self.migrateFromUserDefaultsIfNeeded(stableID: stableID)
-        let raw = GenericPasswordKeychainStore.loadString(service: self.keychainService, account: stableID)?
+        let raw = (
+            GenericPasswordKeychainStore.loadString(service: self.keychainService, account: stableID)
+                ?? GenericPasswordKeychainStore.loadString(service: self.legacyKeychainService, account: stableID)
+        )?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if raw?.isEmpty == false { return raw }
         return nil
@@ -33,6 +37,7 @@ public enum GatewayTLSStore {
 
     public static func saveFingerprint(_ value: String, stableID: String) {
         _ = GenericPasswordKeychainStore.saveString(value, service: self.keychainService, account: stableID)
+        _ = GenericPasswordKeychainStore.delete(service: self.legacyKeychainService, account: stableID)
     }
 
     // MARK: - Migration

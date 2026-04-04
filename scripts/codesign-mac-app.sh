@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_BUNDLE="${1:-dist/OpenClaw.app}"
+APP_BUNDLE="${1:-dist/VeriClaw 爪印.app}"
 IDENTITY="${SIGN_IDENTITY:-}"
 TIMESTAMP_MODE="${CODESIGN_TIMESTAMP:-auto}"
 DISABLE_LIBRARY_VALIDATION="${DISABLE_LIBRARY_VALIDATION:-0}"
@@ -248,8 +248,12 @@ verify_team_ids() {
 }
 
 # Sign main binary
-if [ -f "$APP_BUNDLE/Contents/MacOS/OpenClaw" ]; then
-  echo "Signing main binary"; sign_item "$APP_BUNDLE/Contents/MacOS/OpenClaw" "$APP_ENTITLEMENTS"
+if [ -f "$APP_BUNDLE/Contents/MacOS/VeriClaw" ]; then
+  echo "Signing main binary"; sign_item "$APP_BUNDLE/Contents/MacOS/VeriClaw" "$APP_ENTITLEMENTS"
+elif [ -f "$APP_BUNDLE/Contents/MacOS/Vericlaw" ]; then
+  echo "Signing legacy main binary"; sign_item "$APP_BUNDLE/Contents/MacOS/Vericlaw" "$APP_ENTITLEMENTS"
+elif [ -f "$APP_BUNDLE/Contents/MacOS/OpenClaw" ]; then
+  echo "Signing legacy main binary"; sign_item "$APP_BUNDLE/Contents/MacOS/OpenClaw" "$APP_ENTITLEMENTS"
 fi
 
 # Sign Sparkle deeply if present
@@ -261,15 +265,28 @@ if [ -d "$SPARKLE" ]; then
       sign_plain_item "$f"
     fi
   done
-  sign_plain_item "$SPARKLE/Versions/B/Sparkle"
-  sign_plain_item "$SPARKLE/Versions/B/Autoupdate"
-  sign_plain_item "$SPARKLE/Versions/B/Updater.app/Contents/MacOS/Updater"
-  sign_plain_item "$SPARKLE/Versions/B/Updater.app"
-  sign_plain_item "$SPARKLE/Versions/B/XPCServices/Downloader.xpc/Contents/MacOS/Downloader"
-  sign_plain_item "$SPARKLE/Versions/B/XPCServices/Downloader.xpc"
-  sign_plain_item "$SPARKLE/Versions/B/XPCServices/Installer.xpc/Contents/MacOS/Installer"
-  sign_plain_item "$SPARKLE/Versions/B/XPCServices/Installer.xpc"
-  sign_plain_item "$SPARKLE/Versions/B"
+  SPARKLE_VERSION_DIR="$SPARKLE/Versions/Current"
+  if [ -d "$SPARKLE_VERSION_DIR" ]; then
+    SPARKLE_VERSION_DIR="$(cd "$SPARKLE_VERSION_DIR" && pwd -P)"
+  else
+    SPARKLE_VERSION_DIR="$SPARKLE"
+  fi
+
+  for target in \
+    "$SPARKLE_VERSION_DIR/Sparkle" \
+    "$SPARKLE_VERSION_DIR/Autoupdate" \
+    "$SPARKLE_VERSION_DIR/Updater.app/Contents/MacOS/Updater" \
+    "$SPARKLE_VERSION_DIR/Updater.app" \
+    "$SPARKLE_VERSION_DIR/XPCServices/Downloader.xpc/Contents/MacOS/Downloader" \
+    "$SPARKLE_VERSION_DIR/XPCServices/Downloader.xpc" \
+    "$SPARKLE_VERSION_DIR/XPCServices/Installer.xpc/Contents/MacOS/Installer" \
+    "$SPARKLE_VERSION_DIR/XPCServices/Installer.xpc" \
+    "$SPARKLE_VERSION_DIR"
+  do
+    if [ -e "$target" ]; then
+      sign_plain_item "$target"
+    fi
+  done
   sign_plain_item "$SPARKLE"
 fi
 

@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import Testing
 @testable import OpenClaw
@@ -6,7 +7,13 @@ import Testing
     @MainActor
     @Test func `play does not hang when playback ends or fails`() async throws {
         let wav = makeWav16Mono(sampleRate: 8000, samples: 80)
-        defer { _ = TalkAudioPlayer.shared.stop() }
+        TalkAudioPlayer.shared.installPlayerFactoryForTesting { _ in
+            TestTalkAudioBackend(duration: 0.05, stopWithoutDelegateAfter: 0.05)
+        }
+        defer {
+            TalkAudioPlayer.shared.resetPlayerFactoryForTesting()
+            _ = TalkAudioPlayer.shared.stop()
+        }
 
         _ = try await withTimeout(seconds: 4.0) {
             await TalkAudioPlayer.shared.play(data: wav)
@@ -18,7 +25,13 @@ import Testing
     @MainActor
     @Test func `play does not hang when play is called twice`() async throws {
         let wav = makeWav16Mono(sampleRate: 8000, samples: 800)
-        defer { _ = TalkAudioPlayer.shared.stop() }
+        TalkAudioPlayer.shared.installPlayerFactoryForTesting { _ in
+            TestTalkAudioBackend(duration: 0.25, stopWithoutDelegateAfter: 0.10)
+        }
+        defer {
+            TalkAudioPlayer.shared.resetPlayerFactoryForTesting()
+            _ = TalkAudioPlayer.shared.stop()
+        }
 
         let first = Task { @MainActor in
             await TalkAudioPlayer.shared.play(data: wav)
@@ -31,6 +44,44 @@ import Testing
             await first.value
         }
         #expect(true)
+    }
+}
+
+@MainActor
+private final class TestTalkAudioBackend: NSObject, TalkAudioPlayable {
+    weak var delegate: AVAudioPlayerDelegate?
+    private(set) var isPlaying = false
+    let duration: TimeInterval
+    private(set) var currentTime: TimeInterval = 0
+
+    private let stopWithoutDelegateAfter: TimeInterval
+
+    init(duration: TimeInterval, stopWithoutDelegateAfter: TimeInterval) {
+        self.duration = duration
+        self.stopWithoutDelegateAfter = stopWithoutDelegateAfter
+    }
+
+    @discardableResult
+    func prepareToPlay() -> Bool {
+        true
+    }
+
+    @discardableResult
+    func play() -> Bool {
+        self.isPlaying = true
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(
+                nanoseconds: UInt64(self.stopWithoutDelegateAfter * 1_000_000_000))
+            self.currentTime = self.duration
+            self.isPlaying = false
+        }
+        return true
+    }
+
+    func stop() {
+        self.isPlaying = false
     }
 }
 

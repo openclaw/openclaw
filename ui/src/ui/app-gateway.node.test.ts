@@ -123,7 +123,7 @@ function createHost() {
     agentsList: null,
     agentsError: null,
     debugHealth: null,
-    assistantName: "OpenClaw",
+    assistantName: "VeriClaw 爪印",
     assistantAvatar: null,
     assistantAgentId: null,
     serverVersion: null,

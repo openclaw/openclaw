@@ -185,3 +185,8 @@ if [[ "$WRITE_ENV" -eq 1 ]]; then
   echo
   echo "Updated env file: $ENV_FILE"
 fi
+
+echo
+echo "Next verification steps:"
+echo "  cd \"$REPO_ROOT/apps/ios\" && ../../scripts/with-xcode-developer-dir.sh fastlane ios auth_check"
+echo "  cd \"$REPO_ROOT\" && pnpm ios:doctor"

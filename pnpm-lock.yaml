@@ -576,6 +576,18 @@ importers:
 
   extensions/whatsapp: {}
 
+  extensions/wig-forge:
+    dependencies:
+      '@mediapipe/tasks-vision':
+        specifier: ^0.10.34
+        version: 0.10.34
+      '@sinclair/typebox':
+        specifier: 0.34.48
+        version: 0.34.48
+      sharp:
+        specifier: ^0.34.5
+        version: 0.34.5
+
   extensions/xai: {}
 
   extensions/xiaomi: {}
@@ -1790,6 +1802,9 @@ packages:
   '@matrix-org/matrix-sdk-crypto-nodejs@0.4.0':
     resolution: {integrity: sha512-+qqgpn39XFSbsD0dFjssGO9vHEP7sTyfs8yTpt8vuqWpUpF20QMwpCZi0jpYw7GxjErNTsMshopuo8677DfGEA==}
     engines: {node: '>= 22'}
+
+  '@mediapipe/tasks-vision@0.10.34':
+    resolution: {integrity: sha512-KFGyhDsjJ+9WUMcMfjTOpcEp3LJNS3KwC7BfvKrCYELn/7G/5kmwnU7z6Spps+iWQoTGL8xW8i68r65OTa3DwA==}
 
   '@microsoft/agents-activity@1.3.1':
     resolution: {integrity: sha512-4k44NrfEqXiSg49ofj8geV8ylPocqDLtZKKt0PFL9BvFV0n57X3y1s/fEbsf7Fkl3+P/R2XLyMB5atEGf/eRGg==}
@@ -8647,6 +8662,8 @@ snapshots:
       node-downloader-helper: 2.1.10
     transitivePeerDependencies:
       - supports-color
+
+  '@mediapipe/tasks-vision@0.10.34': {}
 
   '@microsoft/agents-activity@1.3.1':
     dependencies:

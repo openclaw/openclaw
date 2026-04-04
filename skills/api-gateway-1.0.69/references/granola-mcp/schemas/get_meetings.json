@@ -1,0 +1,23 @@
+{
+  "name": "get_meetings",
+  "title": "Get detailed meeting information for one or more Granola mee",
+  "description": "Get detailed meeting information for one or more Granola meetings by ID. Returns private notes, AI-generated summary, attendees, and metadata.\nUse this when you already have specific meeting IDs (e.g. from list_meetings results). For open-ended questions about meeting content, use query_granola_meetings instead.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "meeting_ids": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "minItems": 1,
+        "maxItems": 10,
+        "description": "Array of meeting UUIDs (max 10)"
+      }
+    },
+    "required": ["meeting_ids"],
+    "additionalProperties": false,
+    "$schema": "http://json-schema.org/draft-07/schema#"
+  }
+}

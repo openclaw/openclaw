@@ -1,0 +1,14 @@
+{
+  "name": "log_user_feedback",
+  "description": "Submit user feedback",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "feedback": {
+        "type": "string",
+        "description": "The feedback message"
+      }
+    },
+    "required": ["feedback"]
+  }
+}

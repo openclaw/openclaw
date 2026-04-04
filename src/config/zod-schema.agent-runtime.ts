@@ -775,6 +775,25 @@ export const AgentEntrySchema = z
     skills: z.array(z.string()).optional(),
     memorySearch: MemorySearchSchema,
     humanDelay: HumanDelaySchema.optional(),
+    thinkingDefault: z
+      .union([
+        z.literal("off"),
+        z.literal("minimal"),
+        z.literal("low"),
+        z.literal("medium"),
+        z.literal("high"),
+        z.literal("xhigh"),
+        z.literal("adaptive"),
+      ])
+      .optional(),
+    verboseDefault: z.union([z.literal("off"), z.literal("on"), z.literal("full")]).optional(),
+    elevatedDefault: z
+      .union([z.literal("off"), z.literal("on"), z.literal("ask"), z.literal("full")])
+      .optional(),
+    fastModeDefault: z.boolean().optional(),
+    reasoningDefault: z.union([z.literal("off"), z.literal("on")]).optional(),
+    blockStreamingDefault: z.union([z.literal("off"), z.literal("on")]).optional(),
+    blockStreamingBreak: z.union([z.literal("text_end"), z.literal("message_end")]).optional(),
     heartbeat: HeartbeatSchema,
     identity: IdentitySchema,
     groupChat: GroupChatSchema,

@@ -1,0 +1,23 @@
+{
+  "name": "schedule_next_call",
+  "description": "Schedule the next accountability call",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "nextCallDate": {
+        "type": "string",
+        "description": "The date of the next call (YYYY-MM-DD format)"
+      },
+      "hour": {
+        "type": "number",
+        "description": "The hour (0-23)"
+      },
+      "minute": {
+        "type": "string",
+        "description": "The minute",
+        "enum": ["15", "30", "45", "00"]
+      }
+    },
+    "required": ["nextCallDate", "hour", "minute"]
+  }
+}

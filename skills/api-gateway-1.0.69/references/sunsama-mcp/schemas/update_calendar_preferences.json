@@ -1,0 +1,14 @@
+{
+  "name": "update_calendar_preferences",
+  "description": "Update calendar preferences",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "calendarId": {
+        "type": "string",
+        "description": "The calendar ID to update preferences for"
+      }
+    },
+    "required": ["calendarId"]
+  }
+}

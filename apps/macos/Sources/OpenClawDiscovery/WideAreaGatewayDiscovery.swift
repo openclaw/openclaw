@@ -20,10 +20,12 @@ enum WideAreaGatewayDiscovery {
     private static let nameserverProbeConcurrency = 6
 
     struct DiscoveryContext {
+        var wideAreaDomain: String?
         var tailscaleStatus: @Sendable () -> String?
         var dig: @Sendable (_ args: [String], _ timeout: TimeInterval) -> String?
 
         static let live = DiscoveryContext(
+            wideAreaDomain: nil,
             tailscaleStatus: { readTailscaleStatus() },
             dig: { args, timeout in
                 runDig(args: args, timeout: timeout)
@@ -41,18 +43,19 @@ enum WideAreaGatewayDiscovery {
 
         guard let ips = collectTailnetIPv4s(
             statusJson: context.tailscaleStatus()).nonEmpty else { return [] }
+        guard let domain = self.resolveWideAreaDomain(context: context) else { return [] }
+        let domainTrimmed = domain.trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        let probeName = "_openclaw-gw._tcp.\(domainTrimmed)"
         var candidates = Array(ips.prefix(self.maxCandidates))
         guard let nameserver = findNameserver(
             candidates: &candidates,
             remaining: remaining,
+            wideAreaDomain: domain,
             dig: context.dig)
         else {
             return []
         }
 
-        guard let domain = OpenClawBonjour.wideAreaGatewayServiceDomain else { return [] }
-        let domainTrimmed = domain.trimmingCharacters(in: CharacterSet(charactersIn: "."))
-        let probeName = "_openclaw-gw._tcp.\(domainTrimmed)"
         guard let ptrLines = context.dig(
             ["+short", "+time=1", "+tries=1", "@\(nameserver)", probeName, "PTR"],
             min(defaultTimeoutSeconds, remaining()))?.split(whereSeparator: \.isNewline),
@@ -151,15 +154,26 @@ enum WideAreaGatewayDiscovery {
     private static func findNameserver(
         candidates: inout [String],
         remaining: () -> TimeInterval,
+        wideAreaDomain: String,
         dig: @escaping @Sendable (_ args: [String], _ timeout: TimeInterval) -> String?) -> String?
     {
-        guard let domain = OpenClawBonjour.wideAreaGatewayServiceDomain else { return nil }
-        let domainTrimmed = domain.trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        let domainTrimmed = wideAreaDomain.trimmingCharacters(in: CharacterSet(charactersIn: "."))
         let probeName = "_openclaw-gw._tcp.\(domainTrimmed)"
 
         let ips = candidates
         candidates.removeAll(keepingCapacity: true)
         if ips.isEmpty { return nil }
+        if ips.count <= self.nameserverProbeConcurrency {
+            for ip in ips {
+                let budget = remaining()
+                if budget <= 0 { return nil }
+                if self.probeNameserver(ip, probeName: probeName, timeout: min(defaultTimeoutSeconds, budget), dig: dig)
+                {
+                    return ip
+                }
+            }
+            return nil
+        }
 
         final class ProbeState: @unchecked Sendable {
             let lock = NSLock()
@@ -212,8 +226,33 @@ enum WideAreaGatewayDiscovery {
         return state.found
     }
 
+    private static func probeNameserver(
+        _ ip: String,
+        probeName: String,
+        timeout: TimeInterval,
+        dig: @escaping @Sendable (_ args: [String], _ timeout: TimeInterval) -> String?) -> Bool
+    {
+        if let stdout = dig(
+            ["+short", "+time=1", "+tries=1", "@\(ip)", probeName, "PTR"],
+            timeout),
+            stdout.split(whereSeparator: \.isNewline).isEmpty == false
+        {
+            return true
+        }
+        return false
+    }
+
     private static func runDig(args: [String], timeout: TimeInterval) -> String? {
         self.run(path: self.digPath, args: args, timeout: timeout)
+    }
+
+    private static func resolveWideAreaDomain(context: DiscoveryContext) -> String? {
+        if let override = context.wideAreaDomain?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !override.isEmpty
+        {
+            return OpenClawBonjour.normalizeServiceDomain(override)
+        }
+        return OpenClawBonjour.wideAreaGatewayServiceDomain
     }
 
     private static func run(path: String, args: [String], timeout: TimeInterval) -> String? {

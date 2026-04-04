@@ -17,6 +17,8 @@ public struct DeviceIdentity: Codable, Sendable {
 
 enum DeviceIdentityPaths {
     private static let stateDirEnv = ["OPENCLAW_STATE_DIR"]
+    private static let directoryName = "Vericlaw"
+    private static let legacyDirectoryName = "OpenClaw"
 
     static func stateDirURL() -> URL {
         for key in self.stateDirEnv {
@@ -29,10 +31,20 @@ enum DeviceIdentityPaths {
         }
 
         if let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
-            return appSupport.appendingPathComponent("OpenClaw", isDirectory: true)
+            let preferred = appSupport.appendingPathComponent(self.directoryName, isDirectory: true)
+            let legacy = appSupport.appendingPathComponent(self.legacyDirectoryName, isDirectory: true)
+            if FileManager.default.fileExists(atPath: preferred.path) || !FileManager.default.fileExists(atPath: legacy.path) {
+                return preferred
+            }
+            return legacy
         }
 
-        return FileManager.default.temporaryDirectory.appendingPathComponent("openclaw", isDirectory: true)
+        let preferred = FileManager.default.temporaryDirectory.appendingPathComponent("vericlaw", isDirectory: true)
+        let legacy = FileManager.default.temporaryDirectory.appendingPathComponent("openclaw", isDirectory: true)
+        if FileManager.default.fileExists(atPath: preferred.path) || !FileManager.default.fileExists(atPath: legacy.path) {
+            return preferred
+        }
+        return legacy
     }
 }
 
@@ -46,6 +58,16 @@ public enum DeviceIdentityStore {
            !decoded.deviceId.isEmpty,
            !decoded.publicKey.isEmpty,
            !decoded.privateKey.isEmpty {
+            return decoded
+        }
+        if let legacyURL = self.legacyFileURL(),
+           legacyURL != url,
+           let data = try? Data(contentsOf: legacyURL),
+           let decoded = try? JSONDecoder().decode(DeviceIdentity.self, from: data),
+           !decoded.deviceId.isEmpty,
+           !decoded.publicKey.isEmpty,
+           !decoded.privateKey.isEmpty {
+            self.save(decoded)
             return decoded
         }
         let identity = self.generate()
@@ -106,6 +128,19 @@ public enum DeviceIdentityStore {
     private static func fileURL() -> URL {
         let base = DeviceIdentityPaths.stateDirURL()
         return base
+            .appendingPathComponent("identity", isDirectory: true)
+            .appendingPathComponent(fileName, isDirectory: false)
+    }
+
+    private static func legacyFileURL() -> URL? {
+        if let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+            return appSupport
+                .appendingPathComponent("OpenClaw", isDirectory: true)
+                .appendingPathComponent("identity", isDirectory: true)
+                .appendingPathComponent(fileName, isDirectory: false)
+        }
+        return FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw", isDirectory: true)
             .appendingPathComponent("identity", isDirectory: true)
             .appendingPathComponent(fileName, isDirectory: false)
     }

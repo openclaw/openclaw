@@ -1,0 +1,18 @@
+{
+  "name": "set_calendar_event_allow_task_projections",
+  "description": "Toggle whether tasks can be projected during this event",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "eventId": {
+        "type": "string",
+        "description": "The ID of the calendar event"
+      },
+      "allowTasksProjectedAtSameTime": {
+        "type": "boolean",
+        "description": "Whether to allow tasks during this event"
+      }
+    },
+    "required": ["eventId", "allowTasksProjectedAtSameTime"]
+  }
+}

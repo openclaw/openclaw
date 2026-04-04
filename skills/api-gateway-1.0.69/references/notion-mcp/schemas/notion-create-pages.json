@@ -1,0 +1,89 @@
+{
+  "name": "notion-create-pages",
+  "title": "Create pages in Markdown",
+  "description": "## Overview\nCreates one or more Notion pages, with the specified properties and content.\n## Parent\nAll pages created with a single call to this tool will have the same parent. The parent can be a Notion page (\"page_id\") or data source (\"data_source_id\"). If the parent is omitted, the pages are created as standalone, workspace-level private pages, and the person that created them can organize them later as they see fit.\nIf you have a database URL, ALWAYS pass it to the \"fetch\" tool first to get the schema and URLs of each data source under the database. You can't use the \"database_id\" parent type if the database has more than one data source, so you'll need to identify which \"data_source_id\" to use based on the situation and the results from the fetch tool (data source URLs look like collection://<data_source_id>).\nIf you know the pages should be created under a data source, do NOT use the database ID or URL under the \"page_id\" parameter; \"page_id\" is only for regular, non-database pages.\n## Content\nNotion page content is a string in Notion-flavored Markdown format.\nDon't include the page title at the top of the page's content. Only include it under \"properties\".\n**IMPORTANT**: For the complete Markdown specification, always first fetch the MCP resource at `notion://docs/enhanced-markdown-spec`. Do NOT guess or hallucinate Markdown syntax. This spec is also applicable to other tools like update-page and fetch.\n## Properties\nNotion page properties are a JSON map of property names to SQLite values.\nWhen creating pages in a database:\n- Use the correct property names from the data source schema shown in the fetch tool results.\n- Always include a title property. Data sources always have exactly one title property, but it may not be named \"title\", so, again, rely on the fetched data source schema.\n\nFor pages outside of a database:\n- The only allowed property is \"title\",\twhich is the title of the page in inline markdown format. Always include a \"title\" property.\n\n**IMPORTANT**: Some property types require expanded formats:\n- Date properties: Split into \"date:{property}:start\", \"date:{property}:end\" (optional), and \"date:{property}:is_datetime\" (0 or 1)\n- Place properties: Split into \"place:{property}:name\", \"place:{property}:address\", \"place:{property}:latitude\", \"place:{property}:longitude\", and \"place:{property}:google_place_id\" (optional)\n- Number properties: Use JavaScript numbers (not strings)\n- Checkbox properties: Use \"__YES__\" for checked, \"__NO__\" for unchecked\n\n**Special property naming**: Properties named \"id\" or \"url\" (case insensitive) must be prefixed with \"userDefined:\" (e.g., \"userDefined:URL\", \"userDefined:id\")\n## Templates\nWhen creating a page in a database, you can apply a template to pre-populate it with content and property values. Use the \"fetch\" tool on a database to see available templates in the <templates> section of each data source.\nWhen using a template:\n- Pass the template's ID as \"template_id\" in the page object.\n- Do NOT include \"content\" when using a template, as the template provides it.\n- You can still set \"properties\" alongside the template to override template defaults.\n- Template application is asynchronous. The page is created immediately but starts blank; the template content will appear shortly after.\n\n## Examples\n\t\t<example description=\"Create a page from a database template\">\n\t\t{\n\t\t\t\"parent\": {\"data_source_id\": \"f336d0bc-b841-465b-8045-024475c079dd\"},\n\t\t\t\"pages\": [\n\t\t\t\t{\n\t\t\t\t\t\"template_id\": \"a5da15f6-b853-455d-8827-f906fb52db2b\",\n\t\t\t\t\t\"properties\": {\n\t\t\t\t\t\t\"Task Name\": \"New urgent bug\"\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t]\n\t\t}\n\t\t</example>\n\t\t<example description=\"Create a standalone page with a title and content\">\n\t\t{\n\t\t\t\"pages\": [\n\t\t\t\t{\n\t\t\t\t\t\"properties\": {\"title\": \"Page title\"},\n\t\t\t\t\t\"content\": \"# Section 1 {color=\"blue\"}\nSection 1 content\n<details>\n<summary>Toggle block</summary>\n\tHidden content inside toggle\n</details>\"\n\t\t\t\t}\n\t\t\t]\n\t\t}\n\t\t</example>\n\t\t<example description=\"Create a page under a database's data source\">\n\t\t{\n\t\t\t\"parent\": {\"data_source_id\": \"f336d0bc-b841-465b-8045-024475c079dd\"},\n\t\t\t\"pages\": [\n\t\t\t\t{\n\t\t\t\t\t\"properties\": {\n\t\t\t\t\t\t\"Task Name\": \"Task 123\",\n\t\t\t\t\t\t\"Status\": \"In Progress\",\n\t\t\t\t\t\t\"Priority\": 5,\n\t\t\t\t\t\t\"Is Complete\": \"__YES__\",\n\t\t\t\t\t\t\"date:Due Date:start\": \"2024-12-25\",\n\t\t\t\t\t\t\"date:Due Date:is_datetime\": 0\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t]\n\t\t}\n\t\t</example>\n\t\t<example description=\"Create a page with an existing page as a parent\">\n\t\t{\n\t\t\t\"parent\": {\"page_id\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\"},\n\t\t\t\"pages\": [\n\t\t\t\t{\n\t\t\t\t\t\"properties\": {\"title\": \"Page title\"},\n\t\t\t\t\t\"content\": \"# Section 1\nSection 1 content\n# Section 2\nSection 2 content\"\n\t\t\t\t}\n\t\t\t]\n\t\t}\n\t\t</example>",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "pages": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "properties": {
+              "type": "object",
+              "additionalProperties": {
+                "type": ["string", "number", "null"]
+              },
+              "description": "The properties of the new page, which is a JSON map of property names to SQLite values. For pages in a database, use the SQLite schema definition shown in <database>. For pages outside of a database, the only allowed property is \"title\", which is the title of the page and is automatically shown at the top of the page as a large heading."
+            },
+            "content": {
+              "type": "string",
+              "description": "The content of the new page, using Notion Markdown."
+            },
+            "template_id": {
+              "type": "string",
+              "description": "The ID of a template to apply to this page. When specified, do not provide 'content' as the template will provide it. Properties can still be set alongside the template. Get template IDs from the <templates> section in the fetch tool results."
+            }
+          },
+          "additionalProperties": false
+        },
+        "maxItems": 100,
+        "description": "The pages to create."
+      },
+      "parent": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "page_id": {
+                "type": "string",
+                "description": "The ID of the parent page (with or without dashes), for example, 195de9221179449fab8075a27c979105"
+              },
+              "type": {
+                "type": "string",
+                "enum": ["page_id"]
+              }
+            },
+            "required": ["page_id"],
+            "additionalProperties": true
+          },
+          {
+            "type": "object",
+            "properties": {
+              "database_id": {
+                "type": "string",
+                "description": "The ID of the parent database (with or without dashes), for example, 195de9221179449fab8075a27c979105"
+              },
+              "type": {
+                "type": "string",
+                "enum": ["database_id"]
+              }
+            },
+            "required": ["database_id"],
+            "additionalProperties": true
+          },
+          {
+            "type": "object",
+            "properties": {
+              "data_source_id": {
+                "type": "string",
+                "description": "The ID of the parent data source (collection), with or without dashes. For example, f336d0bc-b841-465b-8045-024475c079dd"
+              },
+              "type": {
+                "type": "string",
+                "enum": ["data_source_id"]
+              }
+            },
+            "required": ["data_source_id"],
+            "additionalProperties": true
+          }
+        ],
+        "description": "The parent under which the new pages will be created. This can be a page (page_id), a database page (database_id), or a data source/collection under a database (data_source_id). If omitted, the new pages will be created as private pages at the workspace level. Use data_source_id when you have a collection:// URL from the fetch tool."
+      }
+    },
+    "required": ["pages"],
+    "additionalProperties": false,
+    "$schema": "http://json-schema.org/draft-07/schema#"
+  }
+}

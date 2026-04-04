@@ -7,6 +7,7 @@ struct SettingsRootView: View {
     private let permissionMonitor = PermissionMonitor.shared
     @State private var monitoringPermissions = false
     @State private var selectedTab: SettingsTab = .general
+    @State private var splitViewVisibility: NavigationSplitViewVisibility = .all
     @State private var snapshotPaths: (configPath: String?, stateDir: String?) = (nil, nil)
     let updater: UpdaterProviding?
     private let isPreview = ProcessInfo.processInfo.isPreview
@@ -19,73 +20,47 @@ struct SettingsRootView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            if self.isNixMode {
-                self.nixManagedBanner
-            }
-            TabView(selection: self.$selectedTab) {
-                GeneralSettings(state: self.state)
-                    .tabItem { Label("General", systemImage: "gearshape") }
-                    .tag(SettingsTab.general)
-
-                ChannelsSettings()
-                    .tabItem { Label("Channels", systemImage: "link") }
-                    .tag(SettingsTab.channels)
-
-                VoiceWakeSettings(state: self.state, isActive: self.selectedTab == .voiceWake)
-                    .tabItem { Label("Voice Wake", systemImage: "waveform.circle") }
-                    .tag(SettingsTab.voiceWake)
-
-                ConfigSettings()
-                    .tabItem { Label("Config", systemImage: "slider.horizontal.3") }
-                    .tag(SettingsTab.config)
-
-                InstancesSettings()
-                    .tabItem { Label("Instances", systemImage: "network") }
-                    .tag(SettingsTab.instances)
-
-                SessionsSettings()
-                    .tabItem { Label("Sessions", systemImage: "clock.arrow.circlepath") }
-                    .tag(SettingsTab.sessions)
-
-                CronSettings()
-                    .tabItem { Label("Cron", systemImage: "calendar") }
-                    .tag(SettingsTab.cron)
-
-                SkillsSettings(state: self.state)
-                    .tabItem { Label("Skills", systemImage: "sparkles") }
-                    .tag(SettingsTab.skills)
-
-                PermissionsSettings(
-                    status: self.permissionMonitor.status,
-                    refresh: self.refreshPerms,
-                    showOnboarding: { DebugActions.restartOnboarding() })
-                    .tabItem { Label("Permissions", systemImage: "lock.shield") }
-                    .tag(SettingsTab.permissions)
-
-                if self.state.debugPaneEnabled {
-                    DebugSettings(state: self.state)
-                        .tabItem { Label("Debug", systemImage: "ant") }
-                        .tag(SettingsTab.debug)
+        NavigationSplitView(columnVisibility: self.$splitViewVisibility) {
+            List(selection: self.sidebarSelection) {
+                ForEach(self.availableTabs, id: \.self) { tab in
+                    Label(tab.title, systemImage: tab.systemImage)
+                        .tag(tab)
                 }
-
-                AboutSettings(updater: self.updater)
-                    .tabItem { Label("About", systemImage: "info.circle") }
-                    .tag(SettingsTab.about)
             }
+            .navigationSplitViewColumnWidth(min: 210, ideal: 220, max: 240)
+            .listStyle(.sidebar)
+        } detail: {
+            VStack(alignment: .leading, spacing: 12) {
+                if self.isNixMode {
+                    self.nixManagedBanner
+                }
+                self.detailContent
+            }
+            .padding(.horizontal, 28)
+            .padding(.vertical, 22)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .navigationTitle(self.selectedTab.title)
         }
-        .padding(.horizontal, 28)
-        .padding(.vertical, 22)
-        .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight, alignment: .topLeading)
+        .navigationSplitViewStyle(.balanced)
+        .frame(
+            minWidth: SettingsTab.minWindowWidth,
+            idealWidth: SettingsTab.windowWidth,
+            maxWidth: .infinity,
+            minHeight: SettingsTab.minWindowHeight,
+            idealHeight: SettingsTab.windowHeight,
+            maxHeight: .infinity,
+            alignment: .topLeading)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onReceive(NotificationCenter.default.publisher(for: .openclawSelectSettingsTab)) { note in
             if let tab = note.object as? SettingsTab {
                 withAnimation(.spring(response: 0.32, dampingFraction: 0.85)) {
+                    self.splitViewVisibility = .all
                     self.selectedTab = tab
                 }
             }
         }
         .onAppear {
+            self.splitViewVisibility = .all
             if let pending = SettingsTabRouter.consumePending() {
                 self.selectedTab = self.validTab(for: pending)
             }
@@ -97,6 +72,7 @@ struct SettingsRootView: View {
             }
         }
         .onChange(of: self.selectedTab) { _, newValue in
+            self.splitViewVisibility = .all
             self.updatePermissionMonitoring(for: newValue)
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
@@ -111,6 +87,65 @@ struct SettingsRootView: View {
         .task(id: self.state.connectionMode) {
             guard !self.isPreview else { return }
             await self.refreshSnapshotPaths()
+        }
+    }
+
+    private var availableTabs: [SettingsTab] {
+        var tabs: [SettingsTab] = [
+            .general,
+            .channels,
+            .voiceWake,
+            .config,
+            .instances,
+            .sessions,
+            .cron,
+            .skills,
+            .permissions,
+        ]
+        if self.state.debugPaneEnabled {
+            tabs.append(.debug)
+        }
+        tabs.append(.about)
+        return tabs
+    }
+
+    private var sidebarSelection: Binding<SettingsTab?> {
+        Binding<SettingsTab?>(
+            get: { self.selectedTab },
+            set: { newValue in
+                guard let newValue else { return }
+                self.selectedTab = newValue
+            })
+    }
+
+    @ViewBuilder
+    private var detailContent: some View {
+        switch self.selectedTab {
+        case .general:
+            GeneralSettings(state: self.state)
+        case .channels:
+            ChannelsSettings()
+        case .voiceWake:
+            VoiceWakeSettings(state: self.state, isActive: true)
+        case .config:
+            ConfigSettings()
+        case .instances:
+            InstancesSettings()
+        case .sessions:
+            SessionsSettings()
+        case .cron:
+            CronSettings()
+        case .skills:
+            SkillsSettings(state: self.state)
+        case .permissions:
+            PermissionsSettings(
+                status: self.permissionMonitor.status,
+                refresh: self.refreshPerms,
+                showOnboarding: { DebugActions.restartOnboarding() })
+        case .debug:
+            DebugSettings(state: self.state)
+        case .about:
+            AboutSettings(updater: self.updater)
         }
     }
 
@@ -173,8 +208,10 @@ struct SettingsRootView: View {
 
 enum SettingsTab: CaseIterable {
     case general, channels, skills, sessions, cron, config, instances, voiceWake, permissions, debug, about
-    static let windowWidth: CGFloat = 824 // wider
-    static let windowHeight: CGFloat = 790 // +10% (more room)
+    static let minWindowWidth: CGFloat = 1_040
+    static let minWindowHeight: CGFloat = 580
+    static let windowWidth: CGFloat = 1_160
+    static let windowHeight: CGFloat = 720
     var title: String {
         switch self {
         case .general: "General"
@@ -204,6 +241,58 @@ enum SettingsTab: CaseIterable {
         case .permissions: "lock.shield"
         case .debug: "ant"
         case .about: "info.circle"
+        }
+    }
+
+    static func launchArgument(from arguments: [String]) -> SettingsTab? {
+        if let inline = arguments.first(where: { $0.hasPrefix("--settings-tab=") }) {
+            return self.init(tabLaunchArgument: String(inline.dropFirst("--settings-tab=".count)))
+        }
+
+        if let index = arguments.firstIndex(of: "--settings-tab") {
+            let nextIndex = arguments.index(after: index)
+            if nextIndex < arguments.endIndex {
+                return self.init(tabLaunchArgument: arguments[nextIndex])
+            }
+        }
+
+        if arguments.contains("--settings") {
+            return .general
+        }
+
+        return nil
+    }
+
+    init?(tabLaunchArgument rawValue: String) {
+        switch rawValue
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: "_", with: "-")
+        {
+        case "general":
+            self = .general
+        case "channels":
+            self = .channels
+        case "skills":
+            self = .skills
+        case "sessions":
+            self = .sessions
+        case "cron":
+            self = .cron
+        case "config":
+            self = .config
+        case "instances":
+            self = .instances
+        case "voice-wake", "voicewake":
+            self = .voiceWake
+        case "permissions":
+            self = .permissions
+        case "debug":
+            self = .debug
+        case "about":
+            self = .about
+        default:
+            return nil
         }
     }
 }

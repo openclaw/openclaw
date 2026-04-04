@@ -138,6 +138,50 @@ describe("config io paths", () => {
     });
   });
 
+  it("accepts agent-level directive defaults from existing configs", async () => {
+    await withTempHome(async (home) => {
+      const configDir = path.join(home, ".openclaw");
+      await fs.mkdir(configDir, { recursive: true });
+      const configPath = path.join(configDir, "openclaw.json");
+      await fs.writeFile(
+        configPath,
+        JSON.stringify(
+          {
+            agents: {
+              list: [
+                {
+                  id: "ops",
+                  thinkingDefault: "high",
+                  verboseDefault: "on",
+                  elevatedDefault: "ask",
+                  fastModeDefault: true,
+                  reasoningDefault: "on",
+                  blockStreamingDefault: "on",
+                  blockStreamingBreak: "message_end",
+                },
+              ],
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+      const io = createIoForHome(home);
+      const cfg = io.loadConfig();
+      expect(cfg.agents?.list?.[0]).toMatchObject({
+        id: "ops",
+        thinkingDefault: "high",
+        verboseDefault: "on",
+        elevatedDefault: "ask",
+        fastModeDefault: true,
+        reasoningDefault: "on",
+        blockStreamingDefault: "on",
+        blockStreamingBreak: "message_end",
+      });
+    });
+  });
+
   it("logs invalid config path details and throws on invalid config", async () => {
     await withTempHome(async (home) => {
       const configDir = path.join(home, ".openclaw");

@@ -1,0 +1,26 @@
+{
+  "name": "reposition_task_in_backlog",
+  "description": "Move a backlog task to a different time bucket",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "taskId": {
+        "type": "string",
+        "description": "The ID of the task"
+      },
+      "timeBucket": {
+        "type": "string",
+        "description": "The target time bucket",
+        "enum": [
+          "in the next two weeks",
+          "in the next month",
+          "in the next quarter",
+          "in the next year",
+          "someday",
+          "never"
+        ]
+      }
+    },
+    "required": ["taskId", "timeBucket"]
+  }
+}

@@ -1,4 +1,4 @@
-app_identifier("ai.openclaw.client")
+app_identifier("ai.vericlaw.client")
 
 # Auth is expected via App Store Connect API key.
 # Provide either:

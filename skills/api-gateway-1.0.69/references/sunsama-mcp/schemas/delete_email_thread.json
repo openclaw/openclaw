@@ -1,0 +1,22 @@
+{
+  "name": "delete_email_thread",
+  "description": "Delete an email thread",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "accountId": {
+        "type": "string",
+        "description": "The email account ID"
+      },
+      "accountService": {
+        "type": "string",
+        "description": "The email service (e.g., gmail, outlook)"
+      },
+      "threadId": {
+        "type": "string",
+        "description": "The email thread ID"
+      }
+    },
+    "required": ["accountId", "accountService", "threadId"]
+  }
+}

@@ -151,6 +151,7 @@ interface ChatEphemeralState {
   searchOpen: boolean;
   searchQuery: string;
   pinnedExpanded: boolean;
+  sendConfirmOpen: boolean;
 }
 
 function createChatEphemeralState(): ChatEphemeralState {
@@ -166,6 +167,7 @@ function createChatEphemeralState(): ChatEphemeralState {
     searchOpen: false,
     searchQuery: "",
     pinnedExpanded: false,
+    sendConfirmOpen: false,
   };
 }
 
@@ -249,7 +251,7 @@ function renderFallbackIndicator(status: FallbackIndicatorStatus | null | undefi
 
 /**
  * Compact notice when context usage reaches 85%+.
- * Progressively shifts from amber (85%) to red (90%+).
+ * Progressively shifts from Apple-style orange (85%) to red (95%+).
  */
 function renderContextNotice(
   session: GatewaySessionRow | undefined,
@@ -265,12 +267,12 @@ function renderContextNotice(
     return nothing;
   }
   const pct = Math.min(Math.round(ratio * 100), 100);
-  // Lerp from amber (#d97706) at 85% to red (#dc2626) at 95%+
+  // Lerp from Apple orange (#ff9f0a) at 85% to Apple red (#ff453a) at 95%+
   const t = Math.min(Math.max((ratio - 0.85) / 0.1, 0), 1);
-  // RGB: amber(217,119,6) → red(220,38,38)
-  const r = Math.round(217 + (220 - 217) * t);
-  const g = Math.round(119 + (38 - 119) * t);
-  const b = Math.round(6 + (38 - 6) * t);
+  // RGB: orange(255,159,10) -> red(255,69,58)
+  const r = 255;
+  const g = Math.round(159 + (69 - 159) * t);
+  const b = Math.round(10 + (58 - 10) * t);
   const color = `rgb(${r}, ${g}, ${b})`;
   const bgOpacity = 0.08 + 0.08 * t;
   const bg = `rgba(${r}, ${g}, ${b}, ${bgOpacity})`;
@@ -497,7 +499,7 @@ function selectSlashCommand(
   if (cmd.executeLocal && !cmd.args) {
     props.onDraftChange(`/${cmd.name}`);
     requestUpdate();
-    props.onSend();
+    openSendConfirmation(props, requestUpdate);
   } else {
     props.onDraftChange(`/${cmd.name} `);
     requestUpdate();
@@ -540,7 +542,7 @@ function selectSlashArg(
   props.onDraftChange(`/${cmdName} ${arg}`);
   requestUpdate();
   if (execute) {
-    props.onSend();
+    openSendConfirmation(props, requestUpdate);
   }
 }
 
@@ -556,6 +558,38 @@ function tokenEstimate(draft: string): string | null {
  */
 function exportMarkdown(props: ChatProps): void {
   exportChatMarkdown(props.messages, props.assistantName);
+}
+
+function hasPendingSendContent(props: ChatProps): boolean {
+  return Boolean(props.draft.trim()) || (props.attachments?.length ?? 0) > 0;
+}
+
+function openSendConfirmation(props: ChatProps, requestUpdate: () => void) {
+  if (!props.connected || props.sending || !hasPendingSendContent(props)) {
+    return;
+  }
+  vs.sendConfirmOpen = true;
+  requestUpdate();
+}
+
+function closeSendConfirmation(requestUpdate: () => void) {
+  if (!vs.sendConfirmOpen) {
+    return;
+  }
+  vs.sendConfirmOpen = false;
+  requestUpdate();
+}
+
+function confirmSend(props: ChatProps, inputHistory: InputHistory, requestUpdate: () => void) {
+  if (!props.connected || props.sending || !hasPendingSendContent(props)) {
+    return;
+  }
+  if (props.draft.trim()) {
+    inputHistory.push(props.draft);
+  }
+  vs.sendConfirmOpen = false;
+  props.onSend();
+  requestUpdate();
 }
 
 const WELCOME_SUGGESTIONS = [
@@ -581,7 +615,7 @@ function renderWelcomeState(props: ChatProps): TemplateResult {
       ${
         avatar
           ? html`<img src=${avatar} alt=${name} style="width:56px; height:56px; border-radius:50%; object-fit:cover;" />`
-          : html`<div class="agent-chat__avatar agent-chat__avatar--logo"><img src=${logoUrl} alt="OpenClaw" /></div>`
+          : html`<div class="agent-chat__avatar agent-chat__avatar--logo"><img src=${logoUrl} alt="VeriClaw 爪印" /></div>`
       }
       <h2>${name}</h2>
       <div class="agent-chat__badges">
@@ -598,11 +632,90 @@ function renderWelcomeState(props: ChatProps): TemplateResult {
               class="agent-chat__suggestion"
               @click=${() => {
                 props.onDraftChange(text);
-                props.onSend();
               }}
             >${text}</button>
           `,
         )}
+      </div>
+    </div>
+  `;
+}
+
+function renderSendConfirmation(
+  props: ChatProps,
+  isBusy: boolean,
+  inputHistory: InputHistory,
+  requestUpdate: () => void,
+): TemplateResult | typeof nothing {
+  if (!vs.sendConfirmOpen) {
+    return nothing;
+  }
+
+  const attachmentCount = props.attachments?.length ?? 0;
+  const preview =
+    props.draft.trim() ||
+    (attachmentCount > 0
+      ? `${attachmentCount} attachment${attachmentCount === 1 ? "" : "s"} ready to send`
+      : "No content");
+  const deliveryLabel = isBusy ? "Queued after the current run finishes" : "Immediate delivery";
+  const sendLabel = isBusy ? "Queue message" : "Send now";
+
+  return html`
+    <div
+      class="exec-approval-overlay chat-send-confirm"
+      role="dialog"
+      aria-modal="true"
+      aria-live="polite"
+      @click=${(e: Event) => {
+        if (e.target === e.currentTarget) {
+          closeSendConfirmation(requestUpdate);
+        }
+      }}
+    >
+      <div class="exec-approval-card chat-send-confirm__card" @click=${(e: Event) => e.stopPropagation()}>
+        <div class="exec-approval-header">
+          <div>
+            <div class="exec-approval-title">Confirm message</div>
+            <div class="exec-approval-sub">
+              Review the destination and payload before it leaves this seat.
+            </div>
+          </div>
+        </div>
+
+        <div class="chat-send-confirm__meta">
+          <div class="chat-send-confirm__meta-row">
+            <span>Destination</span>
+            <span>${props.assistantName || "Assistant"} · ${props.sessionKey}</span>
+          </div>
+          <div class="chat-send-confirm__meta-row">
+            <span>Delivery</span>
+            <span>${deliveryLabel}</span>
+          </div>
+          <div class="chat-send-confirm__meta-row">
+            <span>Attachments</span>
+            <span>${attachmentCount > 0 ? attachmentCount : "None"}</span>
+          </div>
+        </div>
+
+        <div class="chat-send-confirm__preview">
+          <div class="chat-send-confirm__preview-label">Payload</div>
+          <div class="chat-send-confirm__preview-body">${preview}</div>
+        </div>
+
+        <div class="exec-approval-actions">
+          <button class="btn" type="button" @click=${() => closeSendConfirmation(requestUpdate)}>
+            Cancel
+          </button>
+          <button
+            class="btn primary"
+            type="button"
+            autofocus
+            ?disabled=${!props.connected || props.sending}
+            @click=${() => confirmSend(props, inputHistory, requestUpdate)}
+          >
+            ${sendLabel}
+          </button>
+        </div>
       </div>
     </div>
   `;
@@ -953,6 +1066,19 @@ export function renderChat(props: ChatProps) {
   `;
 
   const handleKeyDown = (e: KeyboardEvent) => {
+    if (vs.sendConfirmOpen) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        closeSendConfirmation(requestUpdate);
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+        e.preventDefault();
+        confirmSend(props, inputHistory, requestUpdate);
+        return;
+      }
+    }
+
     // Slash menu navigation — arg mode
     if (vs.slashMenuOpen && vs.slashMenuMode === "args" && vs.slashMenuArgItems.length > 0) {
       const len = vs.slashMenuArgItems.length;
@@ -1054,10 +1180,7 @@ export function renderChat(props: ChatProps) {
       }
       e.preventDefault();
       if (canCompose) {
-        if (props.draft.trim()) {
-          inputHistory.push(props.draft);
-        }
-        props.onSend();
+        openSendConfirmation(props, requestUpdate);
       }
     }
   };
@@ -1076,6 +1199,7 @@ export function renderChat(props: ChatProps) {
       @drop=${(e: DragEvent) => handleDrop(e, props)}
       @dragover=${(e: DragEvent) => e.preventDefault()}
     >
+      ${renderSendConfirmation(props, isBusy, inputHistory, requestUpdate)}
       ${props.disabledReason ? html`<div class="callout">${props.disabledReason}</div>` : nothing}
       ${props.error ? html`<div class="callout danger">${props.error}</div>` : nothing}
 
@@ -1308,12 +1432,7 @@ export function renderChat(props: ChatProps) {
                 : html`
                   <button
                     class="chat-send-btn"
-                    @click=${() => {
-                      if (props.draft.trim()) {
-                        inputHistory.push(props.draft);
-                      }
-                      props.onSend();
-                    }}
+                    @click=${() => openSendConfirmation(props, requestUpdate)}
                     ?disabled=${!props.connected || props.sending}
                     title=${isBusy ? "Queue" : "Send"}
                   >

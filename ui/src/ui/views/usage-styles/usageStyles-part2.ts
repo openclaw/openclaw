@@ -233,16 +233,16 @@ export const usageStylesPart2 = `
     position: relative;
   }
   .cost-segment.output {
-    background: #ef4444;
+    background: var(--danger);
   }
   .cost-segment.input {
-    background: #f59e0b;
+    background: var(--warn);
   }
   .cost-segment.cache-write {
-    background: #10b981;
+    background: var(--ok);
   }
   .cost-segment.cache-read {
-    background: #06b6d4;
+    background: var(--info);
   }
   .cost-breakdown-legend {
     display: flex;
@@ -270,28 +270,28 @@ export const usageStylesPart2 = `
     flex-shrink: 0;
   }
   .legend-dot.output {
-    background: #ef4444;
+    background: var(--danger);
   }
   .legend-dot.input {
-    background: #f59e0b;
+    background: var(--warn);
   }
   .legend-dot.cache-write {
-    background: #10b981;
+    background: var(--ok);
   }
   .legend-dot.cache-read {
-    background: #06b6d4;
+    background: var(--info);
   }
   .legend-dot.system {
-    background: #ff4d4d;
+    background: color-mix(in srgb, var(--danger) 68%, var(--warn) 32%);
   }
   .legend-dot.skills {
-    background: #8b5cf6;
+    background: var(--accent-2);
   }
   .legend-dot.tools {
-    background: #ec4899;
+    background: color-mix(in srgb, var(--accent) 62%, var(--danger) 38%);
   }
   .legend-dot.files {
-    background: #f59e0b;
+    background: var(--warn);
   }
   .cost-breakdown-note {
     margin-top: 10px;
@@ -440,23 +440,23 @@ export const usageStylesPart2 = `
     stroke-width: 2;
   }
   .timeseries-svg .ts-dot {
-    fill: #ff4d4d;
+    fill: color-mix(in srgb, var(--accent) 62%, var(--danger) 38%);
     transition: r 0.15s, fill 0.15s;
   }
   .timeseries-svg .ts-dot:hover {
     r: 5;
   }
   .timeseries-svg .ts-bar {
-    fill: #ff4d4d;
+    fill: color-mix(in srgb, var(--accent) 62%, var(--danger) 38%);
     transition: fill 0.15s;
   }
   .timeseries-svg .ts-bar:hover {
-    fill: #cc3d3d;
+    fill: color-mix(in srgb, var(--accent) 44%, var(--danger) 56%);
   }
-  .timeseries-svg .ts-bar.output { fill: #ef4444; }
-  .timeseries-svg .ts-bar.input { fill: #f59e0b; }
-  .timeseries-svg .ts-bar.cache-write { fill: #10b981; }
-  .timeseries-svg .ts-bar.cache-read { fill: #06b6d4; }
+  .timeseries-svg .ts-bar.output { fill: var(--danger); }
+  .timeseries-svg .ts-bar.input { fill: var(--warn); }
+  .timeseries-svg .ts-bar.cache-write { fill: var(--ok); }
+  .timeseries-svg .ts-bar.cache-read { fill: var(--info); }
   .timeseries-summary {
     margin-top: 12px;
     font-size: 13px;

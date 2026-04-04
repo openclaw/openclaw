@@ -1,6 +1,6 @@
 name: OpenClaw
 options:
-  bundleIdPrefix: ai.openclaw
+  bundleIdPrefix: ai.vericlaw
   deploymentTarget:
     iOS: "18.0"
   xcodeVersion: "16.0"
@@ -49,7 +49,6 @@ targets:
         embed: true
       - target: OpenClawActivityWidget
         embed: true
-      - target: OpenClawWatchApp
       - package: OpenClawKit
       - package: OpenClawKit
         product: OpenClawChatUI
@@ -112,12 +111,13 @@ targets:
     info:
       path: Sources/Info.plist
       properties:
-        CFBundleDisplayName: OpenClaw
+        CFBundleName: VeriClaw 爪印
+        CFBundleDisplayName: VeriClaw 爪印
         CFBundleIconName: AppIcon
         CFBundleURLTypes:
-          - CFBundleURLName: ai.openclaw.ios
+          - CFBundleURLName: ai.vericlaw.ios
             CFBundleURLSchemes:
-              - openclaw
+              - vericlaw
         CFBundleShortVersionString: "$(OPENCLAW_MARKETING_VERSION)"
         CFBundleVersion: "$(OPENCLAW_BUILD_VERSION)"
         UILaunchScreen: {}
@@ -127,19 +127,19 @@ targets:
           - audio
           - remote-notification
         BGTaskSchedulerPermittedIdentifiers:
-          - ai.openclaw.ios.bgrefresh
-        NSLocalNetworkUsageDescription: OpenClaw discovers and connects to your OpenClaw gateway on the local network.
+          - ai.vericlaw.ios.bgrefresh
+        NSLocalNetworkUsageDescription: "VeriClaw 爪印 discovers and connects to your paired OpenClaw gateway on the local network."
         NSAppTransportSecurity:
           NSAllowsArbitraryLoadsInWebContent: true
         NSBonjourServices:
           - _openclaw-gw._tcp
-        NSCameraUsageDescription: OpenClaw can capture photos or short video clips when requested via the gateway.
-        NSLocationWhenInUseUsageDescription: OpenClaw uses your location when you allow location sharing.
-        NSLocationAlwaysAndWhenInUseUsageDescription: OpenClaw can share your location in the background when you enable Always.
-        NSMicrophoneUsageDescription: OpenClaw needs microphone access for voice wake.
-        NSMotionUsageDescription: OpenClaw may use motion data to support device-aware interactions and automations.
-        NSPhotoLibraryUsageDescription: OpenClaw needs photo library access when you choose existing photos to share with your assistant.
-        NSSpeechRecognitionUsageDescription: OpenClaw uses on-device speech recognition for voice wake.
+        NSCameraUsageDescription: VeriClaw 爪印 can capture photos or short clips when you add evidence to a verification case.
+        NSLocationWhenInUseUsageDescription: "VeriClaw 爪印 uses your location when a paired verification workflow needs location-aware context."
+        NSLocationAlwaysAndWhenInUseUsageDescription: "VeriClaw 爪印 can share your location in the background when a paired verification workflow needs ongoing context."
+        NSMicrophoneUsageDescription: VeriClaw 爪印 needs microphone access for voice-triggered review capture.
+        NSMotionUsageDescription: VeriClaw 爪印 may use motion data to support device-aware verification and companion automations.
+        NSPhotoLibraryUsageDescription: VeriClaw 爪印 needs photo library access when you choose evidence to share into the review queue.
+        NSSpeechRecognitionUsageDescription: VeriClaw 爪印 uses on-device speech recognition for voice wake.
         NSSupportsLiveActivities: true
         ITSAppUsesNonExemptEncryption: false
         OpenClawPushTransport: "$(OPENCLAW_PUSH_TRANSPORT)"
@@ -182,7 +182,8 @@ targets:
     info:
       path: ShareExtension/Info.plist
       properties:
-        CFBundleDisplayName: OpenClaw Share
+        CFBundleName: VeriClaw 爪印 Share
+        CFBundleDisplayName: VeriClaw 爪印 Share
         CFBundleShortVersionString: "$(OPENCLAW_MARKETING_VERSION)"
         CFBundleVersion: "$(OPENCLAW_BUILD_VERSION)"
         NSExtension:
@@ -219,7 +220,8 @@ targets:
     info:
       path: ActivityWidget/Info.plist
       properties:
-        CFBundleDisplayName: OpenClaw Activity
+        CFBundleName: VeriClaw 爪印 Activity
+        CFBundleDisplayName: VeriClaw 爪印 Activity
         CFBundleShortVersionString: "$(OPENCLAW_MARKETING_VERSION)"
         CFBundleVersion: "$(OPENCLAW_BUILD_VERSION)"
         NSSupportsLiveActivities: true
@@ -246,7 +248,8 @@ targets:
     info:
       path: WatchApp/Info.plist
       properties:
-        CFBundleDisplayName: OpenClaw
+        CFBundleName: VeriClaw 爪印
+        CFBundleDisplayName: VeriClaw 爪印
         CFBundleShortVersionString: "$(OPENCLAW_MARKETING_VERSION)"
         CFBundleVersion: "$(OPENCLAW_BUILD_VERSION)"
         WKCompanionAppBundleIdentifier: "$(OPENCLAW_APP_BUNDLE_ID)"
@@ -271,7 +274,8 @@ targets:
     info:
       path: WatchExtension/Info.plist
       properties:
-        CFBundleDisplayName: OpenClaw
+        CFBundleName: VeriClaw 爪印
+        CFBundleDisplayName: VeriClaw 爪印
         CFBundleShortVersionString: "$(OPENCLAW_MARKETING_VERSION)"
         CFBundleVersion: "$(OPENCLAW_BUILD_VERSION)"
         NSExtension:
@@ -299,7 +303,7 @@ targets:
         CODE_SIGN_IDENTITY: "Apple Development"
         CODE_SIGN_STYLE: "$(OPENCLAW_CODE_SIGN_STYLE)"
         DEVELOPMENT_TEAM: "$(OPENCLAW_DEVELOPMENT_TEAM)"
-        PRODUCT_BUNDLE_IDENTIFIER: ai.openclaw.ios.tests
+        PRODUCT_BUNDLE_IDENTIFIER: ai.vericlaw.ios.tests
         ENABLE_APP_INTENTS_METADATA_GENERATION: NO
         SWIFT_VERSION: "6.0"
         SWIFT_STRICT_CONCURRENCY: complete
@@ -308,7 +312,7 @@ targets:
     info:
       path: Tests/Info.plist
       properties:
-        CFBundleDisplayName: OpenClawTests
+        CFBundleDisplayName: VeriClawTests
         CFBundleShortVersionString: "$(OPENCLAW_MARKETING_VERSION)"
         CFBundleVersion: "$(OPENCLAW_BUILD_VERSION)"
 
@@ -327,13 +331,13 @@ targets:
         CODE_SIGN_IDENTITY: "Apple Development"
         CODE_SIGN_STYLE: "$(OPENCLAW_CODE_SIGN_STYLE)"
         DEVELOPMENT_TEAM: "$(OPENCLAW_DEVELOPMENT_TEAM)"
-        PRODUCT_BUNDLE_IDENTIFIER: ai.openclaw.ios.logic-tests
+        PRODUCT_BUNDLE_IDENTIFIER: ai.vericlaw.ios.logic-tests
         ENABLE_APP_INTENTS_METADATA_GENERATION: NO
         SWIFT_VERSION: "6.0"
         SWIFT_STRICT_CONCURRENCY: complete
     info:
       path: Tests/Info.plist
       properties:
-        CFBundleDisplayName: OpenClawLogicTests
+        CFBundleDisplayName: VeriClawLogicTests
         CFBundleShortVersionString: "$(OPENCLAW_MARKETING_VERSION)"
         CFBundleVersion: "$(OPENCLAW_BUILD_VERSION)"

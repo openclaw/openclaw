@@ -50,5 +50,5 @@ curl -fsSL "https://raw.githubusercontent.com/kyle-seongwoo-jun/apple-device-ide
 5. 验证 macOS 应用能够正常构建（无警告）：
 
 ```bash
-swift build --package-path apps/macos
+scripts/macos-swift.sh build
 ```

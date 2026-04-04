@@ -24,7 +24,38 @@ struct ControlAgentEvent: Codable, Identifiable {
     let stream: String
     let ts: Double
     let data: [String: OpenClawProtocol.AnyCodable]
+    let sessionKey: String?
     let summary: String?
+
+    init(
+        runId: String,
+        seq: Int,
+        stream: String,
+        ts: Double,
+        data: [String: OpenClawProtocol.AnyCodable],
+        sessionKey: String? = nil,
+        summary: String? = nil)
+    {
+        self.runId = runId
+        self.seq = seq
+        self.stream = stream
+        self.ts = ts
+        self.data = data
+        self.sessionKey = sessionKey
+        self.summary = summary
+    }
+
+    var resolvedSessionKey: String {
+        let topLevel = self.sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let topLevel, !topLevel.isEmpty {
+            return topLevel
+        }
+        let nested = (self.data["sessionKey"]?.value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let nested, !nested.isEmpty {
+            return nested
+        }
+        return "main"
+    }
 }
 
 enum ControlChannelError: Error, LocalizedError {
@@ -63,6 +94,7 @@ final class ControlChannel {
             switch self.state {
             case .connected:
                 self.logger.info("control channel state -> connected")
+                self.scheduleHealthRefreshAfterReconnect(from: oldValue)
             case .connecting:
                 self.logger.info("control channel state -> connecting")
             case .disconnected:
@@ -301,6 +333,22 @@ final class ControlChannel {
         }
     }
 
+    private func scheduleHealthRefreshAfterReconnect(from previousState: ConnectionState) {
+        guard !HealthStore.shared.isRefreshing else { return }
+
+        switch previousState {
+        case .disconnected, .degraded:
+            break
+        case .connecting:
+            let needsBootstrap = HealthStore.shared.snapshot == nil || HealthStore.shared.lastError != nil
+            guard needsBootstrap else { return }
+        case .connected:
+            return
+        }
+
+        Task { await HealthStore.shared.refresh(onDemand: true) }
+    }
+
     private func establishGatewayConnection(timeoutMs: Int = 5000) async throws {
         try await GatewayConnection.shared.refresh()
         let ok = try await GatewayConnection.shared.healthOK(timeoutMs: timeoutMs)
@@ -349,6 +397,9 @@ final class ControlChannel {
 
     private func handle(push: GatewayPush) {
         switch push {
+        case let .snapshot(hello):
+            self.applyHealthSnapshot(from: hello.snapshot.health)
+            self.state = .connected
         case let .event(evt) where evt.event == "agent":
             if let payload = evt.payload,
                let agent = try? GatewayPayloadDecoding.decode(payload, as: ControlAgentEvent.self)
@@ -356,6 +407,8 @@ final class ControlChannel {
                 AgentEventStore.shared.append(agent)
                 self.routeWorkActivity(from: agent)
             }
+        case let .event(evt) where evt.event == "health":
+            self.applyHealthSnapshot(from: evt.payload)
         case let .event(evt) where evt.event == "heartbeat":
             if let payload = evt.payload,
                let heartbeat = try? GatewayPayloadDecoding.decode(payload, as: ControlHeartbeatEvent.self),
@@ -365,17 +418,23 @@ final class ControlChannel {
             }
         case let .event(evt) where evt.event == "shutdown":
             self.state = .degraded("gateway shutdown")
-        case .snapshot:
-            self.state = .connected
         default:
             break
         }
     }
 
+    private func applyHealthSnapshot(from payload: OpenClawProtocol.AnyCodable?) {
+        guard let payload,
+              let data = try? JSONEncoder().encode(payload),
+              let snapshot = decodeHealthSnapshot(from: data)
+        else {
+            return
+        }
+        HealthStore.shared.apply(snapshot: snapshot)
+    }
+
     private func routeWorkActivity(from event: ControlAgentEvent) {
-        // We currently treat VoiceWake as the "main" session for UI purposes.
-        // In the future, the gateway can include a sessionKey to distinguish runs.
-        let sessionKey = (event.data["sessionKey"]?.value as? String) ?? "main"
+        let sessionKey = event.resolvedSessionKey
 
         switch event.stream.lowercased() {
         case "job":

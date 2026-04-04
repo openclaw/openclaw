@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import type { AgentDefaultsLikeConfig } from "../../config/types.agents.js";
 import type { MsgContext } from "../templating.js";
 import type { ElevatedLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
@@ -15,8 +16,6 @@ import { resolveCurrentDirectiveLevels } from "./directive-handling.levels.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import type { TypingController } from "./typing.js";
-
-type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 
 export type ApplyDirectiveResult =
   | { kind: "reply"; reply: ReplyPayload | ReplyPayload[] | undefined }
@@ -40,7 +39,7 @@ export async function applyInlineDirectiveOverrides(params: {
   cfg: OpenClawConfig;
   agentId: string;
   agentDir: string;
-  agentCfg: AgentDefaults;
+  agentCfg: AgentDefaultsLikeConfig;
   sessionEntry: SessionEntry;
   sessionStore: Record<string, SessionEntry>;
   sessionKey: string;

@@ -1,0 +1,14 @@
+{
+  "name": "decline_meeting_invite",
+  "description": "Decline a calendar meeting invite",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "eventId": {
+        "type": "string",
+        "description": "The ID of the calendar event"
+      }
+    },
+    "required": ["eventId"]
+  }
+}

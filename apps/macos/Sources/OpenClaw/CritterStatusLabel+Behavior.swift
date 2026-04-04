@@ -14,6 +14,7 @@ extension CritterStatusLabel {
         ZStack(alignment: .topTrailing) {
             self.iconImage
                 .frame(width: 18, height: 18)
+                .scaleEffect(self.iconScale)
                 .rotationEffect(.degrees(self.wiggleAngle), anchor: .center)
                 .offset(x: self.wiggleOffset)
                 // Avoid Combine's TimerPublisher here: on macOS 26.2 we've seen crashes inside executor checks
@@ -104,29 +105,20 @@ extension CritterStatusLabel {
     }
 
     private var iconImage: Image {
-        let badge: CritterIconRenderer.Badge? = if let prominence = self.iconState.badgeProminence, !self.isPaused {
-            CritterIconRenderer.Badge(
-                symbolName: self.iconState.badgeSymbolName,
-                prominence: prominence)
-        } else {
-            nil
-        }
+        let badgeSymbolName = (!self.isPaused ? self.iconState.badgeSymbolName : nil)
+        let badgeProminence = (!self.isPaused ? self.iconState.badgeProminence : nil)
 
-        if self.isPaused {
-            return Image(nsImage: CritterIconRenderer.makeIcon(blink: 0, badge: nil))
-        }
+        return Image(nsImage: VeriClawBrandAsset.statusBarImage(
+            paused: self.isPaused,
+            sleeping: self.isSleeping,
+            badgeSymbolName: badgeSymbolName,
+            badgeProminence: badgeProminence))
+    }
 
-        if self.isSleeping {
-            return Image(nsImage: CritterIconRenderer.makeIcon(blink: 1, eyesClosedLines: true, badge: nil))
-        }
-
-        return Image(nsImage: CritterIconRenderer.makeIcon(
-            blink: self.blinkAmount,
-            legWiggle: max(self.legWiggle, self.isWorkingNow ? 0.6 : 0),
-            earWiggle: self.earWiggle,
-            earScale: self.earBoostActive ? 1.9 : 1.0,
-            earHoles: self.earBoostActive,
-            badge: badge))
+    private var iconScale: CGFloat {
+        let pulse = self.blinkAmount * 0.05
+        let lift = self.earBoostActive ? 0.05 : 0
+        return 1.0 - pulse + lift
     }
 
     private func resetMotion() {

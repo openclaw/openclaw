@@ -12,6 +12,8 @@ final class WebChatPanel: NSPanel {
     }
 }
 
+extension WebChatPanel: DockVisibilityPromotingPanel {}
+
 enum WebChatPresentation {
     case window
     case panel(anchorProvider: () -> NSRect?)
@@ -38,11 +40,11 @@ final class WebChatManager {
         self.panelSessionKey ?? self.windowSessionKey
     }
 
-    func show(sessionKey: String) {
+    func show(sessionKey: String, mode: WebChatWorkspaceMode = .control) {
         self.closePanel()
         if let controller = self.windowController {
             if self.windowSessionKey == sessionKey {
-                controller.show()
+                controller.show(mode: mode)
                 return
             }
 
@@ -50,13 +52,16 @@ final class WebChatManager {
             self.windowController = nil
             self.windowSessionKey = nil
         }
-        let controller = WebChatSwiftUIWindowController(sessionKey: sessionKey, presentation: .window)
+        let controller = WebChatSwiftUIWindowController(
+            sessionKey: sessionKey,
+            presentation: .window,
+            initialMode: mode)
         controller.onVisibilityChanged = { [weak self] visible in
             self?.onPanelVisibilityChanged?(visible)
         }
         self.windowController = controller
         self.windowSessionKey = sessionKey
-        controller.show()
+        controller.show(mode: mode)
     }
 
     func togglePanel(sessionKey: String, anchorProvider: @escaping () -> NSRect?) {
@@ -98,6 +103,23 @@ final class WebChatManager {
         let key = await GatewayConnection.shared.mainSessionKey()
         self.cachedPreferredSessionKey = key
         return key
+    }
+
+    func preferredSessionKeyImmediate() -> String {
+        if let cachedPreferredSessionKey {
+            return cachedPreferredSessionKey
+        }
+        return WorkActivityStore.shared.mainSessionKey
+    }
+
+    func warmPreferredSessionKey() {
+        guard self.cachedPreferredSessionKey == nil else { return }
+        Task {
+            let key = await GatewayConnection.shared.mainSessionKey()
+            await MainActor.run {
+                self.cachedPreferredSessionKey = key
+            }
+        }
     }
 
     func resetTunnels() {

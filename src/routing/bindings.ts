@@ -102,6 +102,52 @@ export function buildChannelAccountBindings(cfg: OpenClawConfig) {
   return map;
 }
 
+export function resolveUniqueBoundChannelForAgent(
+  cfg: OpenClawConfig,
+  agentId: string,
+): {
+  channelId: string;
+  accountIds: string[];
+} | null {
+  const normalizedAgentId = normalizeAgentId(agentId);
+  let channelId: string | null = null;
+  const accountIds = new Set<string>();
+
+  for (const binding of listBindings(cfg)) {
+    if (!binding || typeof binding !== "object") {
+      continue;
+    }
+    if (normalizeAgentId(binding.agentId) !== normalizedAgentId) {
+      continue;
+    }
+    const match = binding.match;
+    if (!match || typeof match !== "object") {
+      continue;
+    }
+    const normalizedChannelId = normalizeBindingChannelId(match.channel);
+    if (!normalizedChannelId) {
+      continue;
+    }
+    if (channelId && channelId !== normalizedChannelId) {
+      return null;
+    }
+    channelId = normalizedChannelId;
+
+    const accountId = typeof match.accountId === "string" ? match.accountId.trim() : "";
+    if (accountId && accountId !== "*") {
+      accountIds.add(normalizeAccountId(accountId));
+    }
+  }
+
+  if (!channelId) {
+    return null;
+  }
+  return {
+    channelId,
+    accountIds: Array.from(accountIds).toSorted((a, b) => a.localeCompare(b)),
+  };
+}
+
 export function resolvePreferredAccountId(params: {
   accountIds: string[];
   defaultAccountId: string;

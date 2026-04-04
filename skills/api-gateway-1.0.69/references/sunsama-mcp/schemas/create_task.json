@@ -1,0 +1,22 @@
+{
+  "name": "create_task",
+  "description": "Create a new task scheduled for a specific day",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "title": {
+        "type": "string",
+        "description": "The title of the task"
+      },
+      "day": {
+        "type": "string",
+        "description": "The date to schedule the task (YYYY-MM-DD format)"
+      },
+      "alreadyInTaskList": {
+        "type": "boolean",
+        "description": "Whether the task is already in the task list"
+      }
+    },
+    "required": ["title", "day", "alreadyInTaskList"]
+  }
+}

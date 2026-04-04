@@ -1,0 +1,18 @@
+{
+  "name": "get_meeting_transcript",
+  "title": "Get the full transcript for a specific Granola meeting by ID",
+  "description": "Get the full transcript for a specific Granola meeting by ID. Returns only the verbatim transcript content, not summaries or notes.\nUse this when the user needs exact quotes, specific wording, or wants to review what was literally said in a meeting. For summarized content or action items, use query_granola_meetings or list_meetings/get_meetings instead.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "meeting_id": {
+        "type": "string",
+        "format": "uuid",
+        "description": "Meeting UUID"
+      }
+    },
+    "required": ["meeting_id"],
+    "additionalProperties": false,
+    "$schema": "http://json-schema.org/draft-07/schema#"
+  }
+}

@@ -12,6 +12,7 @@ EOF
 
 BUILD_NUMBER="${IOS_BETA_BUILD_NUMBER:-}"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+XCODE_WRAPPER="${ROOT_DIR}/scripts/with-xcode-developer-dir.sh"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -36,5 +37,5 @@ done
 
 (
   cd "${ROOT_DIR}/apps/ios"
-  IOS_BETA_BUILD_NUMBER="${BUILD_NUMBER}" fastlane ios beta
+  IOS_BETA_BUILD_NUMBER="${BUILD_NUMBER}" "${XCODE_WRAPPER}" fastlane ios beta
 )

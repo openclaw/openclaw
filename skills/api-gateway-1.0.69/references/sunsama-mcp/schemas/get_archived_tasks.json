@@ -1,0 +1,9 @@
+{
+  "name": "get_archived_tasks",
+  "description": "List archived tasks",
+  "inputSchema": {
+    "type": "object",
+    "properties": {},
+    "required": []
+  }
+}

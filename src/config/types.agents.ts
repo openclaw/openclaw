@@ -5,6 +5,20 @@ import type { HumanDelayConfig, IdentityConfig } from "./types.base.js";
 import type { GroupChatConfig } from "./types.messages.js";
 import type { AgentToolsConfig, MemorySearchConfig } from "./types.tools.js";
 
+export type AgentDirectiveDefaultsConfig = Pick<
+  AgentDefaultsConfig,
+  | "thinkingDefault"
+  | "verboseDefault"
+  | "elevatedDefault"
+  | "blockStreamingDefault"
+  | "blockStreamingBreak"
+> & {
+  /** Optional per-agent default fast-mode toggle when no session override is present. */
+  fastModeDefault?: boolean;
+  /** Optional per-agent default reasoning visibility when no session override is present. */
+  reasoningDefault?: "on" | "off";
+};
+
 export type AgentRuntimeAcpConfig = {
   /** ACP harness adapter id (for example codex, claude). */
   agent?: string;
@@ -58,7 +72,7 @@ export type AgentAcpBinding = {
 
 export type AgentBinding = AgentRouteBinding | AgentAcpBinding;
 
-export type AgentConfig = {
+export type AgentConfig = AgentDirectiveDefaultsConfig & {
   id: string;
   default?: boolean;
   name?: string;
@@ -88,6 +102,8 @@ export type AgentConfig = {
   /** Optional runtime descriptor for this agent. */
   runtime?: AgentRuntimeConfig;
 };
+
+export type AgentDefaultsLikeConfig = Partial<AgentDefaultsConfig> & Partial<AgentConfig>;
 
 export type AgentsConfig = {
   defaults?: AgentDefaultsConfig;

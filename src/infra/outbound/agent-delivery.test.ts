@@ -72,6 +72,44 @@ describe("agent delivery helpers", () => {
     expect(plan.deliveryTargetMode).toBeUndefined();
   });
 
+  it("uses a uniquely bound delivery channel when session has none", () => {
+    const plan = resolveAgentDeliveryPlan({
+      sessionEntry: undefined,
+      cfg: {
+        bindings: [{ agentId: "main", match: { channel: "discord", accountId: "kaiser_hq" } }],
+      } as OpenClawConfig,
+      agentId: "main",
+      requestedChannel: "last",
+      explicitTo: undefined,
+      accountId: undefined,
+      wantsDelivery: true,
+    });
+
+    expect(plan.resolvedChannel).toBe("discord");
+    expect(plan.resolvedAccountId).toBe("kaiser_hq");
+    expect(plan.deliveryTargetMode).toBe("implicit");
+  });
+
+  it("keeps delivery unresolved when agent is bound to multiple channels", () => {
+    const plan = resolveAgentDeliveryPlan({
+      sessionEntry: undefined,
+      cfg: {
+        bindings: [
+          { agentId: "main", match: { channel: "discord", accountId: "kaiser_hq" } },
+          { agentId: "main", match: { channel: "telegram", accountId: "main" } },
+        ],
+      } as OpenClawConfig,
+      agentId: "main",
+      requestedChannel: "last",
+      explicitTo: undefined,
+      accountId: undefined,
+      wantsDelivery: true,
+    });
+
+    expect(plan.resolvedChannel).toBe("webchat");
+    expect(plan.resolvedAccountId).toBeUndefined();
+  });
+
   it("skips outbound target resolution when explicit target validation is disabled", () => {
     const plan = resolveAgentDeliveryPlan({
       sessionEntry: {

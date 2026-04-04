@@ -1,0 +1,14 @@
+{
+  "name": "list_email_threads",
+  "description": "List email threads from a connected account",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "accountId": {
+        "type": "string",
+        "description": "The ID of the email account"
+      }
+    },
+    "required": ["accountId"]
+  }
+}

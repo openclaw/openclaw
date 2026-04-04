@@ -41,6 +41,88 @@ struct LowCoverageHelperTests {
         #expect(value == 180)
     }
 
+    @Test func `adaptive window sizing keeps ideal size when screen has room`() {
+        let size = AdaptiveWindowSizing.clampedSize(
+            ideal: NSSize(width: 780, height: 760),
+            minimum: NSSize(width: 620, height: 420),
+            padding: 32,
+            within: NSRect(x: 0, y: 0, width: 1600, height: 1000))
+        #expect(size.width == 780)
+        #expect(size.height == 760)
+    }
+
+    @Test func `adaptive window sizing shrinks to fit small screens`() {
+        let size = AdaptiveWindowSizing.clampedSize(
+            ideal: NSSize(width: 940, height: 720),
+            minimum: NSSize(width: 720, height: 580),
+            padding: 32,
+            within: NSRect(x: 0, y: 0, width: 800, height: 640))
+        #expect(size.width == 736)
+        #expect(size.height == 576)
+    }
+
+    @Test func `defaults migration imports widget state from legacy suite`() throws {
+        let namespace = UUID().uuidString
+        let standardSuiteName = "test.standard.\(namespace)"
+        let stableSuiteName = "test.stable.\(namespace)"
+        let legacySuiteName = "test.legacy.\(namespace)"
+        let standard = try #require(UserDefaults(suiteName: standardSuiteName))
+        let stable = try #require(UserDefaults(suiteName: stableSuiteName))
+        let legacy = try #require(UserDefaults(suiteName: legacySuiteName))
+        defer {
+            standard.removePersistentDomain(forName: standardSuiteName)
+            stable.removePersistentDomain(forName: stableSuiteName)
+            legacy.removePersistentDomain(forName: legacySuiteName)
+        }
+
+        legacy.set(true, forKey: "openclaw.hoverWidgetPinned")
+
+        migrateLegacyDefaults(
+            standard: standard,
+            isAppBundle: true,
+            stableSuite: stable,
+            legacySuite: legacy)
+
+        #expect(standard.bool(forKey: "openclaw.hoverWidgetPinned") == true)
+        #expect(stable.bool(forKey: "openclaw.hoverWidgetPinned") == true)
+    }
+
+    @Test func `compatible defaults bool backfills standard and stable suites`() throws {
+        let namespace = UUID().uuidString
+        let standardSuiteName = "test.standard.\(namespace)"
+        let stableSuiteName = "test.stable.\(namespace)"
+        let legacySuiteName = "test.legacy.\(namespace)"
+        let standard = try #require(UserDefaults(suiteName: standardSuiteName))
+        let stable = try #require(UserDefaults(suiteName: stableSuiteName))
+        let legacy = try #require(UserDefaults(suiteName: legacySuiteName))
+        defer {
+            standard.removePersistentDomain(forName: standardSuiteName)
+            stable.removePersistentDomain(forName: stableSuiteName)
+            legacy.removePersistentDomain(forName: legacySuiteName)
+        }
+
+        legacy.set(true, forKey: "openclaw.hoverWidgetCompact")
+
+        let value = compatibleDefaultsBool(
+            forKey: "openclaw.hoverWidgetCompact",
+            standard: standard,
+            stableSuite: stable,
+            legacySuite: legacy)
+
+        #expect(value == true)
+        #expect(standard.bool(forKey: "openclaw.hoverWidgetCompact") == true)
+        #expect(stable.bool(forKey: "openclaw.hoverWidgetCompact") == true)
+
+        persistCompatibleDefaultsBool(
+            false,
+            forKey: "openclaw.hoverWidgetCompact",
+            standard: standard,
+            stableSuite: stable)
+
+        #expect(standard.bool(forKey: "openclaw.hoverWidgetCompact") == false)
+        #expect(stable.bool(forKey: "openclaw.hoverWidgetCompact") == false)
+    }
+
     @Test func `shell executor handles empty command`() async {
         let result = await ShellExecutor.runDetailed(command: [], cwd: nil, env: nil, timeout: nil)
         #expect(result.success == false)
@@ -54,7 +136,7 @@ struct LowCoverageHelperTests {
     }
 
     @Test func `shell executor times out`() async {
-        let result = await ShellExecutor.runDetailed(command: ["/bin/sleep", "1"], cwd: nil, env: nil, timeout: 0.05)
+        let result = await ShellExecutor.runDetailed(command: ["/bin/sleep", "1"], cwd: nil, env: nil, timeout: 0.2)
         #expect(result.timedOut == true)
     }
 
@@ -258,5 +340,45 @@ struct LowCoverageHelperTests {
         let url = try #require(URL(string: "http://192.168.1.2"))
         #expect(CanvasWindowController._testIsLocalNetworkCanvasURL(url))
         #expect(CanvasWindowController._testParseIPv4("not-an-ip") == nil)
+    }
+
+    @Test @MainActor func `dock visibility counts primary windows and promoted panels`() {
+        _ = NSApplication.shared
+
+        let standardWindow = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 320, height: 240),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false)
+        standardWindow.contentViewController = NSViewController()
+        standardWindow.orderFrontRegardless()
+
+        let chatPanel = WebChatPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 320, height: 240),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false)
+        chatPanel.contentViewController = NSViewController()
+        chatPanel.orderFrontRegardless()
+
+        let genericPanel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 320, height: 240),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false)
+        genericPanel.contentViewController = NSViewController()
+        genericPanel.orderFrontRegardless()
+
+        defer {
+            standardWindow.orderOut(nil)
+            chatPanel.orderOut(nil)
+            genericPanel.orderOut(nil)
+        }
+
+        #expect(DockIconManager.countsAsPrimaryAppWindow(standardWindow))
+        #expect(DockIconManager.countsAsPrimaryAppWindow(chatPanel))
+        #expect(!DockIconManager.countsAsPrimaryAppWindow(genericPanel))
+        #expect(DockIconManager.shouldUseRegularActivation(userWantsDockHidden: true, windows: [chatPanel]))
+        #expect(!DockIconManager.shouldUseRegularActivation(userWantsDockHidden: true, windows: [genericPanel]))
     }
 }

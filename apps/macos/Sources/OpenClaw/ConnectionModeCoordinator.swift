@@ -18,20 +18,20 @@ final class ConnectionModeCoordinator {
         self.lastMode = mode
         switch mode {
         case .unconfigured:
+            WebChatManager.shared.resetTunnels()
             _ = await NodeServiceManager.stop()
             NodesStore.shared.lastError = nil
             await RemoteTunnelManager.shared.stopAll()
-            WebChatManager.shared.resetTunnels()
             GatewayProcessManager.shared.stop()
             await GatewayConnection.shared.shutdown()
             await ControlChannel.shared.disconnect()
             Task.detached { await PortGuardian.shared.sweep(mode: .unconfigured) }
 
         case .local:
+            WebChatManager.shared.resetTunnels()
             _ = await NodeServiceManager.stop()
             NodesStore.shared.lastError = nil
             await RemoteTunnelManager.shared.stopAll()
-            WebChatManager.shared.resetTunnels()
             let shouldStart = GatewayAutostartPolicy.shouldStartGateway(mode: .local, paused: paused)
             if shouldStart {
                 GatewayProcessManager.shared.setActive(true)
@@ -72,7 +72,6 @@ final class ConnectionModeCoordinator {
             } catch {
                 self.logger.error("remote tunnel/configure failed: \(error.localizedDescription, privacy: .public)")
             }
-
             Task.detached { await PortGuardian.shared.sweep(mode: .remote) }
         }
     }

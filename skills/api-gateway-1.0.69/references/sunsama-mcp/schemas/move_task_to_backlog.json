@@ -1,0 +1,14 @@
+{
+  "name": "move_task_to_backlog",
+  "description": "Move a task to the backlog",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "taskId": {
+        "type": "string",
+        "description": "The ID of the task to move"
+      }
+    },
+    "required": ["taskId"]
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "name": "add_subtasks_to_task",
+  "description": "Add subtasks to an existing task",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "taskId": {
+        "type": "string",
+        "description": "The ID of the parent task"
+      },
+      "subtasks": {
+        "type": "array",
+        "description": "Array of subtasks to add",
+        "items": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "description": "The title of the subtask"
+            }
+          },
+          "required": ["title"]
+        }
+      }
+    },
+    "required": ["taskId", "subtasks"]
+  }
+}

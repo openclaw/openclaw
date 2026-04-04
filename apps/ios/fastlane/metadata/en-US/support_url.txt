@@ -1,1 +1,1 @@
-https://docs.openclaw.ai/platforms/ios
+https://github.com/openclaw/openclaw/blob/main/SUPPORT.md

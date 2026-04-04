@@ -133,15 +133,15 @@ open 'openclaw://agent?message=Hello%20from%20deep%20link'
 
 ## 新手引导流程（典型）
 
-1. 安装并启动 **OpenClaw.app**。
+1. 安装并启动 **VeriClaw 爪印.app**。
 2. 完成权限清单（TCC 提示）。
 3. 确保**本地**模式处于活动状态且 Gateway 网关正在运行。
 4. 如果你想要终端访问，安装 CLI。
 
 ## 构建和开发工作流程（原生）
 
-- `cd apps/macos && swift build`
-- `swift run OpenClaw`（或 Xcode）
+- `scripts/macos-swift.sh build`
+- `scripts/macos-swift.sh run OpenClaw`（或 Xcode）
 - 打包应用：`scripts/package-mac-app.sh`
 
 ## 调试 Gateway 网关连接（macOS CLI）
@@ -149,9 +149,8 @@ open 'openclaw://agent?message=Hello%20from%20deep%20link'
 使用调试 CLI 来执行与 macOS 应用使用的相同的 Gateway 网关 WebSocket 握手和发现逻辑，而无需启动应用。
 
 ```bash
-cd apps/macos
-swift run openclaw-mac connect --json
-swift run openclaw-mac discover --timeout 3000 --json
+scripts/macos-swift.sh run openclaw-mac connect --json
+scripts/macos-swift.sh run openclaw-mac discover --timeout 3000 --json
 ```
 
 Connect 选项：

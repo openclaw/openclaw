@@ -1,1 +1,11 @@
-OpenClaw iOS client for gateway-connected workflows. Reviewers can follow the standard onboarding and pairing flow in-app.
+VeriClaw 爪印 is an iPhone companion for a user-controlled OpenClaw Gateway.
+
+Reviewers can launch the app, follow the in-app onboarding, pair with a test gateway, and verify review, evidence-capture, share-to-queue, and corrective follow-up flows without a separate hosted account.
+
+Suggested review path:
+1. Launch the app and complete the gateway onboarding flow.
+2. Pair the app with the submission-specific test gateway or demo setup listed below.
+3. Verify review queue, evidence capture, share-to-queue, and correction follow-up behavior.
+
+Submission-specific pairing or demo details:
+__IOS_APP_REVIEW_NOTES_APPEND__

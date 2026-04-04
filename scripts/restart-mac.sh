@@ -1,15 +1,20 @@
 #!/usr/bin/env bash
-# Reset OpenClaw like Trimmy: kill running instances, rebuild, repackage, relaunch, verify.
+# Reset VeriClaw 爪印 like Trimmy: kill running instances, rebuild, repackage, relaunch, verify.
 
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+WITH_XCODE_DEVELOPER_DIR="${ROOT_DIR}/scripts/with-xcode-developer-dir.sh"
+APP_DISPLAY_NAME="${APP_DISPLAY_NAME:-VeriClaw 爪印}"
+APP_BUNDLE_NAME="${APP_BUNDLE_NAME:-${APP_DISPLAY_NAME}.app}"
 APP_BUNDLE="${OPENCLAW_APP_BUNDLE:-}"
-APP_PROCESS_PATTERN="OpenClaw.app/Contents/MacOS/OpenClaw"
+APP_PROCESS_PATTERN="Contents/MacOS/VeriClaw"
+LEGACY_BRAND_PROCESS_PATTERN="Contents/MacOS/Vericlaw"
+LEGACY_APP_PROCESS_PATTERN="Contents/MacOS/OpenClaw"
 DEBUG_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build/debug/OpenClaw"
 LOCAL_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build-local/debug/OpenClaw"
 RELEASE_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build/release/OpenClaw"
-LAUNCH_AGENT="${HOME}/Library/LaunchAgents/ai.openclaw.mac.plist"
+LAUNCH_AGENT="${HOME}/Library/LaunchAgents/ai.vericlaw.mac.plist"
 LOCK_KEY="$(printf '%s' "${ROOT_DIR}" | shasum -a 256 | cut -c1-8)"
 LOCK_DIR="${TMPDIR:-/tmp}/openclaw-restart-${LOCK_KEY}"
 LOCK_PID_FILE="${LOCK_DIR}/pid"
@@ -129,14 +134,22 @@ acquire_lock
 kill_all_openclaw() {
   for _ in {1..10}; do
     pkill -f "${APP_PROCESS_PATTERN}" 2>/dev/null || true
+    pkill -f "${LEGACY_BRAND_PROCESS_PATTERN}" 2>/dev/null || true
+    pkill -f "${LEGACY_APP_PROCESS_PATTERN}" 2>/dev/null || true
     pkill -f "${DEBUG_PROCESS_PATTERN}" 2>/dev/null || true
     pkill -f "${LOCAL_PROCESS_PATTERN}" 2>/dev/null || true
     pkill -f "${RELEASE_PROCESS_PATTERN}" 2>/dev/null || true
+    pkill -x "VeriClaw" 2>/dev/null || true
+    pkill -x "Vericlaw" 2>/dev/null || true
     pkill -x "OpenClaw" 2>/dev/null || true
     if ! pgrep -f "${APP_PROCESS_PATTERN}" >/dev/null 2>&1 \
+       && ! pgrep -f "${LEGACY_BRAND_PROCESS_PATTERN}" >/dev/null 2>&1 \
+       && ! pgrep -f "${LEGACY_APP_PROCESS_PATTERN}" >/dev/null 2>&1 \
        && ! pgrep -f "${DEBUG_PROCESS_PATTERN}" >/dev/null 2>&1 \
        && ! pgrep -f "${LOCAL_PROCESS_PATTERN}" >/dev/null 2>&1 \
        && ! pgrep -f "${RELEASE_PROCESS_PATTERN}" >/dev/null 2>&1 \
+       && ! pgrep -x "VeriClaw" >/dev/null 2>&1 \
+       && ! pgrep -x "Vericlaw" >/dev/null 2>&1 \
        && ! pgrep -x "OpenClaw" >/dev/null 2>&1; then
       return 0
     fi
@@ -145,11 +158,12 @@ kill_all_openclaw() {
 }
 
 stop_launch_agent() {
+  launchctl bootout gui/"$UID"/ai.vericlaw.mac 2>/dev/null || true
   launchctl bootout gui/"$UID"/ai.openclaw.mac 2>/dev/null || true
 }
 
 # 1) Kill all running instances first.
-log "==> Killing existing OpenClaw instances"
+log "==> Killing existing VeriClaw/OpenClaw instances"
 kill_all_openclaw
 stop_launch_agent
 
@@ -158,7 +172,7 @@ run_step "bundle canvas a2ui" bash -lc "cd '${ROOT_DIR}' && pnpm canvas:a2ui:bun
 
 # 2) Rebuild into the same path the packager consumes (.build).
 run_step "clean build cache" bash -lc "cd '${ROOT_DIR}/apps/macos' && rm -rf .build .build-swift .swiftpm 2>/dev/null || true"
-run_step "swift build" bash -lc "cd '${ROOT_DIR}/apps/macos' && swift build -q --product OpenClaw"
+run_step "swift build" bash -lc "cd '${ROOT_DIR}/apps/macos' && '${WITH_XCODE_DEVELOPER_DIR}' swift build -q --product OpenClaw"
 
 if [ "$AUTO_DETECT_SIGNING" -eq 1 ]; then
   if check_signing_keys; then
@@ -173,8 +187,12 @@ fi
 if [ "$NO_SIGN" -eq 1 ]; then
   export ALLOW_ADHOC_SIGNING=1
   export SIGN_IDENTITY="-"
-  mkdir -p "${HOME}/.openclaw"
-  run_step "disable launchagent writes" /usr/bin/touch "${LAUNCHAGENT_DISABLE_MARKER}"
+  if [[ "$ATTACH_ONLY" -ne 1 ]]; then
+    mkdir -p "${HOME}/.openclaw"
+    run_step "disable launchagent writes" /usr/bin/touch "${LAUNCHAGENT_DISABLE_MARKER}"
+  else
+    log "==> attach-only unsigned run; leaving launchagent disable marker untouched"
+  fi
 elif [ "$SIGN" -eq 1 ]; then
   if ! check_signing_keys; then
     fail "No signing identity found. Use --no-sign or install a signing key."
@@ -191,20 +209,43 @@ choose_app_bundle() {
     return 0
   fi
 
+  if [[ -d "/Applications/${APP_BUNDLE_NAME}" ]]; then
+    APP_BUNDLE="/Applications/${APP_BUNDLE_NAME}"
+    return 0
+  fi
+
+  if [[ -d "/Applications/VeriClaw 爪印.app" ]]; then
+    APP_BUNDLE="/Applications/VeriClaw 爪印.app"
+    return 0
+  fi
+
+  if [[ -d "/Applications/Vericlaw.app" ]]; then
+    APP_BUNDLE="/Applications/Vericlaw.app"
+    return 0
+  fi
+
   if [[ -d "/Applications/OpenClaw.app" ]]; then
     APP_BUNDLE="/Applications/OpenClaw.app"
     return 0
   fi
 
-  if [[ -d "${ROOT_DIR}/dist/OpenClaw.app" ]]; then
-    APP_BUNDLE="${ROOT_DIR}/dist/OpenClaw.app"
+  if [[ -d "${ROOT_DIR}/dist/${APP_BUNDLE_NAME}" ]]; then
+    APP_BUNDLE="${ROOT_DIR}/dist/${APP_BUNDLE_NAME}"
     if [[ ! -d "${APP_BUNDLE}/Contents/Frameworks/Sparkle.framework" ]]; then
-      fail "dist/OpenClaw.app missing Sparkle after packaging"
+      fail "dist/${APP_BUNDLE_NAME} missing Sparkle after packaging"
     fi
     return 0
   fi
 
-  fail "App bundle not found. Set OPENCLAW_APP_BUNDLE to your installed OpenClaw.app"
+  if [[ -d "${ROOT_DIR}/dist/VeriClaw 爪印.app" ]]; then
+    APP_BUNDLE="${ROOT_DIR}/dist/VeriClaw 爪印.app"
+    if [[ ! -d "${APP_BUNDLE}/Contents/Frameworks/Sparkle.framework" ]]; then
+      fail "dist/VeriClaw 爪印.app missing Sparkle after packaging"
+    fi
+    return 0
+  fi
+
+  fail "App bundle not found. Set OPENCLAW_APP_BUNDLE to your installed ${APP_BUNDLE_NAME}"
 }
 
 choose_app_bundle
@@ -258,8 +299,8 @@ run_step "launch app" env -i \
 
 # 5) Verify the app is alive.
 sleep 1.5
-if pgrep -f "${APP_PROCESS_PATTERN}" >/dev/null 2>&1; then
-  log "OK: OpenClaw is running."
+if pgrep -f "${APP_PROCESS_PATTERN}" >/dev/null 2>&1 || pgrep -f "${LEGACY_BRAND_PROCESS_PATTERN}" >/dev/null 2>&1 || pgrep -f "${LEGACY_APP_PROCESS_PATTERN}" >/dev/null 2>&1; then
+  log "OK: VeriClaw 爪印 is running."
 else
   fail "App exited immediately. Check ${LOG_PATH} or Console.app (User Reports)."
 fi

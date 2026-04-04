@@ -1,0 +1,14 @@
+{
+  "name": "get_task_time_estimate",
+  "description": "Get AI-suggested time estimate for a task title",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "title": {
+        "type": "string",
+        "description": "The task title to estimate"
+      }
+    },
+    "required": ["title"]
+  }
+}

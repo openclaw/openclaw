@@ -91,6 +91,44 @@ for teams in data.values():
   )
 }
 
+load_teams_from_account_team_map() {
+  local plist_path="${HOME}/Library/Preferences/com.apple.dt.Xcode.plist"
+  [[ -f "$plist_path" ]] || return 0
+  [[ -n "$python_cmd" ]] || return 0
+
+  while IFS=$'\t' read -r team_id is_free team_name; do
+    [[ -z "$team_id" ]] && continue
+    append_team "$team_id" "${is_free:-0}" "${team_name:-}"
+  done < <(
+    plutil -extract IDEProvisioningTeamByIdentifier json -o - "$plist_path" 2>/dev/null \
+      | "$python_cmd" -c '
+import json
+import sys
+
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    raise SystemExit(0)
+
+if not isinstance(data, dict):
+    raise SystemExit(0)
+
+for teams in data.values():
+    if not isinstance(teams, list):
+        continue
+    for team in teams:
+        if not isinstance(team, dict):
+            continue
+        team_id = str(team.get("teamID", "")).strip()
+        if not team_id:
+            continue
+        is_free = "1" if bool(team.get("isFreeProvisioningTeam", False)) else "0"
+        team_name = str(team.get("teamName", "")).replace("\t", " ").strip()
+        print(f"{team_id}\t{is_free}\t{team_name}")
+'
+  )
+}
+
 load_teams_from_legacy_defaults_key() {
   while IFS= read -r team; do
     [[ -z "$team" ]] && continue
@@ -137,7 +175,29 @@ has_xcode_account() {
   [[ -n "$accts" ]] && [[ "$accts" != *"does not exist"* ]] && grep -q 'identifier' <<< "$accts"
 }
 
+describe_available_teams() {
+  local i details=()
+  local label=""
+  for i in "${!team_ids[@]}"; do
+    label="${team_ids[$i]}"
+    if [[ -n "${team_names[$i]}" ]]; then
+      label="${label} (${team_names[$i]}"
+      if [[ "${team_is_free[$i]}" == "1" ]]; then
+        label="${label}, free"
+      fi
+      label="${label})"
+    elif [[ "${team_is_free[$i]}" == "1" ]]; then
+      label="${label} (free)"
+    fi
+    details+=("${label}")
+  done
+
+  local IFS='; '
+  printf '%s' "${details[*]}"
+}
+
 load_teams_from_xcode_preferences
+load_teams_from_account_team_map
 load_teams_from_legacy_defaults_key
 
 if [[ ${#team_ids[@]} -eq 0 ]]; then
@@ -195,13 +255,40 @@ if [[ -n "$preferred_team_name" ]]; then
   done
 fi
 
+fallback_non_free_team=""
+fallback_non_free_count=0
 if [[ "$prefer_non_free_team" == "1" ]]; then
   for i in "${!team_ids[@]}"; do
     if [[ "${team_is_free[$i]}" == "0" ]]; then
-      printf '%s\n' "${team_ids[$i]}"
-      exit 0
+      fallback_non_free_team="${team_ids[$i]}"
+      fallback_non_free_count=$((fallback_non_free_count + 1))
     fi
   done
+fi
+
+if [[ -n "$preferred_team" ]]; then
+  if [[ "$fallback_non_free_count" == "1" ]]; then
+    printf '%s\n' "${fallback_non_free_team}"
+    exit 0
+  fi
+
+  available_teams="$(describe_available_teams)"
+  echo "Configured Apple Team ID ${preferred_team} is not available in the signed-in Xcode account. Available teams: ${available_teams:-none}." >&2
+  if [[ "$fallback_non_free_count" -gt 1 ]]; then
+    echo "Multiple non-free teams are available on this Mac, but none matches the configured preferred team." >&2
+    echo "Set IOS_DEVELOPMENT_TEAM (or IOS_PREFERRED_TEAM_ID) to the exact release team you want to use." >&2
+  elif [[ ${#team_ids[@]} -eq 1 && "${team_is_free[0]}" == "1" ]]; then
+    echo "Only a Personal Team is currently available on this Mac. App Store release workflows require access to the paid Apple Developer team for this app." >&2
+  fi
+  echo "Sign into Xcode with a member of Team ${preferred_team}, invite the current Apple ID to that team, or update the local signing override if the release team has changed." >&2
+  exit 1
+fi
+
+if [[ "$prefer_non_free_team" == "1" ]]; then
+  if [[ "$fallback_non_free_count" -ge 1 ]]; then
+    printf '%s\n' "${fallback_non_free_team}"
+    exit 0
+  fi
 fi
 
 printf '%s\n' "${team_ids[0]}"

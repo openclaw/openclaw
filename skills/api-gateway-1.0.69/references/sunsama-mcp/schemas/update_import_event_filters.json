@@ -1,0 +1,17 @@
+{
+  "name": "update_import_event_filters",
+  "description": "Update event import filters",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "excludedEventFilters": {
+        "type": "array",
+        "description": "Array of event filters to exclude",
+        "items": {
+          "type": "string"
+        }
+      }
+    },
+    "required": ["excludedEventFilters"]
+  }
+}

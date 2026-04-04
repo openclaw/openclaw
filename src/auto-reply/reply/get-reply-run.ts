@@ -16,6 +16,7 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
+import type { AgentDefaultsLikeConfig } from "../../config/types.agents.js";
 import { logVerbose } from "../../globals.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
@@ -51,7 +52,6 @@ import { resolveRunTypingPolicy } from "./typing-policy.js";
 import type { TypingController } from "./typing.js";
 import { appendUntrustedContext } from "./untrusted-context.js";
 
-type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
 
 function buildResetSessionNoticeText(params: {
@@ -130,7 +130,7 @@ type RunPreparedReplyParams = {
   cfg: OpenClawConfig;
   agentId: string;
   agentDir: string;
-  agentCfg: AgentDefaults;
+  agentCfg: AgentDefaultsLikeConfig;
   sessionCfg: OpenClawConfig["session"];
   commandAuthorized: boolean;
   command: ReturnType<typeof buildCommandContext>;
@@ -515,6 +515,7 @@ export async function runPreparedReply(
         provider,
         model,
         sessionEntry,
+        agentCfg,
       }).enabled,
       verboseLevel: resolvedVerboseLevel,
       reasoningLevel: resolvedReasoningLevel,

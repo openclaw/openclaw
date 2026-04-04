@@ -3,10 +3,10 @@
 
 OPENCLAW_IOS_DEFAULT_TEAM = Y5PE65HELJ
 OPENCLAW_IOS_SELECTED_TEAM = $(OPENCLAW_IOS_DEFAULT_TEAM)
-OPENCLAW_APP_BUNDLE_ID = ai.openclaw.client
-OPENCLAW_WATCH_APP_BUNDLE_ID = ai.openclaw.client.watchkitapp
-OPENCLAW_WATCH_EXTENSION_BUNDLE_ID = ai.openclaw.client.watchkitapp.extension
-OPENCLAW_ACTIVITY_WIDGET_BUNDLE_ID = ai.openclaw.client.activitywidget
+OPENCLAW_APP_BUNDLE_ID = ai.vericlaw.client
+OPENCLAW_WATCH_APP_BUNDLE_ID = ai.vericlaw.client.watchkitapp
+OPENCLAW_WATCH_EXTENSION_BUNDLE_ID = ai.vericlaw.client.watchkitapp.extension
+OPENCLAW_ACTIVITY_WIDGET_BUNDLE_ID = ai.vericlaw.client.activitywidget
 
 // Local contributors can override this by running scripts/ios-configure-signing.sh.
 // Keep include after defaults: xcconfig is evaluated top-to-bottom.

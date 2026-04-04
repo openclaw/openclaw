@@ -261,7 +261,7 @@ struct RootCanvas: View {
                     "This phone stays dormant until the gateway needs it, then wakes, syncs, and goes back to sleep.",
                 gatewayLabel: gatewayLabel,
                 activeAgentName: self.appModel.activeAgentName,
-                activeAgentBadge: agents.first(where: { $0.isActive })?.badge ?? "OC",
+                activeAgentBadge: agents.first(where: { $0.isActive })?.badge ?? "VC",
                 activeAgentCaption: "Selected on this phone",
                 agentCount: agents.count,
                 agents: Array(agents.prefix(6)),
@@ -270,13 +270,13 @@ struct RootCanvas: View {
             return HomeCanvasPayload(
                 gatewayState: "connecting",
                 eyebrow: "Reconnecting",
-                title: "OpenClaw is syncing back up",
+                title: "VeriClaw 爪印 is syncing back up",
                 subtitle:
                     "The gateway session is coming back online. "
                     + "Agent shortcuts should settle automatically in a moment.",
                 gatewayLabel: gatewayLabel,
                 activeAgentName: self.appModel.activeAgentName,
-                activeAgentBadge: "OC",
+                activeAgentBadge: "VC",
                 activeAgentCaption: "Gateway session in progress",
                 agentCount: agents.count,
                 agents: Array(agents.prefix(4)),
@@ -284,14 +284,14 @@ struct RootCanvas: View {
         case .error, .disconnected:
             return HomeCanvasPayload(
                 gatewayState: self.gatewayStatus == .error ? "error" : "offline",
-                eyebrow: "Welcome to OpenClaw",
+                eyebrow: "Welcome to VeriClaw 爪印",
                 title: "Your phone stays quiet until it is needed",
                 subtitle:
                     "Pair this device to your gateway to wake it only for real work, "
                     + "keep a live agent overview handy, and avoid battery-draining background loops.",
                 gatewayLabel: gatewayLabel,
                 activeAgentName: "Main",
-                activeAgentBadge: "OC",
+                activeAgentBadge: "VC",
                 activeAgentCaption: "Connect to load your agents",
                 agentCount: agents.count,
                 agents: Array(agents.prefix(4)),

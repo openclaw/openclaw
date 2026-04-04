@@ -4,11 +4,11 @@
 OPENCLAW_CODE_SIGN_STYLE = Automatic
 OPENCLAW_DEVELOPMENT_TEAM = YOUR_TEAM_ID
 
-OPENCLAW_APP_BUNDLE_ID = ai.openclaw.client
-OPENCLAW_SHARE_BUNDLE_ID = ai.openclaw.client.share
-OPENCLAW_ACTIVITY_WIDGET_BUNDLE_ID = ai.openclaw.client.activitywidget
-OPENCLAW_WATCH_APP_BUNDLE_ID = ai.openclaw.client.watchkitapp
-OPENCLAW_WATCH_EXTENSION_BUNDLE_ID = ai.openclaw.client.watchkitapp.extension
+OPENCLAW_APP_BUNDLE_ID = ai.vericlaw.client
+OPENCLAW_SHARE_BUNDLE_ID = ai.vericlaw.client.share
+OPENCLAW_ACTIVITY_WIDGET_BUNDLE_ID = ai.vericlaw.client.activitywidget
+OPENCLAW_WATCH_APP_BUNDLE_ID = ai.vericlaw.client.watchkitapp
+OPENCLAW_WATCH_EXTENSION_BUNDLE_ID = ai.vericlaw.client.watchkitapp.extension
 
 // Leave empty with automatic signing.
 OPENCLAW_APP_PROFILE =

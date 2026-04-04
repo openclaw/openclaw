@@ -140,6 +140,7 @@ final class AppState {
         didSet {
             self.ifNotPreview {
                 UserDefaults.standard.set(self.talkEnabled, forKey: talkEnabledKey)
+                Task { await VoiceWakeRuntime.shared.refresh(state: self) }
                 Task { await TalkModeController.shared.setEnabled(self.talkEnabled) }
             }
         }

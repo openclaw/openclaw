@@ -7,6 +7,13 @@ import UIKit
 
 // swiftlint:disable type_body_length
 struct SettingsTab: View {
+    private enum ReleaseResource {
+        static let privacyPolicyURL = URL(string: "https://github.com/openclaw/openclaw/blob/main/PRIVACY.md")!
+        static let supportURL = URL(string: "https://github.com/openclaw/openclaw/blob/main/SUPPORT.md")!
+        static let noticeURL = URL(string: "https://github.com/openclaw/openclaw/blob/main/NOTICE")!
+        static let trademarksURL = URL(string: "https://github.com/openclaw/openclaw/blob/main/TRADEMARKS.md")!
+    }
+
     private struct FeatureHelp: Identifiable {
         let id = UUID()
         let title: String
@@ -65,7 +72,7 @@ struct SettingsTab: View {
                     DisclosureGroup(isExpanded: self.$gatewayExpanded) {
                         if !self.isGatewayConnected {
                             Text(
-                                "1. Open a chat with your OpenClaw agent and send /pair\n"
+                                "1. Open a chat with your paired OpenClaw bot and send /pair\n"
                                     + "2. Copy the setup code it returns\n"
                                     + "3. Paste here and tap Connect\n"
                                     + "4. Back in that chat, run /pair approve")
@@ -115,7 +122,7 @@ struct SettingsTab: View {
                                     Text(name.isEmpty ? agent.id : name).tag(agent.id)
                                 }
                             }
-                            Text("Controls which bot Chat and Talk speak to.")
+                            Text("Controls which paired OpenClaw bot VeriClaw 爪印 talks to.")
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                         }
@@ -260,7 +267,7 @@ struct SettingsTab: View {
                         self.featureToggle(
                             "Talk Mode",
                             isOn: self.$talkEnabled,
-                            help: "Enables voice conversation mode with your connected OpenClaw agent.") { newValue in
+                            help: "Enables voice conversation mode with your connected agent through VeriClaw 爪印.") { newValue in
                                 self.appModel.setTalkEnabled(newValue)
                             }
                         self.featureToggle(
@@ -279,8 +286,8 @@ struct SettingsTab: View {
                         self.featureToggle(
                             "Allow Camera",
                             isOn: self.$cameraEnabled,
-                            help: "Allows the gateway to request photos or short video clips "
-                                + "while OpenClaw is foregrounded."
+                            help: "Allows the paired OpenClaw gateway to request photos or short video clips "
+                                + "while VeriClaw 爪印 is foregrounded."
                         )
 
                         HStack(spacing: 8) {
@@ -289,7 +296,7 @@ struct SettingsTab: View {
                             Button {
                                 self.activeFeatureHelp = FeatureHelp(
                                     title: "Location Access",
-                                    message: "Controls location permissions for OpenClaw. "
+                                    message: "Controls location permissions for VeriClaw 爪印. "
                                         + "Off disables location tools, While Using enables "
                                         + "foreground location, and Always enables "
                                         + "background location."
@@ -312,7 +319,7 @@ struct SettingsTab: View {
                         self.featureToggle(
                             "Prevent Sleep",
                             isOn: self.$preventSleep,
-                            help: "Keeps the screen awake while OpenClaw is open.")
+                            help: "Keeps the screen awake while VeriClaw 爪印 is open.")
 
                         DisclosureGroup("Advanced") {
                             VStack(alignment: .leading, spacing: 8) {
@@ -355,7 +362,7 @@ struct SettingsTab: View {
                                     self.activeFeatureHelp = FeatureHelp(
                                         title: "Default Share Instruction",
                                         message: "Appends this instruction when sharing content "
-                                            + "into OpenClaw from iOS."
+                                            + "into the VeriClaw 爪印 review queue from iOS."
                                     )
                                 } label: {
                                     Image(systemName: "info.circle")
@@ -387,8 +394,25 @@ struct SettingsTab: View {
                             .truncationMode(.middle)
                         LabeledContent("Device", value: DeviceInfoHelper.deviceFamily())
                         LabeledContent("Platform", value: DeviceInfoHelper.platformStringForDisplay())
-                        LabeledContent("OpenClaw", value: DeviceInfoHelper.openClawVersionString())
+                        LabeledContent("VeriClaw Runtime", value: DeviceInfoHelper.openClawVersionString())
                     }
+                }
+
+                Section("Resources") {
+                    Link(destination: ReleaseResource.privacyPolicyURL) {
+                        Label("Privacy Policy", systemImage: "hand.raised")
+                    }
+                    Link(destination: ReleaseResource.supportURL) {
+                        Label("Support", systemImage: "lifepreserver")
+                    }
+                    Link(destination: ReleaseResource.noticeURL) {
+                        Label("Notice", systemImage: "doc.text")
+                    }
+                    Link(destination: ReleaseResource.trademarksURL) {
+                        Label("Trademark Policy", systemImage: "building.columns")
+                    }
+                } footer: {
+                    Text("Legal, privacy, and support materials for VeriClaw 爪印 are available here inside the app.")
                 }
             }
             .navigationTitle("Settings")
@@ -911,7 +935,7 @@ struct SettingsTab: View {
         guard !trimmed.isEmpty else { return nil }
         let lower = trimmed.lowercased()
         if lower.contains("pairing required") {
-            return "Pairing required. Go back to your OpenClaw chat and run /pair approve, then tap Connect again."
+            return "Pairing required. Go back to your OpenClaw chat and run /pair approve, then tap Connect again in VeriClaw 爪印."
         }
         if lower.contains("device nonce required") || lower.contains("device nonce mismatch") {
             return "Secure handshake failed. Make sure Tailscale is connected, then tap Connect again."

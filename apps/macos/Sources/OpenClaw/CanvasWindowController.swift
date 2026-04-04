@@ -196,6 +196,7 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
 
         self.showWindow(nil)
         self.window?.makeKeyAndOrderFront(nil)
+        DockIconManager.shared.updateDockVisibilityNow()
         NSApp.activate(ignoringOtherApps: true)
         if let path {
             self.load(target: path)
@@ -208,6 +209,7 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
             self.persistFrameIfPanel()
         }
         self.window?.orderOut(nil)
+        DockIconManager.shared.updateDockVisibilityNow()
         self.onVisibilityChanged?(false)
     }
 

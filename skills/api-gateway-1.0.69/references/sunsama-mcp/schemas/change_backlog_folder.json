@@ -1,0 +1,14 @@
+{
+  "name": "change_backlog_folder",
+  "description": "Change the folder for backlog tasks",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "taskIds": {
+        "oneOf": [{ "type": "string" }, { "type": "array", "items": { "type": "string" } }],
+        "description": "Task ID or array of task IDs"
+      }
+    },
+    "required": ["taskIds"]
+  }
+}

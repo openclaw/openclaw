@@ -4,6 +4,9 @@ import Testing
 import UIKit
 @testable import OpenClaw
 
+private let preferredLastConnectionService = "ai.vericlaw.gateway"
+private let legacyLastConnectionService = "ai.openclaw.gateway"
+
 @Suite(.serialized) struct GatewayConnectionControllerTests {
     @Test @MainActor func resolvedDisplayNameSetsDefaultWhenMissing() {
         let defaults = UserDefaults.standard
@@ -71,15 +74,22 @@ import UIKit
     }
 
     @Test @MainActor func loadLastConnectionReadsSavedValues() {
-        let prior = KeychainStore.loadString(service: "ai.openclaw.gateway", account: "lastConnection")
+        let priorPreferred = KeychainStore.loadString(service: preferredLastConnectionService, account: "lastConnection")
+        let priorLegacy = KeychainStore.loadString(service: legacyLastConnectionService, account: "lastConnection")
         defer {
-            if let prior {
-                _ = KeychainStore.saveString(prior, service: "ai.openclaw.gateway", account: "lastConnection")
+            if let priorPreferred {
+                _ = KeychainStore.saveString(priorPreferred, service: preferredLastConnectionService, account: "lastConnection")
             } else {
-                _ = KeychainStore.delete(service: "ai.openclaw.gateway", account: "lastConnection")
+                _ = KeychainStore.delete(service: preferredLastConnectionService, account: "lastConnection")
+            }
+            if let priorLegacy {
+                _ = KeychainStore.saveString(priorLegacy, service: legacyLastConnectionService, account: "lastConnection")
+            } else {
+                _ = KeychainStore.delete(service: legacyLastConnectionService, account: "lastConnection")
             }
         }
-        _ = KeychainStore.delete(service: "ai.openclaw.gateway", account: "lastConnection")
+        _ = KeychainStore.delete(service: preferredLastConnectionService, account: "lastConnection")
+        _ = KeychainStore.delete(service: legacyLastConnectionService, account: "lastConnection")
 
         GatewaySettingsStore.saveLastGatewayConnectionManual(
             host: "gateway.example.com",
@@ -91,15 +101,22 @@ import UIKit
     }
 
     @Test @MainActor func loadLastConnectionReturnsNilForInvalidData() {
-        let prior = KeychainStore.loadString(service: "ai.openclaw.gateway", account: "lastConnection")
+        let priorPreferred = KeychainStore.loadString(service: preferredLastConnectionService, account: "lastConnection")
+        let priorLegacy = KeychainStore.loadString(service: legacyLastConnectionService, account: "lastConnection")
         defer {
-            if let prior {
-                _ = KeychainStore.saveString(prior, service: "ai.openclaw.gateway", account: "lastConnection")
+            if let priorPreferred {
+                _ = KeychainStore.saveString(priorPreferred, service: preferredLastConnectionService, account: "lastConnection")
             } else {
-                _ = KeychainStore.delete(service: "ai.openclaw.gateway", account: "lastConnection")
+                _ = KeychainStore.delete(service: preferredLastConnectionService, account: "lastConnection")
+            }
+            if let priorLegacy {
+                _ = KeychainStore.saveString(priorLegacy, service: legacyLastConnectionService, account: "lastConnection")
+            } else {
+                _ = KeychainStore.delete(service: legacyLastConnectionService, account: "lastConnection")
             }
         }
-        _ = KeychainStore.delete(service: "ai.openclaw.gateway", account: "lastConnection")
+        _ = KeychainStore.delete(service: preferredLastConnectionService, account: "lastConnection")
+        _ = KeychainStore.delete(service: legacyLastConnectionService, account: "lastConnection")
 
         // Plant legacy UserDefaults with invalid host/port to exercise migration + validation.
         withUserDefaults([

@@ -1150,7 +1150,7 @@ final class NodeAppModel {
         if finalStatus == .authorized || finalStatus == .provisional || finalStatus == .ephemeral {
             let addResult = await self.runNotificationCall(timeoutSeconds: 2.0) { [notificationCenter] in
                 let content = UNMutableNotificationContent()
-                content.title = "OpenClaw"
+                content.title = "VeriClaw 爪印"
                 content.body = text
                 content.sound = .default
                 content.userInfo = ["messageId": messageId]
@@ -2079,10 +2079,10 @@ private extension NodeAppModel {
                             if let requestId, !requestId.isEmpty {
                                 self.gatewayStatusText =
                                     "Pairing required (requestId: \(requestId)). "
-                                        + "Approve on gateway and return to OpenClaw."
+                                        + "Approve on gateway and return to VeriClaw 爪印."
                             } else {
                                 self.gatewayStatusText =
-                                    "Pairing required. Approve on gateway and return to OpenClaw."
+                                    "Pairing required. Approve on gateway and return to VeriClaw 爪印."
                             }
                         }
                         // Hard stop the underlying WebSocket watchdog reconnects so the UI stays stable and
@@ -2228,9 +2228,9 @@ extension NodeAppModel {
         self.recordShareEvent("Share self-test running…")
 
         let payload = SharedContentPayload(
-            title: "OpenClaw Share Self-Test",
-            url: URL(string: "https://openclaw.ai/share-self-test"),
-            text: "Validate iOS share->deep-link->gateway forwarding.")
+            title: "VeriClaw 爪印 Share Self-Test",
+            url: URL(string: "https://github.com/openclaw/openclaw?vericlaw-share-self-test=1"),
+            text: "Validate iOS share -> VeriClaw 爪印 review queue -> paired OpenClaw gateway forwarding.")
         guard let deepLink = ShareToAgentDeepLink.buildURL(
             from: payload,
             instruction: "Reply with: SHARE SELF-TEST OK")

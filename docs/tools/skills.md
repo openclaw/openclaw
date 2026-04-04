@@ -14,7 +14,7 @@ OpenClaw uses **[AgentSkills](https://agentskills.io)-compatible** skill folders
 
 Skills are loaded from **three** places:
 
-1. **Bundled skills**: shipped with the install (npm package or OpenClaw.app)
+1. **Bundled skills**: shipped with the install (npm package or VeriClaw 爪印.app)
 2. **Managed/local skills**: `~/.openclaw/skills`
 3. **Workspace skills**: `<workspace>/skills`
 
@@ -287,7 +287,7 @@ Notes:
 ## Managed skills lifecycle
 
 OpenClaw ships a baseline set of skills as **bundled skills** as part of the
-install (npm package or OpenClaw.app). `~/.openclaw/skills` exists for local
+install (npm package or VeriClaw 爪印.app). `~/.openclaw/skills` exists for local
 overrides (for example, pinning/patching a skill without changing the bundled
 copy). Workspace skills are user-owned and override both on name conflicts.
 

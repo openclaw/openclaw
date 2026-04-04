@@ -1,0 +1,46 @@
+{
+  "name": "multi-search-engine",
+  "engines": [
+    { "name": "Baidu", "url": "https://www.baidu.com/s?wd={keyword}", "region": "cn" },
+    {
+      "name": "Bing CN",
+      "url": "https://cn.bing.com/search?q={keyword}&ensearch=0",
+      "region": "cn"
+    },
+    {
+      "name": "Bing INT",
+      "url": "https://cn.bing.com/search?q={keyword}&ensearch=1",
+      "region": "cn"
+    },
+    { "name": "360", "url": "https://www.so.com/s?q={keyword}", "region": "cn" },
+    { "name": "Sogou", "url": "https://sogou.com/web?query={keyword}", "region": "cn" },
+    {
+      "name": "WeChat",
+      "url": "https://wx.sogou.com/weixin?type=2&query={keyword}",
+      "region": "cn"
+    },
+    { "name": "Toutiao", "url": "https://so.toutiao.com/search?keyword={keyword}", "region": "cn" },
+    { "name": "Jisilu", "url": "https://www.jisilu.cn/explore/?keyword={keyword}", "region": "cn" },
+    { "name": "Google", "url": "https://www.google.com/search?q={keyword}", "region": "global" },
+    {
+      "name": "Google HK",
+      "url": "https://www.google.com.hk/search?q={keyword}",
+      "region": "global"
+    },
+    { "name": "DuckDuckGo", "url": "https://duckduckgo.com/html/?q={keyword}", "region": "global" },
+    { "name": "Yahoo", "url": "https://search.yahoo.com/search?p={keyword}", "region": "global" },
+    {
+      "name": "Startpage",
+      "url": "https://www.startpage.com/sp/search?query={keyword}",
+      "region": "global"
+    },
+    { "name": "Brave", "url": "https://search.brave.com/search?q={keyword}", "region": "global" },
+    { "name": "Ecosia", "url": "https://www.ecosia.org/search?q={keyword}", "region": "global" },
+    { "name": "Qwant", "url": "https://www.qwant.com/?q={keyword}", "region": "global" },
+    {
+      "name": "WolframAlpha",
+      "url": "https://www.wolframalpha.com/input?i={keyword}",
+      "region": "global"
+    }
+  ]
+}

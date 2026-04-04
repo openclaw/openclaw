@@ -43,5 +43,5 @@ curl -fsSL "https://raw.githubusercontent.com/kyle-seongwoo-jun/apple-device-ide
 5. Verify the macOS app builds cleanly (no warnings):
 
 ```bash
-swift build --package-path apps/macos
+scripts/macos-swift.sh build
 ```

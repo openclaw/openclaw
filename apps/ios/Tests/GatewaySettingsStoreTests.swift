@@ -7,19 +7,33 @@ private struct KeychainEntry: Hashable {
     let account: String
 }
 
-private let gatewayService = "ai.openclaw.gateway"
-private let nodeService = "ai.openclaw.node"
-private let talkService = "ai.openclaw.talk"
+private let gatewayService = "ai.vericlaw.gateway"
+private let legacyGatewayService = "ai.openclaw.gateway"
+private let nodeService = "ai.vericlaw.node"
+private let legacyNodeService = "ai.openclaw.node"
+private let talkService = "ai.vericlaw.talk"
+private let legacyTalkService = "ai.openclaw.talk"
 private let instanceIdEntry = KeychainEntry(service: nodeService, account: "instanceId")
 private let preferredGatewayEntry = KeychainEntry(service: gatewayService, account: "preferredStableID")
 private let lastGatewayEntry = KeychainEntry(service: gatewayService, account: "lastDiscoveredStableID")
 private let talkAcmeProviderEntry = KeychainEntry(service: talkService, account: "provider.apiKey.acme")
+private let legacyInstanceIdEntry = KeychainEntry(service: legacyNodeService, account: "instanceId")
+private let legacyPreferredGatewayEntry = KeychainEntry(service: legacyGatewayService, account: "preferredStableID")
+private let legacyLastGatewayEntry = KeychainEntry(service: legacyGatewayService, account: "lastDiscoveredStableID")
+private let legacyTalkAcmeProviderEntry = KeychainEntry(service: legacyTalkService, account: "provider.apiKey.acme")
 private let bootstrapDefaultsKeys = [
     "node.instanceId",
     "gateway.preferredStableID",
     "gateway.lastDiscoveredStableID",
 ]
-private let bootstrapKeychainEntries = [instanceIdEntry, preferredGatewayEntry, lastGatewayEntry]
+private let bootstrapKeychainEntries = [
+    instanceIdEntry,
+    preferredGatewayEntry,
+    lastGatewayEntry,
+    legacyInstanceIdEntry,
+    legacyPreferredGatewayEntry,
+    legacyLastGatewayEntry,
+]
 private let lastGatewayDefaultsKeys = [
     "gateway.last.kind",
     "gateway.last.host",
@@ -28,6 +42,7 @@ private let lastGatewayDefaultsKeys = [
     "gateway.last.stableID",
 ]
 private let lastGatewayKeychainEntry = KeychainEntry(service: gatewayService, account: "lastConnection")
+private let legacyLastGatewayKeychainEntry = KeychainEntry(service: legacyGatewayService, account: "lastConnection")
 
 private func snapshotDefaults(_ keys: [String]) -> [String: Any?] {
     let defaults = UserDefaults.standard
@@ -87,7 +102,7 @@ private func withBootstrapSnapshots(_ body: () -> Void) {
 
 private func withLastGatewaySnapshot(_ body: () -> Void) {
     let defaultsSnapshot = snapshotDefaults(lastGatewayDefaultsKeys)
-    let keychainSnapshot = snapshotKeychain([lastGatewayKeychainEntry])
+    let keychainSnapshot = snapshotKeychain([lastGatewayKeychainEntry, legacyLastGatewayKeychainEntry])
     defer {
         restoreDefaults(defaultsSnapshot)
         restoreKeychain(keychainSnapshot)
@@ -189,15 +204,69 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
     }
 
     @Test func talkProviderApiKey_genericRoundTrip() {
-        let keychainSnapshot = snapshotKeychain([talkAcmeProviderEntry])
+        let keychainSnapshot = snapshotKeychain([talkAcmeProviderEntry, legacyTalkAcmeProviderEntry])
         defer { restoreKeychain(keychainSnapshot) }
 
         _ = KeychainStore.delete(service: talkService, account: talkAcmeProviderEntry.account)
+        _ = KeychainStore.delete(service: legacyTalkService, account: talkAcmeProviderEntry.account)
 
         GatewaySettingsStore.saveTalkProviderApiKey("acme-key", provider: "acme")
         #expect(GatewaySettingsStore.loadTalkProviderApiKey(provider: "acme") == "acme-key")
+        #expect(KeychainStore.loadString(service: legacyTalkService, account: talkAcmeProviderEntry.account) == nil)
 
         GatewaySettingsStore.saveTalkProviderApiKey(nil, provider: "acme")
         #expect(GatewaySettingsStore.loadTalkProviderApiKey(provider: "acme") == nil)
+    }
+
+    @Test func bootstrapLoadsLegacyKeychainEntries() {
+        withBootstrapSnapshots {
+            applyDefaults([
+                "node.instanceId": nil,
+                "gateway.preferredStableID": nil,
+                "gateway.lastDiscoveredStableID": nil,
+            ])
+            applyKeychain([
+                instanceIdEntry: nil,
+                preferredGatewayEntry: nil,
+                lastGatewayEntry: nil,
+                legacyInstanceIdEntry: "legacy-node-id",
+                legacyPreferredGatewayEntry: "legacy-preferred",
+                legacyLastGatewayEntry: "legacy-last",
+            ])
+
+            GatewaySettingsStore.bootstrapPersistence()
+
+            let defaults = UserDefaults.standard
+            #expect(defaults.string(forKey: "node.instanceId") == "legacy-node-id")
+            #expect(defaults.string(forKey: "gateway.preferredStableID") == "legacy-preferred")
+            #expect(defaults.string(forKey: "gateway.lastDiscoveredStableID") == "legacy-last")
+        }
+    }
+
+    @Test func gatewayCredentialsLoadFromLegacyAndSaveIntoPreferredService() {
+        let tokenEntry = KeychainEntry(service: gatewayService, account: "gateway-token.instance-1")
+        let legacyTokenEntry = KeychainEntry(service: legacyGatewayService, account: "gateway-token.instance-1")
+        let passwordEntry = KeychainEntry(service: gatewayService, account: "gateway-password.instance-1")
+        let legacyPasswordEntry = KeychainEntry(service: legacyGatewayService, account: "gateway-password.instance-1")
+        let snapshot = snapshotKeychain([tokenEntry, legacyTokenEntry, passwordEntry, legacyPasswordEntry])
+        defer { restoreKeychain(snapshot) }
+
+        applyKeychain([
+            tokenEntry: nil,
+            legacyTokenEntry: "legacy-token",
+            passwordEntry: nil,
+            legacyPasswordEntry: "legacy-password",
+        ])
+
+        #expect(GatewaySettingsStore.loadGatewayToken(instanceId: "instance-1") == "legacy-token")
+        #expect(GatewaySettingsStore.loadGatewayPassword(instanceId: "instance-1") == "legacy-password")
+
+        GatewaySettingsStore.saveGatewayToken("fresh-token", instanceId: "instance-1")
+        GatewaySettingsStore.saveGatewayPassword("fresh-password", instanceId: "instance-1")
+
+        #expect(KeychainStore.loadString(service: gatewayService, account: tokenEntry.account) == "fresh-token")
+        #expect(KeychainStore.loadString(service: legacyGatewayService, account: legacyTokenEntry.account) == nil)
+        #expect(KeychainStore.loadString(service: gatewayService, account: passwordEntry.account) == "fresh-password")
+        #expect(KeychainStore.loadString(service: legacyGatewayService, account: legacyPasswordEntry.account) == nil)
     }
 }

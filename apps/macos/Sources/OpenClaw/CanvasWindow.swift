@@ -20,6 +20,8 @@ final class CanvasPanel: NSPanel {
     }
 }
 
+extension CanvasPanel: DockVisibilityPromotingPanel {}
+
 enum CanvasPresentation {
     case window
     case panel(anchorProvider: () -> NSRect?)

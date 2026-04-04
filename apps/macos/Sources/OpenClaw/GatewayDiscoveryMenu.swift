@@ -112,6 +112,6 @@ struct GatewayDiscoveryMenu: View {
         } label: {
             Image(systemName: "dot.radiowaves.left.and.right")
         }
-        .help("Discover OpenClaw gateways on your LAN")
+        .help("Discover \(Branding.appName) gateways on your LAN")
     }
 }

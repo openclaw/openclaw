@@ -21,6 +21,7 @@ final class SettingsWindowOpener {
     }
 
     func open() {
+        DockIconManager.shared.temporarilyShowDockNow()
         NSApp.activate(ignoringOtherApps: true)
         if let openSettingsAction {
             openSettingsAction()

@@ -4,6 +4,7 @@ import SwiftUI
 
 private enum ChatUIConstants {
     static let bubbleMaxWidth: CGFloat = 560
+    static let workspaceBubbleMaxWidth: CGFloat = 760
     static let bubbleCorner: CGFloat = 18
 }
 
@@ -153,12 +154,16 @@ struct ChatMessageBubble: View {
             markdownVariant: self.markdownVariant,
             userAccent: self.userAccent,
             showsAssistantTrace: self.showsAssistantTrace)
-            .frame(maxWidth: ChatUIConstants.bubbleMaxWidth, alignment: self.isUser ? .trailing : .leading)
+            .frame(maxWidth: self.bubbleMaxWidth, alignment: self.isUser ? .trailing : .leading)
             .frame(maxWidth: .infinity, alignment: self.isUser ? .trailing : .leading)
             .padding(.horizontal, 2)
     }
 
     private var isUser: Bool { self.message.role.lowercased() == "user" }
+
+    private var bubbleMaxWidth: CGFloat {
+        self.style == .workspace ? ChatUIConstants.workspaceBubbleMaxWidth : ChatUIConstants.bubbleMaxWidth
+    }
 }
 
 @MainActor
@@ -175,12 +180,17 @@ private struct ChatMessageBody: View {
         let textColor = self.isUser ? OpenClawChatTheme.userText : OpenClawChatTheme.assistantText
 
         VStack(alignment: .leading, spacing: 10) {
+            if self.style == .workspace {
+                self.workspaceMeta
+            }
+
             if self.isToolResultMessage, self.showsAssistantTrace {
                 if !text.isEmpty {
                     ToolResultCard(
                         title: self.toolResultTitle,
                         text: text,
                         isUser: self.isUser,
+                        style: self.style,
                         toolName: self.message.toolName)
                 }
             } else if self.isUser {
@@ -199,7 +209,7 @@ private struct ChatMessageBody: View {
 
             if !self.inlineAttachments.isEmpty {
                 ForEach(self.inlineAttachments.indices, id: \.self) { idx in
-                    AttachmentRow(att: self.inlineAttachments[idx], isUser: self.isUser)
+                    AttachmentRow(att: self.inlineAttachments[idx], isUser: self.isUser, style: self.style)
                 }
             }
 
@@ -207,7 +217,8 @@ private struct ChatMessageBody: View {
                 ForEach(self.toolCalls.indices, id: \.self) { idx in
                     ToolCallCard(
                         content: self.toolCalls[idx],
-                        isUser: self.isUser)
+                        isUser: self.isUser,
+                        style: self.style)
                 }
             }
 
@@ -219,13 +230,14 @@ private struct ChatMessageBody: View {
                         title: "\(display.emoji) \(display.title)",
                         text: toolResult.text ?? "",
                         isUser: self.isUser,
+                        style: self.style,
                         toolName: toolResult.name)
                 }
             }
         }
         .textSelection(.enabled)
-        .padding(.vertical, 10)
-        .padding(.horizontal, 12)
+        .padding(.vertical, self.bubblePaddingVertical)
+        .padding(.horizontal, self.bubblePaddingHorizontal)
         .foregroundStyle(textColor)
         .background(self.bubbleBackground)
         .clipShape(self.bubbleShape)
@@ -287,6 +299,9 @@ private struct ChatMessageBody: View {
     }
 
     private var bubbleFillColor: Color {
+        if self.style == .workspace {
+            return self.isUser ? OpenClawChatTheme.workspaceUserBubble : OpenClawChatTheme.workspaceAssistantBubble
+        }
         if self.isUser {
             return self.userAccent ?? OpenClawChatTheme.userBubble
         }
@@ -301,6 +316,9 @@ private struct ChatMessageBody: View {
     }
 
     private var bubbleBorderColor: Color {
+        if self.style == .workspace {
+            return self.isUser ? Color.white.opacity(0.16) : OpenClawChatTheme.workspacePanelBorder
+        }
         if self.isUser {
             return Color.white.opacity(0.12)
         }
@@ -311,6 +329,7 @@ private struct ChatMessageBody: View {
     }
 
     private var bubbleBorderWidth: CGFloat {
+        if self.style == .workspace { return 1 }
         if self.isUser { return 0.5 }
         if self.style == .onboarding { return 0.8 }
         return 1
@@ -321,10 +340,11 @@ private struct ChatMessageBody: View {
     }
 
     private var bubbleShape: ChatBubbleShape {
-        ChatBubbleShape(cornerRadius: ChatUIConstants.bubbleCorner, tail: self.bubbleTail)
+        ChatBubbleShape(cornerRadius: self.bubbleCornerRadius, tail: self.bubbleTail)
     }
 
     private var bubbleTail: ChatBubbleShape.Tail {
+        guard self.style != .workspace else { return .none }
         guard self.style == .onboarding else { return .none }
         return self.isUser ? .right : .left
     }
@@ -338,21 +358,88 @@ private struct ChatMessageBody: View {
     }
 
     private var bubbleShadowColor: Color {
-        self.style == .onboarding && !self.isUser ? Color.black.opacity(0.28) : .clear
+        if self.style == .workspace {
+            return Color.black.opacity(self.isUser ? 0.12 : 0.08)
+        }
+        return self.style == .onboarding && !self.isUser ? Color.black.opacity(0.28) : .clear
     }
 
     private var bubbleShadowRadius: CGFloat {
-        self.style == .onboarding && !self.isUser ? 6 : 0
+        if self.style == .workspace { return 16 }
+        return self.style == .onboarding && !self.isUser ? 6 : 0
     }
 
     private var bubbleShadowYOffset: CGFloat {
-        self.style == .onboarding && !self.isUser ? 2 : 0
+        if self.style == .workspace { return 6 }
+        return self.style == .onboarding && !self.isUser ? 2 : 0
     }
+
+    private var bubblePaddingVertical: CGFloat {
+        self.style == .workspace ? 12 : 10
+    }
+
+    private var bubblePaddingHorizontal: CGFloat {
+        self.style == .workspace ? 14 : 12
+    }
+
+    private var bubbleCornerRadius: CGFloat {
+        self.style == .workspace ? 20 : ChatUIConstants.bubbleCorner
+    }
+
+    @ViewBuilder
+    private var workspaceMeta: some View {
+        HStack(spacing: 8) {
+            Text(self.roleLabel)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(self.isUser ? Color.white.opacity(0.96) : Color.secondary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(self.rolePillBackground)
+                .clipShape(Capsule())
+
+            if let timestampLabel = self.timestampLabel {
+                Text(timestampLabel)
+                    .font(.caption2)
+                    .foregroundStyle(self.isUser ? Color.white.opacity(0.78) : .secondary)
+            }
+
+            Spacer(minLength: 0)
+        }
+    }
+
+    private var roleLabel: String {
+        if self.isToolResultMessage {
+            return "Tool Output"
+        }
+        return self.isUser ? "Operator" : "Agent"
+    }
+
+    private var rolePillBackground: AnyShapeStyle {
+        if self.isUser {
+            return AnyShapeStyle(Color.white.opacity(0.18))
+        }
+        return OpenClawChatTheme.workspaceSoftFill
+    }
+
+    private var timestampLabel: String? {
+        guard let rawTimestamp = self.message.timestamp else { return nil }
+        let seconds = rawTimestamp > 10_000_000_000 ? rawTimestamp / 1000 : rawTimestamp
+        let date = Date(timeIntervalSince1970: seconds)
+        return Self.timeFormatter.string(from: date)
+    }
+
+    private static let timeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .none
+        formatter.timeStyle = .short
+        return formatter
+    }()
 }
 
 private struct AttachmentRow: View {
     let att: OpenClawChatMessageContent
     let isUser: Bool
+    let style: OpenClawChatView.Style
 
     var body: some View {
         HStack(spacing: 8) {
@@ -364,14 +451,32 @@ private struct AttachmentRow: View {
             Spacer()
         }
         .padding(10)
-        .background(self.isUser ? Color.white.opacity(0.2) : Color.black.opacity(0.04))
+        .background(self.rowBackground)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(self.rowBorder, lineWidth: self.style == .workspace ? 1 : 0))
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    private var rowBackground: some ShapeStyle {
+        if self.style == .workspace {
+            if self.isUser {
+                return AnyShapeStyle(Color.white.opacity(0.12))
+            }
+            return OpenClawChatTheme.workspaceSoftFill
+        }
+        return AnyShapeStyle(self.isUser ? Color.white.opacity(0.2) : Color.black.opacity(0.04))
+    }
+
+    private var rowBorder: Color {
+        self.style == .workspace ? Color.white.opacity(self.isUser ? 0.10 : 0.08) : .clear
     }
 }
 
 private struct ToolCallCard: View {
     let content: OpenClawChatMessageContent
     let isUser: Bool
+    let style: OpenClawChatView.Style
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -391,10 +496,10 @@ private struct ToolCallCard: View {
         .padding(10)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(OpenClawChatTheme.subtleCard)
+                .fill(self.cardBackground)
                 .overlay(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)))
+                        .strokeBorder(self.cardBorder, lineWidth: 1)))
     }
 
     private var toolName: String {
@@ -408,12 +513,21 @@ private struct ToolCallCard: View {
     private var display: ToolDisplaySummary {
         ToolDisplayRegistry.resolve(name: self.content.name ?? "tool", args: self.content.arguments)
     }
+
+    private var cardBackground: AnyShapeStyle {
+        self.style == .workspace ? OpenClawChatTheme.workspaceSoftFill : OpenClawChatTheme.subtleCard
+    }
+
+    private var cardBorder: Color {
+        self.style == .workspace ? OpenClawChatTheme.workspacePanelBorder : Color.white.opacity(0.08)
+    }
 }
 
 private struct ToolResultCard: View {
     let title: String
     let text: String
     let isUser: Bool
+    let style: OpenClawChatView.Style
     let toolName: String?
     @State private var expanded = false
 
@@ -443,10 +557,10 @@ private struct ToolResultCard: View {
             .padding(10)
             .background(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(OpenClawChatTheme.subtleCard)
+                    .fill(self.cardBackground)
                     .overlay(
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)))
+                            .strokeBorder(self.cardBorder, lineWidth: 1)))
         }
     }
 
@@ -468,6 +582,14 @@ private struct ToolResultCard: View {
     private var shouldShowToggle: Bool {
         self.lines.count > Self.previewLineLimit
     }
+
+    private var cardBackground: AnyShapeStyle {
+        self.style == .workspace ? OpenClawChatTheme.workspaceSoftFill : OpenClawChatTheme.subtleCard
+    }
+
+    private var cardBorder: Color {
+        self.style == .workspace ? OpenClawChatTheme.workspacePanelBorder : Color.white.opacity(0.08)
+    }
 }
 
 @MainActor
@@ -479,16 +601,9 @@ struct ChatTypingIndicatorBubble: View {
             TypingDots()
             Spacer(minLength: 0)
         }
-        .padding(.vertical, self.style == .standard ? 12 : 10)
-        .padding(.horizontal, self.style == .standard ? 12 : 14)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(OpenClawChatTheme.assistantBubble))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
-        .frame(maxWidth: ChatUIConstants.bubbleMaxWidth, alignment: .leading)
-        .focusable(false)
+        .padding(.vertical, self.style == .workspace ? 14 : (self.style == .standard ? 12 : 10))
+        .padding(.horizontal, self.style == .workspace ? 16 : (self.style == .standard ? 12 : 14))
+        .assistantBubbleContainerStyle(self.style)
     }
 }
 
@@ -499,21 +614,23 @@ extension ChatTypingIndicatorBubble: @MainActor Equatable {
 }
 
 private extension View {
-    func assistantBubbleContainerStyle() -> some View {
+    func assistantBubbleContainerStyle(_ style: OpenClawChatView.Style = .standard) -> some View {
         self
             .background(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(OpenClawChatTheme.assistantBubble))
+                    .fill(style == .workspace ? AnyShapeStyle(OpenClawChatTheme.workspaceAssistantBubble) : AnyShapeStyle(OpenClawChatTheme.assistantBubble)))
             .overlay(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
-            .frame(maxWidth: ChatUIConstants.bubbleMaxWidth, alignment: .leading)
+                    .strokeBorder(style == .workspace ? OpenClawChatTheme.workspacePanelBorder : Color.white.opacity(0.08), lineWidth: 1))
+            .shadow(color: style == .workspace ? Color.black.opacity(0.08) : .clear, radius: style == .workspace ? 16 : 0, y: style == .workspace ? 6 : 0)
+            .frame(maxWidth: style == .workspace ? ChatUIConstants.workspaceBubbleMaxWidth : ChatUIConstants.bubbleMaxWidth, alignment: .leading)
             .focusable(false)
     }
 }
 
 @MainActor
 struct ChatStreamingAssistantBubble: View {
+    let style: OpenClawChatView.Style
     let text: String
     let markdownVariant: ChatMarkdownVariant
     let showsAssistantTrace: Bool
@@ -526,12 +643,13 @@ struct ChatStreamingAssistantBubble: View {
                 includesThinking: self.showsAssistantTrace)
         }
         .padding(12)
-        .assistantBubbleContainerStyle()
+        .assistantBubbleContainerStyle(self.style)
     }
 }
 
 @MainActor
 struct ChatPendingToolsBubble: View {
+    let style: OpenClawChatView.Style
     let toolCalls: [OpenClawChatPendingToolCall]
 
     var body: some View {
@@ -558,18 +676,27 @@ struct ChatPendingToolsBubble: View {
                     }
                 }
                 .padding(10)
-                .background(Color.white.opacity(0.06))
+                .background(self.toolCardBackground)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
         }
         .padding(12)
-        .assistantBubbleContainerStyle()
+        .assistantBubbleContainerStyle(self.style)
     }
 }
 
 extension ChatPendingToolsBubble: @MainActor Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.toolCalls == rhs.toolCalls
+    }
+}
+
+private extension ChatPendingToolsBubble {
+    var toolCardBackground: some ShapeStyle {
+        if self.style == .workspace {
+            return AnyShapeStyle(OpenClawChatTheme.workspaceSoftFill)
+        }
+        return AnyShapeStyle(Color.white.opacity(0.06))
     }
 }
 

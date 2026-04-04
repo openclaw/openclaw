@@ -3,6 +3,7 @@ import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import { resolveStateDir } from "../config/paths.js";
+import type { AgentDefaultsLikeConfig } from "../config/types.agents.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   DEFAULT_AGENT_ID,
@@ -25,7 +26,7 @@ export { resolveAgentIdFromSessionKey };
 
 type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
 
-type ResolvedAgentConfig = {
+type ResolvedAgentConfig = AgentDefaultsLikeConfig & {
   name?: string;
   workspace?: string;
   agentDir?: string;
@@ -135,6 +136,13 @@ export function resolveAgentConfig(
     skills: Array.isArray(entry.skills) ? entry.skills : undefined,
     memorySearch: entry.memorySearch,
     humanDelay: entry.humanDelay,
+    thinkingDefault: entry.thinkingDefault,
+    verboseDefault: entry.verboseDefault,
+    elevatedDefault: entry.elevatedDefault,
+    fastModeDefault: entry.fastModeDefault,
+    reasoningDefault: entry.reasoningDefault,
+    blockStreamingDefault: entry.blockStreamingDefault,
+    blockStreamingBreak: entry.blockStreamingBreak,
     heartbeat: entry.heartbeat,
     identity: entry.identity,
     groupChat: entry.groupChat,

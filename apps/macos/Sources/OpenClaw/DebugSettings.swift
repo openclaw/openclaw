@@ -103,7 +103,7 @@ struct DebugSettings: View {
                     }
 
                 Text(
-                    "When enabled, OpenClaw won't install or manage \(gatewayLaunchdLabel). " +
+                    "When enabled, \(Branding.appName) won't install or manage \(gatewayLaunchdLabel). " +
                         "It will only attach to an existing Gateway.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -274,7 +274,7 @@ struct DebugSettings: View {
                         Toggle("Write rolling diagnostics log (JSONL)", isOn: self.$diagnosticsFileLogEnabled)
                             .toggleStyle(.checkbox)
                             .help(
-                                "Writes a rotating, local-only log under ~/Library/Logs/OpenClaw/. " +
+                                "Writes a rotating, local-only log in the app diagnostics folder. " +
                                     "Enable only while actively debugging.")
 
                         HStack(spacing: 8) {
@@ -382,7 +382,7 @@ struct DebugSettings: View {
         GroupBox("Paths") {
             VStack(alignment: .leading, spacing: 12) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("OpenClaw project root")
+                    Text("\(Branding.appName) project root")
                         .font(.caption.weight(.semibold))
                     HStack(spacing: 8) {
                         TextField("Path to openclaw repo", text: self.$gatewayRootInput)
@@ -524,7 +524,7 @@ struct DebugSettings: View {
 
                 VStack(alignment: .leading, spacing: 6) {
                     Text(
-                        "Note: macOS may require restarting OpenClaw after enabling Accessibility or Screen Recording.")
+                        "Note: macOS may require restarting \(Branding.appName) after enabling Accessibility or Screen Recording.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -532,7 +532,7 @@ struct DebugSettings: View {
                     Button {
                         LaunchdManager.startOpenClaw()
                     } label: {
-                        Label("Restart OpenClaw", systemImage: "arrow.counterclockwise")
+                        Label("Restart \(Branding.appName)", systemImage: "arrow.counterclockwise")
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)

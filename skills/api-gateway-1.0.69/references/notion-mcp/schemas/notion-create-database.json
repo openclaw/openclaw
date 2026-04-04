@@ -1,0 +1,41 @@
+{
+  "name": "notion-create-database",
+  "title": "Create Notion database",
+  "description": "Creates a new Notion database using SQL DDL syntax.\nIf no title property provided, \"Name\" is auto-added. Returns Markdown with schema, SQLite definition, and data source ID in <data-source> tag for use with update_data_source and query_data_sources tools.\nThe schema param accepts a CREATE TABLE statement defining columns.\nType syntax:\n- Simple: TITLE, RICH_TEXT, DATE, PEOPLE, CHECKBOX, URL, EMAIL, PHONE_NUMBER, STATUS, FILES\n- SELECT('opt':color, ...) / MULTI_SELECT('opt':color, ...)\n- NUMBER [FORMAT 'dollar'] / FORMULA('expression')\n- RELATION('data_source_id') \u2014 one-way relation\n- RELATION('data_source_id', DUAL) \u2014 two-way relation\n- RELATION('data_source_id', DUAL 'synced_name') \u2014 two-way with synced property name\n- RELATION('data_source_id', DUAL 'synced_name' 'synced_id') \u2014 two-way with synced name and ID (for self-relations)\n- ROLLUP('rel_prop', 'target_prop', 'function')\n- UNIQUE_ID [PREFIX 'X'] / CREATED_TIME / LAST_EDITED_TIME\n- Any column: COMMENT 'description text' Colors: default, gray, brown, orange, yellow, green, blue, purple, pink, red\n\n<example description=\"Minimal\">{\"schema\": \"CREATE TABLE (\"Name\" TITLE)\"}</example>\n<example description=\"Task DB\">{\"title\": \"Tasks\", \"schema\": \"CREATE TABLE (\"Task Name\" TITLE, \"Status\" SELECT('To Do':red, 'Done':green), \"Due Date\" DATE)\"}</example>\n<example description=\"With parent and options\">{\"parent\": {\"page_id\": \"f336d0bc-b841-465b-8045-024475c079dd\"}, \"title\": \"Projects\", \"schema\": \"CREATE TABLE (\"Name\" TITLE, \"Budget\" NUMBER FORMAT 'dollar', \"Tags\" MULTI_SELECT('eng':blue, 'design':pink), \"Task ID\" UNIQUE_ID PREFIX 'PRJ')\"}</example>\n<example description=\"Self-relation (two-step: create database first, then use its data source ID with update_data_source to add self-relations)\">{\"title\": \"Tasks\", \"schema\": \"CREATE TABLE (\"Name\" TITLE, \"Parent\" RELATION('ds_id', DUAL 'Children' 'children'), \"Children\" RELATION('ds_id', DUAL 'Parent' 'parent'))\"}</example>",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "schema": {
+        "type": "string",
+        "description": "SQL DDL CREATE TABLE statement defining the database schema. Column names must be double-quoted, type options use single quotes."
+      },
+      "parent": {
+        "type": "object",
+        "properties": {
+          "page_id": {
+            "type": "string",
+            "description": "The ID of the parent page (with or without dashes), for example, 195de9221179449fab8075a27c979105"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["page_id"]
+          }
+        },
+        "required": ["page_id"],
+        "additionalProperties": true,
+        "description": "The parent under which to create the new database. If omitted, the database will be created as a private page at the workspace level."
+      },
+      "title": {
+        "type": "string",
+        "description": "The title of the new database."
+      },
+      "description": {
+        "type": "string",
+        "description": "The description of the new database."
+      }
+    },
+    "required": ["schema"],
+    "additionalProperties": false,
+    "$schema": "http://json-schema.org/draft-07/schema#"
+  }
+}

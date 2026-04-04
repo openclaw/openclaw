@@ -1,0 +1,26 @@
+{
+  "name": "create_braindump_task",
+  "description": "Create a task in the backlog with a time bucket",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "title": {
+        "type": "string",
+        "description": "The title of the task"
+      },
+      "timeBucket": {
+        "type": "string",
+        "description": "When to do the task",
+        "enum": [
+          "in the next two weeks",
+          "in the next month",
+          "in the next quarter",
+          "in the next year",
+          "someday",
+          "never"
+        ]
+      }
+    },
+    "required": ["title", "timeBucket"]
+  }
+}

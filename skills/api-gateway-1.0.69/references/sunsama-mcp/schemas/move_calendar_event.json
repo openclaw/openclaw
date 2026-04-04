@@ -1,0 +1,22 @@
+{
+  "name": "move_calendar_event",
+  "description": "Reschedule a calendar event",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "eventId": {
+        "type": "string",
+        "description": "The ID of the calendar event"
+      },
+      "startDate": {
+        "type": "string",
+        "description": "The new start date/time"
+      },
+      "isAllDay": {
+        "type": "boolean",
+        "description": "Whether this is an all-day event"
+      }
+    },
+    "required": ["eventId", "startDate", "isAllDay"]
+  }
+}

@@ -1,7 +1,14 @@
 import SwiftUI
 
+private struct MenuItemHighlightedEnvironmentKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
 extension EnvironmentValues {
-    @Entry var menuItemHighlighted: Bool = false
+    var menuItemHighlighted: Bool {
+        get { self[MenuItemHighlightedEnvironmentKey.self] }
+        set { self[MenuItemHighlightedEnvironmentKey.self] = newValue }
+    }
 }
 
 struct SessionMenuLabelView: View {
