@@ -63,6 +63,7 @@ type SelectedConnectAuth = {
   resolvedDeviceToken?: string;
   storedToken?: string;
   storedScopes?: string[];
+  usingStoredDeviceToken?: boolean;
 };
 
 class GatewayClientRequestError extends Error {
@@ -419,6 +420,7 @@ export class GatewayClient {
       resolvedDeviceToken,
       storedToken,
       storedScopes,
+      usingStoredDeviceToken,
     } = this.selectConnectAuth(role);
     if (this.pendingDeviceTokenRetry && authDeviceToken) {
       this.pendingDeviceTokenRetry = false;
@@ -433,10 +435,12 @@ export class GatewayClient {
           }
         : undefined;
     const signedAtMs = Date.now();
-    // Use stored scopes when reconnecting with a device token to preserve the authorized scopes.
-    // Otherwise, fall back to explicitly requested scopes or the default admin-only scope.
+    // Reuse cached scopes only when the client is reusing the cached device token.
+    // Explicit device tokens should keep the caller-requested scope set.
     const scopes =
-      storedScopes && resolvedDeviceToken ? storedScopes : (this.opts.scopes ?? ["operator.admin"]);
+      usingStoredDeviceToken && storedScopes && storedScopes.length > 0
+        ? storedScopes
+        : (this.opts.scopes ?? ["operator.admin"]);
     const platform = this.opts.platform ?? process.platform;
     const device = (() => {
       if (!this.opts.deviceIdentity) {
@@ -639,6 +643,11 @@ export class GatewayClient {
       (!(explicitGatewayToken || authPassword) && (!explicitBootstrapToken || Boolean(storedToken)))
         ? (storedToken ?? undefined)
         : undefined);
+    const usingStoredDeviceToken =
+      Boolean(resolvedDeviceToken) &&
+      !explicitDeviceToken &&
+      Boolean(storedToken) &&
+      resolvedDeviceToken === storedToken;
     // Legacy compatibility: keep `auth.token` populated for device-token auth when
     // no explicit shared token is present.
     const authToken = explicitGatewayToken ?? resolvedDeviceToken;
@@ -653,6 +662,7 @@ export class GatewayClient {
       resolvedDeviceToken,
       storedToken: storedToken ?? undefined,
       storedScopes,
+      usingStoredDeviceToken,
     };
   }
 
