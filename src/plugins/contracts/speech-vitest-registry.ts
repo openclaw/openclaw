@@ -84,6 +84,19 @@ function resolveNamedBuilder<T>(moduleExport: unknown, pattern: RegExp): (() => 
   return undefined;
 }
 
+function resolveNamedBuilders<T>(moduleExport: unknown, pattern: RegExp): Array<() => T> {
+  if (!moduleExport || typeof moduleExport !== "object") {
+    return [];
+  }
+  const matches: Array<() => T> = [];
+  for (const [key, value] of Object.entries(moduleExport as Record<string, unknown>)) {
+    if (pattern.test(key) && typeof value === "function") {
+      matches.push(value as () => T);
+    }
+  }
+  return matches;
+}
+
 function resolveNamedValues<T>(
   moduleExport: unknown,
   pattern: RegExp,
@@ -315,17 +328,19 @@ export function loadVitestImageGenerationProviderContractRegistry(): ImageGenera
     if (!fs.existsSync(testApiPath)) {
       continue;
     }
-    const builder = resolveNamedBuilder<ImageGenerationProviderPlugin>(
+    const builders = resolveNamedBuilders<ImageGenerationProviderPlugin>(
       createVitestCapabilityLoader(testApiPath)(testApiPath),
       /^build.+ImageGenerationProvider$/u,
     );
-    if (!builder) {
+    if (builders.length === 0) {
       continue;
     }
-    registrations.push({
-      pluginId: plugin.id,
-      provider: builder(),
-    });
+    registrations.push(
+      ...builders.map((builder) => ({
+        pluginId: plugin.id,
+        provider: builder(),
+      })),
+    );
     unresolvedPluginIds.delete(plugin.id);
   }
 
