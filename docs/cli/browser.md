@@ -44,6 +44,9 @@ openclaw browser --browser-profile openclaw reset-profile
 
 Notes:
 
+- On Linux hosts without a display server (`$DISPLAY` / `$WAYLAND_DISPLAY` unset), managed browser launches now fall back to headless mode automatically unless you explicitly force headed mode.
+- To force headless mode for a launch without editing config, use `OPENCLAW_BROWSER_HEADLESS=1 openclaw browser start`.
+- To force headed mode, use `OPENCLAW_BROWSER_HEADLESS=0 openclaw browser start`. If no display server is available, OpenClaw returns an actionable error suggesting headless mode or Xvfb.
 - For `attachOnly` and remote CDP profiles, `openclaw browser stop` closes the
   active control session and clears temporary emulation overrides even when
   OpenClaw did not launch the browser process itself.

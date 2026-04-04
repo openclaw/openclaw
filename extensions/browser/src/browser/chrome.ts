@@ -37,9 +37,14 @@ import {
 } from "./chrome.profile-decoration.js";
 import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js";
 import {
+  getManagedBrowserMissingDisplayError,
+  resolveManagedBrowserHeadlessMode,
+} from "./config.js";
+import {
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
 } from "./constants.js";
+import { BrowserProfileUnavailableError } from "./errors.js";
 
 const log = createSubsystemLogger("browser").child("chrome");
 
@@ -91,6 +96,7 @@ export function buildOpenClawChromeLaunchArgs(params: {
   userDataDir: string;
 }): string[] {
   const { resolved, profile, userDataDir } = params;
+  const { headless } = resolveManagedBrowserHeadlessMode(resolved);
   const args: string[] = [
     `--remote-debugging-port=${profile.cdpPort}`,
     `--user-data-dir=${userDataDir}`,
@@ -105,7 +111,7 @@ export function buildOpenClawChromeLaunchArgs(params: {
     "--password-store=basic",
   ];
 
-  if (resolved.headless) {
+  if (headless) {
     args.push("--headless=new");
     args.push("--disable-gpu");
   }
@@ -299,6 +305,10 @@ export async function launchOpenClawChrome(
 ): Promise<RunningChrome> {
   if (!profile.cdpIsLoopback) {
     throw new Error(`Profile "${profile.name}" is remote; cannot launch local Chrome.`);
+  }
+  const missingDisplayError = getManagedBrowserMissingDisplayError(resolved, profile.name);
+  if (missingDisplayError) {
+    throw new BrowserProfileUnavailableError(missingDisplayError);
   }
   await ensurePortAvailable(profile.cdpPort);
 

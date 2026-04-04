@@ -1,5 +1,6 @@
 import { getChromeMcpPid } from "../chrome-mcp.js";
 import { resolveBrowserExecutableForPlatform } from "../chrome.executables.js";
+import { resolveManagedBrowserHeadlessMode } from "../config.js";
 import { toBrowserErrorResponse } from "../errors.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import { createBrowserProfilesService } from "../profiles-service.js";
@@ -95,6 +96,8 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
         detectError = String(err);
       }
 
+      const managedHeadlessMode = resolveManagedBrowserHeadlessMode(current.resolved);
+
       res.json({
         enabled: current.resolved.enabled,
         profile: profileCtx.profile.name,
@@ -114,7 +117,7 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
         detectError,
         userDataDir: profileState?.running?.userDataDir ?? profileCtx.profile.userDataDir ?? null,
         color: profileCtx.profile.color,
-        headless: current.resolved.headless,
+        headless: managedHeadlessMode.headless,
         noSandbox: current.resolved.noSandbox,
         executablePath: current.resolved.executablePath ?? null,
         attachOnly: profileCtx.profile.attachOnly,

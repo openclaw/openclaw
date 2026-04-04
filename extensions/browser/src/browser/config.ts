@@ -8,6 +8,7 @@ import {
 import { isLoopbackHost } from "../gateway/net.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { resolveUserPath } from "../utils.js";
+import { parseBooleanValue } from "../utils/boolean.js";
 import {
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_ENABLED,
@@ -31,12 +32,20 @@ export type ResolvedBrowserConfig = {
   color: string;
   executablePath?: string;
   headless: boolean;
+  headlessConfigured?: boolean;
   noSandbox: boolean;
   attachOnly: boolean;
   defaultProfile: string;
   profiles: Record<string, BrowserProfileConfig>;
   ssrfPolicy?: SsrFPolicy;
   extraArgs: string[];
+};
+
+export const OPENCLAW_BROWSER_HEADLESS_ENV = "OPENCLAW_BROWSER_HEADLESS";
+
+export type ManagedBrowserHeadlessMode = {
+  headless: boolean;
+  source: "env" | "config" | "linux-display-fallback" | "default";
 };
 
 export type ResolvedBrowserProfile = {
@@ -250,6 +259,7 @@ export function resolveBrowserConfig(
     };
   }
 
+  const headlessConfigured = typeof cfg?.headless === "boolean";
   const headless = cfg?.headless === true;
   const noSandbox = cfg?.noSandbox === true;
   const attachOnly = cfg?.attachOnly === true;
@@ -297,6 +307,7 @@ export function resolveBrowserConfig(
     color: defaultColor,
     executablePath,
     headless,
+    headlessConfigured,
     noSandbox,
     attachOnly,
     defaultProfile,
@@ -304,6 +315,59 @@ export function resolveBrowserConfig(
     ssrfPolicy,
     extraArgs,
   };
+}
+
+function hasEnvDisplay(env: NodeJS.ProcessEnv): boolean {
+  const display = env.DISPLAY?.trim();
+  const waylandDisplay = env.WAYLAND_DISPLAY?.trim();
+  return Boolean(display || waylandDisplay);
+}
+
+export function resolveManagedBrowserHeadlessMode(
+  resolved: ResolvedBrowserConfig,
+  params: {
+    env?: NodeJS.ProcessEnv;
+    platform?: NodeJS.Platform;
+  } = {},
+): ManagedBrowserHeadlessMode {
+  const env = params.env ?? process.env;
+  const platform = params.platform ?? process.platform;
+  const envHeadless = parseBooleanValue(env[OPENCLAW_BROWSER_HEADLESS_ENV]);
+
+  if (envHeadless !== undefined) {
+    return { headless: envHeadless, source: "env" };
+  }
+  if (resolved.headlessConfigured === true) {
+    return { headless: resolved.headless, source: "config" };
+  }
+  if (platform === "linux" && !hasEnvDisplay(env)) {
+    return { headless: true, source: "linux-display-fallback" };
+  }
+  return { headless: resolved.headless, source: "default" };
+}
+
+export function getManagedBrowserMissingDisplayError(
+  resolved: ResolvedBrowserConfig,
+  profileName: string,
+  params: {
+    env?: NodeJS.ProcessEnv;
+    platform?: NodeJS.Platform;
+  } = {},
+): string | null {
+  const env = params.env ?? process.env;
+  const platform = params.platform ?? process.platform;
+  if (platform !== "linux" || hasEnvDisplay(env)) {
+    return null;
+  }
+  const mode = resolveManagedBrowserHeadlessMode(resolved, { env, platform });
+  if (mode.headless) {
+    return null;
+  }
+  return (
+    `Headed browser start requested for profile "${profileName}", but no Linux display server was detected ` +
+    `($DISPLAY/$WAYLAND_DISPLAY unset). Set ${OPENCLAW_BROWSER_HEADLESS_ENV}=1, set browser.headless=true, ` +
+    `or launch under Xvfb if you need a visible browser.`
+  );
 }
 
 /**

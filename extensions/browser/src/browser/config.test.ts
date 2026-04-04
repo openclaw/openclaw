@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { BrowserConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
-import { resolveBrowserConfig, resolveProfile, shouldStartLocalBrowserServer } from "./config.js";
+import {
+  getManagedBrowserMissingDisplayError,
+  OPENCLAW_BROWSER_HEADLESS_ENV,
+  resolveBrowserConfig,
+  resolveManagedBrowserHeadlessMode,
+  resolveProfile,
+  shouldStartLocalBrowserServer,
+} from "./config.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 
 function withEnv<T>(env: Record<string, string | undefined>, fn: () => T): T {
@@ -437,6 +444,77 @@ describe("browser config", () => {
         },
       });
       expect(resolved.defaultProfile).toBe("custom");
+    });
+  });
+
+  describe("managed browser headless mode", () => {
+    it("falls back to headless on Linux when no display server is available", () => {
+      const resolved = resolveBrowserConfig({});
+      expect(
+        resolveManagedBrowserHeadlessMode(resolved, {
+          platform: "linux",
+          env: {
+            ...process.env,
+            DISPLAY: "",
+            WAYLAND_DISPLAY: "",
+            [OPENCLAW_BROWSER_HEADLESS_ENV]: undefined,
+          },
+        }),
+      ).toEqual({
+        headless: true,
+        source: "linux-display-fallback",
+      });
+    });
+
+    it("keeps prior headed default when a display server is available", () => {
+      const resolved = resolveBrowserConfig({});
+      expect(
+        resolveManagedBrowserHeadlessMode(resolved, {
+          platform: "linux",
+          env: {
+            ...process.env,
+            DISPLAY: ":0",
+            WAYLAND_DISPLAY: undefined,
+            [OPENCLAW_BROWSER_HEADLESS_ENV]: undefined,
+          },
+        }),
+      ).toEqual({
+        headless: false,
+        source: "default",
+      });
+    });
+
+    it("ignores invalid OPENCLAW_BROWSER_HEADLESS values safely", () => {
+      const resolved = resolveBrowserConfig({});
+      expect(
+        resolveManagedBrowserHeadlessMode(resolved, {
+          platform: "linux",
+          env: {
+            ...process.env,
+            DISPLAY: ":0",
+            WAYLAND_DISPLAY: undefined,
+            [OPENCLAW_BROWSER_HEADLESS_ENV]: "maybe",
+          },
+        }),
+      ).toEqual({
+        headless: false,
+        source: "default",
+      });
+    });
+
+    it("treats explicit config headed mode without a display as an actionable error", () => {
+      const resolved = resolveBrowserConfig({ headless: false });
+      expect(
+        getManagedBrowserMissingDisplayError(resolved, "openclaw", {
+          platform: "linux",
+          env: {
+            ...process.env,
+            DISPLAY: "",
+            WAYLAND_DISPLAY: "",
+            [OPENCLAW_BROWSER_HEADLESS_ENV]: undefined,
+          },
+        }),
+      ).toContain(`Set ${OPENCLAW_BROWSER_HEADLESS_ENV}=1`);
     });
   });
 });
