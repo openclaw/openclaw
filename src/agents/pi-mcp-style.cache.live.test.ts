@@ -2,6 +2,7 @@ import type { AssistantMessage, Tool } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
 import { describe, expect, it } from "vitest";
 import {
+  buildAssistantHistoryTurn,
   buildStableCachePrefix,
   completeSimpleWithLiveTimeout,
   computeCacheHitRate,
@@ -122,21 +123,13 @@ async function runOpenAiMcpStyleCacheProbe(params: {
         { role: "user", content: toolTurn.prompt, timestamp: Date.now() },
         toolTurn.response,
         buildToolResultMessage(toolTurn.toolCall.id),
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "MCP TOOL HISTORY ACKNOWLEDGED" }],
-          timestamp: Date.now(),
-        },
+        buildAssistantHistoryTurn("MCP TOOL HISTORY ACKNOWLEDGED", params.model),
         {
           role: "user",
           content: "Keep the MCP tool output stable in history.",
           timestamp: Date.now(),
         },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "MCP TOOL HISTORY PRESERVED" }],
-          timestamp: Date.now(),
-        },
+        buildAssistantHistoryTurn("MCP TOOL HISTORY PRESERVED", params.model),
         {
           role: "user",
           content: `Reply with exactly CACHE-OK ${params.suffix}.`,

@@ -48,14 +48,14 @@ import {
   planTurnInput,
 } from "./openai-ws-message-conversion.js";
 import { buildOpenAIWebSocketResponseCreatePayload } from "./openai-ws-request.js";
-import { createBoundaryAwareStreamFnForModel } from "./provider-transport-stream.js";
 import { log } from "./pi-embedded-runner/logger.js";
+import { createBoundaryAwareStreamFnForModel } from "./provider-transport-stream.js";
 import {
   buildAssistantMessageWithZeroUsage,
   buildStreamErrorAssistantMessage,
 } from "./stream-message-shared.js";
-import { mergeTransportMetadata } from "./transport-stream-shared.js";
 import { stripSystemPromptCacheBoundary } from "./system-prompt-cache-boundary.js";
+import { mergeTransportMetadata } from "./transport-stream-shared.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Per-session state
@@ -963,7 +963,7 @@ async function fallbackToHttp(
   const httpStreamFn =
     openAIWsStreamDeps.createHttpFallbackStreamFn(model as ProviderRuntimeModel) ??
     openAIWsStreamDeps.streamSimple;
-  const httpStream = httpStreamFn(model, context, mergedOptions);
+  const httpStream = await httpStreamFn(model, context, mergedOptions);
   for await (const event of httpStream) {
     if (fallbackOptions?.suppressStart && event.type === "start") {
       continue;

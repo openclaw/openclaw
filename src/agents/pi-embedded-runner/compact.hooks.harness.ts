@@ -83,7 +83,8 @@ export const sessionAbortCompactionMock: Mock<(reason?: unknown) => void> = vi.f
 export const createOpenClawCodingToolsMock = vi.fn(() => []);
 export const resolveEmbeddedAgentStreamFnMock = vi.fn((_params?: unknown) => vi.fn());
 export const applyExtraParamsToAgentMock = vi.fn(() => ({ effectiveExtraParams: {} }));
-export const resolveAgentTransportOverrideMock = vi.fn(() => undefined);
+export const resolveAgentTransportOverrideMock: Mock<(params?: unknown) => string | undefined> =
+  vi.fn(() => undefined);
 
 export function resetCompactSessionStateMocks(): void {
   sanitizeSessionHistoryMock.mockReset();

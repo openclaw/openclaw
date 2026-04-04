@@ -6,6 +6,7 @@ import { Type } from "@sinclair/typebox";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
+  buildAssistantHistoryTurn as buildTypedAssistantHistoryTurn,
   buildStableCachePrefix,
   completeSimpleWithLiveTimeout,
   computeCacheHitRate,
@@ -49,12 +50,11 @@ let liveRunnerRootDir: string | undefined;
 
 type UserContent = Extract<Message, { role: "user" }>["content"];
 
-function makeAssistantHistoryTurn(text: string): Message {
-  return {
-    role: "assistant",
-    content: [{ type: "text", text }],
-    timestamp: Date.now(),
-  };
+function makeAssistantHistoryTurn(
+  text: string,
+  model?: Awaited<ReturnType<typeof resolveLiveDirectModel>>["model"],
+): Message {
+  return buildTypedAssistantHistoryTurn(text, model);
 }
 
 function makeUserHistoryTurn(content: UserContent): Message {
@@ -348,9 +348,9 @@ async function runOpenAiToolCacheProbe(params: {
         },
         toolTurn.response,
         buildToolResultMessage(toolTurn.toolCall.id, NOOP_TOOL.name, "ok"),
-        makeAssistantHistoryTurn("TOOL HISTORY ACKNOWLEDGED"),
+        makeAssistantHistoryTurn("TOOL HISTORY ACKNOWLEDGED", params.model),
         makeUserHistoryTurn("Keep the tool output stable in history."),
-        makeAssistantHistoryTurn("TOOL HISTORY PRESERVED"),
+        makeAssistantHistoryTurn("TOOL HISTORY PRESERVED", params.model),
         {
           role: "user",
           content: `Reply with exactly CACHE-OK ${params.suffix}.`,
@@ -432,9 +432,9 @@ async function runOpenAiImageCacheProbe(params: {
         makeImageUserTurn(
           "An image is attached. Ignore image semantics but keep the bytes in history.",
         ),
-        makeAssistantHistoryTurn("IMAGE HISTORY ACKNOWLEDGED"),
+        makeAssistantHistoryTurn("IMAGE HISTORY ACKNOWLEDGED", params.model),
         makeUserHistoryTurn("Keep the earlier image turn stable in context."),
-        makeAssistantHistoryTurn("IMAGE HISTORY PRESERVED"),
+        makeAssistantHistoryTurn("IMAGE HISTORY PRESERVED", params.model),
         makeUserHistoryTurn(`Reply with exactly CACHE-OK ${params.suffix}.`),
       ],
     },
@@ -526,9 +526,9 @@ async function runAnthropicToolCacheProbe(params: {
         },
         toolTurn.response,
         buildToolResultMessage(toolTurn.toolCall.id, NOOP_TOOL.name, "ok"),
-        makeAssistantHistoryTurn("TOOL HISTORY ACKNOWLEDGED"),
+        makeAssistantHistoryTurn("TOOL HISTORY ACKNOWLEDGED", params.model),
         makeUserHistoryTurn("Keep the tool output stable in history."),
-        makeAssistantHistoryTurn("TOOL HISTORY PRESERVED"),
+        makeAssistantHistoryTurn("TOOL HISTORY PRESERVED", params.model),
         {
           role: "user",
           content: `Reply with exactly CACHE-OK ${params.suffix}.`,
@@ -572,9 +572,9 @@ async function runAnthropicImageCacheProbe(params: {
         makeImageUserTurn(
           "An image is attached. Ignore image semantics but keep the bytes in history.",
         ),
-        makeAssistantHistoryTurn("IMAGE HISTORY ACKNOWLEDGED"),
+        makeAssistantHistoryTurn("IMAGE HISTORY ACKNOWLEDGED", params.model),
         makeUserHistoryTurn("Keep the earlier image turn stable in context."),
-        makeAssistantHistoryTurn("IMAGE HISTORY PRESERVED"),
+        makeAssistantHistoryTurn("IMAGE HISTORY PRESERVED", params.model),
         makeUserHistoryTurn(`Reply with exactly CACHE-OK ${params.suffix}.`),
       ],
     },

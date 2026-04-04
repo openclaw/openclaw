@@ -8,6 +8,7 @@ import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { normalizeProviderId, parseModelRef } from "./model-selection.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
+import { buildAssistantMessageWithZeroUsage } from "./stream-message-shared.js";
 
 export const LIVE_CACHE_TEST_ENABLED =
   isLiveTestEnabled() && isTruthyEnvValue(process.env.OPENCLAW_LIVE_CACHE_TEST);
@@ -121,6 +122,22 @@ export function extractAssistantText(message: AssistantMessage): string {
     .map((block) => block.text.trim())
     .filter(Boolean)
     .join(" ");
+}
+
+export function buildAssistantHistoryTurn(
+  text: string,
+  model?: Pick<Model<Api>, "api" | "provider" | "id">,
+): AssistantMessage {
+  return buildAssistantMessageWithZeroUsage({
+    model: {
+      api: model?.api ?? "openai-responses",
+      provider: model?.provider ?? "openai",
+      id: model?.id ?? "test-model",
+    },
+    content: [{ type: "text", text }],
+    stopReason: "stop",
+    timestamp: Date.now(),
+  });
 }
 
 export function computeCacheHitRate(usage: {
