@@ -654,6 +654,20 @@ export const MemorySearchSchema = z
       .object({
         modelPath: z.string().optional(),
         modelCacheDir: z.string().optional(),
+        gpu: z
+          .union([
+            z.literal(false),
+            z.literal("auto"),
+            z.literal("metal"),
+            z.literal("cuda"),
+            z.literal("vulkan"),
+          ])
+          .optional(),
+        gpuLayers: z
+          .union([z.literal("auto"), z.literal("max"), z.number().int().nonnegative()])
+          .optional(),
+        contextSize: z.number().int().positive().optional(),
+        flashAttention: z.boolean().optional(),
       })
       .strict()
       .optional(),

@@ -343,6 +343,48 @@ describe("memory search config", () => {
     expect(resolved?.remote).toBeUndefined();
   });
 
+  it("merges local llama tuning settings from defaults and overrides", () => {
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "local",
+            local: {
+              modelPath: "/models/default.gguf",
+              modelCacheDir: "/cache/default",
+              gpu: "vulkan",
+              gpuLayers: "auto",
+              contextSize: 2048,
+            },
+          },
+        },
+        list: [
+          {
+            id: "main",
+            default: true,
+            memorySearch: {
+              local: {
+                gpu: false,
+                flashAttention: true,
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+
+    expect(resolved?.local).toEqual({
+      modelPath: "/models/default.gguf",
+      modelCacheDir: "/cache/default",
+      gpu: false,
+      gpuLayers: "auto",
+      contextSize: 2048,
+      flashAttention: true,
+    });
+  });
+
   it("includes remote defaults for gemini without overrides", () => {
     const cfg = configWithDefaultProvider("gemini");
     const resolved = resolveMemorySearchConfig(cfg, "main");

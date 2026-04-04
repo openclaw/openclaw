@@ -71,6 +71,10 @@ export type EmbeddingProviderOptions = {
   local?: {
     modelPath?: string;
     modelCacheDir?: string;
+    gpu?: false | "auto" | "metal" | "cuda" | "vulkan";
+    gpuLayers?: "auto" | "max" | number;
+    contextSize?: number;
+    flashAttention?: boolean;
   };
   /** Gemini embedding-2: output vector dimensions (768, 1536, or 3072). */
   outputDimensionality?: number;
@@ -107,6 +111,10 @@ export async function createLocalEmbeddingProvider(
 ): Promise<EmbeddingProvider> {
   const modelPath = options.local?.modelPath?.trim() || DEFAULT_LOCAL_MODEL;
   const modelCacheDir = options.local?.modelCacheDir?.trim();
+  const gpu = options.local?.gpu;
+  const gpuLayers = options.local?.gpuLayers;
+  const contextSize = options.local?.contextSize;
+  const flashAttention = options.local?.flashAttention;
 
   // Lazy-load node-llama-cpp to keep startup light unless local is enabled.
   const { getLlama, resolveModelFile, LlamaLogLevel } = await importNodeLlamaCpp();
@@ -126,14 +134,27 @@ export async function createLocalEmbeddingProvider(
     initPromise = (async () => {
       try {
         if (!llama) {
-          llama = await getLlama({ logLevel: LlamaLogLevel.error });
+          llama = await getLlama({
+            logLevel: LlamaLogLevel.error,
+            ...(gpu !== undefined ? { gpu } : {}),
+          });
         }
         if (!embeddingModel) {
           const resolved = await resolveModelFile(modelPath, modelCacheDir || undefined);
-          embeddingModel = await llama.loadModel({ modelPath: resolved });
+          embeddingModel = await llama.loadModel({
+            modelPath: resolved,
+            ...(gpuLayers !== undefined ? { gpuLayers } : {}),
+          });
         }
         if (!embeddingContext) {
-          embeddingContext = await embeddingModel.createEmbeddingContext();
+          const embeddingContextOptions = {
+            ...(contextSize !== undefined ? { contextSize } : {}),
+            ...(flashAttention !== undefined ? { flashAttention } : {}),
+          };
+          embeddingContext =
+            Object.keys(embeddingContextOptions).length > 0
+              ? await embeddingModel.createEmbeddingContext(embeddingContextOptions)
+              : await embeddingModel.createEmbeddingContext();
         }
         return embeddingContext;
       } catch (err) {

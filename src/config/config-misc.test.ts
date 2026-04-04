@@ -520,6 +520,27 @@ describe("config strict validation", () => {
     });
   });
 
+  it("accepts local memorySearch llama tuning settings", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "local",
+            local: {
+              modelPath: "/tmp/embedding.gguf",
+              gpu: "vulkan",
+              gpuLayers: "max",
+              contextSize: 2048,
+              flashAttention: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it("accepts top-level heartbeat agent settings via auto-migration and reports legacyIssues", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {

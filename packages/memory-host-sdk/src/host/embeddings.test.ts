@@ -495,6 +495,59 @@ describe("local embedding normalization", () => {
     } as never);
   }
 
+  it("passes local llama tuning settings through to node-llama-cpp", async () => {
+    const createEmbeddingContextMock = vi.fn().mockResolvedValue({
+      getEmbeddingFor: vi.fn().mockResolvedValue({
+        vector: new Float32Array([1, 2, 3]),
+      }),
+    });
+    const loadModelMock = vi.fn().mockResolvedValue({
+      createEmbeddingContext: createEmbeddingContextMock,
+    });
+    const getLlamaMock = vi.fn().mockResolvedValue({
+      loadModel: loadModelMock,
+    });
+    const resolveModelFileMock = vi.fn(async () => "/fake/model.gguf");
+
+    vi.mocked(nodeLlamaModule.importNodeLlamaCpp).mockResolvedValue({
+      getLlama: getLlamaMock,
+      resolveModelFile: resolveModelFileMock,
+      LlamaLogLevel: { error: 0 },
+    } as never);
+
+    const result = await createEmbeddingProvider({
+      config: {} as never,
+      provider: "local",
+      model: "",
+      fallback: "none",
+      local: {
+        modelPath: "/models/custom.gguf",
+        modelCacheDir: "/cache/models",
+        gpu: "vulkan",
+        gpuLayers: "max",
+        contextSize: 2048,
+        flashAttention: true,
+      },
+    });
+
+    const provider = requireProvider(result);
+    await provider.embedQuery("test");
+
+    expect(getLlamaMock).toHaveBeenCalledWith({
+      logLevel: 0,
+      gpu: "vulkan",
+    });
+    expect(resolveModelFileMock).toHaveBeenCalledWith("/models/custom.gguf", "/cache/models");
+    expect(loadModelMock).toHaveBeenCalledWith({
+      modelPath: "/fake/model.gguf",
+      gpuLayers: "max",
+    });
+    expect(createEmbeddingContextMock).toHaveBeenCalledWith({
+      contextSize: 2048,
+      flashAttention: true,
+    });
+  });
+
   it("normalizes local embeddings to magnitude ~1.0", async () => {
     const unnormalizedVector = [2.35, 3.45, 0.63, 4.3, 1.2, 5.1, 2.8, 3.9];
     const resolveModelFileMock = vi.fn(async () => "/fake/model.gguf");

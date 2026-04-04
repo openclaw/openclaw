@@ -9,14 +9,29 @@ declare module "node-llama-cpp" {
     getEmbeddingFor: (text: string) => Promise<LlamaEmbedding>;
   };
 
+  export type LlamaGpuType = "metal" | "cuda" | "vulkan";
+
+  export type LlamaEmbeddingContextOptions = {
+    contextSize?: number;
+    flashAttention?: boolean;
+  };
+
   export type LlamaModel = {
-    createEmbeddingContext: () => Promise<LlamaEmbeddingContext>;
+    createEmbeddingContext: (
+      params?: LlamaEmbeddingContextOptions,
+    ) => Promise<LlamaEmbeddingContext>;
   };
 
   export type Llama = {
-    loadModel: (params: { modelPath: string }) => Promise<LlamaModel>;
+    loadModel: (params: {
+      modelPath: string;
+      gpuLayers?: "auto" | "max" | number;
+    }) => Promise<LlamaModel>;
   };
 
-  export function getLlama(params: { logLevel: LlamaLogLevel }): Promise<Llama>;
+  export function getLlama(params: {
+    logLevel: LlamaLogLevel;
+    gpu?: LlamaGpuType | "auto" | false;
+  }): Promise<Llama>;
   export function resolveModelFile(modelPath: string, cacheDir?: string): Promise<string>;
 }

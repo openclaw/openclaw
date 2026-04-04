@@ -206,6 +206,29 @@ agents: {
 - 设置 `agents.defaults.memorySearch.provider = "local"`。
 - 提供 `agents.defaults.memorySearch.local.modelPath`（GGUF 或 `hf:` URI）。
 - 可选：设置 `agents.defaults.memorySearch.fallback = "none"` 以避免远程回退。
+- 如果需要更可控的显存占用或本地性能调优，还可以设置 `agents.defaults.memorySearch.local.gpu`、`gpuLayers`、`contextSize` 和 `flashAttention`。
+
+示例：
+
+```json5
+{
+  agents: {
+    defaults: {
+      memorySearch: {
+        provider: "local",
+        fallback: "none",
+        local: {
+          modelPath: "/models/Qwen3-Embedding-4B-Q4_K_M.gguf",
+          gpu: "vulkan",
+          gpuLayers: "max",
+          contextSize: 2048,
+          flashAttention: true,
+        },
+      },
+    },
+  },
+}
+```
 
 ### 记忆工具的工作原理
 
