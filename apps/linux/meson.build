@@ -53,7 +53,8 @@ sources = [
   'src/section_cron.c',
   'src/section_instances.c',
   'src/onboarding.c',
-  'src/log.c'
+  'src/log.c',
+  'src/test_seams.c'
 ]
 
 executable('openclaw-linux',
@@ -124,7 +125,7 @@ test_gateway_rpc_exe = executable('test_gateway_rpc',
 test('gateway_rpc', test_gateway_rpc_exe)
 
 test_rpc_mutations_exe = executable('test_rpc_mutations',
-  ['tests/test_rpc_mutations.c', 'src/gateway_mutations.c'],
+  ['tests/test_rpc_mutations.c', 'src/gateway_mutations.c', 'src/test_seams.c'],
   dependencies : [glib_dep, json_glib_dep])
 test('rpc_mutations', test_rpc_mutations_exe)
 

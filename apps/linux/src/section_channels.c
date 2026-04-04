@@ -14,6 +14,9 @@
 #include "gateway_rpc.h"
 #include "gateway_data.h"
 #include "gateway_mutations.h"
+#include "gateway_config.h"
+#include "section_controller.h"
+#include "test_seams.h"
 #include <adwaita.h>
 
 /* ── State ───────────────────────────────────────────────────────── */
@@ -461,63 +464,49 @@ static void on_web_login_start_done(const GatewayRpcResponse *response, gpointer
 
     JsonObject *payload_obj = json_node_get_object(response->payload);
     
-    /* STRICT GUARDS: Require qrDataUrl member for QR display */
-    if (!json_object_has_member(payload_obj, "qrDataUrl")) {
-        if (channels_status_label) {
-            gtk_label_set_text(GTK_LABEL(channels_status_label), 
-                "Login start error: Response missing required 'qrDataUrl' field");
-        }
-        g_free(channel_id);
-        return;
-    }
+    /* Check for QR data URL using testable helper */
+    const gchar *qr_data_url = NULL;
+    gboolean has_qr = web_login_start_payload_has_qr(payload_obj, &qr_data_url);
     
-    const gchar *qr_data_url = json_object_get_string_member(payload_obj, "qrDataUrl");
-    if (!qr_data_url || *qr_data_url == '\0') {
-        if (channels_status_label) {
-            gtk_label_set_text(GTK_LABEL(channels_status_label), 
-                "Login start error: 'qrDataUrl' is empty or null");
-        }
-        g_free(channel_id);
-        return;
-    }
+    /* Render QR code dialog if we have a valid QR data URL */
+    if (has_qr) {
+        g_autofree gchar *title = g_strdup_printf("Link Device: %s", channel_id);
+        AdwAlertDialog *dialog = ADW_ALERT_DIALOG(adw_alert_dialog_new(title, "Scan this QR code with your device to link it."));
+        adw_alert_dialog_add_responses(dialog, "close", "Close", NULL);
+        adw_alert_dialog_set_default_response(dialog, "close");
+        adw_alert_dialog_set_close_response(dialog, "close");
 
-    /* Render QR code dialog */
-    g_autofree gchar *title = g_strdup_printf("Link Device: %s", channel_id);
-    AdwAlertDialog *dialog = ADW_ALERT_DIALOG(adw_alert_dialog_new(title, "Scan this QR code with your device to link it."));
-    adw_alert_dialog_add_responses(dialog, "close", "Close", NULL);
-    adw_alert_dialog_set_default_response(dialog, "close");
-    adw_alert_dialog_set_close_response(dialog, "close");
-
-    /* Extract base64 image data */
-    const gchar *b64_start = g_strstr_len(qr_data_url, -1, "base64,");
-    if (b64_start) {
-        b64_start += 7; /* skip "base64," */
-        gsize out_len = 0;
-        guchar *img_data = g_base64_decode(b64_start, &out_len);
-        
-        if (img_data) {
-            g_autoptr(GInputStream) stream = g_memory_input_stream_new_from_data(img_data, out_len, g_free);
-            g_autoptr(GError) error = NULL;
-            g_autoptr(GdkPixbuf) pixbuf = gdk_pixbuf_new_from_stream(stream, NULL, &error);
+        /* Extract base64 image data */
+        const gchar *b64_start = g_strstr_len(qr_data_url, -1, "base64,");
+        if (b64_start) {
+            b64_start += 7; /* skip "base64," */
+            gsize out_len = 0;
+            guchar *img_data = g_base64_decode(b64_start, &out_len);
             
-            if (pixbuf) {
-                /* Modern GTK4: create texture from pixbuf for gtk_picture */
-                GdkTexture *texture = gdk_texture_new_for_pixbuf(pixbuf);
-                GtkWidget *img = gtk_picture_new_for_paintable(GDK_PAINTABLE(texture));
-                g_object_unref(texture);
-                gtk_widget_set_size_request(img, 256, 256);
-                gtk_widget_set_margin_start(img, 24);
-                gtk_widget_set_margin_end(img, 24);
-                gtk_widget_set_margin_top(img, 12);
-                gtk_widget_set_margin_bottom(img, 24);
-                adw_alert_dialog_set_extra_child(dialog, img);
+            if (img_data) {
+                g_autoptr(GInputStream) stream = g_memory_input_stream_new_from_data(img_data, out_len, g_free);
+                g_autoptr(GError) error = NULL;
+                g_autoptr(GdkPixbuf) pixbuf = gdk_pixbuf_new_from_stream(stream, NULL, &error);
+                
+                if (pixbuf) {
+                    /* Modern GTK4: create texture from pixbuf for gtk_picture */
+                    GdkTexture *texture = gdk_texture_new_for_pixbuf(pixbuf);
+                    GtkWidget *img = gtk_picture_new_for_paintable(GDK_PAINTABLE(texture));
+                    g_object_unref(texture);
+                    gtk_widget_set_size_request(img, 256, 256);
+                    gtk_widget_set_margin_start(img, 24);
+                    gtk_widget_set_margin_end(img, 24);
+                    gtk_widget_set_margin_top(img, 12);
+                    gtk_widget_set_margin_bottom(img, 24);
+                    adw_alert_dialog_set_extra_child(dialog, img);
+                }
             }
         }
-    }
 
-    GtkApplication *app = GTK_APPLICATION(g_application_get_default());
-    GtkWidget *toplevel = GTK_WIDGET(gtk_application_get_active_window(app));
-    adw_alert_dialog_choose(dialog, toplevel, NULL, NULL, NULL);
+        GtkApplication *app = GTK_APPLICATION(g_application_get_default());
+        GtkWidget *toplevel = GTK_WIDGET(gtk_application_get_active_window(app));
+        adw_alert_dialog_choose(dialog, toplevel, NULL, NULL, NULL);
+    }
 
     if (channels_status_label)
         gtk_label_set_text(GTK_LABEL(channels_status_label), "Waiting for login completion\u2026");

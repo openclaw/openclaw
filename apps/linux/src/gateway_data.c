@@ -564,7 +564,7 @@ GatewayCronData* gateway_data_parse_cron(JsonNode *payload) {
             job->created_at_ms = json_get_int64_or_zero(obj, "createdAtMs");
             job->updated_at_ms = json_get_int64_or_zero(obj, "updatedAtMs");
             job->agent_id = json_get_string_or_null(obj, "agentId");
-            job->transcript_session_key = json_get_string_or_null(obj, "transcriptSessionKey");
+            job->transcript_session_key = json_get_string_or_null(obj, "sessionKey");
 
             /* Routing fields are at the job root level, not in payload */
             job->session_target = json_get_string_or_null(obj, "sessionTarget");
@@ -743,7 +743,7 @@ GatewayCronRunsData* gateway_data_parse_cron_runs(JsonNode *payload) {
             data->entries[i].id = json_get_string_or_null(obj, "id");
             data->entries[i].job_id = json_get_string_or_null(obj, "jobId");
             data->entries[i].status = json_get_string_or_null(obj, "status");
-            data->entries[i].timestamp_ms = json_get_int64_or_zero(obj, "timestampMs");
+            data->entries[i].timestamp_ms = json_get_int64_or_zero(obj, "ts");
             data->entries[i].duration_ms = json_get_int64_or_zero(obj, "durationMs");
             data->entries[i].summary = json_get_string_or_null(obj, "summary");
             data->entries[i].error = json_get_string_or_null(obj, "error");
