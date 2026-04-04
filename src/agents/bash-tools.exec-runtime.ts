@@ -326,7 +326,10 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
     : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
   enqueueSystemEvent(summary, { sessionKey });
   requestHeartbeatNow(
-    scopedHeartbeatWakeOptions(sessionKey, { reason: `exec:${session.id}:exit` }),
+    scopedHeartbeatWakeOptions(sessionKey, {
+      reason: `exec:${session.id}:exit`,
+      coalesceMs: 50,
+    }),
   );
 }
 
@@ -547,7 +550,7 @@ export async function runExecProcess(opts: {
     scopeKey: opts.scopeKey,
     sessionKey: opts.sessionKey,
     notifyOnExit: opts.notifyOnExit,
-    notifyOnExitEmptySuccess: opts.notifyOnExitEmptySuccess === true,
+    notifyOnExitEmptySuccess: opts.notifyOnExitEmptySuccess !== false,
     exitNotified: false,
     child: undefined,
     stdin: undefined,

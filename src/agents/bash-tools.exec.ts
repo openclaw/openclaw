@@ -1195,7 +1195,7 @@ export function createExecTool(
     );
   }
   const notifyOnExit = defaults?.notifyOnExit !== false;
-  const notifyOnExitEmptySuccess = defaults?.notifyOnExitEmptySuccess === true;
+  const notifyOnExitEmptySuccess = defaults?.notifyOnExitEmptySuccess !== false;
   const notifySessionKey = defaults?.sessionKey?.trim() || undefined;
   const approvalRunningNoticeMs = resolveApprovalRunningNoticeMs(defaults?.approvalRunningNoticeMs);
   // Derive agentId only when sessionKey is an agent session key.
