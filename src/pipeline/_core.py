@@ -267,9 +267,10 @@ class PipelineExecutor:
         self._march_protocol = MARCHProtocol()
 
         # v13.2: AFlow dynamic chain generator
-        aflow_model = self.config.get("system", {}).get("model_router", {}).get(
-            "intent", "meta-llama/llama-3.3-70b-instruct:free"
-        )
+        # NEW-1 fix: AFlow needs system prompts — use 'general' model, not 'intent'
+        # (gemma-3-4b-it:free rejects system prompts with HTTP 400)
+        _mr = self.config.get("system", {}).get("model_router", {})
+        aflow_model = _mr.get("general") or _mr.get("intent", "meta-llama/llama-3.3-70b-instruct:free")
         self._aflow = AFlowEngine(
             model=aflow_model,
             default_chains=self.default_chains,
@@ -351,6 +352,14 @@ class PipelineExecutor:
 
         self._init_supermemory()
 
+    async def cleanup(self):
+        """Gracefully close MCP connections to prevent anyio tracebacks at shutdown."""
+        for mcp in [self.openclaw_mcp, self.dmarket_mcp]:
+            try:
+                await mcp.cleanup()
+            except Exception as e:
+                logger.debug("MCP cleanup error (non-fatal)", error=str(e))
+
     async def _validate_cloud(self):
         """Checks that the cloud LLM gateway is configured."""
         logger.info("Cloud-only mode: LLM gateway configured via OpenRouter")
@@ -376,6 +385,12 @@ class PipelineExecutor:
         """
         # Если в конфиге явно задан pipeline — уважаем его (не override)
         brigade_config = self.config.get("brigades", {}).get(brigade, {})
+        # Fallback: if brigade has no roles (e.g. "General"), use OpenClaw-Core
+        if not brigade_config.get("roles"):
+            _fallback_brigade = "OpenClaw-Core"
+            brigade_config = self.config.get("brigades", {}).get(_fallback_brigade, {})
+            if brigade_config.get("roles"):
+                logger.info(f"Brigade '{brigade}' has no roles, falling back to '{_fallback_brigade}'")
         if "pipeline" in brigade_config:
             return brigade_config["pipeline"][:max_steps], "config"
 
@@ -436,6 +451,13 @@ class PipelineExecutor:
         shared_observations: dict = None
     ) -> Dict[str, Any]:
         """Execute the full pipeline for a brigade."""
+
+        # Remap unknown/General brigade to OpenClaw-Core (it has all general-purpose roles)
+        _known_brigades = set(self.config.get("brigades", {}).keys())
+        if brigade not in _known_brigades:
+            _old_brigade = brigade
+            brigade = "OpenClaw-Core"
+            logger.info(f"Brigade '{_old_brigade}' not configured, remapped to '{brigade}'")
 
         # --- v14.4: Multi-Task Decomposer (P1-1 / P1-3 hotfix) ---
         # If the prompt contains a numbered list (1. ... 2. ...) and is long enough,
@@ -927,15 +949,26 @@ class PipelineExecutor:
                 # --- v16.4: General step error detection + self-healing retry ---
                 if not _autoheal_used and response:
                     _resp_lower = (response or "").lower()
-                    # Strip code fences before checking for error markers so that
-                    # legitimate code blocks containing 'error:' don't trigger healing.
+                    # Strip code fences AND inline code before checking for error markers
+                    # so legitimate code/comments containing 'error' don't trigger healing.
                     _resp_no_code = re.sub(r"```[\s\S]*?```", "", _resp_lower)
+                    _resp_no_code = re.sub(r"`[^`]+`", "", _resp_no_code)
+                    # Also strip common false-positive phrases about error handling
+                    _FP_PHRASES = [
+                        "error handling", "error message", "error code",
+                        "error log", "error response", "error status",
+                        "raise error", "catch error", "обработка ошибок",
+                        "обработк", "исключен", "перехват",
+                    ]
+                    _check_text = _resp_no_code
+                    for _fp in _FP_PHRASES:
+                        _check_text = _check_text.replace(_fp, "")
                     _has_error_markers = (
                         response.startswith("⚠️")
-                        or "traceback" in _resp_no_code
-                        or "exception:" in _resp_no_code
-                        or ("error:" in _resp_no_code and not _resp_no_code.startswith("```"))
-                        or "failed to execute" in _resp_no_code
+                        or "traceback" in _check_text
+                        or "exception:" in _check_text
+                        or "error:" in _check_text
+                        or "failed to execute" in _check_text
                     )
                     if _has_error_markers:
                         _autoheal_used = True
