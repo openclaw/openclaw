@@ -4,13 +4,11 @@ import ai.openclaw.app.gateway.GatewaySession
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
 import java.net.HttpURLConnection
 import java.net.URL
-import java.net.URLEncoder
 
 private const val DEFAULT_TIMEOUT_MS = 30_000
 private const val MAX_BODY_SIZE_BYTES = 5 * 1024 * 1024 // 5 MB cap
@@ -162,13 +160,16 @@ class HttpHandler(
       return null
     }
 
-    val headers =
-      buildMap<String, String> {
-        obj["headers"]?.jsonObject?.entries?.forEach { (k, v) ->
-          val value = (v as? JsonPrimitive)?.contentOrNull?.trim() ?: ""
-          if (k.isNotEmpty()) put(k, value)
+    val headersObj = obj["headers"] as? JsonObject
+    val headers = mutableMapOf<String, String>()
+    if (headersObj != null) {
+      for (entry in headersObj.entries) {
+        val value = (entry.value as? JsonPrimitive)?.contentOrNull?.trim() ?: ""
+        if (entry.key.isNotEmpty()) {
+          headers[entry.key] = value
         }
       }
+    }
 
     val body = (obj["body"] as? JsonPrimitive)?.contentOrNull
 
