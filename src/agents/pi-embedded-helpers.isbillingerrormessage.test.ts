@@ -638,6 +638,21 @@ describe("classifyFailoverReason", () => {
       ),
     ).toBeNull();
   });
+  it("classifies Anthropic bare 'unknown error' as timeout for failover", () => {
+    expect(classifyFailoverReason("An unknown error occurred", { provider: "anthropic" })).toBe(
+      "timeout",
+    );
+  });
+
+  it("does not classify generic internal unknown-error text as timeout", () => {
+    expect(classifyFailoverReason("An unknown error occurred")).toBeNull();
+    expect(
+      classifyFailoverReason("An unknown error occurred", { provider: "openrouter" }),
+    ).toBeNull();
+    expect(classifyFailoverReason("Provider returned error")).toBeNull();
+    expect(classifyFailoverReason("Unknown error")).toBeNull();
+    expect(classifyFailoverReason("LLM request failed with an unknown error.")).toBeNull();
+  });
 });
 
 describe("isFailoverErrorMessage", () => {

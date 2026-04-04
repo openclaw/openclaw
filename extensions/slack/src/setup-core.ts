@@ -1,3 +1,4 @@
+import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input-runtime";
 import {
   createAllowlistSetupWizardProxy,
   createAccountScopedAllowFromSection,
@@ -6,18 +7,17 @@ import {
   createStandardChannelSetupStatus,
   DEFAULT_ACCOUNT_ID,
   createEnvPatchedAccountSetupAdapter,
-  hasConfiguredSecretInput,
   type OpenClawConfig,
   parseMentionOrPrefixedId,
   patchChannelConfigForAccount,
   setSetupChannelEnabled,
-} from "openclaw/plugin-sdk/setup";
+} from "openclaw/plugin-sdk/setup-runtime";
 import {
   type ChannelSetupAdapter,
   type ChannelSetupDmPolicy,
   type ChannelSetupWizard,
   type ChannelSetupWizardAllowFromEntry,
-} from "openclaw/plugin-sdk/setup";
+} from "openclaw/plugin-sdk/setup-runtime";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { inspectSlackAccount } from "./account-inspect.js";
 import { listSlackAccountIds, resolveSlackAccount, type ResolvedSlackAccount } from "./accounts.js";
