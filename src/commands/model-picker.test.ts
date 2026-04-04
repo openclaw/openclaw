@@ -88,6 +88,47 @@ beforeEach(() => {
 });
 
 describe("promptDefaultModel", () => {
+  it("treats byteplus plan models as preferred-provider matches", async () => {
+    loadModelCatalog.mockResolvedValue([
+      {
+        provider: "openai",
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+      },
+      {
+        provider: "byteplus-plan",
+        id: "ark-code-latest",
+        name: "Ark Coding Plan",
+      },
+    ]);
+
+    const select = vi.fn(async (params) => params.initialValue as never);
+    const prompter = makePrompter({ select });
+    const config = {
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.4",
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await promptDefaultModel({
+      config,
+      prompter,
+      allowKeep: true,
+      includeManual: false,
+      ignoreAllowlist: true,
+      preferredProvider: "byteplus",
+    });
+
+    const options = select.mock.calls[0]?.[0]?.options ?? [];
+    const optionValues = options.map((opt: { value: string }) => opt.value);
+    expect(optionValues).toContain("byteplus-plan/ark-code-latest");
+    expect(optionValues[1]).toBe("byteplus-plan/ark-code-latest");
+    expect(select.mock.calls[0]?.[0]?.initialValue).toBe("byteplus-plan/ark-code-latest");
+    expect(result.model).toBe("byteplus-plan/ark-code-latest");
+  });
+
   it("supports configuring vLLM during setup", async () => {
     loadModelCatalog.mockResolvedValue([
       {

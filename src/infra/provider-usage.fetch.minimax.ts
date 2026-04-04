@@ -40,8 +40,6 @@ const RESET_KEYS = [
 const PERCENT_KEYS = [
   "used_percent",
   "usedPercent",
-  "usage_percent",
-  "usagePercent",
   "used_rate",
   "usage_rate",
   "used_ratio",
@@ -49,6 +47,11 @@ const PERCENT_KEYS = [
   "usedRatio",
   "usageRatio",
 ] as const;
+
+// MiniMax's usage_percent / usagePercent fields report the remaining quota
+// as a percentage, not the consumed quota. Treat them as "remaining percent"
+// and invert to get usedPercent. Count-based fromCounts always takes priority.
+const REMAINING_PERCENT_KEYS = ["usage_percent", "usagePercent"] as const;
 
 const USED_KEYS = [
   "used",
@@ -289,17 +292,27 @@ function deriveUsedPercent(payload: Record<string, unknown>): number | null {
       ? clampPercent((used / total) * 100)
       : null;
 
-  const percentRaw = pickNumber(payload, PERCENT_KEYS);
-  if (percentRaw !== undefined) {
-    const normalized = clampPercent(percentRaw <= 1 ? percentRaw * 100 : percentRaw);
-    if (fromCounts !== null) {
-      // Count-derived usage is more stable across provider percent field variations.
-      return fromCounts;
-    }
-    return normalized;
+  // Count-derived usage is more stable across provider percent field variations.
+  if (fromCounts !== null) {
+    return fromCounts;
   }
 
-  return fromCounts;
+  const percentRaw = pickNumber(payload, PERCENT_KEYS);
+  if (percentRaw !== undefined) {
+    return clampPercent(percentRaw <= 1 ? percentRaw * 100 : percentRaw);
+  }
+
+  // usage_percent / usagePercent in MiniMax's API represents remaining quota,
+  // not consumed quota. Invert to get usedPercent.
+  const remainingPercentRaw = pickNumber(payload, REMAINING_PERCENT_KEYS);
+  if (remainingPercentRaw !== undefined) {
+    const remainingNormalized = clampPercent(
+      remainingPercentRaw <= 1 ? remainingPercentRaw * 100 : remainingPercentRaw,
+    );
+    return clampPercent(100 - remainingNormalized);
+  }
+
+  return null;
 }
 
 export async function fetchMinimaxUsage(

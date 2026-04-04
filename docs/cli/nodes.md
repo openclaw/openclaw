@@ -39,6 +39,15 @@ openclaw nodes status --last-connected 24h
 Use `--connected` to only show currently-connected nodes. Use `--last-connected <duration>` to
 filter to nodes that connected within a duration (e.g. `24h`, `7d`).
 
+Approval note:
+
+- `openclaw nodes pending` only needs pairing scope.
+- `openclaw nodes approve <requestId>` inherits extra scope requirements from the
+  pending request:
+  - commandless request: pairing only
+  - non-exec node commands: pairing + write
+  - `system.run` / `system.run.prepare` / `system.which`: pairing + admin
+
 ## Invoke
 
 ```bash

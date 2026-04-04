@@ -20,6 +20,8 @@ openclaw status --usage
 Notes:
 
 - `--deep` runs live probes (WhatsApp Web + Telegram + Discord + Slack + Signal).
+- `--usage` prints normalized provider usage windows as `X% left`.
+- MiniMax's raw `usage_percent` / `usagePercent` fields are remaining quota, so OpenClaw inverts them before display; count-based fields win when present.
 - Output includes per-agent session stores when multiple agents are configured.
 - Overview includes Gateway + node host service install/runtime status when available.
 - Overview includes update channel + git SHA (for source checkouts).

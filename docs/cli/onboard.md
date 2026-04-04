@@ -142,6 +142,12 @@ Flow notes:
 
 - `quickstart`: minimal prompts, auto-generates a gateway token.
 - `manual`: full prompts for port/bind/auth (alias of `advanced`).
+- When an auth choice implies a preferred provider, onboarding prefilters the
+  default-model and allowlist pickers to that provider. For Volcengine and
+  BytePlus, this also matches the coding-plan variants
+  (`volcengine-plan/*`, `byteplus-plan/*`).
+- If the preferred-provider filter yields no loaded models yet, onboarding
+  falls back to the unfiltered catalog instead of leaving the picker empty.
 - In the web-search step, some providers can trigger provider-specific
   follow-up prompts:
   - **Grok** can offer optional `x_search` setup with the same `XAI_API_KEY`

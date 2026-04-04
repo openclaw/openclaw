@@ -96,7 +96,8 @@ user timezone is known. To keep the prompt cache-stable, it now only includes
 the **time zone** (no dynamic clock or time format).
 
 Use `session_status` when the agent needs the current time; the status card
-includes a timestamp line.
+includes a timestamp line. The same tool can optionally set a per-session model
+override (`model=default` clears it).
 
 Configure with:
 

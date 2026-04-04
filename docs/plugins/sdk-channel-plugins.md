@@ -280,6 +280,10 @@ Auth-only channels can usually stop at the default path: core handles approvals 
     can show them in root help without activating the full channel runtime,
     while normal full loads still pick up the same descriptors for real command
     registration. Keep `registerFull(...)` for runtime-only work.
+    If `registerFull(...)` registers gateway RPC methods, use a
+    plugin-specific prefix. Core admin namespaces (`config.*`,
+    `exec.approvals.*`, `wizard.*`, `update.*`) stay reserved and always
+    resolve to `operator.admin`.
     `defineChannelPluginEntry` handles the registration-mode split automatically. See
     [Entry Points](/plugins/sdk-entrypoints#definechannelpluginentry) for all
     options.

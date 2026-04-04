@@ -175,6 +175,15 @@ vi.mock("../gateway/call.js", createGatewayCallModuleMock);
 vi.mock("../gateway/session-utils.js", createGatewaySessionUtilsModuleMock);
 vi.mock("../config/config.js", createConfigModuleMock);
 vi.mock("../agents/model-catalog.js", createModelCatalogModuleMock);
+vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
+  normalizeProviderModelIdWithRuntime: () => undefined,
+}));
+// Keep provider-runtime/plugin activation out of this focused tool test. The
+// session_status surface only needs model selection semantics here, not real
+// bundled provider registration.
+vi.mock("../plugins/providers.runtime.js", () => ({
+  resolvePluginProviders: () => [],
+}));
 vi.mock("../agents/auth-profiles.js", createAuthProfilesModuleMock);
 vi.mock("../agents/model-auth.js", createModelAuthModuleMock);
 vi.mock("../infra/provider-usage.js", createProviderUsageModuleMock);
@@ -333,6 +342,25 @@ describe("session_status tool", () => {
     expect(details.statusText).toContain("OpenClaw");
     expect(details.statusText).toContain("🧠 Model:");
     expect(details.statusText).not.toContain("OAuth/token status");
+  });
+
+  it("enables transcript usage fallback for session_status", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "s1",
+        updatedAt: 10,
+      },
+    });
+
+    const tool = getSessionStatusTool();
+
+    await tool.execute("call-transcript-usage", {});
+
+    expect(buildStatusMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        includeTranscriptUsage: true,
+      }),
+    );
   });
 
   it("errors for unknown session keys", async () => {
@@ -645,6 +673,7 @@ describe("session_status tool", () => {
       "/tmp/main/sessions.json",
       expect.objectContaining({
         "agent:main:subagent:child": expect.objectContaining({
+          liveModelSwitchPending: true,
           modelOverride: "claude-sonnet-4-6",
         }),
       }),
@@ -1388,5 +1417,6 @@ describe("session_status tool", () => {
     expect(saved.providerOverride).toBeUndefined();
     expect(saved.modelOverride).toBeUndefined();
     expect(saved.authProfileOverride).toBeUndefined();
+    expect(saved.liveModelSwitchPending).toBe(true);
   });
 });

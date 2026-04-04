@@ -234,6 +234,74 @@ describe("createAnthropicVertexStreamFn", () => {
     });
   });
 
+  it("reapplies Anthropic cache-boundary shaping when payload hooks return a fresh payload", async () => {
+    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5");
+    const model = makeModel({ id: "claude-sonnet-4-6", maxTokens: 64000 });
+    const onPayload = vi.fn(async () => ({
+      system: [
+        {
+          type: "text",
+          text: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+        },
+      ],
+      messages: [{ role: "user", content: "Hello again" }],
+    }));
+
+    void streamFn(
+      model,
+      {
+        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+        messages: [{ role: "user", content: "Hello" }],
+      } as never,
+      {
+        cacheRetention: "short",
+        onPayload,
+      } as never,
+    );
+
+    const transportOptions = hoisted.streamAnthropicMock.mock.calls[0]?.[2] as {
+      onPayload?: (payload: unknown, payloadModel: unknown) => Promise<unknown>;
+    };
+    const nextPayload = await transportOptions.onPayload?.(
+      {
+        system: [
+          {
+            type: "text",
+            text: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+          },
+        ],
+        messages: [{ role: "user", content: "Hello" }],
+      },
+      model,
+    );
+
+    expect(nextPayload).toEqual({
+      system: [
+        {
+          type: "text",
+          text: "Stable prefix",
+          cache_control: { type: "ephemeral" },
+        },
+        {
+          type: "text",
+          text: "Dynamic suffix",
+        },
+      ],
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: "Hello again",
+              cache_control: { type: "ephemeral" },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
   it("omits maxTokens when neither the model nor request provide a finite limit", () => {
     const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5");
     const model = makeModel({ id: "claude-sonnet-4-6" });

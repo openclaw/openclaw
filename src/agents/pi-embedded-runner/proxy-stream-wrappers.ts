@@ -2,9 +2,10 @@ import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { isProxyReasoningUnsupportedModelHint } from "../../plugin-sdk/provider-model-shared.js";
+import { resolveProviderRequestPolicy } from "../provider-attribution.js";
 import { resolveProviderRequestPolicyConfig } from "../provider-request-config.js";
 import { applyAnthropicEphemeralCacheControlMarkers } from "./anthropic-cache-control-payload.js";
-import { isOpenRouterAnthropicModelRef } from "./anthropic-family-cache-semantics.js";
+import { isAnthropicModelRef } from "./anthropic-family-cache-semantics.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 const KILOCODE_FEATURE_HEADER = "X-KILOCODE-FEATURE";
 const KILOCODE_FEATURE_DEFAULT = "openclaw";
@@ -58,10 +59,24 @@ function normalizeProxyReasoningPayload(payload: unknown, thinkingLevel?: ThinkL
 export function createOpenRouterSystemCacheWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
+    const provider = typeof model.provider === "string" ? model.provider : undefined;
+    const modelId = typeof model.id === "string" ? model.id : undefined;
+    // Keep OpenRouter-specific cache markers on verified OpenRouter routes
+    // (or the provider's default route), but not on arbitrary OpenAI proxies.
+    const endpointClass = resolveProviderRequestPolicy({
+      provider,
+      api: typeof model.api === "string" ? model.api : undefined,
+      baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
+      capability: "llm",
+      transport: "stream",
+    }).endpointClass;
     if (
-      typeof model.provider !== "string" ||
-      typeof model.id !== "string" ||
-      !isOpenRouterAnthropicModelRef(model.provider, model.id)
+      !modelId ||
+      !isAnthropicModelRef(modelId) ||
+      !(
+        endpointClass === "openrouter" ||
+        (endpointClass === "default" && provider?.trim().toLowerCase() === "openrouter")
+      )
     ) {
       return underlying(model, context, options);
     }

@@ -16,6 +16,13 @@ export type CliOutput = {
   usage?: CliUsage;
 };
 
+export type CliStreamingDelta = {
+  text: string;
+  delta: string;
+  sessionId?: string;
+  usage?: CliUsage;
+};
+
 function extractJsonObjectCandidates(raw: string): string[] {
   const candidates: string[] = [];
   let depth = 0;
@@ -240,6 +247,113 @@ function parseClaudeCliJsonlResult(params: {
     return { text: "", sessionId: params.sessionId, usage: params.usage };
   }
   return null;
+}
+
+function parseClaudeCliStreamingDelta(params: {
+  providerId: string;
+  parsed: Record<string, unknown>;
+  textSoFar: string;
+  sessionId?: string;
+  usage?: CliUsage;
+}): CliStreamingDelta | null {
+  if (!isClaudeCliProvider(params.providerId)) {
+    return null;
+  }
+  if (params.parsed.type !== "stream_event" || !isRecord(params.parsed.event)) {
+    return null;
+  }
+  const event = params.parsed.event;
+  if (event.type !== "content_block_delta" || !isRecord(event.delta)) {
+    return null;
+  }
+  const delta = event.delta;
+  if (delta.type !== "text_delta" || typeof delta.text !== "string") {
+    return null;
+  }
+  if (!delta.text) {
+    return null;
+  }
+  return {
+    text: `${params.textSoFar}${delta.text}`,
+    delta: delta.text,
+    sessionId: params.sessionId,
+    usage: params.usage,
+  };
+}
+
+export function createCliJsonlStreamingParser(params: {
+  backend: CliBackendConfig;
+  providerId: string;
+  onAssistantDelta: (delta: CliStreamingDelta) => void;
+}) {
+  let lineBuffer = "";
+  let assistantText = "";
+  let sessionId: string | undefined;
+  let usage: CliUsage | undefined;
+
+  const handleParsedRecord = (parsed: Record<string, unknown>) => {
+    sessionId = pickCliSessionId(parsed, params.backend) ?? sessionId;
+    if (!sessionId && typeof parsed.thread_id === "string") {
+      sessionId = parsed.thread_id.trim();
+    }
+    if (isRecord(parsed.usage)) {
+      usage = toCliUsage(parsed.usage) ?? usage;
+    }
+
+    const delta = parseClaudeCliStreamingDelta({
+      providerId: params.providerId,
+      parsed,
+      textSoFar: assistantText,
+      sessionId,
+      usage,
+    });
+    if (!delta) {
+      return;
+    }
+    assistantText = delta.text;
+    params.onAssistantDelta(delta);
+  };
+
+  const flushLines = (flushPartial: boolean) => {
+    while (true) {
+      const newlineIndex = lineBuffer.indexOf("\n");
+      if (newlineIndex < 0) {
+        break;
+      }
+      const line = lineBuffer.slice(0, newlineIndex).trim();
+      lineBuffer = lineBuffer.slice(newlineIndex + 1);
+      if (!line) {
+        continue;
+      }
+      for (const parsed of parseJsonRecordCandidates(line)) {
+        handleParsedRecord(parsed);
+      }
+    }
+    if (!flushPartial) {
+      return;
+    }
+    const tail = lineBuffer.trim();
+    lineBuffer = "";
+    if (!tail) {
+      return;
+    }
+    for (const parsed of parseJsonRecordCandidates(tail)) {
+      handleParsedRecord(parsed);
+    }
+  };
+
+  return {
+    push(chunk: string) {
+      if (!chunk) {
+        return;
+      }
+      lineBuffer += chunk;
+      flushLines(false);
+    },
+    finish() {
+      flushLines(true);
+    },
+  };
 }
 
 export function parseCliJsonl(

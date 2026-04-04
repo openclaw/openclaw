@@ -85,6 +85,7 @@ export async function minimaxUnderstandImage(params: {
       "Content-Type": "application/json",
       "MM-API-Source": "OpenClaw",
     },
+    signal: AbortSignal.timeout(60_000),
     body: JSON.stringify({
       prompt,
       image_url: imageDataUrl,

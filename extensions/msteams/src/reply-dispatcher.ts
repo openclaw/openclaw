@@ -110,6 +110,8 @@ export function createMSTeamsReplyDispatcher(params: {
 
   const blockStreamingEnabled =
     typeof msteamsCfg?.blockStreaming === "boolean" ? msteamsCfg.blockStreaming : false;
+  const typingIndicatorEnabled =
+    typeof msteamsCfg?.typingIndicator === "boolean" ? msteamsCfg.typingIndicator : true;
 
   const pendingMessages: MSTeamsRenderedMessage[] = [];
 
@@ -210,7 +212,10 @@ export function createMSTeamsReplyDispatcher(params: {
     humanDelay: core.channel.reply.resolveHumanDelayConfig(params.cfg, params.agentId),
     onReplyStart: async () => {
       await streamController.onReplyStart();
-      await typingCallbacks?.onReplyStart?.();
+      // Avoid duplicate typing UX in DMs: stream status already shows progress.
+      if (typingIndicatorEnabled && !streamController.hasStream()) {
+        await typingCallbacks?.onReplyStart?.();
+      }
     },
     typingCallbacks,
     deliver: async (payload) => {

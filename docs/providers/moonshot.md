@@ -18,15 +18,16 @@ Current Kimi K2 model IDs:
 [//]: # "moonshot-kimi-k2-ids:start"
 
 - `kimi-k2.5`
-- `kimi-k2-0905-preview`
-- `kimi-k2-turbo-preview`
 - `kimi-k2-thinking`
 - `kimi-k2-thinking-turbo`
+- `kimi-k2-turbo`
 
 [//]: # "moonshot-kimi-k2-ids:end"
 
 ```bash
 openclaw onboard --auth-choice moonshot-api-key
+# or
+openclaw onboard --auth-choice moonshot-api-key-cn
 ```
 
 Kimi Coding:
@@ -57,10 +58,9 @@ Choose **Kimi** in the web-search section to store
       models: {
         // moonshot-kimi-k2-aliases:start
         "moonshot/kimi-k2.5": { alias: "Kimi K2.5" },
-        "moonshot/kimi-k2-0905-preview": { alias: "Kimi K2" },
-        "moonshot/kimi-k2-turbo-preview": { alias: "Kimi K2 Turbo" },
         "moonshot/kimi-k2-thinking": { alias: "Kimi K2 Thinking" },
         "moonshot/kimi-k2-thinking-turbo": { alias: "Kimi K2 Thinking Turbo" },
+        "moonshot/kimi-k2-turbo": { alias: "Kimi K2 Turbo" },
         // moonshot-kimi-k2-aliases:end
       },
     },
@@ -78,28 +78,10 @@ Choose **Kimi** in the web-search section to store
             id: "kimi-k2.5",
             name: "Kimi K2.5",
             reasoning: false,
-            input: ["text"],
+            input: ["text", "image"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 256000,
-            maxTokens: 8192,
-          },
-          {
-            id: "kimi-k2-0905-preview",
-            name: "Kimi K2 0905 Preview",
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 256000,
-            maxTokens: 8192,
-          },
-          {
-            id: "kimi-k2-turbo-preview",
-            name: "Kimi K2 Turbo",
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 256000,
-            maxTokens: 8192,
+            contextWindow: 262144,
+            maxTokens: 262144,
           },
           {
             id: "kimi-k2-thinking",
@@ -107,8 +89,8 @@ Choose **Kimi** in the web-search section to store
             reasoning: true,
             input: ["text"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 256000,
-            maxTokens: 8192,
+            contextWindow: 262144,
+            maxTokens: 262144,
           },
           {
             id: "kimi-k2-thinking-turbo",
@@ -116,8 +98,17 @@ Choose **Kimi** in the web-search section to store
             reasoning: true,
             input: ["text"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 262144,
+            maxTokens: 262144,
+          },
+          {
+            id: "kimi-k2-turbo",
+            name: "Kimi K2 Turbo",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             contextWindow: 256000,
-            maxTokens: 8192,
+            maxTokens: 16384,
           },
           // moonshot-kimi-k2-models:end
         ],
@@ -187,10 +178,18 @@ Config lives under `plugins.entries.moonshot.config.webSearch`:
 - Moonshot model refs use `moonshot/<modelId>`. Kimi Coding model refs use `kimi/<modelId>`.
 - Current Kimi Coding default model ref is `kimi/kimi-code`. Legacy `kimi/k2p5` remains accepted as a compatibility model id.
 - Kimi web search uses `KIMI_API_KEY` or `MOONSHOT_API_KEY`, and defaults to `https://api.moonshot.ai/v1` with model `kimi-k2.5`.
+- Native Moonshot endpoints (`https://api.moonshot.ai/v1` and
+  `https://api.moonshot.cn/v1`) advertise streaming usage compatibility on the
+  shared `openai-completions` transport. OpenClaw now keys that off endpoint
+  capabilities, so compatible custom provider ids targeting the same native
+  Moonshot hosts inherit the same streaming-usage behavior.
 - Override pricing and context metadata in `models.providers` if needed.
 - If Moonshot publishes different context limits for a model, adjust
   `contextWindow` accordingly.
 - Use `https://api.moonshot.ai/v1` for the international endpoint, and `https://api.moonshot.cn/v1` for the China endpoint.
+- Onboarding choices:
+  - `moonshot-api-key` for `https://api.moonshot.ai/v1`
+  - `moonshot-api-key-cn` for `https://api.moonshot.cn/v1`
 
 ## Native thinking mode (Moonshot)
 

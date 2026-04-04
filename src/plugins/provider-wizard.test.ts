@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ProviderPlugin } from "./types.js";
 import {
   buildProviderPluginMethodChoice,
   resolveProviderModelPickerEntries,
@@ -7,6 +6,7 @@ import {
   resolveProviderWizardOptions,
   runProviderModelSelectedHook,
 } from "./provider-wizard.js";
+import type { ProviderPlugin } from "./types.js";
 
 const resolvePluginProviders = vi.hoisted(() => vi.fn<() => ProviderPlugin[]>(() => []));
 vi.mock("./providers.runtime.js", () => ({

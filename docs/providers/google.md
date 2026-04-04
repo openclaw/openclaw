@@ -52,12 +52,24 @@ An alternative provider `google-gemini-cli` uses PKCE OAuth instead of an API
 key. This is an unofficial integration; some users report account
 restrictions. Use at your own risk.
 
+- Default model: `google-gemini-cli/gemini-3.1-pro-preview`
+- Alias: `gemini-cli`
+- Login:
+
+```bash
+openclaw models auth login --provider google-gemini-cli --set-default
+```
+
 Environment variables:
 
 - `OPENCLAW_GEMINI_OAUTH_CLIENT_ID`
 - `OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET`
 
 (Or the `GEMINI_CLI_*` variants.)
+
+If Gemini CLI OAuth requests fail after login, set
+`GOOGLE_CLOUD_PROJECT` or `GOOGLE_CLOUD_PROJECT_ID` on the gateway host and
+retry.
 
 ## Capabilities
 
@@ -70,6 +82,50 @@ Environment variables:
 | Video understanding    | Yes               |
 | Web search (Grounding) | Yes               |
 | Thinking/reasoning     | Yes (Gemini 3.1+) |
+
+## Direct Gemini cache reuse
+
+For direct Gemini API runs (`api: "google-generative-ai"`), OpenClaw now
+passes a configured `cachedContent` handle through to Gemini requests.
+
+- Configure per-model or global params with either
+  `cachedContent` or legacy `cached_content`
+- If both are present, `cachedContent` wins
+- Example value: `cachedContents/prebuilt-context`
+- Gemini cache-hit usage is normalized into OpenClaw `cacheRead` from
+  upstream `cachedContentTokenCount`
+
+Example:
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "google/gemini-2.5-pro": {
+          params: {
+            cachedContent: "cachedContents/prebuilt-context",
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+## Image generation
+
+The bundled `google` image-generation provider defaults to
+`google/gemini-3.1-flash-image-preview`.
+
+- Also supports `google/gemini-3-pro-image-preview`
+- Generate: up to 4 images per request
+- Edit mode: enabled, up to 5 input images
+- Geometry controls: `size`, `aspectRatio`, and `resolution`
+
+The OAuth-only `google-gemini-cli` provider is a separate text-inference
+surface. Image generation, media understanding, and Gemini Grounding stay on
+the `google` provider id.
 
 ## Environment note
 

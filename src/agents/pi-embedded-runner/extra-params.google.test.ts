@@ -37,4 +37,71 @@ describe("extra-params: Google thinking payload compatibility", () => {
     expect(payload.config?.thinkingConfig?.thinkingBudget).toBeUndefined();
     expect(payload.config?.thinkingConfig?.thinkingLevel).toBe("HIGH");
   });
+
+  it("passes cachedContent through Google extra params", () => {
+    const { options } = runExtraParamsCase({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "google/gemini-2.5-pro": {
+                params: {
+                  cachedContent: "cachedContents/test-cache",
+                },
+              },
+            },
+          },
+        },
+      } as never,
+      applyProvider: "google",
+      applyModelId: "gemini-2.5-pro",
+      model: {
+        api: "google-generative-ai",
+        provider: "google",
+        id: "gemini-2.5-pro",
+      } as unknown as Model<"openai-completions">,
+      payload: {
+        contents: [],
+      },
+    });
+
+    expect((options as { cachedContent?: string } | undefined)?.cachedContent).toBe(
+      "cachedContents/test-cache",
+    );
+  });
+
+  it("lets higher-precedence cachedContent override lower-precedence cached_content", () => {
+    const { options } = runExtraParamsCase({
+      cfg: {
+        agents: {
+          defaults: {
+            params: {
+              cached_content: "cachedContents/default-cache",
+            },
+            models: {
+              "google/gemini-2.5-pro": {
+                params: {
+                  cachedContent: "cachedContents/model-cache",
+                },
+              },
+            },
+          },
+        },
+      } as never,
+      applyProvider: "google",
+      applyModelId: "gemini-2.5-pro",
+      model: {
+        api: "google-generative-ai",
+        provider: "google",
+        id: "gemini-2.5-pro",
+      } as unknown as Model<"openai-completions">,
+      payload: {
+        contents: [],
+      },
+    });
+
+    expect((options as { cachedContent?: string } | undefined)?.cachedContent).toBe(
+      "cachedContents/model-cache",
+    );
+  });
 });

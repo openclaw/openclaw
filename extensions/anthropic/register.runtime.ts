@@ -1,10 +1,10 @@
+import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import type {
   OpenClawPluginApi,
   ProviderAuthContext,
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import {
   CLAUDE_CLI_PROFILE_ID,
   applyAuthProfileConfig,

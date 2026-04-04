@@ -341,6 +341,70 @@ describe("ensureAuthProfileStore", () => {
     }
   });
 
+  it("exposes Codex CLI auth without persisting copied tokens into auth-profiles.json", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-external-sync-"));
+    const previousCodexHome = process.env.CODEX_HOME;
+    const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
+    const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+    try {
+      const agentDir = path.join(root, "agent");
+      const codexHome = path.join(root, "codex-home");
+      fs.mkdirSync(agentDir, { recursive: true });
+      fs.mkdirSync(codexHome, { recursive: true });
+      fs.writeFileSync(
+        path.join(codexHome, "auth.json"),
+        `${JSON.stringify(
+          {
+            auth_mode: "chatgpt",
+            tokens: {
+              access_token: "codex-access-token",
+              refresh_token: "codex-refresh-token",
+              account_id: "acct_123",
+            },
+            last_refresh: "2026-03-01T00:00:00.000Z",
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+
+      process.env.CODEX_HOME = codexHome;
+      process.env.OPENCLAW_AGENT_DIR = agentDir;
+      process.env.PI_CODING_AGENT_DIR = agentDir;
+      clearRuntimeAuthProfileStoreSnapshots();
+
+      const store = ensureAuthProfileStore(agentDir);
+      expect(store.profiles["openai-codex:default"]).toMatchObject({
+        type: "oauth",
+        provider: "openai-codex",
+        access: "codex-access-token",
+        refresh: "codex-refresh-token",
+        managedBy: "codex-cli",
+      });
+
+      expect(fs.existsSync(path.join(agentDir, "auth-profiles.json"))).toBe(false);
+    } finally {
+      clearRuntimeAuthProfileStoreSnapshots();
+      if (previousCodexHome === undefined) {
+        delete process.env.CODEX_HOME;
+      } else {
+        process.env.CODEX_HOME = previousCodexHome;
+      }
+      if (previousAgentDir === undefined) {
+        delete process.env.OPENCLAW_AGENT_DIR;
+      } else {
+        process.env.OPENCLAW_AGENT_DIR = previousAgentDir;
+      }
+      if (previousPiAgentDir === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
+      }
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("logs one warning with aggregated reasons for rejected auth-profiles entries", () => {
     const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined);
     try {

@@ -27,16 +27,16 @@ This page covers the internal architecture of the OpenClaw plugin system.
 Capabilities are the public **native plugin** model inside OpenClaw. Every
 native OpenClaw plugin registers against one or more capability types:
 
-| Capability            | Registration method                           | Example plugins           |
-| --------------------- | --------------------------------------------- | ------------------------- |
-| Text inference        | `api.registerProvider(...)`                   | `openai`, `anthropic`     |
-| CLI inference backend | `api.registerCliBackend(...)`                 | `openai`, `anthropic`     |
-| Speech                | `api.registerSpeechProvider(...)`             | `elevenlabs`, `microsoft` |
-| Realtime voice        | `api.registerRealtimeVoiceProvider(...)`      | `openai`                  |
-| Media understanding   | `api.registerMediaUnderstandingProvider(...)` | `openai`, `google`        |
-| Image generation      | `api.registerImageGenerationProvider(...)`    | `openai`, `google`        |
-| Web search            | `api.registerWebSearchProvider(...)`          | `google`                  |
-| Channel / messaging   | `api.registerChannel(...)`                    | `msteams`, `matrix`       |
+| Capability            | Registration method                           | Example plugins                      |
+| --------------------- | --------------------------------------------- | ------------------------------------ |
+| Text inference        | `api.registerProvider(...)`                   | `openai`, `anthropic`                |
+| CLI inference backend | `api.registerCliBackend(...)`                 | `openai`, `anthropic`                |
+| Speech                | `api.registerSpeechProvider(...)`             | `elevenlabs`, `microsoft`            |
+| Realtime voice        | `api.registerRealtimeVoiceProvider(...)`      | `openai`                             |
+| Media understanding   | `api.registerMediaUnderstandingProvider(...)` | `openai`, `google`                   |
+| Image generation      | `api.registerImageGenerationProvider(...)`    | `openai`, `google`, `fal`, `minimax` |
+| Web search            | `api.registerWebSearchProvider(...)`          | `google`                             |
+| Channel / messaging   | `api.registerChannel(...)`                    | `msteams`, `matrix`                  |
 
 A plugin that registers zero capabilities but provides hooks, tools, or
 services is a **legacy hook-only** plugin. That pattern is still fully supported.
@@ -739,17 +739,39 @@ api.registerProvider({
   still runs on core OpenAI transports but owns its transport/base URL
   normalization, OAuth refresh fallback policy, default transport choice,
   synthetic Codex catalog rows, and ChatGPT usage endpoint integration.
-- Google AI Studio and Gemini CLI OAuth use `resolveDynamicModel` and
-  `isModernModelRef` because they own Gemini 3.1 forward-compat fallback and
-  modern-model matching; Gemini CLI OAuth also uses `formatApiKey`,
-  `resolveUsageAuth`, and `fetchUsageSnapshot` for token formatting, token
-  parsing, and quota endpoint wiring.
+- Google AI Studio and Gemini CLI OAuth use `resolveDynamicModel`,
+  `buildReplayPolicy`, `sanitizeReplayHistory`,
+  `resolveReasoningOutputMode`, `wrapStreamFn`, and `isModernModelRef` because the
+  `google-gemini` replay family owns Gemini 3.1 forward-compat fallback,
+  native Gemini replay validation, bootstrap replay sanitation, tagged
+  reasoning-output mode, and modern-model matching, while the
+  `google-thinking` stream family owns Gemini thinking payload normalization;
+  Gemini CLI OAuth also uses `formatApiKey`, `resolveUsageAuth`, and
+  `fetchUsageSnapshot` for token formatting, token parsing, and quota endpoint
+  wiring.
+- Anthropic Vertex uses `buildReplayPolicy` through the
+  `anthropic-by-model` replay family so Claude-specific replay cleanup stays
+  scoped to Claude ids instead of every `anthropic-messages` transport.
 - Amazon Bedrock uses `buildReplayPolicy`, `matchesContextOverflowError`,
   `classifyFailoverReason`, and `resolveDefaultThinkingLevel` because it owns
   Bedrock-specific replay policy plus throttle/not-ready/context-overflow
-  error classification for Anthropic-on-Bedrock traffic.
+  error classification for Anthropic-on-Bedrock traffic; its replay policy
+  shares the same Claude-only `anthropic-by-model` guard.
+- OpenRouter, Kilocode, Opencode, and Opencode Go use `buildReplayPolicy`
+  through the `passthrough-gemini` replay family because they proxy Gemini
+  models through OpenAI-compatible transports and need Gemini
+  thought-signature sanitation without native Gemini replay validation or
+  bootstrap rewrites.
+- MiniMax uses `buildReplayPolicy` through the
+  `hybrid-anthropic-openai` replay family because one provider owns both
+  Anthropic-message and OpenAI-compatible semantics; it keeps Claude-only
+  thinking-block dropping on the Anthropic side while overriding reasoning
+  output mode back to native, and the `minimax-fast-mode` stream family owns
+  fast-mode model rewrites on the shared stream path.
 - Moonshot uses `catalog` plus `wrapStreamFn` because it still uses the shared
-  OpenAI transport but needs provider-owned thinking payload normalization.
+  OpenAI transport but needs provider-owned thinking payload normalization; the
+  `moonshot-thinking` stream family maps config plus `/think` state onto its
+  native binary thinking payload.
 - Kilocode uses `catalog`, `capabilities`, `wrapStreamFn`, and
   `isCacheTtlEligible` because it needs provider-owned request headers,
   reasoning payload normalization, Gemini transcript hints, and Anthropic
@@ -758,7 +780,8 @@ api.registerProvider({
   `isCacheTtlEligible`, `isBinaryThinking`, `isModernModelRef`,
   `resolveUsageAuth`, and `fetchUsageSnapshot` because it owns GLM-5 fallback,
   `tool_stream` defaults, binary thinking UX, modern-model matching, and both
-  usage auth + quota fetching.
+  usage auth + quota fetching; the `tool-stream-default-on` stream family keeps
+  the default-on `tool_stream` wrapper out of per-provider handwritten glue.
 - Mistral, OpenCode Zen, and OpenCode Go use `capabilities` only to keep
   transcript/tooling quirks out of core.
 - Catalog-only bundled providers such as `byteplus`, `cloudflare-ai-gateway`,
@@ -1239,6 +1262,11 @@ must register every channel-owned capability that startup depends on, such as:
 If your full entry still owns any required startup capability, do not enable
 this flag. Keep the plugin on the default behavior and let OpenClaw load the
 full entry during startup.
+
+When those startup surfaces include gateway RPC methods, keep them on a
+plugin-specific prefix. Core admin namespaces (`config.*`,
+`exec.approvals.*`, `wizard.*`, `update.*`) remain reserved and always resolve
+to `operator.admin`, even if a plugin requests a narrower scope.
 
 Example:
 

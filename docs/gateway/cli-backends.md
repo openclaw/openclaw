@@ -13,7 +13,7 @@ OpenClaw can run **local AI CLIs** as a **text-only fallback** when API provider
 rate-limited, or temporarily misbehaving. This is intentionally conservative:
 
 - **Tools are disabled** (no tool calls).
-- **Text in → text out** (reliable).
+- **Text in → text out** (reliable, with Claude CLI partial text streaming when enabled).
 - **Sessions are supported** (so follow-up turns stay coherent).
 - **Images can be passed through** if the CLI accepts image paths.
 
@@ -185,8 +185,9 @@ load local files from plain paths (Claude Code CLI behavior).
 ## Inputs / outputs
 
 - `output: "json"` (default) tries to parse JSON and extract text + session id.
-- `output: "jsonl"` parses JSONL streams (Codex CLI `--json`) and extracts the
-  last agent message plus `thread_id` when present.
+- `output: "jsonl"` parses JSONL streams (for example Claude CLI `stream-json`
+  and Codex CLI `--json`) and extracts the final agent message plus session
+  identifiers when present.
 - `output: "text"` treats stdout as the final response.
 
 Input modes:
@@ -200,8 +201,10 @@ Input modes:
 The bundled Anthropic plugin registers a default for `claude-cli`:
 
 - `command: "claude"`
-- `args: ["-p", "--output-format", "json", "--permission-mode", "bypassPermissions"]`
-- `resumeArgs: ["-p", "--output-format", "json", "--permission-mode", "bypassPermissions", "--resume", "{sessionId}"]`
+- `args: ["-p", "--output-format", "stream-json", "--include-partial-messages", "--verbose", "--permission-mode", "bypassPermissions"]`
+- `resumeArgs: ["-p", "--output-format", "stream-json", "--include-partial-messages", "--verbose", "--permission-mode", "bypassPermissions", "--resume", "{sessionId}"]`
+- `output: "jsonl"`
+- `input: "stdin"`
 - `modelArg: "--model"`
 - `systemPromptArg: "--append-system-prompt"`
 - `sessionArg: "--session-id"`
@@ -240,11 +243,35 @@ CLI backend defaults are now part of the plugin surface:
 - Backend-specific config cleanup stays plugin-owned through the optional
   `normalizeConfig` hook.
 
+## Bundle MCP overlays
+
+CLI backends still do **not** receive OpenClaw tool calls, but a backend can opt
+into a generated MCP config overlay with `bundleMcp: true`.
+
+Current bundled behavior:
+
+- `claude-cli`: `bundleMcp: true`
+- `codex-cli`: no bundle MCP overlay
+- `google-gemini-cli`: no bundle MCP overlay
+
+When bundle MCP is enabled, OpenClaw:
+
+- loads enabled bundle-MCP servers for the current workspace
+- merges them with any existing backend `--mcp-config`
+- rewrites the CLI args to pass `--strict-mcp-config --mcp-config <generated-file>`
+
+If no MCP servers are enabled, OpenClaw still injects a strict empty config.
+That prevents background Claude CLI runs from inheriting ambient user/global MCP
+servers unexpectedly.
+
 ## Limitations
 
 - **No OpenClaw tools** (the CLI backend never receives tool calls). Some CLIs
-  may still run their own agent tooling.
-- **No streaming** (CLI output is collected then returned).
+  may still run their own agent tooling. Backends with `bundleMcp: true`
+  can still receive a generated MCP config overlay for their own CLI-native MCP
+  support.
+- **Streaming is backend-specific**. Claude CLI forwards partial text from
+  `stream-json`; other CLI backends may still be buffered until exit.
 - **Structured outputs** depend on the CLI’s JSON format.
 - **Codex CLI sessions** resume via text output (no JSONL), which is less
   structured than the initial `--json` run. OpenClaw sessions still work

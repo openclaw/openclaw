@@ -112,6 +112,7 @@ describe("google transport stream", () => {
         } as unknown as Parameters<typeof streamFn>[1],
         {
           apiKey: "gemini-api-key",
+          cachedContent: "cachedContents/request-cache",
           reasoning: "medium",
           toolChoice: "auto",
         } as Parameters<typeof streamFn>[2],
@@ -142,6 +143,7 @@ describe("google transport stream", () => {
     expect(payload.systemInstruction).toEqual({
       parts: [{ text: "Follow policy." }],
     });
+    expect(payload.cachedContent).toBe("cachedContents/request-cache");
     expect(payload.generationConfig).toMatchObject({
       thinkingConfig: { includeThoughts: true, thinkingLevel: "HIGH" },
     });
@@ -245,5 +247,32 @@ describe("google transport stream", () => {
     expect(params.generationConfig).not.toMatchObject({
       thinkingConfig: { thinkingBudget: -1 },
     });
+  });
+
+  it("includes cachedContent in direct Gemini payloads when requested", () => {
+    const model = {
+      id: "gemini-2.5-pro",
+      name: "Gemini 2.5 Pro",
+      api: "google-generative-ai",
+      provider: "google",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 8192,
+    } satisfies Model<"google-generative-ai">;
+
+    const params = buildGoogleGenerativeAiParams(
+      model,
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      } as never,
+      {
+        cachedContent: "cachedContents/prebuilt-context",
+      },
+    );
+
+    expect(params.cachedContent).toBe("cachedContents/prebuilt-context");
   });
 });

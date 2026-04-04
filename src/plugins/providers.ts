@@ -295,6 +295,7 @@ export function resolveCatalogHookProviderPluginIds(params: {
           origin: plugin.origin,
           config: normalizedConfig,
           rootConfig: params.config,
+          enabledByDefault: plugin.enabledByDefault,
         }).activated,
     )
     .map((plugin) => plugin.id);

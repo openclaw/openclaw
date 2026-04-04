@@ -803,6 +803,52 @@ describe("device pairing tokens", () => {
     expect(hasEffectivePairedDeviceRole(device, "operator")).toBe(true);
   });
 
+  test("filters active token roles to the approved pairing role set", async () => {
+    const now = Date.now();
+    const device: PairedDevice = {
+      deviceId: "device-filtered",
+      publicKey: "pk-filtered",
+      role: "operator",
+      roles: ["operator"],
+      tokens: {
+        node: {
+          token: "forged-node-token",
+          role: "node",
+          scopes: [],
+          createdAtMs: now,
+        },
+        operator: {
+          token: "real-operator-token",
+          role: "operator",
+          scopes: ["operator.read"],
+          createdAtMs: now,
+        },
+      },
+      createdAtMs: now,
+      approvedAtMs: now,
+    };
+
+    expect(listEffectivePairedDeviceRoles(device)).toEqual(["operator"]);
+    expect(hasEffectivePairedDeviceRole(device, "node")).toBe(false);
+  });
+
+  test("rejects rotating a token for a role that was never approved", async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
+    await setupPairedOperatorDevice(baseDir, ["operator.pairing"]);
+
+    await expect(
+      rotateDeviceToken({
+        deviceId: "device-1",
+        role: "node",
+        baseDir,
+      }),
+    ).resolves.toEqual({ ok: false, reason: "unknown-device-or-role" });
+
+    const paired = await getPairedDevice("device-1", baseDir);
+    expect(paired?.tokens?.node).toBeUndefined();
+    expect(paired && listEffectivePairedDeviceRoles(paired)).toEqual(["operator"]);
+  });
+
   test("removes paired devices by device id", async () => {
     const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
     await setupPairedOperatorDevice(baseDir, ["operator.read"]);

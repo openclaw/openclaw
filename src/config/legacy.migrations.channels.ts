@@ -420,8 +420,7 @@ const CHANNEL_ENABLED_ALIAS_RULES: LegacyConfigRule[] = [
 const GOOGLECHAT_STREAMMODE_RULES: LegacyConfigRule[] = [
   {
     path: ["channels", "googlechat"],
-    message:
-      "channels.googlechat.streamMode is legacy and no longer used; it is removed on load.",
+    message: "channels.googlechat.streamMode is legacy and no longer used; it is removed on load.",
     match: (value) => hasLegacyGoogleChatStreamMode(value),
   },
   {

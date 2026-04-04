@@ -546,7 +546,7 @@ Options:
 - `--skip-ui`
 - `--cloudflare-ai-gateway-account-id <id>`
 - `--cloudflare-ai-gateway-gateway-id <id>`
-- `--node-manager <npm|pnpm|bun>` (pnpm recommended; bun not recommended for Gateway runtime)
+- `--node-manager <npm|pnpm|bun>` (node manager for skills; pnpm recommended, bun also supported)
 - `--json`
 
 ### `configure`
@@ -1197,6 +1197,7 @@ Options:
 Notes:
 
 - Overview includes Gateway + node host service status when available.
+- `--usage` prints normalized provider usage windows as `X% left`.
 
 ### Usage tracking
 
@@ -1211,7 +1212,9 @@ Surfaces:
 Notes:
 
 - Data comes directly from provider usage endpoints (no estimates).
-- Providers: Anthropic, GitHub Copilot, OpenAI Codex OAuth, plus Gemini CLI via the bundled `google` plugin and Antigravity where configured.
+- Human-readable output is normalized to `X% left` across providers.
+- Providers with current usage windows: Anthropic, GitHub Copilot, Gemini CLI, OpenAI Codex, MiniMax, and z.ai.
+- MiniMax note: raw `usage_percent` / `usagePercent` means remaining quota, so OpenClaw inverts it before display; count-based fields still win when present.
 - If no matching credentials exist, usage is hidden.
 - Details: see [Usage tracking](/concepts/usage-tracking).
 

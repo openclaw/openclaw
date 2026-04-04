@@ -1,6 +1,6 @@
 export { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 export {
-  buildPassthroughGeminiSanitizingReplayPolicy,
+  buildProviderReplayFamilyHooks,
   DEFAULT_CONTEXT_TOKENS,
 } from "openclaw/plugin-sdk/provider-model-shared";
 export {

@@ -25,7 +25,7 @@ openclaw models scan
 ```
 
 `openclaw models status` shows the resolved default/fallbacks plus an auth overview.
-When provider usage snapshots are available, the OAuth/token status section includes
+When provider usage snapshots are available, the OAuth/API-key status section includes
 provider usage windows and quota snapshots.
 Add `--probe` to run live auth probes against each configured provider profile.
 Probes are real requests (may consume tokens and trigger rate limits).

@@ -82,7 +82,10 @@ Notes:
 - If `callbackUrl` is omitted, OpenClaw derives one from gateway host/port + `callbackPath`.
 - For multi-account setups, `commands` can be set at the top level or under
   `channels.mattermost.accounts.<id>.commands` (account values override top-level fields).
-- Command callbacks are validated with per-command tokens and fail closed when token checks fail.
+- Command callbacks are validated with the per-command tokens returned by
+  Mattermost when OpenClaw registers `oc_*` commands.
+- Slash callbacks fail closed when registration failed, startup was partial, or
+  the callback token does not match one of the registered commands.
 - Reachability requirement: the callback endpoint must be reachable from the Mattermost server.
   - Do not set `callbackUrl` to `localhost` unless Mattermost runs on the same host/network namespace as OpenClaw.
   - Do not set `callbackUrl` to your Mattermost base URL unless that URL reverse-proxies `/api/channels/mattermost/command` to OpenClaw.
@@ -418,6 +421,19 @@ Mattermost supports multiple accounts under `channels.mattermost.accounts`:
 - No replies in channels: ensure the bot is in the channel and mention it (oncall), use a trigger prefix (onchar), or set `chatmode: "onmessage"`.
 - Auth errors: check the bot token, base URL, and whether the account is enabled.
 - Multi-account issues: env vars only apply to the `default` account.
+- Native slash commands return `Unauthorized: invalid command token.`: OpenClaw
+  did not accept the callback token. Typical causes:
+  - slash command registration failed or only partially completed at startup
+  - the callback is hitting the wrong gateway/account
+  - Mattermost still has old commands pointing at a previous callback target
+  - the gateway restarted without reactivating slash commands
+- If native slash commands stop working, check logs for
+  `mattermost: failed to register slash commands` or
+  `mattermost: native slash commands enabled but no commands could be registered`.
+- If `callbackUrl` is omitted and logs warn that the callback resolved to
+  `http://127.0.0.1:18789/...`, that URL is probably only reachable when
+  Mattermost runs on the same host/network namespace as OpenClaw. Set an
+  explicit externally reachable `commands.callbackUrl` instead.
 - Buttons appear as white boxes: the agent may be sending malformed button data. Check that each button has both `text` and `callback_data` fields.
 - Buttons render but clicks do nothing: verify `AllowedUntrustedInternalConnections` in Mattermost server config includes `127.0.0.1 localhost`, and that `EnablePostActionIntegration` is `true` in ServiceSettings.
 - Buttons return 404 on click: the button `id` likely contains hyphens or underscores. Mattermost's action router breaks on non-alphanumeric IDs. Use `[a-zA-Z0-9]` only.

@@ -1,6 +1,5 @@
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type { AuthChoice, AuthChoiceGroupId } from "./onboard-types.js";
 import {
   resolveManifestProviderSetupFlowContributions,
   resolveProviderSetupFlowContributions,
@@ -11,6 +10,7 @@ import {
   type AuthChoiceOption,
   formatStaticAuthChoiceChoicesForCli,
 } from "./auth-choice-options.static.js";
+import type { AuthChoice, AuthChoiceGroupId } from "./onboard-types.js";
 
 function compareOptionLabels(a: AuthChoiceOption, b: AuthChoiceOption): number {
   return a.label.localeCompare(b.label);

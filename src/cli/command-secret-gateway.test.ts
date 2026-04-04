@@ -717,9 +717,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
 
       expect(readTalkProviderApiKey(result.resolvedConfig)).toBe("target-only");
       expect(result.hadUnresolvedTargets).toBe(false);
-      expect(result.targetStatesByPath["talk.providers.elevenlabs.apiKey"]).toBe(
-        "resolved_local",
-      );
+      expect(result.targetStatesByPath["talk.providers.elevenlabs.apiKey"]).toBe("resolved_local");
     } finally {
       if (priorTalkValue === undefined) {
         delete process.env[talkEnvKey];

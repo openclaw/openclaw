@@ -168,12 +168,23 @@ function listActiveTokenRoles(
   );
 }
 
+export function listApprovedPairedDeviceRoles(
+  device: Pick<PairedDevice, "role" | "roles">,
+): string[] {
+  // Approved roles come from the pairing record itself. This is the durable
+  // contract the owner approved, independent of any currently active tokens.
+  return mergeRoles(device.roles, device.role) ?? [];
+}
+
 export function listEffectivePairedDeviceRoles(
   device: Pick<PairedDevice, "role" | "roles" | "tokens">,
 ): string[] {
   const activeTokenRoles = listActiveTokenRoles(device.tokens);
   if (activeTokenRoles && activeTokenRoles.length > 0) {
-    return activeTokenRoles;
+    // Effective roles are the active token roles, bounded by the approved
+    // pairing contract. A stray token entry must not grant new access.
+    const approvedRoles = new Set(listApprovedPairedDeviceRoles(device));
+    return activeTokenRoles.filter((role) => approvedRoles.has(role));
   }
   // Only fall back to legacy role fields when the tokens map is absent
   // or has no entries at all (empty object from a fresh pairing record).
@@ -182,7 +193,9 @@ export function listEffectivePairedDeviceRoles(
   if (device.tokens && Object.keys(device.tokens).length > 0) {
     return [];
   }
-  return mergeRoles(device.roles, device.role) ?? [];
+  // Legacy fallback: when no token map exists yet, treat the approved pairing
+  // roles as effective until token issuance has happened.
+  return listApprovedPairedDeviceRoles(device);
 }
 
 export function hasEffectivePairedDeviceRole(
@@ -871,6 +884,11 @@ function resolveDeviceTokenUpdateContext(params: {
   }
   const role = normalizeRole(params.role);
   if (!role) {
+    return null;
+  }
+  // Token issuance and rotation must stay inside the role set that pairing
+  // approval recorded for this device.
+  if (!listApprovedPairedDeviceRoles(device).includes(role)) {
     return null;
   }
   const tokens = cloneDeviceTokens(device);

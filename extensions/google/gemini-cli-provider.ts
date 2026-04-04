@@ -4,10 +4,12 @@ import type {
   ProviderFetchUsageSnapshotContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth-result";
+import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
+import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream";
+import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
 import { fetchGeminiUsage } from "openclaw/plugin-sdk/provider-usage";
 import { formatGoogleOauthApiKey, parseGoogleUsageToken } from "./oauth-token-shared.js";
 import { isModernGoogleModel, resolveGoogle31ForwardCompatModel } from "./provider-models.js";
-import { buildGoogleGeminiProviderHooks } from "./replay-policy.js";
 
 const PROVIDER_ID = "google-gemini-cli";
 const PROVIDER_LABEL = "Gemini CLI OAuth";
@@ -19,9 +21,11 @@ const ENV_VARS = [
   "GEMINI_CLI_OAUTH_CLIENT_SECRET",
 ];
 
-const GOOGLE_GEMINI_CLI_PROVIDER_HOOKS = buildGoogleGeminiProviderHooks({
-  includeToolSchemaCompat: true,
-});
+const GOOGLE_GEMINI_CLI_PROVIDER_HOOKS = {
+  ...buildProviderReplayFamilyHooks({ family: "google-gemini" }),
+  ...buildProviderStreamFamilyHooks("google-thinking"),
+  ...buildProviderToolCompatFamilyHooks("gemini"),
+};
 
 async function fetchGeminiCliUsage(ctx: ProviderFetchUsageSnapshotContext) {
   return await fetchGeminiUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn, PROVIDER_ID);

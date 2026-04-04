@@ -514,6 +514,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(result?.text).toContain("Model set to");
     expect(result?.text).toContain("openai/gpt-4o");
     expect(result?.text).not.toContain("failed");
+    expect(sessionEntry.liveModelSwitchPending).toBe(true);
   });
 
   it("does not request a live restart when /model mutates an active session", async () => {

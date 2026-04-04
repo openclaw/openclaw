@@ -70,6 +70,8 @@ openclaw devices reject <requestId>
 ### `openclaw devices rotate --device <id> --role <role> [--scope <scope...>]`
 
 Rotate a device token for a specific role (optionally updating scopes).
+The target role must already exist in that device's approved pairing contract;
+rotation cannot mint a new unapproved role.
 
 ```
 openclaw devices rotate --device <deviceId> --role operator --scope operator.read --scope operator.write
@@ -102,6 +104,9 @@ Pass `--token` or `--password` explicitly. Missing explicit credentials is an er
 
 - Token rotation returns a new token (sensitive). Treat it like a secret.
 - These commands require `operator.pairing` (or `operator.admin`) scope.
+- Token rotation stays inside the approved pairing role set and approved scope
+  baseline for that device. A stray cached token entry does not grant a new
+  rotate target.
 - `devices clear` is intentionally gated by `--yes`.
 - If pairing scope is unavailable on local loopback (and no explicit `--url` is passed), list/approve can use a local pairing fallback.
 - `devices approve` picks the newest pending request automatically when you omit `requestId` or pass `--latest`.

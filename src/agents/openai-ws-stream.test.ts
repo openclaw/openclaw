@@ -860,6 +860,47 @@ describe("buildAssistantMessageFromResponse", () => {
     expect(msg.usage.totalTokens).toBe(150);
   });
 
+  it("maps prompt_tokens and completion_tokens usage aliases", () => {
+    const response = makeResponseObject("resp_5b", "Hello");
+    response.usage = {
+      prompt_tokens: 44,
+      completion_tokens: 11,
+      total_tokens: 55,
+    };
+
+    const msg = buildAssistantMessageFromResponse(response, modelInfo);
+    expect(msg.usage.input).toBe(44);
+    expect(msg.usage.output).toBe(11);
+    expect(msg.usage.totalTokens).toBe(55);
+  });
+
+  it("falls back to normalized input and output when total_tokens is missing", () => {
+    const response = makeResponseObject("resp_5c", "Hello");
+    response.usage = {
+      prompt_tokens: 10,
+      completion_tokens: 5,
+    };
+
+    const msg = buildAssistantMessageFromResponse(response, modelInfo);
+    expect(msg.usage.input).toBe(10);
+    expect(msg.usage.output).toBe(5);
+    expect(msg.usage.totalTokens).toBe(15);
+  });
+
+  it("falls back to normalized input and output when total_tokens is zero", () => {
+    const response = makeResponseObject("resp_5d", "Hello");
+    response.usage = {
+      input_tokens: 10,
+      output_tokens: 5,
+      total_tokens: 0,
+    };
+
+    const msg = buildAssistantMessageFromResponse(response, modelInfo);
+    expect(msg.usage.input).toBe(10);
+    expect(msg.usage.output).toBe(5);
+    expect(msg.usage.totalTokens).toBe(15);
+  });
+
   it("sets model/provider/api from modelInfo", () => {
     const response = makeResponseObject("resp_6", "Hi");
     const msg = buildAssistantMessageFromResponse(response, modelInfo);
@@ -2218,6 +2259,42 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(sent.reasoning).toEqual({ effort: "none" });
     expect(sent.text).toEqual({ verbosity: "low" });
     expect(sent.service_tier).toBe("priority");
+  });
+
+  it("awaits async onPayload mutations before sending response.create", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-onpayload-async");
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+      {
+        onPayload: async (payload: unknown) => {
+          const request = payload as Record<string, unknown>;
+          await Promise.resolve();
+          request.metadata = { async_hook: "applied" };
+          return undefined;
+        },
+      } as unknown as Parameters<typeof streamFn>[2],
+    );
+    await new Promise<void>((resolve, reject) => {
+      queueMicrotask(async () => {
+        try {
+          await new Promise((r) => setImmediate(r));
+          MockManager.lastInstance!.simulateEvent({
+            type: "response.completed",
+            response: makeResponseObject("resp-onpayload-async", "Done"),
+          });
+          for await (const _ of await resolveStream(stream)) {
+            /* consume */
+          }
+          resolve();
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+    const sent = MockManager.lastInstance!.sentEvents[0] as Record<string, unknown>;
+    expect(sent.type).toBe("response.create");
+    expect(sent.metadata).toMatchObject({ async_hook: "applied" });
   });
   it("forwards topP and toolChoice to response.create", async () => {
     const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-topp");

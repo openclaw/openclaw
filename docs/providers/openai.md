@@ -131,6 +131,12 @@ openclaw models auth login --provider openai-codex
 OpenAI's current Codex docs list `gpt-5.4` as the current Codex model. OpenClaw
 maps that to `openai-codex/gpt-5.4` for ChatGPT/Codex OAuth usage.
 
+If onboarding reuses an existing Codex CLI login, those credentials stay
+managed by Codex CLI. On expiry, OpenClaw re-reads the external Codex source
+first and, when the provider can refresh it, writes the refreshed credential
+back to Codex storage instead of taking ownership in a separate OpenClaw-only
+copy.
+
 If your Codex account is entitled to Codex Spark, OpenClaw also supports:
 
 - `openai-codex/gpt-5.3-codex-spark`
@@ -196,7 +202,14 @@ transports.
 For native OpenAI-family endpoints (`openai/*`, `openai-codex/*`, and Azure
 OpenAI Responses), OpenClaw also attaches stable session and turn identity state
 to requests so retries, reconnects, and SSE fallback stay aligned to the same
-conversation identity.
+conversation identity. On native OpenAI-family routes this includes stable
+session/turn request identity headers plus matching transport metadata.
+
+OpenClaw also normalizes OpenAI usage counters across transport variants before
+they reach session/status surfaces. Native OpenAI/Codex Responses traffic may
+report usage as either `input_tokens` / `output_tokens` or
+`prompt_tokens` / `completion_tokens`; OpenClaw treats those as the same input
+and output counters for `/status`, `/usage`, and session logs.
 
 You can set `agents.defaults.models.<provider/model>.params.transport`:
 
