@@ -233,12 +233,14 @@ Distillation can be triggered by:
 - **Heartbeat** — check if 48h+ since last distillation and 3+ unprocessed daily notes
 - **Manual** — user requests "consolidate memory" or "review notes"
 
-## Integration with Session-Recall
+## Integration with Retrieval Skills
 
-This skill manages **what gets stored**. A retrieval skill like `session-recall` (which searches transcripts, memory files, and channel context) manages **how to find it**. They complement each other:
+This skill manages **what gets stored**. A retrieval skill — one that searches transcripts, memory files, and channel context when the agent loses context — manages **how to find it**. They complement each other:
 
 - **adaptive-memory** → organizes memory into searchable layers
-- **session-recall** → searches those layers when context is missing
+- **retrieval skill** → searches those layers when context is missing
+
+For example, `agent-session-recall` (available on ClawHub) provides a 5-stage autonomous recovery flow that pairs naturally with this memory structure. Any skill that searches the `memory/` directory and session transcripts will benefit from the organization this skill provides.
 
 Using both together provides full coverage: structured storage + intelligent retrieval.
 

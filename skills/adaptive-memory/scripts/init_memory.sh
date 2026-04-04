@@ -32,7 +32,7 @@ fi
 if [ ! -f "$WORKSPACE/memory/pending_tasks.json" ]; then
   cat > "$WORKSPACE/memory/pending_tasks.json" << 'EOF'
 {
-  "lastUpdated": "",
+  "lastUpdated": null,
   "tasks": []
 }
 EOF
