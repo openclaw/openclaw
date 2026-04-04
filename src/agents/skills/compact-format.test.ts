@@ -22,7 +22,14 @@ function makeSkill(name: string, desc = "A skill", filePath = `/skills/${name}/S
 }
 
 function makeEntry(skill: Skill): SkillEntry {
-  return { skill, frontmatter: {} };
+  return {
+    skill,
+    frontmatter: {},
+    exposure: {
+      includeInAvailableSkillsPrompt: skill.disableModelInvocation !== true,
+      userInvocable: true,
+    },
+  };
 }
 
 function buildPrompt(
@@ -63,11 +70,11 @@ describe("formatSkillsCompact", () => {
     expect(out).not.toContain("<description>");
   });
 
-  it("filters out disableModelInvocation skills", () => {
+  it("renders all passed skills without reapplying visibility policy", () => {
     const hidden: Skill = { ...makeSkill("hidden"), disableModelInvocation: true };
     const out = formatSkillsCompact([makeSkill("visible"), hidden]);
     expect(out).toContain("visible");
-    expect(out).not.toContain("hidden");
+    expect(out).toContain("hidden");
   });
 
   it("escapes XML special characters", () => {
@@ -85,6 +92,13 @@ describe("formatSkillsCompact", () => {
 });
 
 describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
+  it("applies disableModelInvocation filtering before compact formatting", () => {
+    const hidden: Skill = { ...makeSkill("hidden"), disableModelInvocation: true };
+    const prompt = buildPrompt([makeSkill("visible"), hidden], { maxChars: 4_000 });
+    expect(prompt).toContain("visible");
+    expect(prompt).not.toContain("hidden");
+  });
+
   it("tier 1: uses full format when under budget", () => {
     const skills = [makeSkill("weather", "Get weather data")];
     const prompt = buildPrompt(skills, { maxChars: 50_000 });
