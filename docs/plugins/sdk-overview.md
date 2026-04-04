@@ -42,10 +42,21 @@ subpaths inside their own `api.ts` or `runtime-api.ts` barrels, and core should
 either use those plugin-local barrels or add a narrow generic SDK contract when
 the need is truly cross-channel.
 
+The generated export map still contains a small set of bundled-plugin helper
+seams such as `plugin-sdk/feishu`, `plugin-sdk/feishu-setup`,
+`plugin-sdk/zalo`, `plugin-sdk/zalo-setup`, and `plugin-sdk/matrix*`. Those
+subpaths exist for bundled-plugin maintenance and compatibility only; they are
+intentionally omitted from the common table below and are not the recommended
+import path for new third-party plugins.
+
 ## Subpath reference
 
 The most commonly used subpaths, grouped by purpose. The generated full list of
 200+ subpaths lives in `scripts/lib/plugin-sdk-entrypoints.json`.
+
+Reserved bundled-plugin helper subpaths still appear in that generated list.
+Treat those as implementation detail/compatibility surfaces unless a doc page
+explicitly promotes one as public.
 
 ### Plugin entry
 

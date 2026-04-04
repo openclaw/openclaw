@@ -195,6 +195,13 @@ This table is intentionally the common migration subset, not the full SDK
 surface. The generated full list of 200+ entrypoints lives in
 `scripts/lib/plugin-sdk-entrypoints.json`.
 
+That generated list still includes some bundled-plugin helper seams such as
+`plugin-sdk/feishu`, `plugin-sdk/feishu-setup`, `plugin-sdk/zalo`,
+`plugin-sdk/zalo-setup`, and `plugin-sdk/matrix*`. Those remain exported for
+bundled-plugin maintenance and compatibility, but they are intentionally
+omitted from the common migration table and are not the recommended target for
+new plugin code.
+
 Use the narrowest import that matches the job. If you cannot find an export,
 check the source at `src/plugin-sdk/` or ask in Discord.
 
