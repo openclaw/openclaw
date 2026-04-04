@@ -46,6 +46,8 @@ See [Sandboxing](/gateway/sandboxing) for the full matrix (scope, workspace moun
 - `docker.binds` _pierces_ the sandbox filesystem: whatever you mount is visible inside the container with the mode you set (`:ro` or `:rw`).
 - Default is read-write if you omit the mode; prefer `:ro` for source/secrets.
 - `scope: "shared"` ignores per-agent binds (only global binds apply).
+- OpenClaw validates bind sources twice: first on the normalized source path, then again after resolving through the deepest existing ancestor. Symlink-parent escapes do not bypass blocked-path or allowed-root checks.
+- Non-existent leaf paths are still checked safely. If `/workspace/alias-out/new-file` resolves through a symlinked parent to a blocked path or outside the configured allowed roots, the bind is rejected.
 - Binding `/var/run/docker.sock` effectively hands host control to the sandbox; only do this intentionally.
 - Workspace access (`workspaceAccess: "ro"`/`"rw"`) is independent of bind modes.
 
@@ -85,7 +87,8 @@ Tool policies (global, agent, sandbox) support `group:*` entries that expand to 
 
 Available groups:
 
-- `group:runtime`: `exec`, `bash`, `process`, `code_execution`
+- `group:runtime`: `exec`, `process`, `code_execution` (`bash` is accepted as
+  an alias for `exec`)
 - `group:fs`: `read`, `write`, `edit`, `apply_patch`
 - `group:sessions`: `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`, `sessions_yield`, `subagents`, `session_status`
 - `group:memory`: `memory_search`, `memory_get`

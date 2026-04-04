@@ -387,7 +387,7 @@ Legacy keys:
 
 ## Typing reaction fallback
 
-`typingReaction` adds a temporary reaction to the inbound Slack message while OpenClaw is processing a reply, then removes it when the run finishes. This is a useful fallback when Slack native assistant typing is unavailable, especially in DMs.
+`typingReaction` adds a temporary reaction to the inbound Slack message while OpenClaw is processing a reply, then removes it when the run finishes. This is most useful outside of thread replies, which use a default "is typing..." status indicator.
 
 Resolution order:
 
@@ -512,6 +512,9 @@ Slack can act as a native approval client with interactive buttons and interacti
 - Approver authorization is still enforced: only users identified as approvers can approve or deny requests through Slack.
 
 This uses the same shared approval button surface as other channels. When `interactivity` is enabled in your Slack app settings, approval prompts render as Block Kit buttons directly in the conversation.
+When those buttons are present, they are the primary approval UX; OpenClaw
+should only include a manual `/approve` command when the tool result says chat
+approvals are unavailable or manual approval is the only path.
 
 Config path:
 
@@ -563,7 +566,6 @@ Same-chat `/approve` also works in Slack channels and DMs that already support c
 - Message edits/deletes/thread broadcasts are mapped into system events.
 - Reaction add/remove events are mapped into system events.
 - Member join/leave, channel created/renamed, and pin add/remove events are mapped into system events.
-- Assistant thread status updates (for "is typing..." indicators in threads) use `assistant.threads.setStatus` and require bot scope `assistant:write`.
 - `channel_id_changed` can migrate channel config keys when `configWrites` is enabled.
 - Channel topic/purpose metadata is treated as untrusted context and can be injected into routing context.
 - Thread starter and initial thread-history context seeding are filtered by configured sender allowlists when applicable.

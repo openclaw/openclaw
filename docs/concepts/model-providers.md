@@ -28,15 +28,23 @@ For model selection rules, see [/concepts/models](/concepts/models).
   map is now just for non-plugin/core providers and a few generic-precedence
   cases such as Anthropic API-key-first onboarding.
 - Provider plugins can also own provider runtime behavior via
-  `normalizeConfig`, `applyNativeStreamingUsageCompat`, `resolveConfigApiKey`,
+  `normalizeModelId`, `normalizeTransport`, `normalizeConfig`,
+  `applyNativeStreamingUsageCompat`, `resolveConfigApiKey`,
+  `resolveSyntheticAuth`, `shouldDeferSyntheticProfileAuth`,
   `resolveDynamicModel`, `prepareDynamicModel`,
-  `normalizeResolvedModel`, `capabilities`, `prepareExtraParams`,
-  `wrapStreamFn`, `formatApiKey`, `refreshOAuth`, `buildAuthDoctorHint`,
+  `normalizeResolvedModel`, `contributeResolvedModelCompat`,
+  `capabilities`, `normalizeToolSchemas`,
+  `inspectToolSchemas`, `resolveReasoningOutputMode`,
+  `prepareExtraParams`, `createStreamFn`, `wrapStreamFn`,
+  `resolveTransportTurnState`, `resolveWebSocketSessionPolicy`,
+  `createEmbeddingProvider`, `formatApiKey`, `refreshOAuth`,
+  `buildAuthDoctorHint`,
   `matchesContextOverflowError`, `classifyFailoverReason`,
   `isCacheTtlEligible`, `buildMissingAuthMessage`, `suppressBuiltInModel`,
   `augmentModelCatalog`, `isBinaryThinking`, `supportsXHighThinking`,
   `resolveDefaultThinkingLevel`, `applyConfigDefaults`, `isModernModelRef`,
-  `prepareRuntimeAuth`, `resolveUsageAuth`, and `fetchUsageSnapshot`.
+  `prepareRuntimeAuth`, `resolveUsageAuth`, `fetchUsageSnapshot`, and
+  `onModelSelected`.
 - Note: provider runtime `capabilities` is shared runner metadata (provider
   family, transcript/tooling quirks, transport/cache hints). It is not the
   same as the [public capability model](/plugins/architecture#public-capability-model)
@@ -54,17 +62,50 @@ Typical split:
 - `wizard.setup` / `wizard.modelPicker`: provider owns auth-choice labels,
   legacy aliases, onboarding allowlist hints, and setup entries in onboarding/model pickers
 - `catalog`: provider appears in `models.providers`
-- `normalizeConfig`: provider normalizes `models.providers.<id>` config before runtime uses it; OpenClaw checks the matched provider first, then other hook-capable provider plugins until one actually changes the config
+- `normalizeModelId`: provider normalizes legacy/preview model ids before
+  lookup or canonicalization
+- `normalizeTransport`: provider normalizes transport-family `api` / `baseUrl`
+  before generic model assembly; OpenClaw checks the matched provider first,
+  then other hook-capable provider plugins until one actually changes the
+  transport
+- `normalizeConfig`: provider normalizes `models.providers.<id>` config before
+  runtime uses it; OpenClaw checks the matched provider first, then other
+  hook-capable provider plugins until one actually changes the config. If no
+  provider hook rewrites the config, bundled Google-family helpers still
+  normalize supported Google provider entries.
 - `applyNativeStreamingUsageCompat`: provider applies endpoint-driven native streaming-usage compat rewrites for config providers
-- `resolveConfigApiKey`: provider resolves env-marker auth for config providers without forcing full runtime auth loading
+- `resolveConfigApiKey`: provider resolves env-marker auth for config providers
+  without forcing full runtime auth loading. `amazon-bedrock` also has a
+  built-in AWS env-marker resolver here, even though Bedrock runtime auth uses
+  the AWS SDK default chain.
+- `resolveSyntheticAuth`: provider can expose local/self-hosted or other
+  config-backed auth availability without persisting plaintext secrets
+- `shouldDeferSyntheticProfileAuth`: provider can mark stored synthetic profile
+  placeholders as lower precedence than env/config-backed auth
 - `resolveDynamicModel`: provider accepts model ids not present in the local
   static catalog yet
 - `prepareDynamicModel`: provider needs a metadata refresh before retrying
   dynamic resolution
 - `normalizeResolvedModel`: provider needs transport or base URL rewrites
+- `contributeResolvedModelCompat`: provider contributes compat flags for its
+  vendor models even when they arrive through another compatible transport
 - `capabilities`: provider publishes transcript/tooling/provider-family quirks
+- `normalizeToolSchemas`: provider cleans tool schemas before the embedded
+  runner sees them
+- `inspectToolSchemas`: provider surfaces transport-specific schema warnings
+  after normalization
+- `resolveReasoningOutputMode`: provider chooses native vs tagged
+  reasoning-output contracts
 - `prepareExtraParams`: provider defaults or normalizes per-model request params
+- `createStreamFn`: provider replaces the normal stream path with a fully
+  custom transport
 - `wrapStreamFn`: provider applies request headers/body/model compat wrappers
+- `resolveTransportTurnState`: provider supplies per-turn native transport
+  headers or metadata
+- `resolveWebSocketSessionPolicy`: provider supplies native WebSocket session
+  headers or session cool-down policy
+- `createEmbeddingProvider`: provider owns memory embedding behavior when it
+  belongs with the provider plugin instead of the core embedding switchboard
 - `formatApiKey`: provider formats stored auth profiles into the runtime
   `apiKey` string expected by the transport
 - `refreshOAuth`: provider owns OAuth refresh when the shared `pi-ai`
@@ -95,6 +136,8 @@ Typical split:
   and related status/reporting surfaces
 - `fetchUsageSnapshot`: provider owns the usage endpoint fetch/parsing while
   core still owns the summary shell and formatting
+- `onModelSelected`: provider runs post-selection side effects such as
+  telemetry or provider-owned session bookkeeping
 
 Current bundled examples:
 
@@ -168,8 +211,8 @@ surface.
 - Key selection order preserves priority and deduplicates values.
 - Requests are retried with the next key only on rate-limit responses (for
   example `429`, `rate_limit`, `quota`, `resource exhausted`, `Too many
-concurrent requests`, `ThrottlingException`, or periodic usage-limit
-  messages).
+concurrent requests`, `ThrottlingException`, `concurrency limit reached`,
+  `workers_ai ... quota limit exceeded`, or periodic usage-limit messages).
 - Non-rate-limit failures fail immediately; no key rotation is attempted.
 - When all candidate keys fail, the final error is returned from the last attempt.
 

@@ -134,6 +134,10 @@ When approvals are required, the exec tool returns immediately with
 `status: "approval-pending"` and an approval id. Once approved (or denied / timed out),
 the Gateway emits system events (`Exec finished` / `Exec denied`). If the command is still
 running after `tools.exec.approvalRunningNoticeMs`, a single `Exec running` notice is emitted.
+On channels with native approval cards/buttons, the agent should rely on that
+native UI first and only include a manual `/approve` command when the tool
+result explicitly says chat approvals are unavailable or manual approval is the
+only path.
 
 ## Allowlist + safe bins
 

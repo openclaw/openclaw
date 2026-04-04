@@ -31,8 +31,11 @@ agent (with a session switcher for other sessions).
 - Data plane: Gateway WS methods `chat.history`, `chat.send`, `chat.abort`,
   `chat.inject` and events `chat`, `agent`, `presence`, `tick`, `health`.
 - `chat.history` returns display-normalized transcript rows: inline directive
-  tags are stripped from visible text, pure `NO_REPLY` assistant rows are
-  omitted, and oversized rows can be replaced with placeholders.
+  tags are stripped from visible text, plain-text tool-call XML payloads
+  (including `<tool_calls>` and truncated tool-call blocks) and leaked
+  ASCII/full-width model control tokens are stripped, pure silent-token
+  assistant rows such as exact `NO_REPLY` / `no_reply` are omitted, and
+  oversized rows can be replaced with placeholders.
 - Session: defaults to the primary session (`main`, or `global` when scope is
   global). The UI can switch between sessions.
 - Onboarding uses a dedicated session to keep first‑run setup separate.

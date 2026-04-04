@@ -194,6 +194,11 @@ still requires:
 - remote debugging enabled in that browser
 - approving the first attach consent prompt in the browser
 
+Readiness here is only about local attach prerequisites. Existing-session keeps
+the current Chrome MCP route limits; advanced routes like `responsebody`, PDF
+export, download interception, and batch actions still require a managed
+browser or raw CDP profile.
+
 This check does **not** apply to Docker, sandbox, remote-browser, or other
 headless flows. Those continue to use raw CDP.
 

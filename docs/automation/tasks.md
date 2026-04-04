@@ -28,7 +28,7 @@ Not every agent run creates a task. Heartbeat turns and normal interactive chat 
 - Cron tasks stay live while the cron runtime still owns the job; chat-backed CLI tasks stay live only while their owning run context is still active.
 - Completion is push-driven: detached work can notify directly or wake the
   requester session/heartbeat when it finishes, so status polling loops are
-  usually unnecessary.
+  usually the wrong shape.
 - Isolated cron runs and subagent completions best-effort clean up tracked browser tabs/processes for their child session before final cleanup bookkeeping.
 - Isolated cron delivery suppresses stale interim parent replies while
   descendant subagent work is still draining, and it prefers final descendant

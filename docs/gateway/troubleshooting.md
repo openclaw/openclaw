@@ -402,6 +402,7 @@ Common signatures:
 
 ```bash
 openclaw config get gateway.bind
+openclaw config get gateway.auth.mode
 openclaw config get gateway.auth.token
 openclaw gateway status
 openclaw logs --follow
@@ -409,12 +410,12 @@ openclaw logs --follow
 
 What to check:
 
-- Non-loopback binds (`lan`, `tailnet`, `custom`) need auth configured.
+- Non-loopback binds (`lan`, `tailnet`, `custom`) need a valid gateway auth path: shared token/password auth, or a correctly configured non-loopback `trusted-proxy` deployment.
 - Old keys like `gateway.token` do not replace `gateway.auth.token`.
 
 Common signatures:
 
-- `refusing to bind gateway ... without auth` → bind+auth mismatch.
+- `refusing to bind gateway ... without auth` → non-loopback bind without a valid gateway auth path.
 - `RPC probe: failed` while runtime is running → gateway alive but inaccessible with current auth/url.
 
 ### 3) Pairing and device identity state changed
