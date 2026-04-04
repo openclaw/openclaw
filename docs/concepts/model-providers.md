@@ -293,6 +293,8 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Static fallback catalog ships `kilocode/kilo/auto`; live
   `https://api.kilo.ai/api/gateway/models` discovery can expand the runtime
   catalog further.
+- Exact upstream routing behind `kilocode/kilo/auto` is owned by Kilo Gateway,
+  not hard-coded in OpenClaw.
 
 See [/providers/kilocode](/providers/kilocode) for setup details.
 
@@ -309,6 +311,9 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 - Example model: `kilocode/kilo/auto`
 - MiniMax: `minimax` (`MINIMAX_API_KEY`)
 - Example model: `minimax/MiniMax-M2.7`
+- MiniMax onboarding/API-key setup writes explicit M2.7 model definitions with
+  `input: ["text", "image"]`; the bundled provider catalog keeps the chat refs
+  text-only until that provider config is materialized
 - Moonshot: `moonshot` (`MOONSHOT_API_KEY`)
 - Example model: `moonshot/kimi-k2.5`
 - Kimi Coding: `kimi` (`KIMI_API_KEY` or `KIMICODE_API_KEY`)
