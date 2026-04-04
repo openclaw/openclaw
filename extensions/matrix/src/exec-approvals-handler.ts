@@ -1,5 +1,6 @@
 import {
   buildExecApprovalPendingReplyPayload,
+  type ExecApprovalReplyDecision,
   getExecApprovalApproverDmNoticeText,
   resolveExecApprovalAllowedDecisions,
   resolveExecApprovalCommandDisplay,
@@ -46,7 +47,11 @@ type PreparedMatrixTarget = {
 type PendingApprovalContent = {
   approvalId: string;
   text: string;
-  allowedDecisions: readonly ("allow-once" | "allow-always" | "deny")[];
+  allowedDecisions: readonly ExecApprovalReplyDecision[];
+};
+type ReactionTargetRef = {
+  roomId: string;
+  eventId: string;
 };
 
 export type MatrixExecApprovalHandlerOpts = {
@@ -67,6 +72,23 @@ export type MatrixExecApprovalHandlerDeps = {
 
 function normalizePendingMessageIds(entry: PendingMessage): string[] {
   return Array.from(new Set(entry.messageIds.map((messageId) => messageId.trim()).filter(Boolean)));
+}
+
+function normalizeReactionTargetRef(params: ReactionTargetRef): ReactionTargetRef | null {
+  const roomId = params.roomId.trim();
+  const eventId = params.eventId.trim();
+  if (!roomId || !eventId) {
+    return null;
+  }
+  return { roomId, eventId };
+}
+
+function buildReactionTargetRefKey(params: ReactionTargetRef): string | null {
+  const normalized = normalizeReactionTargetRef(params);
+  if (!normalized) {
+    return null;
+  }
+  return `${normalized.roomId}\u0000${normalized.eventId}`;
 }
 
 function isHandlerConfigured(params: { cfg: OpenClawConfig; accountId: string }): boolean {
@@ -126,6 +148,7 @@ function buildResolvedApprovalText(params: {
 
 export class MatrixExecApprovalHandler {
   private readonly runtime: ExecApprovalChannelRuntime<ApprovalRequest, ApprovalResolved>;
+  private readonly trackedReactionTargets = new Map<string, ReactionTargetRef>();
   private readonly nowMs: () => number;
   private readonly sendMessage: typeof sendMessageMatrix;
   private readonly reactMessage: typeof reactMatrixMessage;
@@ -209,7 +232,7 @@ export class MatrixExecApprovalHandler {
         );
         const reactionEventId =
           result.primaryMessageId?.trim() || messageIds[0] || result.messageId.trim();
-        registerMatrixApprovalReactionTarget({
+        this.trackReactionTarget({
           roomId: result.roomId,
           eventId: reactionEventId,
           approvalId: pendingContent.approvalId,
@@ -247,6 +270,7 @@ export class MatrixExecApprovalHandler {
 
   async stop(): Promise<void> {
     await this.runtime.stop();
+    this.clearTrackedReactionTargets();
   }
 
   async handleRequested(request: ApprovalRequest): Promise<void> {
@@ -300,7 +324,7 @@ export class MatrixExecApprovalHandler {
     const text = buildResolvedApprovalText({ request, resolved });
     await Promise.allSettled(
       entries.map(async (entry) => {
-        unregisterMatrixApprovalReactionTarget({
+        this.untrackReactionTarget({
           roomId: entry.roomId,
           eventId: entry.reactionEventId,
         });
@@ -330,7 +354,7 @@ export class MatrixExecApprovalHandler {
   private async clearPending(entries: PendingMessage[]): Promise<void> {
     await Promise.allSettled(
       entries.map(async (entry) => {
-        unregisterMatrixApprovalReactionTarget({
+        this.untrackReactionTarget({
           roomId: entry.roomId,
           eventId: entry.reactionEventId,
         });
@@ -346,5 +370,42 @@ export class MatrixExecApprovalHandler {
         );
       }),
     );
+  }
+
+  private trackReactionTarget(
+    params: ReactionTargetRef & {
+      approvalId: string;
+      allowedDecisions: readonly ExecApprovalReplyDecision[];
+    },
+  ): void {
+    const normalized = normalizeReactionTargetRef(params);
+    const key = normalized ? buildReactionTargetRefKey(normalized) : null;
+    if (!normalized || !key) {
+      return;
+    }
+    registerMatrixApprovalReactionTarget({
+      roomId: normalized.roomId,
+      eventId: normalized.eventId,
+      approvalId: params.approvalId,
+      allowedDecisions: params.allowedDecisions,
+    });
+    this.trackedReactionTargets.set(key, normalized);
+  }
+
+  private untrackReactionTarget(params: ReactionTargetRef): void {
+    const normalized = normalizeReactionTargetRef(params);
+    const key = normalized ? buildReactionTargetRefKey(normalized) : null;
+    if (!normalized || !key) {
+      return;
+    }
+    unregisterMatrixApprovalReactionTarget(normalized);
+    this.trackedReactionTargets.delete(key);
+  }
+
+  private clearTrackedReactionTargets(): void {
+    for (const target of this.trackedReactionTargets.values()) {
+      unregisterMatrixApprovalReactionTarget(target);
+    }
+    this.trackedReactionTargets.clear();
   }
 }

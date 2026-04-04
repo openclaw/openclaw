@@ -1,5 +1,8 @@
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
-import { resolveMatrixApprovalReactionTarget } from "../../approval-reactions.js";
+import {
+  resolveMatrixApprovalReactionTarget,
+  unregisterMatrixApprovalReactionTarget,
+} from "../../approval-reactions.js";
 import {
   isApprovalNotFoundError,
   resolveMatrixExecApproval,
@@ -32,15 +35,12 @@ async function maybeResolveMatrixApprovalReaction(params: {
   cfg: CoreConfig;
   accountId: string;
   senderId: string;
-  roomId: string;
-  reactionKey: string;
+  target: ReturnType<typeof resolveMatrixApprovalReactionTarget>;
   targetEventId: string;
-  targetEvent: MatrixRawEvent | null;
-  targetSender: string;
-  selfUserId: string;
+  roomId: string;
   logVerboseMessage: (message: string) => void;
 }): Promise<boolean> {
-  if (params.targetSender !== params.selfUserId) {
+  if (!params.target) {
     return false;
   }
   if (
@@ -52,34 +52,30 @@ async function maybeResolveMatrixApprovalReaction(params: {
   ) {
     return false;
   }
-  const target = resolveMatrixApprovalReactionTarget({
-    roomId: params.roomId,
-    eventId: params.targetEventId,
-    reactionKey: params.reactionKey,
-  });
-  if (!target) {
-    return false;
-  }
   try {
     await resolveMatrixExecApproval({
       cfg: params.cfg,
-      approvalId: target.approvalId,
-      decision: target.decision,
+      approvalId: params.target.approvalId,
+      decision: params.target.decision,
       senderId: params.senderId,
     });
     params.logVerboseMessage(
-      `matrix: approval reaction resolved id=${target.approvalId} sender=${params.senderId} decision=${target.decision}`,
+      `matrix: approval reaction resolved id=${params.target.approvalId} sender=${params.senderId} decision=${params.target.decision}`,
     );
     return true;
   } catch (err) {
     if (isApprovalNotFoundError(err)) {
+      unregisterMatrixApprovalReactionTarget({
+        roomId: params.roomId,
+        eventId: params.targetEventId,
+      });
       params.logVerboseMessage(
-        `matrix: approval reaction ignored for expired approval id=${target.approvalId} sender=${params.senderId}`,
+        `matrix: approval reaction ignored for expired approval id=${params.target.approvalId} sender=${params.senderId}`,
       );
       return true;
     }
     params.logVerboseMessage(
-      `matrix: approval reaction failed id=${target.approvalId} sender=${params.senderId}: ${String(err)}`,
+      `matrix: approval reaction failed id=${params.target.approvalId} sender=${params.senderId}: ${String(err)}`,
     );
     return true;
   }
@@ -105,29 +101,19 @@ export async function handleInboundMatrixReaction(params: {
   if (params.senderId === params.selfUserId) {
     return;
   }
-
-  const targetEvent = await params.client.getEvent(params.roomId, reaction.eventId).catch((err) => {
-    params.logVerboseMessage(
-      `matrix: failed resolving reaction target room=${params.roomId} id=${reaction.eventId}: ${String(err)}`,
-    );
-    return null;
+  const approvalTarget = resolveMatrixApprovalReactionTarget({
+    roomId: params.roomId,
+    eventId: reaction.eventId,
+    reactionKey: reaction.key,
   });
-  const targetSender =
-    targetEvent && typeof targetEvent.sender === "string" ? targetEvent.sender.trim() : "";
-  if (!targetSender) {
-    return;
-  }
   if (
     await maybeResolveMatrixApprovalReaction({
       cfg: params.cfg,
       accountId: params.accountId,
       senderId: params.senderId,
-      roomId: params.roomId,
-      reactionKey: reaction.key,
+      target: approvalTarget,
       targetEventId: reaction.eventId,
-      targetEvent: targetEvent as MatrixRawEvent | null,
-      targetSender,
-      selfUserId: params.selfUserId,
+      roomId: params.roomId,
       logVerboseMessage: params.logVerboseMessage,
     })
   ) {
@@ -138,6 +124,18 @@ export async function handleInboundMatrixReaction(params: {
     accountId: params.accountId,
   });
   if (notificationMode === "off") {
+    return;
+  }
+
+  const targetEvent = await params.client.getEvent(params.roomId, reaction.eventId).catch((err) => {
+    params.logVerboseMessage(
+      `matrix: failed resolving reaction target room=${params.roomId} id=${reaction.eventId}: ${String(err)}`,
+    );
+    return null;
+  });
+  const targetSender =
+    targetEvent && typeof targetEvent.sender === "string" ? targetEvent.sender.trim() : "";
+  if (!targetSender) {
     return;
   }
   if (notificationMode === "own" && targetSender !== params.selfUserId) {

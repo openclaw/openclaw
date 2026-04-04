@@ -1,6 +1,9 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { clearMatrixApprovalReactionTargetsForTest } from "./approval-reactions.js";
+import {
+  clearMatrixApprovalReactionTargetsForTest,
+  resolveMatrixApprovalReactionTarget,
+} from "./approval-reactions.js";
 import { MatrixExecApprovalHandler } from "./exec-approvals-handler.js";
 
 const baseRequest = {
@@ -434,6 +437,35 @@ describe("MatrixExecApprovalHandler", () => {
       "$m3",
       expect.objectContaining({ reason: "approval expired" }),
     );
+  });
+
+  it("clears tracked approval anchors when the handler stops", async () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          homeserver: "https://matrix.example.org",
+          userId: "@bot:example.org",
+          accessToken: "tok",
+          execApprovals: {
+            enabled: true,
+            approvers: ["@owner:example.org"],
+            target: "channel",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const { handler } = createHandler(cfg);
+
+    await handler.handleRequested(baseRequest);
+    await handler.stop();
+
+    expect(
+      resolveMatrixApprovalReactionTarget({
+        roomId: "!ops:example.org",
+        eventId: "$m1",
+        reactionKey: "✅",
+      }),
+    ).toBeNull();
   });
 
   it("honors request decision constraints in pending approval text", async () => {

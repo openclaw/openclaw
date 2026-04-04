@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearMatrixApprovalReactionTargetsForTest,
   registerMatrixApprovalReactionTarget,
+  resolveMatrixApprovalReactionTarget,
 } from "../../approval-reactions.js";
 import type { CoreConfig } from "../../types.js";
 import { handleInboundMatrixReaction } from "./reaction-events.js";
@@ -202,6 +203,142 @@ describe("matrix approval reactions", () => {
       decision: "deny",
       senderId: "@owner:example.org",
     });
+    expect(core.system.enqueueSystemEvent).not.toHaveBeenCalled();
+  });
+
+  it("resolves registered approval reactions without fetching the target event", async () => {
+    const core = buildCore();
+    registerMatrixApprovalReactionTarget({
+      roomId: "!ops:example.org",
+      eventId: "$approval-msg",
+      approvalId: "req-123",
+      allowedDecisions: ["allow-once"],
+    });
+    const client = {
+      getEvent: vi.fn().mockRejectedValue(new Error("boom")),
+    } as unknown as Parameters<typeof handleInboundMatrixReaction>[0]["client"];
+
+    await handleInboundMatrixReaction({
+      client,
+      core,
+      cfg: buildConfig(),
+      accountId: "default",
+      roomId: "!ops:example.org",
+      event: {
+        event_id: "$reaction-1",
+        origin_server_ts: 123,
+        content: {
+          "m.relates_to": {
+            rel_type: "m.annotation",
+            event_id: "$approval-msg",
+            key: "✅",
+          },
+        },
+      } as never,
+      senderId: "@owner:example.org",
+      senderLabel: "Owner",
+      selfUserId: "@bot:example.org",
+      isDirectMessage: false,
+      logVerboseMessage: vi.fn(),
+    });
+
+    expect(client.getEvent).not.toHaveBeenCalled();
+    expect(resolveMatrixExecApproval).toHaveBeenCalledWith({
+      cfg: buildConfig(),
+      approvalId: "req-123",
+      decision: "allow-once",
+      senderId: "@owner:example.org",
+    });
+    expect(core.system.enqueueSystemEvent).not.toHaveBeenCalled();
+  });
+
+  it("unregisters stale approval anchors after not-found resolution", async () => {
+    const core = buildCore();
+    resolveMatrixExecApproval.mockRejectedValueOnce(
+      new Error("unknown or expired approval id req-123"),
+    );
+    registerMatrixApprovalReactionTarget({
+      roomId: "!ops:example.org",
+      eventId: "$approval-msg",
+      approvalId: "req-123",
+      allowedDecisions: ["deny"],
+    });
+    const client = {
+      getEvent: vi.fn(),
+    } as unknown as Parameters<typeof handleInboundMatrixReaction>[0]["client"];
+
+    await handleInboundMatrixReaction({
+      client,
+      core,
+      cfg: buildConfig(),
+      accountId: "default",
+      roomId: "!ops:example.org",
+      event: {
+        event_id: "$reaction-1",
+        origin_server_ts: 123,
+        content: {
+          "m.relates_to": {
+            rel_type: "m.annotation",
+            event_id: "$approval-msg",
+            key: "❌",
+          },
+        },
+      } as never,
+      senderId: "@owner:example.org",
+      senderLabel: "Owner",
+      selfUserId: "@bot:example.org",
+      isDirectMessage: false,
+      logVerboseMessage: vi.fn(),
+    });
+
+    expect(client.getEvent).not.toHaveBeenCalled();
+    expect(
+      resolveMatrixApprovalReactionTarget({
+        roomId: "!ops:example.org",
+        eventId: "$approval-msg",
+        reactionKey: "❌",
+      }),
+    ).toBeNull();
+  });
+
+  it("skips target fetches for ordinary reactions when notifications are off", async () => {
+    const core = buildCore();
+    const cfg = buildConfig();
+    const matrixCfg = cfg.channels?.matrix;
+    if (!matrixCfg) {
+      throw new Error("matrix config missing");
+    }
+    matrixCfg.reactionNotifications = "off";
+    const client = {
+      getEvent: vi.fn(),
+    } as unknown as Parameters<typeof handleInboundMatrixReaction>[0]["client"];
+
+    await handleInboundMatrixReaction({
+      client,
+      core,
+      cfg,
+      accountId: "default",
+      roomId: "!ops:example.org",
+      event: {
+        event_id: "$reaction-1",
+        origin_server_ts: 123,
+        content: {
+          "m.relates_to": {
+            rel_type: "m.annotation",
+            event_id: "$msg-1",
+            key: "👍",
+          },
+        },
+      } as never,
+      senderId: "@owner:example.org",
+      senderLabel: "Owner",
+      selfUserId: "@bot:example.org",
+      isDirectMessage: false,
+      logVerboseMessage: vi.fn(),
+    });
+
+    expect(client.getEvent).not.toHaveBeenCalled();
+    expect(resolveMatrixExecApproval).not.toHaveBeenCalled();
     expect(core.system.enqueueSystemEvent).not.toHaveBeenCalled();
   });
 });
