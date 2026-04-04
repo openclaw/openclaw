@@ -59,7 +59,7 @@ describe("getCompatibleActivePluginRegistry", () => {
     ).toBeUndefined();
   });
 
-  it("reuses active registry for explicit non-activating loads regardless of cache key", () => {
+  it("reuses active registry for non-activating loads when only onlyPluginIds differs", () => {
     const registry = createEmptyPluginRegistry();
     const baseOptions = {
       config: {
@@ -76,8 +76,8 @@ describe("getCompatibleActivePluginRegistry", () => {
     const { cacheKey } = __testing.resolvePluginLoadCacheContext(baseOptions);
     setActivePluginRegistry(registry, cacheKey);
 
-    // activate:false (snapshot / metadata-only) always reuses the active
-    // registry — it is a superset of any narrower snapshot request.
+    // activate:false with matching base key (only onlyPluginIds differs) →
+    // reuse active registry since it is a superset of any subset request.
     expect(__testing.getCompatibleActivePluginRegistry({ ...baseOptions, activate: false })).toBe(
       registry,
     );
@@ -85,23 +85,26 @@ describe("getCompatibleActivePluginRegistry", () => {
       __testing.getCompatibleActivePluginRegistry({
         ...baseOptions,
         activate: false,
-        workspaceDir: "/tmp/workspace-b",
+        onlyPluginIds: ["demo"],
       }),
     ).toBe(registry);
+
+    // activate:false with different structural inputs (workspaceDir,
+    // runtimeOptions) → cache miss, because the registry content may differ.
     expect(
       __testing.getCompatibleActivePluginRegistry({
         ...baseOptions,
         activate: false,
-        onlyPluginIds: ["demo"],
+        workspaceDir: "/tmp/workspace-b",
       }),
-    ).toBe(registry);
+    ).toBeUndefined();
     expect(
       __testing.getCompatibleActivePluginRegistry({
         ...baseOptions,
         activate: false,
         runtimeOptions: undefined,
       }),
-    ).toBe(registry);
+    ).toBeUndefined();
   });
 
   it("requires cache key match for explicitly activating loads", () => {
@@ -202,7 +205,7 @@ describe("getCompatibleActivePluginRegistry", () => {
     ).toBeUndefined();
   });
 
-  it("reuses the active registry for explicit non-activating loads even when gateway handlers differ", () => {
+  it("does not reuse active registry for non-activating loads when gateway handlers differ", () => {
     const registry = createEmptyPluginRegistry();
     const loadOptions = {
       config: {
@@ -219,6 +222,8 @@ describe("getCompatibleActivePluginRegistry", () => {
     const { cacheKey } = __testing.resolvePluginLoadCacheContext(loadOptions);
     setActivePluginRegistry(registry, cacheKey);
 
+    // Even with activate:false, structural differences (gateway handlers)
+    // still cause a cache miss — only onlyPluginIds is ignored.
     expect(
       __testing.getCompatibleActivePluginRegistry({
         ...loadOptions,
@@ -228,7 +233,7 @@ describe("getCompatibleActivePluginRegistry", () => {
           "sessions.list": () => undefined,
         },
       }),
-    ).toBe(registry);
+    ).toBeUndefined();
   });
 });
 

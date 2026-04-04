@@ -433,20 +433,22 @@ function getCompatibleActivePluginRegistry(
   if (!hasExplicitCompatibilityInputs(options)) {
     return activeRegistry;
   }
-  // Non-activating (snapshot) loads only read provider/tool metadata from the
-  // registry — they never register commands or mutate global state. The active
-  // registry was loaded with activate:true and contains ALL enabled plugins,
-  // making it a superset of any snapshot request. Reuse it directly to avoid
-  // redundant loadOpenClawPlugins calls caused by cache-key mismatches when
-  // callers omit workspaceDir or pass a narrower onlyPluginIds scope.
-  // Note: activate:undefined is treated as activating (shouldActivate defaults
-  // true), so only explicit activate:false qualifies as a snapshot-only load.
-  if (options.activate === false) {
-    return activeRegistry;
-  }
   const activeCacheKey = getActivePluginRegistryKey();
   if (!activeCacheKey) {
     return undefined;
+  }
+  // Non-activating (snapshot) loads only read provider/tool metadata — they
+  // never register commands or mutate global state. The active registry was
+  // loaded with activate:true and contains ALL enabled plugins, so it is a
+  // superset of any onlyPluginIds subset. For these loads, compare a base key
+  // that strips onlyPluginIds to avoid false cache misses while still
+  // validating config, env, workspaceDir, and other structural inputs.
+  if (options.activate === false) {
+    const baseKey = resolvePluginLoadCacheContext({
+      ...options,
+      onlyPluginIds: undefined,
+    }).cacheKey;
+    return baseKey === activeCacheKey ? activeRegistry : undefined;
   }
   return resolvePluginLoadCacheContext(options).cacheKey === activeCacheKey
     ? activeRegistry
