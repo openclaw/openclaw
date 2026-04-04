@@ -27,6 +27,8 @@
  *                   after compaction. Default: ["AGENTS.md"].
  *   sessionPrefix — only apply to sessions whose key starts with this string.
  *                   Default: "" (all sessions).
+ *   timezone      — IANA timezone for date math (e.g. "Asia/Jerusalem").
+ *                   Default: server local timezone.
  */
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { contextRestoreConfigSchema, type ContextRestoreConfig } from "./config.js";
@@ -47,6 +49,8 @@ export default definePluginEntry({
     const restoreFiles: string[] = cfg.restoreFiles ?? ["AGENTS.md"];
 
     const sessionPrefix: string = cfg.sessionPrefix ?? "";
+
+    const timezone: string | undefined = cfg.timezone;
 
     // ── 1. Static system context anchor (every turn) ─────────────────────────
     api.on(
@@ -88,7 +92,16 @@ export default definePluginEntry({
         }
 
         const now = new Date();
-        const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`; // YYYY-MM-DD local timezone
+        const parts = new Intl.DateTimeFormat("en-CA", {
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          ...(timezone ? { timeZone: timezone } : {}),
+        }).formatToParts(now);
+        const today = parts
+          .filter((p) => p.type !== "literal")
+          .map((p) => p.value)
+          .join("-"); // YYYY-MM-DD, respects configured timezone
         const resolvedFiles = restoreFiles.map((f) => f.replace(/YYYY-MM-DD/g, today));
         const fileList = resolvedFiles.map((f, i) => `${i + 1}. Read ${f}`).join("\n");
 

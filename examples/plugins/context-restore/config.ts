@@ -18,6 +18,11 @@ export const contextRestoreConfigSchema = {
       description:
         "Only apply to sessions whose key starts with this value. Leave empty (default) to apply to all sessions.",
     },
+    timezone: {
+      type: "string",
+      description:
+        'IANA timezone for date math (e.g. "Asia/Jerusalem"). Defaults to server local timezone when omitted.',
+    },
   },
 };
 
@@ -25,4 +30,5 @@ export type ContextRestoreConfig = {
   anchorText?: string;
   restoreFiles?: string[];
   sessionPrefix?: string;
+  timezone?: string;
 };

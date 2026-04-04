@@ -19,6 +19,10 @@
       "sessionPrefix": {
         "type": "string",
         "description": "Only apply to sessions whose key starts with this value. Empty = all sessions."
+      },
+      "timezone": {
+        "type": "string",
+        "description": "IANA timezone for date math (e.g. \"Asia/Jerusalem\"). Defaults to server local timezone when omitted."
       }
     }
   }
