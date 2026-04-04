@@ -22,7 +22,9 @@ The design goal is to keep all network discovery/advertising in the **Node Gatew
 - **Gateway WS (control plane)**: the WebSocket endpoint on `127.0.0.1:18789` by default; can be bound to LAN/tailnet via `gateway.bind`.
 - **Direct WS transport**: a LAN/tailnet-facing Gateway WS endpoint (no SSH).
 - **SSH transport (fallback)**: remote control by forwarding `127.0.0.1:18789` over SSH.
-- **Legacy TCP bridge (deprecated/removed)**: older node transport (see [Bridge protocol](/gateway/bridge-protocol)); no longer advertised for discovery.
+- **Legacy TCP bridge (removed)**: older node transport (see
+  [Bridge protocol](/gateway/bridge-protocol)); no longer advertised for
+  discovery and no longer part of current builds.
 
 Protocol details:
 
