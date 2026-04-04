@@ -109,7 +109,7 @@ export async function handleDiscordMessageAction(
         action: "sendMessage",
         accountId: accountId ?? undefined,
         to,
-        content: content ?? undefined,
+        content: content ?? "",
         mediaUrl,
         filename: filename ?? undefined,
         replyTo: replyTo ?? undefined,

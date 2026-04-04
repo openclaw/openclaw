@@ -85,11 +85,11 @@ function describeDiscordMessageTool({
     actions.add("reactions");
     actions.add("emoji-list");
   }
+  actions.add("upload-file");
   if (discovery.isEnabled("messages")) {
     actions.add("read");
     actions.add("edit");
     actions.add("delete");
-    actions.add("upload-file");
   }
   if (discovery.isEnabled("pins")) {
     actions.add("pin");

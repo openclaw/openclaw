@@ -71,6 +71,71 @@ describe("handleDiscordMessageAction", () => {
     );
   });
 
+  it("defaults content to empty string for upload-file without message", async () => {
+    await handleDiscordMessageAction({
+      action: "upload-file",
+      params: {
+        to: "channel:456",
+        filePath: "https://example.com/file.png",
+      },
+      cfg: {
+        channels: { discord: { token: "tok" } },
+      } as OpenClawConfig,
+    });
+
+    expect(handleDiscordActionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "sendMessage",
+        to: "channel:456",
+        content: "",
+        mediaUrl: "https://example.com/file.png",
+      }),
+      expect.any(Object),
+      expect.any(Object),
+    );
+  });
+
+  it("forwards message content for upload-file when provided", async () => {
+    await handleDiscordMessageAction({
+      action: "upload-file",
+      params: {
+        to: "channel:456",
+        filePath: "https://example.com/file.png",
+        message: "Here is the file",
+      },
+      cfg: {
+        channels: { discord: { token: "tok" } },
+      } as OpenClawConfig,
+    });
+
+    expect(handleDiscordActionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "sendMessage",
+        to: "channel:456",
+        content: "Here is the file",
+        mediaUrl: "https://example.com/file.png",
+      }),
+      expect.any(Object),
+      expect.any(Object),
+    );
+  });
+
+  it("rejects upload-file when no file path is provided", async () => {
+    await expect(
+      handleDiscordMessageAction({
+        action: "upload-file",
+        params: {
+          to: "channel:456",
+        },
+        cfg: {
+          channels: { discord: { token: "tok" } },
+        } as OpenClawConfig,
+      }),
+    ).rejects.toThrow(/upload-file requires filePath, path, or media/);
+
+    expect(handleDiscordActionMock).not.toHaveBeenCalled();
+  });
+
   it("rejects reactions when no message id source is available", async () => {
     await expect(
       handleDiscordMessageAction({
