@@ -8,6 +8,7 @@ import {
 import { theme } from "../terminal/theme.js";
 
 const DEFAULT_DELAY_MS = 0;
+/** Counts how many progress bars are currently showing. If this is greater than 0, new bars are skipped to avoid two bars fighting over the same output line. */
 let activeProgress = 0;
 
 type ProgressOptions = {

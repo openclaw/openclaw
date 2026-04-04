@@ -2,6 +2,7 @@ export type DurationMsParseOptions = {
   defaultUnit?: "ms" | "s" | "m" | "h" | "d";
 };
 
+/** How many milliseconds each unit suffix represents (e.g. "s" = 1000ms, "m" = 60000ms). */
 const DURATION_MULTIPLIERS: Record<string, number> = {
   ms: 1,
   s: 1000,

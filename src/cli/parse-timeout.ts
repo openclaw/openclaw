@@ -17,6 +17,12 @@ export function parseTimeoutMs(raw: unknown): number | undefined {
   return Number.isFinite(value) ? value : undefined;
 }
 
+/**
+ * Same as parseTimeoutMs, but always returns a number instead of undefined.
+ * - If the value is missing (undefined/null) or empty string, returns fallbackMs.
+ * - If the value is the wrong type, returns fallbackMs by default; throws if options.invalidType is "error".
+ * - If the value is present but not a valid positive number, throws an error.
+ */
 export function parseTimeoutMsWithFallback(
   raw: unknown,
   fallbackMs: number,

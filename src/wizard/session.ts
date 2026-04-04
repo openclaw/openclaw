@@ -16,9 +16,11 @@ export type WizardStep = {
   initialValue?: unknown;
   placeholder?: string;
   sensitive?: boolean;
+  /** Who handles this step: "gateway" means the server processes it, "client" means the UI displays it to the user. */
   executor?: "gateway" | "client";
 };
 
+/** Tracks the state of a wizard session. Starts as "running", then ends as "done" (finished normally), "cancelled" (user quit), or "error" (something went wrong). */
 export type WizardSessionStatus = "running" | "done" | "cancelled" | "error";
 
 export type WizardNextResult = {
@@ -34,6 +36,11 @@ type Deferred<T> = {
   reject: (err: unknown) => void;
 };
 
+/**
+ * Creates a promise you can resolve or reject from outside.
+ * One part of the code waits on the promise; another part calls resolve() or reject() when it has a result,
+ * such as when the user submits an answer to a wizard step.
+ */
 function createDeferred<T>(): Deferred<T> {
   let resolve!: (value: T) => void;
   let reject!: (err: unknown) => void;
@@ -163,6 +170,7 @@ class WizardSessionPrompter implements WizardPrompter {
 export class WizardSession {
   private currentStep: WizardStep | null = null;
   private stepDeferred: Deferred<WizardStep | null> | null = null;
+  /** Holds a pending promise for each active step, keyed by the step's ID. Resolved when the user submits an answer for that step. */
   private answerDeferred = new Map<string, Deferred<unknown>>();
   private status: WizardSessionStatus = "running";
   private error: string | undefined;
@@ -199,6 +207,7 @@ export class WizardSession {
     deferred.resolve(value);
   }
 
+  /** Stops the wizard immediately. Any steps the user was waiting on will receive a cancellation error instead of an answer. */
   cancel() {
     if (this.status !== "running") {
       return;
@@ -235,6 +244,7 @@ export class WizardSession {
     }
   }
 
+  /** Shows a step to the user and pauses until answer() is called with their response. */
   async awaitAnswer(step: WizardStep): Promise<unknown> {
     if (this.status !== "running") {
       throw new Error("wizard: session not running");

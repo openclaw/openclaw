@@ -2,6 +2,7 @@ export type BytesParseOptions = {
   defaultUnit?: "b" | "kb" | "mb" | "gb" | "tb";
 };
 
+/** How many bytes each unit suffix represents. Both short (k, m, g, t) and full (kb, mb, gb, tb) forms are accepted. */
 const UNIT_MULTIPLIERS: Record<string, number> = {
   b: 1,
   kb: 1024,
