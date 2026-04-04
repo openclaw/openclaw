@@ -462,8 +462,8 @@ export async function runGatewayUpdateCheck(params: {
                 continue;
               }
               const parsed = JSON.parse(trimmed);
-              if (parsed && typeof parsed.afterVersion === "string") {
-                return parsed.afterVersion;
+              if (parsed && parsed.after && typeof parsed.after.version === "string") {
+                return parsed.after.version;
               }
             }
           } catch {

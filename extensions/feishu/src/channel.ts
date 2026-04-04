@@ -1136,20 +1136,21 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       gateway: {
         startAccount: async (ctx) => {
           const { monitorFeishuProvider } = await import("./monitor.js");
+          const startEffectiveAccountId = (ctx as any).agentAccountId ?? ctx.accountId;
           const account = resolveFeishuRuntimeAccount(
-            { cfg: ctx.cfg, accountId: effectiveAccountId },
+            { cfg: ctx.cfg, accountId: startEffectiveAccountId },
             { requireEventSecrets: true },
           );
           const port = account.config?.webhookPort ?? null;
-          ctx.setStatus({ accountId: effectiveAccountId, port });
+          ctx.setStatus({ accountId: startEffectiveAccountId, port });
           ctx.log?.info(
-            `starting feishu[${effectiveAccountId}] (mode: ${account.config?.connectionMode ?? "websocket"})`,
+            `starting feishu[${startEffectiveAccountId}] (mode: ${account.config?.connectionMode ?? "websocket"})`,
           );
           return monitorFeishuProvider({
             config: ctx.cfg,
             runtime: ctx.runtime,
             abortSignal: ctx.abortSignal,
-            accountId: effectiveAccountId,
+            accountId: startEffectiveAccountId,
           });
         },
       },
