@@ -21,7 +21,6 @@ Docs: https://docs.openclaw.ai
 - Providers/Ollama: add a bundled Ollama Web Search provider for key-free `web_search` via your configured Ollama host and `ollama signin`. (#59318) Thanks @BruceMacD.
 - Plugins/onboarding: add plugin config TUI prompts to onboard and configure wizards so more plugin setup can stay in the guided flow. (#60590)
 - Plugins/install: add `openclaw plugins install --force` to overwrite existing plugin and hook-pack install targets without using the dangerous-code override flag. (#60544) Thanks @gumadeiras.
-- Plugin SDK/config: export `OpenClawSchema` via `openclaw/plugin-sdk/config-schema` so external tooling can validate and introspect full `openclaw.json` config through a supported public subpath. (#60557) Thanks @feniix.
 - Providers/Anthropic: remove setup-token from new onboarding and auth-command setup paths, keep existing configured legacy token profiles runnable, and steer new Anthropic setup to Claude CLI or API keys.
 - Providers/OpenAI Codex: add forward-compat `openai-codex/gpt-5.4-mini` synthesis across provider runtime, model catalog, and model listing so Codex mini works before bundled Pi catalog updates land.
 - Tools/web_search: add a bundled MiniMax Search provider backed by the Coding Plan search API, with region reuse from `MINIMAX_API_HOST` and plugin-owned credential config. (#54648) Thanks @fengmk2.
@@ -33,6 +32,7 @@ Docs: https://docs.openclaw.ai
 - Prompt caching: keep prompt prefixes more reusable across transport fallback, deterministic MCP tool ordering, compaction, and embedded image history so follow-up turns hit cache more reliably. (#58036, #58037, #58038, #59054, #60603, #60691) Thanks @bcherny.
 - Agents/cache: diagnostics: add prompt-cache break diagnostics, trace live cache scenarios through embedded runner paths, and show cache reuse explicitly in `openclaw status --verbose`. Thanks @vincentkoc.
 - Agents/cache: stabilize cache-relevant system prompt fingerprints by normalizing equivalent structured prompt whitespace, line endings, hook-added system context, and runtime capability ordering so semantically unchanged prompts reuse KV/cache more reliably. Thanks @vincentkoc.
+- Plugin SDK/config: export `OpenClawSchema` via `openclaw/plugin-sdk/config-schema` so external tooling can validate and introspect full `openclaw.json` config through a supported public subpath. (#60557) Thanks @feniix.
 
 ### Fixes
 
