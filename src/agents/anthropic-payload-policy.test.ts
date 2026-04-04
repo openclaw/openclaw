@@ -137,6 +137,66 @@ describe("anthropic payload policy", () => {
     ]);
   });
 
+  it("applies 1h TTL for Vertex AI endpoints with long cache retention", () => {
+    const policy = resolveAnthropicPayloadPolicy({
+      provider: "anthropic-vertex",
+      api: "anthropic-messages",
+      baseUrl: "https://us-east5-aiplatform.googleapis.com",
+      cacheRetention: "long",
+      enableCacheControl: true,
+    });
+    const payload: TestPayload = {
+      system: [
+        { type: "text", text: "Follow policy." },
+        { type: "text", text: "Use tools carefully." },
+      ],
+      messages: [{ role: "user", content: "Hello" }],
+    };
+
+    applyAnthropicPayloadPolicyToParams(payload, policy);
+
+    expect(payload.system).toEqual([
+      {
+        type: "text",
+        text: "Follow policy.",
+        cache_control: { type: "ephemeral", ttl: "1h" },
+      },
+      {
+        type: "text",
+        text: "Use tools carefully.",
+        cache_control: { type: "ephemeral", ttl: "1h" },
+      },
+    ]);
+    expect(payload.messages[0]).toEqual({
+      role: "user",
+      content: [{ type: "text", text: "Hello", cache_control: { type: "ephemeral", ttl: "1h" } }],
+    });
+  });
+
+  it("applies 5m ephemeral cache for Vertex AI endpoints with short cache retention", () => {
+    const policy = resolveAnthropicPayloadPolicy({
+      provider: "anthropic-vertex",
+      api: "anthropic-messages",
+      baseUrl: "https://us-east5-aiplatform.googleapis.com",
+      cacheRetention: "short",
+      enableCacheControl: true,
+    });
+    const payload: TestPayload = {
+      system: [{ type: "text", text: "Follow policy." }],
+      messages: [{ role: "user", content: "Hello" }],
+    };
+
+    applyAnthropicPayloadPolicyToParams(payload, policy);
+
+    expect(payload.system).toEqual([
+      {
+        type: "text",
+        text: "Follow policy.",
+        cache_control: { type: "ephemeral" },
+      },
+    ]);
+  });
+
   it("strips the boundary even when cache retention is disabled", () => {
     const policy = resolveAnthropicPayloadPolicy({
       provider: "anthropic",

@@ -36,7 +36,9 @@ function resolveAnthropicEphemeralCacheControl(
     return undefined;
   }
   const ttl =
-    retention === "long" && typeof baseUrl === "string" && baseUrl.includes("api.anthropic.com")
+    retention === "long" &&
+    typeof baseUrl === "string" &&
+    (baseUrl.includes("api.anthropic.com") || baseUrl.includes("aiplatform.googleapis.com"))
       ? "1h"
       : undefined;
   return { type: "ephemeral", ...(ttl ? { ttl } : {}) };
