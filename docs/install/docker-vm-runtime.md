@@ -118,18 +118,18 @@ Expected output:
 OpenClaw runs in Docker, but Docker is not the source of truth.
 All long-lived state must survive restarts, rebuilds, and reboots.
 
-| Component           | Location                          | Persistence mechanism  | Notes                            |
-| ------------------- | --------------------------------- | ---------------------- | -------------------------------- |
-| Gateway config      | `/home/node/.openclaw/`           | Host volume mount      | Includes `openclaw.json`, tokens |
-| Model auth profiles | `/home/node/.openclaw/`           | Host volume mount      | OAuth tokens, API keys           |
-| Skill configs       | `/home/node/.openclaw/skills/`    | Host volume mount      | Skill-level state                |
-| Agent workspace     | `/home/node/.openclaw/workspace/` | Host volume mount      | Code and agent artifacts         |
-| WhatsApp session    | `/home/node/.openclaw/`           | Host volume mount      | Preserves QR login               |
-| Gmail keyring       | `/home/node/.openclaw/`           | Host volume + password | Requires `GOG_KEYRING_PASSWORD`  |
-| External binaries   | `/usr/local/bin/`                 | Docker image           | Must be baked at build time      |
-| Node runtime        | Container filesystem              | Docker image           | Rebuilt every image build        |
-| OS packages         | Container filesystem              | Docker image           | Do not install at runtime        |
-| Docker container    | Ephemeral                         | Restartable            | Safe to destroy                  |
+| Component           | Location                          | Persistence mechanism  | Notes                                  |
+| ------------------- | --------------------------------- | ---------------------- | -------------------------------------- |
+| Gateway config      | `/home/node/.openclaw/`           | Host volume mount      | Includes `openclaw.json`, `.env`       |
+| Model auth profiles | `/home/node/.openclaw/`           | Host volume mount      | `auth-profiles.json` (OAuth, API keys) |
+| Skill configs       | `/home/node/.openclaw/skills/`    | Host volume mount      | Skill-level state                      |
+| Agent workspace     | `/home/node/.openclaw/workspace/` | Host volume mount      | Code and agent artifacts               |
+| WhatsApp session    | `/home/node/.openclaw/`           | Host volume mount      | Preserves QR login                     |
+| Gmail keyring       | `/home/node/.openclaw/`           | Host volume + password | Requires `GOG_KEYRING_PASSWORD`        |
+| External binaries   | `/usr/local/bin/`                 | Docker image           | Must be baked at build time            |
+| Node runtime        | Container filesystem              | Docker image           | Rebuilt every image build              |
+| OS packages         | Container filesystem              | Docker image           | Do not install at runtime              |
+| Docker container    | Ephemeral                         | Restartable            | Safe to destroy                        |
 
 ## Updates
 
