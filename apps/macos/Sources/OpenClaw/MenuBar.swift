@@ -442,7 +442,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         TerminationSignalWatcher.shared.start()
         self.scheduleDeferredStartupServices()
         self.scheduleFirstRunOnboardingIfNeeded()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
             CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "launch")
         }
 

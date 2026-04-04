@@ -1118,23 +1118,21 @@ struct CorrectionWorkspaceView: View {
                 self.watchlistEmptyState
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                ScrollView {
-                    LazyVStack(spacing: 10) {
-                        ForEach(self.visibleIssues) { issue in
-                            Button {
-                                self.selectedIssueID = issue.id
-                            } label: {
-                                CorrectionWorkspaceIssueRow(
-                                    issue: issue,
-                                    isSelected: issue.id == self.selectedIssueID)
-                            }
-                            .buttonStyle(.plain)
-                            .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                LazyVStack(spacing: 10) {
+                    ForEach(self.visibleIssues) { issue in
+                        Button {
+                            self.selectedIssueID = issue.id
+                        } label: {
+                            CorrectionWorkspaceIssueRow(
+                                issue: issue,
+                                isSelected: issue.id == self.selectedIssueID)
+                                .equatable()
                         }
+                        .buttonStyle(.plain)
+                        .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                     }
-                    .padding(.top, 4)
                 }
-                .scrollIndicators(.hidden)
+                .padding(.top, 4)
             }
         }
         .padding(18)
@@ -3242,23 +3240,6 @@ private struct CorrectionWorkspaceCapsuleButtonStyle: ButtonStyle {
     }
 }
 
-private struct CorrectionWorkspaceParallaxModifier: ViewModifier {
-    let depth: CGFloat
-
-    func body(content: Content) -> some View {
-        if #available(macOS 14.0, *) {
-            content.scrollTransition(axis: .vertical) { view, phase in
-                view
-                    .scaleEffect(phase.isIdentity ? 1 : 0.985)
-                    .opacity(phase.isIdentity ? 1 : 0.86)
-                    .offset(y: phase.value * self.depth)
-            }
-        } else {
-            content
-        }
-    }
-}
-
 private struct CorrectionWorkspaceHeader: View {
     let summary: CorrectionWorkspaceSummary
 
@@ -3370,9 +3351,14 @@ private struct CorrectionWorkspaceMiniBadge: View {
     }
 }
 
-private struct CorrectionWorkspaceIssueRow: View {
+@MainActor
+private struct CorrectionWorkspaceIssueRow: View, Equatable {
     let issue: CorrectionWorkspaceIssue
     let isSelected: Bool
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.issue == rhs.issue && lhs.isSelected == rhs.isSelected
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 14) {
@@ -3659,102 +3645,99 @@ private struct CorrectionWorkspaceDetail: View {
     let runAction: (CorrectionWorkspaceAction) -> Void
 
     var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 14) {
-                CorrectionWorkspaceDetailHero(
-                    issue: self.issue,
-                    canvasEnabled: self.canvasEnabled,
-                    runAction: self.runAction)
+        LazyVStack(alignment: .leading, spacing: 14) {
+            CorrectionWorkspaceDetailHero(
+                issue: self.issue,
+                canvasEnabled: self.canvasEnabled,
+                runAction: self.runAction)
 
-                CorrectionWorkspaceClosureSection(
-                    closure: self.issue.closureSnapshot)
+            CorrectionWorkspaceClosureSection(
+                closure: self.issue.closureSnapshot)
 
-                LazyVGrid(
-                    columns: [GridItem(.adaptive(minimum: 250), spacing: 10, alignment: .top)],
-                    alignment: .leading,
-                    spacing: 10)
-                {
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 250), spacing: 10, alignment: .top)],
+                alignment: .leading,
+                spacing: 10)
+            {
+                CorrectionWorkspaceSection(
+                    title: "Diagnosis",
+                    content: self.issue.diagnosis,
+                    systemImage: "stethoscope")
+
+                CorrectionWorkspaceSection(
+                    title: "Intervention",
+                    content: self.issue.prescription,
+                    systemImage: "paperplane")
+
+                if let likelyRootCause = self.issue.likelyRootCause, !likelyRootCause.isEmpty {
                     CorrectionWorkspaceSection(
-                        title: "Diagnosis",
-                        content: self.issue.diagnosis,
-                        systemImage: "stethoscope")
-
-                    CorrectionWorkspaceSection(
-                        title: "Intervention",
-                        content: self.issue.prescription,
-                        systemImage: "paperplane")
-
-                    if let likelyRootCause = self.issue.likelyRootCause, !likelyRootCause.isEmpty {
-                        CorrectionWorkspaceSection(
-                            title: "Root Cause",
-                            content: likelyRootCause,
-                            systemImage: "point.3.connected.trianglepath.dotted")
-                    }
-
-                    if let roleAssessment = self.issue.professionalRoleAssessment {
-                        CorrectionWorkspaceSection(
-                            title: "Role",
-                            content: "\(roleAssessment.contract.summary) \(roleAssessment.drift.detail)",
-                            systemImage: "person.text.rectangle")
-                    }
-
-                    if let casebookGuidance = self.issue.casebookGuidance {
-                        CorrectionWorkspaceStatusSection(
-                            title: "Casebook",
-                            status: casebookGuidance)
-                    }
-
-                    if let runtimeTruth = self.issue.runtimeTruth {
-                        CorrectionWorkspaceStatusSection(
-                            title: "Runtime",
-                            status: runtimeTruth)
-                    }
-
-                    if let templateValidation = self.issue.templateValidation {
-                        CorrectionWorkspaceStatusSection(
-                            title: "Templates",
-                            status: templateValidation)
-                    }
-
-                    if let interventionProgress = self.issue.interventionProgress {
-                        CorrectionWorkspaceProgressSection(
-                            title: "Progress",
-                            progress: interventionProgress)
-                    }
-
-                    if let similarCases = self.issue.similarCases {
-                        CorrectionWorkspaceResearchSection(
-                            title: "Research",
-                            research: similarCases,
-                            isLoading: self.isResearching,
-                            onRefresh: self.refreshResearch)
-                    }
-                }
-
-                if !self.issue.evidence.isEmpty {
-                    CorrectionWorkspaceListSection(
-                        title: "Evidence",
-                        items: self.issue.evidence)
-                }
-
-                if !self.issue.history.isEmpty {
-                    CorrectionWorkspaceListSection(
-                        title: "History",
-                        items: self.issue.history)
+                        title: "Root Cause",
+                        content: likelyRootCause,
+                        systemImage: "point.3.connected.trianglepath.dotted")
                 }
 
                 if let roleAssessment = self.issue.professionalRoleAssessment {
-                    CorrectionWorkspaceListSection(
-                        title: "Role obligations",
-                        items: roleAssessment.contract.behavioralConstitution
-                            + roleAssessment.contract.evidenceObligations
-                            + roleAssessment.drift.highlights)
+                    CorrectionWorkspaceSection(
+                        title: "Role",
+                        content: "\(roleAssessment.contract.summary) \(roleAssessment.drift.detail)",
+                        systemImage: "person.text.rectangle")
+                }
+
+                if let casebookGuidance = self.issue.casebookGuidance {
+                    CorrectionWorkspaceStatusSection(
+                        title: "Casebook",
+                        status: casebookGuidance)
+                }
+
+                if let runtimeTruth = self.issue.runtimeTruth {
+                    CorrectionWorkspaceStatusSection(
+                        title: "Runtime",
+                        status: runtimeTruth)
+                }
+
+                if let templateValidation = self.issue.templateValidation {
+                    CorrectionWorkspaceStatusSection(
+                        title: "Templates",
+                        status: templateValidation)
+                }
+
+                if let interventionProgress = self.issue.interventionProgress {
+                    CorrectionWorkspaceProgressSection(
+                        title: "Progress",
+                        progress: interventionProgress)
+                }
+
+                if let similarCases = self.issue.similarCases {
+                    CorrectionWorkspaceResearchSection(
+                        title: "Research",
+                        research: similarCases,
+                        isLoading: self.isResearching,
+                        onRefresh: self.refreshResearch)
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 2)
+
+            if !self.issue.evidence.isEmpty {
+                CorrectionWorkspaceListSection(
+                    title: "Evidence",
+                    items: self.issue.evidence)
+            }
+
+            if !self.issue.history.isEmpty {
+                CorrectionWorkspaceListSection(
+                    title: "History",
+                    items: self.issue.history)
+            }
+
+            if let roleAssessment = self.issue.professionalRoleAssessment {
+                CorrectionWorkspaceListSection(
+                    title: "Role obligations",
+                    items: roleAssessment.contract.behavioralConstitution
+                        + roleAssessment.contract.evidenceObligations
+                        + roleAssessment.drift.highlights)
+            }
         }
-        .scrollIndicators(.hidden)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 2)
     }
 
     private func actionTitle(_ action: CorrectionWorkspaceAction) -> String {

@@ -11,6 +11,7 @@ struct ControlDashboardView: View {
 
     @Bindable var router: WebChatWorkspaceRouter
     @Bindable var state: AppState
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private let healthStore = HealthStore.shared
     private let gatewayManager = GatewayProcessManager.shared
@@ -38,13 +39,13 @@ struct ControlDashboardView: View {
                 .fill(self.dashboardAccent.opacity(self.healthStore.state == .ok ? 0.14 : 0.20))
                 .frame(width: 440, height: 276)
                 .blur(radius: 70)
-                .offset(x: -228, y: self.breathe ? -118 : -86)
+                .offset(x: -228, y: -96)
 
             Ellipse()
                 .fill(Color.white.opacity(0.22))
                 .frame(width: 360, height: 208)
                 .blur(radius: 58)
-                .offset(x: 72, y: self.breathe ? -52 : -28)
+                .offset(x: 72, y: -34)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
@@ -75,14 +76,15 @@ struct ControlDashboardView: View {
             .scrollIndicators(.hidden)
         }
         .task {
-            if self.healthStore.snapshot == nil {
-                await self.refreshStatus()
-            }
+            guard self.healthStore.snapshot == nil, !self.healthStore.isRefreshing else { return }
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard !Task.isCancelled, self.healthStore.snapshot == nil, !self.healthStore.isRefreshing else { return }
+            await self.refreshStatus(forceEnvironmentRefresh: false)
         }
         .onAppear {
-            guard !self.breathe else { return }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                withAnimation(.easeInOut(duration: 6.0).repeatForever(autoreverses: true)) {
+            guard !self.breathe, !self.reduceMotion else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                withAnimation(.easeInOut(duration: 7.2).repeatForever(autoreverses: true)) {
                     self.breathe = true
                 }
             }
@@ -1003,8 +1005,8 @@ struct ControlDashboardView: View {
         }
     }
 
-    private func refreshStatus() async {
-        self.gatewayManager.refreshEnvironmentStatus(force: true)
+    private func refreshStatus(forceEnvironmentRefresh: Bool = true) async {
+        self.gatewayManager.refreshEnvironmentStatus(force: forceEnvironmentRefresh)
         await self.healthStore.refresh(onDemand: true)
     }
 
