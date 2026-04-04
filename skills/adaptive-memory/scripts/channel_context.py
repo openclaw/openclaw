@@ -147,12 +147,19 @@ def cmd_update(args):
         if line.strip() == section_header:
             found = True
         elif found and not inserted:
-            # Skip HTML comments
+            # Keep HTML comments, insert after them
             if line.strip().startswith("<!--") and line.strip().endswith("-->"):
-                continue
-            new_lines.append(f"- {args.text}")
-            inserted = True
-            found = False
+                pass  # already appended above, keep looking
+            else:
+                # Insert new entry before this line
+                new_lines.insert(len(new_lines) - 1, f"- {args.text}")
+                inserted = True
+                found = False
+
+    # Handle case where section ends at EOF or only had HTML comments
+    if found and not inserted:
+        new_lines.append(f"- {args.text}")
+        inserted = True
 
     # Update the last-updated timestamp
     timestamp = datetime.now(JST).strftime("%Y-%m-%d %H:%M")

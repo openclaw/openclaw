@@ -41,16 +41,16 @@ else
   echo "[SKIP] memory/pending_tasks.json already exists"
 fi
 
-# heartbeat-state.json
-if [ ! -f "$WORKSPACE/memory/heartbeat-state.json" ]; then
-  cat > "$WORKSPACE/memory/heartbeat-state.json" << 'EOF'
+# distillation-state.json
+if [ ! -f "$WORKSPACE/memory/distillation-state.json" ]; then
+  cat > "$WORKSPACE/memory/distillation-state.json" << 'EOF'
 {
   "lastConsolidatedAt": null
 }
 EOF
-  echo "[OK] Created memory/heartbeat-state.json"
+  echo "[OK] Created memory/distillation-state.json"
 else
-  echo "[SKIP] memory/heartbeat-state.json already exists"
+  echo "[SKIP] memory/distillation-state.json already exists"
 fi
 
 # MEMORY.md at workspace root
@@ -105,6 +105,6 @@ echo "  ├── MEMORY.md"
 echo "  └── memory/"
 echo "      ├── active_context.md"
 echo "      ├── pending_tasks.json"
-echo "      ├── heartbeat-state.json"
+echo "      ├── distillation-state.json"
 echo "      ├── channel_context/"
 echo "      └── $TODAY.md"

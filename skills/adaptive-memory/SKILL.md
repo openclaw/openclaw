@@ -23,7 +23,8 @@ memory/
 ├── active_context.md       # Working memory (current tasks, blockers)
 ├── channel_context/        # Per-channel conversation summaries (optional)
 │   └── {channel-name}.md
-└── pending_tasks.json      # Task tracker (structured)
+├── pending_tasks.json      # Task tracker (structured)
+└── distillation-state.json # Tracks last distillation timestamp
 
 MEMORY.md                   # Long-term memory (curated, distilled)
 ```

@@ -197,33 +197,33 @@ def check_pending_tasks(workspace: Path):
 def check_distillation_state(workspace: Path):
     """Check if distillation is overdue."""
     print("\n🔄 Distillation:")
-    path = workspace / "memory" / "heartbeat-state.json"
+    path = workspace / "memory" / "distillation-state.json"
 
     if not path.exists():
-        warn("memory/heartbeat-state.json", "State file missing — distillation not tracked")
+        warn("memory/distillation-state.json", "State file missing — distillation not tracked")
         return
 
     try:
         with open(path) as f:
             state = json.load(f)
     except json.JSONDecodeError:
-        warn("memory/heartbeat-state.json", "Invalid JSON")
+        warn("memory/distillation-state.json", "Invalid JSON")
         return
 
     last = state.get("lastConsolidatedAt")
     if not last:
-        warn("heartbeat-state.json", "Never consolidated — run distill.py")
+        warn("distillation-state.json", "Never consolidated — run distill.py")
         return
 
     try:
         last_dt = datetime.fromisoformat(last.replace("Z", "+00:00") if last.endswith("Z") else last)
         age = datetime.now(JST) - last_dt
         if age > timedelta(hours=96):
-            warn("heartbeat-state.json", f"Last distillation was {age.days}d ago — may be overdue")
+            warn("distillation-state.json", f"Last distillation was {age.days}d ago — may be overdue")
         else:
             print(f"  ✅ Last distillation: {age.days}d {age.seconds // 3600}h ago")
     except ValueError:
-        warn("heartbeat-state.json", f"Cannot parse timestamp: {last}")
+        warn("distillation-state.json", f"Cannot parse timestamp: {last}")
 
 
 def main():
