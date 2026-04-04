@@ -15,6 +15,8 @@ export { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 export {
   assertHttpUrlTargetsPrivateNetwork,
   buildHostnameAllowlistPolicyFromSuffixAllowlist,
+  isPrivateNetworkOptInEnabled,
+  ssrfPolicyFromPrivateNetworkOptIn,
   ssrfPolicyFromAllowPrivateNetwork,
 } from "./ssrf-policy.js";
 export { isPrivateOrLoopbackHost } from "../gateway/net.js";

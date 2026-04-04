@@ -9,10 +9,45 @@ import {
 export { isPrivateIpAddress };
 export type { SsrFPolicy };
 
+export type PrivateNetworkOptInInput =
+  | boolean
+  | null
+  | undefined
+  | Pick<SsrFPolicy, "allowPrivateNetwork" | "dangerouslyAllowPrivateNetwork">
+  | {
+      allowPrivateNetwork?: boolean | null;
+      dangerouslyAllowPrivateNetwork?: boolean | null;
+      network?:
+        | Pick<SsrFPolicy, "allowPrivateNetwork" | "dangerouslyAllowPrivateNetwork">
+        | null
+        | undefined;
+    };
+
+export function isPrivateNetworkOptInEnabled(input: PrivateNetworkOptInInput): boolean {
+  if (input === true) {
+    return true;
+  }
+  if (!input || typeof input !== "object") {
+    return false;
+  }
+  return (
+    input.allowPrivateNetwork === true ||
+    input.dangerouslyAllowPrivateNetwork === true ||
+    input.network?.allowPrivateNetwork === true ||
+    input.network?.dangerouslyAllowPrivateNetwork === true
+  );
+}
+
+export function ssrfPolicyFromPrivateNetworkOptIn(
+  input: PrivateNetworkOptInInput,
+): SsrFPolicy | undefined {
+  return isPrivateNetworkOptInEnabled(input) ? { allowPrivateNetwork: true } : undefined;
+}
+
 export function ssrfPolicyFromAllowPrivateNetwork(
   allowPrivateNetwork: boolean | null | undefined,
 ): SsrFPolicy | undefined {
-  return allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined;
+  return ssrfPolicyFromPrivateNetworkOptIn(allowPrivateNetwork);
 }
 
 export async function assertHttpUrlTargetsPrivateNetwork(
