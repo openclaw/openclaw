@@ -64,7 +64,7 @@ export async function resolveDeliveryTarget(
   cfg: OpenClawConfig,
   agentId: string,
   jobPayload: {
-    channel?: "last" | ChannelId;
+    channel?: ChannelId;
     to?: string;
     threadId?: string | number;
     /** Explicit accountId from job.delivery — overrides session-derived and binding-derived values. */
