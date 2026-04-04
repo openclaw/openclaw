@@ -125,7 +125,26 @@ function formatDreamingSummary(cfg: OpenClawConfig): string {
 }
 
 function formatAuditCounts(audit: ShortTermAuditSummary): string {
-  return `${audit.entryCount} entries · ${audit.promotedCount} promoted · ${audit.conceptTaggedEntryCount} concept-tagged · ${audit.spacedEntryCount} spaced`;
+  const scriptCoverage = audit.conceptTagScripts
+    ? [
+        audit.conceptTagScripts.latinEntryCount > 0
+          ? `${audit.conceptTagScripts.latinEntryCount} latin`
+          : null,
+        audit.conceptTagScripts.cjkEntryCount > 0
+          ? `${audit.conceptTagScripts.cjkEntryCount} cjk`
+          : null,
+        audit.conceptTagScripts.mixedEntryCount > 0
+          ? `${audit.conceptTagScripts.mixedEntryCount} mixed`
+          : null,
+        audit.conceptTagScripts.otherEntryCount > 0
+          ? `${audit.conceptTagScripts.otherEntryCount} other`
+          : null,
+      ]
+        .filter(Boolean)
+        .join(", ")
+    : "";
+  const suffix = scriptCoverage ? ` · scripts=${scriptCoverage}` : "";
+  return `${audit.entryCount} entries · ${audit.promotedCount} promoted · ${audit.conceptTaggedEntryCount} concept-tagged · ${audit.spacedEntryCount} spaced${suffix}`;
 }
 
 function formatRepairSummary(repair: RepairShortTermPromotionArtifactsResult): string {

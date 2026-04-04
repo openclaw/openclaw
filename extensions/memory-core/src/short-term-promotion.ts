@@ -2,7 +2,12 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
-import { deriveConceptTags, MAX_CONCEPT_TAGS } from "./concept-vocabulary.js";
+import {
+  deriveConceptTags,
+  MAX_CONCEPT_TAGS,
+  summarizeConceptTagScriptCoverage,
+  type ConceptTagScriptCoverage,
+} from "./concept-vocabulary.js";
 
 const SHORT_TERM_PATH_RE = /(?:^|\/)memory\/(\d{4})-(\d{2})-(\d{2})\.md$/;
 const SHORT_TERM_BASENAME_RE = /^(\d{4})-(\d{2})-(\d{2})\.md$/;
@@ -114,6 +119,7 @@ export type ShortTermAuditSummary = {
   promotedCount: number;
   spacedEntryCount: number;
   conceptTaggedEntryCount: number;
+  conceptTagScripts?: ConceptTagScriptCoverage;
   invalidEntryCount: number;
   issues: ShortTermAuditIssue[];
   qmd?:
@@ -871,6 +877,7 @@ export async function auditShortTermPromotionArtifacts(params: {
   let promotedCount = 0;
   let spacedEntryCount = 0;
   let conceptTaggedEntryCount = 0;
+  let conceptTagScripts: ConceptTagScriptCoverage | undefined;
   let invalidEntryCount = 0;
   let updatedAt: string | undefined;
 
@@ -899,6 +906,11 @@ export async function auditShortTermPromotionArtifacts(params: {
       conceptTaggedEntryCount = Object.values(store.entries).filter(
         (entry) => (entry.conceptTags?.length ?? 0) > 0,
       ).length;
+      conceptTagScripts = summarizeConceptTagScriptCoverage(
+        Object.values(store.entries)
+          .filter((entry) => (entry.conceptTags?.length ?? 0) > 0)
+          .map((entry) => entry.conceptTags ?? []),
+      );
       invalidEntryCount = Object.keys(asRecord(parsed)?.entries ?? {}).length - entryCount;
       if (invalidEntryCount > 0) {
         issues.push({
@@ -990,6 +1002,7 @@ export async function auditShortTermPromotionArtifacts(params: {
     promotedCount,
     spacedEntryCount,
     conceptTaggedEntryCount,
+    ...(conceptTagScripts ? { conceptTagScripts } : {}),
     invalidEntryCount,
     issues,
     ...(qmd ? { qmd } : {}),

@@ -426,6 +426,48 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("reports concept tag script coverage for multilingual recalls", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "routeur glacier",
+        results: [
+          {
+            path: "memory/2026-04-03.md",
+            startLine: 1,
+            endLine: 2,
+            score: 0.93,
+            snippet: "Configuration du routeur et sauvegarde Glacier.",
+            source: "memory",
+          },
+        ],
+      });
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "router cjk",
+        results: [
+          {
+            path: "memory/2026-04-04.md",
+            startLine: 1,
+            endLine: 2,
+            score: 0.95,
+            snippet: "障害対応ルーター設定とバックアップ確認。",
+            source: "memory",
+          },
+        ],
+      });
+
+      const audit = await auditShortTermPromotionArtifacts({ workspaceDir });
+      expect(audit.conceptTaggedEntryCount).toBe(2);
+      expect(audit.conceptTagScripts).toEqual({
+        latinEntryCount: 1,
+        cjkEntryCount: 1,
+        mixedEntryCount: 0,
+        otherEntryCount: 0,
+      });
+    });
+  });
+
   it("extracts stable concept tags from snippets and paths", () => {
     expect(
       __testing.deriveConceptTags({
@@ -433,5 +475,20 @@ describe("short-term promotion", () => {
         snippet: "Move backups to S3 Glacier and sync QMD router notes.",
       }),
     ).toEqual(expect.arrayContaining(["glacier", "router", "backups"]));
+  });
+
+  it("extracts multilingual concept tags across latin and cjk snippets", () => {
+    expect(
+      __testing.deriveConceptTags({
+        path: "memory/2026-04-03.md",
+        snippet: "Configuración du routeur et sauvegarde Glacier.",
+      }),
+    ).toEqual(expect.arrayContaining(["configuración", "routeur", "sauvegarde", "glacier"]));
+    expect(
+      __testing.deriveConceptTags({
+        path: "memory/2026-04-03.md",
+        snippet: "障害対応ルーター設定とバックアップ確認。路由器备份与网关同步。",
+      }),
+    ).toEqual(expect.arrayContaining(["障害対応", "ルーター", "バックアップ", "路由器", "备份"]));
   });
 });
