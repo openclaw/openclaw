@@ -1584,6 +1584,7 @@ export class AcpSessionManager {
         createInternalHookEvent("agent", "turn:end", params.sessionKey, {
           success: !params.errorCode,
           durationMs,
+          errorCode: params.errorCode,
         }),
       ),
       "agent:turn:end",

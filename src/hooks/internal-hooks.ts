@@ -361,6 +361,13 @@ function hasBooleanContextField<T extends Record<string, unknown>>(
   return typeof context[key] === "boolean";
 }
 
+function hasNumberContextField<T extends Record<string, unknown>>(
+  context: Partial<T>,
+  key: keyof T,
+): boolean {
+  return typeof context[key] === "number";
+}
+
 export function isAgentBootstrapEvent(event: InternalHookEvent): event is AgentBootstrapHookEvent {
   if (!isHookEventTypeAndAction(event, "agent", "bootstrap")) {
     return false;
@@ -463,6 +470,7 @@ export function isSessionPatchEvent(event: InternalHookEvent): event is SessionP
 export type AgentTurnEndHookContext = {
   success: boolean;
   durationMs: number;
+  errorCode?: string;
 };
 
 export type AgentTurnEndHookEvent = InternalHookEvent & {
@@ -470,13 +478,6 @@ export type AgentTurnEndHookEvent = InternalHookEvent & {
   action: "turn:end";
   context: AgentTurnEndHookContext;
 };
-
-function hasNumberContextField<T extends Record<string, unknown>>(
-  context: Partial<T>,
-  key: keyof T,
-): boolean {
-  return typeof context[key] === "number";
-}
 
 export function isAgentTurnEndEvent(event: InternalHookEvent): event is AgentTurnEndHookEvent {
   if (!isHookEventTypeAndAction(event, "agent", "turn:end")) {
