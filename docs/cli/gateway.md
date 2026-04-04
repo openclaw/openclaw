@@ -196,6 +196,21 @@ openclaw gateway call status
 openclaw gateway call logs.tail --params '{"sinceMs": 60000}'
 ```
 
+Options:
+
+- `--params <json>`: JSON object string for params (default `{}`)
+- `--url <url>`
+- `--token <token>`
+- `--password <password>`
+- `--timeout <ms>`
+- `--expect-final`
+- `--json`
+
+Notes:
+
+- `--params` must be valid JSON.
+- `--expect-final` is mainly for agent-style RPCs that stream intermediate events before a final payload.
+
 ## Manage the Gateway service
 
 ```bash
@@ -205,6 +220,12 @@ openclaw gateway stop
 openclaw gateway restart
 openclaw gateway uninstall
 ```
+
+Command options:
+
+- `gateway status`: `--url`, `--token`, `--password`, `--timeout`, `--no-probe`, `--require-rpc`, `--deep`, `--json`
+- `gateway install`: `--port`, `--runtime <node|bun>`, `--token`, `--force`, `--json`
+- `gateway uninstall|start|stop|restart`: `--json`
 
 Notes:
 

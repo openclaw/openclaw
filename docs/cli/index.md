@@ -421,9 +421,10 @@ Most plugin changes require a gateway restart. See [/plugin](/tools/plugin).
 
 Vector search over `MEMORY.md` + `memory/*.md`:
 
-- `openclaw memory status` — show index stats.
+- `openclaw memory status` — show index stats; use `--deep` for provider probes or `--fix` to repair stale recall/promotion artifacts.
 - `openclaw memory index` — reindex memory files.
 - `openclaw memory search "<query>"` (or `--query "<query>"`) — semantic search over memory.
+- `openclaw memory promote` — rank short-term recalls and optionally append top entries into `MEMORY.md`.
 
 ## Chat slash commands
 
@@ -573,6 +574,38 @@ Options:
 Notes:
 
 - For SecretRef-managed gateway tokens, `dashboard` prints or opens a non-tokenized URL instead of exposing the secret in terminal output or browser launch arguments.
+
+### `update`
+
+Update the installed CLI.
+
+Root options:
+
+- `--json`
+- `--no-restart`
+- `--dry-run`
+- `--channel <stable|beta|dev>`
+- `--tag <dist-tag|version|spec>`
+- `--timeout <seconds>`
+- `--yes`
+
+Subcommands:
+
+- `update status`
+- `update wizard`
+
+`update status` options:
+
+- `--json`
+- `--timeout <seconds>`
+
+`update wizard` options:
+
+- `--timeout <seconds>`
+
+Notes:
+
+- `openclaw --update` rewrites to `openclaw update`.
 
 ### `backup`
 
@@ -1273,7 +1306,7 @@ Include `--token` or `--password` explicitly. Missing explicit credentials is an
 
 Subcommands:
 
-- `gateway call <method> [--params <json>]`
+- `gateway call <method> [--params <json>] [--url <url>] [--token <token>] [--password <password>] [--timeout <ms>] [--expect-final] [--json]`
 - `gateway health`
 - `gateway status`
 - `gateway probe`
