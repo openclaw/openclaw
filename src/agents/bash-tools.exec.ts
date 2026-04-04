@@ -1119,7 +1119,7 @@ export function describeExecTool(params?: { agentId?: string; hasCronTool?: bool
   const base = [
     "Execute shell commands with background continuation for work that starts now.",
     "Use yieldMs/background to continue later via process tool.",
-    "For long-running work started now, rely on the automatic completion wake by default; use process when you need logs, status, input, or intervention.",
+    "For long-running work started now, rely on automatic completion wake when the command emits output or fails; use process to confirm quiet successful completions and when you need logs, status, input, or intervention.",
     params?.hasCronTool
       ? "Do not use exec sleep or delay loops for reminders or deferred follow-ups; use cron instead."
       : undefined,

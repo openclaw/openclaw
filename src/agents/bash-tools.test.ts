@@ -416,10 +416,10 @@ describe("tool descriptions", () => {
     const processWithCron = createProcessTool({ hasCronTool: true });
 
     expect(execWithCron.description).toContain(
-      "rely on the automatic completion wake by default; use process when you need logs, status, input, or intervention.",
+      "rely on automatic completion wake when the command emits output or fails; use process to confirm quiet successful completions and when you need logs, status, input, or intervention.",
     );
     expect(processWithCron.description).toContain(
-      "background exec completion already wakes automatically.",
+      "silent successful completions do not always auto-wake by default.",
     );
     expect(execWithCron.description).toContain(
       "Do not use exec sleep or delay loops for reminders or deferred follow-ups; use cron instead.",
@@ -429,8 +429,8 @@ describe("tool descriptions", () => {
     );
     expect(execTool.description).not.toContain("use cron instead");
     expect(processTool.description).not.toContain("scheduled follow-ups");
-    expect(execTool.description).toContain("automatic completion wake by default");
-    expect(processTool.description).toContain("background exec completion already wakes automatically");
+    expect(execTool.description).toContain("confirm quiet successful completions");
+    expect(processTool.description).toContain("silent successful completions do not always auto-wake by default");
   });
 });
 
