@@ -1,5 +1,5 @@
 ---
-summary: "Install OpenClaw — installer script, npm/pnpm, from source, Docker, and more"
+summary: "Install OpenClaw — installer script, npm/pnpm/bun, from source, Docker, and more"
 read_when:
   - You need an install method other than the Getting Started quickstart
   - You want to deploy to a cloud platform

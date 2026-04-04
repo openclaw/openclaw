@@ -40,7 +40,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 
 Add `--no-onboard` to skip onboarding. For source installs, pass `--install-method git --no-onboard`.
 
-## Alternative: manual npm or pnpm
+## Alternative: manual npm, pnpm, or bun
 
 ```bash
 npm i -g openclaw@latest
@@ -48,6 +48,10 @@ npm i -g openclaw@latest
 
 ```bash
 pnpm add -g openclaw@latest
+```
+
+```bash
+bun add -g openclaw@latest
 ```
 
 ## Auto-updater
