@@ -101,6 +101,24 @@ describe("buildInboundMetaSystemPrompt", () => {
     expect(payload["sender_id"]).toBeUndefined();
   });
 
+  it("does not include sticker_file_id in stable system metadata", () => {
+    const prompt = buildInboundMetaSystemPrompt({
+      OriginatingTo: "telegram:5494292670",
+      OriginatingChannel: "telegram",
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "direct",
+      Sticker: {
+        fileId: "CAACAgIAAxkBAAI...sticker_file_id",
+        emoji: "🎉",
+        setName: "PartyPack",
+      },
+    } as TemplateContext);
+
+    const payload = parseInboundMetaPayload(prompt);
+    expect(payload["sticker_file_id"]).toBeUndefined();
+  });
+
   it("includes Slack mrkdwn response format hints for Slack chats", () => {
     const prompt = buildInboundMetaSystemPrompt({
       OriginatingTo: "channel:C123",
@@ -153,6 +171,18 @@ describe("buildInboundUserContextPrefix", () => {
       OriginatingChannel: "webchat",
       MessageSid: "short-id",
       MessageSidFull: "provider-full-id",
+    } as TemplateContext);
+
+    expect(text).toBe("");
+  });
+
+  it("does not emit conversation metadata for direct webchat sticker-only turns", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "direct",
+      OriginatingChannel: "webchat",
+      Sticker: {
+        fileId: "CAACAgIAAxkBAAI...sticker_file_id",
+      },
     } as TemplateContext);
 
     expect(text).toBe("");
@@ -240,6 +270,23 @@ describe("buildInboundUserContextPrefix", () => {
     const senderInfo = parseSenderInfoPayload(text);
     expect(senderInfo["label"]).toBe("Tyler (+15551234567)");
     expect(senderInfo["id"]).toBe("+15551234567");
+  });
+
+  it("includes sticker_file_id in per-turn conversation info for direct chats", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "direct",
+      OriginatingChannel: "telegram",
+      MessageSid: "123",
+      Sticker: {
+        fileId: "CAACAgIAAxkBAAI...sticker_file_id",
+        emoji: "🎉",
+        setName: "PartyPack",
+      },
+    } as TemplateContext);
+
+    const conversationInfo = parseConversationInfoPayload(text);
+    expect(conversationInfo["message_id"]).toBe("123");
+    expect(conversationInfo["sticker_file_id"]).toBe("CAACAgIAAxkBAAI...sticker_file_id");
   });
 
   it("includes formatted timestamp in conversation info when provided", () => {

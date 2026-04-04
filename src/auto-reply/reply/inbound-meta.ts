@@ -112,6 +112,7 @@ export function buildInboundUserContextPrefix(
     message_id: shouldIncludeConversationInfo ? resolvedMessageId : undefined,
     reply_to_id: shouldIncludeConversationInfo ? safeTrim(ctx.ReplyToId) : undefined,
     sender_id: shouldIncludeConversationInfo ? safeTrim(ctx.SenderId) : undefined,
+    sticker_file_id: shouldIncludeConversationInfo ? safeTrim(ctx.Sticker?.fileId) : undefined,
     conversation_label: isDirect ? undefined : safeTrim(ctx.ConversationLabel),
     sender: shouldIncludeConversationInfo
       ? (safeTrim(ctx.SenderName) ??
