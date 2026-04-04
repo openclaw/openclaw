@@ -317,7 +317,8 @@ The same rule applies to other generated bundled-helper families such as:
   `plugin-sdk/mattermost*`, `plugin-sdk/msteams`,
   `plugin-sdk/nextcloud-talk`, `plugin-sdk/nostr`, `plugin-sdk/tlon`,
   `plugin-sdk/twitch`, `plugin-sdk/openai`, `plugin-sdk/moonshot`,
-  `plugin-sdk/modelstudio*`, `plugin-sdk/provider-moonshot`,
+  `plugin-sdk/qwen*`, `plugin-sdk/modelstudio*`,
+  `plugin-sdk/provider-moonshot`,
   `plugin-sdk/cloudflare-ai-gateway`, `plugin-sdk/byteplus`,
   `plugin-sdk/chutes`, `plugin-sdk/deepseek`, `plugin-sdk/google`,
   `plugin-sdk/huggingface`, `plugin-sdk/kimi-coding`,
@@ -329,6 +330,10 @@ The same rule applies to other generated bundled-helper families such as:
   `plugin-sdk/github-copilot-login`, `plugin-sdk/github-copilot-token`,
   `plugin-sdk/diagnostics-otel`, `plugin-sdk/diffs`, `plugin-sdk/llm-task`,
   `plugin-sdk/thread-ownership`, and `plugin-sdk/voice-call`
+
+For Qwen specifically, prefer the canonical `plugin-sdk/qwen` and
+`plugin-sdk/qwen-definitions` seams. `plugin-sdk/modelstudio*` remains
+exported as a compatibility alias for older plugin code.
 
 Use the narrowest import that matches the job. If you cannot find an export,
 check the source at `src/plugin-sdk/` or ask in Discord.
