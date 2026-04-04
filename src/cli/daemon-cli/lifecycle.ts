@@ -1,6 +1,7 @@
 import { isRestartEnabled } from "../../config/commands.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
 import { resolveGatewayService } from "../../daemon/service.js";
+import { resolveLocalGatewayProbeAuthSafeWithEnvFallback } from "../../gateway/probe-auth.js";
 import { probeGateway } from "../../gateway/probe.js";
 import {
   findVerifiedGatewayListenerPidsOnPortSync,
@@ -62,6 +63,14 @@ async function resolveGatewayLifecyclePort(service = resolveGatewayService()) {
 
   const portFromArgs = parsePortFromArgs(command?.programArguments);
   return portFromArgs ?? resolveGatewayPort(await readBestEffortConfig(), mergedEnv);
+}
+
+async function resolveGatewayRestartProbeAuth() {
+  const cfg = await readBestEffortConfig().catch(() => undefined);
+  return await resolveLocalGatewayProbeAuthSafeWithEnvFallback({
+    cfg,
+    env: process.env,
+  });
 }
 
 function resolveGatewayPortFallback(): Promise<number> {
@@ -197,11 +206,13 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       return await recoverInstalledLaunchAgent({ result: "restarted" });
     },
     postRestartCheck: async ({ warnings, fail, stdout }) => {
+      const probeAuth = await resolveGatewayRestartProbeAuth();
       if (restartedWithoutServiceManager) {
         const health = await waitForGatewayHealthyListener({
           port: restartPort,
           attempts: POST_RESTART_HEALTH_ATTEMPTS,
           delayMs: POST_RESTART_HEALTH_DELAY_MS,
+          probeAuth,
         });
         if (health.healthy) {
           return;
@@ -230,6 +241,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         port: restartPort,
         attempts: POST_RESTART_HEALTH_ATTEMPTS,
         delayMs: POST_RESTART_HEALTH_DELAY_MS,
+        probeAuth,
         includeUnknownListenersAsStale: process.platform === "win32",
       });
 
@@ -251,6 +263,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
           port: restartPort,
           attempts: POST_RESTART_HEALTH_ATTEMPTS,
           delayMs: POST_RESTART_HEALTH_DELAY_MS,
+          probeAuth,
           includeUnknownListenersAsStale: process.platform === "win32",
         });
       }

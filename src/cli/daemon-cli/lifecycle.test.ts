@@ -52,6 +52,7 @@ const probeGateway = vi.fn<
 const isRestartEnabled = vi.fn<(config?: { commands?: unknown }) => boolean>(() => true);
 const loadConfig = vi.hoisted(() => vi.fn(() => ({})));
 const recoverInstalledLaunchAgent = vi.hoisted(() => vi.fn());
+const resolveLocalGatewayProbeAuthSafeWithEnvFallback = vi.hoisted(() => vi.fn());
 
 vi.mock("../../config/config.js", () => ({
   loadConfig: () => loadConfig(),
@@ -73,6 +74,11 @@ vi.mock("../../gateway/probe.js", () => ({
     auth?: { token?: string; password?: string };
     timeoutMs: number;
   }) => probeGateway(opts),
+}));
+
+vi.mock("../../gateway/probe-auth.js", () => ({
+  resolveLocalGatewayProbeAuthSafeWithEnvFallback: (params: unknown) =>
+    resolveLocalGatewayProbeAuthSafeWithEnvFallback(params),
 }));
 
 vi.mock("../../config/commands.js", () => ({
@@ -159,6 +165,7 @@ describe("runDaemonRestart health checks", () => {
     isRestartEnabled.mockReset();
     loadConfig.mockReset();
     recoverInstalledLaunchAgent.mockReset();
+    resolveLocalGatewayProbeAuthSafeWithEnvFallback.mockReset();
 
     service.readCommand.mockResolvedValue({
       programArguments: ["openclaw", "gateway", "--port", "18789"],
@@ -198,6 +205,7 @@ describe("runDaemonRestart health checks", () => {
       configSnapshot: { commands: { restart: true } },
     });
     isRestartEnabled.mockReturnValue(true);
+    resolveLocalGatewayProbeAuthSafeWithEnvFallback.mockResolvedValue({});
     signalVerifiedGatewayPidSync.mockImplementation(() => {});
     formatGatewayPidList.mockImplementation((pids) => pids.join(", "));
   });
@@ -344,6 +352,7 @@ describe("runDaemonRestart health checks", () => {
   it("prefers unmanaged restart over launchd repair when a gateway listener is present", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
+
     mockUnmanagedRestart({ runPostRestartCheck: true });
 
     await runDaemonRestart({ json: true });
@@ -352,6 +361,24 @@ describe("runDaemonRestart health checks", () => {
     expect(recoverInstalledLaunchAgent).not.toHaveBeenCalled();
     expect(waitForGatewayHealthyListener).toHaveBeenCalledTimes(1);
     expect(waitForGatewayHealthyRestart).not.toHaveBeenCalled();
+  });
+
+  it("passes configured probe auth into unmanaged restart health checks", async () => {
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
+    resolveLocalGatewayProbeAuthSafeWithEnvFallback.mockResolvedValue({
+      token: "cfg-token",
+      password: "cfg-password",
+    });
+    mockUnmanagedRestart({ runPostRestartCheck: true });
+
+    await runDaemonRestart({ json: true });
+
+    expect(waitForGatewayHealthyListener).toHaveBeenCalledWith({
+      port: 18789,
+      attempts: 120,
+      delayMs: 500,
+      probeAuth: { token: "cfg-token", password: "cfg-password" },
+    });
   });
 
   it("re-bootstraps an installed LaunchAgent on restart when no unmanaged listener exists", async () => {

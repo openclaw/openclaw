@@ -405,9 +405,17 @@ export async function gatherDaemonStatus(
       )
     : undefined;
   let daemonProbeAuth: { token?: string; password?: string } | undefined;
+  let localRestartProbeAuth: { token?: string; password?: string } | undefined;
   let rpcAuthWarning: string | undefined;
   if (opts.probe) {
     const probeMode = daemonCfg.gateway?.mode === "remote" ? "remote" : "local";
+    localRestartProbeAuth = await loadGatewayProbeAuthModule().then(
+      ({ resolveLocalGatewayProbeAuthSafeWithEnvFallback }) =>
+        resolveLocalGatewayProbeAuthSafeWithEnvFallback({
+          cfg: daemonCfg,
+          env: mergedDaemonEnv as NodeJS.ProcessEnv,
+        }),
+    );
     try {
       daemonProbeAuth = resolveGatewayProbeCredentialsFromConfig({
         cfg: daemonCfg,
@@ -475,6 +483,7 @@ export async function gatherDaemonStatus(
               service,
               port: daemonPort,
               env: serviceEnv,
+              probeAuth: localRestartProbeAuth,
             }),
           )
           .catch(() => undefined)

@@ -6,6 +6,7 @@ import {
 } from "../../commands/doctor-completion.js";
 import { doctorCommand } from "../../commands/doctor.js";
 import {
+  readBestEffortConfig,
   readConfigFileSnapshot,
   replaceConfigFile,
   resolveGatewayPort,
@@ -13,6 +14,7 @@ import {
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
 import { resolveGatewayService } from "../../daemon/service.js";
+import { resolveLocalGatewayProbeAuthSafeWithEnvFallback } from "../../gateway/probe-auth.js";
 import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
 import {
   channelToNpmTag,
@@ -106,6 +108,14 @@ const UPDATE_QUIPS = [
 
 function pickUpdateQuip(): string {
   return UPDATE_QUIPS[Math.floor(Math.random() * UPDATE_QUIPS.length)] ?? "Update complete.";
+}
+
+async function resolveUpdateRestartProbeAuth() {
+  const cfg = await readBestEffortConfig().catch(() => undefined);
+  return await resolveLocalGatewayProbeAuthSafeWithEnvFallback({
+    cfg,
+    env: process.env,
+  });
 }
 
 function resolveGatewayInstallEntrypointCandidates(root?: string): string[] {
@@ -693,9 +703,11 @@ async function maybeRestartService(params: {
 
       if (!params.opts.json && restartInitiated) {
         const service = resolveGatewayService();
+        const probeAuth = await resolveUpdateRestartProbeAuth();
         let health = await waitForGatewayHealthyRestart({
           service,
           port: params.gatewayPort,
+          probeAuth,
         });
         if (!health.healthy && health.staleGatewayPids.length > 0) {
           if (!params.opts.json) {
@@ -710,6 +722,7 @@ async function maybeRestartService(params: {
           health = await waitForGatewayHealthyRestart({
             service,
             port: params.gatewayPort,
+            probeAuth,
           });
         }
 

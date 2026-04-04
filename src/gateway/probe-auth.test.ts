@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
+  resolveLocalGatewayProbeAuthSafeWithEnvFallback,
   resolveGatewayProbeAuthSafe,
   resolveGatewayProbeAuthSafeWithSecretInputs,
   resolveGatewayProbeAuthWithSecretInputs,
@@ -187,6 +188,44 @@ describe("resolveGatewayProbeAuthWithSecretInputs", () => {
     expect(auth).toEqual({
       token: "resolved-daemon-token",
       password: undefined,
+    });
+  });
+});
+
+describe("resolveLocalGatewayProbeAuthSafeWithEnvFallback", () => {
+  it("forces local probe auth even when gateway routing mode is remote", async () => {
+    const auth = await resolveLocalGatewayProbeAuthSafeWithEnvFallback({
+      cfg: {
+        gateway: {
+          mode: "remote",
+          auth: {
+            token: "local-token",
+          },
+          remote: {
+            token: "remote-token",
+          },
+        },
+      } as OpenClawConfig,
+      env: {} as NodeJS.ProcessEnv,
+    });
+
+    expect(auth).toEqual({
+      token: "local-token",
+      password: undefined,
+    });
+  });
+
+  it("falls back to env credentials when config is unavailable", async () => {
+    const auth = await resolveLocalGatewayProbeAuthSafeWithEnvFallback({
+      env: {
+        OPENCLAW_GATEWAY_TOKEN: "env-token",
+        OPENCLAW_GATEWAY_PASSWORD: "env-password",
+      } as NodeJS.ProcessEnv,
+    });
+
+    expect(auth).toEqual({
+      token: "env-token",
+      password: "env-password",
     });
   });
 });

@@ -40,6 +40,7 @@ function makeGatewayService(
 async function inspectGatewayRestartWithSnapshot(params: {
   runtime: { status: "running"; pid: number } | { status: "stopped" };
   portUsage: PortUsage;
+  probeAuth?: { token?: string; password?: string };
   includeUnknownListenersAsStale?: boolean;
 }) {
   const service = makeGatewayService(params.runtime);
@@ -48,6 +49,7 @@ async function inspectGatewayRestartWithSnapshot(params: {
   return inspectGatewayRestart({
     service,
     port: 18789,
+    ...(params.probeAuth === undefined ? {} : { probeAuth: params.probeAuth }),
     ...(params.includeUnknownListenersAsStale === undefined
       ? {}
       : { includeUnknownListenersAsStale: params.includeUnknownListenersAsStale }),
@@ -195,6 +197,26 @@ describe("inspectGatewayRestart", () => {
     expect(snapshot.healthy).toBe(true);
     expect(probeGateway).toHaveBeenCalledWith(
       expect.objectContaining({ url: "ws://127.0.0.1:18789" }),
+    );
+  });
+
+  it("passes configured probe auth into reachability checks", async () => {
+    const snapshot = await inspectGatewayRestartWithSnapshot({
+      runtime: { status: "running", pid: 8000 },
+      probeAuth: { token: "cfg-token" },
+      portUsage: {
+        port: 18789,
+        status: "busy",
+        listeners: [{ pid: 9000, ppid: 8999, commandLine: "openclaw-gateway" }],
+        hints: [],
+      },
+    });
+
+    expect(snapshot.healthy).toBe(false);
+    expect(probeGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        auth: { token: "cfg-token", password: undefined },
+      }),
     );
   });
 

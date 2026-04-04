@@ -82,6 +82,28 @@ export async function resolveGatewayProbeAuthSafeWithSecretInputs(params: {
   }
 }
 
+export async function resolveLocalGatewayProbeAuthSafeWithEnvFallback(params: {
+  cfg?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+}): Promise<{ token?: string; password?: string }> {
+  const fallbackAuth = {
+    token: params.env?.OPENCLAW_GATEWAY_TOKEN?.trim() || undefined,
+    password: params.env?.OPENCLAW_GATEWAY_PASSWORD?.trim() || undefined,
+  };
+  if (!params.cfg) {
+    return fallbackAuth;
+  }
+  const { auth } = await resolveGatewayProbeAuthSafeWithSecretInputs({
+    cfg: params.cfg,
+    mode: "local",
+    env: params.env,
+  });
+  return {
+    token: auth.token ?? fallbackAuth.token,
+    password: auth.password ?? fallbackAuth.password,
+  };
+}
+
 export function resolveGatewayProbeAuthSafe(params: {
   cfg: OpenClawConfig;
   mode: "local" | "remote";
