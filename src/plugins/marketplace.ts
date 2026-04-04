@@ -367,7 +367,7 @@ async function resolveLocalMarketplaceSource(
     const rootDir = deriveMarketplaceRootFromManifestPath(resolved);
     return {
       ok: true,
-      rootDir: await fs.realpath(rootDir),
+      rootDir,
       manifestPath: resolved,
     };
   }
@@ -377,11 +377,10 @@ async function resolveLocalMarketplaceSource(
   }
 
   const rootDir = path.basename(resolved) === ".claude-plugin" ? path.dirname(resolved) : resolved;
-  const canonicalRootDir = await fs.realpath(rootDir);
   for (const candidate of MARKETPLACE_MANIFEST_CANDIDATES) {
     const manifestPath = path.join(rootDir, candidate);
     if (await pathExists(manifestPath)) {
-      return { ok: true, rootDir: canonicalRootDir, manifestPath };
+      return { ok: true, rootDir, manifestPath };
     }
   }
 
@@ -811,7 +810,7 @@ async function downloadUrlToTempFile(
 async function ensureInsideMarketplaceRoot(
   rootDir: string,
   candidate: string,
-  options?: { enforceCanonicalContainment?: boolean },
+  options?: { canonicalRootDir?: string },
 ): Promise<{ ok: true; path: string } | { ok: false; error: string }> {
   const resolved = path.resolve(rootDir, candidate);
   const resolvedExists = await pathExists(resolved);
@@ -823,14 +822,14 @@ async function ensureInsideMarketplaceRoot(
     };
   }
 
-  if (options?.enforceCanonicalContainment === true) {
+  if (options?.canonicalRootDir) {
     try {
-      const rootLstat = await fs.lstat(rootDir);
+      const rootLstat = await fs.lstat(options.canonicalRootDir);
       if (!rootLstat.isDirectory()) {
         throw new Error("invalid marketplace root");
       }
 
-      const rootRealPath = await fs.realpath(rootDir);
+      const rootRealPath = await fs.realpath(options.canonicalRootDir);
       let existingPath = resolved;
       // `pathExists` uses `fs.access`, so dangling symlinks are treated as missing and we walk up
       // to the nearest existing ancestor. Live symlinks stop here and are canonicalized below.
@@ -882,6 +881,7 @@ async function validateMarketplaceManifest(params: {
     return { ok: true, manifest: params.manifest };
   }
 
+  const canonicalRootDir = await fs.realpath(params.rootDir);
   for (const plugin of params.manifest.plugins) {
     const source = plugin.source;
     if (source.kind === "path") {
@@ -902,7 +902,7 @@ async function validateMarketplaceManifest(params: {
         };
       }
       const resolved = await ensureInsideMarketplaceRoot(params.rootDir, source.path, {
-        enforceCanonicalContainment: true,
+        canonicalRootDir,
       });
       if (!resolved.ok) {
         return {
@@ -951,10 +951,14 @@ async function resolveMarketplaceEntryInstallPath(params: {
         error: `unsupported remote plugin path source: ${params.source.path}`,
       };
     }
+    const canonicalRootDir =
+      params.marketplaceOrigin === "remote"
+        ? await fs.realpath(params.marketplaceRootDir)
+        : undefined;
     const resolved = path.isAbsolute(params.source.path)
       ? { ok: true as const, path: params.source.path }
       : await ensureInsideMarketplaceRoot(params.marketplaceRootDir, params.source.path, {
-          enforceCanonicalContainment: params.marketplaceOrigin === "remote",
+          canonicalRootDir,
         });
     if (!resolved.ok) {
       return resolved;
@@ -983,8 +987,9 @@ async function resolveMarketplaceEntryInstallPath(params: {
       params.source.kind === "github" || params.source.kind === "git"
         ? params.source.path?.trim() || "."
         : params.source.path.trim();
+    const canonicalRootDir = await fs.realpath(cloned.rootDir);
     const target = await ensureInsideMarketplaceRoot(cloned.rootDir, subPath, {
-      enforceCanonicalContainment: true,
+      canonicalRootDir,
     });
     if (!target.ok) {
       await cloned.cleanup();

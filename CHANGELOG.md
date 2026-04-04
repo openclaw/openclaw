@@ -115,6 +115,7 @@ Docs: https://docs.openclaw.ai
 - Matrix/backup reset: recreate secret storage during backup reset when stale SSSS state blocks durable backup-key reload, including no-backup repair paths. (#60599) thanks @emonty.
 - Plugins/media understanding: enable bundled Groq and Deepgram providers by default so configured audio transcription models load without extra plugin activation config. (#59982) Thanks @yxjsxy.
 - Providers/OpenAI Codex: add forward-compat `openai-codex/gpt-5.4-mini` synthesis across provider runtime, model catalog, and model listing so Codex mini works before bundled Pi catalog updates land.
+- Plugins/marketplace: block remote marketplace symlink escapes without rewriting ordinary local marketplace install paths. (#60556) Thanks @eleqtrizit.
 
 ## 2026.4.2
 
