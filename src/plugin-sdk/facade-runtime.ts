@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createJiti } from "jiti";
 import JSON5 from "json5";
+import { getRuntimeConfigSnapshot } from "../config/config.js";
 import { resolveConfigPath } from "../config/paths.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -138,6 +139,10 @@ function getJiti(modulePath: string) {
 
 function readFacadeBoundaryConfigSafely(): OpenClawConfig {
   try {
+    const runtimeSnapshot = getRuntimeConfigSnapshot();
+    if (runtimeSnapshot) {
+      return runtimeSnapshot;
+    }
     const configPath = resolveConfigPath();
     if (!fs.existsSync(configPath)) {
       return EMPTY_FACADE_BOUNDARY_CONFIG;
