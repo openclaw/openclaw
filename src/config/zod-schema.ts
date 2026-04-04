@@ -956,6 +956,13 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    storage: z
+      .object({
+        /** Enable SQLite memory-mapped I/O. Set to false for NFS-backed volumes. Default: true. */
+        sqliteMmap: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .superRefine((cfg, ctx) => {

@@ -17,3 +17,5 @@ export function requireNodeSqlite(): typeof import("node:sqlite") {
     );
   }
 }
+
+export { applySqliteMmapPragma } from "openclaw/plugin-sdk/infra-sqlite";
