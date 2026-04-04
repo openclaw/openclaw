@@ -15,7 +15,7 @@ import {
   scheduleFollowupDrain,
 } from "./queue.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
-import { createReplyToModeFilter, resolveReplyToMode } from "./reply-threading.js";
+import { createReplyToModeFilter } from "./reply-threading.js";
 import { parseSlackDirectives, hasSlackDirectives } from "./slack-directives.js";
 
 describe("normalizeInboundTextNewlines", () => {
@@ -1843,7 +1843,11 @@ describe("followup queue collect routing", () => {
       });
 
       enqueueFollowupRun(key, createRun({ prompt: "hidden first" }), settings);
-      enqueueFollowupRun(key, createRun({ prompt: "visible second", displayText: "visible second" }), settings);
+      enqueueFollowupRun(
+        key,
+        createRun({ prompt: "visible second", displayText: "visible second" }),
+        settings,
+      );
 
       scheduleFollowupDrain(key, runFollowup);
       await vi.advanceTimersByTimeAsync(5_000);
@@ -2338,9 +2342,6 @@ describe("followup queue drain restart after idle window", () => {
     expect(calls[0]?.execution.agentPrompt).toBe("before-idle");
   });
 });
-
-const emptyCfg = {} as OpenClawConfig;
->>>>>>> cb936aa564 (refactor: start followup queue execution/display split)
 
 describe("createReplyDispatcher", () => {
   it("drops empty payloads and exact silent tokens without media", async () => {

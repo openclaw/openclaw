@@ -95,6 +95,28 @@ function summarizeDeliveryError(error: unknown): string {
   }
 }
 
+function parseTelegramAnnounceTarget(to: string): {
+  chatId: string;
+  chatType: "direct" | "group" | "unknown";
+} {
+  const trimmed = to.trim();
+  const parsed = parseExplicitTargetForChannel("telegram", trimmed);
+  const rawChatId = parsed?.to?.trim() || trimmed;
+  const chatId = rawChatId
+    .replace(/^telegram:(?:group:)?/i, "")
+    .replace(/^group:/i, "")
+    .replace(/:topic:\d+$/i, "")
+    .trim();
+  const inferredGroup = /^-\d+$/.test(chatId);
+  const chatType =
+    parsed?.chatType === "direct" || parsed?.chatType === "group"
+      ? parsed.chatType
+      : inferredGroup
+        ? "group"
+        : "unknown";
+  return { chatId, chatType };
+}
+
 function shouldStripThreadFromAnnounceEntry(
   normalizedRequester?: DeliveryContext,
   normalizedEntry?: DeliveryContext,
@@ -108,12 +130,34 @@ function shouldStripThreadFromAnnounceEntry(
   }
   const requesterChannel = normalizedRequester.channel?.trim().toLowerCase();
   const plugin = requesterChannel ? getChannelPlugin(requesterChannel) : undefined;
-  return Boolean(
-    plugin?.conversationBindings?.shouldStripThreadFromAnnounceOrigin?.({
-      requester: normalizedRequester,
-      entry: normalizedEntry,
-    }),
-  );
+  const pluginDecision = plugin?.conversationBindings?.shouldStripThreadFromAnnounceOrigin?.({
+    requester: normalizedRequester,
+    entry: normalizedEntry,
+  });
+  if (pluginDecision != null) {
+    return pluginDecision;
+  }
+  if (requesterChannel && requesterChannel !== "telegram") {
+    return true;
+  }
+  if (!requesterChannel && !normalizedRequester.to.startsWith("telegram:")) {
+    return true;
+  }
+  try {
+    const requesterTarget = parseTelegramAnnounceTarget(normalizedRequester.to);
+    if (requesterTarget.chatType !== "group") {
+      return true;
+    }
+    const entryTarget = normalizedEntry.to
+      ? parseTelegramAnnounceTarget(normalizedEntry.to)
+      : undefined;
+    if (entryTarget && entryTarget.chatId !== requesterTarget.chatId) {
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
 }
 
 const TRANSIENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
@@ -338,7 +382,7 @@ async function sendAnnounce(item: AnnounceQueueItem) {
     method: "agent",
     params: {
       sessionKey: item.sessionKey,
-      message: requesterIsSubagent ? item.execution.agentPrompt : userFacing?.text ?? "",
+      message: requesterIsSubagent ? item.execution.agentPrompt : (userFacing?.text ?? ""),
       channel: requesterIsSubagent ? undefined : origin?.channel,
       accountId: requesterIsSubagent ? undefined : origin?.accountId,
       to: requesterIsSubagent ? undefined : origin?.to,
