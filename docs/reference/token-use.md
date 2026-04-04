@@ -70,10 +70,14 @@ field names do not change `/status`, `/usage`, or session summaries.
 Gemini CLI JSON usage is normalized too: reply text comes from `response`, and
 `stats.cached` maps to `cacheRead` with `stats.input_tokens - stats.cached`
 used when the CLI omits an explicit `stats.input` field.
-When the current session snapshot is missing cache counters, `/status` can also
-recover `cacheRead` / `cacheWrite` from the most recent transcript usage log.
-Existing nonzero live cache values still take precedence over transcript
-fallback values.
+For native OpenAI-family Responses traffic, WebSocket/SSE usage aliases are
+normalized the same way, and totals fall back to normalized input + output when
+`total_tokens` is missing or `0`.
+When the current session snapshot is sparse, `/status` and `session_status` can
+also recover token/cache counters and the active runtime model label from the
+most recent transcript usage log. Existing nonzero live values still take
+precedence over transcript fallback values, and larger prompt-oriented
+transcript totals can win when stored totals are missing or smaller.
 Usage auth for provider quota windows comes from provider-specific hooks when
 available; otherwise OpenClaw falls back to matching OAuth/API-key credentials
 from auth profiles, env, or config.

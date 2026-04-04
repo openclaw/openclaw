@@ -209,7 +209,9 @@ OpenClaw also normalizes OpenAI usage counters across transport variants before
 they reach session/status surfaces. Native OpenAI/Codex Responses traffic may
 report usage as either `input_tokens` / `output_tokens` or
 `prompt_tokens` / `completion_tokens`; OpenClaw treats those as the same input
-and output counters for `/status`, `/usage`, and session logs.
+and output counters for `/status`, `/usage`, and session logs. When native
+WebSocket traffic omits `total_tokens` (or reports `0`), OpenClaw falls back to
+the normalized input + output total so session/status displays stay populated.
 
 You can set `agents.defaults.models.<provider/model>.params.transport`:
 

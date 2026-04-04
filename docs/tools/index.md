@@ -72,7 +72,8 @@ For image work, use `image` for analysis and `image_generate` for generation or 
 `session_status` is the lightweight status/readback tool in the sessions group.
 It answers `/status`-style questions about the current session and can
 optionally set a per-session model override; `model=default` clears that
-override.
+override. Like `/status`, it can backfill sparse token/cache counters and the
+active runtime model label from the latest transcript usage entry.
 
 ### Plugin-provided tools
 
