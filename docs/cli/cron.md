@@ -35,6 +35,10 @@ Note: `openclaw cron run` now returns as soon as the manual run is queued for ex
 Note: `openclaw cron run <job-id>` force-runs by default. Use `--due` to keep the
 older "only run if due" behavior.
 
+Note: failure notifications use `delivery.failureDestination` first, then
+global `cron.failureDestination`, and finally fall back to the job's primary
+announce target when no explicit failure destination is configured.
+
 Note: retention/pruning is controlled in config:
 
 - `cron.sessionRetention` (default `24h`) prunes completed isolated run sessions.
@@ -113,3 +117,11 @@ openclaw cron edit <job-id> --best-effort-deliver
 openclaw cron edit <job-id> --no-best-effort-deliver
 openclaw cron edit <job-id> --no-deliver
 ```
+
+Failure-delivery note:
+
+- `delivery.failureDestination` is supported for isolated jobs.
+- Main-session jobs may only use `delivery.failureDestination` when primary
+  delivery mode is `webhook`.
+- If you do not set any failure destination and the job already announces to a
+  channel, failure notifications reuse that same announce target.
