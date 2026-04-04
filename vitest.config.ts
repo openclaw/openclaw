@@ -3,15 +3,26 @@ import { resolveLocalVitestMaxWorkers, sharedVitestConfig } from "./vitest.share
 
 export { resolveLocalVitestMaxWorkers };
 
+export const rootVitestProjects = [
+  "vitest.unit.config.ts",
+  "vitest.boundary.config.ts",
+  "vitest.contracts.config.ts",
+  "vitest.bundled.config.ts",
+  "vitest.gateway.config.ts",
+  "vitest.acp.config.ts",
+  "vitest.commands.config.ts",
+  "vitest.auto-reply.config.ts",
+  "vitest.agents.config.ts",
+  "vitest.ui.config.ts",
+  "vitest.channels.config.ts",
+  "vitest.extension-channels.config.ts",
+  "vitest.extensions.config.ts",
+] as const;
+
 export default defineConfig({
   ...sharedVitestConfig,
   test: {
     ...sharedVitestConfig.test,
-    projects: [
-      "vitest.unit.config.ts",
-      "vitest.boundary.config.ts",
-      "vitest.acp.config.ts",
-      "vitest.ui.config.ts",
-    ],
+    projects: [...rootVitestProjects],
   },
 });

@@ -10,10 +10,11 @@ describe("resolveLocalVitestMaxWorkers", () => {
         },
         {
           cpuCount: 10,
+          loadAverage1m: 0,
           totalMemoryBytes: 64 * 1024 ** 3,
         },
       ),
-    ).toBe(4);
+    ).toBe(3);
   });
 
   it("lets OPENCLAW_VITEST_MAX_WORKERS override the inferred cap", () => {
@@ -24,6 +25,7 @@ describe("resolveLocalVitestMaxWorkers", () => {
         },
         {
           cpuCount: 10,
+          loadAverage1m: 0,
           totalMemoryBytes: 128 * 1024 ** 3,
           platform: "darwin",
         },
@@ -39,6 +41,7 @@ describe("resolveLocalVitestMaxWorkers", () => {
         },
         {
           cpuCount: 16,
+          loadAverage1m: 0,
           totalMemoryBytes: 128 * 1024 ** 3,
         },
       ),
@@ -51,6 +54,7 @@ describe("resolveLocalVitestMaxWorkers", () => {
         {},
         {
           cpuCount: 16,
+          loadAverage1m: 0,
           totalMemoryBytes: 16 * 1024 ** 3,
         },
       ),
@@ -63,10 +67,24 @@ describe("resolveLocalVitestMaxWorkers", () => {
         {},
         {
           cpuCount: 16,
+          loadAverage1m: 0,
           totalMemoryBytes: 128 * 1024 ** 3,
         },
       ),
-    ).toBe(8);
+    ).toBe(4);
+  });
+
+  it("backs off further when the host is already busy", () => {
+    expect(
+      resolveLocalVitestMaxWorkers(
+        {},
+        {
+          cpuCount: 16,
+          loadAverage1m: 16,
+          totalMemoryBytes: 128 * 1024 ** 3,
+        },
+      ),
+    ).toBe(2);
   });
 });
 

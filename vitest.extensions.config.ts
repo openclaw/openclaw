@@ -15,6 +15,7 @@ export function createExtensionsVitestConfig(
   return createScopedVitestConfig(loadIncludePatternsFromEnv(env) ?? [BUNDLED_PLUGIN_TEST_GLOB], {
     dir: "extensions",
     env,
+    name: "extensions",
     passWithNoTests: true,
     setupFiles: ["test/setup.extensions.ts"],
     // Some bundled plugins still run on the channel surface; keep those roots

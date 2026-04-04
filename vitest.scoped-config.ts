@@ -43,6 +43,7 @@ export function createScopedVitestConfig(
     dir?: string;
     env?: Record<string, string | undefined>;
     exclude?: string[];
+    name?: string;
     pool?: "threads" | "forks";
     passWithNoTests?: boolean;
     setupFiles?: string[];
@@ -61,6 +62,7 @@ export function createScopedVitestConfig(
     ...base,
     test: {
       ...baseTest,
+      ...(options?.name ? { name: options.name } : {}),
       isolate,
       runner: "./test/non-isolated-runner.ts",
       setupFiles: [...new Set([...(baseTest.setupFiles ?? []), "test/setup-openclaw-runtime.ts"])],

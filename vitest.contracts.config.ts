@@ -1,4 +1,5 @@
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
+import { boundaryTestFiles } from "./vitest.unit-paths.mjs";
 
 export function createContractsVitestConfig(env?: Record<string, string | undefined>) {
   return createScopedVitestConfig(
@@ -12,6 +13,8 @@ export function createContractsVitestConfig(env?: Record<string, string | undefi
     ],
     {
       env,
+      exclude: boundaryTestFiles,
+      name: "contracts",
       passWithNoTests: true,
     },
   );

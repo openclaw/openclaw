@@ -4,6 +4,7 @@ export function createCommandsVitestConfig(env?: Record<string, string | undefin
   return createScopedVitestConfig(["src/commands/**/*.test.ts"], {
     dir: "src/commands",
     env,
+    name: "commands",
   });
 }
 

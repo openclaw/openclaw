@@ -17,6 +17,7 @@ function parsePositiveInt(value: string | undefined): number | null {
 
 type VitestHostInfo = {
   cpuCount?: number;
+  loadAverage1m?: number;
   totalMemoryBytes?: number;
 };
 
@@ -24,6 +25,7 @@ function detectVitestHostInfo(): Required<VitestHostInfo> {
   return {
     cpuCount:
       typeof os.availableParallelism === "function" ? os.availableParallelism() : os.cpus().length,
+    loadAverage1m: os.loadavg()[0] ?? 0,
     totalMemoryBytes: os.totalmem(),
   };
 }
@@ -38,21 +40,32 @@ export function resolveLocalVitestMaxWorkers(
   }
 
   const cpuCount = Math.max(1, system.cpuCount ?? 1);
+  const loadAverage1m = Math.max(0, system.loadAverage1m ?? 0);
   const totalMemoryGb = (system.totalMemoryBytes ?? 0) / 1024 ** 3;
 
-  let inferred = cpuCount <= 4 ? cpuCount - 1 : Math.floor(cpuCount / 2);
-  inferred = clamp(inferred, 1, 8);
+  let inferred =
+    cpuCount <= 4 ? 1 : cpuCount <= 8 ? 2 : cpuCount <= 12 ? 3 : cpuCount <= 16 ? 4 : 6;
 
   if (totalMemoryGb <= 16) {
-    return Math.min(inferred, 2);
+    inferred = Math.min(inferred, 2);
+  } else if (totalMemoryGb <= 32) {
+    inferred = Math.min(inferred, 3);
+  } else if (totalMemoryGb <= 64) {
+    inferred = Math.min(inferred, 4);
+  } else if (totalMemoryGb <= 128) {
+    inferred = Math.min(inferred, 5);
+  } else {
+    inferred = Math.min(inferred, 6);
   }
-  if (totalMemoryGb <= 32) {
-    return Math.min(inferred, 3);
+
+  const loadRatio = loadAverage1m > 0 ? loadAverage1m / cpuCount : 0;
+  if (loadRatio >= 1) {
+    inferred = Math.max(1, Math.floor(inferred / 2));
+  } else if (loadRatio >= 0.75) {
+    inferred = Math.max(1, inferred - 1);
   }
-  if (totalMemoryGb <= 64) {
-    return Math.min(inferred, 4);
-  }
-  return Math.min(inferred, 8);
+
+  return clamp(inferred, 1, 16);
 }
 
 const repoRoot = path.dirname(fileURLToPath(import.meta.url));
@@ -92,7 +105,6 @@ export const sharedVitestConfig = {
       "test/setup.shared.ts",
       "test/setup.extensions.ts",
       "test/setup-openclaw-runtime.ts",
-      "scripts/test-projects.mjs",
       "vitest.channel-paths.mjs",
       "vitest.channels.config.ts",
       "vitest.acp.config.ts",

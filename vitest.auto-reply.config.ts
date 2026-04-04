@@ -4,6 +4,7 @@ export function createAutoReplyVitestConfig(env?: Record<string, string | undefi
   return createScopedVitestConfig(["src/auto-reply/**/*.test.ts"], {
     dir: "src/auto-reply",
     env,
+    name: "auto-reply",
   });
 }
 
