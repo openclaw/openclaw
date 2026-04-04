@@ -282,9 +282,76 @@ Gateway exposes today.
 
 ### Existing major families
 
-- chat/session methods: `chat.*`, `sessions.*`, `agent.wait`
-- node transport and pairing: `node.*`, `device.pair.*`, `device.token.*`
-- exec approvals: `exec.approval.*`, `exec.approvals.*`, `plugin.approval.*`
+#### Agent and workspace helpers
+
+- `agents.list` returns configured agent entries.
+- `agents.create`, `agents.update`, and `agents.delete` manage agent records and
+  workspace wiring.
+- `agents.files.list`, `agents.files.get`, and `agents.files.set` manage the
+  bootstrap workspace files exposed for an agent.
+- `agent.identity.get` returns the effective assistant identity for an agent or
+  session.
+- `agent.wait` waits for a run to finish and returns the terminal snapshot when
+  available.
+
+#### Session control
+
+- `sessions.list` returns the current session index.
+- `sessions.subscribe` and `sessions.unsubscribe` toggle session change event
+  subscriptions for the current WS client.
+- `sessions.messages.subscribe` and `sessions.messages.unsubscribe` toggle
+  transcript/message event subscriptions for one session.
+- `sessions.preview` returns bounded transcript previews for specific session
+  keys.
+- `sessions.resolve` resolves or canonicalizes a session target.
+- `sessions.create` creates a new session entry.
+- `sessions.send` sends a message into an existing session.
+- `sessions.steer` is the interrupt-and-steer variant for an active session.
+- `sessions.abort` aborts active work for a session.
+- `sessions.patch` updates session metadata/overrides.
+- `sessions.reset`, `sessions.delete`, and `sessions.compact` perform session
+  maintenance.
+- `sessions.get` returns the full stored session row.
+- chat execution still uses `chat.history`, `chat.send`, `chat.abort`, and
+  `chat.inject`.
+
+#### Device pairing and device tokens
+
+- `device.pair.list` returns pending and approved paired devices.
+- `device.pair.approve`, `device.pair.reject`, and `device.pair.remove` manage
+  device-pairing records.
+- `device.token.rotate` rotates a paired device token within its approved role
+  and scope bounds.
+- `device.token.revoke` revokes a paired device token.
+
+#### Node pairing, invoke, and pending work
+
+- `node.pair.request`, `node.pair.list`, `node.pair.approve`,
+  `node.pair.reject`, and `node.pair.verify` cover node pairing and bootstrap
+  verification.
+- `node.list` and `node.describe` return known/connected node state.
+- `node.rename` updates a paired node label.
+- `node.invoke` forwards a command to a connected node.
+- `node.invoke.result` returns the result for an invoke request.
+- `node.event` carries node-originated events back into the gateway.
+- `node.canvas.capability.refresh` refreshes scoped canvas-capability tokens.
+- `node.pending.pull` and `node.pending.ack` are the connected-node queue APIs.
+- `node.pending.enqueue` and `node.pending.drain` manage durable pending work
+  for offline/disconnected nodes.
+
+#### Approval families
+
+- `exec.approval.request` and `exec.approval.resolve` cover one-shot exec
+  approval requests.
+- `exec.approvals.get` and `exec.approvals.set` manage gateway exec approval
+  policy snapshots.
+- `exec.approvals.node.get` and `exec.approvals.node.set` manage node-local exec
+  approval policy via node relay commands.
+- `plugin.approval.request`, `plugin.approval.waitDecision`, and
+  `plugin.approval.resolve` cover plugin-defined approval flows.
+
+#### Other major families
+
 - automation: `cron.*`
 - skills/tools: `skills.*`, `tools.catalog`, `tools.effective`
 
