@@ -2,10 +2,11 @@ import { defineConfig } from "vitest/config";
 import {
   resolveDefaultVitestPool,
   resolveLocalVitestMaxWorkers,
+  resolveLocalVitestScheduling,
   sharedVitestConfig,
 } from "./vitest.shared.config.ts";
 
-export { resolveDefaultVitestPool, resolveLocalVitestMaxWorkers };
+export { resolveDefaultVitestPool, resolveLocalVitestMaxWorkers, resolveLocalVitestScheduling };
 
 export const rootVitestProjects = [
   "vitest.unit.config.ts",

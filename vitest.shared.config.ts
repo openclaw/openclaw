@@ -7,12 +7,22 @@ import {
   BUNDLED_PLUGIN_TEST_GLOB,
 } from "./vitest.bundled-plugin-paths.ts";
 import { loadVitestExperimentalConfig } from "./vitest.performance-config.ts";
+import {
+  detectVitestProcessStats,
+  shouldPrintVitestThrottle,
+  type VitestProcessStats,
+} from "./vitest.system-load.ts";
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 
 function parsePositiveInt(value: string | undefined): number | null {
   const parsed = Number.parseInt(value ?? "", 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function isSystemThrottleDisabled(env: Record<string, string | undefined>): boolean {
+  const normalized = env.OPENCLAW_VITEST_DISABLE_SYSTEM_THROTTLE?.trim().toLowerCase();
+  return normalized === "1" || normalized === "true";
 }
 
 type VitestHostInfo = {
@@ -22,6 +32,12 @@ type VitestHostInfo = {
 };
 
 export type OpenClawVitestPool = "forks";
+
+export type LocalVitestScheduling = {
+  maxWorkers: number;
+  fileParallelism: boolean;
+  throttledBySystem: boolean;
+};
 
 export const jsdomOptimizedDeps = {
   optimizer: {
@@ -44,10 +60,26 @@ function detectVitestHostInfo(): Required<VitestHostInfo> {
 export function resolveLocalVitestMaxWorkers(
   env: Record<string, string | undefined> = process.env,
   system: VitestHostInfo = detectVitestHostInfo(),
+  pool: OpenClawVitestPool = resolveDefaultVitestPool(env),
+  processStats: VitestProcessStats = detectVitestProcessStats(env),
 ): number {
+  return resolveLocalVitestScheduling(env, system, pool, processStats).maxWorkers;
+}
+
+export function resolveLocalVitestScheduling(
+  env: Record<string, string | undefined> = process.env,
+  system: VitestHostInfo = detectVitestHostInfo(),
+  pool: OpenClawVitestPool = resolveDefaultVitestPool(env),
+  processStats: VitestProcessStats = detectVitestProcessStats(env),
+): LocalVitestScheduling {
   const override = parsePositiveInt(env.OPENCLAW_VITEST_MAX_WORKERS ?? env.OPENCLAW_TEST_WORKERS);
   if (override !== null) {
-    return clamp(override, 1, 16);
+    const maxWorkers = clamp(override, 1, 16);
+    return {
+      maxWorkers,
+      fileParallelism: maxWorkers > 1,
+      throttledBySystem: false,
+    };
   }
 
   const cpuCount = Math.max(1, system.cpuCount ?? 1);
@@ -76,7 +108,50 @@ export function resolveLocalVitestMaxWorkers(
     inferred = Math.max(1, inferred - 1);
   }
 
-  return clamp(inferred, 1, 16);
+  inferred = clamp(inferred, 1, 16);
+
+  if (isSystemThrottleDisabled(env)) {
+    return {
+      maxWorkers: inferred,
+      fileParallelism: true,
+      throttledBySystem: false,
+    };
+  }
+
+  const highSystemContention =
+    loadRatio >= 1 ||
+    processStats.otherVitestWorkerCount >= 2 ||
+    processStats.otherVitestCpuPercent >= 150 ||
+    processStats.otherVitestRootCount >= 2;
+
+  if (highSystemContention) {
+    return {
+      maxWorkers: 1,
+      fileParallelism: false,
+      throttledBySystem: true,
+    };
+  }
+
+  const moderateSystemContention =
+    loadRatio >= 0.75 ||
+    processStats.otherVitestWorkerCount >= 1 ||
+    processStats.otherVitestCpuPercent >= 75 ||
+    processStats.otherVitestRootCount >= 1;
+
+  if (moderateSystemContention) {
+    const maxWorkers = Math.min(inferred, 2);
+    return {
+      maxWorkers,
+      fileParallelism: true,
+      throttledBySystem: maxWorkers < inferred,
+    };
+  }
+
+  return {
+    maxWorkers: inferred,
+    fileParallelism: true,
+    throttledBySystem: false,
+  };
 }
 
 export function resolveDefaultVitestPool(
@@ -93,8 +168,20 @@ const repoRoot = path.dirname(fileURLToPath(import.meta.url));
 const isCI = process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true";
 const isWindows = process.platform === "win32";
 const defaultPool = resolveDefaultVitestPool();
-const localWorkers = resolveLocalVitestMaxWorkers(process.env, detectVitestHostInfo());
+const localScheduling = resolveLocalVitestScheduling(
+  process.env,
+  detectVitestHostInfo(),
+  defaultPool,
+);
 const ciWorkers = isWindows ? 2 : 3;
+
+if (!isCI && localScheduling.throttledBySystem && shouldPrintVitestThrottle(process.env)) {
+  console.error(
+    `[vitest] throttling local workers to ${localScheduling.maxWorkers}${
+      localScheduling.fileParallelism ? "" : " with file parallelism disabled"
+    } because the host already looks busy.`,
+  );
+}
 
 export const sharedVitestConfig = {
   resolve: {
@@ -119,7 +206,8 @@ export const sharedVitestConfig = {
     unstubEnvs: true,
     unstubGlobals: true,
     pool: defaultPool,
-    maxWorkers: isCI ? ciWorkers : localWorkers,
+    maxWorkers: isCI ? ciWorkers : localScheduling.maxWorkers,
+    fileParallelism: isCI ? true : localScheduling.fileParallelism,
     forceRerunTriggers: [
       "package.json",
       "pnpm-lock.yaml",
