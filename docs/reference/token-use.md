@@ -60,6 +60,8 @@ Other surfaces:
 - **TUI/Web TUI:** `/status` + `/usage` are supported.
 - **CLI:** `openclaw status --usage` and `openclaw channels list` show
   normalized provider quota windows (`X% left`, not per-response costs).
+  Current usage-window providers: Anthropic, GitHub Copilot, Gemini CLI,
+  OpenAI Codex, MiniMax, Xiaomi, and z.ai.
 
 Usage surfaces normalize common provider-native field aliases before display.
 For OpenAI-family Responses traffic, that includes both `input_tokens` /
@@ -72,6 +74,9 @@ When the current session snapshot is missing cache counters, `/status` can also
 recover `cacheRead` / `cacheWrite` from the most recent transcript usage log.
 Existing nonzero live cache values still take precedence over transcript
 fallback values.
+Usage auth for provider quota windows comes from provider-specific hooks when
+available; otherwise OpenClaw falls back to matching OAuth/API-key credentials
+from auth profiles, env, or config.
 
 ## Cost estimation (when shown)
 

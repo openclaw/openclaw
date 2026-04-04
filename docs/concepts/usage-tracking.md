@@ -40,6 +40,10 @@ title: "Usage Tracking"
     chat-model entry, derives the window label from timestamps when explicit
     `window_hours` / `window_minutes` fields are absent, and includes the model
     name in the plan label.
+- **Xiaomi MiMo**: API key via env/config/auth store (`XIAOMI_API_KEY`).
 - **z.ai**: API key via env/config/auth store.
 
-Usage is hidden if no matching OAuth/API credentials exist.
+Usage is hidden when no usable provider usage auth can be resolved. Providers
+can supply plugin-specific usage auth logic; otherwise OpenClaw falls back to
+matching OAuth/API-key credentials from auth profiles, environment variables,
+or config.
