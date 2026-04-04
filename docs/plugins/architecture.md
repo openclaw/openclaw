@@ -1051,6 +1051,7 @@ authoring plugins:
 - Domain subpaths such as `openclaw/plugin-sdk/channel-config-helpers`,
   `openclaw/plugin-sdk/allow-from`,
   `openclaw/plugin-sdk/channel-config-schema`,
+  `openclaw/plugin-sdk/telegram-command-config`,
   `openclaw/plugin-sdk/channel-policy`,
   `openclaw/plugin-sdk/approval-runtime`,
   `openclaw/plugin-sdk/config-runtime`,
@@ -1062,6 +1063,9 @@ authoring plugins:
   `openclaw/plugin-sdk/status-helpers`,
   `openclaw/plugin-sdk/runtime-store`, and
   `openclaw/plugin-sdk/directory-runtime` for shared runtime/config helpers.
+  `telegram-command-config` is the narrow public seam for Telegram custom
+  command normalization/validation and stays available even if the bundled
+  Telegram contract surface is temporarily unavailable.
 - Approval-specific channel seams should prefer one `approvalCapability`
   contract on the plugin. Core then reads approval auth, delivery, render, and
   native-routing behavior through that one capability instead of mixing
