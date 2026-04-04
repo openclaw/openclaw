@@ -144,6 +144,7 @@ import {
   resolveAttemptFsWorkspaceOnly,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
+  shouldWarnOnOrphanedUserRepair,
   shouldInjectHeartbeatPrompt,
 } from "./attempt.prompt-helpers.js";
 import {
@@ -193,6 +194,7 @@ export {
   resolveAttemptFsWorkspaceOnly,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
+  shouldWarnOnOrphanedUserRepair,
   shouldInjectHeartbeatPrompt,
 } from "./attempt.prompt-helpers.js";
 export {
@@ -1494,10 +1496,14 @@ export async function runEmbeddedAttempt(
           }
           const sessionContext = sessionManager.buildSessionContext();
           activeSession.agent.replaceMessages(sessionContext.messages);
-          log.warn(
+          const orphanRepairMessage =
             `Removed orphaned user message to prevent consecutive user turns. ` +
-              `runId=${params.runId} sessionId=${params.sessionId}`,
-          );
+            `runId=${params.runId} sessionId=${params.sessionId} trigger=${params.trigger}`;
+          if (shouldWarnOnOrphanedUserRepair(params.trigger)) {
+            log.warn(orphanRepairMessage);
+          } else {
+            log.debug(orphanRepairMessage);
+          }
         }
         const transcriptLeafId =
           (sessionManager.getLeafEntry() as { id?: string } | null | undefined)?.id ?? null;

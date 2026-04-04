@@ -21,6 +21,7 @@ import {
   resolveEmbeddedAgentStreamFn,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
+  shouldWarnOnOrphanedUserRepair,
   wrapStreamFnRepairMalformedToolCallArguments,
   wrapStreamFnSanitizeMalformedToolCalls,
   wrapStreamFnTrimToolCallNames,
@@ -223,6 +224,20 @@ describe("resolvePromptModeForSession", () => {
     expect(resolvePromptModeForSession(undefined)).toBe("full");
     expect(resolvePromptModeForSession("agent:main")).toBe("full");
     expect(resolvePromptModeForSession("agent:main:thread:abc")).toBe("full");
+  });
+});
+
+describe("shouldWarnOnOrphanedUserRepair", () => {
+  it("warns for user and manual runs", () => {
+    expect(shouldWarnOnOrphanedUserRepair("user")).toBe(true);
+    expect(shouldWarnOnOrphanedUserRepair("manual")).toBe(true);
+  });
+
+  it("does not warn for background triggers", () => {
+    expect(shouldWarnOnOrphanedUserRepair("heartbeat")).toBe(false);
+    expect(shouldWarnOnOrphanedUserRepair("cron")).toBe(false);
+    expect(shouldWarnOnOrphanedUserRepair("memory")).toBe(false);
+    expect(shouldWarnOnOrphanedUserRepair("overflow")).toBe(false);
   });
 });
 
