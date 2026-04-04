@@ -132,12 +132,14 @@ async function executeSpawnAndExpectAccepted(params: {
   callId: string;
   cleanup?: "delete" | "keep";
   label?: string;
+  expectsCompletionMessage?: boolean;
 }) {
   const result = await params.tool.execute(params.callId, {
     task: "do thing",
     runTimeoutSeconds: RUN_TIMEOUT_SECONDS,
     ...(params.cleanup ? { cleanup: params.cleanup } : {}),
     ...(params.label ? { label: params.label } : {}),
+    ...(params.expectsCompletionMessage === false ? { expectsCompletionMessage: false } : {}),
   });
   expect(result.details).toMatchObject({
     status: "accepted",
@@ -390,6 +392,28 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
   });
 
   it("sessions_spawn reports timed out when agent.wait returns timeout", async () => {
+    let announcedStatus: string | undefined;
+    setSessionsSpawnAnnounceFlowOverride(async (params) => {
+      announcedStatus = params.outcome?.status;
+      const requesterSessionKey = resolveRequesterStoreKey(
+        loadConfig(),
+        params.requesterSessionKey,
+      );
+
+      await callGatewayMock({
+        method: "agent",
+        params: {
+          sessionKey: requesterSessionKey,
+          message: `subagent task ${
+            params.outcome?.status === "timeout" ? "timed out" : "completed successfully"
+          }`,
+          deliver: false,
+        },
+      });
+
+      return true;
+    });
+
     const ctx = setupSessionsSpawnGatewayMock({
       includeChatHistory: true,
       chatHistoryText: "still working",
@@ -401,20 +425,22 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
       tool,
       callId: "call-timeout",
       cleanup: "keep",
+      expectsCompletionMessage: false,
     });
 
-    await waitFor(() => ctx.calls.filter((call) => call.method === "agent").length >= 2);
+    await waitFor(() => announcedStatus === "timeout");
 
-    const mainAgentCall = ctx.calls
+    const mainMessages = ctx.calls
       .filter((call) => call.method === "agent")
-      .find((call) => {
+      .filter((call) => {
         const params = call.params as { lane?: string } | undefined;
         return params?.lane !== "subagent";
-      });
-    const mainMessage = (mainAgentCall?.params as { message?: string } | undefined)?.message ?? "";
+      })
+      .map((call) => (call.params as { message?: string } | undefined)?.message ?? "");
 
-    expect(mainMessage).toContain("timed out");
-    expect(mainMessage).not.toContain("completed successfully");
+    expect(announcedStatus).toBe("timeout");
+    expect(mainMessages.some((message) => message.includes("timed out"))).toBe(true);
+    expect(mainMessages.some((message) => message.includes("completed successfully"))).toBe(false);
   });
 
   it("sessions_spawn announces with requester accountId", async () => {
