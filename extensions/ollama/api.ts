@@ -7,11 +7,15 @@ export {
 } from "./src/defaults.js";
 export {
   buildOllamaModelDefinition,
+  detectVisionFromShowResponse,
   enrichOllamaModelsWithContext,
   fetchOllamaModels,
   isReasoningModelHeuristic,
+  isVisionModelHeuristic,
   queryOllamaContextWindow,
+  queryOllamaModelMeta,
   resolveOllamaApiBase,
+  type OllamaModelMeta,
   type OllamaModelWithContext,
   type OllamaTagModel,
   type OllamaTagsResponse,
