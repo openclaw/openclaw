@@ -37,10 +37,19 @@ title: "Usage Tracking"
   - JSON usage falls back to `stats`; `stats.cached` is normalized into
     `cacheRead`.
 - **OpenAI Codex**: OAuth tokens in auth profiles (accountId used when present).
-<<<<<<< HEAD
-- **MiniMax**: API key or MiniMax OAuth auth profile. OpenClaw treats `minimax`, `minimax-cn`, and `minimax-portal` as the same MiniMax quota surface, prefers stored MiniMax OAuth when present, and otherwise falls back to `MINIMAX_CODE_PLAN_KEY`, `MINIMAX_CODING_API_KEY`, or `MINIMAX_API_KEY`. MiniMax's raw `usage_percent` / `usagePercent` fields mean **remaining** quota, so OpenClaw inverts them before display; count-based fields win when present.
-  - Coding-plan window labels come from provider hours/minutes fields when present, then fall back to the `start_time` / `end_time` span.
-  - If the coding-plan endpoint returns `model_remains`, OpenClaw prefers the chat-model entry, derives the window label from timestamps when explicit `window_hours` / `window_minutes` fields are absent, and includes the model name in the plan label.
+- **MiniMax**: API key or MiniMax OAuth auth profile. OpenClaw treats
+  `minimax`, `minimax-cn`, and `minimax-portal` as the same MiniMax quota
+  surface, prefers stored MiniMax OAuth when present, and otherwise falls back
+  to `MINIMAX_CODE_PLAN_KEY`, `MINIMAX_CODING_API_KEY`, or `MINIMAX_API_KEY`.
+  MiniMax's raw `usage_percent` / `usagePercent` fields mean **remaining**
+  quota, so OpenClaw inverts them before display; count-based fields win when
+  present.
+  - Coding-plan window labels come from provider hours/minutes fields when
+    present, then fall back to the `start_time` / `end_time` span.
+  - If the coding-plan endpoint returns `model_remains`, OpenClaw prefers the
+    chat-model entry, derives the window label from timestamps when explicit
+    `window_hours` / `window_minutes` fields are absent, and includes the model
+    name in the plan label.
 - **Xiaomi MiMo**: API key via env/config/auth store (`XIAOMI_API_KEY`).
 - **z.ai**: API key via env/config/auth store.
 

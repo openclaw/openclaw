@@ -237,7 +237,6 @@ Current MiniMax auth choices in the wizard/CLI:
 - OpenClaw normalizes MiniMax coding-plan usage to the same `% left` display
   used by other providers. MiniMax's raw `usage_percent` / `usagePercent`
   fields are remaining quota, not consumed quota, so OpenClaw inverts them.
-<<<<<<< HEAD
   Count-based fields win when present. When the API returns `model_remains`,
   OpenClaw prefers the chat-model entry, derives the window label from
   `start_time` / `end_time` when needed, and includes the selected model name
