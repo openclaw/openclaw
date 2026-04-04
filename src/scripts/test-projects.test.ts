@@ -168,6 +168,17 @@ describe("test-projects args", () => {
     ]);
   });
 
+  it("routes acp targets to the acp config", () => {
+    expect(buildVitestRunPlans(["src/acp/control-plane/manager.test.ts"])).toEqual([
+      {
+        config: "vitest.acp.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/acp/control-plane/manager.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
   it("widens non-test helper file targets to sibling tests inside the routed suite", () => {
     expect(buildVitestRunPlans(["src/gateway/gateway-connection.test-mocks.ts"])).toEqual([
       {
@@ -187,6 +198,17 @@ describe("test-projects args", () => {
         config: "vitest.extensions.config.ts",
         forwardedArgs: [],
         includePatterns: ["extensions/memory-core/src/memory/**/*.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes ui targets to the ui config", () => {
+    expect(buildVitestRunPlans(["ui/src/ui/views/channels.test.ts"])).toEqual([
+      {
+        config: "vitest.ui.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["ui/src/ui/views/channels.test.ts"],
         watchMode: false,
       },
     ]);
