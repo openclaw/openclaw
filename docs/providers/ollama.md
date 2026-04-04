@@ -120,7 +120,7 @@ When you set `OLLAMA_API_KEY` (or an auth profile) and **do not** define `models
 
 - Queries `/api/tags`
 - Uses best-effort `/api/show` lookups to read `contextWindow` when available
-- Marks `reasoning` with a model-name heuristic (`r1`, `reasoning`, `think`)
+- Marks `reasoning` with a model-name heuristic (for example `r1`, `reasoning`, `reason`, or `think`)
 - Sets `maxTokens` to the default Ollama max-token cap used by OpenClaw
 - Sets all costs to `0`
 
@@ -266,11 +266,13 @@ For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-s
 
 ### Reasoning models
 
-OpenClaw treats models with names such as `deepseek-r1`, `reasoning`, or `think` as reasoning-capable by default:
+OpenClaw treats models with names that match its reasoning heuristic as reasoning-capable by default. Common examples include `deepseek-r1` plus generic names containing `reasoning`, `reason`, or `think`:
 
 ```bash
 ollama pull deepseek-r1:32b
 ```
+
+If a heuristic result is wrong for your deployment, define the model explicitly in `models.providers.ollama` and set `reasoning` yourself.
 
 ### Model Costs
 
