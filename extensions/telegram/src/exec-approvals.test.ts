@@ -90,6 +90,21 @@ describe("telegram exec approvals", () => {
     expect(isTelegramExecApprovalApprover({ cfg, senderId: "67890" })).toBe(true);
   });
 
+  it("keeps approver checks working when botToken is an unresolved SecretRef", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: { source: "file", provider: "local-file", id: "/TELEGRAM_BOT_TOKEN" },
+          allowFrom: ["12345"],
+          execApprovals: { enabled: true },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(getTelegramExecApprovalApprovers({ cfg })).toEqual(["12345"]);
+    expect(isTelegramExecApprovalApprover({ cfg, senderId: "12345" })).toBe(true);
+  });
+
   it("defaults target to dm", () => {
     expect(
       resolveTelegramExecApprovalTarget({ cfg: buildConfig({ enabled: true, approvers: ["1"] }) }),
@@ -550,7 +565,7 @@ describe("telegram exec approvals", () => {
       expect(isTelegramExecApprovalAuthorizedSender({ cfg, senderId: "123" })).toBe(true);
     });
 
-    it("accepts active forwarded DM targets", () => {
+    it("does not treat forwarded DM targets as approval authority", () => {
       const cfg = {
         channels: { telegram: { botToken: "tok" } },
         approvals: {
@@ -561,7 +576,7 @@ describe("telegram exec approvals", () => {
           },
         },
       } as OpenClawConfig;
-      expect(isTelegramExecApprovalAuthorizedSender({ cfg, senderId: "12345" })).toBe(true);
+      expect(isTelegramExecApprovalAuthorizedSender({ cfg, senderId: "12345" })).toBe(false);
     });
   });
 });

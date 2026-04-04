@@ -52,7 +52,8 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
       typeof value === "string" ? value.trim().toLowerCase() : undefined,
     );
     isDeliverableMessageChannelMock.mockImplementation(
-      (value?: string) => value === "slack" || value === "discord" || value === "telegram",
+      (value?: string) =>
+        value === "slack" || value === "discord" || value === "telegram" || value === "bluebubbles",
     );
   });
 
@@ -189,6 +190,141 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
       kind: "enabled",
       channel: "slack",
       channelLabel: "Slack",
+    });
+  });
+
+  it("disables inline approvals for BlueBubbles group turn sources", () => {
+    expect(
+      resolveExecApprovalInitiatingSurfaceState({
+        channel: "bluebubbles",
+        turnSourceTo: "bluebubbles:chat_guid:iMessage;+;family-chat",
+      }),
+    ).toEqual({
+      kind: "disabled",
+      channel: "bluebubbles",
+      channelLabel: "Bluebubbles",
+    });
+
+    expect(
+      resolveExecApprovalInitiatingSurfaceState({
+        channel: "bluebubbles",
+        sessionKey: "agent:main:bluebubbles:group:family-chat",
+      }),
+    ).toEqual({
+      kind: "disabled",
+      channel: "bluebubbles",
+      channelLabel: "Bluebubbles",
+    });
+  });
+
+  it("keeps inline approvals enabled for BlueBubbles direct turn sources", () => {
+    expect(
+      resolveExecApprovalInitiatingSurfaceState({
+        channel: "bluebubbles",
+        turnSourceTo: "bluebubbles:+15555550123",
+        sessionKey: "agent:main:bluebubbles:main",
+      }),
+    ).toEqual({
+      kind: "enabled",
+      channel: "bluebubbles",
+      channelLabel: "Bluebubbles",
+    });
+  });
+
+  it("disables initiating surface when exec approvals are routed to explicit targets only", () => {
+    const cfg = {
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "targets",
+          targets: [{ channel: "telegram", to: "1234567890", accountId: "default" }],
+        },
+      },
+    };
+
+    expect(
+      resolveExecApprovalInitiatingSurfaceState({
+        channel: "bluebubbles",
+        sessionKey: "agent:main:bluebubbles:dm:+15555550123",
+        cfg: cfg as never,
+      }),
+    ).toEqual({
+      kind: "disabled",
+      channel: "bluebubbles",
+      channelLabel: "Bluebubbles",
+    });
+  });
+
+  it("disables initiating surface when source channel is unknown in targets-only mode", () => {
+    const cfg = {
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "targets",
+          targets: [{ channel: "telegram", to: "1234567890", accountId: "default" }],
+        },
+      },
+    };
+
+    expect(
+      resolveExecApprovalInitiatingSurfaceState({
+        channel: undefined,
+        sessionKey: "agent:main:bluebubbles:dm:+15555550123",
+        cfg: cfg as never,
+      }),
+    ).toEqual({
+      kind: "disabled",
+      channel: "session",
+      channelLabel: "this platform",
+    });
+  });
+
+  it("keeps initiating surface enabled when forwarding mode is both", () => {
+    const cfg = {
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "both",
+          targets: [{ channel: "telegram", to: "1234567890", accountId: "default" }],
+        },
+      },
+    };
+
+    expect(
+      resolveExecApprovalInitiatingSurfaceState({
+        channel: "bluebubbles",
+        sessionKey: "agent:main:bluebubbles:dm:+15555550123",
+        cfg: cfg as never,
+      }),
+    ).toEqual({
+      kind: "enabled",
+      channel: "bluebubbles",
+      channelLabel: "Bluebubbles",
+    });
+  });
+
+  it("keeps initiating surface enabled when targets-only filters do not match the session", () => {
+    const cfg = {
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "targets",
+          sessionFilter: ["agent:other:"],
+          targets: [{ channel: "telegram", to: "1234567890", accountId: "default" }],
+        },
+      },
+    };
+
+    expect(
+      resolveExecApprovalInitiatingSurfaceState({
+        channel: "bluebubbles",
+        sessionKey: "agent:main:bluebubbles:dm:+15555550123",
+        cfg: cfg as never,
+      }),
+    ).toEqual({
+      kind: "enabled",
+      channel: "bluebubbles",
+      channelLabel: "Bluebubbles",
     });
   });
 });

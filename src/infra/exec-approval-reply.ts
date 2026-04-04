@@ -161,7 +161,7 @@ export function buildExecApprovalInteractiveReply(params: {
 }
 
 export function getExecApprovalApproverDmNoticeText(): string {
-  return "Approval required. I sent approval DMs to the approvers for this account.";
+  return "Approval required. I sent this request to the configured approver DMs.";
 }
 
 export function parseExecApprovalCommandText(

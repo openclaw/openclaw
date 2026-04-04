@@ -440,7 +440,7 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
 
     expect(onToolResult).toHaveBeenCalledWith(
       expect.objectContaining({
-        text: "Approval required. I sent approval DMs to the approvers for this account.",
+        text: "Approval required. I sent this request to the configured approver DMs.",
       }),
     );
     expect(ctx.state.deterministicApprovalPromptSent).toBe(true);
@@ -474,6 +474,41 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
     );
 
     expect(ctx.state.deterministicApprovalPromptSent).toBe(false);
+  });
+
+  it("marks deterministic suppression before awaiting prompt delivery", async () => {
+    const { ctx } = createTestContext();
+    let releaseDelivery: (() => void) | undefined;
+    ctx.params.onToolResult = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseDelivery = resolve;
+        }),
+    );
+
+    const pending = handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-unavailable-race",
+        isError: false,
+        result: {
+          details: {
+            status: "approval-unavailable",
+            reason: "initiating-platform-disabled",
+            channelLabel: "Bluebubbles",
+            sentApproverDms: true,
+          },
+        },
+      } as never,
+    );
+
+    expect(ctx.state.deterministicApprovalPromptSent).toBe(true);
+    expect(releaseDelivery).toBeTypeOf("function");
+    releaseDelivery?.();
+    await pending;
+    expect(ctx.state.deterministicApprovalPromptSent).toBe(true);
   });
 });
 

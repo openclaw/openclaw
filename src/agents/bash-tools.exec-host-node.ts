@@ -253,7 +253,9 @@ export async function executeNodeHostCommand(
       approvalRunningNoticeMs: params.approvalRunningNoticeMs,
       createApprovalSlug,
       turnSourceChannel: params.turnSourceChannel,
+      turnSourceTo: params.turnSourceTo,
       turnSourceAccountId: params.turnSourceAccountId,
+      sessionKey: params.sessionKey,
     });
     const registerNodeApproval = async (approvalId: string) =>
       await registerExecApprovalRequestForHostOrThrow({

@@ -4,6 +4,8 @@ import { resolveExecApprovalInitiatingSurfaceState } from "./exec-approval-surfa
 export function hasApprovalTurnSourceRoute(params: {
   turnSourceChannel?: string | null;
   turnSourceAccountId?: string | null;
+  turnSourceTo?: string | null;
+  sessionKey?: string | null;
 }): boolean {
   if (!params.turnSourceChannel?.trim()) {
     return false;
@@ -12,6 +14,8 @@ export function hasApprovalTurnSourceRoute(params: {
     resolveExecApprovalInitiatingSurfaceState({
       channel: params.turnSourceChannel,
       accountId: params.turnSourceAccountId,
+      turnSourceTo: params.turnSourceTo,
+      sessionKey: params.sessionKey,
       cfg: loadConfig(),
     }).kind === "enabled"
   );

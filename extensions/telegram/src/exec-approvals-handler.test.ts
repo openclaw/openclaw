@@ -11,9 +11,9 @@ const baseRequest = {
   request: {
     command: "npm view diver name version description",
     agentId: "main",
-    sessionKey: "agent:main:telegram:group:-1003841603622:topic:928",
+    sessionKey: "agent:main:telegram:group:-1001234567890:topic:928",
     turnSourceChannel: "telegram",
-    turnSourceTo: "-1003841603622",
+    turnSourceTo: "-1001234567890",
     turnSourceThreadId: "928",
     turnSourceAccountId: "default",
   },
@@ -28,9 +28,9 @@ const pluginRequest = {
     description: "Allow plugin access",
     pluginId: "git-tools",
     agentId: "main",
-    sessionKey: "agent:main:telegram:group:-1003841603622:topic:928",
+    sessionKey: "agent:main:telegram:group:-1001234567890:topic:928",
     turnSourceChannel: "telegram",
-    turnSourceTo: "-1003841603622",
+    turnSourceTo: "-1001234567890",
     turnSourceThreadId: "928",
     turnSourceAccountId: "default",
   },
@@ -52,8 +52,8 @@ function createHandler(cfg: OpenClawConfig, accountId = "default") {
   const sendTyping = vi.fn().mockResolvedValue({ ok: true });
   const sendMessage = vi
     .fn()
-    .mockResolvedValueOnce({ messageId: "m1", chatId: "-1003841603622" })
-    .mockResolvedValue({ messageId: "m2", chatId: "8460800771" });
+    .mockResolvedValueOnce({ messageId: "m1", chatId: "-1001234567890" })
+    .mockResolvedValue({ messageId: "m2", chatId: "1234567890" });
   const editReplyMarkup = vi.fn().mockResolvedValue({ ok: true });
   const handler = new TelegramExecApprovalHandler(
     {
@@ -78,7 +78,7 @@ describe("TelegramExecApprovalHandler", () => {
         telegram: {
           execApprovals: {
             enabled: true,
-            approvers: ["8460800771"],
+            approvers: ["1234567890"],
             target: "channel",
           },
         },
@@ -89,14 +89,14 @@ describe("TelegramExecApprovalHandler", () => {
     await handler.handleRequested(baseRequest);
 
     expect(sendTyping).toHaveBeenCalledWith(
-      "-1003841603622",
+      "-1001234567890",
       expect.objectContaining({
         accountId: "default",
         messageThreadId: 928,
       }),
     );
     expect(sendMessage).toHaveBeenCalledWith(
-      "-1003841603622",
+      "-1001234567890",
       expect.stringContaining("/approve 9f1c7d5d-b1fb-46ef-ac45-662723b65bb7 allow-once"),
       expect.objectContaining({
         accountId: "default",
@@ -130,7 +130,7 @@ describe("TelegramExecApprovalHandler", () => {
         telegram: {
           execApprovals: {
             enabled: true,
-            approvers: ["8460800771"],
+            approvers: ["1234567890"],
             target: "channel",
           },
         },
@@ -147,7 +147,7 @@ describe("TelegramExecApprovalHandler", () => {
     });
 
     expect(sendMessage).toHaveBeenCalledWith(
-      "-1003841603622",
+      "-1001234567890",
       expect.not.stringContaining("allow-always"),
       expect.objectContaining({
         buttons: [
@@ -241,13 +241,20 @@ describe("TelegramExecApprovalHandler", () => {
     expect(secondaryHandler.sendMessage).not.toHaveBeenCalled();
   });
 
-  it("does not double-send in direct chats when the origin chat is the approver DM", async () => {
+  it("defers exec approvals to generic forwarding targets when Telegram is an explicit target", async () => {
     const cfg = {
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "targets",
+          targets: [{ channel: "telegram", to: "1234567890", accountId: "default" }],
+        },
+      },
       channels: {
         telegram: {
           execApprovals: {
             enabled: true,
-            approvers: ["8460800771"],
+            approvers: ["1234567890"],
             target: "dm",
           },
         },
@@ -259,15 +266,140 @@ describe("TelegramExecApprovalHandler", () => {
       ...baseRequest,
       request: {
         ...baseRequest.request,
-        sessionKey: "agent:main:telegram:direct:8460800771",
-        turnSourceTo: "telegram:8460800771",
+        turnSourceChannel: "slack",
+        turnSourceTo: "U1",
+        turnSourceAccountId: null,
+        turnSourceThreadId: null,
+      },
+    });
+
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("keeps native handling for telegram-origin exec approvals even when Telegram is an explicit target", async () => {
+    const cfg = {
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "targets",
+          targets: [{ channel: "telegram", to: "1234567890", accountId: "default" }],
+        },
+      },
+      channels: {
+        telegram: {
+          execApprovals: {
+            enabled: true,
+            approvers: ["1234567890"],
+            target: "dm",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const { handler, sendMessage } = createHandler(cfg);
+
+    await handler.handleRequested(baseRequest);
+
+    expect(sendMessage).toHaveBeenCalled();
+  });
+
+  it("defers plugin approvals to generic forwarding targets when Telegram is an explicit target", async () => {
+    const cfg = {
+      approvals: {
+        plugin: {
+          enabled: true,
+          mode: "targets",
+          targets: [{ channel: "telegram", to: "1234567890", accountId: "default" }],
+        },
+      },
+      channels: {
+        telegram: {
+          execApprovals: {
+            enabled: true,
+            approvers: ["1234567890"],
+            target: "dm",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const { handler, sendMessage } = createHandler(cfg);
+
+    await handler.handleRequested({
+      ...pluginRequest,
+      request: {
+        ...pluginRequest.request,
+        turnSourceChannel: "slack",
+        turnSourceTo: "U1",
+        turnSourceAccountId: null,
+        turnSourceThreadId: null,
+      },
+    });
+
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("sends an origin notice when approval routing is DM-only", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          execApprovals: {
+            enabled: true,
+            approvers: ["1234567890"],
+            target: "dm",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const { handler, sendMessage } = createHandler(cfg);
+
+    await handler.handleRequested(baseRequest);
+
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(sendMessage).toHaveBeenNthCalledWith(
+      1,
+      "-1001234567890",
+      "Approval required. I sent this request to the configured approver DMs.",
+      expect.objectContaining({
+        accountId: "default",
+        messageThreadId: 928,
+      }),
+    );
+    expect(sendMessage).toHaveBeenNthCalledWith(
+      2,
+      "1234567890",
+      expect.stringContaining("/approve 9f1c7d5d-b1fb-46ef-ac45-662723b65bb7 allow-once"),
+      expect.objectContaining({
+        accountId: "default",
+      }),
+    );
+  });
+
+  it("does not double-send in direct chats when the origin chat is the approver DM", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          execApprovals: {
+            enabled: true,
+            approvers: ["1234567890"],
+            target: "dm",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const { handler, sendMessage } = createHandler(cfg);
+
+    await handler.handleRequested({
+      ...baseRequest,
+      request: {
+        ...baseRequest.request,
+        sessionKey: "agent:main:telegram:direct:1234567890",
+        turnSourceTo: "telegram:1234567890",
         turnSourceThreadId: undefined,
       },
     });
 
     expect(sendMessage).toHaveBeenCalledTimes(1);
     expect(sendMessage).toHaveBeenCalledWith(
-      "8460800771",
+      "1234567890",
       expect.stringContaining("/approve 9f1c7d5d-b1fb-46ef-ac45-662723b65bb7 allow-once"),
       expect.objectContaining({
         accountId: "default",
@@ -281,7 +413,7 @@ describe("TelegramExecApprovalHandler", () => {
         telegram: {
           execApprovals: {
             enabled: true,
-            approvers: ["8460800771"],
+            approvers: ["1234567890"],
             target: "both",
           },
         },
@@ -293,13 +425,13 @@ describe("TelegramExecApprovalHandler", () => {
     await handler.handleResolved({
       id: baseRequest.id,
       decision: "allow-once",
-      resolvedBy: "telegram:8460800771",
+      resolvedBy: "telegram:1234567890",
       ts: 2000,
     });
 
     expect(editReplyMarkup).toHaveBeenCalled();
     expect(editReplyMarkup).toHaveBeenCalledWith(
-      "-1003841603622",
+      "-1001234567890",
       "m1",
       [],
       expect.objectContaining({
@@ -314,7 +446,7 @@ describe("TelegramExecApprovalHandler", () => {
         telegram: {
           execApprovals: {
             enabled: true,
-            approvers: ["8460800771"],
+            approvers: ["1234567890"],
             target: "dm",
           },
         },
@@ -324,8 +456,19 @@ describe("TelegramExecApprovalHandler", () => {
 
     await handler.handleRequested(pluginRequest);
 
-    const [chatId, text, options] = sendMessage.mock.calls[0] ?? [];
-    expect(chatId).toBe("8460800771");
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(sendMessage).toHaveBeenNthCalledWith(
+      1,
+      "-1001234567890",
+      "Approval required. I sent this request to the configured approver DMs.",
+      expect.objectContaining({
+        accountId: "default",
+        messageThreadId: 928,
+      }),
+    );
+
+    const [chatId, text, options] = sendMessage.mock.calls[1] ?? [];
+    expect(chatId).toBe("1234567890");
     expect(text).toContain("Plugin approval required");
     expect(options).toEqual(
       expect.objectContaining({
@@ -347,7 +490,7 @@ describe("TelegramExecApprovalHandler", () => {
         telegram: {
           execApprovals: {
             enabled: true,
-            approvers: ["8460800771"],
+            approvers: ["1234567890"],
             agentFilter: ["main"],
             target: "dm",
           },
@@ -365,7 +508,7 @@ describe("TelegramExecApprovalHandler", () => {
     });
 
     const [chatId, text] = sendMessage.mock.calls[0] ?? [];
-    expect(chatId).toBe("8460800771");
+    expect(chatId).toBe("1234567890");
     expect(text).toContain("Plugin approval required");
   });
 
@@ -375,7 +518,7 @@ describe("TelegramExecApprovalHandler", () => {
         telegram: {
           execApprovals: {
             enabled: true,
-            approvers: ["8460800771"],
+            approvers: ["1234567890"],
             target: "dm",
           },
           accounts: {
@@ -413,7 +556,7 @@ describe("TelegramExecApprovalHandler", () => {
           updatedAt: Date.now(),
           deliveryContext: {
             channel: "telegram",
-            to: "-1003841603622",
+            to: "-1001234567890",
             accountId: "secondary",
             threadId: 928,
           },
@@ -426,7 +569,7 @@ describe("TelegramExecApprovalHandler", () => {
           telegram: {
             execApprovals: {
               enabled: true,
-              approvers: ["8460800771"],
+              approvers: ["1234567890"],
               target: "channel",
             },
             accounts: {
@@ -456,7 +599,7 @@ describe("TelegramExecApprovalHandler", () => {
 
       expect(defaultHandler.sendMessage).not.toHaveBeenCalled();
       expect(secondaryHandler.sendMessage).toHaveBeenCalledWith(
-        "-1003841603622",
+        "-1001234567890",
         expect.stringContaining("/approve 9f1c7d5d-b1fb-46ef-ac45-662723b65bb7 allow-once"),
         expect.objectContaining({
           accountId: "secondary",
@@ -478,7 +621,7 @@ describe("TelegramExecApprovalHandler", () => {
           updatedAt: Date.now(),
           deliveryContext: {
             channel: "telegram",
-            to: "-1003841603622",
+            to: "-1001234567890",
             accountId: "secondary",
             threadId: 928,
           },
@@ -491,7 +634,7 @@ describe("TelegramExecApprovalHandler", () => {
           telegram: {
             execApprovals: {
               enabled: true,
-              approvers: ["8460800771"],
+              approvers: ["1234567890"],
               target: "channel",
             },
             accounts: {
@@ -513,7 +656,7 @@ describe("TelegramExecApprovalHandler", () => {
       await secondaryHandler.handler.handleRequested(baseRequest);
 
       expect(defaultHandler.sendMessage).toHaveBeenCalledWith(
-        "-1003841603622",
+        "-1001234567890",
         expect.stringContaining("/approve 9f1c7d5d-b1fb-46ef-ac45-662723b65bb7 allow-once"),
         expect.objectContaining({
           accountId: "default",

@@ -6,12 +6,15 @@ import {
   matchesApprovalRequestFilters,
 } from "openclaw/plugin-sdk/approval-client-runtime";
 import { resolveApprovalRequestChannelAccountId } from "openclaw/plugin-sdk/approval-native-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { TelegramExecApprovalConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig, TelegramExecApprovalConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ExecApprovalRequest, PluginApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
-import { listTelegramAccountIds, resolveTelegramAccount } from "./accounts.js";
+import {
+  listTelegramAccountIds,
+  mergeTelegramAccountConfig,
+  resolveDefaultTelegramAccountId,
+} from "./accounts.js";
 import { resolveTelegramInlineButtonsConfigScope } from "./inline-buttons.js";
 import { normalizeTelegramChatId, resolveTelegramTargetChatType } from "./targets.js";
 
@@ -28,26 +31,34 @@ function normalizeTelegramDirectApproverId(value: string | number): string | und
   return chatId;
 }
 
+function resolveTelegramApprovalAccountId(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): string {
+  return params.accountId
+    ? normalizeAccountId(params.accountId)
+    : resolveDefaultTelegramAccountId(params.cfg);
+}
+
+function resolveTelegramApprovalAccountConfig(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}) {
+  return mergeTelegramAccountConfig(params.cfg, resolveTelegramApprovalAccountId(params));
+}
+
 export function resolveTelegramExecApprovalConfig(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): TelegramExecApprovalConfig | undefined {
-  const account = resolveTelegramAccount(params);
-  const config = account.config.execApprovals;
-  if (!config) {
-    return undefined;
-  }
-  return {
-    ...config,
-    enabled: account.enabled && account.tokenSource !== "none" ? config.enabled : false,
-  };
+  return resolveTelegramApprovalAccountConfig(params).execApprovals;
 }
 
 export function getTelegramExecApprovalApprovers(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): string[] {
-  const account = resolveTelegramAccount(params).config;
+  const account = resolveTelegramApprovalAccountConfig(params);
   return resolveApprovalApprovers({
     explicit: resolveTelegramExecApprovalConfig(params)?.approvers,
     allowFrom: account.allowFrom,
@@ -74,13 +85,57 @@ export function isTelegramExecApprovalTargetRecipient(params: {
   });
 }
 
+function hasMatchingTelegramForwardTarget(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  request: ExecApprovalRequest | PluginApprovalRequest;
+}): boolean {
+  const approvalKind = params.request.id.startsWith("plugin:") ? "plugin" : "exec";
+  const forwardingCfg =
+    approvalKind === "plugin" ? params.cfg.approvals?.plugin : params.cfg.approvals?.exec;
+  if (!forwardingCfg?.enabled) {
+    return false;
+  }
+  const mode = forwardingCfg.mode ?? "session";
+  if (mode !== "targets" && mode !== "both") {
+    return false;
+  }
+  if (
+    !matchesApprovalRequestFilters({
+      request: params.request.request,
+      agentFilter: forwardingCfg.agentFilter,
+      sessionFilter: forwardingCfg.sessionFilter,
+      fallbackAgentIdFromSessionKey: true,
+    })
+  ) {
+    return false;
+  }
+  const expectedAccountId = params.accountId ? normalizeAccountId(params.accountId) : null;
+  return (forwardingCfg.targets ?? []).some((target) => {
+    if (target.channel?.trim().toLowerCase() !== "telegram") {
+      return false;
+    }
+    if (!target.to?.trim()) {
+      return false;
+    }
+    const targetAccountId = target.accountId ? normalizeAccountId(target.accountId) : null;
+    if (expectedAccountId && targetAccountId && targetAccountId !== expectedAccountId) {
+      return false;
+    }
+    return true;
+  });
+}
+
 function countTelegramExecApprovalEligibleAccounts(params: {
   cfg: OpenClawConfig;
   request: ExecApprovalRequest | PluginApprovalRequest;
 }): number {
   return listTelegramAccountIds(params.cfg).filter((accountId) => {
-    const account = resolveTelegramAccount({ cfg: params.cfg, accountId });
-    if (!account.enabled || account.tokenSource === "none") {
+    const account = resolveTelegramApprovalAccountConfig({
+      cfg: params.cfg,
+      accountId,
+    });
+    if (account.enabled === false) {
       return false;
     }
     const config = resolveTelegramExecApprovalConfig({
@@ -114,6 +169,15 @@ function matchesTelegramRequestAccount(params: {
     channel: "telegram",
   });
   if (turnSourceChannel && turnSourceChannel !== "telegram" && !boundAccountId) {
+    if (
+      hasMatchingTelegramForwardTarget({
+        cfg: params.cfg,
+        accountId: params.accountId,
+        request: params.request,
+      })
+    ) {
+      return false;
+    }
     return (
       countTelegramExecApprovalEligibleAccounts({
         cfg: params.cfg,
@@ -140,8 +204,7 @@ const telegramExecApprovalProfile = createChannelExecApprovalProfile({
 
 export const isTelegramExecApprovalClientEnabled = telegramExecApprovalProfile.isClientEnabled;
 export const isTelegramExecApprovalApprover = telegramExecApprovalProfile.isApprover;
-export const isTelegramExecApprovalAuthorizedSender =
-  telegramExecApprovalProfile.isAuthorizedSender;
+export const isTelegramExecApprovalAuthorizedSender = isTelegramExecApprovalApprover;
 export const resolveTelegramExecApprovalTarget = telegramExecApprovalProfile.resolveTarget;
 export const shouldHandleTelegramExecApprovalRequest =
   telegramExecApprovalProfile.shouldHandleRequest;
@@ -169,7 +232,7 @@ function resolveExecApprovalButtonsExplicitlyDisabled(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): boolean {
-  const capabilities = resolveTelegramAccount(params).config.capabilities;
+  const capabilities = resolveTelegramApprovalAccountConfig(params).capabilities;
   return resolveTelegramInlineButtonsConfigScope(capabilities) === "off";
 }
 

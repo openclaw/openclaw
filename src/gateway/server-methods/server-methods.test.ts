@@ -1109,6 +1109,8 @@ describe("exec approval handlers", () => {
   it("keeps approvals pending when no approver clients but forwarding accepted the request", async () => {
     const { manager, handlers, forwarder, respond, context } =
       createForwardingExecApprovalFixture();
+    const broadcastSpy = vi.fn();
+    context.broadcast = broadcastSpy;
     const expireSpy = vi.spyOn(manager, "expire");
     const resolveRespond = vi.fn();
     forwarder.handleRequested.mockResolvedValueOnce(true);
@@ -1123,6 +1125,7 @@ describe("exec approval handlers", () => {
 
     expect(forwarder.handleRequested).toHaveBeenCalledTimes(1);
     expect(expireSpy).not.toHaveBeenCalled();
+    expect(broadcastSpy).not.toHaveBeenCalled();
 
     await resolveExecApproval({
       handlers,
@@ -1138,6 +1141,50 @@ describe("exec approval handlers", () => {
       expect.objectContaining({ id: "approval-forwarded", decision: "allow-once" }),
       undefined,
     );
+  });
+
+  it("keeps origin broadcast active when forwarding succeeds but origin route is available", async () => {
+    vi.useFakeTimers();
+    try {
+      const { manager, handlers, forwarder, respond, context } =
+        createForwardingExecApprovalFixture();
+      const broadcastSpy = vi.fn();
+      context.broadcast = broadcastSpy;
+      forwarder.handleRequested.mockResolvedValueOnce(true);
+
+      const requestPromise = requestExecApproval({
+        handlers,
+        respond,
+        context,
+        params: {
+          twoPhase: true,
+          timeoutMs: 60_000,
+          id: "approval-forwarded-with-origin",
+          host: "gateway",
+          turnSourceChannel: "slack",
+          turnSourceTo: "D123",
+        },
+      });
+
+      await vi.waitFor(() => {
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({ status: "accepted", id: "approval-forwarded-with-origin" }),
+          undefined,
+        );
+      });
+
+      expect(broadcastSpy).toHaveBeenCalledWith(
+        "exec.approval.requested",
+        expect.objectContaining({ id: "approval-forwarded-with-origin" }),
+        { dropIfSlow: true },
+      );
+
+      manager.resolve("approval-forwarded-with-origin", "allow-once");
+      await requestPromise;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

@@ -95,7 +95,9 @@ export type DefaultExecApprovalRequestArgs = {
   approvalRunningNoticeMs: number;
   createApprovalSlug: (approvalId: string) => string;
   turnSourceChannel?: string;
+  turnSourceTo?: string;
   turnSourceAccountId?: string;
+  sessionKey?: string;
 };
 
 export function createExecApprovalPendingState(params: {
@@ -237,7 +239,9 @@ export async function resolveApprovalDecisionOrUndefined(params: {
 
 export function resolveExecApprovalUnavailableState(params: {
   turnSourceChannel?: string;
+  turnSourceTo?: string;
   turnSourceAccountId?: string;
+  sessionKey?: string;
   preResolvedDecision: string | null | undefined;
 }): {
   initiatingSurface: ExecApprovalInitiatingSurfaceState;
@@ -246,7 +250,9 @@ export function resolveExecApprovalUnavailableState(params: {
 } {
   const initiatingSurface = resolveExecApprovalInitiatingSurfaceState({
     channel: params.turnSourceChannel,
+    turnSourceTo: params.turnSourceTo,
     accountId: params.turnSourceAccountId,
+    sessionKey: params.sessionKey,
   });
   const sentApproverDms =
     (initiatingSurface.kind === "disabled" || initiatingSurface.kind === "unsupported") &&
@@ -271,7 +277,9 @@ export async function createAndRegisterDefaultExecApprovalRequest(params: {
   approvalRunningNoticeMs: number;
   createApprovalSlug: (approvalId: string) => string;
   turnSourceChannel?: string;
+  turnSourceTo?: string;
   turnSourceAccountId?: string;
+  sessionKey?: string;
   register: (approvalId: string) => Promise<ExecApprovalRegistration>;
 }): Promise<RegisteredExecApprovalRequestContext> {
   const {
@@ -290,7 +298,9 @@ export async function createAndRegisterDefaultExecApprovalRequest(params: {
   const { initiatingSurface, sentApproverDms, unavailableReason } =
     resolveExecApprovalUnavailableState({
       turnSourceChannel: params.turnSourceChannel,
+      turnSourceTo: params.turnSourceTo,
       turnSourceAccountId: params.turnSourceAccountId,
+      sessionKey: params.sessionKey,
       preResolvedDecision,
     });
 
@@ -317,7 +327,9 @@ export function buildDefaultExecApprovalRequestArgs(
     approvalRunningNoticeMs: params.approvalRunningNoticeMs,
     createApprovalSlug: params.createApprovalSlug,
     turnSourceChannel: params.turnSourceChannel,
+    turnSourceTo: params.turnSourceTo,
     turnSourceAccountId: params.turnSourceAccountId,
+    sessionKey: params.sessionKey,
   };
 }
 

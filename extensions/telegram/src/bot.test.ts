@@ -546,7 +546,7 @@ describe("createTelegramBot", () => {
     );
   });
 
-  it("allows exec approval callbacks from target-only Telegram recipients", async () => {
+  it("rejects exec approval callbacks from target-only Telegram recipients", async () => {
     onSpy.mockClear();
     editMessageReplyMarkupSpy.mockClear();
     editMessageTextSpy.mockClear();
@@ -589,25 +589,12 @@ describe("createTelegramBot", () => {
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
-    expect(resolveExecApprovalSpy).toHaveBeenCalledWith({
-      cfg: expect.objectContaining({
-        approvals: expect.objectContaining({
-          exec: expect.objectContaining({
-            enabled: true,
-            mode: "targets",
-          }),
-        }),
-      }),
-      approvalId: "138e9b8c",
-      decision: "allow-once",
-      allowPluginFallback: false,
-      senderId: "9",
-    });
-    expect(editMessageReplyMarkupSpy).toHaveBeenCalledTimes(1);
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-approve-target");
+    expect(resolveExecApprovalSpy).not.toHaveBeenCalled();
+    expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
+    expect(sendMessageSpy).not.toHaveBeenCalled();
   });
 
-  it("does not allow target-only recipients to use legacy plugin fallback ids", async () => {
+  it("rejects legacy plugin fallback attempts from target-only recipients", async () => {
     onSpy.mockClear();
     editMessageReplyMarkupSpy.mockClear();
     editMessageTextSpy.mockClear();
@@ -652,28 +639,10 @@ describe("createTelegramBot", () => {
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
-    expect(resolveExecApprovalSpy).toHaveBeenCalledWith({
-      cfg: expect.objectContaining({
-        approvals: expect.objectContaining({
-          exec: expect.objectContaining({
-            enabled: true,
-            mode: "targets",
-          }),
-        }),
-      }),
-      approvalId: "138e9b8c",
-      decision: "allow-once",
-      allowPluginFallback: false,
-      senderId: "9",
-    });
+    expect(resolveExecApprovalSpy).not.toHaveBeenCalled();
     expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
     expect(replySpy).not.toHaveBeenCalled();
-    expect(sendMessageSpy).toHaveBeenCalledWith(
-      1234,
-      `${CROSS_MARK_EMOJI} Failed to submit approval. Please try again or contact an admin.`,
-      undefined,
-    );
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-legacy-plugin-fallback-blocked");
+    expect(sendMessageSpy).not.toHaveBeenCalled();
   });
 
   it("keeps plugin approval callback buttons for target-only recipients", async () => {

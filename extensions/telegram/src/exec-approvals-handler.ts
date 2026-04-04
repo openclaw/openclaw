@@ -2,6 +2,7 @@ import { buildPluginApprovalPendingReplyPayload } from "openclaw/plugin-sdk/appr
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   createChannelNativeApprovalRuntime,
+  getExecApprovalApproverDmNoticeText,
   resolveExecApprovalRequestAllowedDecisions,
   type ExecApprovalChannelRuntime,
 } from "openclaw/plugin-sdk/infra-runtime";
@@ -125,6 +126,16 @@ export class TelegramExecApprovalHandler {
           }),
         };
       },
+      sendOriginNotice: async ({ originTarget }) => {
+        await this.sendMessage(originTarget.to, getExecApprovalApproverDmNoticeText(), {
+          cfg: this.opts.cfg,
+          token: this.opts.token,
+          accountId: this.opts.accountId,
+          ...(typeof originTarget.threadId === "number"
+            ? { messageThreadId: originTarget.threadId }
+            : {}),
+        });
+      },
       prepareTarget: ({ plannedTarget }) => ({
         dedupeKey: `${plannedTarget.target.to}:${plannedTarget.target.threadId == null ? "" : String(plannedTarget.target.threadId)}`,
         target: {
@@ -158,6 +169,11 @@ export class TelegramExecApprovalHandler {
           chatId: result.chatId,
           messageId: result.messageId,
         };
+      },
+      onOriginNoticeError: ({ error, request }) => {
+        log.error(
+          `telegram exec approvals: failed to send origin DM redirect notice for ${request.id}: ${String(error)}`,
+        );
       },
       onDeliveryError: ({ error, request }) => {
         log.error(

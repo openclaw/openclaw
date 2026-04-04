@@ -419,9 +419,95 @@ describe("exec approval forwarder", () => {
           turnSourceAccountId: "default",
         },
       }),
-    ).resolves.toBe(false);
+    ).resolves.toBe(true);
 
     expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it("keeps explicit telegram target forwarding for non-telegram origins", async () => {
+    vi.useFakeTimers();
+    const cfg = {
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "targets",
+          targets: [{ channel: "telegram", to: "123" }],
+        },
+      },
+      channels: {
+        telegram: {
+          execApprovals: {
+            enabled: true,
+            approvers: ["123"],
+            target: "dm",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const { deliver, forwarder } = createForwarder({ cfg });
+    await expect(
+      forwarder.handleRequested({
+        ...baseRequest,
+        request: {
+          ...baseRequest.request,
+          turnSourceChannel: "slack",
+          turnSourceTo: "U123",
+          turnSourceAccountId: "default",
+        },
+      }),
+    ).resolves.toBe(true);
+
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(deliver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "123",
+      }),
+    );
+  });
+
+  it("keeps explicit telegram target forwarding for telegram origins in targets mode", async () => {
+    vi.useFakeTimers();
+    const cfg = {
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "targets",
+          targets: [{ channel: "telegram", to: "123" }],
+        },
+      },
+      channels: {
+        telegram: {
+          execApprovals: {
+            enabled: true,
+            approvers: ["123"],
+            target: "dm",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const { deliver, forwarder } = createForwarder({ cfg });
+    await expect(
+      forwarder.handleRequested({
+        ...baseRequest,
+        request: {
+          ...baseRequest.request,
+          turnSourceChannel: "telegram",
+          turnSourceTo: "123",
+          turnSourceAccountId: "default",
+        },
+      }),
+    ).resolves.toBe(true);
+
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(deliver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "123",
+      }),
+    );
   });
 
   it("attaches shared interactive approval buttons in forwarded fallback payloads", async () => {
@@ -584,7 +670,7 @@ describe("exec approval forwarder", () => {
   it.each([
     {
       cfg: makeSessionCfg({ discordExecApprovalsEnabled: true }),
-      expectedAccepted: false,
+      expectedAccepted: true,
       expectedDeliveryCount: 0,
     },
     {

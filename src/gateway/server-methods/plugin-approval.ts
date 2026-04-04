@@ -96,17 +96,6 @@ export function createPluginApprovalHandlers(
         return;
       }
 
-      context.broadcast(
-        "plugin.approval.requested",
-        {
-          id: record.id,
-          request: record.request,
-          createdAtMs: record.createdAtMs,
-          expiresAtMs: record.expiresAtMs,
-        },
-        { dropIfSlow: true },
-      );
-
       let forwarded = false;
       if (opts?.forwarder?.handlePluginApprovalRequested) {
         try {
@@ -120,12 +109,29 @@ export function createPluginApprovalHandlers(
           context.logGateway?.error?.(`plugin approvals: forward request failed: ${String(err)}`);
         }
       }
-
-      const hasApprovalClients = context.hasExecApprovalClients?.(client?.connId) ?? false;
       const hasTurnSourceRoute = hasApprovalTurnSourceRoute({
         turnSourceChannel: record.request.turnSourceChannel,
+        turnSourceTo: record.request.turnSourceTo,
         turnSourceAccountId: record.request.turnSourceAccountId,
+        sessionKey: record.request.sessionKey,
       });
+      const shouldBroadcastApprovalClients = !(forwarded && !hasTurnSourceRoute);
+      if (shouldBroadcastApprovalClients) {
+        context.broadcast(
+          "plugin.approval.requested",
+          {
+            id: record.id,
+            request: record.request,
+            createdAtMs: record.createdAtMs,
+            expiresAtMs: record.expiresAtMs,
+          },
+          { dropIfSlow: true },
+        );
+      }
+
+      const hasApprovalClients = shouldBroadcastApprovalClients
+        ? (context.hasExecApprovalClients?.(client?.connId) ?? false)
+        : false;
       if (!hasApprovalClients && !forwarded && !hasTurnSourceRoute) {
         manager.expire(record.id, "no-approval-route");
         respond(

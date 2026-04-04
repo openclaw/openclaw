@@ -86,7 +86,7 @@ describe("SlackExecApprovalHandler", () => {
     expect(sendMessageSlackMock).toHaveBeenNthCalledWith(
       1,
       "channel:C123ROOM",
-      "Approval required. I sent approval DMs to the approvers for this account.",
+      "Approval required. I sent this request to the configured approver DMs.",
       expect.objectContaining({
         accountId: "default",
         threadTs: "1712345678.123456",

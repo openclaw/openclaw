@@ -1191,6 +1191,7 @@
                   "tools/elevated",
                   "tools/exec",
                   "tools/exec-approvals",
+                  "tools/approval-admin-terminal",
                   "tools/image-generation",
                   "tools/llm-task",
                   "tools/lobster",

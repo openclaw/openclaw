@@ -165,6 +165,50 @@ describe("plugin approval forwarding", () => {
       expect(deliver).toHaveBeenCalled();
     });
 
+    it("keeps explicit telegram target forwarding for non-telegram origins", async () => {
+      const request = makePluginRequest();
+      const cfg = {
+        approvals: {
+          plugin: {
+            enabled: true,
+            mode: "targets",
+            targets: [{ channel: "telegram", to: "1234567890" }],
+          },
+        },
+        channels: {
+          telegram: {
+            execApprovals: {
+              enabled: true,
+              approvers: ["1234567890"],
+              target: "dm",
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const deliver = vi.fn().mockResolvedValue([]);
+      const { forwarder } = createForwarder({ cfg, deliver });
+      const result = await forwarder.handlePluginApprovalRequested!(
+        makePluginRequest({
+          request: {
+            ...request.request,
+            turnSourceChannel: "slack",
+            turnSourceTo: "U123",
+            turnSourceAccountId: "default",
+          },
+        }),
+      );
+
+      expect(result).toBe(true);
+      await flushPendingDelivery();
+      expect(deliver).toHaveBeenCalledTimes(1);
+      expect(deliver).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channel: "telegram",
+          to: "1234567890",
+        }),
+      );
+    });
+
     it("returns false when no approvals config at all", async () => {
       const cfg = {} as OpenClawConfig;
       const { forwarder } = createForwarder({ cfg });

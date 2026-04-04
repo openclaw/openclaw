@@ -30,11 +30,13 @@ describe("hasApprovalTurnSourceRoute", () => {
         turnSourceAccountId: "work",
       }),
     ).toBe(true);
-    expect(resolveExecApprovalInitiatingSurfaceStateMock).toHaveBeenCalledWith({
-      channel: "slack",
-      accountId: "work",
-      cfg: { loaded: true },
-    });
+    expect(resolveExecApprovalInitiatingSurfaceStateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        accountId: "work",
+        cfg: { loaded: true },
+      }),
+    );
   });
 
   it("returns false when the initiating surface is disabled or unsupported", () => {
