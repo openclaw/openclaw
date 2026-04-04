@@ -1,5 +1,5 @@
 import { listSecretTargetRegistryEntries } from "./target-registry.js";
-import { UNSUPPORTED_SECRETREF_SURFACE_PATTERNS } from "./unsupported-surface-policy.js";
+import { getUnsupportedSecretRefSurfacePatterns } from "./unsupported-surface-policy.js";
 
 type CredentialMatrixEntry = {
   id: string;
@@ -54,7 +54,7 @@ export function buildSecretRefCredentialMatrix(): SecretRefCredentialMatrixDocum
     pathSyntax: 'Dot path with "*" for map keys and "[]" for arrays.',
     scope:
       "Credentials that are strictly user-supplied and not minted/rotated by OpenClaw runtime.",
-    excludedMutableOrRuntimeManaged: [...UNSUPPORTED_SECRETREF_SURFACE_PATTERNS],
+    excludedMutableOrRuntimeManaged: getUnsupportedSecretRefSurfacePatterns(),
     entries,
   };
 }

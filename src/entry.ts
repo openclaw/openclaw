@@ -185,9 +185,13 @@ export function tryHandleRootHelpFastPath(
       .catch(handleError);
     return true;
   }
-  import("./cli/program/root-help.js")
-    .then(({ outputRootHelp }) => {
-      return outputRootHelp();
+  import("./cli/root-help-metadata.js")
+    .then(async ({ outputPrecomputedRootHelpText }) => {
+      if (outputPrecomputedRootHelpText()) {
+        return;
+      }
+      const { outputRootHelp } = await import("./cli/program/root-help.js");
+      await outputRootHelp();
     })
     .catch(handleError);
   return true;

@@ -1,7 +1,25 @@
 import { describe, expect, it, vi } from "vitest";
 import { tryHandleRootHelpFastPath } from "./entry.js";
 
+const outputPrecomputedRootHelpTextMock = vi.hoisted(() => vi.fn(() => false));
+
+vi.mock("./cli/root-help-metadata.js", () => ({
+  outputPrecomputedRootHelpText: outputPrecomputedRootHelpTextMock,
+}));
+
 describe("entry root help fast path", () => {
+  it("prefers precomputed root help text when available", async () => {
+    outputPrecomputedRootHelpTextMock.mockReturnValueOnce(true);
+
+    const handled = tryHandleRootHelpFastPath(["node", "openclaw", "--help"], {
+      env: {},
+    });
+    await vi.dynamicImportSettled();
+
+    expect(handled).toBe(true);
+    expect(outputPrecomputedRootHelpTextMock).toHaveBeenCalledTimes(1);
+  });
+
   it("renders root help without importing the full program", async () => {
     const outputRootHelpMock = vi.fn();
 

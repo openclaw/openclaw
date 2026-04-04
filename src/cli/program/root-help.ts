@@ -1,11 +1,16 @@
 import { Command } from "commander";
 import { getPluginCliCommandDescriptors } from "../../plugins/cli.js";
+import type { OpenClawPluginCliCommandDescriptor } from "../../plugins/types.js";
 import { VERSION } from "../../version.js";
 import { getCoreCliCommandDescriptors } from "./core-command-descriptors.js";
 import { configureProgramHelp } from "./help.js";
 import { getSubCliEntries } from "./subcli-descriptors.js";
 
-async function buildRootHelpProgram(): Promise<Command> {
+type RootHelpRenderOptions = {
+  pluginDescriptors?: OpenClawPluginCliCommandDescriptor[] | null;
+};
+
+async function buildRootHelpProgram(options?: RootHelpRenderOptions): Promise<Command> {
   const program = new Command();
   configureProgramHelp(program, {
     programVersion: VERSION,
@@ -26,7 +31,11 @@ async function buildRootHelpProgram(): Promise<Command> {
     program.command(command.name).description(command.description);
     existingCommands.add(command.name);
   }
-  for (const command of await getPluginCliCommandDescriptors()) {
+  const pluginDescriptors =
+    options && "pluginDescriptors" in options
+      ? (options.pluginDescriptors ?? [])
+      : await getPluginCliCommandDescriptors();
+  for (const command of pluginDescriptors) {
     if (existingCommands.has(command.name)) {
       continue;
     }
@@ -37,8 +46,8 @@ async function buildRootHelpProgram(): Promise<Command> {
   return program;
 }
 
-export async function renderRootHelpText(): Promise<string> {
-  const program = await buildRootHelpProgram();
+export async function renderRootHelpText(options?: RootHelpRenderOptions): Promise<string> {
+  const program = await buildRootHelpProgram(options);
   let output = "";
   const originalWrite = process.stdout.write.bind(process.stdout);
   const captureWrite: typeof process.stdout.write = ((chunk: string | Uint8Array) => {
@@ -54,6 +63,6 @@ export async function renderRootHelpText(): Promise<string> {
   return output;
 }
 
-export async function outputRootHelp(): Promise<void> {
-  process.stdout.write(await renderRootHelpText());
+export async function outputRootHelp(options?: RootHelpRenderOptions): Promise<void> {
+  process.stdout.write(await renderRootHelpText(options));
 }
