@@ -99,9 +99,13 @@ Current bundled examples:
   endpoint fetching, cache-TTL/provider-family metadata, and auth-aware global
   config defaults
 - `amazon-bedrock`: provider-owned context-overflow matching and failover
-  reason classification for Bedrock-specific throttle/not-ready errors
+  reason classification for Bedrock-specific throttle/not-ready errors, plus
+  Claude-only replay-policy guards on Anthropic traffic
+- `anthropic-vertex`: Claude-only replay-policy guards on Anthropic-message
+  traffic
 - `openrouter`: pass-through model ids, request wrappers, provider capability
-  hints, and cache-TTL policy
+  hints, Gemini thought-signature sanitation on proxy Gemini traffic, and
+  cache-TTL policy
 - `github-copilot`: onboarding/device login, forward-compat model fallback,
   Claude-thinking transcript hints, runtime token exchange, and usage endpoint
   fetching
@@ -110,20 +114,26 @@ Current bundled examples:
   OpenAI/Codex catalog rows, thinking/live-model policy, usage-token alias
   normalization (`input` / `output` and `prompt` / `completion` families), and
   provider-family metadata
-- `google` and `google-gemini-cli`: Gemini 3.1 forward-compat fallback and
-  modern-model matching; Gemini CLI OAuth also owns auth-profile token
-  formatting, usage-token parsing, and quota endpoint fetching for usage
-  surfaces
+- `google` and `google-gemini-cli`: Gemini 3.1 forward-compat fallback,
+  native Gemini replay validation, bootstrap replay sanitation, tagged
+  reasoning-output mode, and modern-model matching; Gemini CLI OAuth also owns
+  auth-profile token formatting, usage-token parsing, and quota endpoint
+  fetching for usage surfaces
 - `moonshot`: shared transport, plugin-owned thinking payload normalization
 - `kilocode`: shared transport, plugin-owned request headers, reasoning payload
-  normalization, Gemini transcript hints, and cache-TTL policy
+  normalization, proxy-Gemini thought-signature sanitation, and cache-TTL
+  policy
 - `zai`: GLM-5 forward-compat fallback, `tool_stream` defaults, cache-TTL
   policy, binary-thinking/live-model policy, and usage auth + quota fetching
-- `mistral`, `opencode`, and `opencode-go`: plugin-owned capability metadata
+- `mistral`: plugin-owned capability metadata
+- `opencode` and `opencode-go`: plugin-owned capability metadata plus
+  proxy-Gemini thought-signature sanitation
 - `byteplus`, `cloudflare-ai-gateway`, `huggingface`, `kimi`,
   `modelstudio`, `nvidia`, `qianfan`, `stepfun`, `synthetic`, `together`, `venice`,
   `vercel-ai-gateway`, and `volcengine`: plugin-owned catalogs only
-- `minimax` and `xiaomi`: plugin-owned catalogs plus usage auth/snapshot logic
+- `minimax`: plugin-owned catalogs, hybrid Anthropic/OpenAI replay-policy
+  selection, and usage auth/snapshot logic
+- `xiaomi`: plugin-owned catalogs plus usage auth/snapshot logic
 
 The bundled `openai` plugin now owns both provider ids: `openai` and
 `openai-codex`.
