@@ -89,6 +89,52 @@ const CONFIG_AUDIT_LOG_FILENAME = "config-audit.jsonl";
 const CONFIG_HEALTH_STATE_FILENAME = "config-health.json";
 const loggedInvalidConfigs = new Set<string>();
 
+/**
+ * CLI flag names whose following argument value contains a secret and should
+ * be redacted before writing to config-audit.jsonl.
+ * Fixes openclaw/openclaw#60826.
+ */
+const SENSITIVE_ARGV_FLAGS = new Set([
+  "--token",
+  "--bot-token",
+  "--app-token",
+  "--access-token",
+  "--gateway-token",
+  "--password",
+  "--api-key",
+  "--secret",
+  "--secret-key",
+  "--secret-input",
+]);
+
+/**
+ * Return a redacted copy of argv where values following known sensitive flags
+ * (and --flag=value forms) are replaced with [REDACTED].
+ */
+function redactArgv(argv: string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i] ?? "";
+    // Handle --flag=value form
+    const eqIdx = arg.indexOf("=");
+    if (eqIdx !== -1) {
+      const flag = arg.slice(0, eqIdx);
+      if (SENSITIVE_ARGV_FLAGS.has(flag)) {
+        out.push(`${flag}=[REDACTED]`);
+        continue;
+      }
+    }
+    // Handle --flag <value> form
+    if (SENSITIVE_ARGV_FLAGS.has(arg) && i + 1 < argv.length) {
+      out.push(arg, "[REDACTED]");
+      i++;
+      continue;
+    }
+    out.push(arg);
+  }
+  return out;
+}
+
 type ConfigWriteAuditResult = "rename" | "copy-fallback" | "failed";
 
 type ConfigWriteAuditRecord = {
@@ -1027,7 +1073,7 @@ async function observeConfigSnapshot(
     pid: process.pid,
     ppid: process.ppid,
     cwd: process.cwd(),
-    argv: process.argv.slice(0, 8),
+    argv: redactArgv(process.argv).slice(0, 8),
     execArgv: process.execArgv.slice(0, 8),
     exists: true,
     valid: snapshot.valid,
@@ -1153,7 +1199,7 @@ function observeConfigSnapshotSync(
     pid: process.pid,
     ppid: process.ppid,
     cwd: process.cwd(),
-    argv: process.argv.slice(0, 8),
+    argv: redactArgv(process.argv).slice(0, 8),
     execArgv: process.execArgv.slice(0, 8),
     exists: true,
     valid: snapshot.valid,
@@ -1936,7 +1982,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       pid: process.pid,
       ppid: process.ppid,
       cwd: process.cwd(),
-      argv: process.argv.slice(0, 8),
+      argv: redactArgv(process.argv).slice(0, 8),
       execArgv: process.execArgv.slice(0, 8),
       watchMode: deps.env.OPENCLAW_WATCH_MODE === "1",
       watchSession:
