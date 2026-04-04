@@ -10,7 +10,7 @@ import {
 } from "../../acp/runtime/session-identity.js";
 import { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { updateSessionStore } from "../../config/sessions/store.runtime.js";
+import { updateSessionStoreEntry } from "../../config/sessions/store.runtime.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
@@ -215,6 +215,7 @@ function isStaleSessionInitError(params: { code: string; message: string }): boo
 async function maybeUnbindStaleBoundConversations(params: {
   targetSessionKey: string;
   error: { code: string; message: string };
+  cfg?: OpenClawConfig;
 }): Promise<void> {
   if (!isStaleSessionInitError(params.error)) {
     return;
@@ -238,6 +239,7 @@ async function maybeUnbindStaleBoundConversations(params: {
   try {
     const sessionEntry = readAcpSessionEntry({
       sessionKey: params.targetSessionKey,
+      cfg: params.cfg,
     });
     if (!sessionEntry?.entry || !sessionEntry.storeSessionKey) {
       return;
@@ -252,21 +254,31 @@ async function maybeUnbindStaleBoundConversations(params: {
     if (!routeFieldsPresent) {
       return;
     }
-    await updateSessionStore(sessionEntry.storePath, (store) => {
-      const existing = store[sessionEntry.storeSessionKey];
-      if (!existing) {
-        return null;
-      }
-      store[sessionEntry.storeSessionKey] = {
-        ...existing,
-        deliveryContext: undefined,
-        origin: undefined,
-        lastChannel: undefined,
-        lastTo: undefined,
-        lastAccountId: undefined,
-        lastThreadId: undefined,
-      };
-      return store[sessionEntry.storeSessionKey];
+    // Use updateSessionStoreEntry so the session key is re-resolved inside the
+    // store lock, eliminating a TOCTOU gap if the key is renamed between reads.
+    await updateSessionStoreEntry({
+      storePath: sessionEntry.storePath,
+      sessionKey: params.targetSessionKey,
+      update: async (existing) => {
+        const hasRouteFields =
+          existing.deliveryContext !== undefined ||
+          existing.origin !== undefined ||
+          existing.lastChannel !== undefined ||
+          existing.lastTo !== undefined ||
+          existing.lastAccountId !== undefined ||
+          existing.lastThreadId !== undefined;
+        if (!hasRouteFields) {
+          return null;
+        }
+        return {
+          deliveryContext: undefined,
+          origin: undefined,
+          lastChannel: undefined,
+          lastTo: undefined,
+          lastAccountId: undefined,
+          lastThreadId: undefined,
+        };
+      },
     });
     logVerbose(
       `dispatch-acp: scrubbed stale session routing fields for ${params.targetSessionKey}`,
@@ -449,6 +461,7 @@ export async function tryDispatchAcpReply(params: {
       await maybeUnbindStaleBoundConversations({
         targetSessionKey: canonicalSessionKey,
         error: acpResolution.error,
+        cfg: params.cfg,
       });
       const delivered = await delivery.deliver("final", {
         text: formatAcpRuntimeErrorText(acpResolution.error),
@@ -555,6 +568,7 @@ export async function tryDispatchAcpReply(params: {
     await maybeUnbindStaleBoundConversations({
       targetSessionKey: canonicalSessionKey,
       error: acpError,
+      cfg: params.cfg,
     });
     const delivered = await delivery.deliver("final", {
       text: formatAcpRuntimeErrorText(acpError),
