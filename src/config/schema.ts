@@ -25,6 +25,7 @@ type JsonSchemaObject = JsonSchemaNode & {
   required?: string[];
   additionalProperties?: JsonSchemaObject | boolean;
   items?: JsonSchemaObject | JsonSchemaObject[];
+  $defs?: Record<string, unknown>;
 };
 
 const asJsonSchemaObject = (value: unknown): JsonSchemaObject | null =>
@@ -318,18 +319,84 @@ function applyHeartbeatTargetHints(
   return next;
 }
 
+/**
+ * Recursively rewrites `$ref` pointers in a schema object.
+ * If the ref matches `#/$defs/<name>`, it is rewritten to `#/$defs/<prefix>_<name>`.
+ */
+function rewriteDefsRefs(obj: unknown, prefix: string, originalDefNames: Set<string>): unknown {
+  if (obj === null || typeof obj !== "object") {
+    return obj;
+  }
+  if (Array.isArray(obj)) {
+    return obj.map((item) => rewriteDefsRefs(item, prefix, originalDefNames));
+  }
+  const record = obj as Record<string, unknown>;
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(record)) {
+    if (key === "$ref" && typeof value === "string") {
+      const match = value.match(/^#\/\$defs\/(.+)$/);
+      if (match && originalDefNames.has(match[1])) {
+        result[key] = `#/$defs/${prefix}_${match[1]}`;
+      } else {
+        result[key] = value;
+      }
+    } else {
+      result[key] = rewriteDefsRefs(value, prefix, originalDefNames);
+    }
+  }
+  return result;
+}
+
+/**
+ * Extracts $defs from a plugin schema, namespaces them by plugin id,
+ * rewrites $ref pointers, and returns the processed schema along with
+ * the namespaced definitions to hoist to root.
+ */
+function extractAndNamespaceDefs(
+  pluginSchema: JsonSchemaObject,
+  pluginId: string,
+): { schema: JsonSchemaObject; defs: Record<string, unknown> } {
+  const defs = pluginSchema.$defs;
+  if (!defs || typeof defs !== "object" || Array.isArray(defs)) {
+    return { schema: pluginSchema, defs: {} };
+  }
+
+  const defNames = new Set(Object.keys(defs));
+  const namespacedDefs: Record<string, unknown> = {};
+
+  // Namespace each definition by prefixing with plugin id
+  for (const [name, def] of Object.entries(defs)) {
+    const namespacedName = `${pluginId}_${name}`;
+    // Also rewrite any $refs inside the definition itself
+    namespacedDefs[namespacedName] = rewriteDefsRefs(def, pluginId, defNames);
+  }
+
+  // Clone schema without $defs and rewrite all $refs
+  const { $defs: _removed, ...schemaWithoutDefs } = pluginSchema;
+  const rewrittenSchema = rewriteDefsRefs(
+    schemaWithoutDefs,
+    pluginId,
+    defNames,
+  ) as JsonSchemaObject;
+
+  return { schema: rewrittenSchema, defs: namespacedDefs };
+}
+
 function applyPluginSchemas(schema: ConfigSchema, plugins: PluginUiMetadata[]): ConfigSchema {
   const next = cloneSchema(schema);
   const root = asJsonSchemaObject(next);
   const pluginsNode = asJsonSchemaObject(root?.properties?.plugins);
   const entriesNode = asJsonSchemaObject(pluginsNode?.properties?.entries);
-  if (!entriesNode) {
+  if (!entriesNode || !root) {
     return next;
   }
 
   const entryBase = asJsonSchemaObject(entriesNode.additionalProperties);
   const entryProperties = entriesNode.properties ?? {};
   entriesNode.properties = entryProperties;
+
+  // Collect all hoisted $defs from plugins
+  const hoistedDefs: Record<string, unknown> = {};
 
   for (const plugin of plugins) {
     if (!plugin.configSchema) {
@@ -340,20 +407,37 @@ function applyPluginSchemas(schema: ConfigSchema, plugins: PluginUiMetadata[]): 
       : ({ type: "object" } as JsonSchemaObject);
     const entryObject = asJsonSchemaObject(entrySchema) ?? ({ type: "object" } as JsonSchemaObject);
     const baseConfigSchema = asJsonSchemaObject(entryObject.properties?.config);
-    const pluginSchema = asJsonSchemaObject(plugin.configSchema);
+    const rawPluginSchema = asJsonSchemaObject(plugin.configSchema);
+
+    // Extract and namespace $defs from plugin schema
+    const { schema: processedPluginSchema, defs } = rawPluginSchema
+      ? extractAndNamespaceDefs(rawPluginSchema, plugin.id)
+      : { schema: rawPluginSchema, defs: {} };
+
+    // Merge hoisted definitions
+    Object.assign(hoistedDefs, defs);
+
     const nextConfigSchema =
       baseConfigSchema &&
-      pluginSchema &&
+      processedPluginSchema &&
       isObjectSchema(baseConfigSchema) &&
-      isObjectSchema(pluginSchema)
-        ? mergeObjectSchema(baseConfigSchema, pluginSchema)
-        : cloneSchema(plugin.configSchema);
+      isObjectSchema(processedPluginSchema)
+        ? mergeObjectSchema(baseConfigSchema, processedPluginSchema)
+        : processedPluginSchema
+          ? cloneSchema(processedPluginSchema)
+          : cloneSchema(plugin.configSchema);
 
     entryObject.properties = {
       ...entryObject.properties,
       config: nextConfigSchema,
     };
     entryProperties[plugin.id] = entryObject;
+  }
+
+  // Hoist all collected $defs to root level
+  if (Object.keys(hoistedDefs).length > 0) {
+    const existingDefs = (root.$defs as Record<string, unknown>) ?? {};
+    root.$defs = { ...existingDefs, ...hoistedDefs };
   }
 
   return next;
@@ -363,23 +447,48 @@ function applyChannelSchemas(schema: ConfigSchema, channels: ChannelUiMetadata[]
   const next = cloneSchema(schema);
   const root = asJsonSchemaObject(next);
   const channelsNode = asJsonSchemaObject(root?.properties?.channels);
-  if (!channelsNode) {
+  if (!channelsNode || !root) {
     return next;
   }
   const channelProps = channelsNode.properties ?? {};
   channelsNode.properties = channelProps;
+
+  // Collect all hoisted $defs from channels
+  const hoistedDefs: Record<string, unknown> = {};
 
   for (const channel of channels) {
     if (!channel.configSchema) {
       continue;
     }
     const existing = asJsonSchemaObject(channelProps[channel.id]);
-    const incoming = asJsonSchemaObject(channel.configSchema);
-    if (existing && incoming && isObjectSchema(existing) && isObjectSchema(incoming)) {
-      channelProps[channel.id] = mergeObjectSchema(existing, incoming);
+    const rawIncoming = asJsonSchemaObject(channel.configSchema);
+
+    // Extract and namespace $defs from channel schema
+    const { schema: processedIncoming, defs } = rawIncoming
+      ? extractAndNamespaceDefs(rawIncoming, channel.id)
+      : { schema: rawIncoming, defs: {} };
+
+    // Merge hoisted definitions
+    Object.assign(hoistedDefs, defs);
+
+    if (
+      existing &&
+      processedIncoming &&
+      isObjectSchema(existing) &&
+      isObjectSchema(processedIncoming)
+    ) {
+      channelProps[channel.id] = mergeObjectSchema(existing, processedIncoming);
+    } else if (processedIncoming) {
+      channelProps[channel.id] = cloneSchema(processedIncoming);
     } else {
       channelProps[channel.id] = cloneSchema(channel.configSchema);
     }
+  }
+
+  // Hoist all collected $defs to root level
+  if (Object.keys(hoistedDefs).length > 0) {
+    const existingDefs = (root.$defs as Record<string, unknown>) ?? {};
+    root.$defs = { ...existingDefs, ...hoistedDefs };
   }
 
   return next;

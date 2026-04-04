@@ -203,6 +203,147 @@ describe("config schema", () => {
     });
   });
 
+  it("hoists $defs from plugin schemas to root level with namespaced keys", () => {
+    const res = buildConfigSchema({
+      plugins: [
+        {
+          id: "qqbot",
+          name: "QQBot",
+          configSchema: {
+            type: "object",
+            properties: {
+              account: { $ref: "#/$defs/account" },
+            },
+            $defs: {
+              account: {
+                type: "object",
+                properties: {
+                  name: { type: "string" },
+                },
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    const schema = res.schema as {
+      $defs?: Record<string, unknown>;
+      properties?: Record<string, unknown>;
+    };
+
+    // $defs should be hoisted to root level with namespaced key
+    expect(schema.$defs).toBeDefined();
+    expect(schema.$defs?.["qqbot_account"]).toBeDefined();
+
+    // Plugin config should have rewritten $ref
+    const pluginsNode = schema.properties?.plugins as Record<string, unknown> | undefined;
+    const entriesNode = pluginsNode?.properties as Record<string, unknown> | undefined;
+    const entriesProps = entriesNode?.entries as Record<string, unknown> | undefined;
+    const entryProps = entriesProps?.properties as Record<string, unknown> | undefined;
+    const pluginEntry = entryProps?.["qqbot"] as Record<string, unknown> | undefined;
+    const pluginConfig = pluginEntry?.properties as Record<string, unknown> | undefined;
+    const pluginConfigSchema = pluginConfig?.config as Record<string, unknown> | undefined;
+    const pluginConfigProps = pluginConfigSchema?.properties as Record<string, unknown> | undefined;
+    const accountProp = pluginConfigProps?.account as Record<string, unknown> | undefined;
+
+    // $ref should point to namespaced definition at root
+    expect(accountProp?.$ref).toBe("#/$defs/qqbot_account");
+
+    // Plugin config should NOT have its own $defs
+    expect(pluginConfigSchema?.$defs).toBeUndefined();
+  });
+
+  it("hoists $defs from channel schemas to root level with namespaced keys", () => {
+    const res = buildConfigSchema({
+      channels: [
+        {
+          id: "custom-channel",
+          label: "Custom Channel",
+          configSchema: {
+            type: "object",
+            properties: {
+              settings: { $ref: "#/$defs/settings" },
+            },
+            $defs: {
+              settings: {
+                type: "object",
+                properties: {
+                  enabled: { type: "boolean" },
+                },
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    const schema = res.schema as {
+      $defs?: Record<string, unknown>;
+      properties?: Record<string, unknown>;
+    };
+
+    // $defs should be hoisted to root level with namespaced key
+    expect(schema.$defs).toBeDefined();
+    expect(schema.$defs?.["custom-channel_settings"]).toBeDefined();
+
+    // Channel schema should have rewritten $ref
+    const channelsNode = schema.properties?.channels as Record<string, unknown> | undefined;
+    const channelProps = channelsNode?.properties as Record<string, unknown> | undefined;
+    const channelSchema = channelProps?.["custom-channel"] as Record<string, unknown> | undefined;
+    const channelSchemaProps = channelSchema?.properties as Record<string, unknown> | undefined;
+    const settingsProp = channelSchemaProps?.settings as Record<string, unknown> | undefined;
+
+    // $ref should point to namespaced definition at root
+    expect(settingsProp?.$ref).toBe("#/$defs/custom-channel_settings");
+
+    // Channel schema should NOT have its own $defs
+    expect(channelSchema?.$defs).toBeUndefined();
+  });
+
+  it("rewrites nested $refs inside $defs definitions", () => {
+    const res = buildConfigSchema({
+      plugins: [
+        {
+          id: "nested-plugin",
+          name: "Nested Plugin",
+          configSchema: {
+            type: "object",
+            properties: {
+              parent: { $ref: "#/$defs/parent" },
+            },
+            $defs: {
+              child: {
+                type: "object",
+                properties: {
+                  value: { type: "string" },
+                },
+              },
+              parent: {
+                type: "object",
+                properties: {
+                  child: { $ref: "#/$defs/child" },
+                },
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    const schema = res.schema as { $defs?: Record<string, unknown> };
+
+    // Both defs should be hoisted
+    expect(schema.$defs?.["nested-plugin_parent"]).toBeDefined();
+    expect(schema.$defs?.["nested-plugin_child"]).toBeDefined();
+
+    // The nested $ref inside parent should also be rewritten
+    const parentDef = schema.$defs?.["nested-plugin_parent"] as Record<string, unknown> | undefined;
+    const parentProps = parentDef?.properties as Record<string, unknown> | undefined;
+    const childRef = parentProps?.child as Record<string, unknown> | undefined;
+    expect(childRef?.$ref).toBe("#/$defs/nested-plugin_child");
+  });
+
   it("adds heartbeat target hints with dynamic channels", () => {
     const res = buildConfigSchema(heartbeatChannelInput);
 
