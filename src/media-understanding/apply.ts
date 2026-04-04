@@ -17,6 +17,7 @@ import {
   formatAudioTranscripts,
   formatMediaUnderstandingBody,
 } from "./format.js";
+import { pushNativeMediaBlocks } from "./native-forwarding.js";
 import { resolveConcurrency } from "./resolve.js";
 import {
   type ActiveMediaModel,
@@ -31,6 +32,7 @@ import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
   MediaUnderstandingProvider,
+  NativeMediaBlock,
 } from "./types.js";
 
 export type ApplyMediaUnderstandingResult = {
@@ -528,6 +530,61 @@ export async function applyMediaUnderstanding(params: {
       }
       ctx.MediaUnderstanding = [...(ctx.MediaUnderstanding ?? []), ...outputs];
     }
+
+    // --- Native media forwarding ------------------------------------------------
+    // When nativeForwarding is enabled for audio/video, read the raw attachment
+    // bytes, base64-encode them, and push into the native-forwarding store so the
+    // prompt call-site can inject them as multimodal content blocks.
+    const nativeBlocks: NativeMediaBlock[] = [];
+    const audioForward = cfg.tools?.media?.audio?.nativeForwarding === true;
+    const videoForward = cfg.tools?.media?.video?.nativeForwarding === true;
+    if (audioForward || videoForward) {
+      for (const attachment of attachments) {
+        if (!attachment) {
+          continue;
+        }
+        const kind = resolveAttachmentKind(attachment);
+        const shouldForward =
+          (kind === "audio" && audioForward) || (kind === "video" && videoForward);
+        if (!shouldForward) {
+          continue;
+        }
+        try {
+          const bufferResult = await cache.getBuffer({
+            attachmentIndex: attachment.index,
+            maxBytes: 25 * 1024 * 1024, // 25 MiB hard cap for native forwarding
+            timeoutMs: 30_000,
+          });
+          if (bufferResult?.buffer) {
+            const mimeType =
+              normalizeMimeType(bufferResult.mime ?? attachment.mime) ??
+              (kind === "audio" ? "audio/ogg" : "video/mp4");
+            nativeBlocks.push({
+              type: kind,
+              data: bufferResult.buffer.toString("base64"),
+              mimeType,
+            });
+            if (shouldLogVerbose()) {
+              logVerbose(
+                `media: native forwarding captured ${kind} attachment index=${attachment.index} ` +
+                  `mime=${mimeType} bytes=${bufferResult.buffer.length}`,
+              );
+            }
+          }
+        } catch (err) {
+          if (shouldLogVerbose()) {
+            logVerbose(
+              `media: native forwarding skipped ${kind} index=${attachment.index}: ${String(err)}`,
+            );
+          }
+        }
+      }
+      if (nativeBlocks.length > 0 && ctx.SessionKey) {
+        pushNativeMediaBlocks(ctx.SessionKey, nativeBlocks);
+      }
+    }
+    // --- End native media forwarding --------------------------------------------
+
     const audioAttachmentIndexes = new Set(
       outputs
         .filter((output) => output.kind === "audio.transcription")

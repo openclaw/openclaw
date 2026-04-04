@@ -13,6 +13,11 @@ import {
   ensureGlobalUndiciEnvProxyDispatcher,
   ensureGlobalUndiciStreamTimeouts,
 } from "../../../infra/net/undici-global-dispatcher.js";
+import {
+  consumeNativeMediaBlocks,
+  discardNativeMediaBlocks,
+} from "../../../media-understanding/native-forwarding.js";
+import type { NativeMediaBlock } from "../../../media-understanding/types.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import {
   isOllamaCompatProvider,
@@ -1595,10 +1600,34 @@ export async function runEmbeddedAttempt(
             inFlightPrompt: effectivePrompt,
           });
 
-          // Only pass images option if there are actually images to pass
-          // This avoids potential issues with models that don't expect the images parameter
-          if (imageResult.images.length > 0) {
-            await abortable(activeSession.prompt(effectivePrompt, { images: imageResult.images }));
+          // Merge native audio/video blocks (from media-understanding nativeForwarding)
+          // into the media array alongside images.  The pi-ai `prompt()` options accept
+          // `images` which is an array of ImageContent | AudioContent; audio/video
+          // blocks are structurally compatible once the companion pi-ai types are updated.
+          const nativeMediaKey = params.sessionKey ?? params.sessionId;
+          const nativeMedia: NativeMediaBlock[] = consumeNativeMediaBlocks(nativeMediaKey);
+          const mergedMedia: Array<(typeof imageResult.images)[number] | NativeMediaBlock> = [
+            ...imageResult.images,
+            ...nativeMedia,
+          ];
+
+          if (nativeMedia.length > 0) {
+            log.debug(
+              `Native media forwarding: injecting ${nativeMedia.length} block(s) into prompt ` +
+                `(audio=${nativeMedia.filter((b) => b.type === "audio").length}, ` +
+                `video=${nativeMedia.filter((b) => b.type === "video").length}) ` +
+                `sessionId=${params.sessionId}`,
+            );
+          }
+
+          // Only pass images/media option if there are actually items to pass.
+          // This avoids potential issues with models that don't expect the images parameter.
+          if (mergedMedia.length > 0) {
+            await abortable(
+              activeSession.prompt(effectivePrompt, {
+                images: mergedMedia as typeof imageResult.images,
+              }),
+            );
           } else {
             await abortable(activeSession.prompt(effectivePrompt));
           }
@@ -1840,6 +1869,8 @@ export async function runEmbeddedAttempt(
           );
         }
         clearActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
+        // Discard any unconsumed native media blocks to prevent memory leaks.
+        discardNativeMediaBlocks(params.sessionKey ?? params.sessionId);
         params.abortSignal?.removeEventListener?.("abort", onAbort);
       }
 

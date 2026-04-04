@@ -98,6 +98,14 @@ export type MediaUnderstandingConfig = MediaProviderRequestConfig & {
   /** Ordered model list (fallbacks in order). */
   models?: MediaUnderstandingModelConfig[];
   /**
+   * Forward the raw audio/video bytes as base64 to multimodal models that support
+   * native input_audio / video_url content blocks (e.g. GPT-4o-audio, Gemini 2.5).
+   * When enabled the transcription/description still runs but the original media is
+   * also attached so the model can perceive tone, emotion, and visual details that
+   * text-only transcription loses.  Default: false (opt-in).
+   */
+  nativeForwarding?: boolean;
+  /**
    * Echo the audio transcript back to the originating chat before agent processing.
    * Lets users verify what was heard. Default: false.
    */

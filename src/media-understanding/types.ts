@@ -134,6 +134,20 @@ export type ImagesDescriptionResult = {
   model?: string;
 };
 
+/**
+ * A raw media block captured for native forwarding to multimodal models.
+ * When `nativeForwarding` is enabled in the media config, the original
+ * audio/video bytes are base64-encoded and stored here so they can be
+ * injected as `input_audio` / `video_url` content blocks at prompt time.
+ */
+export type NativeMediaBlock = {
+  type: "audio" | "video";
+  /** Base64-encoded raw media bytes. */
+  data: string;
+  /** Original MIME type (e.g. "audio/ogg", "video/mp4"). */
+  mimeType: string;
+};
+
 export type MediaUnderstandingProvider = {
   id: string;
   capabilities?: MediaUnderstandingCapability[];
