@@ -129,6 +129,78 @@ function createCompactionDiagId(): string {
   return `ovf-${Date.now().toString(36)}-${generateSecureToken(4)}`;
 }
 
+/**
+ * Build a user-friendly error message for context overflow scenarios.
+ * Includes actionable guidance based on what recovery attempts were tried.
+ */
+function buildContextOverflowErrorMessage(params: {
+  kind: "compaction_failure" | "context_overflow";
+  provider: string;
+  modelId: string;
+  contextWindowTokens: number;
+  messageCount: number;
+  compactionAttempts: number;
+  maxCompactionAttempts: number;
+  toolResultTruncationAttempted: boolean;
+  isCompactionFailure: boolean;
+}): string {
+  const {
+    kind,
+    provider,
+    modelId,
+    contextWindowTokens,
+    messageCount,
+    compactionAttempts,
+    maxCompactionAttempts,
+    toolResultTruncationAttempted,
+    isCompactionFailure,
+  } = params;
+
+  const lines: string[] = [];
+
+  // Header
+  if (isCompactionFailure) {
+    lines.push(`Compaction failed: The session compaction process encountered an error.`);
+  } else if (compactionAttempts >= maxCompactionAttempts) {
+    lines.push(
+      `Context overflow: The session is too large even after ${compactionAttempts} compaction attempts.`,
+    );
+  } else if (toolResultTruncationAttempted) {
+    lines.push(
+      `Context overflow: The session is too large even after truncating oversized tool results.`,
+    );
+  } else {
+    lines.push(`Context overflow: The prompt is too large for the model's context window.`);
+  }
+
+  // Context info
+  lines.push(`Model: ${provider}/${modelId} (context window: ~${contextWindowTokens.toLocaleString()} tokens)`);
+  lines.push(`Messages in session: ${messageCount}`);
+
+  // Actionable guidance
+  lines.push("");
+  lines.push(`Suggestions:`);
+
+  if (kind === "compaction_failure") {
+    lines.push(`• Try /reset or /new to start a fresh session`);
+    lines.push(`• The compaction system encountered an error — this may be temporary`);
+  } else if (compactionAttempts >= maxCompactionAttempts) {
+    lines.push(`• Use /reset or /new to start a fresh session`);
+    lines.push(`• Switch to a model with a larger context window (e.g., Claude 3.7 Sonnet, GPT-4.5)`);
+    lines.push(`• Ask the model to summarize the current session before continuing`);
+  } else if (toolResultTruncationAttempted) {
+    lines.push(`• Use /reset or /new to start a fresh session`);
+    lines.push(`• Try a model with a larger context window`);
+    lines.push(`• Review recent tool outputs — one may be unexpectedly large`);
+  } else {
+    lines.push(`• Wait for automatic compaction to run`);
+    lines.push(`• Use /reset or /new if the issue persists`);
+    lines.push(`• Consider a model with a larger context window for long sessions`);
+  }
+
+  return lines.join("\n");
+}
+
 // Defensive guard for the outer run loop across all retry branches.
 const BASE_RUN_RETRY_ITERATIONS = 24;
 const RUN_RETRY_ITERATIONS_PER_PROFILE = 8;
@@ -1227,12 +1299,21 @@ export async function runEmbeddedPiAgent(
               );
             }
             const kind = isCompactionFailure ? "compaction_failure" : "context_overflow";
+            const errorPayload = buildContextOverflowErrorMessage({
+              kind,
+              provider,
+              modelId: model.id,
+              contextWindowTokens: ctxInfo.tokens,
+              messageCount,
+              compactionAttempts: overflowCompactionAttempts,
+              maxCompactionAttempts: MAX_OVERFLOW_COMPACTION_ATTEMPTS,
+              toolResultTruncationAttempted,
+              isCompactionFailure,
+            });
             return {
               payloads: [
                 {
-                  text:
-                    "Context overflow: prompt too large for the model. " +
-                    "Try /reset (or /new) to start a fresh session, or use a larger-context model.",
+                  text: errorPayload,
                   isError: true,
                 },
               ],
