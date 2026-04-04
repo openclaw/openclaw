@@ -89,6 +89,8 @@ export type SessionEntry = {
   spawnedWorkspaceDir?: string;
   /** Explicit parent session linkage for dashboard-created child sessions. */
   parentSessionKey?: string;
+  /** Session key of the previous version of this session (used for /new history preservation). */
+  previousSessionKey?: string;
   /** True after a thread/topic session has been forked from its parent transcript once. */
   forkedFromParent?: boolean;
   /** Subagent spawn depth (0 = main, 1 = sub-agent, 2 = sub-sub-agent). */

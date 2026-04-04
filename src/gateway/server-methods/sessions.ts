@@ -990,11 +990,13 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
 
     const reason = p.reason === "new" ? "new" : "reset";
+    const preserveHistory = reason === "new";
     const { performGatewaySessionReset } = await import("./sessions.runtime.js");
     const result = await performGatewaySessionReset({
       key,
       reason,
       commandSource: "gateway:sessions.reset",
+      preserveHistory,
     });
     if (!result.ok) {
       respond(false, undefined, result.error);

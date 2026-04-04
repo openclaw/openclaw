@@ -18,6 +18,17 @@ export function renderSessionSidebar(props: SessionSidebarProps): TemplateResult
   const { sessions, activeSessionKey, onSessionSelect, onNewSession, onClose, loading } = props;
   const rows = sessions?.sessions ?? [];
 
+  // Filter: show active sessions, or ended sessions that were preserved via /new (have previousSessionKey)
+  const showableSessions = rows.filter((row) => {
+    if (!row.endedAt) {
+      return true;
+    }
+    if (row.previousSessionKey) {
+      return true;
+    }
+    return false;
+  });
+
   // Group sessions by recency
   const now = Date.now();
   const dayMs = 24 * 60 * 60 * 1000;
@@ -25,7 +36,7 @@ export function renderSessionSidebar(props: SessionSidebarProps): TemplateResult
   const yesterday: GatewaySessionRow[] = [];
   const older: GatewaySessionRow[] = [];
 
-  for (const row of rows) {
+  for (const row of showableSessions) {
     const ts = row.updatedAt ?? 0;
     if (!ts) {
       older.push(row);
@@ -39,19 +50,22 @@ export function renderSessionSidebar(props: SessionSidebarProps): TemplateResult
   }
 
   const renderGroup = (label: string, items: GatewaySessionRow[]) => {
-    if (items.length === 0) {return nothing;}
+    if (items.length === 0) {
+      return nothing;
+    }
     return html`
       <div class="session-sidebar__group">
         <div class="session-sidebar__group-label">${label}</div>
         ${repeat(
           items,
           (row) => row.key,
-          (row) => renderSessionItem({
-            session: row,
-            isActive: row.key === activeSessionKey,
-            onSelect: onSessionSelect,
-            basePath: props.basePath,
-          } as SessionItemProps),
+          (row) =>
+            renderSessionItem({
+              session: row,
+              isActive: row.key === activeSessionKey,
+              onSelect: onSessionSelect,
+              basePath: props.basePath,
+            } as SessionItemProps),
         )}
       </div>
     `;
@@ -72,20 +86,13 @@ export function renderSessionSidebar(props: SessionSidebarProps): TemplateResult
       </div>
 
       <div class="session-sidebar__content">
-        ${loading ? html`
-          <div class="session-sidebar__loading">
-            ${icons.loader} Loading sessions...
-          </div>
-        ` : nothing}
-
-        ${rows.length === 0 && !loading ? html`
-          <div class="session-sidebar__empty">
-            No sessions found
-          </div>
-        ` : nothing}
-
-        ${renderGroup("Today", today)}
-        ${renderGroup("Yesterday", yesterday)}
+        ${loading
+          ? html` <div class="session-sidebar__loading">${icons.loader} Loading sessions...</div> `
+          : nothing}
+        ${showableSessions.length === 0 && !loading
+          ? html` <div class="session-sidebar__empty">No sessions found</div> `
+          : nothing}
+        ${renderGroup("Today", today)} ${renderGroup("Yesterday", yesterday)}
         ${renderGroup("Older", older)}
       </div>
 

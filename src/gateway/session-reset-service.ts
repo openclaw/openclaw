@@ -381,6 +381,7 @@ export async function performGatewaySessionReset(params: {
   key: string;
   reason: "new" | "reset";
   commandSource: string;
+  preserveHistory?: boolean;
 }): Promise<
   | { ok: true; key: string; entry: SessionEntry }
   | { ok: false; error: ReturnType<typeof errorShape> }
@@ -444,6 +445,23 @@ export async function performGatewaySessionReset(params: {
         agentId: sessionAgentId,
       }),
     );
+    // When preserveHistory=true (i.e. /new), archive the old session at a compound key
+    // so it appears as a separate history entry in the sidebar.
+    let parentSessionKey = currentEntry?.parentSessionKey;
+    let previousSessionKey: string | undefined;
+    if (params.preserveHistory && currentEntry) {
+      const oldEntryKey = `${primaryKey}:${currentEntry.sessionId}`;
+      const archivedEntry: SessionEntry = {
+        ...currentEntry,
+        endedAt: Date.now(),
+        status: "done",
+        previousSessionKey: primaryKey,
+      };
+      store[oldEntryKey] = archivedEntry;
+      parentSessionKey = oldEntryKey;
+      previousSessionKey = oldEntryKey;
+    }
+
     const nextEntry: SessionEntry = {
       sessionId: nextSessionId,
       sessionFile,
@@ -479,7 +497,8 @@ export async function performGatewaySessionReset(params: {
       queueDrop: currentEntry?.queueDrop,
       spawnedBy: currentEntry?.spawnedBy,
       spawnedWorkspaceDir: currentEntry?.spawnedWorkspaceDir,
-      parentSessionKey: currentEntry?.parentSessionKey,
+      parentSessionKey,
+      previousSessionKey,
       forkedFromParent: currentEntry?.forkedFromParent,
       spawnDepth: currentEntry?.spawnDepth,
       subagentRole: currentEntry?.subagentRole,

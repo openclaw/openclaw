@@ -26,6 +26,11 @@
   animation: slide-in 200ms ease-out;
 }
 
+/* Session sidebar only mode — use same flex ratio as markdown sidebar */
+.chat-sidebar--session-only {
+  flex: 1;
+}
+
 @keyframes slide-in {
   from {
     opacity: 0;

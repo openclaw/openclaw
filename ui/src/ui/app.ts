@@ -1,6 +1,5 @@
 import { LitElement } from "lit";
 import { customElement, state } from "lit/decorators.js";
-import { resolveAgentIdFromSessionKey } from "./session-key.ts";
 import { i18n, I18nController, isSupportedLocale } from "../i18n/index.ts";
 import {
   handleChannelConfigReload as handleChannelConfigReloadInternal,
@@ -20,7 +19,6 @@ import {
   handleSendChat as handleSendChatInternal,
   removeQueuedMessage as removeQueuedMessageInternal,
 } from "./app-chat.ts";
-import { loadChatHistory, type ChatState } from "./controllers/chat.ts";
 import { DEFAULT_CRON_FORM, DEFAULT_LOG_LEVEL_FILTERS } from "./app-defaults.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import { connectGateway as connectGatewayInternal } from "./app-gateway.ts";
@@ -61,6 +59,7 @@ import {
   refreshVisibleToolsEffectiveForCurrentSession as refreshVisibleToolsEffectiveForCurrentSessionInternal,
 } from "./controllers/agents.ts";
 import { loadAssistantIdentity as loadAssistantIdentityInternal } from "./controllers/assistant-identity.ts";
+import { loadChatHistory, type ChatState } from "./controllers/chat.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
@@ -71,6 +70,7 @@ import type {
 } from "./controllers/skills.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
+import { resolveAgentIdFromSessionKey } from "./session-key.ts";
 import { loadSettings, type UiSettings } from "./storage.ts";
 import { VALID_THEME_NAMES, type ResolvedTheme, type ThemeMode, type ThemeName } from "./theme.ts";
 import type {
@@ -795,7 +795,9 @@ export class OpenClawApp extends LitElement {
   }
 
   handleCloseSessionSidebar() {
+    // Close session sidebar AND outer sidebar (tool output)
     this.sessionSidebarOpen = false;
+    this.sidebarOpen = false;
   }
 
   handleSessionSelectFromSidebar(key: string) {
@@ -809,14 +811,13 @@ export class OpenClawApp extends LitElement {
     this.sessionKey = key;
     this.applySettings({ ...this.settings, sessionKey: key, lastActiveSessionKey: key });
     void this.loadAssistantIdentity();
-    // Close sidebar first (sync), then load history (async)
-    this.handleCloseSessionSidebar();
+    // Keep sidebar OPEN so user can continue switching sessions
     void loadChatHistory(this as unknown as ChatState);
   }
 
   handleNewSessionFromSidebar() {
     // Use /new command to create a truly new session
-    this.handleCloseSessionSidebar();
+    // Keep sidebar OPEN
     void this.handleSendChat("/new");
   }
 
