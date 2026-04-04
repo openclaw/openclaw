@@ -68,6 +68,10 @@ field names do not change `/status`, `/usage`, or session summaries.
 Gemini CLI JSON usage is normalized too: reply text comes from `response`, and
 `stats.cached` maps to `cacheRead` with `stats.input_tokens - stats.cached`
 used when the CLI omits an explicit `stats.input` field.
+When the current session snapshot is missing cache counters, `/status` can also
+recover `cacheRead` / `cacheWrite` from the most recent transcript usage log.
+Existing nonzero live cache values still take precedence over transcript
+fallback values.
 
 ## Cost estimation (when shown)
 

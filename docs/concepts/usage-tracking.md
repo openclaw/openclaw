@@ -14,6 +14,9 @@ title: "Usage Tracking"
 - No estimated costs; only the provider-reported windows.
 - Human-readable status output is normalized to `X% left`, even when an
   upstream API reports consumed quota, remaining quota, or only raw counts.
+- Session-level `/status` cache counters can fall back to the latest transcript
+  usage entry when the live session snapshot is missing `cacheRead` /
+  `cacheWrite`. Existing nonzero live cache values still win.
 
 ## Where it shows up
 

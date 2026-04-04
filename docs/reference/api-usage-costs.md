@@ -18,6 +18,9 @@ OpenClaw features that can generate provider usage or paid API calls.
 
 - `/status` shows the current session model, context usage, and last response tokens.
 - If the model uses **API-key auth**, `/status` also shows **estimated cost** for the last reply.
+- If live session metadata is missing cache counters, `/status` can recover
+  `cacheRead` / `cacheWrite` from the latest transcript usage entry. Existing
+  nonzero live cache values still take precedence.
 
 **Per-message cost footer**
 

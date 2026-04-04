@@ -22,6 +22,7 @@ Notes:
 - `--deep` runs live probes (WhatsApp Web + Telegram + Discord + Slack + Signal).
 - `--usage` prints normalized provider usage windows as `X% left`.
 - MiniMax's raw `usage_percent` / `usagePercent` fields are remaining quota, so OpenClaw inverts them before display; count-based fields win when present. `model_remains` responses prefer the chat-model entry, derive the window label from timestamps when needed, and include the model name in the plan label.
+- When the current session snapshot is missing cache counters, `/status` can backfill `cacheRead` / `cacheWrite` from the most recent transcript usage log. Existing nonzero live cache values still win over transcript fallback values.
 - Output includes per-agent session stores when multiple agents are configured.
 - Overview includes Gateway + node host service install/runtime status when available.
 - Overview includes update channel + git SHA (for source checkouts).
