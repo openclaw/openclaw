@@ -160,11 +160,9 @@ describe("matrix doctor", () => {
     expect(result.config.channels?.matrix?.groups?.["!ops:example.org"]).toEqual({
       enabled: true,
     });
-    expect(result.config.channels?.matrix?.accounts?.work?.rooms?.["!legacy:example.org"]).toEqual(
-      {
-        enabled: false,
-      },
-    );
+    expect(result.config.channels?.matrix?.accounts?.work?.rooms?.["!legacy:example.org"]).toEqual({
+      enabled: false,
+    });
     expect(result.changes).toEqual(
       expect.arrayContaining([
         "Moved channels.matrix.groups.!ops:example.org.allow → channels.matrix.groups.!ops:example.org.enabled (true).",
