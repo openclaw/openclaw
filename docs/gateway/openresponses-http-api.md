@@ -278,6 +278,9 @@ Event types currently emitted:
 ## Usage
 
 `usage` is populated when the underlying provider reports token counts.
+OpenClaw normalizes common OpenAI-style aliases before those counters reach
+downstream status/session surfaces, including `input_tokens` / `output_tokens`
+and `prompt_tokens` / `completion_tokens`.
 
 ## Errors
 

@@ -107,7 +107,8 @@ Current bundled examples:
   fetching
 - `openai`: GPT-5.4 forward-compat fallback, direct OpenAI transport
   normalization, Codex-aware missing-auth hints, Spark suppression, synthetic
-  OpenAI/Codex catalog rows, thinking/live-model policy, and
+  OpenAI/Codex catalog rows, thinking/live-model policy, usage-token alias
+  normalization (`input` / `output` and `prompt` / `completion` families), and
   provider-family metadata
 - `google` and `google-gemini-cli`: Gemini 3.1 forward-compat fallback and
   modern-model matching; Gemini CLI OAuth also owns auth-profile token
