@@ -1460,7 +1460,7 @@ Notes:
 
 Common RPCs:
 
-- `config.schema.lookup` (inspect one config subtree with field docs)
+- `config.schema.lookup` (inspect one config subtree with shallow schema fields, docs, and immediate child summaries)
 - `config.get` (read current config snapshot + hash)
 - `config.set` (validate + write full config; use `baseHash` for optimistic concurrency)
 - `config.apply` (validate + write config + restart + wake)
