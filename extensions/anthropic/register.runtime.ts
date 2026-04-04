@@ -7,6 +7,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
   applyAuthProfileConfig,
+  createProviderApiKeyAuthMethod,
   ensureApiKeyFromOptionEnvOrPrompt,
   listProfilesForProvider,
   normalizeApiKeyInput,
@@ -17,11 +18,13 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { cloneFirstTemplateModel } from "openclaw/plugin-sdk/provider-model-shared";
 import { fetchClaudeUsage } from "openclaw/plugin-sdk/provider-usage";
+import { buildAnthropicCliBackend } from "./cli-backend.js";
 import { buildAnthropicCliMigrationResult, hasClaudeCliAuth } from "./cli-migration.js";
 import {
   applyAnthropicConfigDefaults,
   normalizeAnthropicProviderConfig,
 } from "./config-defaults.js";
+import { anthropicMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { buildAnthropicReplayPolicy } from "./replay-policy.js";
 import { wrapAnthropicProviderStream } from "./stream-wrappers.js";
 
@@ -200,7 +203,7 @@ async function runAnthropicCliMigrationNonInteractive(ctx: {
   };
 }
 
-export async function registerAnthropicPlugin(api: OpenClawPluginApi): Promise<void> {
+export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
   const claudeCliProfileId = "anthropic:claude-cli";
   const providerId = "anthropic";
   const defaultAnthropicModel = "anthropic/claude-sonnet-4-6";
@@ -211,45 +214,7 @@ export async function registerAnthropicPlugin(api: OpenClawPluginApi): Promise<v
     "anthropic/claude-sonnet-4-5",
     "anthropic/claude-haiku-4-5",
   ] as const;
-  let createApiKeyAuthMethod:
-    | (typeof import("openclaw/plugin-sdk/provider-auth-api-key"))["createProviderApiKeyAuthMethod"]
-    | undefined;
-  let mediaUnderstandingProvider:
-    | (typeof import("./media-understanding-provider.js"))["anthropicMediaUnderstandingProvider"]
-    | undefined;
-
-  // Avoid touching a partially initialized static binding during cyclic bootstrap.
-  try {
-    const cliBackendModule = await import("./cli-backend.js");
-    const cliBackend =
-      typeof cliBackendModule.buildAnthropicCliBackend === "function"
-        ? cliBackendModule.buildAnthropicCliBackend()
-        : undefined;
-    if (cliBackend) {
-      api.registerCliBackend(cliBackend);
-    }
-  } catch {
-    // Best-effort during test bootstrap; provider registration still proceeds.
-  }
-  try {
-    const providerApiKeyAuthModule = await import("openclaw/plugin-sdk/provider-auth-api-key");
-    createApiKeyAuthMethod =
-      typeof providerApiKeyAuthModule.createProviderApiKeyAuthMethod === "function"
-        ? providerApiKeyAuthModule.createProviderApiKeyAuthMethod
-        : undefined;
-  } catch {
-    createApiKeyAuthMethod = undefined;
-  }
-  if (!createApiKeyAuthMethod) {
-    return;
-  }
-  try {
-    const mediaUnderstandingModule = await import("./media-understanding-provider.js");
-    mediaUnderstandingProvider =
-      mediaUnderstandingModule.anthropicMediaUnderstandingProvider ?? undefined;
-  } catch {
-    mediaUnderstandingProvider = undefined;
-  }
+  api.registerCliBackend(buildAnthropicCliBackend());
   api.registerProvider({
     id: providerId,
     label: "Anthropic",
@@ -291,7 +256,7 @@ export async function registerAnthropicPlugin(api: OpenClawPluginApi): Promise<v
             runtime: ctx.runtime,
           }),
       },
-      createApiKeyAuthMethod({
+      createProviderApiKeyAuthMethod({
         providerId,
         methodId: "api-key",
         label: "Anthropic API key",
@@ -337,7 +302,5 @@ export async function registerAnthropicPlugin(api: OpenClawPluginApi): Promise<v
         profileId: ctx.profileId,
       }),
   });
-  if (mediaUnderstandingProvider) {
-    api.registerMediaUnderstandingProvider(mediaUnderstandingProvider);
-  }
+  api.registerMediaUnderstandingProvider(anthropicMediaUnderstandingProvider);
 }

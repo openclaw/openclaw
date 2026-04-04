@@ -6,6 +6,6 @@ export default definePluginEntry({
   name: "Anthropic Provider",
   description: "Bundled Anthropic provider plugin",
   register(api) {
-    registerAnthropicPlugin(api);
+    return registerAnthropicPlugin(api);
   },
 });

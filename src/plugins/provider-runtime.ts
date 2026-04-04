@@ -412,7 +412,25 @@ export function normalizeProviderConfigWithPlugin(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderNormalizeConfigContext;
 }): ModelProviderConfig | undefined {
-  return resolveProviderHookPlugin(params)?.normalizeConfig?.(params.context) ?? undefined;
+  const hasConfigChange = (normalized: ModelProviderConfig) =>
+    normalized !== params.context.providerConfig;
+  const matchedPlugin = resolveProviderHookPlugin(params);
+  const normalizedMatched = matchedPlugin?.normalizeConfig?.(params.context);
+  if (normalizedMatched && hasConfigChange(normalizedMatched)) {
+    return normalizedMatched;
+  }
+
+  for (const candidate of resolveProviderPluginsForHooks(params)) {
+    if (!candidate.normalizeConfig || candidate === matchedPlugin) {
+      continue;
+    }
+    const normalized = candidate.normalizeConfig(params.context);
+    if (normalized && hasConfigChange(normalized)) {
+      return normalized;
+    }
+  }
+
+  return undefined;
 }
 
 export function applyProviderNativeStreamingUsageCompatWithPlugin(params: {

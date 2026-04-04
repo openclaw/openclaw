@@ -3,7 +3,7 @@ import {
   normalizeTelegramCommandDescription,
   normalizeTelegramCommandName,
   resolveTelegramCustomCommands,
-} from "../../extensions/telegram/api.js";
+} from "../../extensions/telegram/config-api.js";
 import { isSafeScpRemoteHost } from "../infra/scp-host.js";
 import { isValidInboundPathRootPattern } from "../media/inbound-path-policy.js";
 import { ToolPolicySchema } from "./zod-schema.agent-runtime.js";

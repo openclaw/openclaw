@@ -357,6 +357,7 @@ export function getSoonestCooldownExpiry(
 ): number | null {
   const ts = options?.now ?? Date.now();
   let soonest: number | null = null;
+  let latestMatchingModelCooldown: number | null = null;
   for (const id of profileIds) {
     const stats = store.usageStats?.[id];
     if (!stats) {
@@ -369,11 +370,27 @@ export function getSoonestCooldownExpiry(
     if (typeof until !== "number" || !Number.isFinite(until) || until <= 0) {
       continue;
     }
+    const matchingModelScopedCooldown =
+      options?.forModel &&
+      stats.cooldownReason === "rate_limit" &&
+      stats.cooldownModel === options.forModel &&
+      !isActiveUnusableWindow(stats.disabledUntil, ts);
+    if (matchingModelScopedCooldown) {
+      latestMatchingModelCooldown =
+        latestMatchingModelCooldown === null ? until : Math.max(latestMatchingModelCooldown, until);
+      continue;
+    }
     if (soonest === null || until < soonest) {
       soonest = until;
     }
   }
-  return soonest;
+  if (soonest === null) {
+    return latestMatchingModelCooldown;
+  }
+  if (latestMatchingModelCooldown === null) {
+    return soonest;
+  }
+  return Math.min(soonest, latestMatchingModelCooldown);
 }
 
 function shouldBypassModelScopedCooldown(

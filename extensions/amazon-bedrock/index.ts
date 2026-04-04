@@ -1,5 +1,5 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { registerAmazonBedrockPlugin } from "./register.runtime.js";
+import { registerAmazonBedrockPlugin } from "./register.sync.runtime.js";
 
 export default definePluginEntry({
   id: "amazon-bedrock",

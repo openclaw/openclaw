@@ -1,4 +1,16 @@
 import { definePluginEntry, type ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  coerceSecretRef,
+  DEFAULT_COPILOT_API_BASE_URL,
+  ensureAuthProfileStore,
+  fetchCopilotUsage,
+  githubCopilotLoginCommand,
+  listProfilesForProvider,
+  PROVIDER_ID,
+  resolveCopilotApiToken,
+  resolveCopilotForwardCompatModel,
+  wrapCopilotProviderStream,
+} from "./register.runtime.js";
 
 const COPILOT_ENV_VARS = ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"];
 const COPILOT_XHIGH_MODEL_IDS = ["gpt-5.2", "gpt-5.2-codex"] as const;
@@ -15,19 +27,7 @@ export default definePluginEntry({
   id: "github-copilot",
   name: "GitHub Copilot Provider",
   description: "Bundled GitHub Copilot provider plugin",
-  async register(api) {
-    const {
-      coerceSecretRef,
-      DEFAULT_COPILOT_API_BASE_URL,
-      ensureAuthProfileStore,
-      fetchCopilotUsage,
-      githubCopilotLoginCommand,
-      listProfilesForProvider,
-      PROVIDER_ID,
-      resolveCopilotApiToken,
-      resolveCopilotForwardCompatModel,
-      wrapCopilotProviderStream,
-    } = await import("./register.runtime.js");
+  register(api) {
     function resolveFirstGithubToken(params: { agentDir?: string; env: NodeJS.ProcessEnv }): {
       githubToken: string;
       hasProfile: boolean;
