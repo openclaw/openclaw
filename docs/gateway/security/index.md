@@ -359,6 +359,11 @@ For break-glass scenarios only, `gateway.controlUi.dangerouslyDisableDeviceAuth`
 disables device identity checks entirely. This is a severe security downgrade;
 keep it off unless you are actively debugging and can revert quickly.
 
+Separate from those dangerous flags, successful `gateway.auth.mode: "trusted-proxy"`
+can admit **operator** Control UI sessions without device identity. That is an
+intentional auth-mode behavior, not an `allowInsecureAuth` shortcut, and it still
+does not extend to node-role Control UI sessions.
+
 `openclaw security audit` warns when this setting is enabled.
 
 ## Insecure or dangerous flags summary

@@ -300,6 +300,7 @@ The Gateway treats these as **claims** and enforces server-side allowlists.
 - All WS clients must include `device` identity during `connect` (operator + node).
   Control UI can omit it only in these modes:
   - `gateway.controlUi.allowInsecureAuth=true` for localhost-only insecure HTTP compatibility.
+  - successful `gateway.auth.mode: "trusted-proxy"` operator Control UI auth.
   - `gateway.controlUi.dangerouslyDisableDeviceAuth=true` (break-glass, severe security downgrade).
 - All connections must sign the server-provided `connect.challenge` nonce.
 
