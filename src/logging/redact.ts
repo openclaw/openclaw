@@ -5,7 +5,7 @@ import { replacePatternBounded } from "./redact-bounded.js";
 
 const requireConfig = resolveNodeRequireFromMeta(import.meta.url);
 
-export type RedactSensitiveMode = "off" | "tools";
+export type RedactSensitiveMode = "off" | "tools" | "all";
 
 const DEFAULT_REDACT_MODE: RedactSensitiveMode = "tools";
 const DEFAULT_REDACT_MIN_LENGTH = 18;
@@ -45,7 +45,13 @@ type RedactOptions = {
 };
 
 function normalizeMode(value?: string): RedactSensitiveMode {
-  return value === "off" ? "off" : DEFAULT_REDACT_MODE;
+  if (value === "off") {
+    return "off";
+  }
+  if (value === "all") {
+    return "all";
+  }
+  return DEFAULT_REDACT_MODE;
 }
 
 function parsePattern(raw: string): RegExp | null {
@@ -128,7 +134,8 @@ export function redactSensitiveText(text: string, options?: RedactOptions): stri
     return text;
   }
   const resolved = options ?? resolveConfigRedaction();
-  if (normalizeMode(resolved.mode) === "off") {
+  const mode = normalizeMode(resolved.mode);
+  if (mode === "off") {
     return text;
   }
   const patterns = resolvePatterns(resolved.patterns);
@@ -140,7 +147,9 @@ export function redactSensitiveText(text: string, options?: RedactOptions): stri
 
 export function redactToolDetail(detail: string): string {
   const resolved = resolveConfigRedaction();
-  if (normalizeMode(resolved.mode) !== "tools") {
+  const mode = normalizeMode(resolved.mode);
+  // Apply tool-call redaction for both "tools" and "all" modes.
+  if (mode !== "tools" && mode !== "all") {
     return detail;
   }
   return redactSensitiveText(detail, resolved);

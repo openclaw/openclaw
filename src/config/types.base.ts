@@ -173,7 +173,7 @@ export type LoggingConfig = {
   consoleLevel?: "silent" | "fatal" | "error" | "warn" | "info" | "debug" | "trace";
   consoleStyle?: "pretty" | "compact" | "json";
   /** Redact sensitive tokens in tool summaries. Default: "tools". */
-  redactSensitive?: "off" | "tools";
+  redactSensitive?: "off" | "tools" | "all";
   /** Regex patterns used to redact sensitive tokens (defaults apply when unset). */
   redactPatterns?: string[];
 };
