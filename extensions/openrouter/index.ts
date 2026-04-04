@@ -83,7 +83,7 @@ export default definePluginEntry({
 
     function wrapOpenRouterProviderStream(
       ctx: ProviderWrapStreamFnContext,
-    ): StreamFn | undefined {
+    ): StreamFn | null | undefined {
       const providerRouting =
         ctx.extraParams?.provider != null && typeof ctx.extraParams.provider === "object"
           ? (ctx.extraParams.provider as Record<string, unknown>)
@@ -91,10 +91,16 @@ export default definePluginEntry({
       const routedStreamFn = providerRouting
         ? injectOpenRouterRouting(ctx.streamFn, providerRouting)
         : ctx.streamFn;
-      return OPENROUTER_THINKING_STREAM_HOOKS.wrapStreamFn?.({
-        ...ctx,
-        streamFn: routedStreamFn,
-      });
+      const wrapStreamFn = OPENROUTER_THINKING_STREAM_HOOKS.wrapStreamFn ?? undefined;
+      if (!wrapStreamFn) {
+        return routedStreamFn;
+      }
+      return (
+        wrapStreamFn({
+          ...ctx,
+          streamFn: routedStreamFn,
+        }) ?? undefined
+      );
     }
 
     function isOpenRouterCacheTtlModel(modelId: string): boolean {

@@ -4,7 +4,7 @@ import { listLegacyWebFetchConfigPaths, migrateLegacyWebFetchConfig } from "./le
 
 describe("legacy web fetch config", () => {
   it("migrates legacy Firecrawl fetch config into plugin-owned config", () => {
-    const res = migrateLegacyWebFetchConfig<OpenClawConfig>({
+    const res = migrateLegacyWebFetchConfig({
       tools: {
         web: {
           fetch: {
@@ -40,7 +40,7 @@ describe("legacy web fetch config", () => {
   });
 
   it("drops legacy firecrawl.enabled when migrating plugin-owned config", () => {
-    const res = migrateLegacyWebFetchConfig<OpenClawConfig>({
+    const res = migrateLegacyWebFetchConfig({
       tools: {
         web: {
           fetch: {

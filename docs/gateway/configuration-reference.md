@@ -452,6 +452,10 @@ Mattermost ships as a plugin: `openclaw plugins install @openclaw/mattermost`.
       dmPolicy: "pairing",
       chatmode: "oncall", // oncall | onmessage | onchar
       oncharPrefixes: [">", "!"],
+      groups: {
+        "*": { requireMention: true },
+        "team-channel-id": { requireMention: false },
+      },
       commands: {
         native: true, // opt-in
         nativeSkills: true,
@@ -481,6 +485,7 @@ When Mattermost native commands are enabled:
   Use host/domain values, not full URLs.
 - `channels.mattermost.configWrites`: allow or deny Mattermost-initiated config writes.
 - `channels.mattermost.requireMention`: require `@mention` before replying in channels.
+- `channels.mattermost.groups.<channelId>.requireMention`: per-channel mention-gating override (`"*"` for default).
 - Optional `channels.mattermost.defaultAccount` overrides default account selection when it matches a configured account id.
 
 ### Signal
@@ -984,7 +989,7 @@ Time format in system prompt. Default: `auto` (OS preference).
 - `pdfMaxPages`: default maximum pages considered by extraction fallback mode in the `pdf` tool.
 - `verboseDefault`: default verbose level for agents. Values: `"off"`, `"on"`, `"full"`. Default: `"off"`.
 - `elevatedDefault`: default elevated-output level for agents. Values: `"off"`, `"on"`, `"ask"`, `"full"`. Default: `"on"`.
-- `model.primary`: format `provider/model` (e.g. `openai/gpt-5.4`). If you omit the provider, OpenClaw assumes the configured default provider (currently `openai`; deprecated fallback behavior, so prefer explicit `provider/model`).
+- `model.primary`: format `provider/model` (e.g. `openai/gpt-5.4`). If you omit the provider, OpenClaw tries an alias first, then a unique configured-provider match for that exact model id, and only then falls back to the configured default provider (deprecated compatibility behavior, so prefer explicit `provider/model`).
 - `models`: the configured model catalog and allowlist for `/model`. Each entry can include `alias` (shortcut) and `params` (provider-specific, for example `temperature`, `maxTokens`, `cacheRetention`, `context1m`).
 - `params`: global default provider parameters applied to all models. Set at `agents.defaults.params` (e.g. `{ cacheRetention: "long" }`).
 - `params` merge precedence (config): `agents.defaults.params` (global base) is overridden by `agents.defaults.models["provider/model"].params` (per-model), then `agents.list[].params` (matching agent id) overrides by key. See [Prompt Caching](/reference/prompt-caching) for details.
@@ -1845,24 +1850,31 @@ Defaults for Talk mode (macOS/iOS/Android).
 ```json5
 {
   talk: {
-    voiceId: "elevenlabs_voice_id",
-    voiceAliases: {
-      Clawd: "EXAVITQu4vr4xnSDxMaL",
-      Roger: "CwhRBWXzGAHq8TQ4Fs17",
+    provider: "elevenlabs",
+    providers: {
+      elevenlabs: {
+        voiceId: "elevenlabs_voice_id",
+        voiceAliases: {
+          Clawd: "EXAVITQu4vr4xnSDxMaL",
+          Roger: "CwhRBWXzGAHq8TQ4Fs17",
+        },
+        modelId: "eleven_v3",
+        outputFormat: "mp3_44100_128",
+        apiKey: "elevenlabs_api_key",
+      },
     },
-    modelId: "eleven_v3",
-    outputFormat: "mp3_44100_128",
-    apiKey: "elevenlabs_api_key",
     silenceTimeoutMs: 1500,
     interruptOnSpeech: true,
   },
 }
 ```
 
+- `talk.provider` must match a key in `talk.providers` when multiple Talk providers are configured.
+- Legacy flat Talk keys (`talk.voiceId`, `talk.voiceAliases`, `talk.modelId`, `talk.outputFormat`, `talk.apiKey`) are compatibility-only and are auto-migrated into `talk.providers.<provider>`.
 - Voice IDs fall back to `ELEVENLABS_VOICE_ID` or `SAG_VOICE_ID`.
-- `apiKey` and `providers.*.apiKey` accept plaintext strings or SecretRef objects.
+- `providers.*.apiKey` accepts plaintext strings or SecretRef objects.
 - `ELEVENLABS_API_KEY` fallback applies only when no Talk API key is configured.
-- `voiceAliases` lets Talk directives use friendly names.
+- `providers.*.voiceAliases` lets Talk directives use friendly names.
 - `silenceTimeoutMs` controls how long Talk mode waits after user silence before it sends the transcript. Unset keeps the platform default pause window (`700 ms on macOS and Android, 900 ms on iOS`).
 
 ---
@@ -3117,7 +3129,12 @@ Notes:
 }
 ```
 
-- `billingBackoffHours`: base backoff in hours when a profile fails due to billing/insufficient credits (default: `5`).
+- `billingBackoffHours`: base backoff in hours when a profile fails due to true
+  billing/insufficient-credit errors (default: `5`). Explicit billing text can
+  still land here even on `401`/`403` responses (for example OpenRouter
+  `Key limit exceeded`). Retryable HTTP `402` usage-window or
+  organization/workspace spend-limit messages stay in the `rate_limit` path
+  instead.
 - `billingBackoffHoursByProvider`: optional per-provider overrides for billing backoff hours.
 - `billingMaxHours`: cap in hours for billing backoff exponential growth (default: `24`).
 - `authPermanentBackoffMinutes`: base backoff in minutes for high-confidence `auth_permanent` failures (default: `10`).

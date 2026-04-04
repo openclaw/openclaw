@@ -120,6 +120,9 @@ Common signatures:
 - That cached-token retry reuses the cached scope set stored with the paired
   device token. Explicit `deviceToken` / explicit `scopes` callers keep their
   requested scope set instead.
+- Outside that retry path, connect auth precedence is explicit shared
+  token/password first, then explicit `deviceToken`, then stored device token,
+  then bootstrap token.
 - On the async Tailscale Serve Control UI path, failed attempts for the same
   `{scope, ip}` are serialized before the limiter records the failure. Two bad
   concurrent retries from the same client can therefore surface `retry later`
@@ -240,13 +243,15 @@ Look for:
 
 - Cron enabled and next wake present.
 - Job run history status (`ok`, `skipped`, `error`).
-- Heartbeat skip reasons (`quiet-hours`, `requests-in-flight`, `alerts-disabled`).
+- Heartbeat skip reasons (`quiet-hours`, `requests-in-flight`, `alerts-disabled`, `empty-heartbeat-file`, `no-tasks-due`).
 
 Common signatures:
 
 - `cron: scheduler disabled; jobs will not run automatically` → cron disabled.
 - `cron: timer tick failed` → scheduler tick failed; check file/log/runtime errors.
 - `heartbeat skipped` with `reason=quiet-hours` → outside active hours window.
+- `heartbeat skipped` with `reason=empty-heartbeat-file` → `HEARTBEAT.md` exists but only contains blank lines / markdown headers, so OpenClaw skips the model call.
+- `heartbeat skipped` with `reason=no-tasks-due` → `HEARTBEAT.md` contains a `tasks:` block, but none of the tasks are due on this tick.
 - `heartbeat: unknown accountId` → invalid account id for heartbeat delivery target.
 - `heartbeat skipped` with `reason=dm-blocked` → heartbeat target resolved to a DM-style destination while `agents.defaults.heartbeat.directPolicy` (or per-agent override) is set to `block`.
 
