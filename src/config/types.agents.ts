@@ -63,6 +63,7 @@ export type AgentConfig = {
   default?: boolean;
   name?: string;
   workspace?: string;
+  multipleWorkspaces?: string[];
   agentDir?: string;
   model?: AgentModelConfig;
   /** Optional per-agent default thinking level (overrides agents.defaults.thinkingDefault). */

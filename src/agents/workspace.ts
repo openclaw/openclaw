@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { openBoundaryFile } from "../infra/boundary-file-read.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
@@ -327,6 +328,7 @@ async function ensureGitRepo(dir: string, isBrandNewWorkspace: boolean) {
 export async function ensureAgentWorkspace(params?: {
   dir?: string;
   ensureBootstrapFiles?: boolean;
+  multipleWorkspaces?: string[];
 }): Promise<{
   dir: string;
   agentsPath?: string;
@@ -340,6 +342,16 @@ export async function ensureAgentWorkspace(params?: {
   const rawDir = params?.dir?.trim() ? params.dir.trim() : DEFAULT_AGENT_WORKSPACE_DIR;
   const dir = resolveUserPath(rawDir);
   await fs.mkdir(dir, { recursive: true });
+
+  // If multipleWorkspaces is set, populate the composite directory with symlinks
+  // before any bootstrap file creation. This ensures all execution paths (reply,
+  // CLI, heartbeat, etc.) see the same composite workspace.
+  if (params?.multipleWorkspaces && params.multipleWorkspaces.length > 0) {
+    await ensureCompositeWorkspace({
+      compositeDir: dir,
+      workspacePaths: params.multipleWorkspaces,
+    });
+  }
 
   if (!params?.ensureBootstrapFiles) {
     return { dir };
@@ -644,4 +656,153 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
     });
   }
   return { files, diagnostics };
+}
+
+const compositeLog = createSubsystemLogger("composite-workspace");
+
+/**
+ * Ensure a composite workspace directory exists with symlinks to each workspace path.
+ * Stale symlinks (pointing to paths not in the current set) are removed.
+ * Basename collisions are resolved by prepending the parent directory name.
+ */
+export async function ensureCompositeWorkspace(params: {
+  compositeDir: string;
+  workspacePaths: string[];
+}): Promise<void> {
+  const { compositeDir, workspacePaths } = params;
+  await fs.mkdir(compositeDir, { recursive: true });
+
+  // On case-insensitive filesystems (macOS, Windows) names like "Repo" and "repo"
+  // resolve to the same on-disk entry, so we normalize all collision checks to lowercase.
+  const isCaseInsensitive = process.platform === "darwin" || process.platform === "win32";
+  const normalizeKey = (name: string) => (isCaseInsensitive ? name.toLowerCase() : name);
+
+  // Build unique link names from basenames, deduping collisions.
+  const linkEntries: Array<{ linkName: string; target: string }> = [];
+  const nameCount = new Map<string, number>();
+  for (const ws of workspacePaths) {
+    const key = normalizeKey(path.basename(ws));
+    nameCount.set(key, (nameCount.get(key) ?? 0) + 1);
+  }
+
+  // Internal workspace names (bootstrap files, memory dir) that must never be used as symlink names.
+  const internalNamesRaw = [
+    DEFAULT_AGENTS_FILENAME,
+    DEFAULT_SOUL_FILENAME,
+    DEFAULT_TOOLS_FILENAME,
+    DEFAULT_IDENTITY_FILENAME,
+    DEFAULT_USER_FILENAME,
+    DEFAULT_HEARTBEAT_FILENAME,
+    DEFAULT_BOOTSTRAP_FILENAME,
+    DEFAULT_MEMORY_FILENAME,
+    DEFAULT_MEMORY_ALT_FILENAME,
+    "memory",
+    WORKSPACE_STATE_DIRNAME,
+  ];
+  const internalNames = new Set<string>(internalNamesRaw.map(normalizeKey));
+  // Track all taken names so collision resolution avoids them. Seed with internal names
+  // and non-collision basenames (which keep their short names).
+  const takenNames = new Set<string>(internalNames);
+  for (const ws of workspacePaths) {
+    const key = normalizeKey(path.basename(ws));
+    if ((nameCount.get(key) ?? 0) === 1 && !internalNames.has(key)) {
+      takenNames.add(key);
+    }
+  }
+
+  const nameUsed = new Map<string, number>();
+  for (const ws of workspacePaths) {
+    const base = path.basename(ws);
+    const baseKey = normalizeKey(base);
+    let linkName: string;
+    // Dedup when basename collides with another workspace or with an internal name.
+    const needsDedup = (nameCount.get(baseKey) ?? 0) > 1 || internalNames.has(baseKey);
+    if (needsDedup) {
+      const parentName = path.basename(path.dirname(ws));
+      const candidate = `${parentName}-${base}`;
+      const candidateKey = normalizeKey(candidate);
+      let suffix = nameUsed.get(candidateKey) ?? 0;
+      linkName = suffix > 0 ? `${candidate}-${suffix}` : candidate;
+      // Ensure the resolved name doesn't collide with any taken name.
+      while (takenNames.has(normalizeKey(linkName))) {
+        suffix += 1;
+        linkName = `${candidate}-${suffix}`;
+      }
+      nameUsed.set(candidateKey, suffix + 1);
+    } else {
+      linkName = base;
+    }
+    takenNames.add(normalizeKey(linkName));
+    linkEntries.push({ linkName, target: ws });
+  }
+
+  // Remove stale symlinks in composite dir that are not in the current set.
+  const desiredNames = new Set(
+    linkEntries.map((e) => (isCaseInsensitive ? e.linkName.toLowerCase() : e.linkName)),
+  );
+  try {
+    const existing = await fs.readdir(compositeDir, { withFileTypes: true });
+    for (const entry of existing) {
+      if (!entry.isSymbolicLink()) {
+        continue;
+      }
+      if (!desiredNames.has(isCaseInsensitive ? entry.name.toLowerCase() : entry.name)) {
+        const stalePath = path.join(compositeDir, entry.name);
+        compositeLog.info(`Removing stale symlink: ${stalePath}`);
+        await fs.unlink(stalePath).catch(() => {});
+      }
+    }
+  } catch {
+    // Directory may not exist yet or be unreadable.
+  }
+
+  // Create or update symlinks.
+  for (const { linkName, target } of linkEntries) {
+    const linkPath = path.join(compositeDir, linkName);
+    const targetExists = await fs
+      .access(target)
+      .then(() => true)
+      .catch(() => false);
+    const symlinkType = process.platform === "win32" ? "dir" : undefined;
+
+    // Warn on missing targets but still create the symlink.
+    if (!targetExists) {
+      compositeLog.warn(`Workspace target does not exist: ${target}`);
+    }
+
+    // Check if symlink already points to the correct target.
+    try {
+      const existingTarget = await fs.readlink(linkPath);
+      if (path.resolve(existingTarget) === path.resolve(target)) {
+        // On Windows, a missing target created without an explicit "dir" type can leave
+        // behind a file-typed symlink that resolves to the right target string but is not
+        // usable as a directory once the target appears. When the target exists, verify the
+        // resolved link is traversable as a directory before keeping it.
+        if (!(process.platform === "win32" && targetExists)) {
+          continue;
+        }
+        try {
+          const stats = await fs.stat(linkPath);
+          if (stats.isDirectory()) {
+            continue;
+          }
+        } catch {
+          // Recreate the symlink with the explicit directory type below.
+        }
+      }
+      // Target changed or existing Windows link is unusable — remove old symlink.
+      await fs.unlink(linkPath);
+    } catch {
+      // Symlink doesn't exist or isn't a symlink — try to remove whatever is there.
+      try {
+        await fs.rm(linkPath, { force: true, recursive: false });
+      } catch (rmErr) {
+        compositeLog.warn(`Cannot replace non-symlink at ${linkPath}: ${String(rmErr)}`);
+        continue;
+      }
+    }
+
+    await fs.symlink(target, linkPath, symlinkType);
+    compositeLog.info(`Symlinked ${linkName} -> ${target}`);
+  }
 }
