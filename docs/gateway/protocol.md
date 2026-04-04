@@ -350,8 +350,9 @@ implemented in `src/gateway/server-methods/*.ts`.
 - `chat.history` is display-normalized for UI clients: inline directive tags are
   stripped from visible text, plain-text tool-call XML payloads (including
   `<tool_calls>` and truncated tool-call blocks) and leaked ASCII/full-width
-  model control tokens are stripped, pure `NO_REPLY` assistant rows are
-  omitted, and oversized rows can be replaced with placeholders.
+  model control tokens are stripped, pure silent-token assistant rows such as
+  exact `NO_REPLY` / `no_reply` are omitted, and oversized rows can be
+  replaced with placeholders.
 
 #### Device pairing and device tokens
 
