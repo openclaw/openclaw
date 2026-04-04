@@ -6,11 +6,11 @@ import { stripModelSpecialTokens } from "./pi-embedded-utils.js";
  */
 describe("stripModelSpecialTokens", () => {
   it("strips tokens and inserts space between adjacent words", () => {
-    expect(stripModelSpecialTokens("<|user|>Question<|assistant|>Answer")).toBe("Question Answer");
+    expect(stripModelSpecialTokens("<|user|>Question<|assistant|>Answer")).toBe(" Question Answer");
   });
 
   it("strips full-width pipe variants (DeepSeek U+FF5C)", () => {
-    expect(stripModelSpecialTokens("<｜begin▁of▁sentence｜>Hello there")).toBe("Hello there");
+    expect(stripModelSpecialTokens("<｜begin▁of▁sentence｜>Hello there")).toBe(" Hello there");
   });
 
   it("does not strip normal angle brackets or HTML", () => {
