@@ -112,7 +112,11 @@ export async function start(state: CronServiceState) {
           "cron: clearing stale running marker on startup",
         );
         job.state.runningAtMs = undefined;
-        startupInterruptedJobIds.add(job.id);
+        // Only skip interrupted one-shot jobs from startup catchup.
+        // Recurring jobs (cron/every) should be retried if past due (#60495).
+        if (job.schedule.kind === "at") {
+          startupInterruptedJobIds.add(job.id);
+        }
       }
     }
     if (startupInterruptedJobIds.size > 0) {
