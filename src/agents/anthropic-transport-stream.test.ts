@@ -220,6 +220,52 @@ describe("anthropic transport stream", () => {
     );
   });
 
+  it("uses authToken when Anthropic-compatible providers inject a Bearer Authorization header", async () => {
+    const model = attachModelProviderRequestTransport(
+      {
+        id: "MiniMax-M2.7",
+        name: "MiniMax M2.7",
+        api: "anthropic-messages",
+        provider: "minimax-portal",
+        baseUrl: "https://api.minimax.io/anthropic",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+        headers: {
+          Authorization: "Bearer minimax-oauth-token",
+        },
+      } satisfies Model<"anthropic-messages">,
+      undefined,
+    );
+    const streamFn = createAnthropicMessagesTransportStreamFn();
+
+    const stream = await Promise.resolve(
+      streamFn(
+        model,
+        {
+          messages: [{ role: "user", content: "hello" }],
+        } as Parameters<typeof streamFn>[1],
+        {
+          apiKey: "minimax-oauth-token",
+        } as Parameters<typeof streamFn>[2],
+      ),
+    );
+    await stream.result();
+
+    expect(anthropicCtorMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        apiKey: null,
+        authToken: "minimax-oauth-token",
+        baseURL: "https://api.minimax.io/anthropic",
+        defaultHeaders: expect.objectContaining({
+          Authorization: "Bearer minimax-oauth-token",
+        }),
+      }),
+    );
+  });
+
   it("maps adaptive thinking effort for Claude 4.6 transport runs", async () => {
     const model = attachModelProviderRequestTransport(
       {

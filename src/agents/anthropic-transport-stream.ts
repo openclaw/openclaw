@@ -153,6 +153,24 @@ function isAnthropicOAuthToken(apiKey: string): boolean {
   return apiKey.includes("sk-ant-oat");
 }
 
+function hasBearerAuthorizationHeader(
+  headers: Record<string, string> | undefined,
+  apiKey: string,
+): boolean {
+  if (!headers) {
+    return false;
+  }
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() !== "authorization") {
+      continue;
+    }
+    if (value.trim() === `Bearer ${apiKey}`) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function toClaudeCodeName(name: string): string {
   return CLAUDE_CODE_TOOL_LOOKUP.get(name.toLowerCase()) ?? name;
 }
@@ -426,7 +444,18 @@ function createAnthropicTransportClient(params: {
   if (needsInterleavedBeta) {
     betaFeatures.push("interleaved-thinking-2025-05-14");
   }
-  if (isAnthropicOAuthToken(apiKey)) {
+  const usesBearerAuthToken =
+    isAnthropicOAuthToken(apiKey) || hasBearerAuthorizationHeader(model.headers, apiKey);
+  if (usesBearerAuthToken) {
+    const oauthHeaders: Record<string, string> = isAnthropicOAuthToken(apiKey)
+      ? {
+          "anthropic-beta": `claude-code-20250219,oauth-2025-04-20,${betaFeatures.join(",")}`,
+          "user-agent": `claude-cli/${CLAUDE_CODE_VERSION}`,
+          "x-app": "cli",
+        }
+      : {
+          "anthropic-beta": betaFeatures.join(","),
+        };
     return {
       client: new Anthropic({
         apiKey: null,
@@ -437,16 +466,14 @@ function createAnthropicTransportClient(params: {
           {
             accept: "application/json",
             "anthropic-dangerous-direct-browser-access": "true",
-            "anthropic-beta": `claude-code-20250219,oauth-2025-04-20,${betaFeatures.join(",")}`,
-            "user-agent": `claude-cli/${CLAUDE_CODE_VERSION}`,
-            "x-app": "cli",
+            ...oauthHeaders,
           },
           model.headers,
           options?.headers,
         ),
         fetch,
       }),
-      isOAuthToken: true,
+      isOAuthToken: isAnthropicOAuthToken(apiKey),
     };
   }
   return {
