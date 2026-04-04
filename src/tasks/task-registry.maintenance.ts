@@ -1,6 +1,7 @@
 import { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { deriveSessionChatType } from "../sessions/session-chat-type.js";
 import {
   deleteTaskRecordById,
   ensureTaskRegistryReady,
@@ -63,7 +64,18 @@ function hasLostGraceExpired(task: TaskRecord, now: number): boolean {
   return now - referenceAt >= TASK_RECONCILE_GRACE_MS;
 }
 
+/**
+ * Returns false if the task's runtime is cron, since cron tasks do not maintain
+ * a persistent child session after the job exits.
+ *
+ * For cli tasks, long-lived channel/group/direct session-store entries do not
+ * imply task liveness, so only agent-scoped non-chat child sessions count.
+ */
 function hasBackingSession(task: TaskRecord): boolean {
+  if (task.runtime === "cron") {
+    return false;
+  }
+
   const childSessionKey = task.childSessionKey?.trim();
   if (!childSessionKey) {
     return true;
@@ -77,12 +89,24 @@ function hasBackingSession(task: TaskRecord): boolean {
     }
     return Boolean(acpEntry.entry);
   }
-  if (task.runtime === "subagent" || task.runtime === "cli") {
+  if (task.runtime === "subagent") {
     const agentId = parseAgentSessionKey(childSessionKey)?.agentId;
     const storePath = resolveStorePath(undefined, { agentId });
     const store = loadSessionStore(storePath);
     return Boolean(findSessionEntryByKey(store, childSessionKey));
   }
+
+  if (task.runtime === "cli") {
+    const chatType = deriveSessionChatType(childSessionKey);
+    if (chatType === "channel" || chatType === "group" || chatType === "direct") {
+      return false;
+    }
+    const agentId = parseAgentSessionKey(childSessionKey)?.agentId;
+    const storePath = resolveStorePath(undefined, { agentId });
+    const store = loadSessionStore(storePath);
+    return Boolean(findSessionEntryByKey(store, childSessionKey));
+  }
+
   return true;
 }
 
