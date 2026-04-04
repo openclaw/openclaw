@@ -62,15 +62,6 @@ Config merge order:
 2. `agents.defaults.models["provider/model"].params` (per-model override)
 3. `agents.list[].params` (matching agent id; overrides by key)
 
-### Legacy `cacheControlTtl`
-
-Legacy values are still accepted and mapped:
-
-- `5m` -> `short`
-- `1h` -> `long`
-
-Prefer `cacheRetention` for new config.
-
 ### `contextPruning.mode: "cache-ttl"`
 
 Prunes old tool-result context after cache TTL windows so post-idle requests do not re-cache oversized history.
