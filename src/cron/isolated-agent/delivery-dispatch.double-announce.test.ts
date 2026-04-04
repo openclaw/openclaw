@@ -425,52 +425,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
   });
 
-  it("suppresses NO_REPLY payload in direct delivery so sentinel never leaks to external channels", async () => {
-    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
-    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
-
-    const params = makeBaseParams({ synthesizedText: "NO_REPLY" });
-    (params as Record<string, unknown>).deliveryPayloadHasStructuredContent = true;
-    const state = await dispatchCronDelivery(params);
-
-    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
-    expect(state.delivered).toBe(true);
-    expect(state.deliveryAttempted).toBe(true);
-    expect(
-      shouldEnqueueCronMainSummary({
-        summaryText: "NO_REPLY",
-        deliveryRequested: true,
-        delivered: state.delivered,
-        deliveryAttempted: state.deliveryAttempted,
-        suppressMainSummary: false,
-        isCronSystemEvent: () => true,
-      }),
-    ).toBe(false);
-  });
-
-  it("suppresses NO_REPLY payload with surrounding whitespace", async () => {
-    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
-    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
-
-    const params = makeBaseParams({ synthesizedText: "  NO_REPLY  " });
-    (params as Record<string, unknown>).deliveryPayloadHasStructuredContent = true;
-    const state = await dispatchCronDelivery(params);
-
-    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
-    expect(state.delivered).toBe(true);
-    expect(state.deliveryAttempted).toBe(true);
-    expect(
-      shouldEnqueueCronMainSummary({
-        summaryText: "  NO_REPLY  ",
-        deliveryRequested: true,
-        delivered: state.delivered,
-        deliveryAttempted: state.deliveryAttempted,
-        suppressMainSummary: false,
-        isCronSystemEvent: () => true,
-      }),
-    ).toBe(false);
-  });
-
   it("text delivery fires exactly once (no double-deliver)", async () => {
     vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
@@ -665,8 +619,13 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
     // NO_REPLY must be filtered out before reaching the outbound adapter.
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
-    // Mark as silently delivered so the job is persisted as successful.
-    expect(state.delivered).toBe(true);
+    expect(state.result).toEqual(
+      expect.objectContaining({
+        status: "ok",
+        delivered: false,
+        deliveryAttempted: true,
+      }),
+    );
     // deliveryAttempted must be true so the heartbeat timer does not fire
     // a fallback enqueueSystemEvent with the NO_REPLY sentinel text.
     expect(state.deliveryAttempted).toBe(true);
@@ -676,8 +635,8 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       shouldEnqueueCronMainSummary({
         summaryText: "NO_REPLY",
         deliveryRequested: true,
-        delivered: state.delivered,
-        deliveryAttempted: state.deliveryAttempted,
+        delivered: state.result?.delivered,
+        deliveryAttempted: state.result?.deliveryAttempted,
         suppressMainSummary: false,
         isCronSystemEvent: () => true,
       }),
@@ -693,18 +652,52 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     const state = await dispatchCronDelivery(params);
 
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
-    expect(state.delivered).toBe(true);
+    expect(state.result).toEqual(
+      expect.objectContaining({
+        status: "ok",
+        delivered: false,
+        deliveryAttempted: true,
+      }),
+    );
     expect(state.deliveryAttempted).toBe(true);
 
     expect(
       shouldEnqueueCronMainSummary({
         summaryText: "  NO_REPLY  ",
         deliveryRequested: true,
-        delivered: state.delivered,
-        deliveryAttempted: state.deliveryAttempted,
+        delivered: state.result?.delivered,
+        deliveryAttempted: state.result?.deliveryAttempted,
         suppressMainSummary: false,
         isCronSystemEvent: () => true,
       }),
     ).toBe(false);
+  });
+
+  it("cleans up the direct cron session after a structured silent reply when deleteAfterRun is enabled", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+
+    const params = makeBaseParams({ synthesizedText: SILENT_REPLY_TOKEN });
+    (params as Record<string, unknown>).deliveryPayloadHasStructuredContent = true;
+    (params.job as { deleteAfterRun?: boolean }).deleteAfterRun = true;
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.result).toEqual(
+      expect.objectContaining({
+        status: "ok",
+        delivered: false,
+        deliveryAttempted: true,
+      }),
+    );
+    expect(callGateway).toHaveBeenCalledWith({
+      method: "sessions.delete",
+      params: {
+        key: "agent:main",
+        deleteTranscript: true,
+        emitLifecycleHooks: false,
+      },
+      timeoutMs: 10_000,
+    });
   });
 });

@@ -370,6 +370,37 @@ export async function dispatchCronDelivery(
       deliveryAttempted,
       ...params.telemetry,
     });
+  const cleanupDirectCronSessionIfNeeded = async (): Promise<void> => {
+    if (!params.job.deleteAfterRun) {
+      return;
+    }
+    try {
+      const { callGateway } = await loadGatewayCallRuntime();
+      await callGateway({
+        method: "sessions.delete",
+        params: {
+          key: params.agentSessionKey,
+          deleteTranscript: true,
+          emitLifecycleHooks: false,
+        },
+        timeoutMs: 10_000,
+      });
+    } catch {
+      // Best-effort; direct delivery result should still be returned.
+    }
+  };
+  const finishSilentReplyDelivery = async (): Promise<RunCronAgentTurnResult> => {
+    deliveryAttempted = true;
+    await cleanupDirectCronSessionIfNeeded();
+    return params.withRunSession({
+      status: "ok",
+      summary,
+      outputText,
+      delivered: false,
+      deliveryAttempted: true,
+      ...params.telemetry,
+    });
+  };
 
   const deliverViaDirect = async (
     delivery: SuccessfulDeliveryTarget,
@@ -398,15 +429,7 @@ export async function dispatchCronDelivery(
         (p) => !isSilentReplyText(p.text, SILENT_REPLY_TOKEN),
       );
       if (payloadsForDelivery.length === 0) {
-        deliveryAttempted = true;
-        delivered = true;
-        return params.withRunSession({
-          status: "ok",
-          summary,
-          outputText,
-          delivered: true,
-          ...params.telemetry,
-        });
+        return await finishSilentReplyDelivery();
       }
       if (params.isAborted()) {
         return params.withRunSession({
@@ -538,26 +561,6 @@ export async function dispatchCronDelivery(
   const finalizeTextDelivery = async (
     delivery: SuccessfulDeliveryTarget,
   ): Promise<RunCronAgentTurnResult | null> => {
-    const cleanupDirectCronSessionIfNeeded = async (): Promise<void> => {
-      if (!params.job.deleteAfterRun) {
-        return;
-      }
-      try {
-        const { callGateway } = await loadGatewayCallRuntime();
-        await callGateway({
-          method: "sessions.delete",
-          params: {
-            key: params.agentSessionKey,
-            deleteTranscript: true,
-            emitLifecycleHooks: false,
-          },
-          timeoutMs: 10_000,
-        });
-      } catch {
-        // Best-effort; direct delivery result should still be returned.
-      }
-    };
-
     if (!synthesizedText) {
       return null;
     }
@@ -628,7 +631,7 @@ export async function dispatchCronDelivery(
       hadDescendants &&
       synthesizedText.trim() === initialSynthesizedText &&
       isLikelyInterimCronMessage(initialSynthesizedText) &&
-      initialSynthesizedText.toUpperCase() !== SILENT_REPLY_TOKEN.toUpperCase()
+      !isSilentReplyText(initialSynthesizedText, SILENT_REPLY_TOKEN)
     ) {
       // Descendants existed but no post-orchestration synthesis arrived AND
       // no descendant fallback reply was available. Suppress stale parent
@@ -643,15 +646,8 @@ export async function dispatchCronDelivery(
         ...params.telemetry,
       });
     }
-    if (synthesizedText.toUpperCase() === SILENT_REPLY_TOKEN.toUpperCase()) {
-      await cleanupDirectCronSessionIfNeeded();
-      return params.withRunSession({
-        status: "ok",
-        summary,
-        outputText,
-        delivered: false,
-        ...params.telemetry,
-      });
+    if (isSilentReplyText(synthesizedText, SILENT_REPLY_TOKEN)) {
+      return await finishSilentReplyDelivery();
     }
     if (params.isAborted()) {
       return params.withRunSession({
