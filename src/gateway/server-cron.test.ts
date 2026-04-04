@@ -12,14 +12,14 @@ const {
   loadConfigMock,
   fetchWithSsrFGuardMock,
   runCronIsolatedAgentTurnMock,
-  closeTrackedBrowserTabsForSessionsMock,
+  cleanupBrowserSessionsForLifecycleEndMock,
 } = vi.hoisted(() => ({
   enqueueSystemEventMock: vi.fn(),
   requestHeartbeatNowMock: vi.fn(),
   loadConfigMock: vi.fn(),
   fetchWithSsrFGuardMock: vi.fn(),
   runCronIsolatedAgentTurnMock: vi.fn(async () => ({ status: "ok" as const, summary: "ok" })),
-  closeTrackedBrowserTabsForSessionsMock: vi.fn(async () => 0),
+  cleanupBrowserSessionsForLifecycleEndMock: vi.fn(async () => {}),
 }));
 
 function enqueueSystemEvent(...args: unknown[]) {
@@ -61,8 +61,8 @@ vi.mock("../cron/isolated-agent.js", () => ({
   runCronIsolatedAgentTurn: runCronIsolatedAgentTurnMock,
 }));
 
-vi.mock("../plugin-sdk/browser-maintenance.js", () => ({
-  closeTrackedBrowserTabsForSessions: closeTrackedBrowserTabsForSessionsMock,
+vi.mock("../browser-lifecycle-cleanup.js", () => ({
+  cleanupBrowserSessionsForLifecycleEnd: cleanupBrowserSessionsForLifecycleEndMock,
 }));
 
 import { buildGatewayCronService } from "./server-cron.js";
@@ -86,7 +86,7 @@ describe("buildGatewayCronService", () => {
     loadConfigMock.mockClear();
     fetchWithSsrFGuardMock.mockClear();
     runCronIsolatedAgentTurnMock.mockClear();
-    closeTrackedBrowserTabsForSessionsMock.mockClear();
+    cleanupBrowserSessionsForLifecycleEndMock.mockClear();
   });
 
   it("routes main-target jobs to the scoped session for enqueue + wake", async () => {
@@ -207,7 +207,7 @@ describe("buildGatewayCronService", () => {
           sessionKey: "project-alpha-monitor",
         }),
       );
-      expect(closeTrackedBrowserTabsForSessionsMock).toHaveBeenCalledWith({
+      expect(cleanupBrowserSessionsForLifecycleEndMock).toHaveBeenCalledWith({
         sessionKeys: ["project-alpha-monitor"],
         onWarn: expect.any(Function),
       });

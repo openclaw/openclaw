@@ -17,8 +17,8 @@ const lifecycleEventMocks = vi.hoisted(() => ({
   emitSessionLifecycleEvent: vi.fn(),
 }));
 
-const browserMaintenanceMocks = vi.hoisted(() => ({
-  closeTrackedBrowserTabsForSessions: vi.fn(async () => 0),
+const browserLifecycleCleanupMocks = vi.hoisted(() => ({
+  cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
 }));
 
 vi.mock("../tasks/task-executor.js", () => ({
@@ -31,8 +31,9 @@ vi.mock("../sessions/session-lifecycle-events.js", () => ({
   emitSessionLifecycleEvent: lifecycleEventMocks.emitSessionLifecycleEvent,
 }));
 
-vi.mock("../plugin-sdk/browser-maintenance.js", () => ({
-  closeTrackedBrowserTabsForSessions: browserMaintenanceMocks.closeTrackedBrowserTabsForSessions,
+vi.mock("../browser-lifecycle-cleanup.js", () => ({
+  cleanupBrowserSessionsForLifecycleEnd:
+    browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd,
 }));
 
 vi.mock("./subagent-registry-helpers.js", async () => {
@@ -66,7 +67,7 @@ describe("subagent registry lifecycle hardening", () => {
   beforeEach(async () => {
     vi.resetModules();
     vi.clearAllMocks();
-    browserMaintenanceMocks.closeTrackedBrowserTabsForSessions.mockClear();
+    browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd.mockClear();
     mod = await import("./subagent-registry-lifecycle.js");
   });
 
@@ -208,10 +209,12 @@ describe("subagent registry lifecycle hardening", () => {
       }),
     ).resolves.toBeUndefined();
 
-    expect(browserMaintenanceMocks.closeTrackedBrowserTabsForSessions).toHaveBeenCalledWith({
-      sessionKeys: [entry.childSessionKey],
-      onWarn: expect.any(Function),
-    });
+    expect(browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd).toHaveBeenCalledWith(
+      {
+        sessionKeys: [entry.childSessionKey],
+        onWarn: expect.any(Function),
+      },
+    );
     expect(runSubagentAnnounceFlow).toHaveBeenCalledWith(
       expect.objectContaining({
         childSessionKey: entry.childSessionKey,
@@ -252,7 +255,9 @@ describe("subagent registry lifecycle hardening", () => {
       }),
     ).resolves.toBeUndefined();
 
-    expect(browserMaintenanceMocks.closeTrackedBrowserTabsForSessions).not.toHaveBeenCalled();
+    expect(
+      browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd,
+    ).not.toHaveBeenCalled();
     expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
   });
 });
