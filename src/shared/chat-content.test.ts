@@ -1,64 +1,75 @@
 import { describe, expect, it } from "vitest";
 import { extractTextFromChatContent } from "./chat-content.js";
 
-describe("shared/chat-content", () => {
-  it("normalizes plain string content", () => {
-    expect(extractTextFromChatContent("  hello\nworld  ")).toBe("hello world");
+describe("extractTextFromChatContent", () => {
+  it("extracts string content directly", () => {
+    expect(extractTextFromChatContent("Hello world")).toBe("Hello world");
   });
 
-  it("extracts only text blocks from array content", () => {
-    expect(
-      extractTextFromChatContent([
-        { type: "text", text: " hello " },
-        { type: "image_url", image_url: "https://example.com" },
-        { type: "text", text: "world" },
-        { text: "ignored without type" },
-        null,
-      ]),
-    ).toBe("hello world");
+  it("returns null for empty string", () => {
+    expect(extractTextFromChatContent("")).toBeNull();
+    expect(extractTextFromChatContent("   ")).toBeNull();
   });
 
-  it("applies sanitizers and custom join/normalization hooks", () => {
-    expect(
-      extractTextFromChatContent("Here [Tool Call: foo (ID: 1)] ok", {
-        sanitizeText: (text) => text.replace(/\[Tool Call:[^\]]+\]\s*/g, ""),
-      }),
-    ).toBe("Here ok");
-
-    expect(
-      extractTextFromChatContent(
-        [
-          { type: "text", text: " hello " },
-          { type: "text", text: "world " },
-        ],
-        {
-          sanitizeText: (text) => text.trim(),
-          joinWith: "\n",
-          normalizeText: (text) => text.trim(),
-        },
-      ),
-    ).toBe("hello\nworld");
-
-    expect(
-      extractTextFromChatContent(
-        [
-          { type: "text", text: "keep" },
-          { type: "text", text: "drop" },
-        ],
-        {
-          sanitizeText: (text) => (text === "drop" ? "   " : text),
-        },
-      ),
-    ).toBe("keep");
+  it("normalizes whitespace in strings", () => {
+    expect(extractTextFromChatContent("Hello  \n\n  world")).toBe("Hello world");
   });
 
-  it("returns null for unsupported or empty content", () => {
-    expect(extractTextFromChatContent(123)).toBeNull();
-    expect(extractTextFromChatContent([{ type: "text", text: "   " }])).toBeNull();
+  it("extracts text from content blocks", () => {
+    const content = [
+      { type: "text", text: "Hello" },
+      { type: "text", text: "world" },
+    ];
+    expect(extractTextFromChatContent(content)).toBe("Hello world");
+  });
+
+  it("skips non-text blocks", () => {
+    const content = [
+      { type: "text", text: "Hello" },
+      { type: "image", url: "https://example.com/img.png" },
+      { type: "text", text: "world" },
+    ];
+    expect(extractTextFromChatContent(content)).toBe("Hello world");
+  });
+
+  it("skips blocks without text", () => {
+    const content = [
+      { type: "text", text: "Hello" },
+      { type: "text" },
+      { type: "text", text: "" },
+      { type: "text", text: "world" },
+    ];
+    expect(extractTextFromChatContent(content)).toBe("Hello world");
+  });
+
+  it("returns null for empty content array", () => {
+    expect(extractTextFromChatContent([])).toBeNull();
+  });
+
+  it("skips null and undefined blocks", () => {
+    const content = [
+      null,
+      { type: "text", text: "Hello" },
+      undefined,
+    ];
+    expect(extractTextFromChatContent(content)).toBe("Hello");
+  });
+
+  it("customizes join separator", () => {
+    const content = [{ type: "text", text: "a" }, { type: "text", text: "b" }];
+    expect(extractTextFromChatContent(content, { joinWith: "\n" })).toBe("a\nb");
+  });
+
+  it("applies custom sanitize function", () => {
+    const content = "Hello [redacted]";
     expect(
-      extractTextFromChatContent("  ", {
-        sanitizeText: () => "",
-      }),
-    ).toBeNull();
+      extractTextFromChatContent(content, { sanitizeText: (t) => t.replace("[redacted]", "") }),
+    ).toBe("Hello");
+  });
+
+  it("returns null for non-string/non-array content", () => {
+    expect(extractTextFromChatContent(123 as any)).toBeNull();
+    expect(extractTextFromChatContent({} as any)).toBeNull();
+    expect(extractTextFromChatContent(null)).toBeNull();
   });
 });
