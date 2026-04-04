@@ -3,19 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { VoiceCallRuntime } from "./runtime-entry.js";
 
-let runtimeStub: {
-  config: { toNumber?: string };
-  manager: {
-    initiateCall: ReturnType<typeof vi.fn>;
-    continueCall: ReturnType<typeof vi.fn>;
-    speak: ReturnType<typeof vi.fn>;
-    endCall: ReturnType<typeof vi.fn>;
-    getCall: ReturnType<typeof vi.fn>;
-    getCallByProviderCallId: ReturnType<typeof vi.fn>;
-  };
-  stop: ReturnType<typeof vi.fn>;
-};
+let runtimeStub: VoiceCallRuntime;
 
 vi.mock("./runtime-entry.js", () => ({
   createVoiceCallRuntime: vi.fn(async () => runtimeStub),
@@ -50,6 +40,28 @@ type RegisterCliContext = {
   workspaceDir?: string;
   logger: typeof noopLogger;
 };
+
+function createRuntimeStub(callId = "call-1"): VoiceCallRuntime {
+  return {
+    config: { toNumber: "+15550001234" } as unknown as VoiceCallRuntime["config"],
+    provider: {} as VoiceCallRuntime["provider"],
+    manager: {
+      initiateCall: vi.fn(async () => ({ callId, success: true })),
+      continueCall: vi.fn(async () => ({
+        success: true,
+        transcript: "hello",
+      })),
+      speak: vi.fn(async () => ({ success: true })),
+      endCall: vi.fn(async () => ({ success: true })),
+      getCall: vi.fn((id: string) => (id === "call-1" ? { callId: "call-1" } : undefined)),
+      getCallByProviderCallId: vi.fn(() => undefined),
+    } as unknown as VoiceCallRuntime["manager"],
+    webhookServer: {} as VoiceCallRuntime["webhookServer"],
+    webhookUrl: "http://127.0.0.1:3334/voice/webhook",
+    publicUrl: null,
+    stop: vi.fn(async () => {}),
+  };
+}
 
 function captureStdout() {
   let output = "";
@@ -129,21 +141,7 @@ describe("voice-call plugin", () => {
     noopLogger.error.mockClear();
     noopLogger.debug.mockClear();
     vi.mocked(createVoiceCallRuntime).mockClear();
-    runtimeStub = {
-      config: { toNumber: "+15550001234" },
-      manager: {
-        initiateCall: vi.fn(async () => ({ callId: "call-1", success: true })),
-        continueCall: vi.fn(async () => ({
-          success: true,
-          transcript: "hello",
-        })),
-        speak: vi.fn(async () => ({ success: true })),
-        endCall: vi.fn(async () => ({ success: true })),
-        getCall: vi.fn((id: string) => (id === "call-1" ? { callId: "call-1" } : undefined)),
-        getCallByProviderCallId: vi.fn(() => undefined),
-      },
-      stop: vi.fn(async () => {}),
-    };
+    runtimeStub = createRuntimeStub();
     vi.mocked(createVoiceCallRuntime).mockReset();
     vi.mocked(createVoiceCallRuntime).mockImplementation(async () => runtimeStub);
   });
@@ -168,22 +166,18 @@ describe("voice-call plugin", () => {
   });
 
   it("does not republish a runtime that stop already claimed", async () => {
-    let resolveFirstRuntime: ((runtime: typeof runtimeStub) => void) | undefined;
-    const firstRuntimePromise = new Promise<typeof runtimeStub>((resolve) => {
+    let resolveFirstRuntime: ((runtime: VoiceCallRuntime) => void) | undefined;
+    const firstRuntimePromise = new Promise<VoiceCallRuntime>((resolve) => {
       resolveFirstRuntime = resolve;
     });
     const firstRuntime = {
       ...runtimeStub,
       stop: vi.fn(async () => {}),
-    };
+    } as VoiceCallRuntime;
     const secondRuntime = {
-      ...runtimeStub,
-      manager: {
-        ...runtimeStub.manager,
-        initiateCall: vi.fn(async () => ({ callId: "call-2", success: true })),
-      },
+      ...createRuntimeStub("call-2"),
       stop: vi.fn(async () => {}),
-    };
+    } as VoiceCallRuntime;
     vi.mocked(createVoiceCallRuntime)
       .mockImplementationOnce(async () => firstRuntimePromise)
       .mockImplementationOnce(async () => secondRuntime);
