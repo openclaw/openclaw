@@ -1,5 +1,9 @@
 import { postTrustedWebToolsJson } from "openclaw/plugin-sdk/provider-web-search";
-import { normalizeXaiModelId } from "../model-id.js";
+import {
+  coerceXaiToolConfig,
+  resolveNormalizedXaiToolModel,
+  resolvePositiveIntegerToolConfig,
+} from "./tool-config-shared.js";
 import { extractXaiWebSearchContent, type XaiWebSearchResponse } from "./web-search-shared.js";
 
 export const XAI_CODE_EXECUTION_ENDPOINT = "https://api.x.ai/v1/responses";
@@ -24,32 +28,23 @@ export type XaiCodeExecutionResult = {
   outputTypes: string[];
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 export function resolveXaiCodeExecutionConfig(
   config?: Record<string, unknown>,
 ): XaiCodeExecutionConfig {
-  return isRecord(config) ? (config as XaiCodeExecutionConfig) : {};
+  return coerceXaiToolConfig<XaiCodeExecutionConfig>(config);
 }
 
 export function resolveXaiCodeExecutionModel(config?: Record<string, unknown>): string {
-  const resolved = resolveXaiCodeExecutionConfig(config);
-  return typeof resolved.model === "string" && resolved.model.trim()
-    ? normalizeXaiModelId(resolved.model.trim())
-    : XAI_DEFAULT_CODE_EXECUTION_MODEL;
+  return resolveNormalizedXaiToolModel({
+    config,
+    defaultModel: XAI_DEFAULT_CODE_EXECUTION_MODEL,
+  });
 }
 
 export function resolveXaiCodeExecutionMaxTurns(
   config?: Record<string, unknown>,
 ): number | undefined {
-  const raw = resolveXaiCodeExecutionConfig(config).maxTurns;
-  if (typeof raw !== "number" || !Number.isFinite(raw)) {
-    return undefined;
-  }
-  const normalized = Math.trunc(raw);
-  return normalized > 0 ? normalized : undefined;
+  return resolvePositiveIntegerToolConfig(config, "maxTurns");
 }
 
 export function buildXaiCodeExecutionPayload(params: {
