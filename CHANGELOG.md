@@ -177,6 +177,7 @@ Docs: https://docs.openclaw.ai
 - Agents/logging: keep orphaned-user transcript repair warnings focused on interactive runs, and downgrade background-trigger repairs (`heartbeat`, `cron`, `memory`, `overflow`) to debug logs to reduce false-alarm gateway noise.
 - Gateway/node pairing: require `operator.pairing` for node approvals end-to-end, while still requiring `operator.write` or `operator.admin` when the pending node commands need those higher scopes. (#60461) Thanks @eleqtrizit.
 - Providers/OpenRouter: gate Anthropic prompt-cache `cache_control` markers to native/default OpenRouter routes and preserve them for native OpenRouter hosts behind custom provider ids. Thanks @vincentkoc.
+- Browser/CDP: validate both initial and discovered CDP websocket endpoints before connect so strict SSRF policy blocks cross-host pivots and direct websocket targets. (#60469) Thanks @eleqtrizit.
 
 ## 2026.4.1
 
