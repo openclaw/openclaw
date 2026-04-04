@@ -29,6 +29,7 @@ type ChromeMcpSession = {
 type ChromeMcpSessionFactory = (
   profileName: string,
   userDataDir?: string,
+  cdpUrl?: string,
 ) => Promise<ChromeMcpSession>;
 
 const DEFAULT_CHROME_MCP_COMMAND = "npx";
@@ -171,6 +172,16 @@ function extractJsonMessage(result: ChromeMcpToolResult): unknown {
   return null;
 }
 
+function getCdpUrlForProfile(profileName: string): string | undefined {
+  try {
+    const state = require("../server-context").state;
+    const profile = state()?.resolved?.profiles?.[profileName];
+    return profile?.cdpUrl || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function normalizeChromeMcpUserDataDir(userDataDir?: string): string | undefined {
   const trimmed = userDataDir?.trim();
   return trimmed ? trimmed : undefined;
@@ -213,20 +224,28 @@ async function closeChromeMcpSessionsForProfile(
   return closed;
 }
 
-export function buildChromeMcpArgs(userDataDir?: string): string[] {
+export function buildChromeMcpArgs(userDataDir?: string, cdpUrl?: string): string[] {
   const normalizedUserDataDir = normalizeChromeMcpUserDataDir(userDataDir);
-  return normalizedUserDataDir
-    ? [...DEFAULT_CHROME_MCP_ARGS, "--userDataDir", normalizedUserDataDir]
-    : [...DEFAULT_CHROME_MCP_ARGS];
+
+  const base = [
+    "-y",
+    "chrome-devtools-mcp@latest",
+    ...(cdpUrl ? ["--browserUrl", cdpUrl] : ["--autoConnect"]),
+    "--experimentalStructuredContent",
+    "--experimental-page-id-routing",
+  ];
+
+  return normalizedUserDataDir ? [...base, "--userDataDir", normalizedUserDataDir] : base;
 }
 
 async function createRealSession(
   profileName: string,
   userDataDir?: string,
+  cdpUrl?: string,
 ): Promise<ChromeMcpSession> {
   const transport = new StdioClientTransport({
     command: DEFAULT_CHROME_MCP_COMMAND,
-    args: buildChromeMcpArgs(userDataDir),
+    args: buildChromeMcpArgs(userDataDir, cdpUrl),
     stderr: "pipe",
   });
   const client = new Client(
@@ -277,7 +296,11 @@ async function getSession(profileName: string, userDataDir?: string): Promise<Ch
     let pending = pendingSessions.get(cacheKey);
     if (!pending) {
       pending = (async () => {
-        const created = await (sessionFactory ?? createRealSession)(profileName, userDataDir);
+        const created = await (sessionFactory ?? createRealSession)(
+          profileName,
+          userDataDir,
+          getCdpUrlForProfile(profileName),
+        );
         if (pendingSessions.get(cacheKey) === pending) {
           sessions.set(cacheKey, created);
         } else {
