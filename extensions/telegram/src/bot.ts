@@ -354,10 +354,10 @@ export function createTelegramBot(opts: TelegramBotOptions): TelegramBotInstance
   bot.use(
     botRuntime.sequentialize((ctx) =>
       getTelegramSequentialKey(ctx, {
-        isRunActiveForChat: telegramDeps.isRunActiveForSession
+        isRunActiveForChat: telegramDeps.isRunActiveForSessionKey
           ? (chatId) => {
-              const sessionId = chatSessionCache.get(chatId);
-              return sessionId ? telegramDeps.isRunActiveForSession!(sessionId) : false;
+              const sessionKey = chatSessionCache.get(chatId);
+              return sessionKey ? telegramDeps.isRunActiveForSessionKey!(sessionKey) : false;
             }
           : undefined,
       }),

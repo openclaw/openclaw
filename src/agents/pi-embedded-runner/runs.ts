@@ -41,6 +41,8 @@ const embeddedRunState = resolveGlobalSingleton(EMBEDDED_RUN_STATE_KEY, () => ({
   snapshots: new Map<string, ActiveEmbeddedRunSnapshot>(),
   waiters: new Map<string, Set<EmbeddedRunWaiter>>(),
   modelSwitchRequests: new Map<string, EmbeddedRunModelSwitchRequest>(),
+  /** Reverse index: sessionKey → sessionId for active runs. */
+  sessionKeyToId: new Map<string, string>(),
 }));
 const ACTIVE_EMBEDDED_RUNS = embeddedRunState.activeRuns;
 const ACTIVE_EMBEDDED_RUN_SNAPSHOTS = embeddedRunState.snapshots;
@@ -138,6 +140,12 @@ export function isEmbeddedPiRunActive(sessionId: string): boolean {
     diag.debug(`run active check: sessionId=${sessionId} active=true`);
   }
   return active;
+}
+
+/** Check if any active embedded run is associated with the given sessionKey. */
+export function isEmbeddedPiRunActiveForSessionKey(sessionKey: string): boolean {
+  const sessionId = embeddedRunState.sessionKeyToId.get(sessionKey);
+  return sessionId ? ACTIVE_EMBEDDED_RUNS.has(sessionId) : false;
 }
 
 export function isEmbeddedPiRunStreaming(sessionId: string): boolean {
@@ -278,6 +286,9 @@ export function setActiveEmbeddedRun(
 ) {
   const wasActive = ACTIVE_EMBEDDED_RUNS.has(sessionId);
   ACTIVE_EMBEDDED_RUNS.set(sessionId, handle);
+  if (sessionKey) {
+    embeddedRunState.sessionKeyToId.set(sessionKey, sessionId);
+  }
   logSessionStateChange({
     sessionId,
     sessionKey,
@@ -308,6 +319,9 @@ export function clearActiveEmbeddedRun(
     ACTIVE_EMBEDDED_RUNS.delete(sessionId);
     ACTIVE_EMBEDDED_RUN_SNAPSHOTS.delete(sessionId);
     EMBEDDED_RUN_MODEL_SWITCH_REQUESTS.delete(sessionId);
+    if (sessionKey && embeddedRunState.sessionKeyToId.get(sessionKey) === sessionId) {
+      embeddedRunState.sessionKeyToId.delete(sessionKey);
+    }
     logSessionStateChange({ sessionId, sessionKey, state: "idle", reason: "run_completed" });
     if (!sessionId.startsWith("probe-")) {
       diag.debug(`run cleared: sessionId=${sessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`);
