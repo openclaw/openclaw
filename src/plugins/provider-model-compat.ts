@@ -1,6 +1,5 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
-import { resolveOpenAICompletionsCompatDefaultsFromCapabilities } from "../agents/openai-completions-compat.js";
-import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
+import { detectOpenAICompletionsCompat } from "../agents/openai-completions-compat.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
 
 function extractModelCompat(
@@ -94,16 +93,7 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
 
   const compat = model.compat ?? undefined;
   const detectedCompatDefaults = baseUrl
-    ? resolveOpenAICompletionsCompatDefaultsFromCapabilities({
-        provider: typeof model.provider === "string" ? model.provider : undefined,
-        ...resolveProviderRequestCapabilities({
-          provider: typeof model.provider === "string" ? model.provider : undefined,
-          api: model.api,
-          baseUrl,
-          capability: "llm",
-          transport: "stream",
-        }),
-      })
+    ? detectOpenAICompletionsCompat(model).defaults
     : undefined;
   const needsForce = Boolean(
     detectedCompatDefaults &&
