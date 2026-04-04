@@ -95,6 +95,42 @@ def _run_harvest_echo():
         print(f"[harvest-echo] ERROR: {e}")
 
 
+# ── TG Echo ──────────────────────────────────────────────────────
+
+def _run_tg_echo():
+    """Run tg-echo.js to update tg-echo.json for Cafe bulletin board.
+
+    Only runs once per hour (checks last run time).
+    """
+    import subprocess, time
+
+    TG_SCRIPT = "/Users/sulaxd/clawd/website/projects/website/scripts/cafe-pipeline/tg-echo.js"
+    MARKER = "/tmp/tg-echo-last-run"
+
+    try:
+        if os.path.exists(MARKER):
+            last_run = os.path.getmtime(MARKER)
+            if time.time() - last_run < 3600:
+                return
+    except Exception:
+        pass
+
+    try:
+        result = subprocess.run(
+            ["node", TG_SCRIPT],
+            capture_output=True, text=True, timeout=30,
+            cwd=os.path.dirname(TG_SCRIPT),
+        )
+        if result.returncode == 0:
+            with open(MARKER, 'w') as f:
+                f.write(str(time.time()))
+            print(f"[tg-echo] OK: {result.stdout[:200]}")
+        else:
+            print(f"[tg-echo] FAIL: {result.stderr[:200]}")
+    except Exception as e:
+        print(f"[tg-echo] ERROR: {e}")
+
+
 # ── Beat counter ──────────────────────────────────────────────────
 
 def _load_beat_state() -> dict:
@@ -1139,6 +1175,7 @@ def main():
         pass  # Non-critical
 
     _run_harvest_echo()
+    _run_tg_echo()
 
     # ── Summary line ──
     action_summary = "; ".join(_actions) if _actions else "quiet"
