@@ -1082,15 +1082,36 @@ def main():
         if cafe_data_dir.exists():
             (cafe_data_dir / "briefing.json").write_text(json.dumps(notebook_data, ensure_ascii=False, indent=2))
             # Also copy latest morning brief (deep news) to cafe-morning.json
+            # Priority: rafael_brief > morning-brief-*.md
             try:
                 import glob
-                briefs = sorted(glob.glob(str(Path.home() / "clawd/workspace/memory/morning-brief-*.md")))
-                if briefs:
-                    latest_brief = Path(briefs[-1])
+                import os
+
+                latest_brief = None
+                latest_date = None
+                latest_source = None
+
+                # Check rafael briefs
+                rafael_briefs = sorted(glob.glob(str(Path.home() / "clawd/workspace/rafael/briefs/*.md")))
+                if rafael_briefs:
+                    latest_brief = Path(rafael_briefs[-1])
+                    latest_date = latest_brief.stem
+                    latest_source = "rafael"
+
+                # Also check morning-brief-*.md as fallback
+                morning_briefs = sorted(glob.glob(str(Path.home() / "clawd/workspace/memory/morning-brief-*.md")))
+                if morning_briefs:
+                    fallback_brief = Path(morning_briefs[-1])
+                    fallback_date = fallback_brief.stem.replace("morning-brief-", "")
+                    # Use morning-brief only if no rafael brief, or if it's newer
+                    if not latest_brief or fallback_date > latest_date:
+                        latest_brief = fallback_brief
+                        latest_date = fallback_date
+                        latest_source = "morning-brief"
+
+                if latest_brief:
                     brief_text = latest_brief.read_text().strip()
-                    # Extract date from filename: morning-brief-YYYY-MM-DD.md
-                    brief_date = latest_brief.stem.replace("morning-brief-", "")
-                    morning_json = {"date": brief_date, "content": brief_text, "source": "morning-brief"}
+                    morning_json = {"date": latest_date, "content": brief_text, "source": latest_source}
                     (cafe_data_dir / "cafe-morning.json").write_text(json.dumps(morning_json, ensure_ascii=False, indent=2))
             except Exception:
                 pass
