@@ -49,6 +49,11 @@ export async function checkInboundAccessControl(params: {
   messageTimestampMs?: number;
   connectedAtMs?: number;
   pairingGraceMs?: number;
+  /** True when processing a Baileys "append" upsert (history/offline catch-up).
+   *  Pairing challenges must never fire for append messages — they are replays,
+   *  not real-time inbound DMs. Without this guard, reconnect loops cause
+   *  unsolicited pairing codes to be sent to contacts (#56448). */
+  isAppend?: boolean;
   sock: {
     sendMessage: (jid: string, content: { text: string }) => Promise<unknown>;
   };
@@ -79,9 +84,13 @@ export async function checkInboundAccessControl(params: {
       ? params.pairingGraceMs
       : PAIRING_REPLY_HISTORY_GRACE_MS;
   const suppressPairingReply =
-    typeof params.connectedAtMs === "number" &&
+    // Suppress for append (history/offline) messages — these are replays from
+    // Baileys, not real-time DMs. Sending pairing codes for replayed messages
+    // during reconnect cycles sends unsolicited messages to contacts (#56448).
+    params.isAppend === true ||
+    (typeof params.connectedAtMs === "number" &&
     typeof params.messageTimestampMs === "number" &&
-    params.messageTimestampMs < params.connectedAtMs - pairingGraceMs;
+    params.messageTimestampMs < params.connectedAtMs - pairingGraceMs);
 
   // Group policy filtering:
   // - "open": groups bypass allowFrom, only mention-gating applies
