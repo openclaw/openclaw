@@ -80,6 +80,7 @@ import {
   type SkillSnapshot,
 } from "../skills.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
+import { applyExtraParamsToAgent, resolveAgentTransportOverride } from "./extra-params.js";
 import { classifyCompactionReason, resolveCompactionFailureReason } from "./compact-reasons.js";
 import {
   asCompactionHookRunner,
@@ -108,6 +109,10 @@ import { buildModelAliasLines, resolveModelAsync } from "./model.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "./replay-history.js";
 import { buildEmbeddedSandboxInfo } from "./sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "./session-manager-cache.js";
+import {
+  resolveEmbeddedAgentBaseStreamFn,
+  resolveEmbeddedAgentStreamFn,
+} from "./stream-resolution.js";
 import { truncateSessionAfterCompaction } from "./session-truncation.js";
 import { resolveEmbeddedRunSkillEntries } from "./skills-runtime.js";
 import {
@@ -124,6 +129,7 @@ import { splitSdkTools } from "./tool-split.js";
 import type { EmbeddedPiCompactResult } from "./types.js";
 import { describeUnknownError, mapThinkingLevel } from "./utils.js";
 import { flushPendingToolResultsAfterIdle } from "./wait-for-idle-before-flush.js";
+import { shouldUseOpenAIWebSocketTransport } from "./run/attempt.thread-helpers.js";
 
 export type CompactEmbeddedPiSessionParams = {
   sessionId: string;
@@ -746,13 +752,61 @@ export async function compactEmbeddedPiSessionDirect(
       });
       applySystemPromptOverrideToSession(session, systemPromptOverride());
       const providerStreamFn = registerProviderStreamForModel({
-        model,
+        model: effectiveModel,
         cfg: params.config,
         agentDir,
         workspaceDir: effectiveWorkspace,
       });
-      if (providerStreamFn) {
-        session.agent.streamFn = providerStreamFn;
+      const shouldUseWebSocketTransport = shouldUseOpenAIWebSocketTransport({
+        provider,
+        modelApi: effectiveModel.api,
+      });
+      const wsApiKey = shouldUseWebSocketTransport
+        ? await authStorage.getApiKey(provider)
+        : undefined;
+      if (shouldUseWebSocketTransport && !wsApiKey) {
+        log.warn(
+          `[ws-stream] no API key for provider=${provider}; keeping compaction HTTP transport`,
+        );
+      }
+      // Compaction builds the same embedded system prompt, so it must flow
+      // through the same transport/payload shaping stack as normal turns.
+      session.agent.streamFn = resolveEmbeddedAgentStreamFn({
+        currentStreamFn: resolveEmbeddedAgentBaseStreamFn({ session }),
+        providerStreamFn,
+        shouldUseWebSocketTransport,
+        wsApiKey,
+        sessionId: params.sessionId,
+        signal: runAbortController.signal,
+        model: effectiveModel,
+        authStorage,
+      });
+      const { effectiveExtraParams } = applyExtraParamsToAgent(
+        session.agent,
+        params.config,
+        provider,
+        modelId,
+        undefined,
+        params.thinkLevel,
+        sessionAgentId,
+        effectiveWorkspace,
+        effectiveModel,
+        agentDir,
+      );
+      const agentTransportOverride = resolveAgentTransportOverride({
+        settingsManager,
+        effectiveExtraParams,
+      });
+      if (
+        agentTransportOverride &&
+        typeof (session.agent as { setTransport?: unknown }).setTransport === "function" &&
+        (session.agent as { transport?: unknown }).transport !== agentTransportOverride
+      ) {
+        (
+          session.agent as {
+            setTransport(nextTransport: string): void;
+          }
+        ).setTransport(agentTransportOverride);
       }
 
       try {

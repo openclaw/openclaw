@@ -219,6 +219,7 @@ const mockStreamSimple = vi.fn((model: unknown, context: unknown, options?: unkn
   });
   return stream;
 });
+const mockCreateHttpFallbackStreamFn = vi.fn(() => mockStreamSimple as never);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -1180,8 +1181,11 @@ describe("createOpenAIWebSocketStreamFn", () => {
   beforeEach(() => {
     MockManager.reset();
     streamSimpleCalls.length = 0;
+    mockCreateHttpFallbackStreamFn.mockReset();
+    mockCreateHttpFallbackStreamFn.mockReturnValue(mockStreamSimple as never);
     openAIWsStreamTesting.setDepsForTest({
       createManager: ((options?: unknown) => new MockManager(options)) as never,
+      createHttpFallbackStreamFn: mockCreateHttpFallbackStreamFn as never,
       streamSimple: mockStreamSimple,
     });
   });
@@ -1195,6 +1199,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
     releaseWsSession("sess-1");
     releaseWsSession("sess-2");
     releaseWsSession("sess-fallback");
+    releaseWsSession("sess-boundary-http-fallback");
     releaseWsSession("sess-incremental");
     releaseWsSession("sess-full");
     releaseWsSession("sess-phase");
@@ -1931,6 +1936,64 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(streamSimpleCalls.length).toBeGreaterThan(callsBefore);
   });
 
+  it("routes websocket HTTP fallback through the configured HTTP fallback builder", async () => {
+    const httpFallbackCalls: Array<{ model: unknown; context: unknown; options?: unknown }> = [];
+    const httpFallbackStreamFn = vi.fn((model: unknown, context: unknown, options?: unknown) => {
+      httpFallbackCalls.push({ model, context, options });
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const msg = makeFakeAssistantMessage("boundary-safe fallback");
+        stream.push({ type: "done", reason: "stop", message: msg });
+        stream.end();
+      });
+      return stream;
+    });
+    mockCreateHttpFallbackStreamFn.mockReturnValue(httpFallbackStreamFn as never);
+    const sessionId = "sess-boundary-http-fallback";
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", sessionId);
+
+    const stream1 = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+    );
+    await new Promise<void>((resolve, reject) => {
+      queueMicrotask(async () => {
+        try {
+          await new Promise((r) => setImmediate(r));
+          MockManager.lastInstance!.simulateEvent({
+            type: "response.completed",
+            response: makeResponseObject("resp-ok", "OK"),
+          });
+          for await (const _ of await resolveStream(stream1)) {
+            /* consume */
+          }
+          resolve();
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+
+    MockManager.globalSendFailuresRemaining = 2;
+    const stream2 = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      {
+        ...contextStub,
+        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+      } as Parameters<typeof streamFn>[1],
+    );
+    for await (const _ of await resolveStream(stream2)) {
+      /* consume */
+    }
+
+    expect(mockCreateHttpFallbackStreamFn).toHaveBeenCalled();
+    expect(streamSimpleCalls).toHaveLength(0);
+    expect(httpFallbackCalls).toHaveLength(1);
+    expect(httpFallbackCalls[0]?.context).toMatchObject({
+      systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+    });
+  });
+
   it("forwards temperature and maxTokens to response.create", async () => {
     const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-temp");
     const opts = { temperature: 0.3, maxTokens: 256 };
@@ -2288,6 +2351,7 @@ describe("releaseWsSession / hasWsSession", () => {
     MockManager.reset();
     openAIWsStreamTesting.setDepsForTest({
       createManager: (() => new MockManager()) as never,
+      createHttpFallbackStreamFn: mockCreateHttpFallbackStreamFn as never,
       streamSimple: mockStreamSimple,
     });
   });

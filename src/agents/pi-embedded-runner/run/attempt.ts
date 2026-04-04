@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
-import { streamSimple } from "@mariozechner/pi-ai";
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -31,7 +30,6 @@ import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../../agent-paths.js";
 import { resolveSessionAgentIds } from "../../agent-scope.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
-import { createAnthropicVertexStreamFnForModel } from "../../anthropic-vertex-stream.js";
 import {
   analyzeBootstrapBudget,
   buildBootstrapPromptWarning,
@@ -55,7 +53,7 @@ import { buildModelAliasLines } from "../../model-alias-lines.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
 import { supportsModelTools } from "../../model-tool-support.js";
-import { createOpenAIWebSocketStreamFn, releaseWsSession } from "../../openai-ws-stream.js";
+import { releaseWsSession } from "../../openai-ws-stream.js";
 import { resolveOwnerDisplaySetting } from "../../owner-display.js";
 import { createBundleLspToolRuntime } from "../../pi-bundle-lsp-runtime.js";
 import {
@@ -75,7 +73,6 @@ import { applyPiAutoCompactionGuard } from "../../pi-settings.js";
 import { toClientToolDefinitions } from "../../pi-tool-definition-adapter.js";
 import { createOpenClawCodingTools, resolveToolLoopDetectionConfig } from "../../pi-tools.js";
 import { registerProviderStreamForModel } from "../../provider-stream.js";
-import { createBoundaryAwareStreamFnForModel } from "../../provider-transport-stream.js";
 import { resolveSandboxContext } from "../../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { repairSessionFileIfNeeded } from "../../session-file-repair.js";
@@ -91,7 +88,6 @@ import {
   applySkillEnvOverridesFromSnapshot,
   resolveSkillsPromptForRun,
 } from "../../skills.js";
-import { stripSystemPromptCacheBoundary } from "../../system-prompt-cache-boundary.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../../tool-call-id.js";
@@ -122,6 +118,11 @@ import {
   buildEmbeddedSystemPrompt,
   createSystemPromptOverride,
 } from "../system-prompt.js";
+import {
+  resetEmbeddedAgentBaseStreamFnCacheForTest,
+  resolveEmbeddedAgentBaseStreamFn,
+  resolveEmbeddedAgentStreamFn,
+} from "../stream-resolution.js";
 import { dropThinkingBlocks } from "../thinking.js";
 import { collectAllowedToolNames } from "../tool-name-allowlist.js";
 import { installToolResultContextGuard } from "../tool-result-context-guard.js";
@@ -216,66 +217,13 @@ export {
   wrapStreamFnSanitizeMalformedToolCalls,
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.tool-call-normalization.js";
+export {
+  resetEmbeddedAgentBaseStreamFnCacheForTest,
+  resolveEmbeddedAgentBaseStreamFn,
+  resolveEmbeddedAgentStreamFn,
+};
 
 const MAX_BTW_SNAPSHOT_MESSAGES = 100;
-
-export function resolveEmbeddedAgentStreamFn(params: {
-  currentStreamFn: StreamFn | undefined;
-  providerStreamFn?: StreamFn;
-  shouldUseWebSocketTransport: boolean;
-  wsApiKey?: string;
-  sessionId: string;
-  signal?: AbortSignal;
-  model: EmbeddedRunAttemptParams["model"];
-  authStorage?: { getApiKey(provider: string): Promise<string | undefined> };
-}): StreamFn {
-  if (params.providerStreamFn) {
-    const inner = params.providerStreamFn;
-    const normalizeContext = (context: Parameters<StreamFn>[1]) =>
-      context.systemPrompt
-        ? {
-            ...context,
-            systemPrompt: stripSystemPromptCacheBoundary(context.systemPrompt),
-          }
-        : context;
-    // Provider-owned transports bypass pi-coding-agent's default auth lookup,
-    // so keep injecting the resolved runtime apiKey for streamSimple-compatible
-    // transports that still read credentials from options.apiKey.
-    if (params.authStorage) {
-      const { authStorage, model } = params;
-      return async (m, context, options) => {
-        const apiKey = await authStorage.getApiKey(model.provider);
-        return inner(m, normalizeContext(context), {
-          ...options,
-          apiKey: apiKey ?? options?.apiKey,
-        });
-      };
-    }
-    return (m, context, options) => inner(m, normalizeContext(context), options);
-  }
-
-  const currentStreamFn = params.currentStreamFn ?? streamSimple;
-  if (params.shouldUseWebSocketTransport) {
-    return params.wsApiKey
-      ? createOpenAIWebSocketStreamFn(params.wsApiKey, params.sessionId, {
-          signal: params.signal,
-        })
-      : currentStreamFn;
-  }
-
-  if (params.model.provider === "anthropic-vertex") {
-    return createAnthropicVertexStreamFnForModel(params.model);
-  }
-
-  if (params.currentStreamFn === undefined || params.currentStreamFn === streamSimple) {
-    const boundaryAwareStreamFn = createBoundaryAwareStreamFnForModel(params.model);
-    if (boundaryAwareStreamFn) {
-      return boundaryAwareStreamFn;
-    }
-  }
-
-  return currentStreamFn;
-}
 
 function summarizeMessagePayload(msg: AgentMessage): { textChars: number; imageBlocks: number } {
   const content = (msg as { content?: unknown }).content;
@@ -953,7 +901,11 @@ export async function runEmbeddedAttempt(
         workspaceDir: params.workspaceDir,
       });
 
-      const defaultSessionStreamFn = activeSession.agent.streamFn;
+      // Rebuild each turn from the session's original stream base so prior-turn
+      // wrappers do not pin us to stale provider/API transport behavior.
+      const defaultSessionStreamFn = resolveEmbeddedAgentBaseStreamFn({
+        session: activeSession,
+      });
       const providerStreamFn = registerProviderStreamForModel({
         model: params.model,
         cfg: params.config,
