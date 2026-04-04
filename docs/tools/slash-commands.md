@@ -73,15 +73,15 @@ They run immediately, are stripped before the model sees the message, and the re
 
 Text + native (when enabled):
 
-- `/help`
+- `/help` (alias: `/h`)
 - `/commands`
 - `/tools [compact|verbose]` (show what the current agent can use right now; `verbose` adds descriptions)
 - `/skill <name> [input]` (run a skill by name)
-- `/status` (show current status; includes provider usage/quota for the current model provider when available)
+- `/status` (alias: `/s`; show current status; includes provider usage/quota for the current model provider when available)
 - `/tasks` (list background tasks for the current session; shows active and recent task details with agent-local fallback counts)
 - `/allowlist` (list/add/remove allowlist entries)
 - `/approve <id> <decision>` (resolve exec approval prompts; use the pending approval message for the available decisions)
-- `/context [list|detail|json]` (explain “context”; `detail` shows per-file + per-tool + per-skill + system prompt size)
+- `/context [list|detail|json]` (alias: `/ctx`; explain “context”; `detail` shows per-file + per-tool + per-skill + system prompt size)
 - `/btw <question>` (ask an ephemeral side question about the current session without changing future session context; see [/tools/btw](/tools/btw))
 - `/export-session [path]` (alias: `/export`) (export current session to HTML with full system prompt)
 - `/whoami` (show your sender id; alias: `/id`)
@@ -102,7 +102,7 @@ Text + native (when enabled):
   - `/plugin install <spec>` accepts the same plugin specs as `openclaw plugins install`: local path/archive, npm package, or `clawhub:<pkg>`.
   - Enable/disable writes still reply with a restart hint. On a watched foreground gateway, OpenClaw may perform that restart automatically right after the write.
 - `/debug show|set|unset|reset` (runtime overrides, owner-only; requires `commands.debug: true`)
-- `/usage off|tokens|full|cost` (per-response usage footer or local cost summary)
+- `/usage off|tokens|full|cost` (alias: `/u`; per-response usage footer or local cost summary)
 - `/tts off|always|inbound|tagged|status|provider|limit|summary|audio` (control TTS; see [/tts](/tools/tts))
   - Discord: native command is `/voice` (Discord reserves `/tts`); text `/tts` still works.
 - `/stop`
@@ -112,20 +112,21 @@ Text + native (when enabled):
 - `/dock-slack` (alias: `/dock_slack`) (switch replies to Slack)
 - `/activation mention|always` (groups only)
 - `/send on|off|inherit` (owner-only)
-- `/reset` or `/new [model]` (optional model hint; remainder is passed through)
+- `/reset` or `/new [model]` (alias: `/n`; optional model hint; remainder is passed through)
 - `/think <off|minimal|low|medium|high|xhigh>` (dynamic choices by model/provider; aliases: `/thinking`, `/t`)
-- `/fast status|on|off` (omitting the arg shows the current effective fast-mode state)
+- `/fast status|on|off` (alias: `/f`; omitting the arg shows the current effective fast-mode state)
 - `/verbose on|full|off` (alias: `/v`)
 - `/reasoning on|off|stream` (alias: `/reason`; when on, sends a separate message prefixed `Reasoning:`; `stream` = Telegram draft only)
 - `/elevated on|off|ask|full` (alias: `/elev`; `full` skips exec approvals)
 - `/exec host=<auto|sandbox|gateway|node> security=<deny|allowlist|full> ask=<off|on-miss|always> node=<id>` (send `/exec` to show current)
-- `/model <name>` (alias: `/models`; or `/<alias>` from `agents.defaults.models.*.alias`)
+- `/model <name>` (alias: `/m`; show or set the model; or `/<alias>` from `agents.defaults.models.*.alias`)
+- `/models` (alias: `/ms`; list model providers or provider models)
 - `/queue <mode>` (plus options like `debounce:2s cap:25 drop:summarize`; send `/queue` to see current settings)
 - `/bash <command>` (host-only; alias for `! <command>`; requires `commands.bash: true` + `tools.elevated` allowlists)
 
 Text-only:
 
-- `/compact [instructions]` (see [/concepts/compaction](/concepts/compaction))
+- `/compact [instructions]` (alias: `/c`; see [/concepts/compaction](/concepts/compaction))
 - `! <command>` (host-only; one at a time; use `!poll` + `!stop` for long-running jobs)
 - `!poll` (check output / status; accepts optional `sessionId`; `/bash poll` also works)
 - `!stop` (stop the running bash job; accepts optional `sessionId`; `/bash stop` also works)
