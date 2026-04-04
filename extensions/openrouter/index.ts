@@ -91,16 +91,14 @@ export default definePluginEntry({
       const routedStreamFn = providerRouting
         ? injectOpenRouterRouting(ctx.streamFn, providerRouting)
         : ctx.streamFn;
-      const wrapStreamFn = OPENROUTER_THINKING_STREAM_HOOKS.wrapStreamFn ?? undefined;
+      const wrapStreamFn = OPENROUTER_THINKING_STREAM_HOOKS.wrapStreamFn;
       if (!wrapStreamFn) {
         return routedStreamFn;
       }
-      return (
-        wrapStreamFn({
-          ...ctx,
-          streamFn: routedStreamFn,
-        }) ?? undefined
-      );
+      return wrapStreamFn({
+        ...ctx,
+        streamFn: routedStreamFn,
+      });
     }
 
     function isOpenRouterCacheTtlModel(modelId: string): boolean {
