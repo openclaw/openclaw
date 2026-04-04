@@ -382,8 +382,12 @@ async function resolveRuntimeCwdForAcpSpawn(params: {
   try {
     await fs.access(params.resolvedCwd);
     return params.resolvedCwd;
-  } catch {
-    return undefined;
+  } catch (error) {
+    const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      return undefined;
+    }
+    throw error;
   }
 }
 

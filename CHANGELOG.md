@@ -53,6 +53,7 @@ Docs: https://docs.openclaw.ai
 - Telegram/replies: preserve explicit topic targets when `replyTo` is present while still inheriting the current topic for same-chat replies without an explicit topic. (#59634) Thanks @dashhuang.
 - Telegram/reactions: preserve `reactionNotifications: "own"` across gateway restarts by persisting sent-message ownership state instead of treating cold cache as a permissive fallback. (#59207) Thanks @samzong.
 - Telegram/media: preserve `<media:...>` placeholders and `file_id` in captioned messages when Bot API downloads fail, so agents still receive media context. (#59948) Thanks @v1p0r.
+- ACP/agents: inherit the target agent workspace for cross-agent ACP spawns, keep missing target workspaces on the backend default cwd path, and surface real access errors instead of silently running in the wrong tree. (#58438) Thanks @zssggle-rgb.
 - Telegram/media: keep inbound image attachments readable on upgraded installs where legacy state roots still differ from the managed config-dir media cache. (#59971) Thanks @neeravmakwana.
 - Telegram/local Bot API: thread `channels.telegram.apiRoot` through buffered reply-media and album downloads so self-hosted Bot API file paths stop falling back to `api.telegram.org` and 404ing. (#59544) Thanks @SARAMALI15792.
 - Telegram/media: add `channels.telegram.network.dangerouslyAllowPrivateNetwork` for trusted fake-IP or transparent-proxy environments where Telegram media downloads resolve `api.telegram.org` to private/internal/special-use addresses.
