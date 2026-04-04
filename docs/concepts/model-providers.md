@@ -343,11 +343,14 @@ default base URL, headers, or model list.
 
 ### Moonshot AI (Kimi)
 
-Moonshot uses OpenAI-compatible endpoints, so configure it as a custom provider:
+Moonshot ships as a bundled provider plugin. Use the built-in provider by
+default, and add an explicit `models.providers.moonshot` entry only when you
+need to override the base URL or model metadata:
 
 - Provider: `moonshot`
 - Auth: `MOONSHOT_API_KEY`
 - Example model: `moonshot/kimi-k2.5`
+- CLI: `openclaw onboard --auth-choice moonshot-api-key`
 
 Kimi K2 model IDs:
 

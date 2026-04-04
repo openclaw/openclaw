@@ -70,5 +70,12 @@ kilocode/google/gemini-3-pro-preview
 - Model refs are `kilocode/<model-id>` (e.g., `kilocode/anthropic/claude-sonnet-4`).
 - Default model: `kilocode/kilo/auto`
 - Base URL: `https://api.kilo.ai/api/gateway/`
+- Bundled fallback catalog always includes `kilocode/kilo/auto` (`Kilo Auto`) with
+  `input: ["text", "image"]`, `reasoning: true`, `contextWindow: 1000000`,
+  and `maxTokens: 128000`
+- At startup, OpenClaw tries `GET https://api.kilo.ai/api/gateway/models` and
+  merges discovered models ahead of the static fallback catalog
+- Kilo Gateway is documented in source as OpenRouter-compatible, so it stays on
+  the proxy-style OpenAI-compatible path rather than native OpenAI request shaping
 - For more model/provider options, see [/concepts/model-providers](/concepts/model-providers).
 - Kilo Gateway uses a Bearer token with your API key under the hood.
