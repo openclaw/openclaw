@@ -1,3 +1,4 @@
+import { resolveTtsConfig } from "openclaw/plugin-sdk/speech-runtime";
 import type { VoiceCallTtsConfig } from "./config.js";
 import type { CoreConfig } from "./core-bridge.js";
 import { deepMergeDefined } from "./deep-merge.js";
@@ -20,6 +21,7 @@ export type TelephonyTtsRuntime = {
 };
 
 export type TelephonyTtsProvider = {
+  synthesisTimeoutMs: number;
   synthesizeForTelephony: (text: string) => Promise<Buffer>;
 };
 
@@ -33,8 +35,12 @@ export function createTelephonyTtsProvider(params: {
 }): TelephonyTtsProvider {
   const { coreConfig, ttsOverride, runtime, logger } = params;
   const mergedConfig = applyTtsOverride(coreConfig, ttsOverride);
+  const synthesisTimeoutMs = resolveTtsConfig(
+    mergedConfig as Parameters<typeof resolveTtsConfig>[0],
+  ).timeoutMs;
 
   return {
+    synthesisTimeoutMs,
     synthesizeForTelephony: async (text: string) => {
       const result = await runtime.textToSpeechTelephony({
         text,

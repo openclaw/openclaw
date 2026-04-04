@@ -3,6 +3,10 @@ import type { VoiceCallTtsConfig } from "./config.js";
 import type { CoreConfig } from "./core-bridge.js";
 import { createTelephonyTtsProvider } from "./telephony-tts.js";
 
+vi.mock("openclaw/plugin-sdk/speech-runtime", () => ({
+  resolveTtsConfig: () => ({ timeoutMs: 8000 }),
+}));
+
 function createCoreConfig(): CoreConfig {
   const tts: VoiceCallTtsConfig = {
     provider: "openai",
