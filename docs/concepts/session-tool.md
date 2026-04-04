@@ -32,6 +32,8 @@ The returned view is intentionally bounded and safety-filtered:
 
 - assistant text is normalized before recall:
   - thinking tags are stripped
+  - `<relevant-memories>` / `<relevant_memories>` scaffolding blocks are stripped
+  - plain-text tool-call XML payload blocks such as `<tool_call>...</tool_call>` / `<function_calls>...</function_calls>` are stripped
   - downgraded tool-call/result scaffolding such as `[Tool Call: ...]`,
     `[Tool Result ...]`, and `[Historical context ...]` is stripped
   - leaked model control tokens such as `<|assistant|>` / `<｜...｜>` are stripped

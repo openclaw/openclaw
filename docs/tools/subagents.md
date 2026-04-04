@@ -265,6 +265,8 @@ Announce payloads include a stats line at the end (even when wrapped):
 
 - assistant recall is normalized first:
   - thinking tags are stripped
+  - `<relevant-memories>` / `<relevant_memories>` scaffolding blocks are stripped
+  - plain-text tool-call XML payload blocks such as `<tool_call>...</tool_call>` / `<function_calls>...</function_calls>` are stripped
   - downgraded tool-call/result scaffolding and historical-context markers are stripped
   - leaked model control tokens such as `<|assistant|>` are stripped
   - malformed MiniMax tool-call XML is stripped
