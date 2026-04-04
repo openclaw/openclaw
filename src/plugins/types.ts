@@ -1918,6 +1918,8 @@ export type PluginHookName =
   | "before_agent_reply"
   | "llm_input"
   | "llm_output"
+  | "before_model_call"
+  | "after_model_call"
   | "agent_end"
   | "before_compaction"
   | "after_compaction"
@@ -1948,6 +1950,8 @@ export const PLUGIN_HOOK_NAMES = [
   "before_agent_reply",
   "llm_input",
   "llm_output",
+  "before_model_call",
+  "after_model_call",
   "agent_end",
   "before_compaction",
   "after_compaction",
@@ -2136,6 +2140,52 @@ export type PluginHookLlmOutputEvent = {
     cacheWrite?: number;
     total?: number;
   };
+};
+
+// before_model_call hook — fires before each real provider model invocation
+export type PluginHookBeforeModelCallEvent = {
+  /** Stable run identifier for this agent invocation. */
+  runId: string;
+  /** Ephemeral session UUID. */
+  sessionId: string;
+  /** Provider identifier (e.g. "anthropic", "openai"). */
+  provider: string;
+  /** Model identifier (e.g. "sonnet-4.6"). */
+  model: string;
+  /** Provider API type (e.g. "anthropic-messages", "openai-chat"). */
+  api?: string;
+  /** Unique identifier for this individual model call. */
+  callId: string;
+  /** The resolved system prompt sent alongside the provider request. */
+  systemPrompt?: string;
+  /** The messages array sent to the provider. */
+  requestMessages: unknown[];
+};
+
+// after_model_call hook — fires after each real provider model invocation completes
+export type PluginHookAfterModelCallEvent = {
+  /** Stable run identifier for this agent invocation. */
+  runId: string;
+  /** Ephemeral session UUID. */
+  sessionId: string;
+  /** Provider identifier (e.g. "anthropic", "openai"). */
+  provider: string;
+  /** Model identifier (e.g. "sonnet-4.6"). */
+  model: string;
+  /** Provider API type (e.g. "anthropic-messages", "openai-chat"). */
+  api?: string;
+  /** Unique identifier for this individual model call (matches before_model_call). */
+  callId: string;
+  /** Error message if the model call failed. */
+  error?: string;
+  /** Duration of the model call in milliseconds. */
+  durationMs?: number;
+  /**
+   * The assistant message returned by this model call (available after the
+   * stream is fully consumed). Contains the complete response including text
+   * content, tool_use blocks, stop reason, and usage metadata.
+   */
+  responseMessage?: unknown;
 };
 
 // agent_end hook
@@ -2643,6 +2693,14 @@ export type PluginHookHandlerMap = {
   llm_input: (event: PluginHookLlmInputEvent, ctx: PluginHookAgentContext) => Promise<void> | void;
   llm_output: (
     event: PluginHookLlmOutputEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<void> | void;
+  before_model_call: (
+    event: PluginHookBeforeModelCallEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<void> | void;
+  after_model_call: (
+    event: PluginHookAfterModelCallEvent,
     ctx: PluginHookAgentContext,
   ) => Promise<void> | void;
   agent_end: (event: PluginHookAgentEndEvent, ctx: PluginHookAgentContext) => Promise<void> | void;
