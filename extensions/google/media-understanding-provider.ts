@@ -10,14 +10,12 @@ import {
 import {
   assertOkOrThrowHttpError,
   postJsonRequest,
-  resolveProviderHttpRequestConfig,
   type ProviderRequestTransportOverrides,
 } from "openclaw/plugin-sdk/provider-http";
 import {
   DEFAULT_GOOGLE_API_BASE_URL,
-  normalizeGoogleApiBaseUrl,
   normalizeGoogleModelId,
-  parseGeminiAuth,
+  resolveGoogleGenerativeAiHttpRequestConfig,
 } from "./runtime-api.js";
 
 export const DEFAULT_GOOGLE_AUDIO_BASE_URL = DEFAULT_GOOGLE_API_BASE_URL;
@@ -54,15 +52,11 @@ async function generateGeminiInlineDataText(params: {
     return normalizeGoogleModelId(trimmed);
   })();
   const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-    resolveProviderHttpRequestConfig({
-      baseUrl: normalizeGoogleApiBaseUrl(params.baseUrl ?? params.defaultBaseUrl),
-      defaultBaseUrl: DEFAULT_GOOGLE_API_BASE_URL,
-      allowPrivateNetwork: Boolean(params.baseUrl?.trim()),
+    resolveGoogleGenerativeAiHttpRequestConfig({
+      apiKey: params.apiKey,
+      baseUrl: params.baseUrl ?? params.defaultBaseUrl,
       headers: params.headers,
       request: params.request,
-      defaultHeaders: parseGeminiAuth(params.apiKey).headers,
-      provider: "google",
-      api: "google-generative-ai",
       capability: params.defaultMime.startsWith("audio/") ? "audio" : "video",
       transport: "media-understanding",
     });

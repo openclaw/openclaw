@@ -1,4 +1,8 @@
-import { resolveProviderEndpoint } from "openclaw/plugin-sdk/provider-http";
+import {
+  resolveProviderEndpoint,
+  resolveProviderHttpRequestConfig,
+  type ProviderRequestTransportOverrides,
+} from "openclaw/plugin-sdk/provider-http";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   applyAgentDefaultModelPrimary,
@@ -155,6 +159,28 @@ export function parseGeminiAuth(apiKey: string): { headers: Record<string, strin
       "Content-Type": "application/json",
     },
   };
+}
+
+export function resolveGoogleGenerativeAiHttpRequestConfig(params: {
+  apiKey: string;
+  baseUrl?: string;
+  headers?: Record<string, string>;
+  request?: ProviderRequestTransportOverrides;
+  capability: "image" | "audio" | "video";
+  transport: "http" | "media-understanding";
+}) {
+  return resolveProviderHttpRequestConfig({
+    baseUrl: normalizeGoogleApiBaseUrl(params.baseUrl ?? DEFAULT_GOOGLE_API_BASE_URL),
+    defaultBaseUrl: DEFAULT_GOOGLE_API_BASE_URL,
+    allowPrivateNetwork: Boolean(params.baseUrl?.trim()),
+    headers: params.headers,
+    request: params.request,
+    defaultHeaders: parseGeminiAuth(params.apiKey).headers,
+    provider: "google",
+    api: "google-generative-ai",
+    capability: params.capability,
+    transport: params.transport,
+  });
 }
 
 export const GOOGLE_GEMINI_DEFAULT_MODEL = "google/gemini-3.1-pro-preview";

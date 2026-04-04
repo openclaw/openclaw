@@ -3,6 +3,7 @@ import {
   isGoogleGenerativeAiApi,
   normalizeGoogleGenerativeAiBaseUrl,
   parseGeminiAuth,
+  resolveGoogleGenerativeAiHttpRequestConfig,
   resolveGoogleGenerativeAiApiOrigin,
   resolveGoogleGenerativeAiTransport,
   shouldNormalizeGoogleGenerativeAiProviderConfig,
@@ -108,6 +109,37 @@ describe("google generative ai helpers", () => {
         "x-goog-api-key": "api-key-123",
         "Content-Type": "application/json",
       },
+    });
+  });
+
+  it("builds shared Google Generative AI HTTP request config", () => {
+    const oauthConfig = resolveGoogleGenerativeAiHttpRequestConfig({
+      apiKey: JSON.stringify({ token: "oauth-token" }),
+      baseUrl: "https://generativelanguage.googleapis.com",
+      capability: "audio",
+      transport: "media-understanding",
+    });
+    expect(oauthConfig).toMatchObject({
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      allowPrivateNetwork: true,
+    });
+    expect(Object.fromEntries(new Headers(oauthConfig.headers).entries())).toEqual({
+      authorization: "Bearer oauth-token",
+      "content-type": "application/json",
+    });
+
+    const apiKeyConfig = resolveGoogleGenerativeAiHttpRequestConfig({
+      apiKey: "api-key-123",
+      capability: "image",
+      transport: "http",
+    });
+    expect(apiKeyConfig).toMatchObject({
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      allowPrivateNetwork: false,
+    });
+    expect(Object.fromEntries(new Headers(apiKeyConfig.headers).entries())).toEqual({
+      "content-type": "application/json",
+      "x-goog-api-key": "api-key-123",
     });
   });
 });
