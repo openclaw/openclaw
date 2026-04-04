@@ -32,7 +32,7 @@ open http://localhost:18789
 ```
 
 Retrieve the configured shared secret for the Control UI. This deploy script
-creates a gateway token by default:
+creates token auth by default:
 
 ```bash
 kubectl get secret openclaw-secrets -n openclaw -o jsonpath='{.data.OPENCLAW_GATEWAY_TOKEN}' | base64 -d
