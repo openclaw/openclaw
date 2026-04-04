@@ -93,6 +93,17 @@ explicitly promotes one as public.
     | `plugin-sdk/outbound-runtime` | Outbound identity/send delegate helpers |
     | `plugin-sdk/thread-bindings-runtime` | Thread-binding lifecycle and adapter helpers |
     | `plugin-sdk/agent-media-payload` | Legacy agent media payload builder |
+    | `plugin-sdk/conversation-runtime` | Conversation/thread binding, pairing, and configured-binding helpers |
+    | `plugin-sdk/runtime-config-snapshot` | Runtime config snapshot helper |
+    | `plugin-sdk/runtime-group-policy` | Runtime group-policy resolution helpers |
+    | `plugin-sdk/channel-status` | Shared channel status snapshot/summary helpers |
+    | `plugin-sdk/channel-config-primitives` | Narrow channel config-schema primitives |
+    | `plugin-sdk/channel-config-writes` | Channel config-write authorization helpers |
+    | `plugin-sdk/channel-plugin-common` | Shared channel plugin prelude exports |
+    | `plugin-sdk/allowlist-config-edit` | Allowlist config edit/read helpers |
+    | `plugin-sdk/group-access` | Shared group-access decision helpers |
+    | `plugin-sdk/direct-dm` | Shared direct-DM auth/guard helpers |
+    | `plugin-sdk/interactive-runtime` | Interactive reply payload normalization/reduction helpers |
     | `plugin-sdk/channel-inbound` | Debounce, mention matching, envelope helpers |
     | `plugin-sdk/channel-send-result` | Reply result types |
     | `plugin-sdk/channel-actions` | `createMessageToolButtonsSchema`, `createMessageToolCardSchema` |
@@ -135,6 +146,9 @@ explicitly promotes one as public.
     | `plugin-sdk/approval-delivery-runtime` | Native approval capability/delivery adapters |
     | `plugin-sdk/approval-native-runtime` | Native approval target + account-binding helpers |
     | `plugin-sdk/approval-reply-runtime` | Exec/plugin approval reply payload helpers |
+    | `plugin-sdk/command-auth-native` | Native command auth + native session-target helpers |
+    | `plugin-sdk/command-detection` | Shared command detection helpers |
+    | `plugin-sdk/command-surface` | Command-body normalization and command-surface helpers |
     | `plugin-sdk/allow-from` | `formatAllowFromLowercase` |
     | `plugin-sdk/security-runtime` | Shared trust, DM gating, external-content, and secret-collection helpers |
     | `plugin-sdk/ssrf-policy` | Host allowlist and private-network SSRF policy helpers |
@@ -172,6 +186,19 @@ explicitly promotes one as public.
     | `plugin-sdk/temp-path` | Shared temp-download path helpers |
     | `plugin-sdk/logging-core` | Subsystem logger and redaction helpers |
     | `plugin-sdk/markdown-table-runtime` | Markdown table mode helpers |
+    | `plugin-sdk/json-store` | Small JSON state read/write helpers |
+    | `plugin-sdk/file-lock` | Re-entrant file-lock helpers |
+    | `plugin-sdk/persistent-dedupe` | Disk-backed dedupe cache helpers |
+    | `plugin-sdk/acp-runtime` | ACP runtime/session helpers |
+    | `plugin-sdk/agent-config-primitives` | Narrow agent runtime config-schema primitives |
+    | `plugin-sdk/boolean-param` | Loose boolean param reader |
+    | `plugin-sdk/dangerous-name-runtime` | Dangerous-name matching resolution helpers |
+    | `plugin-sdk/device-bootstrap` | Device bootstrap and pairing token helpers |
+    | `plugin-sdk/extension-shared` | Shared passive-channel and status helper primitives |
+    | `plugin-sdk/models-provider-runtime` | `/models` command/provider reply helpers |
+    | `plugin-sdk/skill-commands-runtime` | Skill command listing helpers |
+    | `plugin-sdk/native-command-registry` | Native command registry/build/serialize helpers |
+    | `plugin-sdk/provider-zai-endpoint` | Z.AI endpoint detection helpers |
     | `plugin-sdk/infra-runtime` | System event/heartbeat helpers |
     | `plugin-sdk/collection-runtime` | Small bounded cache helpers |
     | `plugin-sdk/diagnostic-runtime` | Diagnostic flag and event helpers |
@@ -199,15 +226,6 @@ explicitly promotes one as public.
     | `plugin-sdk/image-generation-core` | Shared image-generation types, failover, auth, and registry helpers |
     | `plugin-sdk/media-understanding` | Media understanding provider types |
     | `plugin-sdk/speech` | Speech provider types |
-    | `plugin-sdk/interactive-runtime` | Interactive reply payload normalization/reduction helpers |
-    | `plugin-sdk/channel-config-primitives` | Narrow channel config-schema primitives |
-    | `plugin-sdk/channel-config-writes` | Channel config-write authorization helpers |
-    | `plugin-sdk/channel-plugin-common` | Shared channel plugin prelude exports |
-    | `plugin-sdk/channel-status` | Shared channel status snapshot/summary helpers |
-    | `plugin-sdk/allowlist-config-edit` | Allowlist config edit/read helpers |
-    | `plugin-sdk/group-access` | Shared group-access decision helpers |
-    | `plugin-sdk/direct-dm` | Shared direct-DM auth/guard helpers |
-    | `plugin-sdk/extension-shared` | Shared passive-channel and status helper primitives |
     | `plugin-sdk/webhook-targets` | Webhook target registry and route-install helpers |
     | `plugin-sdk/webhook-path` | Webhook path normalization helpers |
     | `plugin-sdk/web-media` | Shared remote/local media loading helpers |
