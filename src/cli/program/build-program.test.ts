@@ -82,6 +82,19 @@ describe("buildProgram", () => {
     expect(process.exitCode).toBe(1);
   });
 
+  it("does not run the command action after an argument error", async () => {
+    const program = buildProgram();
+    const exitSpy = mockProcessExit();
+    const actionSpy = vi.fn();
+    program.command("test").action(actionSpy);
+
+    await expect(program.parseAsync(["test", "unexpected-arg"], { from: "user" })).rejects.toThrow(
+      "process.exit:1",
+    );
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(actionSpy).not.toHaveBeenCalled();
+  });
+
   it("preserves exitCode 0 for help display", async () => {
     const program = buildProgram();
     const exitSpy = mockProcessExit();
