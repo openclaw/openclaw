@@ -98,14 +98,17 @@ export type PersistSessionEntryParams = {
   storePath: string;
   entry: SessionEntry;
   clearedFields?: string[];
+  clearMissingFields?: boolean;
 };
 
 export async function persistSessionEntry(params: PersistSessionEntryParams): Promise<void> {
   const persisted = await updateSessionStore(params.storePath, (store) => {
     const merged = mergeSessionEntry(store[params.sessionKey], params.entry);
-    for (const field of params.clearedFields ?? []) {
-      if (!Object.hasOwn(params.entry, field)) {
-        Reflect.deleteProperty(merged, field);
+    if (params.clearMissingFields === true) {
+      for (const field of params.clearedFields ?? []) {
+        if (!Object.hasOwn(params.entry, field)) {
+          Reflect.deleteProperty(merged, field);
+        }
       }
     }
     store[params.sessionKey] = merged;
@@ -396,6 +399,8 @@ export function runAgentAttempt(params: {
             sessionKey: params.sessionKey,
             storePath: params.storePath,
             entry: updatedEntry,
+            clearedFields: params.providerOverride === "claude-cli" ? ["claudeCliSessionId"] : [],
+            clearMissingFields: params.providerOverride === "claude-cli",
           });
 
           params.sessionEntry = updatedEntry;

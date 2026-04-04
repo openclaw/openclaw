@@ -2,7 +2,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { resolveFallbackRetryPrompt, sessionFileHasContent } from "./attempt-execution.js";
+import {
+  persistSessionEntry,
+  resolveFallbackRetryPrompt,
+  sessionFileHasContent,
+} from "./attempt-execution.js";
 
 describe("resolveFallbackRetryPrompt", () => {
   const originalBody = "Summarize the quarterly earnings report and highlight key trends.";
@@ -155,5 +159,87 @@ describe("sessionFileHasContent", () => {
     const link = path.join(tmpDir, "link.jsonl");
     await fs.symlink(realFile, link);
     expect(await sessionFileHasContent(link)).toBe(false);
+  });
+});
+
+describe("persistSessionEntry", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "oc-persist-test-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("preserves omitted cleared fields by default", async () => {
+    const storePath = path.join(tmpDir, "sessions.json");
+    const sessionKey = "agent:main:main";
+    const initialEntry = {
+      sessionId: "sess-1",
+      updatedAt: 1,
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-6",
+    };
+    await fs.writeFile(storePath, JSON.stringify({ [sessionKey]: initialEntry }), "utf-8");
+
+    const sessionStore = { [sessionKey]: { ...initialEntry } };
+    await persistSessionEntry({
+      sessionStore,
+      sessionKey,
+      storePath,
+      entry: {
+        sessionId: "sess-1",
+        updatedAt: 2,
+        thinkingLevel: "adaptive",
+      },
+      clearedFields: ["providerOverride", "modelOverride"],
+    });
+
+    expect(sessionStore[sessionKey]?.providerOverride).toBe("anthropic");
+    expect(sessionStore[sessionKey]?.modelOverride).toBe("claude-opus-4-6");
+
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      { providerOverride?: string; modelOverride?: string }
+    >;
+    expect(persisted[sessionKey]?.providerOverride).toBe("anthropic");
+    expect(persisted[sessionKey]?.modelOverride).toBe("claude-opus-4-6");
+  });
+
+  it("clears omitted fields only when explicitly requested", async () => {
+    const storePath = path.join(tmpDir, "sessions.json");
+    const sessionKey = "agent:main:main";
+    const initialEntry = {
+      sessionId: "sess-2",
+      updatedAt: 1,
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-6",
+    };
+    await fs.writeFile(storePath, JSON.stringify({ [sessionKey]: initialEntry }), "utf-8");
+
+    const sessionStore = { [sessionKey]: { ...initialEntry } };
+    await persistSessionEntry({
+      sessionStore,
+      sessionKey,
+      storePath,
+      entry: {
+        sessionId: "sess-2",
+        updatedAt: 2,
+      },
+      clearedFields: ["providerOverride", "modelOverride"],
+      clearMissingFields: true,
+    });
+
+    expect(sessionStore[sessionKey]?.providerOverride).toBeUndefined();
+    expect(sessionStore[sessionKey]?.modelOverride).toBeUndefined();
+
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      { providerOverride?: string; modelOverride?: string }
+    >;
+    expect(persisted[sessionKey]?.providerOverride).toBeUndefined();
+    expect(persisted[sessionKey]?.modelOverride).toBeUndefined();
   });
 });

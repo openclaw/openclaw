@@ -91,6 +91,7 @@ type PersistSessionEntryParams = {
   sessionKey: string;
   storePath: string;
   entry: SessionEntry;
+  clearMissingOverrideFields?: boolean;
 };
 
 type OverrideFieldClearedByDelete =
@@ -122,6 +123,7 @@ async function persistSessionEntry(params: PersistSessionEntryParams): Promise<v
   await persistSessionEntryBase({
     ...params,
     clearedFields: OVERRIDE_FIELDS_CLEARED_BY_DELETE,
+    clearMissingFields: params.clearMissingOverrideFields === true,
   });
 }
 
@@ -618,6 +620,7 @@ async function agentCommandInternal(
               sessionKey,
               storePath,
               entry,
+              clearMissingOverrideFields: true,
             });
           }
         }
