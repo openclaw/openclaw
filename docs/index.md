@@ -77,7 +77,7 @@ The Gateway is the single source of truth for sessions, routing, and channel con
     Discord, iMessage, Signal, Slack, Telegram, WhatsApp, WebChat, and more with a single Gateway process.
   </Card>
   <Card title="Plugin channels" icon="plug">
-    Add Matrix, Nostr, Twitch, Zalo, and more with plugin packages.
+    Bundled plugins add Matrix, Nostr, Twitch, Zalo, and more in normal current releases.
   </Card>
   <Card title="Multi-agent routing" icon="route">
     Isolated sessions per agent, workspace, or sender.
