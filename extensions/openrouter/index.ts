@@ -83,7 +83,7 @@ export default definePluginEntry({
 
     function wrapOpenRouterProviderStream(
       ctx: ProviderWrapStreamFnContext,
-    ): StreamFn | undefined {
+    ): StreamFn | null | undefined {
       const providerRouting =
         ctx.extraParams?.provider != null && typeof ctx.extraParams.provider === "object"
           ? (ctx.extraParams.provider as Record<string, unknown>)

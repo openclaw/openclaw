@@ -163,14 +163,18 @@ export {
 export {
   createGoogleThinkingPayloadWrapper,
   sanitizeGoogleThinkingPayload,
-  createMinimaxFastModeWrapper,
+} from "../agents/pi-embedded-runner/google-stream-wrappers.js";
+export {
   createKilocodeWrapper,
   createOpenRouterSystemCacheWrapper,
   createOpenRouterWrapper,
   isProxyReasoningUnsupported,
+} from "../agents/pi-embedded-runner/proxy-stream-wrappers.js";
+export { createMinimaxFastModeWrapper } from "../agents/pi-embedded-runner/minimax-stream-wrappers.js";
+export {
   createMoonshotThinkingWrapper,
   resolveMoonshotThinkingType,
-};
+} from "../agents/pi-embedded-runner/moonshot-thinking-stream-wrappers.js";
 export {
   createOpenAIAttributionHeadersWrapper,
   createCodexNativeWebSearchWrapper,
