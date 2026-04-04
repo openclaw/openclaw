@@ -14,6 +14,9 @@ models are accessed via the `zai` provider and model IDs like `zai/glm-5`.
 ## CLI setup
 
 ```bash
+# Generic API-key setup with endpoint auto-detection
+openclaw onboard --auth-choice zai-api-key
+
 # Coding Plan Global, recommended for Coding Plan users
 openclaw onboard --auth-choice zai-coding-global
 
@@ -36,8 +39,30 @@ openclaw onboard --auth-choice zai-cn
 }
 ```
 
+`zai-api-key` lets OpenClaw detect the matching Z.AI endpoint from the key and
+apply the correct base URL automatically. Use the explicit regional choices when
+you want to force a specific Coding Plan or general API surface.
+
+## Current bundled GLM models
+
+OpenClaw currently seeds the bundled `zai` provider with these GLM refs:
+
+- `glm-5.1`
+- `glm-5`
+- `glm-5-turbo`
+- `glm-5v-turbo`
+- `glm-4.7`
+- `glm-4.7-flash`
+- `glm-4.7-flashx`
+- `glm-4.6`
+- `glm-4.6v`
+- `glm-4.5`
+- `glm-4.5-air`
+- `glm-4.5-flash`
+- `glm-4.5v`
+
 ## Notes
 
 - GLM versions and availability can change; check Z.AI's docs for the latest.
-- Example model IDs include `glm-5.1`, `glm-5`, `glm-5v-turbo`, `glm-4.7`, and `glm-4.6`.
+- Default bundled model ref is `zai/glm-5`.
 - For provider details, see [/providers/zai](/providers/zai).

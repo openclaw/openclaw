@@ -15,6 +15,9 @@ with a Z.AI API key.
 ## CLI setup
 
 ```bash
+# Generic API-key setup with endpoint auto-detection
+openclaw onboard --auth-choice zai-api-key
+
 # Coding Plan Global, recommended for Coding Plan users
 openclaw onboard --auth-choice zai-coding-global
 
@@ -37,9 +40,32 @@ openclaw onboard --auth-choice zai-cn
 }
 ```
 
+`zai-api-key` lets OpenClaw detect the matching Z.AI endpoint from the key and
+apply the correct base URL automatically. Use the explicit regional choices when
+you want to force a specific Coding Plan or general API surface.
+
+## Bundled GLM catalog
+
+OpenClaw currently seeds the bundled `zai` provider with:
+
+- `glm-5.1`
+- `glm-5`
+- `glm-5-turbo`
+- `glm-5v-turbo`
+- `glm-4.7`
+- `glm-4.7-flash`
+- `glm-4.7-flashx`
+- `glm-4.6`
+- `glm-4.6v`
+- `glm-4.5`
+- `glm-4.5-air`
+- `glm-4.5-flash`
+- `glm-4.5v`
+
 ## Notes
 
 - GLM models are available as `zai/<model>` (example: `zai/glm-5`).
+- Default bundled model ref: `zai/glm-5`
 - `tool_stream` is enabled by default for Z.AI tool-call streaming. Set
   `agents.defaults.models["zai/<model>"].params.tool_stream` to `false` to disable it.
 - See [/providers/glm](/providers/glm) for the model family overview.
