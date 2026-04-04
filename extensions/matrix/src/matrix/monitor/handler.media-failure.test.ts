@@ -10,8 +10,8 @@ const { downloadMatrixMediaMock } = vi.hoisted(() => ({
   downloadMatrixMediaMock: vi.fn(),
 }));
 
-vi.mock("./media.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./media.js")>();
+vi.mock("./media.js", async () => {
+  const actual = await vi.importActual<typeof import("./media.js")>("./media.js");
   return {
     ...actual,
     downloadMatrixMedia: (...args: unknown[]) => downloadMatrixMediaMock(...args),

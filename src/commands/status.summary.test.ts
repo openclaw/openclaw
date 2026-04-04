@@ -1,7 +1,12 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../channels/config-presence.js", () => ({
+const statusSummaryMocks = vi.hoisted(() => ({
   hasPotentialConfiguredChannels: vi.fn(() => true),
+  buildChannelSummary: vi.fn(async () => ["ok"]),
+}));
+
+vi.mock("../channels/config-presence.js", () => ({
+  hasPotentialConfiguredChannels: statusSummaryMocks.hasPotentialConfiguredChannels,
 }));
 
 vi.mock("./status.summary.runtime.js", () => ({
@@ -29,17 +34,6 @@ vi.mock("../config/io.js", () => ({
   loadConfig: vi.fn(() => ({})),
 }));
 
-vi.mock("../config/sessions.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/sessions.js")>();
-  return {
-    ...actual,
-    loadSessionStore: vi.fn(() => ({})),
-    resolveFreshSessionTotalTokens: vi.fn(() => undefined),
-    resolveMainSessionKey: vi.fn(() => "main"),
-    resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
-  };
-});
-
 vi.mock("../gateway/agent-list.js", () => ({
   listGatewayAgentsBasic: vi.fn(() => ({
     defaultId: "main",
@@ -48,7 +42,7 @@ vi.mock("../gateway/agent-list.js", () => ({
 }));
 
 vi.mock("../infra/channel-summary.js", () => ({
-  buildChannelSummary: vi.fn(async () => ["ok"]),
+  buildChannelSummary: statusSummaryMocks.buildChannelSummary,
 }));
 
 vi.mock("../infra/heartbeat-summary.js", () => ({
@@ -106,15 +100,18 @@ vi.mock("../routing/session-key.js", () => ({
   parseAgentSessionKey: vi.fn(() => null),
 }));
 
-vi.mock("../version.js", () => ({
-  resolveRuntimeServiceVersion: vi.fn(() => "2026.3.8"),
-}));
+vi.mock("../version.js", async () => {
+  const actual = await vi.importActual<typeof import("../version.js")>("../version.js");
+  return {
+    ...actual,
+    resolveRuntimeServiceVersion: vi.fn(() => "2026.3.8"),
+  };
+});
 
 vi.mock("./status.link-channel.js", () => ({
   resolveLinkChannelContext: vi.fn(async () => undefined),
 }));
 
-const { hasPotentialConfiguredChannels } = await import("../channels/config-presence.js");
 const { buildChannelSummary } = await import("../infra/channel-summary.js");
 const { resolveLinkChannelContext } = await import("./status.link-channel.js");
 let getStatusSummary: typeof import("./status.summary.js").getStatusSummary;
@@ -128,6 +125,8 @@ describe("getStatusSummary", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    statusSummaryMocks.hasPotentialConfiguredChannels.mockReturnValue(true);
+    statusSummaryMocks.buildChannelSummary.mockResolvedValue(["ok"]);
   });
 
   it("includes runtimeVersion in the status payload", async () => {
@@ -141,7 +140,7 @@ describe("getStatusSummary", () => {
   });
 
   it("skips channel summary imports when no channels are configured", async () => {
-    vi.mocked(hasPotentialConfiguredChannels).mockReturnValue(false);
+    statusSummaryMocks.hasPotentialConfiguredChannels.mockReturnValue(false);
 
     const summary = await getStatusSummary();
 

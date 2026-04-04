@@ -65,27 +65,6 @@ const imageProviderHarness = vi.hoisted(() => {
   };
 });
 
-vi.mock("../../media-understanding/runner.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../media-understanding/runner.js")>();
-  return {
-    ...actual,
-    buildProviderRegistry: (overrides?: Record<string, MediaUnderstandingProvider>) =>
-      imageProviderHarness.buildProviderRegistry(overrides),
-  };
-});
-
-vi.mock("../../media-understanding/provider-registry.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../media-understanding/provider-registry.js")>();
-  return {
-    ...actual,
-    getMediaUnderstandingProvider: (
-      id: string,
-      registry: Map<string, MediaUnderstandingProvider>,
-    ) => imageProviderHarness.getMediaUnderstandingProvider(id, registry),
-  };
-});
-
 vi.mock("../bash-tools.js", () => ({
   createExecTool: vi.fn(() => piToolsHarness.createStubTool("exec")),
   createProcessTool: vi.fn(() => piToolsHarness.createStubTool("process")),
@@ -142,6 +121,15 @@ async function writeAuthProfiles(agentDir: string, profiles: unknown) {
 
 async function createOpenClawCodingToolsWithFreshModules(options?: CreateOpenClawCodingToolsArgs) {
   vi.resetModules();
+  const freshImageTool = await import("./image-tool.js");
+  freshImageTool.__testing.setProviderDepsForTest({
+    buildProviderRegistry: (overrides?: Record<string, MediaUnderstandingProvider>) =>
+      imageProviderHarness.buildProviderRegistry(overrides),
+    getMediaUnderstandingProvider: (
+      id: string,
+      registry: Map<string, MediaUnderstandingProvider>,
+    ) => imageProviderHarness.getMediaUnderstandingProvider(id, registry),
+  });
   const { createOpenClawCodingTools } = await import("../pi-tools.js");
   return createOpenClawCodingTools(options);
 }
@@ -883,20 +871,22 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
-  it("allows local image paths outside default media roots when workspaceOnly is off", async () => {
+  it("still rejects temp workspace paths outside allowed local roots when workspaceOnly is off", async () => {
     await withTempWorkspacePng(async ({ workspaceDir, imagePath }) => {
       const fetch = stubMinimaxOkFetch();
       await withTempAgentDir(async (agentDir) => {
         const cfg = createMinimaxImageConfig();
 
         const withoutWorkspace = createRequiredImageTool({ config: cfg, agentDir });
-        await expectImageToolExecOk(withoutWorkspace, imagePath);
+        await expect(
+          withoutWorkspace.execute("t1", { prompt: "Describe.", image: imagePath }),
+        ).rejects.toThrow(/not under an allowed directory/i);
 
         const withWorkspace = createRequiredImageTool({ config: cfg, agentDir, workspaceDir });
 
         await expectImageToolExecOk(withWorkspace, imagePath);
 
-        expect(fetch).toHaveBeenCalledTimes(2);
+        expect(fetch).toHaveBeenCalledTimes(1);
       });
     });
   });
@@ -933,7 +923,7 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
-  it("allows non-workspace local image paths when workspaceOnly is disabled", async () => {
+  it("still rejects non-workspace local image paths when workspaceOnly is disabled", async () => {
     const fetch = stubMinimaxOkFetch();
     await withTempAgentDir(async (agentDir) => {
       const cfg = createMinimaxImageConfig();
@@ -947,8 +937,10 @@ describe("image tool implicit imageModel config", () => {
           fsPolicy: { workspaceOnly: false },
         });
 
-        await expectImageToolExecOk(tool, outsideImage);
-        expect(fetch).toHaveBeenCalledTimes(1);
+        await expect(
+          tool.execute("t1", { prompt: "Describe.", image: outsideImage }),
+        ).rejects.toThrow(/not under an allowed directory/i);
+        expect(fetch).not.toHaveBeenCalled();
       } finally {
         await fs.rm(outsideDir, { recursive: true, force: true });
       }
