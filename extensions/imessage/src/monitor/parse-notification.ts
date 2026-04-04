@@ -74,7 +74,9 @@ export function parseIMessageNotification(raw: unknown): IMessagePayload | null 
     !isOptionalString(message.chat_guid) ||
     !isOptionalString(message.chat_name) ||
     !isOptionalStringArray(message.participants) ||
-    !isOptionalBoolean(message.is_group)
+    !isOptionalBoolean(message.is_group) ||
+    !isOptionalBoolean(message.is_tapback) ||
+    !isOptionalNumber(message.associated_message_type)
   ) {
     return null;
   }

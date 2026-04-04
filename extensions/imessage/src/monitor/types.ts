@@ -25,6 +25,9 @@ export type IMessagePayload = {
   chat_name?: string | null;
   participants?: string[] | null;
   is_group?: boolean | null;
+  // Tapback/reaction fields (imsg v0.5.0+)
+  is_tapback?: boolean | null;
+  associated_message_type?: number | null;
 };
 
 export type MonitorIMessageOpts = {
