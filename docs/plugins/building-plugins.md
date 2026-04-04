@@ -156,6 +156,7 @@ A single plugin can register any number of capabilities via the `api` object:
 | Media understanding   | `api.registerMediaUnderstandingProvider(...)` | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
 | Image generation      | `api.registerImageGenerationProvider(...)`    | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
 | Video generation      | `api.registerVideoGenerationProvider(...)`    | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
+| Web fetch             | `api.registerWebFetchProvider(...)`           | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
 | Web search            | `api.registerWebSearchProvider(...)`          | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
 | Agent tools           | `api.registerTool(...)`                       | Below                                                                           |
 | Custom commands       | `api.registerCommand(...)`                    | [Entry Points](/plugins/sdk-entrypoints)                                        |

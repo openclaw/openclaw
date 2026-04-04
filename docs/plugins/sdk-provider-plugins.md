@@ -504,8 +504,9 @@ API key auth, and dynamic model resolution.
 
   <Step title="Add extra capabilities (optional)">
     <a id="step-5-add-extra-capabilities"></a>
-    A provider plugin can register speech, realtime transcription, realtime voice, media
-    understanding, image generation, video generation, and web search alongside text inference:
+    A provider plugin can register speech, realtime transcription, realtime
+    voice, media understanding, image generation, video generation, web fetch,
+    and web search alongside text inference:
 
     ```typescript
     register(api) {
@@ -572,6 +573,26 @@ API key auth, and dynamic model resolution.
           supportsResolution: true,
         },
         generateVideo: async (req) => ({ videos: [] }),
+      });
+
+      api.registerWebFetchProvider({
+        id: "acme-ai-fetch",
+        label: "Acme Fetch",
+        hint: "Fetch pages through Acme's rendering backend.",
+        envVars: ["ACME_FETCH_API_KEY"],
+        placeholder: "acme-...",
+        signupUrl: "https://acme.example.com/fetch",
+        credentialPath: "plugins.entries.acme.config.webFetch.apiKey",
+        getCredentialValue: (fetchConfig) => fetchConfig?.acme?.apiKey,
+        setCredentialValue: (fetchConfigTarget, value) => {
+          const acme = (fetchConfigTarget.acme ??= {});
+          acme.apiKey = value;
+        },
+        createTool: () => ({
+          description: "Fetch a page through Acme Fetch.",
+          parameters: {},
+          execute: async (args) => ({ content: [] }),
+        }),
       });
 
       api.registerWebSearchProvider({

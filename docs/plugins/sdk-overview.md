@@ -293,6 +293,8 @@ methods:
 | `api.registerRealtimeVoiceProvider(...)`         | Duplex realtime voice sessions   |
 | `api.registerMediaUnderstandingProvider(...)`    | Image/audio/video analysis       |
 | `api.registerImageGenerationProvider(...)`       | Image generation                 |
+| `api.registerVideoGenerationProvider(...)`       | Video generation                 |
+| `api.registerWebFetchProvider(...)`              | Web fetch / scrape provider      |
 | `api.registerWebSearchProvider(...)`             | Web search                       |
 
 ### Tools and commands
