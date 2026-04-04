@@ -91,6 +91,10 @@ USER.md
 
 # local tooling
 .serena/
+.codex-artifacts/
+.playwright-cli/
+output/
+apps/macos/build/
 
 # Agent credentials and memory (NEVER COMMIT)
 /memory/

@@ -1,8 +1,28 @@
 {
   "name": "openclaw",
   "version": "2026.3.14",
-  "description": "Multi-channel AI gateway with extensible messaging integrations",
-  "keywords": [],
+  "description": "Self-hosted AI assistant and MCP-compatible gateway for Discord, Telegram, WhatsApp, Slack, iMessage, browser automation, and multi-agent workflows",
+  "keywords": [
+    "ai-assistant",
+    "ai-gateway",
+    "automation",
+    "browser-automation",
+    "claude",
+    "codex",
+    "discord-bot",
+    "imessage",
+    "local-first",
+    "mcp",
+    "mcp-client",
+    "model-context-protocol",
+    "multi-agent",
+    "openclaw",
+    "personal-ai-assistant",
+    "self-hosted-ai",
+    "slack-bot",
+    "telegram-bot",
+    "whatsapp-bot"
+  ],
   "homepage": "https://github.com/openclaw/openclaw#readme",
   "bugs": {
     "url": "https://github.com/openclaw/openclaw/issues"
