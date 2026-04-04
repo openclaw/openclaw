@@ -107,6 +107,7 @@ type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
   cacheRetention?: "none" | "short" | "long";
   cachedContent?: string;
   openaiWsWarmup?: boolean;
+  requestMetadata?: Record<string, string>;
 };
 type SupportedTransport = Exclude<CacheRetentionStreamOptions["transport"], undefined>;
 
@@ -235,28 +236,31 @@ function createStreamFnWithExtraParams(
   agentId?: string,
   agentName?: string,
 ): StreamFn | undefined {
-  if (!extraParams || Object.keys(extraParams).length === 0) {
+  // Allow the wrapper to be created when Bedrock metadata needs to be
+  // injected, even if no user-configured extra params are present.
+  const hasBedrockMetadata = provider === "amazon-bedrock" && !!agentId;
+  if ((!extraParams || Object.keys(extraParams).length === 0) && !hasBedrockMetadata) {
     return undefined;
   }
 
   const streamParams: CacheRetentionStreamOptions = {};
-  if (typeof extraParams.temperature === "number") {
+  if (typeof extraParams?.temperature === "number") {
     streamParams.temperature = extraParams.temperature;
   }
-  if (typeof extraParams.maxTokens === "number") {
+  if (typeof extraParams?.maxTokens === "number") {
     streamParams.maxTokens = extraParams.maxTokens;
   }
-  const transport = resolveSupportedTransport(extraParams.transport);
+  const transport = resolveSupportedTransport(extraParams?.transport);
   if (transport) {
     streamParams.transport = transport;
-  } else if (extraParams.transport != null) {
+  } else if (extraParams?.transport != null) {
     const transportSummary =
       typeof extraParams.transport === "string"
         ? extraParams.transport
         : typeof extraParams.transport;
     log.warn(`ignoring invalid transport param: ${transportSummary}`);
   }
-  if (typeof extraParams.openaiWsWarmup === "boolean") {
+  if (typeof extraParams?.openaiWsWarmup === "boolean") {
     streamParams.openaiWsWarmup = extraParams.openaiWsWarmup;
   }
   const cachedContent =
@@ -274,14 +278,14 @@ function createStreamFnWithExtraParams(
   // requestMetadata so it flows through pi-ai's streamBedrock() into AWS
   // ConverseStream API calls. AWS Cost Explorer can then group costs by
   // these metadata keys.
-  if (provider === "amazon-bedrock" && agentId) {
-    (streamParams as Record<string, unknown>).requestMetadata = {
-      "openclaw:agentId": agentId,
+  if (hasBedrockMetadata) {
+    streamParams.requestMetadata = {
+      "openclaw:agentId": agentId!,
       ...(agentName ? { "openclaw:agentName": agentName } : {}),
     };
   }
   const initialCacheRetention = resolveCacheRetention(
-    extraParams,
+    extraParams ?? {},
     provider,
     typeof model?.api === "string" ? model.api : undefined,
     typeof model?.id === "string" ? model.id : undefined,
@@ -296,7 +300,7 @@ function createStreamFnWithExtraParams(
   const underlying = baseStreamFn ?? streamSimple;
   const wrappedStreamFn: StreamFn = (callModel, context, options) => {
     const cacheRetention = resolveCacheRetention(
-      extraParams,
+      extraParams ?? {},
       provider,
       typeof callModel.api === "string" ? callModel.api : undefined,
       typeof callModel.id === "string" ? callModel.id : undefined,
