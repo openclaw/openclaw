@@ -76,7 +76,9 @@ describe("zai provider plugin", () => {
         provider.resolveDynamicModel?.({
           provider: "zai",
           modelId: testCase.modelId,
-          modelRegistry: { find: () => template },
+          modelRegistry: {
+            find: (_provider, modelId) => (modelId === "glm-4.7" ? template : null),
+          },
         } as never),
       ).toMatchObject({
         provider: "zai",
@@ -86,5 +88,78 @@ describe("zai provider plugin", () => {
         ...testCase.expected,
       });
     }
+  });
+
+  it("returns an already-registered GLM-5 variant as-is", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const registered = {
+      id: "glm-5-turbo",
+      name: "GLM-5-Turbo",
+      provider: "zai",
+      api: "openai-completions",
+      baseUrl: "https://api.z.ai/api/paas/v4",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0.1, output: 0.2, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 123456,
+      maxTokens: 54321,
+    };
+    const template = {
+      id: "glm-4.7",
+      name: "GLM-4.7",
+      provider: "zai",
+      api: "openai-completions",
+      baseUrl: "https://api.z.ai/api/paas/v4",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0.6, output: 2.2, cacheRead: 0.11, cacheWrite: 0 },
+      contextWindow: 204800,
+      maxTokens: 131072,
+    };
+
+    expect(
+      provider.resolveDynamicModel?.({
+        provider: "zai",
+        modelId: "glm-5-turbo",
+        modelRegistry: {
+          find: (_provider, modelId) =>
+            modelId === "glm-5-turbo" ? registered : modelId === "glm-4.7" ? template : null,
+        },
+      } as never),
+    ).toEqual(registered);
+  });
+
+  it("still synthesizes unknown GLM-5 variants from the GLM-4.7 template", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const template = {
+      id: "glm-4.7",
+      name: "GLM-4.7",
+      provider: "zai",
+      api: "openai-completions",
+      baseUrl: "https://api.z.ai/api/paas/v4",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0.6, output: 2.2, cacheRead: 0.11, cacheWrite: 0 },
+      contextWindow: 204800,
+      maxTokens: 131072,
+    };
+
+    expect(
+      provider.resolveDynamicModel?.({
+        provider: "zai",
+        modelId: "glm-5-turbo",
+        modelRegistry: {
+          find: (_provider, modelId) => (modelId === "glm-4.7" ? template : null),
+        },
+      } as never),
+    ).toMatchObject({
+      id: "glm-5-turbo",
+      name: "GLM-5 Turbo",
+      provider: "zai",
+      api: "openai-completions",
+      baseUrl: "https://api.z.ai/api/paas/v4",
+      reasoning: true,
+      input: ["text"],
+    });
   });
 });
