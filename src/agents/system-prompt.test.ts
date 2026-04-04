@@ -379,6 +379,32 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain('Use `runtime: "subagent"` instead.');
   });
 
+  it("guides Feishu group sessions toward subagent run mode and agentId sends", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions_list", "sessions_send", "sessions_spawn"],
+      runtimeInfo: {
+        channel: "feishu",
+      },
+    });
+
+    expect(prompt).toContain(
+      "Use it when you know the target sessionKey/label, or when you want the most recent visible session for a specific `agentId`.",
+    );
+    expect(prompt).toContain(
+      "omit `activeMinutes` unless you explicitly want only very recent sessions",
+    );
+    expect(prompt).toContain(
+      "Only call `sessions_yield` after at least one delegated/background task was accepted.",
+    );
+    expect(prompt).toContain(
+      "In ordinary Feishu group chats, do not rely on thread-bound current-conversation child sessions.",
+    );
+    expect(prompt).toContain(
+      'prefer `sessions_spawn({ runtime: "subagent", mode: "run", agentId: ... })`',
+    );
+  });
+
   it("preserves tool casing in the prompt", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

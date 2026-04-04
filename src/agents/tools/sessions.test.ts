@@ -485,7 +485,7 @@ describe("sessions_send gating", () => {
     callGatewayMock.mockClear();
   });
 
-  it("returns an error when neither sessionKey nor label is provided", async () => {
+  it("returns an error when neither sessionKey, label, nor agentId is provided", async () => {
     const tool = createMainSessionsSendTool();
 
     const result = await tool.execute("call-missing-target", {
@@ -495,17 +495,74 @@ describe("sessions_send gating", () => {
 
     expect(result.details).toMatchObject({
       status: "error",
-      error: "Either sessionKey or label is required",
+      error: "Either sessionKey, label, or agentId is required",
     });
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
+  it("resolves bare agentId to the most recent visible session", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: true },
+        sessions: { visibility: "all" },
+      },
+    });
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: Record<string, unknown> };
+      if (request.method === "sessions.list") {
+        return {
+          sessions: [{ key: "agent:worker:discord:group:dev" }],
+        };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-agentid", acceptedAt: 123 };
+      }
+      if (request.method === "agent.wait") {
+        return { runId: "run-agentid", status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        return {
+          messages: [{ role: "assistant", content: [{ type: "text", text: "done" }] }],
+        };
+      }
+      return {};
+    });
+
+    const tool = createMainSessionsSendTool();
+    const result = await tool.execute("call-agent-id", {
+      agentId: "worker",
+      message: "hello",
+      timeoutSeconds: 1,
+    });
+
+    expect(result.details).toMatchObject({
+      status: "ok",
+      reply: "done",
+      sessionKey: "agent:worker:discord:group:dev",
+    });
+    expect(callGatewayMock.mock.calls[0]?.[0]).toMatchObject({
+      method: "sessions.list",
+      params: expect.objectContaining({ agentId: "worker" }),
+    });
+    expect(
+      callGatewayMock.mock.calls.some(
+        (call) =>
+          (call[0] as { method?: string; params?: Record<string, unknown> }).method === "agent" &&
+          (call[0] as { params?: Record<string, unknown> }).params?.sessionKey ===
+            "agent:worker:discord:group:dev",
+      ),
+    ).toBe(true);
+  });
+
   it("returns an error when label resolution fails", async () => {
-    callGatewayMock.mockRejectedValueOnce(new Error("No session found with label: nope"));
+    callGatewayMock.mockRejectedValueOnce(
+      new Error("No session found with label: Agent not found: nope"),
+    );
     const tool = createMainSessionsSendTool();
 
     const result = await tool.execute("call-missing-label", {
-      label: "nope",
+      label: "Agent not found: nope",
       message: "hello",
       timeoutSeconds: 5,
     });

@@ -260,12 +260,14 @@ export function buildAgentSystemPrompt(params: {
     agents_list: acpSpawnRuntimeEnabled
       ? 'List OpenClaw agent ids allowed for sessions_spawn when runtime="subagent" (not ACP harness ids)'
       : "List OpenClaw agent ids allowed for sessions_spawn",
-    sessions_list: "List other sessions (incl. sub-agents) with filters/last",
+    sessions_list:
+      "List other sessions (incl. sub-agents) with filters/last; omit activeMinutes unless you truly need recent-only results",
     sessions_history: "Fetch history for another session/sub-agent",
-    sessions_send: "Send a message to another session/sub-agent",
+    sessions_send:
+      "Send a message to another session/sub-agent (target by sessionKey, label, or agentId)",
     sessions_spawn: acpSpawnRuntimeEnabled
       ? 'Spawn an isolated sub-agent or ACP coding session (runtime="acp" requires `agentId` unless `acp.defaultAgent` is configured; ACP harness ids follow acp.allowedAgents, not agents_list)'
-      : "Spawn an isolated sub-agent session",
+      : 'Spawn an isolated sub-agent session; in ordinary Feishu groups prefer runtime="subagent" + mode="run" for delegated work',
     subagents: "List, steer, or kill sub-agent runs for this requester session",
     session_status:
       "Show a /status-equivalent status card (usage + time + Reasoning/Verbose/Elevated); use for model-use questions (📊 session_status); optional per-session model override",
@@ -449,12 +451,21 @@ export function buildAgentSystemPrompt(params: {
     "TOOLS.md does not control tool availability; it is user guidance for how to use external tools.",
     `For long waits, avoid rapid poll loops: use ${execToolName} with enough yieldMs or ${processToolName}(action=poll, timeout=<ms>).`,
     "If a task is more complex or takes longer, spawn a sub-agent. Completion is push-based: it will auto-announce when done.",
+    "`sessions_send` is for contacting an already-existing session. Use it when you know the target sessionKey/label, or when you want the most recent visible session for a specific `agentId`.",
+    "When using `sessions_list` to discover sessions, omit `activeMinutes` unless you explicitly want only very recent sessions; narrow filters can hide valid targets.",
+    "Only call `sessions_yield` after at least one delegated/background task was accepted. If every `sessions_send` / `sessions_spawn` call failed synchronously, stay in the current turn and report the failure.",
     ...(acpHarnessSpawnAllowed
       ? [
           'For requests like "do this in codex/claude code/cursor/gemini" or similar ACP harnesses, treat it as ACP harness intent and call `sessions_spawn` with `runtime: "acp"`.',
           'On Discord, default ACP harness requests to thread-bound persistent sessions (`thread: true`, `mode: "session"`) unless the user asks otherwise.',
           "Set `agentId` explicitly unless `acp.defaultAgent` is configured, and do not route ACP harness requests through `subagents`/`agents_list` or local PTY exec flows.",
           'For ACP harness thread spawns, do not call `message` with `action=thread-create`; use `sessions_spawn` (`runtime: "acp"`, `thread: true`) as the single thread creation path.',
+          'Do not mix ACP-only params like `streamTo` or `resumeSessionId` with `runtime: "subagent"`.',
+        ]
+      : []),
+    ...(runtimeChannel === "feishu"
+      ? [
+          'In ordinary Feishu group chats, do not rely on thread-bound current-conversation child sessions. Keep the parent session in the group, and for long-running delegated work prefer `sessions_spawn({ runtime: "subagent", mode: "run", agentId: ... })` so child results auto-announce back to you before you reply to the group.',
         ]
       : []),
     "Do not poll `subagents list` / `sessions_list` in a loop; only check status on-demand (for intervention, debugging, or when explicitly asked).",

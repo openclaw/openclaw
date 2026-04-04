@@ -132,7 +132,7 @@ export function createSessionsSpawnTool(
     label: "Sessions",
     name: "sessions_spawn",
     description:
-      'Spawn an isolated session (runtime="subagent" or runtime="acp"). mode="run" is one-shot and mode="session" is persistent/thread-bound. Subagents inherit the parent workspace directory automatically.',
+      'Spawn an isolated session (runtime="subagent" or runtime="acp"). mode="run" is one-shot and mode="session" is persistent/thread-bound. Subagents inherit the parent workspace directory automatically. In ordinary Feishu groups, prefer runtime="subagent" with mode="run" for delegated work.',
     parameters: SessionsSpawnToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -156,7 +156,8 @@ export function createSessionsSpawnTool(
       const cleanup =
         params.cleanup === "keep" || params.cleanup === "delete" ? params.cleanup : "keep";
       const sandbox = params.sandbox === "require" ? "require" : "inherit";
-      const streamTo = params.streamTo === "parent" ? "parent" : undefined;
+      const requestedStreamTo = params.streamTo === "parent" ? "parent" : undefined;
+      const streamTo = runtime === "acp" ? requestedStreamTo : undefined;
       // Back-compat: older callers used timeoutSeconds for this tool.
       const timeoutSecondsCandidate =
         typeof params.runTimeoutSeconds === "number"
@@ -177,13 +178,6 @@ export function createSessionsSpawnTool(
             mimeType?: string;
           }>)
         : undefined;
-
-      if (streamTo && runtime !== "acp") {
-        return jsonResult({
-          status: "error",
-          error: `streamTo is only supported for runtime=acp; got runtime=${runtime}`,
-        });
-      }
 
       if (resumeSessionId && runtime !== "acp") {
         return jsonResult({

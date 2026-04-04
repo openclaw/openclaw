@@ -2,7 +2,11 @@ import crypto from "node:crypto";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
-import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import {
+  isValidAgentId,
+  normalizeAgentId,
+  resolveAgentIdFromSessionKey,
+} from "../../routing/session-key.js";
 import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
 import {
   type GatewayMessageChannel,
@@ -27,7 +31,14 @@ import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 const SessionsSendToolSchema = Type.Object({
   sessionKey: Type.Optional(Type.String()),
   label: Type.Optional(Type.String({ minLength: 1, maxLength: SESSION_LABEL_MAX_LENGTH })),
-  agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
+  agentId: Type.Optional(
+    Type.String({
+      minLength: 1,
+      maxLength: 64,
+      description:
+        "Agent id to target. When used without sessionKey/label, OpenClaw sends to the most recent visible session for that agent.",
+    }),
+  ),
   message: Type.String(),
   timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
 });
@@ -98,7 +109,7 @@ export function createSessionsSendTool(opts?: {
     label: "Session Send",
     name: "sessions_send",
     description:
-      "Send a message into another session. Use sessionKey or label to identify the target.",
+      "Send a message into another session. Use sessionKey, label, or agentId to identify the target.",
     parameters: SessionsSendToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -116,30 +127,23 @@ export function createSessionsSendTool(opts?: {
       const sessionKeyParam = readStringParam(params, "sessionKey");
       const labelParam = readStringParam(params, "label")?.trim() || undefined;
       const labelAgentIdParam = readStringParam(params, "agentId")?.trim() || undefined;
-      if (sessionKeyParam && labelParam) {
-        return jsonResult({
-          runId: crypto.randomUUID(),
-          status: "error",
-          error: "Provide either sessionKey or label (not both).",
-        });
-      }
+      const requesterAgentId = resolveAgentIdFromSessionKey(effectiveRequesterKey);
+      const requestedAgentIdFromParam = labelAgentIdParam
+        ? normalizeAgentId(labelAgentIdParam)
+        : undefined;
 
-      let sessionKey = sessionKeyParam;
-      if (!sessionKey && labelParam) {
-        const requesterAgentId = resolveAgentIdFromSessionKey(effectiveRequesterKey);
-        const requestedAgentId = labelAgentIdParam
-          ? normalizeAgentId(labelAgentIdParam)
-          : undefined;
-
-        if (restrictToSpawned && requestedAgentId && requestedAgentId !== requesterAgentId) {
+      const buildRequestedAgentDeniedResult = (requestedAgentId?: string) => {
+        if (!requestedAgentId) {
+          return null;
+        }
+        if (restrictToSpawned && requestedAgentId !== requesterAgentId) {
           return jsonResult({
             runId: crypto.randomUUID(),
             status: "forbidden",
-            error: "Sandboxed sessions_send label lookup is limited to this agent",
+            error: "Sandboxed sessions_send agent lookup is limited to this agent",
           });
         }
-
-        if (requesterAgentId && requestedAgentId && requestedAgentId !== requesterAgentId) {
+        if (requestedAgentId !== requesterAgentId) {
           if (!a2aPolicy.enabled) {
             return jsonResult({
               runId: crypto.randomUUID(),
@@ -156,6 +160,88 @@ export function createSessionsSendTool(opts?: {
             });
           }
         }
+        return null;
+      };
+
+      const resolveLatestSessionKeyForAgent = async (
+        requestedAgentId: string | undefined,
+        missingError: string,
+      ): Promise<{ key: string } | { result: ReturnType<typeof jsonResult> }> => {
+        if (!requestedAgentId) {
+          return { key: "" };
+        }
+        const deniedResult = buildRequestedAgentDeniedResult(requestedAgentId);
+        if (deniedResult) {
+          return { result: deniedResult };
+        }
+        try {
+          const listed = await gatewayCall<{
+            sessions?: Array<{
+              key?: string;
+            }>;
+          }>({
+            method: "sessions.list",
+            params: {
+              limit: 50,
+              includeGlobal: false,
+              includeUnknown: false,
+              agentId: requestedAgentId,
+              ...(restrictToSpawned ? { spawnedBy: effectiveRequesterKey } : {}),
+            },
+            timeoutMs: 10_000,
+          });
+          const sessions = Array.isArray(listed?.sessions) ? listed.sessions : [];
+          for (const entry of sessions) {
+            const key = typeof entry?.key === "string" ? entry.key.trim() : "";
+            if (key) {
+              return { key };
+            }
+          }
+        } catch (err) {
+          const messageText = err instanceof Error ? err.message : String(err);
+          if (restrictToSpawned) {
+            return {
+              result: jsonResult({
+                runId: crypto.randomUUID(),
+                status: "forbidden",
+                error: "Session not visible from this sandboxed agent session.",
+              }),
+            };
+          }
+          return {
+            result: jsonResult({
+              runId: crypto.randomUUID(),
+              status: "error",
+              error: messageText || missingError,
+            }),
+          };
+        }
+        return {
+          result: jsonResult({
+            runId: crypto.randomUUID(),
+            status: restrictToSpawned ? "forbidden" : "error",
+            error: restrictToSpawned
+              ? "Session not visible from this sandboxed agent session."
+              : missingError,
+          }),
+        };
+      };
+
+      if (sessionKeyParam && labelParam) {
+        return jsonResult({
+          runId: crypto.randomUUID(),
+          status: "error",
+          error: "Provide either sessionKey or label (not both).",
+        });
+      }
+
+      let sessionKey = sessionKeyParam;
+      if (!sessionKey && labelParam) {
+        const requestedAgentId = requestedAgentIdFromParam;
+        const deniedResult = buildRequestedAgentDeniedResult(requestedAgentId);
+        if (deniedResult) {
+          return deniedResult;
+        }
 
         const resolveParams: Record<string, unknown> = {
           label: labelParam,
@@ -163,6 +249,7 @@ export function createSessionsSendTool(opts?: {
           ...(restrictToSpawned ? { spawnedBy: effectiveRequesterKey } : {}),
         };
         let resolvedKey = "";
+        let resolveErrorMessage = "";
         try {
           const resolved = await gatewayCall<{ key: string }>({
             method: "sessions.resolve",
@@ -171,19 +258,21 @@ export function createSessionsSendTool(opts?: {
           });
           resolvedKey = typeof resolved?.key === "string" ? resolved.key.trim() : "";
         } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          if (restrictToSpawned) {
-            return jsonResult({
-              runId: crypto.randomUUID(),
-              status: "forbidden",
-              error: "Session not visible from this sandboxed agent session.",
-            });
+          resolveErrorMessage = err instanceof Error ? err.message : String(err);
+        }
+
+        if (!resolvedKey) {
+          const fallbackAgentId =
+            requestedAgentId ??
+            (isValidAgentId(labelParam) ? normalizeAgentId(labelParam) : undefined);
+          const fallback = await resolveLatestSessionKeyForAgent(
+            fallbackAgentId,
+            `No session found with label: ${labelParam}`,
+          );
+          if ("result" in fallback) {
+            return fallback.result;
           }
-          return jsonResult({
-            runId: crypto.randomUUID(),
-            status: "error",
-            error: msg || `No session found with label: ${labelParam}`,
-          });
+          resolvedKey = fallback.key;
         }
 
         if (!resolvedKey) {
@@ -197,17 +286,28 @@ export function createSessionsSendTool(opts?: {
           return jsonResult({
             runId: crypto.randomUUID(),
             status: "error",
-            error: `No session found with label: ${labelParam}`,
+            error: resolveErrorMessage || `No session found with label: ${labelParam}`,
           });
         }
         sessionKey = resolvedKey;
+      }
+
+      if (!sessionKey && requestedAgentIdFromParam) {
+        const fallback = await resolveLatestSessionKeyForAgent(
+          requestedAgentIdFromParam,
+          `No session found for agentId: ${requestedAgentIdFromParam}`,
+        );
+        if ("result" in fallback) {
+          return fallback.result;
+        }
+        sessionKey = fallback.key;
       }
 
       if (!sessionKey) {
         return jsonResult({
           runId: crypto.randomUUID(),
           status: "error",
-          error: "Either sessionKey or label is required",
+          error: "Either sessionKey, label, or agentId is required",
         });
       }
       const resolvedSession = await resolveSessionReference({
