@@ -9,6 +9,12 @@ import {
   resolveCronEditScheduleRequest,
 } from "./schedule-options.js";
 import { getCronChannelOptions, parseDurationMs, warnIfCronSchedulerDisabled } from "./shared.js";
+import {
+  assertValidThreadIdValue,
+  composeThreadDeliveryTarget,
+  isNonMainSessionTarget,
+  normalizeThreadIdInputs,
+} from "./thread-id-shared.js";
 
 const assignIf = (
   target: Record<string, unknown>,
@@ -20,6 +26,43 @@ const assignIf = (
     target[key] = value;
   }
 };
+
+async function findCronJobById(id: string, opts: Record<string, unknown>) {
+  const limit = 200;
+  let offset = 0;
+  const visitedOffsets = new Set<number>();
+
+  while (!visitedOffsets.has(offset)) {
+    visitedOffsets.add(offset);
+    const listed = (await callGatewayFromCli("cron.list", opts, {
+      includeDisabled: true,
+      limit,
+      offset,
+      sortBy: "name",
+      sortDir: "asc",
+    })) as { jobs?: CronJob[]; nextOffset?: number | null } | null;
+    const jobs = listed?.jobs ?? [];
+    const existing = jobs.find((job) => job.id === id);
+    if (existing) {
+      return existing;
+    }
+    const nextOffset =
+      typeof listed?.nextOffset === "number" && Number.isFinite(listed.nextOffset)
+        ? listed.nextOffset
+        : jobs.length < limit
+          ? undefined
+          : offset + jobs.length;
+    if (nextOffset === undefined) {
+      return undefined;
+    }
+    if (nextOffset <= offset) {
+      return undefined;
+    }
+    offset = nextOffset;
+  }
+
+  return undefined;
+}
 
 export function registerCronEditCommand(cron: Command) {
   addGatewayClientOptions(
@@ -66,6 +109,7 @@ export function registerCronEditCommand(cron: Command) {
         "Delivery destination (E.164, Telegram chatId, or Discord channel/user)",
       )
       .option("--account <id>", "Channel account id for delivery (multi-account setups)")
+      .option("--thread-id <id>", "Telegram topic/thread id for delivery")
       .option("--best-effort-deliver", "Do not fail job if delivery fails")
       .option("--no-best-effort-deliver", "Fail job when delivery fails")
       .option("--failure-alert", "Enable failure alerts for this job")
@@ -98,6 +142,18 @@ export function registerCronEditCommand(cron: Command) {
             throw new Error("Choose --announce or --no-deliver (not multiple).");
           }
           const patch: Record<string, unknown> = {};
+          const threadInputs = normalizeThreadIdInputs(opts);
+          let existingJob: CronJob | undefined;
+          const getExistingJob = async () => {
+            if (existingJob !== undefined) {
+              return existingJob;
+            }
+            existingJob = await findCronJobById(id, opts);
+            if (!existingJob) {
+              throw new Error(`unknown cron job id: ${id}`);
+            }
+            return existingJob;
+          };
           if (typeof opts.name === "string") {
             patch.name = opts.name;
           }
@@ -158,10 +214,7 @@ export function registerCronEditCommand(cron: Command) {
           if (scheduleRequest.kind === "direct") {
             patch.schedule = scheduleRequest.schedule;
           } else if (scheduleRequest.kind === "patch-existing-cron") {
-            const listed = (await callGatewayFromCli("cron.list", opts, {
-              includeDisabled: true,
-            })) as { jobs?: CronJob[] } | null;
-            const existing = (listed?.jobs ?? []).find((job) => job.id === id);
+            const existing = await getExistingJob();
             if (!existing) {
               throw new Error(`unknown cron job id: ${id}`);
             }
@@ -226,7 +279,75 @@ export function registerCronEditCommand(cron: Command) {
             patch.payload = payload;
           }
 
-          if (hasDeliveryModeFlag || hasDeliveryTarget || hasDeliveryAccount || hasBestEffort) {
+          if (threadInputs.hasThreadId) {
+            assertValidThreadIdValue(threadInputs.threadId);
+            if (threadInputs.explicitChannelProvided && !threadInputs.explicitChannel) {
+              throw new Error("--thread-id requires --channel telegram");
+            }
+            if (threadInputs.explicitToProvided && !threadInputs.explicitTo) {
+              throw new Error("--thread-id requires --to");
+            }
+            if (opts.deliver === false) {
+              throw new Error("--thread-id is not supported with --no-deliver");
+            }
+
+            const existing = await getExistingJob();
+            const existingDelivery = existing.delivery ?? { mode: "none" as const };
+            const effectiveSessionTarget =
+              typeof opts.session === "string" && opts.session.trim()
+                ? opts.session.trim()
+                : existing.sessionTarget;
+            const effectivePayloadKind = hasSystemEventPatch
+              ? "systemEvent"
+              : hasAgentTurnPatch
+                ? "agentTurn"
+                : existing.payload.kind;
+            const effectiveDeliveryMode = hasDeliveryModeFlag
+              ? opts.announce || opts.deliver === true
+                ? "announce"
+                : "none"
+              : hasBestEffort
+                ? "announce"
+                : existingDelivery.mode;
+            const effectiveDeliveryChannel =
+              threadInputs.explicitChannel ?? existingDelivery.channel;
+            const effectiveDeliveryTo = threadInputs.explicitTo ?? existingDelivery.to;
+
+            if (
+              !isNonMainSessionTarget(effectiveSessionTarget) ||
+              effectivePayloadKind !== "agentTurn"
+            ) {
+              throw new Error("--thread-id is only supported for non-main agentTurn jobs");
+            }
+            if (effectiveDeliveryMode === "none") {
+              throw new Error("--thread-id is not supported with --no-deliver");
+            }
+            if (existingDelivery.mode === "webhook" && !opts.announce) {
+              throw new Error(
+                "--thread-id is not supported for webhook delivery jobs unless --announce is set",
+              );
+            }
+            if (effectiveDeliveryChannel !== "telegram") {
+              throw new Error("--thread-id requires --channel telegram");
+            }
+            if (!threadInputs.explicitTo && existingDelivery.mode === "webhook") {
+              throw new Error("--thread-id requires --to");
+            }
+            if (!threadInputs.explicitTo && existingDelivery.channel !== "telegram") {
+              throw new Error("--thread-id requires --to");
+            }
+            if (!effectiveDeliveryTo) {
+              throw new Error("--thread-id requires --to");
+            }
+          }
+
+          if (
+            threadInputs.hasThreadId ||
+            hasDeliveryModeFlag ||
+            hasDeliveryTarget ||
+            hasDeliveryAccount ||
+            hasBestEffort
+          ) {
             const delivery: Record<string, unknown> = {};
             if (hasDeliveryModeFlag) {
               delivery.mode = opts.announce || opts.deliver === true ? "announce" : "none";
@@ -241,6 +362,18 @@ export function registerCronEditCommand(cron: Command) {
             if (typeof opts.to === "string") {
               const to = opts.to.trim();
               delivery.to = to ? to : undefined;
+            }
+            if (threadInputs.hasThreadId) {
+              const existing = await getExistingJob();
+              const existingTo =
+                typeof existing.delivery?.to === "string" && existing.delivery.to.trim()
+                  ? existing.delivery.to.trim()
+                  : undefined;
+              const baseTo = threadInputs.explicitTo ?? existingTo;
+              if (!baseTo || !threadInputs.threadId) {
+                throw new Error("--thread-id requires --to");
+              }
+              delivery.to = composeThreadDeliveryTarget(baseTo, threadInputs.threadId);
             }
             if (typeof opts.account === "string") {
               const account = opts.account.trim();

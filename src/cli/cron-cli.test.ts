@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
+import type { CronJob } from "../cron/types.js";
 import { registerCronCli } from "./cron-cli.js";
 
 const CRON_CLI_TEST_TIMEOUT_MS = 15_000;
@@ -65,6 +66,7 @@ type CronUpdatePatch = {
       mode?: string;
       channel?: string;
       to?: string;
+      threadId?: string;
       accountId?: string;
       bestEffort?: boolean;
     };
@@ -74,7 +76,13 @@ type CronUpdatePatch = {
 type CronAddParams = {
   schedule?: { kind?: string; staggerMs?: number };
   payload?: { model?: string; thinking?: string; lightContext?: boolean };
-  delivery?: { mode?: string; accountId?: string };
+  delivery?: {
+    mode?: string;
+    channel?: string;
+    to?: string;
+    threadId?: string;
+    accountId?: string;
+  };
   deleteAfterRun?: boolean;
   agentId?: string;
   sessionTarget?: string;
@@ -140,6 +148,43 @@ function mockCronEditJobLookup(schedule: unknown): void {
           ok: true,
           params: {},
           jobs: [{ id: "job-1", schedule }],
+        };
+      }
+      return { ok: true, params };
+    },
+  );
+}
+
+function makeCronJob(overrides: Partial<CronJob> = {}): CronJob {
+  return {
+    id: "job-1",
+    name: "job-1",
+    enabled: true,
+    createdAtMs: 1,
+    updatedAtMs: 1,
+    schedule: { kind: "every", everyMs: 60_000 },
+    sessionTarget: "isolated",
+    wakeMode: "now",
+    payload: { kind: "agentTurn", message: "hello" },
+    delivery: { mode: "announce", channel: "telegram", to: "19098680" },
+    state: {},
+    ...overrides,
+  };
+}
+
+function mockCronListPages(pages: CronJob[][]): void {
+  callGatewayFromCli.mockImplementation(
+    async (method: string, _opts: unknown, params?: { offset?: number; limit?: number }) => {
+      if (method === "cron.status") {
+        return { enabled: true };
+      }
+      if (method === "cron.list") {
+        const offset = params?.offset ?? 0;
+        const pageIndex = Math.floor(offset / 200);
+        const jobs = pages[pageIndex] ?? [];
+        return {
+          jobs,
+          nextOffset: pageIndex < pages.length - 1 ? (pageIndex + 1) * 200 : undefined,
         };
       }
       return { ok: true, params };
@@ -355,6 +400,84 @@ describe("cron cli", () => {
     expect(params?.delivery?.accountId).toBe("coordinator");
   });
 
+  it("supports telegram thread delivery on cron add", async () => {
+    const params = await runCronAddAndGetParams([
+      "--name",
+      "topic add",
+      "--cron",
+      "* * * * *",
+      "--message",
+      "hello",
+      "--channel",
+      "telegram",
+      "--to",
+      "19098680",
+      "--thread-id",
+      "48",
+    ]);
+
+    expect(params?.sessionTarget).toBe("isolated");
+    expect(params?.delivery).toEqual({
+      mode: "announce",
+      channel: "telegram",
+      to: "19098680:topic:48",
+      accountId: undefined,
+    });
+  });
+
+  it.each([
+    {
+      label: "main systemEvent",
+      args: [
+        "--session",
+        "main",
+        "--system-event",
+        "tick",
+        "--channel",
+        "telegram",
+        "--to",
+        "19098680",
+        "--thread-id",
+        "48",
+      ],
+    },
+    {
+      label: "non-telegram channel",
+      args: ["--message", "hello", "--channel", "discord", "--to", "19098680", "--thread-id", "48"],
+    },
+    {
+      label: "blank target",
+      args: ["--message", "hello", "--channel", "telegram", "--to", "   ", "--thread-id", "48"],
+    },
+    {
+      label: "blank channel",
+      args: ["--message", "hello", "--channel", "   ", "--to", "19098680", "--thread-id", "48"],
+    },
+    {
+      label: "blank thread-id",
+      args: [
+        "--message",
+        "hello",
+        "--channel",
+        "telegram",
+        "--to",
+        "19098680",
+        "--thread-id",
+        "   ",
+      ],
+    },
+  ])("rejects invalid thread-id cron add inputs: $label", async ({ args }) => {
+    await expectCronCommandExit([
+      "cron",
+      "add",
+      "--name",
+      "invalid thread add",
+      "--cron",
+      "* * * * *",
+      ...args,
+    ]);
+  });
+
   it("rejects --account on non-isolated/systemEvent cron add", async () => {
     await expectCronCommandExit([
       "cron",
@@ -555,6 +678,190 @@ describe("cron cli", () => {
     expect(patch?.patch?.delivery?.mode).toBe("announce");
     expect(patch?.patch?.delivery?.channel).toBe("telegram");
     expect(patch?.patch?.delivery?.to).toBe("19098680");
+  });
+
+  it("supports telegram thread delivery on cron edit with explicit target", async () => {
+    resetGatewayMock();
+    mockCronListPages([[makeCronJob()]]);
+    const program = buildProgram();
+    await program.parseAsync(
+      [
+        "cron",
+        "edit",
+        "job-1",
+        "--announce",
+        "--channel",
+        "telegram",
+        "--to",
+        "19098680",
+        "--thread-id",
+        "48",
+      ],
+      { from: "user" },
+    );
+    const patch = getGatewayCallParams<CronUpdatePatch>("cron.update");
+
+    expect(patch?.patch?.delivery).toEqual({
+      mode: "announce",
+      channel: "telegram",
+      to: "19098680:topic:48",
+    });
+  });
+
+  it("reuses existing telegram target for cron edit thread delivery", async () => {
+    resetGatewayMock();
+    mockCronListPages([
+      [
+        makeCronJob({
+          id: "job-1",
+          delivery: { mode: "announce", channel: "telegram", to: "19098680" },
+        }),
+      ],
+    ]);
+    const program = buildProgram();
+    await program.parseAsync(["cron", "edit", "job-1", "--thread-id", "48"], { from: "user" });
+
+    const patch = getGatewayCallParams<CronUpdatePatch>("cron.update");
+    expect(patch?.patch?.delivery).toEqual({ to: "19098680:topic:48" });
+  });
+
+  it.each([
+    {
+      label: "current session",
+      job: makeCronJob({ sessionTarget: "current" }),
+    },
+    {
+      label: "custom session",
+      job: makeCronJob({ sessionTarget: "session:project-alpha" }),
+    },
+  ])("allows thread-id for $label cron edit jobs", async ({ job }) => {
+    resetGatewayMock();
+    mockCronListPages([[job]]);
+    const program = buildProgram();
+    await program.parseAsync(["cron", "edit", "job-1", "--thread-id", "48"], { from: "user" });
+
+    const patch = getGatewayCallParams<CronUpdatePatch>("cron.update");
+    expect(patch?.patch?.delivery?.to).toBe("19098680:topic:48");
+  });
+
+  it.each([
+    {
+      label: "main systemEvent job",
+      args: ["--thread-id", "48"],
+      job: makeCronJob({
+        sessionTarget: "main",
+        payload: { kind: "systemEvent", text: "tick" },
+        delivery: { mode: "none" },
+      }),
+    },
+    {
+      label: "explicit system-event patch",
+      args: ["--system-event", "tick", "--thread-id", "48"],
+      job: makeCronJob(),
+    },
+    {
+      label: "blank channel",
+      args: ["--channel", "   ", "--thread-id", "48"],
+      job: makeCronJob(),
+    },
+    {
+      label: "blank target",
+      args: ["--channel", "telegram", "--to", "   ", "--thread-id", "48"],
+      job: makeCronJob(),
+    },
+    {
+      label: "non-telegram channel",
+      args: ["--channel", "discord", "--thread-id", "48"],
+      job: makeCronJob(),
+    },
+    {
+      label: "non-telegram fallback",
+      args: ["--thread-id", "48"],
+      job: makeCronJob({ delivery: { mode: "announce", channel: "discord", to: "chan-1" } }),
+    },
+    {
+      label: "webhook without announce",
+      args: ["--thread-id", "48"],
+      job: makeCronJob({ delivery: { mode: "webhook", to: "https://example.invalid/cron" } }),
+    },
+    {
+      label: "webhook announce without explicit target",
+      args: ["--announce", "--channel", "telegram", "--thread-id", "48"],
+      job: makeCronJob({ delivery: { mode: "webhook", to: "https://example.invalid/cron" } }),
+    },
+    {
+      label: "no-deliver",
+      args: ["--no-deliver", "--thread-id", "48"],
+      job: makeCronJob(),
+    },
+  ])("rejects invalid cron edit thread delivery: $label", async ({ args, job }) => {
+    resetGatewayMock();
+    mockCronListPages([[job]]);
+    const program = buildProgram();
+    await expect(
+      program.parseAsync(["cron", "edit", "job-1", ...args], { from: "user" }),
+    ).rejects.toThrow("__exit__:1");
+  });
+
+  it("allows webhook jobs to switch to telegram announce thread delivery", async () => {
+    resetGatewayMock();
+    mockCronListPages([
+      [makeCronJob({ delivery: { mode: "webhook", to: "https://example.invalid/cron" } })],
+    ]);
+    const program = buildProgram();
+    await program.parseAsync(
+      [
+        "cron",
+        "edit",
+        "job-1",
+        "--announce",
+        "--channel",
+        "telegram",
+        "--to",
+        "19098680",
+        "--thread-id",
+        "48",
+      ],
+      { from: "user" },
+    );
+
+    const patch = getGatewayCallParams<CronUpdatePatch>("cron.update");
+    expect(patch?.patch?.delivery).toEqual({
+      mode: "announce",
+      channel: "telegram",
+      to: "19098680:topic:48",
+    });
+  });
+
+  it("looks up exact cron edit jobs across pages with stable ordering", async () => {
+    resetGatewayMock();
+    mockCronListPages([
+      [makeCronJob({ id: "job-0", name: "a-job" })],
+      [makeCronJob({ id: "job-1", name: "b-job", schedule: { kind: "cron", expr: "0 * * * *" } })],
+    ]);
+    const program = buildProgram();
+    await program.parseAsync(["cron", "edit", "job-1", "--exact", "--thread-id", "48"], {
+      from: "user",
+    });
+
+    const listCalls = callGatewayFromCli.mock.calls.filter((call) => call[0] === "cron.list");
+    expect(listCalls).toHaveLength(2);
+    expect(listCalls[0]?.[2]).toMatchObject({
+      includeDisabled: true,
+      offset: 0,
+      sortBy: "name",
+      sortDir: "asc",
+    });
+    expect(listCalls[1]?.[2]).toMatchObject({
+      includeDisabled: true,
+      offset: 200,
+      sortBy: "name",
+      sortDir: "asc",
+    });
+
+    const patch = getGatewayCallParams<CronUpdatePatch>("cron.update");
+    expect(patch?.patch?.schedule).toEqual({ kind: "cron", expr: "0 * * * *", staggerMs: 0 });
+    expect(patch?.patch?.delivery?.to).toBe("19098680:topic:48");
   });
 
   it.each([

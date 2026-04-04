@@ -13,6 +13,12 @@ import {
   printCronList,
   warnIfCronSchedulerDisabled,
 } from "./shared.js";
+import {
+  assertValidThreadIdValue,
+  composeThreadDeliveryTarget,
+  isNonMainSessionTarget,
+  normalizeThreadIdInputs,
+} from "./thread-id-shared.js";
 
 export function registerCronStatusCommand(cron: Command) {
   addGatewayClientOptions(
@@ -99,6 +105,7 @@ export function registerCronAddCommand(cron: Command) {
         "Delivery destination (E.164, Telegram chatId, or Discord channel/user)",
       )
       .option("--account <id>", "Channel account id for delivery (multi-account setups)")
+      .option("--thread-id <id>", "Telegram topic/thread id for delivery")
       .option("--best-effort-deliver", "Do not fail the job if delivery fails", false)
       .option("--json", "Output JSON", false)
       .action(async (opts: GatewayRpcOpts & Record<string, unknown>, cmd?: Command) => {
@@ -172,11 +179,7 @@ export function registerCronAddCommand(cron: Command) {
           const inferredSessionTarget = payload.kind === "agentTurn" ? "isolated" : "main";
           const sessionTarget =
             sessionSource === "cli" ? sessionTargetRaw || "" : inferredSessionTarget;
-          const isCustomSessionTarget =
-            sessionTarget.toLowerCase().startsWith("session:") &&
-            sessionTarget.slice(8).trim().length > 0;
-          const isIsolatedLikeSessionTarget =
-            sessionTarget === "isolated" || sessionTarget === "current" || isCustomSessionTarget;
+          const isIsolatedLikeSessionTarget = isNonMainSessionTarget(sessionTarget);
           if (sessionTarget !== "main" && !isIsolatedLikeSessionTarget) {
             throw new Error("--session must be main, isolated, current, or session:<id>");
           }
@@ -202,6 +205,29 @@ export function registerCronAddCommand(cron: Command) {
             typeof opts.account === "string" && opts.account.trim()
               ? opts.account.trim()
               : undefined;
+          const threadInputs = normalizeThreadIdInputs(opts);
+
+          if (threadInputs.hasThreadId) {
+            assertValidThreadIdValue(threadInputs.threadId);
+            if (threadInputs.explicitChannelProvided && !threadInputs.explicitChannel) {
+              throw new Error("--thread-id requires --channel telegram");
+            }
+            if (threadInputs.explicitToProvided && !threadInputs.explicitTo) {
+              throw new Error("--thread-id requires --to");
+            }
+            if (!isIsolatedLikeSessionTarget || payload.kind !== "agentTurn") {
+              throw new Error("--thread-id is only supported for non-main agentTurn jobs");
+            }
+            if (hasNoDeliver) {
+              throw new Error("--thread-id is not supported with --no-deliver");
+            }
+            if (threadInputs.explicitChannel !== "telegram") {
+              throw new Error("--thread-id requires --channel telegram");
+            }
+            if (!threadInputs.explicitTo) {
+              throw new Error("--thread-id requires --to");
+            }
+          }
 
           if (accountId && (!isIsolatedLikeSessionTarget || payload.kind !== "agentTurn")) {
             throw new Error("--account requires a non-main agentTurn job with delivery.");
@@ -247,10 +273,17 @@ export function registerCronAddCommand(cron: Command) {
               ? {
                   mode: deliveryMode,
                   channel:
-                    typeof opts.channel === "string" && opts.channel.trim()
+                    threadInputs.explicitChannel ??
+                    (typeof opts.channel === "string" && opts.channel.trim()
                       ? opts.channel.trim()
-                      : undefined,
-                  to: typeof opts.to === "string" && opts.to.trim() ? opts.to.trim() : undefined,
+                      : undefined),
+                  to:
+                    threadInputs.threadId && threadInputs.explicitTo
+                      ? composeThreadDeliveryTarget(threadInputs.explicitTo, threadInputs.threadId)
+                      : (threadInputs.explicitTo ??
+                        (typeof opts.to === "string" && opts.to.trim()
+                          ? opts.to.trim()
+                          : undefined)),
                   accountId,
                   bestEffort: opts.bestEffortDeliver ? true : undefined,
                 }
