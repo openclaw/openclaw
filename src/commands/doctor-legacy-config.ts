@@ -1,5 +1,6 @@
 import { migrateVoiceCallLegacyConfigInput } from "../../extensions/voice-call/config-api.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
+import { isDeepStrictEqual } from "node:util";
 import { shouldMoveSingleAccountChannelKey } from "../channels/plugins/setup-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveNormalizedProviderModelMaxTokens } from "../config/defaults.js";
@@ -386,7 +387,7 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
       return;
     }
 
-    const sameShape = JSON.stringify(normalizedTalk) === JSON.stringify(rawTalk);
+    const sameShape = isDeepStrictEqual(normalizedTalk, rawTalk);
     if (sameShape) {
       return;
     }

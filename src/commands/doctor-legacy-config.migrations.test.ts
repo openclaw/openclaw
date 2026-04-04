@@ -759,6 +759,28 @@ describe("normalizeCompatibilityConfigValues", () => {
     ]);
   });
 
+  it("does not report talk provider normalization for semantically identical key ordering differences", () => {
+    const input = {
+      talk: {
+        interruptOnSpeech: true,
+        silenceTimeoutMs: 1500,
+        providers: {
+          elevenlabs: {
+            apiKey: "secret-key",
+            voiceId: "voice-123",
+            modelId: "eleven_v3",
+          },
+        },
+        provider: "elevenlabs",
+      },
+    };
+
+    const res = normalizeCompatibilityConfigValues(input);
+
+    expect(res.config).toEqual(input);
+    expect(res.changes).toEqual([]);
+  });
+
   it("migrates tools.message.allowCrossContextSend to canonical crossContext settings", () => {
     const res = normalizeCompatibilityConfigValues({
       tools: {
