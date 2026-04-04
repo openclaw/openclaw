@@ -44,18 +44,19 @@ function createGuardrailWrapStreamFn(
   };
 }
 
-const PROVIDER_ID = "amazon-bedrock";
-const CLAUDE_46_MODEL_RE = /claude-(?:opus|sonnet)-4(?:\.|-)6(?:$|[-.])/i;
-const ANTHROPIC_BY_MODEL_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
-  family: "anthropic-by-model",
-});
-const BEDROCK_CONTEXT_OVERFLOW_PATTERNS = [
-  /ValidationException.*(?:input is too long|max input token|input token.*exceed)/i,
-  /ValidationException.*(?:exceeds? the (?:maximum|max) (?:number of )?(?:input )?tokens)/i,
-  /ModelStreamErrorException.*(?:Input is too long|too many input tokens)/i,
-] as const;
-
 export async function registerAmazonBedrockPlugin(api: OpenClawPluginApi): Promise<void> {
+  // Keep registration-local constants inside the function so partial module
+  // initialization during test bootstrap cannot trip TDZ reads.
+  const providerId = "amazon-bedrock";
+  const claude46ModelRe = /claude-(?:opus|sonnet)-4(?:\.|-)6(?:$|[-.])/i;
+  const anthropicByModelReplayHooks = buildProviderReplayFamilyHooks({
+    family: "anthropic-by-model",
+  });
+  const bedrockContextOverflowPatterns = [
+    /ValidationException.*(?:input is too long|max input token|input token.*exceed)/i,
+    /ValidationException.*(?:exceeds? the (?:maximum|max) (?:number of )?(?:input )?tokens)/i,
+    /ModelStreamErrorException.*(?:Input is too long|too many input tokens)/i,
+  ] as const;
   const guardrail = (api.pluginConfig as Record<string, unknown> | undefined)?.guardrail as
     | GuardrailConfig
     | undefined;
@@ -69,7 +70,7 @@ export async function registerAmazonBedrockPlugin(api: OpenClawPluginApi): Promi
       : baseWrapStreamFn;
 
   api.registerProvider({
-    id: PROVIDER_ID,
+    id: providerId,
     label: "Amazon Bedrock",
     docsPath: "/providers/models",
     auth: [],
@@ -85,17 +86,17 @@ export async function registerAmazonBedrockPlugin(api: OpenClawPluginApi): Promi
         }
         return {
           provider: mergeImplicitBedrockProvider({
-            existing: ctx.config.models?.providers?.[PROVIDER_ID],
+            existing: ctx.config.models?.providers?.[providerId],
             implicit,
           }),
         };
       },
     },
     resolveConfigApiKey: ({ env }) => resolveBedrockConfigApiKey(env),
-    ...ANTHROPIC_BY_MODEL_REPLAY_HOOKS,
+    ...anthropicByModelReplayHooks,
     wrapStreamFn,
     matchesContextOverflowError: ({ errorMessage }) =>
-      BEDROCK_CONTEXT_OVERFLOW_PATTERNS.some((pattern) => pattern.test(errorMessage)),
+      bedrockContextOverflowPatterns.some((pattern) => pattern.test(errorMessage)),
     classifyFailoverReason: ({ errorMessage }) => {
       if (/ThrottlingException|Too many concurrent requests/i.test(errorMessage)) {
         return "rate_limit";
@@ -106,6 +107,6 @@ export async function registerAmazonBedrockPlugin(api: OpenClawPluginApi): Promi
       return undefined;
     },
     resolveDefaultThinkingLevel: ({ modelId }) =>
-      CLAUDE_46_MODEL_RE.test(modelId.trim()) ? "adaptive" : undefined,
+      claude46ModelRe.test(modelId.trim()) ? "adaptive" : undefined,
   });
 }

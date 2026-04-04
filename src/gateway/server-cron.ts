@@ -1,3 +1,4 @@
+import { closeTrackedBrowserTabsForSessions } from "../../extensions/browser/runtime-api.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import type { CliDeps } from "../cli/deps.js";

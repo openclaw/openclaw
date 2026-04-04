@@ -1,1 +1,5 @@
-export { TelegramChannelConfigSchema } from "./src/config-schema.js";
+export {
+  normalizeTelegramCommandDescription,
+  normalizeTelegramCommandName,
+  resolveTelegramCustomCommands,
+} from "./src/command-config.js";
