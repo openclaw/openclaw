@@ -192,6 +192,9 @@ Treat each message as a layer-specific clue:
   - WSL2 cannot reach the configured `cdpUrl`
 - `Browser attachOnly is enabled and CDP websocket for profile "remote" is not reachable`
   - the HTTP endpoint answered, but the DevTools WebSocket still could not be opened
+- stale viewport / dark-mode / locale / offline overrides after a remote session
+  - run `openclaw browser stop --browser-profile remote`
+  - this closes the active control session and releases Playwright/CDP emulation state without restarting the gateway or the external browser
 - `gateway timeout after 1500ms`
   - often still CDP reachability or a slow/unreachable remote endpoint
 - `No Chrome tabs found for profile="user"`
