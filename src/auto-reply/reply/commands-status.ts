@@ -274,7 +274,10 @@ export async function buildStatusText(params: {
     const verboseEnabled = resolvedVerboseLevel && resolvedVerboseLevel !== "off";
     if (runs.length > 0) {
       const active = runs.filter(
-        (entry) => !entry.endedAt || countPendingDescendantRuns(entry.childSessionKey) > 0,
+        (entry) =>
+          !entry.endedAt ||
+          (!entry.cleanupCompletedAt && !entry.suppressAnnounceReason) ||
+          countPendingDescendantRuns(entry.childSessionKey) > 0,
       );
       const done = runs.length - active.length;
       if (verboseEnabled) {
