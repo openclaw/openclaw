@@ -5,7 +5,7 @@ summary: "`openclaw agent` 的 CLI 参考（通过 Gateway 网关发送一个智
 title: agent
 x-i18n:
   generated_at: "2026-02-03T07:44:38Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: dcf12fb94e207c68645f58235792596d65afecf8216b8f9ab3acb01e03b50a33
   source_path: cli/agent.md

@@ -1,7 +1,9 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
+import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   applyAnthropicPayloadPolicyToParams,
+  composeProviderStreamWrappers,
   resolveAnthropicPayloadPolicy,
   streamWithPayloadPatch,
 } from "openclaw/plugin-sdk/provider-stream";
@@ -128,7 +130,7 @@ export function createAnthropicBetaHeadersWrapper(
         : betas;
     if (isOauth && requestedContext1m) {
       log.warn(
-        `ignoring context1m for Anthropic subscription (OAuth setup-token) auth on ${model.provider}/${model.id}; falling back to the standard context window because Anthropic rejects context-1m beta with OAuth auth`,
+        `ignoring context1m for Anthropic Claude CLI or legacy token auth on ${model.provider}/${model.id}; falling back to the standard context window because Anthropic rejects context-1m beta with non-API-key auth`,
       );
     }
 
@@ -206,6 +208,26 @@ export function resolveAnthropicServiceTier(
     log.warn(`ignoring invalid Anthropic service tier param: ${rawSummary}`);
   }
   return normalized;
+}
+
+export function wrapAnthropicProviderStream(
+  ctx: ProviderWrapStreamFnContext,
+): StreamFn | undefined {
+  const anthropicBetas = resolveAnthropicBetas(ctx.extraParams, ctx.modelId);
+  const serviceTier = resolveAnthropicServiceTier(ctx.extraParams);
+  const fastMode = resolveAnthropicFastMode(ctx.extraParams);
+  return composeProviderStreamWrappers(
+    ctx.streamFn,
+    anthropicBetas?.length
+      ? (streamFn) => createAnthropicBetaHeadersWrapper(streamFn, anthropicBetas)
+      : undefined,
+    serviceTier
+      ? (streamFn) => createAnthropicServiceTierWrapper(streamFn, serviceTier)
+      : undefined,
+    fastMode !== undefined
+      ? (streamFn) => createAnthropicFastModeWrapper(streamFn, fastMode)
+      : undefined,
+  );
 }
 
 export const __testing = { log };

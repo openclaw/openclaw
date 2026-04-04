@@ -983,7 +983,7 @@ describe("applyMediaUnderstanding", () => {
     const cfg: OpenClawConfig = {
       tools: {
         media: {
-          image: { enabled: true, models: [{ provider: "openai", model: "gpt-5.2" }] },
+          image: { enabled: true, models: [{ provider: "openai", model: "gpt-5.4" }] },
           audio: { enabled: true, models: [{ provider: "groq" }] },
           video: { enabled: true, models: [{ provider: "google", model: "gemini-3" }] },
         },

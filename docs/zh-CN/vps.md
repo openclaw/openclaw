@@ -6,7 +6,7 @@ summary: OpenClaw 的 VPS 托管中心（Oracle/Fly/Hetzner/GCP/exe.dev）
 title: VPS 托管
 x-i18n:
   generated_at: "2026-02-03T10:12:57Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 7749b479b333aa5541e7ad8b0ff84e9f8f6bd10d7188285121975cb893acc037
   source_path: vps.md

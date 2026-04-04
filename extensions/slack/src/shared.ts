@@ -4,12 +4,9 @@ import {
   adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
 } from "openclaw/plugin-sdk/channel-config-helpers";
-import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
-import {
-  formatDocsLink,
-  hasConfiguredSecretInput,
-  patchChannelConfigForAccount,
-} from "openclaw/plugin-sdk/setup";
+import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input-runtime";
+import { patchChannelConfigForAccount } from "openclaw/plugin-sdk/setup-runtime";
+import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { inspectSlackAccount } from "./account-inspect.js";
 import {
   listSlackAccountIds,
@@ -178,7 +175,7 @@ export function createSlackPluginBase(params: {
   | "config"
   | "setup"
 > {
-  return createChannelPluginBase({
+  return {
     id: SLACK_CHANNEL,
     meta: {
       ...getChatChannelMeta(SLACK_CHANNEL),
@@ -240,7 +237,7 @@ export function createSlackPluginBase(params: {
         }),
     },
     setup: params.setup,
-  }) as Pick<
+  } as Pick<
     ChannelPlugin<ResolvedSlackAccount>,
     | "id"
     | "meta"

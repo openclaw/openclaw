@@ -1,12 +1,7 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import type { DiscordGuildEntry } from "openclaw/plugin-sdk/config-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { createEnvPatchedAccountSetupAdapter } from "openclaw/plugin-sdk/setup-adapter-runtime";
-import type {
-  ChannelSetupAdapter,
-  ChannelSetupDmPolicy,
-  ChannelSetupWizard,
-} from "openclaw/plugin-sdk/setup-runtime";
+import type { ChannelSetupDmPolicy, ChannelSetupWizard } from "openclaw/plugin-sdk/setup-runtime";
 import { createStandardChannelSetupStatus } from "openclaw/plugin-sdk/setup-runtime";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import {
@@ -14,6 +9,7 @@ import {
   listDiscordSetupAccountIds,
   resolveDiscordSetupAccountConfig,
 } from "./setup-account-state.js";
+import { discordSetupAdapter } from "./setup-adapter.js";
 import {
   createAccountScopedAllowFromSection,
   createAccountScopedGroupAccessSection,
@@ -74,14 +70,6 @@ export function parseDiscordAllowFromId(value: string): string | null {
     idPattern: /^\d+$/,
   });
 }
-
-export const discordSetupAdapter: ChannelSetupAdapter = createEnvPatchedAccountSetupAdapter({
-  channelKey: channel,
-  defaultAccountOnlyEnvError: "DISCORD_BOT_TOKEN can only be used for the default account.",
-  missingCredentialError: "Discord requires token (or --use-env).",
-  hasCredentials: (input) => Boolean(input.token),
-  buildPatch: (input) => (input.token ? { token: input.token } : {}),
-});
 
 export function createDiscordSetupWizardBase(handlers: {
   promptAllowFrom: NonNullable<ChannelSetupDmPolicy["promptAllowFrom"]>;

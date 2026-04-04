@@ -199,7 +199,7 @@ describe("legacy config detection", () => {
   });
   it("rejects legacy agent.model string", async () => {
     const res = validateConfigObject({
-      agent: { model: "anthropic/claude-opus-4-5" },
+      agent: { model: "anthropic/claude-opus-4-6" },
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
@@ -243,12 +243,12 @@ describe("legacy config detection", () => {
   it("does not rewrite removed legacy model config migrations", async () => {
     const res = migrateLegacyConfig({
       agent: {
-        model: "anthropic/claude-opus-4-5",
+        model: "anthropic/claude-opus-4-6",
         modelFallbacks: ["openai/gpt-4.1-mini"],
         imageModel: "openai/gpt-4.1-mini",
-        imageModelFallbacks: ["anthropic/claude-opus-4-5"],
-        allowedModels: ["anthropic/claude-opus-4-5", "openai/gpt-4.1-mini"],
-        modelAliases: { Opus: "anthropic/claude-opus-4-5" },
+        imageModelFallbacks: ["anthropic/claude-opus-4-6"],
+        allowedModels: ["anthropic/claude-opus-4-6", "openai/gpt-4.1-mini"],
+        modelAliases: { Opus: "anthropic/claude-opus-4-6" },
       },
     });
     expect(res.changes).toEqual([]);

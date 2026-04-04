@@ -37,7 +37,7 @@ describe("provider env vars", () => {
       ]),
     );
     expect(listKnownProviderAuthEnvVarNames()).toEqual(
-      expect.arrayContaining(["MINIMAX_CODE_PLAN_KEY"]),
+      expect.arrayContaining(["MINIMAX_CODE_PLAN_KEY", "MINIMAX_CODING_API_KEY"]),
     );
     expect(listKnownSecretEnvVarNames()).not.toContain("OPENCLAW_API_KEY");
   });
@@ -61,5 +61,6 @@ describe("provider env vars", () => {
     expect(getProviderEnvVars("__proto__")).toEqual([]);
     expect(getProviderEnvVars("constructor")).toEqual([]);
     expect(getProviderEnvVars("openai")).toEqual(["OPENAI_API_KEY"]);
+    expect(getProviderEnvVars("anthropic")).toEqual(["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"]);
   });
 });

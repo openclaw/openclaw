@@ -99,6 +99,7 @@ import {
 } from "./compaction-safety-timeout.js";
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 import { buildEmbeddedExtensionFactories } from "./extensions.js";
+import { applyExtraParamsToAgent, resolveAgentTransportOverride } from "./extra-params.js";
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "./history.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
@@ -106,10 +107,16 @@ import { buildEmbeddedMessageActionDiscoveryInput } from "./message-action-disco
 import { readPiModelContextTokens } from "./model-context-tokens.js";
 import { buildModelAliasLines, resolveModelAsync } from "./model.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "./replay-history.js";
+import { shouldUseOpenAIWebSocketTransport } from "./run/attempt.thread-helpers.js";
 import { buildEmbeddedSandboxInfo } from "./sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "./session-manager-cache.js";
 import { truncateSessionAfterCompaction } from "./session-truncation.js";
 import { resolveEmbeddedRunSkillEntries } from "./skills-runtime.js";
+import {
+  resolveEmbeddedAgentApiKey,
+  resolveEmbeddedAgentBaseStreamFn,
+  resolveEmbeddedAgentStreamFn,
+} from "./stream-resolution.js";
 import {
   applySystemPromptOverrideToSession,
   buildEmbeddedSystemPrompt,
@@ -746,14 +753,56 @@ export async function compactEmbeddedPiSessionDirect(
       });
       applySystemPromptOverrideToSession(session, systemPromptOverride());
       const providerStreamFn = registerProviderStreamForModel({
-        model,
+        model: effectiveModel,
         cfg: params.config,
         agentDir,
         workspaceDir: effectiveWorkspace,
       });
-      if (providerStreamFn) {
-        session.agent.streamFn = providerStreamFn;
+      const shouldUseWebSocketTransport = shouldUseOpenAIWebSocketTransport({
+        provider,
+        modelApi: effectiveModel.api,
+      });
+      const wsApiKey = shouldUseWebSocketTransport
+        ? await resolveEmbeddedAgentApiKey({
+            provider,
+            resolvedApiKey: hasRuntimeAuthExchange ? undefined : apiKeyInfo?.apiKey,
+            authStorage,
+          })
+        : undefined;
+      if (shouldUseWebSocketTransport && !wsApiKey) {
+        log.warn(
+          `[ws-stream] no API key for provider=${provider}; keeping compaction HTTP transport`,
+        );
       }
+      // Compaction builds the same embedded system prompt, so it must flow
+      // through the same transport/payload shaping stack as normal turns.
+      session.agent.streamFn = resolveEmbeddedAgentStreamFn({
+        currentStreamFn: resolveEmbeddedAgentBaseStreamFn({ session }),
+        providerStreamFn,
+        shouldUseWebSocketTransport,
+        wsApiKey,
+        sessionId: params.sessionId,
+        signal: runAbortController.signal,
+        model: effectiveModel,
+        resolvedApiKey: hasRuntimeAuthExchange ? undefined : apiKeyInfo?.apiKey,
+        authStorage,
+      });
+      const { effectiveExtraParams } = applyExtraParamsToAgent(
+        session.agent,
+        params.config,
+        provider,
+        modelId,
+        undefined,
+        params.thinkLevel,
+        sessionAgentId,
+        effectiveWorkspace,
+        effectiveModel,
+        agentDir,
+      );
+      resolveAgentTransportOverride({
+        settingsManager,
+        effectiveExtraParams,
+      });
 
       try {
         const prior = await sanitizeSessionHistory({
@@ -784,7 +833,7 @@ export async function compactEmbeddedPiSessionDirect(
         });
         // Apply validated transcript to the live session even when no history limit is configured,
         // so compaction and hook metrics are based on the same message set.
-        session.agent.replaceMessages(validated);
+        session.agent.state.messages = validated;
         // "Original" compaction metrics should describe the validated transcript that enters
         // limiting/compaction, not the raw on-disk session snapshot.
         const originalMessages = session.messages.slice();
@@ -801,7 +850,7 @@ export async function compactEmbeddedPiSessionDirect(
             })
           : truncated;
         if (limited.length > 0) {
-          session.agent.replaceMessages(limited);
+          session.agent.state.messages = limited;
         }
         const hookRunner = asCompactionHookRunner(getGlobalHookRunner());
         const observedTokenCount = normalizeObservedTokenCount(params.currentTokenCount);

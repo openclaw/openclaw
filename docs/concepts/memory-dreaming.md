@@ -39,12 +39,12 @@ Promotion requires all configured threshold gates to pass, not just one signal.
 
 ### Signal weights
 
-| Signal    | Weight | Description                                        |
-| --------- | ------ | -------------------------------------------------- |
-| Frequency | 0.35   | How often the same entry was recalled              |
-| Relevance | 0.35   | Average recall scores when retrieved               |
-| Diversity | 0.15   | Count of distinct query intents that surfaced it   |
-| Recency   | 0.15   | Temporal decay (14-day half-life)                  |
+| Signal    | Weight | Description                                      |
+| --------- | ------ | ------------------------------------------------ |
+| Frequency | 0.35   | How often the same entry was recalled            |
+| Relevance | 0.35   | Average recall scores when retrieved             |
+| Diversity | 0.15   | Count of distinct query intents that surfaced it |
+| Recency   | 0.15   | Temporal decay (14-day half-life)                |
 
 ## How it works
 
@@ -62,12 +62,12 @@ Promotion requires all configured threshold gates to pass, not just one signal.
 
 `dreaming.mode` controls cadence and default thresholds:
 
-| Mode   | Cadence       | minScore | minRecallCount | minUniqueQueries |
-| ------ | ------------- | -------- | -------------- | ---------------- |
-| `off`  | Disabled      | --       | --             | --               |
-| `core` | Daily 3 AM    | 0.75     | 3              | 2                |
-| `rem`  | Every 6 hours | 0.85     | 4              | 3                |
-| `deep` | Every 12 hours | 0.80    | 3              | 3                |
+| Mode   | Cadence        | minScore | minRecallCount | minUniqueQueries |
+| ------ | -------------- | -------- | -------------- | ---------------- |
+| `off`  | Disabled       | --       | --             | --               |
+| `core` | Daily 3 AM     | 0.75     | 3              | 2                |
+| `rem`  | Every 6 hours  | 0.85     | 4              | 3                |
+| `deep` | Every 12 hours | 0.80     | 3              | 3                |
 
 ## Scheduling model
 

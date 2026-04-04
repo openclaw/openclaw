@@ -7,6 +7,7 @@ const ANTHROPIC_BASE_URL = "https://api.anthropic.com";
 const XAI_BASE_URL = "https://api.x.ai/v1";
 const ZAI_BASE_URL = "https://api.z.ai/api/paas/v4";
 const GOOGLE_GENERATIVE_AI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
+const GOOGLE_GEMINI_CLI_BASE_URL = "https://cloudcode-pa.googleapis.com";
 const DEFAULT_CONTEXT_WINDOW = 200_000;
 const DEFAULT_MAX_TOKENS = 8192;
 const OPENROUTER_FALLBACK_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
@@ -150,7 +151,7 @@ function buildDynamicModel(
       if (existing) {
         return undefined;
       }
-      const template = findTemplate(params, "github-copilot", ["gpt-5.2-codex"]);
+      const template = findTemplate(params, "github-copilot", ["gpt-5.4"]);
       if (lower === "gpt-5.4" && template) {
         return cloneTemplate(
           template,
@@ -182,17 +183,17 @@ function buildDynamicModel(
     case "openai-codex": {
       const template =
         lower === "gpt-5.4"
-          ? findTemplate(params, "openai-codex", ["gpt-5.4", "gpt-5.2-codex"])
+          ? findTemplate(params, "openai-codex", ["gpt-5.4", "gpt-5.4"])
           : lower === "gpt-5.4-mini"
             ? findTemplate(params, "openai-codex", [
                 "gpt-5.4",
                 "gpt-5.1-codex-mini",
                 "gpt-5.3-codex",
-                "gpt-5.2-codex",
+                "gpt-5.4",
               ])
             : lower === "gpt-5.3-codex-spark"
-              ? findTemplate(params, "openai-codex", ["gpt-5.4", "gpt-5.2-codex"])
-              : findTemplate(params, "openai-codex", ["gpt-5.2-codex"]);
+              ? findTemplate(params, "openai-codex", ["gpt-5.4", "gpt-5.4"])
+              : findTemplate(params, "openai-codex", ["gpt-5.4"]);
       const fallback = {
         provider: "openai-codex",
         api: "openai-codex-responses",
@@ -256,13 +257,13 @@ function buildDynamicModel(
     case "openai": {
       const templateIds =
         lower === "gpt-5.4"
-          ? ["gpt-5.2"]
+          ? ["gpt-5.4"]
           : lower === "gpt-5.4-pro"
-            ? ["gpt-5.2-pro", "gpt-5.2"]
+            ? ["gpt-5.4-pro", "gpt-5.4"]
             : lower === "gpt-5.4-mini"
-              ? ["gpt-5-mini"]
+              ? ["gpt-5.4-mini"]
               : lower === "gpt-5.4-nano"
-                ? ["gpt-5-nano", "gpt-5-mini"]
+                ? ["gpt-5.4-nano", "gpt-5.4-mini"]
                 : undefined;
       if (!templateIds) {
         return undefined;
@@ -330,7 +331,7 @@ function buildDynamicModel(
       const template = findTemplate(
         params,
         "anthropic",
-        lower === "claude-opus-4-6" ? ["claude-opus-4-5"] : ["claude-sonnet-4-5"],
+        lower === "claude-opus-4-6" ? ["claude-opus-4-6"] : ["claude-sonnet-4-6"],
       );
       return cloneTemplate(
         template,
@@ -350,6 +351,32 @@ function buildDynamicModel(
           cost: OPENROUTER_FALLBACK_COST,
           contextWindow: DEFAULT_CONTEXT_WINDOW,
           maxTokens: DEFAULT_CONTEXT_WINDOW,
+        },
+      );
+    }
+    case "google-antigravity": {
+      if (lower !== "claude-opus-4-6-thinking") {
+        return undefined;
+      }
+      return cloneTemplate(
+        undefined,
+        modelId,
+        {
+          provider: "google-antigravity",
+          api: "google-gemini-cli",
+          baseUrl: GOOGLE_GEMINI_CLI_BASE_URL,
+          reasoning: true,
+          input: ["text", "image"],
+        },
+        {
+          provider: "google-antigravity",
+          api: "google-gemini-cli",
+          baseUrl: GOOGLE_GEMINI_CLI_BASE_URL,
+          reasoning: true,
+          input: ["text", "image"],
+          cost: OPENROUTER_FALLBACK_COST,
+          contextWindow: DEFAULT_CONTEXT_WINDOW,
+          maxTokens: DEFAULT_MAX_TOKENS,
         },
       );
     }
@@ -393,6 +420,7 @@ export function createProviderRuntimeTestMock(options: ProviderRuntimeTestMockOp
       "openai",
       "xai",
       "anthropic",
+      "google-antigravity",
       "zai",
     ],
   );

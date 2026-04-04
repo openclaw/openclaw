@@ -499,6 +499,49 @@ describe("legacy migrate channel streaming aliases", () => {
       streaming: "off",
     });
   });
+
+  it("removes legacy googlechat streamMode aliases", () => {
+    const raw = {
+      channels: {
+        googlechat: {
+          streamMode: "append",
+          accounts: {
+            work: {
+              streamMode: "replace",
+            },
+          },
+        },
+      },
+    };
+
+    const validated = validateConfigObjectWithPlugins(raw);
+    expect(validated.ok).toBe(true);
+    if (!validated.ok) {
+      return;
+    }
+    expect(
+      (validated.config.channels?.googlechat as Record<string, unknown> | undefined)?.streamMode,
+    ).toBeUndefined();
+    expect(
+      (validated.config.channels?.googlechat?.accounts?.work as Record<string, unknown> | undefined)
+        ?.streamMode,
+    ).toBeUndefined();
+
+    const res = migrateLegacyConfig(raw);
+    expect(res.changes).toContain(
+      "Removed channels.googlechat.streamMode (legacy key no longer used).",
+    );
+    expect(res.changes).toContain(
+      "Removed channels.googlechat.accounts.work.streamMode (legacy key no longer used).",
+    );
+    expect(
+      (res.config?.channels?.googlechat as Record<string, unknown> | undefined)?.streamMode,
+    ).toBeUndefined();
+    expect(
+      (res.config?.channels?.googlechat?.accounts?.work as Record<string, unknown> | undefined)
+        ?.streamMode,
+    ).toBeUndefined();
+  });
 });
 
 describe("legacy migrate nested channel enabled aliases", () => {
@@ -558,7 +601,7 @@ describe("legacy migrate nested channel enabled aliases", () => {
     });
   });
 
-  it("moves legacy allow toggles into enabled for slack, googlechat, and discord", () => {
+  it("moves legacy allow toggles into enabled for slack, googlechat, discord, matrix, and zalouser", () => {
     const res = migrateLegacyConfig({
       channels: {
         slack: {
@@ -617,6 +660,38 @@ describe("legacy migrate nested channel enabled aliases", () => {
             },
           },
         },
+        matrix: {
+          groups: {
+            "!ops:example.org": {
+              allow: false,
+            },
+          },
+          accounts: {
+            work: {
+              rooms: {
+                "!legacy:example.org": {
+                  allow: true,
+                },
+              },
+            },
+          },
+        },
+        zalouser: {
+          groups: {
+            "group:trusted": {
+              allow: false,
+            },
+          },
+          accounts: {
+            work: {
+              groups: {
+                "group:legacy": {
+                  allow: true,
+                },
+              },
+            },
+          },
+        },
       },
     });
 
@@ -638,6 +713,18 @@ describe("legacy migrate nested channel enabled aliases", () => {
     expect(res.changes).toContain(
       "Moved channels.discord.accounts.work.guilds.200.channels.help.allow → channels.discord.accounts.work.guilds.200.channels.help.enabled.",
     );
+    expect(res.changes).toContain(
+      "Moved channels.matrix.groups.!ops:example.org.allow → channels.matrix.groups.!ops:example.org.enabled (false).",
+    );
+    expect(res.changes).toContain(
+      "Moved channels.matrix.accounts.work.rooms.!legacy:example.org.allow → channels.matrix.accounts.work.rooms.!legacy:example.org.enabled (true).",
+    );
+    expect(res.changes).toContain(
+      "Moved channels.zalouser.groups.group:trusted.allow → channels.zalouser.groups.group:trusted.enabled (false).",
+    );
+    expect(res.changes).toContain(
+      "Moved channels.zalouser.accounts.work.groups.group:legacy.allow → channels.zalouser.accounts.work.groups.group:legacy.enabled (true).",
+    );
     expect(res.config?.channels?.slack?.channels?.ops).toEqual({
       enabled: false,
     });
@@ -646,6 +733,18 @@ describe("legacy migrate nested channel enabled aliases", () => {
     });
     expect(res.config?.channels?.discord?.guilds?.["100"]?.channels?.general).toEqual({
       enabled: false,
+    });
+    expect(res.config?.channels?.matrix?.groups?.["!ops:example.org"]).toEqual({
+      enabled: false,
+    });
+    expect(res.config?.channels?.matrix?.accounts?.work?.rooms?.["!legacy:example.org"]).toEqual({
+      enabled: true,
+    });
+    expect(res.config?.channels?.zalouser?.groups?.["group:trusted"]).toEqual({
+      enabled: false,
+    });
+    expect(res.config?.channels?.zalouser?.accounts?.work?.groups?.["group:legacy"]).toEqual({
+      enabled: true,
     });
   });
 

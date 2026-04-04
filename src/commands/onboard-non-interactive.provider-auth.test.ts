@@ -330,33 +330,6 @@ vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async
     },
   };
 
-  const anthropicTokenChoice: ChoiceHandler = {
-    providerId: "anthropic",
-    label: "Anthropic",
-    runNonInteractive: async (ctx) => {
-      const token = normalizeText(ctx.opts.token);
-      if (!token) {
-        ctx.runtime.error("Missing --token for --auth-choice token.");
-        ctx.runtime.exit(1);
-        return null;
-      }
-      upsertAuthProfile({
-        profileId: "anthropic:default",
-        credential: {
-          type: "token",
-          provider: "anthropic",
-          token,
-        },
-        agentDir: ctx.agentDir,
-      });
-      return providerApiKeyAuthRuntime.applyAuthProfileConfig(ctx.config as never, {
-        profileId: "anthropic:default",
-        provider: "anthropic",
-        mode: "token",
-      });
-    },
-  };
-
   const choiceMap = new Map<string, ChoiceHandler>([
     [
       "apiKey",
@@ -581,7 +554,6 @@ vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async
           }),
       }),
     ],
-    ["token", anthropicTokenChoice],
   ]);
 
   return {
@@ -1087,30 +1059,31 @@ describe("onboard (non-interactive): provider auth", () => {
     });
   });
 
-  it("stores token auth profile", async () => {
+  it("rejects legacy Anthropic token onboarding", async () => {
     await withOnboardEnv("openclaw-onboard-token-", async ({ configPath, runtime }) => {
       const cleanToken = `sk-ant-oat01-${"a".repeat(80)}`;
       const token = `${cleanToken.slice(0, 30)}\r${cleanToken.slice(30)}`;
 
-      await runNonInteractiveSetupWithDefaults(runtime, {
-        authChoice: "token",
-        tokenProvider: "anthropic",
-        token,
-        tokenProfileId: "anthropic:default",
-      });
+      await expect(
+        runNonInteractiveSetupWithDefaults(runtime, {
+          authChoice: "token",
+          tokenProvider: "anthropic",
+          token,
+          tokenProfileId: "anthropic:default",
+        }),
+      ).rejects.toThrow("Process exited with code 1");
+
+      expect(runtime.error).toHaveBeenCalledWith(
+        [
+          'Auth choice "token" is no longer supported for Anthropic onboarding.',
+          "Existing Anthropic token profiles still run if they are already configured.",
+          'Use "--auth-choice anthropic-cli" or "--auth-choice apiKey" instead.',
+        ].join("\n"),
+      );
 
       const cfg = await readJsonFile<ProviderAuthConfigSnapshot>(configPath);
-
-      expect(cfg.auth?.profiles?.["anthropic:default"]?.provider).toBe("anthropic");
-      expect(cfg.auth?.profiles?.["anthropic:default"]?.mode).toBe("token");
-
-      const store = ensureAuthProfileStore();
-      const profile = store.profiles["anthropic:default"];
-      expect(profile?.type).toBe("token");
-      if (profile?.type === "token") {
-        expect(profile.provider).toBe("anthropic");
-        expect(profile.token).toBe(cleanToken);
-      }
+      expect(cfg.auth?.profiles?.["anthropic:default"]).toBeUndefined();
+      expect(ensureAuthProfileStore().profiles["anthropic:default"]).toBeUndefined();
     });
   });
 

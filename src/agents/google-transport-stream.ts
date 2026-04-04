@@ -30,6 +30,7 @@ type GoogleTransportModel = Model<"google-generative-ai"> & {
 type GoogleThinkingLevel = "MINIMAL" | "LOW" | "MEDIUM" | "HIGH";
 
 type GoogleTransportOptions = SimpleStreamOptions & {
+  cachedContent?: string;
   toolChoice?:
     | "auto"
     | "none"
@@ -49,6 +50,7 @@ type GoogleTransportOptions = SimpleStreamOptions & {
 };
 
 type GoogleGenerateContentRequest = {
+  cachedContent?: string;
   contents: Array<Record<string, unknown>>;
   generationConfig?: Record<string, unknown>;
   systemInstruction?: Record<string, unknown>;
@@ -441,6 +443,9 @@ export function buildGoogleGenerativeAiParams(
   const params: GoogleGenerateContentRequest = {
     contents: convertGoogleMessages(model, context),
   };
+  if (typeof options?.cachedContent === "string" && options.cachedContent.trim()) {
+    params.cachedContent = options.cachedContent.trim();
+  }
   if (Object.keys(generationConfig).length > 0) {
     params.generationConfig = generationConfig;
   }

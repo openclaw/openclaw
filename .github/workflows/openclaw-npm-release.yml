@@ -129,6 +129,31 @@ jobs:
       - name: Verify release contents
         run: pnpm release:check
 
+      - name: Validate live cache credentials
+        if: ${{ github.ref == 'refs/heads/main' }}
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${OPENAI_API_KEY}" ]]; then
+            echo "Missing OPENAI_API_KEY secret for release live cache validation." >&2
+            exit 1
+          fi
+          if [[ -z "${ANTHROPIC_API_KEY}" ]]; then
+            echo "Missing ANTHROPIC_API_KEY secret for release live cache validation." >&2
+            exit 1
+          fi
+
+      - name: Verify live prompt cache floors
+        if: ${{ github.ref == 'refs/heads/main' }}
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENCLAW_LIVE_CACHE_TEST: "1"
+          OPENCLAW_LIVE_TEST: "1"
+        run: pnpm test:live:cache
+
       - name: Pack prepared npm tarball
         id: packed_tarball
         env:

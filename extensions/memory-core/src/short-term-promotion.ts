@@ -2,6 +2,12 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
+import {
+  deriveConceptTags,
+  MAX_CONCEPT_TAGS,
+  summarizeConceptTagScriptCoverage,
+  type ConceptTagScriptCoverage,
+} from "./concept-vocabulary.js";
 
 const SHORT_TERM_PATH_RE = /(?:^|\/)memory\/(\d{4})-(\d{2})-(\d{2})\.md$/;
 const SHORT_TERM_BASENAME_RE = /^(\d{4})-(\d{2})-(\d{2})\.md$/;
@@ -10,6 +16,8 @@ const DEFAULT_RECENCY_HALF_LIFE_DAYS = 14;
 export const DEFAULT_PROMOTION_MIN_SCORE = 0.75;
 export const DEFAULT_PROMOTION_MIN_RECALL_COUNT = 3;
 export const DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES = 2;
+const MAX_QUERY_HASHES = 32;
+const MAX_RECALL_DAYS = 16;
 const SHORT_TERM_STORE_RELATIVE_PATH = path.join("memory", ".dreams", "short-term-recall.json");
 const SHORT_TERM_LOCK_RELATIVE_PATH = path.join("memory", ".dreams", "short-term-promotion.lock");
 const SHORT_TERM_LOCK_WAIT_TIMEOUT_MS = 10_000;
@@ -21,13 +29,17 @@ export type PromotionWeights = {
   relevance: number;
   diversity: number;
   recency: number;
+  consolidation: number;
+  conceptual: number;
 };
 
 export const DEFAULT_PROMOTION_WEIGHTS: PromotionWeights = {
-  frequency: 0.35,
-  relevance: 0.35,
+  frequency: 0.24,
+  relevance: 0.3,
   diversity: 0.15,
   recency: 0.15,
+  consolidation: 0.1,
+  conceptual: 0.06,
 };
 
 export type ShortTermRecallEntry = {
@@ -43,6 +55,8 @@ export type ShortTermRecallEntry = {
   firstRecalledAt: string;
   lastRecalledAt: string;
   queryHashes: string[];
+  recallDays: string[];
+  conceptTags: string[];
   promotedAt?: string;
 };
 
@@ -57,6 +71,8 @@ export type PromotionComponents = {
   relevance: number;
   diversity: number;
   recency: number;
+  consolidation: number;
+  conceptual: number;
 };
 
 export type PromotionCandidate = {
@@ -75,7 +91,52 @@ export type PromotionCandidate = {
   lastRecalledAt: string;
   ageDays: number;
   score: number;
+  recallDays: string[];
+  conceptTags: string[];
   components: PromotionComponents;
+};
+
+export type ShortTermAuditIssue = {
+  severity: "warn" | "error";
+  code:
+    | "recall-store-unreadable"
+    | "recall-store-empty"
+    | "recall-store-invalid"
+    | "recall-lock-stale"
+    | "recall-lock-unreadable"
+    | "qmd-index-missing"
+    | "qmd-index-empty"
+    | "qmd-collections-empty";
+  message: string;
+  fixable: boolean;
+};
+
+export type ShortTermAuditSummary = {
+  storePath: string;
+  lockPath: string;
+  updatedAt?: string;
+  exists: boolean;
+  entryCount: number;
+  promotedCount: number;
+  spacedEntryCount: number;
+  conceptTaggedEntryCount: number;
+  conceptTagScripts?: ConceptTagScriptCoverage;
+  invalidEntryCount: number;
+  issues: ShortTermAuditIssue[];
+  qmd?:
+    | {
+        dbPath?: string;
+        collections?: number;
+        dbBytes?: number;
+      }
+    | undefined;
+};
+
+export type RepairShortTermPromotionArtifactsResult = {
+  changed: boolean;
+  removedInvalidEntries: number;
+  rewroteStore: boolean;
+  removedStaleLock: boolean;
 };
 
 export type RankShortTermPromotionOptions = {
@@ -153,15 +214,91 @@ function mergeQueryHashes(existing: string[], queryHash: string): string[] {
   if (!queryHash) {
     return existing;
   }
-  const next = existing.filter(Boolean);
-  if (!next.includes(queryHash)) {
+  const seen = new Set<string>();
+  const next = existing.filter((value) => {
+    if (!value || seen.has(value)) {
+      return false;
+    }
+    seen.add(value);
+    return true;
+  });
+  if (!seen.has(queryHash)) {
     next.push(queryHash);
   }
-  const maxHashes = 32;
-  if (next.length <= maxHashes) {
+  if (next.length <= MAX_QUERY_HASHES) {
     return next;
   }
-  return next.slice(next.length - maxHashes);
+  return next.slice(next.length - MAX_QUERY_HASHES);
+}
+
+function mergeRecentDistinct(existing: string[], nextValue: string, limit: number): string[] {
+  const seen = new Set<string>();
+  const next = existing.filter((value): value is string => {
+    if (typeof value !== "string" || value.length === 0 || seen.has(value)) {
+      return false;
+    }
+    seen.add(value);
+    return true;
+  });
+  if (nextValue && !next.includes(nextValue)) {
+    next.push(nextValue);
+  }
+  if (next.length <= limit) {
+    return next;
+  }
+  return next.slice(next.length - limit);
+}
+
+function normalizeIsoDay(isoLike: string): string | null {
+  if (typeof isoLike !== "string") {
+    return null;
+  }
+  const match = isoLike.trim().match(/^(\d{4}-\d{2}-\d{2})/);
+  return match?.[1] ?? null;
+}
+
+function normalizeDistinctStrings(values: unknown[], limit: number): string[] {
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const value of values) {
+    if (typeof value !== "string") {
+      continue;
+    }
+    const trimmed = value.trim();
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
+    seen.add(trimmed);
+    normalized.push(trimmed);
+    if (normalized.length >= limit) {
+      break;
+    }
+  }
+  return normalized;
+}
+
+function calculateConsolidationComponent(recallDays: string[]): number {
+  if (recallDays.length === 0) {
+    return 0;
+  }
+  if (recallDays.length === 1) {
+    return 0.2;
+  }
+  const parsed = recallDays
+    .map((value) => Date.parse(`${value}T00:00:00.000Z`))
+    .filter((value) => Number.isFinite(value))
+    .toSorted((left, right) => left - right);
+  if (parsed.length <= 1) {
+    return 0.2;
+  }
+  const spanDays = Math.max(0, (parsed.at(-1)! - parsed[0]!) / DAY_MS);
+  const spacing = clampScore(Math.log1p(parsed.length - 1) / Math.log1p(4));
+  const span = clampScore(spanDays / 7);
+  return clampScore(0.55 * spacing + 0.45 * span);
+}
+
+function calculateConceptualComponent(conceptTags: string[]): number {
+  return clampScore(conceptTags.length / 6);
 }
 
 function emptyStore(nowIso: string): ShortTermRecallStore {
@@ -204,10 +341,19 @@ function normalizeStore(raw: unknown, nowIso: string): ShortTermRecallStore {
       const promotedAt = typeof entry.promotedAt === "string" ? entry.promotedAt : undefined;
       const snippet = typeof entry.snippet === "string" ? normalizeSnippet(entry.snippet) : "";
       const queryHashes = Array.isArray(entry.queryHashes)
-        ? entry.queryHashes.filter(
-            (hash): hash is string => typeof hash === "string" && hash.length > 0,
-          )
+        ? normalizeDistinctStrings(entry.queryHashes, MAX_QUERY_HASHES)
         : [];
+      const recallDays = Array.isArray(entry.recallDays)
+        ? entry.recallDays
+            .map((value) => normalizeIsoDay(String(value)))
+            .filter((value): value is string => value !== null)
+        : [];
+      const conceptTags = Array.isArray(entry.conceptTags)
+        ? normalizeDistinctStrings(
+            entry.conceptTags.map((tag) => (typeof tag === "string" ? tag.toLowerCase() : tag)),
+            MAX_CONCEPT_TAGS,
+          )
+        : deriveConceptTags({ path: entryPath, snippet });
 
       const normalizedKey = key || buildEntryKey({ path: entryPath, startLine, endLine, source });
       entries[normalizedKey] = {
@@ -223,6 +369,8 @@ function normalizeStore(raw: unknown, nowIso: string): ShortTermRecallStore {
         firstRecalledAt,
         lastRecalledAt,
         queryHashes,
+        recallDays: recallDays.slice(-MAX_RECALL_DAYS),
+        conceptTags,
         ...(promotedAt ? { promotedAt } : {}),
       };
     }
@@ -264,7 +412,9 @@ function normalizeWeights(weights?: Partial<PromotionWeights>): PromotionWeights
   const relevance = Math.max(0, merged.relevance);
   const diversity = Math.max(0, merged.diversity);
   const recency = Math.max(0, merged.recency);
-  const sum = frequency + relevance + diversity + recency;
+  const consolidation = Math.max(0, merged.consolidation);
+  const conceptual = Math.max(0, merged.conceptual);
+  const sum = frequency + relevance + diversity + recency + consolidation + conceptual;
   if (sum <= 0) {
     return { ...DEFAULT_PROMOTION_WEIGHTS };
   }
@@ -273,6 +423,8 @@ function normalizeWeights(weights?: Partial<PromotionWeights>): PromotionWeights
     relevance: relevance / sum,
     diversity: diversity / sum,
     recency: recency / sum,
+    consolidation: consolidation / sum,
+    conceptual: conceptual / sum,
   };
 }
 
@@ -446,6 +598,12 @@ export async function recordShortTermRecalls(params: {
       const totalScore = Math.max(0, (existing?.totalScore ?? 0) + score);
       const maxScore = Math.max(existing?.maxScore ?? 0, score);
       const queryHashes = mergeQueryHashes(existing?.queryHashes ?? [], queryHash);
+      const recallDays = mergeRecentDistinct(
+        existing?.recallDays ?? [],
+        nowIso.slice(0, 10),
+        MAX_RECALL_DAYS,
+      );
+      const conceptTags = deriveConceptTags({ path: normalizedPath, snippet });
 
       store.entries[key] = {
         key,
@@ -460,6 +618,8 @@ export async function recordShortTermRecalls(params: {
         firstRecalledAt: existing?.firstRecalledAt ?? nowIso,
         lastRecalledAt: nowIso,
         queryHashes,
+        recallDays,
+        conceptTags: conceptTags.length > 0 ? conceptTags : (existing?.conceptTags ?? []),
         ...(existing?.promotedAt ? { promotedAt: existing.promotedAt } : {}),
       };
     }
@@ -524,12 +684,18 @@ export async function rankShortTermPromotionCandidates(
       ? Math.max(0, (nowMs - lastRecalledAtMs) / DAY_MS)
       : 0;
     const recency = clampScore(calculateRecencyComponent(ageDays, halfLifeDays));
+    const recallDays = entry.recallDays ?? [];
+    const conceptTags = entry.conceptTags ?? [];
+    const consolidation = calculateConsolidationComponent(recallDays);
+    const conceptual = calculateConceptualComponent(conceptTags);
 
     const score =
       weights.frequency * frequency +
       weights.relevance * avgScore +
       weights.diversity * diversity +
-      weights.recency * recency;
+      weights.recency * recency +
+      weights.consolidation * consolidation +
+      weights.conceptual * conceptual;
 
     if (score < minScore) {
       continue;
@@ -551,11 +717,15 @@ export async function rankShortTermPromotionCandidates(
       lastRecalledAt: entry.lastRecalledAt,
       ageDays,
       score: clampScore(score),
+      recallDays,
+      conceptTags,
       components: {
         frequency,
         relevance: avgScore,
         diversity,
         recency,
+        consolidation,
+        conceptual,
       },
     });
   }
@@ -688,8 +858,249 @@ export function resolveShortTermRecallStorePath(workspaceDir: string): string {
   return resolveStorePath(workspaceDir);
 }
 
+export function resolveShortTermRecallLockPath(workspaceDir: string): string {
+  return resolveLockPath(workspaceDir);
+}
+
+export async function auditShortTermPromotionArtifacts(params: {
+  workspaceDir: string;
+  qmd?: {
+    dbPath?: string;
+    collections?: number;
+  };
+}): Promise<ShortTermAuditSummary> {
+  const workspaceDir = params.workspaceDir.trim();
+  const storePath = resolveStorePath(workspaceDir);
+  const lockPath = resolveLockPath(workspaceDir);
+  const issues: ShortTermAuditIssue[] = [];
+  let exists = false;
+  let entryCount = 0;
+  let promotedCount = 0;
+  let spacedEntryCount = 0;
+  let conceptTaggedEntryCount = 0;
+  let conceptTagScripts: ConceptTagScriptCoverage | undefined;
+  let invalidEntryCount = 0;
+  let updatedAt: string | undefined;
+
+  try {
+    const raw = await fs.readFile(storePath, "utf-8");
+    exists = true;
+    if (raw.trim().length === 0) {
+      issues.push({
+        severity: "warn",
+        code: "recall-store-empty",
+        message: "Short-term recall store is empty.",
+        fixable: true,
+      });
+    } else {
+      const nowIso = new Date().toISOString();
+      const parsed = JSON.parse(raw) as unknown;
+      const store = normalizeStore(parsed, nowIso);
+      updatedAt = store.updatedAt;
+      entryCount = Object.keys(store.entries).length;
+      promotedCount = Object.values(store.entries).filter((entry) =>
+        Boolean(entry.promotedAt),
+      ).length;
+      spacedEntryCount = Object.values(store.entries).filter(
+        (entry) => (entry.recallDays?.length ?? 0) > 1,
+      ).length;
+      conceptTaggedEntryCount = Object.values(store.entries).filter(
+        (entry) => (entry.conceptTags?.length ?? 0) > 0,
+      ).length;
+      conceptTagScripts = summarizeConceptTagScriptCoverage(
+        Object.values(store.entries)
+          .filter((entry) => (entry.conceptTags?.length ?? 0) > 0)
+          .map((entry) => entry.conceptTags ?? []),
+      );
+      invalidEntryCount = Object.keys(asRecord(parsed)?.entries ?? {}).length - entryCount;
+      if (invalidEntryCount > 0) {
+        issues.push({
+          severity: "warn",
+          code: "recall-store-invalid",
+          message: `Short-term recall store contains ${invalidEntryCount} invalid entr${invalidEntryCount === 1 ? "y" : "ies"}.`,
+          fixable: true,
+        });
+      }
+    }
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT") {
+      issues.push({
+        severity: "error",
+        code: "recall-store-unreadable",
+        message: `Short-term recall store is unreadable: ${code ?? "error"}.`,
+        fixable: false,
+      });
+    }
+  }
+
+  try {
+    const stat = await fs.stat(lockPath);
+    const ageMs = Date.now() - stat.mtimeMs;
+    if (ageMs > SHORT_TERM_LOCK_STALE_MS && (await canStealStaleLock(lockPath))) {
+      issues.push({
+        severity: "warn",
+        code: "recall-lock-stale",
+        message: "Short-term promotion lock appears stale.",
+        fixable: true,
+      });
+    }
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT") {
+      issues.push({
+        severity: "warn",
+        code: "recall-lock-unreadable",
+        message: `Short-term promotion lock could not be inspected: ${code ?? "error"}.`,
+        fixable: false,
+      });
+    }
+  }
+
+  let qmd: ShortTermAuditSummary["qmd"];
+  if (params.qmd) {
+    qmd = {
+      dbPath: params.qmd.dbPath,
+      collections: params.qmd.collections,
+    };
+    if (typeof params.qmd.collections === "number" && params.qmd.collections <= 0) {
+      issues.push({
+        severity: "warn",
+        code: "qmd-collections-empty",
+        message: "QMD reports zero managed collections.",
+        fixable: false,
+      });
+    }
+    const dbPath = params.qmd.dbPath?.trim();
+    if (dbPath) {
+      try {
+        const stat = await fs.stat(dbPath);
+        qmd.dbBytes = stat.size;
+        if (!stat.isFile() || stat.size <= 0) {
+          issues.push({
+            severity: "error",
+            code: "qmd-index-empty",
+            message: "QMD index file exists but is empty.",
+            fixable: false,
+          });
+        }
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code === "ENOENT") {
+          issues.push({
+            severity: "error",
+            code: "qmd-index-missing",
+            message: "QMD index file is missing.",
+            fixable: false,
+          });
+        } else {
+          throw err;
+        }
+      }
+    }
+  }
+
+  return {
+    storePath,
+    lockPath,
+    updatedAt,
+    exists,
+    entryCount,
+    promotedCount,
+    spacedEntryCount,
+    conceptTaggedEntryCount,
+    ...(conceptTagScripts ? { conceptTagScripts } : {}),
+    invalidEntryCount,
+    issues,
+    ...(qmd ? { qmd } : {}),
+  };
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+export async function repairShortTermPromotionArtifacts(params: {
+  workspaceDir: string;
+}): Promise<RepairShortTermPromotionArtifactsResult> {
+  const workspaceDir = params.workspaceDir.trim();
+  const nowIso = new Date().toISOString();
+  let rewroteStore = false;
+  let removedInvalidEntries = 0;
+  let removedStaleLock = false;
+
+  try {
+    const lockPath = resolveLockPath(workspaceDir);
+    const stat = await fs.stat(lockPath);
+    const ageMs = Date.now() - stat.mtimeMs;
+    if (ageMs > SHORT_TERM_LOCK_STALE_MS && (await canStealStaleLock(lockPath))) {
+      await fs.unlink(lockPath).catch(() => undefined);
+      removedStaleLock = true;
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw err;
+    }
+  }
+
+  await withShortTermLock(workspaceDir, async () => {
+    const storePath = resolveStorePath(workspaceDir);
+    try {
+      const raw = await fs.readFile(storePath, "utf-8");
+      const parsed = raw.trim().length > 0 ? (JSON.parse(raw) as unknown) : emptyStore(nowIso);
+      const rawEntries = Object.keys(asRecord(parsed)?.entries ?? {}).length;
+      const normalized = normalizeStore(parsed, nowIso);
+      removedInvalidEntries = Math.max(0, rawEntries - Object.keys(normalized.entries).length);
+      const nextEntries = Object.fromEntries(
+        Object.entries(normalized.entries).map(([key, entry]) => {
+          const conceptTags = deriveConceptTags({ path: entry.path, snippet: entry.snippet });
+          const fallbackDay = normalizeIsoDay(entry.lastRecalledAt) ?? nowIso.slice(0, 10);
+          return [
+            key,
+            {
+              ...entry,
+              queryHashes: (entry.queryHashes ?? []).slice(-MAX_QUERY_HASHES),
+              recallDays: mergeRecentDistinct(entry.recallDays ?? [], fallbackDay, MAX_RECALL_DAYS),
+              conceptTags: conceptTags.length > 0 ? conceptTags : (entry.conceptTags ?? []),
+            } satisfies ShortTermRecallEntry,
+          ];
+        }),
+      );
+      const comparableStore: ShortTermRecallStore = {
+        version: 1,
+        updatedAt: normalized.updatedAt,
+        entries: nextEntries,
+      };
+      const comparableRaw = `${JSON.stringify(comparableStore, null, 2)}\n`;
+      if (comparableRaw !== `${raw.trimEnd()}\n`) {
+        await writeStore(workspaceDir, {
+          ...comparableStore,
+          updatedAt: nowIso,
+        });
+        rewroteStore = true;
+      }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw err;
+      }
+    }
+  });
+
+  return {
+    changed: rewroteStore || removedStaleLock,
+    removedInvalidEntries,
+    rewroteStore,
+    removedStaleLock,
+  };
+}
+
 export const __testing = {
   parseLockOwnerPid,
   canStealStaleLock,
   isProcessLikelyAlive,
+  deriveConceptTags,
+  calculateConsolidationComponent,
 };

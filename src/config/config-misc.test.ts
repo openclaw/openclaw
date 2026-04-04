@@ -757,6 +757,14 @@ describe("config strict validation", () => {
               },
             },
           },
+          googlechat: {
+            streamMode: "append",
+            accounts: {
+              work: {
+                streamMode: "replace",
+              },
+            },
+          },
           slack: {
             streaming: true,
           },
@@ -769,6 +777,10 @@ describe("config strict validation", () => {
       expect(snap.legacyIssues.some((issue) => issue.path === "channels.telegram")).toBe(true);
       expect(snap.legacyIssues.some((issue) => issue.path === "channels.discord")).toBe(true);
       expect(snap.legacyIssues.some((issue) => issue.path === "channels.discord.accounts")).toBe(
+        true,
+      );
+      expect(snap.legacyIssues.some((issue) => issue.path === "channels.googlechat")).toBe(true);
+      expect(snap.legacyIssues.some((issue) => issue.path === "channels.googlechat.accounts")).toBe(
         true,
       );
       expect(snap.legacyIssues.some((issue) => issue.path === "channels.slack")).toBe(true);
@@ -784,6 +796,16 @@ describe("config strict validation", () => {
       expect(snap.sourceConfig.channels?.discord?.accounts?.work).toMatchObject({
         streaming: "block",
       });
+      expect(
+        (snap.sourceConfig.channels?.googlechat as Record<string, unknown> | undefined)?.streamMode,
+      ).toBeUndefined();
+      expect(
+        (
+          snap.sourceConfig.channels?.googlechat?.accounts?.work as
+            | Record<string, unknown>
+            | undefined
+        )?.streamMode,
+      ).toBeUndefined();
       expect(snap.sourceConfig.channels?.slack).toMatchObject({
         streaming: "partial",
         nativeStreaming: true,

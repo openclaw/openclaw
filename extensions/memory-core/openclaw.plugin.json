@@ -12,6 +12,11 @@
       "placeholder": "0 3 * * *",
       "help": "Optional cron cadence override for managed dreaming runs."
     },
+    "dreaming.cron": {
+      "label": "Dreaming Cron",
+      "placeholder": "0 3 * * *",
+      "help": "Optional cron cadence override for managed dreaming runs."
+    },
     "dreaming.timezone": {
       "label": "Dreaming Timezone",
       "placeholder": "America/Los_Angeles",
@@ -51,6 +56,9 @@
             "enum": ["off", "core", "deep", "rem"]
           },
           "frequency": {
+            "type": "string"
+          },
+          "cron": {
             "type": "string"
           },
           "timezone": {

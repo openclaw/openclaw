@@ -47,6 +47,10 @@ const CORE_SECRET_SURFACE_GUARDS = [
       /\bWhatsAppConfigSchema\b/,
     ],
   },
+  {
+    path: "src/plugin-sdk/command-auth.ts",
+    forbiddenPatterns: [/\bpluginId:\s*"telegram"/],
+  },
 ] as const;
 
 describe("channel secret contract surface guardrails", () => {

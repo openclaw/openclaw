@@ -89,6 +89,7 @@ import {
   type GatewayUpdateAvailableEventPayload,
 } from "./events.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
+import { startMcpLoopbackServer } from "./mcp-http.js";
 import { startGatewayModelPricingRefresh } from "./model-pricing-cache.js";
 import { NodeRegistry } from "./node-registry.js";
 import { createChannelManager } from "./server-channels.js";
@@ -783,6 +784,7 @@ export async function startGatewayServer(
   let skillsChangeUnsub = () => {};
   let channelHealthMonitor: ReturnType<typeof startChannelHealthMonitor> | null = null;
   let stopModelPricingRefresh = () => {};
+  let mcpServer: { port: number; close: () => Promise<void> } | undefined;
   let configReloader: { stop: () => Promise<void> } = { stop: async () => {} };
   const closeOnStartupFailure = async () => {
     if (diagnosticsEnabled) {
@@ -798,6 +800,7 @@ export async function startGatewayServer(
     stopModelPricingRefresh();
     channelHealthMonitor?.stop();
     clearSecretsRuntimeSnapshot();
+    await mcpServer?.close().catch(() => {});
     await createGatewayCloseHandler({
       bonjourStop,
       tailscaleCleanup,
@@ -864,6 +867,13 @@ export async function startGatewayServer(
   let transcriptUnsub: (() => void) | null = null;
   let lifecycleUnsub: (() => void) | null = null;
   try {
+    try {
+      mcpServer = await startMcpLoopbackServer(0);
+      log.info(`MCP loopback server listening on http://127.0.0.1:${mcpServer.port}/mcp`);
+    } catch (error) {
+      log.warn(`MCP loopback server failed to start: ${String(error)}`);
+    }
+
     if (!minimalTestGateway) {
       const machineDisplayName = await getMachineDisplayName();
       const discovery = await startGatewayDiscovery({
@@ -1542,6 +1552,7 @@ export async function startGatewayServer(
       stopModelPricingRefresh();
       channelHealthMonitor?.stop();
       clearSecretsRuntimeSnapshot();
+      await mcpServer?.close().catch(() => {});
       await close(opts);
     },
   };

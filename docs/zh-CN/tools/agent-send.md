@@ -5,7 +5,7 @@ summary: 直接 `openclaw agent` CLI 运行（带可选投递）
 title: Agent Send
 x-i18n:
   generated_at: "2026-02-03T07:54:52Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: a84d6a304333eebe155da2bf24cf5fc0482022a0a48ab34aa1465cd6e667022d
   source_path: tools/agent-send.md

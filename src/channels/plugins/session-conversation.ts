@@ -1,5 +1,5 @@
 import { fileURLToPath } from "node:url";
-import { loadBundledPluginPublicSurfaceModuleSync } from "../../plugin-sdk/facade-runtime.js";
+import { tryLoadActivatedBundledPluginPublicSurfaceModuleSync } from "../../plugin-sdk/facade-runtime.js";
 import { resolveBundledPluginsDir } from "../../plugins/bundled-dir.js";
 import { resolveBundledPluginPublicSurfacePath } from "../../plugins/bundled-plugin-metadata.js";
 import {
@@ -152,7 +152,7 @@ function resolveBundledSessionConversationFallback(params: {
   }
   let resolveSessionConversation: BundledSessionKeyModule["resolveSessionConversation"];
   try {
-    resolveSessionConversation = loadBundledPluginPublicSurfaceModuleSync<BundledSessionKeyModule>({
+    resolveSessionConversation = tryLoadActivatedBundledPluginPublicSurfaceModuleSync<BundledSessionKeyModule>({
       dirName,
       artifactBasename: SESSION_KEY_API_ARTIFACT_BASENAME,
     })?.resolveSessionConversation;

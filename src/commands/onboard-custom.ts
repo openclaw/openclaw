@@ -60,8 +60,8 @@ function isAzureUrl(baseUrl: string): boolean {
  * The api-version will be handled by the Azure OpenAI client or as a query param.
  *
  * Example:
- *   https://my-resource.services.ai.azure.com + gpt-5-nano
- *   => https://my-resource.services.ai.azure.com/openai/deployments/gpt-5-nano
+ *   https://my-resource.services.ai.azure.com + gpt-5.4-nano
+ *   => https://my-resource.services.ai.azure.com/openai/deployments/gpt-5.4-nano
  */
 function transformAzureUrl(baseUrl: string, modelId: string): string {
   const normalizedUrl = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;

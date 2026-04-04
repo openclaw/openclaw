@@ -11,6 +11,7 @@ import { getModelProviderRequestTransport } from "./provider-request-config.js";
 
 const SUPPORTED_TRANSPORT_APIS = new Set<Api>([
   "openai-responses",
+  "openai-codex-responses",
   "openai-completions",
   "azure-openai-responses",
   "anthropic-messages",
@@ -19,6 +20,7 @@ const SUPPORTED_TRANSPORT_APIS = new Set<Api>([
 
 const SIMPLE_TRANSPORT_API_ALIAS: Record<string, Api> = {
   "openai-responses": "openclaw-openai-responses-transport",
+  "openai-codex-responses": "openclaw-openai-responses-transport",
   "openai-completions": "openclaw-openai-completions-transport",
   "azure-openai-responses": "openclaw-azure-openai-responses-transport",
   "anthropic-messages": "openclaw-anthropic-messages-transport",
@@ -28,6 +30,7 @@ const SIMPLE_TRANSPORT_API_ALIAS: Record<string, Api> = {
 function createSupportedTransportStreamFn(api: Api): StreamFn | undefined {
   switch (api) {
     case "openai-responses":
+    case "openai-codex-responses":
       return createOpenAIResponsesTransportStreamFn();
     case "openai-completions":
       return createOpenAICompletionsTransportStreamFn();
