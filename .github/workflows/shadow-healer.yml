@@ -53,31 +53,37 @@ jobs:
             cat /tmp/log-excerpt.txt
           } > /tmp/analysis-prompt.txt
 
-          # Using glm CLI to call GLM-5.1
-          glm glm-5.1 --print --bare -p "分析這個 GitHub Actions CI 失敗日誌，提供：
+          # Call GLM-5.1 via OpenAI-compatible API (zhipu bigmodel)
+          PROMPT="分析這個 GitHub Actions CI 失敗日誌，提供：
           1) 根本原因 (root_cause)
           2) 失敗的步驟 (failed_step)
           3) 建議修復的檔案和改動 (suggested_fixes)
           4) 修復優先級 (priority: critical/high/medium)
 
           只輸出有效的 JSON（無 markdown 包裝）：
-          {
-            \"root_cause\": \"...\",
-            \"failed_step\": \"...\",
-            \"affected_files\": [...],
-            \"suggested_fixes\": [...],
-            \"priority\": \"...\",
-            \"confidence\": 0.0
-          }
+          {\"root_cause\":\"...\",\"failed_step\":\"...\",\"affected_files\":[...],\"suggested_fixes\":[...],\"priority\":\"...\",\"confidence\":0.0}
 
           日誌內容：
-          $(cat /tmp/analysis-prompt.txt)" > /tmp/ai-patch.json 2>&1 || echo '{"error":"AI analysis failed","root_cause":"unknown"}' > /tmp/ai-patch.json
+          $(cat /tmp/analysis-prompt.txt | head -200)"
+
+          curl -s --max-time 60 \
+            -H "Authorization: Bearer $ZAI_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n --arg p "$PROMPT" '{model:"glm-5.1",messages:[{role:"user",content:$p}],temperature:0.1}')" \
+            "$ZAI_BASE_URL/chat/completions" \
+            | jq -r '.choices[0].message.content // empty' > /tmp/ai-patch.json 2>&1 \
+            || echo '{"error":"AI analysis failed","root_cause":"unknown"}' > /tmp/ai-patch.json
+
+          # Validate JSON output
+          if ! jq . /tmp/ai-patch.json > /dev/null 2>&1; then
+            echo '{"error":"invalid_json","raw":"'"$(head -1 /tmp/ai-patch.json)"'"}' > /tmp/ai-patch.json
+          fi
 
           echo "AI Analysis Result:"
           cat /tmp/ai-patch.json
         env:
-          ANTHROPIC_BASE_URL: ${{ secrets.ZAI_BASE_URL }}
-          ANTHROPIC_API_KEY: ${{ secrets.ZAI_API_KEY }}
+          ZAI_BASE_URL: ${{ secrets.ZAI_BASE_URL }}
+          ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
 
       - name: Record to healing log
         run: |

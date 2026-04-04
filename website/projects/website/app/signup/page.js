@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic';
+
 import NoAuthPageWrapper from '@/components/core/NoAuthPageWrapper.js';
 import SignUpPage from './SignUpPage.js';
 import parseMetadataTitle from '@/utils/parseMetadataTitle.js';
