@@ -230,8 +230,38 @@ Current bundled provider examples:
   | `plugin-sdk/reply-payload` | Message reply types | Reply payload types |
   | `plugin-sdk/provider-setup` | Curated local/self-hosted provider setup helpers | Self-hosted provider discovery/config helpers |
   | `plugin-sdk/self-hosted-provider-setup` | Focused OpenAI-compatible self-hosted provider setup helpers | Same self-hosted provider discovery/config helpers |
+  | `plugin-sdk/provider-auth-runtime` | Provider runtime auth helpers | Runtime API-key resolution helpers |
+  | `plugin-sdk/provider-auth-api-key` | Provider API-key setup helpers | API-key onboarding/profile-write helpers |
+  | `plugin-sdk/provider-auth-result` | Provider auth-result helpers | Standard OAuth auth-result builder |
+  | `plugin-sdk/provider-auth-login` | Provider interactive login helpers | Shared interactive login helpers |
+  | `plugin-sdk/provider-env-vars` | Provider env-var helpers | Provider auth env-var lookup helpers |
   | `plugin-sdk/provider-onboard` | Provider onboarding patches | Onboarding config helpers |
+  | `plugin-sdk/provider-http` | Provider HTTP helpers | Generic provider HTTP/endpoint capability helpers |
+  | `plugin-sdk/provider-web-fetch` | Provider web-fetch helpers | Web-fetch provider registration/cache helpers |
+  | `plugin-sdk/provider-web-search` | Provider web-search helpers | Web-search provider registration/cache/config helpers |
   | `plugin-sdk/keyed-async-queue` | Ordered async queue | `KeyedAsyncQueue` |
+  | `plugin-sdk/media-runtime` | Shared media helpers | Media fetch/transform/store helpers plus media payload builders |
+  | `plugin-sdk/media-understanding-runtime` | Media-understanding runtime facade | Media-understanding runner facade and typed result helpers |
+  | `plugin-sdk/text-runtime` | Shared text helpers | Text, markdown, logging, and formatting helpers |
+  | `plugin-sdk/text-chunking` | Text chunking helpers | Outbound text chunking helper |
+  | `plugin-sdk/speech-runtime` | Speech runtime facade | TTS resolution and synthesis helpers |
+  | `plugin-sdk/speech-core` | Shared speech core | Speech provider types, registry, directives, normalization |
+  | `plugin-sdk/realtime-transcription` | Realtime transcription helpers | Provider types and registry helpers |
+  | `plugin-sdk/realtime-voice` | Realtime voice helpers | Provider types and registry helpers |
+  | `plugin-sdk/image-generation-core` | Shared image-generation core | Image-generation types, failover, auth, and registry helpers |
+  | `plugin-sdk/interactive-runtime` | Interactive reply helpers | Interactive reply payload normalization/reduction |
+  | `plugin-sdk/channel-config-primitives` | Channel config primitives | Narrow channel config-schema primitives |
+  | `plugin-sdk/channel-config-writes` | Channel config-write helpers | Channel config-write authorization helpers |
+  | `plugin-sdk/channel-plugin-common` | Shared channel prelude | Shared channel plugin prelude exports |
+  | `plugin-sdk/channel-status` | Channel status helpers | Shared channel status snapshot/summary helpers |
+  | `plugin-sdk/allowlist-config-edit` | Allowlist config helpers | Allowlist config edit/read helpers |
+  | `plugin-sdk/group-access` | Group access helpers | Shared group-access decision helpers |
+  | `plugin-sdk/direct-dm` | Direct-DM helpers | Shared direct-DM auth/guard helpers |
+  | `plugin-sdk/extension-shared` | Shared extension helpers | Passive-channel/status helper primitives |
+  | `plugin-sdk/webhook-targets` | Webhook target helpers | Webhook target registry and route-install helpers |
+  | `plugin-sdk/webhook-path` | Webhook path helpers | Webhook path normalization helpers |
+  | `plugin-sdk/web-media` | Shared web media helpers | Remote/local media loading helpers |
+  | `plugin-sdk/zod` | Zod re-export | Re-exported `zod` for plugin SDK consumers |
   | `plugin-sdk/testing` | Test utilities | Test helpers and mocks |
 </Accordion>
 

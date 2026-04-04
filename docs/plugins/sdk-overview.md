@@ -108,9 +108,17 @@ explicitly promotes one as public.
     | `plugin-sdk/provider-setup` | Curated local/self-hosted provider setup helpers |
     | `plugin-sdk/self-hosted-provider-setup` | Focused OpenAI-compatible self-hosted provider setup helpers |
     | `plugin-sdk/cli-backend` | CLI backend defaults + watchdog constants |
+    | `plugin-sdk/provider-auth-runtime` | Runtime API-key resolution helpers for provider plugins |
+    | `plugin-sdk/provider-auth-api-key` | API-key onboarding/profile-write helpers |
+    | `plugin-sdk/provider-auth-result` | Standard OAuth auth-result builder |
+    | `plugin-sdk/provider-auth-login` | Shared interactive login helpers for provider plugins |
+    | `plugin-sdk/provider-env-vars` | Provider auth env-var lookup helpers |
     | `plugin-sdk/provider-auth` | `createProviderApiKeyAuthMethod`, `ensureApiKeyFromOptionEnvOrPrompt`, `upsertAuthProfile` |
     | `plugin-sdk/provider-model-shared` | `normalizeModelCompat`, `buildProviderReplayFamilyHooks`, `sanitizeGoogleGeminiReplayHistory`, `resolveTaggedReasoningOutputMode` |
     | `plugin-sdk/provider-catalog-shared` | `findCatalogTemplate`, `buildSingleProviderApiKeyCatalog`, `supportsNativeStreamingUsageCompat`, `applyProviderNativeStreamingUsageCompat` |
+    | `plugin-sdk/provider-http` | Generic provider HTTP/endpoint capability helpers |
+    | `plugin-sdk/provider-web-fetch` | Web-fetch provider registration/cache helpers |
+    | `plugin-sdk/provider-web-search` | Web-search provider registration/cache/config helpers |
     | `plugin-sdk/provider-tools` | `buildProviderToolCompatFamilyHooks`, Gemini schema helpers |
     | `plugin-sdk/provider-usage` | `fetchClaudeUsage` and similar |
     | `plugin-sdk/provider-stream` | `buildProviderStreamFamilyHooks`, stream wrapper types, provider stream wrappers, shared OpenAI/OpenRouter stream-family helpers |
@@ -179,9 +187,31 @@ explicitly promotes one as public.
   <Accordion title="Capability and testing subpaths">
     | Subpath | Key exports |
     | --- | --- |
+    | `plugin-sdk/media-runtime` | Shared media fetch/transform/store helpers plus media payload builders |
+    | `plugin-sdk/media-understanding-runtime` | Media-understanding runner facade and typed result helpers |
+    | `plugin-sdk/text-runtime` | Shared text, markdown, logging, and formatting helpers |
+    | `plugin-sdk/text-chunking` | Outbound text chunking helper |
+    | `plugin-sdk/speech-runtime` | Speech-core runtime facade for TTS resolution and synthesis |
+    | `plugin-sdk/speech-core` | Shared speech provider types, registry, directive, and normalization helpers |
+    | `plugin-sdk/realtime-transcription` | Realtime transcription provider types and registry helpers |
+    | `plugin-sdk/realtime-voice` | Realtime voice provider types and registry helpers |
     | `plugin-sdk/image-generation` | Image generation provider types |
+    | `plugin-sdk/image-generation-core` | Shared image-generation types, failover, auth, and registry helpers |
     | `plugin-sdk/media-understanding` | Media understanding provider types |
     | `plugin-sdk/speech` | Speech provider types |
+    | `plugin-sdk/interactive-runtime` | Interactive reply payload normalization/reduction helpers |
+    | `plugin-sdk/channel-config-primitives` | Narrow channel config-schema primitives |
+    | `plugin-sdk/channel-config-writes` | Channel config-write authorization helpers |
+    | `plugin-sdk/channel-plugin-common` | Shared channel plugin prelude exports |
+    | `plugin-sdk/channel-status` | Shared channel status snapshot/summary helpers |
+    | `plugin-sdk/allowlist-config-edit` | Allowlist config edit/read helpers |
+    | `plugin-sdk/group-access` | Shared group-access decision helpers |
+    | `plugin-sdk/direct-dm` | Shared direct-DM auth/guard helpers |
+    | `plugin-sdk/extension-shared` | Shared passive-channel and status helper primitives |
+    | `plugin-sdk/webhook-targets` | Webhook target registry and route-install helpers |
+    | `plugin-sdk/webhook-path` | Webhook path normalization helpers |
+    | `plugin-sdk/web-media` | Shared remote/local media loading helpers |
+    | `plugin-sdk/zod` | Re-exported `zod` for plugin SDK consumers |
     | `plugin-sdk/testing` | `installCommonResolveTargetErrorCases`, `shouldAckReaction` |
   </Accordion>
 </AccordionGroup>
