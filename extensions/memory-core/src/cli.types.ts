@@ -12,3 +12,12 @@ export type MemorySearchCommandOptions = MemoryCommandOptions & {
   maxResults?: number;
   minScore?: number;
 };
+
+export type MemoryPromoteCommandOptions = MemoryCommandOptions & {
+  limit?: number;
+  minScore?: number;
+  minRecallCount?: number;
+  minUniqueQueries?: number;
+  apply?: boolean;
+  includePromoted?: boolean;
+};

@@ -20,6 +20,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/browser seams: split browser and WhatsApp plugin-sdk seams into narrower browser, approval-auth, and target-helper facades so hot paths and owner tests avoid broader runtime fan-out. (#60376) Thanks @shakkernerd.
 - Tests/runtime: trim local unit-test import/runtime fan-out across browser, WhatsApp, cron, task, and reply flows so owner suites start faster with lower shared-worker overhead while preserving the same focused behavior coverage. (#60249) Thanks @shakkernerd.
 - Tests/secrets runtime: restore split secrets suite cache and env isolation cleanup so broader runs do not leak stale plugin or provider snapshot state. (#60395) Thanks @shakkernerd.
+- Memory/dreaming (experimental): add opt-in weighted short-term recall promotion to `MEMORY.md`, managed dreaming modes (`off|core|rem|deep`), and a `/dreaming` command plus Dreams UI so durable memory promotion can run on background cadence without manual scheduling. (#60569) Thanks @vignesh07.
 
 ### Fixes
 

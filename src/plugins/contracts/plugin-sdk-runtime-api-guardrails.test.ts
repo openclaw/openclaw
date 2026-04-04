@@ -43,8 +43,8 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export { probeIMessage } from "./src/probe.js";',
     'export type { IMessageProbe } from "./src/probe.js";',
     'export { sendMessageIMessage } from "./src/send.js";',
+    'export { chunkTextForOutbound } from "./src/channel-api.js";',
     'export type IMessageAccountConfig = Omit< NonNullable<NonNullable<RuntimeApiOpenClawConfig["channels"]>["imessage"]>, "accounts" | "defaultAccount" >;',
-    'export function chunkTextForOutbound(text: string, limit: number): string[] { const chunks: string[] = []; let remaining = text; while (remaining.length > limit) { const window = remaining.slice(0, limit); const splitAt = Math.max(window.lastIndexOf("\\n"), window.lastIndexOf(" ")); const breakAt = splitAt > 0 ? splitAt : limit; chunks.push(remaining.slice(0, breakAt).trimEnd()); remaining = remaining.slice(breakAt).trimStart(); } if (remaining.length > 0 || text.length === 0) { chunks.push(remaining); } return chunks; }',
   ],
   [bundledPluginFile("googlechat", "runtime-api.ts")]: [
     'export * from "openclaw/plugin-sdk/googlechat";',
@@ -59,8 +59,9 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export { setMatrixThreadBindingIdleTimeoutBySessionKey, setMatrixThreadBindingMaxAgeBySessionKey } from "./src/matrix/thread-bindings-shared.js";',
     'export { setMatrixRuntime } from "./src/runtime.js";',
     'export { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";',
-    'export type { ChannelDirectoryEntry, ChannelMessageActionContext, OpenClawConfig, PluginRuntime, RuntimeLogger, RuntimeEnv, WizardPrompter } from "openclaw/plugin-sdk/matrix-runtime-shared";',
-    'export { formatZonedTimestamp } from "openclaw/plugin-sdk/matrix-runtime-shared";',
+    'export type { ChannelDirectoryEntry, ChannelMessageActionContext, OpenClawConfig, PluginRuntime, RuntimeLogger, WizardPrompter } from "openclaw/plugin-sdk/core";',
+    'export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";',
+    'export { formatZonedTimestamp } from "openclaw/plugin-sdk/core";',
     'export function chunkTextForOutbound(text: string, limit: number): string[] { const chunks: string[] = []; let remaining = text; while (remaining.length > limit) { const window = remaining.slice(0, limit); const splitAt = Math.max(window.lastIndexOf("\\n"), window.lastIndexOf(" ")); const breakAt = splitAt > 0 ? splitAt : limit; chunks.push(remaining.slice(0, breakAt).trimEnd()); remaining = remaining.slice(breakAt).trimStart(); } if (remaining.length > 0 || text.length === 0) { chunks.push(remaining); } return chunks; }',
   ],
   [bundledPluginFile("nextcloud-talk", "runtime-api.ts")]: [
