@@ -163,7 +163,7 @@ describe("scoped vitest configs", () => {
 
   it("defaults channel tests to non-isolated mode", () => {
     expect(defaultChannelsConfig.test?.isolate).toBe(false);
-    expect(defaultChannelsConfig.test?.pool).toBe("forks");
+    expect(defaultChannelsConfig.test?.pool).toBe("threads");
   });
 
   it("keeps the core channel lane limited to non-extension roots", () => {
@@ -199,7 +199,7 @@ describe("scoped vitest configs", () => {
 
   it("defaults extension tests to non-isolated mode", () => {
     expect(defaultExtensionsConfig.test?.isolate).toBe(false);
-    expect(defaultExtensionsConfig.test?.pool).toBe("forks");
+    expect(defaultExtensionsConfig.test?.pool).toBe("threads");
   });
 
   it("normalizes extension channel include patterns relative to the scoped dir", () => {
