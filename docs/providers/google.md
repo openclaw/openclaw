@@ -22,7 +22,7 @@ Gemini Grounding.
 1. Set the API key:
 
 ```bash
-openclaw onboard --auth-choice google-api-key
+openclaw onboard --auth-choice gemini-api-key
 ```
 
 2. Set a default model:
@@ -42,7 +42,7 @@ openclaw onboard --auth-choice google-api-key
 ```bash
 openclaw onboard --non-interactive \
   --mode local \
-  --auth-choice google-api-key \
+  --auth-choice gemini-api-key \
   --gemini-api-key "$GEMINI_API_KEY"
 ```
 
