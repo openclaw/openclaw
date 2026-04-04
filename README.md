@@ -31,6 +31,15 @@ If you are looking for a self-hosted AI assistant, a Discord AI bot runtime, a T
 - Route different channels, users, and groups to different agents and workspaces.
 - Use VeriClaw for evidence-first correction, anti-hallucination triage, verification, and delivery integrity.
 
+## Why developers fork OpenClaw
+
+- Start from a real self-hosted AI assistant and multi-channel runtime, not a toy demo.
+- Reuse one Gateway for Discord, Telegram, WhatsApp, Slack, browser automation, and MCP-connected tools.
+- Extend channels, routing, agents, skills, and supervision without rebuilding the whole control plane.
+- Learn from a working reference architecture for runtime truth, delivery integrity, and multi-agent execution.
+
+If you want something you can both deploy and study, OpenClaw is designed to be worth forking, not just starring.
+
 Start here: [Getting Started](https://docs.openclaw.ai/start/getting-started) · [Onboarding Wizard](https://docs.openclaw.ai/start/wizard) · [Docs](https://docs.openclaw.ai) · [Discord](https://discord.gg/clawd)
 
 [Website](https://openclaw.ai) · [Docs](https://docs.openclaw.ai) · [Vision](VISION.md) · [DeepWiki](https://deepwiki.com/openclaw/openclaw) · [Getting Started](https://docs.openclaw.ai/start/getting-started) · [Updating](https://docs.openclaw.ai/install/updating) · [Showcase](https://docs.openclaw.ai/start/showcase) · [FAQ](https://docs.openclaw.ai/help/faq) · [Wizard](https://docs.openclaw.ai/start/wizard) · [Nix](https://github.com/openclaw/nix-openclaw) · [Docker](https://docs.openclaw.ai/install/docker) · [Discord](https://discord.gg/clawd)
@@ -50,7 +59,7 @@ This launch window is focused on a unified OpenClaw plus VeriClaw story across
 GitHub and the Apple-native companion. Both surfaces should converge toward the
 same ship point, while Watch remains outside the current release gate.
 
-Launch materials: [GitHub launch kit](docs/launch/github-launch-kit.md) · [GitHub release announcement](docs/launch/github-release-announcement.md) · [Market differentiation](docs/launch/market-differentiation.md)
+Launch materials: [GitHub launch kit](docs/launch/github-launch-kit.md) · [GitHub release announcement](docs/launch/github-release-announcement.md) · [Social copy pack](docs/launch/social-copy-pack.md) · [Market differentiation](docs/launch/market-differentiation.md)
 
 Preferred setup: run the onboarding wizard (`openclaw onboard`) in your terminal.
 The wizard guides you step by step through setting up the gateway, workspace, channels, and skills. The CLI wizard is the recommended path and works on **macOS, Linux, and Windows (via WSL2; strongly recommended)**.

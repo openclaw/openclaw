@@ -213,6 +213,8 @@ Suggested GitHub screenshot or media caption style:
 
 - Market scan and differentiation:
   [market-differentiation.md](market-differentiation.md)
+- Short launch and repost copy:
+  [social-copy-pack.md](social-copy-pack.md)
 - Apple submission copy and screenshot notes:
   [APP_STORE_SUBMISSION_KIT.md](../../apps/ios/APP_STORE_SUBMISSION_KIT.md)
 - First-use UX acceptance notes:
