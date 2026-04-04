@@ -65,7 +65,11 @@ describe("createScopedVitestConfig", () => {
       setupFiles: ["test/setup.extensions.ts"],
     });
 
-    expect(config.test?.setupFiles).toEqual(["test/setup.extensions.ts"]);
+    expect(config.test?.setupFiles).toEqual([
+      "test/setup.ts",
+      "test/setup.extensions.ts",
+      "test/setup-openclaw-runtime.ts",
+    ]);
   });
 });
 
@@ -85,7 +89,7 @@ describe("scoped vitest configs", () => {
 
   it("defaults channel tests to non-isolated mode", () => {
     expect(defaultChannelsConfig.test?.isolate).toBe(false);
-    expect(defaultChannelsConfig.test?.pool).toBe("forks");
+    expect(defaultChannelsConfig.test?.pool).toBe("threads");
   });
 
   it("keeps the core channel lane limited to non-extension roots", () => {
@@ -121,7 +125,7 @@ describe("scoped vitest configs", () => {
 
   it("defaults extension tests to non-isolated mode", () => {
     expect(defaultExtensionsConfig.test?.isolate).toBe(false);
-    expect(defaultExtensionsConfig.test?.pool).toBe("forks");
+    expect(defaultExtensionsConfig.test?.pool).toBe("threads");
   });
 
   it("normalizes extension channel include patterns relative to the scoped dir", () => {
@@ -165,7 +169,11 @@ describe("scoped vitest configs", () => {
     expect(defaultChannelsConfig.test?.exclude).not.toContain(
       bundledPluginFile("telegram", "src/fetch.test.ts"),
     );
-    expect(defaultExtensionsConfig.test?.setupFiles).toEqual(["test/setup.extensions.ts"]);
+    expect(defaultExtensionsConfig.test?.setupFiles).toEqual([
+      "test/setup.ts",
+      "test/setup.extensions.ts",
+      "test/setup-openclaw-runtime.ts",
+    ]);
   });
 
   it("keeps provider plugin tests out of the shared extensions lane", () => {
