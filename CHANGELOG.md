@@ -18,9 +18,12 @@ Docs: https://docs.openclaw.ai
 - Providers/Ollama: add bundled Ollama Web Search provider for key-free web_search via your configured Ollama host and `ollama signin`. (#59318) Thanks @BruceMacD.
 - Plugins/install: add `openclaw plugins install --force` to overwrite existing plugin and hook-pack install targets without using the dangerous-code override flag. (#60544) Thanks @gumadeiras.
 - Providers/transport: add shared proxy/TLS/auth-aware request transport support across model-provider paths, including Anthropic and Google native transport runtimes, so provider request overrides work beyond OpenAI-family traffic.
+- Cache/history images: preserve the full 3-turn embedded Pi image-cache window so prompt-cache prefix reuse survives one more assistant turn. (#60603) Thanks @gumadeiras.
 
 ### Fixes
 
+- Providers/OpenAI: preserve native `reasoning.effort: "none"` and strict tool schemas on direct OpenAI-family endpoints, keep OpenAI-compatible proxies on the older compat shim path, and enable OpenAI WebSocket warm-up by default for native Responses routes.
+- Providers/OpenAI Codex: split native `contextWindow` from runtime `contextTokens` for `openai-codex/gpt-5.4`, keep the default effective cap at `272000`, and expose a per-model config override via `models.providers.*.models[].contextTokens`.
 - Skills/uv install: block workspace `.env` from overriding `UV_PYTHON` and strip related interpreter override keys from uv skill-install subprocesses so repository-controlled env files cannot steer the selected Python runtime. (#59178) Thanks @pgondhi987.
 - Telegram/reactions: preserve `reactionNotifications: "own"` across gateway restarts by persisting sent-message ownership state instead of treating cold cache as a permissive fallback. (#59207) Thanks @samzong.
 - Gateway/startup: detect PID recycling in gateway lock files on Windows and macOS, and add startup progress so stale lock conflicts no longer block healthy restarts. (#59843) Thanks @TonyDerek-dot.
@@ -31,6 +34,7 @@ Docs: https://docs.openclaw.ai
 - Telegram/local Bot API: thread `channels.telegram.apiRoot` through buffered reply-media and album downloads so self-hosted Bot API file paths stop falling back to `api.telegram.org` and 404ing. (#59544) Thanks @SARAMALI15792.
 - Telegram/replies: preserve explicit topic targets when `replyTo` is present while still inheriting the current topic for same-chat replies without an explicit topic. (#59634) Thanks @dashhuang.
 - Telegram/native commands: clean up metadata-driven progress placeholders when replies fall back, edits fail, or local exec approval prompts are suppressed. (#59300) Thanks @jalehman.
+- Telegram/models: compare full provider/model refs in the Telegram picker so same-id models from other providers no longer show the wrong current-model checkmark. (#60384) Thanks @sfuminya.
 - Media/request overrides: resolve shared and capability-filtered media request SecretRefs correctly and expose media transport override fields to schema-driven config consumers. (#59848) Thanks @vincentkoc.
 - Providers/request overrides: stop advertising unsupported proxy and TLS transport settings on `models.providers.*.request`, and fail closed if unvalidated config tries to route LLM model-provider traffic through dead transport fields. (#59682) Thanks @vincentkoc.
 - Discord/mentions: treat `@everyone` and `@here` as valid mention-gate triggers in guild preflight so mention-required bots still respond to those broadcasts. (#60343) Thanks @geekhuashan.
@@ -47,6 +51,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/runtime: reuse compatible active registries for `web_search` and `web_fetch` provider snapshot resolution so repeated runtime reads do not re-import the same bundled plugin set on each agent message. Related #48380.
 - Infra/tailscale: ignore `OPENCLAW_TEST_TAILSCALE_BINARY` outside explicit test environments and block it from workspace `.env`, so test-only binary overrides cannot be injected through trusted repository state. (#58468) Thanks @eleqtrizit.
 - Plugins/OpenAI: enable reference-image edits for `gpt-image-1` by routing edit calls to `/images/edits` with multipart image uploads, and update image-generation capability/docs metadata accordingly. Thanks @steipete.
+- Cache/context guard: compact newest tool results first so the cached prompt prefix stays byte-identical and avoids full re-tokenization every turn past the 75% context threshold. (#58036) Thanks @bcherny.
 - Agents/tools: include value-shape hints in missing-parameter tool errors so dropped, empty-string, and wrong-type write payloads are easier to diagnose from logs. (#55317) Thanks @priyansh19.
 - Android/assistant: keep queued App Actions prompts pending when auto-send enqueue is rejected, so transient chat-health drops do not silently lose the assistant request. Thanks @obviyus.
 - Plugins/startup: migrate legacy `tools.web.search.<provider>` config before strict startup validation, and record plugin failure phase/timestamp so degraded plugin startup is easier to diagnose from logs and `plugins list`.
@@ -99,6 +104,11 @@ Docs: https://docs.openclaw.ai
 - Hooks/tool policy: block tool calls when a `before_tool_call` hook crashes so hook failures fail closed instead of silently allowing execution. (#59822) Thanks @pgondhi987.
 - Matrix/media: surface a dedicated `[matrix <kind> attachment too large]` marker for oversized inbound media instead of the generic unavailable marker, and classify size-limit failures with a typed Matrix error. (#60289) Thanks @efe-arv.
 - WhatsApp/watchdog: reset watchdog timeout after reconnect so quiet channels no longer enter a tight reconnect loop from stale message timestamps carried across connection runs. (#60007) Thanks @MonkeyLeeT.
+- Agents/fallback: persist selected fallback overrides before retry attempts start, prefer persisted overrides during live-session reconciliation, and keep provider-scoped auth-profile failover from snapping retries back to stale primary selections.
+- Agents/MCP: sort MCP tools deterministically by name so the tools block in API requests is stable across turns, preventing unnecessary prompt-cache busting from non-deterministic `listTools()` order. (#58037) Thanks @bcherny.
+- Infra/json-file: preserve symlink-backed JSON stores and Windows overwrite fallback when atomically saving small sync JSON state files. (#60589) Thanks @gumadeiras.
+- Matrix/credentials: read the current and legacy credential files directly during migration fallback so concurrent legacy rename races still resolve to the stored credentials. (#60591) Thanks @gumadeiras.
+- Providers/Anthropic Vertex: read ADC files directly during auth discovery so explicit Google credentials and default ADC no longer depend on `existsSync` preflight checks. (#60592) Thanks @gumadeiras.
 
 ## 2026.4.2
 
