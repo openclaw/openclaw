@@ -275,7 +275,7 @@ describe("runReplyAgent authProfileId fallback scoping", () => {
     } as unknown as FollowupRun;
 
     const sessionKey = "main";
-    const sessionEntry = {
+    const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
       totalTokens: 1,
@@ -317,6 +317,115 @@ describe("runReplyAgent authProfileId fallback scoping", () => {
     expect(call.provider).toBe("openai-codex");
     expect(call.authProfileId).toBeUndefined();
     expect(call.authProfileIdSource).toBeUndefined();
+    expect(sessionEntry.providerOverride).toBe("openai-codex");
+    expect(sessionEntry.modelOverride).toBe("gpt-5.2");
+    expect(sessionEntry.authProfileOverride).toBeUndefined();
+    expect(sessionEntry.authProfileOverrideSource).toBeUndefined();
+  });
+
+  it("persists same-provider fallback model while keeping the scoped auth profile", async () => {
+    runWithModelFallbackMock.mockImplementationOnce(
+      async ({ run }: RunWithModelFallbackParams) => ({
+        result: await run("anthropic", "claude-sonnet"),
+        provider: "anthropic",
+        model: "claude-sonnet",
+      }),
+    );
+
+    runEmbeddedPiAgentMock.mockResolvedValue({ payloads: [{ text: "ok" }], meta: {} });
+
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "telegram",
+      OriginatingTo: "chat",
+      AccountId: "primary",
+      MessageSid: "msg",
+      Surface: "telegram",
+    } as unknown as TemplateContext;
+
+    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+    const followupRun = {
+      prompt: "hello",
+      summaryLine: "hello",
+      enqueuedAt: Date.now(),
+      run: {
+        agentId: "main",
+        agentDir: "/tmp/agent",
+        sessionId: "session",
+        sessionKey: "main",
+        messageProvider: "telegram",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        config: createCliBackendTestConfig(),
+        skillsSnapshot: {},
+        provider: "anthropic",
+        model: "claude-opus",
+        authProfileId: "anthropic:openclaw",
+        authProfileIdSource: "user",
+        thinkLevel: "low",
+        verboseLevel: "off",
+        elevatedLevel: "off",
+        bashElevated: {
+          enabled: false,
+          allowed: false,
+          defaultLevel: "off",
+        },
+        timeoutMs: 5_000,
+        blockReplyBreak: "message_end",
+      },
+    } as unknown as FollowupRun;
+
+    const sessionKey = "main";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 1,
+      compactionCount: 0,
+      authProfileOverride: "anthropic:openclaw",
+      authProfileOverrideSource: "user" as const,
+    };
+
+    await runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: sessionKey,
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath: undefined,
+      defaultModel: "anthropic/claude-opus-4-5",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as {
+      authProfileId?: unknown;
+      authProfileIdSource?: unknown;
+      provider?: unknown;
+      model?: unknown;
+    };
+
+    expect(call.provider).toBe("anthropic");
+    expect(call.model).toBe("claude-sonnet");
+    expect(call.authProfileId).toBe("anthropic:openclaw");
+    expect(call.authProfileIdSource).toBe("user");
+    expect(sessionEntry.providerOverride).toBe("anthropic");
+    expect(sessionEntry.modelOverride).toBe("claude-sonnet");
+    expect(sessionEntry.authProfileOverride).toBe("anthropic:openclaw");
+    expect(sessionEntry.authProfileOverrideSource).toBe("user");
   });
 });
 
