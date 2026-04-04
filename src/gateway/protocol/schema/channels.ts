@@ -23,6 +23,7 @@ export const TalkSpeakParamsSchema = Type.Object(
     modelId: Type.Optional(Type.String()),
     outputFormat: Type.Optional(Type.String()),
     speed: Type.Optional(Type.Number()),
+    rateWpm: Type.Optional(Type.Integer({ minimum: 1 })),
     stability: Type.Optional(Type.Number()),
     similarity: Type.Optional(Type.Number()),
     style: Type.Optional(Type.Number()),
@@ -30,6 +31,7 @@ export const TalkSpeakParamsSchema = Type.Object(
     seed: Type.Optional(Type.Integer({ minimum: 0 })),
     normalize: Type.Optional(Type.String()),
     language: Type.Optional(Type.String()),
+    latencyTier: Type.Optional(Type.Integer({ minimum: 0 })),
   },
   { additionalProperties: false },
 );
