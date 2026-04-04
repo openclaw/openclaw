@@ -2,12 +2,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { isChannelSurfaceTestFile } from "../vitest.channel-paths.mjs";
-import { isBoundaryTestFile } from "../vitest.unit-paths.mjs";
+import { isBoundaryTestFile, isBundledPluginDependentUnitTestFile } from "../vitest.unit-paths.mjs";
 
 const DEFAULT_VITEST_CONFIG = "vitest.unit.config.ts";
 const AGENTS_VITEST_CONFIG = "vitest.agents.config.ts";
 const AUTO_REPLY_VITEST_CONFIG = "vitest.auto-reply.config.ts";
 const BOUNDARY_VITEST_CONFIG = "vitest.boundary.config.ts";
+const BUNDLED_VITEST_CONFIG = "vitest.bundled.config.ts";
 const CHANNEL_VITEST_CONFIG = "vitest.channels.config.ts";
 const COMMANDS_VITEST_CONFIG = "vitest.commands.config.ts";
 const E2E_VITEST_CONFIG = "vitest.e2e.config.ts";
@@ -79,6 +80,9 @@ function classifyTarget(arg, cwd) {
   }
   if (isBoundaryTestFile(relative)) {
     return "boundary";
+  }
+  if (isBundledPluginDependentUnitTestFile(relative)) {
+    return "bundled";
   }
   if (relative.startsWith("src/gateway/")) {
     return "gateway";
@@ -159,6 +163,7 @@ export function buildVitestRunPlans(args, cwd = process.cwd()) {
   const orderedKinds = [
     "default",
     "boundary",
+    "bundled",
     "gateway",
     "command",
     "autoReply",
@@ -176,21 +181,23 @@ export function buildVitestRunPlans(args, cwd = process.cwd()) {
     const config =
       kind === "boundary"
         ? BOUNDARY_VITEST_CONFIG
-        : kind === "gateway"
-          ? GATEWAY_VITEST_CONFIG
-          : kind === "command"
-            ? COMMANDS_VITEST_CONFIG
-            : kind === "autoReply"
-              ? AUTO_REPLY_VITEST_CONFIG
-              : kind === "agent"
-                ? AGENTS_VITEST_CONFIG
-                : kind === "e2e"
-                  ? E2E_VITEST_CONFIG
-                  : kind === "channel"
-                    ? CHANNEL_VITEST_CONFIG
-                    : kind === "extension"
-                      ? EXTENSIONS_VITEST_CONFIG
-                      : DEFAULT_VITEST_CONFIG;
+        : kind === "bundled"
+          ? BUNDLED_VITEST_CONFIG
+          : kind === "gateway"
+            ? GATEWAY_VITEST_CONFIG
+            : kind === "command"
+              ? COMMANDS_VITEST_CONFIG
+              : kind === "autoReply"
+                ? AUTO_REPLY_VITEST_CONFIG
+                : kind === "agent"
+                  ? AGENTS_VITEST_CONFIG
+                  : kind === "e2e"
+                    ? E2E_VITEST_CONFIG
+                    : kind === "channel"
+                      ? CHANNEL_VITEST_CONFIG
+                      : kind === "extension"
+                        ? EXTENSIONS_VITEST_CONFIG
+                        : DEFAULT_VITEST_CONFIG;
     const includePatterns =
       kind === "default" || kind === "e2e"
         ? null

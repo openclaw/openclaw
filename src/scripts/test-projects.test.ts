@@ -78,6 +78,17 @@ describe("test-projects args", () => {
     ]);
   });
 
+  it("routes bundled-plugin-dependent unit targets to the bundled config", () => {
+    expect(buildVitestRunPlans(["src/plugins/loader.test.ts"])).toEqual([
+      {
+        config: "vitest.bundled.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/plugins/loader.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
   it("routes command targets to the commands config", () => {
     expect(buildVitestRunPlans(["src/commands/status.summary.test.ts"])).toEqual([
       {
@@ -128,6 +139,19 @@ describe("test-projects args", () => {
         config: "vitest.gateway.config.ts",
         forwardedArgs: [],
         includePatterns: ["src/gateway/**/*.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("widens extension helper targets to sibling extension tests", () => {
+    expect(
+      buildVitestRunPlans(["extensions/memory-core/src/memory/test-runtime-mocks.ts"]),
+    ).toEqual([
+      {
+        config: "vitest.extensions.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["extensions/memory-core/src/memory/**/*.test.ts"],
         watchMode: false,
       },
     ]);
