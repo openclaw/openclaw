@@ -6,7 +6,7 @@ summary: "`openclaw devices` 的 CLI 参考（设备配对 + token 轮换/撤销
 title: devices
 x-i18n:
   generated_at: "2026-02-03T07:44:52Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 52f903817d2886c1dc29b85d30168d1edff7944bd120a1e139159c9d99a1f517
   source_path: cli/devices.md

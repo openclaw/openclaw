@@ -9,7 +9,7 @@ import {
   unlinkSync,
 } from "node:fs";
 import path from "node:path";
-import { normalizeChannelId, type ChannelId } from "openclaw/plugin-sdk/channel-runtime";
+import { normalizeChannelId, type ChannelId } from "openclaw/plugin-sdk/channel-targets";
 import type {
   OpenClawConfig,
   TtsAutoMode,

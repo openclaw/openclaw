@@ -459,7 +459,7 @@ export async function runPreparedReply(
       command,
       sessionKey,
       cfg,
-      accountId: ctx.AccountId,
+      accountId: sessionCtx.AccountId,
       threadId: ctx.MessageThreadId,
       provider,
       model,
@@ -526,7 +526,7 @@ export async function runPreparedReply(
     // Originating channel for reply routing.
     originatingChannel: ctx.OriginatingChannel,
     originatingTo: ctx.OriginatingTo,
-    originatingAccountId: ctx.AccountId,
+    originatingAccountId: sessionCtx.AccountId,
     originatingThreadId: ctx.MessageThreadId,
     originatingChatType: ctx.ChatType,
     run: {
@@ -580,7 +580,13 @@ export async function runPreparedReply(
       ownerNumbers: command.ownerList.length > 0 ? command.ownerList : undefined,
       inputProvenance: ctx.InputProvenance ?? sessionCtx.InputProvenance,
       extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
-      ...(isReasoningTagProvider(provider) ? { enforceFinalTag: true } : {}),
+      ...(isReasoningTagProvider(provider, {
+        config: cfg,
+        workspaceDir,
+        modelId: model,
+      })
+        ? { enforceFinalTag: true }
+        : {}),
     },
   };
 

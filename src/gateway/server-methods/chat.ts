@@ -102,7 +102,7 @@ type ChatAbortRequester = {
   isAdmin: boolean;
 };
 
-const CHAT_HISTORY_TEXT_MAX_CHARS = 12_000;
+const DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS = 12_000;
 const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
 let chatHistoryPlaceholderEmitCount = 0;
@@ -483,17 +483,23 @@ async function rewriteChatSendUserTurnMediaPaths(params: {
   });
 }
 
-function truncateChatHistoryText(text: string): { text: string; truncated: boolean } {
-  if (text.length <= CHAT_HISTORY_TEXT_MAX_CHARS) {
+function truncateChatHistoryText(
+  text: string,
+  maxChars: number,
+): { text: string; truncated: boolean } {
+  if (text.length <= maxChars) {
     return { text, truncated: false };
   }
   return {
-    text: `${text.slice(0, CHAT_HISTORY_TEXT_MAX_CHARS)}\n...(truncated)...`,
+    text: `${text.slice(0, maxChars)}\n...(truncated)...`,
     truncated: true,
   };
 }
 
-function sanitizeChatHistoryContentBlock(block: unknown): { block: unknown; changed: boolean } {
+function sanitizeChatHistoryContentBlock(
+  block: unknown,
+  maxChars: number,
+): { block: unknown; changed: boolean } {
   if (!block || typeof block !== "object") {
     return { block, changed: false };
   }
@@ -501,22 +507,22 @@ function sanitizeChatHistoryContentBlock(block: unknown): { block: unknown; chan
   let changed = false;
   if (typeof entry.text === "string") {
     const stripped = stripInlineDirectiveTagsForDisplay(entry.text);
-    const res = truncateChatHistoryText(stripped.text);
+    const res = truncateChatHistoryText(stripped.text, maxChars);
     entry.text = res.text;
     changed ||= stripped.changed || res.truncated;
   }
   if (typeof entry.partialJson === "string") {
-    const res = truncateChatHistoryText(entry.partialJson);
+    const res = truncateChatHistoryText(entry.partialJson, maxChars);
     entry.partialJson = res.text;
     changed ||= res.truncated;
   }
   if (typeof entry.arguments === "string") {
-    const res = truncateChatHistoryText(entry.arguments);
+    const res = truncateChatHistoryText(entry.arguments, maxChars);
     entry.arguments = res.text;
     changed ||= res.truncated;
   }
   if (typeof entry.thinking === "string") {
-    const res = truncateChatHistoryText(entry.thinking);
+    const res = truncateChatHistoryText(entry.thinking, maxChars);
     entry.thinking = res.text;
     changed ||= res.truncated;
   }
@@ -597,7 +603,10 @@ function sanitizeCost(raw: unknown): { total?: number } | undefined {
   return total !== undefined ? { total } : undefined;
 }
 
-function sanitizeChatHistoryMessage(message: unknown): { message: unknown; changed: boolean } {
+function sanitizeChatHistoryMessage(
+  message: unknown,
+  maxChars: number,
+): { message: unknown; changed: boolean } {
   if (!message || typeof message !== "object") {
     return { message, changed: false };
   }
@@ -644,11 +653,11 @@ function sanitizeChatHistoryMessage(message: unknown): { message: unknown; chang
 
   if (typeof entry.content === "string") {
     const stripped = stripInlineDirectiveTagsForDisplay(entry.content);
-    const res = truncateChatHistoryText(stripped.text);
+    const res = truncateChatHistoryText(stripped.text, maxChars);
     entry.content = res.text;
     changed ||= stripped.changed || res.truncated;
   } else if (Array.isArray(entry.content)) {
-    const updated = entry.content.map((block) => sanitizeChatHistoryContentBlock(block));
+    const updated = entry.content.map((block) => sanitizeChatHistoryContentBlock(block, maxChars));
     if (updated.some((item) => item.changed)) {
       entry.content = updated.map((item) => item.block);
       changed = true;
@@ -657,7 +666,7 @@ function sanitizeChatHistoryMessage(message: unknown): { message: unknown; chang
 
   if (typeof entry.text === "string") {
     const stripped = stripInlineDirectiveTagsForDisplay(entry.text);
-    const res = truncateChatHistoryText(stripped.text);
+    const res = truncateChatHistoryText(stripped.text, maxChars);
     entry.text = res.text;
     changed ||= stripped.changed || res.truncated;
   }
@@ -703,21 +712,21 @@ function extractAssistantTextForSilentCheck(message: unknown): string | undefine
   return texts.length > 0 ? texts.join("\n") : undefined;
 }
 
-function sanitizeChatHistoryMessages(messages: unknown[]): unknown[] {
+function sanitizeChatHistoryMessages(messages: unknown[], maxChars: number): unknown[] {
   if (messages.length === 0) {
     return messages;
   }
   let changed = false;
   const next: unknown[] = [];
   for (const message of messages) {
-    const res = sanitizeChatHistoryMessage(message);
-    changed ||= res.changed;
     // Drop assistant messages whose entire visible text is the silent reply token.
-    const text = extractAssistantTextForSilentCheck(res.message);
+    const text = extractAssistantTextForSilentCheck(message);
     if (text !== undefined && isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
       changed = true;
       continue;
     }
+    const res = sanitizeChatHistoryMessage(message, maxChars);
+    changed ||= res.changed;
     next.push(res.message);
   }
   return changed ? next : messages;
@@ -1205,13 +1214,25 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const { sessionKey, limit } = params as {
+    const {
+      sessionKey,
+      limit,
+      maxChars: rpcMaxChars,
+    } = params as {
       sessionKey: string;
       limit?: number;
+      maxChars?: number;
     };
     const { cfg, storePath, entry } = loadSessionEntry(sessionKey);
-    const sessionId = entry?.sessionId;
+    const configMaxChars = cfg.gateway?.webchat?.chatHistoryMaxChars;
+    const effectiveMaxChars =
+      typeof rpcMaxChars === "number"
+        ? rpcMaxChars
+        : typeof configMaxChars === "number"
+          ? configMaxChars
+          : DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
     const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
+    const sessionId = entry?.sessionId;
     const resolvedSessionModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
     const localMessages =
       sessionId && storePath ? readSessionMessages(sessionId, storePath, entry?.sessionFile) : [];
@@ -1226,7 +1247,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     const max = Math.min(hardMax, requested);
     const sliced = rawMessages.length > max ? rawMessages.slice(-max) : rawMessages;
     const sanitized = stripEnvelopeFromMessages(sliced);
-    const normalized = sanitizeChatHistoryMessages(sanitized);
+    const normalized = sanitizeChatHistoryMessages(sanitized, effectiveMaxChars);
     const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
     const perMessageHardCap = Math.min(CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES, maxHistoryBytes);
     const replaced = replaceOversizedChatHistoryMessages({

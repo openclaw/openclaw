@@ -56,4 +56,19 @@ describe("config presence", () => {
       expectedConfigured: false,
     });
   });
+
+  it("detects env-only channel config", () => {
+    const stateDir = makeTempStateDir();
+    const env = {
+      OPENCLAW_STATE_DIR: stateDir,
+      MATRIX_ACCESS_TOKEN: "token",
+    } as NodeJS.ProcessEnv;
+
+    expectPotentialConfiguredChannelCase({
+      cfg: {},
+      env,
+      expectedIds: ["matrix"],
+      expectedConfigured: true,
+    });
+  });
 });

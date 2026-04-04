@@ -4,7 +4,7 @@ summary: 社区构建的基于 OpenClaw 的项目和集成
 title: 案例展示
 x-i18n:
   generated_at: "2026-02-03T10:11:36Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: b3460f6a7b9948799a6082fee90fa8e5ac1d43e34872aea51ba431813dcead7a
   source_path: start/showcase.md

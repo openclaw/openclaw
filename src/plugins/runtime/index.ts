@@ -16,6 +16,8 @@ import { createRuntimeEvents } from "./runtime-events.js";
 import { createRuntimeLogging } from "./runtime-logging.js";
 import { createRuntimeMedia } from "./runtime-media.js";
 import { createRuntimeSystem } from "./runtime-system.js";
+import { createRuntimeTaskFlow } from "./runtime-taskflow.js";
+import { createRuntimeTasks } from "./runtime-tasks.js";
 import type { PluginRuntime } from "./types.js";
 
 const loadTtsRuntime = createLazyRuntimeModule(() => import("./runtime-tts.runtime.js"));
@@ -56,6 +58,12 @@ type RuntimeImageGenerationModule = Pick<
 >;
 let cachedRuntimeImageGenerationModule: RuntimeImageGenerationModule | null = null;
 
+type RuntimeVideoGenerationModule = Pick<
+  typeof import("../../plugin-sdk/video-generation-runtime.js"),
+  "generateVideo" | "listRuntimeVideoGenerationProviders"
+>;
+let cachedRuntimeVideoGenerationModule: RuntimeVideoGenerationModule | null = null;
+
 function loadRuntimeImageGenerationModule(): RuntimeImageGenerationModule {
   cachedRuntimeImageGenerationModule ??=
     loadBundledPluginPublicSurfaceModuleSync<RuntimeImageGenerationModule>({
@@ -70,6 +78,23 @@ function createRuntimeImageGeneration(): PluginRuntime["imageGeneration"] {
     generate: (params) => loadRuntimeImageGenerationModule().generateImage(params),
     listProviders: (params) =>
       loadRuntimeImageGenerationModule().listRuntimeImageGenerationProviders(params),
+  };
+}
+
+function loadRuntimeVideoGenerationModule(): RuntimeVideoGenerationModule {
+  cachedRuntimeVideoGenerationModule ??=
+    loadBundledPluginPublicSurfaceModuleSync<RuntimeVideoGenerationModule>({
+      dirName: "video-generation-core",
+      artifactBasename: "runtime-api.js",
+    });
+  return cachedRuntimeVideoGenerationModule;
+}
+
+function createRuntimeVideoGeneration(): PluginRuntime["videoGeneration"] {
+  return {
+    generate: (params) => loadRuntimeVideoGenerationModule().generateVideo(params),
+    listProviders: (params) =>
+      loadRuntimeVideoGenerationModule().listRuntimeVideoGenerationProviders(params),
   };
 }
 
@@ -183,6 +208,10 @@ export type CreatePluginRuntimeOptions = {
 
 export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): PluginRuntime {
   const mediaUnderstanding = createRuntimeMediaUnderstandingFacade();
+  const taskFlow = createRuntimeTaskFlow();
+  const tasks = createRuntimeTasks({
+    legacyTaskFlow: taskFlow,
+  });
   const runtime = {
     // Sourced from the shared OpenClaw version resolver (#52899) so plugins
     // always see the same version the CLI reports, avoiding API-version drift.
@@ -203,12 +232,17 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     events: createRuntimeEvents(),
     logging: createRuntimeLogging(),
     state: { resolveStateDir },
+    tasks,
+    taskFlow,
   } satisfies Omit<
     PluginRuntime,
-    "tts" | "mediaUnderstanding" | "stt" | "modelAuth" | "imageGeneration"
+    "tts" | "mediaUnderstanding" | "stt" | "modelAuth" | "imageGeneration" | "videoGeneration"
   > &
     Partial<
-      Pick<PluginRuntime, "tts" | "mediaUnderstanding" | "stt" | "modelAuth" | "imageGeneration">
+      Pick<
+        PluginRuntime,
+        "tts" | "mediaUnderstanding" | "stt" | "modelAuth" | "imageGeneration" | "videoGeneration"
+      >
     >;
 
   defineCachedValue(runtime, "tts", createRuntimeTts);
@@ -218,6 +252,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
   }));
   defineCachedValue(runtime, "modelAuth", createRuntimeModelAuth);
   defineCachedValue(runtime, "imageGeneration", createRuntimeImageGeneration);
+  defineCachedValue(runtime, "videoGeneration", createRuntimeVideoGeneration);
 
   return runtime as PluginRuntime;
 }

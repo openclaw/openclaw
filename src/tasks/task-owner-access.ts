@@ -5,6 +5,7 @@ import {
   resolveTaskForLookupToken,
 } from "./task-registry.js";
 import type { TaskRecord } from "./task-registry.types.js";
+import { buildTaskStatusSnapshot } from "./task-status.js";
 
 function normalizeOwnerKey(ownerKey?: string): string | undefined {
   const trimmed = ownerKey?.trim();
@@ -40,6 +41,18 @@ export function listTasksForRelatedSessionKeyForOwner(params: {
 }): TaskRecord[] {
   return listTasksForRelatedSessionKey(params.relatedSessionKey).filter((task) =>
     canOwnerAccessTask(task, params.callerOwnerKey),
+  );
+}
+
+export function buildTaskStatusSnapshotForRelatedSessionKeyForOwner(params: {
+  relatedSessionKey: string;
+  callerOwnerKey: string;
+}) {
+  return buildTaskStatusSnapshot(
+    listTasksForRelatedSessionKeyForOwner({
+      relatedSessionKey: params.relatedSessionKey,
+      callerOwnerKey: params.callerOwnerKey,
+    }),
   );
 }
 

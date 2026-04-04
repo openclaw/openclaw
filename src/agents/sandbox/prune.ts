@@ -1,5 +1,5 @@
+import { stopBrowserBridgeServer } from "../../../extensions/browser/runtime-api.js";
 import { loadConfig } from "../../config/config.js";
-import { stopBrowserBridgeServer } from "../../plugin-sdk/browser-runtime.js";
 import { defaultRuntime } from "../../runtime.js";
 import { getSandboxBackendManager } from "./backend.js";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";

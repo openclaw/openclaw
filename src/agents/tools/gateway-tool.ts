@@ -63,7 +63,7 @@ function parseGatewayConfigMutationRaw(
   return parsedRes.parsed;
 }
 
-function getValueAtPath(config: Record<string, unknown>, path: string): unknown {
+function getValueAtCanonicalPath(config: Record<string, unknown>, path: string): unknown {
   let current: unknown = config;
   for (const part of path.split(".")) {
     if (!current || typeof current !== "object" || Array.isArray(current)) {
@@ -72,6 +72,17 @@ function getValueAtPath(config: Record<string, unknown>, path: string): unknown 
     current = (current as Record<string, unknown>)[part];
   }
   return current;
+}
+
+function getValueAtPath(config: Record<string, unknown>, path: string): unknown {
+  const direct = getValueAtCanonicalPath(config, path);
+  if (direct !== undefined) {
+    return direct;
+  }
+  if (!path.startsWith("tools.exec.")) {
+    return undefined;
+  }
+  return getValueAtCanonicalPath(config, path.replace(/^tools\.exec\./, "tools.bash."));
 }
 
 function assertGatewayConfigMutationAllowed(params: {
@@ -167,8 +178,8 @@ export function createGatewayTool(opts?: {
             : undefined;
         const note =
           typeof params.note === "string" && params.note.trim() ? params.note.trim() : undefined;
-        // Extract channel + threadId for routing after restart
-        // Supports both :thread: (most channels) and :topic: (Telegram)
+        // Extract channel + threadId for routing after restart.
+        // Uses generic :thread: parsing plus plugin-owned session grammars.
         const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey);
         const payload: RestartSentinelPayload = {
           kind: "restart",

@@ -5,7 +5,7 @@ read_when:
 summary: 开发智能体工具备注（C-3PO）
 x-i18n:
   generated_at: "2026-02-01T21:37:41Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 3d41097967c9811637855664f978c02107a28b6d811ba49941a8f96f0720cd45
   source_path: reference/templates/TOOLS.dev.md

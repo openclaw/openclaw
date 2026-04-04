@@ -4,15 +4,21 @@ type FacadeEntry = PluginSdkFacadeTypeMap["memory-core-engine-runtime"];
 type FacadeModule = FacadeEntry["module"];
 import {
   createLazyFacadeObjectValue,
-  loadBundledPluginPublicSurfaceModuleSync,
+  loadActivatedBundledPluginPublicSurfaceModuleSync,
 } from "./facade-runtime.js";
 
 function loadFacadeModule(): FacadeModule {
-  return loadBundledPluginPublicSurfaceModuleSync<FacadeModule>({
+  return loadActivatedBundledPluginPublicSurfaceModuleSync<FacadeModule>({
     dirName: "memory-core",
     artifactBasename: "runtime-api.js",
   });
 }
+export const auditShortTermPromotionArtifacts: FacadeModule["auditShortTermPromotionArtifacts"] = ((
+  ...args
+) =>
+  loadFacadeModule()["auditShortTermPromotionArtifacts"](
+    ...args,
+  )) as FacadeModule["auditShortTermPromotionArtifacts"];
 export const getBuiltinMemoryEmbeddingProviderDoctorMetadata: FacadeModule["getBuiltinMemoryEmbeddingProviderDoctorMetadata"] =
   ((...args) =>
     loadFacadeModule()["getBuiltinMemoryEmbeddingProviderDoctorMetadata"](
@@ -28,5 +34,13 @@ export const listBuiltinAutoSelectMemoryEmbeddingProviderDoctorMetadata: FacadeM
 export const MemoryIndexManager: FacadeModule["MemoryIndexManager"] = createLazyFacadeObjectValue(
   () => loadFacadeModule()["MemoryIndexManager"] as object,
 ) as FacadeModule["MemoryIndexManager"];
+export const repairShortTermPromotionArtifacts: FacadeModule["repairShortTermPromotionArtifacts"] =
+  ((...args) =>
+    loadFacadeModule()["repairShortTermPromotionArtifacts"](
+      ...args,
+    )) as FacadeModule["repairShortTermPromotionArtifacts"];
 export type BuiltinMemoryEmbeddingProviderDoctorMetadata =
   FacadeEntry["types"]["BuiltinMemoryEmbeddingProviderDoctorMetadata"];
+export type RepairShortTermPromotionArtifactsResult =
+  FacadeEntry["types"]["RepairShortTermPromotionArtifactsResult"];
+export type ShortTermAuditSummary = FacadeEntry["types"]["ShortTermAuditSummary"];

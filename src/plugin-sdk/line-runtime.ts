@@ -2,10 +2,10 @@
 import type { PluginSdkFacadeTypeMap } from "../generated/plugin-sdk-facade-type-map.generated.js";
 type FacadeEntry = PluginSdkFacadeTypeMap["line-runtime"];
 type FacadeModule = FacadeEntry["module"];
-import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
+import { loadActivatedBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
 
 function loadFacadeModule(): FacadeModule {
-  return loadBundledPluginPublicSurfaceModuleSync<FacadeModule>({
+  return loadActivatedBundledPluginPublicSurfaceModuleSync<FacadeModule>({
     dirName: "line",
     artifactBasename: "runtime-api.js",
   });
@@ -78,6 +78,8 @@ export const getRichMenuIdOfUser: FacadeModule["getRichMenuIdOfUser"] = ((...arg
   loadFacadeModule()["getRichMenuIdOfUser"](...args)) as FacadeModule["getRichMenuIdOfUser"];
 export const getRichMenuList: FacadeModule["getRichMenuList"] = ((...args) =>
   loadFacadeModule()["getRichMenuList"](...args)) as FacadeModule["getRichMenuList"];
+export const hasLineDirectives: FacadeModule["hasLineDirectives"] = ((...args) =>
+  loadFacadeModule()["hasLineDirectives"](...args)) as FacadeModule["hasLineDirectives"];
 export const isSenderAllowed: FacadeModule["isSenderAllowed"] = ((...args) =>
   loadFacadeModule()["isSenderAllowed"](...args)) as FacadeModule["isSenderAllowed"];
 export const linkRichMenuToUser: FacadeModule["linkRichMenuToUser"] = ((...args) =>
@@ -96,6 +98,8 @@ export const normalizeDmAllowFromWithStore: FacadeModule["normalizeDmAllowFromWi
   loadFacadeModule()["normalizeDmAllowFromWithStore"](
     ...args,
   )) as FacadeModule["normalizeDmAllowFromWithStore"];
+export const parseLineDirectives: FacadeModule["parseLineDirectives"] = ((...args) =>
+  loadFacadeModule()["parseLineDirectives"](...args)) as FacadeModule["parseLineDirectives"];
 export const postbackAction: FacadeModule["postbackAction"] = ((...args) =>
   loadFacadeModule()["postbackAction"](...args)) as FacadeModule["postbackAction"];
 export const probeLineBot: FacadeModule["probeLineBot"] = ((...args) =>

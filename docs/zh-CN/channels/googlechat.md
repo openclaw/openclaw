@@ -5,7 +5,7 @@ summary: Google Chat 应用支持状态、功能和配置
 title: Google Chat
 x-i18n:
   generated_at: "2026-02-03T07:43:39Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 3b2bb116cdd12614c3d5afddd0879e9deb05c3606e3a2385cbc07f23552b357e
   source_path: channels/googlechat.md

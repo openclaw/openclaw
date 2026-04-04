@@ -27,7 +27,6 @@ function createFileChooserPageMocks() {
 
 describe("pw-tools-core", () => {
   beforeAll(async () => {
-    vi.resetModules();
     mod = await import("./pw-tools-core.js");
   });
 

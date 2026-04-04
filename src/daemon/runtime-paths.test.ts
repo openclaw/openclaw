@@ -4,10 +4,17 @@ const fsMocks = vi.hoisted(() => ({
   access: vi.fn(),
 }));
 
-vi.mock("node:fs/promises", () => ({
-  default: { access: fsMocks.access },
-  access: fsMocks.access,
-}));
+vi.mock("node:fs/promises", async () => {
+  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+  return {
+    ...actual,
+    default: {
+      ...actual,
+      access: fsMocks.access,
+    },
+    access: fsMocks.access,
+  };
+});
 
 import {
   renderSystemNodeWarning,

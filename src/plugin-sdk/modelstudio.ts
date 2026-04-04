@@ -3,14 +3,14 @@ import type { PluginSdkFacadeTypeMap } from "../generated/plugin-sdk-facade-type
 type FacadeEntry = PluginSdkFacadeTypeMap["modelstudio"];
 type FacadeModule = FacadeEntry["module"];
 import {
-  createLazyFacadeObjectValue,
   createLazyFacadeArrayValue,
+  createLazyFacadeObjectValue,
   loadBundledPluginPublicSurfaceModuleSync,
 } from "./facade-runtime.js";
 
 function loadFacadeModule(): FacadeModule {
   return loadBundledPluginPublicSurfaceModuleSync<FacadeModule>({
-    dirName: "modelstudio",
+    dirName: "qwen",
     artifactBasename: "api.js",
   });
 }

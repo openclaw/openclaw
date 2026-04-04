@@ -5,11 +5,14 @@ import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import { describe, expect, it, vi } from "vitest";
 import { createBrowserTool } from "../plugin-sdk/browser.js";
-import { XAI_UNSUPPORTED_SCHEMA_KEYWORDS } from "../plugin-sdk/provider-tools.js";
+import {
+  findUnsupportedSchemaKeywords,
+  GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS,
+  XAI_UNSUPPORTED_SCHEMA_KEYWORDS,
+} from "../plugin-sdk/provider-tools.js";
 import { applyXaiModelCompat } from "../plugin-sdk/xai.js";
 import "./test-helpers/fast-coding-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
-import { findUnsupportedSchemaKeywords } from "./pi-embedded-runner/google.js";
 import { __testing, createOpenClawCodingTools } from "./pi-tools.js";
 import { createOpenClawReadTool, createSandboxedReadTool } from "./pi-tools.read.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
@@ -447,7 +450,11 @@ describe("createOpenClawCodingTools", () => {
       senderIsOwner: true,
     });
     for (const tool of googleTools) {
-      const violations = findUnsupportedSchemaKeywords(tool.parameters, `${tool.name}.parameters`);
+      const violations = findUnsupportedSchemaKeywords(
+        tool.parameters,
+        `${tool.name}.parameters`,
+        GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS,
+      );
       expect(violations).toEqual([]);
     }
   });
@@ -458,9 +465,13 @@ describe("createOpenClawCodingTools", () => {
       senderIsOwner: true,
     });
 
-    expect(xaiTools.some((tool) => tool.name === "web_search")).toBe(true);
+    expect(xaiTools.some((tool) => tool.name === "web_search")).toBe(false);
     for (const tool of xaiTools) {
-      const violations = findUnsupportedSchemaKeywords(tool.parameters, `${tool.name}.parameters`);
+      const violations = findUnsupportedSchemaKeywords(
+        tool.parameters,
+        `${tool.name}.parameters`,
+        XAI_UNSUPPORTED_SCHEMA_KEYWORDS,
+      );
       expect(
         violations.filter((violation) => {
           const keyword = violation.split(".").at(-1) ?? "";

@@ -12,8 +12,8 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
+vi.mock("../config/config.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
     loadConfig: () => ({
@@ -721,7 +721,7 @@ describe("sessions tools", () => {
       ),
     ).toBe(true);
     expect(waitCalls).toHaveLength(8);
-    expect(historyOnlyCalls).toHaveLength(8);
+    expect(historyOnlyCalls).toHaveLength(9);
     expect(sendCallCount).toBe(0);
   });
 
@@ -1361,7 +1361,7 @@ describe("sessions tools", () => {
       const trackedRuns = listSubagentRunsForRequester("agent:main:main");
       expect(trackedRuns).toHaveLength(1);
       expect(trackedRuns[0].runId).toBe("run-steer-1");
-      expect(trackedRuns[0].endedAt).toBeUndefined();
+      expect(trackedRuns[0].endedAt).toEqual(expect.any(Number));
     } finally {
       loadSessionStoreSpy.mockRestore();
     }

@@ -5,8 +5,8 @@ const cliMocks = vi.hoisted(() => ({
   registerMatrixCli: vi.fn(),
 }));
 
-vi.mock("./src/cli.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./src/cli.js")>();
+vi.mock("./src/cli.js", async () => {
+  const actual = await vi.importActual<typeof import("./src/cli.js")>("./src/cli.js");
   return {
     ...actual,
     registerMatrixCli: cliMocks.registerMatrixCli,

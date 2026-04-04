@@ -445,6 +445,23 @@ EOF
 )"
 }
 
+ensure_vm_running_for_retry() {
+  local status
+  status="$(prlctl status "$VM_NAME" 2>/dev/null || true)"
+  case "$status" in
+    *" suspended")
+      # Some Windows guest transport drops leave the VM suspended between retry
+      # attempts; wake it before the next prlctl exec.
+      warn "VM suspended during retry path; resuming $VM_NAME"
+      prlctl resume "$VM_NAME" >/dev/null
+      ;;
+    *" stopped")
+      warn "VM stopped during retry path; starting $VM_NAME"
+      prlctl start "$VM_NAME" >/dev/null
+      ;;
+  esac
+}
+
 run_windows_retry() {
   local label="$1"
   local max_attempts="$2"
@@ -463,7 +480,12 @@ run_windows_retry() {
     fi
     warn "$label attempt $attempt failed (rc=$rc)"
     if (( attempt < max_attempts )); then
-      wait_for_guest_ready >/dev/null 2>&1 || true
+      if ! ensure_vm_running_for_retry >/dev/null 2>&1; then
+        :
+      fi
+      if ! wait_for_guest_ready >/dev/null 2>&1; then
+        :
+      fi
       sleep 5
     fi
   done
@@ -984,12 +1006,13 @@ verify_gateway() {
   guest_run_openclaw "" "" gateway status --deep --require-rpc
 }
 
-restart_gateway() {
+run_gateway_daemon_action() {
+  local action="$1"
   local runner_name log_name done_name done_status launcher_state
   local poll_rc state_rc log_rc start_seconds poll_deadline startup_checked
-  runner_name="openclaw-gateway-restart-$RANDOM-$RANDOM.ps1"
-  log_name="openclaw-gateway-restart-$RANDOM-$RANDOM.log"
-  done_name="openclaw-gateway-restart-$RANDOM-$RANDOM.done"
+  runner_name="openclaw-gateway-$action-$RANDOM-$RANDOM.ps1"
+  log_name="openclaw-gateway-$action-$RANDOM-$RANDOM.log"
+  done_name="openclaw-gateway-$action-$RANDOM-$RANDOM.done"
   start_seconds="$SECONDS"
   poll_deadline=$((SECONDS + TIMEOUT_GATEWAY_S + 60))
   startup_checked=0
@@ -1006,7 +1029,7 @@ Remove-Item \$runner, \$log, \$done -Force -ErrorAction SilentlyContinue
 \$done = Join-Path \$env:TEMP '$done_name'
 try {
   \$openclaw = Join-Path \$env:APPDATA 'npm\openclaw.cmd'
-  & \$openclaw gateway restart *>&1 | Tee-Object -FilePath \$log -Append | Out-Null
+  & \$openclaw gateway $action *>&1 | Tee-Object -FilePath \$log -Append | Out-Null
   Set-Content -Path \$done -Value ([string]\$LASTEXITCODE)
 } catch {
   if (Test-Path \$log) {
@@ -1030,9 +1053,9 @@ EOF
     set -e
     done_status="${done_status//$'\r'/}"
     if [[ $poll_rc -ne 0 ]]; then
-      warn "windows gateway restart helper poll failed; retrying"
+      warn "windows gateway $action helper poll failed; retrying"
       if (( SECONDS >= poll_deadline )); then
-        warn "windows gateway restart helper timed out while polling done file"
+        warn "windows gateway $action helper timed out while polling done file"
         return 1
       fi
       sleep 2
@@ -1044,7 +1067,7 @@ EOF
       log_rc=$?
       set -e
       if [[ $log_rc -ne 0 ]]; then
-        warn "windows gateway restart helper log drain failed after completion"
+        warn "windows gateway $action helper log drain failed after completion"
       fi
       [[ "$done_status" == "0" ]]
       return $?
@@ -1059,7 +1082,7 @@ EOF
       launcher_state="${launcher_state//$'\r'/}"
       startup_checked=1
       if [[ $state_rc -eq 0 && "$launcher_state" == *"runner=False"* && "$launcher_state" == *"log=False"* && "$launcher_state" == *"done=False"* ]]; then
-        warn "windows gateway restart helper failed to materialize guest files"
+        warn "windows gateway $action helper failed to materialize guest files"
         return 1
       fi
     fi
@@ -1069,13 +1092,21 @@ EOF
       log_rc=$?
       set -e
       if [[ $log_rc -ne 0 ]]; then
-        warn "windows gateway restart helper log drain failed after timeout"
+        warn "windows gateway $action helper log drain failed after timeout"
       fi
-      warn "windows gateway restart helper timed out waiting for done file"
+      warn "windows gateway $action helper timed out waiting for done file"
       return 1
     fi
     sleep 2
   done
+}
+
+restart_gateway() {
+  run_gateway_daemon_action restart
+}
+
+stop_gateway() {
+  run_gateway_daemon_action stop
 }
 
 show_gateway_status_compat() {
@@ -1145,7 +1176,10 @@ run_upgrade_lane() {
   phase_run "upgrade.install-main" "$TIMEOUT_INSTALL_S" install_main_tgz "$host_ip" "openclaw-main-upgrade.tgz" || return $?
   UPGRADE_MAIN_VERSION="$(extract_last_version "$(phase_log_path upgrade.install-main)")"
   phase_run "upgrade.verify-main-version" "$TIMEOUT_VERIFY_S" verify_target_version || return $?
-  phase_run "upgrade.gateway-restart" "$TIMEOUT_GATEWAY_S" restart_gateway || return $?
+  # Stop the old managed gateway before ref-mode onboard rewrites config and
+  # gateway auth. Restarting first can leave the old token alive and make the
+  # onboard health probe fail against a stale daemon.
+  phase_run "upgrade.gateway-stop" "$TIMEOUT_GATEWAY_S" stop_gateway || return $?
   phase_run "upgrade.onboard-ref" "$TIMEOUT_ONBOARD_S" run_ref_onboard || return $?
   phase_run "upgrade.gateway-status" "$TIMEOUT_GATEWAY_S" verify_gateway || return $?
   UPGRADE_GATEWAY_STATUS="pass"

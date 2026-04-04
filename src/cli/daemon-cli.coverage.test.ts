@@ -70,8 +70,9 @@ vi.mock("../daemon/program-args.js", () => ({
   resolveGatewayProgramArguments: (opts: unknown) => resolveGatewayProgramArguments(opts),
 }));
 
-vi.mock("../daemon/service.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../daemon/service.js")>();
+vi.mock("../daemon/service.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../daemon/service.js")>("../daemon/service.js");
   return {
     ...actual,
     resolveGatewayService: () => ({
@@ -104,8 +105,8 @@ vi.mock("../infra/ports.js", () => ({
   formatPortDiagnostics: () => ["Port 18789 is already in use."],
 }));
 
-vi.mock("../runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../runtime.js")>()),
+vi.mock("../runtime.js", async () => ({
+  ...(await vi.importActual<typeof import("../runtime.js")>("../runtime.js")),
   defaultRuntime: mocks.defaultRuntime,
 }));
 

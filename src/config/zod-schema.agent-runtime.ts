@@ -316,6 +316,7 @@ export const ToolsWebSearchSchema = z
 export const ToolsWebFetchSchema = z
   .object({
     enabled: z.boolean().optional(),
+    provider: z.string().optional(),
     maxChars: z.number().int().positive().optional(),
     maxCharsCap: z.number().int().positive().optional(),
     maxResponseBytes: z.number().int().positive().optional(),
@@ -324,6 +325,8 @@ export const ToolsWebFetchSchema = z
     maxRedirects: z.number().int().nonnegative().optional(),
     userAgent: z.string().optional(),
     readability: z.boolean().optional(),
+    // Keep the legacy Firecrawl fetch shape loadable so existing installs can
+    // start and then migrate cleanly through doctor.
     firecrawl: z
       .object({
         enabled: z.boolean().optional(),
@@ -342,7 +345,6 @@ export const ToolsWebFetchSchema = z
 export const ToolsWebXSearchSchema = z
   .object({
     enabled: z.boolean().optional(),
-    apiKey: SecretInputSchema.optional().register(sensitive),
     model: z.string().optional(),
     inlineCitations: z.boolean().optional(),
     maxTurns: z.number().int().optional(),
@@ -527,7 +529,6 @@ export const AgentSandboxSchema = z
     workspaceAccess: z.union([z.literal("none"), z.literal("ro"), z.literal("rw")]).optional(),
     sessionToolsVisibility: z.union([z.literal("spawned"), z.literal("all")]).optional(),
     scope: z.union([z.literal("session"), z.literal("agent"), z.literal("shared")]).optional(),
-    perSession: z.boolean().optional(),
     workspaceRoot: z.string().optional(),
     docker: SandboxDockerSchema,
     ssh: SandboxSshSchema,

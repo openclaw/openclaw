@@ -167,9 +167,9 @@ openclaw models list | grep venice
 | 模型 ID                         | 名称                             | 上下文 | 功能             |
 | ------------------------------- | -------------------------------- | ------ | ---------------- |
 | `claude-opus-4-6`               | Claude Opus 4.6（通过 Venice）   | 1M     | 推理、视觉       |
-| `claude-opus-4-5`               | Claude Opus 4.5（通过 Venice）   | 198k   | 推理、视觉       |
+| `claude-opus-4-6`               | Claude Opus 4.5（通过 Venice）   | 198k   | 推理、视觉       |
 | `claude-sonnet-4-6`             | Claude Sonnet 4.6（通过 Venice） | 1M     | 推理、视觉       |
-| `claude-sonnet-4-5`             | Claude Sonnet 4.5（通过 Venice） | 198k   | 推理、视觉       |
+| `claude-sonnet-4-6`             | Claude Sonnet 4.5（通过 Venice） | 198k   | 推理、视觉       |
 | `openai-gpt-54`                 | GPT-5.4（通过 Venice）           | 1M     | 推理、视觉       |
 | `openai-gpt-53-codex`           | GPT-5.3 Codex（通过 Venice）     | 400k   | 推理、视觉、编码 |
 | `openai-gpt-52`                 | GPT-5.2（通过 Venice）           | 256k   | 推理             |

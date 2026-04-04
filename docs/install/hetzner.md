@@ -33,6 +33,9 @@ See [Security](/gateway/security) and [VPS hosting](/vps).
 - Persist `~/.openclaw` + `~/.openclaw/workspace` on the host (survives restarts/rebuilds)
 - Access the Control UI from your laptop via an SSH tunnel
 
+That mounted `~/.openclaw` state includes `openclaw.json`, per-agent
+`agents/<agentId>/agent/auth-profiles.json`, and `.env`.
+
 The Gateway can be accessed via:
 
 - SSH port forwarding from your laptop
@@ -150,6 +153,10 @@ For the generic Docker flow, see [Docker](/install/docker).
 
     **Do not commit this file.**
 
+    This `.env` file is for container/runtime env such as `OPENCLAW_GATEWAY_TOKEN`.
+    Stored provider OAuth/API-key auth lives in the mounted
+    `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`.
+
   </Step>
 
   <Step title="Docker Compose configuration">
@@ -218,7 +225,8 @@ For the generic Docker flow, see [Docker](/install/docker).
 
     `http://127.0.0.1:18789/`
 
-    Paste your gateway token.
+    Paste the configured shared secret. This guide uses the gateway token by
+    default; if you switched to password auth, use that password instead.
 
   </Step>
 </Steps>

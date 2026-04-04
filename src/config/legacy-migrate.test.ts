@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { migrateLegacyConfig } from "./legacy-migrate.js";
+import {
+  validateConfigObjectRawWithPlugins,
+  validateConfigObjectWithPlugins,
+} from "./validation.js";
 
 describe("legacy migrate audio transcription", () => {
   it("does not rewrite removed routing.transcribeAudio migrations", () => {
@@ -132,12 +136,7 @@ describe("legacy migrate mention routing", () => {
     });
 
     expect(res.config).toBeNull();
-    expect(res.changes).toContain(
-      "Skipped channels.telegram.groupMentionsOnly migration because channels.telegram.groups already has an incompatible shape; fix remaining issues manually.",
-    );
-    expect(res.changes).toContain(
-      "Migration applied, but config still invalid; fix remaining issues manually.",
-    );
+    expect(res.changes).toEqual([]);
   });
 
   it('does not overwrite invalid channels.telegram.groups."*" when migrating groupMentionsOnly', () => {
@@ -153,12 +152,7 @@ describe("legacy migrate mention routing", () => {
     });
 
     expect(res.config).toBeNull();
-    expect(res.changes).toContain(
-      "Skipped channels.telegram.groupMentionsOnly migration because channels.telegram.groups already has an incompatible shape; fix remaining issues manually.",
-    );
-    expect(res.changes).toContain(
-      "Migration applied, but config still invalid; fix remaining issues manually.",
-    );
+    expect(res.changes).toEqual([]);
   });
 });
 
@@ -283,6 +277,529 @@ describe("legacy migrate tts provider shape", () => {
 
     expect(res.changes).toEqual([]);
     expect(res.config).toBeNull();
+  });
+});
+
+describe("legacy migrate talk provider shape", () => {
+  it("moves legacy talk fields into talk.providers.elevenlabs", () => {
+    const res = migrateLegacyConfig({
+      talk: {
+        voiceId: "voice-1",
+        modelId: "eleven_v3",
+        outputFormat: "pcm_44100",
+        apiKey: "test-key",
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Moved talk legacy fields (voiceId, modelId, outputFormat, apiKey) → talk.providers.elevenlabs (filled missing provider fields only).",
+    );
+    expect(res.config?.talk).toEqual({
+      providers: {
+        elevenlabs: {
+          voiceId: "voice-1",
+          modelId: "eleven_v3",
+          outputFormat: "pcm_44100",
+          apiKey: "test-key",
+        },
+      },
+    });
+  });
+
+  it("merges legacy talk fields into the active provider without overwriting explicit provider values", () => {
+    const res = migrateLegacyConfig({
+      talk: {
+        provider: "acme",
+        providers: {
+          acme: {
+            voiceId: "provider-voice",
+          },
+        },
+        voiceId: "legacy-voice",
+        modelId: "acme-model",
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Moved talk legacy fields (voiceId, modelId) → talk.providers.acme (filled missing provider fields only).",
+    );
+    expect(res.config?.talk).toEqual({
+      provider: "acme",
+      providers: {
+        acme: {
+          voiceId: "provider-voice",
+          modelId: "acme-model",
+        },
+      },
+    });
+  });
+
+  it("treats empty talk.providers as legacy-only talk config", () => {
+    const res = migrateLegacyConfig({
+      talk: {
+        providers: {},
+        voiceId: "voice-1",
+        modelId: "eleven_v3",
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Moved talk legacy fields (voiceId, modelId) → talk.providers.elevenlabs (filled missing provider fields only).",
+    );
+    expect(res.config?.talk).toMatchObject({
+      providers: {
+        elevenlabs: {
+          voiceId: "voice-1",
+          modelId: "eleven_v3",
+        },
+      },
+    });
+  });
+
+  it("does not trust blocked talk.provider ids during migration", () => {
+    const res = migrateLegacyConfig({
+      talk: {
+        provider: "__proto__",
+        voiceId: "legacy-voice",
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Skipped talk legacy field migration because talk.providers defines multiple providers and talk.provider is unset; move talk.voiceId/talk.voiceAliases/talk.modelId/talk.outputFormat/talk.apiKey under the intended provider manually.",
+    );
+    expect(res.config).toBeNull();
+    expect(res.changes).toContain(
+      "Migration applied, but config still invalid; fix remaining issues manually.",
+    );
+  });
+
+  it("leaves legacy talk fields in place when the target provider is ambiguous", () => {
+    const res = migrateLegacyConfig({
+      talk: {
+        providers: {
+          acme: { voiceId: "acme-voice" },
+          elevenlabs: { voiceId: "eleven-voice" },
+        },
+        voiceId: "legacy-voice",
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Skipped talk legacy field migration because talk.providers defines multiple providers and talk.provider is unset; move talk.voiceId/talk.voiceAliases/talk.modelId/talk.outputFormat/talk.apiKey under the intended provider manually.",
+    );
+    expect(res.config).toBeNull();
+    expect(res.changes).toContain(
+      "Migration applied, but config still invalid; fix remaining issues manually.",
+    );
+  });
+});
+
+describe("legacy migrate sandbox scope aliases", () => {
+  it("moves agents.defaults.sandbox.perSession into scope", () => {
+    const res = migrateLegacyConfig({
+      agents: {
+        defaults: {
+          sandbox: {
+            perSession: true,
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Moved agents.defaults.sandbox.perSession → agents.defaults.sandbox.scope (session).",
+    );
+    expect(res.config?.agents?.defaults?.sandbox).toEqual({
+      scope: "session",
+    });
+  });
+
+  it("moves agents.list[].sandbox.perSession into scope", () => {
+    const res = migrateLegacyConfig({
+      agents: {
+        list: [
+          {
+            id: "pi",
+            sandbox: {
+              perSession: false,
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Moved agents.list.0.sandbox.perSession → agents.list.0.sandbox.scope (shared).",
+    );
+    expect(res.config?.agents?.list?.[0]?.sandbox).toEqual({
+      scope: "shared",
+    });
+  });
+
+  it("drops legacy sandbox perSession when scope is already set", () => {
+    const res = migrateLegacyConfig({
+      agents: {
+        defaults: {
+          sandbox: {
+            scope: "agent",
+            perSession: true,
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Removed agents.defaults.sandbox.perSession (agents.defaults.sandbox.scope already set).",
+    );
+    expect(res.config?.agents?.defaults?.sandbox).toEqual({
+      scope: "agent",
+    });
+  });
+
+  it("does not migrate invalid sandbox perSession values", () => {
+    const raw = {
+      agents: {
+        defaults: {
+          sandbox: {
+            perSession: "yes",
+          },
+        },
+      },
+    };
+
+    const res = migrateLegacyConfig(raw);
+
+    expect(res.changes).toEqual([]);
+    expect(res.config).toBeNull();
+    expect(validateConfigObjectWithPlugins(raw).ok).toBe(false);
+  });
+});
+
+describe("legacy migrate channel streaming aliases", () => {
+  it("migrates telegram and discord streaming aliases", () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        telegram: {
+          streamMode: "block",
+        },
+        discord: {
+          streaming: false,
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Moved channels.telegram.streamMode → channels.telegram.streaming (block).",
+    );
+    expect(res.changes).toContain("Normalized channels.discord.streaming boolean → enum (off).");
+    expect(res.config?.channels?.telegram).toMatchObject({
+      streaming: "block",
+    });
+    expect(res.config?.channels?.discord).toMatchObject({
+      streaming: "off",
+    });
+  });
+
+  it("removes legacy googlechat streamMode aliases", () => {
+    const raw = {
+      channels: {
+        googlechat: {
+          streamMode: "append",
+          accounts: {
+            work: {
+              streamMode: "replace",
+            },
+          },
+        },
+      },
+    };
+
+    const validated = validateConfigObjectWithPlugins(raw);
+    expect(validated.ok).toBe(true);
+    if (!validated.ok) {
+      return;
+    }
+    expect(
+      (validated.config.channels?.googlechat as Record<string, unknown> | undefined)?.streamMode,
+    ).toBeUndefined();
+    expect(
+      (validated.config.channels?.googlechat?.accounts?.work as Record<string, unknown> | undefined)
+        ?.streamMode,
+    ).toBeUndefined();
+
+    const res = migrateLegacyConfig(raw);
+    expect(res.changes).toContain(
+      "Removed channels.googlechat.streamMode (legacy key no longer used).",
+    );
+    expect(res.changes).toContain(
+      "Removed channels.googlechat.accounts.work.streamMode (legacy key no longer used).",
+    );
+    expect(
+      (res.config?.channels?.googlechat as Record<string, unknown> | undefined)?.streamMode,
+    ).toBeUndefined();
+    expect(
+      (res.config?.channels?.googlechat?.accounts?.work as Record<string, unknown> | undefined)
+        ?.streamMode,
+    ).toBeUndefined();
+  });
+});
+
+describe("legacy migrate nested channel enabled aliases", () => {
+  it("accepts legacy allow aliases through with-plugins validation and normalizes them", () => {
+    const raw = {
+      channels: {
+        slack: {
+          channels: {
+            ops: {
+              allow: false,
+            },
+          },
+        },
+        googlechat: {
+          groups: {
+            "spaces/aaa": {
+              allow: true,
+            },
+          },
+        },
+        discord: {
+          guilds: {
+            "100": {
+              channels: {
+                general: {
+                  allow: false,
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const validated = validateConfigObjectWithPlugins(raw);
+    expect(validated.ok).toBe(true);
+    if (!validated.ok) {
+      return;
+    }
+    expect(validated.config.channels?.slack?.channels?.ops).toEqual({
+      enabled: false,
+    });
+    expect(validated.config.channels?.googlechat?.groups?.["spaces/aaa"]).toEqual({
+      enabled: true,
+    });
+    expect(validated.config.channels?.discord?.guilds?.["100"]?.channels?.general).toEqual({
+      enabled: false,
+    });
+
+    const rawValidated = validateConfigObjectRawWithPlugins(raw);
+    expect(rawValidated.ok).toBe(true);
+    if (!rawValidated.ok) {
+      return;
+    }
+    expect(rawValidated.config.channels?.slack?.channels?.ops).toEqual({
+      enabled: false,
+    });
+  });
+
+  it("moves legacy allow toggles into enabled for slack, googlechat, discord, matrix, and zalouser", () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        slack: {
+          channels: {
+            ops: {
+              allow: false,
+            },
+          },
+          accounts: {
+            work: {
+              channels: {
+                general: {
+                  allow: true,
+                },
+              },
+            },
+          },
+        },
+        googlechat: {
+          groups: {
+            "spaces/aaa": {
+              allow: false,
+            },
+          },
+          accounts: {
+            work: {
+              groups: {
+                "spaces/bbb": {
+                  allow: true,
+                },
+              },
+            },
+          },
+        },
+        discord: {
+          guilds: {
+            "100": {
+              channels: {
+                general: {
+                  allow: false,
+                },
+              },
+            },
+          },
+          accounts: {
+            work: {
+              guilds: {
+                "200": {
+                  channels: {
+                    help: {
+                      allow: true,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        matrix: {
+          groups: {
+            "!ops:example.org": {
+              allow: false,
+            },
+          },
+          accounts: {
+            work: {
+              rooms: {
+                "!legacy:example.org": {
+                  allow: true,
+                },
+              },
+            },
+          },
+        },
+        zalouser: {
+          groups: {
+            "group:trusted": {
+              allow: false,
+            },
+          },
+          accounts: {
+            work: {
+              groups: {
+                "group:legacy": {
+                  allow: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Moved channels.slack.channels.ops.allow → channels.slack.channels.ops.enabled.",
+    );
+    expect(res.changes).toContain(
+      "Moved channels.slack.accounts.work.channels.general.allow → channels.slack.accounts.work.channels.general.enabled.",
+    );
+    expect(res.changes).toContain(
+      "Moved channels.googlechat.groups.spaces/aaa.allow → channels.googlechat.groups.spaces/aaa.enabled.",
+    );
+    expect(res.changes).toContain(
+      "Moved channels.googlechat.accounts.work.groups.spaces/bbb.allow → channels.googlechat.accounts.work.groups.spaces/bbb.enabled.",
+    );
+    expect(res.changes).toContain(
+      "Moved channels.discord.guilds.100.channels.general.allow → channels.discord.guilds.100.channels.general.enabled.",
+    );
+    expect(res.changes).toContain(
+      "Moved channels.discord.accounts.work.guilds.200.channels.help.allow → channels.discord.accounts.work.guilds.200.channels.help.enabled.",
+    );
+    expect(res.changes).toContain(
+      "Moved channels.matrix.groups.!ops:example.org.allow → channels.matrix.groups.!ops:example.org.enabled (false).",
+    );
+    expect(res.changes).toContain(
+      "Moved channels.matrix.accounts.work.rooms.!legacy:example.org.allow → channels.matrix.accounts.work.rooms.!legacy:example.org.enabled (true).",
+    );
+    expect(res.changes).toContain(
+      "Moved channels.zalouser.groups.group:trusted.allow → channels.zalouser.groups.group:trusted.enabled (false).",
+    );
+    expect(res.changes).toContain(
+      "Moved channels.zalouser.accounts.work.groups.group:legacy.allow → channels.zalouser.accounts.work.groups.group:legacy.enabled (true).",
+    );
+    expect(res.config?.channels?.slack?.channels?.ops).toEqual({
+      enabled: false,
+    });
+    expect(res.config?.channels?.googlechat?.groups?.["spaces/aaa"]).toEqual({
+      enabled: false,
+    });
+    expect(res.config?.channels?.discord?.guilds?.["100"]?.channels?.general).toEqual({
+      enabled: false,
+    });
+    expect(res.config?.channels?.matrix?.groups?.["!ops:example.org"]).toEqual({
+      enabled: false,
+    });
+    expect(res.config?.channels?.matrix?.accounts?.work?.rooms?.["!legacy:example.org"]).toEqual({
+      enabled: true,
+    });
+    expect(res.config?.channels?.zalouser?.groups?.["group:trusted"]).toEqual({
+      enabled: false,
+    });
+    expect(res.config?.channels?.zalouser?.accounts?.work?.groups?.["group:legacy"]).toEqual({
+      enabled: true,
+    });
+  });
+
+  it("drops legacy allow when enabled is already set", () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        slack: {
+          channels: {
+            ops: {
+              allow: true,
+              enabled: false,
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Removed channels.slack.channels.ops.allow (channels.slack.channels.ops.enabled already set).",
+    );
+    expect(res.config?.channels?.slack?.channels?.ops).toEqual({
+      enabled: false,
+    });
+  });
+});
+
+describe("legacy migrate x_search auth", () => {
+  it("moves only legacy x_search auth into plugin-owned xai config", () => {
+    const res = migrateLegacyConfig({
+      tools: {
+        web: {
+          x_search: {
+            apiKey: "xai-legacy-key",
+            enabled: true,
+            model: "grok-4-1-fast",
+          },
+        },
+      },
+    });
+
+    expect((res.config?.tools?.web as Record<string, unknown> | undefined)?.x_search).toEqual({
+      enabled: true,
+      model: "grok-4-1-fast",
+    });
+    expect(res.config?.plugins?.entries?.xai).toEqual({
+      enabled: true,
+      config: {
+        webSearch: {
+          apiKey: "xai-legacy-key",
+        },
+      },
+    });
+    expect(res.changes).toEqual([
+      "Moved tools.web.x_search.apiKey → plugins.entries.xai.config.webSearch.apiKey.",
+    ]);
   });
 });
 

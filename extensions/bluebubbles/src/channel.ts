@@ -1,4 +1,6 @@
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
+import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
@@ -6,7 +8,10 @@ import {
   projectAccountWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
 import { createAttachedChannelResultAdapter } from "openclaw/plugin-sdk/channel-send-result";
-import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
+import {
+  buildProbeChannelStatusSummary,
+  PAIRING_APPROVED_MESSAGE,
+} from "openclaw/plugin-sdk/channel-status";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   createComputedAccountStatusAdapter,
@@ -39,15 +44,10 @@ import {
   resolveBlueBubblesGroupToolPolicy,
 } from "./group-policy.js";
 import type { ChannelAccountSnapshot, ChannelPlugin } from "./runtime-api.js";
-import {
-  buildProbeChannelStatusSummary,
-  collectBlueBubblesStatusIssues,
-  DEFAULT_ACCOUNT_ID,
-  PAIRING_APPROVED_MESSAGE,
-} from "./runtime-api.js";
 import { resolveBlueBubblesOutboundSessionRoute } from "./session-route.js";
 import { blueBubblesSetupAdapter } from "./setup-core.js";
 import { blueBubblesSetupWizard } from "./setup-surface.js";
+import { collectBlueBubblesStatusIssues } from "./status-issues.js";
 import {
   extractHandleFromChatGuid,
   inferBlueBubblesTargetChatType,

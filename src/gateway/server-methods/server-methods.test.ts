@@ -420,11 +420,15 @@ describe("exec approval handlers", () => {
   async function resolveExecApproval(params: {
     handlers: ExecApprovalHandlers;
     id: string;
+    decision?: "allow-once" | "allow-always" | "deny";
     respond: ReturnType<typeof vi.fn>;
     context: { broadcast: (event: string, payload: unknown) => void };
   }) {
     return params.handlers["exec.approval.resolve"]({
-      params: { id: params.id, decision: "allow-once" } as ExecApprovalResolveArgs["params"],
+      params: {
+        id: params.id,
+        decision: params.decision ?? "allow-once",
+      } as ExecApprovalResolveArgs["params"],
       respond: params.respond as unknown as ExecApprovalResolveArgs["respond"],
       context: toExecApprovalResolveContext(params.context),
       client: null,
@@ -566,6 +570,51 @@ describe("exec approval handlers", () => {
     expect(broadcasts.some((entry) => entry.event === "exec.approval.resolved")).toBe(true);
   });
 
+  it("rejects allow-always when the request ask mode is always", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: { twoPhase: true, ask: "always" },
+    });
+
+    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
+    const id = (requested?.payload as { id?: string })?.id ?? "";
+    expect(id).not.toBe("");
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id,
+      decision: "allow-always",
+      respond: resolveRespond,
+      context,
+    });
+
+    expect(resolveRespond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message:
+          "allow-always is unavailable because the effective policy requires approval every time",
+      }),
+    );
+
+    const denyRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id,
+      decision: "deny",
+      respond: denyRespond,
+      context,
+    });
+
+    await requestPromise;
+    expect(denyRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+  });
+
   it("does not reuse a resolved exact id as a prefix for another pending approval", () => {
     const manager = new ExecApprovalManager();
     const resolvedRecord = manager.create({ command: "echo old", host: "gateway" }, 2_000, "abc");
@@ -603,6 +652,37 @@ describe("exec approval handlers", () => {
         argv: ["echo", "ok"],
         cwd: "/tmp",
         env: { A_VAR: "a", Z_VAR: "z" },
+      }).binding,
+    );
+  });
+
+  it("includes Windows-compatible env keys in approval env bindings", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        timeoutMs: 10,
+        commandArgv: ["cmd.exe", "/c", "echo", "ok"],
+        command: "cmd.exe /c echo ok",
+        env: {
+          "ProgramFiles(x86)": "C:\\Program Files (x86)",
+        },
+      },
+    });
+    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
+    expect(requested).toBeTruthy();
+    const request = (requested?.payload as { request?: Record<string, unknown> })?.request ?? {};
+    const envBinding = buildSystemRunApprovalEnvBinding({
+      "ProgramFiles(x86)": "C:\\Program Files (x86)",
+    });
+    expect(request["envKeys"]).toEqual(envBinding.envKeys);
+    expect(request["systemRunBinding"]).toEqual(
+      buildSystemRunApprovalBinding({
+        argv: ["cmd.exe", "/c", "echo", "ok"],
+        cwd: "/tmp",
+        env: { "ProgramFiles(x86)": "C:\\Program Files (x86)" },
       }).binding,
     );
   });

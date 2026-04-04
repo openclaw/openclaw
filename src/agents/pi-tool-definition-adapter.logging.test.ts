@@ -60,7 +60,7 @@ describe("pi tool definition adapter logging", () => {
 
     expect(logError).toHaveBeenCalledWith(
       expect.stringContaining(
-        '[tools] edit failed: Missing required parameters: oldText alias, newText alias. Supply correct parameters before retrying. raw_params={"path":"notes.txt"}',
+        '[tools] edit failed: Missing required parameters: oldText alias, newText alias (received: path). Supply correct parameters before retrying. raw_params={"path":"notes.txt"}',
       ),
     );
   });
