@@ -155,6 +155,19 @@ export const en: TranslationMap = {
       noResults: "No results",
     },
   },
+  logs: {
+    title: "Logs",
+    subtitle: "Gateway file logs (JSONL).",
+    loading: "Loading…",
+    exportVisible: "Export visible",
+    exportFiltered: "Export filtered",
+    filter: "Filter",
+    searchPlaceholder: "Search logs",
+    autoFollow: "Auto-follow",
+    file: "File: {value}",
+    truncated: "Log output truncated; showing latest chunk.",
+    empty: "No log entries.",
+  },
   usage: {
     page: {
       subtitle: "See where tokens go, when sessions spike, and what drives cost.",
