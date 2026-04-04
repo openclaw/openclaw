@@ -815,6 +815,33 @@ describe("openai transport stream", () => {
     expect(params.stream_options).toMatchObject({ include_usage: true });
   });
 
+  it("enables streaming usage compat for generic providers on native DashScope endpoints", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "glm-5",
+        name: "GLM-5",
+        api: "openai-completions",
+        provider: "generic",
+        baseUrl: "https://coding.dashscope.aliyuncs.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    ) as {
+      stream_options?: { include_usage?: boolean };
+    };
+
+    expect(params.stream_options).toMatchObject({ include_usage: true });
+  });
+
   it("disables developer-role-only compat defaults for configured custom proxy completions providers", () => {
     const params = buildOpenAICompletionsParams(
       {
