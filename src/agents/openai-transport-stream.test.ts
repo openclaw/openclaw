@@ -20,6 +20,7 @@ import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js"
 describe("openai transport stream", () => {
   it("reports the supported transport-aware APIs", () => {
     expect(isTransportAwareApiSupported("openai-responses")).toBe(true);
+    expect(isTransportAwareApiSupported("openai-codex-responses")).toBe(true);
     expect(isTransportAwareApiSupported("openai-completions")).toBe(true);
     expect(isTransportAwareApiSupported("azure-openai-responses")).toBe(true);
     expect(isTransportAwareApiSupported("anthropic-messages")).toBe(true);
@@ -40,6 +41,20 @@ describe("openai transport stream", () => {
         contextWindow: 200000,
         maxTokens: 8192,
       } satisfies Model<"openai-responses">),
+    ).toBeTypeOf("function");
+    expect(
+      createBoundaryAwareStreamFnForModel({
+        id: "codex-mini-latest",
+        name: "Codex Mini Latest",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-codex-responses">),
     ).toBeTypeOf("function");
     expect(
       createBoundaryAwareStreamFnForModel({
@@ -100,6 +115,39 @@ describe("openai transport stream", () => {
       api: "openclaw-openai-responses-transport",
       provider: "openai",
       id: "gpt-5.4",
+    });
+    expect(buildTransportAwareSimpleStreamFn(model)).toBeTypeOf("function");
+  });
+
+  it("prepares a Codex Responses simple-completion api alias when transport overrides are attached", () => {
+    const model = attachModelProviderRequestTransport(
+      {
+        id: "codex-mini-latest",
+        name: "Codex Mini Latest",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-codex-responses">,
+      {
+        proxy: {
+          mode: "explicit-proxy",
+          url: "http://proxy.internal:8443",
+        },
+      },
+    );
+
+    const prepared = prepareTransportAwareSimpleModel(model);
+
+    expect(resolveTransportAwareSimpleApi(model.api)).toBe("openclaw-openai-responses-transport");
+    expect(prepared).toMatchObject({
+      api: "openclaw-openai-responses-transport",
+      provider: "openai-codex",
+      id: "codex-mini-latest",
     });
     expect(buildTransportAwareSimpleStreamFn(model)).toBeTypeOf("function");
   });

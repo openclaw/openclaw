@@ -250,20 +250,20 @@ AI CLI backend such as `claude-cli` or `codex-cli`.
 
 ### API object fields
 
-| Field                    | Type                      | Description                                                      |
-| ------------------------ | ------------------------- | ---------------------------------------------------------------- |
-| `api.id`                 | `string`                  | Plugin id                                                        |
-| `api.name`               | `string`                  | Display name                                                     |
-| `api.version`            | `string?`                 | Plugin version (optional)                                        |
-| `api.description`        | `string?`                 | Plugin description (optional)                                    |
-| `api.source`             | `string`                  | Plugin source path                                               |
-| `api.rootDir`            | `string?`                 | Plugin root directory (optional)                                 |
-| `api.config`             | `OpenClawConfig`          | Current config snapshot                                          |
-| `api.pluginConfig`       | `Record<string, unknown>` | Plugin-specific config from `plugins.entries.<id>.config`        |
-| `api.runtime`            | `PluginRuntime`           | [Runtime helpers](/plugins/sdk-runtime)                          |
-| `api.logger`             | `PluginLogger`            | Scoped logger (`debug`, `info`, `warn`, `error`)                 |
-| `api.registrationMode`   | `PluginRegistrationMode`  | `"full"`, `"setup-only"`, `"setup-runtime"`, or `"cli-metadata"` |
-| `api.resolvePath(input)` | `(string) => string`      | Resolve path relative to plugin root                             |
+| Field                    | Type                      | Description                                                                |
+| ------------------------ | ------------------------- | -------------------------------------------------------------------------- |
+| `api.id`                 | `string`                  | Plugin id                                                                  |
+| `api.name`               | `string`                  | Display name                                                               |
+| `api.version`            | `string?`                 | Plugin version (optional)                                                  |
+| `api.description`        | `string?`                 | Plugin description (optional)                                              |
+| `api.source`             | `string`                  | Plugin source path                                                         |
+| `api.rootDir`            | `string?`                 | Plugin root directory (optional)                                           |
+| `api.config`             | `OpenClawConfig`          | Current config snapshot (active in-memory runtime snapshot when available) |
+| `api.pluginConfig`       | `Record<string, unknown>` | Plugin-specific config from `plugins.entries.<id>.config`                  |
+| `api.runtime`            | `PluginRuntime`           | [Runtime helpers](/plugins/sdk-runtime)                                    |
+| `api.logger`             | `PluginLogger`            | Scoped logger (`debug`, `info`, `warn`, `error`)                           |
+| `api.registrationMode`   | `PluginRegistrationMode`  | `"full"`, `"setup-only"`, `"setup-runtime"`, or `"cli-metadata"`           |
+| `api.resolvePath(input)` | `(string) => string`      | Resolve path relative to plugin root                                       |
 
 ## Internal module convention
 
@@ -282,6 +282,11 @@ my-plugin/
   from production code. Route internal imports through `./api.ts` or
   `./runtime-api.ts`. The SDK path is the external contract only.
 </Warning>
+
+Facade-loaded bundled plugin public surfaces (`api.ts`, `runtime-api.ts`,
+`index.ts`, `setup-entry.ts`, and similar public entry files) now prefer the
+active runtime config snapshot when OpenClaw is already running. If no runtime
+snapshot exists yet, they fall back to the resolved config file on disk.
 
 <Warning>
   Extension production code should also avoid `openclaw/plugin-sdk/<other-plugin>`

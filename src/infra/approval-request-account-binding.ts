@@ -80,7 +80,13 @@ export function resolveApprovalRequestChannelAccountId(params: {
   if (!expectedChannel) {
     return null;
   }
-  return resolveApprovalRequestAccountId(params);
+  const turnSourceChannel = normalizeOptionalChannel(params.request.request.turnSourceChannel);
+  if (!turnSourceChannel || turnSourceChannel === expectedChannel) {
+    return resolveApprovalRequestAccountId(params);
+  }
+
+  const sessionBinding = resolvePersistedApprovalRequestSessionBinding(params);
+  return sessionBinding?.channel === expectedChannel ? (sessionBinding.accountId ?? null) : null;
 }
 
 export function doesApprovalRequestMatchChannelAccount(params: {
