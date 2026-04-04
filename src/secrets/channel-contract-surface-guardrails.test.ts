@@ -39,6 +39,14 @@ const CORE_SECRET_SURFACE_GUARDS = [
       /\bformatWhatsAppConfigAllowFromEntries\b/,
     ],
   },
+  {
+    path: "src/config/bundled-channel-config-runtime.ts",
+    forbiddenPatterns: [
+      /\bstaticBundledChannelSchemas\b/,
+      /\bMSTeamsConfigSchema\b/,
+      /\bWhatsAppConfigSchema\b/,
+    ],
+  },
 ] as const;
 
 describe("channel secret contract surface guardrails", () => {
