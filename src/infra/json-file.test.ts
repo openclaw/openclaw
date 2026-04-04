@@ -142,6 +142,24 @@ describe("json-file helpers", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "does not create missing target directories through an existing symlink",
+    async () => {
+      await withTempDir({ prefix: "openclaw-json-file-" }, async (root) => {
+        const missingTargetDir = path.join(root, "missing-target");
+        const targetPath = path.join(missingTargetDir, "config.json");
+        const linkPath = path.join(root, "config-link.json");
+        fs.symlinkSync(targetPath, linkPath);
+
+        expect(() => saveJsonFile(linkPath, SAVED_PAYLOAD)).toThrow(
+          expect.objectContaining({ code: "ENOENT" }),
+        );
+        expect(fs.existsSync(missingTargetDir)).toBe(false);
+        expect(fs.lstatSync(linkPath).isSymbolicLink()).toBe(true);
+      });
+    },
+  );
+
   it("falls back to copy when rename-based overwrite fails", async () => {
     await withJsonPath(({ root, pathname }) => {
       writeExistingJson(pathname);

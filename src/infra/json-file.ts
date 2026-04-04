@@ -36,9 +36,10 @@ function readSymlinkTargetPath(linkPath: string): string {
   return path.resolve(path.dirname(linkPath), target);
 }
 
-function resolveJsonWriteTarget(pathname: string): string {
+function resolveJsonWriteTarget(pathname: string): { targetPath: string; followsSymlink: boolean } {
   let currentPath = pathname;
   const visited = new Set<string>();
+  let followsSymlink = false;
 
   for (;;) {
     let stat: fs.Stats;
@@ -48,11 +49,11 @@ function resolveJsonWriteTarget(pathname: string): string {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         throw error;
       }
-      return currentPath;
+      return { targetPath: currentPath, followsSymlink };
     }
 
     if (!stat.isSymbolicLink()) {
-      return currentPath;
+      return { targetPath: currentPath, followsSymlink };
     }
 
     if (visited.has(currentPath)) {
@@ -64,6 +65,7 @@ function resolveJsonWriteTarget(pathname: string): string {
     }
 
     visited.add(currentPath);
+    followsSymlink = true;
     currentPath = readSymlinkTargetPath(currentPath);
   }
 }
@@ -104,11 +106,13 @@ export function loadJsonFile<T = unknown>(pathname: string): T | undefined {
 }
 
 export function saveJsonFile(pathname: string, data: unknown) {
-  const targetPath = resolveJsonWriteTarget(pathname);
+  const { targetPath, followsSymlink } = resolveJsonWriteTarget(pathname);
   const tmpPath = `${targetPath}.${randomUUID()}.tmp`;
   const payload = `${JSON.stringify(data, null, 2)}\n`;
 
-  fs.mkdirSync(path.dirname(targetPath), { recursive: true, mode: JSON_DIR_MODE });
+  if (!followsSymlink) {
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true, mode: JSON_DIR_MODE });
+  }
   try {
     writeTempJsonFile(tmpPath, payload);
     trySetSecureMode(tmpPath);
