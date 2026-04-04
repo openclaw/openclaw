@@ -27,8 +27,10 @@ Auth is supplied during the WebSocket handshake via:
 
 - `connect.params.auth.token`
 - `connect.params.auth.password`
+- Tailscale Serve identity headers when `gateway.auth.allowTailscale: true`
+- trusted-proxy identity headers when `gateway.auth.mode: "trusted-proxy"`
   The dashboard settings panel keeps a token for the current browser tab session and selected gateway URL; passwords are not persisted.
-  Onboarding generates a gateway token by default, so paste it here on first connect.
+  Onboarding generates a gateway token by default, so shared-secret setups usually paste that here on first connect.
 
 ## Device pairing (first connection)
 
@@ -157,7 +159,8 @@ Then open:
 
 - `http://<tailscale-ip>:18789/` (or your configured `gateway.controlUi.basePath`)
 
-Paste the token into the UI settings (sent as `connect.params.auth.token`).
+Paste the matching shared secret into the UI settings (sent as
+`connect.params.auth.token` or `connect.params.auth.password`).
 
 ## Insecure HTTP
 
