@@ -824,6 +824,9 @@ Notes:
 
 - `devices list` and `devices approve` can fall back to local pairing files on local loopback when direct pairing scope is unavailable.
 - `devices approve` auto-selects the newest pending request when no `requestId` is passed or `--latest` is set.
+- Stored-token reconnects reuse the token's cached approved scopes; explicit
+  `devices rotate --scope ...` updates that stored scope set for future
+  cached-token reconnects.
 - `devices rotate` and `devices revoke` return JSON payloads.
 
 ### `qr`
