@@ -1,5 +1,5 @@
 import process from "node:process";
-import { Command } from "commander";
+import { Command, CommanderError } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildProgram } from "./build-program.js";
 import type { ProgramContext } from "./context.js";
@@ -31,14 +31,26 @@ vi.mock("./program-context.js", () => ({
 }));
 
 describe("buildProgram", () => {
-  function mockProcessExit() {
-    return vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
-      throw new Error(`process.exit:${String(code)}`);
-    }) as typeof process.exit);
+  function mockProcessOutput() {
+    vi.spyOn(process.stdout, "write").mockImplementation(
+      ((() => true) as unknown) as typeof process.stdout.write,
+    );
+    vi.spyOn(process.stderr, "write").mockImplementation(
+      ((() => true) as unknown) as typeof process.stderr.write,
+    );
+  }
+
+  async function expectCommanderExit(promise: Promise<unknown>, exitCode: number) {
+    const error = await promise.catch((err) => err);
+
+    expect(error).toBeInstanceOf(CommanderError);
+    expect(error).toMatchObject({ exitCode });
+    return error as CommanderError;
   }
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockProcessOutput();
     createProgramContextMock.mockReturnValue({
       programVersion: "9.9.9-test",
       channelOptions: ["telegram"],
@@ -72,62 +84,57 @@ describe("buildProgram", () => {
 
   it("sets exitCode to 1 on argument errors (fixes #60905)", async () => {
     const program = buildProgram();
-    const exitSpy = mockProcessExit();
     program.command("test").description("Test command");
 
-    await expect(program.parseAsync(["test", "unexpected-arg"], { from: "user" })).rejects.toThrow(
-      "process.exit:1",
+    const error = await expectCommanderExit(
+      program.parseAsync(["test", "unexpected-arg"], { from: "user" }),
+      1,
     );
-    expect(exitSpy).toHaveBeenCalledWith(1);
+
+    expect(error.code).toBe("commander.excessArguments");
     expect(process.exitCode).toBe(1);
   });
 
   it("does not run the command action after an argument error", async () => {
     const program = buildProgram();
-    const exitSpy = mockProcessExit();
     const actionSpy = vi.fn();
     program.command("test").action(actionSpy);
 
-    await expect(program.parseAsync(["test", "unexpected-arg"], { from: "user" })).rejects.toThrow(
-      "process.exit:1",
-    );
-    expect(exitSpy).toHaveBeenCalledWith(1);
+    await expectCommanderExit(program.parseAsync(["test", "unexpected-arg"], { from: "user" }), 1);
+
     expect(actionSpy).not.toHaveBeenCalled();
   });
 
   it("preserves exitCode 0 for help display", async () => {
     const program = buildProgram();
-    const exitSpy = mockProcessExit();
     program.command("test").description("Test command");
 
-    await expect(program.parseAsync(["--help"], { from: "user" })).rejects.toThrow(
-      "process.exit:0",
-    );
-    expect(exitSpy).toHaveBeenCalledWith(0);
+    const error = await expectCommanderExit(program.parseAsync(["--help"], { from: "user" }), 0);
+
+    expect(error.code).toBe("commander.helpDisplayed");
     expect(process.exitCode).toBe(0);
   });
 
   it("preserves exitCode 0 for version display", async () => {
     const program = buildProgram();
-    const exitSpy = mockProcessExit();
     program.version("1.0.0");
 
-    await expect(program.parseAsync(["--version"], { from: "user" })).rejects.toThrow(
-      "process.exit:0",
-    );
-    expect(exitSpy).toHaveBeenCalledWith(0);
+    const error = await expectCommanderExit(program.parseAsync(["--version"], { from: "user" }), 0);
+
+    expect(error.code).toBe("commander.version");
     expect(process.exitCode).toBe(0);
   });
 
   it("preserves non-zero exitCode for help error flows", async () => {
     const program = buildProgram();
-    const exitSpy = mockProcessExit();
     program.helpCommand("help [command]");
 
-    await expect(program.parseAsync(["help", "missing"], { from: "user" })).rejects.toThrow(
-      "process.exit:1",
+    const error = await expectCommanderExit(
+      program.parseAsync(["help", "missing"], { from: "user" }),
+      1,
     );
-    expect(exitSpy).toHaveBeenCalledWith(1);
+
+    expect(error.code).toBe("commander.help");
     expect(process.exitCode).toBe(1);
   });
 });
