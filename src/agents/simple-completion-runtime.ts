@@ -1,6 +1,6 @@
 import { complete, type Api, type Model } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveAgentDir, resolveAgentEffectiveModelPrimary } from "./agent-scope.js";
+import { resolveAgentDir, resolveAgentEffectiveModelPrimaryForTask } from "./agent-scope.js";
 import { DEFAULT_PROVIDER } from "./defaults.js";
 import {
   applyLocalNoAuthHeaderOverride,
@@ -68,9 +68,12 @@ export function resolveSimpleCompletionSelectionForAgent(params: {
   const fallbackRef = resolveDefaultModelForAgent({
     cfg: params.cfg,
     agentId: params.agentId,
+    task: "simpleCompletion",
   });
   const modelRef =
-    params.modelRef?.trim() || resolveAgentEffectiveModelPrimary(params.cfg, params.agentId);
+    params.modelRef?.trim() ||
+    resolveAgentEffectiveModelPrimaryForTask(params.cfg, params.agentId, "simpleCompletion") ||
+    `${fallbackRef.provider}/${fallbackRef.model}`;
   const split = modelRef ? splitTrailingAuthProfile(modelRef) : null;
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,

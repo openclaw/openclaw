@@ -87,30 +87,21 @@ describe("resolveSimpleCompletionSelectionForAgent", () => {
     );
   });
 
-  it("uses configured provider fallback when default provider is unavailable", () => {
+  it("prefers simpleCompletion task model when configured", () => {
     const cfg = {
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            models: [
-              {
-                id: "gpt-5",
-                name: "GPT-5",
-                reasoning: false,
-                input: ["text"],
-                cost: {
-                  input: 0,
-                  output: 0,
-                  cacheRead: 0,
-                  cacheWrite: 0,
-                },
-                contextWindow: 200_000,
-                maxTokens: 8192,
+      agents: {
+        defaults: { model: "anthropic/claude-opus-4-6" },
+        list: [
+          {
+            id: "main",
+            model: {
+              primary: "openai/gpt-5.4",
+              tasks: {
+                simpleCompletion: "openai/gpt-5-mini",
               },
-            ],
+            },
           },
-        },
+        ],
       },
     } as OpenClawConfig;
 
@@ -118,7 +109,7 @@ describe("resolveSimpleCompletionSelectionForAgent", () => {
     expect(selection).toEqual(
       expect.objectContaining({
         provider: "openai",
-        modelId: "gpt-5.4",
+        modelId: "gpt-5-mini",
       }),
     );
   });

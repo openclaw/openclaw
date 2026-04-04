@@ -74,6 +74,7 @@ export function buildSystemPrompt(params: {
   const defaultModelRef = resolveDefaultModelForAgent({
     cfg: params.config ?? {},
     agentId: params.agentId,
+    task: "systemPrompt",
   });
   const defaultModelLabel = `${defaultModelRef.provider}/${defaultModelRef.model}`;
   const { runtimeInfo, userTimezone, userTime, userTimeFormat } = buildSystemPromptParams({

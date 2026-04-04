@@ -34,3 +34,15 @@ export function toAgentModelListLike(model?: AgentModelConfig): AgentModelListLi
   }
   return model;
 }
+
+export function resolveAgentTaskModelValue(
+  model: AgentModelConfig | undefined,
+  task: "chat" | "systemPrompt" | "simpleCompletion",
+): string | undefined {
+  if (!model || typeof model !== "object") {
+    return undefined;
+  }
+  const raw = model.tasks?.[task];
+  const trimmed = typeof raw === "string" ? raw.trim() : "";
+  return trimmed || undefined;
+}

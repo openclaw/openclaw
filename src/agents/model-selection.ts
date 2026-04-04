@@ -11,7 +11,7 @@ import { resolvePluginSetupCliBackend } from "../plugins/setup-registry.js";
 import { sanitizeForLog, stripAnsi } from "../terminal/ansi.js";
 import {
   resolveAgentConfig,
-  resolveAgentEffectiveModelPrimary,
+  resolveAgentEffectiveModelPrimaryForTask,
   resolveAgentModelFallbacksOverride,
 } from "./agent-scope.js";
 import { resolveConfiguredProviderFallback } from "./configured-provider-fallback.js";
@@ -454,9 +454,11 @@ export function resolveConfiguredModelRef(params: {
 export function resolveDefaultModelForAgent(params: {
   cfg: OpenClawConfig;
   agentId?: string;
+  task?: "chat" | "systemPrompt" | "simpleCompletion";
 }): ModelRef {
+  const task = params.task ?? "chat";
   const agentModelOverride = params.agentId
-    ? resolveAgentEffectiveModelPrimary(params.cfg, params.agentId)
+    ? resolveAgentEffectiveModelPrimaryForTask(params.cfg, params.agentId, task)
     : undefined;
   const cfg =
     agentModelOverride && agentModelOverride.length > 0

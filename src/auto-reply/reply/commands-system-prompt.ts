@@ -90,6 +90,7 @@ export async function resolveCommandsSystemPromptBundle(
   const defaultModelRef = resolveDefaultModelForAgent({
     cfg: params.cfg,
     agentId: sessionAgentId,
+    task: "systemPrompt",
   });
   const defaultModelLabel = `${defaultModelRef.provider}/${defaultModelRef.model}`;
   const { runtimeInfo, userTimezone, userTime, userTimeFormat } = buildSystemPromptParams({

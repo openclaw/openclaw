@@ -8,6 +8,7 @@ import {
   resolveAgentConfig,
   resolveAgentDir,
   resolveAgentEffectiveModelPrimary,
+  resolveAgentEffectiveModelPrimaryForTask,
   resolveAgentExplicitModelPrimary,
   resolveAgentSkillsFilter,
   resolveFallbackAgentId,
@@ -121,6 +122,59 @@ describe("resolveAgentConfig", () => {
     };
     expect(resolveAgentExplicitModelPrimary(cfgNoDefaults, "main")).toBeUndefined();
     expect(resolveAgentEffectiveModelPrimary(cfgNoDefaults, "main")).toBeUndefined();
+  });
+
+  it("supports task-specific model overrides with sensible fallback order", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            tasks: {
+              systemPrompt: "openai/gpt-5-mini",
+              simpleCompletion: "anthropic/claude-haiku-4-5",
+            },
+          },
+        },
+        list: [
+          {
+            id: "main",
+            model: {
+              primary: "anthropic/claude-sonnet-4-6",
+              tasks: {
+                systemPrompt: "openai/gpt-5-mini",
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    expect(resolveAgentEffectiveModelPrimaryForTask(cfg, "main", "chat")).toBe(
+      "anthropic/claude-sonnet-4-6",
+    );
+    expect(resolveAgentEffectiveModelPrimaryForTask(cfg, "main", "systemPrompt")).toBe(
+      "openai/gpt-5-mini",
+    );
+    expect(resolveAgentEffectiveModelPrimaryForTask(cfg, "main", "simpleCompletion")).toBe(
+      "anthropic/claude-sonnet-4-6",
+    );
+
+    const inheritedCfg: OpenClawConfig = {
+      agents: {
+        defaults: cfg.agents?.defaults,
+        list: [{ id: "main" }],
+      },
+    };
+    expect(resolveAgentEffectiveModelPrimaryForTask(inheritedCfg, "main", "chat")).toBe(
+      "openai/gpt-5.4",
+    );
+    expect(resolveAgentEffectiveModelPrimaryForTask(inheritedCfg, "main", "systemPrompt")).toBe(
+      "openai/gpt-5-mini",
+    );
+    expect(resolveAgentEffectiveModelPrimaryForTask(inheritedCfg, "main", "simpleCompletion")).toBe(
+      "anthropic/claude-haiku-4-5",
+    );
   });
 
   it("supports per-agent model primary+fallbacks", () => {

@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveAgentModelFallbackValues } from "../config/model-input.js";
+import {
+  resolveAgentModelFallbackValues,
+  resolveAgentTaskModelValue,
+} from "../config/model-input.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -31,6 +34,8 @@ function stripNullBytes(s: string): string {
 export { resolveAgentIdFromSessionKey };
 
 type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
+
+export type AgentModelTask = "chat" | "systemPrompt" | "simpleCompletion";
 
 type ResolvedAgentConfig = {
   name?: string;
@@ -195,8 +200,19 @@ export function resolveAgentEffectiveModelPrimary(
   cfg: OpenClawConfig,
   agentId: string,
 ): string | undefined {
+  return resolveAgentEffectiveModelPrimaryForTask(cfg, agentId, "chat");
+}
+
+export function resolveAgentEffectiveModelPrimaryForTask(
+  cfg: OpenClawConfig,
+  agentId: string,
+  task: AgentModelTask,
+): string | undefined {
+  const agentModel = resolveAgentConfig(cfg, agentId)?.model;
   return (
-    resolveAgentExplicitModelPrimary(cfg, agentId) ??
+    resolveAgentTaskModelValue(agentModel, task) ??
+    resolveModelPrimary(agentModel) ??
+    resolveAgentTaskModelValue(cfg.agents?.defaults?.model, task) ??
     resolveModelPrimary(cfg.agents?.defaults?.model)
   );
 }

@@ -5,6 +5,15 @@ import type {
   SandboxSshSettings,
 } from "./types.sandbox.js";
 
+export type AgentTaskModelConfig = {
+  /** Model used for normal chat / turn execution. */
+  chat?: string;
+  /** Model used when assembling or rendering the system prompt/runtime prompt context. */
+  systemPrompt?: string;
+  /** Model used for lightweight one-shot completions and helper flows. */
+  simpleCompletion?: string;
+};
+
 export type AgentModelConfig =
   | string
   | {
@@ -12,6 +21,8 @@ export type AgentModelConfig =
       primary?: string;
       /** Per-agent model fallbacks (provider/model). */
       fallbacks?: string[];
+      /** Optional task-specific model overrides. */
+      tasks?: AgentTaskModelConfig;
     };
 
 export type AgentSandboxConfig = {
