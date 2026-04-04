@@ -152,7 +152,7 @@ Current bundled provider examples:
 
 ## Import path reference
 
-<Accordion title="Full import path table">
+<Accordion title="Common import path table">
   | Import path | Purpose | Key exports |
   | --- | --- | --- |
   | `plugin-sdk/plugin-entry` | Canonical plugin entry helper | `definePluginEntry` |
@@ -187,6 +187,10 @@ Current bundled provider examples:
   | `plugin-sdk/keyed-async-queue` | Ordered async queue | `KeyedAsyncQueue` |
   | `plugin-sdk/testing` | Test utilities | Test helpers and mocks |
 </Accordion>
+
+This table is intentionally the common migration subset, not the full SDK
+surface. The generated full list of 200+ entrypoints lives in
+`scripts/lib/plugin-sdk-entrypoints.json`.
 
 Use the narrowest import that matches the job. If you cannot find an export,
 check the source at `src/plugin-sdk/` or ask in Discord.

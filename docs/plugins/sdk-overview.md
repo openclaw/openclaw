@@ -44,8 +44,8 @@ the need is truly cross-channel.
 
 ## Subpath reference
 
-The most commonly used subpaths, grouped by purpose. The full list of 100+
-subpaths is in `scripts/lib/plugin-sdk-entrypoints.json`.
+The most commonly used subpaths, grouped by purpose. The generated full list of
+200+ subpaths lives in `scripts/lib/plugin-sdk-entrypoints.json`.
 
 ### Plugin entry
 
