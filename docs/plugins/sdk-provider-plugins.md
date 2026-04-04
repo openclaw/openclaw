@@ -294,6 +294,7 @@ API key auth, and dynamic model resolution.
     | Family | What it wires in |
     | --- | --- |
     | `google-thinking` | Gemini thinking payload normalization on the shared stream path |
+    | `kilocode-thinking` | Kilo reasoning wrapper on the shared proxy stream path, with `kilo/auto` and unsupported proxy reasoning ids skipping injected thinking |
     | `moonshot-thinking` | Moonshot binary native-thinking payload mapping from config + `/think` level |
     | `minimax-fast-mode` | MiniMax fast-mode model rewrite on the shared stream path |
     | `openai-responses-defaults` | Shared native OpenAI/Codex Responses wrappers: attribution headers, `/fast`/`serviceTier`, text verbosity, native Codex web search, reasoning-compat payload shaping, and Responses context management |
@@ -303,6 +304,7 @@ API key auth, and dynamic model resolution.
     Real bundled examples:
 
     - `google` and `google-gemini-cli`: `google-thinking`
+    - `kilocode`: `kilocode-thinking`
     - `moonshot`: `moonshot-thinking`
     - `minimax` and `minimax-portal`: `minimax-fast-mode`
     - `openai` and `openai-codex`: `openai-responses-defaults`
