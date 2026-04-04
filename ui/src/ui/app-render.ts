@@ -151,9 +151,9 @@ const lazySkills = createLazy(() => import("./views/skills.ts"));
 const lazyDreams = createLazy(() => import("./views/dreams.ts"));
 const DREAMING_MODE_OPTIONS: Array<{ id: DreamingMode; label: string; detail: string }> = [
   { id: "off", label: "Off", detail: "No automatic promotions" },
-  { id: "core", label: "Core", detail: "Nightly cadence" },
-  { id: "rem", label: "REM", detail: "Every 6 hours" },
-  { id: "deep", label: "Deep", detail: "Every 12 hours, stricter" },
+  { id: "core", label: "Core", detail: "Nightly cadence, balanced thresholds" },
+  { id: "rem", label: "REM", detail: "Every 6 hours, more active consolidation" },
+  { id: "deep", label: "Deep", detail: "Every 12 hours, stricter promotion gates" },
 ];
 
 function resolveDreamingMode(configValue: Record<string, unknown> | null): DreamingMode {
@@ -706,10 +706,16 @@ export function renderApp(state: AppViewState) {
                                   ? "dreaming-header-controls__mode--active"
                                   : ""}"
                                 ?disabled=${dreamingLoading}
-                                title=${option.detail}
+                                title=${`${option.label}: ${option.detail}`}
+                                aria-label=${`${option.label}: ${option.detail}`}
                                 @click=${() => applyDreamingMode(option.id)}
                               >
-                                ${option.label}
+                                <span class="dreaming-header-controls__mode-label"
+                                  >${option.label}</span
+                                >
+                                <span class="dreaming-header-controls__mode-detail"
+                                  >${option.detail}</span
+                                >
                               </button>
                             `,
                           )}
