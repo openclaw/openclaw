@@ -43,10 +43,6 @@ import { resolveSlackAutoThreadId } from "./action-threading.js";
 import { slackApprovalCapability } from "./approval-native.js";
 import { createSlackActions } from "./channel-actions.js";
 import { resolveSlackChannelType } from "./channel-type.js";
-import {
-  listSlackDirectoryGroupsFromConfig,
-  listSlackDirectoryPeersFromConfig,
-} from "./directory-config.js";
 import { shouldSuppressLocalSlackExecApprovalPrompt } from "./exec-approvals.js";
 import { resolveSlackGroupRequireMention, resolveSlackGroupToolPolicy } from "./group-policy.js";
 import { isSlackInteractiveRepliesEnabled } from "./interactive-replies.js";
@@ -122,6 +118,9 @@ let slackProbeModulePromise: Promise<typeof import("./probe.js")> | undefined;
 let slackMonitorModulePromise: Promise<typeof import("./monitor.js")> | undefined;
 let slackDirectoryLiveModulePromise: Promise<typeof import("./directory-live.js")> | undefined;
 
+const loadSlackDirectoryConfigModule = createLazyRuntimeModule(
+  () => import("./directory-config.js"),
+);
 const loadSlackResolveChannelsModule = createLazyRuntimeModule(
   () => import("./resolve-channels.js"),
 );
@@ -355,8 +354,10 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
       },
     },
     directory: createChannelDirectoryAdapter({
-      listPeers: async (params) => listSlackDirectoryPeersFromConfig(params),
-      listGroups: async (params) => listSlackDirectoryGroupsFromConfig(params),
+      listPeers: async (params) =>
+        (await loadSlackDirectoryConfigModule()).listSlackDirectoryPeersFromConfig(params),
+      listGroups: async (params) =>
+        (await loadSlackDirectoryConfigModule()).listSlackDirectoryGroupsFromConfig(params),
       ...createRuntimeDirectoryLiveAdapter({
         getRuntime: loadSlackDirectoryLiveModule,
         listPeersLive: (runtime) => runtime.listDirectoryPeersLive,
