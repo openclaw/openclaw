@@ -83,7 +83,9 @@ Use `sessions_spawn`:
 - Then runs an announce step and posts the announce reply to the requester chat channel
 - Default model: inherits the caller unless you set `agents.defaults.subagents.model` (or per-agent `agents.list[].subagents.model`); an explicit `sessions_spawn.model` still wins.
 - Default thinking: inherits the caller unless you set `agents.defaults.subagents.thinking` (or per-agent `agents.list[].subagents.thinking`); an explicit `sessions_spawn.thinking` still wins.
+- Default startup patience: sub-agent startup/setup RPCs use `agents.defaults.subagents.startupWaitTimeoutMs` when set; otherwise they fall back to `60000` ms. This is requester-side wait budget only.
 - Default run timeout: if `sessions_spawn.runTimeoutSeconds` is omitted, OpenClaw uses `agents.defaults.subagents.runTimeoutSeconds` when set; otherwise it falls back to `0` (no timeout).
+- Default completion announce timeout: completion delivery uses `agents.defaults.subagents.completionAnnounceTimeoutMs` when set, otherwise falls back to the legacy alias `agents.defaults.subagents.announceTimeoutMs`, then to `90000` ms.
 
 Tool params:
 
@@ -149,7 +151,9 @@ Auto-archive:
 - Archive uses `sessions.delete` and renames the transcript to `*.deleted.<timestamp>` (same folder).
 - `cleanup: "delete"` archives immediately after announce (still keeps the transcript via rename).
 - Auto-archive is best-effort; pending timers are lost if the gateway restarts.
+- `startupWaitTimeoutMs` does **not** stop a child that eventually starts; it only controls how long the requester waits for startup/setup RPCs before surfacing a timeout.
 - `runTimeoutSeconds` does **not** auto-archive; it only stops the run. The session remains until auto-archive.
+- `completionAnnounceTimeoutMs` only affects final completion announce delivery. It does not change startup wait or child runtime limits.
 - Auto-archive applies equally to depth-1 and depth-2 sessions.
 - Browser cleanup is separate from archive cleanup: tracked browser tabs/processes are best-effort closed when the run finishes, even if the transcript/session record is kept.
 
@@ -167,7 +171,10 @@ By default, sub-agents cannot spawn their own sub-agents (`maxSpawnDepth: 1`). Y
         maxSpawnDepth: 2, // allow sub-agents to spawn children (default: 1)
         maxChildrenPerAgent: 5, // max active children per agent session (default: 5)
         maxConcurrent: 8, // global concurrency lane cap (default: 8)
-        runTimeoutSeconds: 900, // default timeout for sessions_spawn when omitted (0 = no timeout)
+        startupWaitTimeoutMs: 60000, // requester wait budget for startup/setup RPCs before launch
+        runTimeoutSeconds: 900, // child runtime timeout when sessions_spawn omits it (0 = no timeout)
+        completionAnnounceTimeoutMs: 90000, // preferred completion announce delivery timeout
+        announceTimeoutMs: 90000, // legacy alias for completionAnnounceTimeoutMs
       },
     },
   },
