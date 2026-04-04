@@ -32,13 +32,17 @@ For model selection rules, see [/concepts/models](/concepts/models).
   `applyNativeStreamingUsageCompat`, `resolveConfigApiKey`,
   `resolveSyntheticAuth`, `shouldDeferSyntheticProfileAuth`,
   `resolveDynamicModel`, `prepareDynamicModel`,
-  `normalizeResolvedModel`, `capabilities`, `prepareExtraParams`,
-  `wrapStreamFn`, `formatApiKey`, `refreshOAuth`, `buildAuthDoctorHint`,
+  `normalizeResolvedModel`, `capabilities`, `normalizeToolSchemas`,
+  `inspectToolSchemas`, `resolveReasoningOutputMode`,
+  `prepareExtraParams`, `createStreamFn`, `wrapStreamFn`,
+  `resolveTransportTurnState`, `resolveWebSocketSessionPolicy`,
+  `formatApiKey`, `refreshOAuth`, `buildAuthDoctorHint`,
   `matchesContextOverflowError`, `classifyFailoverReason`,
   `isCacheTtlEligible`, `buildMissingAuthMessage`, `suppressBuiltInModel`,
   `augmentModelCatalog`, `isBinaryThinking`, `supportsXHighThinking`,
   `resolveDefaultThinkingLevel`, `applyConfigDefaults`, `isModernModelRef`,
-  `prepareRuntimeAuth`, `resolveUsageAuth`, and `fetchUsageSnapshot`.
+  `prepareRuntimeAuth`, `resolveUsageAuth`, `fetchUsageSnapshot`, and
+  `onModelSelected`.
 - Note: provider runtime `capabilities` is shared runner metadata (provider
   family, transcript/tooling quirks, transport/cache hints). It is not the
   same as the [public capability model](/plugins/architecture#public-capability-model)
@@ -73,8 +77,20 @@ Typical split:
   dynamic resolution
 - `normalizeResolvedModel`: provider needs transport or base URL rewrites
 - `capabilities`: provider publishes transcript/tooling/provider-family quirks
+- `normalizeToolSchemas`: provider cleans tool schemas before the embedded
+  runner sees them
+- `inspectToolSchemas`: provider surfaces transport-specific schema warnings
+  after normalization
+- `resolveReasoningOutputMode`: provider chooses native vs tagged
+  reasoning-output contracts
 - `prepareExtraParams`: provider defaults or normalizes per-model request params
+- `createStreamFn`: provider replaces the normal stream path with a fully
+  custom transport
 - `wrapStreamFn`: provider applies request headers/body/model compat wrappers
+- `resolveTransportTurnState`: provider supplies per-turn native transport
+  headers or metadata
+- `resolveWebSocketSessionPolicy`: provider supplies native WebSocket session
+  headers or session cool-down policy
 - `formatApiKey`: provider formats stored auth profiles into the runtime
   `apiKey` string expected by the transport
 - `refreshOAuth`: provider owns OAuth refresh when the shared `pi-ai`
@@ -105,6 +121,8 @@ Typical split:
   and related status/reporting surfaces
 - `fetchUsageSnapshot`: provider owns the usage endpoint fetch/parsing while
   core still owns the summary shell and formatting
+- `onModelSelected`: provider runs post-selection side effects such as
+  telemetry or provider-owned session bookkeeping
 
 Current bundled examples:
 
