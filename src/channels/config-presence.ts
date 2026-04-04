@@ -2,8 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
-import { listBundledChannelPlugins } from "./plugins/bundled.js";
 import { listBundledChannelPluginIds } from "./plugins/bundled-ids.js";
+import { listBundledChannelPlugins } from "./plugins/bundled.js";
 
 const IGNORED_CHANNEL_CONFIG_KEYS = new Set(["defaults", "modelByChannel"]);
 

@@ -233,15 +233,17 @@ function toSystemAuditFindings(params: {
       ...(finding.flow ? { flow: finding.flow } : {}),
     })),
   ];
-  const filteredFindings = allFindings.filter((finding) => {
-    if (params.severityFilter && finding.severity !== params.severityFilter) {
-      return false;
-    }
-    if (params.codeFilter && finding.code !== params.codeFilter) {
-      return false;
-    }
-    return true;
-  }).toSorted(compareSystemAuditFindings);
+  const filteredFindings = allFindings
+    .filter((finding) => {
+      if (params.severityFilter && finding.severity !== params.severityFilter) {
+        return false;
+      }
+      if (params.codeFilter && finding.code !== params.codeFilter) {
+        return false;
+      }
+      return true;
+    })
+    .toSorted(compareSystemAuditFindings);
   const sortedAllFindings = [...allFindings].toSorted(compareSystemAuditFindings);
   return {
     allFindings: sortedAllFindings,

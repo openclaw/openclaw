@@ -10,11 +10,11 @@ import {
   buildToolsMessage,
 } from "../status.js";
 import { buildThreadingToolContext } from "./agent-runner-utils.js";
+import { resolveChannelAccountId } from "./channel-context.js";
 import { buildContextReply } from "./commands-context-report.js";
 import { buildExportSessionReply } from "./commands-export-session.js";
 import { buildStatusReply } from "./commands-status.js";
 import type { CommandHandler } from "./commands-types.js";
-import { resolveChannelAccountId } from "./channel-context.js";
 import { extractExplicitGroupId } from "./group-id.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 
