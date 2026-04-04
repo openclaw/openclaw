@@ -31,6 +31,9 @@ import {
   waitForAgentRunAndReadUpdatedAssistantReply,
 } from "./run-wait.js";
 import { resolveStoredSubagentCapabilities } from "./subagent-capabilities.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
+import { countPendingDescendantRunsFromRuns } from "./subagent-registry-queries.js";
+import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import {
   clearSubagentRunSteerRestart,
   countPendingDescendantRuns,
@@ -160,30 +163,70 @@ export function resolveSubagentController(params: {
 }
 
 export function listControlledSubagentRuns(controllerSessionKey: string): SubagentRunRecord[] {
-  const filtered: SubagentRunRecord[] = [];
-  for (const entry of sortSubagentRuns(listSubagentRunsForController(controllerSessionKey))) {
-    const latest = getLatestSubagentRunByChildSessionKey(entry.childSessionKey);
-    const latestControllerSessionKey =
-      latest?.controllerSessionKey?.trim() || latest?.requesterSessionKey?.trim();
-    if (
-      !latest ||
-      latest.runId !== entry.runId ||
-      latestControllerSessionKey !== controllerSessionKey
-    ) {
-      continue;
-    }
-    filtered.push(entry);
+  const key = controllerSessionKey.trim();
+  if (!key) {
+    return [];
   }
-  return filtered;
+
+  const snapshot = getSubagentRunsSnapshotForRead(subagentRuns);
+  const latestByChildSessionKey = buildLatestSubagentRunIndex(snapshot).latestByChildSessionKey;
+  const filtered = Array.from(latestByChildSessionKey.values()).filter((entry) => {
+    const latestControllerSessionKey =
+      entry.controllerSessionKey?.trim() || entry.requesterSessionKey?.trim();
+    return latestControllerSessionKey === key;
+  });
+  return sortSubagentRuns(filtered);
 }
 
-export function createPendingDescendantCounter() {
+function buildLatestSubagentRunIndex(runs: Map<string, SubagentRunRecord>) {
+  const latestByChildSessionKey = new Map<string, SubagentRunRecord>();
+  for (const entry of runs.values()) {
+    const childSessionKey = entry.childSessionKey?.trim();
+    if (!childSessionKey) {
+      continue;
+    }
+    const existing = latestByChildSessionKey.get(childSessionKey);
+    if (!existing || entry.createdAt > existing.createdAt) {
+      latestByChildSessionKey.set(childSessionKey, entry);
+    }
+  }
+
+  const childSessionsByController = new Map<string, string[]>();
+  for (const [childSessionKey, entry] of latestByChildSessionKey.entries()) {
+    const controllerSessionKey =
+      entry.controllerSessionKey?.trim() || entry.requesterSessionKey?.trim();
+    if (!controllerSessionKey) {
+      continue;
+    }
+    const existing = childSessionsByController.get(controllerSessionKey);
+    if (existing) {
+      existing.push(childSessionKey);
+      continue;
+    }
+    childSessionsByController.set(controllerSessionKey, [childSessionKey]);
+  }
+  for (const childSessions of childSessionsByController.values()) {
+    childSessions.sort();
+  }
+
+  return {
+    latestByChildSessionKey,
+    childSessionsByController,
+  };
+}
+
+export function createPendingDescendantCounter(runsSnapshot?: Map<string, SubagentRunRecord>) {
   const pendingDescendantCache = new Map<string, number>();
   return (sessionKey: string) => {
     if (pendingDescendantCache.has(sessionKey)) {
       return pendingDescendantCache.get(sessionKey) ?? 0;
     }
-    const pending = Math.max(0, countPendingDescendantRuns(sessionKey));
+    const pending = Math.max(
+      0,
+      runsSnapshot
+        ? countPendingDescendantRunsFromRuns(runsSnapshot, sessionKey)
+        : countPendingDescendantRuns(sessionKey),
+    );
     pendingDescendantCache.set(sessionKey, pending);
     return pending;
   };
@@ -275,7 +318,9 @@ export function buildSubagentList(params: {
     dedupedRuns.push(entry);
   }
   const cache = new Map<string, Record<string, SessionEntry>>();
-  const pendingDescendantCount = createPendingDescendantCounter();
+  const snapshot = getSubagentRunsSnapshotForRead(subagentRuns);
+  const { childSessionsByController } = buildLatestSubagentRunIndex(snapshot);
+  const pendingDescendantCount = createPendingDescendantCounter(snapshot);
   let index = 1;
   const buildListEntry = (entry: SubagentRunRecord, runtimeMs: number) => {
     const sessionEntry = resolveSessionEntryForKey({
@@ -289,19 +334,7 @@ export function buildSubagentList(params: {
     const status = resolveRunStatus(entry, {
       pendingDescendants,
     });
-    const childSessions = Array.from(
-      new Set(
-        listSubagentRunsForController(entry.childSessionKey)
-          .map((run) => run.childSessionKey?.trim())
-          .filter((childSessionKey): childSessionKey is string => Boolean(childSessionKey))
-          .filter((childSessionKey) => {
-            const latest = getLatestSubagentRunByChildSessionKey(childSessionKey);
-            const latestControllerSessionKey =
-              latest?.controllerSessionKey?.trim() || latest?.requesterSessionKey?.trim();
-            return latestControllerSessionKey === entry.childSessionKey;
-          }),
-      ),
-    );
+    const childSessions = childSessionsByController.get(entry.childSessionKey) ?? [];
     const runtime = formatDurationCompact(runtimeMs) ?? "n/a";
     const label = truncateLine(resolveSubagentLabel(entry), 48);
     const task = truncateLine(entry.task.trim(), params.taskMaxChars ?? 72);
