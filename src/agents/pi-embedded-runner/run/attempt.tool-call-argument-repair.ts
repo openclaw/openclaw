@@ -171,6 +171,30 @@ function repairToolCallArgumentsInMessage(
   typedBlock.arguments = repairedArgs;
 }
 
+function hasMeaningfulToolCallArgumentsInMessage(message: unknown, contentIndex: number): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  const block = content[contentIndex];
+  if (!block || typeof block !== "object") {
+    return false;
+  }
+  const typedBlock = block as { type?: unknown; arguments?: unknown };
+  if (!isToolCallBlockType(typedBlock.type)) {
+    return false;
+  }
+  return (
+    typedBlock.arguments !== null &&
+    typeof typedBlock.arguments === "object" &&
+    !Array.isArray(typedBlock.arguments) &&
+    Object.keys(typedBlock.arguments as Record<string, unknown>).length > 0
+  );
+}
+
 function clearToolCallArgumentsInMessage(message: unknown, contentIndex: number): void {
   if (!message || typeof message !== "object") {
     return;
@@ -211,6 +235,7 @@ function wrapStreamRepairMalformedToolCallArguments(
 ): ReturnType<typeof streamSimple> {
   const partialJsonByIndex = new Map<number, string>();
   const repairedArgsByIndex = new Map<number, Record<string, unknown>>();
+  const hadPreexistingArgsByIndex = new Set<number>();
   const disabledIndices = new Set<number>();
   const loggedRepairIndices = new Set<number>();
   const originalResult = stream.result.bind(stream);
@@ -219,6 +244,7 @@ function wrapStreamRepairMalformedToolCallArguments(
     repairMalformedToolCallArgumentsInMessage(message, repairedArgsByIndex);
     partialJsonByIndex.clear();
     repairedArgsByIndex.clear();
+    hadPreexistingArgsByIndex.clear();
     disabledIndices.clear();
     loggedRepairIndices.clear();
     return message;
@@ -262,8 +288,16 @@ function wrapStreamRepairMalformedToolCallArguments(
                 shouldAttemptMalformedToolCallRepair(nextPartialJson, event.delta) ||
                 repairedArgsByIndex.has(event.contentIndex);
               if (shouldReevaluateRepair) {
+                const hadRepairState = repairedArgsByIndex.has(event.contentIndex);
                 const repair = tryExtractUsableToolCallArguments(nextPartialJson);
                 if (repair) {
+                  if (
+                    !hadRepairState &&
+                    (hasMeaningfulToolCallArgumentsInMessage(event.partial, event.contentIndex) ||
+                      hasMeaningfulToolCallArgumentsInMessage(event.message, event.contentIndex))
+                  ) {
+                    hadPreexistingArgsByIndex.add(event.contentIndex);
+                  }
                   repairedArgsByIndex.set(event.contentIndex, repair.args);
                   repairToolCallArgumentsInMessage(event.partial, event.contentIndex, repair.args);
                   repairToolCallArgumentsInMessage(event.message, event.contentIndex, repair.args);
@@ -275,8 +309,20 @@ function wrapStreamRepairMalformedToolCallArguments(
                   }
                 } else {
                   repairedArgsByIndex.delete(event.contentIndex);
-                  clearToolCallArgumentsInMessage(event.partial, event.contentIndex);
-                  clearToolCallArgumentsInMessage(event.message, event.contentIndex);
+                  // Keep args that were already present on the streamed message, but
+                  // clear repair-only state so stale repaired args do not get replayed.
+                  const hadPreexistingArgs =
+                    hadPreexistingArgsByIndex.has(event.contentIndex) ||
+                    (!hadRepairState &&
+                      (hasMeaningfulToolCallArgumentsInMessage(event.partial, event.contentIndex) ||
+                        hasMeaningfulToolCallArgumentsInMessage(
+                          event.message,
+                          event.contentIndex,
+                        )));
+                  if (!hadPreexistingArgs) {
+                    clearToolCallArgumentsInMessage(event.partial, event.contentIndex);
+                    clearToolCallArgumentsInMessage(event.message, event.contentIndex);
+                  }
                 }
               }
             }
@@ -294,6 +340,7 @@ function wrapStreamRepairMalformedToolCallArguments(
                 repairToolCallArgumentsInMessage(event.message, event.contentIndex, repairedArgs);
               }
               partialJsonByIndex.delete(event.contentIndex);
+              hadPreexistingArgsByIndex.delete(event.contentIndex);
               disabledIndices.delete(event.contentIndex);
               loggedRepairIndices.delete(event.contentIndex);
             }
