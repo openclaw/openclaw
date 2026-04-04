@@ -14,20 +14,20 @@ type RegisteredProviderCollections = {
 };
 
 type ProviderPluginModule = {
-  register(api: ReturnType<typeof createTestPluginApi>): void;
+  register(api: ReturnType<typeof createTestPluginApi>): void | Promise<void>;
 };
 
-export function registerProviderPlugin(params: {
+export async function registerProviderPlugin(params: {
   plugin: ProviderPluginModule;
   id: string;
   name: string;
-}): RegisteredProviderCollections {
+}): Promise<RegisteredProviderCollections> {
   const providers: ProviderPlugin[] = [];
   const speechProviders: SpeechProviderPlugin[] = [];
   const mediaProviders: MediaUnderstandingProviderPlugin[] = [];
   const imageProviders: ImageGenerationProviderPlugin[] = [];
 
-  params.plugin.register(
+  await params.plugin.register(
     createTestPluginApi({
       id: params.id,
       name: params.name,

@@ -2,6 +2,8 @@ import { format } from "node:util";
 import type { OutputRuntimeEnv, RuntimeEnv } from "../runtime.js";
 export type { OutputRuntimeEnv, RuntimeEnv } from "../runtime.js";
 export { createNonExitingRuntime, defaultRuntime } from "../runtime.js";
+export { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
+export { getChannelsCommandSecretTargetIds } from "../cli/command-secret-targets.js";
 export {
   danger,
   info,
@@ -17,7 +19,14 @@ export {
 } from "../globals.js";
 export * from "../logging.js";
 export { waitForAbortSignal } from "../infra/abort-signal.js";
+export { createBackupArchive } from "../infra/backup-create.js";
+export {
+  detectPluginInstallPathIssue,
+  formatPluginInstallPathIssue,
+} from "../infra/plugin-install-path-warnings.js";
+export { collectProviderDangerousNameMatchingScopes } from "../config/dangerous-name-matching.js";
 export { registerUnhandledRejectionHandler } from "../infra/unhandled-rejections.js";
+export { removePluginFromConfig } from "../plugins/uninstall.js";
 
 /** Minimal logger contract accepted by runtime-adapter helpers. */
 type LoggerLike = {

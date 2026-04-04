@@ -65,4 +65,39 @@ describe("loadConfig runtime snapshot pinning", () => {
       }
     });
   });
+
+  it("reloads when OPENCLAW_CONFIG_PATH changes after the module was imported", async () => {
+    await withTempHome("openclaw-config-runtime-load-path-", async (home) => {
+      const originalConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+      const primaryConfigPath = path.join(home, ".openclaw", "primary.json");
+      const alternateConfigPath = path.join(home, ".openclaw", "alternate.json");
+
+      await fs.mkdir(path.dirname(primaryConfigPath), { recursive: true });
+      await fs.writeFile(
+        primaryConfigPath,
+        `${JSON.stringify({ gateway: { port: 18789 } }, null, 2)}\n`,
+        "utf8",
+      );
+      await fs.writeFile(
+        alternateConfigPath,
+        `${JSON.stringify({ gateway: { port: 19003 } }, null, 2)}\n`,
+        "utf8",
+      );
+
+      try {
+        process.env.OPENCLAW_CONFIG_PATH = primaryConfigPath;
+        expect(loadConfig().gateway?.port).toBe(18789);
+
+        process.env.OPENCLAW_CONFIG_PATH = alternateConfigPath;
+        expect(loadConfig().gateway?.port).toBe(19003);
+      } finally {
+        if (originalConfigPath === undefined) {
+          delete process.env.OPENCLAW_CONFIG_PATH;
+        } else {
+          process.env.OPENCLAW_CONFIG_PATH = originalConfigPath;
+        }
+        resetRuntimeConfigState();
+      }
+    });
+  });
 });

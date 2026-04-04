@@ -64,7 +64,7 @@ OpenClaw 的共享 `/fast` 开关也支持直接 Anthropic API 密钥流量。
   agents: {
     defaults: {
       models: {
-        "anthropic/claude-sonnet-4-5": {
+        "anthropic/claude-sonnet-4-6": {
           params: { fastMode: true },
         },
       },

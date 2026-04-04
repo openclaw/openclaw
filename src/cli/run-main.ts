@@ -10,7 +10,6 @@ import { isMainModule } from "../infra/is-main.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import { enableConsoleCapture } from "../logging.js";
-import { normalizePluginId } from "../plugins/config-state.js";
 import { hasMemoryRuntime } from "../plugins/memory-state.js";
 import {
   getCommandPathWithRootOptions,
@@ -93,7 +92,7 @@ export function resolveMissingBrowserCommandMessage(config?: OpenClawConfig): st
     Array.isArray(config?.plugins?.allow) && config.plugins.allow.length > 0
       ? config.plugins.allow
           .filter((entry): entry is string => typeof entry === "string")
-          .map((entry) => normalizePluginId(entry))
+          .map((entry) => entry.trim().toLowerCase())
       : [];
   if (allow.length > 0 && !allow.includes("browser")) {
     return (
@@ -159,8 +158,11 @@ export async function runCli(argv: string[] = process.argv) {
 
   try {
     if (shouldUseRootHelpFastPath(normalizedArgv)) {
-      const { outputRootHelp } = await import("./program/root-help.js");
-      await outputRootHelp();
+      const { outputPrecomputedRootHelpText } = await import("./root-help-metadata.js");
+      if (!outputPrecomputedRootHelpText()) {
+        const { outputRootHelp } = await import("./program/root-help.js");
+        await outputRootHelp();
+      }
       return;
     }
 

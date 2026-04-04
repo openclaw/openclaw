@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { beforeEach, describe, expect, test } from "vitest";
 import {
   clearAgentRunContext,
   emitAgentEvent,
@@ -6,6 +6,7 @@ import {
   onAgentEvent,
   registerAgentRunContext,
   resetAgentEventsForTest,
+  resetAgentRunContextForTest,
 } from "./agent-events.js";
 
 type AgentEventsModule = typeof import("./agent-events.js");
@@ -18,10 +19,6 @@ async function importAgentEventsModule(cacheBust: string): Promise<AgentEventsMo
 
 describe("agent-events sequencing", () => {
   beforeEach(() => {
-    resetAgentEventsForTest();
-  });
-
-  afterEach(() => {
     resetAgentEventsForTest();
   });
 
@@ -78,6 +75,7 @@ describe("agent-events sequencing", () => {
   });
 
   test("omits sessionKey for runs hidden from Control UI", async () => {
+    resetAgentRunContextForTest();
     registerAgentRunContext("run-hidden", {
       sessionKey: "session-imessage",
       isControlUiVisible: false,
@@ -99,6 +97,7 @@ describe("agent-events sequencing", () => {
   });
 
   test("merges later run context updates into existing runs", async () => {
+    resetAgentRunContextForTest();
     registerAgentRunContext("run-ctx", {
       sessionKey: "session-main",
       isControlUiVisible: true,
@@ -117,6 +116,7 @@ describe("agent-events sequencing", () => {
   });
 
   test("falls back to registered sessionKey when event sessionKey is blank", async () => {
+    resetAgentRunContextForTest();
     registerAgentRunContext("run-ctx", { sessionKey: "session-main" });
 
     let receivedSessionKey: string | undefined;

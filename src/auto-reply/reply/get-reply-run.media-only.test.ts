@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { importFreshModule } from "../../../test/helpers/import-fresh.ts";
 
 vi.mock("../../agents/auth-profiles/session-override.js", () => ({
   resolveSessionAuthProfileOverride: vi.fn().mockResolvedValue(undefined),
@@ -99,14 +100,13 @@ let runReplyAgent: typeof import("./agent-runner.runtime.js").runReplyAgent;
 let routeReply: typeof import("./route-reply.runtime.js").routeReply;
 let drainFormattedSystemEvents: typeof import("./session-system-events.js").drainFormattedSystemEvents;
 let resolveTypingMode: typeof import("./typing-mode.js").resolveTypingMode;
+let loadScopeCounter = 0;
 
 async function loadFreshGetReplyRunModuleForTest() {
-  vi.resetModules();
-  ({ runReplyAgent } = await import("./agent-runner.runtime.js"));
-  ({ routeReply } = await import("./route-reply.runtime.js"));
-  ({ drainFormattedSystemEvents } = await import("./session-system-events.js"));
-  ({ resolveTypingMode } = await import("./typing-mode.js"));
-  ({ runPreparedReply } = await import("./get-reply-run.js"));
+  ({ runPreparedReply } = await importFreshModule<typeof import("./get-reply-run.js")>(
+    import.meta.url,
+    `./get-reply-run.js?scope=media-only-${loadScopeCounter++}`,
+  ));
 }
 
 function baseParams(
@@ -186,6 +186,13 @@ function baseParams(
 }
 
 describe("runPreparedReply media-only handling", () => {
+  beforeAll(async () => {
+    ({ runReplyAgent } = await import("./agent-runner.runtime.js"));
+    ({ routeReply } = await import("./route-reply.runtime.js"));
+    ({ drainFormattedSystemEvents } = await import("./session-system-events.js"));
+    ({ resolveTypingMode } = await import("./typing-mode.js"));
+  });
+
   beforeEach(async () => {
     storeRuntimeLoads.mockClear();
     updateSessionStore.mockReset();
@@ -260,6 +267,40 @@ describe("runPreparedReply media-only handling", () => {
     expect(resetNoticeCall?.payload?.text).not.toContain("🔑");
     expect(resetNoticeCall?.payload?.text).not.toContain("api-key");
     expect(resetNoticeCall?.payload?.text).not.toContain("env:");
+  });
+
+  it("routes reset notices through the effective session account when AccountId is omitted", async () => {
+    await runPreparedReply(
+      baseParams({
+        resetTriggered: true,
+        ctx: {
+          Body: "",
+          RawBody: "",
+          CommandBody: "",
+          ThreadHistoryBody: "Earlier message in this thread",
+          OriginatingChannel: "slack",
+          OriginatingTo: "C123",
+          ChatType: "group",
+          AccountId: undefined,
+        },
+        sessionCtx: {
+          Body: "",
+          BodyStripped: "",
+          ThreadHistoryBody: "Earlier message in this thread",
+          MediaPath: "/tmp/input.png",
+          Provider: "slack",
+          ChatType: "group",
+          OriginatingChannel: "slack",
+          OriginatingTo: "C123",
+          AccountId: "work",
+        },
+      }),
+    );
+
+    const resetNoticeCall = vi.mocked(routeReply).mock.calls[0]?.[0] as
+      | { accountId?: string }
+      | undefined;
+    expect(resetNoticeCall?.accountId).toBe("work");
   });
 
   it("skips reset notice when only webchat fallback routing is available", async () => {
@@ -351,6 +392,37 @@ describe("runPreparedReply media-only handling", () => {
 
     const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
     expect(call?.followupRun.run.messageProvider).toBe("feishu");
+  });
+
+  it("uses the effective session account for followup originatingAccountId when AccountId is omitted", async () => {
+    await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "",
+          RawBody: "",
+          CommandBody: "",
+          ThreadHistoryBody: "Earlier message in this thread",
+          OriginatingChannel: "discord",
+          OriginatingTo: "channel:24680",
+          ChatType: "group",
+          AccountId: undefined,
+        },
+        sessionCtx: {
+          Body: "",
+          BodyStripped: "",
+          ThreadHistoryBody: "Earlier message in this thread",
+          MediaPath: "/tmp/input.png",
+          Provider: "discord",
+          ChatType: "group",
+          OriginatingChannel: "discord",
+          OriginatingTo: "channel:24680",
+          AccountId: "work",
+        },
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.followupRun.originatingAccountId).toBe("work");
   });
 
   it("passes suppressTyping through typing mode resolution", async () => {

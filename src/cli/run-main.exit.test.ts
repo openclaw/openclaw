@@ -1,5 +1,6 @@
 import process from "node:process";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { runCli } from "./run-main.js";
 
 const tryRouteCliMock = vi.hoisted(() => vi.fn());
 const loadDotEnvMock = vi.hoisted(() => vi.fn());
@@ -11,6 +12,7 @@ const hasMemoryRuntimeMock = vi.hoisted(() => vi.fn(() => false));
 const ensureTaskRegistryReadyMock = vi.hoisted(() => vi.fn());
 const startTaskRegistryMaintenanceMock = vi.hoisted(() => vi.fn());
 const outputRootHelpMock = vi.hoisted(() => vi.fn());
+const outputPrecomputedRootHelpTextMock = vi.hoisted(() => vi.fn(() => false));
 const buildProgramMock = vi.hoisted(() => vi.fn());
 const maybeRunCliInContainerMock = vi.hoisted(() =>
   vi.fn<
@@ -63,16 +65,19 @@ vi.mock("./program/root-help.js", () => ({
   outputRootHelp: outputRootHelpMock,
 }));
 
+vi.mock("./root-help-metadata.js", () => ({
+  outputPrecomputedRootHelpText: outputPrecomputedRootHelpTextMock,
+}));
+
 vi.mock("./program.js", () => ({
   buildProgram: buildProgramMock,
 }));
-
-const { runCli } = await import("./run-main.js");
 
 describe("runCli exit behavior", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     hasMemoryRuntimeMock.mockReturnValue(false);
+    outputPrecomputedRootHelpTextMock.mockReturnValue(false);
   });
 
   it("does not force process.exit after successful routed command", async () => {
@@ -101,6 +106,7 @@ describe("runCli exit behavior", () => {
 
     expect(maybeRunCliInContainerMock).toHaveBeenCalledWith(["node", "openclaw", "--help"]);
     expect(tryRouteCliMock).not.toHaveBeenCalled();
+    expect(outputPrecomputedRootHelpTextMock).toHaveBeenCalledTimes(1);
     expect(outputRootHelpMock).toHaveBeenCalledTimes(1);
     expect(buildProgramMock).not.toHaveBeenCalled();
     expect(closeActiveMemorySearchManagersMock).not.toHaveBeenCalled();

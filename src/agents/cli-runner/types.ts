@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { CliSessionBinding } from "../../config/sessions.js";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import type { CliBackendConfig } from "../../config/types.js";
+import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { ResolvedCliBackend } from "../cli-backends.js";
 
 export type RunCliAgentParams = {
@@ -28,12 +29,16 @@ export type RunCliAgentParams = {
   bootstrapPromptWarningSignaturesSeen?: string[];
   bootstrapPromptWarningSignature?: string;
   images?: ImageContent[];
+  imageOrder?: PromptImageOrderEntry[];
+  messageProvider?: string;
+  agentAccountId?: string;
 };
 
 export type CliPreparedBackend = {
   backend: CliBackendConfig;
   cleanup?: () => Promise<void>;
   mcpConfigHash?: string;
+  env?: Record<string, string>;
 };
 
 export type CliReusableSession = {

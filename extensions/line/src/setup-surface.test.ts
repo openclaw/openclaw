@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import ts from "typescript";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { bundledPluginRoot } from "../../../test/helpers/bundled-plugin-paths.js";
 import { loadRuntimeApiExportTypesViaJiti } from "../../../test/helpers/plugins/jiti-runtime-api.ts";
 import {
@@ -174,17 +174,138 @@ describe("line setup wizard", () => {
     expect(result.cfg.channels?.line?.channelAccessToken).toBe("line-token");
     expect(result.cfg.channels?.line?.channelSecret).toBe("line-secret");
   });
+
+  it("reads the named-account DM policy instead of the channel root", async () => {
+    const { lineSetupWizard } = await import("./setup-surface.js");
+
+    expect(
+      lineSetupWizard.dmPolicy?.getCurrent(
+        {
+          channels: {
+            line: {
+              dmPolicy: "disabled",
+              accounts: {
+                work: {
+                  channelAccessToken: "token",
+                  channelSecret: "secret",
+                  dmPolicy: "allowlist",
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        "work",
+      ),
+    ).toBe("allowlist");
+  });
+
+  it("reports account-scoped config keys for named accounts", async () => {
+    const { lineSetupWizard } = await import("./setup-surface.js");
+
+    expect(lineSetupWizard.dmPolicy?.resolveConfigKeys?.({} as OpenClawConfig, "work")).toEqual({
+      policyKey: "channels.line.accounts.work.dmPolicy",
+      allowFromKey: "channels.line.accounts.work.allowFrom",
+    });
+  });
+
+  it("uses configured defaultAccount for omitted DM policy account context", async () => {
+    const { lineSetupWizard } = await import("./setup-surface.js");
+
+    const cfg = {
+      channels: {
+        line: {
+          defaultAccount: "work",
+          dmPolicy: "disabled",
+          allowFrom: ["Uroot"],
+          accounts: {
+            work: {
+              channelAccessToken: "token",
+              channelSecret: "secret",
+              dmPolicy: "allowlist",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(lineSetupWizard.dmPolicy?.getCurrent(cfg)).toBe("allowlist");
+    expect(lineSetupWizard.dmPolicy?.resolveConfigKeys?.(cfg)).toEqual({
+      policyKey: "channels.line.accounts.work.dmPolicy",
+      allowFromKey: "channels.line.accounts.work.allowFrom",
+    });
+
+    const next = lineSetupWizard.dmPolicy?.setPolicy(cfg, "open");
+    expect(next?.channels?.line?.dmPolicy).toBe("disabled");
+    expect(next?.channels?.line?.accounts?.work?.dmPolicy).toBe("open");
+  });
+
+  it('writes open policy state to the named account and preserves inherited allowFrom with "*"', async () => {
+    const { lineSetupWizard } = await import("./setup-surface.js");
+
+    const next = lineSetupWizard.dmPolicy?.setPolicy(
+      {
+        channels: {
+          line: {
+            allowFrom: ["Uroot"],
+            accounts: {
+              work: {
+                channelAccessToken: "token",
+                channelSecret: "secret",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      "open",
+      "work",
+    );
+
+    expect(next?.channels?.line?.dmPolicy).toBeUndefined();
+    expect(next?.channels?.line?.allowFrom).toEqual(["Uroot"]);
+    expect(next?.channels?.line?.accounts?.work?.dmPolicy).toBe("open");
+    expect(next?.channels?.line?.accounts?.work?.allowFrom).toEqual(["Uroot", "*"]);
+  });
+
+  it("uses configured defaultAccount for omitted setup configured state", async () => {
+    const { lineSetupWizard } = await import("./setup-surface.js");
+
+    const configured = await lineSetupWizard.status.resolveConfigured({
+      cfg: {
+        channels: {
+          line: {
+            defaultAccount: "work",
+            channelAccessToken: "root-token",
+            channelSecret: "root-secret",
+            accounts: {
+              alerts: {
+                channelAccessToken: "alerts-token",
+                channelSecret: "alerts-secret",
+              },
+              work: {
+                channelAccessToken: "",
+                channelSecret: "",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(configured).toBe(false);
+  });
 });
 
 describe("probeLineBot", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
+    ({ probeLineBot } = await import("./probe.js"));
+  });
+
+  beforeEach(() => {
     getBotInfoMock.mockReset();
     MessagingApiClientMock.mockReset();
     MessagingApiClientMock.mockImplementation(function () {
       return { getBotInfo: getBotInfoMock };
     });
-    ({ probeLineBot } = await import("./probe.js"));
   });
 
   afterEach(() => {
@@ -233,10 +354,6 @@ describe("linePlugin status.probeAccount", () => {
       pictureUrl: "https://example.com/bot.png",
     });
 
-    const { linePlugin: freshLinePlugin } = await import("./channel.js");
-    const { clearLineRuntime: clearFreshLineRuntime } = await import("./runtime.js");
-    const { probeLineBot: directProbeLineBot } = await import("./probe.js");
-    clearFreshLineRuntime();
     const params = {
       cfg: {} as OpenClawConfig,
       account: {
@@ -249,8 +366,10 @@ describe("linePlugin status.probeAccount", () => {
       timeoutMs: 50,
     };
 
-    await expect(freshLinePlugin.status!.probeAccount!(params)).resolves.toEqual(
-      await directProbeLineBot("token", 50),
+    clearLineRuntime();
+
+    await expect(linePlugin.status!.probeAccount!(params)).resolves.toEqual(
+      await probeLineBot("token", 50),
     );
   });
 });

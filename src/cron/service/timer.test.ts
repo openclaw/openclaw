@@ -4,7 +4,7 @@ import { setupCronServiceSuite, writeCronStoreSnapshot } from "../../cron/servic
 import { createCronServiceState } from "../../cron/service/state.js";
 import { onTimer } from "../../cron/service/timer.js";
 import type { CronJob } from "../../cron/types.js";
-import * as taskRegistry from "../../tasks/task-registry.js";
+import * as taskExecutor from "../../tasks/task-executor.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-registry.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
@@ -96,7 +96,7 @@ describe("cron service timer seam coverage", () => {
     });
 
     const createTaskRecordSpy = vi
-      .spyOn(taskRegistry, "createTaskRecord")
+      .spyOn(taskExecutor, "createRunningTaskRun")
       .mockImplementation(() => {
         throw new Error("disk full");
       });

@@ -18,4 +18,52 @@ describe("MatrixConfigSchema SecretInput", () => {
     });
     expect(result.success).toBe(true);
   });
+
+  it("accepts dm threadReplies overrides", () => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      dm: {
+        policy: "pairing",
+        threadReplies: "off",
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts room-level account assignments", () => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      groups: {
+        "!room:example.org": {
+          enabled: true,
+          account: "axis",
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) {
+      throw new Error("expected schema parse to succeed");
+    }
+    expect(result.data.groups?.["!room:example.org"]?.account).toBe("axis");
+  });
+
+  it("accepts legacy room-level account assignments", () => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      rooms: {
+        "!room:example.org": {
+          enabled: true,
+          account: "axis",
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) {
+      throw new Error("expected schema parse to succeed");
+    }
+    expect(result.data.rooms?.["!room:example.org"]?.account).toBe("axis");
+  });
 });

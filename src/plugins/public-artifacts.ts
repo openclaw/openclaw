@@ -1,4 +1,4 @@
-import { listBundledPluginMetadata } from "./bundled-plugin-metadata.js";
+import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "./runtime-sidecar-paths.js";
 
 function assertUniqueValues<T extends string>(values: readonly T[], label: string): readonly T[] {
   const seen = new Set<string>();
@@ -20,21 +20,6 @@ export function getPublicArtifactBasename(relativePath: string): string {
   return relativePath.split("/").at(-1) ?? relativePath;
 }
 
-function buildBundledDistArtifactPath(dirName: string, artifact: string): string {
-  return ["dist", "extensions", dirName, artifact].join("/");
-}
-
-export const BUNDLED_RUNTIME_SIDECAR_PATHS = assertUniqueValues(
-  listBundledPluginMetadata()
-    .flatMap((entry) =>
-      (entry.runtimeSidecarArtifacts ?? []).map((artifact) =>
-        buildBundledDistArtifactPath(entry.dirName, artifact),
-      ),
-    )
-    .toSorted((left, right) => left.localeCompare(right)),
-  "bundled runtime sidecar path",
-);
-
 const EXTRA_GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES = assertUniqueValues(
   [
     "action-runtime.runtime.js",
@@ -42,6 +27,7 @@ const EXTRA_GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES = assertUniqueValues(
     "allow-from.js",
     "api.js",
     "auth-presence.js",
+    "config-api.js",
     "channel-config-api.js",
     "index.js",
     "login-qr-api.js",

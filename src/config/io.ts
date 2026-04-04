@@ -38,15 +38,29 @@ import {
   materializeRuntimeConfig,
 } from "./materialize.js";
 import { applyMergePatch } from "./merge-patch.js";
-import { resolveConfigPath, resolveDefaultConfigCandidates, resolveStateDir } from "./paths.js";
+import { resolveConfigPath, resolveStateDir } from "./paths.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
 import { applyConfigOverrides } from "./runtime-overrides.js";
+import {
+  getRuntimeConfigSnapshot as getRuntimeConfigSnapshotState,
+  getRuntimeConfigSnapshotRefreshHandler,
+  getRuntimeConfigSourceSnapshot as getRuntimeConfigSourceSnapshotState,
+  resetConfigRuntimeState as resetConfigRuntimeStateState,
+  setRuntimeConfigSnapshot as setRuntimeConfigSnapshotState,
+  setRuntimeConfigSnapshotRefreshHandler as setRuntimeConfigSnapshotRefreshHandlerState,
+} from "./runtime-snapshot.js";
 import type { OpenClawConfig, ConfigFileSnapshot, LegacyConfigIssue } from "./types.js";
 import {
   validateConfigObjectRawWithPlugins,
   validateConfigObjectWithPlugins,
 } from "./validation.js";
 import { shouldWarnOnTouchedVersion } from "./version.js";
+
+export {
+  getRuntimeConfigSnapshotState as getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshotState as getRuntimeConfigSourceSnapshot,
+  setRuntimeConfigSnapshotRefreshHandlerState as setRuntimeConfigSnapshotRefreshHandler,
+};
 
 // Re-export for backwards compatibility
 export { CircularIncludeError, ConfigIncludeError } from "./includes.js";
@@ -62,6 +76,7 @@ const SHELL_ENV_EXPECTED_KEYS = [
   "OPENROUTER_API_KEY",
   "AI_GATEWAY_API_KEY",
   "MINIMAX_API_KEY",
+  "QWEN_API_KEY",
   "MODELSTUDIO_API_KEY",
   "SYNTHETIC_API_KEY",
   "KILOCODE_API_KEY",
@@ -226,15 +241,6 @@ export type ConfigWriteOptions = {
 export type ReadConfigFileSnapshotForWriteResult = {
   snapshot: ConfigFileSnapshot;
   writeOptions: ConfigWriteOptions;
-};
-
-export type RuntimeConfigSnapshotRefreshParams = {
-  sourceConfig: OpenClawConfig;
-};
-
-export type RuntimeConfigSnapshotRefreshHandler = {
-  refresh: (params: RuntimeConfigSnapshotRefreshParams) => boolean | Promise<boolean>;
-  clearOnRefreshFailure?: () => void;
 };
 
 export type ConfigWriteNotification = {
@@ -1673,12 +1679,7 @@ async function finalizeReadConfigSnapshotInternalResult(
 
 export function createConfigIO(overrides: ConfigIoDeps = {}) {
   const deps = normalizeDeps(overrides);
-  const requestedConfigPath = resolveConfigPathForDeps(deps);
-  const candidatePaths = deps.configPath
-    ? [requestedConfigPath]
-    : resolveDefaultConfigCandidates(deps.env, deps.homedir);
-  const configPath =
-    candidatePaths.find((candidate) => deps.fs.existsSync(candidate)) ?? requestedConfigPath;
+  const configPath = resolveConfigPathForDeps(deps);
 
   function observeLoadConfigSnapshot(snapshot: ConfigFileSnapshot): ConfigFileSnapshot {
     observeConfigSnapshotSync(deps, snapshot);
@@ -1720,7 +1721,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       const effectiveConfigRaw = legacyResolution.effectiveConfigRaw;
       for (const w of readResolution.envWarnings) {
         deps.logger.warn(
-          `Config (${configPath}): missing env var "${w.varName}" at ${w.configPath} — feature using this value will be unavailable`,
+          `Config (${configPath}): missing env var "${w.varName}" at ${w.configPath} - feature using this value will be unavailable`,
         );
       }
       warnOnConfigMiskeys(effectiveConfigRaw, deps.logger);
@@ -1885,7 +1886,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     const exists = deps.fs.existsSync(configPath);
     if (!exists) {
       const hash = hashConfigRaw(null);
-      const config = materializeRuntimeConfig({}, "missing");
+      const config = {};
       const legacyIssues: LegacyConfigIssue[] = [];
       return await finalizeReadConfigSnapshotInternalResult(deps, {
         snapshot: createConfigFileSnapshot({
@@ -1970,7 +1971,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       // sections reference unset env vars (e.g. optional provider API keys).
       const envVarWarnings = readResolution.envWarnings.map((w) => ({
         path: w.configPath,
-        message: `Missing env var "${w.varName}" — feature using this value will be unavailable`,
+        message: `Missing env var "${w.varName}" - feature using this value will be unavailable`,
       }));
 
       const resolvedConfigRaw = readResolution.resolvedConfigRaw;
@@ -2020,7 +2021,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       const nodeErr = err as NodeJS.ErrnoException;
       let message: string;
       if (nodeErr?.code === "EACCES") {
-        // Permission denied — common in Docker/container deployments where the
+        // Permission denied - common in Docker/container deployments where the
         // config file is owned by root but the gateway runs as a non-root user.
         const uid = process.getuid?.();
         const uidHint = typeof uid === "number" ? String(uid) : "$(id -u)";
@@ -2122,14 +2123,18 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
 
     // Restore ${VAR} env var references that were resolved during config loading.
     // Read the current file (pre-substitution) and restore any references whose
-    // resolved values match the incoming config — so we don't overwrite
+    // resolved values match the incoming config - so we don't overwrite
     // "${ANTHROPIC_API_KEY}" with "sk-ant-..." when the caller didn't change it.
     //
     // We use only the root file's parsed content (no $include resolution) to avoid
     // pulling values from included files into the root config on write-back.
-    // Apply env restoration to validated.config (which has runtime defaults stripped
-    // per issue #6070) rather than the raw caller input.
-    let cfgToWrite = validated.config;
+    // Use persistCandidate (the merge-patched value before validation) rather than
+    // validated.config, because plugin/channel AJV validation may inject schema
+    // defaults (e.g., enrichGroupParticipantsFromContacts) that should not be
+    // persisted to disk (issue #56772).
+    // Apply legacy web-search normalization so that migration results are still
+    // persisted even though we bypass validated.config.
+    let cfgToWrite = persistCandidate as OpenClawConfig;
     try {
       if (deps.fs.existsSync(configPath)) {
         const currentRaw = await deps.fs.promises.readFile(configPath, "utf-8");
@@ -2174,7 +2179,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         }
       }
     }
-    // Do NOT apply runtime defaults when writing — user config should only contain
+    // Do NOT apply runtime defaults when writing - user config should only contain
     // explicitly set values. Runtime defaults are applied when loading (issue #6070).
     const stampedOutputConfig = stampConfigVersion(outputConfig);
     const json = JSON.stringify(stampedOutputConfig, null, 2).trimEnd().concat("\n");
@@ -2372,10 +2377,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
 const AUTO_OWNER_DISPLAY_SECRET_BY_PATH = new Map<string, string>();
 const AUTO_OWNER_DISPLAY_SECRET_PERSIST_IN_FLIGHT = new Set<string>();
 const AUTO_OWNER_DISPLAY_SECRET_PERSIST_WARNED = new Set<string>();
-let runtimeConfigSnapshot: OpenClawConfig | null = null;
-let runtimeConfigSourceSnapshot: OpenClawConfig | null = null;
 let runtimeConfigSnapshotPath: string | null = null;
-let runtimeConfigSnapshotRefreshHandler: RuntimeConfigSnapshotRefreshHandler | null = null;
 const configWriteListeners = new Set<(event: ConfigWriteNotification) => void>();
 
 function notifyConfigWriteListeners(event: ConfigWriteNotification): void {
@@ -2396,27 +2398,16 @@ function resolveRuntimeConfigSnapshotPath(): string {
   return resolveConfigPathForDeps(normalizeDeps({}));
 }
 
-export function registerConfigWriteListener(
-  listener: (event: ConfigWriteNotification) => void,
-): () => void {
-  configWriteListeners.add(listener);
-  return () => {
-    configWriteListeners.delete(listener);
-  };
-}
-
 export function setRuntimeConfigSnapshot(
   config: OpenClawConfig,
   sourceConfig?: OpenClawConfig,
 ): void {
-  runtimeConfigSnapshot = config;
-  runtimeConfigSourceSnapshot = sourceConfig ?? null;
+  setRuntimeConfigSnapshotState(config, sourceConfig);
   runtimeConfigSnapshotPath = resolveRuntimeConfigSnapshotPath();
 }
 
 export function resetConfigRuntimeState(): void {
-  runtimeConfigSnapshot = null;
-  runtimeConfigSourceSnapshot = null;
+  resetConfigRuntimeStateState();
   runtimeConfigSnapshotPath = null;
 }
 
@@ -2424,12 +2415,13 @@ export function clearRuntimeConfigSnapshot(): void {
   resetConfigRuntimeState();
 }
 
-export function getRuntimeConfigSnapshot(): OpenClawConfig | null {
-  return runtimeConfigSnapshot;
-}
-
-export function getRuntimeConfigSourceSnapshot(): OpenClawConfig | null {
-  return runtimeConfigSourceSnapshot;
+export function registerConfigWriteListener(
+  listener: (event: ConfigWriteNotification) => void,
+): () => void {
+  configWriteListeners.add(listener);
+  return () => {
+    configWriteListeners.delete(listener);
+  };
 }
 
 function isCompatibleTopLevelRuntimeProjectionShape(params: {
@@ -2462,6 +2454,8 @@ function isCompatibleTopLevelRuntimeProjectionShape(params: {
 }
 
 export function projectConfigOntoRuntimeSourceSnapshot(config: OpenClawConfig): OpenClawConfig {
+  const runtimeConfigSnapshot = getRuntimeConfigSnapshotState();
+  const runtimeConfigSourceSnapshot = getRuntimeConfigSourceSnapshotState();
   if (!runtimeConfigSnapshot || !runtimeConfigSourceSnapshot) {
     return config;
   }
@@ -2484,14 +2478,9 @@ export function projectConfigOntoRuntimeSourceSnapshot(config: OpenClawConfig): 
   return coerceConfig(applyMergePatch(runtimeConfigSourceSnapshot, runtimePatch));
 }
 
-export function setRuntimeConfigSnapshotRefreshHandler(
-  refreshHandler: RuntimeConfigSnapshotRefreshHandler | null,
-): void {
-  runtimeConfigSnapshotRefreshHandler = refreshHandler;
-}
-
 export function loadConfig(): OpenClawConfig {
   const currentSnapshotPath = resolveRuntimeConfigSnapshotPath();
+  const runtimeConfigSnapshot = getRuntimeConfigSnapshotState();
   if (runtimeConfigSnapshot && runtimeConfigSnapshotPath === currentSnapshotPath) {
     return runtimeConfigSnapshot;
   }
@@ -2503,7 +2492,7 @@ export function loadConfig(): OpenClawConfig {
   // should swap this snapshot via explicit reload/watcher paths instead of
   // reparsing openclaw.json on hot code paths.
   setRuntimeConfigSnapshot(config);
-  return runtimeConfigSnapshot ?? config;
+  return getRuntimeConfigSnapshotState() ?? config;
 }
 
 export function getRuntimeConfig(): OpenClawConfig {
@@ -2537,6 +2526,8 @@ export async function writeConfigFile(
 ): Promise<void> {
   const io = createConfigIO();
   let nextCfg = cfg;
+  const runtimeConfigSnapshot = getRuntimeConfigSnapshotState();
+  const runtimeConfigSourceSnapshot = getRuntimeConfigSourceSnapshotState();
   const hadRuntimeSnapshot = Boolean(runtimeConfigSnapshot);
   const hadBothSnapshots = Boolean(runtimeConfigSnapshot && runtimeConfigSourceSnapshot);
   if (hadBothSnapshots) {
@@ -2550,20 +2541,21 @@ export async function writeConfigFile(
     unsetPaths: options.unsetPaths,
   });
   const notifyCommittedWrite = () => {
-    if (!runtimeConfigSnapshot) {
+    const currentRuntimeConfig = getRuntimeConfigSnapshotState();
+    if (!currentRuntimeConfig) {
       return;
     }
     notifyConfigWriteListeners({
       configPath: io.configPath,
       sourceConfig: nextCfg,
-      runtimeConfig: runtimeConfigSnapshot,
+      runtimeConfig: currentRuntimeConfig,
       persistedHash: writeResult.persistedHash,
       writtenAtMs: Date.now(),
     });
   };
   // Keep the last-known-good runtime snapshot active until the specialized refresh path
   // succeeds, so concurrent readers do not observe unresolved SecretRefs mid-refresh.
-  const refreshHandler = runtimeConfigSnapshotRefreshHandler;
+  const refreshHandler = getRuntimeConfigSnapshotRefreshHandler();
   if (refreshHandler) {
     try {
       const refreshed = await refreshHandler.refresh({ sourceConfig: nextCfg });

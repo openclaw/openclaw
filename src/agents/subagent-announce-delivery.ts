@@ -1,16 +1,5 @@
-import { resolveQueueSettings } from "../auto-reply/reply/queue.js";
-import { loadConfig } from "../config/config.js";
-import {
-  loadSessionStore,
-  resolveAgentIdFromSessionKey,
-  resolveMainSessionKey,
-  resolveStorePath,
-} from "../config/sessions.js";
-import { callGateway } from "../gateway/call.js";
-import { createBoundDeliveryRouter } from "../infra/outbound/bound-delivery-router.js";
-import { resolveConversationIdFromTargets } from "../infra/outbound/conversation-id.js";
+import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
-import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { normalizeAccountId, normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
@@ -21,10 +10,29 @@ import {
   normalizeDeliveryContext,
   resolveConversationDeliveryTarget,
 } from "../utils/delivery-context.js";
-import { INTERNAL_MESSAGE_CHANNEL, isInternalMessageChannel } from "../utils/message-channel.js";
+import {
+  INTERNAL_MESSAGE_CHANNEL,
+  isGatewayMessageChannel,
+  isInternalMessageChannel,
+  normalizeMessageChannel,
+} from "../utils/message-channel.js";
 import { buildAnnounceIdempotencyKey, resolveQueueAnnounceId } from "./announce-idempotency.js";
 import type { AgentInternalEvent } from "./internal-events.js";
-import { isEmbeddedPiRunActive, queueEmbeddedPiMessage } from "./pi-embedded.js";
+import {
+  callGateway,
+  createBoundDeliveryRouter,
+  getGlobalHookRunner,
+  isEmbeddedPiRunActive,
+  loadConfig,
+  loadSessionStore,
+  queueEmbeddedPiMessage,
+  resolveAgentIdFromSessionKey,
+  resolveConversationIdFromTargets,
+  resolveExternalBestEffortDeliveryTarget,
+  resolveMainSessionKey,
+  resolveQueueSettings,
+  resolveStorePath,
+} from "./subagent-announce-delivery.runtime.js";
 import {
   runSubagentAnnounceDispatch,
   type SubagentAnnounceDeliveryResult,
@@ -84,6 +92,27 @@ function summarizeDeliveryError(error: unknown): string {
   } catch {
     return "error";
   }
+}
+
+function shouldStripThreadFromAnnounceEntry(
+  normalizedRequester?: DeliveryContext,
+  normalizedEntry?: DeliveryContext,
+): boolean {
+  if (
+    !normalizedRequester?.to ||
+    normalizedRequester.threadId != null ||
+    normalizedEntry?.threadId == null
+  ) {
+    return false;
+  }
+  const requesterChannel = normalizedRequester.channel?.trim().toLowerCase();
+  const plugin = requesterChannel ? getChannelPlugin(requesterChannel) : undefined;
+  return Boolean(
+    plugin?.conversationBindings?.shouldStripThreadFromAnnounceOrigin?.({
+      requester: normalizedRequester,
+      entry: normalizedEntry,
+    }),
+  );
 }
 
 const TRANSIENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
@@ -190,9 +219,7 @@ export function resolveAnnounceOrigin(
     );
   }
   const entryForMerge =
-    normalizedRequester?.to &&
-    normalizedRequester.threadId == null &&
-    normalizedEntry?.threadId != null
+    normalizedEntry && shouldStripThreadFromAnnounceEntry(normalizedRequester, normalizedEntry)
       ? (() => {
           const { threadId: _ignore, ...rest } = normalizedEntry;
           return rest;
@@ -448,6 +475,7 @@ async function sendSubagentAnnounceDirectly(params: {
   directIdempotencyKey: string;
   completionDirectOrigin?: DeliveryContext;
   directOrigin?: DeliveryContext;
+  requesterSessionOrigin?: DeliveryContext;
   sourceSessionKey?: string;
   sourceChannel?: string;
   sourceTool?: string;
@@ -469,25 +497,33 @@ async function sendSubagentAnnounceDirectly(params: {
   try {
     const completionDirectOrigin = normalizeDeliveryContext(params.completionDirectOrigin);
     const directOrigin = normalizeDeliveryContext(params.directOrigin);
+    const requesterSessionOrigin = normalizeDeliveryContext(params.requesterSessionOrigin);
+    // Merge completionDirectOrigin with directOrigin so that missing fields
+    // (channel, to, accountId) fall back to the originating session's
+    // lastChannel / lastTo. Without this, a completion origin that carries a
+    // channel but not a `to` would prevent external delivery.
     const effectiveDirectOrigin =
       params.expectsCompletionMessage && completionDirectOrigin
-        ? completionDirectOrigin
+        ? mergeDeliveryContext(completionDirectOrigin, directOrigin)
         : directOrigin;
-    const directChannel =
-      typeof effectiveDirectOrigin?.channel === "string"
-        ? effectiveDirectOrigin.channel.trim()
-        : "";
-    const directTo =
-      typeof effectiveDirectOrigin?.to === "string" ? effectiveDirectOrigin.to.trim() : "";
-    const shouldDeliverExternally =
-      !params.requesterIsSubagent &&
-      Boolean(directChannel) &&
-      Boolean(directTo) &&
-      !isInternalMessageChannel(directChannel);
-
-    const threadId =
-      effectiveDirectOrigin?.threadId != null && effectiveDirectOrigin.threadId !== ""
-        ? String(effectiveDirectOrigin.threadId)
+    const sessionOnlyOrigin = effectiveDirectOrigin?.channel
+      ? effectiveDirectOrigin
+      : requesterSessionOrigin;
+    const deliveryTarget = !params.requesterIsSubagent
+      ? resolveExternalBestEffortDeliveryTarget({
+          channel: effectiveDirectOrigin?.channel,
+          to: effectiveDirectOrigin?.to,
+          accountId: effectiveDirectOrigin?.accountId,
+          threadId: effectiveDirectOrigin?.threadId,
+        })
+      : { deliver: false };
+    const normalizedSessionOnlyOriginChannel = !params.requesterIsSubagent
+      ? normalizeMessageChannel(sessionOnlyOrigin?.channel)
+      : undefined;
+    const sessionOnlyOriginChannel =
+      normalizedSessionOnlyOriginChannel &&
+      isGatewayMessageChannel(normalizedSessionOnlyOriginChannel)
+        ? normalizedSessionOnlyOriginChannel
         : undefined;
     if (params.signal?.aborted) {
       return {
@@ -506,13 +542,25 @@ async function sendSubagentAnnounceDirectly(params: {
           params: {
             sessionKey: canonicalRequesterSessionKey,
             message: params.triggerMessage,
-            deliver: shouldDeliverExternally,
+            deliver: deliveryTarget.deliver,
             bestEffortDeliver: params.bestEffortDeliver,
             internalEvents: params.internalEvents,
-            channel: !params.requesterIsSubagent ? directChannel || undefined : undefined,
-            accountId: !params.requesterIsSubagent ? effectiveDirectOrigin?.accountId : undefined,
-            to: !params.requesterIsSubagent ? directTo || undefined : undefined,
-            threadId: !params.requesterIsSubagent ? threadId : undefined,
+            channel: deliveryTarget.deliver ? deliveryTarget.channel : sessionOnlyOriginChannel,
+            accountId: deliveryTarget.deliver
+              ? deliveryTarget.accountId
+              : sessionOnlyOriginChannel
+                ? sessionOnlyOrigin?.accountId
+                : undefined,
+            to: deliveryTarget.deliver
+              ? deliveryTarget.to
+              : sessionOnlyOriginChannel
+                ? sessionOnlyOrigin?.to
+                : undefined,
+            threadId: deliveryTarget.deliver
+              ? deliveryTarget.threadId
+              : sessionOnlyOriginChannel
+                ? sessionOnlyOrigin?.threadId
+                : undefined,
             inputProvenance: {
               kind: "inter_session",
               sourceSessionKey: params.sourceSessionKey,
@@ -546,6 +594,7 @@ export async function deliverSubagentAnnouncement(params: {
   steerMessage: string;
   internalEvents?: AgentInternalEvent[];
   summaryLine?: string;
+  requesterSessionOrigin?: DeliveryContext;
   requesterOrigin?: DeliveryContext;
   completionDirectOrigin?: DeliveryContext;
   directOrigin?: DeliveryContext;
@@ -584,6 +633,7 @@ export async function deliverSubagentAnnouncement(params: {
         directIdempotencyKey: params.directIdempotencyKey,
         completionDirectOrigin: params.completionDirectOrigin,
         directOrigin: params.directOrigin,
+        requesterSessionOrigin: params.requesterSessionOrigin,
         sourceSessionKey: params.sourceSessionKey,
         sourceChannel: params.sourceChannel,
         sourceTool: params.sourceTool,

@@ -6,7 +6,7 @@ summary: OpenClaw 如何构建提示上下文并报告 token 使用量 + 成本
 title: Token 使用与成本
 x-i18n:
   generated_at: "2026-02-03T07:54:57Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: aee417119851db9e36890487517ed9602d214849e412127e7f534ebec5c9e105
   source_path: reference/token-use.md
@@ -100,9 +100,9 @@ https://docs.anthropic.com/docs/build-with-claude/prompt-caching
 agents:
   defaults:
     model:
-      primary: "anthropic/claude-opus-4-5"
+      primary: "anthropic/claude-opus-4-6"
     models:
-      "anthropic/claude-opus-4-5":
+      "anthropic/claude-opus-4-6":
         params:
           cacheRetention: "long"
     heartbeat:

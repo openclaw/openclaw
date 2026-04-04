@@ -389,6 +389,8 @@ describe("loadPluginManifestRegistry", () => {
           method: "api-key",
           choiceId: "openai-api-key",
           choiceLabel: "OpenAI API key",
+          assistantPriority: 10,
+          assistantVisibility: "visible",
         },
       ],
       configSchema: { type: "object" },
@@ -411,6 +413,8 @@ describe("loadPluginManifestRegistry", () => {
         method: "api-key",
         choiceId: "openai-api-key",
         choiceLabel: "OpenAI API key",
+        assistantPriority: 10,
+        assistantVisibility: "visible",
       },
     ]);
   });
@@ -634,32 +638,7 @@ describe("loadPluginManifestRegistry", () => {
     expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(0);
   });
 
-  it.each([
-    { name: "provider-style", manifestId: "openai", idHint: "openai-provider" },
-    { name: "plugin-style", manifestId: "brave", idHint: "brave-plugin" },
-    { name: "sandbox-style", manifestId: "openshell", idHint: "openshell-sandbox" },
-    { name: "multi-entry-style", manifestId: "matrix", idHint: "matrix/index" },
-    {
-      name: "media-understanding-style",
-      manifestId: "groq",
-      idHint: "groq-media-understanding",
-    },
-  ] as const)("accepts $name id hints without warning", ({ manifestId, idHint }) => {
-    const dir = makeTempDir();
-    writeManifest(dir, { id: manifestId, configSchema: { type: "object" } });
-
-    expect(
-      hasPluginIdMismatchWarning(
-        loadSingleCandidateRegistry({
-          idHint,
-          rootDir: dir,
-          origin: "bundled",
-        }),
-      ),
-    ).toBe(false);
-  });
-
-  it("still warns for unrelated id hint mismatches", () => {
+  it("does not warn for id hint mismatches when manifest id is authoritative", () => {
     const dir = makeTempDir();
     writeManifest(dir, { id: "openai", configSchema: { type: "object" } });
 
@@ -671,13 +650,7 @@ describe("loadPluginManifestRegistry", () => {
       }),
     ]);
 
-    expect(
-      registry.diagnostics.some((diag) =>
-        diag.message.includes(
-          'plugin id mismatch (manifest uses "openai", entry hints "totally-different")',
-        ),
-      ),
-    ).toBe(true);
+    expect(hasPluginIdMismatchWarning(registry)).toBe(false);
   });
 
   it.each([

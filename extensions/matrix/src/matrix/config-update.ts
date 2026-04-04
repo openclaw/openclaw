@@ -1,15 +1,26 @@
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
-import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { coerceSecretRef } from "openclaw/plugin-sdk/config-runtime";
 import { normalizeSecretInputString } from "openclaw/plugin-sdk/setup";
 import type { CoreConfig, MatrixConfig } from "../types.js";
 import { findMatrixAccountConfig } from "./account-config.js";
+import {
+  resolveMatrixConfigFieldPath,
+  resolveMatrixConfigPath,
+  shouldStoreMatrixAccountAtTopLevel,
+} from "./config-paths.js";
+
+export {
+  resolveMatrixConfigFieldPath,
+  resolveMatrixConfigPath,
+  shouldStoreMatrixAccountAtTopLevel,
+} from "./config-paths.js";
 
 export type MatrixAccountPatch = {
   name?: string | null;
   enabled?: boolean;
   homeserver?: string | null;
   allowPrivateNetwork?: boolean | null;
+  proxy?: string | null;
   userId?: string | null;
   accessToken?: MatrixConfig["accessToken"] | null;
   password?: MatrixConfig["password"] | null;
@@ -112,35 +123,6 @@ function applyNullableArrayField(
   target[key] = [...value];
 }
 
-export function shouldStoreMatrixAccountAtTopLevel(cfg: CoreConfig, accountId: string): boolean {
-  const normalizedAccountId = normalizeAccountId(accountId);
-  if (normalizedAccountId !== DEFAULT_ACCOUNT_ID) {
-    return false;
-  }
-  const accounts = cfg.channels?.matrix?.accounts;
-  return !accounts || Object.keys(accounts).length === 0;
-}
-
-export function resolveMatrixConfigPath(cfg: CoreConfig, accountId: string): string {
-  const normalizedAccountId = normalizeAccountId(accountId);
-  if (shouldStoreMatrixAccountAtTopLevel(cfg, normalizedAccountId)) {
-    return "channels.matrix";
-  }
-  return `channels.matrix.accounts.${normalizedAccountId}`;
-}
-
-export function resolveMatrixConfigFieldPath(
-  cfg: CoreConfig,
-  accountId: string,
-  fieldPath: string,
-): string {
-  const suffix = fieldPath.trim().replace(/^\.+/, "");
-  if (!suffix) {
-    return resolveMatrixConfigPath(cfg, accountId);
-  }
-  return `${resolveMatrixConfigPath(cfg, accountId)}.${suffix}`;
-}
-
 export function updateMatrixAccountConfig(
   cfg: CoreConfig,
   accountId: string,
@@ -171,6 +153,7 @@ export function updateMatrixAccountConfig(
   }
 
   applyNullableStringField(nextAccount, "homeserver", patch.homeserver);
+  applyNullableStringField(nextAccount, "proxy", patch.proxy);
   applyNullableStringField(nextAccount, "userId", patch.userId);
   applyNullableSecretInputField(
     nextAccount,

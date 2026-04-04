@@ -6,6 +6,7 @@ import { AcpRuntimeError } from "../../acp/runtime/errors.js";
 import type { AcpSessionStoreEntry } from "../../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
+import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 import { createAcpSessionMeta, createAcpTestConfig } from "./test-fixtures/acp-runtime.js";
@@ -58,6 +59,7 @@ const bindingServiceMocks = vi.hoisted(() => ({
 }));
 
 const sessionKey = "agent:codex-acp:session-1";
+const originalFetch = globalThis.fetch;
 type MockTtsReply = Awaited<ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>>;
 let tryDispatchAcpReply: typeof import("./dispatch-acp.js").tryDispatchAcpReply;
 
@@ -281,6 +283,7 @@ describe("tryDispatchAcpReply", () => {
     bindingServiceMocks.listBySession.mockReturnValue([]);
     bindingServiceMocks.unbind.mockReset();
     bindingServiceMocks.unbind.mockResolvedValue([]);
+    globalThis.fetch = originalFetch;
   });
 
   it("routes ACP block output to originating channel", async () => {
@@ -412,6 +415,13 @@ describe("tryDispatchAcpReply", () => {
 
       await runDispatch({
         bodyForAgent: "   ",
+        cfg: createAcpTestConfig({
+          channels: {
+            imessage: {
+              attachmentRoots: [tempDir],
+            },
+          },
+        }),
         ctxOverrides: {
           MediaPath: imagePath,
           MediaType: "image/png",
@@ -429,6 +439,105 @@ describe("tryDispatchAcpReply", () => {
           ],
         }),
       );
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips ACP attachments outside allowed inbound roots", async () => {
+    setReadyAcpResolution();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-"));
+    const imagePath = path.join(tempDir, "outside-root.png");
+    try {
+      await fs.writeFile(imagePath, "image-bytes");
+      managerMocks.runTurn.mockResolvedValue(undefined);
+
+      await runDispatch({
+        bodyForAgent: "   ",
+        ctxOverrides: {
+          MediaPath: imagePath,
+          MediaType: "image/png",
+        },
+      });
+
+      expect(managerMocks.runTurn).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips file URL ACP attachments outside allowed inbound roots", async () => {
+    setReadyAcpResolution();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-"));
+    const imagePath = path.join(tempDir, "outside-root.png");
+    try {
+      await fs.writeFile(imagePath, "image-bytes");
+      managerMocks.runTurn.mockResolvedValue(undefined);
+
+      await runDispatch({
+        bodyForAgent: "   ",
+        ctxOverrides: {
+          MediaPath: `file://${imagePath}`,
+          MediaType: "image/png",
+        },
+      });
+
+      expect(managerMocks.runTurn).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips relative ACP attachment paths that resolve outside allowed inbound roots", async () => {
+    setReadyAcpResolution();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-"));
+    const imagePath = path.join(tempDir, "outside-root.png");
+    try {
+      await fs.writeFile(imagePath, "image-bytes");
+      managerMocks.runTurn.mockResolvedValue(undefined);
+
+      await runDispatch({
+        bodyForAgent: "   ",
+        ctxOverrides: {
+          MediaPath: path.relative(process.cwd(), imagePath),
+          MediaType: "image/png",
+        },
+      });
+
+      expect(managerMocks.runTurn).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not fall back to remote URLs when ACP local attachment paths are blocked", async () => {
+    setReadyAcpResolution();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-"));
+    const imagePath = path.join(tempDir, "outside-root.png");
+    const fetchSpy = vi.fn(
+      async () =>
+        new Response(Buffer.from("remote-image"), {
+          headers: {
+            "content-type": "image/png",
+          },
+        }),
+    );
+    globalThis.fetch = withFetchPreconnect(fetchSpy as typeof fetch);
+    try {
+      await fs.writeFile(imagePath, "image-bytes");
+      managerMocks.runTurn.mockResolvedValue(undefined);
+
+      await runDispatch({
+        bodyForAgent: "   ",
+        ctxOverrides: {
+          MediaPath: imagePath,
+          MediaUrl: "https://example.com/image.png",
+          MediaType: "image/png",
+        },
+      });
+
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(managerMocks.runTurn).not.toHaveBeenCalled();
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
@@ -702,6 +811,90 @@ describe("tryDispatchAcpReply", () => {
     );
   });
 
+  it("honors the configured default account when checking bound-session identity notices", async () => {
+    const canonicalSessionKey = "agent:main:main";
+    managerMocks.resolveSession.mockReturnValue({
+      kind: "ready",
+      sessionKey: canonicalSessionKey,
+      meta: createAcpSessionMeta({
+        identity: {
+          state: "pending",
+          source: "ensure",
+          lastUpdatedAt: Date.now(),
+          acpxRecordId: "rec-work",
+        },
+      }),
+    });
+    bindingServiceMocks.listBySession.mockImplementation((targetSessionKey: string) =>
+      targetSessionKey === canonicalSessionKey
+        ? [
+            {
+              bindingId: "discord:work:thread-1",
+              targetSessionKey: canonicalSessionKey,
+              targetKind: "session",
+              conversation: {
+                channel: "discord",
+                accountId: "work",
+                conversationId: "thread-1",
+              },
+              status: "active",
+              boundAt: 0,
+            },
+          ]
+        : [],
+    );
+    sessionMetaMocks.readAcpSessionEntry.mockImplementation(
+      (params: { sessionKey: string; cfg?: OpenClawConfig }) =>
+        params.sessionKey === canonicalSessionKey
+          ? {
+              cfg: params.cfg ?? createAcpTestConfig(),
+              storePath: "/tmp/openclaw-session-store.json",
+              sessionKey: canonicalSessionKey,
+              storeSessionKey: canonicalSessionKey,
+              acp: createAcpSessionMeta({
+                identity: {
+                  state: "resolved",
+                  source: "status",
+                  lastUpdatedAt: Date.now(),
+                  acpxSessionId: "acpx-work",
+                },
+              }),
+            }
+          : null,
+    );
+    managerMocks.runTurn.mockResolvedValue(undefined);
+    const { dispatcher } = createDispatcher();
+
+    await runDispatch({
+      bodyForAgent: "test",
+      dispatcher,
+      cfg: createAcpTestConfig({
+        channels: {
+          discord: {
+            defaultAccount: "work",
+          },
+        },
+      }),
+      ctxOverrides: {
+        Provider: "discord",
+        Surface: "discord",
+      },
+      sessionKeyOverride: canonicalSessionKey,
+    });
+
+    expect(bindingServiceMocks.listBySession).toHaveBeenCalledWith(canonicalSessionKey);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.stringContaining("Session ids resolved."),
+      }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.stringContaining("acpx session id: acpx-work"),
+      }),
+    );
+  });
+
   it("does not deliver final fallback text when routed block text was already visible", async () => {
     setReadyAcpResolution();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
@@ -838,6 +1031,48 @@ describe("tryDispatchAcpReply", () => {
       expect.objectContaining({ text: "First chunk. \nSecond chunk." }),
     );
     expect(result?.queuedFinal).toBe(true);
+  });
+
+  it("honors the configured default account for ACP projector chunking when AccountId is omitted", async () => {
+    setReadyAcpResolution();
+    const cfg = createAcpTestConfig({
+      channels: {
+        discord: {
+          defaultAccount: "work",
+          accounts: {
+            work: {
+              textChunkLimit: 5,
+            },
+          },
+        },
+      },
+    });
+    managerMocks.runTurn.mockImplementation(
+      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+        await onEvent({ type: "text_delta", text: "abcdef", tag: "agent_message_chunk" });
+        await onEvent({ type: "done" });
+      },
+    );
+
+    const { dispatcher } = createDispatcher();
+    await runDispatch({
+      bodyForAgent: "reply",
+      cfg,
+      dispatcher,
+      ctxOverrides: {
+        Provider: "discord",
+        Surface: "discord",
+      },
+    });
+
+    expect(dispatcher.sendBlockReply).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ text: "abcde" }),
+    );
+    expect(dispatcher.sendBlockReply).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ text: "f" }),
+    );
   });
 
   it("does not add text fallback when final TTS already delivered audio", async () => {

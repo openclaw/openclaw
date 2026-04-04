@@ -1,5 +1,5 @@
 import { createRequire } from "node:module";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { fetchTelegramChatId } from "./api-fetch.js";
 
 const require = createRequire(import.meta.url);
@@ -50,6 +50,12 @@ function getOwnSymbolValue(
 afterEach(() => {
   vi.unstubAllEnvs();
 });
+
+vi.mock("undici", () => ({
+  ProxyAgent: proxyMocks.ProxyAgent,
+  fetch: proxyMocks.undiciFetch,
+  setGlobalDispatcher: proxyMocks.setGlobalDispatcher,
+}));
 
 describe("fetchTelegramChatId", () => {
   const cases = [
@@ -163,32 +169,14 @@ describe("undici env proxy semantics", () => {
 });
 
 describe("makeProxyFetch", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    proxyMocks.undiciFetch.mockReset();
-    proxyMocks.proxyAgentSpy.mockClear();
-    proxyMocks.setGlobalDispatcher.mockClear();
-    vi.doMock("undici", () => ({
-      ProxyAgent: proxyMocks.ProxyAgent,
-      fetch: proxyMocks.undiciFetch,
-      setGlobalDispatcher: proxyMocks.setGlobalDispatcher,
-    }));
+  beforeAll(async () => {
     ({ getProxyUrlFromFetch, makeProxyFetch } = await import("./proxy.js"));
   });
 
-  it("uses undici fetch with ProxyAgent dispatcher", async () => {
-    const proxyUrl = "http://proxy.test:8080";
-    proxyMocks.undiciFetch.mockResolvedValue({ ok: true });
-
-    const proxyFetch = makeProxyFetch(proxyUrl);
-    await proxyFetch("https://api.telegram.org/bot123/getMe");
-
-    expect(proxyMocks.proxyAgentSpy).toHaveBeenCalledWith(proxyUrl);
-    expect(proxyMocks.undiciFetch).toHaveBeenCalledWith(
-      "https://api.telegram.org/bot123/getMe",
-      expect.objectContaining({ dispatcher: proxyMocks.getLastAgent() }),
-    );
-    expect(proxyMocks.setGlobalDispatcher).not.toHaveBeenCalled();
+  beforeEach(() => {
+    proxyMocks.undiciFetch.mockReset();
+    proxyMocks.proxyAgentSpy.mockClear();
+    proxyMocks.setGlobalDispatcher.mockClear();
   });
 
   it("attaches proxy metadata for resolver transport handling", () => {

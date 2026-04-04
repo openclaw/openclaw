@@ -4,12 +4,9 @@ import {
   adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
 } from "openclaw/plugin-sdk/channel-config-helpers";
-import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
-import {
-  formatDocsLink,
-  hasConfiguredSecretInput,
-  patchChannelConfigForAccount,
-} from "openclaw/plugin-sdk/setup";
+import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input-runtime";
+import { patchChannelConfigForAccount } from "openclaw/plugin-sdk/setup-runtime";
+import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { inspectSlackAccount } from "./account-inspect.js";
 import {
   listSlackAccountIds,
@@ -17,9 +14,10 @@ import {
   resolveSlackAccount,
   type ResolvedSlackAccount,
 } from "./accounts.js";
+import { getChatChannelMeta, type ChannelPlugin, type OpenClawConfig } from "./channel-api.js";
 import { SlackChannelConfigSchema } from "./config-schema.js";
+import { slackDoctor } from "./doctor.js";
 import { isSlackInteractiveRepliesEnabled } from "./interactive-replies.js";
-import { getChatChannelMeta, type ChannelPlugin, type OpenClawConfig } from "./runtime-api.js";
 
 export const SLACK_CHANNEL = "slack" as const;
 
@@ -33,7 +31,7 @@ function buildSlackManifest(botName: string) {
     features: {
       bot_user: {
         display_name: safeName,
-        always_online: false,
+        always_online: true,
       },
       app_home: {
         messages_tab_enabled: true,
@@ -50,22 +48,28 @@ function buildSlackManifest(botName: string) {
     oauth_config: {
       scopes: {
         bot: [
-          "chat:write",
+          "app_mentions:read",
+          "assistant:write",
           "channels:history",
           "channels:read",
-          "groups:history",
-          "im:history",
-          "mpim:history",
-          "users:read",
-          "app_mentions:read",
-          "reactions:read",
-          "reactions:write",
-          "pins:read",
-          "pins:write",
-          "emoji:read",
+          "chat:write",
           "commands",
+          "emoji:read",
           "files:read",
           "files:write",
+          "groups:history",
+          "groups:read",
+          "im:history",
+          "im:read",
+          "im:write",
+          "mpim:history",
+          "mpim:read",
+          "mpim:write",
+          "pins:read",
+          "pins:write",
+          "reactions:read",
+          "reactions:write",
+          "users:read",
         ],
       },
     },
@@ -74,17 +78,17 @@ function buildSlackManifest(botName: string) {
       event_subscriptions: {
         bot_events: [
           "app_mention",
+          "channel_rename",
+          "member_joined_channel",
+          "member_left_channel",
           "message.channels",
           "message.groups",
           "message.im",
           "message.mpim",
-          "reaction_added",
-          "reaction_removed",
-          "member_joined_channel",
-          "member_left_channel",
-          "channel_rename",
           "pin_added",
           "pin_removed",
+          "reaction_added",
+          "reaction_removed",
         ],
       },
     },
@@ -112,7 +116,7 @@ export function setSlackChannelAllowlist(
   accountId: string,
   channelKeys: string[],
 ): OpenClawConfig {
-  const channels = Object.fromEntries(channelKeys.map((key) => [key, { allow: true }]));
+  const channels = Object.fromEntries(channelKeys.map((key) => [key, { enabled: true }]));
   return patchChannelConfigForAccount({
     cfg,
     channel: SLACK_CHANNEL,
@@ -162,6 +166,8 @@ export function createSlackPluginBase(params: {
   | "meta"
   | "setupWizard"
   | "capabilities"
+  | "commands"
+  | "doctor"
   | "agentPrompt"
   | "streaming"
   | "reload"
@@ -169,7 +175,7 @@ export function createSlackPluginBase(params: {
   | "config"
   | "setup"
 > {
-  return createChannelPluginBase({
+  return {
     id: SLACK_CHANNEL,
     meta: {
       ...getChatChannelMeta(SLACK_CHANNEL),
@@ -183,7 +189,24 @@ export function createSlackPluginBase(params: {
       media: true,
       nativeCommands: true,
     },
+    commands: {
+      nativeCommandsAutoEnabled: false,
+      nativeSkillsAutoEnabled: false,
+      resolveNativeCommandName: ({ commandKey, defaultName }) =>
+        commandKey === "status" ? "agentstatus" : defaultName,
+    },
+    doctor: slackDoctor,
     agentPrompt: {
+      inboundFormattingHints: () => ({
+        text_markup: "slack_mrkdwn",
+        rules: [
+          "Use Slack mrkdwn, not standard Markdown.",
+          "Bold uses *single asterisks*.",
+          "Links use <url|label>.",
+          "Code blocks use triple backticks without a language identifier.",
+          "Do not use markdown headings or pipe tables.",
+        ],
+      }),
       messageToolHints: ({ cfg, accountId }) =>
         isSlackInteractiveRepliesEnabled({ cfg, accountId })
           ? [
@@ -214,12 +237,14 @@ export function createSlackPluginBase(params: {
         }),
     },
     setup: params.setup,
-  }) as Pick<
+  } as Pick<
     ChannelPlugin<ResolvedSlackAccount>,
     | "id"
     | "meta"
     | "setupWizard"
     | "capabilities"
+    | "commands"
+    | "doctor"
     | "agentPrompt"
     | "streaming"
     | "reload"

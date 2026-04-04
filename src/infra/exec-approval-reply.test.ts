@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import {
+  buildExecApprovalActionDescriptors,
+  buildExecApprovalCommandText,
+  buildExecApprovalInteractiveReply,
   buildExecApprovalPendingReplyPayload,
   buildExecApprovalUnavailableReplyPayload,
   getExecApprovalApproverDmNoticeText,
   getExecApprovalReplyMetadata,
+  parseExecApprovalCommandText,
 } from "./exec-approval-reply.js";
 
 describe("exec approval reply helpers", () => {
@@ -50,6 +54,14 @@ describe("exec approval reply helpers", () => {
     );
   });
 
+  it("mentions native chat approval clients in the fallback guidance", () => {
+    expect(
+      buildExecApprovalUnavailableReplyPayload({
+        reason: "no-approval-route",
+      }).text,
+    ).toContain("native chat approval client such as Discord, Slack, or Telegram");
+  });
+
   it.each(invalidReplyMetadataCases)(
     "returns null for invalid reply metadata payload: $name",
     ({ payload }) => {
@@ -64,14 +76,19 @@ describe("exec approval reply helpers", () => {
           execApproval: {
             approvalId: " req-1 ",
             approvalSlug: " slug-1 ",
+            agentId: " agent-1 ",
             allowedDecisions: ["allow-once", "bad", "deny", "allow-always", 3],
+            sessionKey: " session-1 ",
           },
         },
       }),
     ).toEqual({
       approvalId: "req-1",
       approvalSlug: "slug-1",
+      approvalKind: "exec",
+      agentId: "agent-1",
       allowedDecisions: ["allow-once", "deny", "allow-always"],
+      sessionKey: "session-1",
     });
   });
 
@@ -92,7 +109,10 @@ describe("exec approval reply helpers", () => {
       execApproval: {
         approvalId: "req-1",
         approvalSlug: "slug-1",
+        approvalKind: "exec",
+        agentId: undefined,
         allowedDecisions: ["allow-once", "allow-always", "deny"],
+        sessionKey: undefined,
       },
     });
     expect(payload.interactive).toEqual({
@@ -107,7 +127,7 @@ describe("exec approval reply helpers", () => {
             },
             {
               label: "Allow Always",
-              value: "/approve req-1 always",
+              value: "/approve req-1 allow-always",
               style: "primary",
             },
             {
@@ -124,6 +144,71 @@ describe("exec approval reply helpers", () => {
     expect(payload.text).toContain("```sh\necho ok\n```");
     expect(payload.text).toContain("Host: gateway\nNode: node-1\nCWD: /tmp/work\nExpires in: 2s");
     expect(payload.text).toContain("Full id: `req-1`");
+  });
+
+  it("omits allow-always actions when the effective policy requires approval every time", () => {
+    const payload = buildExecApprovalPendingReplyPayload({
+      approvalId: "req-ask-always",
+      approvalSlug: "slug-always",
+      ask: "always",
+      command: "echo ok",
+      host: "gateway",
+    });
+
+    expect(payload.channelData).toEqual({
+      execApproval: {
+        approvalId: "req-ask-always",
+        approvalSlug: "slug-always",
+        approvalKind: "exec",
+        allowedDecisions: ["allow-once", "deny"],
+      },
+    });
+    expect(payload.text).toContain("```txt\n/approve slug-always allow-once\n```");
+    expect(payload.text).not.toContain("allow-always");
+    expect(payload.text).toContain(
+      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
+    );
+    expect(payload.interactive).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Allow Once",
+              value: "/approve req-ask-always allow-once",
+              style: "success",
+            },
+            {
+              label: "Deny",
+              value: "/approve req-ask-always deny",
+              style: "danger",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("stores agent and session metadata for downstream suppression checks", () => {
+    const payload = buildExecApprovalPendingReplyPayload({
+      approvalId: "req-meta",
+      approvalSlug: "slug-meta",
+      agentId: "ops-agent",
+      sessionKey: "agent:ops-agent:matrix:channel:!room:example.org",
+      command: "echo ok",
+      host: "gateway",
+    });
+
+    expect(payload.channelData).toEqual({
+      execApproval: {
+        approvalId: "req-meta",
+        approvalSlug: "slug-meta",
+        approvalKind: "exec",
+        agentId: "ops-agent",
+        allowedDecisions: ["allow-once", "allow-always", "deny"],
+        sessionKey: "agent:ops-agent:matrix:channel:!room:example.org",
+      },
+    });
   });
 
   it("uses a longer fence for commands containing triple backticks", () => {
@@ -164,6 +249,81 @@ describe("exec approval reply helpers", () => {
     });
 
     expect(payload.text).toContain("Expires in: 30m");
+  });
+
+  it("builds shared exec approval action descriptors and interactive replies", () => {
+    expect(
+      buildExecApprovalActionDescriptors({
+        approvalCommandId: "req-1",
+      }),
+    ).toEqual([
+      {
+        decision: "allow-once",
+        label: "Allow Once",
+        style: "success",
+        command: "/approve req-1 allow-once",
+      },
+      {
+        decision: "allow-always",
+        label: "Allow Always",
+        style: "primary",
+        command: "/approve req-1 allow-always",
+      },
+      {
+        decision: "deny",
+        label: "Deny",
+        style: "danger",
+        command: "/approve req-1 deny",
+      },
+    ]);
+
+    expect(
+      buildExecApprovalInteractiveReply({
+        approvalCommandId: "req-1",
+      }),
+    ).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            { label: "Allow Once", value: "/approve req-1 allow-once", style: "success" },
+            { label: "Allow Always", value: "/approve req-1 allow-always", style: "primary" },
+            { label: "Deny", value: "/approve req-1 deny", style: "danger" },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("builds and parses shared exec approval command text", () => {
+    expect(
+      buildExecApprovalCommandText({
+        approvalCommandId: "req-1",
+        decision: "allow-always",
+      }),
+    ).toBe("/approve req-1 allow-always");
+
+    expect(parseExecApprovalCommandText("/approve req-1 deny")).toEqual({
+      approvalId: "req-1",
+      decision: "deny",
+    });
+    expect(parseExecApprovalCommandText("approve req-1 allow-once")).toEqual({
+      approvalId: "req-1",
+      decision: "allow-once",
+    });
+    expect(parseExecApprovalCommandText("/approve@clover req-1 allow-once")).toEqual({
+      approvalId: "req-1",
+      decision: "allow-once",
+    });
+    expect(parseExecApprovalCommandText("  /approve req-1 always")).toEqual({
+      approvalId: "req-1",
+      decision: "allow-always",
+    });
+    expect(parseExecApprovalCommandText("/approve req-1 allow-always")).toEqual({
+      approvalId: "req-1",
+      decision: "allow-always",
+    });
+    expect(parseExecApprovalCommandText("/approve req-1 maybe")).toBeNull();
   });
 
   it("builds unavailable payloads for approver DMs", () => {

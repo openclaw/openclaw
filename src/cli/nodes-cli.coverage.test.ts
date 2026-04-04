@@ -1,6 +1,6 @@
 import { Command } from "commander";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createCliRuntimeCapture } from "./test-runtime-capture.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { registerNodesCli } from "./nodes-cli.js";
 
 type NodeInvokeCall = {
   method?: string;
@@ -46,21 +46,55 @@ const callGateway = vi.fn(async (opts: NodeInvokeCall) => {
 
 const randomIdempotencyKey = vi.fn(() => "rk_test");
 
-const { runtimeErrors, defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
+const mocks = vi.hoisted(() => {
+  const runtimeErrors: string[] = [];
+  const stringifyArgs = (args: unknown[]) => args.map((value) => String(value)).join(" ");
+  const defaultRuntime = {
+    log: vi.fn(),
+    error: vi.fn((...args: unknown[]) => {
+      runtimeErrors.push(stringifyArgs(args));
+    }),
+    writeStdout: vi.fn((value: string) => {
+      defaultRuntime.log(value.endsWith("\n") ? value.slice(0, -1) : value);
+    }),
+    writeJson: vi.fn((value: unknown, space = 2) => {
+      defaultRuntime.log(JSON.stringify(value, null, space > 0 ? space : undefined));
+    }),
+    exit: vi.fn((code: number) => {
+      throw new Error(`__exit__:${code}`);
+    }),
+  };
+  return {
+    runtimeErrors,
+    defaultRuntime,
+  };
+});
+
+const { runtimeErrors, defaultRuntime } = mocks;
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGateway(opts as NodeInvokeCall),
   randomIdempotencyKey: () => randomIdempotencyKey(),
 }));
 
-vi.mock("../runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../runtime.js")>()),
-  defaultRuntime,
+vi.mock("../runtime.js", async () => ({
+  ...(await vi.importActual<typeof import("../runtime.js")>("../runtime.js")),
+  defaultRuntime: mocks.defaultRuntime,
 }));
 
 describe("nodes-cli coverage", () => {
-  let registerNodesCli: (program: Command) => void;
-  let sharedProgram: Command;
+  let sharedProgram: Command = new Command();
+
+  const withSuppressedStderr = async <T>(run: () => Promise<T>) => {
+    const stderrSpy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((() => true) as typeof process.stderr.write);
+    try {
+      return await run();
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  };
 
   const getNodeInvokeCall = () => {
     const last = lastNodeInvokeCall;
@@ -75,25 +109,30 @@ describe("nodes-cli coverage", () => {
     return getNodeInvokeCall();
   };
 
-  beforeAll(async () => {
-    ({ registerNodesCli } = await import("./nodes-cli.js"));
-    sharedProgram = new Command();
+  if (sharedProgram.commands.length === 0) {
     sharedProgram.exitOverride();
     registerNodesCli(sharedProgram);
-  });
+  }
 
   beforeEach(() => {
-    resetRuntimeCapture();
+    runtimeErrors.length = 0;
     callGateway.mockClear();
     randomIdempotencyKey.mockClear();
+    defaultRuntime.log.mockClear();
+    defaultRuntime.error.mockClear();
+    defaultRuntime.writeStdout.mockClear();
+    defaultRuntime.writeJson.mockClear();
+    defaultRuntime.exit.mockClear();
     lastNodeInvokeCall = null;
   });
 
   it("does not register the removed run wrapper", async () => {
-    await expect(
-      sharedProgram.parseAsync(["nodes", "run", "--node", "mac-1"], { from: "user" }),
-    ).rejects.toMatchObject({
-      code: "commander.unknownCommand",
+    await withSuppressedStderr(async () => {
+      await expect(
+        sharedProgram.parseAsync(["nodes", "run", "--node", "mac-1"], { from: "user" }),
+      ).rejects.toMatchObject({
+        code: "commander.unknownCommand",
+      });
     });
   });
 

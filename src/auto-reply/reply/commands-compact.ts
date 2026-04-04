@@ -154,6 +154,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
       : "Compaction failed";
   if (result.ok && result.compacted) {
     await incrementCompactionCount({
+      cfg: params.cfg,
       sessionEntry: params.sessionEntry,
       sessionStore: params.sessionStore,
       sessionKey: params.sessionKey,

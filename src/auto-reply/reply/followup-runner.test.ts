@@ -125,25 +125,54 @@ function refreshQueuedFollowupSessionForFollowupTest(params: {
   previousSessionId?: string;
   nextSessionId?: string;
   nextSessionFile?: string;
+  nextProvider?: string;
+  nextModel?: string;
+  nextAuthProfileId?: string;
+  nextAuthProfileIdSource?: "auto" | "user";
 }): void {
   const cleaned = params.key.trim();
-  if (!cleaned || !params.previousSessionId || !params.nextSessionId) {
-    return;
-  }
-  if (params.previousSessionId === params.nextSessionId) {
+  if (!cleaned) {
     return;
   }
   const queue = FOLLOWUP_TEST_QUEUES.get(cleaned);
   if (!queue) {
     return;
   }
+  const shouldRewriteSession =
+    Boolean(params.previousSessionId) &&
+    Boolean(params.nextSessionId) &&
+    params.previousSessionId !== params.nextSessionId;
+  const shouldRewriteSelection =
+    typeof params.nextProvider === "string" ||
+    typeof params.nextModel === "string" ||
+    Object.hasOwn(params, "nextAuthProfileId") ||
+    Object.hasOwn(params, "nextAuthProfileIdSource");
+  if (!shouldRewriteSession && !shouldRewriteSelection) {
+    return;
+  }
   const rewrite = (run?: FollowupRun["run"]) => {
-    if (!run || run.sessionId !== params.previousSessionId) {
+    if (!run) {
       return;
     }
-    run.sessionId = params.nextSessionId!;
-    if (params.nextSessionFile?.trim()) {
-      run.sessionFile = params.nextSessionFile;
+    if (shouldRewriteSession && run.sessionId === params.previousSessionId) {
+      run.sessionId = params.nextSessionId!;
+      if (params.nextSessionFile?.trim()) {
+        run.sessionFile = params.nextSessionFile;
+      }
+    }
+    if (shouldRewriteSelection) {
+      if (typeof params.nextProvider === "string") {
+        run.provider = params.nextProvider;
+      }
+      if (typeof params.nextModel === "string") {
+        run.model = params.nextModel;
+      }
+      if (Object.hasOwn(params, "nextAuthProfileId")) {
+        run.authProfileId = params.nextAuthProfileId?.trim() || undefined;
+      }
+      if (Object.hasOwn(params, "nextAuthProfileIdSource")) {
+        run.authProfileIdSource = run.authProfileId ? params.nextAuthProfileIdSource : undefined;
+      }
     }
   };
   rewrite(queue.lastRun);
@@ -200,6 +229,7 @@ async function loadFreshFollowupRunnerModuleForTest() {
     acquireSessionWriteLock: vi.fn(async () => ({
       release: async () => {},
     })),
+    resolveSessionLockMaxHoldFromTimeout: vi.fn(() => 1),
   }));
   vi.doMock("../../agents/pi-embedded.js", () => ({
     abortEmbeddedPiRun: vi.fn(async () => false),
@@ -341,7 +371,7 @@ describe("createFollowupRunner compaction", () => {
       sessionStore,
       sessionKey: "main",
       storePath,
-      defaultModel: "anthropic/claude-opus-4-5",
+      defaultModel: "anthropic/claude-opus-4-6",
     });
 
     const queued = createQueuedRun({
@@ -392,7 +422,7 @@ describe("createFollowupRunner compaction", () => {
       sessionStore,
       sessionKey: "main",
       storePath,
-      defaultModel: "anthropic/claude-opus-4-5",
+      defaultModel: "anthropic/claude-opus-4-6",
     });
 
     const queued = createQueuedRun({
@@ -446,7 +476,7 @@ describe("createFollowupRunner compaction", () => {
       sessionStore,
       sessionKey: "main",
       storePath,
-      defaultModel: "anthropic/claude-opus-4-5",
+      defaultModel: "anthropic/claude-opus-4-6",
     });
 
     const queuedNext = createQueuedRun({
@@ -497,7 +527,7 @@ describe("createFollowupRunner compaction", () => {
       sessionStore,
       sessionKey: "main",
       storePath,
-      defaultModel: "anthropic/claude-opus-4-5",
+      defaultModel: "anthropic/claude-opus-4-6",
     });
 
     const queued = createQueuedRun({
@@ -600,7 +630,7 @@ describe("createFollowupRunner compaction", () => {
       sessionStore,
       sessionKey: "main",
       storePath,
-      defaultModel: "anthropic/claude-opus-4-5",
+      defaultModel: "anthropic/claude-opus-4-6",
       agentCfgContextTokens: 100_000,
     });
 
@@ -670,7 +700,7 @@ describe("createFollowupRunner bootstrap warning dedupe", () => {
       sessionEntry,
       sessionStore,
       sessionKey: "main",
-      defaultModel: "anthropic/claude-opus-4-5",
+      defaultModel: "anthropic/claude-opus-4-6",
     });
 
     await runner(baseQueuedRun());
@@ -702,7 +732,7 @@ describe("createFollowupRunner messaging tool dedupe", () => {
       opts: { onBlockReply },
       typing: createMockTypingController(),
       typingMode: "instant",
-      defaultModel: "anthropic/claude-opus-4-5",
+      defaultModel: "anthropic/claude-opus-4-6",
       sessionEntry: overrides.sessionEntry,
       sessionStore: overrides.sessionStore,
       sessionKey: overrides.sessionKey,
@@ -852,7 +882,7 @@ describe("createFollowupRunner messaging tool dedupe", () => {
           agentMeta: {
             usage: { input: 1_000, output: 50 },
             lastCallUsage: { input: 400, output: 20 },
-            model: "claude-opus-4-5",
+            model: "claude-opus-4-6",
             provider: "anthropic",
           },
         },
@@ -870,7 +900,7 @@ describe("createFollowupRunner messaging tool dedupe", () => {
     const store = loadSessionStore(storePath, { skipCache: true });
     // totalTokens should reflect the last call usage snapshot, not the accumulated input.
     expect(store[sessionKey]?.totalTokens).toBe(400);
-    expect(store[sessionKey]?.model).toBe("claude-opus-4-5");
+    expect(store[sessionKey]?.model).toBe("claude-opus-4-6");
     // Accumulated usage is still stored for usage/cost tracking.
     expect(store[sessionKey]?.inputTokens).toBe(1_000);
     expect(store[sessionKey]?.outputTokens).toBe(50);
@@ -898,7 +928,7 @@ describe("createFollowupRunner messaging tool dedupe", () => {
         agentMeta: {
           usage: { input: 10, output: 5 },
           lastCallUsage: { input: 6, output: 3 },
-          model: "claude-opus-4-5",
+          model: "claude-opus-4-6",
         },
       },
     });
@@ -907,7 +937,7 @@ describe("createFollowupRunner messaging tool dedupe", () => {
       opts: { onBlockReply: createAsyncReplySpy() },
       typing: createMockTypingController(),
       typingMode: "instant",
-      defaultModel: "anthropic/claude-opus-4-5",
+      defaultModel: "anthropic/claude-opus-4-6",
       sessionEntry,
       sessionStore,
       sessionKey,
@@ -1007,7 +1037,7 @@ describe("createFollowupRunner typing cleanup", () => {
       opts: { onBlockReply: createAsyncReplySpy() },
       typing,
       typingMode: "instant",
-      defaultModel: "anthropic/claude-opus-4-5",
+      defaultModel: "anthropic/claude-opus-4-6",
     });
 
     await runner(baseQueuedRun());
@@ -1037,7 +1067,7 @@ describe("createFollowupRunner typing cleanup", () => {
       opts: { onBlockReply: vi.fn(async () => {}) },
       typing,
       typingMode: "instant",
-      defaultModel: "anthropic/claude-opus-4-5",
+      defaultModel: "anthropic/claude-opus-4-6",
     });
 
     await runner(baseQueuedRun());
@@ -1057,7 +1087,7 @@ describe("createFollowupRunner typing cleanup", () => {
       opts: { onBlockReply },
       typing,
       typingMode: "instant",
-      defaultModel: "anthropic/claude-opus-4-5",
+      defaultModel: "anthropic/claude-opus-4-6",
     });
 
     await runner(baseQueuedRun());
@@ -1080,7 +1110,7 @@ describe("createFollowupRunner agentDir forwarding", () => {
       opts: { onBlockReply },
       typing: createMockTypingController(),
       typingMode: "instant",
-      defaultModel: "anthropic/claude-opus-4-5",
+      defaultModel: "anthropic/claude-opus-4-6",
     });
     const agentDir = path.join("/tmp", "agent-dir");
     const queued = createQueuedRun();

@@ -1,13 +1,10 @@
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { isAbortError } from "../infra/unhandled-rejections.js";
 import { fetchRemoteMedia, MediaFetchError } from "../media/fetch.js";
-import {
-  DEFAULT_IMESSAGE_ATTACHMENT_ROOTS,
-  isInboundPathAllowed,
-  mergeInboundPathRoots,
-} from "../media/inbound-path-policy.js";
+import { isInboundPathAllowed, mergeInboundPathRoots } from "../media/inbound-path-policy.js";
 import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
 import { detectMime } from "../media/mime.js";
 import { buildRandomTempFilePath } from "../plugin-sdk/temp-path.js";
@@ -28,6 +25,11 @@ type MediaPathResult = {
   cleanup?: () => Promise<void> | void;
 };
 
+type LocalReadResult = {
+  buffer: Buffer;
+  filePath: string;
+};
+
 type AttachmentCacheEntry = {
   attachment: MediaAttachment;
   resolvedPath?: string;
@@ -42,10 +44,7 @@ type AttachmentCacheEntry = {
 let defaultLocalPathRoots: readonly string[] | undefined;
 
 function getDefaultLocalPathRoots(): readonly string[] {
-  defaultLocalPathRoots ??= mergeInboundPathRoots(
-    getDefaultMediaLocalRoots(),
-    DEFAULT_IMESSAGE_ATTACHMENT_ROOTS,
-  );
+  defaultLocalPathRoots ??= mergeInboundPathRoots(getDefaultMediaLocalRoots());
   return defaultLocalPathRoots;
 }
 
@@ -110,17 +109,21 @@ export class MediaAttachmentCache {
             `Attachment ${params.attachmentIndex + 1} exceeds maxBytes ${params.maxBytes}`,
           );
         }
-        const buffer = await fs.readFile(entry.resolvedPath);
+        const { buffer, filePath } = await this.readLocalBuffer({
+          attachmentIndex: params.attachmentIndex,
+          filePath: entry.resolvedPath,
+          maxBytes: params.maxBytes,
+        });
+        entry.resolvedPath = filePath;
         entry.buffer = buffer;
         entry.bufferMime =
           entry.bufferMime ??
           entry.attachment.mime ??
           (await detectMime({
             buffer,
-            filePath: entry.resolvedPath,
+            filePath,
           }));
-        entry.bufferFileName =
-          path.basename(entry.resolvedPath) || `media-${params.attachmentIndex + 1}`;
+        entry.bufferFileName = path.basename(filePath) || `media-${params.attachmentIndex + 1}`;
         return {
           buffer,
           mime: entry.bufferMime,
@@ -227,10 +230,10 @@ export class MediaAttachmentCache {
   }
 
   async cleanup(): Promise<void> {
-    const cleanups: Array<Promise<void> | void> = [];
+    const cleanups: Promise<void>[] = [];
     for (const entry of this.entries.values()) {
       if (entry.tempCleanup) {
-        cleanups.push(Promise.resolve(entry.tempCleanup()));
+        cleanups.push(entry.tempCleanup());
         entry.tempCleanup = undefined;
       }
     }
@@ -327,5 +330,42 @@ export class MediaAttachmentCache {
         ),
       ))();
     return await this.canonicalLocalPathRoots;
+  }
+
+  private async readLocalBuffer(params: {
+    attachmentIndex: number;
+    filePath: string;
+    maxBytes: number;
+  }): Promise<LocalReadResult> {
+    const flags =
+      fsConstants.O_RDONLY | (process.platform === "win32" ? 0 : fsConstants.O_NOFOLLOW);
+    const handle = await fs.open(params.filePath, flags);
+    try {
+      const stat = await handle.stat();
+      if (!stat.isFile()) {
+        throw new MediaUnderstandingSkipError(
+          "empty",
+          `Attachment ${params.attachmentIndex + 1} has no path or URL.`,
+        );
+      }
+      const canonicalPath = await fs.realpath(params.filePath).catch(() => params.filePath);
+      const canonicalRoots = await this.getCanonicalLocalPathRoots();
+      if (!isInboundPathAllowed({ filePath: canonicalPath, roots: canonicalRoots })) {
+        throw new MediaUnderstandingSkipError(
+          "empty",
+          `Attachment ${params.attachmentIndex + 1} has no path or URL.`,
+        );
+      }
+      const buffer = await handle.readFile();
+      if (buffer.length > params.maxBytes) {
+        throw new MediaUnderstandingSkipError(
+          "maxBytes",
+          `Attachment ${params.attachmentIndex + 1} exceeds maxBytes ${params.maxBytes}`,
+        );
+      }
+      return { buffer, filePath: canonicalPath };
+    } finally {
+      await handle.close().catch(() => {});
+    }
   }
 }

@@ -111,7 +111,7 @@ describe("legacy config detection", () => {
   it("does not rewrite removed agent config migrations", async () => {
     const res = migrateLegacyConfig({
       agent: {
-        model: "openai/gpt-5.2",
+        model: "openai/gpt-5.4",
         tools: { allow: ["sessions.list"], deny: ["danger"] },
         elevated: { enabled: true, allowFrom: { discord: ["user:1"] } },
         bash: { timeoutSec: 12 },
@@ -240,6 +240,17 @@ describe("legacy config detection", () => {
     if (!res.ok) {
       expect(res.issues[0]?.path).toBe("");
       expect(res.issues[0]?.message).toContain('"telegram"');
+    }
+  });
+  it("rejects channels.telegram.groupMentionsOnly", async () => {
+    const res = validateConfigObject({
+      channels: { telegram: { groupMentionsOnly: true } },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues.some((issue) => issue.path === "channels.telegram.groupMentionsOnly")).toBe(
+        true,
+      );
     }
   });
   it("rejects gateway.token", async () => {
@@ -373,10 +384,6 @@ describe("legacy config detection", () => {
         const channel = getChannelConfig(res.config, provider);
         expect(channel?.dmPolicy, provider).toBe("pairing");
         expect(channel?.groupPolicy, provider).toBe("allowlist");
-        if (provider === "telegram") {
-          expect(channel?.streaming, provider).toBe("partial");
-          expect(channel?.streamMode, provider).toBeUndefined();
-        }
       }
     },
   );
@@ -386,7 +393,9 @@ describe("legacy config detection", () => {
       input: { channels: { telegram: { streamMode: "off" } } },
       assert: (config: NonNullable<OpenClawConfig>) => {
         expect(config.channels?.telegram?.streaming).toBe("off");
-        expect(config.channels?.telegram?.streamMode).toBeUndefined();
+        expect(
+          (config.channels?.telegram as Record<string, unknown> | undefined)?.streamMode,
+        ).toBeUndefined();
       },
     },
     {
@@ -394,7 +403,9 @@ describe("legacy config detection", () => {
       input: { channels: { telegram: { streamMode: "block" } } },
       assert: (config: NonNullable<OpenClawConfig>) => {
         expect(config.channels?.telegram?.streaming).toBe("block");
-        expect(config.channels?.telegram?.streamMode).toBeUndefined();
+        expect(
+          (config.channels?.telegram as Record<string, unknown> | undefined)?.streamMode,
+        ).toBeUndefined();
       },
     },
     {
@@ -412,16 +423,22 @@ describe("legacy config detection", () => {
       },
       assert: (config: NonNullable<OpenClawConfig>) => {
         expect(config.channels?.telegram?.accounts?.ops?.streaming).toBe("off");
-        expect(config.channels?.telegram?.accounts?.ops?.streamMode).toBeUndefined();
+        expect(
+          (config.channels?.telegram?.accounts?.ops as Record<string, unknown> | undefined)
+            ?.streamMode,
+        ).toBeUndefined();
       },
     },
-  ] as const)("normalizes telegram legacy streamMode alias: $name", ({ input, assert, name }) => {
-    const res = validateConfigObject(input);
-    expect(res.ok, name).toBe(true);
-    if (res.ok) {
-      assert(res.config);
-    }
-  });
+  ] as const)(
+    "normalizes telegram legacy streamMode alias during migration: $name",
+    ({ input, assert, name }) => {
+      const res = migrateLegacyConfig(input);
+      expect(res.config, name).not.toBeNull();
+      if (res.config) {
+        assert(res.config);
+      }
+    },
+  );
 
   it.each([
     {
@@ -447,7 +464,10 @@ describe("legacy config detection", () => {
         expect(res.changes, name).toContain(expectedChange);
       }
       expect(res.config?.channels?.discord?.streaming, name).toBe(expectedStreaming);
-      expect(res.config?.channels?.discord?.streamMode, name).toBeUndefined();
+      expect(
+        (res.config?.channels?.discord as Record<string, unknown> | undefined)?.streamMode,
+        name,
+      ).toBeUndefined();
     },
   );
 
@@ -468,13 +488,15 @@ describe("legacy config detection", () => {
       expectedStreaming: "block",
     },
   ] as const)(
-    "normalizes discord streaming fields during validation: $name",
-    ({ input, expectedStreaming, name }) => {
+    "rejects legacy discord streaming fields during validation: $name",
+    ({ input, name }) => {
       const res = validateConfigObject(input);
-      expect(res.ok, name).toBe(true);
-      if (res.ok) {
-        expect(res.config.channels?.discord?.streaming, name).toBe(expectedStreaming);
-        expect(res.config.channels?.discord?.streamMode, name).toBeUndefined();
+      expect(res.ok, name).toBe(false);
+      if (!res.ok) {
+        expect(res.issues[0]?.path, name).toBe("channels.discord");
+        expect(res.issues[0]?.message, name).toContain(
+          "channels.discord.streamMode and boolean channels.discord.streaming are legacy",
+        );
       }
     },
   );
@@ -494,7 +516,10 @@ describe("legacy config detection", () => {
       },
       assert: (config: NonNullable<OpenClawConfig>) => {
         expect(config.channels?.discord?.accounts?.work?.streaming).toBe("partial");
-        expect(config.channels?.discord?.accounts?.work?.streamMode).toBeUndefined();
+        expect(
+          (config.channels?.discord?.accounts?.work as Record<string, unknown> | undefined)
+            ?.streamMode,
+        ).toBeUndefined();
       },
     },
     {
@@ -508,7 +533,9 @@ describe("legacy config detection", () => {
       },
       assert: (config: NonNullable<OpenClawConfig>) => {
         expect(config.channels?.slack?.streaming).toBe("progress");
-        expect(config.channels?.slack?.streamMode).toBeUndefined();
+        expect(
+          (config.channels?.slack as Record<string, unknown> | undefined)?.streamMode,
+        ).toBeUndefined();
         expect(config.channels?.slack?.nativeStreaming).toBe(true);
       },
     },
@@ -527,11 +554,11 @@ describe("legacy config detection", () => {
       },
     },
   ] as const)(
-    "normalizes account-level discord/slack streaming alias: $name",
+    "normalizes account-level discord/slack streaming alias during migration: $name",
     ({ input, assert, name }) => {
-      const res = validateConfigObject(input);
-      expect(res.ok, name).toBe(true);
-      if (res.ok) {
+      const res = migrateLegacyConfig(input);
+      expect(res.config, name).not.toBeNull();
+      if (res.config) {
         assert(res.config);
       }
     },
