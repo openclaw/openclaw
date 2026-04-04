@@ -3,6 +3,8 @@ import {
   type ProviderAuthContext,
   type ProviderAuthMethod,
   type ProviderAuthMethodNonInteractiveContext,
+  type ProviderReplayPolicy,
+  type ProviderReplayPolicyContext,
   type ProviderResolveDynamicModelContext,
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
@@ -16,7 +18,10 @@ import {
   upsertAuthProfile,
   validateApiKeyInput,
 } from "openclaw/plugin-sdk/provider-auth-api-key";
-import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  buildOpenAICompatibleReplayPolicy,
+  normalizeModelCompat,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import { createZaiToolStreamWrapper } from "openclaw/plugin-sdk/provider-stream";
 import { fetchZaiUsage, resolveLegacyPiAgentAccessToken } from "openclaw/plugin-sdk/provider-usage";
 import { detectZaiEndpoint, type ZaiEndpointId } from "./detect.js";
@@ -28,12 +33,24 @@ const PROVIDER_ID = "zai";
 const GLM5_TEMPLATE_MODEL_ID = "glm-4.7";
 const PROFILE_ID = "zai:default";
 
+function buildZaiReplayPolicy(ctx: ProviderReplayPolicyContext): ProviderReplayPolicy | undefined {
+  return buildOpenAICompatibleReplayPolicy(ctx.modelApi);
+}
+
 function resolveGlm5ForwardCompatModel(
   ctx: ProviderResolveDynamicModelContext,
 ): ProviderRuntimeModel | undefined {
   const trimmedModelId = ctx.modelId.trim();
   if (!trimmedModelId.toLowerCase().startsWith("glm-5")) {
     return undefined;
+  }
+
+  const existing = ctx.modelRegistry.find(
+    PROVIDER_ID,
+    trimmedModelId,
+  ) as ProviderRuntimeModel | null;
+  if (existing) {
+    return existing;
   }
 
   const def = buildZaiModelDefinition({ id: trimmedModelId });
@@ -264,6 +281,7 @@ export default definePluginEntry({
         }),
       ],
       resolveDynamicModel: (ctx) => resolveGlm5ForwardCompatModel(ctx),
+      buildReplayPolicy: (ctx) => buildZaiReplayPolicy(ctx),
       prepareExtraParams: (ctx) => {
         if (ctx.extraParams?.tool_stream !== undefined) {
           return ctx.extraParams;

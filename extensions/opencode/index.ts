@@ -1,6 +1,9 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
-import { matchesExactOrPrefix } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  buildPassthroughGeminiSanitizingReplayPolicy,
+  matchesExactOrPrefix,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import { applyOpencodeZenConfig, OPENCODE_ZEN_DEFAULT_MODEL } from "./api.js";
 
 const PROVIDER_ID = "opencode";
@@ -12,23 +15,6 @@ function isModernOpencodeModel(modelId: string): boolean {
     return false;
   }
   return !matchesExactOrPrefix(lower, MINIMAX_MODERN_MODEL_MATCHERS);
-}
-
-function buildOpencodeReplayPolicy(modelId?: string) {
-  const normalizedModelId = modelId?.toLowerCase() ?? "";
-  return {
-    applyAssistantFirstOrderingFix: false,
-    validateGeminiTurns: false,
-    validateAnthropicTurns: false,
-    ...(normalizedModelId.includes("gemini")
-      ? {
-          sanitizeThoughtSignatures: {
-            allowBase64Only: true,
-            includeCamelCase: true,
-          },
-        }
-      : {}),
-  };
 }
 
 export default definePluginEntry({
@@ -71,7 +57,7 @@ export default definePluginEntry({
           },
         }),
       ],
-      buildReplayPolicy: ({ modelId }) => buildOpencodeReplayPolicy(modelId),
+      buildReplayPolicy: ({ modelId }) => buildPassthroughGeminiSanitizingReplayPolicy(modelId),
       isModernModelRef: ({ modelId }) => isModernOpencodeModel(modelId),
     });
   },

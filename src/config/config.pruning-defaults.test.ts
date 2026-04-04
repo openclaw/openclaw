@@ -74,14 +74,14 @@ describe("config pruning defaults", () => {
       },
       agents: {
         defaults: {
-          model: { primary: "anthropic/claude-opus-4-5" },
+          model: { primary: "anthropic/claude-opus-4-6" },
         },
       },
     });
 
     expectAnthropicPruningDefaults(cfg);
     expect(
-      cfg.agents?.defaults?.models?.["anthropic/claude-opus-4-5"]?.params?.cacheRetention,
+      cfg.agents?.defaults?.models?.["anthropic/claude-opus-4-6"]?.params?.cacheRetention,
     ).toBe("short");
   });
 

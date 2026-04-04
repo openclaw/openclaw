@@ -1,25 +1,9 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
+import { buildPassthroughGeminiSanitizingReplayPolicy } from "openclaw/plugin-sdk/provider-model-shared";
 import { applyOpencodeGoConfig, OPENCODE_GO_DEFAULT_MODEL_REF } from "./api.js";
 
 const PROVIDER_ID = "opencode-go";
-
-function buildOpencodeGoReplayPolicy(modelId?: string) {
-  const normalizedModelId = modelId?.toLowerCase() ?? "";
-  return {
-    applyAssistantFirstOrderingFix: false,
-    validateGeminiTurns: false,
-    validateAnthropicTurns: false,
-    ...(normalizedModelId.includes("gemini")
-      ? {
-          sanitizeThoughtSignatures: {
-            allowBase64Only: true,
-            includeCamelCase: true,
-          },
-        }
-      : {}),
-  };
-}
 
 export default definePluginEntry({
   id: PROVIDER_ID,
@@ -60,7 +44,7 @@ export default definePluginEntry({
           },
         }),
       ],
-      buildReplayPolicy: ({ modelId }) => buildOpencodeGoReplayPolicy(modelId),
+      buildReplayPolicy: ({ modelId }) => buildPassthroughGeminiSanitizingReplayPolicy(modelId),
       isModernModelRef: () => true,
     });
   },

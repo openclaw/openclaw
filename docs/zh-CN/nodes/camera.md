@@ -6,7 +6,7 @@ summary: 用于智能体的相机捕获（iOS 节点 + macOS 应用）：照片�
 title: 相机捕获
 x-i18n:
   generated_at: "2026-02-03T07:50:55Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: b4d5f5ecbab6f70597cf1e1f9cc5f7f54681253bd747442db16cc681203b5813
   source_path: nodes/camera.md

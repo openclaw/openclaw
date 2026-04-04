@@ -15,6 +15,7 @@ type PreparedCliBundleMcpConfig = {
   backend: CliBackendConfig;
   cleanup?: () => Promise<void>;
   mcpConfigHash?: string;
+  env?: Record<string, string>;
 };
 
 async function readExternalMcpConfig(configPath: string): Promise<BundleMcpConfig> {
@@ -69,10 +70,12 @@ export async function prepareCliBundleMcpConfig(params: {
   backend: CliBackendConfig;
   workspaceDir: string;
   config?: OpenClawConfig;
+  additionalConfig?: BundleMcpConfig;
+  env?: Record<string, string>;
   warn?: (message: string) => void;
 }): Promise<PreparedCliBundleMcpConfig> {
   if (!params.enabled) {
-    return { backend: params.backend };
+    return { backend: params.backend, env: params.env };
   }
 
   const existingMcpConfigPath =
@@ -97,6 +100,9 @@ export async function prepareCliBundleMcpConfig(params: {
     params.warn?.(`bundle MCP skipped for ${diagnostic.pluginId}: ${diagnostic.message}`);
   }
   mergedConfig = applyMergePatch(mergedConfig, bundleConfig.config) as BundleMcpConfig;
+  if (params.additionalConfig) {
+    mergedConfig = applyMergePatch(mergedConfig, params.additionalConfig) as BundleMcpConfig;
+  }
 
   // Always pass an explicit strict MCP config for background claude-cli runs.
   // Otherwise Claude may inherit ambient user/global MCP servers (for example
@@ -116,6 +122,7 @@ export async function prepareCliBundleMcpConfig(params: {
       ),
     },
     mcpConfigHash: crypto.createHash("sha256").update(serializedConfig).digest("hex"),
+    env: params.env,
     cleanup: async () => {
       await fs.rm(tempDir, { recursive: true, force: true });
     },

@@ -26,7 +26,7 @@ import {
 } from "./config-state.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
 import { initializeGlobalHookRunner } from "./hook-runner-global.js";
-import { clearPluginInteractiveHandlers } from "./interactive.js";
+import { clearPluginInteractiveHandlers } from "./interactive-registry.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import {
   clearMemoryEmbeddingProviders,
@@ -102,6 +102,13 @@ export type PluginLoadOptions = {
   loadModules?: boolean;
   throwOnLoadError?: boolean;
 };
+
+const CLI_METADATA_ENTRY_BASENAMES = [
+  "cli-metadata.ts",
+  "cli-metadata.js",
+  "cli-metadata.mjs",
+  "cli-metadata.cjs",
+] as const;
 
 export class PluginLoadFailureError extends Error {
   readonly pluginIds: string[];
@@ -583,6 +590,8 @@ function createPluginRecord(params: {
     cliBackendIds: [],
     providerIds: [],
     speechProviderIds: [],
+    realtimeTranscriptionProviderIds: [],
+    realtimeVoiceProviderIds: [],
     mediaUnderstandingProviderIds: [],
     imageGenerationProviderIds: [],
     webFetchProviderIds: [],
@@ -1810,8 +1819,17 @@ export async function loadOpenClawPluginCliRegistry(
     }
 
     const pluginRoot = safeRealpathOrResolve(candidate.rootDir);
+    const cliMetadataSource = resolveCliMetadataEntrySource(candidate.rootDir);
+    const sourceForCliMetadata =
+      candidate.origin === "bundled" ? cliMetadataSource : (cliMetadataSource ?? candidate.source);
+    if (!sourceForCliMetadata) {
+      record.status = "loaded";
+      registry.plugins.push(record);
+      seenIds.set(pluginId, candidate.origin);
+      continue;
+    }
     const opened = openBoundaryFileSync({
-      absolutePath: candidate.source,
+      absolutePath: sourceForCliMetadata,
       rootPath: pluginRoot,
       boundaryLabel: "plugin root",
       rejectHardlinks: candidate.origin !== "bundled",
@@ -1942,4 +1960,14 @@ function safeRealpathOrResolve(value: string): string {
   } catch {
     return path.resolve(value);
   }
+}
+
+function resolveCliMetadataEntrySource(rootDir: string): string | null {
+  for (const basename of CLI_METADATA_ENTRY_BASENAMES) {
+    const candidate = path.join(rootDir, basename);
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
 }

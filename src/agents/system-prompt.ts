@@ -1,13 +1,20 @@
 import { createHmac, createHash } from "node:crypto";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { resolveChannelApprovalCapability } from "../channels/plugins/approvals.js";
+import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import { buildMemoryPromptSection } from "../plugins/memory-state.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import type { ResolvedTimeFormat } from "./date-time.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import type { EmbeddedSandboxInfo } from "./pi-embedded-runner/types.js";
+import {
+  normalizePromptCapabilityIds,
+  normalizeStructuredPromptSection,
+} from "./prompt-cache-stability.js";
 import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 
 /**
  * Controls which hardcoded sections are included in the system prompt.
@@ -175,13 +182,13 @@ function buildDocsSection(params: { docsPath?: string; isMinimal: boolean; readT
 
 function buildExecApprovalPromptGuidance(params: { runtimeChannel?: string }) {
   const runtimeChannel = params.runtimeChannel?.trim().toLowerCase();
-  if (
-    runtimeChannel === "discord" ||
-    runtimeChannel === "slack" ||
-    runtimeChannel === "telegram" ||
-    runtimeChannel === "webchat"
-  ) {
-    return "When exec returns approval-pending on Discord, Slack, Telegram, or WebChat, rely on the native approval card/buttons when they appear and do not also send plain chat /approve instructions. Only include the concrete /approve command if the tool result says chat approvals are unavailable or only manual approval is possible.";
+  const usesNativeApprovalUi =
+    runtimeChannel === "webchat" ||
+    (runtimeChannel
+      ? Boolean(resolveChannelApprovalCapability(getChannelPlugin(runtimeChannel))?.native)
+      : false);
+  if (usesNativeApprovalUi) {
+    return "When exec returns approval-pending on this channel, rely on native approval card/buttons when they appear and do not also send plain chat /approve instructions. Only include the concrete /approve command if the tool result says chat approvals are unavailable or only manual approval is possible.";
   }
   return "When exec returns approval-pending, include the concrete /approve command from tool output as plain chat text for the user, and do not ask for a different or rotated code.";
 }
@@ -344,7 +351,10 @@ export function buildAgentSystemPrompt(params: {
   const readToolName = resolveToolName("read");
   const execToolName = resolveToolName("exec");
   const processToolName = resolveToolName("process");
-  const extraSystemPrompt = params.extraSystemPrompt?.trim();
+  const extraSystemPrompt =
+    typeof params.extraSystemPrompt === "string"
+      ? normalizeStructuredPromptSection(params.extraSystemPrompt)
+      : undefined;
   const ownerDisplay = params.ownerDisplay === "hash" ? "hash" : "raw";
   const ownerLine = buildOwnerIdentityLine(
     params.ownerNumbers ?? [],
@@ -365,14 +375,22 @@ export function buildAgentSystemPrompt(params: {
     : undefined;
   const reasoningLevel = params.reasoningLevel ?? "off";
   const userTimezone = params.userTimezone?.trim();
-  const skillsPrompt = params.skillsPrompt?.trim();
-  const heartbeatPrompt = params.heartbeatPrompt?.trim();
+  const skillsPrompt =
+    typeof params.skillsPrompt === "string"
+      ? normalizeStructuredPromptSection(params.skillsPrompt)
+      : undefined;
+  const heartbeatPrompt =
+    typeof params.heartbeatPrompt === "string"
+      ? normalizeStructuredPromptSection(params.heartbeatPrompt)
+      : undefined;
   const runtimeInfo = params.runtimeInfo;
   const runtimeChannel = runtimeInfo?.channel?.trim().toLowerCase();
-  const runtimeCapabilities = (runtimeInfo?.capabilities ?? [])
-    .map((cap) => String(cap).trim())
-    .filter(Boolean);
-  const runtimeCapabilitiesLower = new Set(runtimeCapabilities.map((cap) => cap.toLowerCase()));
+  const runtimeCapabilities = runtimeInfo?.capabilities ?? [];
+  const runtimeCapabilitiesLower = new Set(
+    runtimeCapabilities
+      .map((cap) => String(cap).trim().toLowerCase())
+      .filter(Boolean),
+  );
   const inlineButtonsEnabled = runtimeCapabilitiesLower.has("inlinebuttons");
   const messageChannelOptions = listDeliverableMessageChannels().join("|");
   const promptMode = params.promptMode ?? "full";
@@ -411,7 +429,12 @@ export function buildAgentSystemPrompt(params: {
     isMinimal,
     readToolName,
   });
-  const workspaceNotes = (params.workspaceNotes ?? []).map((note) => note.trim()).filter(Boolean);
+  const workspaceNotes = (params.workspaceNotes ?? [])
+    .map((note) => normalizeStructuredPromptSection(note))
+    .filter(Boolean);
+  const modelAliasLines = (params.modelAliasLines ?? [])
+    .map((line) => normalizeStructuredPromptSection(line))
+    .filter(Boolean);
 
   // For "none" mode, return just the basic identity line
   if (promptMode === "none") {
@@ -496,16 +519,16 @@ export function buildAgentSystemPrompt(params: {
     hasGateway && !isMinimal ? "" : "",
     "",
     // Skip model aliases for subagent/none modes
-    params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
+    modelAliasLines.length > 0 && !isMinimal
       ? "## Model Aliases"
       : "",
-    params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
+    modelAliasLines.length > 0 && !isMinimal
       ? "Prefer aliases when specifying model overrides; full provider/model is also accepted."
       : "",
-    params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
-      ? params.modelAliasLines.join("\n")
+    modelAliasLines.length > 0 && !isMinimal
+      ? modelAliasLines.join("\n")
       : "",
-    params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal ? "" : "",
+    modelAliasLines.length > 0 && !isMinimal ? "" : "",
     userTimezone
       ? "If you need the current date, time, or day of week, run session_status (📊 session_status)."
       : "",
@@ -582,12 +605,6 @@ export function buildAgentSystemPrompt(params: {
     ...buildVoiceSection({ isMinimal, ttsHint: params.ttsHint }),
   ];
 
-  if (extraSystemPrompt) {
-    // Use "Subagent Context" header for minimal mode (subagents), otherwise "Group Chat Context"
-    const contextHeader =
-      promptMode === "minimal" ? "## Subagent Context" : "## Group Chat Context";
-    lines.push(contextHeader, extraSystemPrompt, "");
-  }
   if (params.reactionGuidance) {
     const { level, channel } = params.reactionGuidance;
     const guidanceText =
@@ -658,6 +675,18 @@ export function buildAgentSystemPrompt(params: {
     );
   }
 
+  // Keep large stable prompt context above this seam so Anthropic-family
+  // transports can reuse it across labs and turns. Dynamic group/session
+  // additions below it are the primary cache invalidators.
+  lines.push(SYSTEM_PROMPT_CACHE_BOUNDARY);
+
+  if (extraSystemPrompt) {
+    // Use "Subagent Context" header for minimal mode (subagents), otherwise "Group Chat Context"
+    const contextHeader =
+      promptMode === "minimal" ? "## Subagent Context" : "## Group Chat Context";
+    lines.push(contextHeader, extraSystemPrompt, "");
+  }
+
   // Skip heartbeats for subagent/none modes
   if (!isMinimal && heartbeatPrompt) {
     lines.push(
@@ -696,6 +725,7 @@ export function buildRuntimeLine(
   runtimeCapabilities: string[] = [],
   defaultThinkLevel?: ThinkLevel,
 ): string {
+  const normalizedRuntimeCapabilities = normalizePromptCapabilityIds(runtimeCapabilities);
   return `Runtime: ${[
     runtimeInfo?.agentId ? `agent=${runtimeInfo.agentId}` : "",
     runtimeInfo?.host ? `host=${runtimeInfo.host}` : "",
@@ -711,7 +741,11 @@ export function buildRuntimeLine(
     runtimeInfo?.shell ? `shell=${runtimeInfo.shell}` : "",
     runtimeChannel ? `channel=${runtimeChannel}` : "",
     runtimeChannel
-      ? `capabilities=${runtimeCapabilities.length > 0 ? runtimeCapabilities.join(",") : "none"}`
+      ? `capabilities=${
+          normalizedRuntimeCapabilities.length > 0
+            ? normalizedRuntimeCapabilities.join(",")
+            : "none"
+        }`
       : "",
     `thinking=${defaultThinkLevel ?? "off"}`,
   ]

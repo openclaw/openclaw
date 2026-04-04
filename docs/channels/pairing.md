@@ -100,7 +100,7 @@ Stored under `~/.openclaw/devices/`:
 
 ### Notes
 
-- The legacy `node.pair.*` API (CLI: `openclaw nodes pending/approve`) is a
+- The legacy `node.pair.*` API (CLI: `openclaw nodes pending|approve|reject|rename`) is a
   separate gateway-owned pairing store. WS nodes still require device pairing.
 
 ## Related docs

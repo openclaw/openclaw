@@ -120,6 +120,9 @@ let auditDeepModulePromise: Promise<typeof import("./audit.deep.runtime.js")> | 
 let auditChannelModulePromise:
   | Promise<typeof import("./audit-channel.collect.runtime.js")>
   | undefined;
+let pluginRegistryLoaderModulePromise:
+  | Promise<typeof import("../plugins/runtime/runtime-registry-loader.js")>
+  | undefined;
 let gatewayProbeDepsPromise:
   | Promise<{
       buildGatewayConnectionDetails: typeof import("../gateway/call.js").buildGatewayConnectionDetails;
@@ -146,6 +149,11 @@ async function loadAuditDeepModule() {
 async function loadAuditChannelModule() {
   auditChannelModulePromise ??= import("./audit-channel.collect.runtime.js");
   return await auditChannelModulePromise;
+}
+
+async function loadPluginRegistryLoaderModule() {
+  pluginRegistryLoaderModulePromise ??= import("../plugins/runtime/runtime-registry-loader.js");
+  return await pluginRegistryLoaderModulePromise;
 }
 
 async function loadGatewayProbeDeps() {
@@ -193,46 +201,6 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 function hasNonEmptyString(value: unknown): boolean {
   return typeof value === "string" && value.trim().length > 0;
-}
-
-function isFeishuDocToolEnabled(cfg: OpenClawConfig): boolean {
-  const channels = asRecord(cfg.channels);
-  const feishu = asRecord(channels?.feishu);
-  if (!feishu || feishu.enabled === false) {
-    return false;
-  }
-
-  const baseTools = asRecord(feishu.tools);
-  const baseDocEnabled = baseTools?.doc !== false;
-  const baseAppId = hasNonEmptyString(feishu.appId);
-  const baseAppSecret = hasConfiguredSecretInput(feishu.appSecret, cfg.secrets?.defaults);
-  const baseConfigured = baseAppId && baseAppSecret;
-
-  const accounts = asRecord(feishu.accounts);
-  if (!accounts || Object.keys(accounts).length === 0) {
-    return baseDocEnabled && baseConfigured;
-  }
-
-  for (const accountValue of Object.values(accounts)) {
-    const account = asRecord(accountValue) ?? {};
-    if (account.enabled === false) {
-      continue;
-    }
-    const accountTools = asRecord(account.tools);
-    const effectiveTools = accountTools ?? baseTools;
-    const docEnabled = effectiveTools?.doc !== false;
-    if (!docEnabled) {
-      continue;
-    }
-    const accountConfigured =
-      (hasNonEmptyString(account.appId) || baseAppId) &&
-      (hasConfiguredSecretInput(account.appSecret, cfg.secrets?.defaults) || baseAppSecret);
-    if (accountConfigured) {
-      return true;
-    }
-  }
-
-  return false;
 }
 
 async function collectFilesystemFindings(params: {
@@ -601,18 +569,6 @@ function collectGatewayConfigFindings(
       detail:
         "gateway.controlUi.dangerouslyDisableDeviceAuth=true disables device identity checks for the Control UI.",
       remediation: "Disable it unless you are in a short-lived break-glass scenario.",
-    });
-  }
-
-  if (isFeishuDocToolEnabled(cfg)) {
-    findings.push({
-      checkId: "channels.feishu.doc_owner_open_id",
-      severity: "warn",
-      title: "Feishu doc create can grant requester permissions",
-      detail:
-        'channels.feishu tools include "doc"; feishu_doc action "create" can grant document access to the trusted requesting Feishu user.',
-      remediation:
-        "Disable channels.feishu.tools.doc when not needed, and restrict tool access for untrusted prompts.",
     });
   }
 
@@ -1455,6 +1411,14 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
     context.includeChannelSecurity &&
     (context.plugins !== undefined || hasPotentialConfiguredChannels(cfg, env));
   if (shouldAuditChannelSecurity) {
+    if (context.plugins === undefined) {
+      (await loadPluginRegistryLoaderModule()).ensurePluginRegistryLoaded({
+        scope: "configured-channels",
+        config: cfg,
+        activationSourceConfig: context.sourceConfig,
+        env,
+      });
+    }
     const channelPlugins = context.plugins ?? (await loadChannelPlugins()).listChannelPlugins();
     const { collectChannelSecurityFindings } = await loadAuditChannelModule();
     findings.push(

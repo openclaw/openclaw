@@ -41,6 +41,17 @@ async function loadTargetsRuntime() {
   return await targetsRuntimePromise;
 }
 
+async function resolveOutboundTargetWithRuntime(
+  params: Parameters<typeof tryResolveLoadedOutboundTarget>[0],
+) {
+  const loaded = tryResolveLoadedOutboundTarget(params);
+  if (loaded) {
+    return loaded;
+  }
+  const { resolveOutboundTarget } = await loadTargetsRuntime();
+  return resolveOutboundTarget(params);
+}
+
 let channelSelectionRuntimePromise:
   | Promise<typeof import("../../infra/outbound/channel-selection.runtime.js")>
   | undefined;
@@ -49,12 +60,11 @@ async function loadChannelSelectionRuntime() {
   channelSelectionRuntimePromise ??= import("../../infra/outbound/channel-selection.runtime.js");
   return await channelSelectionRuntimePromise;
 }
-
 export async function resolveDeliveryTarget(
   cfg: OpenClawConfig,
   agentId: string,
   jobPayload: {
-    channel?: "last" | ChannelId;
+    channel?: ChannelId;
     to?: string;
     threadId?: string | number;
     /** Explicit accountId from job.delivery — overrides session-derived and binding-derived values. */
@@ -182,7 +192,7 @@ export async function resolveDeliveryTarget(
   const effectiveAllowFrom = mode === "implicit" ? allowFromOverride : undefined;
 
   if (toCandidate && mode === "implicit" && allowFromOverride.length > 0) {
-    let currentTargetResolution = tryResolveLoadedOutboundTarget({
+    const currentTargetResolution = await resolveOutboundTargetWithRuntime({
       channel,
       to: toCandidate,
       cfg,
@@ -190,23 +200,12 @@ export async function resolveDeliveryTarget(
       mode,
       allowFrom: effectiveAllowFrom,
     });
-    if (!currentTargetResolution) {
-      const { resolveOutboundTarget } = await loadTargetsRuntime();
-      currentTargetResolution = resolveOutboundTarget({
-        channel,
-        to: toCandidate,
-        cfg,
-        accountId,
-        mode,
-        allowFrom: effectiveAllowFrom,
-      });
-    }
     if (!currentTargetResolution.ok) {
       toCandidate = allowFromOverride[0];
     }
   }
 
-  let docked = tryResolveLoadedOutboundTarget({
+  const docked = await resolveOutboundTargetWithRuntime({
     channel,
     to: toCandidate,
     cfg,
@@ -214,17 +213,6 @@ export async function resolveDeliveryTarget(
     mode,
     allowFrom: effectiveAllowFrom,
   });
-  if (!docked) {
-    const { resolveOutboundTarget } = await loadTargetsRuntime();
-    docked = resolveOutboundTarget({
-      channel,
-      to: toCandidate,
-      cfg,
-      accountId,
-      mode,
-      allowFrom: effectiveAllowFrom,
-    });
-  }
   if (!docked.ok) {
     return {
       ok: false,

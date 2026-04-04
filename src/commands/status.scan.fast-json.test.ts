@@ -69,6 +69,11 @@ describe("scanStatusJsonFast", () => {
     const result = await scanStatusJsonFast({}, {} as never);
 
     expect(result.memory).toBeNull();
+    expect(mocks.hasPotentialConfiguredChannels).toHaveBeenCalledWith(
+      expect.any(Object),
+      process.env,
+      { includePersistedAuthState: false },
+    );
     expect(mocks.resolveMemorySearchConfig).not.toHaveBeenCalled();
     expect(mocks.getMemorySearchManager).not.toHaveBeenCalled();
   });

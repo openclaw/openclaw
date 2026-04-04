@@ -1,4 +1,6 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { createPluginSetupWizardStatus } from "../../../test/helpers/plugins/setup-wizard.js";
 import { signalPlugin } from "./channel.js";
 import * as clientModule from "./client.js";
 import { classifySignalCliLogLine } from "./daemon.js";
@@ -15,6 +17,8 @@ import {
   parseSignalAllowFromEntries,
   signalDmPolicy,
 } from "./setup-core.js";
+
+const getSignalSetupStatus = createPluginSetupWizardStatus(signalPlugin);
 
 describe("looksLikeUuid", () => {
   it("accepts hyphenated UUIDs", () => {
@@ -132,6 +136,74 @@ describe("probeSignal", () => {
     expect(res.ok).toBe(false);
     expect(res.status).toBe(503);
     expect(res.version).toBe(null);
+  });
+
+  it("setup status lines use the selected account cliPath", async () => {
+    const status = await getSignalSetupStatus({
+      cfg: {
+        channels: {
+          signal: {
+            cliPath: "/tmp/root-signal-cli",
+            accounts: {
+              work: {
+                cliPath: "/tmp/work-signal-cli",
+              },
+            },
+          },
+        },
+      } as never,
+      accountOverrides: { signal: "work" },
+    });
+
+    expect(status.statusLines).toContain("signal-cli: missing (/tmp/work-signal-cli)");
+  });
+
+  it("setup status uses configured defaultAccount for omitted cliPath lookup", async () => {
+    const status = await getSignalSetupStatus({
+      cfg: {
+        channels: {
+          signal: {
+            cliPath: "/tmp/root-signal-cli",
+            defaultAccount: "work",
+            accounts: {
+              work: {
+                cliPath: "/tmp/work-signal-cli",
+              },
+            },
+          },
+        },
+      } as never,
+      accountOverrides: {},
+    });
+
+    expect(status.statusLines).toContain("signal-cli: missing (/tmp/work-signal-cli)");
+  });
+
+  it("uses configured defaultAccount for omitted setup configured state", async () => {
+    const status = await getSignalSetupStatus({
+      cfg: {
+        channels: {
+          signal: {
+            defaultAccount: "work",
+            cliPath: "/tmp/root-signal-cli",
+            accounts: {
+              alerts: {
+                cliPath: "/tmp/alerts-signal-cli",
+              },
+              work: {
+                cliPath: "",
+                account: "",
+                httpHost: "",
+                httpUrl: "",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      accountOverrides: {},
+    });
+
+    expect(status.configured).toBe(true);
   });
 });
 
@@ -251,23 +323,51 @@ describe("signal setup parsing", () => {
     });
   });
 
-  it('writes open policy state to the named account and preserves inherited allowFrom with "*"', () => {
-    const next = signalDmPolicy.setPolicy(
-      {
-        channels: {
-          signal: {
-            allowFrom: ["+15555550123"],
-            accounts: {
-              work: {
-                account: "+15555550999",
-              },
+  it("uses configured defaultAccount for omitted DM policy account context", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        signal: {
+          defaultAccount: "work",
+          dmPolicy: "disabled",
+          allowFrom: ["+15555550123"],
+          accounts: {
+            work: {
+              account: "+15555550999",
+              dmPolicy: "allowlist",
             },
           },
         },
       },
-      "open",
-      "work",
-    );
+    };
+
+    expect(signalDmPolicy.getCurrent(cfg)).toBe("allowlist");
+    expect(signalDmPolicy.resolveConfigKeys?.(cfg)).toEqual({
+      policyKey: "channels.signal.accounts.work.dmPolicy",
+      allowFromKey: "channels.signal.accounts.work.allowFrom",
+    });
+
+    const next = signalDmPolicy.setPolicy(cfg, "open");
+    expect(next.channels?.signal?.dmPolicy).toBe("disabled");
+    expect(next.channels?.signal?.allowFrom).toEqual(["+15555550123"]);
+    expect(next.channels?.signal?.accounts?.work?.dmPolicy).toBe("open");
+    expect(next.channels?.signal?.accounts?.work?.allowFrom).toEqual(["+15555550123", "*"]);
+  });
+
+  it('writes open policy state to the named account and stores inherited allowFrom with "*"', () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        signal: {
+          allowFrom: ["+15555550123"],
+          accounts: {
+            work: {
+              account: "+15555550999",
+            },
+          },
+        },
+      },
+    };
+
+    const next = signalDmPolicy.setPolicy(cfg, "open", "work");
 
     expect(next.channels?.signal?.dmPolicy).toBeUndefined();
     expect(next.channels?.signal?.allowFrom).toEqual(["+15555550123"]);

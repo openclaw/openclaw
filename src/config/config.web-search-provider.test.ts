@@ -175,16 +175,25 @@ beforeAll(async () => {
 });
 
 describe("web search provider config", () => {
-  it("does not warn for legacy brave config when bundled web search allowlist compat applies", () => {
+  it("does not warn for brave plugin config when bundled web search allowlist compat applies", () => {
     const res = validateConfigObjectWithPlugins({
       plugins: {
         allow: ["bluebubbles", "memory-core"],
+        entries: {
+          brave: {
+            config: {
+              webSearch: {
+                apiKey: "test-brave-key", // pragma: allowlist secret
+              },
+            },
+          },
+        },
       },
       tools: {
         web: {
           search: {
             enabled: true,
-            apiKey: "test-brave-key", // pragma: allowlist secret
+            provider: "brave",
           },
         },
       },
@@ -304,7 +313,7 @@ describe("web search provider config", () => {
     expect(res.ok).toBe(false);
   });
 
-  it("rejects legacy scoped provider config for bundled providers", () => {
+  it("accepts legacy scoped provider config for bundled providers via auto-migration", () => {
     const res = validateConfigObjectWithPlugins({
       tools: {
         web: {
@@ -318,7 +327,21 @@ describe("web search provider config", () => {
       },
     });
 
-    expect(res.ok).toBe(false);
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.config.tools?.web?.search).toEqual({
+      provider: "gemini",
+    });
+    expect(res.config.plugins?.entries?.google).toEqual({
+      enabled: true,
+      config: {
+        webSearch: {
+          apiKey: "legacy-key",
+        },
+      },
+    });
   });
 
   it("accepts gemini provider with no extra config", () => {

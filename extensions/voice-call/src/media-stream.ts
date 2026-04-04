@@ -3,24 +3,27 @@
  *
  * Handles bidirectional audio streaming between Twilio and the AI services.
  * - Receives mu-law audio from Twilio via WebSocket
- * - Forwards to OpenAI Realtime STT for transcription
+ * - Forwards to the selected realtime transcription provider
  * - Sends TTS audio back to Twilio
  */
 
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
-import { type RawData, WebSocket, WebSocketServer } from "ws";
 import type {
-  OpenAIRealtimeSTTProvider,
-  RealtimeSTTSession,
-} from "./providers/stt-openai-realtime.js";
+  RealtimeTranscriptionProviderConfig,
+  RealtimeTranscriptionProviderPlugin,
+  RealtimeTranscriptionSession,
+} from "openclaw/plugin-sdk/realtime-transcription";
+import { type RawData, WebSocket, WebSocketServer } from "ws";
 
 /**
  * Configuration for the media stream handler.
  */
 export interface MediaStreamConfig {
-  /** STT provider for transcription */
-  sttProvider: OpenAIRealtimeSTTProvider;
+  /** Realtime transcription provider for streaming STT. */
+  transcriptionProvider: RealtimeTranscriptionProviderPlugin;
+  /** Provider-owned config blob passed into the transcription session. */
+  providerConfig: RealtimeTranscriptionProviderConfig;
   /** Close sockets that never send a valid `start` frame within this window. */
   preStartTimeoutMs?: number;
   /** Max concurrent pre-start sockets. */
@@ -50,7 +53,7 @@ interface StreamSession {
   callId: string;
   streamSid: string;
   ws: WebSocket;
-  sttSession: RealtimeSTTSession;
+  sttSession: RealtimeTranscriptionSession;
 }
 
 type TtsQueueEntry = {
@@ -254,20 +257,20 @@ export class MediaStreamHandler {
       return null;
     }
 
-    // Create STT session
-    const sttSession = this.config.sttProvider.createSession();
-
-    // Set up transcript callbacks
-    sttSession.onPartial((partial) => {
-      this.config.onPartialTranscript?.(callSid, partial);
-    });
-
-    sttSession.onTranscript((transcript) => {
-      this.config.onTranscript?.(callSid, transcript);
-    });
-
-    sttSession.onSpeechStart(() => {
-      this.config.onSpeechStart?.(callSid);
+    const sttSession = this.config.transcriptionProvider.createSession({
+      providerConfig: this.config.providerConfig,
+      onPartial: (partial) => {
+        this.config.onPartialTranscript?.(callSid, partial);
+      },
+      onTranscript: (transcript) => {
+        this.config.onTranscript?.(callSid, transcript);
+      },
+      onSpeechStart: () => {
+        this.config.onSpeechStart?.(callSid);
+      },
+      onError: (error) => {
+        console.warn("[MediaStream] Transcription session error:", error.message);
+      },
     });
 
     const session: StreamSession = {
@@ -282,7 +285,7 @@ export class MediaStreamHandler {
     // Notify connection BEFORE STT connect so TTS can work even if STT fails
     this.config.onConnect?.(callSid, streamSid);
 
-    // Connect to OpenAI STT (non-blocking, log errors but don't fail the call)
+    // Connect to transcription service (non-blocking, log errors but don't fail the call)
     sttSession.connect().catch((err) => {
       console.warn(`[MediaStream] STT connection failed (TTS still works):`, err.message);
     });

@@ -214,6 +214,8 @@ export interface PluginSdkFacadeTypeMap {
     };
     types: {
       BuiltinMemoryEmbeddingProviderDoctorMetadata: import("@openclaw/memory-core/runtime-api.js").BuiltinMemoryEmbeddingProviderDoctorMetadata;
+      RepairShortTermPromotionArtifactsResult: import("@openclaw/memory-core/runtime-api.js").RepairShortTermPromotionArtifactsResult;
+      ShortTermAuditSummary: import("@openclaw/memory-core/runtime-api.js").ShortTermAuditSummary;
     };
   };
   "mattermost-policy": {
@@ -553,15 +555,6 @@ export interface PluginSdkFacadeTypeMap {
     sourceModules: {
       source1: {
         module: typeof import("@openclaw/zai/api.js");
-      };
-    };
-    types: {};
-  };
-  "whatsapp-targets": {
-    module: typeof import("@openclaw/whatsapp/targets.js");
-    sourceModules: {
-      source1: {
-        module: typeof import("@openclaw/whatsapp/targets.js");
       };
     };
     types: {};

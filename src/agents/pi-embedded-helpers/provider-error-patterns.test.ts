@@ -59,6 +59,12 @@ describe("classifyProviderSpecificError", () => {
     expect(classifyProviderSpecificError("concurrency limit reached")).toBe("rate_limit");
   });
 
+  it("classifies Cloudflare Workers AI quota errors as rate_limit", () => {
+    expect(classifyProviderSpecificError("workers_ai gateway error: quota limit exceeded")).toBe(
+      "rate_limit",
+    );
+  });
+
   it("does not match generic 'model is not ready' without Bedrock prefix", () => {
     expect(classifyProviderSpecificError("model is not ready")).toBeNull();
   });

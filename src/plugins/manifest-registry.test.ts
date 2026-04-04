@@ -2,11 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginCandidate } from "./discovery.js";
+import type { OpenClawPackageManifest } from "./manifest.js";
 import {
   clearPluginManifestRegistryCache,
   loadPluginManifestRegistry,
 } from "./manifest-registry.js";
-import type { OpenClawPackageManifest } from "./manifest.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 vi.unmock("../version.js");
@@ -389,6 +389,8 @@ describe("loadPluginManifestRegistry", () => {
           method: "api-key",
           choiceId: "openai-api-key",
           choiceLabel: "OpenAI API key",
+          assistantPriority: 10,
+          assistantVisibility: "visible",
         },
       ],
       configSchema: { type: "object" },
@@ -411,6 +413,8 @@ describe("loadPluginManifestRegistry", () => {
         method: "api-key",
         choiceId: "openai-api-key",
         choiceLabel: "OpenAI API key",
+        assistantPriority: 10,
+        assistantVisibility: "visible",
       },
     ]);
   });

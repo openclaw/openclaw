@@ -154,7 +154,7 @@ describe("configureChannelAccessWithAllowlist", () => {
           ...params.cfg.channels,
           slack: {
             ...params.cfg.channels?.slack,
-            channels: Object.fromEntries(params.resolved.map((id) => [id, { allow: true }])),
+            channels: Object.fromEntries(params.resolved.map((id) => [id, { enabled: true }])),
           },
         },
       };
@@ -170,8 +170,8 @@ describe("configureChannelAccessWithAllowlist", () => {
 
     expect(calls).toEqual(["resolve", "setPolicy", "apply"]);
     expect(next.channels?.slack?.channels).toEqual({
-      C1: { allow: true },
-      C2: { allow: true },
+      C1: { enabled: true },
+      C2: { enabled: true },
     });
   });
 });

@@ -236,7 +236,7 @@ For the full setup guide, see [Oracle Cloud](/platforms/oracle). For signup tips
 ```bash
 openclaw gateway status
 openclaw doctor --non-interactive
-journalctl -u openclaw --no-pager -n 50
+journalctl --user -u openclaw-gateway.service --no-pager -n 50
 ```
 
 ### Port already in use

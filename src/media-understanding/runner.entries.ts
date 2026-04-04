@@ -24,9 +24,9 @@ import { runExec } from "../process/exec.js";
 import { MediaAttachmentCache } from "./attachments.js";
 import {
   CLI_OUTPUT_MAX_BUFFER,
-  DEFAULT_AUDIO_MODELS,
   DEFAULT_TIMEOUT_SECONDS,
   MIN_AUDIO_FILE_BYTES,
+  resolveDefaultMediaModel,
 } from "./defaults.js";
 import { MediaUnderstandingSkipError } from "./errors.js";
 import { fileExists } from "./fs.js";
@@ -548,7 +548,14 @@ export async function runProviderEntry(params: {
       config: params.config,
       entry,
     });
-    const model = entry.model?.trim() || DEFAULT_AUDIO_MODELS[providerId] || entry.model;
+    const model =
+      entry.model?.trim() ||
+      resolveDefaultMediaModel({
+        cfg,
+        providerId,
+        capability: "audio",
+      }) ||
+      entry.model;
     const result = await executeWithApiKeyRotation({
       provider: providerId,
       apiKeys,

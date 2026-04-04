@@ -1,30 +1,10 @@
 import { resolveConfiguredProviderFallback } from "../agents/configured-provider-fallback.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { resolvePersistedModelRef } from "../agents/model-selection.js";
+import { parseModelRef, resolvePersistedModelRef } from "../agents/model-selection.js";
 import { normalizeProviderId } from "../agents/provider-id.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
-
-function parseStatusModelRef(
-  raw: string,
-  defaultProvider: string,
-): { provider: string; model: string } | null {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const slash = trimmed.indexOf("/");
-  if (slash === -1) {
-    return { provider: defaultProvider, model: trimmed };
-  }
-  const provider = trimmed.slice(0, slash).trim();
-  const model = trimmed.slice(slash + 1).trim();
-  if (!provider || !model) {
-    return null;
-  }
-  return { provider, model };
-}
 
 function resolveStatusModelRefFromRaw(params: {
   cfg: OpenClawConfig;
@@ -44,14 +24,18 @@ function resolveStatusModelRefFromRaw(params: {
       if (!alias || alias.toLowerCase() !== aliasKey) {
         continue;
       }
-      const parsed = parseStatusModelRef(modelKey, params.defaultProvider);
+      const parsed = parseModelRef(modelKey, params.defaultProvider, {
+        allowPluginNormalization: false,
+      });
       if (parsed) {
         return parsed;
       }
     }
-    return { provider: "anthropic", model: trimmed };
+    return { provider: params.defaultProvider, model: trimmed };
   }
-  return parseStatusModelRef(trimmed, params.defaultProvider);
+  return parseModelRef(trimmed, params.defaultProvider, {
+    allowPluginNormalization: false,
+  });
 }
 
 function resolveConfiguredStatusModelRef(params: {
@@ -99,7 +83,7 @@ function resolveConfiguredStatusModelRef(params: {
   return { provider: params.defaultProvider, model: params.defaultModel };
 }
 
-function resolveConfiguredProviderContextWindow(
+function resolveConfiguredProviderContextTokens(
   cfg: OpenClawConfig | undefined,
   provider: string,
   model: string,
@@ -114,13 +98,19 @@ function resolveConfiguredProviderContextWindow(
       continue;
     }
     for (const entry of providerConfig.models) {
+      const contextTokens =
+        typeof entry?.contextTokens === "number"
+          ? entry.contextTokens
+          : typeof entry?.contextWindow === "number"
+            ? entry.contextWindow
+            : undefined;
       if (
         typeof entry?.id === "string" &&
         entry.id === model &&
-        typeof entry.contextWindow === "number" &&
-        entry.contextWindow > 0
+        typeof contextTokens === "number" &&
+        contextTokens > 0
       ) {
-        return entry.contextWindow;
+        return contextTokens;
       }
     }
   }
@@ -180,13 +170,13 @@ function resolveContextTokensForModel(params: {
     return params.contextTokensOverride;
   }
   if (params.provider && params.model) {
-    const configuredWindow = resolveConfiguredProviderContextWindow(
+    const configuredContextTokens = resolveConfiguredProviderContextTokens(
       params.cfg,
       params.provider,
       params.model,
     );
-    if (configuredWindow !== undefined) {
-      return configuredWindow;
+    if (configuredContextTokens !== undefined) {
+      return configuredContextTokens;
     }
   }
   return params.fallbackContextTokens ?? DEFAULT_CONTEXT_TOKENS;

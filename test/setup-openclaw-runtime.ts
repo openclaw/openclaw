@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll } from "vitest";
+import { afterAll, afterEach, beforeAll, vi } from "vitest";
 import type {
   ChannelId,
   ChannelOutboundAdapter,
@@ -6,34 +6,34 @@ import type {
 } from "../src/channels/plugins/types.js";
 import type { OpenClawConfig } from "../src/config/config.js";
 import type { OutboundSendDeps } from "../src/infra/outbound/deliver.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../src/plugins/runtime.js";
 import type { PluginRegistry } from "../src/plugins/registry.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../src/plugins/runtime.js";
 import { installSharedTestSetup } from "./setup.shared.js";
 
 const testEnv = installSharedTestSetup();
 
-const [
-  { resetContextWindowCacheForTest },
-  { resetModelsJsonReadyCacheForTest },
-  { drainSessionWriteLockStateForTest, resetSessionWriteLockStateForTest },
-  { createTopLevelChannelReplyToModeResolver },
-  { createTestRegistry },
-  { cleanupSessionStateForTest },
-] = await Promise.all([
-  import("../src/agents/context.js"),
-  import("../src/agents/models-config.js"),
-  import("../src/agents/session-write-lock.js"),
-  import("../src/channels/plugins/threading-helpers.js"),
-  import("../src/test-utils/channel-plugins.js"),
-  import("../src/test-utils/session-state-cleanup.js"),
-]);
-
 const WORKER_RUNTIME_STATE = Symbol.for("openclaw.testSetupRuntimeState");
+const WORKER_CLEANUP_DEPS = Symbol.for("openclaw.testSetupCleanupDeps");
 
 type WorkerRuntimeState = {
   defaultPluginRegistry: PluginRegistry | null;
   materializedDefaultPluginRegistry: PluginRegistry | null;
 };
+
+type WorkerCleanupDeps = {
+  clearSessionStoreCaches: typeof import("../src/config/sessions/store-cache.js").clearSessionStoreCaches;
+  drainFileLockStateForTest: typeof import("../src/infra/file-lock.js").drainFileLockStateForTest;
+  drainSessionStoreLockQueuesForTest: typeof import("../src/config/sessions/store-lock-state.js").drainSessionStoreLockQueuesForTest;
+  drainSessionWriteLockStateForTest: typeof import("../src/agents/session-write-lock.js").drainSessionWriteLockStateForTest;
+  resetContextWindowCacheForTest: typeof import("../src/agents/context-runtime-state.js").resetContextWindowCacheForTest;
+  resetFileLockStateForTest: typeof import("../src/infra/file-lock.js").resetFileLockStateForTest;
+  resetModelsJsonReadyCacheForTest: typeof import("../src/agents/models-config-state.js").resetModelsJsonReadyCacheForTest;
+  resetSessionWriteLockStateForTest: typeof import("../src/agents/session-write-lock.js").resetSessionWriteLockStateForTest;
+};
+
+type ReplyToModeResolver = NonNullable<
+  NonNullable<ChannelPlugin["threading"]>["resolveReplyToMode"]
+>;
 
 const workerRuntimeState = (() => {
   const globalState = globalThis as typeof globalThis & {
@@ -48,9 +48,98 @@ const workerRuntimeState = (() => {
   return globalState[WORKER_RUNTIME_STATE];
 })();
 
+async function loadWorkerCleanupDeps(): Promise<WorkerCleanupDeps> {
+  const [
+    { resetContextWindowCacheForTest },
+    { resetModelsJsonReadyCacheForTest },
+    { clearSessionStoreCaches },
+    { drainSessionStoreLockQueuesForTest },
+    { drainFileLockStateForTest, resetFileLockStateForTest },
+    { drainSessionWriteLockStateForTest, resetSessionWriteLockStateForTest },
+  ] = await Promise.all([
+    vi.importActual<typeof import("../src/agents/context-runtime-state.js")>(
+      "../src/agents/context-runtime-state.js",
+    ),
+    vi.importActual<typeof import("../src/agents/models-config-state.js")>(
+      "../src/agents/models-config-state.js",
+    ),
+    vi.importActual<typeof import("../src/config/sessions/store-cache.js")>(
+      "../src/config/sessions/store-cache.js",
+    ),
+    vi.importActual<typeof import("../src/config/sessions/store-lock-state.js")>(
+      "../src/config/sessions/store-lock-state.js",
+    ),
+    vi.importActual<typeof import("../src/infra/file-lock.js")>("../src/infra/file-lock.js"),
+    vi.importActual<typeof import("../src/agents/session-write-lock.js")>(
+      "../src/agents/session-write-lock.js",
+    ),
+  ]);
+
+  return {
+    clearSessionStoreCaches,
+    drainFileLockStateForTest,
+    drainSessionStoreLockQueuesForTest,
+    resetContextWindowCacheForTest,
+    resetModelsJsonReadyCacheForTest,
+    drainSessionWriteLockStateForTest,
+    resetFileLockStateForTest,
+    resetSessionWriteLockStateForTest,
+  };
+}
+
+function getWorkerCleanupDeps(): Promise<WorkerCleanupDeps> {
+  const globalState = globalThis as typeof globalThis & {
+    [WORKER_CLEANUP_DEPS]?: Promise<WorkerCleanupDeps>;
+  };
+  globalState[WORKER_CLEANUP_DEPS] ??= loadWorkerCleanupDeps();
+  return globalState[WORKER_CLEANUP_DEPS];
+}
+
 const pickSendFn = (id: ChannelId, deps?: OutboundSendDeps) => {
   return deps?.[id] as ((...args: unknown[]) => Promise<unknown>) | undefined;
 };
+
+function createTopLevelChannelReplyToModeResolverForTest(channelId: string): ReplyToModeResolver {
+  return ({ cfg }) => {
+    const channelConfig = (
+      cfg.channels as Record<string, { replyToMode?: "off" | "first" | "all" }> | undefined
+    )?.[channelId];
+    return channelConfig?.replyToMode ?? "off";
+  };
+}
+
+function createTestRegistryForSetup(
+  channels: Array<{ pluginId: string; plugin: ChannelPlugin; source: string }> = [],
+): PluginRegistry {
+  return {
+    plugins: [],
+    tools: [],
+    hooks: [],
+    typedHooks: [],
+    channels: channels as unknown as PluginRegistry["channels"],
+    channelSetups: channels.map((entry) => ({
+      pluginId: entry.pluginId,
+      plugin: entry.plugin,
+      source: entry.source,
+      enabled: true,
+    })),
+    providers: [],
+    speechProviders: [],
+    realtimeTranscriptionProviders: [],
+    realtimeVoiceProviders: [],
+    mediaUnderstandingProviders: [],
+    imageGenerationProviders: [],
+    webFetchProviders: [],
+    webSearchProviders: [],
+    gatewayHandlers: {},
+    httpRoutes: [],
+    cliRegistrars: [],
+    services: [],
+    commands: [],
+    conversationBindingResolvedHandlers: [],
+    diagnostics: [],
+  };
+}
 
 function resolveSlackStubReplyToMode(params: {
   cfg: OpenClawConfig;
@@ -174,13 +263,13 @@ const createStubPlugin = (params: {
 });
 
 const createDefaultRegistry = () =>
-  createTestRegistry([
+  createTestRegistryForSetup([
     {
       pluginId: "discord",
       plugin: createStubPlugin({
         id: "discord",
         label: "Discord",
-        resolveReplyToMode: createTopLevelChannelReplyToModeResolver("discord"),
+        resolveReplyToMode: createTopLevelChannelReplyToModeResolverForTest("discord"),
       }),
       source: "test",
     },
@@ -199,7 +288,7 @@ const createDefaultRegistry = () =>
         ...createStubPlugin({
           id: "telegram",
           label: "Telegram",
-          resolveReplyToMode: createTopLevelChannelReplyToModeResolver("telegram"),
+          resolveReplyToMode: createTopLevelChannelReplyToModeResolverForTest("telegram"),
         }),
         status: {
           buildChannelSummary: async () => ({
@@ -280,7 +369,21 @@ beforeAll(() => {
 });
 
 afterEach(async () => {
-  await cleanupSessionStateForTest();
+  const {
+    clearSessionStoreCaches,
+    drainFileLockStateForTest,
+    drainSessionStoreLockQueuesForTest,
+    drainSessionWriteLockStateForTest,
+    resetContextWindowCacheForTest,
+    resetFileLockStateForTest,
+    resetModelsJsonReadyCacheForTest,
+    resetSessionWriteLockStateForTest,
+  } = await getWorkerCleanupDeps();
+  await drainSessionStoreLockQueuesForTest();
+  clearSessionStoreCaches();
+  await drainFileLockStateForTest();
+  await drainSessionWriteLockStateForTest();
+  resetFileLockStateForTest();
   resetContextWindowCacheForTest();
   resetModelsJsonReadyCacheForTest();
   resetSessionWriteLockStateForTest();
@@ -288,7 +391,10 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
-  await cleanupSessionStateForTest();
+  const { clearSessionStoreCaches, drainFileLockStateForTest, drainSessionWriteLockStateForTest } =
+    await getWorkerCleanupDeps();
+  clearSessionStoreCaches();
+  await drainFileLockStateForTest();
   await drainSessionWriteLockStateForTest();
   testEnv.cleanup();
 });

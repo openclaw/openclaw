@@ -29,6 +29,20 @@ openclaw onboard --mistral-api-key "$MISTRAL_API_KEY"
 }
 ```
 
+## Built-in LLM catalog
+
+OpenClaw currently ships this bundled Mistral catalog:
+
+| Model ref                        | Input       | Context | Max output | Notes                    |
+| -------------------------------- | ----------- | ------- | ---------- | ------------------------ |
+| `mistral/mistral-large-latest`   | text, image | 262,144 | 16,384     | Default model            |
+| `mistral/mistral-medium-2508`    | text, image | 262,144 | 8,192      | Mistral Medium 3.1       |
+| `mistral/mistral-small-latest`   | text, image | 128,000 | 16,384     | Smaller multimodal model |
+| `mistral/pixtral-large-latest`   | text, image | 128,000 | 32,768     | Pixtral                  |
+| `mistral/codestral-latest`       | text        | 256,000 | 4,096      | Coding                   |
+| `mistral/devstral-medium-latest` | text        | 262,144 | 32,768     | Devstral 2               |
+| `mistral/magistral-small`        | text        | 128,000 | 40,000     | Reasoning-enabled        |
+
 ## Config snippet (audio transcription with Voxtral)
 
 ```json5

@@ -18,13 +18,17 @@ import {
   matchesExactOrPrefix,
 } from "./shared.js";
 import { wrapAzureOpenAIProviderStream, wrapOpenAIProviderStream } from "./stream-hooks.js";
+import {
+  resolveOpenAITransportTurnState,
+  resolveOpenAIWebSocketSessionPolicy,
+} from "./transport-policy.js";
 
 const PROVIDER_ID = "openai";
 const OPENAI_GPT_54_MODEL_ID = "gpt-5.4";
 const OPENAI_GPT_54_PRO_MODEL_ID = "gpt-5.4-pro";
 const OPENAI_GPT_54_MINI_MODEL_ID = "gpt-5.4-mini";
 const OPENAI_GPT_54_NANO_MODEL_ID = "gpt-5.4-nano";
-const OPENAI_GPT_54_CONTEXT_TOKENS = 272_000;
+const OPENAI_GPT_54_CONTEXT_TOKENS = 1_050_000;
 const OPENAI_GPT_54_PRO_CONTEXT_TOKENS = 1_050_000;
 const OPENAI_GPT_54_MINI_CONTEXT_TOKENS = 400_000;
 const OPENAI_GPT_54_NANO_CONTEXT_TOKENS = 400_000;
@@ -248,13 +252,18 @@ export function buildOpenAIProvider(): ProviderPlugin {
       return {
         ...ctx.extraParams,
         ...(hasSupportedTransport ? {} : { transport: "auto" }),
-        ...(hasExplicitWarmup ? {} : { openaiWsWarmup: false }),
+        ...(hasExplicitWarmup ? {} : { openaiWsWarmup: true }),
       };
     },
     wrapStreamFn: (ctx) =>
       normalizeProviderId(ctx.provider) === PROVIDER_ID
         ? wrapOpenAIProviderStream(ctx)
         : wrapAzureOpenAIProviderStream(ctx),
+    matchesContextOverflowError: ({ errorMessage }) =>
+      /content_filter.*(?:prompt|input).*(?:too long|exceed)/i.test(errorMessage),
+    resolveTransportTurnState: (ctx) => resolveOpenAITransportTurnState(ctx),
+    resolveWebSocketSessionPolicy: (ctx) => resolveOpenAIWebSocketSessionPolicy(ctx),
+    resolveReasoningOutputMode: () => "native",
     supportsXHighThinking: ({ modelId }) => matchesExactOrPrefix(modelId, OPENAI_XHIGH_MODEL_IDS),
     isModernModelRef: ({ modelId }) => matchesExactOrPrefix(modelId, OPENAI_MODERN_MODEL_IDS),
     buildMissingAuthMessage: (ctx) => {

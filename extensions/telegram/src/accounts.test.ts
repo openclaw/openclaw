@@ -3,6 +3,7 @@ import * as runtimeEnvModule from "openclaw/plugin-sdk/runtime-env";
 import { withEnv } from "openclaw/plugin-sdk/testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  createTelegramActionGate,
   listTelegramAccountIds,
   resolveTelegramMediaRuntimeOptions,
   resetMissingDefaultWarnFlag,
@@ -333,6 +334,28 @@ describe("resolveTelegramPollActionGateState", () => {
       enabled: true,
     });
   });
+
+  it("uses configured defaultAccount when telegram action gate accountId is omitted", () => {
+    const gate = createTelegramActionGate({
+      cfg: {
+        channels: {
+          telegram: {
+            actions: { sendMessage: false, poll: false },
+            defaultAccount: "work",
+            accounts: {
+              work: {
+                botToken: "123:work",
+                actions: { sendMessage: true, poll: true },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(gate("sendMessage")).toBe(true);
+    expect(gate("poll")).toBe(true);
+  });
 });
 
 describe("resolveTelegramAccount groups inheritance (#30673)", () => {
@@ -428,6 +451,7 @@ describe("resolveTelegramMediaRuntimeOptions", () => {
             network: {
               dangerouslyAllowPrivateNetwork: false,
             },
+            trustedLocalFileRoots: ["/srv/telegram/cache"],
             accounts: {
               work: {
                 botToken: "123:work",
@@ -435,6 +459,7 @@ describe("resolveTelegramMediaRuntimeOptions", () => {
                 network: {
                   dangerouslyAllowPrivateNetwork: true,
                 },
+                trustedLocalFileRoots: ["/var/lib/telegram-bot-api"],
               },
             },
           },
@@ -447,6 +472,7 @@ describe("resolveTelegramMediaRuntimeOptions", () => {
     expect(resolved).toEqual({
       token: "123:work",
       apiRoot: "http://tg-proxy.internal:8081",
+      trustedLocalFileRoots: ["/var/lib/telegram-bot-api"],
       dangerouslyAllowPrivateNetwork: true,
       transport: undefined,
     });
@@ -461,6 +487,7 @@ describe("resolveTelegramMediaRuntimeOptions", () => {
             network: {
               dangerouslyAllowPrivateNetwork: true,
             },
+            trustedLocalFileRoots: ["/srv/telegram/cache"],
             accounts: {
               work: {
                 botToken: "123:work",
@@ -476,6 +503,7 @@ describe("resolveTelegramMediaRuntimeOptions", () => {
     expect(resolved).toEqual({
       token: "123:work",
       apiRoot: "http://tg-proxy.internal:8081",
+      trustedLocalFileRoots: ["/srv/telegram/cache"],
       dangerouslyAllowPrivateNetwork: true,
       transport: undefined,
     });

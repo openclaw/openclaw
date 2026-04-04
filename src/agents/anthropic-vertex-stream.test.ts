@@ -1,5 +1,6 @@
 import type { Model } from "@mariozechner/pi-ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 
 const hoisted = vi.hoisted(() => {
   const streamAnthropicMock = vi.fn<(model: unknown, context: unknown, options: unknown) => symbol>(
@@ -13,8 +14,9 @@ const hoisted = vi.hoisted(() => {
   };
 });
 
-vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
-  const original = await importOriginal<typeof import("@mariozechner/pi-ai")>();
+vi.mock("@mariozechner/pi-ai", async () => {
+  const original =
+    await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
   return {
     ...original,
     streamAnthropic: (model: unknown, context: unknown, options: unknown) =>
@@ -34,8 +36,9 @@ let createAnthropicVertexStreamFnForModel: typeof import("./anthropic-vertex-str
 
 async function loadFreshAnthropicVertexStreamModuleForTest() {
   vi.resetModules();
-  vi.doMock("@mariozechner/pi-ai", async (importOriginal) => {
-    const original = await importOriginal<typeof import("@mariozechner/pi-ai")>();
+  vi.doMock("@mariozechner/pi-ai", async () => {
+    const original =
+      await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
     return {
       ...original,
       streamAnthropic: (model: unknown, context: unknown, options: unknown) =>
@@ -141,6 +144,94 @@ describe("createAnthropicVertexStreamFn", () => {
         effort: "max",
       }),
     );
+  });
+
+  it("applies Anthropic cache-boundary shaping before forwarding payload hooks", async () => {
+    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5");
+    const model = makeModel({ id: "claude-sonnet-4-6", maxTokens: 64000 });
+    const onPayload = vi.fn(async (payload: unknown) => payload);
+
+    void streamFn(
+      model,
+      {
+        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+        messages: [{ role: "user", content: "Hello" }],
+      } as never,
+      {
+        cacheRetention: "short",
+        onPayload,
+      } as never,
+    );
+
+    const transportOptions = hoisted.streamAnthropicMock.mock.calls[0]?.[2] as {
+      onPayload?: (payload: unknown, payloadModel: unknown) => Promise<unknown>;
+    };
+    const payload = {
+      system: [
+        {
+          type: "text",
+          text: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+          cache_control: { type: "ephemeral" },
+        },
+      ],
+      messages: [{ role: "user", content: "Hello" }],
+    };
+
+    const nextPayload = await transportOptions.onPayload?.(payload, model);
+
+    expect(onPayload).toHaveBeenCalledWith(
+      {
+        system: [
+          {
+            type: "text",
+            text: "Stable prefix",
+            cache_control: { type: "ephemeral" },
+          },
+          {
+            type: "text",
+            text: "Dynamic suffix",
+          },
+        ],
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: "Hello",
+                cache_control: { type: "ephemeral" },
+              },
+            ],
+          },
+        ],
+      },
+      model,
+    );
+    expect(nextPayload).toEqual({
+      system: [
+        {
+          type: "text",
+          text: "Stable prefix",
+          cache_control: { type: "ephemeral" },
+        },
+        {
+          type: "text",
+          text: "Dynamic suffix",
+        },
+      ],
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: "Hello",
+              cache_control: { type: "ephemeral" },
+            },
+          ],
+        },
+      ],
+    });
   });
 
   it("omits maxTokens when neither the model nor request provide a finite limit", () => {

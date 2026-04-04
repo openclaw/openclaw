@@ -22,7 +22,7 @@ Gemini Grounding.
 1. Set the API key:
 
 ```bash
-openclaw onboard --auth-choice google-api-key
+openclaw onboard --auth-choice gemini-api-key
 ```
 
 2. Set a default model:
@@ -42,7 +42,7 @@ openclaw onboard --auth-choice google-api-key
 ```bash
 openclaw onboard --non-interactive \
   --mode local \
-  --auth-choice google-api-key \
+  --auth-choice gemini-api-key \
   --gemini-api-key "$GEMINI_API_KEY"
 ```
 
@@ -70,6 +70,20 @@ Environment variables:
 | Video understanding    | Yes               |
 | Web search (Grounding) | Yes               |
 | Thinking/reasoning     | Yes (Gemini 3.1+) |
+
+## Image generation
+
+The bundled `google` image-generation provider defaults to
+`google/gemini-3.1-flash-image-preview`.
+
+- Also supports `google/gemini-3-pro-image-preview`
+- Generate: up to 4 images per request
+- Edit mode: enabled, up to 5 input images
+- Geometry controls: `size`, `aspectRatio`, and `resolution`
+
+The OAuth-only `google-gemini-cli` provider is a separate text-inference
+surface. Image generation, media understanding, and Gemini Grounding stay on
+the `google` provider id.
 
 ## Environment note
 

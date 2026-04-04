@@ -6,6 +6,7 @@ import { initSubagentRegistry } from "../agents/subagent-registry.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import type { CanvasHostServer } from "../canvas-host/server.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
+import { runChannelPluginStartupMaintenance } from "../channels/plugins/lifecycle-startup.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { isRestartEnabled } from "../config/commands.js";
@@ -38,10 +39,6 @@ import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
-import {
-  detectPluginInstallPathIssue,
-  formatPluginInstallPathIssue,
-} from "../infra/plugin-install-path-warnings.js";
 import { setGatewaySigusr1RestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
 import {
   primeRemoteSkillsCache,
@@ -52,7 +49,6 @@ import { enqueueSystemEvent } from "../infra/system-events.js";
 import { scheduleGatewayUpdateCheck } from "../infra/update-startup.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
-import { resolveBundledPluginInstallCommandHint } from "../plugins/bundled-sources.js";
 import {
   resolveConfiguredDeferredChannelPluginIds,
   resolveGatewayStartupPluginIds,
@@ -84,6 +80,7 @@ import {
 } from "../tasks/task-registry.maintenance.js";
 import { runSetupWizard } from "../wizard/setup.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
+import { resolveGatewayAuth } from "./auth.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
 import { startGatewayConfigReloader } from "./config-reload.js";
 import type { ControlUiRootState } from "./control-ui.js";
@@ -92,6 +89,7 @@ import {
   type GatewayUpdateAvailableEventPayload,
 } from "./events.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
+import { startMcpLoopbackServer } from "./mcp-http.js";
 import { startGatewayModelPricingRefresh } from "./model-pricing-cache.js";
 import { NodeRegistry } from "./node-registry.js";
 import { createChannelManager } from "./server-channels.js";
@@ -124,7 +122,6 @@ import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
 import { createGatewayRuntimeState } from "./server-runtime-state.js";
 import { resolveSessionKeyForRun } from "./server-session-key.js";
 import { logGatewayStartup } from "./server-startup-log.js";
-import { runStartupMatrixMigration } from "./server-startup-matrix-migration.js";
 import { runStartupSessionMigration } from "./server-startup-session-migration.js";
 import { startGatewaySidecars } from "./server-startup.js";
 import { startGatewayTailscaleExposure } from "./server-tailscale.js";
@@ -554,7 +551,7 @@ export async function startGatewayServer(
     const startupSnapshot = await readConfigFileSnapshot();
     startupInternalWriteHash = startupSnapshot.hash ?? null;
   }
-  await runStartupMatrixMigration({
+  await runChannelPluginStartupMaintenance({
     cfg: cfgAtStart,
     env: process.env,
     log,
@@ -564,26 +561,6 @@ export async function startGatewayServer(
     env: process.env,
     log,
   });
-  const matrixInstallPathIssue = await detectPluginInstallPathIssue({
-    pluginId: "matrix",
-    install: cfgAtStart.plugins?.installs?.matrix,
-  });
-  if (matrixInstallPathIssue) {
-    const lines = formatPluginInstallPathIssue({
-      issue: matrixInstallPathIssue,
-      pluginLabel: "Matrix",
-      defaultInstallCommand: "openclaw plugins install @openclaw/matrix",
-      repoInstallCommand: resolveBundledPluginInstallCommandHint({
-        pluginId: "matrix",
-        workspaceDir: process.cwd(),
-      }),
-      formatCommand: formatCliCommand,
-    });
-    log.warn(
-      `gateway: matrix install path warning:\n${lines.map((entry) => `- ${entry}`).join("\n")}`,
-    );
-  }
-
   initSubagentRegistry();
   const gatewayPluginConfigAtStart = applyPluginAutoEnable({
     config: cfgAtStart,
@@ -658,6 +635,13 @@ export async function startGatewayServer(
     tailscaleConfig,
     tailscaleMode,
   } = runtimeConfig;
+  const getResolvedAuth = () =>
+    resolveGatewayAuth({
+      authConfig: getRuntimeConfig().gateway?.auth,
+      authOverride: opts.auth,
+      env: process.env,
+      tailscaleMode,
+    });
   let hooksConfig = runtimeConfig.hooksConfig;
   let hookClientIpConfig = resolveHookClientIpConfig(cfgAtStart);
   const canvasHostEnabled = runtimeConfig.canvasHostEnabled;
@@ -800,6 +784,7 @@ export async function startGatewayServer(
   let skillsChangeUnsub = () => {};
   let channelHealthMonitor: ReturnType<typeof startChannelHealthMonitor> | null = null;
   let stopModelPricingRefresh = () => {};
+  let mcpServer: { port: number; close: () => Promise<void> } | undefined;
   let configReloader: { stop: () => Promise<void> } = { stop: async () => {} };
   const closeOnStartupFailure = async () => {
     if (diagnosticsEnabled) {
@@ -815,6 +800,7 @@ export async function startGatewayServer(
     stopModelPricingRefresh();
     channelHealthMonitor?.stop();
     clearSecretsRuntimeSnapshot();
+    await mcpServer?.close().catch(() => {});
     await createGatewayCloseHandler({
       bonjourStop,
       tailscaleCleanup,
@@ -872,6 +858,7 @@ export async function startGatewayServer(
     broadcast,
   });
   let { cron, storePath: cronStorePath } = cronState;
+  deps.cron = cron;
 
   const { getRuntimeSnapshot, startChannels, startChannel, stopChannel, markChannelLoggedOut } =
     channelManager;
@@ -880,6 +867,13 @@ export async function startGatewayServer(
   let transcriptUnsub: (() => void) | null = null;
   let lifecycleUnsub: (() => void) | null = null;
   try {
+    try {
+      mcpServer = await startMcpLoopbackServer(0);
+      log.info(`MCP loopback server listening on http://127.0.0.1:${mcpServer.port}/mcp`);
+    } catch (error) {
+      log.warn(`MCP loopback server failed to start: ${String(error)}`);
+    }
+
     if (!minimalTestGateway) {
       const machineDisplayName = await getMachineDisplayName();
       const discovery = await startGatewayDiscovery({
@@ -1277,6 +1271,20 @@ export async function startGatewayServer(
           }
         }
       },
+      disconnectClientsUsingSharedGatewayAuth: () => {
+        for (const gatewayClient of clients) {
+          // Trusted-proxy sessions stay up here; only token/password-authenticated
+          // clients should be invalidated when the shared gateway secret changes.
+          if (!gatewayClient.usesSharedGatewayAuth) {
+            continue;
+          }
+          try {
+            gatewayClient.socket.close(4001, "gateway auth changed");
+          } catch {
+            /* ignore */
+          }
+        }
+      },
       nodeRegistry,
       agentRunSeq,
       chatAbortControllers,
@@ -1322,6 +1330,7 @@ export async function startGatewayServer(
       canvasHostEnabled: Boolean(canvasHost),
       canvasHostServerPort,
       resolvedAuth,
+      getResolvedAuth,
       rateLimiter: authRateLimiter,
       browserRateLimiter: browserAuthRateLimiter,
       gatewayMethods,
@@ -1425,6 +1434,7 @@ export async function startGatewayServer(
               cronState = nextState.cronState;
               cron = cronState.cron;
               cronStorePath = cronState.storePath;
+              deps.cron = cron;
               channelHealthMonitor = nextState.channelHealthMonitor;
             },
             startChannel,
@@ -1542,6 +1552,7 @@ export async function startGatewayServer(
       stopModelPricingRefresh();
       channelHealthMonitor?.stop();
       clearSecretsRuntimeSnapshot();
+      await mcpServer?.close().catch(() => {});
       await close(opts);
     },
   };

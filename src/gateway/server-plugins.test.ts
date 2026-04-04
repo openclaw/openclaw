@@ -32,8 +32,10 @@ vi.mock("../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable,
 }));
 
-vi.mock("../channels/plugins/binding-registry.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../channels/plugins/binding-registry.js")>();
+vi.mock("../channels/plugins/binding-registry.js", async () => {
+  const actual = await vi.importActual<typeof import("../channels/plugins/binding-registry.js")>(
+    "../channels/plugins/binding-registry.js",
+  );
   return {
     ...actual,
     primeConfiguredBindingRegistry,
@@ -67,6 +69,8 @@ const createRegistry = (diagnostics: PluginDiagnostic[]): PluginRegistry => ({
   commands: [],
   providers: [],
   speechProviders: [],
+  realtimeTranscriptionProviders: [],
+  realtimeVoiceProviders: [],
   mediaUnderstandingProviders: [],
   imageGenerationProviders: [],
   webFetchProviders: [],

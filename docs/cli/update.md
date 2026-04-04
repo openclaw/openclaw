@@ -24,6 +24,7 @@ openclaw update --tag beta
 openclaw update --tag main
 openclaw update --dry-run
 openclaw update --no-restart
+openclaw update --yes
 openclaw update --json
 openclaw --update
 ```
@@ -36,6 +37,7 @@ openclaw --update
 - `--dry-run`: preview planned update actions (channel/tag/target/restart flow) without writing config, installing, syncing plugins, or restarting.
 - `--json`: print machine-readable `UpdateRunResult` JSON.
 - `--timeout <seconds>`: per-step timeout (default is 1200s).
+- `--yes`: skip confirmation prompts (for example downgrade confirmation)
 
 Note: downgrades require confirmation because older versions can break configuration.
 
@@ -59,6 +61,10 @@ Options:
 Interactive flow to pick an update channel and confirm whether to restart the Gateway
 after updating (default is to restart). If you select `dev` without a git checkout, it
 offers to create one.
+
+Options:
+
+- `--timeout <seconds>`: timeout for each update step (default `1200`)
 
 ## What it does
 

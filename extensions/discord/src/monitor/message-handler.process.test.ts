@@ -272,6 +272,67 @@ function getReactionEmojis(): string[] {
   ).map((call) => call[2]);
 }
 
+function expectAckReactionRuntimeOptions(params?: {
+  accountId?: string;
+  ackReaction?: string;
+  removeAckAfterReply?: boolean;
+}) {
+  const messages: Record<string, unknown> = {};
+  if (params?.ackReaction) {
+    messages.ackReaction = params.ackReaction;
+  }
+  if (params?.removeAckAfterReply !== undefined) {
+    messages.removeAckAfterReply = params.removeAckAfterReply;
+  }
+  return expect.objectContaining({
+    rest: {},
+    ...(Object.keys(messages).length > 0
+      ? { cfg: expect.objectContaining({ messages: expect.objectContaining(messages) }) }
+      : {}),
+    ...(params?.accountId ? { accountId: params.accountId } : {}),
+  });
+}
+
+function expectReactAckCallAt(
+  index: number,
+  emoji: string,
+  params?: {
+    channelId?: string;
+    messageId?: string;
+    accountId?: string;
+    ackReaction?: string;
+    removeAckAfterReply?: boolean;
+  },
+) {
+  expect(sendMocks.reactMessageDiscord).toHaveBeenNthCalledWith(
+    index + 1,
+    params?.channelId ?? "c1",
+    params?.messageId ?? "m1",
+    emoji,
+    expectAckReactionRuntimeOptions(params),
+  );
+}
+
+function expectRemoveAckCallAt(
+  index: number,
+  emoji: string,
+  params?: {
+    channelId?: string;
+    messageId?: string;
+    accountId?: string;
+    ackReaction?: string;
+    removeAckAfterReply?: boolean;
+  },
+) {
+  expect(sendMocks.removeReactionDiscord).toHaveBeenNthCalledWith(
+    index + 1,
+    params?.channelId ?? "c1",
+    params?.messageId ?? "m1",
+    emoji,
+    expectAckReactionRuntimeOptions(params),
+  );
+}
+
 function createMockDraftStreamForTest() {
   const draftStream = createMockDraftStream();
   createDiscordDraftStream.mockReturnValueOnce(draftStream);
@@ -318,16 +379,10 @@ describe("processDiscordMessage ack reactions", () => {
     // oxlint-disable-next-line typescript/no-explicit-any
     await processDiscordMessage(ctx as any);
 
-    expect(sendMocks.reactMessageDiscord.mock.calls[0]).toEqual([
-      "c1",
-      "m1",
-      "👀",
-      {
-        rest: {},
-        cfg: expect.objectContaining({ messages: { ackReaction: "👀" } }),
-        accountId: "ops",
-      },
-    ]);
+    expectReactAckCallAt(0, "👀", {
+      accountId: "ops",
+      ackReaction: "👀",
+    });
   });
 
   it("uses preflight-resolved messageChannelId when message.channelId is missing", async () => {
@@ -345,16 +400,11 @@ describe("processDiscordMessage ack reactions", () => {
     // oxlint-disable-next-line typescript/no-explicit-any
     await processDiscordMessage(ctx as any);
 
-    expect(sendMocks.reactMessageDiscord.mock.calls[0]).toEqual([
-      "fallback-channel",
-      "m1",
-      "👀",
-      {
-        rest: {},
-        cfg: expect.objectContaining({ messages: { ackReaction: "👀" } }),
-        accountId: "default",
-      },
-    ]);
+    expectReactAckCallAt(0, "👀", {
+      channelId: "fallback-channel",
+      accountId: "default",
+      ackReaction: "👀",
+    });
   });
 
   it("debounces intermediate phase reactions and jumps to done for short runs", async () => {
@@ -509,21 +559,11 @@ describe("processDiscordMessage ack reactions", () => {
     // oxlint-disable-next-line typescript/no-explicit-any
     await processDiscordMessage(ctx as any);
 
-    expect(sendMocks.removeReactionDiscord).toHaveBeenCalledWith(
-      "c1",
-      "m1",
-      "👀",
-      expect.objectContaining({
-        rest: {},
-        cfg: expect.objectContaining({
-          messages: expect.objectContaining({
-            ackReaction: "👀",
-            removeAckAfterReply: true,
-          }),
-        }),
-        accountId: "default",
-      }),
-    );
+    expectRemoveAckCallAt(0, "👀", {
+      accountId: "default",
+      ackReaction: "👀",
+      removeAckAfterReply: true,
+    });
   });
 
   it("removes the plain ack reaction when status reactions are disabled and removeAckAfterReply is enabled", async () => {
@@ -543,22 +583,11 @@ describe("processDiscordMessage ack reactions", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(getReactionEmojis()).toEqual(["👀"]);
-    expect(sendMocks.removeReactionDiscord).toHaveBeenNthCalledWith(
-      2,
-      "c1",
-      "m1",
-      "👀",
-      expect.objectContaining({
-        rest: {},
-        cfg: expect.objectContaining({
-          messages: expect.objectContaining({
-            ackReaction: "👀",
-            removeAckAfterReply: true,
-          }),
-        }),
-        accountId: "default",
-      }),
-    );
+    expectRemoveAckCallAt(0, "👀", {
+      accountId: "default",
+      ackReaction: "👀",
+      removeAckAfterReply: true,
+    });
   });
 });
 

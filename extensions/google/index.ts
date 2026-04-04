@@ -8,7 +8,6 @@ import {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
-import { createGoogleThinkingPayloadWrapper } from "openclaw/plugin-sdk/provider-stream";
 import {
   GOOGLE_GEMINI_DEFAULT_MODEL,
   applyGoogleGeminiModelDefault,
@@ -17,14 +16,9 @@ import {
   normalizeGoogleModelId,
 } from "./api.js";
 import { buildGoogleGeminiCliBackend } from "./cli-backend.js";
+import { formatGoogleOauthApiKey } from "./oauth-token-shared.js";
 import { isModernGoogleModel, resolveGoogle31ForwardCompatModel } from "./provider-models.js";
-import {
-  buildGoogleReplayPolicy,
-  inspectGoogleGeminiCliToolSchemas,
-  normalizeGoogleGeminiCliToolSchemas,
-  resolveGoogleReasoningOutputMode,
-  sanitizeGoogleReplayHistory,
-} from "./replay-policy.js";
+import { buildGoogleGeminiProviderHooks } from "./replay-policy.js";
 import { createGeminiWebSearchProvider } from "./src/gemini-web-search-provider.js";
 
 const GOOGLE_GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
@@ -37,12 +31,6 @@ const GOOGLE_GEMINI_CLI_ENV_VARS = [
   "GEMINI_CLI_OAUTH_CLIENT_SECRET",
 ] as const;
 
-type GoogleOauthApiKeyCredential = {
-  type?: string;
-  access?: string;
-  projectId?: string;
-};
-
 let googleGeminiCliProviderPromise: Promise<ProviderPlugin> | null = null;
 let googleImageGenerationProviderPromise: Promise<ImageGenerationProvider> | null = null;
 let googleMediaUnderstandingProviderPromise: Promise<MediaUnderstandingProvider> | null = null;
@@ -54,15 +42,10 @@ type GoogleMediaUnderstandingProvider = MediaUnderstandingProvider & {
   describeVideo: NonNullable<MediaUnderstandingProvider["describeVideo"]>;
 };
 
-function formatGoogleOauthApiKey(cred: GoogleOauthApiKeyCredential): string {
-  if (cred.type !== "oauth" || typeof cred.access !== "string" || !cred.access.trim()) {
-    return "";
-  }
-  return JSON.stringify({
-    token: cred.access,
-    projectId: cred.projectId,
-  });
-}
+const GOOGLE_GEMINI_PROVIDER_HOOKS = buildGoogleGeminiProviderHooks();
+const GOOGLE_GEMINI_PROVIDER_HOOKS_WITH_TOOL_COMPAT = buildGoogleGeminiProviderHooks({
+  includeToolSchemaCompat: true,
+});
 
 async function loadGoogleGeminiCliProvider(): Promise<ProviderPlugin> {
   if (!googleGeminiCliProviderPromise) {
@@ -147,14 +130,9 @@ function createLazyGoogleGeminiCliProvider(): ProviderPlugin {
     normalizeModelId: ({ modelId }) => normalizeGoogleModelId(modelId),
     resolveDynamicModel: (ctx) =>
       resolveGoogle31ForwardCompatModel({ providerId: GOOGLE_GEMINI_CLI_PROVIDER_ID, ctx }),
-    buildReplayPolicy: () => buildGoogleReplayPolicy(),
-    wrapStreamFn: (ctx) => createGoogleThinkingPayloadWrapper(ctx.streamFn, ctx.thinkingLevel),
-    sanitizeReplayHistory: (ctx) => sanitizeGoogleReplayHistory(ctx),
-    normalizeToolSchemas: (ctx) => normalizeGoogleGeminiCliToolSchemas(ctx),
-    inspectToolSchemas: (ctx) => inspectGoogleGeminiCliToolSchemas(ctx),
-    resolveReasoningOutputMode: () => resolveGoogleReasoningOutputMode(),
+    ...GOOGLE_GEMINI_PROVIDER_HOOKS_WITH_TOOL_COMPAT,
     isModernModelRef: ({ modelId }) => isModernGoogleModel(modelId),
-    formatApiKey: (cred) => formatGoogleOauthApiKey(cred as GoogleOauthApiKeyCredential),
+    formatApiKey: (cred) => formatGoogleOauthApiKey(cred),
     resolveUsageAuth: async (ctx) => {
       const provider = await loadGoogleGeminiCliProvider();
       return await provider.resolveUsageAuth?.(ctx);
@@ -259,10 +237,7 @@ export default definePluginEntry({
           templateProviderId: GOOGLE_GEMINI_CLI_PROVIDER_ID,
           ctx,
         }),
-      wrapStreamFn: (ctx) => createGoogleThinkingPayloadWrapper(ctx.streamFn, ctx.thinkingLevel),
-      buildReplayPolicy: () => buildGoogleReplayPolicy(),
-      sanitizeReplayHistory: (ctx) => sanitizeGoogleReplayHistory(ctx),
-      resolveReasoningOutputMode: () => resolveGoogleReasoningOutputMode(),
+      ...GOOGLE_GEMINI_PROVIDER_HOOKS,
       isModernModelRef: ({ modelId }) => isModernGoogleModel(modelId),
     });
     api.registerCliBackend(buildGoogleGeminiCliBackend());

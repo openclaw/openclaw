@@ -1,9 +1,11 @@
 import {
-  createChannelApproverDmTargetResolver,
-  createChannelNativeOriginTargetResolver,
   createApproverRestrictedNativeApprovalCapability,
   splitChannelApprovalCapability,
-} from "openclaw/plugin-sdk/approval-runtime";
+} from "openclaw/plugin-sdk/approval-delivery-runtime";
+import {
+  createChannelApproverDmTargetResolver,
+  createChannelNativeOriginTargetResolver,
+} from "openclaw/plugin-sdk/approval-native-runtime";
 import type { ChannelApprovalCapability } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ExecApprovalRequest, PluginApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
@@ -13,6 +15,7 @@ import {
   isTelegramExecApprovalApprover,
   isTelegramExecApprovalAuthorizedSender,
   isTelegramExecApprovalClientEnabled,
+  isTelegramExecApprovalTargetRecipient,
   resolveTelegramExecApprovalTarget,
   shouldHandleTelegramExecApprovalRequest,
 } from "./exec-approvals.js";
@@ -113,6 +116,9 @@ const resolveTelegramApproveCommandBehavior: NonNullable<
     return undefined;
   }
   if (isTelegramExecApprovalClientEnabled({ cfg, accountId })) {
+    return undefined;
+  }
+  if (isTelegramExecApprovalTargetRecipient({ cfg, accountId, senderId })) {
     return undefined;
   }
   if (

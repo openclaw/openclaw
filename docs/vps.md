@@ -93,10 +93,10 @@ For VM hosts using `systemd`, consider:
   - `TimeoutStartSec=90`
 - Prefer SSD-backed disks for state/cache paths to reduce random-I/O cold-start penalties.
 
-Example:
+For the standard `openclaw onboard --install-daemon` path, edit the user unit:
 
 ```bash
-sudo systemctl edit openclaw
+systemctl --user edit openclaw-gateway.service
 ```
 
 ```ini
@@ -107,6 +107,9 @@ Restart=always
 RestartSec=2
 TimeoutStartSec=90
 ```
+
+If you deliberately installed a system unit instead, edit
+`openclaw-gateway.service` via `sudo systemctl edit openclaw-gateway.service`.
 
 How `Restart=` policies help automated recovery:
 [systemd can automate service recovery](https://www.redhat.com/en/blog/systemd-automate-recovery).

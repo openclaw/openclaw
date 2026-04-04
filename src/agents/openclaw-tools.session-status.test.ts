@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
@@ -79,10 +79,9 @@ function installScopedSessionStores(syncUpdates = false) {
   return stores;
 }
 
-async function createSessionsModuleMock(
-  importOriginal: () => Promise<typeof import("../config/sessions.js")>,
-) {
-  const actual = await importOriginal();
+async function createSessionsModuleMock() {
+  const actual =
+    await vi.importActual<typeof import("../config/sessions.js")>("../config/sessions.js");
   return {
     ...actual,
     loadSessionStore: (storePath: string) => loadSessionStoreMock(storePath),
@@ -106,10 +105,10 @@ function createGatewayCallModuleMock() {
   };
 }
 
-async function createGatewaySessionUtilsModuleMock(
-  importOriginal: () => Promise<typeof import("../gateway/session-utils.js")>,
-) {
-  const actual = await importOriginal();
+async function createGatewaySessionUtilsModuleMock() {
+  const actual = await vi.importActual<typeof import("../gateway/session-utils.js")>(
+    "../gateway/session-utils.js",
+  );
   return {
     ...actual,
     loadCombinedSessionStoreForGateway: (cfg: unknown) =>
@@ -117,10 +116,8 @@ async function createGatewaySessionUtilsModuleMock(
   };
 }
 
-async function createConfigModuleMock(
-  importOriginal: () => Promise<typeof import("../config/config.js")>,
-) {
-  const actual = await importOriginal();
+async function createConfigModuleMock() {
+  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
     loadConfig: () => mockConfig,
@@ -181,44 +178,35 @@ vi.mock("../agents/model-catalog.js", createModelCatalogModuleMock);
 vi.mock("../agents/auth-profiles.js", createAuthProfilesModuleMock);
 vi.mock("../agents/model-auth.js", createModelAuthModuleMock);
 vi.mock("../infra/provider-usage.js", createProviderUsageModuleMock);
+vi.mock("../auto-reply/group-activation.js", () => ({
+  normalizeGroupActivation: (value: unknown) => value ?? "always",
+}));
+vi.mock("../auto-reply/reply/queue.js", () => ({
+  getFollowupQueueDepth: () => 0,
+  resolveQueueSettings: resolveQueueSettingsMock,
+}));
+vi.mock("../auto-reply/status.js", () => ({
+  buildStatusMessage: buildStatusMessageMock,
+}));
+vi.mock("../tasks/task-owner-access.js", () => ({
+  listTasksForRelatedSessionKeyForOwner: (params: {
+    relatedSessionKey: string;
+    callerOwnerKey: string;
+  }) => listTasksForRelatedSessionKeyForOwnerMock(params),
+  buildTaskStatusSnapshotForRelatedSessionKeyForOwner: (params: {
+    relatedSessionKey: string;
+    callerOwnerKey: string;
+  }) =>
+    buildTaskStatusSnapshot(listTasksForRelatedSessionKeyForOwnerMock(params) as TaskRecord[], {
+      now: TASK_STATUS_SNAPSHOT_NOW,
+    }),
+}));
 
 let createSessionStatusTool: typeof import("./tools/session-status-tool.js").createSessionStatusTool;
 
-async function loadFreshOpenClawToolsForSessionStatusTest() {
-  vi.resetModules();
-  vi.doMock("../config/sessions.js", createSessionsModuleMock);
-  vi.doMock("../gateway/call.js", createGatewayCallModuleMock);
-  vi.doMock("../gateway/session-utils.js", createGatewaySessionUtilsModuleMock);
-  vi.doMock("../config/config.js", createConfigModuleMock);
-  vi.doMock("../agents/model-catalog.js", createModelCatalogModuleMock);
-  vi.doMock("../agents/auth-profiles.js", createAuthProfilesModuleMock);
-  vi.doMock("../agents/model-auth.js", createModelAuthModuleMock);
-  vi.doMock("../infra/provider-usage.js", createProviderUsageModuleMock);
-  vi.doMock("../auto-reply/group-activation.js", () => ({
-    normalizeGroupActivation: (value: unknown) => value ?? "always",
-  }));
-  vi.doMock("../auto-reply/reply/queue.js", () => ({
-    getFollowupQueueDepth: () => 0,
-    resolveQueueSettings: resolveQueueSettingsMock,
-  }));
-  vi.doMock("../auto-reply/status.js", () => ({
-    buildStatusMessage: buildStatusMessageMock,
-  }));
-  vi.doMock("../tasks/task-owner-access.js", () => ({
-    listTasksForRelatedSessionKeyForOwner: (params: {
-      relatedSessionKey: string;
-      callerOwnerKey: string;
-    }) => listTasksForRelatedSessionKeyForOwnerMock(params),
-    buildTaskStatusSnapshotForRelatedSessionKeyForOwner: (params: {
-      relatedSessionKey: string;
-      callerOwnerKey: string;
-    }) =>
-      buildTaskStatusSnapshot(listTasksForRelatedSessionKeyForOwnerMock(params) as TaskRecord[], {
-        now: TASK_STATUS_SNAPSHOT_NOW,
-      }),
-  }));
+beforeAll(async () => {
   ({ createSessionStatusTool } = await import("./tools/session-status-tool.js"));
-}
+});
 
 function resetSessionStore(store: Record<string, SessionEntry>) {
   buildStatusMessageMock.mockClear();
@@ -325,9 +313,8 @@ function getSessionStatusTool(agentSessionKey = "main", options?: { sandboxed?: 
 }
 
 describe("session_status tool", () => {
-  beforeEach(async () => {
+  beforeEach(() => {
     buildStatusMessageMock.mockClear();
-    await loadFreshOpenClawToolsForSessionStatusTest();
   });
 
   it("returns a status card for the current session", async () => {
@@ -346,6 +333,25 @@ describe("session_status tool", () => {
     expect(details.statusText).toContain("OpenClaw");
     expect(details.statusText).toContain("🧠 Model:");
     expect(details.statusText).not.toContain("OAuth/token status");
+  });
+
+  it("enables transcript usage fallback for session_status", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "s1",
+        updatedAt: 10,
+      },
+    });
+
+    const tool = getSessionStatusTool();
+
+    await tool.execute("call-transcript-usage", {});
+
+    expect(buildStatusMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        includeTranscriptUsage: true,
+      }),
+    );
   });
 
   it("errors for unknown session keys", async () => {

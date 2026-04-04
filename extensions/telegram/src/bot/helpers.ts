@@ -1,6 +1,5 @@
 import type { Chat, Message } from "@grammyjs/types";
 import { formatLocationText, type NormalizedLocation } from "openclaw/plugin-sdk/channel-inbound";
-import { resolveTelegramPreviewStreamMode } from "openclaw/plugin-sdk/config-runtime";
 import type {
   TelegramDirectConfig,
   TelegramGroupConfig,
@@ -10,6 +9,7 @@ import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runt
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { firstDefined, normalizeAllowFrom, type NormalizedAllowFrom } from "../bot-access.js";
 import { normalizeTelegramReplyToMessageId } from "../outbound-params.js";
+import { resolveTelegramPreviewStreamMode } from "../preview-streaming.js";
 import {
   buildSenderLabel,
   buildSenderName,

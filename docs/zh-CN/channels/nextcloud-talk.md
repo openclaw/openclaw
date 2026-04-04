@@ -5,7 +5,7 @@ summary: Nextcloud Talk 支持状态、功能和配置
 title: Nextcloud Talk
 x-i18n:
   generated_at: "2026-02-03T10:04:00Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 21b7b9756c4356a76dc0f14c10e44ed74a284cf3badf87e2df75eb88d8a90c31
   source_path: channels/nextcloud-talk.md

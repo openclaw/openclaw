@@ -6,7 +6,7 @@ summary: Talk 模式：使用 ElevenLabs TTS 进行连续语音对话
 title: Talk 模式
 x-i18n:
   generated_at: "2026-02-03T10:07:59Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: ecbc3701c9e9502970cf13227fedbc9714d13668d8f4f3988fef2a4d68116a42
   source_path: nodes/talk.md

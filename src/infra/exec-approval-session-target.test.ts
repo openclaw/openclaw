@@ -7,6 +7,9 @@ import type { SessionEntry } from "../config/sessions.js";
 import {
   doesApprovalRequestMatchChannelAccount,
   resolveApprovalRequestAccountId,
+  resolveApprovalRequestChannelAccountId,
+} from "./approval-request-account-binding.js";
+import {
   resolveApprovalRequestOriginTarget,
   resolveExecApprovalSessionTarget,
 } from "./exec-approval-session-target.js";
@@ -241,6 +244,33 @@ describe("exec approval session target", () => {
         accountId: "work",
       }),
     ).toBe(false);
+  });
+
+  it("falls back to the stored session binding when turn source uses another channel", () => {
+    const tmpDir = createTempDir();
+    const storePath = path.join(tmpDir, "sessions.json");
+    const cfg = writeStoreFile(storePath, {
+      "agent:main:matrix:channel:!ops:example.org": {
+        sessionId: "main",
+        updatedAt: 1,
+        origin: {
+          provider: "matrix",
+          accountId: "ops",
+        },
+        lastChannel: "slack",
+        lastTo: "channel:C123",
+        lastAccountId: "work",
+      },
+    });
+    const request = buildRequest({
+      sessionKey: "agent:main:matrix:channel:!ops:example.org",
+      turnSourceChannel: "discord",
+      turnSourceTo: "channel:D123",
+      turnSourceAccountId: "work",
+    });
+
+    expect(resolveApprovalRequestAccountId({ cfg, request, channel: "matrix" })).toBeNull();
+    expect(resolveApprovalRequestChannelAccountId({ cfg, request, channel: "matrix" })).toBe("ops");
   });
 
   it("falls back to the session-bound account when no turn-source account is present", () => {

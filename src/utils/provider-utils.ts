@@ -2,6 +2,10 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveProviderReasoningOutputModeWithPlugin } from "../plugins/provider-runtime.js";
 import type { ProviderRuntimeModel } from "../plugins/types.js";
 
+const BUILTIN_REASONING_OUTPUT_MODES = {
+  "google-generative-ai": "tagged",
+} as const;
+
 /**
  * Utility functions for provider-specific logic and capabilities.
  */
@@ -20,6 +24,7 @@ export function resolveReasoningOutputMode(params: {
     return "native";
   }
 
+  const normalized = provider.toLowerCase();
   const pluginMode = resolveProviderReasoningOutputModeWithPlugin({
     provider,
     config: params.config,
@@ -39,6 +44,13 @@ export function resolveReasoningOutputMode(params: {
     return pluginMode;
   }
 
+  const builtInMode =
+    BUILTIN_REASONING_OUTPUT_MODES[normalized as keyof typeof BUILTIN_REASONING_OUTPUT_MODES];
+  if (builtInMode) {
+    return builtInMode;
+  }
+
+  // Keep a tiny built-in fallback for non-plugin Google surfaces.
   return "native";
 }
 

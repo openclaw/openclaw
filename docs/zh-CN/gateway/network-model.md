@@ -5,7 +5,7 @@ summary: Gateway 网关、节点和 canvas 主机如何连接。
 title: 网络模型
 x-i18n:
   generated_at: "2026-02-04T17:53:21Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: e3508b884757ef19f425c82e891e2b07e7fd7d985413d569e55ae9b175c91f0f
   source_path: gateway/network-model.md

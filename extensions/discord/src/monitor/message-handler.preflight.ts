@@ -22,6 +22,7 @@ import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import { logDebug } from "openclaw/plugin-sdk/text-runtime";
+import { resolveDefaultDiscordAccountId } from "../accounts.js";
 import {
   isDiscordGroupAllowedByPolicy,
   normalizeDiscordSlug,
@@ -119,6 +120,50 @@ function isBoundThreadBotSystemMessage(params: {
     return false;
   }
   return DISCORD_BOUND_THREAD_SYSTEM_PREFIXES.some((prefix) => text.startsWith(prefix));
+}
+
+function resolveDiscordMentionState(params: {
+  authorIsBot: boolean;
+  botId?: string;
+  hasAnyMention: boolean;
+  isDirectMessage: boolean;
+  isExplicitlyMentioned: boolean;
+  mentionRegexes: RegExp[];
+  mentionText: string;
+  mentionedEveryone: boolean;
+  referencedAuthorId?: string;
+  senderIsPluralKit: boolean;
+  transcript?: string;
+}): { implicitMention: boolean; wasMentioned: boolean } {
+  if (params.isDirectMessage) {
+    return {
+      implicitMention: false,
+      wasMentioned: false,
+    };
+  }
+
+  const everyoneMentioned =
+    params.mentionedEveryone && (!params.authorIsBot || params.senderIsPluralKit);
+  const wasMentioned =
+    everyoneMentioned ||
+    matchesMentionWithExplicit({
+      text: params.mentionText,
+      mentionRegexes: params.mentionRegexes,
+      explicit: {
+        hasAnyMention: params.hasAnyMention,
+        isExplicitlyMentioned: params.isExplicitlyMentioned,
+        canResolveExplicit: Boolean(params.botId),
+      },
+      transcript: params.transcript,
+    });
+  const implicitMention = Boolean(
+    params.botId && params.referencedAuthorId && params.referencedAuthorId === params.botId,
+  );
+
+  return {
+    implicitMention,
+    wasMentioned,
+  };
 }
 
 export function resolvePreflightMentionRequirement(params: {
@@ -342,7 +387,7 @@ export async function preflightDiscordMessage(
 
   const dmPolicy = params.discordConfig?.dmPolicy ?? params.discordConfig?.dm?.policy ?? "pairing";
   const useAccessGroups = params.cfg.commands?.useAccessGroups !== false;
-  const resolvedAccountId = params.accountId ?? DEFAULT_ACCOUNT_ID;
+  const resolvedAccountId = params.accountId ?? resolveDefaultDiscordAccountId(params.cfg);
   const allowNameMatching = isDangerousNameMatchingEnabled(params.discordConfig);
   let commandAuthorized = true;
   if (isDirectMessage) {
@@ -751,24 +796,19 @@ export async function preflightDiscordMessage(
   }
 
   const mentionText = hasTypedText ? baseText : "";
-  const wasMentioned =
-    !isDirectMessage &&
-    matchesMentionWithExplicit({
-      text: mentionText,
-      mentionRegexes,
-      explicit: {
-        hasAnyMention,
-        isExplicitlyMentioned: explicitlyMentioned,
-        canResolveExplicit: Boolean(botId),
-      },
-      transcript: preflightTranscript,
-    });
-  const implicitMention = Boolean(
-    !isDirectMessage &&
-    botId &&
-    message.referencedMessage?.author?.id &&
-    message.referencedMessage.author.id === botId,
-  );
+  const { implicitMention, wasMentioned } = resolveDiscordMentionState({
+    authorIsBot: Boolean(author.bot),
+    botId,
+    hasAnyMention,
+    isDirectMessage,
+    isExplicitlyMentioned: explicitlyMentioned,
+    mentionRegexes,
+    mentionText,
+    mentionedEveryone: Boolean(message.mentionedEveryone),
+    referencedAuthorId: message.referencedMessage?.author?.id,
+    senderIsPluralKit: sender.isPluralKit,
+    transcript: preflightTranscript,
+  });
   if (shouldLogVerbose()) {
     logVerbose(
       `discord: inbound id=${message.id} guild=${params.data.guild_id ?? "dm"} channel=${messageChannelId} mention=${wasMentioned ? "yes" : "no"} type=${isDirectMessage ? "dm" : isGroupDm ? "group-dm" : "guild"} content=${messageText ? "yes" : "no"}`,

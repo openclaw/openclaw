@@ -8,7 +8,7 @@ import {
   resolveAnthropicBetas,
   resolveAnthropicFastMode,
   resolveAnthropicServiceTier,
-} from "../../extensions/anthropic/api.js";
+} from "../../test/helpers/providers/anthropic-contract.js";
 import { createConfiguredOllamaCompatNumCtxWrapper } from "../plugin-sdk/ollama.js";
 import { __testing as extraParamsTesting } from "./pi-embedded-runner/extra-params.js";
 import {
@@ -161,11 +161,14 @@ beforeEach(() => {
           params.context.thinkingLevel,
         );
       }
-      if (params.provider === "kimi") {
+      if (params.provider === "test-anthropic-tool-compat") {
         return createAnthropicToolPayloadCompatibilityWrapper(params.context.streamFn, {
           toolSchemaMode: "openai-functions",
           toolChoiceMode: "openai-string-modes",
         });
+      }
+      if (params.provider === "kimi") {
+        return params.context.streamFn;
       }
       if (params.provider === "minimax" || params.provider === "minimax-portal") {
         return createMinimaxFastModeWrapper(
@@ -707,6 +710,66 @@ describe("applyExtraParamsToAgent", () => {
     expect(payloads[0]).not.toHaveProperty("reasoning_effort");
   });
 
+  it("keeps disabled reasoning payloads for native OpenAI responses routes", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        reasoning: { effort: "none", summary: "auto" },
+      };
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "openai", "gpt-5", undefined, "off");
+
+    const model = {
+      api: "openai-responses",
+      provider: "openai",
+      id: "gpt-5",
+      baseUrl: "https://api.openai.com/v1",
+    } as Model<"openai-responses">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).toEqual({
+      context_management: [{ type: "compaction", compact_threshold: 80000 }],
+      reasoning: { effort: "none", summary: "auto" },
+      store: true,
+    });
+  });
+
+  it("keeps disabled reasoning payloads for proxied OpenAI responses routes", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        reasoning: { effort: "none", summary: "auto" },
+      };
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "openai", "gpt-5", undefined, "off");
+
+    const model = {
+      api: "openai-responses",
+      provider: "openai",
+      id: "gpt-5",
+      baseUrl: "https://proxy.example.com/v1",
+    } as Model<"openai-responses">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).toEqual({
+      reasoning: { effort: "none", summary: "auto" },
+    });
+  });
+
   it("injects parallel_tool_calls for openai-completions payloads when configured", () => {
     const payload = runParallelToolCallsPayloadMutationCase({
       applyProvider: "nvidia-nim",
@@ -1164,7 +1227,7 @@ describe("applyExtraParamsToAgent", () => {
     });
   });
 
-  it("rewrites anthropic tool payloads for Kimi", () => {
+  it("keeps anthropic tool payloads native for Kimi", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = {
@@ -1201,22 +1264,16 @@ describe("applyExtraParamsToAgent", () => {
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.tools).toEqual([
       {
-        type: "function",
-        function: {
-          name: "read",
-          description: "Read file",
-          parameters: {
-            type: "object",
-            properties: { path: { type: "string" } },
-            required: ["path"],
-          },
+        name: "read",
+        description: "Read file",
+        input_schema: {
+          type: "object",
+          properties: { path: { type: "string" } },
+          required: ["path"],
         },
       },
     ]);
-    expect(payloads[0]?.tool_choice).toEqual({
-      type: "function",
-      function: { name: "read" },
-    });
+    expect(payloads[0]?.tool_choice).toEqual({ type: "tool", name: "read" });
   });
 
   it("does not rewrite anthropic tool schema for non-kimi endpoints", () => {
@@ -1319,11 +1376,18 @@ describe("applyExtraParamsToAgent", () => {
     };
     const agent = { streamFn: baseStreamFn };
 
-    applyExtraParamsToAgent(agent, undefined, "kimi", "proxy-model", undefined, "low");
+    applyExtraParamsToAgent(
+      agent,
+      undefined,
+      "test-anthropic-tool-compat",
+      "proxy-model",
+      undefined,
+      "low",
+    );
 
     const model = {
       api: "anthropic-messages",
-      provider: "kimi",
+      provider: "test-anthropic-tool-compat",
       id: "proxy-model",
     } as Model<"anthropic-messages">;
     const context: Context = { messages: [] };
@@ -1516,7 +1580,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(calls[0]?.transport).toBe("auto");
   });
 
-  it("defaults OpenAI transport to auto without websocket warm-up", () => {
+  it("defaults OpenAI transport to auto with websocket warm-up", () => {
     const { calls, agent } = createOptionsCaptureAgent();
 
     applyExtraParamsToAgent(agent, undefined, "openai", "gpt-5");
@@ -1531,7 +1595,7 @@ describe("applyExtraParamsToAgent", () => {
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.transport).toBe("auto");
-    expect(calls[0]?.openaiWsWarmup).toBe(false);
+    expect(calls[0]?.openaiWsWarmup).toBe(true);
   });
 
   it("injects native Codex web_search for direct openai-codex Responses models", () => {
@@ -2109,7 +2173,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.store).toBe(true);
   });
 
-  it("strips disabled OpenAI reasoning payloads instead of sending effort:none", () => {
+  it("keeps disabled OpenAI reasoning payloads on native Responses routes", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "openai",
       applyModelId: "gpt-5-mini",
@@ -2124,10 +2188,10 @@ describe("applyExtraParamsToAgent", () => {
         reasoning: { effort: "none" },
       },
     });
-    expect(payload).not.toHaveProperty("reasoning");
+    expect(payload.reasoning).toEqual({ effort: "none" });
   });
 
-  it("strips disabled Azure OpenAI Responses reasoning payloads", () => {
+  it("keeps disabled Azure OpenAI Responses reasoning payloads", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "azure-openai-responses",
       applyModelId: "gpt-5-mini",
@@ -2142,7 +2206,7 @@ describe("applyExtraParamsToAgent", () => {
         reasoning: { effort: "none" },
       },
     });
-    expect(payload).not.toHaveProperty("reasoning");
+    expect(payload.reasoning).toEqual({ effort: "none" });
   });
 
   it("injects configured OpenAI service_tier into Responses payloads", () => {

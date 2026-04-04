@@ -34,7 +34,10 @@ let buildProviderAuthDoctorHintWithPlugin: typeof import("./provider-runtime.js"
 let buildProviderMissingAuthMessageWithPlugin: typeof import("./provider-runtime.js").buildProviderMissingAuthMessageWithPlugin;
 let buildProviderUnknownModelHintWithPlugin: typeof import("./provider-runtime.js").buildProviderUnknownModelHintWithPlugin;
 let applyProviderNativeStreamingUsageCompatWithPlugin: typeof import("./provider-runtime.js").applyProviderNativeStreamingUsageCompatWithPlugin;
+let applyProviderConfigDefaultsWithPlugin: typeof import("./provider-runtime.js").applyProviderConfigDefaultsWithPlugin;
 let formatProviderAuthProfileApiKeyWithPlugin: typeof import("./provider-runtime.js").formatProviderAuthProfileApiKeyWithPlugin;
+let classifyProviderFailoverReasonWithPlugin: typeof import("./provider-runtime.js").classifyProviderFailoverReasonWithPlugin;
+let matchesProviderContextOverflowWithPlugin: typeof import("./provider-runtime.js").matchesProviderContextOverflowWithPlugin;
 let normalizeProviderConfigWithPlugin: typeof import("./provider-runtime.js").normalizeProviderConfigWithPlugin;
 let normalizeProviderModelIdWithPlugin: typeof import("./provider-runtime.js").normalizeProviderModelIdWithPlugin;
 let applyProviderResolvedModelCompatWithPlugins: typeof import("./provider-runtime.js").applyProviderResolvedModelCompatWithPlugins;
@@ -127,6 +130,7 @@ function createOpenAiCatalogProviderPlugin(
       { provider: "openai", id: "gpt-5.4-mini", name: "gpt-5.4-mini" },
       { provider: "openai", id: "gpt-5.4-nano", name: "gpt-5.4-nano" },
       { provider: "openai-codex", id: "gpt-5.4", name: "gpt-5.4" },
+      { provider: "openai-codex", id: "gpt-5.4-mini", name: "gpt-5.4-mini" },
       {
         provider: "openai-codex",
         id: "gpt-5.3-codex-spark",
@@ -252,9 +256,12 @@ describe("provider-runtime", () => {
       buildProviderMissingAuthMessageWithPlugin,
       buildProviderUnknownModelHintWithPlugin,
       applyProviderNativeStreamingUsageCompatWithPlugin,
+      applyProviderConfigDefaultsWithPlugin,
       applyProviderResolvedModelCompatWithPlugins,
       applyProviderResolvedTransportWithPlugin,
+      classifyProviderFailoverReasonWithPlugin,
       formatProviderAuthProfileApiKeyWithPlugin,
+      matchesProviderContextOverflowWithPlugin,
       normalizeProviderConfigWithPlugin,
       normalizeProviderModelIdWithPlugin,
       normalizeProviderTransportWithPlugin,
@@ -380,6 +387,78 @@ describe("provider-runtime", () => {
     ).toMatchObject({
       baseUrl: "https://normalized.example.com/v1",
     });
+  });
+
+  it("resolves provider config defaults through owner plugins", () => {
+    resolveOwningPluginIdsForProviderMock.mockReturnValue(["anthropic"]);
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: "anthropic",
+        label: "Anthropic",
+        auth: [],
+        applyConfigDefaults: ({ config }) => ({
+          ...config,
+          agents: {
+            defaults: {
+              heartbeat: { every: "1h" },
+            },
+          },
+        }),
+      },
+    ]);
+
+    expect(
+      applyProviderConfigDefaultsWithPlugin({
+        provider: "anthropic",
+        context: {
+          provider: "anthropic",
+          env: {},
+          config: {},
+        },
+      }),
+    ).toMatchObject({
+      agents: {
+        defaults: {
+          heartbeat: {
+            every: "1h",
+          },
+        },
+      },
+    });
+  });
+
+  it("resolves failover classification through hook-only aliases", () => {
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: "openai",
+        label: "OpenAI",
+        hookAliases: ["azure-openai-responses"],
+        auth: [],
+        matchesContextOverflowError: ({ errorMessage }) =>
+          /\bcontent_filter\b.*\btoo long\b/i.test(errorMessage),
+        classifyFailoverReason: ({ errorMessage }) =>
+          /\bquota exceeded\b/i.test(errorMessage) ? "rate_limit" : undefined,
+      },
+    ]);
+
+    expect(
+      matchesProviderContextOverflowWithPlugin({
+        provider: "azure-openai-responses",
+        context: {
+          provider: "azure-openai-responses",
+          errorMessage: "content_filter prompt too long",
+        },
+      }),
+    ).toBe(true);
+    expect(
+      classifyProviderFailoverReasonWithPlugin({
+        provider: "azure-openai-responses",
+        context: {
+          provider: "azure-openai-responses",
+          errorMessage: "quota exceeded",
+        },
+      }),
+    ).toBe("rate_limit");
   });
 
   it("resolves stream wrapper hooks through hook-only aliases without provider ownership", () => {
@@ -934,7 +1013,7 @@ describe("provider-runtime", () => {
           resolveProviderCacheTtlEligibility({
             provider: DEMO_PROVIDER_ID,
             context: createDemoProviderContext({
-              modelId: "anthropic/claude-sonnet-4-5",
+              modelId: "anthropic/claude-sonnet-4-6",
             }),
           }),
         expected: true,
@@ -1166,10 +1245,10 @@ describe("provider-runtime", () => {
         context: {
           env: process.env,
           entries: [
-            { provider: "openai", id: "gpt-5.2", name: "GPT-5.2" },
-            { provider: "openai", id: "gpt-5.2-pro", name: "GPT-5.2 Pro" },
-            { provider: "openai", id: "gpt-5-mini", name: "GPT-5 mini" },
-            { provider: "openai", id: "gpt-5-nano", name: "GPT-5 nano" },
+            { provider: "openai", id: "gpt-5.4", name: "GPT-5.2" },
+            { provider: "openai", id: "gpt-5.4-pro", name: "GPT-5.2 Pro" },
+            { provider: "openai", id: "gpt-5.4-mini", name: "GPT-5 mini" },
+            { provider: "openai", id: "gpt-5.4-nano", name: "GPT-5 nano" },
             { provider: "openai-codex", id: "gpt-5.4", name: "GPT-5.4" },
           ],
         },

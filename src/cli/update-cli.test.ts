@@ -3,16 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { TEST_BUNDLED_RUNTIME_SIDECAR_PATHS } from "../../test/helpers/bundled-runtime-sidecars.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/types.openclaw.js";
 import type { UpdateRunResult } from "../infra/update-runner.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createCliRuntimeCapture } from "./test-runtime-capture.js";
-
-const TEST_BUNDLED_RUNTIME_SIDECAR_PATHS = [
-  "dist/extensions/discord/runtime-api.js",
-  "dist/extensions/slack/helper-api.js",
-  "dist/extensions/telegram/thread-bindings-runtime.js",
-] as const;
+import { isOwningNpmCommand } from "./update-cli.test-helpers.js";
 
 const confirm = vi.fn();
 const select = vi.fn();
@@ -751,6 +747,7 @@ describe("update-cli", () => {
     const brewRoot = path.join(brewPrefix, "lib", "node_modules");
     const pkgRoot = path.join(brewRoot, "openclaw");
     const brewNpm = path.join(brewPrefix, "bin", "npm");
+    const win32PrefixNpm = path.join(brewPrefix, "npm.cmd");
     const pathNpmRoot = createCaseDir("nvm-root");
     mockPackageInstallStatus(pkgRoot);
     pathExists.mockResolvedValue(false);
@@ -776,7 +773,7 @@ describe("update-cli", () => {
           termination: "exit",
         };
       }
-      if (argv[0] === brewNpm && argv[1] === "root" && argv[2] === "-g") {
+      if (isOwningNpmCommand(argv[0], brewPrefix) && argv[1] === "root" && argv[2] === "-g") {
         return {
           stdout: `${brewRoot}\n`,
           stderr: "",
@@ -798,14 +795,40 @@ describe("update-cli", () => {
 
     await fs.mkdir(path.dirname(brewNpm), { recursive: true });
     await fs.writeFile(brewNpm, "", "utf8");
+    await fs.writeFile(win32PrefixNpm, "", "utf8");
     await updateCommand({ yes: true });
 
     platformSpy.mockRestore();
 
     expect(runGatewayUpdate).not.toHaveBeenCalled();
-    expect(runCommandWithTimeout).toHaveBeenCalledWith(
-      [brewNpm, "i", "-g", "openclaw@latest", "--no-fund", "--no-audit", "--loglevel=error"],
-      expect.any(Object),
+    const installCall = vi
+      .mocked(runCommandWithTimeout)
+      .mock.calls.find(
+        ([argv]) =>
+          Array.isArray(argv) &&
+          isOwningNpmCommand(argv[0], brewPrefix) &&
+          argv[1] === "i" &&
+          argv[2] === "-g" &&
+          argv[3] === "openclaw@latest",
+      );
+
+    expect(installCall).toBeDefined();
+    const installCommand = String(installCall?.[0][0] ?? "");
+    expect(installCommand).not.toBe("npm");
+    expect(path.isAbsolute(installCommand)).toBe(true);
+    expect(path.normalize(installCommand)).toContain(path.normalize(brewPrefix));
+    expect(path.normalize(installCommand)).toMatch(
+      new RegExp(
+        `${path
+          .normalize(path.join(brewPrefix, path.sep))
+          .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}.*npm(?:\\.cmd)?$`,
+        "i",
+      ),
+    );
+    expect(installCall?.[1]).toEqual(
+      expect.objectContaining({
+        timeoutMs: expect.any(Number),
+      }),
     );
   });
 

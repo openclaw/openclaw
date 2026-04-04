@@ -4,16 +4,10 @@ import type {
   ProviderFetchUsageSnapshotContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth-result";
-import { createGoogleThinkingPayloadWrapper } from "openclaw/plugin-sdk/provider-stream";
 import { fetchGeminiUsage } from "openclaw/plugin-sdk/provider-usage";
+import { formatGoogleOauthApiKey, parseGoogleUsageToken } from "./oauth-token-shared.js";
 import { isModernGoogleModel, resolveGoogle31ForwardCompatModel } from "./provider-models.js";
-import {
-  buildGoogleReplayPolicy,
-  inspectGoogleGeminiCliToolSchemas,
-  normalizeGoogleGeminiCliToolSchemas,
-  resolveGoogleReasoningOutputMode,
-  sanitizeGoogleReplayHistory,
-} from "./replay-policy.js";
+import { buildGoogleGeminiProviderHooks } from "./replay-policy.js";
 
 const PROVIDER_ID = "google-gemini-cli";
 const PROVIDER_LABEL = "Gemini CLI OAuth";
@@ -25,31 +19,9 @@ const ENV_VARS = [
   "GEMINI_CLI_OAUTH_CLIENT_SECRET",
 ];
 
-function parseGoogleUsageToken(apiKey: string): string {
-  try {
-    const parsed = JSON.parse(apiKey) as { token?: unknown };
-    if (typeof parsed?.token === "string") {
-      return parsed.token;
-    }
-  } catch {
-    // ignore
-  }
-  return apiKey;
-}
-
-function formatGoogleOauthApiKey(cred: {
-  type?: string;
-  access?: string;
-  projectId?: string;
-}): string {
-  if (cred.type !== "oauth" || typeof cred.access !== "string" || !cred.access.trim()) {
-    return "";
-  }
-  return JSON.stringify({
-    token: cred.access,
-    projectId: cred.projectId,
-  });
-}
+const GOOGLE_GEMINI_CLI_PROVIDER_HOOKS = buildGoogleGeminiProviderHooks({
+  includeToolSchemaCompat: true,
+});
 
 async function fetchGeminiCliUsage(ctx: ProviderFetchUsageSnapshotContext) {
   return await fetchGeminiUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn, PROVIDER_ID);
@@ -131,12 +103,7 @@ export function registerGoogleGeminiCliProvider(api: OpenClawPluginApi) {
     },
     resolveDynamicModel: (ctx) =>
       resolveGoogle31ForwardCompatModel({ providerId: PROVIDER_ID, ctx }),
-    buildReplayPolicy: () => buildGoogleReplayPolicy(),
-    wrapStreamFn: (ctx) => createGoogleThinkingPayloadWrapper(ctx.streamFn, ctx.thinkingLevel),
-    sanitizeReplayHistory: (ctx) => sanitizeGoogleReplayHistory(ctx),
-    normalizeToolSchemas: (ctx) => normalizeGoogleGeminiCliToolSchemas(ctx),
-    inspectToolSchemas: (ctx) => inspectGoogleGeminiCliToolSchemas(ctx),
-    resolveReasoningOutputMode: () => resolveGoogleReasoningOutputMode(),
+    ...GOOGLE_GEMINI_CLI_PROVIDER_HOOKS,
     isModernModelRef: ({ modelId }) => isModernGoogleModel(modelId),
     formatApiKey: (cred) => formatGoogleOauthApiKey(cred),
     resolveUsageAuth: async (ctx) => {
