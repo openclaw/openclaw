@@ -727,29 +727,49 @@ export function hasDurableExecApproval(params: {
   allowlist?: readonly ExecAllowlistEntry[];
   commandText?: string | null;
 }): boolean {
-  const normalizedCommand = params.commandText?.trim();
-  const commandPattern = normalizedCommand
-    ? buildDurableCommandApprovalPattern(normalizedCommand)
-    : null;
-  const exactCommandMatch = normalizedCommand
-    ? (params.allowlist ?? []).some(
-        (entry) =>
-          entry.source === "allow-always" &&
-          (entry.pattern === commandPattern ||
-            (typeof entry.commandText === "string" &&
-              entry.commandText.trim() === normalizedCommand)),
-      )
-    : false;
-  const allowlistMatch =
-    params.analysisOk &&
-    params.segmentAllowlistEntries.length > 0 &&
-    params.segmentAllowlistEntries.every((entry) => entry?.source === "allow-always");
-  return exactCommandMatch || allowlistMatch;
+  return (
+    hasExactCommandDurableExecApproval({
+      allowlist: params.allowlist,
+      commandText: params.commandText,
+    }) ||
+    hasSegmentDurableExecApproval({
+      analysisOk: params.analysisOk,
+      segmentAllowlistEntries: params.segmentAllowlistEntries,
+    })
+  );
 }
 
 function buildDurableCommandApprovalPattern(commandText: string): string {
   const digest = crypto.createHash("sha256").update(commandText).digest("hex").slice(0, 16);
   return `=command:${digest}`;
+}
+
+function hasExactCommandDurableExecApproval(params: {
+  allowlist?: readonly ExecAllowlistEntry[];
+  commandText?: string | null;
+}): boolean {
+  const normalizedCommand = params.commandText?.trim();
+  if (!normalizedCommand) {
+    return false;
+  }
+  const commandPattern = buildDurableCommandApprovalPattern(normalizedCommand);
+  return (params.allowlist ?? []).some(
+    (entry) =>
+      entry.source === "allow-always" &&
+      (entry.pattern === commandPattern ||
+        (typeof entry.commandText === "string" && entry.commandText.trim() === normalizedCommand)),
+  );
+}
+
+function hasSegmentDurableExecApproval(params: {
+  analysisOk: boolean;
+  segmentAllowlistEntries: Array<ExecAllowlistEntry | null>;
+}): boolean {
+  return (
+    params.analysisOk &&
+    params.segmentAllowlistEntries.length > 0 &&
+    params.segmentAllowlistEntries.every((entry) => entry?.source === "allow-always")
+  );
 }
 
 export function recordAllowlistUse(

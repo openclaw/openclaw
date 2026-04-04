@@ -28,6 +28,7 @@ Docs: https://docs.openclaw.ai
 - Agents/system prompts: add an internal cache-prefix boundary across Anthropic-family, OpenAI-family, Google, and CLI transport shaping so stable system-prompt prefixes stay reusable without leaking internal cache markers to provider payloads. (#59054) Thanks @coletebou and @vincentkoc.
 - Docs/memory: add a dedicated Dreaming concept page, expand Memory overview with the Dreaming model, and link Dreaming from further reading to document the experimental opt-in consolidation workflow. Thanks @vignesh07.
 - Agents/cache prefixes: route compaction, OpenAI WebSocket HTTP fallback, and later-turn embedded session reuse through the same cache-safe prompt shaping path so Anthropic-family and OpenAI-family requests keep stable prompt bytes across follow-up turns and fallback transport changes. (#60691) Thanks @vincentkoc.
+- Agents/Claude CLI: expose OpenClaw tools to background Claude CLI runs through a loopback MCP bridge that reuses gateway tool policy, honors session/account/channel scoping, and only advertises the bridge when the local runtime is actually live. (#35676) Thanks @mylukin.
 
 ### Fixes
 
@@ -102,6 +103,7 @@ Docs: https://docs.openclaw.ai
 - Exec/Windows: include Windows-compatible env override keys like `ProgramFiles(x86)` in system-run approval binding so changed approved values are rejected instead of silently passing unbound. (#59182) Thanks @pgondhi987.
 - ACP/Windows spawn: fail closed on unresolved `.cmd` and `.bat` OpenClaw wrappers unless a caller explicitly opts into shell fallback, so Windows ACP launches do not silently drop into shell-mediated execution when wrapper unwrapping fails. (#58436) Thanks @eleqtrizit.
 - Exec/Windows: prefer strict-inline-eval denial over generic allowlist prompts for interpreter carriers, while keeping persisted Windows allow-always approvals argv-bound. (#59780) Thanks @luoyanglang.
+- Exec/gateway: honor durable exact-command `allow-always` trust on repeated allowlist-mode gateway execs so identical reruns stop prompting after approval. (#59880) Thanks @luoyanglang.
 - Gateway/connect: omit admin-scoped config and auth metadata from lower-privilege `hello-ok` snapshots while preserving those fields for admin reconnects. (#58469) Thanks @eleqtrizit.
 - iOS/canvas: restrict A2UI bridge trust to the bundled scaffold and exact capability-backed remote canvas URLs, so generic `canvas.navigate` and `canvas.present` loads no longer gain action-dispatch authority. (#58471) Thanks @eleqtrizit.
 - Agents/tool policy: preserve restrictive plugin-only allowlists instead of silently widening access to core tools, and keep allowlist warnings aligned with the enforced policy. (#58476) Thanks @eleqtrizit.

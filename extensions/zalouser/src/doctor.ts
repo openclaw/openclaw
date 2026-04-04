@@ -7,6 +7,8 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { collectProviderDangerousNameMatchingScopes } from "openclaw/plugin-sdk/runtime";
 import { isZalouserMutableGroupEntry } from "./security-audit.js";
 
+type ZalouserChannelsConfig = NonNullable<OpenClawConfig["channels"]>;
+
 function asObjectRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -132,7 +134,7 @@ function normalizeZalouserCompatibilityConfig(cfg: OpenClawConfig): ChannelDocto
       ...cfg,
       channels: {
         ...cfg.channels,
-        zalouser: updatedZalouser as OpenClawConfig["channels"]["zalouser"],
+        zalouser: updatedZalouser as ZalouserChannelsConfig["zalouser"],
       },
     },
     changes,

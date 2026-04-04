@@ -125,6 +125,8 @@ openclaw [--dev] [--profile <name>] <command>
   channels
     list
     status
+    capabilities
+    resolve
     logs
     add
     remove
@@ -132,6 +134,9 @@ openclaw [--dev] [--profile <name>] <command>
     logout
   directory
   skills
+    search
+    install
+    update
     list
     info
     check

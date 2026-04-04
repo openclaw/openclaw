@@ -48,6 +48,14 @@
     "target": "快速开始"
   },
   {
+    "source": "Chutes",
+    "target": "Chutes"
+  },
+  {
+    "source": "Qwen",
+    "target": "Qwen"
+  },
+  {
     "source": "Diffs",
     "target": "Diffs"
   },
