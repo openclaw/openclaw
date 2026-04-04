@@ -46,14 +46,12 @@ import {
   listSlackDirectoryGroupsFromConfig,
   listSlackDirectoryPeersFromConfig,
 } from "./directory-config.js";
-import { listSlackDirectoryGroupsLive, listSlackDirectoryPeersLive } from "./directory-live.js";
 import { shouldSuppressLocalSlackExecApprovalPrompt } from "./exec-approvals.js";
 import { resolveSlackGroupRequireMention, resolveSlackGroupToolPolicy } from "./group-policy.js";
 import { isSlackInteractiveRepliesEnabled } from "./interactive-replies.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
-import { monitorSlackProvider } from "./monitor.js";
 import { slackOutbound } from "./outbound-adapter.js";
-import { probeSlack, type SlackProbe } from "./probe.js";
+import type { SlackProbe } from "./probe.js";
 import { resolveSlackReplyBlocks } from "./reply-blocks.js";
 import { resolveSlackChannelAllowlist } from "./resolve-channels.js";
 import { resolveSlackUserAllowlist } from "./resolve-users.js";
@@ -93,10 +91,6 @@ const resolveSlackDmPolicy = createScopedDmSecurityResolver<ResolvedSlackAccount
       .trim(),
 });
 
-function resolveSlackProbe() {
-  return probeSlack;
-}
-
 async function resolveSlackHandleAction() {
   return (
     getOptionalSlackRuntime()?.channel?.slack?.handleSlackAction ??
@@ -125,6 +119,9 @@ type SlackSendFn = typeof import("./send.runtime.js").sendMessageSlack;
 
 let slackActionRuntimePromise: Promise<typeof import("./action-runtime.runtime.js")> | undefined;
 let slackSendRuntimePromise: Promise<typeof import("./send.runtime.js")> | undefined;
+let slackProbeModulePromise: Promise<typeof import("./probe.js")> | undefined;
+let slackMonitorModulePromise: Promise<typeof import("./monitor.js")> | undefined;
+let slackDirectoryLiveModulePromise: Promise<typeof import("./directory-live.js")> | undefined;
 
 async function loadSlackActionRuntime() {
   slackActionRuntimePromise ??= import("./action-runtime.runtime.js");
@@ -134,6 +131,21 @@ async function loadSlackActionRuntime() {
 async function loadSlackSendRuntime() {
   slackSendRuntimePromise ??= import("./send.runtime.js");
   return await slackSendRuntimePromise;
+}
+
+async function loadSlackProbeModule() {
+  slackProbeModulePromise ??= import("./probe.js");
+  return await slackProbeModulePromise;
+}
+
+async function loadSlackMonitorModule() {
+  slackMonitorModulePromise ??= import("./monitor.js");
+  return await slackMonitorModulePromise;
+}
+
+async function loadSlackDirectoryLiveModule() {
+  slackDirectoryLiveModulePromise ??= import("./directory-live.js");
+  return await slackDirectoryLiveModulePromise;
 }
 
 async function resolveSlackSendContext(params: {
@@ -341,10 +353,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
       listPeers: async (params) => listSlackDirectoryPeersFromConfig(params),
       listGroups: async (params) => listSlackDirectoryGroupsFromConfig(params),
       ...createRuntimeDirectoryLiveAdapter({
-        getRuntime: () => ({
-          listDirectoryGroupsLive: listSlackDirectoryGroupsLive,
-          listDirectoryPeersLive: listSlackDirectoryPeersLive,
-        }),
+        getRuntime: loadSlackDirectoryLiveModule,
         listPeersLive: (runtime) => runtime.listDirectoryPeersLive,
         listGroupsLive: (runtime) => runtime.listDirectoryGroupsLive,
       }),
@@ -403,7 +412,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         if (!token) {
           return { ok: false, error: "missing token" };
         }
-        return await resolveSlackProbe()(token, timeoutMs);
+        return await (await loadSlackProbeModule()).probeSlack(token, timeoutMs);
       },
       formatCapabilitiesProbe: ({ probe }) => {
         const slackProbe = probe as SlackProbe | undefined;
@@ -463,7 +472,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         const botToken = account.botToken?.trim();
         const appToken = account.appToken?.trim();
         ctx.log?.info(`[${account.accountId}] starting provider`);
-        return monitorSlackProvider({
+        return (await loadSlackMonitorModule()).monitorSlackProvider({
           botToken: botToken ?? "",
           appToken: appToken ?? "",
           accountId: account.accountId,
