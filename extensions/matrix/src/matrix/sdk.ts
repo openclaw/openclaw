@@ -25,7 +25,7 @@ import { matrixEventToRaw, parseMxc } from "./sdk/event-helpers.js";
 import { MatrixAuthedHttpClient } from "./sdk/http-client.js";
 import { MATRIX_IDB_PERSIST_INTERVAL_MS } from "./sdk/idb-persistence-lock.js";
 import { ConsoleLogger, LogService, noop } from "./sdk/logger.js";
-import { MatrixRecoveryKeyStore } from "./sdk/recovery-key-store.js";
+import { MatrixRecoveryKeyStore, isRepairableSecretStorageAccessError } from "./sdk/recovery-key-store.js";
 import { createMatrixGuardedFetch, type HttpMethod, type QueryParams } from "./sdk/transport.js";
 import type {
   MatrixClientEventMap,
@@ -1151,6 +1151,18 @@ export class MatrixClient {
 
     previousVersion = await this.resolveRoomKeyBackupVersion();
 
+    // Check whether the SSSS key is currently broken (bad MAC or callback failure)
+    // before deleting the old backup. If so, we must force SSSS recreation during
+    // the bootstrap below; otherwise bootstrapSecretStorage writes the new backup
+    // key to SSSS encrypted with a key that does not match recovery_key.json, causing
+    // every subsequent cold-start loadSessionBackupPrivateKeyFromSecretStorage call
+    // to fail with bad MAC even after an apparently successful reset.
+    const preResetBackupStatus = previousVersion ? await this.getRoomKeyBackupStatus() : null;
+    const ssssKeyIsBroken =
+      preResetBackupStatus?.keyLoadAttempted === true &&
+      typeof preResetBackupStatus.keyLoadError === "string" &&
+      isRepairableSecretStorageAccessError(new Error(preResetBackupStatus.keyLoadError));
+
     try {
       if (previousVersion) {
         try {
@@ -1168,6 +1180,12 @@ export class MatrixClient {
 
       await this.recoveryKeyStore.bootstrapSecretStorageWithRecoveryKey(crypto, {
         setupNewKeyBackup: true,
+        // Force SSSS recreation when the existing SSSS key is broken (bad MAC), so
+        // the new backup key is written into a fresh SSSS consistent with recovery_key.json.
+        forceNewSecretStorage: ssssKeyIsBroken,
+        // Also allow recreation if bootstrapSecretStorage itself surfaces a repairable
+        // error (e.g. bad MAC from a different SSSS entry).
+        allowSecretStorageRecreateWithoutRecoveryKey: true,
       });
       await this.enableTrustedRoomKeyBackupIfPossible(crypto);
 

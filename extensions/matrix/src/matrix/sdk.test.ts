@@ -1918,6 +1918,74 @@ describe("MatrixClient crypto bootstrapping", () => {
     expect(result.backup.matchesDecryptionKey).toBe(false);
   });
 
+  it("forces SSSS recreation when the pre-reset backup status shows a bad MAC key-load error", async () => {
+    // Simulates the state after a cross-signing bootstrap that recreated SSSS but left the
+    // old m.megolm_backup.v1 SSSS entry (encrypted with the old key) on the homeserver.
+    // getRoomKeyBackupStatus calls resolveRoomKeyBackupLocalState twice per invocation
+    // (once before and once after the load attempt), so getSessionBackupPrivateKey
+    // returns null for the first two calls (pre-reset, decryptionKeyCached = false
+    // → load is attempted → bad MAC) then a real key thereafter (post-reset).
+    const bootstrapSecretStorage = vi.fn(async () => {});
+    const checkKeyBackupAndEnable = vi.fn(async () => {});
+    const loadSessionBackupPrivateKeyFromSecretStorage = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Error decrypting secret m.megolm_backup.v1: bad MAC"));
+    const getSessionBackupPrivateKey = vi
+      .fn()
+      .mockResolvedValueOnce(null)             // pre-reset pass 1: no key cached
+      .mockResolvedValueOnce(null)             // pre-reset pass 2: still no key after failed load
+      .mockResolvedValue(new Uint8Array([1])); // post-reset: key is present after bootstrap
+    const getSecretStorageStatus = vi.fn(async () => ({
+      ready: true,
+      defaultKeyId: "key-new",
+    }));
+    matrixJsClient.getCrypto = vi.fn(() => ({
+      on: vi.fn(),
+      bootstrapSecretStorage,
+      checkKeyBackupAndEnable,
+      loadSessionBackupPrivateKeyFromSecretStorage,
+      getSessionBackupPrivateKey,
+      getSecretStorageStatus,
+      getActiveSessionBackupVersion: vi.fn(async () => "22000"),
+      getKeyBackupInfo: vi.fn(async () => ({
+        algorithm: "m.megolm_backup.v1.curve25519-aes-sha2",
+        auth_data: {},
+        version: "22000",
+      })),
+      isKeyBackupTrusted: vi.fn(async () => ({
+        trusted: true,
+        matchesDecryptionKey: true,
+      })),
+    }));
+
+    const client = new MatrixClient("https://matrix.example.org", "token", {
+      encryption: true,
+    });
+    vi.spyOn(client, "doRequest").mockImplementation(async (method, endpoint) => {
+      if (method === "GET" && String(endpoint).includes("/room_keys/version")) {
+        return { version: "21999" };
+      }
+      if (method === "DELETE" && String(endpoint).includes("/room_keys/version/21999")) {
+        return {};
+      }
+      return {};
+    });
+
+    const result = await client.resetRoomKeyBackup();
+
+    expect(result.success).toBe(true);
+    expect(result.createdVersion).toBe("22000");
+    // bootstrapSecretStorage must have been called with setupNewSecretStorage: true
+    // because the pre-reset bad MAC status triggered forceNewSecretStorage.
+    expect(bootstrapSecretStorage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        setupNewKeyBackup: true,
+        setupNewSecretStorage: true,
+      }),
+    );
+    expect(loadSessionBackupPrivateKeyFromSecretStorage).toHaveBeenCalledTimes(1);
+  });
+
   it("reports bootstrap failure when cross-signing keys are not published", async () => {
     matrixJsClient.getUserId = vi.fn(() => "@bot:example.org");
     matrixJsClient.getDeviceId = vi.fn(() => "DEVICE123");
