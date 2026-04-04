@@ -1,4 +1,6 @@
+import { readSessionMessages } from "../../gateway/session-utils.js";
 import { shouldLogVerbose } from "../../globals.js";
+import { emitAgentEvent } from "../../infra/agent-events.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import { requestHeartbeatNow as requestHeartbeatNowImpl } from "../../infra/heartbeat-wake.js";
 import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
@@ -27,6 +29,7 @@ import {
   CLI_BACKEND_LOG_OUTPUT_ENV,
   LEGACY_CLAUDE_CLI_LOG_OUTPUT_ENV,
 } from "./log.js";
+import { injectManagedClaudeCliArgs } from "./managed-claude-cli.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 const executeDeps = {
@@ -92,14 +95,63 @@ export async function executePreparedCliRun(
     backend,
     cliSessionId: cliSessionIdToUse,
   });
-  const useResume = Boolean(
-    cliSessionIdToUse && resolvedSessionId && backend.resumeArgs && backend.resumeArgs.length > 0,
-  );
-  const systemPromptArg = resolveSystemPromptUsage({
+  const isManagedMode = backend.sessionMode === "managed";
+  const useResume =
+    !isManagedMode &&
+    Boolean(
+      cliSessionIdToUse && resolvedSessionId && backend.resumeArgs && backend.resumeArgs.length > 0,
+    );
+  let systemPromptArg = resolveSystemPromptUsage({
     backend,
-    isNewSession: isNew,
+    isNewSession: isManagedMode ? true : isNew,
     systemPrompt: context.systemPrompt,
   });
+
+  // In managed mode, inject conversation history into the system prompt so
+  // the CLI backend sees prior turns without owning the session file.
+  if (isManagedMode && params.sessionId && params.sessionFile) {
+    try {
+      const sessionMessages = readSessionMessages(params.sessionId, undefined, params.sessionFile);
+      if (sessionMessages.length > 0) {
+        const MAX_HISTORY_CHARS = 80_000;
+        const historyLines: string[] = [];
+        let totalChars = 0;
+        for (const msg of (sessionMessages as Array<{ role: string; content: unknown }>).slice(
+          -60,
+        )) {
+          const role =
+            msg.role === "assistant" ? "Assistant" : msg.role === "user" ? "User" : "System";
+          const textParts = Array.isArray(msg.content)
+            ? (msg.content as Array<{ type: string; text?: string }>)
+                .filter((b) => b.type === "text")
+                .map((b) => b.text ?? "")
+            : typeof msg.content === "string"
+              ? [msg.content]
+              : [];
+          const text = textParts.join("\n").trim();
+          if (!text) {
+            continue;
+          }
+          const truncated = text.length > 4000 ? text.slice(0, 4000) + "\n... [truncated]" : text;
+          if (totalChars + truncated.length > MAX_HISTORY_CHARS) {
+            break;
+          }
+          historyLines.push(`[${role}]: ${truncated}`);
+          totalChars += truncated.length;
+        }
+        if (historyLines.length > 0) {
+          const historyBlock = historyLines.join("\n\n");
+          const baseSystem = systemPromptArg ?? context.systemPrompt ?? "";
+          systemPromptArg = `${baseSystem}\n\n<conversation_history>\n${historyBlock}\n</conversation_history>\n\nThe above is the conversation history. The user's new message follows as the prompt. Continue the conversation naturally.`;
+          cliBackendLog.info(
+            `cli managed: injected ${historyLines.length}/${sessionMessages.length} messages (${totalChars} chars) into system prompt`,
+          );
+        }
+      }
+    } catch (err) {
+      cliBackendLog.warn(`cli managed history injection failed: ${String(err)}`);
+    }
+  }
 
   let imagePaths: string[] | undefined;
   let cleanupImages: (() => Promise<void>) | undefined;
@@ -124,7 +176,8 @@ export async function executePreparedCliRun(
     prompt,
   });
   const stdinPayload = stdin ?? "";
-  const baseArgs = useResume ? (backend.resumeArgs ?? backend.args ?? []) : (backend.args ?? []);
+  const rawBaseArgs = useResume ? (backend.resumeArgs ?? backend.args ?? []) : (backend.args ?? []);
+  const baseArgs = injectManagedClaudeCliArgs(rawBaseArgs, context.backendResolved.id, backend);
   const resolvedArgs = useResume
     ? baseArgs.map((entry) => entry.replaceAll("{sessionId}", resolvedSessionId ?? ""))
     : baseArgs;
@@ -191,6 +244,43 @@ export async function executePreparedCliRun(
         cliSessionId: useResume ? resolvedSessionId : undefined,
       });
 
+      // Real-time streaming: parse NDJSON lines and emit agent events so
+      // typing indicators and delivery pipelines can react immediately.
+      const streamedChunks: string[] = [];
+      let stdoutBuffer = "";
+      const isJsonlMode =
+        (useResume ? (backend.resumeOutput ?? backend.output) : backend.output) === "jsonl";
+      const onStdoutStream = isJsonlMode
+        ? (chunk: string) => {
+            stdoutBuffer += chunk;
+            const lines = stdoutBuffer.split(/\r?\n/g);
+            stdoutBuffer = lines.pop() ?? "";
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (!trimmed) {
+                continue;
+              }
+              streamedChunks.push(trimmed);
+              try {
+                const parsed = JSON.parse(trimmed);
+                if (parsed.type === "assistant" && parsed.message?.content) {
+                  for (const block of parsed.message.content) {
+                    if (block.type === "text" && block.text && params.runId) {
+                      emitAgentEvent({
+                        runId: params.runId,
+                        stream: "assistant",
+                        data: { text: block.text },
+                      });
+                    }
+                  }
+                }
+              } catch {
+                // Ignore parse errors for partial lines.
+              }
+            }
+          }
+        : undefined;
+
       const managedRun = await supervisor.spawn({
         sessionId: params.sessionId,
         backendId: context.backendResolved.id,
@@ -203,10 +293,13 @@ export async function executePreparedCliRun(
         cwd: context.workspaceDir,
         env,
         input: stdinPayload,
+        ...(onStdoutStream ? { captureOutput: false, onStdout: onStdoutStream } : {}),
       });
       const result = await managedRun.wait();
 
-      const stdout = result.stdout.trim();
+      const stdout = onStdoutStream
+        ? [...streamedChunks, stdoutBuffer.trim()].filter(Boolean).join("\n")
+        : result.stdout.trim();
       const stderr = result.stderr.trim();
       if (logOutputText) {
         if (stdout) {

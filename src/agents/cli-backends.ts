@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { CliBackendConfig } from "../config/types.js";
 import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
+import { buildManagedClaudeCliConfig } from "./cli-runner/managed-claude-cli.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 export type ResolvedCliBackend = {
@@ -10,11 +11,17 @@ export type ResolvedCliBackend = {
   pluginId?: string;
 };
 
+const MANAGED_CLAUDE_CLI_ID = "managed-claude-cli";
+
+function isManagedClaudeCliBackend(provider: string): boolean {
+  return normalizeProviderId(provider) === MANAGED_CLAUDE_CLI_ID;
+}
+
 function resolveFallbackBundleMcpCapability(provider: string): boolean {
   // Claude CLI consumes explicit MCP config overlays even when the runtime
   // plugin registry is not initialized yet (for example direct runner tests or
   // narrow non-gateway entrypoints).
-  return provider === "claude-cli";
+  return provider === "claude-cli" || isManagedClaudeCliBackend(provider);
 }
 
 function normalizeBackendKey(key: string): string {
@@ -98,6 +105,23 @@ export function resolveCliBackendConfig(
   const normalized = normalizeBackendKey(provider);
   const configured = cfg?.agents?.defaults?.cliBackends ?? {};
   const override = pickBackendConfig(configured, normalized);
+
+  // managed-claude-cli: opinionated preset that auto-configures everything.
+  // Users only need to provide `command` (and optionally `token`).
+  if (isManagedClaudeCliBackend(normalized)) {
+    const userConfig = override ?? ({} as Partial<CliBackendConfig>);
+    const config = buildManagedClaudeCliConfig(userConfig as CliBackendConfig);
+    const command = config.command?.trim();
+    if (!command) {
+      return null;
+    }
+    return {
+      id: MANAGED_CLAUDE_CLI_ID,
+      config: { ...config, command },
+      bundleMcp: true,
+    };
+  }
+
   const registered = resolveRegisteredBackend(normalized);
   if (registered) {
     const merged = mergeBackendConfig(registered.config, override);

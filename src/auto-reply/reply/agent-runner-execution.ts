@@ -29,7 +29,7 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
-import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
+import { emitAgentEvent, onAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
 import {
@@ -532,6 +532,16 @@ export async function runAgentTurnWithFallback(params: {
                 : undefined;
             return (async () => {
               let lifecycleTerminalEmitted = false;
+              // Keep typing indicators alive during long CLI runs by
+              // forwarding streamed agent events to the typing signaler.
+              const unsubCliTyping = onAgentEvent((evt) => {
+                if (evt.runId === runId && evt.stream === "assistant" && evt.data) {
+                  const text = (evt.data as { text?: string }).text;
+                  if (text) {
+                    params.typingSignals.signalTextDelta(text).catch(() => {});
+                  }
+                }
+              });
               try {
                 const result = await runCliAgent({
                   sessionId: params.followupRun.run.sessionId,
@@ -588,6 +598,48 @@ export async function runAgentTurnWithFallback(params: {
                 });
                 lifecycleTerminalEmitted = true;
 
+                // In managed session mode, write the user + assistant turn back
+                // to the OpenClaw session file so future runs see the history.
+                const cliBackendConfig =
+                  params.followupRun.run.config?.agents?.defaults?.cliBackends?.[provider];
+                if (
+                  cliBackendConfig?.sessionMode === "managed" &&
+                  params.followupRun.run.sessionFile
+                ) {
+                  try {
+                    const now = new Date().toISOString();
+                    const userMsgId = crypto.randomUUID().slice(0, 8);
+                    const assistantMsgId = crypto.randomUUID().slice(0, 8);
+                    const cliResultText = result.payloads?.[0]?.text?.trim() ?? "";
+                    const userLine = JSON.stringify({
+                      type: "message",
+                      id: userMsgId,
+                      parentId: "",
+                      timestamp: now,
+                      message: {
+                        role: "user",
+                        content: [{ type: "text", text: params.commandBody }],
+                      },
+                    });
+                    const assistantLine = JSON.stringify({
+                      type: "message",
+                      id: assistantMsgId,
+                      parentId: userMsgId,
+                      timestamp: now,
+                      message: {
+                        role: "assistant",
+                        content: [{ type: "text", text: cliResultText }],
+                      },
+                    });
+                    fs.appendFileSync(
+                      params.followupRun.run.sessionFile,
+                      "\n" + userLine + "\n" + assistantLine,
+                    );
+                  } catch {
+                    // Best-effort write-back.
+                  }
+                }
+
                 return result;
               } catch (err) {
                 if (rollbackFallbackCandidateSelection) {
@@ -612,6 +664,7 @@ export async function runAgentTurnWithFallback(params: {
                 lifecycleTerminalEmitted = true;
                 throw err;
               } finally {
+                unsubCliTyping();
                 // Defensive backstop: never let a CLI run complete without a terminal
                 // lifecycle event, otherwise downstream consumers can hang.
                 if (!lifecycleTerminalEmitted) {
