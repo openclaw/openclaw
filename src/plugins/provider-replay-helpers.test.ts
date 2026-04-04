@@ -4,6 +4,7 @@ import {
   buildGoogleGeminiReplayPolicy,
   buildHybridAnthropicOrOpenAIReplayPolicy,
   buildOpenAICompatibleReplayPolicy,
+  buildPassthroughGeminiSanitizingReplayPolicy,
   resolveTaggedReasoningOutputMode,
   sanitizeGoogleGeminiReplayHistory,
   buildStrictAnthropicReplayPolicy,
@@ -73,6 +74,21 @@ describe("provider replay helpers", () => {
       allowSyntheticToolResults: true,
     });
     expect(resolveTaggedReasoningOutputMode()).toBe("tagged");
+  });
+
+  it("builds passthrough Gemini signature sanitization only when needed", () => {
+    expect(buildPassthroughGeminiSanitizingReplayPolicy("gemini-2.5-pro")).toMatchObject({
+      applyAssistantFirstOrderingFix: false,
+      validateGeminiTurns: false,
+      validateAnthropicTurns: false,
+      sanitizeThoughtSignatures: {
+        allowBase64Only: true,
+        includeCamelCase: true,
+      },
+    });
+    expect(
+      buildPassthroughGeminiSanitizingReplayPolicy("anthropic/claude-sonnet-4-6"),
+    ).not.toHaveProperty("sanitizeThoughtSignatures");
   });
 
   it("sanitizes Gemini replay ordering with a bootstrap turn", () => {

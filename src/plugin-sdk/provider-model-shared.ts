@@ -34,6 +34,7 @@ export {
   buildGoogleGeminiReplayPolicy,
   buildHybridAnthropicOrOpenAIReplayPolicy,
   buildOpenAICompatibleReplayPolicy,
+  buildPassthroughGeminiSanitizingReplayPolicy,
   resolveTaggedReasoningOutputMode,
   sanitizeGoogleGeminiReplayHistory,
   buildStrictAnthropicReplayPolicy,
