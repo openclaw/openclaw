@@ -738,6 +738,7 @@ export async function runEmbeddedPiAgent(
         (params.bootstrapPromptWarningSignature ? [params.bootstrapPromptWarningSignature] : []);
       const usageAccumulator = createUsageAccumulator();
       let lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
+      let lastAttemptToolMetas: Array<{ toolName: string; meta?: string }> | undefined;
       let autoCompactionCount = 0;
       let runLoopIterations = 0;
       let overloadFailoverAttempts = 0;
@@ -826,6 +827,7 @@ export async function runEmbeddedPiAgent(
                   lastRunPromptUsage,
                   lastTurnTotal,
                 }),
+                toolMetas: lastAttemptToolMetas,
                 error: { kind: "retry_limit", message },
               },
             };
@@ -933,6 +935,9 @@ export async function runEmbeddedPiAgent(
           const lastAssistantUsage = normalizeUsage(lastAssistant?.usage as UsageLike);
           const attemptUsage = attempt.attemptUsage ?? lastAssistantUsage;
           mergeUsageIntoAccumulator(usageAccumulator, attemptUsage);
+          // Track tool metadata from the latest attempt so error return paths
+          // (context_overflow, role_ordering, image_size) can propagate it.
+          lastAttemptToolMetas = attempt.toolMetas;
           // Keep prompt size from the latest model call so session totalTokens
           // reflects current context usage, not accumulated tool-loop usage.
           lastRunPromptUsage = lastAssistantUsage ?? attemptUsage;
@@ -1142,6 +1147,7 @@ export async function runEmbeddedPiAgent(
                   lastAssistant,
                   lastTurnTotal,
                 }),
+                toolMetas: attempt.toolMetas,
                 systemPromptReport: attempt.systemPromptReport,
                 error: { kind, message: errorText },
               },
@@ -1176,6 +1182,7 @@ export async function runEmbeddedPiAgent(
                     lastAssistant,
                     lastTurnTotal,
                   }),
+                  toolMetas: attempt.toolMetas,
                   systemPromptReport: attempt.systemPromptReport,
                   error: { kind: "role_ordering", message: errorText },
                 },
@@ -1208,6 +1215,7 @@ export async function runEmbeddedPiAgent(
                     lastAssistant,
                     lastTurnTotal,
                   }),
+                  toolMetas: attempt.toolMetas,
                   systemPromptReport: attempt.systemPromptReport,
                   error: { kind: "image_size", message: errorText },
                 },
