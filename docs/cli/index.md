@@ -845,6 +845,7 @@ Notes:
 
 - `--token` and `--password` are mutually exclusive.
 - The setup code carries a short-lived bootstrap token, not the shared gateway token/password.
+- `--remote` can use `gateway.remote.url` or the active Tailscale Serve/Funnel URL.
 - After scanning, approve the request with `openclaw devices list` / `openclaw devices approve <requestId>`.
 
 ### `clawbot`
