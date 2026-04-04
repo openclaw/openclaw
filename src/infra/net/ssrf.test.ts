@@ -108,6 +108,28 @@ describe("isBlockedHostnameOrIp", () => {
     "api.localhost",
     "svc.local",
     "db.internal",
+    // AWS metadata endpoints
+    "instance-data",
+    "instance-data.amazonaws.com",
+    "metadata.ecs.amazonaws.com",
+    // Azure metadata endpoints
+    "metadata.azure.internal",
+    "metadata.compute.azure.com",
+    // GCP metadata endpoints
+    "metadata",
+    // Alibaba Cloud metadata endpoints
+    "metadata.alibaba.internal",
+    // Oracle Cloud metadata endpoints
+    "metadata.oracle.internal",
+    // IBM Cloud metadata endpoints
+    "metadata.cloud.ibm.com",
+    // DigitalOcean metadata endpoints
+    "metadata.digitalocean.internal",
+    // Hetzner Cloud metadata endpoints
+    "metadata.hetzner.internal",
+    // Generic internal/metadata patterns
+    "metadata.internal",
+    "metadata.k8s.internal",
   ])("blocks reserved hostname %s", (hostname) => {
     expect(isBlockedHostnameOrIp(hostname)).toBe(true);
   });

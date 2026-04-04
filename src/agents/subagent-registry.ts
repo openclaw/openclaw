@@ -813,8 +813,8 @@ function restoreSubagentRunsOnce() {
         // Ignore import failures — orphan recovery is best-effort.
       },
     );
-  } catch {
-    // ignore restore failures
+  } catch (err) {
+    defaultRuntime.log(`[warn] subagent runs restore failed: ${String(err)}`);
   }
 }
 
@@ -882,8 +882,8 @@ async function sweepSubagentRuns() {
         },
         timeoutMs: 10_000,
       });
-    } catch {
-      // ignore
+    } catch (err) {
+      defaultRuntime.log(`[warn] sweepSubagentRuns error: ${String(err)}`);
     }
   }
   if (mutated) {
@@ -1523,8 +1523,8 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
       accountId: entry.requesterOrigin?.accountId,
       triggerCleanup: true,
     });
-  } catch {
-    // ignore
+  } catch (err) {
+    defaultRuntime.log(`[warn] sendAgentGoodbye failed: ${String(err)}`);
   }
 }
 

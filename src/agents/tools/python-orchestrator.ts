@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { writeFile, mkdtemp, rm } from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import { createServer } from "node:http";
@@ -29,24 +30,38 @@ interface ToolCallRecord {
   cached?: boolean;
 }
 
-// LRU Cache for tool call results
+// LRU Cache for tool call results with memory limits
 interface CacheEntry {
   result: unknown;
   timestamp: number;
+  estimatedSize: number; // Estimated size in bytes
 }
 
 class ToolCallCache {
   private cache = new Map<string, CacheEntry>();
   private maxEntries: number;
   private ttlMs: number;
+  private maxMemoryBytes: number;
+  private currentMemoryBytes: number = 0;
 
-  constructor(maxEntries = 200, ttlSeconds = 300) {
+  constructor(maxEntries = 200, ttlSeconds = 300, maxMemoryMB = 50) {
     this.maxEntries = maxEntries;
     this.ttlMs = ttlSeconds * 1000;
+    this.maxMemoryBytes = maxMemoryMB * 1024 * 1024;
   }
 
   private makeKey(tool: string, params: unknown): string {
     return `${tool}:${JSON.stringify(params)}`;
+  }
+
+  private estimateSize(value: unknown): number {
+    // Rough size estimation in bytes
+    try {
+      const json = JSON.stringify(value);
+      return json ? json.length : 100;
+    } catch {
+      return 100; // Default size for non-serializable
+    }
   }
 
   get(tool: string, params: unknown): { result: unknown; cached: boolean } | null {
@@ -60,6 +75,7 @@ class ToolCallCache {
     // Evict expired entries
     if (Date.now() - entry.timestamp > this.ttlMs) {
       this.cache.delete(key);
+      this.currentMemoryBytes -= entry.estimatedSize;
       return null;
     }
 
@@ -71,25 +87,36 @@ class ToolCallCache {
 
   set(tool: string, params: unknown, result: unknown): void {
     const key = this.makeKey(tool, params);
+    const estimatedSize = this.estimateSize(result);
 
     // Update existing entry if present (moves to end)
     if (this.cache.has(key)) {
+      const oldEntry = this.cache.get(key)!;
+      this.currentMemoryBytes -= oldEntry.estimatedSize;
       this.cache.delete(key);
     }
 
-    // Evict if at capacity (LRU - remove oldest/least recently used)
-    if (this.cache.size >= this.maxEntries) {
+    // Evict LRU entries until we have room
+    while (
+      this.cache.size >= this.maxEntries ||
+      this.currentMemoryBytes + estimatedSize > this.maxMemoryBytes
+    ) {
       const oldestKey = this.cache.keys().next().value;
-      if (oldestKey) {
-        this.cache.delete(oldestKey);
+      if (!oldestKey) {
+        break;
       }
+      const oldEntry = this.cache.get(oldestKey)!;
+      this.cache.delete(oldestKey);
+      this.currentMemoryBytes -= oldEntry.estimatedSize;
     }
 
-    this.cache.set(key, { result, timestamp: Date.now() });
+    this.cache.set(key, { result, timestamp: Date.now(), estimatedSize });
+    this.currentMemoryBytes += estimatedSize;
   }
 
   clear(): void {
     this.cache.clear();
+    this.currentMemoryBytes = 0;
   }
 
   get stats() {
@@ -97,6 +124,9 @@ class ToolCallCache {
       size: this.cache.size,
       maxEntries: this.maxEntries,
       ttlSeconds: this.ttlMs / 1000,
+      memoryBytes: this.currentMemoryBytes,
+      maxMemoryBytes: this.maxMemoryBytes,
+      memoryUsagePercent: Math.round((this.currentMemoryBytes / this.maxMemoryBytes) * 100),
     };
   }
 }
@@ -157,6 +187,49 @@ function calculateMaxConcurrent(): number {
 // Global concurrency limiter instance
 const concurrencyLimiter = new ConcurrencyLimiter(calculateMaxConcurrent());
 
+// Global rate limiter for tool bridge calls (across all sessions)
+// Prevents abuse via multiple concurrent Python orchestrator sessions
+class GlobalRateLimiter {
+  private calls: number = 0;
+  private windowStart: number = Date.now();
+  private readonly maxCallsPerWindow: number;
+  private readonly windowMs: number;
+
+  constructor(maxCallsPerMinute: number = 1000) {
+    this.maxCallsPerWindow = maxCallsPerMinute;
+    this.windowMs = 60 * 1000; // 1 minute window
+  }
+
+  private resetIfWindowExpired() {
+    const now = Date.now();
+    if (now - this.windowStart >= this.windowMs) {
+      this.calls = 0;
+      this.windowStart = now;
+    }
+  }
+
+  async acquire(): Promise<boolean> {
+    this.resetIfWindowExpired();
+    if (this.calls >= this.maxCallsPerWindow) {
+      return false;
+    }
+    this.calls++;
+    return true;
+  }
+
+  get status() {
+    this.resetIfWindowExpired();
+    return {
+      calls: this.calls,
+      maxCallsPerWindow: this.maxCallsPerWindow,
+      windowMs: this.windowMs,
+      remaining: Math.max(0, this.maxCallsPerWindow - this.calls),
+    };
+  }
+}
+
+const globalRateLimiter = new GlobalRateLimiter(1000); // 1000 calls/minute global limit
+
 async function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     let body = "";
@@ -171,9 +244,12 @@ async function startToolBridgeServer(
   maxCalls: number = 100,
   allowedTools?: string[],
   sessionCache?: ToolCallCache,
-): Promise<{ port: number; toolCalls: ToolCallRecord[]; stop: () => void }> {
+): Promise<{ port: number; toolCalls: ToolCallRecord[]; stop: () => void; authToken: string }> {
   const toolCalls: ToolCallRecord[] = [];
   let callCount = 0;
+
+  // Generate random auth token for this session
+  const authToken = randomBytes(32).toString("hex");
 
   // Build allowed tools set if specified
   const allowedToolsSet = allowedTools ? new Set(allowedTools) : null;
@@ -182,7 +258,7 @@ async function startToolBridgeServer(
     // Enable CORS for local requests
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Bridge-Token");
 
     if (req.method === "OPTIONS") {
       res.writeHead(200);
@@ -192,6 +268,14 @@ async function startToolBridgeServer(
 
     if (req.url === "/call" && req.method === "POST") {
       try {
+        // Authentication check
+        const providedToken = req.headers["x-bridge-token"];
+        if (!providedToken || providedToken !== authToken) {
+          res.writeHead(401, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Invalid or missing authentication token" }));
+          return;
+        }
+
         const body = await readBody(req);
         const { tool: toolName, params } = JSON.parse(body);
 
@@ -227,7 +311,15 @@ async function startToolBridgeServer(
           }
         }
 
-        // Limit check (only for non-cached calls)
+        // Global rate limit check (across all sessions)
+        const rateLimitOk = await globalRateLimiter.acquire();
+        if (!rateLimitOk) {
+          res.writeHead(429, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Global rate limit exceeded. Try again later." }));
+          return;
+        }
+
+        // Per-session limit check (only for non-cached calls)
         callCount++;
         if (callCount > maxCalls) {
           res.writeHead(429, { "Content-Type": "application/json" });
@@ -275,6 +367,7 @@ async function startToolBridgeServer(
     port,
     toolCalls,
     stop: () => server.close(),
+    authToken,
   };
 }
 
@@ -282,6 +375,7 @@ async function createPythonScript(
   tempDir: string,
   pythonCode: string,
   bridgePort: number,
+  bridgeAuthToken: string,
 ): Promise<string> {
   const scriptPath = join(tempDir, "orchestrator.py");
 
@@ -296,6 +390,7 @@ import urllib.error
 # Bridge configuration
 BRIDGE_PORT = ${bridgePort}
 BRIDGE_URL = f"http://127.0.0.1:{BRIDGE_PORT}"
+BRIDGE_TOKEN = "${bridgeAuthToken}"
 
 class ToolError(Exception):
     """Error when calling a tool"""
@@ -306,7 +401,10 @@ async def call_tool(name: str, params: dict) -> dict:
     req = urllib.request.Request(
         f"{BRIDGE_URL}/call",
         data=json.dumps({"tool": name, "params": params}).encode(),
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "X-Bridge-Token": BRIDGE_TOKEN,
+        },
         method="POST",
     )
 
@@ -444,8 +542,12 @@ All tool calls are tracked and limited to ${opts?.maxToolCalls ?? 100} per execu
       // Use concurrency limiter to control resource usage
       return concurrencyLimiter.run(async () => {
         const tempDir = await mkdtemp(join(tmpdir(), "openclaw-ptc-"));
-        let bridgeServer: { stop: () => void; port: number; toolCalls: ToolCallRecord[] } | null =
-          null;
+        let bridgeServer: {
+          stop: () => void;
+          port: number;
+          toolCalls: ToolCallRecord[];
+          authToken: string;
+        } | null = null;
 
         // Create session-scoped cache for tool calls
         const sessionCache = new ToolCallCache(200, 300);
@@ -460,7 +562,12 @@ All tool calls are tracked and limited to ${opts?.maxToolCalls ?? 100} per execu
           );
 
           // Create the Python script
-          const scriptPath = await createPythonScript(tempDir, userCode, bridgeServer.port);
+          const scriptPath = await createPythonScript(
+            tempDir,
+            userCode,
+            bridgeServer.port,
+            bridgeServer.authToken,
+          );
 
           // Execute Python
           const { stdout, stderr, exitCode } = await new Promise<{
@@ -468,10 +575,31 @@ All tool calls are tracked and limited to ${opts?.maxToolCalls ?? 100} per execu
             stderr: string;
             exitCode: number;
           }>((resolve, reject) => {
+            // Filter environment variables to avoid leaking sensitive credentials
+            // Only pass essential variables and explicitly whitelisted ones
+            const SAFE_ENV_VARS = new Set([
+              "PATH",
+              "HOME",
+              "USER",
+              "LANG",
+              "LC_ALL",
+              "TZ",
+              "NODE_ENV",
+              "PYTHONPATH",
+              "PYENV_VERSION",
+              "VIRTUAL_ENV",
+            ]);
+            const filteredEnv: Record<string, string> = {};
+            for (const [key, value] of Object.entries(process.env)) {
+              if (SAFE_ENV_VARS.has(key) || key.startsWith("PY")) {
+                filteredEnv[key] = value ?? "";
+              }
+            }
+
             const pythonProcess = spawn("python3", [scriptPath], {
               cwd: tempDir,
               env: {
-                ...process.env,
+                ...filteredEnv,
                 OPENCLAW_BRIDGE_PORT: String(bridgeServer!.port),
                 PYTHONUNBUFFERED: "1",
               },
@@ -548,8 +676,9 @@ All tool calls are tracked and limited to ${opts?.maxToolCalls ?? 100} per execu
           bridgeServer?.stop();
           try {
             await rm(tempDir, { recursive: true, force: true });
-          } catch {
-            // Ignore cleanup errors
+          } catch (err) {
+            // Log cleanup failures for debugging (disk space issues, permission problems)
+            console.warn(`[python_orchestrator] Temp dir cleanup failed: ${String(err)}`);
           }
         }
       });

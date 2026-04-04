@@ -81,7 +81,11 @@ export function readStringParam(
     }
     return undefined;
   }
-  const value = trim ? raw.trim() : raw;
+  let value = trim ? raw.trim() : raw;
+  // Security: Reject null bytes and other dangerous characters in paths
+  if (value.includes("\0")) {
+    throw new ToolInputError(`${label} contains invalid characters`);
+  }
   if (!value && !allowEmpty) {
     if (required) {
       throw new ToolInputError(`${label} required`);
@@ -314,7 +318,22 @@ export async function imageResultFromFile(params: {
   extraText?: string;
   details?: Record<string, unknown>;
   imageSanitization?: ImageSanitizationLimits;
+  allowedRoots?: string[]; // If provided, path must be under one of these directories
 }): Promise<AgentToolResult<unknown>> {
+  // Path traversal protection: ensure the file is under an allowed directory
+  if (params.allowedRoots && params.allowedRoots.length > 0) {
+    const resolvedPath = await fs.realpath(params.path).catch(() => params.path);
+    const isUnderRoot = params.allowedRoots.some((root) => {
+      const normalizedRoot = root.endsWith("/") ? root : `${root}/`;
+      return resolvedPath.startsWith(normalizedRoot);
+    });
+    if (!isUnderRoot) {
+      throw new ToolAuthorizationError(
+        `File path is not under an allowed directory: ${params.path}`,
+      );
+    }
+  }
+
   const buf = await fs.readFile(params.path);
   const mimeType = (await detectMime({ buffer: buf.slice(0, 256) })) ?? "image/png";
   return await imageResult({

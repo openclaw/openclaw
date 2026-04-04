@@ -41,7 +41,33 @@ export type SsrFPolicy = {
 const BLOCKED_HOSTNAMES = new Set([
   "localhost",
   "localhost.localdomain",
+  // AWS
+  "169.254.169.254",
+  "instance-data",
+  "instance-data.amazonaws.com",
+  "metadata.ecs.amazonaws.com",
+  // Azure
+  "169.254.169.254",
+  "metadata.azure.internal",
+  "metadata.compute.azure.com",
+  // GCP
   "metadata.google.internal",
+  "metadata",
+  // Alibaba Cloud
+  "100.100.100.200",
+  "metadata.alibaba.internal",
+  // Oracle Cloud
+  "192.0.0.192",
+  "metadata.oracle.internal",
+  // IBM Cloud
+  "metadata.cloud.ibm.com",
+  // DigitalOcean
+  "metadata.digitalocean.internal",
+  // Hetzner Cloud
+  "metadata.hetzner.internal",
+  // Generic internal/metadata patterns
+  "metadata.internal",
+  "metadata.k8s.internal",
 ]);
 
 function normalizeHostnameSet(values?: string[]): Set<string> {

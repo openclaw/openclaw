@@ -4,6 +4,40 @@ import { enableCompileCache } from "node:module";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { isRootHelpInvocation, isRootVersionInvocation } from "./cli/argv.js";
+
+// Global error handlers to catch unhandled rejections and exceptions
+process.on("unhandledRejection", (reason, promise) => {
+  const message = reason instanceof Error ? `${reason.message}\n${reason.stack}` : String(reason);
+  console.error("[fatal] Unhandled Rejection at:", promise, "reason:", message);
+});
+
+process.on("uncaughtException", (error, origin) => {
+  console.error(
+    "[fatal] Uncaught Exception:",
+    error instanceof Error ? `${error.message}\n${error.stack}` : String(error),
+    origin ? `\nOrigin: ${origin}` : "",
+  );
+});
+
+// Cleanup temp files on exit
+let cleanupRegistered = false;
+const cleanupCallbacks: (() => Promise<void> | void)[] = [];
+
+export function registerCleanup(cb: () => Promise<void> | void): void {
+  if (!cleanupRegistered) {
+    cleanupRegistered = true;
+    process.on("exit", () => {
+      for (const cb of cleanupCallbacks) {
+        try {
+          void cb();
+        } catch {
+          // Ignore cleanup errors on exit
+        }
+      }
+    });
+  }
+  cleanupCallbacks.push(cb);
+}
 import { parseCliContainerArgs, resolveCliContainerTarget } from "./cli/container-target.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
 import { normalizeWindowsArgv } from "./cli/windows-argv.js";
