@@ -188,9 +188,7 @@ export function splitMessagesByTokenShare(
         chunks.length < normalizedParts - 1 &&
         currentTokens > targetTokens
       ) {
-        chunks.push(current);
-        current = [];
-        currentTokens = 0;
+        splitCurrentAtPendingBoundary();
         pendingChunkStartIndex = null;
       }
     }
