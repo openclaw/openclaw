@@ -178,7 +178,7 @@ export function resolveMattermostEffectiveReplyToId(params: {
   if (threadRootId && params.replyToMode !== "off") {
     return threadRootId;
   }
-  if (params.kind === "direct") {
+  if (params.kind === "direct" || params.kind === "unknown") {
     return undefined;
   }
   const postId = params.postId?.trim();
@@ -407,6 +407,14 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       resolveSessionKey: async ({ channelId, userId, post }) => {
         const channelInfo = await resolveChannelInfo(channelId);
         const kind = mapMattermostChannelTypeToChatType(channelInfo?.type);
+        if (kind === "unknown") {
+          // Throw so the caller's try/catch skips enqueueSystemEvent entirely.
+          // Returning any session key here would enqueue the event into the
+          // wrong session before handlePost's own guard ever runs.
+          throw new Error(
+            `mattermost: cannot resolve session key — unknown channel type for ${channelId}`,
+          );
+        }
         const teamId = channelInfo?.team_id ?? undefined;
         const route = core.channel.routing.resolveAgentRoute({
           cfg,
@@ -430,6 +438,12 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       dispatchButtonClick: async (opts) => {
         const channelInfo = await resolveChannelInfo(opts.channelId);
         const kind = mapMattermostChannelTypeToChatType(channelInfo?.type);
+        if (kind === "unknown") {
+          logVerboseMessage(
+            `mattermost: drop button click (cannot determine channel type for ${opts.channelId})`,
+          );
+          return;
+        }
         const chatType = channelChatType(kind);
         const teamId = channelInfo?.team_id ?? undefined;
         const channelName = channelInfo?.name ?? undefined;
@@ -1004,6 +1018,23 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       logVerboseMessage("mattermost: drop post (missing message id)");
       return;
     }
+    // Check channel type before marking the message as seen, so that a
+    // transient unknown-channel post doesn't poison the dedup tracker.
+    // If the event has no channel_type, fall back to the API — but if that
+    // also returns nothing, drop the post.
+    const channelTypeFromEvent = payload.data?.channel_type;
+    if (mapMattermostChannelTypeToChatType(channelTypeFromEvent) === "unknown") {
+      const channelInfoFallback = await resolveChannelInfo(channelId);
+      if (mapMattermostChannelTypeToChatType(channelInfoFallback?.type) === "unknown") {
+        logVerboseMessage(
+          `mattermost: drop post (cannot determine channel type for ${channelId}, post=${post.id ?? "?"})`,
+        );
+        return;
+      }
+      // channelInfoFallback.type is now set; continue with the normal path below.
+      // (resolveChannelInfo result is cached so the second call below
+      // is a cache hit — no extra network request.)
+    }
     const dedupeEntries = allMessageIds.map((id) =>
       recentInboundMessages.check(`${account.accountId}:${id}`),
     );
@@ -1029,8 +1060,14 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     }
 
     const channelInfo = await resolveChannelInfo(channelId);
-    const channelType = payload.data?.channel_type ?? channelInfo?.type ?? undefined;
+    const channelType = channelTypeFromEvent ?? channelInfo?.type ?? undefined;
     const kind = mapMattermostChannelTypeToChatType(channelType);
+    if (kind === "unknown") {
+      logVerboseMessage(
+        `mattermost: drop post (cannot determine channel type for ${channelId}, post=${post.id ?? "?"})`,
+      );
+      return;
+    }
     const chatType = channelChatType(kind);
 
     const senderName =
@@ -1540,6 +1577,12 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       return;
     }
     const kind = mapMattermostChannelTypeToChatType(channelInfo.type);
+    if (kind === "unknown") {
+      logVerboseMessage(
+        `mattermost: drop reaction (unrecognised channel type "${channelInfo.type}" for ${channelId})`,
+      );
+      return;
+    }
 
     // Enforce DM/group policy and allowlist checks (same as normal messages)
     const dmPolicy = account.config.dmPolicy ?? "pairing";
