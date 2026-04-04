@@ -2,10 +2,14 @@ import fs from "node:fs";
 import os from "node:os";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
-import { listBundledChannelPluginIds } from "./plugins/bundled-ids.js";
 import { listBundledChannelPlugins } from "./plugins/bundled.js";
+import { listBundledChannelPluginIds } from "./plugins/bundled-ids.js";
 
 const IGNORED_CHANNEL_CONFIG_KEYS = new Set(["defaults", "modelByChannel"]);
+
+type ChannelPresenceOptions = {
+  includePersistedAuthState?: boolean;
+};
 
 function hasNonEmptyString(value: unknown): boolean {
   return typeof value === "string" && value.trim().length > 0;
@@ -36,6 +40,7 @@ function hasPersistedChannelState(env: NodeJS.ProcessEnv): boolean {
 export function listPotentialConfiguredChannelIds(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
+  options: ChannelPresenceOptions = {},
 ): string[] {
   const configuredChannelIds = new Set<string>();
   const channelEnvPrefixes = listConfiguredChannelEnvPrefixes();
@@ -61,17 +66,23 @@ export function listPotentialConfiguredChannelIds(
       }
     }
   }
-  if (hasPersistedChannelState(env)) {
+
+  if (options.includePersistedAuthState !== false && hasPersistedChannelState(env)) {
     for (const plugin of listBundledChannelPlugins()) {
       if (plugin.config?.hasPersistedAuthState?.({ cfg, env })) {
         configuredChannelIds.add(plugin.id);
       }
     }
   }
+
   return [...configuredChannelIds];
 }
 
-function hasEnvConfiguredChannel(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
+function hasEnvConfiguredChannel(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+  options: ChannelPresenceOptions = {},
+): boolean {
   const channelEnvPrefixes = listConfiguredChannelEnvPrefixes();
   for (const [key, value] of Object.entries(env)) {
     if (!hasNonEmptyString(value)) {
@@ -81,7 +92,7 @@ function hasEnvConfiguredChannel(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): b
       return true;
     }
   }
-  if (!hasPersistedChannelState(env)) {
+  if (options.includePersistedAuthState === false || !hasPersistedChannelState(env)) {
     return false;
   }
   return listBundledChannelPlugins().some((plugin) =>
@@ -92,6 +103,7 @@ function hasEnvConfiguredChannel(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): b
 export function hasPotentialConfiguredChannels(
   cfg: OpenClawConfig | null | undefined,
   env: NodeJS.ProcessEnv = process.env,
+  options: ChannelPresenceOptions = {},
 ): boolean {
   const channels = isRecord(cfg?.channels) ? cfg.channels : null;
   if (channels) {
@@ -104,5 +116,5 @@ export function hasPotentialConfiguredChannels(
       }
     }
   }
-  return hasEnvConfiguredChannel(cfg ?? {}, env);
+  return hasEnvConfiguredChannel(cfg ?? {}, env, options);
 }

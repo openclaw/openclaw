@@ -127,7 +127,9 @@ export async function scanStatusJsonFast(
     cfg,
     sourceConfig: loadedRaw,
     secretDiagnostics,
-    hasConfiguredChannels: hasPotentialConfiguredChannels(cfg),
+    hasConfiguredChannels: hasPotentialConfiguredChannels(cfg, process.env, {
+      includePersistedAuthState: false,
+    }),
     opts,
     resolveOsSummary,
     resolveMemory: async ({ cfg, agentStatus, memoryPlugin }) =>
