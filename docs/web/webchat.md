@@ -28,7 +28,9 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket.
 - `chat.history` is bounded for stability: Gateway may truncate long text fields, omit heavy metadata, and replace oversized entries with `[chat.history omitted: message too large]`.
 - `chat.history` is also display-normalized: inline delivery directive tags
   such as `[[reply_to_*]]` and `[[audio_as_voice]]`, plain-text tool-call XML
-  payloads (including `<tool_calls>` and truncated tool-call blocks), and
+  payloads (including `<tool_call>...</tool_call>`,
+  `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`,
+  `<function_calls>...</function_calls>`, and truncated tool-call blocks), and
   leaked ASCII/full-width model control tokens are stripped from visible text,
   and assistant entries whose whole visible text is only the exact silent
   token `NO_REPLY` / `no_reply` are omitted.

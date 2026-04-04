@@ -209,6 +209,10 @@ with model refs like:
 - `claude-cli/claude-sonnet-4-6`
 - `claude-cli/claude-opus-4-6`
 
+Shorter aliases like `claude-cli/sonnet`, `claude-cli/opus`, or
+`claude-cli/opus-4.6` still normalize through the bundled backend, but docs
+and config examples use the canonical `claude-cli/claude-*` refs.
+
 How it works:
 
 1. OpenClaw launches `claude -p --output-format stream-json --include-partial-messages ...`
@@ -300,10 +304,11 @@ Claude CLI** first and **Anthropic API key** second.
 What this does:
 
 - verifies Claude CLI is already signed in on the gateway host
-- switches the default model to `claude-cli/...`
+- switches the default model to a canonical `claude-cli/claude-*` ref
 - rewrites Anthropic default-model fallbacks like `anthropic/claude-opus-4-6`
   to `claude-cli/claude-opus-4-6`
-- adds matching `claude-cli/...` entries to `agents.defaults.models`
+- adds matching canonical `claude-cli/claude-*` entries to
+  `agents.defaults.models`
 
 Quick verification:
 
@@ -311,7 +316,8 @@ Quick verification:
 openclaw models status
 ```
 
-You should see the resolved primary model under `claude-cli/...`.
+You should see the resolved primary model under a canonical
+`claude-cli/claude-*` ref.
 
 What it does **not** do:
 

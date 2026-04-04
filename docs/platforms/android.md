@@ -139,10 +139,11 @@ The Android Chat tab supports session selection (default `main`, plus other exis
 
 - History: `chat.history` (display-normalized; inline directive tags are
   stripped from visible text, plain-text tool-call XML payloads (including
-  `<tool_calls>` and truncated tool-call blocks) and leaked ASCII/full-width
-  model control tokens are stripped, pure silent-token assistant rows such as
-  exact `NO_REPLY` / `no_reply` are omitted, and oversized rows can be
-  replaced with placeholders)
+  `<tool_call>...</tool_call>`, `<function_call>...</function_call>`,
+  `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and
+  truncated tool-call blocks) and leaked ASCII/full-width model control tokens
+  are stripped, pure silent-token assistant rows such as exact `NO_REPLY` /
+  `no_reply` are omitted, and oversized rows can be replaced with placeholders)
 - Send: `chat.send`
 - Push updates (best-effort): `chat.subscribe` → `event:"chat"`
 

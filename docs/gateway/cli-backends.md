@@ -30,7 +30,7 @@ You can use Claude CLI **without any config** (the bundled Anthropic plugin
 registers a default backend):
 
 ```bash
-openclaw agent --message "hi" --model claude-cli/opus-4.6
+openclaw agent --message "hi" --model claude-cli/claude-sonnet-4-6
 ```
 
 Codex CLI also works out of the box (via the bundled OpenAI plugin):
@@ -73,12 +73,12 @@ Add a CLI backend to your fallback list so it only runs when primary models fail
     defaults: {
       model: {
         primary: "anthropic/claude-opus-4-6",
-        fallbacks: ["claude-cli/opus-4.6", "claude-cli/opus-4.5"],
+        fallbacks: ["claude-cli/claude-sonnet-4-6", "claude-cli/claude-opus-4-6"],
       },
       models: {
         "anthropic/claude-opus-4-6": { alias: "Opus" },
-        "claude-cli/opus-4.6": {},
-        "claude-cli/opus-4.5": {},
+        "claude-cli/claude-sonnet-4-6": {},
+        "claude-cli/claude-opus-4-6": {},
       },
     },
   },
@@ -90,6 +90,9 @@ Notes:
 - If you use `agents.defaults.models` (allowlist), you must include `claude-cli/...`.
 - If the primary provider fails (auth, rate limits, timeouts), OpenClaw will
   try the CLI backend next.
+- The bundled Claude CLI backend still accepts shorter aliases like
+  `claude-cli/opus`, `claude-cli/opus-4.6`, or `claude-cli/sonnet`, but docs
+  and config examples use the canonical `claude-cli/claude-*` refs.
 
 ## Configuration overview
 

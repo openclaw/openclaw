@@ -38,8 +38,9 @@ The returned view is intentionally bounded and safety-filtered:
   - thinking tags are stripped
   - `<relevant-memories>` / `<relevant_memories>` scaffolding blocks are stripped
   - plain-text tool-call XML payload blocks such as `<tool_call>...</tool_call>`,
-    `<tool_calls>...</tool_calls>`, and `<function_calls>...</function_calls>`
-    are stripped, including truncated payloads that never close cleanly
+    `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, and
+    `<function_calls>...</function_calls>` are stripped, including truncated
+    payloads that never close cleanly
   - downgraded tool-call/result scaffolding such as `[Tool Call: ...]`,
     `[Tool Result ...]`, and `[Historical context ...]` is stripped
   - leaked model control tokens such as `<|assistant|>`, other ASCII
