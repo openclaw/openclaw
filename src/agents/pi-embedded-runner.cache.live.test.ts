@@ -45,6 +45,16 @@ type CacheRun = {
   text: string;
   usage: AssistantMessage["usage"];
 };
+type CacheTraceEvent = {
+  sessionId?: string;
+  stage?: string;
+  note?: string;
+  options?: {
+    previousCacheRead?: number;
+    cacheRead?: number;
+    changes?: Array<{ code?: string; detail?: string }>;
+  };
+};
 type LiveResolvedModel = Awaited<ReturnType<typeof resolveLiveDirectModel>>;
 
 const NOOP_TOOL: Tool = {
@@ -54,6 +64,14 @@ const NOOP_TOOL: Tool = {
 };
 let liveTestPngBase64 = "";
 let liveRunnerRootDir: string | undefined;
+let liveCacheTraceFile: string | undefined;
+let previousCacheTraceEnv: {
+  enabled?: string;
+  file?: string;
+  messages?: string;
+  prompt?: string;
+  system?: string;
+} | null = null;
 
 type UserContent = Extract<Message, { role: "user" }>["content"];
 
@@ -96,6 +114,30 @@ function buildRunnerSessionPaths(sessionId: string) {
 function resolveProviderBaseUrl(model: LiveResolvedModel["model"]): string | undefined {
   const candidate = (model as { baseUrl?: unknown }).baseUrl;
   return typeof candidate === "string" && candidate.trim().length > 0 ? candidate : undefined;
+}
+
+async function readCacheTraceEvents(sessionId: string): Promise<CacheTraceEvent[]> {
+  if (!liveCacheTraceFile) {
+    throw new Error("live cache trace file not initialized");
+  }
+  const raw = await fs.readFile(liveCacheTraceFile, "utf8").catch(() => "");
+  return raw
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as CacheTraceEvent)
+    .filter((event) => event.sessionId === sessionId);
+}
+
+async function expectCacheTraceStages(
+  sessionId: string,
+  requiredStages: Array<"cache:state" | "cache:result">,
+): Promise<void> {
+  const events = await readCacheTraceEvents(sessionId);
+  const stages = new Set(events.map((event) => event.stage));
+  for (const stage of requiredStages) {
+    expect(stages.has(stage)).toBe(true);
+  }
 }
 
 function resolveDefaultProviderBaseUrl(model: LiveResolvedModel["model"]): string {
@@ -700,10 +742,47 @@ async function runAnthropicImageCacheProbe(params: {
 describeCacheLive("pi embedded runner prompt caching (live)", () => {
   beforeAll(async () => {
     liveRunnerRootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-cache-"));
+    liveCacheTraceFile = path.join(liveRunnerRootDir, "cache-trace.jsonl");
     liveTestPngBase64 = (await fs.readFile(LIVE_TEST_PNG_URL)).toString("base64");
+    previousCacheTraceEnv = {
+      enabled: process.env.OPENCLAW_CACHE_TRACE,
+      file: process.env.OPENCLAW_CACHE_TRACE_FILE,
+      messages: process.env.OPENCLAW_CACHE_TRACE_MESSAGES,
+      prompt: process.env.OPENCLAW_CACHE_TRACE_PROMPT,
+      system: process.env.OPENCLAW_CACHE_TRACE_SYSTEM,
+    };
+    process.env.OPENCLAW_CACHE_TRACE = "1";
+    process.env.OPENCLAW_CACHE_TRACE_FILE = liveCacheTraceFile;
+    process.env.OPENCLAW_CACHE_TRACE_MESSAGES = "0";
+    process.env.OPENCLAW_CACHE_TRACE_PROMPT = "0";
+    process.env.OPENCLAW_CACHE_TRACE_SYSTEM = "0";
   }, 120_000);
 
   afterAll(async () => {
+    if (previousCacheTraceEnv) {
+      const restore = (
+        key:
+          | "OPENCLAW_CACHE_TRACE"
+          | "OPENCLAW_CACHE_TRACE_FILE"
+          | "OPENCLAW_CACHE_TRACE_MESSAGES"
+          | "OPENCLAW_CACHE_TRACE_PROMPT"
+          | "OPENCLAW_CACHE_TRACE_SYSTEM",
+        value: string | undefined,
+      ) => {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      };
+      restore("OPENCLAW_CACHE_TRACE", previousCacheTraceEnv.enabled);
+      restore("OPENCLAW_CACHE_TRACE_FILE", previousCacheTraceEnv.file);
+      restore("OPENCLAW_CACHE_TRACE_MESSAGES", previousCacheTraceEnv.messages);
+      restore("OPENCLAW_CACHE_TRACE_PROMPT", previousCacheTraceEnv.prompt);
+      restore("OPENCLAW_CACHE_TRACE_SYSTEM", previousCacheTraceEnv.system);
+    }
+    previousCacheTraceEnv = null;
+    liveCacheTraceFile = undefined;
     if (liveRunnerRootDir) {
       await fs.rm(liveRunnerRootDir, { recursive: true, force: true });
     }
@@ -868,6 +947,7 @@ describeCacheLive("pi embedded runner prompt caching (live)", () => {
 
         expect(bestHit.usage.cacheRead ?? 0).toBeGreaterThan(1_024);
         expect(bestHit.hitRate).toBeGreaterThanOrEqual(0.4);
+        await expectCacheTraceStages(sessionId, ["cache:state", "cache:result"]);
       },
       8 * 60_000,
     );
@@ -914,6 +994,7 @@ describeCacheLive("pi embedded runner prompt caching (live)", () => {
 
         expect(bestHit.usage.cacheRead ?? 0).toBeGreaterThan(1_024);
         expect(bestHit.hitRate).toBeGreaterThanOrEqual(0.35);
+        await expectCacheTraceStages(sessionId, ["cache:state", "cache:result"]);
       },
       8 * 60_000,
     );
@@ -1106,6 +1187,7 @@ describeCacheLive("pi embedded runner prompt caching (live)", () => {
 
         expect(bestHit.usage.cacheRead ?? 0).toBeGreaterThan(1_024);
         expect(bestHit.hitRate).toBeGreaterThanOrEqual(0.4);
+        await expectCacheTraceStages(sessionId, ["cache:state", "cache:result"]);
       },
       8 * 60_000,
     );
@@ -1159,6 +1241,7 @@ describeCacheLive("pi embedded runner prompt caching (live)", () => {
 
         expect(followup.usage.cacheRead ?? 0).toBeGreaterThan(1_024);
         expect(followup.hitRate).toBeGreaterThanOrEqual(0.3);
+        await expectCacheTraceStages(sessionId, ["cache:state", "cache:result"]);
       },
       10 * 60_000,
     );

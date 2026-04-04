@@ -255,6 +255,7 @@ export async function statusCommand(
     formatGitInstallLabel,
     formatHealthChannelLines,
     formatKTokens,
+    formatPromptCacheCompact,
     formatPluginCompatibilityNotice,
     formatTimeAgo,
     formatTokensCompact,
@@ -669,6 +670,7 @@ export async function statusCommand(
         { key: "Age", header: "Age", minWidth: 9 },
         { key: "Model", header: "Model", minWidth: 14 },
         { key: "Tokens", header: "Tokens", minWidth: 16 },
+        ...(opts.verbose ? [{ key: "Cache", header: "Cache", minWidth: 16, flex: true }] : []),
       ],
       rows:
         summary.sessions.recent.length > 0
@@ -678,6 +680,7 @@ export async function statusCommand(
               Age: sess.updatedAt ? formatTimeAgo(sess.age) : "no activity",
               Model: sess.model ?? "unknown",
               Tokens: formatTokensCompact(sess),
+              ...(opts.verbose ? { Cache: formatPromptCacheCompact(sess) || muted("—") } : {}),
             }))
           : [
               {
@@ -686,6 +689,7 @@ export async function statusCommand(
                 Age: "",
                 Model: "",
                 Tokens: "",
+                ...(opts.verbose ? { Cache: "" } : {}),
               },
             ],
     }).trimEnd(),
