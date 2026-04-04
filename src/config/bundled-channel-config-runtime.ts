@@ -1,12 +1,9 @@
 import * as bundledChannelModule from "../channels/plugins/bundled.js";
-import { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 import type {
   ChannelConfigRuntimeSchema,
   ChannelConfigSchema,
 } from "../channels/plugins/types.plugin.js";
 import { listBundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
-import { MSTeamsConfigSchema } from "./zod-schema.providers-core.js";
-import { WhatsAppConfigSchema } from "./zod-schema.providers-whatsapp.js";
 
 type BundledChannelRuntimeMap = ReadonlyMap<string, ChannelConfigRuntimeSchema>;
 type BundledChannelConfigSchemaMap = ReadonlyMap<string, ChannelConfigSchema>;
@@ -19,10 +16,6 @@ type BundledChannelMaps = {
   configSchemaMap: Map<string, ChannelConfigSchema>;
 };
 
-const staticBundledChannelSchemas = new Map<string, ChannelConfigSchema>([
-  ["msteams", buildChannelConfigSchema(MSTeamsConfigSchema)],
-  ["whatsapp", buildChannelConfigSchema(WhatsAppConfigSchema)],
-]);
 let cachedBundledChannelMaps: BundledChannelMaps | undefined;
 
 function buildBundledChannelMaps(
@@ -53,17 +46,15 @@ function buildBundledChannelMaps(
         continue;
       }
       if (!configSchemaMap.has(channelId)) {
-        configSchemaMap.set(channelId, { schema: channelSchema });
+        configSchemaMap.set(channelId, {
+          schema: channelSchema,
+          ...(channelConfig.runtime ? { runtime: channelConfig.runtime } : {}),
+          ...(channelConfig.uiHints ? { uiHints: channelConfig.uiHints } : {}),
+        });
       }
-    }
-  }
-
-  for (const [channelId, channelSchema] of staticBundledChannelSchemas) {
-    if (!configSchemaMap.has(channelId)) {
-      configSchemaMap.set(channelId, channelSchema);
-    }
-    if (channelSchema.runtime && !runtimeMap.has(channelId)) {
-      runtimeMap.set(channelId, channelSchema.runtime);
+      if (channelConfig.runtime && !runtimeMap.has(channelId)) {
+        runtimeMap.set(channelId, channelConfig.runtime);
+      }
     }
   }
 
@@ -79,7 +70,8 @@ function readBundledChannelPlugins(): readonly BundledChannelPluginShape[] | und
     return Array.isArray(plugins) ? (plugins as readonly BundledChannelPluginShape[]) : undefined;
   } catch (error) {
     // Circular bundled channel imports can transiently hit TDZ during test/bootstrap
-    // initialization. Fall back to metadata/static schemas until the registry is ready.
+    // initialization. Fall back to manifest-published contract surfaces until the
+    // bundled registry is ready.
     if (error instanceof ReferenceError) {
       return undefined;
     }

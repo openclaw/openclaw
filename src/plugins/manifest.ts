@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
+import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.plugin.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { isRecord } from "../utils.js";
@@ -12,9 +13,23 @@ export const PLUGIN_MANIFEST_FILENAMES = [PLUGIN_MANIFEST_FILENAME] as const;
 export type PluginManifestChannelConfig = {
   schema: Record<string, unknown>;
   uiHints?: Record<string, PluginConfigUiHint>;
+  runtime?: ChannelConfigRuntimeSchema;
   label?: string;
   description?: string;
   preferOver?: string[];
+};
+
+export type PluginManifestModelSupport = {
+  /**
+   * Cheap manifest-owned model-id prefixes for transparent provider activation
+   * from shorthand model refs such as `gpt-5.4` or `claude-sonnet-4.6`.
+   */
+  modelPrefixes?: string[];
+  /**
+   * Regex sources matched against the raw model id after profile suffixes are
+   * stripped. Use this when simple prefixes are not expressive enough.
+   */
+  modelPatterns?: string[];
 };
 
 export type PluginManifest = {
@@ -28,6 +43,11 @@ export type PluginManifest = {
   kind?: PluginKind | PluginKind[];
   channels?: string[];
   providers?: string[];
+  /**
+   * Cheap model-family ownership metadata used before plugin runtime loads.
+   * Use this for shorthand model refs that omit an explicit provider prefix.
+   */
+  modelSupport?: PluginManifestModelSupport;
   /** Cheap startup activation lookup for plugin-owned CLI inference backends. */
   cliBackends?: string[];
   /** Cheap provider-auth env lookup without booting plugin runtime. */
@@ -148,6 +168,21 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
   return Object.keys(contracts).length > 0 ? contracts : undefined;
 }
 
+function normalizeManifestModelSupport(value: unknown): PluginManifestModelSupport | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const modelPrefixes = normalizeStringList(value.modelPrefixes);
+  const modelPatterns = normalizeStringList(value.modelPatterns);
+  const modelSupport = {
+    ...(modelPrefixes.length > 0 ? { modelPrefixes } : {}),
+    ...(modelPatterns.length > 0 ? { modelPatterns } : {}),
+  } satisfies PluginManifestModelSupport;
+
+  return Object.keys(modelSupport).length > 0 ? modelSupport : undefined;
+}
+
 function normalizeProviderAuthChoices(
   value: unknown,
 ): PluginManifestProviderAuthChoice[] | undefined {
@@ -219,12 +254,17 @@ function normalizeChannelConfigs(
     const uiHints = isRecord(rawEntry.uiHints)
       ? (rawEntry.uiHints as Record<string, PluginConfigUiHint>)
       : undefined;
+    const runtime =
+      isRecord(rawEntry.runtime) && typeof rawEntry.runtime.safeParse === "function"
+        ? (rawEntry.runtime as ChannelConfigRuntimeSchema)
+        : undefined;
     const label = typeof rawEntry.label === "string" ? rawEntry.label.trim() : "";
     const description = typeof rawEntry.description === "string" ? rawEntry.description.trim() : "";
     const preferOver = normalizeStringList(rawEntry.preferOver);
     normalized[channelId] = {
       schema,
       ...(uiHints ? { uiHints } : {}),
+      ...(runtime ? { runtime } : {}),
       ...(label ? { label } : {}),
       ...(description ? { description } : {}),
       ...(preferOver.length > 0 ? { preferOver } : {}),
@@ -313,6 +353,7 @@ export function loadPluginManifest(
   const version = typeof raw.version === "string" ? raw.version.trim() : undefined;
   const channels = normalizeStringList(raw.channels);
   const providers = normalizeStringList(raw.providers);
+  const modelSupport = normalizeManifestModelSupport(raw.modelSupport);
   const cliBackends = normalizeStringList(raw.cliBackends);
   const providerAuthEnvVars = normalizeStringListRecord(raw.providerAuthEnvVars);
   const providerAuthChoices = normalizeProviderAuthChoices(raw.providerAuthChoices);
@@ -338,6 +379,7 @@ export function loadPluginManifest(
       kind,
       channels,
       providers,
+      modelSupport,
       cliBackends,
       providerAuthEnvVars,
       providerAuthChoices,

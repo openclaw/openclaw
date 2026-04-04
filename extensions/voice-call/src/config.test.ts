@@ -273,12 +273,6 @@ describe("normalizeVoiceCallConfig", () => {
 });
 
 describe("resolveVoiceCallConfig", () => {
-  const originalEnv = { ...process.env };
-
-  afterEach(() => {
-    process.env = { ...originalEnv };
-  });
-
   it("keeps legacy streaming OpenAI fields inside providers.openai without forcing provider selection", () => {
     const resolved = resolveVoiceCallConfig({
       enabled: true,
@@ -301,14 +295,13 @@ describe("resolveVoiceCallConfig", () => {
     });
   });
 
-  it("maps realtime instructions from the legacy env hook without altering provider selection", () => {
-    process.env.REALTIME_VOICE_INSTRUCTIONS = "Stay concise.";
-
+  it("preserves configured realtime instructions without env indirection", () => {
     const resolved = resolveVoiceCallConfig({
       enabled: true,
       provider: "twilio",
       realtime: {
         enabled: true,
+        instructions: "Stay concise.",
       },
     });
 

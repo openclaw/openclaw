@@ -17,8 +17,9 @@ describe("resolveLocalVitestMaxWorkers", () => {
           loadAverage1m: 0,
           totalMemoryBytes: 64 * 1024 ** 3,
         },
+        "threads",
       ),
-    ).toBe(3);
+    ).toBe(2);
   });
 
   it("lets OPENCLAW_VITEST_MAX_WORKERS override the inferred cap", () => {
@@ -60,8 +61,9 @@ describe("resolveLocalVitestMaxWorkers", () => {
           loadAverage1m: 0,
           totalMemoryBytes: 16 * 1024 ** 3,
         },
+        "threads",
       ),
-    ).toBe(2);
+    ).toBe(1);
   });
 
   it("lets roomy hosts use more local parallelism", () => {
@@ -73,8 +75,9 @@ describe("resolveLocalVitestMaxWorkers", () => {
           loadAverage1m: 0,
           totalMemoryBytes: 128 * 1024 ** 3,
         },
+        "threads",
       ),
-    ).toBe(4);
+    ).toBe(3);
   });
 
   it("backs off further when the host is already busy", () => {
@@ -86,8 +89,23 @@ describe("resolveLocalVitestMaxWorkers", () => {
           loadAverage1m: 16,
           totalMemoryBytes: 128 * 1024 ** 3,
         },
+        "threads",
       ),
-    ).toBe(2);
+    ).toBe(1);
+  });
+
+  it("keeps fork pools less conservative than thread pools on roomy hosts", () => {
+    expect(
+      resolveLocalVitestMaxWorkers(
+        {},
+        {
+          cpuCount: 16,
+          loadAverage1m: 0,
+          totalMemoryBytes: 128 * 1024 ** 3,
+        },
+        "forks",
+      ),
+    ).toBe(4);
   });
 });
 

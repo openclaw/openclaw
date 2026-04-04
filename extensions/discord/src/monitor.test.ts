@@ -330,7 +330,7 @@ describe("discord guild/channel resolution", () => {
     expect(help?.allowed).toBe(true);
     expect(help?.requireMention).toBe(true);
     expect(help?.skills).toEqual(["search"]);
-    expect(help?.enabled).toBe(false);
+    expect(help?.enabled).toBe(true);
     expect(help?.users).toEqual(["123"]);
     expect(help?.systemPrompt).toBe("Use short answers.");
     expect(help?.autoThread).toBe(true);

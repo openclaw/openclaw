@@ -1,4 +1,4 @@
-import { collectBlueBubblesStatusIssues } from "openclaw/plugin-sdk/channel-status";
+import { collectBlueBubblesStatusIssues } from "openclaw/plugin-sdk/bluebubbles";
 import { describe, expect, it } from "vitest";
 
 describe("collectBlueBubblesStatusIssues", () => {

@@ -40,13 +40,15 @@ export function resolveVitestIsolation(
 export function createScopedVitestConfig(
   include: string[],
   options?: {
+    deps?: Record<string, unknown>;
     dir?: string;
     env?: Record<string, string | undefined>;
     environment?: string;
     exclude?: string[];
+    includeOpenClawRuntimeSetup?: boolean;
     isolate?: boolean;
     name?: string;
-    pool?: "threads" | "forks";
+    pool?: "forks";
     passWithNoTests?: boolean;
     setupFiles?: string[];
     useNonIsolatedRunner?: boolean;
@@ -64,20 +66,20 @@ export function createScopedVitestConfig(
     ...new Set([
       ...(baseTest.setupFiles ?? []),
       ...(options?.setupFiles ?? []),
-      "test/setup-openclaw-runtime.ts",
+      ...(options?.includeOpenClawRuntimeSetup === false ? [] : ["test/setup-openclaw-runtime.ts"]),
     ]),
   ];
+  const useNonIsolatedRunner = options?.useNonIsolatedRunner ?? !isolate;
 
   return defineConfig({
     ...base,
     test: {
       ...baseTest,
+      ...(options?.deps ? { deps: options.deps } : {}),
       ...(options?.name ? { name: options.name } : {}),
       ...(options?.environment ? { environment: options.environment } : {}),
       isolate,
-      ...(options?.useNonIsolatedRunner === false
-        ? {}
-        : { runner: "./test/non-isolated-runner.ts" }),
+      ...(useNonIsolatedRunner ? { runner: "./test/non-isolated-runner.ts" } : {}),
       setupFiles,
       ...(scopedDir ? { dir: scopedDir } : {}),
       include: relativizeScopedPatterns(include, scopedDir),

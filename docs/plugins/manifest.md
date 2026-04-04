@@ -46,6 +46,8 @@ Use it for:
 - config validation
 - auth and onboarding metadata that should be available without booting plugin
   runtime
+- shorthand model-family ownership metadata that should auto-activate the
+  plugin before runtime loads
 - static capability ownership snapshots used for bundled compat wiring and
   contract coverage
 - config UI hints
@@ -80,6 +82,9 @@ Those belong in your plugin code and `package.json`.
   "description": "OpenRouter provider plugin",
   "version": "1.0.0",
   "providers": ["openrouter"],
+  "modelSupport": {
+    "modelPrefixes": ["router-"]
+  },
   "cliBackends": ["openrouter-cli"],
   "providerAuthEnvVars": {
     "openrouter": ["OPENROUTER_API_KEY"]
@@ -128,6 +133,7 @@ Those belong in your plugin code and `package.json`.
 | `kind`                | No       | `"memory"` \| `"context-engine"` | Declares an exclusive plugin kind used by `plugins.slots.*`.                                                                 |
 | `channels`            | No       | `string[]`                       | Channel ids owned by this plugin. Used for discovery and config validation.                                                  |
 | `providers`           | No       | `string[]`                       | Provider ids owned by this plugin.                                                                                           |
+| `modelSupport`        | No       | `object`                         | Manifest-owned shorthand model-family metadata used to auto-load the plugin before runtime.                                  |
 | `cliBackends`         | No       | `string[]`                       | CLI inference backend ids owned by this plugin. Used for startup auto-activation from explicit config refs.                  |
 | `providerAuthEnvVars` | No       | `Record<string, string[]>`       | Cheap provider-auth env metadata that OpenClaw can inspect without loading plugin code.                                      |
 | `providerAuthChoices` | No       | `object[]`                       | Cheap auth-choice metadata for onboarding pickers, preferred-provider resolution, and simple CLI flag wiring.                |
@@ -217,6 +223,36 @@ Each list is optional:
 | `imageGenerationProviders`       | `string[]` | Image-generation provider ids this plugin owns.                |
 | `webSearchProviders`             | `string[]` | Web-search provider ids this plugin owns.                      |
 | `tools`                          | `string[]` | Agent tool names this plugin owns for bundled contract checks. |
+
+## modelSupport reference
+
+Use `modelSupport` when OpenClaw should infer your provider plugin from
+shorthand model ids like `gpt-5.4` or `claude-sonnet-4.6` before plugin runtime
+loads.
+
+```json
+{
+  "modelSupport": {
+    "modelPrefixes": ["gpt-", "o1", "o3", "o4"],
+    "modelPatterns": ["^computer-use-preview"]
+  }
+}
+```
+
+OpenClaw applies this precedence:
+
+- explicit `provider/model` refs use the owning `providers` manifest metadata
+- `modelPatterns` beat `modelPrefixes`
+- if one non-bundled plugin and one bundled plugin both match, the non-bundled
+  plugin wins
+- remaining ambiguity is ignored until the user or config specifies a provider
+
+Fields:
+
+| Field           | Type       | What it means                                                                   |
+| --------------- | ---------- | ------------------------------------------------------------------------------- |
+| `modelPrefixes` | `string[]` | Prefixes matched with `startsWith` against shorthand model ids.                 |
+| `modelPatterns` | `string[]` | Regex sources matched against shorthand model ids after profile suffix removal. |
 
 Legacy top-level `speechProviders`, `mediaUnderstandingProviders`, and
 `imageGenerationProviders` are deprecated. Use `openclaw doctor --fix` to move

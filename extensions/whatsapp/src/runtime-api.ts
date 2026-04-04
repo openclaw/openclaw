@@ -1,14 +1,11 @@
 export { getChatChannelMeta, type ChannelPlugin } from "openclaw/plugin-sdk/core";
-export {
-  buildChannelConfigSchema,
-  WhatsAppConfigSchema,
-} from "openclaw/plugin-sdk/channel-config-schema";
+export { buildChannelConfigSchema, WhatsAppConfigSchema } from "../config-api.js";
 export { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 export {
   formatWhatsAppConfigAllowFromEntries,
   resolveWhatsAppConfigAllowFrom,
   resolveWhatsAppConfigDefaultTo,
-} from "openclaw/plugin-sdk/channel-config-helpers";
+} from "./config-accessors.js";
 export {
   createActionGate,
   jsonResult,
