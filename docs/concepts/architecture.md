@@ -99,8 +99,12 @@ sequenceDiagram
 - All WS clients (operators + nodes) include a **device identity** on `connect`.
 - New device IDs require pairing approval; the Gateway issues a **device token**
   for subsequent connects.
-- **Local** connects (loopback or the gateway host’s own tailnet address) can be
-  auto‑approved to keep same‑host UX smooth.
+- Direct local loopback connects can be auto-approved to keep same-host UX
+  smooth.
+- OpenClaw also has a narrow backend/container-local self-connect path for
+  trusted shared-secret helper flows.
+- Tailnet and LAN connects, including same-host tailnet binds, still require
+  explicit pairing approval.
 - All connects must sign the `connect.challenge` nonce.
 - Signature payload `v3` also binds `platform` + `deviceFamily`; the gateway
   pins paired metadata on reconnect and requires repair pairing for metadata

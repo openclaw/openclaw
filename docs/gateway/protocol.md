@@ -470,8 +470,11 @@ Gateway exposes today.
 - Gateways issue tokens per device + role.
 - Pairing approvals are required for new device IDs unless local auto-approval
   is enabled.
-- **Local** connects include loopback and the gateway host’s own tailnet address
-  (so same‑host tailnet binds can still auto‑approve).
+- Pairing auto-approval is centered on direct local loopback connects.
+- OpenClaw also has a narrow backend/container-local self-connect path for
+  trusted shared-secret helper flows.
+- Same-host tailnet or LAN connects are still treated as remote for pairing and
+  require approval.
 - All WS clients must include `device` identity during `connect` (operator + node).
   Control UI can omit it only in these modes:
   - `gateway.controlUi.allowInsecureAuth=true` for localhost-only insecure HTTP compatibility.

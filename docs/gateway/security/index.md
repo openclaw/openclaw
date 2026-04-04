@@ -893,10 +893,12 @@ paths, set `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` on the client process as break
 
 Local device pairing:
 
-- Device pairing is auto‑approved for **local** connects (loopback or the
-  gateway host’s own tailnet address) to keep same‑host clients smooth.
-- Other tailnet peers are **not** treated as local; they still need pairing
-  approval.
+- Device pairing is auto-approved for direct local loopback connects to keep
+  same-host clients smooth.
+- OpenClaw also has a narrow backend/container-local self-connect path for
+  trusted shared-secret helper flows.
+- Tailnet and LAN connects, including same-host tailnet binds, are treated as
+  remote for pairing and still need approval.
 
 Auth modes:
 

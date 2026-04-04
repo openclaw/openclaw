@@ -37,9 +37,12 @@ Key references:
 
 Local trust:
 
-- Local connections (loopback or the gateway host’s own tailnet address) can be
-  auto‑approved for pairing to keep same‑host UX smooth.
-- Non‑local tailnet/LAN clients still require explicit pairing approval.
+- Direct local loopback connects can be auto-approved for pairing to keep
+  same-host UX smooth.
+- OpenClaw also has a narrow backend/container-local self-connect path for
+  trusted shared-secret helper flows.
+- Tailnet and LAN clients, including same-host tailnet binds, still require
+  explicit pairing approval.
 
 ## Discovery + transports
 
