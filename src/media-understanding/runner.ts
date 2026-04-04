@@ -393,8 +393,17 @@ async function resolveLocalAudioEntry(): Promise<MediaUnderstandingModelConfig |
 }
 
 async function resolveGeminiCliEntry(
-  _capability: MediaUnderstandingCapability,
+  capability: MediaUnderstandingCapability,
 ): Promise<MediaUnderstandingModelConfig | null> {
+  // Gemini CLI headless is not a reliable audio-transcription fallback: prompts that
+  // reference audio paths (for example Telegram .ogg voice notes) can be treated as
+  // regular file context instead of multimodal audio, and may drift into invalid tool
+  // fallback behavior. Keep Gemini CLI auto-detect for image/video, but prefer
+  // deterministic local/provider audio paths until the CLI offers a stable binary-audio
+  // attachment flow for headless transcription.
+  if (capability === "audio") {
+    return null;
+  }
   if (!(await probeGeminiCli())) {
     return null;
   }

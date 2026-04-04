@@ -800,6 +800,39 @@ describe("applyMediaUnderstanding", () => {
     expect(mockedRunExec).not.toHaveBeenCalled();
   });
 
+  it("skips Gemini CLI auto-detect for audio and prefers provider transcription", async () => {
+    const binDir = await createTempMediaDir();
+    await createMockExecutable(binDir, "gemini");
+    const ctx = await createAudioCtx({
+      fileName: "telegram-note.ogg",
+      mediaType: "audio/ogg",
+      content: createSafeAudioFixtureBuffer(2048),
+    });
+    const cfg: OpenClawConfig = { tools: { media: { audio: {} } } };
+
+    await withMediaAutoDetectEnv(
+      {
+        PATH: binDir,
+      },
+      async () => {
+        const result = await applyMediaUnderstanding({
+          ctx,
+          cfg,
+          providers: {
+            openai: {
+              id: "openai",
+              transcribeAudio: async () => ({ text: "provider transcript" }),
+            },
+          },
+        });
+        expect(result.appliedAudio).toBe(true);
+      },
+    );
+
+    expect(ctx.Transcript).toBe("provider transcript");
+    expect(mockedRunExec).not.toHaveBeenCalledWith("gemini", expect.any(Array), expect.any(Object));
+  });
+
   it("uses CLI image understanding and preserves caption for commands", async () => {
     const imagePath = await createTempMediaFile({
       fileName: "photo.jpg",
