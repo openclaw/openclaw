@@ -78,6 +78,19 @@ const MattermostNetworkSchema = z
   .strict()
   .optional();
 
+const MattermostThreadFollowSchema = z
+  .object({
+    mode: z.enum(["off", "same-user"]).optional(),
+    ttlMinutes: z
+      .number()
+      .int()
+      .min(1)
+      .max(24 * 60)
+      .optional(),
+  })
+  .strict()
+  .optional();
+
 const MattermostAccountSchemaBase = z
   .object({
     name: z.string().optional(),
@@ -99,6 +112,7 @@ const MattermostAccountSchemaBase = z
     chunkMode: z.enum(["length", "newline"]).optional(),
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
+    threadFollow: MattermostThreadFollowSchema,
     replyToMode: z.enum(["off", "first", "all", "batched"]).optional(),
     responsePrefix: z.string().optional(),
     actions: z

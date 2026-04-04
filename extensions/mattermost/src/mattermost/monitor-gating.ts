@@ -35,6 +35,7 @@ export type MattermostMentionGateInput = {
   commandAuthorized: boolean;
   oncharEnabled: boolean;
   oncharTriggered: boolean;
+  implicitMention?: boolean;
   canDetectMention: boolean;
 };
 
@@ -63,10 +64,14 @@ export function evaluateMattermostMentionGate(
     !params.wasMentioned &&
     params.commandAuthorized;
   const effectiveWasMentioned =
-    params.wasMentioned || shouldBypassMention || params.oncharTriggered;
+    params.wasMentioned ||
+    shouldBypassMention ||
+    params.oncharTriggered ||
+    params.implicitMention === true;
   if (
     params.oncharEnabled &&
     !params.oncharTriggered &&
+    params.implicitMention !== true &&
     !params.wasMentioned &&
     !params.isControlCommand
   ) {

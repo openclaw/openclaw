@@ -32,7 +32,11 @@ function resolveRequireMentionForTest(params: MattermostRequireMentionResolverIn
   return true;
 }
 
-function evaluateMentionGateForMessage(params: { cfg: OpenClawConfig; threadRootId?: string }) {
+function evaluateMentionGateForMessage(params: {
+  cfg: OpenClawConfig;
+  threadRootId?: string;
+  implicitMention?: boolean;
+}) {
   const account = resolveMattermostAccount({ cfg: params.cfg, accountId: "default" });
   const resolver = vi.fn(resolveRequireMentionForTest);
   const input: MattermostMentionGateInput = {
@@ -48,6 +52,7 @@ function evaluateMentionGateForMessage(params: { cfg: OpenClawConfig; threadRoot
     commandAuthorized: false,
     oncharEnabled: false,
     oncharTriggered: false,
+    implicitMention: params.implicitMention,
     canDetectMention: true,
   };
   const decision = evaluateMattermostMentionGate(input);
@@ -109,6 +114,24 @@ describe("mattermost mention gating", () => {
     expect(account.requireMention).toBe(true);
     expect(decision.shouldRequireMention).toBe(true);
     expect(decision.dropReason).toBe("missing-mention");
+  });
+
+  it("accepts unmentioned thread replies in oncall mode when implicit thread follow is active", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          chatmode: "oncall",
+          groupPolicy: "open",
+        },
+      },
+    };
+    const { decision } = evaluateMentionGateForMessage({
+      cfg,
+      threadRootId: "thread-root-1",
+      implicitMention: true,
+    });
+    expect(decision.dropReason).toBeNull();
+    expect(decision.effectiveWasMentioned).toBe(true);
   });
 });
 

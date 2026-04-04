@@ -3,11 +3,27 @@ import type { SecretInput } from "./secret-input.js";
 
 export type MattermostReplyToMode = "off" | "first" | "all" | "batched";
 export type MattermostChatTypeKey = "direct" | "channel" | "group";
+export type MattermostThreadFollowMode = "off" | "same-user";
 
 export type MattermostChatMode = "oncall" | "onmessage" | "onchar";
 export type MattermostNetworkConfig = {
   /** Dangerous opt-in for self-hosted Mattermost on trusted private/internal hosts. */
   dangerouslyAllowPrivateNetwork?: boolean;
+};
+
+export type MattermostThreadFollowConfig = {
+  /**
+   * Controls whether the bot may keep responding in a thread without a fresh
+   * @mention / onchar trigger after it already replied there.
+   * - "off" (default): keep the normal mention/onchar gate for every message
+   * - "same-user": allow follow-ups only from the same sender the bot last replied to in that thread
+   */
+  mode?: MattermostThreadFollowMode;
+  /**
+   * How long a thread stays eligible for follow-up behavior after the bot
+   * replies there. Default: 60 minutes.
+   */
+  ttlMinutes?: number;
 };
 
 export type MattermostAccountConfig = {
@@ -57,6 +73,8 @@ export type MattermostAccountConfig = {
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   /** Outbound response prefix override for this channel/account. */
   responsePrefix?: string;
+  /** Thread follow-up policy for mentionless replies after the bot already participated. */
+  threadFollow?: MattermostThreadFollowConfig;
   /**
    * Controls whether channel and group replies are sent as thread replies.
    * - "off" (default): only thread-reply when incoming message is already a thread reply

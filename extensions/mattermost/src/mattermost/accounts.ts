@@ -7,12 +7,20 @@ import type {
   MattermostChatMode,
   MattermostChatTypeKey,
   MattermostReplyToMode,
+  MattermostThreadFollowMode,
 } from "../types.js";
 import { normalizeMattermostBaseUrl } from "./client.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 
 export type MattermostTokenSource = "env" | "config" | "none";
 export type MattermostBaseUrlSource = "env" | "config" | "none";
+
+export type ResolvedMattermostThreadFollowConfig = {
+  mode: MattermostThreadFollowMode;
+  ttlMs: number;
+};
+
+const DEFAULT_MATTERMOST_THREAD_FOLLOW_TTL_MS = 60 * 60_000;
 
 export type ResolvedMattermostAccount = {
   accountId: string;
@@ -52,7 +60,7 @@ function mergeMattermostAccountConfig(
       | undefined,
     accountId,
     omitKeys: ["defaultAccount"],
-    nestedObjectKeys: ["commands"],
+    nestedObjectKeys: ["commands", "threadFollow"],
   });
 }
 
@@ -129,6 +137,18 @@ export function resolveMattermostReplyToMode(
     return "off";
   }
   return account.config.replyToMode ?? "off";
+}
+
+export function resolveMattermostThreadFollowConfig(
+  config: MattermostAccountConfig | undefined,
+): ResolvedMattermostThreadFollowConfig {
+  const mode = config?.threadFollow?.mode ?? "off";
+  const ttlMinutes = config?.threadFollow?.ttlMinutes;
+  const ttlMs =
+    typeof ttlMinutes === "number" && Number.isFinite(ttlMinutes) && ttlMinutes > 0
+      ? Math.max(1, Math.floor(ttlMinutes)) * 60_000
+      : DEFAULT_MATTERMOST_THREAD_FOLLOW_TTL_MS;
+  return { mode, ttlMs };
 }
 
 export function listEnabledMattermostAccounts(cfg: OpenClawConfig): ResolvedMattermostAccount[] {

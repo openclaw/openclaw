@@ -4,6 +4,7 @@ import {
   resolveDefaultMattermostAccountId,
   resolveMattermostAccount,
   resolveMattermostReplyToMode,
+  resolveMattermostThreadFollowConfig,
 } from "./accounts.js";
 
 describe("resolveDefaultMattermostAccountId", () => {
@@ -133,6 +134,40 @@ describe("resolveMattermostReplyToMode", () => {
     expect(account.config.commands).toEqual({
       native: true,
       callbackPath: "/hooks/work",
+    });
+  });
+
+  it("merges nested threadFollow config across shared and account scopes", () => {
+    const account = resolveMattermostAccount({
+      cfg: {
+        channels: {
+          mattermost: {
+            threadFollow: {
+              mode: "same-user",
+            },
+            accounts: {
+              work: {
+                threadFollow: {
+                  ttlMinutes: 15,
+                },
+              },
+            },
+          },
+        },
+      },
+      accountId: "work",
+    });
+
+    expect(account.config.threadFollow).toEqual({
+      mode: "same-user",
+      ttlMinutes: 15,
+    });
+  });
+
+  it("defaults threadFollow to off with a one-hour ttl", () => {
+    expect(resolveMattermostThreadFollowConfig({})).toEqual({
+      mode: "off",
+      ttlMs: 60 * 60_000,
     });
   });
 });

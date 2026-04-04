@@ -1,6 +1,10 @@
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { getMattermostRuntime } from "../runtime.js";
-import { resolveMattermostAccount, resolveMattermostReplyToMode } from "./accounts.js";
+import {
+  resolveMattermostAccount,
+  resolveMattermostReplyToMode,
+  resolveMattermostThreadFollowConfig,
+} from "./accounts.js";
 import {
   createMattermostClient,
   fetchMattermostChannel,
@@ -86,6 +90,7 @@ import {
 import { sendMessageMattermost } from "./send.js";
 import { cleanupSlashCommands } from "./slash-commands.js";
 import { deactivateSlashCommands, getSlashCommandState } from "./slash-state.js";
+import { hasMattermostThreadFollow, recordMattermostThreadFollow } from "./thread-follow-cache.js";
 
 export {
   evaluateMattermostMentionGate,
@@ -1188,6 +1193,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const baseSessionKey = route.sessionKey;
     const threadRootId = post.root_id?.trim() || undefined;
     const replyToMode = resolveMattermostReplyToMode(account, kind);
+    const threadFollow = resolveMattermostThreadFollowConfig(account.config);
     const threadContext = resolveMattermostThreadSessionContext({
       baseSessionKey,
       kind,
@@ -1233,6 +1239,17 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       ? stripOncharPrefix(rawText, oncharPrefixes)
       : { triggered: false, stripped: rawText };
     const oncharTriggered = oncharResult.triggered;
+    const implicitMention =
+      kind !== "direct" &&
+      threadRootId !== undefined &&
+      threadFollow.mode !== "off" &&
+      hasMattermostThreadFollow({
+        accountId: account.accountId,
+        channelId,
+        threadRootId,
+        senderId,
+        ttlMs: threadFollow.ttlMs,
+      });
     const canDetectMention = Boolean(botUsername) || mentionRegexes.length > 0;
     const mentionDecision = evaluateMattermostMentionGate({
       kind,
@@ -1247,6 +1264,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       commandAuthorized,
       oncharEnabled,
       oncharTriggered,
+      implicitMention,
       canDetectMention,
     });
     const { shouldRequireMention, shouldBypassMention } = mentionDecision;
@@ -1443,6 +1461,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
         typingCallbacks,
         deliver: async (payload: ReplyPayload) => {
+          const replyRootId = resolveMattermostReplyRootId({
+            threadRootId: effectiveReplyToId,
+            replyToId: payload.replyToId,
+          });
           await deliverMattermostReplyPayload({
             core,
             cfg,
@@ -1450,14 +1472,20 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             to,
             accountId: account.accountId,
             agentId: route.agentId,
-            replyToId: resolveMattermostReplyRootId({
-              threadRootId: effectiveReplyToId,
-              replyToId: payload.replyToId,
-            }),
+            replyToId: replyRootId,
             textLimit,
             tableMode,
             sendMessage: sendMessageMattermost,
           });
+          if (kind !== "direct" && replyRootId && threadFollow.mode !== "off") {
+            recordMattermostThreadFollow({
+              accountId: account.accountId,
+              channelId,
+              threadRootId: replyRootId,
+              senderId,
+              ttlMs: threadFollow.ttlMs,
+            });
+          }
           runtime.log?.(`delivered reply to ${to}`);
         },
         onError: (err, info) => {

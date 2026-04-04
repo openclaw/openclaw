@@ -39,6 +39,16 @@ describe("MattermostConfigSchema", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts threadFollow config", () => {
+    const result = MattermostConfigSchema.safeParse({
+      threadFollow: {
+        mode: "same-user",
+        ttlMinutes: 30,
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
   it("accepts groups on account", () => {
     const result = MattermostConfigSchema.safeParse({
       accounts: {

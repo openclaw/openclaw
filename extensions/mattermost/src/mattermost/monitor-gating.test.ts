@@ -81,4 +81,54 @@ describe("mattermost monitor gating", () => {
       dropReason: null,
     });
   });
+
+  it("treats implicit thread follow as mentioned", () => {
+    const resolveRequireMention = vi.fn(() => true);
+
+    expect(
+      evaluateMattermostMentionGate({
+        kind: "channel",
+        cfg: {} as never,
+        accountId: "default",
+        channelId: "chan-1",
+        resolveRequireMention,
+        wasMentioned: false,
+        isControlCommand: false,
+        commandAuthorized: false,
+        oncharEnabled: false,
+        oncharTriggered: false,
+        implicitMention: true,
+        canDetectMention: true,
+      }),
+    ).toEqual({
+      shouldRequireMention: true,
+      shouldBypassMention: false,
+      effectiveWasMentioned: true,
+      dropReason: null,
+    });
+  });
+
+  it("lets implicit thread follow bypass the onchar gate", () => {
+    const resolveRequireMention = vi.fn(() => true);
+
+    expect(
+      evaluateMattermostMentionGate({
+        kind: "channel",
+        cfg: {} as never,
+        accountId: "default",
+        channelId: "chan-1",
+        resolveRequireMention,
+        wasMentioned: false,
+        isControlCommand: false,
+        commandAuthorized: false,
+        oncharEnabled: true,
+        oncharTriggered: false,
+        implicitMention: true,
+        canDetectMention: true,
+      }),
+    ).toMatchObject({
+      effectiveWasMentioned: true,
+      dropReason: null,
+    });
+  });
 });
