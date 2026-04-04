@@ -255,9 +255,6 @@ jobs:
     needs: [docs-scope, changed-scope]
     if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_website == 'true')
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: website/projects/website
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -277,9 +274,11 @@ jobs:
           cache-dependency-path: website/projects/website/pnpm-lock.yaml
 
       - name: Install dependencies
+        working-directory: website/projects/website
         run: pnpm install --frozen-lockfile
 
       - name: Build website
+        working-directory: website/projects/website
         run: pnpm build
         env:
           NEXT_PUBLIC_GA_MEASUREMENT_ID: dummy
