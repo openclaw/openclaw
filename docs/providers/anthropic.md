@@ -12,6 +12,20 @@ title: "Anthropic"
 Anthropic builds the **Claude** model family and provides access via an API.
 In OpenClaw you can authenticate with an API key or a **setup-token**.
 
+<Warning>
+Anthropic changed third-party harness billing on **April 4, 2026 at 12:00 PM
+PT / 8:00 PM BST**. Anthropic says Claude subscription limits no longer cover
+OpenClaw or other third-party harnesses. You can still use Anthropic
+subscription auth in OpenClaw, but Anthropic now requires **Extra Usage**
+(pay-as-you-go, billed separately from the subscription) for that traffic.
+
+If you want a clearer billing path, use an Anthropic API key instead. OpenClaw
+also supports other subscription-style options, including [OpenAI
+Codex](/providers/openai), [Alibaba Cloud Model Studio Coding
+Plan](/providers/qwen_modelstudio), [MiniMax Coding Plan](/providers/minimax),
+and [Z.AI / GLM Coding Plan](/providers/glm).
+</Warning>
+
 ## Option A: Anthropic API key
 
 **Best for:** standard API access and usage-based billing.
@@ -194,6 +208,11 @@ OAuth betas.
 **Best for:** a single-user gateway host that already has Claude CLI installed
 and signed in with a Claude subscription.
 
+Billing note: when Claude CLI is used through OpenClaw, Anthropic now treats
+that traffic as third-party harness usage. As of **April 4, 2026 at 12:00 PM
+PT / 8:00 PM BST**, Anthropic requires **Extra Usage** instead of included
+Claude subscription limits for this path.
+
 This path uses the local `claude` binary for model inference instead of calling
 the Anthropic API directly. OpenClaw treats it as a **CLI backend provider**
 with model refs like:
@@ -306,7 +325,8 @@ More details: [/gateway/cli-backends](/gateway/cli-backends)
 
 ## Option C: Claude setup-token
 
-**Best for:** using your Claude subscription.
+**Best for:** using your Claude subscription with Anthropic **Extra Usage**
+enabled, or while transitioning to API-key billing.
 
 ### Where to get a setup-token
 
@@ -346,6 +366,9 @@ openclaw onboard --auth-choice setup-token
 ## Notes
 
 - Generate the setup-token with `claude setup-token` and paste it, or run `openclaw models auth setup-token` on the gateway host.
+- Anthropic says that starting **April 4, 2026 at 12:00 PM PT / 8:00 PM BST**,
+  OpenClaw usage with Claude subscription auth requires **Extra Usage**
+  (pay-as-you-go billed separately from the subscription).
 - If you see “OAuth token refresh failed …” on a Claude subscription, re-auth with a setup-token. See [/gateway/troubleshooting](/gateway/troubleshooting).
 - Auth details + reuse rules are in [/concepts/oauth](/concepts/oauth).
 

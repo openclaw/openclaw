@@ -87,4 +87,4 @@ Notes:
   CLI login and rewrites the main Anthropic default-model path to `claude-cli/...`.
 - `setup-token` prompts for a setup-token value (generate it with `claude setup-token` on any machine).
 - `paste-token` accepts a token string generated elsewhere or from automation.
-- Anthropic policy note: setup-token support is technical compatibility. Anthropic has blocked some subscription usage outside Claude Code in the past, so verify current terms before using it broadly.
+- Anthropic billing note: Anthropic changed third-party harness billing on **April 4, 2026 at 12:00 PM PT / 8:00 PM BST**. Anthropic says Claude subscription limits no longer cover OpenClaw, and setup-token usage in OpenClaw now requires **Extra Usage** billed separately from the subscription.

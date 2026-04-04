@@ -559,11 +559,19 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     **local-only models** so your data stays on your device. Subscriptions (Claude
     Pro/Max or OpenAI Codex) are optional ways to authenticate those providers.
 
-    If you choose Anthropic subscription auth, decide for yourself whether to use it:
-    Anthropic has blocked some subscription usage outside Claude Code in the past.
-    OpenAI Codex OAuth is explicitly supported for external tools like OpenClaw.
+    Anthropic changed third-party harness billing on **April 4, 2026 at 12:00 PM
+    PT / 8:00 PM BST**. Anthropic says Claude subscription limits no longer cover
+    OpenClaw, and Anthropic subscription auth in OpenClaw now requires **Extra
+    Usage** billed separately from the subscription. OpenAI Codex OAuth is
+    explicitly supported for external tools like OpenClaw.
+
+    OpenClaw also supports other hosted subscription-style options including
+    **Alibaba Cloud Model Studio Coding Plan**, **MiniMax Coding Plan**, and
+    **Z.AI / GLM Coding Plan**.
 
     Docs: [Anthropic](/providers/anthropic), [OpenAI](/providers/openai),
+    [Qwen / Model Studio](/providers/qwen_modelstudio),
+    [MiniMax](/providers/minimax), [GLM Models](/providers/glm),
     [Local models](/gateway/local-models), [Models](/concepts/models).
 
   </Accordion>
@@ -573,9 +581,11 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     login on the gateway host.
 
     Claude Pro/Max subscriptions **do not include an API key**, so this is the
-    technical path for subscription accounts. But this is your decision: Anthropic
-    has blocked some subscription usage outside Claude Code in the past.
-    If you want the clearest and safest supported path for production, use an Anthropic API key.
+    technical path for subscription accounts. But Anthropic changed third-party
+    harness billing on **April 4, 2026 at 12:00 PM PT / 8:00 PM BST**:
+    Anthropic says OpenClaw now requires **Extra Usage** billed separately from
+    the subscription for this path. If you want the clearest and safest
+    supported path for production, use an Anthropic API key.
 
   </Accordion>
 
@@ -602,10 +612,17 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
     Setup-token is still supported. Claude CLI migration is simpler when the gateway host already runs Claude Code. See [Anthropic](/providers/anthropic) and [OAuth](/concepts/oauth).
 
-    Important: this is technical compatibility, not a policy guarantee. Anthropic
-    has blocked some subscription usage outside Claude Code in the past.
-    You need to decide whether to use it and verify Anthropic's current terms.
-    For production or multi-user workloads, Anthropic API key auth is the safer, recommended choice.
+    Important: Anthropic changed third-party harness billing on **April 4, 2026
+    at 12:00 PM PT / 8:00 PM BST**. Anthropic says Claude subscription limits no
+    longer cover OpenClaw, and Anthropic now requires **Extra Usage** billed
+    separately from the subscription for setup-token or Claude CLI traffic
+    through OpenClaw.
+
+    For production or multi-user workloads, Anthropic API key auth is the
+    safer, recommended choice. If you want other subscription-style hosted
+    options in OpenClaw, see [OpenAI](/providers/openai), [Qwen / Model
+    Studio](/providers/qwen_modelstudio), [MiniMax](/providers/minimax), and
+    [GLM Models](/providers/glm).
 
   </Accordion>
 

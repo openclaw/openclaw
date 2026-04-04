@@ -931,9 +931,13 @@ openclaw models auth setup-token --provider anthropic
 openclaw models status
 ```
 
-Policy note: this is technical compatibility. Anthropic has blocked some
-subscription usage outside Claude Code in the past; verify current Anthropic
-terms before relying on setup-token in production.
+Billing note: Anthropic changed third-party harness billing on **April 4, 2026
+at 12:00 PM PT / 8:00 PM BST**. Anthropic says Claude subscription limits no
+longer cover OpenClaw, and setup-token usage in OpenClaw now requires **Extra
+Usage** billed separately from the subscription. For production, prefer an
+Anthropic API key or another supported subscription-style provider such as
+OpenAI Codex, Alibaba Cloud Model Studio Coding Plan, MiniMax Coding Plan, or
+Z.AI / GLM Coding Plan.
 
 Anthropic Claude CLI migration:
 

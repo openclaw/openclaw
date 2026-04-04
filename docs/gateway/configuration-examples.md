@@ -569,9 +569,11 @@ Only enable direct mutable name/email/nick matching with each channel's `dangero
 ### Anthropic setup-token + API key, MiniMax fallback
 
 <Warning>
-Anthropic setup-token usage outside Claude Code has been restricted for some
-users in the past. Treat this as user-choice risk and verify current Anthropic
-terms before depending on subscription auth.
+Anthropic changed third-party harness billing on **April 4, 2026 at 12:00 PM
+PT / 8:00 PM BST**. Anthropic says Claude subscription limits no longer cover
+OpenClaw, and Anthropic setup-token traffic now requires **Extra Usage** billed
+separately from the subscription. Prefer an Anthropic API key if you want the
+clearest billing path.
 </Warning>
 
 ```json5

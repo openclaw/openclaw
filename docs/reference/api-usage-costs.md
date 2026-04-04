@@ -22,7 +22,13 @@ OpenClaw features that can generate provider usage or paid API calls.
 **Per-message cost footer**
 
 - `/usage full` appends a usage footer to every reply, including **estimated cost** (API-key only).
-- `/usage tokens` shows tokens only; OAuth flows hide dollar cost.
+- `/usage tokens` shows tokens only; OAuth/setup-token/CLI subscription flows hide dollar cost.
+
+Anthropic note: starting **April 4, 2026 at 12:00 PM PT / 8:00 PM BST**,
+Anthropic says OpenClaw no longer uses included Claude subscription limits.
+Anthropic subscription-auth traffic in OpenClaw now requires **Extra Usage**
+billed separately from the subscription, but Anthropic does not expose a
+per-message dollar estimate that OpenClaw can show in `/usage full`.
 
 **CLI usage windows (provider quotas)**
 
@@ -47,6 +53,11 @@ OpenClaw can pick up credentials from:
 
 Every reply or tool call uses the **current model provider** (OpenAI, Anthropic, etc). This is the
 primary source of usage and cost.
+
+This also includes subscription-style hosted providers that still bill outside
+OpenClaw's local UI, such as **OpenAI Codex**, **Alibaba Cloud Model Studio
+Coding Plan**, **MiniMax Coding Plan**, **Z.AI / GLM Coding Plan**, and
+Anthropic subscription auth with **Extra Usage** enabled.
 
 See [Models](/providers/models) for pricing config and [Token use & costs](/reference/token-use) for display.
 
