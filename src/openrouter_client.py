@@ -148,6 +148,10 @@ async def call_openrouter(
     max_tokens = role_config.get("max_tokens", ROLE_TOKEN_BUDGET.get(role_name, 2048))
     temperature = role_config.get("temperature", 0.3)
     timeout_sec = role_config.get("timeout_sec", config.get("system", {}).get("timeout_sec", 120))
+    # v16.5 N8-fix: scale timeout for large prompts (heavy RAG context)
+    _prompt_len = len(system_prompt or "") + len(user_prompt or "")
+    if _prompt_len > 8000:
+        timeout_sec = max(timeout_sec, int(timeout_sec * 1.7))
     max_retries = role_config.get("max_retries", 3)
 
     # Build fallback chain (deduplicated, preserve order)

@@ -47,24 +47,24 @@
       "enabled": true,
       "api_key": "${OPENROUTER_API_KEY}",
       "base_url": "https://openrouter.ai/api/v1",
-      "intent_model": "arcee-ai/trinity-mini:free",
+      "intent_model": "google/gemma-3-4b-it:free",
       "max_retries": 3,
       "retry_backoff_base": 2,
       "notes": "Permanent cloud mode. All inference routed through OpenRouter API."
     },
     "model_router": {
       "risk_analysis": "nvidia/nemotron-3-super-120b-a12b:free",
-      "tool_execution": "qwen/qwen3.6-plus-preview:free",
-      "data_parsing": "arcee-ai/trinity-mini:free",
+      "tool_execution": "qwen/qwen3.6-plus:free",
+      "data_parsing": "google/gemma-3-4b-it:free",
       "general": "nvidia/nemotron-3-super-120b-a12b:free",
-      "code": "qwen/qwen3.6-plus-preview:free",
+      "code": "qwen/qwen3.6-plus:free",
       "research": "stepfun/step-3.5-flash:free",
       "vision": "nvidia/nemotron-nano-12b-v2-vl:free",
       "video_analyst": "nvidia/nemotron-nano-12b-v2-vl:free",
-      "intent": "arcee-ai/trinity-mini:free",
-      "expand": "arcee-ai/trinity-mini:free",
+      "intent": "google/gemma-3-4b-it:free",
+      "expand": "google/gemma-3-4b-it:free",
       "agent": "z-ai/glm-4.5-air:free",
-      "notes": "2026-04-01: replaced trinity-large-preview (retiring Apr 10) with qwen3.6-plus-preview (#3 programming), step-3.5-flash (research), glm-4.5-air (agents)"
+      "notes": "2026-04-04: replaced qwen3.6-plus-preview (HTTP 404) with qwen3.6-plus:free; replaced trinity-mini (empty responses) with gemma-3-4b-it:free"
     },
     "aflow": {
       "enabled": true,

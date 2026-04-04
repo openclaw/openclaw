@@ -160,6 +160,13 @@ class ReActReasoner:
             "Thought: <your reasoning>\n"
             "Action: <tool name or Finish>\n"
             "Action Input: <input for the tool, or final answer if Action is Finish>\n\n"
+            "IMPORTANT RULES:\n"
+            "- If the user asks you to WRITE code (e.g. 'write a function', 'implement'), "
+            "DO NOT use list_directory or read_file. Instead, use 'Finish' and provide "
+            "the code directly as the final answer.\n"
+            "- Only use filesystem tools (list_directory, read_file) when the task requires "
+            "READING or INSPECTING existing files.\n"
+            "- Use web_search only for research/analysis tasks that need external info.\n\n"
             f"Available tools:\n{tool_desc}\n"
             "Use 'Finish' as the Action when you have the final answer."
         )

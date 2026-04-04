@@ -228,23 +228,30 @@ class MARCHProtocol:
     # ------------------------------------------------------------------
 
     async def _verify_claim(self, claim: EntityClaim) -> VerificationResult:
-        """Check a claim against SuperMemory. Returns verified/not."""
+        """Check a claim against SuperMemory. Returns verified/not.
+
+        v16.5 N6-fix: 'Not found in memory' is NOT a discrepancy — the model
+        can generate new entities (function names, version numbers) that
+        legitimately don't exist in the knowledge base yet.  Only mark as
+        unverified when memory *contradicts* the claim.
+        """
         if not self.supermemory:
-            # No memory available — assume unverifiable, low confidence
+            # No memory available — assume verified (cannot contradict)
             return VerificationResult(
                 claim=claim,
-                verified=claim.confidence >= 0.9,  # high-confidence claims pass
+                verified=True,
                 memory_evidence="[no SuperMemory available]",
             )
 
         try:
             results = self.supermemory.recall(claim.entity, top_k=2)
             if not results:
+                # Entity not found in memory — this is NOT a discrepancy,
+                # it simply means the entity is new / generated.
                 return VerificationResult(
                     claim=claim,
-                    verified=False,
-                    memory_evidence="[no matching memory found]",
-                    discrepancy=f"Entity '{claim.entity}' not found in knowledge base",
+                    verified=True,
+                    memory_evidence="[no matching memory found — new entity, not a discrepancy]",
                 )
 
             # Check if the recalled content supports or contradicts

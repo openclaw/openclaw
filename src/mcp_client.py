@@ -308,11 +308,21 @@ class OpenClawMCPClient:
             return error_msg
 
     async def cleanup(self):
-        """Close all connections and terminate background processes gracefully"""
+        """Close all connections and terminate background processes gracefully.
+
+        v16.5 N9-fix: Suppress RuntimeError from anyio cancel scope teardown
+        in multithreaded asyncio context — cosmetic only, does not affect results.
+        """
         try:
             await self._exit_stack.aclose()
             print("[MCP] Connections closed successfully.")
         except asyncio.CancelledError:
             print("[MCP] Cleanup cancelled, connections closed.")
+        except RuntimeError as e:
+            # anyio stdio_client async generator raises this on shutdown
+            if "cancel scope" in str(e).lower():
+                print("[MCP] Cleanup: suppressed anyio cancel scope teardown error (cosmetic).")
+            else:
+                print(f"[MCP] Cleanup RuntimeError: {e}")
         except Exception as e:
             print(f"[MCP] Cleanup warning: {e}")

@@ -990,7 +990,11 @@ class PipelineExecutor:
                     pass
 
             # AGGRESSIVE PARSER RETRY
-            if not extracted_json_str and ("Planner" in role_name or "Foreman" in role_name):
+            # v16.5: Accept numbered text plans as valid output (N2 fix).
+            # Only force re-generation when the response is very short or
+            # clearly not a plan (no numbered list or bullet points).
+            _is_text_plan = bool(re.search(r"(?:^|\n)\s*(?:\d+[\.\)]\s|[-•]\s)", response or ""))
+            if not extracted_json_str and ("Planner" in role_name or "Foreman" in role_name) and not _is_text_plan:
                 lower_resp = response.lower()
                 if any(kw in lower_resp for kw in ["создай", "запиши", "выполни", "create", "write", "execute"]):
                     logger.warning(f"No JSON found from {role_name} but action keywords present. Forcing re-generation.")
