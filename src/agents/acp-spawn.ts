@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import fs from "node:fs/promises";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import {
   cleanupFailedAcpSpawn,
@@ -58,6 +59,7 @@ import {
 } from "./acp-spawn-parent-stream.js";
 import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
+import { resolveSpawnedWorkspaceInheritance } from "./spawned-context.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";
 
 const log = createSubsystemLogger("agents/acp-spawn");
@@ -365,6 +367,24 @@ function summarizeError(err: unknown): string {
     return err;
   }
   return "error";
+}
+
+async function resolveRuntimeCwdForAcpSpawn(params: {
+  resolvedCwd?: string;
+  explicitCwd?: string;
+}): Promise<string | undefined> {
+  if (!params.resolvedCwd) {
+    return undefined;
+  }
+  if (typeof params.explicitCwd === "string" && params.explicitCwd.trim()) {
+    return params.resolvedCwd;
+  }
+  try {
+    await fs.access(params.resolvedCwd);
+    return params.resolvedCwd;
+  } catch {
+    return undefined;
+  }
 }
 
 function resolveRequesterInternalSessionKey(params: {
@@ -918,6 +938,16 @@ export async function spawnAcpDirect(
 
   const sessionKey = `agent:${targetAgentId}:acp:${crypto.randomUUID()}`;
   const runtimeMode = resolveAcpSessionMode(spawnMode);
+  const resolvedCwd = resolveSpawnedWorkspaceInheritance({
+    config: cfg,
+    targetAgentId,
+    requesterSessionKey: ctx.agentSessionKey,
+    explicitWorkspaceDir: params.cwd,
+  });
+  const runtimeCwd = await resolveRuntimeCwdForAcpSpawn({
+    resolvedCwd,
+    explicitCwd: params.cwd,
+  });
 
   let preparedBinding: PreparedAcpThreadBinding | null = null;
   if (requestThreadBinding) {
@@ -958,7 +988,7 @@ export async function spawnAcpDirect(
       targetAgentId,
       runtimeMode,
       resumeSessionId: params.resumeSessionId,
-      cwd: params.cwd,
+      cwd: runtimeCwd,
     });
     initializedRuntime = initializedSession.runtimeCloseHandle;
 

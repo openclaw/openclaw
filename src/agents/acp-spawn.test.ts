@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as acpSessionManager from "../acp/control-plane/manager.js";
 import type { AcpInitializeSessionInput } from "../acp/control-plane/manager.types.js";
@@ -536,6 +539,111 @@ describe("spawnAcpDirect", () => {
       to: "channel:child-thread",
       threadId: "child-thread",
     });
+  });
+
+  it("uses the target agent workspace for cross-agent ACP spawns when cwd is omitted", async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acp-spawn-"));
+    try {
+      const mainWorkspace = path.join(workspaceRoot, "main");
+      const targetWorkspace = path.join(workspaceRoot, "claude-code");
+      await fs.mkdir(mainWorkspace, { recursive: true });
+      await fs.mkdir(targetWorkspace, { recursive: true });
+
+      replaceSpawnConfig({
+        ...hoisted.state.cfg,
+        acp: {
+          ...hoisted.state.cfg.acp,
+          allowedAgents: ["codex", "claude-code"],
+        },
+        agents: {
+          list: [
+            {
+              id: "main",
+              default: true,
+              workspace: mainWorkspace,
+            },
+            {
+              id: "claude-code",
+              workspace: targetWorkspace,
+            },
+          ],
+        },
+      });
+
+      const result = await spawnAcpDirect(
+        {
+          task: "Inspect the queue owner state",
+          agentId: "claude-code",
+          mode: "run",
+        },
+        {
+          agentSessionKey: "agent:main:main",
+        },
+      );
+
+      expect(result.status).toBe("accepted");
+      expect(hoisted.initializeSessionMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey: expect.stringMatching(/^agent:claude-code:acp:/),
+          agent: "claude-code",
+          cwd: targetWorkspace,
+        }),
+      );
+    } finally {
+      await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to backend default cwd when the inherited target workspace does not exist", async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acp-spawn-"));
+    try {
+      const mainWorkspace = path.join(workspaceRoot, "main");
+      const missingTargetWorkspace = path.join(workspaceRoot, "claude-code-missing");
+      await fs.mkdir(mainWorkspace, { recursive: true });
+
+      replaceSpawnConfig({
+        ...hoisted.state.cfg,
+        acp: {
+          ...hoisted.state.cfg.acp,
+          allowedAgents: ["codex", "claude-code"],
+        },
+        agents: {
+          list: [
+            {
+              id: "main",
+              default: true,
+              workspace: mainWorkspace,
+            },
+            {
+              id: "claude-code",
+              workspace: missingTargetWorkspace,
+            },
+          ],
+        },
+      });
+
+      const result = await spawnAcpDirect(
+        {
+          task: "Inspect the queue owner state",
+          agentId: "claude-code",
+          mode: "run",
+        },
+        {
+          agentSessionKey: "agent:main:main",
+        },
+      );
+
+      expect(result.status).toBe("accepted");
+      expect(hoisted.initializeSessionMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey: expect.stringMatching(/^agent:claude-code:acp:/),
+          agent: "claude-code",
+          cwd: undefined,
+        }),
+      );
+    } finally {
+      await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
   });
 
   it("binds LINE ACP sessions to the current conversation when the channel has no native threads", async () => {
