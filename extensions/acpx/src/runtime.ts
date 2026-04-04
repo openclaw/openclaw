@@ -166,6 +166,42 @@ function findSessionIdentifierEvent(events: AcpxJsonObject[]): AcpxJsonObject | 
   );
 }
 
+function resolveSilentAcpxExitErrorCode(exitCode: number | null | undefined): AcpRuntimeErrorCode {
+  if (exitCode === ACPX_EXIT_CODE_PERMISSION_DENIED) {
+    return "ACP_TURN_FAILED";
+  }
+  return "ACP_BACKEND_UNAVAILABLE";
+}
+
+function resolveSilentAcpxControlExitErrorCode(params: {
+  exitCode: number | null | undefined;
+  fallbackCode: AcpRuntimeErrorCode;
+}): AcpRuntimeErrorCode {
+  if (params.exitCode === ACPX_EXIT_CODE_PERMISSION_DENIED) {
+    return params.fallbackCode;
+  }
+  return params.fallbackCode === "ACP_TURN_FAILED"
+    ? "ACP_BACKEND_UNAVAILABLE"
+    : params.fallbackCode;
+}
+
+function shouldAttemptEnsureRecovery(error: unknown): boolean {
+  if (!(error instanceof AcpRuntimeError)) {
+    return true;
+  }
+  if (error.code !== "ACP_SESSION_INIT_FAILED") {
+    return false;
+  }
+  if (isRecord(error.cause)) {
+    const causeKind = asTrimmedString(error.cause.kind);
+    const eventCount = error.cause.eventCount;
+    if (causeKind === "acpx-control-exit" && typeof eventCount === "number") {
+      return eventCount > 0;
+    }
+  }
+  return !/\bacpx exited with code\s+[1-9]\d*\b/i.test(error.message);
+}
+
 export function encodeAcpxRuntimeHandleState(state: AcpxHandleState): string {
   const payload = Buffer.from(JSON.stringify(state), "utf8").toString("base64url");
   return `${ACPX_RUNTIME_HANDLE_PREFIX}${payload}`;
@@ -582,6 +618,9 @@ export class AcpxRuntime implements AcpRuntime {
           fallbackCode: "ACP_SESSION_INIT_FAILED",
         });
       } catch (error) {
+        if (!shouldAttemptEnsureRecovery(error)) {
+          throw error;
+        }
         const recovered = await this.recoverEnsureFailure({
           sessionName,
           agent,
@@ -781,6 +820,7 @@ export class AcpxRuntime implements AcpRuntime {
       if (exitedWithFailure && !sawError) {
         yield {
           type: "error",
+          code: resolveSilentAcpxExitErrorCode(exit.code),
           message: formatAcpxExitMessage({
             stderr,
             exitCode: exit.code,
@@ -1158,12 +1198,22 @@ export class AcpxRuntime implements AcpRuntime {
       })
     ) {
       throw new AcpRuntimeError(
-        params.fallbackCode,
+        resolveSilentAcpxControlExitErrorCode({
+          exitCode: result.code,
+          fallbackCode: params.fallbackCode,
+        }),
         formatAcpxExitMessage({
           stderr: result.stderr,
           exitCode: result.code,
           signal: result.signal,
         }),
+        {
+          cause: {
+            kind: "acpx-control-exit",
+            exitCode: result.code ?? null,
+            eventCount: events.length,
+          },
+        },
       );
     }
     return events;

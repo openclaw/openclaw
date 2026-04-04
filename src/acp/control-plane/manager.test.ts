@@ -1446,7 +1446,7 @@ describe("AcpSessionManager", () => {
         requestId: "run-1",
       }),
     ).rejects.toMatchObject({
-      code: "ACP_TURN_FAILED",
+      code: "ACP_BACKEND_UNAVAILABLE",
       message: "acpx exited with code 1",
     });
 

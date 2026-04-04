@@ -83,6 +83,9 @@ const setKey = command === "set" ? String(args[commandIndex + 1] || "") : "";
 const setValue = command === "set" ? String(args[commandIndex + 2] || "") : "";
 
 if (command === "sessions" && args[commandIndex + 1] === "ensure") {
+  if (ensureName.includes("silent-init")) {
+    process.exit(1);
+  }
   writeLog({ kind: "ensure", agent, args, sessionName: ensureName });
   if (process.env.MOCK_ACPX_ENSURE_STDERR) {
     process.stderr.write(String(process.env.MOCK_ACPX_ENSURE_STDERR) + "\n");
@@ -301,6 +304,10 @@ if (command === "prompt") {
 
   if (process.env.MOCK_ACPX_PROMPT_SIGNAL) {
     process.kill(process.pid, process.env.MOCK_ACPX_PROMPT_SIGNAL);
+  }
+
+  if (stdinText.includes("silent-exit")) {
+    process.exit(1);
   }
 
   if (stdinText.includes("split-spacing")) {
