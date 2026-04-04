@@ -129,6 +129,14 @@ validation failures) are treated as failover‑worthy and use the same cooldowns
 OpenAI-compatible stop-reason errors such as `Unhandled stop reason: error`,
 `stop reason: error`, and `reason: error` are classified as timeout/failover
 signals.
+Provider-scoped generic server text can also land in that timeout bucket when
+the source matches a known transient pattern. For example, Anthropic bare
+`An unknown error occurred` and JSON `api_error` payloads with transient server
+text such as `internal server error`, `unknown error, 520`, `upstream error`,
+or `backend error` are treated as failover-worthy timeouts. Generic internal
+fallback text such as `LLM request failed with an unknown error.` or a bare
+`Provider returned error` stays conservative and does not trigger failover by
+itself.
 
 Cooldowns use exponential backoff:
 
