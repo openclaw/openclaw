@@ -271,7 +271,7 @@
           "exportName": "CliBackendPlugin",
           "kind": "type",
           "source": {
-            "line": 1750,
+            "line": 1752,
             "path": "src/plugins/types.ts"
           }
         },
@@ -415,7 +415,7 @@
           "exportName": "MediaUnderstandingProviderPlugin",
           "kind": "type",
           "source": {
-            "line": 1527,
+            "line": 1529,
             "path": "src/plugins/types.ts"
           }
         },
@@ -433,7 +433,7 @@
           "exportName": "OpenClawPluginApi",
           "kind": "type",
           "source": {
-            "line": 1794,
+            "line": 1796,
             "path": "src/plugins/types.ts"
           }
         },
@@ -568,7 +568,7 @@
           "exportName": "SpeechProviderPlugin",
           "kind": "type",
           "source": {
-            "line": 1502,
+            "line": 1504,
             "path": "src/plugins/types.ts"
           }
         },
@@ -1692,7 +1692,7 @@
           "exportName": "BlockStreamingCoalesceSchema",
           "kind": "const",
           "source": {
-            "line": 408,
+            "line": 409,
             "path": "src/config/zod-schema.core.ts"
           }
         },
@@ -1701,7 +1701,7 @@
           "exportName": "ContextVisibilityModeSchema",
           "kind": "const",
           "source": {
-            "line": 406,
+            "line": 407,
             "path": "src/config/zod-schema.core.ts"
           }
         },
@@ -1719,7 +1719,7 @@
           "exportName": "DmConfigSchema",
           "kind": "const",
           "source": {
-            "line": 361,
+            "line": 362,
             "path": "src/config/zod-schema.core.ts"
           }
         },
@@ -1728,7 +1728,7 @@
           "exportName": "DmPolicySchema",
           "kind": "const",
           "source": {
-            "line": 405,
+            "line": 406,
             "path": "src/config/zod-schema.core.ts"
           }
         },
@@ -1746,7 +1746,7 @@
           "exportName": "GroupPolicySchema",
           "kind": "const",
           "source": {
-            "line": 403,
+            "line": 404,
             "path": "src/config/zod-schema.core.ts"
           }
         },
@@ -1764,7 +1764,7 @@
           "exportName": "MarkdownConfigSchema",
           "kind": "const",
           "source": {
-            "line": 441,
+            "line": 442,
             "path": "src/config/zod-schema.core.ts"
           }
         },
@@ -1782,7 +1782,7 @@
           "exportName": "ReplyRuntimeConfigSchemaShape",
           "kind": "const",
           "source": {
-            "line": 416,
+            "line": 417,
             "path": "src/config/zod-schema.core.ts"
           }
         },
@@ -1791,7 +1791,7 @@
           "exportName": "requireOpenAllowFrom",
           "kind": "const",
           "source": {
-            "line": 556,
+            "line": 557,
             "path": "src/config/zod-schema.core.ts"
           }
         },
@@ -4820,7 +4820,7 @@
           "exportName": "MediaUnderstandingProviderPlugin",
           "kind": "type",
           "source": {
-            "line": 1527,
+            "line": 1529,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4847,7 +4847,7 @@
           "exportName": "OpenClawPluginApi",
           "kind": "type",
           "source": {
-            "line": 1794,
+            "line": 1796,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4856,7 +4856,7 @@
           "exportName": "OpenClawPluginCommandDefinition",
           "kind": "type",
           "source": {
-            "line": 1650,
+            "line": 1652,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4874,7 +4874,7 @@
           "exportName": "OpenClawPluginDefinition",
           "kind": "type",
           "source": {
-            "line": 1776,
+            "line": 1778,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4883,7 +4883,7 @@
           "exportName": "OpenClawPluginService",
           "kind": "type",
           "source": {
-            "line": 1743,
+            "line": 1745,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4892,7 +4892,7 @@
           "exportName": "OpenClawPluginServiceContext",
           "kind": "type",
           "source": {
-            "line": 1735,
+            "line": 1737,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4928,7 +4928,7 @@
           "exportName": "PluginCommandContext",
           "kind": "type",
           "source": {
-            "line": 1542,
+            "line": 1544,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4964,7 +4964,7 @@
           "exportName": "ProviderAugmentModelCatalogContext",
           "kind": "type",
           "source": {
-            "line": 827,
+            "line": 829,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4982,7 +4982,7 @@
           "exportName": "ProviderAuthDoctorHintContext",
           "kind": "type",
           "source": {
-            "line": 514,
+            "line": 516,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5018,7 +5018,7 @@
           "exportName": "ProviderBuildMissingAuthMessageContext",
           "kind": "type",
           "source": {
-            "line": 739,
+            "line": 741,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5027,7 +5027,7 @@
           "exportName": "ProviderBuildUnknownModelHintContext",
           "kind": "type",
           "source": {
-            "line": 755,
+            "line": 757,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5036,7 +5036,7 @@
           "exportName": "ProviderBuiltInModelSuppressionContext",
           "kind": "type",
           "source": {
-            "line": 771,
+            "line": 773,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5045,7 +5045,7 @@
           "exportName": "ProviderBuiltInModelSuppressionResult",
           "kind": "type",
           "source": {
-            "line": 780,
+            "line": 782,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5054,7 +5054,7 @@
           "exportName": "ProviderCacheTtlEligibilityContext",
           "kind": "type",
           "source": {
-            "line": 726,
+            "line": 728,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5081,7 +5081,7 @@
           "exportName": "ProviderDefaultThinkingPolicyContext",
           "kind": "type",
           "source": {
-            "line": 804,
+            "line": 806,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5090,7 +5090,7 @@
           "exportName": "ProviderDiscoveryContext",
           "kind": "type",
           "source": {
-            "line": 843,
+            "line": 845,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5099,7 +5099,7 @@
           "exportName": "ProviderFetchUsageSnapshotContext",
           "kind": "type",
           "source": {
-            "line": 495,
+            "line": 497,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5108,7 +5108,7 @@
           "exportName": "ProviderModernModelPolicyContext",
           "kind": "type",
           "source": {
-            "line": 814,
+            "line": 816,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5117,7 +5117,7 @@
           "exportName": "ProviderNormalizeResolvedModelContext",
           "kind": "type",
           "source": {
-            "line": 359,
+            "line": 361,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5126,7 +5126,7 @@
           "exportName": "ProviderNormalizeToolSchemasContext",
           "kind": "type",
           "source": {
-            "line": 636,
+            "line": 638,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5135,7 +5135,7 @@
           "exportName": "ProviderPreparedRuntimeAuth",
           "kind": "type",
           "source": {
-            "line": 441,
+            "line": 443,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5144,7 +5144,7 @@
           "exportName": "ProviderPrepareDynamicModelContext",
           "kind": "type",
           "source": {
-            "line": 350,
+            "line": 352,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5153,7 +5153,7 @@
           "exportName": "ProviderPrepareExtraParamsContext",
           "kind": "type",
           "source": {
-            "line": 528,
+            "line": 530,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5162,7 +5162,7 @@
           "exportName": "ProviderPrepareRuntimeAuthContext",
           "kind": "type",
           "source": {
-            "line": 420,
+            "line": 422,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5171,7 +5171,7 @@
           "exportName": "ProviderReasoningOutputMode",
           "kind": "type",
           "source": {
-            "line": 542,
+            "line": 544,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5180,7 +5180,7 @@
           "exportName": "ProviderReasoningOutputModeContext",
           "kind": "type",
           "source": {
-            "line": 652,
+            "line": 654,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5189,7 +5189,7 @@
           "exportName": "ProviderReplayPolicy",
           "kind": "type",
           "source": {
-            "line": 561,
+            "line": 563,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5198,7 +5198,7 @@
           "exportName": "ProviderReplayPolicyContext",
           "kind": "type",
           "source": {
-            "line": 584,
+            "line": 586,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5207,7 +5207,7 @@
           "exportName": "ProviderReplaySessionEntry",
           "kind": "type",
           "source": {
-            "line": 595,
+            "line": 597,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5216,7 +5216,7 @@
           "exportName": "ProviderReplaySessionState",
           "kind": "type",
           "source": {
-            "line": 600,
+            "line": 602,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5225,7 +5225,7 @@
           "exportName": "ProviderResolvedUsageAuth",
           "kind": "type",
           "source": {
-            "line": 482,
+            "line": 484,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5234,7 +5234,7 @@
           "exportName": "ProviderResolveDynamicModelContext",
           "kind": "type",
           "source": {
-            "line": 333,
+            "line": 335,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5243,7 +5243,7 @@
           "exportName": "ProviderResolveUsageAuthContext",
           "kind": "type",
           "source": {
-            "line": 463,
+            "line": 465,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5261,7 +5261,7 @@
           "exportName": "ProviderSanitizeReplayHistoryContext",
           "kind": "type",
           "source": {
-            "line": 611,
+            "line": 613,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5270,7 +5270,7 @@
           "exportName": "ProviderThinkingPolicyContext",
           "kind": "type",
           "source": {
-            "line": 792,
+            "line": 794,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5279,7 +5279,7 @@
           "exportName": "ProviderToolSchemaDiagnostic",
           "kind": "type",
           "source": {
-            "line": 640,
+            "line": 642,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5297,7 +5297,7 @@
           "exportName": "ProviderValidateReplayTurnsContext",
           "kind": "type",
           "source": {
-            "line": 624,
+            "line": 626,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5306,7 +5306,7 @@
           "exportName": "ProviderWrapStreamFnContext",
           "kind": "type",
           "source": {
-            "line": 677,
+            "line": 679,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5369,7 +5369,7 @@
           "exportName": "SpeechProviderPlugin",
           "kind": "type",
           "source": {
-            "line": 1502,
+            "line": 1504,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5470,7 +5470,7 @@
           "exportName": "MediaUnderstandingProviderPlugin",
           "kind": "type",
           "source": {
-            "line": 1527,
+            "line": 1529,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5488,7 +5488,7 @@
           "exportName": "OpenClawPluginApi",
           "kind": "type",
           "source": {
-            "line": 1794,
+            "line": 1796,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5497,7 +5497,7 @@
           "exportName": "OpenClawPluginCommandDefinition",
           "kind": "type",
           "source": {
-            "line": 1650,
+            "line": 1652,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5515,7 +5515,7 @@
           "exportName": "OpenClawPluginDefinition",
           "kind": "type",
           "source": {
-            "line": 1776,
+            "line": 1778,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5524,7 +5524,7 @@
           "exportName": "OpenClawPluginService",
           "kind": "type",
           "source": {
-            "line": 1743,
+            "line": 1745,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5533,7 +5533,7 @@
           "exportName": "OpenClawPluginServiceContext",
           "kind": "type",
           "source": {
-            "line": 1735,
+            "line": 1737,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5560,7 +5560,7 @@
           "exportName": "PluginCommandContext",
           "kind": "type",
           "source": {
-            "line": 1542,
+            "line": 1544,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5578,7 +5578,7 @@
           "exportName": "ProviderAugmentModelCatalogContext",
           "kind": "type",
           "source": {
-            "line": 827,
+            "line": 829,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5596,7 +5596,7 @@
           "exportName": "ProviderAuthDoctorHintContext",
           "kind": "type",
           "source": {
-            "line": 514,
+            "line": 516,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5632,7 +5632,7 @@
           "exportName": "ProviderBuildMissingAuthMessageContext",
           "kind": "type",
           "source": {
-            "line": 739,
+            "line": 741,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5641,7 +5641,7 @@
           "exportName": "ProviderBuildUnknownModelHintContext",
           "kind": "type",
           "source": {
-            "line": 755,
+            "line": 757,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5650,7 +5650,7 @@
           "exportName": "ProviderBuiltInModelSuppressionContext",
           "kind": "type",
           "source": {
-            "line": 771,
+            "line": 773,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5659,7 +5659,7 @@
           "exportName": "ProviderBuiltInModelSuppressionResult",
           "kind": "type",
           "source": {
-            "line": 780,
+            "line": 782,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5668,7 +5668,7 @@
           "exportName": "ProviderCacheTtlEligibilityContext",
           "kind": "type",
           "source": {
-            "line": 726,
+            "line": 728,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5695,7 +5695,7 @@
           "exportName": "ProviderDefaultThinkingPolicyContext",
           "kind": "type",
           "source": {
-            "line": 804,
+            "line": 806,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5704,7 +5704,7 @@
           "exportName": "ProviderDeferSyntheticProfileAuthContext",
           "kind": "type",
           "source": {
-            "line": 941,
+            "line": 943,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5713,7 +5713,7 @@
           "exportName": "ProviderDiscoveryContext",
           "kind": "type",
           "source": {
-            "line": 843,
+            "line": 845,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5722,7 +5722,7 @@
           "exportName": "ProviderFetchUsageSnapshotContext",
           "kind": "type",
           "source": {
-            "line": 495,
+            "line": 497,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5731,7 +5731,7 @@
           "exportName": "ProviderModernModelPolicyContext",
           "kind": "type",
           "source": {
-            "line": 814,
+            "line": 816,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5740,7 +5740,7 @@
           "exportName": "ProviderNormalizeConfigContext",
           "kind": "type",
           "source": {
-            "line": 385,
+            "line": 387,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5749,7 +5749,7 @@
           "exportName": "ProviderNormalizeModelIdContext",
           "kind": "type",
           "source": {
-            "line": 374,
+            "line": 376,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5758,7 +5758,7 @@
           "exportName": "ProviderNormalizeResolvedModelContext",
           "kind": "type",
           "source": {
-            "line": 359,
+            "line": 361,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5767,7 +5767,7 @@
           "exportName": "ProviderNormalizeToolSchemasContext",
           "kind": "type",
           "source": {
-            "line": 636,
+            "line": 638,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5776,7 +5776,7 @@
           "exportName": "ProviderNormalizeTransportContext",
           "kind": "type",
           "source": {
-            "line": 397,
+            "line": 399,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5785,7 +5785,7 @@
           "exportName": "ProviderPreparedRuntimeAuth",
           "kind": "type",
           "source": {
-            "line": 441,
+            "line": 443,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5794,7 +5794,7 @@
           "exportName": "ProviderPrepareDynamicModelContext",
           "kind": "type",
           "source": {
-            "line": 350,
+            "line": 352,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5803,7 +5803,7 @@
           "exportName": "ProviderPrepareExtraParamsContext",
           "kind": "type",
           "source": {
-            "line": 528,
+            "line": 530,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5812,7 +5812,7 @@
           "exportName": "ProviderPrepareRuntimeAuthContext",
           "kind": "type",
           "source": {
-            "line": 420,
+            "line": 422,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5821,7 +5821,7 @@
           "exportName": "ProviderReasoningOutputMode",
           "kind": "type",
           "source": {
-            "line": 542,
+            "line": 544,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5830,7 +5830,7 @@
           "exportName": "ProviderReasoningOutputModeContext",
           "kind": "type",
           "source": {
-            "line": 652,
+            "line": 654,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5839,7 +5839,7 @@
           "exportName": "ProviderReplayPolicy",
           "kind": "type",
           "source": {
-            "line": 561,
+            "line": 563,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5848,7 +5848,7 @@
           "exportName": "ProviderReplayPolicyContext",
           "kind": "type",
           "source": {
-            "line": 584,
+            "line": 586,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5857,7 +5857,7 @@
           "exportName": "ProviderReplaySessionEntry",
           "kind": "type",
           "source": {
-            "line": 595,
+            "line": 597,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5866,7 +5866,7 @@
           "exportName": "ProviderReplaySessionState",
           "kind": "type",
           "source": {
-            "line": 600,
+            "line": 602,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5875,7 +5875,7 @@
           "exportName": "ProviderResolveConfigApiKeyContext",
           "kind": "type",
           "source": {
-            "line": 409,
+            "line": 411,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5884,7 +5884,7 @@
           "exportName": "ProviderResolvedUsageAuth",
           "kind": "type",
           "source": {
-            "line": 482,
+            "line": 484,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5893,7 +5893,7 @@
           "exportName": "ProviderResolveDynamicModelContext",
           "kind": "type",
           "source": {
-            "line": 333,
+            "line": 335,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5902,7 +5902,7 @@
           "exportName": "ProviderResolveUsageAuthContext",
           "kind": "type",
           "source": {
-            "line": 463,
+            "line": 465,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5920,7 +5920,7 @@
           "exportName": "ProviderSanitizeReplayHistoryContext",
           "kind": "type",
           "source": {
-            "line": 611,
+            "line": 613,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5929,7 +5929,7 @@
           "exportName": "ProviderThinkingPolicyContext",
           "kind": "type",
           "source": {
-            "line": 792,
+            "line": 794,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5938,7 +5938,7 @@
           "exportName": "ProviderToolSchemaDiagnostic",
           "kind": "type",
           "source": {
-            "line": 640,
+            "line": 642,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5947,7 +5947,7 @@
           "exportName": "ProviderValidateReplayTurnsContext",
           "kind": "type",
           "source": {
-            "line": 624,
+            "line": 626,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5956,7 +5956,7 @@
           "exportName": "ProviderWrapStreamFnContext",
           "kind": "type",
           "source": {
-            "line": 677,
+            "line": 679,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5965,7 +5965,7 @@
           "exportName": "SpeechProviderPlugin",
           "kind": "type",
           "source": {
-            "line": 1502,
+            "line": 1504,
             "path": "src/plugins/types.ts"
           }
         }
@@ -5999,7 +5999,7 @@
           }
         },
         {
-          "declaration": "export function applyProviderConfigWithDefaultModel(cfg: OpenClawConfig, params: { agentModels: Record<string, AgentModelEntryConfig>; providerId: string; api: \"github-copilot\" | \"openai-completions\" | ... 6 more ... | \"azure-openai-responses\"; baseUrl: string; defaultModel: ModelDefinitionConfig; defaultModelId?: string | undefined; }): OpenClawConfig;",
+          "declaration": "export function applyProviderConfigWithDefaultModel(cfg: OpenClawConfig, params: { agentModels: Record<string, AgentModelEntryConfig>; providerId: string; api: \"openai-completions\" | ... 7 more ... | \"ollama\"; baseUrl: string; defaultModel: ModelDefinitionConfig; defaultModelId?: string | undefined; }): OpenClawConfig;",
           "exportName": "applyProviderConfigWithDefaultModel",
           "kind": "function",
           "source": {
@@ -6008,7 +6008,7 @@
           }
         },
         {
-          "declaration": "export function applyProviderConfigWithDefaultModelPreset(cfg: OpenClawConfig, params: { providerId: string; api: \"github-copilot\" | \"openai-completions\" | \"openai-responses\" | \"openai-codex-responses\" | \"anthropic-messages\" | \"google-generative-ai\" | \"bedrock-converse-stream\" | \"ollama\" | \"azure-openai-responses\"; ... 4 more ...; primaryModelRef?: string | undefined; }): OpenClawConfig;",
+          "declaration": "export function applyProviderConfigWithDefaultModelPreset(cfg: OpenClawConfig, params: { providerId: string; api: \"openai-completions\" | \"openai-responses\" | \"azure-openai-responses\" | \"openai-codex-responses\" | \"anthropic-messages\" | \"bedrock-converse-stream\" | \"google-generative-ai\" | \"github-copilot\" | \"ollama\"; ... 4 more ...; primaryModelRef?: string | undefined; }): OpenClawConfig;",
           "exportName": "applyProviderConfigWithDefaultModelPreset",
           "kind": "function",
           "source": {
@@ -6017,7 +6017,7 @@
           }
         },
         {
-          "declaration": "export function applyProviderConfigWithDefaultModels(cfg: OpenClawConfig, params: { agentModels: Record<string, AgentModelEntryConfig>; providerId: string; api: \"github-copilot\" | \"openai-completions\" | ... 6 more ... | \"azure-openai-responses\"; baseUrl: string; defaultModels: ModelDefinitionConfig[]; defaultModelId?: string | undefined; }): OpenClawConfig;",
+          "declaration": "export function applyProviderConfigWithDefaultModels(cfg: OpenClawConfig, params: { agentModels: Record<string, AgentModelEntryConfig>; providerId: string; api: \"openai-completions\" | ... 7 more ... | \"ollama\"; baseUrl: string; defaultModels: ModelDefinitionConfig[]; defaultModelId?: string | undefined; }): OpenClawConfig;",
           "exportName": "applyProviderConfigWithDefaultModels",
           "kind": "function",
           "source": {
@@ -6026,7 +6026,7 @@
           }
         },
         {
-          "declaration": "export function applyProviderConfigWithDefaultModelsPreset(cfg: OpenClawConfig, params: { providerId: string; api: \"github-copilot\" | \"openai-completions\" | \"openai-responses\" | \"openai-codex-responses\" | \"anthropic-messages\" | \"google-generative-ai\" | \"bedrock-converse-stream\" | \"ollama\" | \"azure-openai-responses\"; ... 4 more ...; primaryModelRef?: string | undefined; }): OpenClawConfig;",
+          "declaration": "export function applyProviderConfigWithDefaultModelsPreset(cfg: OpenClawConfig, params: { providerId: string; api: \"openai-completions\" | \"openai-responses\" | \"azure-openai-responses\" | \"openai-codex-responses\" | \"anthropic-messages\" | \"bedrock-converse-stream\" | \"google-generative-ai\" | \"github-copilot\" | \"ollama\"; ... 4 more ...; primaryModelRef?: string | undefined; }): OpenClawConfig;",
           "exportName": "applyProviderConfigWithDefaultModelsPreset",
           "kind": "function",
           "source": {
@@ -6035,7 +6035,7 @@
           }
         },
         {
-          "declaration": "export function applyProviderConfigWithModelCatalog(cfg: OpenClawConfig, params: { agentModels: Record<string, AgentModelEntryConfig>; providerId: string; api: \"github-copilot\" | \"openai-completions\" | ... 6 more ... | \"azure-openai-responses\"; baseUrl: string; catalogModels: ModelDefinitionConfig[]; }): OpenClawConfig;",
+          "declaration": "export function applyProviderConfigWithModelCatalog(cfg: OpenClawConfig, params: { agentModels: Record<string, AgentModelEntryConfig>; providerId: string; api: \"openai-completions\" | ... 7 more ... | \"ollama\"; baseUrl: string; catalogModels: ModelDefinitionConfig[]; }): OpenClawConfig;",
           "exportName": "applyProviderConfigWithModelCatalog",
           "kind": "function",
           "source": {
@@ -6044,7 +6044,7 @@
           }
         },
         {
-          "declaration": "export function applyProviderConfigWithModelCatalogPreset(cfg: OpenClawConfig, params: { providerId: string; api: \"github-copilot\" | \"openai-completions\" | \"openai-responses\" | \"openai-codex-responses\" | \"anthropic-messages\" | \"google-generative-ai\" | \"bedrock-converse-stream\" | \"ollama\" | \"azure-openai-responses\"; baseUrl: string; catalogModels: ModelDefinitionConfig[]; aliases?: readonly AgentModelAliasEntry[] | undefined; primaryModelRef?: string | undefined; }): OpenClawConfig;",
+          "declaration": "export function applyProviderConfigWithModelCatalogPreset(cfg: OpenClawConfig, params: { providerId: string; api: \"openai-completions\" | \"openai-responses\" | \"azure-openai-responses\" | \"openai-codex-responses\" | \"anthropic-messages\" | \"bedrock-converse-stream\" | \"google-generative-ai\" | \"github-copilot\" | \"ollama\"; baseUrl: string; catalogModels: ModelDefinitionConfig[]; aliases?: readonly AgentModelAliasEntry[] | undefined; primaryModelRef?: string | undefined; }): OpenClawConfig;",
           "exportName": "applyProviderConfigWithModelCatalogPreset",
           "kind": "function",
           "source": {
@@ -6053,7 +6053,7 @@
           }
         },
         {
-          "declaration": "export function createDefaultModelPresetAppliers<TArgs extends unknown[]>(params: { resolveParams: (cfg: OpenClawConfig, ...args: TArgs) => Omit<{ providerId: string; api: \"github-copilot\" | \"openai-completions\" | \"openai-responses\" | ... 5 more ... | \"azure-openai-responses\"; ... 4 more ...; primaryModelRef?: string | undefined; }, \"primaryModelRef\"> | null | undefined; primaryModelRef: string; }): ProviderOnboardPresetAppliers<...>;",
+          "declaration": "export function createDefaultModelPresetAppliers<TArgs extends unknown[]>(params: { resolveParams: (cfg: OpenClawConfig, ...args: TArgs) => Omit<{ providerId: string; api: \"openai-completions\" | \"openai-responses\" | \"azure-openai-responses\" | ... 5 more ... | \"ollama\"; ... 4 more ...; primaryModelRef?: string | undefined; }, \"primaryModelRef\"> | null | undefined; primaryModelRef: string; }): ProviderOnboardPresetAppliers<...>;",
           "exportName": "createDefaultModelPresetAppliers",
           "kind": "function",
           "source": {
@@ -6062,7 +6062,7 @@
           }
         },
         {
-          "declaration": "export function createDefaultModelsPresetAppliers<TArgs extends unknown[]>(params: { resolveParams: (cfg: OpenClawConfig, ...args: TArgs) => Omit<{ providerId: string; api: \"github-copilot\" | \"openai-completions\" | \"openai-responses\" | ... 5 more ... | \"azure-openai-responses\"; ... 4 more ...; primaryModelRef?: string | undefined; }, \"primaryModelRef\"> | null | undefined; primaryModelRef: string; }): ProviderOnboardPresetAppliers<...>;",
+          "declaration": "export function createDefaultModelsPresetAppliers<TArgs extends unknown[]>(params: { resolveParams: (cfg: OpenClawConfig, ...args: TArgs) => Omit<{ providerId: string; api: \"openai-completions\" | \"openai-responses\" | \"azure-openai-responses\" | ... 5 more ... | \"ollama\"; ... 4 more ...; primaryModelRef?: string | undefined; }, \"primaryModelRef\"> | null | undefined; primaryModelRef: string; }): ProviderOnboardPresetAppliers<...>;",
           "exportName": "createDefaultModelsPresetAppliers",
           "kind": "function",
           "source": {
@@ -6071,7 +6071,7 @@
           }
         },
         {
-          "declaration": "export function createModelCatalogPresetAppliers<TArgs extends unknown[]>(params: { resolveParams: (cfg: OpenClawConfig, ...args: TArgs) => Omit<{ providerId: string; api: \"github-copilot\" | \"openai-completions\" | \"openai-responses\" | ... 5 more ... | \"azure-openai-responses\"; baseUrl: string; catalogModels: ModelDefinitionConfig[]; aliases?: readonly AgentModelAliasEntry[] | undefined; primaryModelRef?: string | undefined; }, \"primaryModelRef\"> | null | undefined; primaryModelRef: string; }): ProviderOnboardPresetAppliers<...>;",
+          "declaration": "export function createModelCatalogPresetAppliers<TArgs extends unknown[]>(params: { resolveParams: (cfg: OpenClawConfig, ...args: TArgs) => Omit<{ providerId: string; api: \"openai-completions\" | \"openai-responses\" | \"azure-openai-responses\" | ... 5 more ... | \"ollama\"; baseUrl: string; catalogModels: ModelDefinitionConfig[]; aliases?: readonly AgentModelAliasEntry[] | undefined; primaryModelRef?: string | undefined; }, \"primaryModelRef\"> | null | undefined; primaryModelRef: string; }): ProviderOnboardPresetAppliers<...>;",
           "exportName": "createModelCatalogPresetAppliers",
           "kind": "function",
           "source": {
@@ -6125,7 +6125,7 @@
           }
         },
         {
-          "declaration": "export type ModelApi = \"github-copilot\" | \"openai-completions\" | \"openai-responses\" | \"openai-codex-responses\" | \"anthropic-messages\" | \"google-generative-ai\" | \"bedrock-converse-stream\" | \"ollama\" | \"azure-openai-responses\";",
+          "declaration": "export type ModelApi = \"openai-completions\" | \"openai-responses\" | \"azure-openai-responses\" | \"openai-codex-responses\" | \"anthropic-messages\" | \"bedrock-converse-stream\" | \"google-generative-ai\" | \"github-copilot\" | \"ollama\";",
           "exportName": "ModelApi",
           "kind": "type",
           "source": {
@@ -6147,7 +6147,7 @@
           "exportName": "ModelProviderConfig",
           "kind": "type",
           "source": {
-            "line": 68,
+            "line": 74,
             "path": "src/config/types.models.ts"
           }
         },
