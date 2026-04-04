@@ -95,16 +95,32 @@ function parseJsonRecordCandidates(raw: string): Record<string, unknown>[] {
 function toCliUsage(raw: Record<string, unknown>): CliUsage | undefined {
   const pick = (key: string) =>
     typeof raw[key] === "number" && raw[key] > 0 ? raw[key] : undefined;
-  const input = pick("input_tokens") ?? pick("inputTokens");
+  const totalInput = pick("input_tokens") ?? pick("inputTokens");
   const output = pick("output_tokens") ?? pick("outputTokens");
   const cacheRead =
-    pick("cache_read_input_tokens") ?? pick("cached_input_tokens") ?? pick("cacheRead");
+    pick("cache_read_input_tokens") ??
+    pick("cached_input_tokens") ??
+    pick("cacheRead") ??
+    pick("cached");
+  const input =
+    pick("input") ??
+    (typeof totalInput === "number" ? Math.max(0, totalInput - (cacheRead ?? 0)) : undefined);
   const cacheWrite = pick("cache_write_input_tokens") ?? pick("cacheWrite");
   const total = pick("total_tokens") ?? pick("total");
   if (!input && !output && !cacheRead && !cacheWrite && !total) {
     return undefined;
   }
   return { input, output, cacheRead, cacheWrite, total };
+}
+
+function readCliUsage(parsed: Record<string, unknown>): CliUsage | undefined {
+  if (isRecord(parsed.usage)) {
+    return toCliUsage(parsed.usage);
+  }
+  if (isRecord(parsed.stats)) {
+    return toCliUsage(parsed.stats);
+  }
+  return undefined;
 }
 
 function collectCliText(value: unknown): string {
@@ -120,8 +136,14 @@ function collectCliText(value: unknown): string {
   if (!isRecord(value)) {
     return "";
   }
+  if (typeof value.response === "string") {
+    return value.response;
+  }
   if (typeof value.text === "string") {
     return value.text;
+  }
+  if (typeof value.result === "string") {
+    return value.result;
   }
   if (typeof value.content === "string") {
     return value.content;
@@ -166,13 +188,12 @@ export function parseCliJson(raw: string, backend: CliBackendConfig): CliOutput 
   let sawStructuredOutput = false;
   for (const parsed of parsedRecords) {
     sessionId = pickCliSessionId(parsed, backend) ?? sessionId;
-    if (isRecord(parsed.usage)) {
-      usage = toCliUsage(parsed.usage) ?? usage;
-    }
+    usage = readCliUsage(parsed) ?? usage;
     const nextText =
       collectCliText(parsed.message) ||
       collectCliText(parsed.content) ||
       collectCliText(parsed.result) ||
+      collectCliText(parsed.response) ||
       collectCliText(parsed);
     const trimmedText = nextText.trim();
     if (trimmedText) {
@@ -239,9 +260,7 @@ export function parseCliJsonl(
       if (!sessionId && typeof parsed.thread_id === "string") {
         sessionId = parsed.thread_id.trim();
       }
-      if (isRecord(parsed.usage)) {
-        usage = toCliUsage(parsed.usage) ?? usage;
-      }
+      usage = readCliUsage(parsed) ?? usage;
 
       const claudeResult = parseClaudeCliJsonlResult({
         providerId,
