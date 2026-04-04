@@ -23,12 +23,15 @@ title: "Audio and Voice Notes"
 If you **don’t configure models** and `tools.media.audio.enabled` is **not** set to `false`,
 OpenClaw auto-detects in this order and stops at the first working option:
 
-1. **Local CLIs** (if installed)
+1. **Active reply model** when its provider supports audio understanding.
+2. **Local CLIs** (if installed)
    - `sherpa-onnx-offline` (requires `SHERPA_ONNX_MODEL_DIR` with encoder/decoder/joiner/tokens)
    - `whisper-cli` (from `whisper-cpp`; uses `WHISPER_CPP_MODEL` or the bundled tiny model)
    - `whisper` (Python CLI; downloads models automatically)
-2. **Gemini CLI** (`gemini`) using `read_many_files`
-3. **Provider keys** (OpenAI → Groq → Deepgram → Google)
+3. **Gemini CLI** (`gemini`) using `read_many_files`
+4. **Provider auth**
+   - Configured `models.providers.*` entries that support audio are tried first
+   - Bundled fallback order: OpenAI → Groq → Deepgram → Google → Mistral
 
 To disable auto-detection, set `tools.media.audio.enabled: false`.
 To customize, set `tools.media.audio.models`.
