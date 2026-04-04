@@ -30,7 +30,12 @@ export {
 } from "../plugins/provider-model-compat.js";
 export { normalizeProviderId } from "../agents/provider-id.js";
 export {
+  buildAnthropicReplayPolicyForModel,
+  buildGoogleGeminiReplayPolicy,
+  buildHybridAnthropicOrOpenAIReplayPolicy,
   buildOpenAICompatibleReplayPolicy,
+  resolveTaggedReasoningOutputMode,
+  sanitizeGoogleGeminiReplayHistory,
   buildStrictAnthropicReplayPolicy,
 } from "../plugins/provider-replay-helpers.js";
 export {
