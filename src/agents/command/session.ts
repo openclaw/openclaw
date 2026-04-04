@@ -66,9 +66,10 @@ export function resolveSessionKeyForRequest(opts: {
   let sessionKey: string | undefined =
     explicitSessionKey ?? (ctx ? resolveSessionKey(scope, ctx, mainKey) : undefined);
 
-  // If a session id was provided, prefer to re-use its entry (by id) even when no key was derived.
+  // If a session id was provided, prefer to re-use its entry (by id).
+  // Note: --session-id takes precedence over --agent, allowing explicit session targeting even when
+  // an agent is specified (fixes issue #60614).
   if (
-    !explicitSessionKey &&
     opts.sessionId &&
     (!sessionKey || sessionStore[sessionKey]?.sessionId !== opts.sessionId)
   ) {
@@ -84,9 +85,9 @@ export function resolveSessionKeyForRequest(opts: {
   // Sessions created under a specific agent live in that agent's store file; the primary
   // store (derived from the default agent) won't contain them.
   // Also covers the case where --to derived a sessionKey that doesn't match the requested sessionId.
+  // Note: --session-id takes precedence over --agent (fixes issue #60614).
   if (
     opts.sessionId &&
-    !explicitSessionKey &&
     (!sessionKey || sessionStore[sessionKey]?.sessionId !== opts.sessionId)
   ) {
     const allAgentIds = listAgentIds(opts.cfg);
