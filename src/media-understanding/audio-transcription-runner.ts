@@ -48,11 +48,11 @@ export async function runAudioTranscription(params: {
     });
     const output = result.outputs.find((entry) => entry.kind === "audio.transcription");
     const transcript = output?.text?.trim();
-    const skippedReason = (Array.isArray(result.decision.attachments)
-      ? result.decision.attachments
-      : []
-    )
-      .flatMap((entry) => (Array.isArray(entry.attempts) ? entry.attempts : []))
+    const targetAttachmentIndex = attachments[0]?.index;
+    const targetDecision = (
+      Array.isArray(result.decision.attachments) ? result.decision.attachments : []
+    ).find((entry) => entry?.attachmentIndex === targetAttachmentIndex);
+    const skippedReason = (Array.isArray(targetDecision?.attempts) ? targetDecision.attempts : [])
       .map((attempt) =>
         typeof attempt?.reason === "string" ? attempt.reason.split(":")[0]?.trim() : undefined,
       )

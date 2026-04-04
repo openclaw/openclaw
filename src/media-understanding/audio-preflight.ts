@@ -54,7 +54,7 @@ export async function transcribeFirstAudio(params: {
     const { transcript, skippedReason } = await runAudioTranscription({
       ctx,
       cfg,
-      attachments,
+      attachments: [firstAudio],
       agentDir: params.agentDir,
       providers: params.providers,
       activeModel: params.activeModel,
