@@ -362,6 +362,8 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("./stream-resolution.js", () => ({
+    resolveEmbeddedAgentApiKey: vi.fn(async () => "test-api-key"),
+    resolveEmbeddedAgentBaseStreamFn: vi.fn(() => vi.fn()),
     resolveEmbeddedAgentStreamFn: resolveEmbeddedAgentStreamFnMock,
   }));
 
@@ -428,7 +430,7 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("./extensions.js", () => ({
-    buildEmbeddedExtensionFactories: vi.fn(() => ({ factories: [] })),
+    buildEmbeddedExtensionFactories: vi.fn(() => []),
   }));
 
   vi.doMock("./history.js", () => ({

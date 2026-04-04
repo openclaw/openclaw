@@ -10,9 +10,11 @@ sidebarTitle: "Install and Configure"
 
 # Plugins
 
-Plugins extend OpenClaw with new capabilities: channels, model providers, tools,
-skills, speech, image generation, and more. Some plugins are **core** (shipped
-with OpenClaw), others are **external** (published on npm by the community).
+Plugins extend OpenClaw with new capabilities: channels, model providers,
+tools, skills, speech, realtime transcription, realtime voice,
+media-understanding, image generation, video generation, web fetch, web
+search, and more. Some plugins are **core** (shipped with OpenClaw), others
+are **external** (published on npm by the community).
 
 ## Quick start
 
@@ -93,7 +95,7 @@ and the [Plugin SDK Overview](/plugins/sdk-overview).
 <AccordionGroup>
   <Accordion title="Model providers (enabled by default)">
     `anthropic`, `byteplus`, `cloudflare-ai-gateway`, `github-copilot`, `google`,
-    `huggingface`, `kilocode`, `kimi-coding`, `minimax`, `mistral`, `modelstudio`,
+    `huggingface`, `kilocode`, `kimi-coding`, `minimax`, `mistral`, `qwen`,
     `moonshot`, `nvidia`, `openai`, `opencode`, `opencode-go`, `openrouter`,
     `qianfan`, `synthetic`, `together`, `venice`,
     `vercel-ai-gateway`, `volcengine`, `xiaomi`, `zai`
@@ -306,20 +308,24 @@ public contract.
 
 Common registration methods:
 
-| Method                               | What it registers    |
-| ------------------------------------ | -------------------- |
-| `registerProvider`                   | Model provider (LLM) |
-| `registerChannel`                    | Chat channel         |
-| `registerTool`                       | Agent tool           |
-| `registerHook` / `on(...)`           | Lifecycle hooks      |
-| `registerSpeechProvider`             | Text-to-speech / STT |
-| `registerMediaUnderstandingProvider` | Image/audio analysis |
-| `registerImageGenerationProvider`    | Image generation     |
-| `registerWebSearchProvider`          | Web search           |
-| `registerHttpRoute`                  | HTTP endpoint        |
-| `registerCommand` / `registerCli`    | CLI commands         |
-| `registerContextEngine`              | Context engine       |
-| `registerService`                    | Background service   |
+| Method                                  | What it registers           |
+| --------------------------------------- | --------------------------- |
+| `registerProvider`                      | Model provider (LLM)        |
+| `registerChannel`                       | Chat channel                |
+| `registerTool`                          | Agent tool                  |
+| `registerHook` / `on(...)`              | Lifecycle hooks             |
+| `registerSpeechProvider`                | Text-to-speech / STT        |
+| `registerRealtimeTranscriptionProvider` | Streaming STT               |
+| `registerRealtimeVoiceProvider`         | Duplex realtime voice       |
+| `registerMediaUnderstandingProvider`    | Image/audio analysis        |
+| `registerImageGenerationProvider`       | Image generation            |
+| `registerVideoGenerationProvider`       | Video generation            |
+| `registerWebFetchProvider`              | Web fetch / scrape provider |
+| `registerWebSearchProvider`             | Web search                  |
+| `registerHttpRoute`                     | HTTP endpoint               |
+| `registerCommand` / `registerCli`       | CLI commands                |
+| `registerContextEngine`                 | Context engine              |
+| `registerService`                       | Background service          |
 
 Hook guard behavior for typed lifecycle hooks:
 

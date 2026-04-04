@@ -952,6 +952,10 @@ Time format in system prompt. Default: `auto` (OS preference).
         primary: "openai/gpt-image-1",
         fallbacks: ["google/gemini-3.1-flash-image-preview"],
       },
+      videoGenerationModel: {
+        primary: "qwen/wan2.6-t2v",
+        fallbacks: ["qwen/wan2.6-i2v"],
+      },
       pdfModel: {
         primary: "anthropic/claude-opus-4-6",
         fallbacks: ["openai/gpt-5.4-mini"],
@@ -982,6 +986,12 @@ Time format in system prompt. Default: `auto` (OS preference).
   - Typical values: `google/gemini-3.1-flash-image-preview` for native Gemini image generation, `fal/fal-ai/flux/dev` for fal, or `openai/gpt-image-1` for OpenAI Images.
   - If you select a provider/model directly, configure the matching provider auth/API key too (for example `GEMINI_API_KEY` or `GOOGLE_API_KEY` for `google/*`, `OPENAI_API_KEY` for `openai/*`, `FAL_KEY` for `fal/*`).
   - If omitted, `image_generate` can still infer an auth-backed provider default. It tries the current default provider first, then the remaining registered image-generation providers in provider-id order.
+- `videoGenerationModel`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
+  - Used by the shared video-generation capability.
+  - Typical values: `qwen/wan2.6-t2v`, `qwen/wan2.6-i2v`, `qwen/wan2.6-r2v`, `qwen/wan2.6-r2v-flash`, or `qwen/wan2.7-r2v`.
+  - Set this explicitly before using shared video generation. Unlike `imageGenerationModel`, the video-generation runtime does not infer a provider default yet.
+  - If you select a provider/model directly, configure the matching provider auth/API key too.
+  - The bundled Qwen video-generation provider currently supports up to 1 output video, 1 input image, 4 input videos, 10 seconds duration, and provider-level `size`, `aspectRatio`, `resolution`, `audio`, and `watermark` options.
 - `pdfModel`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
   - Used by the `pdf` tool for model routing.
   - If omitted, the PDF tool falls back to `imageModel`, then to the resolved session/default model.
@@ -989,7 +999,7 @@ Time format in system prompt. Default: `auto` (OS preference).
 - `pdfMaxPages`: default maximum pages considered by extraction fallback mode in the `pdf` tool.
 - `verboseDefault`: default verbose level for agents. Values: `"off"`, `"on"`, `"full"`. Default: `"off"`.
 - `elevatedDefault`: default elevated-output level for agents. Values: `"off"`, `"on"`, `"ask"`, `"full"`. Default: `"on"`.
-- `model.primary`: format `provider/model` (e.g. `openai/gpt-5.4`). If you omit the provider, OpenClaw tries an alias first, then a unique configured-provider match for that exact model id, and only then falls back to the configured default provider (deprecated compatibility behavior, so prefer explicit `provider/model`).
+- `model.primary`: format `provider/model` (e.g. `openai/gpt-5.4`). If you omit the provider, OpenClaw tries an alias first, then a unique configured-provider match for that exact model id, and only then falls back to the configured default provider (deprecated compatibility behavior, so prefer explicit `provider/model`). If that provider no longer exposes the configured default model, OpenClaw falls back to the first configured provider/model instead of surfacing a stale removed-provider default.
 - `models`: the configured model catalog and allowlist for `/model`. Each entry can include `alias` (shortcut) and `params` (provider-specific, for example `temperature`, `maxTokens`, `cacheRetention`, `context1m`).
 - `params`: global default provider parameters applied to all models. Set at `agents.defaults.params` (e.g. `{ cacheRetention: "long" }`).
 - `params` merge precedence (config): `agents.defaults.params` (global base) is overridden by `agents.defaults.models["provider/model"].params` (per-model), then `agents.list[].params` (matching agent id) overrides by key. See [Prompt Caching](/reference/prompt-caching) for details.
@@ -1887,27 +1897,29 @@ Defaults for Talk mode (macOS/iOS/Android).
 
 Local onboarding defaults new local configs to `tools.profile: "coding"` when unset (existing explicit profiles are preserved).
 
-| Profile     | Includes                                                                                  |
-| ----------- | ----------------------------------------------------------------------------------------- |
-| `minimal`   | `session_status` only                                                                     |
-| `coding`    | `group:fs`, `group:runtime`, `group:sessions`, `group:memory`, `image`                    |
-| `messaging` | `group:messaging`, `sessions_list`, `sessions_history`, `sessions_send`, `session_status` |
-| `full`      | No restriction (same as unset)                                                            |
+| Profile     | Includes                                                                                                      |
+| ----------- | ------------------------------------------------------------------------------------------------------------- |
+| `minimal`   | `session_status` only                                                                                         |
+| `coding`    | `group:fs`, `group:runtime`, `group:web`, `group:sessions`, `group:memory`, `cron`, `image`, `image_generate` |
+| `messaging` | `group:messaging`, `sessions_list`, `sessions_history`, `sessions_send`, `session_status`                     |
+| `full`      | No restriction (same as unset)                                                                                |
 
 ### Tool groups
 
-| Group              | Tools                                                                                    |
-| ------------------ | ---------------------------------------------------------------------------------------- |
-| `group:runtime`    | `exec`, `process` (`bash` is accepted as an alias for `exec`)                            |
-| `group:fs`         | `read`, `write`, `edit`, `apply_patch`                                                   |
-| `group:sessions`   | `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`, `session_status` |
-| `group:memory`     | `memory_search`, `memory_get`                                                            |
-| `group:web`        | `web_search`, `web_fetch`                                                                |
-| `group:ui`         | `browser`, `canvas`                                                                      |
-| `group:automation` | `cron`, `gateway`                                                                        |
-| `group:messaging`  | `message`                                                                                |
-| `group:nodes`      | `nodes`                                                                                  |
-| `group:openclaw`   | All built-in tools (excludes provider plugins)                                           |
+| Group              | Tools                                                                                                                   |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| `group:runtime`    | `exec`, `process`, `code_execution` (`bash` is accepted as an alias for `exec`)                                         |
+| `group:fs`         | `read`, `write`, `edit`, `apply_patch`                                                                                  |
+| `group:sessions`   | `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`, `sessions_yield`, `subagents`, `session_status` |
+| `group:memory`     | `memory_search`, `memory_get`                                                                                           |
+| `group:web`        | `web_search`, `x_search`, `web_fetch`                                                                                   |
+| `group:ui`         | `browser`, `canvas`                                                                                                     |
+| `group:automation` | `cron`, `gateway`                                                                                                       |
+| `group:messaging`  | `message`                                                                                                               |
+| `group:nodes`      | `nodes`                                                                                                                 |
+| `group:agents`     | `agents_list`                                                                                                           |
+| `group:media`      | `image`, `image_generate`, `tts`                                                                                        |
+| `group:openclaw`   | All built-in tools (excludes provider plugins)                                                                          |
 
 ### `tools.allow` / `tools.deny`
 
@@ -2025,10 +2037,14 @@ Settings can be defined globally in `tools.loopDetection` and overridden per-age
       },
       fetch: {
         enabled: true,
+        provider: "firecrawl", // optional; omit for auto-detect
         maxChars: 50000,
         maxCharsCap: 50000,
+        maxResponseBytes: 2000000,
         timeoutSeconds: 30,
         cacheTtlMinutes: 15,
+        maxRedirects: 3,
+        readability: true,
         userAgent: "custom-ua",
       },
     },
@@ -2612,6 +2628,10 @@ See [Plugins](/tools/plugin).
 - `existing-session` profiles are host-only and use Chrome MCP instead of CDP.
 - `existing-session` profiles can set `userDataDir` to target a specific
   Chromium-based browser profile such as Brave or Edge.
+- `existing-session` profiles keep the current Chrome MCP route limits:
+  snapshot/ref-driven actions instead of CSS-selector targeting, one-file upload
+  hooks, no dialog timeout overrides, no `wait --load networkidle`, and no
+  `responsebody`, PDF export, download interception, or batch actions.
 - Local managed `openclaw` profiles auto-assign `cdpPort` and `cdpUrl`; only
   set `cdpUrl` explicitly for remote CDP.
 - Auto-detect order: default browser if Chromium-based → Chrome → Brave → Edge → Chromium → Chrome Canary.
@@ -3131,7 +3151,8 @@ Notes:
 
 - `billingBackoffHours`: base backoff in hours when a profile fails due to true
   billing/insufficient-credit errors (default: `5`). Explicit billing text can
-  still land here even on `401`/`403` responses (for example OpenRouter
+  still land here even on `401`/`403` responses, but provider-specific text
+  matchers stay scoped to the provider that owns them (for example OpenRouter
   `Key limit exceeded`). Retryable HTTP `402` usage-window or
   organization/workspace spend-limit messages stay in the `rate_limit` path
   instead.
@@ -3140,9 +3161,9 @@ Notes:
 - `authPermanentBackoffMinutes`: base backoff in minutes for high-confidence `auth_permanent` failures (default: `10`).
 - `authPermanentMaxMinutes`: cap in minutes for `auth_permanent` backoff growth (default: `60`).
 - `failureWindowHours`: rolling window in hours used for backoff counters (default: `24`).
-- `overloadedProfileRotations`: maximum same-provider auth-profile rotations for overloaded errors before switching to model fallback (default: `1`).
+- `overloadedProfileRotations`: maximum same-provider auth-profile rotations for overloaded errors before switching to model fallback (default: `1`). Provider-busy shapes such as `ModelNotReadyException` land here.
 - `overloadedBackoffMs`: fixed delay before retrying an overloaded provider/profile rotation (default: `0`).
-- `rateLimitedProfileRotations`: maximum same-provider auth-profile rotations for rate-limit errors before switching to model fallback (default: `1`).
+- `rateLimitedProfileRotations`: maximum same-provider auth-profile rotations for rate-limit errors before switching to model fallback (default: `1`). That rate-limit bucket includes provider-shaped text such as `Too many concurrent requests`, `ThrottlingException`, `concurrency limit reached`, `workers_ai ... quota limit exceeded`, and `resource exhausted`.
 
 ---
 

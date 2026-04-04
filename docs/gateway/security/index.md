@@ -542,7 +542,7 @@ change other sessions.
 
 Two built-in tools can make persistent control-plane changes:
 
-- `gateway` can call `config.apply`, `config.patch`, and `update.run`.
+- `gateway` can inspect config with `config.schema.lookup` / `config.get`, and can make persistent changes with `config.apply`, `config.patch`, and `update.run`.
 - `cron` can create scheduled jobs that keep running after the original chat/task ends.
 
 For any agent/surface that handles untrusted content, deny these by default:
@@ -694,6 +694,13 @@ tool calls. Reduce the blast radius by:
   `gateway.http.endpoints.responses.images.urlAllowlist`, and keep `maxUrlParts` low.
   Empty allowlists are treated as unset; use `files.allowUrl: false` / `images.allowUrl: false`
   if you want to disable URL fetching entirely.
+- For OpenResponses file inputs, decoded `input_file` text is still injected as
+  **untrusted external content**. Do not rely on file text being trusted just because
+  the Gateway decoded it locally. The injected block still carries explicit
+  `<<<EXTERNAL_UNTRUSTED_CONTENT ...>>>` boundary markers plus `Source: External`
+  metadata, even though this path omits the longer `SECURITY NOTICE:` banner.
+- The same marker-based wrapping is applied when media-understanding extracts text
+  from attached documents before appending that text to the media prompt.
 - Enabling sandboxing and strict tool allowlists for any agent that touches untrusted input.
 - Keeping secrets out of prompts; pass them via env/config on the gateway host instead.
 

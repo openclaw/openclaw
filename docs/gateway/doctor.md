@@ -68,7 +68,7 @@ cat ~/.openclaw/openclaw.json
 - OpenCode provider override warnings (`models.providers.opencode` / `models.providers.opencode-go`).
 - OAuth TLS prerequisites check for OpenAI Codex OAuth profiles.
 - Legacy on-disk state migration (sessions/agent dir/WhatsApp auth).
-- Legacy plugin manifest contract key migration (`speechProviders`, `mediaUnderstandingProviders`, `imageGenerationProviders` → `contracts`).
+- Legacy plugin manifest contract key migration (`speechProviders`, `realtimeTranscriptionProviders`, `realtimeVoiceProviders`, `mediaUnderstandingProviders`, `imageGenerationProviders`, `videoGenerationProviders`, `webFetchProviders`, `webSearchProviders` → `contracts`).
 - Legacy cron store migration (`jobId`, `schedule.cron`, top-level delivery/payload fields, payload `provider`, simple `notify: true` webhook fallback jobs).
 - Session lock file inspection and stale lock cleanup.
 - State integrity and permissions checks (sessions, transcripts, state dir).
@@ -194,6 +194,11 @@ still requires:
 - remote debugging enabled in that browser
 - approving the first attach consent prompt in the browser
 
+Readiness here is only about local attach prerequisites. Existing-session keeps
+the current Chrome MCP route limits; advanced routes like `responsebody`, PDF
+export, download interception, and batch actions still require a managed
+browser or raw CDP profile.
+
 This check does **not** apply to Docker, sandbox, remote-browser, or other
 headless flows. Those continue to use raw CDP.
 
@@ -229,11 +234,14 @@ repeat no-op `doctor --fix` changes.
 
 ### 3a) Legacy plugin manifest migrations
 
-Doctor scans all installed plugin manifests for deprecated top-level capability keys
-(`speechProviders`, `mediaUnderstandingProviders`, `imageGenerationProviders`).
-When found, it offers to move them into the `contracts` object and rewrite the manifest
-file in-place. This migration is idempotent; if the `contracts` key already has the
-same values, the legacy key is removed without duplicating the data.
+Doctor scans all installed plugin manifests for deprecated top-level capability
+keys (`speechProviders`, `realtimeTranscriptionProviders`,
+`realtimeVoiceProviders`, `mediaUnderstandingProviders`,
+`imageGenerationProviders`, `videoGenerationProviders`, `webFetchProviders`,
+`webSearchProviders`). When found, it offers to move them into the `contracts`
+object and rewrite the manifest file in-place. This migration is idempotent;
+if the `contracts` key already has the same values, the legacy key is removed
+without duplicating the data.
 
 ### 3b) Legacy cron store migrations
 

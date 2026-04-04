@@ -354,8 +354,6 @@ Notes:
 
 ## Text streaming
 
-OpenClaw supports Slack native text streaming via the Agents and AI Apps API.
-
 `channels.slack.streaming` controls live preview behavior:
 
 - `off`: disable live preview streaming.
@@ -363,35 +361,29 @@ OpenClaw supports Slack native text streaming via the Agents and AI Apps API.
 - `block`: append chunked preview updates.
 - `progress`: show progress status text while generating, then send final text.
 
-`channels.slack.nativeStreaming` controls Slack's native streaming API (`chat.startStream` / `chat.appendStream` / `chat.stopStream`) when `streaming` is `partial` (default: `true`).
+`channels.slack.nativeStreaming` controls Slack native text streaming when `streaming` is `partial` (default: `true`).
 
-Disable native Slack streaming (keep draft preview behavior):
+- A reply thread must be available for native text streaming to appear. Thread selection still follows `replyToMode`. Without one, the normal draft preview is used.
+- Media and non-text payloads fall back to normal delivery.
+- If streaming fails mid-reply, OpenClaw falls back to normal delivery for remaining payloads.
 
-```yaml
-channels:
-  slack:
-    streaming: partial
-    nativeStreaming: false
+Use draft preview instead of Slack native text streaming:
+
+```json5
+{
+  channels: {
+    slack: {
+      streaming: "partial",
+      nativeStreaming: false,
+    },
+  },
+}
 ```
 
 Legacy keys:
 
 - `channels.slack.streamMode` (`replace | status_final | append`) is auto-migrated to `channels.slack.streaming`.
 - boolean `channels.slack.streaming` is auto-migrated to `channels.slack.nativeStreaming`.
-
-### Requirements
-
-1. Enable **Agents and AI Apps** in your Slack app settings.
-2. Ensure the app has the `assistant:write` scope.
-3. A reply thread must be available for that message. Thread selection still follows `replyToMode`.
-
-### Behavior
-
-- First text chunk starts a stream (`chat.startStream`).
-- Later text chunks append to the same stream (`chat.appendStream`).
-- End of reply finalizes stream (`chat.stopStream`).
-- Media and non-text payloads fall back to normal delivery.
-- If streaming fails mid-reply, OpenClaw falls back to normal delivery for remaining payloads.
 
 ## Typing reaction fallback
 

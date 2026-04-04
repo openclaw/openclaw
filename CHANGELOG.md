@@ -32,6 +32,7 @@ Docs: https://docs.openclaw.ai
 - Prompt caching: keep prompt prefixes more reusable across transport fallback, deterministic MCP tool ordering, compaction, and embedded image history so follow-up turns hit cache more reliably. (#58036, #58037, #58038, #59054, #60603, #60691) Thanks @bcherny.
 - Agents/cache: diagnostics: add prompt-cache break diagnostics, trace live cache scenarios through embedded runner paths, and show cache reuse explicitly in `openclaw status --verbose`. Thanks @vincentkoc.
 - Agents/cache: stabilize cache-relevant system prompt fingerprints by normalizing equivalent structured prompt whitespace, line endings, hook-added system context, and runtime capability ordering so semantically unchanged prompts reuse KV/cache more reliably. Thanks @vincentkoc.
+- Config/schema: enrich the exported `openclaw config schema` JSON Schema with field titles and descriptions so editors, agents, and other schema consumers receive the same config help metadata. (#60067) Thanks @solavrc.
 
 ### Fixes
 
@@ -97,6 +98,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/auth: serialize async shared-secret auth attempts per client so concurrent Tailscale-capable failures cannot overrun the intended auth rate-limit budget. Thanks @Telecaster2147.
 - Doctor/config: compare normalized `talk` configs by deep structural equality instead of key-order-sensitive serialization so `openclaw doctor --fix` stops repeatedly reporting/applying no-op `talk.provider/providers` normalization. (#59911) Thanks @ejames-dev.
 - Gateway/device auth: reuse cached device-token scopes only for cached-token reconnects, while keeping explicit `deviceToken` scope requests and empty-cache fallbacks intact so reconnects preserve `operator.read` without breaking explicit auth flows. (#46032) Thanks @caicongyang.
+- Agents/scheduling: steer background-now work toward automatic completion wake and treat `process` polling as on-demand inspection or intervention instead of default completion handling. (#60877) Thanks @vincentkoc.
 - Google Gemini CLI auth: improve OAuth credential discovery across Windows nvm and Homebrew libexec installs, and align Code Assist metadata so Gemini login stops failing on packaged CLI layouts. (#40729) Thanks @hughcube.
 - Mattermost/config schema: accept `groups.*.requireMention` again so existing Mattermost configs no longer fail strict validation after upgrade. (#58271) Thanks @MoerAI.
 - Agents/failover: scope Anthropic `An unknown error occurred` failover matching by provider so generic internal unknown-error text no longer triggers retryable timeout fallback. (#59325) Thanks @aaron-he-zhu.

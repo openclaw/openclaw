@@ -86,11 +86,15 @@ describe("runClaudeCliAgent", () => {
     });
 
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
-    const spawnInput = supervisorSpawnMock.mock.calls[0]?.[0] as { argv: string[]; mode: string };
+    const spawnInput = supervisorSpawnMock.mock.calls[0]?.[0] as {
+      argv: string[];
+      input?: string;
+      mode: string;
+    };
     expect(spawnInput.mode).toBe("child");
     expect(spawnInput.argv).toContain("claude");
     expect(spawnInput.argv).toContain("--session-id");
-    expect(spawnInput.argv).toContain("hi");
+    expect(spawnInput.input).toBe("hi");
   });
 
   it("starts fresh when only a legacy claude session id is provided", async () => {
@@ -110,11 +114,14 @@ describe("runClaudeCliAgent", () => {
     });
 
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
-    const spawnInput = supervisorSpawnMock.mock.calls[0]?.[0] as { argv: string[] };
+    const spawnInput = supervisorSpawnMock.mock.calls[0]?.[0] as {
+      argv: string[];
+      input?: string;
+    };
     expect(spawnInput.argv).not.toContain("--resume");
     expect(spawnInput.argv).not.toContain("c9d7b831-1c31-4d22-80b9-1e50ca207d4b");
     expect(spawnInput.argv).toContain("--session-id");
-    expect(spawnInput.argv).toContain("hi");
+    expect(spawnInput.input).toBe("hi");
   });
 
   it("serializes concurrent claude-cli runs in the same workspace", async () => {

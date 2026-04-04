@@ -834,13 +834,13 @@ describe("openai transport stream", () => {
     expect(params.messages?.[0]?.content).toBe("Stable prefix\nDynamic suffix");
   });
 
-  it("uses system role and streaming usage compat for native ModelStudio completions providers", () => {
+  it("uses system role and streaming usage compat for native Qwen completions providers", () => {
     const params = buildOpenAICompletionsParams(
       {
         id: "qwen3.6-plus",
         name: "Qwen 3.6 Plus",
         api: "openai-completions",
-        provider: "modelstudio",
+        provider: "qwen",
         baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
         reasoning: true,
         input: ["text"],
