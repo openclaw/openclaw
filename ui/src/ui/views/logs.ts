@@ -52,6 +52,7 @@ export function renderLogs(props: LogsProps) {
     }
     return matchesFilter(entry, needle);
   });
+  const exportFileSuffix = needle || levelFiltered ? "filtered" : "visible";
   const exportLabel = needle || levelFiltered ? t("logs.exportFiltered") : t("logs.exportVisible");
 
   return html`
@@ -71,7 +72,7 @@ export function renderLogs(props: LogsProps) {
             @click=${() =>
               props.onExport(
                 filtered.map((entry) => entry.raw),
-                exportLabel,
+                exportFileSuffix,
               )}
           >
             ${exportLabel}
