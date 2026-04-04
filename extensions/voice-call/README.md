@@ -78,11 +78,11 @@ Put under `plugins.entries.voice-call.config`:
     enabled: true,
     // optional; if omitted, Voice Call picks the first registered
     // realtime-transcription provider by autoSelectOrder
-    provider: "openai",
+    provider: "<realtime-transcription-provider-id>",
     streamPath: "/voice/stream",
     providers: {
-      openai: {
-        model: "gpt-4o-transcribe",
+      "<realtime-transcription-provider-id>": {
+        // provider-owned options
       },
     },
     preStartTimeoutMs: 5000,
@@ -99,6 +99,7 @@ Notes:
 - `mock` is a local dev provider (no network calls).
 - Telnyx requires `telnyx.publicKey` (or `TELNYX_PUBLIC_KEY`) unless `skipSignatureVerification` is true.
 - advanced webhook, streaming, and tunnel notes: `https://docs.openclaw.ai/plugins/voice-call`
+- `responseModel` is optional. When unset, voice responses use the runtime default model.
 
 ## Stale call reaper
 

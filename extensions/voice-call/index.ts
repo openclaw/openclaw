@@ -7,7 +7,10 @@ import {
 import { createVoiceCallRuntime, type VoiceCallRuntime } from "./runtime-entry.js";
 import { registerVoiceCallCli } from "./src/cli.js";
 import {
-  VoiceCallConfigSchema,
+  normalizeVoiceCallLegacyConfigInput,
+  parseVoiceCallPluginConfig,
+} from "./src/config-compat.js";
+import {
   resolveVoiceCallConfig,
   validateProviderConfig,
   type VoiceCallConfig,
@@ -16,23 +19,12 @@ import type { CoreConfig } from "./src/core-bridge.js";
 
 const voiceCallConfigSchema = {
   parse(value: unknown): VoiceCallConfig {
-    const raw =
-      value && typeof value === "object" && !Array.isArray(value)
-        ? (value as Record<string, unknown>)
-        : {};
-
-    const twilio = raw.twilio as Record<string, unknown> | undefined;
-    const legacyFrom = typeof twilio?.from === "string" ? twilio.from : undefined;
-
-    const enabled = typeof raw.enabled === "boolean" ? raw.enabled : true;
-    const providerRaw = raw.provider === "log" ? "mock" : raw.provider;
-    const provider = providerRaw ?? (enabled ? "mock" : undefined);
-
-    return VoiceCallConfigSchema.parse({
-      ...raw,
+    const normalized = normalizeVoiceCallLegacyConfigInput(value);
+    const enabled = typeof normalized.enabled === "boolean" ? normalized.enabled : true;
+    return parseVoiceCallPluginConfig({
+      ...normalized,
       enabled,
-      provider,
-      fromNumber: raw.fromNumber ?? legacyFrom,
+      provider: normalized.provider ?? (enabled ? "mock" : undefined),
     });
   },
   uiHints: {
@@ -100,7 +92,11 @@ const voiceCallConfigSchema = {
       advanced: true,
     },
     store: { label: "Call Log Store Path", advanced: true },
-    responseModel: { label: "Response Model", advanced: true },
+    responseModel: {
+      label: "Response Model",
+      help: "Optional override. Falls back to the runtime default model when unset.",
+      advanced: true,
+    },
     responseSystemPrompt: { label: "Response System Prompt", advanced: true },
     responseTimeoutMs: { label: "Response Timeout (ms)", advanced: true },
   },
@@ -151,11 +147,23 @@ export default definePluginEntry({
     if (api.pluginConfig && typeof api.pluginConfig === "object") {
       const raw = api.pluginConfig as Record<string, unknown>;
       const twilio = raw.twilio as Record<string, unknown> | undefined;
+      const streaming = raw.streaming as Record<string, unknown> | undefined;
       if (raw.provider === "log") {
         api.logger.warn('[voice-call] provider "log" is deprecated; use "mock" instead');
       }
       if (typeof twilio?.from === "string") {
         api.logger.warn("[voice-call] twilio.from is deprecated; use fromNumber instead");
+      }
+      if (
+        typeof streaming?.sttProvider === "string" ||
+        typeof streaming?.openaiApiKey === "string" ||
+        typeof streaming?.sttModel === "string" ||
+        typeof streaming?.silenceDurationMs === "number" ||
+        typeof streaming?.vadThreshold === "number"
+      ) {
+        api.logger.warn(
+          "[voice-call] legacy streaming.* OpenAI fields are deprecated; move settings under streaming.provider and streaming.providers.<id>",
+        );
       }
     }
 
