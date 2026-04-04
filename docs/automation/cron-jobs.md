@@ -100,6 +100,15 @@ agent primary as a hidden extra retry target.
 
 Use `--announce --channel telegram --to "-1001234567890"` for channel delivery. For Telegram forum topics, use `-1001234567890:topic:123`. Slack/Discord/Mattermost targets should use explicit prefixes (`channel:<id>`, `user:<id>`).
 
+For cron-owned isolated jobs, the runner owns the final delivery path. The
+agent is prompted to return a plain-text summary, and that summary is then sent
+through `announce`, `webhook`, or kept internal for `none`. `--no-deliver`
+does not hand delivery back to the agent; it keeps the run internal.
+
+If the original task explicitly says to message some external recipient, the
+agent should note who/where that message should go in its output instead of
+trying to send it directly.
+
 Failure notifications follow a separate destination path:
 
 - `cron.failureDestination` sets a global default for failure notifications.
@@ -363,6 +372,9 @@ openclaw doctor
 - Delivery mode is `none` means no external message is expected.
 - Delivery target missing/invalid (`channel`/`to`) means outbound was skipped.
 - Channel auth errors (`unauthorized`, `Forbidden`) mean delivery was blocked by credentials.
+- For cron-owned isolated jobs, do not expect the agent to use the message tool
+  as a fallback. The runner owns final delivery; `--no-deliver` keeps it
+  internal instead of allowing a direct send.
 
 ### Timezone gotchas
 

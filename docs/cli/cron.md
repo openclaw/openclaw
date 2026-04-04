@@ -19,6 +19,10 @@ Tip: run `openclaw cron --help` for the full command surface.
 Note: isolated `cron add` jobs default to `--announce` delivery. Use `--no-deliver` to keep
 output internal. `--deliver` remains as a deprecated alias for `--announce`.
 
+Note: cron-owned isolated runs expect a plain-text summary and the runner owns
+the final send path. `--no-deliver` keeps the run internal; it does not hand
+delivery back to the agent's message tool.
+
 Note: one-shot (`--at`) jobs delete after success by default. Use `--keep-after-run` to keep them.
 
 Note: `--session` supports `main`, `isolated`, `current`, and `session:<id>`.
@@ -100,6 +104,14 @@ openclaw cron add \
 ```
 
 `--light-context` applies to isolated agent-turn jobs only. For cron runs, lightweight mode keeps bootstrap context empty instead of injecting the full workspace bootstrap set.
+
+Delivery ownership note:
+
+- Cron-owned isolated jobs always route final user-visible delivery through the
+  cron runner (`announce`, `webhook`, or internal-only `none`).
+- If the task mentions messaging some external recipient, the agent should
+  describe the intended destination in its result instead of trying to send it
+  directly.
 
 ## Common admin commands
 

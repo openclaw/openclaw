@@ -1023,6 +1023,29 @@ for usage/billing and raise limits as needed.
 
   </Accordion>
 
+  <Accordion title="Cron fired, but nothing was sent to the channel. Why?">
+    Check the delivery mode first:
+
+    - `--no-deliver` / `delivery.mode: "none"` means no external message is expected.
+    - Missing or invalid announce target (`channel` / `to`) means the runner skipped outbound delivery.
+    - Channel auth failures (`unauthorized`, `Forbidden`) mean the runner tried to deliver but credentials blocked it.
+
+    For isolated cron jobs, the runner owns final delivery. The agent is expected
+    to return a plain-text summary for the runner to send. `--no-deliver` keeps
+    that result internal; it does not let the agent send directly with the
+    message tool instead.
+
+    Debug:
+
+    ```bash
+    openclaw cron runs --id <jobId> --limit 50
+    openclaw tasks show <runId-or-sessionKey>
+    ```
+
+    Docs: [Cron jobs](/automation/cron-jobs), [Background Tasks](/automation/tasks).
+
+  </Accordion>
+
   <Accordion title="How do I install skills on Linux?">
     Use native `openclaw skills` commands or drop skills into your workspace. The macOS Skills UI isn't available on Linux.
     Browse skills at [https://clawhub.ai](https://clawhub.ai).
