@@ -363,6 +363,14 @@ export function resolveConfiguredModelRef(params: {
         return aliasMatch.ref;
       }
 
+      const inferredProvider = inferUniqueProviderFromConfiguredModels({
+        cfg: params.cfg,
+        model: trimmed,
+      });
+      if (inferredProvider) {
+        return { provider: inferredProvider, model: trimmed };
+      }
+
       // Default to the configured provider if no provider is specified, but warn as this is deprecated.
       const safeTrimmed = sanitizeForLog(trimmed);
       const safeResolved = sanitizeForLog(`${params.defaultProvider}/${safeTrimmed}`);

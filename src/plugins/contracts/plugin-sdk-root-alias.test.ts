@@ -336,7 +336,6 @@ describe("plugin-sdk root alias", () => {
     expect(packageJson.exports?.["./plugin-sdk/slack-targets"]).toBeUndefined();
     expect(packageJson.exports?.["./plugin-sdk/telegram-account"]).toBeUndefined();
     expect(packageJson.exports?.["./plugin-sdk/telegram-allow-from"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/telegram-command-config"]).toBeUndefined();
     expect(packageJson.exports?.["./plugin-sdk/telegram-surface"]).toBeUndefined();
     expect(packageJson.exports?.["./plugin-sdk/whatsapp-auth-presence"]).toBeUndefined();
     expect(packageJson.exports?.["./plugin-sdk/whatsapp-core"]).toBeUndefined();

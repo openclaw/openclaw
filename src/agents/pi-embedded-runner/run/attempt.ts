@@ -6,6 +6,12 @@ import {
   DefaultResourceLoader,
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
+import {
+  isOllamaCompatProvider,
+  resolveOllamaCompatNumCtxEnabled,
+  shouldInjectOllamaCompatNumCtx,
+  wrapOllamaCompatNumCtx,
+} from "../../../../extensions/ollama/runtime-api.js";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
@@ -14,12 +20,6 @@ import {
   ensureGlobalUndiciStreamTimeouts,
 } from "../../../infra/net/undici-global-dispatcher.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
-import {
-  isOllamaCompatProvider,
-  resolveOllamaCompatNumCtxEnabled,
-  shouldInjectOllamaCompatNumCtx,
-  wrapOllamaCompatNumCtx,
-} from "../../../plugin-sdk/ollama.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { resolveToolCallArgumentsEncoding } from "../../../plugins/provider-model-compat.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
@@ -217,7 +217,7 @@ export {
   resolveOllamaCompatNumCtxEnabled,
   shouldInjectOllamaCompatNumCtx,
   wrapOllamaCompatNumCtx,
-} from "../../../plugin-sdk/ollama.js";
+} from "../../../../extensions/ollama/runtime-api.js";
 export {
   decodeHtmlEntitiesInObject,
   wrapStreamFnRepairMalformedToolCallArguments,
@@ -975,12 +975,12 @@ export async function runEmbeddedAttempt(
         settingsManager,
         effectiveExtraParams,
       });
+      const effectiveAgentTransport = agentTransportOverride ?? activeSession.agent.transport;
       if (agentTransportOverride && activeSession.agent.transport !== agentTransportOverride) {
         log.debug(
           `embedded agent transport override: ${activeSession.agent.transport} -> ${agentTransportOverride} ` +
             `(${params.provider}/${params.modelId})`,
         );
-        activeSession.agent.setTransport(agentTransportOverride);
       }
 
       const cacheObservabilityEnabled = Boolean(cacheTrace) || log.isEnabled("debug");
@@ -1178,7 +1178,7 @@ export async function runEmbeddedAttempt(
           : truncated;
         cacheTrace?.recordStage("session:limited", { messages: limited });
         if (limited.length > 0) {
-          activeSession.agent.replaceMessages(limited);
+          activeSession.agent.state.messages = limited;
         }
 
         if (params.contextEngine) {
@@ -1196,7 +1196,7 @@ export async function runEmbeddedAttempt(
               throw new Error("context engine assemble returned no result");
             }
             if (assembled.messages !== activeSession.messages) {
-              activeSession.agent.replaceMessages(assembled.messages);
+              activeSession.agent.state.messages = assembled.messages;
             }
             if (assembled.systemPromptAddition) {
               systemPromptText = prependSystemPromptAddition({
@@ -1522,7 +1522,7 @@ export async function runEmbeddedAttempt(
               params.modelId,
             ),
             streamStrategy,
-            transport: activeSession.agent.transport,
+            transport: effectiveAgentTransport,
             systemPrompt: systemPromptText,
             toolNames: promptCacheToolNames,
           });
@@ -1555,7 +1555,7 @@ export async function runEmbeddedAttempt(
             sessionManager.resetLeaf();
           }
           const sessionContext = sessionManager.buildSessionContext();
-          activeSession.agent.replaceMessages(sessionContext.messages);
+          activeSession.agent.state.messages = sessionContext.messages;
           const orphanRepairMessage =
             `Removed orphaned user message to prevent consecutive user turns. ` +
             `runId=${params.runId} sessionId=${params.sessionId} trigger=${params.trigger}`;
@@ -1574,7 +1574,7 @@ export async function runEmbeddedAttempt(
           // history stays byte-identical for prompt-cache prefix matching.
           const didPruneImages = pruneProcessedHistoryImages(activeSession.messages);
           if (didPruneImages) {
-            activeSession.agent.replaceMessages(activeSession.messages);
+            activeSession.agent.state.messages = activeSession.messages;
           }
 
           // Detect and load images referenced in the prompt for vision-capable models.

@@ -245,8 +245,7 @@ export function buildAgentSystemPrompt(params: {
   const acpSpawnRuntimeEnabled = acpEnabled && !sandboxedRuntime;
   const execToolSummary =
     "Run shell commands (pty available for TTY-required CLIs; use for work that starts now, not delayed follow-ups)";
-  const processToolSummary =
-    "Manage background exec sessions for commands already started";
+  const processToolSummary = "Manage background exec sessions for commands already started";
   const cronToolSummary =
     "Manage cron jobs and wake events (use for reminders, delayed follow-ups, and recurring tasks; for requests like 'check back in 10 minutes' or 'remind me later', use cron instead of exec sleep, yieldMs delays, or process polling; when scheduling a reminder, write the systemEvent text as something that will read like a reminder when it fires, and mention that it is a reminder depending on the time gap between setting and firing; include recent context in reminder text if appropriate)";
   const coreToolSummaries: Record<string, string> = {

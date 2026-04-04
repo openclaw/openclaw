@@ -100,13 +100,14 @@ Current bundled examples:
   config defaults
 - `amazon-bedrock`: provider-owned context-overflow matching and failover
   reason classification for Bedrock-specific throttle/not-ready errors, plus
-  Claude-only replay-policy guards on Anthropic traffic
+  the shared `anthropic-by-model` replay family for Claude-only replay-policy
+  guards on Anthropic traffic
 - `anthropic-vertex`: Claude-only replay-policy guards on Anthropic-message
   traffic
 - `openrouter`: pass-through model ids, request wrappers, provider capability
   hints, Gemini thought-signature sanitation on proxy Gemini traffic, proxy
-  reasoning injection through the `openrouter-thinking` stream family, and
-  cache-TTL policy
+  reasoning injection through the `openrouter-thinking` stream family, routing
+  metadata forwarding, and cache-TTL policy
 - `github-copilot`: onboarding/device login, forward-compat model fallback,
   Claude-thinking transcript hints, runtime token exchange, and usage endpoint
   fetching
@@ -126,7 +127,11 @@ Current bundled examples:
   normalization, proxy-Gemini thought-signature sanitation, and cache-TTL
   policy
 - `zai`: GLM-5 forward-compat fallback, `tool_stream` defaults, cache-TTL
-  policy, binary-thinking/live-model policy, and usage auth + quota fetching
+  policy, binary-thinking/live-model policy, and usage auth + quota fetching;
+  unknown `glm-5*` ids synthesize from the bundled `glm-4.7` template
+- `xai`: native Responses transport normalization, `/fast` alias rewrites for
+  Grok fast variants, default `tool_stream`, and xAI-specific tool-schema /
+  reasoning-payload cleanup
 - `mistral`: plugin-owned capability metadata
 - `opencode` and `opencode-go`: plugin-owned capability metadata plus
   proxy-Gemini thought-signature sanitation
@@ -154,7 +159,10 @@ surface.
   - `<PROVIDER>_API_KEY_*` (numbered list, e.g. `<PROVIDER>_API_KEY_1`)
 - For Google providers, `GOOGLE_API_KEY` is also included as fallback.
 - Key selection order preserves priority and deduplicates values.
-- Requests are retried with the next key only on rate-limit responses (for example `429`, `rate_limit`, `quota`, `resource exhausted`).
+- Requests are retried with the next key only on rate-limit responses (for
+  example `429`, `rate_limit`, `quota`, `resource exhausted`, `Too many
+concurrent requests`, `ThrottlingException`, or periodic usage-limit
+  messages).
 - Non-rate-limit failures fail immediately; no key rotation is attempted.
 - When all candidate keys fail, the final error is returned from the last attempt.
 
@@ -279,6 +287,9 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Auth: Vertex uses gcloud ADC; Gemini CLI uses its OAuth flow
 - Caution: Gemini CLI OAuth in OpenClaw is an unofficial integration. Some users have reported Google account restrictions after using third-party clients. Review Google terms and use a non-critical account if you choose to proceed.
 - Gemini CLI OAuth is shipped as part of the bundled `google` plugin.
+  - Install Gemini CLI first:
+    - `brew install gemini-cli`
+    - or `npm install -g @google/gemini-cli`
   - Enable: `openclaw plugins enable google`
   - Login: `openclaw models auth login --provider google-gemini-cli --set-default`
   - Default model: `google-gemini-cli/gemini-3.1-pro-preview`
@@ -330,8 +341,13 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 - OpenRouter remains on the proxy-style OpenAI-compatible path, so native
   OpenAI-only request shaping (`serviceTier`, Responses `store`,
   prompt-cache hints, OpenAI reasoning-compat payloads) is not forwarded
+- Gemini-backed OpenRouter refs keep proxy-Gemini thought-signature sanitation
+  only; native Gemini replay validation and bootstrap rewrites stay off
 - Kilo Gateway: `kilocode` (`KILOCODE_API_KEY`)
 - Example model: `kilocode/kilo/auto`
+- Gemini-backed Kilo refs keep the same proxy-Gemini thought-signature
+  sanitation path; `kilocode/kilo/auto` and other proxy-reasoning-unsupported
+  hints skip proxy reasoning injection
 - MiniMax: `minimax` (API key) and `minimax-portal` (OAuth)
 - Auth: `MINIMAX_API_KEY` for `minimax`; `MINIMAX_OAUTH_TOKEN` or `MINIMAX_API_KEY` for `minimax-portal`
 - Example model: `minimax/MiniMax-M2.7` or `minimax-portal/MiniMax-M2.7`
@@ -363,6 +379,12 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 - BytePlus: `byteplus` (`BYTEPLUS_API_KEY`)
 - Example model: `byteplus-plan/ark-code-latest`
 - xAI: `xai` (`XAI_API_KEY`)
+  - Native bundled xAI requests use the xAI Responses path
+  - `/fast` or `params.fastMode: true` rewrites `grok-3`, `grok-3-mini`,
+    `grok-4`, and `grok-4-0709` to their `*-fast` variants
+  - `tool_stream` defaults on; set
+    `agents.defaults.models["xai/<model>"].params.tool_stream` to `false` to
+    disable it
 - Mistral: `mistral` (`MISTRAL_API_KEY`)
 - Example model: `mistral/mistral-large-latest`
 - CLI: `openclaw onboard --auth-choice mistral-api-key`
