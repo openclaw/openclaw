@@ -298,6 +298,12 @@ export const TelegramAccountSchemaBase = z
     errorPolicy: TelegramErrorPolicySchema,
     errorCooldownMs: z.number().int().nonnegative().optional(),
     apiRoot: z.string().url().optional(),
+    trustedLocalFileRoots: z
+      .array(z.string())
+      .optional()
+      .describe(
+        "Trusted local filesystem roots for self-hosted Telegram Bot API absolute file_path values. Only absolute paths under these roots are read directly; all other absolute paths are rejected.",
+      ),
     autoTopicLabel: AutoTopicLabelSchema,
   })
   .strict();
