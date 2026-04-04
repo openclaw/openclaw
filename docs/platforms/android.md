@@ -73,6 +73,15 @@ dns-sd -B _openclaw-gw._tcp local.
 
 More debugging notes: [Bonjour](/gateway/bonjour).
 
+If you also configured a wide-area discovery domain, compare against:
+
+```bash
+openclaw gateway discover --json
+```
+
+That shows `local.` plus the configured wide-area domain in one pass and uses the resolved
+service endpoint instead of TXT-only hints.
+
 #### Tailnet (Vienna ⇄ London) discovery via unicast DNS-SD
 
 Android NSD/mDNS discovery won’t cross networks. If your Android node and the gateway are on different networks but connected via Tailscale, use Wide-Area Bonjour / unicast DNS-SD instead.

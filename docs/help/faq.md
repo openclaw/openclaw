@@ -42,7 +42,8 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
    openclaw status --deep
    ```
 
-   Runs gateway health checks + provider probes (requires a reachable gateway). See [Health](/gateway/health).
+   Runs a live gateway health probe, including channel probes when supported
+   (requires a reachable gateway). See [Health](/gateway/health).
 
 5. **Tail the latest log**
 
@@ -181,7 +182,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     They control different layers:
 
     - `approvals.exec`: forwards approval prompts to chat destinations
-    - `channels.<channel>.execApprovals`: makes that channel act as a native approval client
+    - `channels.<channel>.execApprovals`: makes that channel act as a native approval client for exec approvals
 
     The host exec policy is still the real approval gate. Chat config only controls where approval
     prompts appear and how people can answer them.
@@ -192,6 +193,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     - If a supported native channel can infer approvers safely, OpenClaw now auto-enables DM-first native approvals when `channels.<channel>.execApprovals.enabled` is unset or `"auto"`.
     - Use `approvals.exec` only when prompts must also be forwarded to other chats or explicit ops rooms.
     - Use `channels.<channel>.execApprovals.target: "channel"` or `"both"` only when you explicitly want approval prompts posted back into the originating room/topic.
+    - Plugin approvals are separate again: they use same-chat `/approve` by default, optional `approvals.plugin` forwarding, and only some native channels keep plugin-approval-native handling on top.
 
     Short version: forwarding is for routing, native client config is for richer channel-specific UX.
     See [Exec Approvals](/tools/exec-approvals).
@@ -1050,6 +1052,7 @@ for usage/billing and raise limits as needed.
     - `--no-deliver` / `delivery.mode: "none"` means no external message is expected.
     - Missing or invalid announce target (`channel` / `to`) means the runner skipped outbound delivery.
     - Channel auth failures (`unauthorized`, `Forbidden`) mean the runner tried to deliver but credentials blocked it.
+    - A silent isolated result (`NO_REPLY` / `no_reply` only) is treated as intentionally non-deliverable, so the runner also suppresses queued fallback delivery.
 
     For isolated cron jobs, the runner owns final delivery. The agent is expected
     to return a plain-text summary for the runner to send. `--no-deliver` keeps
@@ -2657,6 +2660,7 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
     - On `AUTH_TOKEN_MISMATCH`, trusted clients can attempt one bounded retry with a cached device token when the gateway returns retry hints (`canRetryWithDeviceToken=true`, `recommendedNextStep=retry_with_device_token`).
     - That cached-token retry now reuses the cached approved scopes stored with the device token. Explicit `deviceToken` / explicit `scopes` callers still keep their requested scope set instead of inheriting cached scopes.
     - Outside that retry path, connect auth precedence is explicit shared token/password first, then explicit `deviceToken`, then stored device token, then bootstrap token.
+    - Bootstrap token scope checks are role-prefixed. The built-in bootstrap operator allowlist only satisfies operator requests; node or other non-operator roles still need scopes under their own role prefix.
 
     Fix:
 

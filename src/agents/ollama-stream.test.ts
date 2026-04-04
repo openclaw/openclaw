@@ -1,14 +1,35 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildOllamaChatRequest,
+  createConfiguredOllamaCompatStreamWrapper,
   createConfiguredOllamaStreamFn,
   createOllamaStreamFn,
   convertToOllamaMessages,
   buildAssistantMessage,
   parseNdjsonStream,
   resolveOllamaBaseUrlForRun,
-} from "../plugin-sdk/ollama.js";
-import { applyExtraParamsToAgent } from "./pi-embedded-runner/extra-params.js";
+} from "../../extensions/ollama/runtime-api.js";
+import {
+  __testing as extraParamsTesting,
+  applyExtraParamsToAgent,
+} from "./pi-embedded-runner/extra-params.js";
+
+beforeEach(() => {
+  extraParamsTesting.setProviderRuntimeDepsForTest({
+    prepareProviderExtraParams: ({ context }) => context.extraParams,
+    wrapProviderStreamFn: ({ provider, context }) =>
+      provider === "ollama"
+        ? createConfiguredOllamaCompatStreamWrapper({
+            ...context,
+            provider,
+          })
+        : context.streamFn,
+  });
+});
+
+afterEach(() => {
+  extraParamsTesting.resetProviderRuntimeDepsForTest();
+});
 
 describe("buildOllamaChatRequest", () => {
   it("omits tools when none are provided", () => {

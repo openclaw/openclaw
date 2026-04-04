@@ -86,7 +86,7 @@ It does not install or modify anything on the remote host.
   </Step>
   <Step title="Health check">
     - Starts gateway (if needed) and runs `openclaw health`.
-    - `openclaw status --deep` adds gateway health probes to status output.
+    - `openclaw status --deep` adds the live gateway health probe to status output, including channel probes when supported.
   </Step>
   <Step title="Skills">
     - Reads available skills and checks requirements.
