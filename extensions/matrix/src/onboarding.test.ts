@@ -308,7 +308,7 @@ describe("matrix onboarding", () => {
       },
       groupPolicy: "allowlist",
       groups: {
-        "!ops-room:example.org": { allow: true },
+        "!ops-room:example.org": { enabled: true },
       },
     });
     expect(result.cfg.channels?.["matrix"]?.dm).toBeUndefined();

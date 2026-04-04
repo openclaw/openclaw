@@ -122,7 +122,7 @@ describe("updateMatrixAccountConfig", () => {
             policy: "pairing",
           },
           groups: {
-            "!default:example.org": { allow: true },
+            "!default:example.org": { enabled: true },
           },
           accounts: {
             ops: {
@@ -145,14 +145,14 @@ describe("updateMatrixAccountConfig", () => {
       },
       groupPolicy: "allowlist",
       groups: {
-        "!ops-room:example.org": { allow: true },
+        "!ops-room:example.org": { enabled: true },
       },
       rooms: null,
     });
 
     expect(updated.channels?.["matrix"]?.dm?.policy).toBe("pairing");
     expect(updated.channels?.["matrix"]?.groups).toEqual({
-      "!default:example.org": { allow: true },
+      "!default:example.org": { enabled: true },
     });
     expect(updated.channels?.["matrix"]?.accounts?.ops).toMatchObject({
       dm: {
@@ -162,7 +162,7 @@ describe("updateMatrixAccountConfig", () => {
       },
       groupPolicy: "allowlist",
       groups: {
-        "!ops-room:example.org": { allow: true },
+        "!ops-room:example.org": { enabled: true },
       },
     });
     expect(updated.channels?.["matrix"]?.accounts?.ops?.rooms).toBeUndefined();

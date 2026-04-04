@@ -13822,16 +13822,6 @@
       "hasChildren": false
     },
     {
-      "path": "channels.matrix.groups.*.allow",
-      "kind": "channel",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
       "path": "channels.matrix.groups.*.allowBots",
       "kind": "channel",
       "type": [
@@ -14194,16 +14184,6 @@
       "path": "channels.matrix.rooms.*.account",
       "kind": "channel",
       "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.matrix.rooms.*.allow",
-      "kind": "channel",
-      "type": "boolean",
       "required": false,
       "deprecated": false,
       "sensitive": false,

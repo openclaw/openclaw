@@ -558,7 +558,7 @@ describe("legacy migrate nested channel enabled aliases", () => {
     });
   });
 
-  it("moves legacy allow toggles into enabled for slack, googlechat, and discord", () => {
+  it("moves legacy allow toggles into enabled for slack, googlechat, discord, and matrix", () => {
     const res = migrateLegacyConfig({
       channels: {
         slack: {
@@ -617,6 +617,22 @@ describe("legacy migrate nested channel enabled aliases", () => {
             },
           },
         },
+        matrix: {
+          groups: {
+            "!ops:example.org": {
+              allow: false,
+            },
+          },
+          accounts: {
+            work: {
+              rooms: {
+                "!legacy:example.org": {
+                  allow: true,
+                },
+              },
+            },
+          },
+        },
       },
     });
 
@@ -638,6 +654,12 @@ describe("legacy migrate nested channel enabled aliases", () => {
     expect(res.changes).toContain(
       "Moved channels.discord.accounts.work.guilds.200.channels.help.allow → channels.discord.accounts.work.guilds.200.channels.help.enabled.",
     );
+    expect(res.changes).toContain(
+      "Moved channels.matrix.groups.!ops:example.org.allow → channels.matrix.groups.!ops:example.org.enabled (false).",
+    );
+    expect(res.changes).toContain(
+      "Moved channels.matrix.accounts.work.rooms.!legacy:example.org.allow → channels.matrix.accounts.work.rooms.!legacy:example.org.enabled (true).",
+    );
     expect(res.config?.channels?.slack?.channels?.ops).toEqual({
       enabled: false,
     });
@@ -646,6 +668,12 @@ describe("legacy migrate nested channel enabled aliases", () => {
     });
     expect(res.config?.channels?.discord?.guilds?.["100"]?.channels?.general).toEqual({
       enabled: false,
+    });
+    expect(res.config?.channels?.matrix?.groups?.["!ops:example.org"]).toEqual({
+      enabled: false,
+    });
+    expect(res.config?.channels?.matrix?.accounts?.work?.rooms?.["!legacy:example.org"]).toEqual({
+      enabled: true,
     });
   });
 

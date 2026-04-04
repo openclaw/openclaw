@@ -1704,7 +1704,7 @@
       "tags": [
         "automation"
       ],
-      "help": "Delivery target (\"last\", \"none\", or a channel id). Known channels: telegram, whatsapp, discord, irc, googlechat, slack, signal, imessage, line, bluebubbles, feishu, matrix, mattermost, msteams, nextcloud-talk, nostr, qqbot, synology-chat, tlon, twitch, zalo, zalouser.",
+      "help": "Delivery target (\"last\", \"none\", or a channel id). Known channels: feishu, googlechat, nostr, msteams, mattermost, nextcloud-talk, matrix, bluebubbles, line, zalo, zalouser, synology-chat, tlon, discord, imessage, irc, qqbot, signal, slack, telegram, twitch, whatsapp.",
       "hasChildren": false
     },
     {
@@ -4532,7 +4532,7 @@
       "tags": [
         "automation"
       ],
-      "help": "Delivery target (\"last\", \"none\", or a channel id). Known channels: telegram, whatsapp, discord, irc, googlechat, slack, signal, imessage, line, bluebubbles, feishu, matrix, mattermost, msteams, nextcloud-talk, nostr, qqbot, synology-chat, tlon, twitch, zalo, zalouser.",
+      "help": "Delivery target (\"last\", \"none\", or a channel id). Known channels: feishu, googlechat, nostr, msteams, mattermost, nextcloud-talk, matrix, bluebubbles, line, zalo, zalouser, synology-chat, tlon, discord, imessage, irc, qqbot, signal, slack, telegram, twitch, whatsapp.",
       "hasChildren": false
     },
     {
@@ -15420,6 +15420,16 @@
       "path": "models.providers.*.models.*.compat.unsupportedToolSchemaKeywords.*",
       "kind": "core",
       "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.models.*.contextTokens",
+      "kind": "core",
+      "type": "integer",
       "required": false,
       "deprecated": false,
       "sensitive": false,
