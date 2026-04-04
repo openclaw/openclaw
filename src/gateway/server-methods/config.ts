@@ -476,6 +476,28 @@ export const configHandlers: GatewayRequestHandlers = {
     }
     const changedPaths = diffConfigPaths(snapshot.config, validated.config);
     const actor = resolveControlPlaneActor(client);
+
+    // No-op: if the validated config is identical to the current config,
+    // skip the file write and SIGUSR1 restart entirely. This avoids a full
+    // gateway restart (and the resulting connection drop) when a control-plane
+    // client re-sends the same config (e.g. hot-apply with no actual changes).
+    if (changedPaths.length === 0) {
+      context?.logGateway?.info(
+        `config.patch noop ${formatControlPlaneActor(actor)} (no changed paths)`,
+      );
+      respond(
+        true,
+        {
+          ok: true,
+          noop: true,
+          path: createConfigIO().configPath,
+          config: redactConfigObject(validated.config, schemaPatch.uiHints),
+        },
+        undefined,
+      );
+      return;
+    }
+
     context?.logGateway?.info(
       `config.patch write ${formatControlPlaneActor(actor)} changedPaths=${summarizeChangedPaths(changedPaths)} restartReason=config.patch`,
     );
