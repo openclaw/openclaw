@@ -163,9 +163,7 @@ export type ProviderToolCompatFamily = "gemini";
 
 export function buildProviderToolCompatFamilyHooks(family: ProviderToolCompatFamily): {
   normalizeToolSchemas: (ctx: ProviderNormalizeToolSchemasContext) => AnyAgentTool[];
-  inspectToolSchemas: (
-    ctx: ProviderNormalizeToolSchemasContext,
-  ) => ProviderToolSchemaDiagnostic[];
+  inspectToolSchemas: (ctx: ProviderNormalizeToolSchemasContext) => ProviderToolSchemaDiagnostic[];
 } {
   switch (family) {
     case "gemini":

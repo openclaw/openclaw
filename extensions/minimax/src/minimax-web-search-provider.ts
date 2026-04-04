@@ -27,10 +27,7 @@ import {
 
 const MINIMAX_SEARCH_ENDPOINT_GLOBAL = "https://api.minimax.io/v1/coding_plan/search";
 const MINIMAX_SEARCH_ENDPOINT_CN = "https://api.minimaxi.com/v1/coding_plan/search";
-const MINIMAX_CODING_PLAN_ENV_VARS = [
-  "MINIMAX_CODE_PLAN_KEY",
-  "MINIMAX_CODING_API_KEY",
-] as const;
+const MINIMAX_CODING_PLAN_ENV_VARS = ["MINIMAX_CODE_PLAN_KEY", "MINIMAX_CODING_API_KEY"] as const;
 
 type MiniMaxSearchResult = {
   title?: string;

@@ -74,7 +74,9 @@ describe("minimax provider catalog", () => {
     );
 
     const providers = await resolveImplicitProvidersForTest({ agentDir });
-    const apiHighspeed = providers?.minimax?.models?.find((model) => model.id === "MiniMax-M2.7-highspeed");
+    const apiHighspeed = providers?.minimax?.models?.find(
+      (model) => model.id === "MiniMax-M2.7-highspeed",
+    );
     const portalHighspeed = providers?.["minimax-portal"]?.models?.find(
       (model) => model.id === "MiniMax-M2.7-highspeed",
     );

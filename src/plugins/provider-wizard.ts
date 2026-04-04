@@ -1,19 +1,19 @@
-import type { OpenClawConfig } from "../config/config.js";
-import type { WizardPrompter } from "../wizard/prompts.js";
-import type {
-  ProviderAuthMethod,
-  ProviderPlugin,
-  ProviderPluginWizardModelPicker,
-  ProviderPluginWizardSetup,
-} from "./types.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
+import type { OpenClawConfig } from "../config/config.js";
+import type { WizardPrompter } from "../wizard/prompts.js";
 import {
   buildPluginSnapshotCacheEnvKey,
   resolvePluginSnapshotCacheTtlMs,
   shouldUsePluginSnapshotCache,
 } from "./cache-controls.js";
 import { resolvePluginProviders } from "./providers.runtime.js";
+import type {
+  ProviderAuthMethod,
+  ProviderPlugin,
+  ProviderPluginWizardModelPicker,
+  ProviderPluginWizardSetup,
+} from "./types.js";
 
 export const PROVIDER_PLUGIN_CHOICE_PREFIX = "provider-plugin:";
 type ProviderWizardCacheEntry = {

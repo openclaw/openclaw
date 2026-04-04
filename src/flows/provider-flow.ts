@@ -1,12 +1,12 @@
 import type { OpenClawConfig } from "../config/config.js";
-import type { ProviderPlugin } from "../plugins/types.js";
-import type { FlowContribution, FlowOption } from "./types.js";
 import { resolveManifestProviderAuthChoices } from "../plugins/provider-auth-choices.js";
 import {
   resolveProviderModelPickerEntries,
   resolveProviderWizardOptions,
 } from "../plugins/provider-wizard.js";
 import { resolvePluginProviders } from "../plugins/providers.runtime.js";
+import type { ProviderPlugin } from "../plugins/types.js";
+import type { FlowContribution, FlowOption } from "./types.js";
 import { mergeFlowContributions, sortFlowContributionsByLabel } from "./types.js";
 
 export type ProviderFlowScope = "text-inference" | "image-generation";

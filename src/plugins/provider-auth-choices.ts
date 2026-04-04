@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "../config/config.js";
 import { normalizeProviderIdForAuth } from "../agents/model-selection.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 

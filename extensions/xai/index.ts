@@ -6,10 +6,7 @@ import {
   composeProviderStreamWrappers,
   createToolStreamWrapper,
 } from "openclaw/plugin-sdk/provider-stream";
-import {
-  jsonResult,
-  readProviderEnvValue,
-} from "openclaw/plugin-sdk/provider-web-search";
+import { jsonResult, readProviderEnvValue } from "openclaw/plugin-sdk/provider-web-search";
 import {
   applyXaiModelCompat,
   normalizeXaiModelId,
@@ -20,13 +17,13 @@ import {
 import { applyXaiConfig, XAI_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildXaiProvider } from "./provider-catalog.js";
 import { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
+import { resolveFallbackXaiAuth } from "./src/tool-auth-shared.js";
 import { resolveEffectiveXSearchConfig } from "./src/x-search-config.js";
 import {
   createXaiFastModeWrapper,
   createXaiToolCallArgumentDecodingWrapper,
   createXaiToolPayloadCompatibilityWrapper,
 } from "./stream.js";
-import { resolveFallbackXaiAuth } from "./src/tool-auth-shared.js";
 import { createXaiWebSearchProvider } from "./web-search.js";
 
 const PROVIDER_ID = "xai";
@@ -37,7 +34,7 @@ const OPENAI_COMPATIBLE_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
 function hasResolvableXaiApiKey(config: unknown): boolean {
   return Boolean(
     resolveFallbackXaiAuth(config as OpenClawConfig | undefined)?.apiKey ||
-      readProviderEnvValue(["XAI_API_KEY"]),
+    readProviderEnvValue(["XAI_API_KEY"]),
   );
 }
 

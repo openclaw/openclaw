@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
 import { NON_ENV_SECRETREF_MARKER } from "openclaw/plugin-sdk/provider-auth-runtime";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   isXaiToolEnabled,
   resolveFallbackXaiAuth,

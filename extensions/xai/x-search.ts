@@ -10,11 +10,11 @@ import {
   resolveTimeoutSeconds,
   writeCache,
 } from "openclaw/plugin-sdk/provider-web-search";
+import { isXaiToolEnabled, resolveXaiToolApiKey } from "./src/tool-auth-shared.js";
 import {
   resolveEffectiveXSearchConfig,
   resolveLegacyXSearchConfig,
 } from "./src/x-search-config.js";
-import { isXaiToolEnabled, resolveXaiToolApiKey } from "./src/tool-auth-shared.js";
 import {
   buildXaiXSearchPayload,
   requestXaiXSearch,
