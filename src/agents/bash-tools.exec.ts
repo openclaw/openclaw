@@ -1135,7 +1135,10 @@ export function describeExecTool(params?: { agentId?: string; hasCronTool?: bool
   );
   try {
     const approvalsFile = loadExecApprovals();
-    const approvals = resolveExecApprovalsFromFile({ file: approvalsFile, agentId });
+    const approvals = resolveExecApprovalsFromFile({
+      file: approvalsFile,
+      agentId: params?.agentId,
+    });
     const allowlist = approvals.allowlist.filter((entry) => {
       const pattern = entry.pattern?.trim() ?? "";
       return (
