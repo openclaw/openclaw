@@ -491,7 +491,12 @@ img.chat-avatar {
 }
 
 @media (max-width: 400px) {
-  .chat-avatar {
+  .chat-group-messages {
+    max-width: 100%;
+  }
+
+  .chat-avatar,
+  img.chat-avatar {
     display: none;
   }
 }
