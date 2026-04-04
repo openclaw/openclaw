@@ -99,7 +99,7 @@ You can switch models for the current session without restarting:
 /model
 /model list
 /model 3
-/model openai/gpt-5.2
+/model openai/gpt-5.4
 /model status
 ```
 

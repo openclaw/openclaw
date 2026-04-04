@@ -129,7 +129,6 @@ vi.mock("../agents/auth-profiles.js", () => {
 });
 
 const providerRuntimeMocks = vi.hoisted(() => ({
-  resolveProviderUsageAuthWithPluginMock: vi.fn(async (..._args: unknown[]) => null),
   providerRuntimeMock: {
     augmentModelCatalogWithProviderPlugins: vi.fn((catalog: unknown) => catalog),
     buildProviderAuthDoctorHintWithPlugin: vi.fn(() => undefined),
@@ -153,7 +152,6 @@ const providerRuntimeMocks = vi.hoisted(() => ({
     resolveProviderRuntimePlugin: vi.fn(() => undefined),
     resolveProviderStreamFn: vi.fn(() => undefined),
     resolveProviderSyntheticAuthWithPlugin: vi.fn(() => undefined),
-    resolveProviderUsageSnapshotWithPlugin: vi.fn(async () => undefined),
     resolveProviderXHighThinking: vi.fn(() => undefined),
     runProviderDynamicModel: vi.fn(() => undefined),
     wrapProviderStreamFn: vi.fn(() => undefined),
@@ -167,7 +165,6 @@ vi.mock("../plugins/provider-runtime.js", async () => {
   return {
     ...actual,
     ...providerRuntimeMocks.providerRuntimeMock,
-    resolveProviderUsageAuthWithPlugin: providerRuntimeMocks.resolveProviderUsageAuthWithPluginMock,
   };
 });
 
@@ -178,7 +175,6 @@ vi.mock("../plugins/provider-runtime.ts", async () => {
   return {
     ...actual,
     ...providerRuntimeMocks.providerRuntimeMock,
-    resolveProviderUsageAuthWithPlugin: providerRuntimeMocks.resolveProviderUsageAuthWithPluginMock,
   };
 });
 
@@ -224,8 +220,6 @@ describe("resolveProviderAuths key normalization", () => {
     clearRuntimeConfigSnapshot();
     clearConfigCache();
     clearRuntimeAuthProfileStoreSnapshots();
-    providerRuntimeMocks.resolveProviderUsageAuthWithPluginMock.mockReset();
-    providerRuntimeMocks.resolveProviderUsageAuthWithPluginMock.mockResolvedValue(null);
   });
 
   afterEach(() => {

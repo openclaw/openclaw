@@ -101,8 +101,8 @@ function createProviderWithModelsConfig(provider: string, models: Array<Record<s
 function resolveConfiguredRefForTest(cfg: Partial<OpenClawConfig>) {
   return resolveConfiguredModelRef({
     cfg: cfg as OpenClawConfig,
-    defaultProvider: "anthropic",
-    defaultModel: "claude-opus-4-6",
+    defaultProvider: "openai",
+    defaultModel: "gpt-5.4",
   });
 }
 
@@ -800,7 +800,7 @@ describe("model-selection", () => {
     it("should fall back to hardcoded default when no custom providers have models", () => {
       const cfg = createProviderWithModelsConfig("empty-provider", []);
       const result = resolveConfiguredRefForTest(cfg);
-      expect(result).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
+      expect(result).toEqual({ provider: "openai", model: "gpt-5.4" });
     });
 
     it("should warn when specified model cannot be resolved and falls back to default", () => {
@@ -817,13 +817,13 @@ describe("model-selection", () => {
 
         const result = resolveConfiguredModelRef({
           cfg: cfg as OpenClawConfig,
-          defaultProvider: "anthropic",
-          defaultModel: "claude-opus-4-6",
+          defaultProvider: "openai",
+          defaultModel: "gpt-5.4",
         });
 
-        expect(result).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
+        expect(result).toEqual({ provider: "openai", model: "gpt-5.4" });
         expect(warnSpy).toHaveBeenCalledWith(
-          expect.stringContaining('Falling back to default "anthropic/claude-opus-4-6"'),
+          expect.stringContaining('Falling back to default "openai/gpt-5.4"'),
         );
       } finally {
         warnSpy.mockRestore();
@@ -889,10 +889,10 @@ describe("model-selection", () => {
       expect(resolveAnthropicOpusThinking(cfg)).toBe("adaptive");
     });
 
-    it("defaults Anthropic Claude 4.6 models to adaptive", () => {
+    it("falls back to low when no provider thinking hook is active", () => {
       const cfg = {} as OpenClawConfig;
 
-      expect(resolveAnthropicOpusThinking(cfg)).toBe("adaptive");
+      expect(resolveAnthropicOpusThinking(cfg)).toBe("low");
 
       expect(
         resolveThinkingDefault({
@@ -908,7 +908,7 @@ describe("model-selection", () => {
             },
           ],
         }),
-      ).toBe("adaptive");
+      ).toBe("low");
     });
   });
 });

@@ -3,13 +3,6 @@ import { resolveProviderUsageSnapshotWithPlugin } from "../plugins/provider-runt
 import { resolveFetch } from "./fetch.js";
 import { type ProviderAuth, resolveProviderAuths } from "./provider-usage.auth.js";
 import {
-  fetchClaudeUsage,
-  fetchCodexUsage,
-  fetchGeminiUsage,
-  fetchMinimaxUsage,
-  fetchZaiUsage,
-} from "./provider-usage.fetch.js";
-import {
   DEFAULT_TIMEOUT_MS,
   ignoredErrors,
   PROVIDER_LABELS,
@@ -22,97 +15,19 @@ import type {
   UsageSummary,
 } from "./provider-usage.types.js";
 
-async function fetchCopilotUsageFallback(
-  token: string,
-  timeoutMs: number,
-  fetchFn: typeof fetch,
-): Promise<ProviderUsageSnapshot> {
-  const res = await fetchFn("https://api.github.com/copilot_internal/user", {
-    headers: {
-      Authorization: `token ${token}`,
-      "Editor-Version": "vscode/1.96.2",
-      "User-Agent": "GitHubCopilotChat/0.26.7",
-      "X-Github-Api-Version": "2025-04-01",
-    },
-    signal: AbortSignal.timeout(timeoutMs),
-  });
-  if (!res.ok) {
-    return {
-      provider: "github-copilot",
-      displayName: PROVIDER_LABELS["github-copilot"],
-      windows: [],
-      error: `HTTP ${res.status}`,
-    };
-  }
-  const data = (await res.json()) as {
-    quota_snapshots?: {
-      premium_interactions?: { percent_remaining?: number | null };
-      chat?: { percent_remaining?: number | null };
-    };
-    copilot_plan?: string;
-  };
-  const windows = [];
-  const premiumRemaining = data.quota_snapshots?.premium_interactions?.percent_remaining;
-  if (premiumRemaining !== undefined && premiumRemaining !== null) {
-    windows.push({
-      label: "Premium",
-      usedPercent: Math.max(0, Math.min(100, 100 - premiumRemaining)),
-    });
-  }
-  const chatRemaining = data.quota_snapshots?.chat?.percent_remaining;
-  if (chatRemaining !== undefined && chatRemaining !== null) {
-    windows.push({ label: "Chat", usedPercent: Math.max(0, Math.min(100, 100 - chatRemaining)) });
-  }
-  return {
-    provider: "github-copilot",
-    displayName: PROVIDER_LABELS["github-copilot"],
-    windows,
-    plan: data.copilot_plan,
-  };
-}
-
 async function fetchProviderUsageSnapshotFallback(params: {
   auth: ProviderAuth;
   timeoutMs: number;
   fetchFn: typeof fetch;
 }): Promise<ProviderUsageSnapshot> {
-  switch (params.auth.provider) {
-    case "anthropic":
-      return await fetchClaudeUsage(params.auth.token, params.timeoutMs, params.fetchFn);
-    case "github-copilot":
-      return await fetchCopilotUsageFallback(params.auth.token, params.timeoutMs, params.fetchFn);
-    case "google-gemini-cli":
-      return await fetchGeminiUsage(
-        params.auth.token,
-        params.timeoutMs,
-        params.fetchFn,
-        "google-gemini-cli",
-      );
-    case "openai-codex":
-      return await fetchCodexUsage(
-        params.auth.token,
-        params.auth.accountId,
-        params.timeoutMs,
-        params.fetchFn,
-      );
-    case "zai":
-      return await fetchZaiUsage(params.auth.token, params.timeoutMs, params.fetchFn);
-    case "minimax":
-      return await fetchMinimaxUsage(params.auth.token, params.timeoutMs, params.fetchFn);
-    case "xiaomi":
-      return {
-        provider: "xiaomi",
-        displayName: PROVIDER_LABELS.xiaomi,
-        windows: [],
-      };
-    default:
-      return {
-        provider: params.auth.provider,
-        displayName: PROVIDER_LABELS[params.auth.provider],
-        windows: [],
-        error: "Unsupported provider",
-      };
-  }
+  void params.timeoutMs;
+  void params.fetchFn;
+  return {
+    provider: params.auth.provider,
+    displayName: PROVIDER_LABELS[params.auth.provider] ?? params.auth.provider,
+    windows: [],
+    error: "Unsupported provider",
+  };
 }
 
 type UsageSummaryOptions = {
