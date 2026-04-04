@@ -139,6 +139,12 @@ flowchart TD
     - `origin not allowed` → browser `Origin` is not allowed for the Control UI
       gateway target.
     - `AUTH_TOKEN_MISMATCH` with retry hints (`canRetryWithDeviceToken=true`) → one trusted device-token retry may occur automatically.
+    - That cached-token retry reuses the cached scope set stored with the paired
+      device token. Explicit `deviceToken` / explicit `scopes` callers keep
+      their requested scope set instead.
+    - On the async Tailscale Serve Control UI path, failed attempts for the same
+      `{scope, ip}` are serialized before the limiter records the failure, so a
+      second concurrent bad retry can already show `retry later`.
     - `too many failed authentication attempts (retry later)` from a localhost
       browser origin → repeated failures from that same `Origin` are temporarily
       locked out; another localhost origin uses a separate bucket.

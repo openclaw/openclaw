@@ -86,6 +86,29 @@ Likewise, prefer `openclaw/plugin-sdk/setup-runtime`,
 `openclaw/plugin-sdk/reply-chunking` when you do not need the broader umbrella
 surface.
 
+For setup specifically:
+
+- `openclaw/plugin-sdk/setup-runtime` covers the runtime-safe setup helpers:
+  lookup-note output, `promptResolvedAllowFrom`, `splitSetupEntries`, and the
+  delegated setup-proxy builders
+- `openclaw/plugin-sdk/setup-adapter-runtime` is the narrow env-aware adapter
+  seam for `createEnvPatchedAccountSetupAdapter`
+- `openclaw/plugin-sdk/channel-setup` covers the optional-install setup
+  builders plus a few setup-safe primitives:
+  `createOptionalChannelSetupSurface`, `createOptionalChannelSetupAdapter`,
+  `createOptionalChannelSetupWizard`, `DEFAULT_ACCOUNT_ID`,
+  `createTopLevelChannelDmPolicy`, `setSetupChannelEnabled`, and
+  `splitSetupEntries`
+- use the broader `openclaw/plugin-sdk/setup` seam only when you also need the
+  heavier shared setup/config helpers such as
+  `moveSingleAccountChannelSectionToDefaultAccount(...)`
+
+If your channel only wants to advertise "install this plugin first" in setup
+surfaces, prefer `createOptionalChannelSetupSurface(...)`. The generated
+adapter/wizard fail closed on config writes and finalization, and they reuse
+the same install-required message across validation, finalize, and docs-link
+copy.
+
 For other hot channel paths, prefer the narrow helpers over broader legacy
 surfaces:
 
@@ -105,6 +128,9 @@ surfaces:
   and adapter registration
 - `openclaw/plugin-sdk/agent-media-payload` only when a legacy agent/media
   payload field layout is still required
+- `openclaw/plugin-sdk/telegram-command-config` for Telegram custom-command
+  normalization, duplicate/conflict validation, and a fallback-stable command
+  config contract
 
 Auth-only channels can usually stop at the default path: core handles approvals and the plugin just exposes outbound/auth capabilities. Native approval channels such as Matrix, Slack, Telegram, and custom chat transports should use the shared native helpers instead of rolling their own approval lifecycle.
 

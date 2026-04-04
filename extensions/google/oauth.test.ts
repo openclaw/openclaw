@@ -91,9 +91,16 @@ describe("extractGeminiCliCredentials", () => {
     const layout = makeFakeLayout();
     process.env.PATH = layout.binDir;
 
+    // resolveGeminiCliDirs checks package.json to validate candidate directories
+    const geminiCliDir = join(rootDir, "fake", "lib", "node_modules", "@google", "gemini-cli");
+    const packageJsonPath = normalizePath(join(geminiCliDir, "package.json"));
+
     mockExistsSync.mockImplementation((p: string) => {
       const normalized = normalizePath(p);
       if (normalized === normalizePath(layout.geminiPath)) {
+        return true;
+      }
+      if (normalized === packageJsonPath) {
         return true;
       }
       if (params.oauth2Exists && normalized === normalizePath(layout.oauth2Path)) {
@@ -116,11 +123,9 @@ describe("extractGeminiCliCredentials", () => {
     const binDir = join(rootDir, "fake", "npm-bin");
     const geminiPath = join(binDir, "gemini");
     const resolvedPath = geminiPath;
+    const geminiCliDir = join(binDir, "node_modules", "@google", "gemini-cli");
     const oauth2Path = join(
-      binDir,
-      "node_modules",
-      "@google",
-      "gemini-cli",
+      geminiCliDir,
       "node_modules",
       "@google",
       "gemini-cli-core",
@@ -129,11 +134,15 @@ describe("extractGeminiCliCredentials", () => {
       "code_assist",
       "oauth2.js",
     );
+    const packageJsonPath = normalizePath(join(geminiCliDir, "package.json"));
     process.env.PATH = binDir;
 
     mockExistsSync.mockImplementation((p: string) => {
       const normalized = normalizePath(p);
       if (normalized === normalizePath(geminiPath)) {
+        return true;
+      }
+      if (normalized === packageJsonPath) {
         return true;
       }
       if (params.oauth2Exists && normalized === normalizePath(oauth2Path)) {
@@ -145,6 +154,140 @@ describe("extractGeminiCliCredentials", () => {
     if (params.oauth2Content !== undefined) {
       mockReadFileSync.mockReturnValue(params.oauth2Content);
     }
+  }
+
+  function installHomebrewLibexecLayout(params: { oauth2Content: string }) {
+    const brewPrefix = join(rootDir, "opt", "homebrew");
+    const cellarRoot = join(brewPrefix, "Cellar", "gemini-cli", "1.2.3");
+    const binDir = join(brewPrefix, "bin");
+    const geminiPath = join(binDir, "gemini");
+    const resolvedPath = join(cellarRoot, "libexec", "bin", "gemini");
+    const geminiCliDir = join(
+      cellarRoot,
+      "libexec",
+      "lib",
+      "node_modules",
+      "@google",
+      "gemini-cli",
+    );
+    const packageJsonPath = normalizePath(join(geminiCliDir, "package.json"));
+    const oauth2Path = join(
+      geminiCliDir,
+      "node_modules",
+      "@google",
+      "gemini-cli-core",
+      "dist",
+      "src",
+      "code_assist",
+      "oauth2.js",
+    );
+
+    process.env.PATH = binDir;
+    mockExistsSync.mockImplementation((p: string) => {
+      const normalized = normalizePath(p);
+      return (
+        normalized === normalizePath(geminiPath) ||
+        normalized === packageJsonPath ||
+        normalized === normalizePath(oauth2Path)
+      );
+    });
+    mockRealpathSync.mockReturnValue(resolvedPath);
+    mockReadFileSync.mockImplementation((p: string) => {
+      if (normalizePath(p) === normalizePath(oauth2Path)) {
+        return params.oauth2Content;
+      }
+      throw new Error(`Unexpected read for ${p}`);
+    });
+  }
+
+  function installWindowsNvmLayoutWithUnrelatedOauth(params: {
+    oauth2Content: string;
+    unrelatedOauth2Content: string;
+  }) {
+    const nvmRoot = join(rootDir, "fake", "Users", "lobster", "AppData", "Local", "nvm");
+    const versionDir = join(nvmRoot, "v24.1.0");
+    const geminiPath = join(versionDir, process.platform === "win32" ? "gemini.cmd" : "gemini");
+    const resolvedPath = geminiPath;
+    const geminiCliDir = join(versionDir, "node_modules", "@google", "gemini-cli");
+    const packageJsonPath = normalizePath(join(geminiCliDir, "package.json"));
+    const oauth2Path = join(
+      geminiCliDir,
+      "node_modules",
+      "@google",
+      "gemini-cli-core",
+      "dist",
+      "src",
+      "code_assist",
+      "oauth2.js",
+    );
+    const unrelatedOauth2Path = join(
+      nvmRoot,
+      "node_modules",
+      "discord-api-types",
+      "payloads",
+      "v10",
+      "oauth2.js",
+    );
+
+    process.env.PATH = versionDir;
+    mockExistsSync.mockImplementation((p: string) => {
+      const normalized = normalizePath(p);
+      return (
+        normalized === normalizePath(geminiPath) ||
+        normalized === packageJsonPath ||
+        normalized === normalizePath(oauth2Path)
+      );
+    });
+    mockRealpathSync.mockReturnValue(resolvedPath);
+    mockReadFileSync.mockImplementation((p: string) => {
+      const normalized = normalizePath(p);
+      if (normalized === normalizePath(oauth2Path)) {
+        return params.oauth2Content;
+      }
+      if (normalized === normalizePath(unrelatedOauth2Path)) {
+        return params.unrelatedOauth2Content;
+      }
+      throw new Error(`Unexpected read for ${p}`);
+    });
+    mockReaddirSync.mockImplementation((p: string) => {
+      const normalized = normalizePath(p);
+      if (normalized === normalizePath(nvmRoot)) {
+        return [dirent("node_modules", true)];
+      }
+      if (normalized === normalizePath(join(nvmRoot, "node_modules"))) {
+        return [dirent("discord-api-types", true)];
+      }
+      if (normalized === normalizePath(join(nvmRoot, "node_modules", "discord-api-types"))) {
+        return [dirent("payloads", true)];
+      }
+      if (
+        normalized === normalizePath(join(nvmRoot, "node_modules", "discord-api-types", "payloads"))
+      ) {
+        return [dirent("v10", true)];
+      }
+      if (
+        normalized ===
+        normalizePath(join(nvmRoot, "node_modules", "discord-api-types", "payloads", "v10"))
+      ) {
+        return [dirent("oauth2.js", false)];
+      }
+      return [];
+    });
+
+    return { unrelatedOauth2Path };
+  }
+
+  function dirent(name: string, isDirectory: boolean) {
+    return {
+      name,
+      isBlockDevice: () => false,
+      isCharacterDevice: () => false,
+      isDirectory: () => isDirectory,
+      isFIFO: () => false,
+      isFile: () => !isDirectory,
+      isSocket: () => false,
+      isSymbolicLink: () => false,
+    };
   }
 
   function expectFakeCliCredentials(result: unknown) {
@@ -196,6 +339,15 @@ describe("extractGeminiCliCredentials", () => {
     expectFakeCliCredentials(result);
   });
 
+  it("extracts credentials from Homebrew libexec installs", async () => {
+    installHomebrewLibexecLayout({ oauth2Content: FAKE_OAUTH2_CONTENT });
+
+    clearCredentialsCache();
+    const result = extractGeminiCliCredentials();
+
+    expectFakeCliCredentials(result);
+  });
+
   it("returns null when oauth2.js cannot be found", async () => {
     installGeminiLayout({ oauth2Exists: false, readdir: [] });
 
@@ -225,6 +377,23 @@ describe("extractGeminiCliCredentials", () => {
     expect(result2).toEqual(result1);
     expect(mockReadFileSync.mock.calls.length).toBe(readCount);
   });
+
+  it("skips unrelated oauth2.js files when gemini resolves inside a Windows nvm root", async () => {
+    const { unrelatedOauth2Path } = installWindowsNvmLayoutWithUnrelatedOauth({
+      oauth2Content: FAKE_OAUTH2_CONTENT,
+      unrelatedOauth2Content: "// unrelated oauth file",
+    });
+
+    clearCredentialsCache();
+    const result = extractGeminiCliCredentials();
+
+    expectFakeCliCredentials(result);
+    expect(
+      mockReadFileSync.mock.calls.some(
+        ([path]) => normalizePath(String(path)) === normalizePath(unrelatedOauth2Path),
+      ),
+    ).toBe(false);
+  });
 });
 
 describe("loginGeminiCliOAuth", () => {
@@ -244,16 +413,11 @@ describe("loginGeminiCliOAuth", () => {
     "GOOGLE_CLOUD_PROJECT_ID",
   ] as const;
 
-  function getExpectedPlatform(): "WINDOWS" | "MACOS" | "PLATFORM_UNSPECIFIED" {
-    if (process.platform === "win32") {
-      return "WINDOWS";
-    }
-    if (process.platform === "darwin") {
-      return "MACOS";
-    }
-    // Matches updated resolvePlatform() which uses PLATFORM_UNSPECIFIED for Linux
-    return "PLATFORM_UNSPECIFIED";
-  }
+  const EXPECTED_LOAD_CODE_ASSIST_METADATA = {
+    ideType: "IDE_UNSPECIFIED",
+    platform: "PLATFORM_UNSPECIFIED",
+    pluginType: "GEMINI",
+  } as const;
 
   function getRequestUrl(input: string | URL | Request): string {
     return typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
@@ -390,19 +554,11 @@ describe("loginGeminiCliOAuth", () => {
 
     const clientMetadata = getHeaderValue(firstHeaders, "Client-Metadata");
     expect(clientMetadata).toBeDefined();
-    expect(JSON.parse(clientMetadata as string)).toEqual({
-      ideType: "ANTIGRAVITY",
-      platform: getExpectedPlatform(),
-      pluginType: "GEMINI",
-    });
+    expect(JSON.parse(clientMetadata as string)).toEqual(EXPECTED_LOAD_CODE_ASSIST_METADATA);
 
     const body = JSON.parse(String(loadRequests[0]?.init?.body));
     expect(body).toEqual({
-      metadata: {
-        ideType: "ANTIGRAVITY",
-        platform: getExpectedPlatform(),
-        pluginType: "GEMINI",
-      },
+      metadata: EXPECTED_LOAD_CODE_ASSIST_METADATA,
     });
   });
 
