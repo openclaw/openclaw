@@ -2,8 +2,8 @@ import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing
 import { createRestrictSendersChannelSecurity } from "openclaw/plugin-sdk/channel-policy";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createEmptyChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
-import { type ChannelPlugin, type ResolvedLineAccount } from "../api.js";
 import { resolveLineAccount } from "./accounts.js";
+import { type ChannelPlugin, type ResolvedLineAccount } from "./channel-api.js";
 import { lineChannelPluginCommon } from "./channel-shared.js";
 import { lineGatewayAdapter } from "./gateway.js";
 import { resolveLineGroupRequireMention } from "./group-policy.js";
