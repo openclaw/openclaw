@@ -16,11 +16,15 @@ export const DEFAULT_RESTART_HEALTH_ATTEMPTS = Math.ceil(
   DEFAULT_RESTART_HEALTH_TIMEOUT_MS / DEFAULT_RESTART_HEALTH_DELAY_MS,
 );
 
+export type GatewayRestartWaitOutcome = "healthy" | "stale-pids" | "stopped-free" | "timeout";
+
 export type GatewayRestartSnapshot = {
   runtime: GatewayServiceRuntime;
   portUsage: PortUsage;
   healthy: boolean;
   staleGatewayPids: number[];
+  waitOutcome?: GatewayRestartWaitOutcome;
+  elapsedMs?: number;
 };
 
 export type GatewayPortHealthSnapshot = {
@@ -213,6 +217,14 @@ function shouldEarlyExitStoppedFree(
   );
 }
 
+function withWaitContext(
+  snapshot: GatewayRestartSnapshot,
+  waitOutcome: GatewayRestartWaitOutcome,
+  elapsedMs: number,
+): GatewayRestartSnapshot {
+  return { ...snapshot, waitOutcome, elapsedMs };
+}
+
 export async function waitForGatewayHealthyRestart(params: {
   service: GatewayService;
   port: number;
@@ -233,22 +245,19 @@ export async function waitForGatewayHealthyRestart(params: {
 
   let consecutiveStoppedFreeCount = 0;
   const STOPPED_FREE_THRESHOLD = 6;
-  const minAttemptForEarlyExit = Math.min(
-    Math.ceil(10_000 / delayMs),
-    Math.floor(attempts / 2),
-  );
+  const minAttemptForEarlyExit = Math.min(Math.ceil(10_000 / delayMs), Math.floor(attempts / 2));
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     if (snapshot.healthy) {
-      return snapshot;
+      return withWaitContext(snapshot, "healthy", attempt * delayMs);
     }
     if (snapshot.staleGatewayPids.length > 0 && snapshot.runtime.status !== "running") {
-      return snapshot;
+      return withWaitContext(snapshot, "stale-pids", attempt * delayMs);
     }
     if (shouldEarlyExitStoppedFree(snapshot, attempt, minAttemptForEarlyExit)) {
       consecutiveStoppedFreeCount += 1;
       if (consecutiveStoppedFreeCount >= STOPPED_FREE_THRESHOLD) {
-        return snapshot;
+        return withWaitContext(snapshot, "stopped-free", attempt * delayMs);
       }
     } else if (snapshot.runtime.status !== "stopped" || snapshot.portUsage.status !== "free") {
       consecutiveStoppedFreeCount = 0;
@@ -262,7 +271,7 @@ export async function waitForGatewayHealthyRestart(params: {
     });
   }
 
-  return snapshot;
+  return withWaitContext(snapshot, "timeout", attempts * delayMs);
 }
 
 export async function waitForGatewayHealthyListener(params: {
