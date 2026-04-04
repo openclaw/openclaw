@@ -108,6 +108,7 @@ Docs: https://docs.openclaw.ai
 - Agents/MCP: sort MCP tools deterministically by name so the tools block in API requests is stable across turns, preventing unnecessary prompt-cache busting from non-deterministic `listTools()` order. (#58037) Thanks @bcherny.
 - Infra/json-file: preserve symlink-backed JSON stores and Windows overwrite fallback when atomically saving small sync JSON state files. (#60589) Thanks @gumadeiras.
 - Matrix/credentials: read the current and legacy credential files directly during migration fallback so concurrent legacy rename races still resolve to the stored credentials. (#60591) Thanks @gumadeiras.
+- Providers/Anthropic Vertex: read ADC files directly during auth discovery so explicit Google credentials and default ADC no longer depend on `existsSync` preflight checks. (#60592) Thanks @gumadeiras.
 
 ## 2026.4.2
 
