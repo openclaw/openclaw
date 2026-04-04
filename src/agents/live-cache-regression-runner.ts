@@ -349,13 +349,6 @@ function formatUsage(usage: CacheUsage | undefined) {
   return `cacheRead=${usage?.cacheRead ?? 0} cacheWrite=${usage?.cacheWrite ?? 0} input=${usage?.input ?? 0}`;
 }
 
-function resolveBaselineFloor(
-  provider: ProviderKey,
-  lane: BaselineLane,
-): LiveCacheFloor | undefined {
-  return (LIVE_CACHE_REGRESSION_BASELINE[provider] as Record<string, LiveCacheFloor>)[lane];
-}
-
 function assertAgainstBaseline(params: {
   lane: BaselineLane;
   provider: ProviderKey;
