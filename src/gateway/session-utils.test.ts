@@ -771,7 +771,7 @@ describe("resolveSessionModelIdentityRef", () => {
         "qwen-dashscope": {
           models: [{ id: "qwen-max" }],
         },
-        modelstudio: {
+        qwen: {
           models: [{ id: "qwen-max" }],
         },
       },

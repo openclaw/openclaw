@@ -285,7 +285,7 @@ API key auth, and dynamic model resolution.
 
     - `google` and `google-gemini-cli`: `google-gemini`
     - `openrouter`, `kilocode`, `opencode`, and `opencode-go`: `passthrough-gemini`
-    - `anthropic-vertex`: `anthropic-by-model`
+    - `amazon-bedrock` and `anthropic-vertex`: `anthropic-by-model`
     - `minimax`: `hybrid-anthropic-openai`
     - `moonshot`, `ollama`, `xai`, and `zai`: `openai-compatible`
 
@@ -294,6 +294,7 @@ API key auth, and dynamic model resolution.
     | Family | What it wires in |
     | --- | --- |
     | `google-thinking` | Gemini thinking payload normalization on the shared stream path |
+    | `kilocode-thinking` | Kilo reasoning wrapper on the shared proxy stream path, with `kilo/auto` and unsupported proxy reasoning ids skipping injected thinking |
     | `moonshot-thinking` | Moonshot binary native-thinking payload mapping from config + `/think` level |
     | `minimax-fast-mode` | MiniMax fast-mode model rewrite on the shared stream path |
     | `openai-responses-defaults` | Shared native OpenAI/Codex Responses wrappers: attribution headers, `/fast`/`serviceTier`, text verbosity, native Codex web search, reasoning-compat payload shaping, and Responses context management |
@@ -303,11 +304,44 @@ API key auth, and dynamic model resolution.
     Real bundled examples:
 
     - `google` and `google-gemini-cli`: `google-thinking`
+    - `kilocode`: `kilocode-thinking`
     - `moonshot`: `moonshot-thinking`
     - `minimax` and `minimax-portal`: `minimax-fast-mode`
     - `openai` and `openai-codex`: `openai-responses-defaults`
     - `openrouter`: `openrouter-thinking`
     - `zai`: `tool-stream-default-on`
+
+    `openclaw/plugin-sdk/provider-model-shared` also exports the replay-family
+    enum plus the shared helpers those families are built from. Common public
+    exports include:
+
+    - `ProviderReplayFamily`
+    - `buildProviderReplayFamilyHooks(...)`
+    - shared replay builders such as `buildOpenAICompatibleReplayPolicy(...)`,
+      `buildAnthropicReplayPolicyForModel(...)`,
+      `buildGoogleGeminiReplayPolicy(...)`, and
+      `buildHybridAnthropicOrOpenAIReplayPolicy(...)`
+    - Gemini replay helpers such as `sanitizeGoogleGeminiReplayHistory(...)`
+      and `resolveTaggedReasoningOutputMode()`
+    - endpoint/model helpers such as `resolveProviderEndpoint(...)`,
+      `normalizeProviderId(...)`, `normalizeGooglePreviewModelId(...)`, and
+      `normalizeNativeXaiModelId(...)`
+
+    `openclaw/plugin-sdk/provider-stream` exposes both the family builder and
+    the public wrapper helpers those families reuse. Common public exports
+    include:
+
+    - `ProviderStreamFamily`
+    - `buildProviderStreamFamilyHooks(...)`
+    - `composeProviderStreamWrappers(...)`
+    - shared OpenAI/Codex wrappers such as
+      `createOpenAIAttributionHeadersWrapper(...)`,
+      `createOpenAIFastModeWrapper(...)`,
+      `createOpenAIServiceTierWrapper(...)`,
+      `createOpenAIResponsesContextManagementWrapper(...)`, and
+      `createCodexNativeWebSearchWrapper(...)`
+    - shared proxy/provider wrappers such as `createOpenRouterWrapper(...)`,
+      `createToolStreamWrapper(...)`, and `createMinimaxFastModeWrapper(...)`
 
     Some stream helpers stay provider-local on purpose. Current bundled
     example: `@openclaw/anthropic-provider` exports
@@ -316,6 +350,31 @@ API key auth, and dynamic model resolution.
     lower-level Anthropic wrapper builders from its public `api.ts` /
     `contract-api.ts` seam. Those helpers remain Anthropic-specific because
     they also encode Claude OAuth beta handling and `context1m` gating.
+
+    Other bundled providers also keep transport-specific wrappers local when
+    the behavior is not shared cleanly across families. Current example: the
+    bundled xAI plugin keeps native xAI Responses shaping in its own
+    `wrapStreamFn`, including `/fast` alias rewrites, default `tool_stream`,
+    unsupported strict-tool cleanup, and xAI-specific reasoning-payload
+    removal.
+
+    `openclaw/plugin-sdk/provider-tools` currently exposes one shared
+    tool-schema family plus shared schema/compat helpers:
+
+    - `ProviderToolCompatFamily` documents the shared family inventory today.
+    - `buildProviderToolCompatFamilyHooks("gemini")` wires Gemini schema
+      cleanup + diagnostics for providers that need Gemini-safe tool schemas.
+    - `normalizeGeminiToolSchemas(...)` and `inspectGeminiToolSchemas(...)`
+      are the underlying public Gemini schema helpers.
+    - `resolveXaiModelCompatPatch()` returns the bundled xAI compat patch:
+      `toolSchemaProfile: "xai"`, unsupported schema keywords, native
+      `web_search` support, and HTML-entity tool-call argument decoding.
+    - `applyXaiModelCompat(model)` applies that same xAI compat patch to a
+      resolved model before it reaches the runner.
+
+    Real bundled example: the xAI plugin uses `normalizeResolvedModel` plus
+    `contributeResolvedModelCompat` to keep that compat metadata owned by the
+    provider instead of hardcoding xAI rules in core.
 
     The same package-root pattern also backs other bundled providers:
 
@@ -445,8 +504,9 @@ API key auth, and dynamic model resolution.
 
   <Step title="Add extra capabilities (optional)">
     <a id="step-5-add-extra-capabilities"></a>
-    A provider plugin can register speech, realtime transcription, realtime voice, media
-    understanding, image generation, and web search alongside text inference:
+    A provider plugin can register speech, realtime transcription, realtime
+    voice, media understanding, image generation, video generation, web fetch,
+    and web search alongside text inference:
 
     ```typescript
     register(api) {
@@ -502,6 +562,43 @@ API key auth, and dynamic model resolution.
         id: "acme-ai",
         label: "Acme Images",
         generate: async (req) => ({ /* image result */ }),
+      });
+
+      api.registerVideoGenerationProvider({
+        id: "acme-ai",
+        label: "Acme Video",
+        capabilities: {
+          maxVideos: 1,
+          maxDurationSeconds: 10,
+          supportsResolution: true,
+        },
+        generateVideo: async (req) => ({ videos: [] }),
+      });
+
+      api.registerWebFetchProvider({
+        id: "acme-ai-fetch",
+        label: "Acme Fetch",
+        hint: "Fetch pages through Acme's rendering backend.",
+        envVars: ["ACME_FETCH_API_KEY"],
+        placeholder: "acme-...",
+        signupUrl: "https://acme.example.com/fetch",
+        credentialPath: "plugins.entries.acme.config.webFetch.apiKey",
+        getCredentialValue: (fetchConfig) => fetchConfig?.acme?.apiKey,
+        setCredentialValue: (fetchConfigTarget, value) => {
+          const acme = (fetchConfigTarget.acme ??= {});
+          acme.apiKey = value;
+        },
+        createTool: () => ({
+          description: "Fetch a page through Acme Fetch.",
+          parameters: {},
+          execute: async (args) => ({ content: [] }),
+        }),
+      });
+
+      api.registerWebSearchProvider({
+        id: "acme-ai-search",
+        label: "Acme Search",
+        search: async (req) => ({ content: [] }),
       });
     }
     ```

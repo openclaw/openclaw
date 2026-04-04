@@ -358,7 +358,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
        - `/pair approve` when there is only one pending request
        - `/pair approve latest` for most recent
 
-    The setup code carries a short-lived bootstrap token. Built-in bootstrap handoff keeps the primary node token at `scopes: []`; any handed-off operator token stays bounded to `operator.approvals`, `operator.read`, `operator.talk.secrets`, and `operator.write`.
+    The setup code carries a short-lived bootstrap token. Built-in bootstrap handoff keeps the primary node token at `scopes: []`; any handed-off operator token stays bounded to `operator.approvals`, `operator.read`, `operator.talk.secrets`, and `operator.write`. Bootstrap scope checks are role-prefixed, so that operator allowlist only satisfies operator requests; non-operator roles still need scopes under their own role prefix.
 
     If a device retries with changed auth details (for example role/scopes/public key), the previous pending request is superseded and the new request uses a different `requestId`. Re-run `/pair pending` before approving.
 
@@ -831,6 +831,16 @@ openclaw message poll --channel telegram --target -1001234567890:topic:42 \
     - `target: "both"` sends to approver DMs and the originating chat/topic
 
     Only resolved approvers can approve or deny. Non-approvers cannot use `/approve` and cannot use Telegram approval buttons.
+
+    Approval resolution behavior:
+
+    - IDs prefixed with `plugin:` always resolve through plugin approvals.
+    - Other approval IDs try `exec.approval.resolve` first.
+    - If Telegram is also authorized for plugin approvals and the gateway says
+      the exec approval is unknown/expired, Telegram retries once through
+      `plugin.approval.resolve`.
+    - Real exec approval denials/errors do not silently fall through to plugin
+      approval resolution.
 
     Channel delivery shows the command text in the chat, so only enable `channel` or `both` in trusted groups/topics. When the prompt lands in a forum topic, OpenClaw preserves the topic for both the approval prompt and the post-approval follow-up. Exec approvals expire after 30 minutes by default.
 

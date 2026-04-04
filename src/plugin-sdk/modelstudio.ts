@@ -10,7 +10,7 @@ import {
 
 function loadFacadeModule(): FacadeModule {
   return loadBundledPluginPublicSurfaceModuleSync<FacadeModule>({
-    dirName: "modelstudio",
+    dirName: "qwen",
     artifactBasename: "api.js",
   });
 }

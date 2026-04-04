@@ -727,7 +727,7 @@ describe("Agent-specific tool filtering", () => {
         command: "echo done",
         host: "sandbox",
       }),
-    ).rejects.toThrow("requires a sandbox runtime");
+    ).rejects.toThrow("exec host not allowed");
   });
 
   it("should apply agent-specific exec host defaults over global defaults", async () => {
@@ -777,7 +777,7 @@ describe("Agent-specific tool filtering", () => {
         host: "sandbox",
         yieldMs: 1000,
       }),
-    ).rejects.toThrow("requires a sandbox runtime");
+    ).rejects.toThrow("exec host not allowed");
   });
 
   it("applies explicit agentId exec defaults when sessionKey is opaque", async () => {

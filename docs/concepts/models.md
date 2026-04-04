@@ -30,6 +30,7 @@ Related:
   falls back to `agents.defaults.imageModel`, then the resolved session/default
   model.
 - `agents.defaults.imageGenerationModel` is used by the shared image-generation capability. If omitted, `image_generate` can still infer an auth-backed provider default. It tries the current default provider first, then the remaining registered image-generation providers in provider-id order. If you set a specific provider/model, also configure that provider's auth/API key.
+- `agents.defaults.videoGenerationModel` is used by the shared video-generation capability. Unlike image generation, this does not infer a provider default today. Set an explicit `provider/model` such as `qwen/wan2.6-t2v`, and configure that provider's auth/API key too.
 - Per-agent defaults can override `agents.defaults.model` via `agents.list[].model` plus bindings (see [/concepts/multi-agent](/concepts/multi-agent)).
 
 ## Quick model policy
@@ -55,6 +56,7 @@ subscription** (OAuth) and **Anthropic** (API key or Claude CLI).
 - `agents.defaults.imageModel.primary` and `agents.defaults.imageModel.fallbacks`
 - `agents.defaults.pdfModel.primary` and `agents.defaults.pdfModel.fallbacks`
 - `agents.defaults.imageGenerationModel.primary` and `agents.defaults.imageGenerationModel.fallbacks`
+- `agents.defaults.videoGenerationModel.primary` and `agents.defaults.videoGenerationModel.fallbacks`
 - `agents.defaults.models` (allowlist + aliases + provider params)
 - `models.providers` (custom providers written into `models.json`)
 
@@ -123,6 +125,9 @@ Notes:
   1. alias match
   2. unique configured-provider match for that exact unprefixed model id
   3. deprecated fallback to the configured default provider
+     If that provider no longer exposes the configured default model, OpenClaw
+     instead falls back to the first configured provider/model to avoid
+     surfacing a stale removed-provider default.
 
 Full command behavior/config: [Slash commands](/tools/slash-commands).
 
@@ -172,6 +177,11 @@ provider has no credentials, `models status` prints a **Missing auth** section.
 JSON includes `auth.oauth` (warn window + profiles) and `auth.providers`
 (effective auth per provider).
 Use `--check` for automation (exit `1` when missing/expired, `2` when expiring).
+Use `--probe` for live auth checks; probe rows can come from auth profiles, env
+credentials, or `models.json`.
+If explicit `auth.order.<provider>` omits a stored profile, probe reports
+`excluded_by_auth_order` instead of trying it. If auth exists but no probeable
+model can be resolved for that provider, probe reports `status: no_model`.
 
 Auth choice is provider/account dependent. For always-on gateway hosts, API
 keys are usually the most predictable; Claude CLI reuse and existing legacy

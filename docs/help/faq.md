@@ -42,7 +42,8 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
    openclaw status --deep
    ```
 
-   Runs gateway health checks + provider probes (requires a reachable gateway). See [Health](/gateway/health).
+   Runs a live gateway health probe, including channel probes when supported
+   (requires a reachable gateway). See [Health](/gateway/health).
 
 5. **Tail the latest log**
 
@@ -127,6 +128,21 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
   </Accordion>
 
+  <Accordion title="Heartbeat keeps skipping. What do the skip reasons mean?">
+    Common heartbeat skip reasons:
+
+    - `quiet-hours`: outside the configured active-hours window
+    - `empty-heartbeat-file`: `HEARTBEAT.md` exists but only contains blank/header-only scaffolding
+    - `no-tasks-due`: `HEARTBEAT.md` task mode is active but none of the task intervals are due yet
+    - `alerts-disabled`: all heartbeat visibility is disabled (`showOk`, `showAlerts`, and `useIndicator` are all off)
+
+    In task mode, due timestamps are only advanced after a real heartbeat run
+    completes. Skipped runs do not mark tasks as completed.
+
+    Docs: [Heartbeat](/gateway/heartbeat), [Automation & Tasks](/automation).
+
+  </Accordion>
+
   <Accordion title="Recommended way to install and set up OpenClaw">
     The repo recommends running from source and using onboarding:
 
@@ -181,7 +197,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     They control different layers:
 
     - `approvals.exec`: forwards approval prompts to chat destinations
-    - `channels.<channel>.execApprovals`: makes that channel act as a native approval client
+    - `channels.<channel>.execApprovals`: makes that channel act as a native approval client for exec approvals
 
     The host exec policy is still the real approval gate. Chat config only controls where approval
     prompts appear and how people can answer them.
@@ -192,6 +208,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     - If a supported native channel can infer approvers safely, OpenClaw now auto-enables DM-first native approvals when `channels.<channel>.execApprovals.enabled` is unset or `"auto"`.
     - Use `approvals.exec` only when prompts must also be forwarded to other chats or explicit ops rooms.
     - Use `channels.<channel>.execApprovals.target: "channel"` or `"both"` only when you explicitly want approval prompts posted back into the originating room/topic.
+    - Plugin approvals are separate again: they use same-chat `/approve` by default, optional `approvals.plugin` forwarding, and only some native channels keep plugin-approval-native handling on top.
 
     Short version: forwarding is for routing, native client config is for richer channel-specific UX.
     See [Exec Approvals](/tools/exec-approvals).
@@ -570,11 +587,11 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     explicitly supported for external tools like OpenClaw.
 
     OpenClaw also supports other hosted subscription-style options including
-    **Alibaba Cloud Model Studio Coding Plan**, **MiniMax Coding Plan**, and
+    **Qwen Cloud Coding Plan**, **MiniMax Coding Plan**, and
     **Z.AI / GLM Coding Plan**.
 
     Docs: [Anthropic](/providers/anthropic), [OpenAI](/providers/openai),
-    [Qwen / Model Studio](/providers/qwen_modelstudio),
+    [Qwen Cloud](/providers/qwen),
     [MiniMax](/providers/minimax), [GLM Models](/providers/glm),
     [Local models](/gateway/local-models), [Models](/concepts/models).
 
@@ -605,7 +622,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     For production or multi-user workloads, Anthropic API key auth is the
     safer, recommended choice. If you want other subscription-style hosted
     options in OpenClaw, see [OpenAI](/providers/openai), [Qwen / Model
-    Studio](/providers/qwen_modelstudio), [MiniMax](/providers/minimax), and
+    Cloud](/providers/qwen), [MiniMax](/providers/minimax), and
     [GLM Models](/providers/glm).
 
   </Accordion>
@@ -1012,6 +1029,8 @@ for usage/billing and raise limits as needed.
     - If the completion origin only carries a channel, OpenClaw falls back to the requester session's stored route (`lastChannel` / `lastTo` / `lastAccountId`) so direct delivery can still succeed.
     - If neither a bound route nor a usable stored route exists, direct delivery can fail and the result falls back to queued session delivery instead of posting immediately to chat.
     - Invalid or stale targets can still force queue fallback or final delivery failure.
+    - If the child's last visible assistant reply is a silent token (`NO_REPLY` / `ANNOUNCE_SKIP`), OpenClaw intentionally suppresses the announce instead of posting stale earlier progress.
+    - If the child timed out after only tool calls, the announce can collapse that into a short partial-progress summary instead of replaying raw tool output.
 
     Debug:
 
@@ -1050,6 +1069,7 @@ for usage/billing and raise limits as needed.
     - `--no-deliver` / `delivery.mode: "none"` means no external message is expected.
     - Missing or invalid announce target (`channel` / `to`) means the runner skipped outbound delivery.
     - Channel auth failures (`unauthorized`, `Forbidden`) mean the runner tried to deliver but credentials blocked it.
+    - A silent isolated result (`NO_REPLY` / `no_reply` only) is treated as intentionally non-deliverable, so the runner also suppresses queued fallback delivery.
 
     For isolated cron jobs, the runner owns final delivery. The agent is expected
     to return a plain-text summary for the runner to send. `--no-deliver` keeps
@@ -1211,6 +1231,12 @@ for usage/billing and raise limits as needed.
     ```
 
     This path is host-local. If the Gateway runs elsewhere, either run a node host on the browser machine or use remote CDP instead.
+
+    Current limits on `existing-session` / `user`:
+
+    - actions are ref-driven, not CSS-selector driven
+    - uploads require `ref` / `inputRef` and currently support one file at a time
+    - `responsebody`, PDF export, download interception, and batch actions still need a managed browser or raw CDP profile
 
   </Accordion>
 </AccordionGroup>
@@ -1455,14 +1481,14 @@ for usage/billing and raise limits as needed.
     - `gateway.remote.token` / `.password` do **not** enable local gateway auth by themselves.
     - Local call paths can use `gateway.remote.*` as fallback only when `gateway.auth.*` is unset.
     - If `gateway.auth.token` / `gateway.auth.password` is explicitly configured via SecretRef and unresolved, resolution fails closed (no remote fallback masking).
-    - The Control UI authenticates via `connect.params.auth.token` (stored in app/UI settings). Avoid putting tokens in URLs.
+    - Shared-secret Control UI setups authenticate via `connect.params.auth.token` or `connect.params.auth.password` (stored in app/UI settings). Identity-bearing modes such as Tailscale Serve or `trusted-proxy` use request headers instead. Avoid putting shared secrets in URLs.
 
   </Accordion>
 
   <Accordion title="Why do I need a token on localhost now?">
-    OpenClaw enforces token auth by default, including loopback. If no token is configured, gateway startup auto-generates one and saves it to `gateway.auth.token`, so **local WS clients must authenticate**. This blocks other local processes from calling the Gateway.
+    OpenClaw enforces gateway auth by default, including loopback. In the normal default path that means token auth: if no explicit auth path is configured, gateway startup resolves to token mode and auto-generates one, saving it to `gateway.auth.token`, so **local WS clients must authenticate**. This blocks other local processes from calling the Gateway.
 
-    If you **really** want open loopback, set `gateway.auth.mode: "none"` explicitly in your config. Doctor can generate a token for you any time: `openclaw doctor --generate-gateway-token`.
+    If you prefer a different auth path, you can explicitly choose password mode (or, for non-loopback identity-aware reverse proxies, `trusted-proxy`). If you **really** want open loopback, set `gateway.auth.mode: "none"` explicitly in your config. Doctor can generate a token for you any time: `openclaw doctor --generate-gateway-token`.
 
   </Accordion>
 
@@ -1529,29 +1555,32 @@ for usage/billing and raise limits as needed.
             },
           },
         },
-      },
-      tools: {
-        web: {
-          search: {
-            enabled: true,
-            provider: "brave",
-            maxResults: 5,
-          },
-          fetch: {
-            enabled: true,
+        },
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              provider: "brave",
+              maxResults: 5,
+            },
+            fetch: {
+              enabled: true,
+              provider: "firecrawl", // optional; omit for auto-detect
+            },
           },
         },
-      },
     }
     ```
 
     Provider-specific web-search config now lives under `plugins.entries.<plugin>.config.webSearch.*`.
     Legacy `tools.web.search.*` provider paths still load temporarily for compatibility, but they should not be used for new configs.
+    Firecrawl web-fetch fallback config lives under `plugins.entries.firecrawl.config.webFetch.*`.
 
     Notes:
 
-    - If you use allowlists, add `web_search`/`web_fetch` or `group:web`.
+    - If you use allowlists, add `web_search`/`web_fetch`/`x_search` or `group:web`.
     - `web_fetch` is enabled by default (unless explicitly disabled).
+    - If `tools.web.fetch.provider` is omitted, OpenClaw auto-detects the first ready fetch fallback provider from available credentials. Today the bundled provider is Firecrawl.
     - Daemons read env vars from `~/.openclaw/.env` (or the service environment).
 
     Docs: [Web tools](/tools/web).
@@ -1573,6 +1602,8 @@ for usage/billing and raise limits as needed.
 
     - Use `openclaw config set` for small changes.
     - Use `openclaw configure` for interactive edits.
+    - Use `config.schema.lookup` first when you are not sure about an exact path or field shape; it returns a shallow schema node plus immediate child summaries for drill-down.
+    - Use `config.patch` for partial RPC edits; keep `config.apply` for full-config replacement only.
 
     Docs: [Config](/cli/config), [Configure](/cli/configure), [Doctor](/gateway/doctor).
 
@@ -1742,7 +1773,13 @@ for usage/billing and raise limits as needed.
   </Accordion>
 
   <Accordion title="Is there an API / RPC way to apply config?">
-    Yes. `config.apply` validates + writes the full config and restarts the Gateway as part of the operation.
+    Yes.
+
+    - `config.schema.lookup`: inspect one config subtree with its shallow schema node, matched UI hint, and immediate child summaries before writing
+    - `config.get`: fetch the current snapshot + hash
+    - `config.patch`: safe partial update (preferred for most RPC edits)
+    - `config.apply`: validate + replace the full config, then restart
+
   </Accordion>
 
   <Accordion title="Minimal sane config for a first install">
@@ -2128,7 +2165,7 @@ for usage/billing and raise limits as needed.
     agents.defaults.model.primary
     ```
 
-    Models are referenced as `provider/model` (example: `openai/gpt-5.4`). If you omit the provider, OpenClaw first tries an alias, then a unique configured-provider match for that exact model id, and only then falls back to the configured default provider as a deprecated compatibility path. You should still **explicitly** set `provider/model`.
+    Models are referenced as `provider/model` (example: `openai/gpt-5.4`). If you omit the provider, OpenClaw first tries an alias, then a unique configured-provider match for that exact model id, and only then falls back to the configured default provider as a deprecated compatibility path. If that provider no longer exposes the configured default model, OpenClaw falls back to the first configured provider/model instead of surfacing a stale removed-provider default. You should still **explicitly** set `provider/model`.
 
   </Accordion>
 
@@ -2163,6 +2200,8 @@ for usage/billing and raise limits as needed.
     - edit `agents.defaults.model` in `~/.openclaw/openclaw.json`
 
     Avoid `config.apply` with a partial object unless you intend to replace the whole config.
+    For RPC edits, inspect with `config.schema.lookup` first and prefer `config.patch`. The lookup payload gives you the normalized path, shallow schema docs/constraints, and immediate child summaries.
+    for partial updates.
     If you did overwrite config, restore from backup or re-run `openclaw doctor` to repair.
 
     Docs: [Models](/concepts/models), [Configure](/cli/configure), [Config](/cli/config), [Doctor](/gateway/doctor).
@@ -2437,22 +2476,39 @@ for usage/billing and raise limits as needed.
 
     The rate-limit bucket includes more than plain `429` responses. OpenClaw
     also treats messages like `Too many concurrent requests`,
-    `ThrottlingException`, `resource exhausted`, and periodic usage-window
-    limits (`weekly/monthly limit reached`) as failover-worthy rate limits.
+    `ThrottlingException`, `concurrency limit reached`,
+    `workers_ai ... quota limit exceeded`, `resource exhausted`, and periodic
+    usage-window limits (`weekly/monthly limit reached`) as failover-worthy
+    rate limits.
 
     Some billing-looking responses are not `402`, and some HTTP `402`
     responses also stay in that transient bucket. If a provider returns
-    explicit billing text on `401` or `403` (for example OpenRouter
-    `Key limit exceeded`), OpenClaw keeps that in the billing lane. If a `402`
+    explicit billing text on `401` or `403`, OpenClaw can still keep that in
+    the billing lane, but provider-specific text matchers stay scoped to the
+    provider that owns them (for example OpenRouter `Key limit exceeded`). If a `402`
     message instead looks like a retryable usage-window or
     organization/workspace spend limit (`daily limit reached, resets tomorrow`,
     `organization spending limit exceeded`), OpenClaw treats it as
     `rate_limit`, not a long billing disable.
 
     Context-overflow errors are different: signatures such as
-    `request_too_large`, `input exceeds the maximum number of tokens`, or
-    `input is too long for the model` stay on the compaction/retry path instead
-    of advancing model fallback.
+    `request_too_large`, `input exceeds the maximum number of tokens`,
+    `input token count exceeds the maximum number of input tokens`,
+    `input is too long for the model`, or `ollama error: context length
+    exceeded` stay on the compaction/retry path instead of advancing model
+    fallback.
+
+    Generic server-error text is intentionally narrower than "anything with
+    unknown/error in it". OpenClaw does treat provider-scoped transient shapes
+    such as Anthropic bare `An unknown error occurred`, OpenRouter bare
+    `Provider returned error`, stop-reason errors like `Unhandled stop reason:
+    error`, JSON `api_error` payloads with transient server text
+    (`internal server error`, `unknown error, 520`, `upstream error`, `backend
+    error`), and provider-busy errors such as `ModelNotReadyException` as
+    failover-worthy timeout/overloaded signals when the provider context
+    matches.
+    Generic internal fallback text like `LLM request failed with an unknown
+    error.` stays conservative and does not trigger model fallback by itself.
 
   </Accordion>
 
@@ -2556,6 +2612,15 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
     openclaw models auth order set --provider anthropic --agent main anthropic:default
     ```
 
+    To verify what will actually be tried, use:
+
+    ```bash
+    openclaw models status --probe
+    ```
+
+    If a stored profile is omitted from the explicit order, probe reports
+    `excluded_by_auth_order` for that profile instead of trying it silently.
+
   </Accordion>
 
   <Accordion title="OAuth vs API key - what is the difference?">
@@ -2647,6 +2712,7 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
     - On `AUTH_TOKEN_MISMATCH`, trusted clients can attempt one bounded retry with a cached device token when the gateway returns retry hints (`canRetryWithDeviceToken=true`, `recommendedNextStep=retry_with_device_token`).
     - That cached-token retry now reuses the cached approved scopes stored with the device token. Explicit `deviceToken` / explicit `scopes` callers still keep their requested scope set instead of inheriting cached scopes.
     - Outside that retry path, connect auth precedence is explicit shared token/password first, then explicit `deviceToken`, then stored device token, then bootstrap token.
+    - Bootstrap token scope checks are role-prefixed. The built-in bootstrap operator allowlist only satisfies operator requests; node or other non-operator roles still need scopes under their own role prefix.
 
     Fix:
 
@@ -2967,6 +3033,9 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
 
     - using a read-only or tool-disabled "reader" agent to summarize untrusted content
     - keeping `web_search` / `web_fetch` / `browser` off for tool-enabled agents
+    - treating decoded file/document text as untrusted too: OpenResponses
+      `input_file` and media-attachment extraction both wrap extracted text in
+      explicit external-content boundary markers instead of passing raw file text
     - sandboxing and strict tool allowlists
 
     Details: [Security](/gateway/security).

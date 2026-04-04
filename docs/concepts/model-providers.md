@@ -28,7 +28,8 @@ For model selection rules, see [/concepts/models](/concepts/models).
   map is now just for non-plugin/core providers and a few generic-precedence
   cases such as Anthropic API-key-first onboarding.
 - Provider plugins can also own provider runtime behavior via
-  `normalizeConfig`, `resolveDynamicModel`, `prepareDynamicModel`,
+  `normalizeConfig`, `applyNativeStreamingUsageCompat`, `resolveConfigApiKey`,
+  `resolveDynamicModel`, `prepareDynamicModel`,
   `normalizeResolvedModel`, `capabilities`, `prepareExtraParams`,
   `wrapStreamFn`, `formatApiKey`, `refreshOAuth`, `buildAuthDoctorHint`,
   `matchesContextOverflowError`, `classifyFailoverReason`,
@@ -53,7 +54,9 @@ Typical split:
 - `wizard.setup` / `wizard.modelPicker`: provider owns auth-choice labels,
   legacy aliases, onboarding allowlist hints, and setup entries in onboarding/model pickers
 - `catalog`: provider appears in `models.providers`
-- `normalizeConfig`: provider normalizes `models.providers.<id>` config before runtime uses it
+- `normalizeConfig`: provider normalizes `models.providers.<id>` config before runtime uses it; OpenClaw checks the matched provider first, then other hook-capable provider plugins until one actually changes the config
+- `applyNativeStreamingUsageCompat`: provider applies endpoint-driven native streaming-usage compat rewrites for config providers
+- `resolveConfigApiKey`: provider resolves env-marker auth for config providers without forcing full runtime auth loading
 - `resolveDynamicModel`: provider accepts model ids not present in the local
   static catalog yet
 - `prepareDynamicModel`: provider needs a metadata refresh before retrying
@@ -100,13 +103,14 @@ Current bundled examples:
   config defaults
 - `amazon-bedrock`: provider-owned context-overflow matching and failover
   reason classification for Bedrock-specific throttle/not-ready errors, plus
-  Claude-only replay-policy guards on Anthropic traffic
+  the shared `anthropic-by-model` replay family for Claude-only replay-policy
+  guards on Anthropic traffic
 - `anthropic-vertex`: Claude-only replay-policy guards on Anthropic-message
   traffic
 - `openrouter`: pass-through model ids, request wrappers, provider capability
   hints, Gemini thought-signature sanitation on proxy Gemini traffic, proxy
-  reasoning injection through the `openrouter-thinking` stream family, and
-  cache-TTL policy
+  reasoning injection through the `openrouter-thinking` stream family, routing
+  metadata forwarding, and cache-TTL policy
 - `github-copilot`: onboarding/device login, forward-compat model fallback,
   Claude-thinking transcript hints, runtime token exchange, and usage endpoint
   fetching
@@ -126,13 +130,21 @@ Current bundled examples:
   normalization, proxy-Gemini thought-signature sanitation, and cache-TTL
   policy
 - `zai`: GLM-5 forward-compat fallback, `tool_stream` defaults, cache-TTL
-  policy, binary-thinking/live-model policy, and usage auth + quota fetching
+  policy, binary-thinking/live-model policy, and usage auth + quota fetching;
+  unknown `glm-5*` ids synthesize from the bundled `glm-4.7` template
+- `xai`: native Responses transport normalization, `/fast` alias rewrites for
+  Grok fast variants, default `tool_stream`, and xAI-specific tool-schema /
+  reasoning-payload cleanup
 - `mistral`: plugin-owned capability metadata
 - `opencode` and `opencode-go`: plugin-owned capability metadata plus
   proxy-Gemini thought-signature sanitation
 - `byteplus`, `cloudflare-ai-gateway`, `huggingface`, `kimi`,
-  `modelstudio`, `nvidia`, `qianfan`, `stepfun`, `synthetic`, `together`, `venice`,
+  `nvidia`, `qianfan`, `stepfun`, `synthetic`, `together`, `venice`,
   `vercel-ai-gateway`, and `volcengine`: plugin-owned catalogs only
+- `qwen`: plugin-owned catalogs for text models plus shared
+  media-understanding and video-generation provider registrations for its
+  multimodal surfaces; Qwen video generation uses the Standard DashScope video
+  endpoints with bundled Wan models such as `wan2.6-t2v` and `wan2.7-r2v`
 - `minimax`: plugin-owned catalogs, hybrid Anthropic/OpenAI replay-policy
   selection, and usage auth/snapshot logic
 - `xiaomi`: plugin-owned catalogs plus usage auth/snapshot logic
@@ -156,8 +168,8 @@ surface.
 - Key selection order preserves priority and deduplicates values.
 - Requests are retried with the next key only on rate-limit responses (for
   example `429`, `rate_limit`, `quota`, `resource exhausted`, `Too many
-concurrent requests`, `ThrottlingException`, or periodic usage-limit
-  messages).
+concurrent requests`, `ThrottlingException`, `concurrency limit reached`,
+  `workers_ai ... quota limit exceeded`, or periodic usage-limit messages).
 - Non-rate-limit failures fail immediately; no key rotation is attempted.
 - When all candidate keys fail, the final error is returned from the last attempt.
 
@@ -246,7 +258,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 
 ### Other subscription-style hosted options
 
-- [Qwen / Model Studio](/providers/qwen_modelstudio): Alibaba Cloud Standard pay-as-you-go and Coding Plan subscription endpoints
+- [Qwen Cloud](/providers/qwen): Qwen Cloud provider surface plus Alibaba DashScope and Coding Plan endpoint mapping
 - [MiniMax](/providers/minimax): MiniMax Coding Plan OAuth or API key access
 - [GLM Models](/providers/glm): Z.AI Coding Plan or general API endpoints
 
@@ -336,8 +348,13 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 - OpenRouter remains on the proxy-style OpenAI-compatible path, so native
   OpenAI-only request shaping (`serviceTier`, Responses `store`,
   prompt-cache hints, OpenAI reasoning-compat payloads) is not forwarded
+- Gemini-backed OpenRouter refs keep proxy-Gemini thought-signature sanitation
+  only; native Gemini replay validation and bootstrap rewrites stay off
 - Kilo Gateway: `kilocode` (`KILOCODE_API_KEY`)
 - Example model: `kilocode/kilo/auto`
+- Gemini-backed Kilo refs keep the same proxy-Gemini thought-signature
+  sanitation path; `kilocode/kilo/auto` and other proxy-reasoning-unsupported
+  hints skip proxy reasoning injection
 - MiniMax: `minimax` (API key) and `minimax-portal` (OAuth)
 - Auth: `MINIMAX_API_KEY` for `minimax`; `MINIMAX_OAUTH_TOKEN` or `MINIMAX_API_KEY` for `minimax-portal`
 - Example model: `minimax/MiniMax-M2.7` or `minimax-portal/MiniMax-M2.7`
@@ -350,8 +367,8 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 - Example model: `kimi/kimi-code`
 - Qianfan: `qianfan` (`QIANFAN_API_KEY`)
 - Example model: `qianfan/deepseek-v3.2`
-- Model Studio: `modelstudio` (`MODELSTUDIO_API_KEY`)
-- Example model: `modelstudio/qwen3.5-plus`
+- Qwen Cloud: `qwen` (`QWEN_API_KEY`, `MODELSTUDIO_API_KEY`, or `DASHSCOPE_API_KEY`)
+- Example model: `qwen/qwen3.5-plus`
 - NVIDIA: `nvidia` (`NVIDIA_API_KEY`)
 - Example model: `nvidia/nvidia/llama-3.1-nemotron-70b-instruct`
 - StepFun: `stepfun` / `stepfun-plan` (`STEPFUN_API_KEY`)
@@ -369,6 +386,12 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 - BytePlus: `byteplus` (`BYTEPLUS_API_KEY`)
 - Example model: `byteplus-plan/ark-code-latest`
 - xAI: `xai` (`XAI_API_KEY`)
+  - Native bundled xAI requests use the xAI Responses path
+  - `/fast` or `params.fastMode: true` rewrites `grok-3`, `grok-3-mini`,
+    `grok-4`, and `grok-4-0709` to their `*-fast` variants
+  - `tool_stream` defaults on; set
+    `agents.defaults.models["xai/<model>"].params.tool_stream` to `false` to
+    disable it
 - Mistral: `mistral` (`MISTRAL_API_KEY`)
 - Example model: `mistral/mistral-large-latest`
 - CLI: `openclaw onboard --auth-choice mistral-api-key`

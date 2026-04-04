@@ -536,7 +536,12 @@ describe("image tool implicit imageModel config", () => {
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_OAUTH_TOKEN",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
     "MINIMAX_API_KEY",
+    "MODELSTUDIO_API_KEY",
+    "QWEN_API_KEY",
+    "DASHSCOPE_API_KEY",
     "ZAI_API_KEY",
     "Z_AI_API_KEY",
     // Avoid implicit Copilot provider discovery hitting the network in tests.
@@ -572,9 +577,14 @@ describe("image tool implicit imageModel config", () => {
       const cfg: OpenClawConfig = {
         agents: { defaults: { model: { primary: "minimax/MiniMax-M2.7" } } },
       };
-      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual(
-        createDefaultImageFallbackExpectation("minimax/MiniMax-VL-01"),
-      );
+      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
+        ...createDefaultImageFallbackExpectation("minimax/MiniMax-VL-01"),
+        fallbacks: [
+          "openai/gpt-5.4-mini",
+          "anthropic/claude-opus-4-6",
+          "minimax-portal/MiniMax-VL-01",
+        ],
+      });
       expect(createImageTool({ config: cfg, agentDir })).not.toBeNull();
     });
   });
