@@ -333,6 +333,12 @@ Watches company Slack channel, responds helpfully, and forwards notifications to
 Multi-lingual audio transcription via OpenRouter (Gemini, etc). Available on ClawHub.
 </Card>
 
+<Card title="VoiceOps — Discord Voice Pipeline" icon="discord" href="https://github.com/GreyforgeLabs/voiceops">
+  **@GreyforgeLabs** • `voice` `discord` `tts` `asr` `full-duplex`
+
+Full-duplex Discord voice bot for OpenClaw. Speak naturally into a voice channel — Whisper ASR transcribes, your OpenClaw agent responds, kokoro-js neural TTS speaks back. 3–7s end-to-end. Zero cloud TTS cost. MIT licensed.
+</Card>
+
 </CardGroup>
 
 ## 🏗️ Infrastructure & Deployment
