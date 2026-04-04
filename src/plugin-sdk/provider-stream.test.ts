@@ -106,21 +106,25 @@ describe("buildProviderStreamFamilyHooks", () => {
     expect(capturedModelId).toBe("MiniMax-M2.7-highspeed");
 
     const kilocodeHooks = buildProviderStreamFamilyHooks("kilocode-thinking");
-    kilocodeHooks.wrapStreamFn?.({
-      streamFn: baseStreamFn,
-      thinkingLevel: "high",
-      modelId: "openai/gpt-5.4",
-    } as never)({ provider: "kilocode", id: "openai/gpt-5.4" } as never, {} as never, {});
+    void requireStreamFn(
+      requireWrapStreamFn(kilocodeHooks.wrapStreamFn)({
+        streamFn: baseStreamFn,
+        thinkingLevel: "high",
+        modelId: "openai/gpt-5.4",
+      } as never),
+    )({ provider: "kilocode", id: "openai/gpt-5.4" } as never, {} as never, {});
     expect(capturedPayload).toMatchObject({
       config: { thinkingConfig: { thinkingBudget: -1 } },
       reasoning: { effort: "high" },
     });
 
-    kilocodeHooks.wrapStreamFn?.({
-      streamFn: baseStreamFn,
-      thinkingLevel: "high",
-      modelId: "kilo/auto",
-    } as never)({ provider: "kilocode", id: "kilo/auto" } as never, {} as never, {});
+    void requireStreamFn(
+      requireWrapStreamFn(kilocodeHooks.wrapStreamFn)({
+        streamFn: baseStreamFn,
+        thinkingLevel: "high",
+        modelId: "kilo/auto",
+      } as never),
+    )({ provider: "kilocode", id: "kilo/auto" } as never, {} as never, {});
     expect(capturedPayload).toMatchObject({
       config: { thinkingConfig: { thinkingBudget: -1 } },
     });
