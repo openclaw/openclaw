@@ -188,7 +188,7 @@ describe("resolveLocalVitestScheduling", () => {
         idleVitestStats,
       ),
     ).toEqual({
-      maxWorkers: 2,
+      maxWorkers: 3,
       fileParallelism: true,
       throttledBySystem: false,
     });
@@ -248,11 +248,9 @@ describe("test scripts", () => {
       "OPENCLAW_VITEST_MAX_WORKERS=1 vitest run --config vitest.config.ts",
     );
     expect(pkg.scripts?.["test:fast"]).toBe(
-      "vitest run --config vitest.unit.config.ts",
+      "node scripts/run-vitest.mjs run --config vitest.unit.config.ts",
     );
-    expect(pkg.scripts?.["test:gateway"]).toBe(
-      "vitest run --config vitest.gateway.config.ts",
-    );
+    expect(pkg.scripts?.["test:gateway"]).toBe("vitest run --config vitest.gateway.config.ts");
     expect(pkg.scripts?.["test:single"]).toBeUndefined();
   });
 });
