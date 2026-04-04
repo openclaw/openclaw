@@ -27,6 +27,12 @@ const OPENAI_SESSION_ID = "live-cache-openai-stable-session";
 const ANTHROPIC_SESSION_ID = "live-cache-anthropic-stable-session";
 const OPENAI_PREFIX = buildStableCachePrefix("openai");
 const ANTHROPIC_PREFIX = buildStableCachePrefix("anthropic");
+const OPENAI_STABLE_PREFIX_MIN_CACHE_READ = 4_608;
+const OPENAI_STABLE_PREFIX_MIN_HIT_RATE = 0.9;
+const OPENAI_TOOL_MIN_CACHE_READ = 4_096;
+const OPENAI_TOOL_MIN_HIT_RATE = 0.85;
+const OPENAI_IMAGE_MIN_CACHE_READ = 3_840;
+const OPENAI_IMAGE_MIN_HIT_RATE = 0.82;
 const LIVE_TEST_PNG_URL = new URL(
   "../../apps/android/app/src/main/res/mipmap-xhdpi/ic_launcher.png",
   import.meta.url,
@@ -625,7 +631,7 @@ describeCacheLive("pi embedded runner prompt caching (live)", () => {
     }, 120_000);
 
     it(
-      "hits a high cache-read rate on repeated stable prefixes",
+      "hits the expected OpenAI cache plateau on repeated stable prefixes",
       async () => {
         const warmup = await runOpenAiCacheProbe({
           ...fixture,
@@ -653,17 +659,19 @@ describeCacheLive("pi embedded runner prompt caching (live)", () => {
           (candidate.usage.cacheRead ?? 0) > (best.usage.cacheRead ?? 0) ? candidate : best,
         );
         logLiveCache(
-          `openai best-hit suffix=${bestHit.suffix} cacheRead=${bestHit.usage.cacheRead} input=${bestHit.usage.input} rate=${bestHit.hitRate.toFixed(3)}`,
+          `openai stable-prefix plateau suffix=${bestHit.suffix} cacheRead=${bestHit.usage.cacheRead} input=${bestHit.usage.input} rate=${bestHit.hitRate.toFixed(3)}`,
         );
 
-        expect(bestHit.usage.cacheRead ?? 0).toBeGreaterThan(1_024);
-        expect(bestHit.hitRate).toBeGreaterThanOrEqual(0.7);
+        expect(bestHit.usage.cacheRead ?? 0).toBeGreaterThanOrEqual(
+          OPENAI_STABLE_PREFIX_MIN_CACHE_READ,
+        );
+        expect(bestHit.hitRate).toBeGreaterThanOrEqual(OPENAI_STABLE_PREFIX_MIN_HIT_RATE);
       },
       6 * 60_000,
     );
 
     it(
-      "keeps high cache-read rates across tool-call followup turns",
+      "keeps the expected OpenAI cache plateau across tool-call followup turns",
       async () => {
         const warmup = await runOpenAiToolCacheProbe({
           ...fixture,
@@ -686,17 +694,17 @@ describeCacheLive("pi embedded runner prompt caching (live)", () => {
         });
         const bestHit = (hitA.usage.cacheRead ?? 0) >= (hitB.usage.cacheRead ?? 0) ? hitA : hitB;
         logLiveCache(
-          `openai tool best-hit suffix=${bestHit.suffix} cacheRead=${bestHit.usage.cacheRead} input=${bestHit.usage.input} rate=${bestHit.hitRate.toFixed(3)}`,
+          `openai tool plateau suffix=${bestHit.suffix} cacheRead=${bestHit.usage.cacheRead} input=${bestHit.usage.input} rate=${bestHit.hitRate.toFixed(3)}`,
         );
 
-        expect(bestHit.usage.cacheRead ?? 0).toBeGreaterThan(1_024);
-        expect(bestHit.hitRate).toBeGreaterThanOrEqual(0.7);
+        expect(bestHit.usage.cacheRead ?? 0).toBeGreaterThanOrEqual(OPENAI_TOOL_MIN_CACHE_READ);
+        expect(bestHit.hitRate).toBeGreaterThanOrEqual(OPENAI_TOOL_MIN_HIT_RATE);
       },
       8 * 60_000,
     );
 
     it(
-      "keeps high cache-read rates across image-heavy followup turns",
+      "keeps the expected OpenAI cache plateau across image-heavy followup turns",
       async () => {
         const warmup = await runOpenAiImageCacheProbe({
           ...fixture,
@@ -719,11 +727,11 @@ describeCacheLive("pi embedded runner prompt caching (live)", () => {
         });
         const bestHit = (hitA.usage.cacheRead ?? 0) >= (hitB.usage.cacheRead ?? 0) ? hitA : hitB;
         logLiveCache(
-          `openai image best-hit suffix=${bestHit.suffix} cacheRead=${bestHit.usage.cacheRead} input=${bestHit.usage.input} rate=${bestHit.hitRate.toFixed(3)}`,
+          `openai image plateau suffix=${bestHit.suffix} cacheRead=${bestHit.usage.cacheRead} input=${bestHit.usage.input} rate=${bestHit.hitRate.toFixed(3)}`,
         );
 
-        expect(bestHit.usage.cacheRead ?? 0).toBeGreaterThan(1_024);
-        expect(bestHit.hitRate).toBeGreaterThanOrEqual(0.6);
+        expect(bestHit.usage.cacheRead ?? 0).toBeGreaterThanOrEqual(OPENAI_IMAGE_MIN_CACHE_READ);
+        expect(bestHit.hitRate).toBeGreaterThanOrEqual(OPENAI_IMAGE_MIN_HIT_RATE);
       },
       6 * 60_000,
     );
