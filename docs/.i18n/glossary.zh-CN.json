@@ -232,6 +232,14 @@
     "target": "CLI"
   },
   {
+    "source": "/cli/gateway",
+    "target": "/cli/gateway"
+  },
+  {
+    "source": "/gateway#multiple-gateways-same-host",
+    "target": "/gateway#multiple-gateways-same-host"
+  },
+  {
     "source": "install sanity",
     "target": "安装完整性检查"
   },

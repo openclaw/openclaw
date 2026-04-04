@@ -23,6 +23,9 @@ Auth profiles are **per-agent**. Each agent reads from its own:
 ~/.openclaw/agents/<agentId>/agent/auth-profiles.json
 ```
 
+`sessions_history` is the safer cross-session recall path here too: it returns
+a bounded, redacted view, not a raw transcript dump.
+
 Main agent credentials are **not** shared automatically. Never reuse `agentDir`
 across agents (it causes auth/session collisions). If you want to share creds,
 copy `auth-profiles.json` into the other agent's `agentDir`.

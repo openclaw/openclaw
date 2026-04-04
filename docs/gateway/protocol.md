@@ -112,7 +112,9 @@ bounded role entries in `deviceTokens`:
 For the built-in node/operator bootstrap flow, the primary node token stays
 `scopes: []` and any handed-off operator token stays bounded to the bootstrap
 operator allowlist (`operator.approvals`, `operator.read`,
-`operator.talk.secrets`, `operator.write`).
+`operator.talk.secrets`, `operator.write`). Bootstrap scope checks stay
+role-prefixed: operator entries only satisfy operator requests, and non-operator
+roles still need scopes under their own role prefix.
 
 ### Node example
 
@@ -314,6 +316,9 @@ Gateway exposes today.
 - `sessions.get` returns the full stored session row.
 - chat execution still uses `chat.history`, `chat.send`, `chat.abort`, and
   `chat.inject`.
+- `chat.history` is display-normalized for UI clients: inline directive tags are
+  stripped from visible text, pure `NO_REPLY` assistant rows are omitted, and
+  oversized rows can be replaced with placeholders.
 
 #### Device pairing and device tokens
 

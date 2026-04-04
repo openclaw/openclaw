@@ -18,6 +18,11 @@ into a summary so the chat can continue.
 2. The summary is saved in the session transcript.
 3. Recent messages are kept intact.
 
+When OpenClaw splits history into compaction chunks, it keeps assistant tool
+calls paired with their matching `toolResult` entries. If a split point lands
+inside a tool block, OpenClaw moves the boundary so the pair stays together and
+the current unsummarized tail is preserved.
+
 The full conversation history stays on disk. Compaction only changes what the
 model sees on the next turn.
 

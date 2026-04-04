@@ -34,6 +34,8 @@ These commands work on channels that support persistent thread bindings. See **T
 - `/session max-age <duration|off>`
 
 `/subagents info` shows run metadata (status, timestamps, session id, transcript path, cleanup).
+Use `sessions_history` for a bounded, safety-filtered recall view; inspect the
+transcript path on disk when you need the raw full transcript.
 
 ### Spawn behavior
 
@@ -246,6 +248,14 @@ Announce payloads include a stats line at the end (even when wrapped):
 - `sessionKey`, `sessionId`, and transcript path (so the main agent can fetch history via `sessions_history` or inspect the file on disk)
 - Internal metadata is meant for orchestration only; user-facing replies should be rewritten in normal assistant voice.
 
+`sessions_history` is the safer orchestration path:
+
+- credential/token-like text is redacted
+- long blocks can be truncated
+- very large histories can drop older rows or replace an oversized row with
+  `[sessions_history omitted: message too large]`
+- raw on-disk transcript inspection is the fallback when you need the full byte-for-byte transcript
+
 ## Tool Policy (sub-agent tools)
 
 By default, sub-agents get **all tools except session tools** and system tools:
@@ -254,6 +264,9 @@ By default, sub-agents get **all tools except session tools** and system tools:
 - `sessions_history`
 - `sessions_send`
 - `sessions_spawn`
+
+`sessions_history` remains a bounded, redacted recall view here too; it is not
+a raw transcript dump.
 
 When `maxSpawnDepth >= 2`, depth-1 orchestrator sub-agents additionally receive `sessions_spawn`, `subagents`, `sessions_list`, and `sessions_history` so they can manage their children.
 

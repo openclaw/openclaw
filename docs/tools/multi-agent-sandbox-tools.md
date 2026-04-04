@@ -295,6 +295,9 @@ Legacy `agent.*` configs are migrated by `openclaw doctor`; prefer `agents.defau
 }
 ```
 
+`sessions_history` in this profile still returns a bounded, redacted recall
+view rather than a raw transcript dump.
+
 ---
 
 ## Common Pitfall: "non-main"

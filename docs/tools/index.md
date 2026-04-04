@@ -129,6 +129,10 @@ Use `group:*` shorthands in allow/deny lists:
 | `group:nodes`      | nodes                                                                                                     |
 | `group:openclaw`   | All built-in OpenClaw tools (excludes plugin tools)                                                       |
 
+`sessions_history` returns a bounded, safety-filtered recall view. For very
+large or sensitive transcripts, expect redaction, truncation, and possible
+oversized-row placeholders instead of a raw transcript dump.
+
 ### Provider-specific restrictions
 
 Use `tools.byProvider` to restrict tools for specific providers without

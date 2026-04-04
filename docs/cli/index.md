@@ -669,7 +669,7 @@ Manage chat channel accounts (WhatsApp/Telegram/Discord/Google Chat/Slack/Matter
 Subcommands:
 
 - `channels list`: show configured channels and auth profiles.
-- `channels status`: check gateway reachability and channel health (`--probe` runs extra checks; use `openclaw health` or `openclaw status --deep` for gateway health probes).
+- `channels status`: check gateway reachability and channel health (`--probe` runs live per-account probe/audit checks when the gateway is reachable; if not, it falls back to config-only channel summaries. Use `openclaw health` or `openclaw status --deep` for broader gateway health probes).
 - Tip: `channels status` prints warnings with suggested fixes when it can detect common misconfigurations (then points you to `openclaw doctor`).
 - `channels logs`: show recent channel logs from the gateway log file.
 - `channels add`: wizard-style setup when no flags are passed; flags switch to non-interactive mode.
@@ -733,6 +733,7 @@ Notes:
 
 - `channels login` supports `--verbose`.
 - `channels capabilities --account` only applies when `--channel` is set.
+- `channels status --probe` can show transport state plus probe/audit results such as `works`, `probe failed`, `audit ok`, or `audit failed`, depending on channel support.
 
 More detail: [/concepts/oauth](/concepts/oauth)
 
@@ -850,6 +851,7 @@ Notes:
 - The setup code carries a short-lived bootstrap token, not the shared gateway token/password.
 - Built-in bootstrap handoff keeps the primary node token at `scopes: []`.
 - Any handed-off operator bootstrap token stays bounded to `operator.approvals`, `operator.read`, `operator.talk.secrets`, and `operator.write`.
+- Bootstrap scope checks are role-prefixed, so that operator allowlist only satisfies operator requests; non-operator roles still need scopes under their own role prefix.
 - `--remote` can use `gateway.remote.url` or the active Tailscale Serve/Funnel URL.
 - After scanning, approve the request with `openclaw devices list` / `openclaw devices approve <requestId>`.
 
@@ -1201,7 +1203,7 @@ Options:
 
 - `--json`
 - `--all` (full diagnosis; read-only, pasteable)
-- `--deep` (probe channels)
+- `--deep` (ask the gateway for a live health probe, including channel probes when supported)
 - `--usage` (show model provider usage/quota)
 - `--timeout <ms>`
 - `--verbose`
@@ -1239,8 +1241,13 @@ Options:
 
 - `--json`
 - `--timeout <ms>`
-- `--verbose`
+- `--verbose` (force a live probe and print gateway connection details)
 - `--debug` (alias for `--verbose`)
+
+Notes:
+
+- Default `health` can return a fresh cached gateway snapshot.
+- `health --verbose` forces a live probe and expands human-readable output across all configured accounts and agents.
 
 ### `sessions`
 
@@ -1444,6 +1451,11 @@ Subcommands:
 - `gateway discover`
 - `gateway install|uninstall|start|stop|restart`
 - `gateway run`
+
+Notes:
+
+- `gateway status --deep` adds a system-level service scan. Use `gateway probe`,
+  `health --verbose`, or top-level `status --deep` for deeper runtime probe detail.
 
 Common RPCs:
 
