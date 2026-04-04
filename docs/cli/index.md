@@ -1297,6 +1297,14 @@ List and manage [background task](/automation/tasks) runs across agents.
 - `tasks flow show <lookup>` — inspect a flow by id or lookup key
 - `tasks flow cancel <lookup>` — cancel a running flow and its active tasks
 
+### `flows`
+
+Legacy docs shortcut. Flow commands live under `openclaw tasks flow`:
+
+- `tasks flow list [--json]`
+- `tasks flow show <lookup>`
+- `tasks flow cancel <lookup>`
+
 ## Gateway
 
 ### `gateway`
@@ -1620,6 +1628,8 @@ All `cron` commands accept `--url`, `--token`, `--timeout`, `--expect-final`.
 
 ## Node host
 
+### `node`
+
 `node` runs a **headless node host** or manages it as a background service. See
 [`openclaw node`](/cli/node).
 
@@ -1743,6 +1753,10 @@ Common commands:
 - `voicecall expose [--mode off|serve|funnel] [--path <path>] [--port <port>] [--serve-path <path>]`
 
 ## Docs search
+
+### `docs`
+
+Search the live OpenClaw docs index.
 
 ### `docs [query...]`
 
