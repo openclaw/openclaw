@@ -3,7 +3,11 @@ import path from "node:path";
 import JSON5 from "json5";
 import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { isRecord } from "../utils.js";
-import { DEFAULT_PLUGIN_ENTRY_CANDIDATES, PLUGIN_MANIFEST_FILENAME } from "./manifest.js";
+import {
+  DEFAULT_PLUGIN_ENTRY_CANDIDATES,
+  type ManifestLoadFailureReason,
+  PLUGIN_MANIFEST_FILENAME,
+} from "./manifest.js";
 import type { PluginBundleFormat } from "./types.js";
 
 export const CODEX_BUNDLE_MANIFEST_RELATIVE_PATH = ".codex-plugin/plugin.json";
@@ -25,11 +29,11 @@ export type BundlePluginManifest = {
 
 export type BundleManifestLoadResult =
   | { ok: true; manifest: BundlePluginManifest; manifestPath: string }
-  | { ok: false; error: string; manifestPath: string };
+  | { ok: false; error: string; reason: ManifestLoadFailureReason; manifestPath: string };
 
 type BundleManifestFileLoadResult =
   | { ok: true; raw: Record<string, unknown>; manifestPath: string }
-  | { ok: false; error: string; manifestPath: string };
+  | { ok: false; error: string; reason: ManifestLoadFailureReason; manifestPath: string };
 
 function normalizeString(value: unknown): string | undefined {
   const trimmed = typeof value === "string" ? value.trim() : "";
@@ -108,11 +112,17 @@ function loadBundleManifestFile(params: {
         if (params.allowMissing) {
           return { ok: true, raw: {}, manifestPath };
         }
-        return { ok: false, error: `plugin manifest not found: ${manifestPath}`, manifestPath };
+        return {
+          ok: false,
+          error: `plugin manifest not found: ${manifestPath}`,
+          reason: "not-found",
+          manifestPath,
+        } satisfies BundleManifestFileLoadResult;
       },
-      fallback: (failure) => ({
+      fallback: (failure): BundleManifestFileLoadResult => ({
         ok: false,
         error: `unsafe plugin manifest path: ${manifestPath} (${failure.reason})`,
+        reason: "unsafe-path",
         manifestPath,
       }),
     });
@@ -120,13 +130,19 @@ function loadBundleManifestFile(params: {
   try {
     const raw = JSON5.parse(fs.readFileSync(opened.fd, "utf-8")) as unknown;
     if (!isRecord(raw)) {
-      return { ok: false, error: "plugin manifest must be an object", manifestPath };
+      return {
+        ok: false,
+        error: "plugin manifest must be an object",
+        reason: "invalid",
+        manifestPath,
+      };
     }
     return { ok: true, raw, manifestPath };
   } catch (err) {
     return {
       ok: false,
       error: `failed to parse plugin manifest: ${String(err)}`,
+      reason: "parse-error",
       manifestPath,
     };
   } finally {
