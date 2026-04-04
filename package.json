@@ -567,6 +567,14 @@
       "types": "./dist/plugin-sdk/image-generation-core.d.ts",
       "default": "./dist/plugin-sdk/image-generation-core.js"
     },
+    "./plugin-sdk/video-generation": {
+      "types": "./dist/plugin-sdk/video-generation.d.ts",
+      "default": "./dist/plugin-sdk/video-generation.js"
+    },
+    "./plugin-sdk/video-generation-core": {
+      "types": "./dist/plugin-sdk/video-generation-core.d.ts",
+      "default": "./dist/plugin-sdk/video-generation-core.js"
+    },
     "./plugin-sdk/irc": {
       "types": "./dist/plugin-sdk/irc.d.ts",
       "default": "./dist/plugin-sdk/irc.js"
@@ -726,6 +734,14 @@
     "./plugin-sdk/minimax": {
       "types": "./dist/plugin-sdk/minimax.d.ts",
       "default": "./dist/plugin-sdk/minimax.js"
+    },
+    "./plugin-sdk/qwen": {
+      "types": "./dist/plugin-sdk/qwen.d.ts",
+      "default": "./dist/plugin-sdk/qwen.js"
+    },
+    "./plugin-sdk/qwen-definitions": {
+      "types": "./dist/plugin-sdk/qwen-definitions.d.ts",
+      "default": "./dist/plugin-sdk/qwen-definitions.js"
     },
     "./plugin-sdk/modelstudio": {
       "types": "./dist/plugin-sdk/modelstudio.d.ts",

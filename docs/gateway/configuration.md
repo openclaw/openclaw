@@ -51,7 +51,9 @@ See the [full reference](/gateway/configuration-reference) for every available f
   </Tab>
   <Tab title="Control UI">
     Open [http://127.0.0.1:18789](http://127.0.0.1:18789) and use the **Config** tab.
-    The Control UI renders a form from the config schema, with a **Raw JSON** editor as an escape hatch.
+    The Control UI renders a form from the live config schema, including field
+    labels/help plus plugin and channel schemas when available, with a **Raw
+    JSON** editor as an escape hatch.
   </Tab>
   <Tab title="Direct edit">
     Edit `~/.openclaw/openclaw.json` directly. The Gateway watches the file and applies changes automatically (see [hot reload](#config-hot-reload)).
@@ -63,6 +65,15 @@ See the [full reference](/gateway/configuration-reference) for every available f
 <Warning>
 OpenClaw only accepts configurations that fully match the schema. Unknown keys, malformed types, or invalid values cause the Gateway to **refuse to start**. The only root-level exception is `$schema` (string), so editors can attach JSON Schema metadata.
 </Warning>
+
+Schema tooling notes:
+
+- `openclaw config schema` prints the same JSON Schema family used by Control UI
+  and config validation.
+- Field `title` and `description` values are carried into the schema output for
+  editor and form tooling.
+- Runtime plugin/channel schemas are merged in when the gateway can load the
+  current manifest registry.
 
 When validation fails:
 

@@ -388,15 +388,7 @@ describe("subagent registry steer restarts", () => {
     emitLifecycleEnd("run-terminal-state-new");
 
     await flushAnnounce();
-    expect(runSubagentEndedHookMock).toHaveBeenCalledTimes(1);
-    expect(runSubagentEndedHookMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: "run-terminal-state-new",
-      }),
-      expect.objectContaining({
-        runId: "run-terminal-state-new",
-      }),
-    );
+    expect(runSubagentEndedHookMock).not.toHaveBeenCalled();
     expect(emitSessionLifecycleEventMock).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionKey: "agent:main:subagent:terminal-state",
@@ -544,24 +536,7 @@ describe("subagent registry steer restarts", () => {
     expect(run?.outcome).toEqual({ status: "error", error: "manual kill" });
     expect(run?.cleanupHandled).toBe(true);
     expect(typeof run?.cleanupCompletedAt).toBe("number");
-    expect(runSubagentEndedHookMock).toHaveBeenCalledWith(
-      {
-        targetSessionKey: childSessionKey,
-        targetKind: "subagent",
-        reason: "subagent-killed",
-        sendFarewell: true,
-        accountId: undefined,
-        runId: "run-killed",
-        endedAt: expect.any(Number),
-        outcome: "killed",
-        error: "manual kill",
-      },
-      {
-        runId: "run-killed",
-        childSessionKey,
-        requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
-      },
-    );
+    expect(runSubagentEndedHookMock).not.toHaveBeenCalled();
   });
 
   it("treats a child session as inactive when only a stale older row is still unended", async () => {

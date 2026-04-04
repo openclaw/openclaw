@@ -75,8 +75,8 @@ Usage** (pay-as-you-go billed separately from the subscription) for that
 traffic.
 
 If you want other subscription-style options in OpenClaw, see [OpenAI
-Codex](/providers/openai), [Alibaba Cloud Model Studio Coding
-Plan](/providers/qwen_modelstudio), [MiniMax Coding Plan](/providers/minimax),
+Codex](/providers/openai), [Qwen Cloud Coding
+Plan](/providers/qwen), [MiniMax Coding Plan](/providers/minimax),
 and [Z.AI / GLM Coding Plan](/providers/glm).
 </Warning>
 
