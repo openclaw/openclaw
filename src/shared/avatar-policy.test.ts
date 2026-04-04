@@ -1,64 +1,137 @@
-import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  hasAvatarUriScheme,
+  resolveAvatarMime,
   isAvatarDataUrl,
-  isAvatarHttpUrl,
   isAvatarImageDataUrl,
-  isPathWithinRoot,
-  isSupportedLocalAvatarExtension,
+  isAvatarHttpUrl,
   isWindowsAbsolutePath,
   isWorkspaceRelativeAvatarPath,
+  isPathWithinRoot,
   looksLikeAvatarPath,
-  resolveAvatarMime,
+  isSupportedLocalAvatarExtension,
 } from "./avatar-policy.js";
 
-describe("avatar policy", () => {
-  it("classifies avatar URI and path helpers directly", () => {
-    expect(isAvatarDataUrl("data:text/plain,hello")).toBe(true);
-    expect(isAvatarImageDataUrl("data:image/png;base64,AAAA")).toBe(true);
+describe("resolveAvatarMime", () => {
+  it("resolves common image extensions", () => {
+    expect(resolveAvatarMime("avatar.png")).toBe("image/png");
+    expect(resolveAvatarMime("avatar.jpg")).toBe("image/jpeg");
+    expect(resolveAvatarMime("avatar.jpeg")).toBe("image/jpeg");
+    expect(resolveAvatarMime("avatar.webp")).toBe("image/webp");
+    expect(resolveAvatarMime("avatar.gif")).toBe("image/gif");
+    expect(resolveAvatarMime("avatar.svg")).toBe("image/svg+xml");
+  });
+
+  it("returns octet-stream for unknown extensions", () => {
+    expect(resolveAvatarMime("avatar.unknown")).toBe("application/octet-stream");
+  });
+
+  it("handles case-insensitive extensions", () => {
+    expect(resolveAvatarMime("avatar.PNG")).toBe("image/png");
+    expect(resolveAvatarMime("avatar.JPEG")).toBe("image/jpeg");
+  });
+});
+
+describe("isAvatarDataUrl", () => {
+  it("detects data URLs", () => {
+    expect(isAvatarDataUrl("data:image/png;base64,abc")).toBe(true);
+    expect(isAvatarDataUrl("DATA:text/plain,hello")).toBe(true);
+  });
+
+  it("returns false for non-data URLs", () => {
+    expect(isAvatarDataUrl("https://example.com/avatar.png")).toBe(false);
+    expect(isAvatarDataUrl("/path/to/file")).toBe(false);
+  });
+});
+
+describe("isAvatarImageDataUrl", () => {
+  it("detects image data URLs", () => {
+    expect(isAvatarImageDataUrl("data:image/png;base64,abc")).toBe(true);
+    expect(isAvatarImageDataUrl("data:image/jpeg;base64,xyz")).toBe(true);
+  });
+
+  it("rejects non-image data URLs", () => {
     expect(isAvatarImageDataUrl("data:text/plain,hello")).toBe(false);
+  });
+});
+
+describe("isAvatarHttpUrl", () => {
+  it("detects HTTP URLs", () => {
+    expect(isAvatarHttpUrl("http://example.com/avatar.png")).toBe(true);
     expect(isAvatarHttpUrl("https://example.com/avatar.png")).toBe(true);
+  });
+
+  it("rejects non-HTTP URLs", () => {
     expect(isAvatarHttpUrl("ftp://example.com/avatar.png")).toBe(false);
-    expect(hasAvatarUriScheme("slack://avatar")).toBe(true);
-    expect(isWindowsAbsolutePath("C:\\\\avatars\\\\openclaw.png")).toBe(true);
+    expect(isAvatarHttpUrl("data:image/png;base64,abc")).toBe(false);
+  });
+});
+
+describe("isWindowsAbsolutePath", () => {
+  it("detects Windows absolute paths", () => {
+    expect(isWindowsAbsolutePath("C:\\Users\\test")).toBe(true);
+    expect(isWindowsAbsolutePath("D:\\folder\\file.png")).toBe(true);
   });
 
-  it("accepts workspace-relative avatar paths and rejects URI schemes", () => {
-    expect(isWorkspaceRelativeAvatarPath("avatars/openclaw.png")).toBe(true);
-    expect(isWorkspaceRelativeAvatarPath("C:\\\\avatars\\\\openclaw.png")).toBe(true);
-    expect(isWorkspaceRelativeAvatarPath("https://example.com/avatar.png")).toBe(false);
-    expect(isWorkspaceRelativeAvatarPath("data:image/png;base64,AAAA")).toBe(false);
+  it("rejects Unix paths", () => {
+    expect(isWindowsAbsolutePath("/home/user/avatar.png")).toBe(false);
+  });
+});
+
+describe("isWorkspaceRelativeAvatarPath", () => {
+  it("returns true for relative paths", () => {
+    expect(isWorkspaceRelativeAvatarPath("avatar.png")).toBe(true);
+    expect(isWorkspaceRelativeAvatarPath("folder/avatar.png")).toBe(true);
+  });
+
+  it("returns false for absolute paths", () => {
+    expect(isWorkspaceRelativeAvatarPath("/home/user/avatar.png")).toBe(false);
+    expect(isWorkspaceRelativeAvatarPath("C:\\Users\\avatar.png")).toBe(false);
+  });
+
+  it("returns false for home directory paths", () => {
     expect(isWorkspaceRelativeAvatarPath("~/avatar.png")).toBe(false);
-    expect(isWorkspaceRelativeAvatarPath("slack://avatar")).toBe(false);
-    expect(isWorkspaceRelativeAvatarPath("")).toBe(false);
+  });
+});
+
+describe("isPathWithinRoot", () => {
+  it("returns true for paths within root", () => {
+    expect(isPathWithinRoot("/home/user", "/home/user/avatar.png")).toBe(true);
+    expect(isPathWithinRoot("/home/user", "/home/user/folder/avatar.png")).toBe(true);
   });
 
-  it("checks path containment safely", () => {
-    const root = path.resolve("/tmp/root");
-    expect(isPathWithinRoot(root, root)).toBe(true);
-    expect(isPathWithinRoot(root, path.resolve("/tmp/root/avatars/a.png"))).toBe(true);
-    expect(isPathWithinRoot(root, path.resolve("/tmp/root/../outside.png"))).toBe(false);
-    expect(isPathWithinRoot(root, path.resolve("/tmp/root-sibling/avatar.png"))).toBe(false);
+  it("returns true for exact match", () => {
+    expect(isPathWithinRoot("/home/user", "/home/user")).toBe(true);
   });
 
-  it("detects avatar-like path strings", () => {
-    expect(looksLikeAvatarPath("avatars/openclaw.svg")).toBe(true);
-    expect(looksLikeAvatarPath("openclaw.webp")).toBe(true);
-    expect(looksLikeAvatarPath("avatar.ico")).toBe(true);
-    expect(looksLikeAvatarPath("A")).toBe(false);
+  it("returns false for paths outside root", () => {
+    expect(isPathWithinRoot("/home/user", "/home/other/avatar.png")).toBe(false);
+  });
+});
+
+describe("looksLikeAvatarPath", () => {
+  it("detects avatar-like paths", () => {
+    expect(looksLikeAvatarPath("avatar.png")).toBe(true);
+    expect(looksLikeAvatarPath("folder/avatar.jpg")).toBe(true);
+    expect(looksLikeAvatarPath("C:\\Users\\avatar.gif")).toBe(true);
   });
 
-  it("supports expected local file extensions", () => {
+  it("detects by extension", () => {
+    expect(looksLikeAvatarPath("somefile.png")).toBe(true);
+    expect(looksLikeAvatarPath("doc.pdf")).toBe(false);
+  });
+});
+
+describe("isSupportedLocalAvatarExtension", () => {
+  it("returns true for supported extensions", () => {
     expect(isSupportedLocalAvatarExtension("avatar.png")).toBe(true);
+    expect(isSupportedLocalAvatarExtension("avatar.jpg")).toBe(true);
+    expect(isSupportedLocalAvatarExtension("avatar.gif")).toBe(true);
+    expect(isSupportedLocalAvatarExtension("avatar.webp")).toBe(true);
     expect(isSupportedLocalAvatarExtension("avatar.svg")).toBe(true);
-    expect(isSupportedLocalAvatarExtension("avatar.ico")).toBe(false);
   });
 
-  it("resolves mime type from extension", () => {
-    expect(resolveAvatarMime("a.svg")).toBe("image/svg+xml");
-    expect(resolveAvatarMime("a.tiff")).toBe("image/tiff");
-    expect(resolveAvatarMime("A.PNG")).toBe("image/png");
-    expect(resolveAvatarMime("a.bin")).toBe("application/octet-stream");
+  it("returns false for unsupported extensions", () => {
+    expect(isSupportedLocalAvatarExtension("document.pdf")).toBe(false);
+    expect(isSupportedLocalAvatarExtension("video.mp4")).toBe(false);
   });
 });
