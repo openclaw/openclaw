@@ -2,7 +2,7 @@ import { verifyDeviceSignature } from "../../../infra/device-identity.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { GatewayAuthResult } from "../../auth.js";
 import { buildDeviceAuthPayload, buildDeviceAuthPayloadV3 } from "../../device-auth.js";
-import { isLoopbackAddress } from "../../net.js";
+import { isLoopbackAddress, isPrivateOrLoopbackHost, resolveHostName } from "../../net.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../protocol/client-info.js";
 import type { ConnectParams } from "../../protocol/index.js";
 import type { AuthProvidedKind } from "./auth-messages.js";
@@ -69,34 +69,42 @@ export function shouldSkipBackendSelfPairing(params: {
   sharedAuthOk: boolean;
   authMethod: GatewayAuthResult["method"];
 }): boolean {
-  const isLocalTrustedClient =
-    (params.connectParams.client.id === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT &&
-      params.connectParams.client.mode === GATEWAY_CLIENT_MODES.BACKEND) ||
-    (params.connectParams.client.id === GATEWAY_CLIENT_IDS.CLI &&
-      params.connectParams.client.mode === GATEWAY_CLIENT_MODES.CLI);
-  if (!isLocalTrustedClient) {
+  const isBackendClient =
+    params.connectParams.client.id === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT &&
+    params.connectParams.client.mode === GATEWAY_CLIENT_MODES.BACKEND;
+  if (!isBackendClient) {
     return false;
   }
   const usesSharedSecretAuth = params.authMethod === "token" || params.authMethod === "password";
   const usesDeviceTokenAuth = params.authMethod === "device-token";
-  // `authMethod === "device-token"` only reaches this helper after the caller
-  // has already accepted auth (`authOk === true`), so a separate
-  // `deviceTokenAuthOk` flag would be redundant here.
-  //
-  // For any trusted client identity (backend or CLI) with a valid shared
-  // secret (token/password) and no browser Origin header, skip pairing
-  // regardless of isLocalClient.  The shared secret is the trust anchor;
-  // isLocalDirectRequest() produces false negatives in Docker containers
-  // that share the gateway's network namespace via network_mode, even when
-  // remoteAddress is 127.0.0.1.
-  if (params.sharedAuthOk && usesSharedSecretAuth && !params.hasBrowserOriginHeader) {
-    return true;
-  }
-  // For device-token auth, retain the locality check as defense-in-depth.
   return (
     params.isLocalClient &&
     !params.hasBrowserOriginHeader &&
-    usesDeviceTokenAuth
+    ((params.sharedAuthOk && usesSharedSecretAuth) || usesDeviceTokenAuth)
+  );
+}
+
+export function shouldTreatCliContainerHostAsLocal(params: {
+  connectParams: ConnectParams;
+  requestHost?: string;
+  remoteAddress?: string;
+  hasProxyHeaders: boolean;
+  hasBrowserOriginHeader: boolean;
+  sharedAuthOk: boolean;
+  authMethod: GatewayAuthResult["method"];
+}): boolean {
+  const isCliClient =
+    params.connectParams.client.id === GATEWAY_CLIENT_IDS.CLI &&
+    params.connectParams.client.mode === GATEWAY_CLIENT_MODES.CLI;
+  const usesSharedSecretAuth = params.authMethod === "token" || params.authMethod === "password";
+  return (
+    isCliClient &&
+    params.sharedAuthOk &&
+    usesSharedSecretAuth &&
+    !params.hasProxyHeaders &&
+    !params.hasBrowserOriginHeader &&
+    isLoopbackAddress(params.remoteAddress) &&
+    isPrivateOrLoopbackHost(resolveHostName(params.requestHost))
   );
 }
 

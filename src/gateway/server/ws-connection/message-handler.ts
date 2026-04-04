@@ -110,6 +110,7 @@ import {
   resolveUnauthorizedHandshakeContext,
   shouldAllowSilentLocalPairing,
   shouldSkipBackendSelfPairing,
+  shouldTreatCliContainerHostAsLocal,
 } from "./handshake-auth-helpers.js";
 import { isUnauthorizedRoleError, UnauthorizedFloodGuard } from "./unauthorized-flood-guard.js";
 
@@ -725,6 +726,16 @@ export function attachGatewayWsMessageHandler(params: {
           authOk,
           authMethod,
         });
+        const allowCliContainerLocalPairing = shouldTreatCliContainerHostAsLocal({
+          connectParams,
+          requestHost,
+          remoteAddress: remoteAddr,
+          hasProxyHeaders,
+          hasBrowserOriginHeader,
+          sharedAuthOk,
+          authMethod,
+        });
+        const effectiveIsLocalClient = isLocalClient || allowCliContainerLocalPairing;
         const skipPairing =
           shouldSkipBackendSelfPairing({
             connectParams,
@@ -814,7 +825,7 @@ export function attachGatewayWsMessageHandler(params: {
               });
             };
             const allowSilentLocalPairing = shouldAllowSilentLocalPairing({
-              isLocalClient,
+              isLocalClient: effectiveIsLocalClient,
               hasBrowserOriginHeader,
               isControlUi,
               isWebchat,
