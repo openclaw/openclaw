@@ -55,7 +55,7 @@ transcript path on disk when you need the raw full transcript.
   - thread-bound or conversation-bound completion routes win when available
   - if the completion origin only provides a channel, OpenClaw fills the missing target/account from the requester session's resolved route (`lastChannel` / `lastTo` / `lastAccountId`) so direct delivery still works
 - The completion handoff to the requester session is runtime-generated internal context (not user-authored text) and includes:
-  - `Result` (`assistant` reply text, or latest `toolResult` if the assistant reply is empty)
+  - `Result` (latest visible `assistant` reply text, otherwise sanitized latest tool/toolResult text)
   - `Status` (`completed successfully` / `failed` / `timed out` / `unknown`)
   - compact runtime/token stats
   - a delivery instruction telling the requester agent to rewrite in normal assistant voice (not forward raw internal metadata)
@@ -235,6 +235,7 @@ Sub-agents report back via an announce step:
 
 - The announce step runs inside the sub-agent session (not the requester session).
 - If the sub-agent replies exactly `ANNOUNCE_SKIP`, nothing is posted.
+- If the latest assistant text is a silent token such as `NO_REPLY`, announce output is suppressed even if earlier visible progress existed.
 - Otherwise delivery depends on requester depth:
   - top-level requester sessions use a follow-up `agent` call with external delivery (`deliver=true`)
   - nested requester subagent sessions receive an internal follow-up injection (`deliver=false`) so the orchestrator can synthesize child results in-session
@@ -247,9 +248,10 @@ Sub-agents report back via an announce step:
   - child session key/id
   - announce type + task label
   - status line derived from runtime outcome (`success`, `error`, `timeout`, or `unknown`)
-  - result content from the announce step (or `(no output)` if missing)
+  - result content selected from the latest visible assistant text, otherwise sanitized latest tool/toolResult text
   - a follow-up instruction describing when to reply vs. stay silent
 - `Status` is not inferred from model output; it comes from runtime outcome signals.
+- On timeout, if the child only got through tool calls, announce can collapse that history into a short partial-progress summary instead of replaying raw tool output.
 
 Announce payloads include a stats line at the end (even when wrapped):
 

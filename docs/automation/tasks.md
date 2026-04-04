@@ -222,6 +222,7 @@ Completion cleanup is also runtime-aware:
 - Isolated cron completion best-effort closes tracked browser tabs/processes for the cron session before the run fully tears down.
 - Isolated cron delivery waits out descendant subagent follow-up when needed and
   suppresses stale parent acknowledgement text instead of announcing it.
+- Subagent completion delivery prefers the latest visible assistant text; if that is empty it falls back to sanitized latest tool/toolResult text, and timeout-only tool-call runs can collapse to a short partial-progress summary.
 - Cleanup failures do not mask the real task outcome.
 
 ### `tasks flow list|show|cancel`

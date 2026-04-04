@@ -1014,6 +1014,8 @@ for usage/billing and raise limits as needed.
     - If the completion origin only carries a channel, OpenClaw falls back to the requester session's stored route (`lastChannel` / `lastTo` / `lastAccountId`) so direct delivery can still succeed.
     - If neither a bound route nor a usable stored route exists, direct delivery can fail and the result falls back to queued session delivery instead of posting immediately to chat.
     - Invalid or stale targets can still force queue fallback or final delivery failure.
+    - If the child's last visible assistant reply is a silent token (`NO_REPLY` / `ANNOUNCE_SKIP`), OpenClaw intentionally suppresses the announce instead of posting stale earlier progress.
+    - If the child timed out after only tool calls, the announce can collapse that into a short partial-progress summary instead of replaying raw tool output.
 
     Debug:
 

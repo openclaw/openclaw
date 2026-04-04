@@ -38,7 +38,7 @@ wired end-to-end.
    - tool events => `stream: "tool"`
    - assistant deltas => `stream: "assistant"`
    - lifecycle events => `stream: "lifecycle"` (`phase: "start" | "end" | "error"`)
-5. `agent.wait` uses `waitForAgentJob`:
+5. `agent.wait` uses `waitForAgentRun`:
    - waits for **lifecycle end/error** for `runId`
    - returns `{ status: ok|error|timeout, startedAt, endedAt, error? }`
 
