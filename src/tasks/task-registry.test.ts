@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startAcpSpawnParentStreamRelay } from "../agents/acp-spawn-parent-stream.js";
+import { resetCronActiveJobsForTests } from "../cron/active-jobs.js";
 import {
   emitAgentEvent,
   registerAgentRunContext,
@@ -226,6 +227,7 @@ describe("task-registry", () => {
     resetSystemEventsForTest();
     resetHeartbeatWakeStateForTests();
     resetAgentRunContextForTest();
+    resetCronActiveJobsForTests();
     resetTaskRegistryDeliveryRuntimeForTests();
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
