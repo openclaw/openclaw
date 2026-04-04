@@ -58,8 +58,15 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
   const threadId = isGroup
     ? resolveTelegramForumThreadId({ isForum, messageThreadId })
     : messageThreadId;
+  // Use per-message keys so that inbound messages are not blocked behind an
+  // active agent run.  Run-level serialization is already handled by the
+  // session lane queue (enqueueCommandInLane, maxConcurrent=1), so relaxing
+  // the grammY sequentialize key is safe and allows steer-mode messages to
+  // reach queueEmbeddedPiMessage() while a run is in progress.
+  const messageId = msg?.message_id;
   if (typeof chatId === "number") {
-    return threadId != null ? `telegram:${chatId}:topic:${threadId}` : `telegram:${chatId}`;
+    const base = threadId != null ? `telegram:${chatId}:topic:${threadId}` : `telegram:${chatId}`;
+    return typeof messageId === "number" ? `${base}:${messageId}` : base;
   }
   return "telegram:unknown";
 }
