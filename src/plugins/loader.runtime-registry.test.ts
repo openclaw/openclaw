@@ -21,9 +21,50 @@ afterEach(() => {
 });
 
 describe("getCompatibleActivePluginRegistry", () => {
-  it("reuses the active registry only when the load context cache key matches", () => {
+  it("reuses the active registry for non-activating loads regardless of cache key", () => {
     const registry = createEmptyPluginRegistry();
     const loadOptions = {
+      config: {
+        plugins: {
+          allow: ["demo"],
+          load: { paths: ["/tmp/demo.js"] },
+        },
+      },
+      workspaceDir: "/tmp/workspace-a",
+      runtimeOptions: {
+        allowGatewaySubagentBinding: true,
+      },
+    };
+    const { cacheKey } = __testing.resolvePluginLoadCacheContext(loadOptions);
+    setActivePluginRegistry(registry, cacheKey);
+
+    // Non-activating loads (snapshot / metadata-only) always reuse the active
+    // registry — it is a superset of any narrower snapshot request.
+    expect(__testing.getCompatibleActivePluginRegistry(loadOptions)).toBe(registry);
+    expect(
+      __testing.getCompatibleActivePluginRegistry({
+        ...loadOptions,
+        workspaceDir: "/tmp/workspace-b",
+      }),
+    ).toBe(registry);
+    expect(
+      __testing.getCompatibleActivePluginRegistry({
+        ...loadOptions,
+        onlyPluginIds: ["demo"],
+      }),
+    ).toBe(registry);
+    expect(
+      __testing.getCompatibleActivePluginRegistry({
+        ...loadOptions,
+        runtimeOptions: undefined,
+      }),
+    ).toBe(registry);
+  });
+
+  it("requires cache key match for activating loads", () => {
+    const registry = createEmptyPluginRegistry();
+    const loadOptions = {
+      activate: true as const,
       config: {
         plugins: {
           allow: ["demo"],
@@ -49,12 +90,6 @@ describe("getCompatibleActivePluginRegistry", () => {
       __testing.getCompatibleActivePluginRegistry({
         ...loadOptions,
         onlyPluginIds: ["demo"],
-      }),
-    ).toBeUndefined();
-    expect(
-      __testing.getCompatibleActivePluginRegistry({
-        ...loadOptions,
-        runtimeOptions: undefined,
       }),
     ).toBeUndefined();
   });
@@ -94,9 +129,10 @@ describe("getCompatibleActivePluginRegistry", () => {
     expect(__testing.getCompatibleActivePluginRegistry()).toBe(registry);
   });
 
-  it("does not reuse the active registry when core gateway method names differ", () => {
+  it("does not reuse the active registry when core gateway method names differ in activating loads", () => {
     const registry = createEmptyPluginRegistry();
     const loadOptions = {
+      activate: true as const,
       config: {
         plugins: {
           allow: ["demo"],
@@ -121,6 +157,34 @@ describe("getCompatibleActivePluginRegistry", () => {
         },
       }),
     ).toBeUndefined();
+  });
+
+  it("reuses the active registry for non-activating loads even when gateway handlers differ", () => {
+    const registry = createEmptyPluginRegistry();
+    const loadOptions = {
+      config: {
+        plugins: {
+          allow: ["demo"],
+          load: { paths: ["/tmp/demo.js"] },
+        },
+      },
+      workspaceDir: "/tmp/workspace-a",
+      coreGatewayHandlers: {
+        "sessions.get": () => undefined,
+      },
+    };
+    const { cacheKey } = __testing.resolvePluginLoadCacheContext(loadOptions);
+    setActivePluginRegistry(registry, cacheKey);
+
+    expect(
+      __testing.getCompatibleActivePluginRegistry({
+        ...loadOptions,
+        coreGatewayHandlers: {
+          "sessions.get": () => undefined,
+          "sessions.list": () => undefined,
+        },
+      }),
+    ).toBe(registry);
   });
 });
 
