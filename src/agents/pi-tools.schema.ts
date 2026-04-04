@@ -141,6 +141,8 @@ export function normalizeToolParameterSchema(
   // - Gemini rejects several JSON Schema keywords, so we scrub those.
   // - OpenAI rejects function tool schemas unless the *top-level* is `type: "object"`.
   //   (TypeBox root unions compile to `{ anyOf: [...] }` without `type`).
+  // - OpenAI and GitHub Copilot require `additionalProperties: false` on all tool schemas.
+  //   Without it they return HTTP 400: 'additionalProperties' is required to be false.
   // - Anthropic expects full JSON Schema draft 2020-12 compliance.
   // - xAI rejects validation-constraint keywords (minLength, maxLength, etc.) outright.
   //
@@ -151,6 +153,25 @@ export function normalizeToolParameterSchema(
   const isAnthropicProvider = options?.modelProvider?.toLowerCase().includes("anthropic");
   const unsupportedToolSchemaKeywords = resolveUnsupportedToolSchemaKeywords(options?.modelCompat);
 
+  // OpenAI and GitHub Copilot require `additionalProperties: false` on every object schema
+  // used as a tool definition. Without this field they return HTTP 400.
+  const normalizedProvider = options?.modelProvider?.trim().toLowerCase() ?? "";
+  const isOpenAIFamilyProvider =
+    normalizedProvider === "openai" ||
+    normalizedProvider === "openai-codex" ||
+    normalizedProvider === "github-copilot";
+
+  function enforceAdditionalPropertiesFalse(s: unknown): unknown {
+    if (!isOpenAIFamilyProvider || !s || typeof s !== "object") {
+      return s;
+    }
+    const record = s as Record<string, unknown>;
+    if (record.additionalProperties === false) {
+      return s;
+    }
+    return { ...record, additionalProperties: false };
+  }
+
   function applyProviderCleaning(s: unknown): unknown {
     if (isGeminiProvider && !isAnthropicProvider) {
       return cleanSchemaForGemini(s);
@@ -158,7 +179,7 @@ export function normalizeToolParameterSchema(
     if (unsupportedToolSchemaKeywords.size > 0) {
       return stripUnsupportedSchemaKeywords(s, unsupportedToolSchemaKeywords);
     }
-    return s;
+    return enforceAdditionalPropertiesFalse(s);
   }
 
   const conditionalKey = getTopLevelConditionalKey(schemaRecord);
@@ -241,7 +262,11 @@ export function normalizeToolParameterSchema(
       Object.keys(mergedProperties).length > 0 ? mergedProperties : (schemaRecord.properties ?? {}),
     ...(mergedRequired && mergedRequired.length > 0 ? { required: mergedRequired } : {}),
     additionalProperties:
-      "additionalProperties" in schemaRecord ? schemaRecord.additionalProperties : true,
+      isOpenAIFamilyProvider
+        ? false
+        : "additionalProperties" in schemaRecord
+          ? schemaRecord.additionalProperties
+          : true,
   };
 
   // Flatten union schemas into a single object schema:

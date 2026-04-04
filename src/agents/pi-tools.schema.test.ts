@@ -143,4 +143,55 @@ describe("normalizeToolParameters", () => {
     expect(parameters.properties?.query.minLength).toBeUndefined();
     expect(parameters.properties?.query.type).toBe("string");
   });
+
+  it("injects additionalProperties:false for openai provider", () => {
+    const tool: AnyAgentTool = {
+      name: "read",
+      label: "read",
+      description: "Read a file",
+      parameters: Type.Object({
+        path: Type.String({ description: "Path to the file" }),
+        offset: Type.Optional(Type.Number()),
+        limit: Type.Optional(Type.Number()),
+      }),
+      execute: vi.fn(),
+    };
+
+    const normalized = normalizeToolParameters(tool, { modelProvider: "openai" });
+    const parameters = normalized.parameters as Record<string, unknown>;
+    expect(parameters.additionalProperties).toBe(false);
+  });
+
+  it("injects additionalProperties:false for github-copilot provider", () => {
+    const tool: AnyAgentTool = {
+      name: "read",
+      label: "read",
+      description: "Read a file",
+      parameters: Type.Object({
+        path: Type.String({ description: "Path to the file" }),
+      }),
+      execute: vi.fn(),
+    };
+
+    const normalized = normalizeToolParameters(tool, { modelProvider: "github-copilot" });
+    const parameters = normalized.parameters as Record<string, unknown>;
+    expect(parameters.additionalProperties).toBe(false);
+  });
+
+  it("does not inject additionalProperties:false for anthropic provider", () => {
+    const tool: AnyAgentTool = {
+      name: "read",
+      label: "read",
+      description: "Read a file",
+      parameters: Type.Object({
+        path: Type.String({ description: "Path to the file" }),
+      }),
+      execute: vi.fn(),
+    };
+
+    const normalized = normalizeToolParameters(tool, { modelProvider: "anthropic" });
+    const parameters = normalized.parameters as Record<string, unknown>;
+    // Anthropic does not require additionalProperties: false
+    expect(parameters.additionalProperties).toBeUndefined();
+  });
 });
