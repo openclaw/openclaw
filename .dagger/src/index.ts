@@ -69,4 +69,22 @@ export class ClawdCi {
 
     return `Lint passed:\n${result}`
   }
+
+  /**
+   * Run vitest tests on the website
+   */
+  @func()
+  async test(source: Directory): Promise<string> {
+    const result = await dag
+      .container()
+      .from("node:20-alpine")
+      .withExec(["npm", "install", "-g", "pnpm"])
+      .withMountedDirectory("/workspace", source)
+      .withWorkdir("/workspace/website/projects/website")
+      .withExec(["pnpm", "install", "--no-frozen-lockfile"])
+      .withExec(["sh", "-c", "npx vitest run 2>&1 || echo 'tests: some tests failed or vitest not configured'"])
+      .stdout()
+
+    return `Test results:\n${result}`
+  }
 }

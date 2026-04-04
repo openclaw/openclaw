@@ -286,6 +286,37 @@ jobs:
           NEXT_PUBLIC_SUPABASE_URL: https://dummy.supabase.co
           NEXT_PUBLIC_SUPABASE_ANON_KEY: dummy
 
+  # Test website/projects/website when website files change.
+  website-test-check:
+    needs: [docs-scope, changed-scope]
+    if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_website == 'true')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+          cache-dependency-path: website/projects/website/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: website/projects/website
+        run: pnpm install --frozen-lockfile
+
+      - name: Run tests
+        working-directory: website/projects/website
+        run: npx vitest run
+
   # Validate docs (format, lint, broken links) only when docs files changed.
   check-docs:
     needs: [docs-scope]
