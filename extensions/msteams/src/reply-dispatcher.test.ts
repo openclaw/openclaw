@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const createChannelReplyPipelineMock = vi.hoisted(() => vi.fn());
 const createReplyDispatcherWithTypingMock = vi.hoisted(() => vi.fn());
 const getMSTeamsRuntimeMock = vi.hoisted(() => vi.fn());
+const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
 const renderReplyPayloadsToMessagesMock = vi.hoisted(() => vi.fn(() => []));
 const sendMSTeamsMessagesMock = vi.hoisted(() => vi.fn(async () => []));
 const streamInstances = vi.hoisted(
@@ -86,6 +87,9 @@ describe("createMSTeamsReplyDispatcher", () => {
     }));
 
     getMSTeamsRuntimeMock.mockReturnValue({
+      system: {
+        enqueueSystemEvent: enqueueSystemEventMock,
+      },
       channel: {
         text: {
           resolveChunkMode: vi.fn(() => "length"),
@@ -102,10 +106,12 @@ describe("createMSTeamsReplyDispatcher", () => {
   function createDispatcher(
     conversationType: string = "personal",
     msteamsConfig: Record<string, unknown> = {},
+    extraParams: { onSentMessageIds?: (ids: string[]) => void } = {},
   ) {
     return createMSTeamsReplyDispatcher({
       cfg: { channels: { msteams: msteamsConfig } } as never,
       agentId: "agent",
+      sessionKey: "agent:main:main",
       runtime: { error: vi.fn() } as never,
       log: { debug: vi.fn(), error: vi.fn(), warn: vi.fn() } as never,
       adapter: {
@@ -127,6 +133,7 @@ describe("createMSTeamsReplyDispatcher", () => {
       } as never,
       replyStyle: "thread",
       textLimit: 4000,
+      ...extraParams,
     });
   }
 
@@ -205,6 +212,54 @@ describe("createMSTeamsReplyDispatcher", () => {
     await options.deliver({ text: "block content" });
 
     expect(sendMSTeamsMessagesMock).not.toHaveBeenCalled();
+  });
+
+  it("queues a system event when some queued Teams messages fail to send", async () => {
+    const onSentMessageIds = vi.fn();
+    renderReplyPayloadsToMessagesMock.mockReturnValue([
+      { content: "one" },
+      { content: "two" },
+    ] as never);
+    sendMSTeamsMessagesMock
+      .mockRejectedValueOnce(Object.assign(new Error("gateway timeout"), { statusCode: 502 }))
+      .mockResolvedValueOnce(["id-1"] as never)
+      .mockRejectedValueOnce(Object.assign(new Error("gateway timeout"), { statusCode: 502 }));
+
+    const dispatcher = createDispatcher(
+      "personal",
+      { blockStreaming: false },
+      { onSentMessageIds },
+    );
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+
+    await options.deliver({ text: "block content" });
+    await dispatcher.markDispatchIdle();
+
+    expect(onSentMessageIds).toHaveBeenCalledWith(["id-1"]);
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      expect.stringContaining("Microsoft Teams delivery failed"),
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        contextKey: "msteams:delivery-failure:conv",
+      }),
+    );
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      expect.stringContaining("The user may not have received the full reply"),
+      expect.any(Object),
+    );
+  });
+
+  it("does not queue a delivery-failure system event when Teams send succeeds", async () => {
+    renderReplyPayloadsToMessagesMock.mockReturnValue([{ content: "hello" }] as never);
+    sendMSTeamsMessagesMock.mockResolvedValue(["id-1"] as never);
+
+    const dispatcher = createDispatcher("personal", { blockStreaming: false });
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+
+    await options.deliver({ text: "block content" });
+    await dispatcher.markDispatchIdle();
+
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
   });
 });
 
