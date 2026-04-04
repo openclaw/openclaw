@@ -2,7 +2,10 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import { isToolAllowedByPolicies } from "./tool-policy-match.js";
-import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "./tool-policy.js";
+import {
+  mergeAlsoAllowPolicy,
+  resolveToolProfilePolicy,
+} from "./tool-policy.js";
 
 export type ToolFsPolicy = {
   workspaceOnly: boolean;
@@ -22,7 +25,10 @@ export function createToolFsPolicy(params: {
   };
 }
 
-export function resolveToolFsConfig(params: { cfg?: OpenClawConfig; agentId?: string }): {
+export function resolveToolFsConfig(params: {
+  cfg?: OpenClawConfig;
+  agentId?: string;
+}): {
   workspaceOnly?: boolean;
   allowedPaths?: string[];
   denyPaths?: string[];
@@ -30,7 +36,9 @@ export function resolveToolFsConfig(params: { cfg?: OpenClawConfig; agentId?: st
   const cfg = params.cfg;
   const globalFs = cfg?.tools?.fs;
   const agentFs =
-    cfg && params.agentId ? resolveAgentConfig(cfg, params.agentId)?.tools?.fs : undefined;
+    cfg && params.agentId
+      ? resolveAgentConfig(cfg, params.agentId)?.tools?.fs
+      : undefined;
   return {
     workspaceOnly: agentFs?.workspaceOnly ?? globalFs?.workspaceOnly,
     allowedPaths: agentFs?.allowedPaths ?? globalFs?.allowedPaths,
@@ -52,7 +60,10 @@ function normalizeList(value: string[] | undefined): string[] | undefined {
   return out.length > 0 ? out : [];
 }
 
-function union(a: string[] | undefined, b: string[] | undefined): string[] | undefined {
+function union(
+  a: string[] | undefined,
+  b: string[] | undefined,
+): string[] | undefined {
   if (a === undefined && b === undefined) {
     return undefined;
   }
@@ -60,7 +71,9 @@ function union(a: string[] | undefined, b: string[] | undefined): string[] | und
   return merged.length > 0 ? Array.from(new Set(merged)) : [];
 }
 
-function intersectAll(lists: Array<string[] | undefined>): string[] | undefined {
+function intersectAll(
+  lists: Array<string[] | undefined>,
+): string[] | undefined {
   const defined = lists.filter((v) => v !== undefined);
   if (defined.length === 0) {
     return undefined;
@@ -77,7 +90,9 @@ function intersectAll(lists: Array<string[] | undefined>): string[] | undefined 
   return Array.from(acc);
 }
 
-export function combineToolFsPolicies(params: ToolFsPolicyCombineParams): ToolFsPolicy {
+export function combineToolFsPolicies(
+  params: ToolFsPolicyCombineParams,
+): ToolFsPolicy {
   const globalAllowed = normalizeList(params.globalPolicy?.allowedPaths);
   const agentAllowed = normalizeList(params.agentPolicy?.allowedPaths);
   const spawnAllowed = normalizeList(params.spawnPolicy?.allowedPaths);
@@ -86,7 +101,11 @@ export function combineToolFsPolicies(params: ToolFsPolicyCombineParams): ToolFs
   const agentDeny = normalizeList(params.agentPolicy?.denyPaths);
   const spawnDeny = normalizeList(params.spawnPolicy?.denyPaths);
 
-  const allowedPaths = intersectAll([globalAllowed, agentAllowed, spawnAllowed]);
+  const allowedPaths = intersectAll([
+    globalAllowed,
+    agentAllowed,
+    spawnAllowed,
+  ]);
   const denyPaths = union(union(globalDeny, agentDeny), spawnDeny);
 
   const workspaceOnly =
@@ -100,7 +119,6 @@ export function combineToolFsPolicies(params: ToolFsPolicyCombineParams): ToolFs
     denyPaths,
   };
 }
-
 
 export function resolveEffectiveToolFsWorkspaceOnly(params: {
   cfg?: OpenClawConfig;
@@ -117,12 +135,17 @@ export function resolveEffectiveToolFsRootExpansionAllowed(params: {
   if (!cfg) {
     return true;
   }
-  const agentTools = params.agentId ? resolveAgentConfig(cfg, params.agentId)?.tools : undefined;
+  const agentTools = params.agentId
+    ? resolveAgentConfig(cfg, params.agentId)?.tools
+    : undefined;
   const globalTools = cfg.tools;
   const profile = agentTools?.profile ?? globalTools?.profile;
-  const profileAlsoAllow = new Set(agentTools?.alsoAllow ?? globalTools?.alsoAllow ?? []);
+  const profileAlsoAllow = new Set(
+    agentTools?.alsoAllow ?? globalTools?.alsoAllow ?? [],
+  );
   const fsConfig = resolveToolFsConfig(params);
-  const hasExplicitFsConfig = agentTools?.fs !== undefined || globalTools?.fs !== undefined;
+  const hasExplicitFsConfig =
+    agentTools?.fs !== undefined || globalTools?.fs !== undefined;
   if (fsConfig.workspaceOnly === true) {
     return false;
   }
@@ -137,5 +160,9 @@ export function resolveEffectiveToolFsRootExpansionAllowed(params: {
   );
   const globalPolicy = pickSandboxToolPolicy(globalTools);
   const agentPolicy = pickSandboxToolPolicy(agentTools);
-  return isToolAllowedByPolicies("read", [profilePolicy, globalPolicy, agentPolicy]);
+  return isToolAllowedByPolicies("read", [
+    profilePolicy,
+    globalPolicy,
+    agentPolicy,
+  ]);
 }
