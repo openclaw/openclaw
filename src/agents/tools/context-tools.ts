@@ -5,8 +5,8 @@
  */
 
 import { Type } from "@sinclair/typebox";
-import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { ContextArchive, createContextArchive } from "../../context-engine/archive.js";
+import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 
 // Simple helper - reconstruct on demand instead of caching
 function getArchive(sessionId: string): ContextArchive {
@@ -21,6 +21,7 @@ const recallModeEnum = ["summary", "full", "key_points"] as const;
  */
 export function createCompressContextTool(sessionId: string): AnyAgentTool {
   return {
+    label: "Context Archive",
     name: "compress_context",
     description: `Compress and archive a range of messages from the current context.
 
@@ -41,10 +42,12 @@ You should provide a meaningful summary that captures:
     parameters: Type.Object(
       {
         topic: Type.String({
-          description: 'A brief title for the archived topic, e.g., "React component optimization discussion"',
+          description:
+            'A brief title for the archived topic, e.g., "React component optimization discussion"',
         }),
         summary: Type.String({
-          description: "Structured summary in Markdown format. Include main points, context, and outcomes.",
+          description:
+            "Structured summary in Markdown format. Include main points, context, and outcomes.",
         }),
         key_decisions: Type.Optional(
           Type.Array(Type.String(), {
@@ -59,9 +62,12 @@ You should provide a meaningful summary that captures:
           { description: "Range of messages to archive" },
         ),
         importance: Type.Optional(
-          Type.Union(importanceEnum.map((v) => Type.Literal(v)), {
-            description: "Importance level. High importance archives are kept longer.",
-          }),
+          Type.Union(
+            importanceEnum.map((v) => Type.Literal(v)),
+            {
+              description: "Importance level. High importance archives are kept longer.",
+            },
+          ),
         ),
       },
       { additionalProperties: true },
@@ -98,6 +104,7 @@ You should provide a meaningful summary that captures:
  */
 export function createListArchivesTool(sessionId: string): AnyAgentTool {
   return {
+    label: "Context Archive",
     name: "list_archives",
     description: `List archived contexts from previous compressions.
 
@@ -142,6 +149,7 @@ Returns a list of archives with their paths, topics, and token counts.`,
  */
 export function createRecallArchiveTool(sessionId: string): AnyAgentTool {
   return {
+    label: "Context Archive",
     name: "recall_archive",
     description: `Recall and restore content from an archived context.
 
@@ -157,9 +165,12 @@ Use this when you need to reference previous discussions that were archived.`,
           description: "Path to the archive file (from list_archives)",
         }),
         mode: Type.Optional(
-          Type.Union(recallModeEnum.map((v) => Type.Literal(v)), {
-            description: "How much content to restore",
-          }),
+          Type.Union(
+            recallModeEnum.map((v) => Type.Literal(v)),
+            {
+              description: "How much content to restore",
+            },
+          ),
         ),
       },
       { additionalProperties: true },
