@@ -210,6 +210,84 @@ The Gateway treats these as **claims** and enforces server-side allowlists.
 - Presence entries include `deviceId`, `roles`, and `scopes` so UIs can show a single row per device
   even when it connects as both **operator** and **node**.
 
+## Common RPC method families
+
+This page is not a generated full dump, but the public WS surface is broader
+than the handshake/auth examples above. These are the main method families the
+Gateway exposes today.
+
+### System and identity
+
+- `gateway.identity.get` returns the gateway device identity used by relay and
+  pairing flows.
+- `system-presence` returns the current presence snapshot for connected
+  operator/node devices.
+- `system-event` appends a system event and can update/broadcast presence
+  context.
+- `last-heartbeat` returns the latest persisted heartbeat event.
+- `set-heartbeats` toggles heartbeat processing on the gateway.
+
+### Models and usage
+
+- `models.list` returns the runtime-allowed model catalog.
+- `usage.status` returns provider usage windows/remaining quota summaries.
+- `usage.cost` returns aggregated cost usage summaries for a date range.
+- `sessions.usage` returns per-session usage summaries.
+- `sessions.usage.timeseries` returns timeseries usage for one session.
+- `sessions.usage.logs` returns usage log entries for one session.
+
+### Channels and login helpers
+
+- `channels.status` returns built-in + bundled channel/plugin status summaries.
+- `channels.logout` logs out a specific channel/account where the channel
+  supports logout.
+- `web.login.start` starts a QR/web login flow for the current QR-capable web
+  channel provider.
+- `web.login.wait` waits for that QR/web login flow to complete and starts the
+  channel on success.
+- `push.test` sends a test APNs push to a registered iOS node.
+- `voicewake.get` returns the stored wake-word triggers.
+- `voicewake.set` updates wake-word triggers and broadcasts the change.
+
+### Talk and TTS
+
+- `talk.config` returns the effective Talk config payload; `includeSecrets`
+  requires `operator.talk.secrets` (or `operator.admin`).
+- `talk.mode` sets/broadcasts the current Talk mode state for WebChat/Control UI
+  clients.
+- `talk.speak` synthesizes speech through the active Talk speech provider.
+- `tts.status` returns TTS enabled state, active provider, fallback providers,
+  and provider config state.
+- `tts.providers` returns the visible TTS provider inventory.
+- `tts.enable` and `tts.disable` toggle TTS prefs state.
+- `tts.setProvider` updates the preferred TTS provider.
+- `tts.convert` runs one-shot text-to-speech conversion.
+
+### Secrets, config, update, and wizard
+
+- `secrets.reload` re-resolves active SecretRefs and swaps runtime secret state
+  only on full success.
+- `secrets.resolve` resolves command-target secret assignments for a specific
+  command/target set.
+- `config.get` returns the current config snapshot and hash.
+- `config.set` writes a validated config payload.
+- `config.patch` merges a partial config update.
+- `config.apply` validates + replaces the full config payload.
+- `config.schema` and `config.schema.lookup` expose the live config schema and
+  lookup helpers used by Control UI and CLI tooling.
+- `update.run` runs the gateway update flow and schedules a restart only when
+  the update itself succeeded.
+- `wizard.start`, `wizard.next`, `wizard.status`, and `wizard.cancel` expose the
+  onboarding wizard over WS RPC.
+
+### Existing major families
+
+- chat/session methods: `chat.*`, `sessions.*`, `agent.wait`
+- node transport and pairing: `node.*`, `device.pair.*`, `device.token.*`
+- exec approvals: `exec.approval.*`, `exec.approvals.*`, `plugin.approval.*`
+- automation: `cron.*`
+- skills/tools: `skills.*`, `tools.catalog`, `tools.effective`
+
 ### Node helper methods
 
 - Nodes may call `skills.bins` to fetch the current list of skill executables
