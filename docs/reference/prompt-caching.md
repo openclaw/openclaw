@@ -120,6 +120,19 @@ For `openrouter/anthropic/*` model refs, OpenClaw injects Anthropic `cache_contr
 
 If the provider does not support this cache mode, `cacheRetention` has no effect.
 
+## OpenClaw cache-stability guards
+
+OpenClaw also keeps several cache-sensitive payload shapes deterministic before
+the request reaches the provider:
+
+- Bundle MCP tool catalogs are sorted deterministically before tool
+  registration, so `listTools()` order changes do not churn the tools block and
+  bust prompt-cache prefixes.
+- Legacy sessions with persisted image blocks keep the **3 most recent
+  completed turns** intact; older already-processed image blocks may be
+  replaced with a marker so image-heavy follow-ups do not keep re-sending large
+  stale payloads.
+
 ## Tuning patterns
 
 ### Mixed traffic (recommended default)
