@@ -1232,7 +1232,7 @@ Browser control CLI (dedicated Chrome/Brave/Edge/Chromium). See [`openclaw brows
 
 Common options:
 
-- `--url`, `--token`, `--timeout`, `--json`
+- `--url`, `--token`, `--timeout`, `--expect-final`, `--json`
 - `--browser-profile <name>`
 
 Manage:
@@ -1246,7 +1246,7 @@ Manage:
 - `browser focus <targetId>`
 - `browser close [targetId]`
 - `browser profiles`
-- `browser create-profile --name <name> [--color <hex>] [--cdp-url <url>]`
+- `browser create-profile --name <name> [--color <hex>] [--cdp-url <url>] [--driver existing-session] [--user-data-dir <path>]`
 - `browser delete-profile --name <name>`
 
 Inspect:
