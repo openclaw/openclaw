@@ -1,6 +1,6 @@
 import process from "node:process";
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildProgram } from "./build-program.js";
 import type { ProgramContext } from "./context.js";
 
@@ -41,6 +41,11 @@ describe("buildProgram", () => {
     } satisfies ProgramContext);
   });
 
+  afterEach(() => {
+    // Clean up exitCode after each test
+    process.exitCode = undefined;
+  });
+
   it("wires context/help/preaction/command registration with shared context", () => {
     const argv = ["node", "openclaw", "status"];
     const originalArgv = process.argv;
@@ -57,5 +62,51 @@ describe("buildProgram", () => {
     } finally {
       process.argv = originalArgv;
     }
+  });
+
+  it("sets exitCode to 1 on argument errors (fixes #60905)", () => {
+    // Reset exitCode before test
+    process.exitCode = undefined;
+    const program = buildProgram();
+    program.command("test").description("Test command");
+
+    // Simulate argument error: passing unexpected argument to command that doesn't accept any
+    try {
+      program.parse(["node", "openclaw", "test", "unexpected-arg"], { from: "user" });
+    } catch {
+      // exitOverride throws, but we expect exitCode to be set
+    }
+
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("preserves exitCode 0 for help display", () => {
+    // Reset exitCode before test
+    process.exitCode = undefined;
+    const program = buildProgram();
+    program.command("test").description("Test command");
+
+    try {
+      program.parse(["node", "openclaw", "--help"], { from: "user" });
+    } catch {
+      // exitOverride throws for help too
+    }
+
+    expect(process.exitCode).toBe(0);
+  });
+
+  it("preserves exitCode 0 for version display", () => {
+    // Reset exitCode before test
+    process.exitCode = undefined;
+    const program = buildProgram();
+    program.version("1.0.0");
+
+    try {
+      program.parse(["node", "openclaw", "--version"], { from: "user" });
+    } catch {
+      // exitOverride throws for version too
+    }
+
+    expect(process.exitCode).toBe(0);
   });
 });
