@@ -1,6 +1,5 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
-import { parseAgentSessionKey } from "../../../src/sessions/session-key-utils.js";
 import { t } from "../i18n/index.ts";
 import { refreshChat } from "./app-chat.ts";
 import { syncUrlWithSessionKey } from "./app-settings.ts";
@@ -16,6 +15,7 @@ import { ChatState, loadChatHistory } from "./controllers/chat.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
+import { parseAgentSessionKey } from "./session-key.ts";
 import type { ThemeTransitionContext } from "./theme-transition.ts";
 import type { ThemeMode, ThemeName } from "./theme.ts";
 import type { SessionsListResult } from "./types.ts";

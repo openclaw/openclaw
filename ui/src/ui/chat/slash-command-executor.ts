@@ -9,14 +9,14 @@ import {
   normalizeVerboseLevel,
   resolveThinkingDefaultForModel,
 } from "../../../../src/auto-reply/thinking.shared.js";
+import { createChatModelOverride, resolvePreferredServerChatModel } from "../chat-model-ref.ts";
+import type { GatewayBrowserClient } from "../gateway.ts";
 import {
   DEFAULT_AGENT_ID,
   DEFAULT_MAIN_KEY,
   isSubagentSessionKey,
   parseAgentSessionKey,
-} from "../../../../src/routing/session-key.js";
-import { createChatModelOverride, resolvePreferredServerChatModel } from "../chat-model-ref.ts";
-import type { GatewayBrowserClient } from "../gateway.ts";
+} from "../session-key.ts";
 import type {
   AgentsListResult,
   ChatModelOverride,
