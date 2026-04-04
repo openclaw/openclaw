@@ -62,6 +62,7 @@ export type TelegramMediaRuntimeOptions = {
   token: string;
   transport?: TelegramTransport;
   apiRoot?: string;
+  trustedLocalFileRoots?: readonly string[];
   dangerouslyAllowPrivateNetwork?: boolean;
 };
 
@@ -179,6 +180,7 @@ export function resolveTelegramMediaRuntimeOptions(params: {
     token: params.token,
     transport: params.transport,
     apiRoot: accountCfg?.apiRoot,
+    trustedLocalFileRoots: accountCfg?.trustedLocalFileRoots,
     dangerouslyAllowPrivateNetwork: accountCfg?.network?.dangerouslyAllowPrivateNetwork,
   };
 }
