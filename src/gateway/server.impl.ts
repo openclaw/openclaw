@@ -78,6 +78,7 @@ import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { runSetupWizard } from "../wizard/setup.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
+import { resolveGatewayAuth } from "./auth.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
 import { startGatewayConfigReloader } from "./config-reload.js";
 import type { ControlUiRootState } from "./control-ui.js";
@@ -638,6 +639,13 @@ export async function startGatewayServer(
     tailscaleConfig,
     tailscaleMode,
   } = runtimeConfig;
+  const getResolvedAuth = () =>
+    resolveGatewayAuth({
+      authConfig: getRuntimeConfig().gateway?.auth,
+      authOverride: opts.auth,
+      env: process.env,
+      tailscaleMode,
+    });
   let hooksConfig = runtimeConfig.hooksConfig;
   let hookClientIpConfig = resolveHookClientIpConfig(cfgAtStart);
   const canvasHostEnabled = runtimeConfig.canvasHostEnabled;
@@ -1300,6 +1308,7 @@ export async function startGatewayServer(
       canvasHostEnabled: Boolean(canvasHost),
       canvasHostServerPort,
       resolvedAuth,
+      getResolvedAuth,
       rateLimiter: authRateLimiter,
       browserRateLimiter: browserAuthRateLimiter,
       gatewayMethods,
