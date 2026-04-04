@@ -126,7 +126,7 @@ If you use tool profiles or allowlists, add `web_fetch` or `group:web`:
 {
   tools: {
     allow: ["web_fetch"],
-    // or: allow: ["group:web"]  (includes both web_fetch and web_search)
+    // or: allow: ["group:web"]  (includes web_fetch, web_search, and x_search)
   },
 }
 ```

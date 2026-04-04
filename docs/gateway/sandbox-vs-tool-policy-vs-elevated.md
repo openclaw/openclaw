@@ -85,14 +85,17 @@ Tool policies (global, agent, sandbox) support `group:*` entries that expand to 
 
 Available groups:
 
-- `group:runtime`: `exec`, `bash`, `process`
+- `group:runtime`: `exec`, `bash`, `process`, `code_execution`
 - `group:fs`: `read`, `write`, `edit`, `apply_patch`
-- `group:sessions`: `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`, `session_status`
+- `group:sessions`: `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`, `sessions_yield`, `subagents`, `session_status`
 - `group:memory`: `memory_search`, `memory_get`
+- `group:web`: `web_search`, `x_search`, `web_fetch`
 - `group:ui`: `browser`, `canvas`
 - `group:automation`: `cron`, `gateway`
 - `group:messaging`: `message`
 - `group:nodes`: `nodes`
+- `group:agents`: `agents_list`
+- `group:media`: `image`, `image_generate`, `tts`
 - `group:openclaw`: all built-in OpenClaw tools (excludes provider plugins)
 
 ## Elevated: exec-only "run on host"

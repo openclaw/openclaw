@@ -1570,7 +1570,7 @@ for usage/billing and raise limits as needed.
 
     Notes:
 
-    - If you use allowlists, add `web_search`/`web_fetch` or `group:web`.
+    - If you use allowlists, add `web_search`/`web_fetch`/`x_search` or `group:web`.
     - `web_fetch` is enabled by default (unless explicitly disabled).
     - Daemons read env vars from `~/.openclaw/.env` (or the service environment).
 

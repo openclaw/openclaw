@@ -106,12 +106,12 @@ config. Deny always wins over allow.
 `tools.profile` sets a base allowlist before `allow`/`deny` is applied.
 Per-agent override: `agents.list[].tools.profile`.
 
-| Profile     | What it includes                            |
-| ----------- | ------------------------------------------- |
-| `full`      | All tools (default)                         |
-| `coding`    | File I/O, runtime, sessions, memory, image  |
-| `messaging` | Messaging, session list/history/send/status |
-| `minimal`   | `session_status` only                       |
+| Profile     | What it includes                                         |
+| ----------- | -------------------------------------------------------- |
+| `full`      | All tools (default)                                      |
+| `coding`    | Files, runtime, web, sessions, memory, cron, image tools |
+| `messaging` | Messaging, session list/history/send/status              |
+| `minimal`   | `session_status` only                                    |
 
 ### Tool groups
 
@@ -128,6 +128,8 @@ Use `group:*` shorthands in allow/deny lists:
 | `group:automation` | cron, gateway                                                                                             |
 | `group:messaging`  | message                                                                                                   |
 | `group:nodes`      | nodes                                                                                                     |
+| `group:agents`     | agents_list                                                                                               |
+| `group:media`      | image, image_generate, tts                                                                                |
 | `group:openclaw`   | All built-in OpenClaw tools (excludes plugin tools)                                                       |
 
 `sessions_history` returns a bounded, safety-filtered recall view. It strips
