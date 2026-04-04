@@ -61,6 +61,7 @@ const TalkConfigSchema = Type.Object(
     resolved: ResolvedTalkConfigSchema,
     interruptOnSpeech: Type.Optional(Type.Boolean()),
     silenceTimeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
+    ...talkProviderFieldSchemas,
   },
   { additionalProperties: false },
 );
