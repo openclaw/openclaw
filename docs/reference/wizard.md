@@ -48,6 +48,8 @@ For a high-level overview, see [Onboarding (CLI)](/start/wizard).
     - **Cloudflare AI Gateway**: prompts for Account ID, Gateway ID, and `CLOUDFLARE_AI_GATEWAY_API_KEY`.
     - More detail: [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
     - **MiniMax**: config is auto-written; hosted default is `MiniMax-M2.7`.
+      API-key setup uses `minimax/...`, and OAuth setup uses
+      `minimax-portal/...`.
     - More detail: [MiniMax](/providers/minimax)
     - **StepFun**: config is auto-written for StepFun standard or Step Plan on China or global endpoints.
     - Standard currently includes `step-3.5-flash`, and Step Plan also includes `step-3.5-flash-2603`.

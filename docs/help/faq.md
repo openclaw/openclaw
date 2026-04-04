@@ -2193,10 +2193,14 @@ for usage/billing and raise limits as needed.
     Fix checklist:
 
     1. Upgrade to a current OpenClaw release (or run from source `main`), then restart the gateway.
-    2. Make sure MiniMax is configured (wizard or JSON), or that a MiniMax API key
-       exists in env/auth profiles so the provider can be injected.
-    3. Use the exact model id (case-sensitive): `minimax/MiniMax-M2.7` or
-       `minimax/MiniMax-M2.7-highspeed`.
+    2. Make sure MiniMax is configured (wizard or JSON), or that MiniMax auth
+       exists in env/auth profiles so the matching provider can be injected
+       (`MINIMAX_API_KEY` for `minimax`, `MINIMAX_OAUTH_TOKEN` or stored MiniMax
+       OAuth for `minimax-portal`).
+    3. Use the exact model id (case-sensitive) for your auth path:
+       `minimax/MiniMax-M2.7` or `minimax/MiniMax-M2.7-highspeed` for API-key
+       setup, or `minimax-portal/MiniMax-M2.7` /
+       `minimax-portal/MiniMax-M2.7-highspeed` for OAuth setup.
     4. Run:
 
        ```bash

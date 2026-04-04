@@ -332,8 +332,9 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
   prompt-cache hints, OpenAI reasoning-compat payloads) is not forwarded
 - Kilo Gateway: `kilocode` (`KILOCODE_API_KEY`)
 - Example model: `kilocode/kilo/auto`
-- MiniMax: `minimax` (`MINIMAX_API_KEY`)
-- Example model: `minimax/MiniMax-M2.7`
+- MiniMax: `minimax` (API key) and `minimax-portal` (OAuth)
+- Auth: `MINIMAX_API_KEY` for `minimax`; `MINIMAX_OAUTH_TOKEN` or `MINIMAX_API_KEY` for `minimax-portal`
+- Example model: `minimax/MiniMax-M2.7` or `minimax-portal/MiniMax-M2.7`
 - MiniMax onboarding/API-key setup writes explicit M2.7 model definitions with
   `input: ["text", "image"]`; the bundled provider catalog keeps the chat refs
   text-only until that provider config is materialized
@@ -557,7 +558,8 @@ MiniMax is configured via `models.providers` because it uses custom endpoints:
 - MiniMax OAuth (CN): `--auth-choice minimax-cn-oauth`
 - MiniMax API key (Global): `--auth-choice minimax-global-api`
 - MiniMax API key (CN): `--auth-choice minimax-cn-api`
-- Auth: `MINIMAX_API_KEY`
+- Auth: `MINIMAX_API_KEY` for `minimax`; `MINIMAX_OAUTH_TOKEN` or
+  `MINIMAX_API_KEY` for `minimax-portal`
 
 See [/providers/minimax](/providers/minimax) for setup details, model options, and config snippets.
 
