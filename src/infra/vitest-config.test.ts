@@ -3,7 +3,15 @@ import { describe, expect, it } from "vitest";
 import baseConfig, {
   resolveDefaultVitestPool,
   resolveLocalVitestMaxWorkers,
+  resolveLocalVitestScheduling,
 } from "../../vitest.config.ts";
+import { parseVitestProcessStats } from "../../vitest.system-load.ts";
+
+const idleVitestStats = {
+  otherVitestRootCount: 0,
+  otherVitestWorkerCount: 0,
+  otherVitestCpuPercent: 0,
+} as const;
 
 describe("resolveLocalVitestMaxWorkers", () => {
   it("uses a moderate local worker cap on larger hosts", () => {
@@ -17,6 +25,8 @@ describe("resolveLocalVitestMaxWorkers", () => {
           loadAverage1m: 0,
           totalMemoryBytes: 64 * 1024 ** 3,
         },
+        "forks",
+        idleVitestStats,
       ),
     ).toBe(3);
   });
@@ -32,6 +42,8 @@ describe("resolveLocalVitestMaxWorkers", () => {
           loadAverage1m: 0,
           totalMemoryBytes: 128 * 1024 ** 3,
         },
+        "forks",
+        idleVitestStats,
       ),
     ).toBe(2);
   });
@@ -47,6 +59,8 @@ describe("resolveLocalVitestMaxWorkers", () => {
           loadAverage1m: 0,
           totalMemoryBytes: 128 * 1024 ** 3,
         },
+        "forks",
+        idleVitestStats,
       ),
     ).toBe(3);
   });
@@ -60,6 +74,8 @@ describe("resolveLocalVitestMaxWorkers", () => {
           loadAverage1m: 0,
           totalMemoryBytes: 16 * 1024 ** 3,
         },
+        "forks",
+        idleVitestStats,
       ),
     ).toBe(2);
   });
@@ -73,6 +89,8 @@ describe("resolveLocalVitestMaxWorkers", () => {
           loadAverage1m: 0,
           totalMemoryBytes: 128 * 1024 ** 3,
         },
+        "forks",
+        idleVitestStats,
       ),
     ).toBe(4);
   });
@@ -86,6 +104,8 @@ describe("resolveLocalVitestMaxWorkers", () => {
           loadAverage1m: 16,
           totalMemoryBytes: 128 * 1024 ** 3,
         },
+        "forks",
+        idleVitestStats,
       ),
     ).toBe(2);
   });
@@ -99,8 +119,100 @@ describe("resolveLocalVitestMaxWorkers", () => {
           loadAverage1m: 0,
           totalMemoryBytes: 256 * 1024 ** 3,
         },
+        "forks",
+        idleVitestStats,
       ),
     ).toBe(6);
+  });
+});
+
+describe("resolveLocalVitestScheduling", () => {
+  it("falls back to serial when other Vitest workers are already active", () => {
+    expect(
+      resolveLocalVitestScheduling(
+        {},
+        {
+          cpuCount: 16,
+          loadAverage1m: 0.5,
+          totalMemoryBytes: 128 * 1024 ** 3,
+        },
+        "forks",
+        {
+          otherVitestRootCount: 1,
+          otherVitestWorkerCount: 3,
+          otherVitestCpuPercent: 120,
+        },
+      ),
+    ).toEqual({
+      maxWorkers: 1,
+      fileParallelism: false,
+      throttledBySystem: true,
+    });
+  });
+
+  it("caps moderate contention to two workers", () => {
+    expect(
+      resolveLocalVitestScheduling(
+        {},
+        {
+          cpuCount: 16,
+          loadAverage1m: 0.5,
+          totalMemoryBytes: 128 * 1024 ** 3,
+        },
+        "forks",
+        {
+          otherVitestRootCount: 1,
+          otherVitestWorkerCount: 0,
+          otherVitestCpuPercent: 10,
+        },
+      ),
+    ).toEqual({
+      maxWorkers: 2,
+      fileParallelism: true,
+      throttledBySystem: true,
+    });
+  });
+
+  it("allows disabling the system throttle probe explicitly", () => {
+    expect(
+      resolveLocalVitestScheduling(
+        {
+          OPENCLAW_VITEST_DISABLE_SYSTEM_THROTTLE: "1",
+        },
+        {
+          cpuCount: 16,
+          loadAverage1m: 0.5,
+          totalMemoryBytes: 128 * 1024 ** 3,
+        },
+        "forks",
+        idleVitestStats,
+      ),
+    ).toEqual({
+      maxWorkers: 4,
+      fileParallelism: true,
+      throttledBySystem: false,
+    });
+  });
+});
+
+describe("parseVitestProcessStats", () => {
+  it("counts other Vitest roots and workers while excluding the current pid", () => {
+    expect(
+      parseVitestProcessStats(
+        [
+          "101 0.0 node /Users/me/project/node_modules/.bin/vitest run --config vitest.config.ts",
+          "102 41.3 /opt/homebrew/bin/node /Users/me/project/node_modules/vitest/dist/workers/forks.js",
+          "103 37.4 /opt/homebrew/bin/node /Users/me/project/node_modules/vitest/dist/workers/forks.js",
+          "200 12.0 node /Users/me/project/node_modules/.bin/vitest run --config vitest.unit.config.ts",
+          "201 25.5 node unrelated-script.mjs",
+        ].join("\n"),
+        200,
+      ),
+    ).toEqual({
+      otherVitestRootCount: 1,
+      otherVitestWorkerCount: 2,
+      otherVitestCpuPercent: 78.7,
+    });
   });
 });
 
@@ -137,6 +249,9 @@ describe("test scripts", () => {
 
     expect(pkg.scripts?.["test:serial"]).toBe(
       "OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/test-projects.mjs",
+    );
+    expect(pkg.scripts?.["test:fast"]).toBe(
+      "node scripts/run-vitest.mjs run --config vitest.unit.config.ts",
     );
     expect(pkg.scripts?.["test:single"]).toBeUndefined();
   });
