@@ -20,8 +20,15 @@ Key references:
 - [Tailscale](/gateway/tailscale) for Serve/Funnel automation.
 - [Web surfaces](/web) for bind modes and security notes.
 
-Authentication is enforced at the WebSocket handshake via `connect.params.auth`
-(token or password). See `gateway.auth` in [Gateway configuration](/gateway/configuration).
+Authentication is enforced at the WebSocket handshake via the configured gateway
+auth path:
+
+- `connect.params.auth.token`
+- `connect.params.auth.password`
+- Tailscale Serve identity headers when `gateway.auth.allowTailscale: true`
+- trusted-proxy identity headers when `gateway.auth.mode: "trusted-proxy"`
+
+See `gateway.auth` in [Gateway configuration](/gateway/configuration).
 
 Security note: the Control UI is an **admin surface** (chat, config, exec approvals).
 Do not expose it publicly. The UI keeps dashboard URL tokens in sessionStorage
@@ -40,7 +47,7 @@ Prefer localhost, Tailscale Serve, or an SSH tunnel.
 - **Token source**: `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`); `openclaw dashboard` can pass it via URL fragment for one-time bootstrap, and the Control UI keeps it in sessionStorage for the current browser tab session and selected gateway URL instead of localStorage.
 - If `gateway.auth.token` is SecretRef-managed, `openclaw dashboard` prints/copies/opens a non-tokenized URL by design. This avoids exposing externally managed tokens in shell logs, clipboard history, or browser-launch arguments.
 - If `gateway.auth.token` is configured as a SecretRef and is unresolved in your current shell, `openclaw dashboard` still prints a non-tokenized URL plus actionable auth setup guidance.
-- **Not localhost**: use Tailscale Serve (tokenless for Control UI/WebSocket if `gateway.auth.allowTailscale: true`, assumes trusted gateway host; HTTP APIs still need token/password), tailnet bind with a token, or an SSH tunnel. See [Web surfaces](/web).
+- **Not localhost**: use Tailscale Serve (tokenless for Control UI/WebSocket if `gateway.auth.allowTailscale: true`, assumes trusted gateway host; HTTP APIs still need token/password), a non-loopback bind with token/password auth, an identity-aware reverse proxy with `gateway.auth.mode: "trusted-proxy"`, or an SSH tunnel. See [Web surfaces](/web).
 
 <a id="if-you-see-unauthorized-1008"></a>
 
