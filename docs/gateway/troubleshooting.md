@@ -117,6 +117,9 @@ Common signatures:
 - `device signature invalid` / `device signature expired` → client signed the wrong
   payload (or stale timestamp) for the current handshake.
 - `AUTH_TOKEN_MISMATCH` with `canRetryWithDeviceToken=true` → client can do one trusted retry with cached device token.
+- That cached-token retry reuses the cached scope set stored with the paired
+  device token. Explicit `deviceToken` / explicit `scopes` callers keep their
+  requested scope set instead.
 - `too many failed authentication attempts (retry later)` from a browser-origin
   loopback client → repeated failures from that same normalized `Origin` are
   locked out temporarily; another localhost origin uses a separate bucket.

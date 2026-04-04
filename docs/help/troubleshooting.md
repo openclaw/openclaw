@@ -139,6 +139,9 @@ flowchart TD
     - `origin not allowed` → browser `Origin` is not allowed for the Control UI
       gateway target.
     - `AUTH_TOKEN_MISMATCH` with retry hints (`canRetryWithDeviceToken=true`) → one trusted device-token retry may occur automatically.
+    - That cached-token retry reuses the cached scope set stored with the paired
+      device token. Explicit `deviceToken` / explicit `scopes` callers keep
+      their requested scope set instead.
     - `too many failed authentication attempts (retry later)` from a localhost
       browser origin → repeated failures from that same `Origin` are temporarily
       locked out; another localhost origin uses a separate bucket.
