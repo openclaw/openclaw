@@ -421,6 +421,29 @@ function resolveTelegramExecApprovalTarget(params: {
   return resolveTelegramTestAccount(params.cfg, params.accountId).execApprovals?.target ?? "dm";
 }
 
+function isTelegramExecApprovalTargetRecipient(params: {
+  cfg: OpenClawConfig;
+  senderId?: string | null;
+  accountId?: string | null;
+}): boolean {
+  const senderId = params.senderId ? normalizeTelegramDirectApproverId(params.senderId) : undefined;
+  if (!senderId) {
+    return false;
+  }
+  const targets = params.cfg.approvals?.exec?.targets ?? [];
+  const accountId = params.accountId ? normalizeAccountId(params.accountId) : undefined;
+  return targets.some((target) => {
+    if (target.channel?.trim().toLowerCase() !== "telegram") {
+      return false;
+    }
+    if (accountId && target.accountId && normalizeAccountId(target.accountId) !== accountId) {
+      return false;
+    }
+    const to = target.to ? normalizeTelegramDirectApproverId(target.to) : undefined;
+    return Boolean(to && to === senderId);
+  });
+}
+
 const telegramNativeApprovalAdapter = createApproverRestrictedNativeApprovalAdapter({
   channel: "telegram",
   channelLabel: "Telegram",

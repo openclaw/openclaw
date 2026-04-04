@@ -5,7 +5,7 @@ import {
   resolveChannelApprovalCapability,
 } from "../channels/plugins/index.js";
 import { loadConfig, type OpenClawConfig } from "../config/config.js";
-import { deriveSessionChatType } from "../sessions/session-key-utils.js";
+import { parseRawSessionConversationRef } from "../sessions/session-key-utils.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
@@ -40,8 +40,12 @@ function isBlueBubblesGroupTurnSource(params: {
     return false;
   }
 
-  const sessionChatType = deriveSessionChatType(params.sessionKey);
-  if (sessionChatType === "group" || sessionChatType === "channel") {
+  const sessionRef = parseRawSessionConversationRef(params.sessionKey);
+  if (
+    sessionRef &&
+    sessionRef.channel === "bluebubbles" &&
+    (sessionRef.kind === "group" || sessionRef.kind === "channel")
+  ) {
     return true;
   }
 

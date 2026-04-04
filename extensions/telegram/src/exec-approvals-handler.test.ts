@@ -507,7 +507,8 @@ describe("TelegramExecApprovalHandler", () => {
       },
     });
 
-    const [chatId, text] = sendMessage.mock.calls[0] ?? [];
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    const [chatId, text] = sendMessage.mock.calls[1] ?? [];
     expect(chatId).toBe("1234567890");
     expect(text).toContain("Plugin approval required");
   });

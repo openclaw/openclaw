@@ -6,7 +6,10 @@ import {
   matchesApprovalRequestFilters,
 } from "openclaw/plugin-sdk/approval-client-runtime";
 import { resolveApprovalRequestChannelAccountId } from "openclaw/plugin-sdk/approval-native-runtime";
-import type { OpenClawConfig, TelegramExecApprovalConfig } from "openclaw/plugin-sdk/config-runtime";
+import type {
+  OpenClawConfig,
+  TelegramExecApprovalConfig,
+} from "openclaw/plugin-sdk/config-runtime";
 import type { ExecApprovalRequest, PluginApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
@@ -51,7 +54,15 @@ export function resolveTelegramExecApprovalConfig(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): TelegramExecApprovalConfig | undefined {
-  return resolveTelegramApprovalAccountConfig(params).execApprovals;
+  const account = resolveTelegramApprovalAccountConfig(params);
+  const config = account.execApprovals;
+  if (!config) {
+    return undefined;
+  }
+  return {
+    ...config,
+    enabled: account.enabled !== false && config.enabled !== false,
+  };
 }
 
 export function getTelegramExecApprovalApprovers(params: {
