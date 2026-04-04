@@ -8,6 +8,7 @@ import { normalizeEmbeddingModelWithPrefixes } from "./embeddings-model-normaliz
 import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
 import { buildRemoteBaseUrlPolicy, withRemoteHttpResponse } from "./remote-http.js";
 import { resolveMemorySecretInputString } from "./secret-input.js";
+import { retry } from "../agents/tools/retry.js";
 
 export type OllamaEmbeddingClient = {
   baseUrl: string;
@@ -76,25 +77,39 @@ export async function createOllamaEmbeddingProvider(
   const embedUrl = `${client.baseUrl.replace(/\/$/, "")}/api/embeddings`;
 
   const embedOne = async (text: string): Promise<number[]> => {
-    const json = await withRemoteHttpResponse({
-      url: embedUrl,
-      ssrfPolicy: client.ssrfPolicy,
-      init: {
-        method: "POST",
-        headers: client.headers,
-        body: JSON.stringify({ model: client.model, prompt: text }),
-      },
-      onResponse: async (res) => {
-        if (!res.ok) {
-          throw new Error(`Ollama embeddings HTTP ${res.status}: ${await res.text()}`);
+    const json = await retry(
+      async () => {
+        const result = await withRemoteHttpResponse({
+          url: embedUrl,
+          ssrfPolicy: client.ssrfPolicy,
+          init: {
+            method: "POST",
+            headers: client.headers,
+            body: JSON.stringify({ model: client.model, prompt: text }),
+          },
+          onResponse: async (res) => {
+            if (!res.ok) {
+              throw new Error(`Ollama embeddings HTTP ${res.status}: ${await res.text()}`);
+            }
+            return (await res.json()) as { embedding?: number[] };
+          },
+        });
+        if (!Array.isArray(result.embedding)) {
+          throw new Error(`Ollama embeddings response missing embedding[]`);
         }
-        return (await res.json()) as { embedding?: number[] };
+        return sanitizeAndNormalizeEmbedding(result.embedding);
       },
-    });
-    if (!Array.isArray(json.embedding)) {
-      throw new Error(`Ollama embeddings response missing embedding[]`);
+      {
+        maxAttempts: 3,
+        baseDelayMs: 1000,
+        maxDelayMs: 10000,
+        throwOnFailure: false,
+      },
+    );
+    if (!json) {
+      throw new Error("Ollama embeddings failed after 3 attempts");
     }
-    return sanitizeAndNormalizeEmbedding(json.embedding);
+    return json;
   };
 
   const provider: EmbeddingProvider = {

@@ -15,6 +15,7 @@ import { debugEmbeddingsLog } from "./embeddings-debug.js";
 import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
 import { buildRemoteBaseUrlPolicy, withRemoteHttpResponse } from "./remote-http.js";
 import { resolveMemorySecretInputString } from "./secret-input.js";
+import { retry } from "../agents/tools/retry.js";
 
 export type GeminiEmbeddingClient = {
   baseUrl: string;
@@ -172,36 +173,52 @@ async function fetchGeminiEmbeddingPayload(params: {
   embedding?: { values?: number[] };
   embeddings?: Array<{ values?: number[] }>;
 }> {
-  return await executeWithApiKeyRotation({
-    provider: "google",
-    apiKeys: params.client.apiKeys,
-    execute: async (apiKey) => {
-      const authHeaders = parseGeminiAuth(apiKey);
-      const headers = {
-        ...authHeaders.headers,
-        ...params.client.headers,
-      };
-      return await withRemoteHttpResponse({
-        url: params.endpoint,
-        ssrfPolicy: params.client.ssrfPolicy,
-        init: {
-          method: "POST",
-          headers,
-          body: JSON.stringify(params.body),
-        },
-        onResponse: async (res) => {
-          if (!res.ok) {
-            const text = await res.text();
-            throw new Error(`gemini embeddings failed: ${res.status} ${text}`);
-          }
-          return (await res.json()) as {
-            embedding?: { values?: number[] };
-            embeddings?: Array<{ values?: number[] }>;
+  const result = await retry(
+    async () => {
+      return await executeWithApiKeyRotation({
+        provider: "google",
+        apiKeys: params.client.apiKeys,
+        execute: async (apiKey) => {
+          const authHeaders = parseGeminiAuth(apiKey);
+          const headers = {
+            ...authHeaders.headers,
+            ...params.client.headers,
           };
+          return await withRemoteHttpResponse({
+            url: params.endpoint,
+            ssrfPolicy: params.client.ssrfPolicy,
+            init: {
+              method: "POST",
+              headers,
+              body: JSON.stringify(params.body),
+            },
+            onResponse: async (res) => {
+              if (!res.ok) {
+                const text = await res.text();
+                throw new Error(`gemini embeddings failed: ${res.status} ${text}`);
+              }
+              return (await res.json()) as {
+                embedding?: { values?: number[] };
+                embeddings?: Array<{ values?: number[] }>;
+              };
+            },
+          });
         },
       });
     },
-  });
+    {
+      maxAttempts: 3,
+      baseDelayMs: 1500,
+      maxDelayMs: 15000,
+      throwOnFailure: false,
+    },
+  );
+
+  if (result === null) {
+    throw new Error("gemini embeddings failed after 3 attempts");
+  }
+
+  return result;
 }
 
 function normalizeGeminiBaseUrl(raw: string): string {

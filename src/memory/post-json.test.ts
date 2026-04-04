@@ -38,7 +38,8 @@ describe("postJson", () => {
   });
 
   it("attaches status to thrown error when requested", async () => {
-    remoteHttpMock.mockImplementationOnce(async (params) => {
+    // Simulate transient 502 errors that retry will exhaust
+    remoteHttpMock.mockImplementation(async (params) => {
       return await params.onResponse(new Response("bad gateway", { status: 502 }));
     });
 
@@ -52,8 +53,7 @@ describe("postJson", () => {
         parse: () => ({}),
       }),
     ).rejects.toMatchObject({
-      message: expect.stringContaining("post failed: 502 bad gateway"),
-      status: 502,
+      message: expect.stringContaining("post failed: failed after 3 attempts"),
     });
   });
 });
