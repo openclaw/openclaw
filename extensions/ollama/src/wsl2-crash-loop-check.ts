@@ -14,8 +14,7 @@
  */
 
 import { execFile } from "node:child_process";
-import { access } from "node:fs/promises";
-import { readFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 

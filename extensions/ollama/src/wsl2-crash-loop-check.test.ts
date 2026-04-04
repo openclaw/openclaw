@@ -1,54 +1,52 @@
-import { describe, expect, it, vi, afterEach } from "vitest";
+import { promisify } from "node:util";
+import { describe, expect, it, vi, afterEach, beforeEach } from "vitest";
 
-// Mock node:fs/promises and node:child_process BEFORE importing the module under test.
-// Do NOT mock node:util — real promisify must wrap the mocked execFile.
+// Mock node:fs/promises BEFORE importing the module under test.
 vi.mock("node:fs/promises", () => ({
   readFile: vi.fn(),
   access: vi.fn(),
 }));
 
-vi.mock("node:child_process", () => ({
-  execFile: vi.fn(),
-}));
+// Create a mock execFile with util.promisify.custom support.
+// vi.mock factory must not reference outer scope, so we build the mock inline.
+vi.mock("node:child_process", async (importOriginal) => {
+  const { promisify: realPromisify } = await import("node:util");
+  const mockFn = vi.fn();
+  // Attach the promisify.custom symbol so util.promisify returns our async mock
+  const asyncMock = vi.fn();
+  (mockFn as unknown as Record<symbol, unknown>)[realPromisify.custom] = asyncMock;
+  return { execFile: mockFn };
+});
 
 import * as childProcess from "node:child_process";
 import * as fs from "node:fs/promises";
 import {
   checkWsl2CrashLoopRisk,
+  hasCuda,
   isWsl2,
   isOllamaEnabledWithRestartAlways,
 } from "./wsl2-crash-loop-check.js";
 
 const readFileMock = vi.mocked(fs.readFile);
 const accessMock = vi.mocked(fs.access);
-// execFile is callback-based; promisify wraps it, so mock must use the callback style
-const execFileMock = vi.mocked(childProcess.execFile);
+// Access the promisify.custom mock from the mocked execFile
+const execFileMock = childProcess.execFile as unknown as ReturnType<typeof vi.fn> & {
+  [key: symbol]: ReturnType<typeof vi.fn>;
+};
+const execFilePromiseMock = vi.mocked(execFileMock[promisify.custom]);
 
-// Helper: make execFile callback succeed with the given stdout
+// Helper: make execFile resolve with the given stdout
 function mockExecFileOk(stdout: string) {
-  execFileMock.mockImplementation(((
-    _cmd: unknown,
-    _args: unknown,
-    _opts: unknown,
-    cb: (err: null, r: { stdout: string; stderr: string }) => void,
-  ) => {
-    cb(null, { stdout, stderr: "" });
-  }) as never);
+  execFilePromiseMock.mockResolvedValue({ stdout, stderr: "" });
 }
 
-// Helper: make execFile callback fail
+// Helper: make execFile reject
 function mockExecFileFail() {
-  execFileMock.mockImplementation(((
-    _cmd: unknown,
-    _args: unknown,
-    _opts: unknown,
-    cb: (err: Error) => void,
-  ) => {
-    cb(new Error("command not found"));
-  }) as never);
+  execFilePromiseMock.mockRejectedValue(new Error("command not found"));
 }
 
 describe("isWsl2", () => {
+  beforeEach(() => vi.clearAllMocks());
   afterEach(() => vi.clearAllMocks());
 
   it("returns true when /proc/version contains microsoft and WSL2", async () => {
@@ -71,6 +69,33 @@ describe("isWsl2", () => {
   it("returns false when /proc/version is unreadable", async () => {
     readFileMock.mockRejectedValue(new Error("ENOENT") as never);
     expect(await isWsl2()).toBe(false);
+  });
+});
+
+describe("hasCuda", () => {
+  afterEach(() => vi.clearAllMocks());
+
+  it("returns true when /usr/lib/wsl/lib/nvidia-smi exists", async () => {
+    accessMock.mockResolvedValueOnce(undefined as never);
+    expect(await hasCuda()).toBe(true);
+    expect(accessMock).toHaveBeenCalledTimes(1);
+    expect(accessMock).toHaveBeenCalledWith("/usr/lib/wsl/lib/nvidia-smi");
+  });
+
+  it("returns true via fallback when /usr/local/cuda exists but nvidia-smi does not", async () => {
+    accessMock
+      .mockRejectedValueOnce(new Error("ENOENT") as never) // nvidia-smi fails
+      .mockResolvedValueOnce(undefined as never); // /usr/local/cuda succeeds
+    expect(await hasCuda()).toBe(true);
+    expect(accessMock).toHaveBeenCalledTimes(2);
+    expect(accessMock).toHaveBeenNthCalledWith(1, "/usr/lib/wsl/lib/nvidia-smi");
+    expect(accessMock).toHaveBeenNthCalledWith(2, "/usr/local/cuda");
+  });
+
+  it("returns false when neither path exists", async () => {
+    accessMock.mockRejectedValue(new Error("ENOENT") as never);
+    expect(await hasCuda()).toBe(false);
+    expect(accessMock).toHaveBeenCalledTimes(2);
   });
 });
 
