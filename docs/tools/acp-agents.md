@@ -19,6 +19,36 @@ If you want Codex or Claude Code to connect as an external MCP client directly
 to existing OpenClaw channel conversations, use [`openclaw mcp serve`](/cli/mcp)
 instead of ACP.
 
+## Which page do I want?
+
+There are three nearby surfaces that are easy to confuse:
+
+| You want to...                                                                     | Use this                              | Notes                                                                                                       |
+| ---------------------------------------------------------------------------------- | ------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Run Codex, Claude Code, Gemini CLI, or another external harness _through_ OpenClaw | This page: ACP agents                 | Chat-bound sessions, `/acp spawn`, `sessions_spawn({ runtime: "acp" })`, background tasks, runtime controls |
+| Expose an OpenClaw Gateway session _as_ an ACP server for an editor or client      | [`openclaw acp`](/cli/acp)            | Bridge mode. IDE/client talks ACP to OpenClaw over stdio/WebSocket                                          |
+| Reuse a local AI CLI as a text-only fallback model                                 | [CLI Backends](/gateway/cli-backends) | Not ACP. No OpenClaw tools, no ACP controls, no harness runtime                                             |
+
+## Does this work out of the box?
+
+Usually, yes.
+
+- Fresh installs now ship the bundled `acpx` runtime plugin enabled by default.
+- The bundled `acpx` plugin prefers its plugin-local pinned `acpx` binary.
+- On startup, OpenClaw probes that binary and self-repairs it if needed.
+- Start with `/acp doctor` if you want a fast readiness check.
+
+What can still happen on first use:
+
+- A target harness adapter may be fetched on demand with `npx` the first time you use that harness.
+- Vendor auth still has to exist on the host for that harness.
+- If the host has no npm/network access, first-run adapter fetches can fail until caches are pre-warmed or the adapter is installed another way.
+
+Examples:
+
+- `/acp spawn codex`: OpenClaw should be ready to bootstrap `acpx`, but the Codex ACP adapter may still need a first-run fetch.
+- `/acp spawn claude`: same story for the Claude ACP adapter, plus Claude-side auth on that host.
+
 ## Fast operator flow
 
 Use this when you want a practical `/acp` runbook:
@@ -69,6 +99,26 @@ Use ACP when you want an external harness runtime. Use sub-agents when you want 
 | Spawn tool    | `sessions_spawn` with `runtime:"acp"` | `sessions_spawn` (default runtime) |
 
 See also [Sub-agents](/tools/subagents).
+
+## How ACP runs Claude Code
+
+For Claude Code through ACP, the stack is:
+
+1. OpenClaw ACP session control plane
+2. bundled `acpx` runtime plugin
+3. Claude ACP adapter
+4. Claude-side runtime/session machinery
+
+Important distinction:
+
+- ACP Claude is not the same thing as the direct `claude-cli/...` fallback runtime.
+- ACP Claude is a harness session with ACP controls, session resume, background-task tracking, and optional conversation/thread binding.
+- `claude-cli/...` is a text-only local CLI backend. See [CLI Backends](/gateway/cli-backends).
+
+For operators, the practical rule is:
+
+- want `/acp spawn`, bindable sessions, runtime controls, or persistent harness work: use ACP
+- want simple local text fallback through the raw CLI: use CLI backends
 
 ## Bound sessions
 
@@ -492,7 +542,7 @@ Some controls depend on backend capabilities. If a backend does not support a co
 | `/acp close`         | Close session and unbind thread targets.                  | `/acp close`                                                  |
 | `/acp status`        | Show backend, mode, state, runtime options, capabilities. | `/acp status`                                                 |
 | `/acp set-mode`      | Set runtime mode for target session.                      | `/acp set-mode plan`                                          |
-| `/acp set`           | Generic runtime config option write.                      | `/acp set model openai/gpt-5.2`                               |
+| `/acp set`           | Generic runtime config option write.                      | `/acp set model openai/gpt-5.4`                               |
 | `/acp cwd`           | Set runtime working directory override.                   | `/acp cwd /Users/user/Projects/repo`                          |
 | `/acp permissions`   | Set approval policy profile.                              | `/acp permissions strict`                                     |
 | `/acp timeout`       | Set runtime timeout (seconds).                            | `/acp timeout 120`                                            |
@@ -614,7 +664,17 @@ See [Configuration Reference](/gateway/configuration-reference).
 
 ## Plugin setup for acpx backend
 
-Install and enable plugin:
+Fresh installs ship the bundled `acpx` runtime plugin enabled by default, so ACP
+usually works without a manual plugin install step.
+
+Start with:
+
+```text
+/acp doctor
+```
+
+If you disabled `acpx`, denied it via `plugins.allow` / `plugins.deny`, or want
+to switch to a local development checkout, use the explicit plugin path:
 
 ```bash
 openclaw plugins install acpx

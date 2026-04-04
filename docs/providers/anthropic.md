@@ -95,11 +95,11 @@ OpenClaw supports Anthropic's prompt caching feature. This is **API-only**; subs
 
 Use the `cacheRetention` parameter in your model config:
 
-| Value   | Cache Duration | Description                         |
-| ------- | -------------- | ----------------------------------- |
-| `none`  | No caching     | Disable prompt caching              |
-| `short` | 5 minutes      | Default for API Key auth            |
-| `long`  | 1 hour         | Extended cache (requires beta flag) |
+| Value   | Cache Duration | Description              |
+| ------- | -------------- | ------------------------ |
+| `none`  | No caching     | Disable prompt caching   |
+| `short` | 5 minutes      | Default for API Key auth |
+| `long`  | 1 hour         | Extended cache           |
 
 ```json5
 {
@@ -154,18 +154,6 @@ This lets one agent keep a long-lived cache while another agent on the same mode
 - Anthropic Claude models on Bedrock (`amazon-bedrock/*anthropic.claude*`) accept `cacheRetention` pass-through when configured.
 - Non-Anthropic Bedrock models are forced to `cacheRetention: "none"` at runtime.
 - Anthropic API-key smart defaults also seed `cacheRetention: "short"` for Claude-on-Bedrock model refs when no explicit value is set.
-
-### Legacy parameter
-
-The older `cacheControlTtl` parameter is still supported for backwards compatibility:
-
-- `"5m"` maps to `short`
-- `"1h"` maps to `long`
-
-We recommend migrating to the new `cacheRetention` parameter.
-
-OpenClaw includes the `extended-cache-ttl-2025-04-11` beta flag for Anthropic API
-requests; keep it if you override provider headers (see [/gateway/configuration](/gateway/configuration)).
 
 ## 1M context window (Anthropic beta)
 

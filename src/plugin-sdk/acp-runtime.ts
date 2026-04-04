@@ -40,7 +40,9 @@ export const __testing = new Proxy({} as typeof managerTesting & typeof registry
     return Reflect.has(managerTesting, prop) || Reflect.has(registryTesting, prop);
   },
   ownKeys() {
-    return Array.from(new Set([...Reflect.ownKeys(managerTesting), ...Reflect.ownKeys(registryTesting)]));
+    return Array.from(
+      new Set([...Reflect.ownKeys(managerTesting), ...Reflect.ownKeys(registryTesting)]),
+    );
   },
   getOwnPropertyDescriptor(_target, prop) {
     if (Reflect.has(managerTesting, prop) || Reflect.has(registryTesting, prop)) {

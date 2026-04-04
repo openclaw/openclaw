@@ -18,6 +18,7 @@ import {
 } from "./live-cache-test-support.js";
 import { runEmbeddedPiAgent } from "./pi-embedded-runner.js";
 import { compactEmbeddedPiSessionDirect } from "./pi-embedded-runner/compact.runtime.js";
+import { buildZeroUsage } from "./stream-message-shared.js";
 
 const describeCacheLive = LIVE_CACHE_TEST_ENABLED ? describe : describe.skip;
 
@@ -27,6 +28,12 @@ const OPENAI_SESSION_ID = "live-cache-openai-stable-session";
 const ANTHROPIC_SESSION_ID = "live-cache-anthropic-stable-session";
 const OPENAI_PREFIX = buildStableCachePrefix("openai");
 const ANTHROPIC_PREFIX = buildStableCachePrefix("anthropic");
+const OPENAI_STABLE_PREFIX_MIN_CACHE_READ = 4_608;
+const OPENAI_STABLE_PREFIX_MIN_HIT_RATE = 0.9;
+const OPENAI_TOOL_MIN_CACHE_READ = 4_096;
+const OPENAI_TOOL_MIN_HIT_RATE = 0.85;
+const OPENAI_IMAGE_MIN_CACHE_READ = 3_840;
+const OPENAI_IMAGE_MIN_HIT_RATE = 0.82;
 const LIVE_TEST_PNG_URL = new URL(
   "../../apps/android/app/src/main/res/mipmap-xhdpi/ic_launcher.png",
   import.meta.url,
@@ -86,26 +93,114 @@ function buildRunnerSessionPaths(sessionId: string) {
   };
 }
 
-function resolveProviderBaseUrl(fixture: LiveResolvedModel): string | undefined {
-  const candidate = (fixture.model as { baseUrl?: unknown }).baseUrl;
+function resolveProviderBaseUrl(model: LiveResolvedModel["model"]): string | undefined {
+  const candidate = (model as { baseUrl?: unknown }).baseUrl;
   return typeof candidate === "string" && candidate.trim().length > 0 ? candidate : undefined;
 }
 
-function buildEmbeddedRunnerConfig(params: {
-  fixture: LiveResolvedModel;
-  cacheRetention: "none" | "short" | "long";
-  transport?: "sse" | "websocket";
-}): OpenClawConfig {
-  const provider = params.fixture.model.provider;
-  const modelKey = `${provider}/${params.fixture.model.id}`;
-  const providerBaseUrl = resolveProviderBaseUrl(params.fixture);
+function resolveDefaultProviderBaseUrl(model: LiveResolvedModel["model"]): string {
+  if (model.provider === "anthropic") {
+    return "https://api.anthropic.com/v1";
+  }
+  if (model.provider === "openai") {
+    return "https://api.openai.com/v1";
+  }
+  return "https://example.invalid/v1";
+}
+
+function buildEmbeddedModelDefinition(model: LiveResolvedModel["model"]) {
+  const contextWindowCandidate = (model as { contextWindow?: unknown }).contextWindow;
+  const maxTokensCandidate = (model as { maxTokens?: unknown }).maxTokens;
+  const reasoningCandidate = (model as { reasoning?: unknown }).reasoning;
+  const inputCandidate = (model as { input?: unknown }).input;
+  const contextWindow =
+    typeof contextWindowCandidate === "number" && Number.isFinite(contextWindowCandidate)
+      ? Math.max(1, Math.trunc(contextWindowCandidate))
+      : 128_000;
+  const maxTokens =
+    typeof maxTokensCandidate === "number" && Number.isFinite(maxTokensCandidate)
+      ? Math.max(1, Math.trunc(maxTokensCandidate))
+      : 8_192;
+  const input =
+    Array.isArray(inputCandidate) &&
+    inputCandidate.every((value) => value === "text" || value === "image")
+      ? [...inputCandidate]
+      : (["text", "image"] as Array<"text" | "image">);
+  return {
+    id: model.id,
+    name: model.id,
+    api: resolveEmbeddedModelApi(model),
+    reasoning: typeof reasoningCandidate === "boolean" ? reasoningCandidate : false,
+    input,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow,
+    maxTokens,
+  };
+}
+
+function resolveEmbeddedModelApi(
+  model: LiveResolvedModel["model"],
+): "anthropic-messages" | "openai-responses" {
+  return model.provider === "anthropic" ? "anthropic-messages" : "openai-responses";
+}
+
+function normalizeLiveUsage(
+  usage:
+    | AssistantMessage["usage"]
+    | {
+        input?: number;
+        output?: number;
+        cacheRead?: number;
+        cacheWrite?: number;
+        total?: number;
+      }
+    | undefined,
+): AssistantMessage["usage"] {
+  if (!usage) {
+    return buildZeroUsage();
+  }
+  const input = usage.input ?? 0;
+  const output = usage.output ?? 0;
+  const cacheRead = usage.cacheRead ?? 0;
+  const cacheWrite = usage.cacheWrite ?? 0;
+  const totalTokens =
+    "totalTokens" in usage && typeof usage.totalTokens === "number"
+      ? usage.totalTokens
+      : "total" in usage && typeof usage.total === "number"
+        ? usage.total
+        : input + output;
+  const cost =
+    "cost" in usage && usage.cost
+      ? usage.cost
+      : { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+  return {
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    totalTokens,
+    cost,
+  };
+}
+
+function buildEmbeddedRunnerConfig(
+  params: LiveResolvedModel & {
+    cacheRetention: "none" | "short" | "long";
+    transport?: "sse" | "websocket";
+  },
+): OpenClawConfig {
+  const provider = params.model.provider;
+  const modelKey = `${provider}/${params.model.id}`;
+  const providerBaseUrl =
+    resolveProviderBaseUrl(params.model) ?? resolveDefaultProviderBaseUrl(params.model);
   return {
     models: {
       providers: {
         [provider]: {
-          api: params.fixture.model.api,
-          apiKey: params.fixture.apiKey,
-          ...(providerBaseUrl ? { baseUrl: providerBaseUrl } : {}),
+          api: resolveEmbeddedModelApi(params.model),
+          apiKey: params.apiKey,
+          baseUrl: providerBaseUrl,
+          models: [buildEmbeddedModelDefinition(params.model)],
         },
       },
     },
@@ -147,8 +242,9 @@ function extractRunPayloadText(payloads: Array<{ text?: string } | undefined> | 
 }
 
 async function runEmbeddedCacheProbe(params: {
-  fixture: LiveResolvedModel;
+  apiKey: string;
   cacheRetention: "none" | "short" | "long";
+  model: LiveResolvedModel["model"];
   prefix: string;
   providerTag: "anthropic" | "openai";
   sessionId: string;
@@ -166,13 +262,14 @@ async function runEmbeddedCacheProbe(params: {
       workspaceDir: sessionPaths.workspaceDir,
       agentDir: sessionPaths.agentDir,
       config: buildEmbeddedRunnerConfig({
-        fixture: params.fixture,
+        apiKey: params.apiKey,
         cacheRetention: params.cacheRetention,
+        model: params.model,
         transport: params.transport,
       }),
       prompt: buildEmbeddedCachePrompt(params.suffix, params.promptSections),
-      provider: params.fixture.model.provider,
-      model: params.fixture.model.id,
+      provider: params.model.provider,
+      model: params.model.id,
       timeoutMs: params.providerTag === "openai" ? OPENAI_TIMEOUT_MS : ANTHROPIC_TIMEOUT_MS,
       runId: `${params.sessionId}-${params.suffix}-${params.transport ?? "default"}`,
       extraSystemPrompt: params.prefix,
@@ -183,7 +280,7 @@ async function runEmbeddedCacheProbe(params: {
   );
   const text = extractRunPayloadText(result.payloads);
   expect(text.toLowerCase()).toContain(params.suffix.toLowerCase());
-  const usage = result.meta.agentMeta?.usage ?? {};
+  const usage = normalizeLiveUsage(result.meta.agentMeta?.usage);
   return {
     suffix: params.suffix,
     text,
@@ -193,8 +290,9 @@ async function runEmbeddedCacheProbe(params: {
 }
 
 async function compactLiveCacheSession(params: {
-  fixture: LiveResolvedModel;
+  apiKey: string;
   cacheRetention: "none" | "short" | "long";
+  model: LiveResolvedModel["model"];
   providerTag: "anthropic" | "openai";
   sessionId: string;
 }) {
@@ -208,11 +306,12 @@ async function compactLiveCacheSession(params: {
       workspaceDir: sessionPaths.workspaceDir,
       agentDir: sessionPaths.agentDir,
       config: buildEmbeddedRunnerConfig({
-        fixture: params.fixture,
+        apiKey: params.apiKey,
         cacheRetention: params.cacheRetention,
+        model: params.model,
       }),
-      provider: params.fixture.model.provider,
-      model: params.fixture.model.id,
+      provider: params.model.provider,
+      model: params.model.id,
       force: true,
       trigger: "manual",
       runId: `${params.sessionId}-compact`,
@@ -625,7 +724,7 @@ describeCacheLive("pi embedded runner prompt caching (live)", () => {
     }, 120_000);
 
     it(
-      "hits a high cache-read rate on repeated stable prefixes",
+      "hits the expected OpenAI cache plateau on repeated stable prefixes",
       async () => {
         const warmup = await runOpenAiCacheProbe({
           ...fixture,
@@ -653,17 +752,19 @@ describeCacheLive("pi embedded runner prompt caching (live)", () => {
           (candidate.usage.cacheRead ?? 0) > (best.usage.cacheRead ?? 0) ? candidate : best,
         );
         logLiveCache(
-          `openai best-hit suffix=${bestHit.suffix} cacheRead=${bestHit.usage.cacheRead} input=${bestHit.usage.input} rate=${bestHit.hitRate.toFixed(3)}`,
+          `openai stable-prefix plateau suffix=${bestHit.suffix} cacheRead=${bestHit.usage.cacheRead} input=${bestHit.usage.input} rate=${bestHit.hitRate.toFixed(3)}`,
         );
 
-        expect(bestHit.usage.cacheRead ?? 0).toBeGreaterThan(1_024);
-        expect(bestHit.hitRate).toBeGreaterThanOrEqual(0.7);
+        expect(bestHit.usage.cacheRead ?? 0).toBeGreaterThanOrEqual(
+          OPENAI_STABLE_PREFIX_MIN_CACHE_READ,
+        );
+        expect(bestHit.hitRate).toBeGreaterThanOrEqual(OPENAI_STABLE_PREFIX_MIN_HIT_RATE);
       },
       6 * 60_000,
     );
 
     it(
-      "keeps high cache-read rates across tool-call followup turns",
+      "keeps the expected OpenAI cache plateau across tool-call followup turns",
       async () => {
         const warmup = await runOpenAiToolCacheProbe({
           ...fixture,
@@ -686,17 +787,17 @@ describeCacheLive("pi embedded runner prompt caching (live)", () => {
         });
         const bestHit = (hitA.usage.cacheRead ?? 0) >= (hitB.usage.cacheRead ?? 0) ? hitA : hitB;
         logLiveCache(
-          `openai tool best-hit suffix=${bestHit.suffix} cacheRead=${bestHit.usage.cacheRead} input=${bestHit.usage.input} rate=${bestHit.hitRate.toFixed(3)}`,
+          `openai tool plateau suffix=${bestHit.suffix} cacheRead=${bestHit.usage.cacheRead} input=${bestHit.usage.input} rate=${bestHit.hitRate.toFixed(3)}`,
         );
 
-        expect(bestHit.usage.cacheRead ?? 0).toBeGreaterThan(1_024);
-        expect(bestHit.hitRate).toBeGreaterThanOrEqual(0.7);
+        expect(bestHit.usage.cacheRead ?? 0).toBeGreaterThanOrEqual(OPENAI_TOOL_MIN_CACHE_READ);
+        expect(bestHit.hitRate).toBeGreaterThanOrEqual(OPENAI_TOOL_MIN_HIT_RATE);
       },
       8 * 60_000,
     );
 
     it(
-      "keeps high cache-read rates across image-heavy followup turns",
+      "keeps the expected OpenAI cache plateau across image-heavy followup turns",
       async () => {
         const warmup = await runOpenAiImageCacheProbe({
           ...fixture,
@@ -719,11 +820,11 @@ describeCacheLive("pi embedded runner prompt caching (live)", () => {
         });
         const bestHit = (hitA.usage.cacheRead ?? 0) >= (hitB.usage.cacheRead ?? 0) ? hitA : hitB;
         logLiveCache(
-          `openai image best-hit suffix=${bestHit.suffix} cacheRead=${bestHit.usage.cacheRead} input=${bestHit.usage.input} rate=${bestHit.hitRate.toFixed(3)}`,
+          `openai image plateau suffix=${bestHit.suffix} cacheRead=${bestHit.usage.cacheRead} input=${bestHit.usage.input} rate=${bestHit.hitRate.toFixed(3)}`,
         );
 
-        expect(bestHit.usage.cacheRead ?? 0).toBeGreaterThan(1_024);
-        expect(bestHit.hitRate).toBeGreaterThanOrEqual(0.6);
+        expect(bestHit.usage.cacheRead ?? 0).toBeGreaterThanOrEqual(OPENAI_IMAGE_MIN_CACHE_READ);
+        expect(bestHit.hitRate).toBeGreaterThanOrEqual(OPENAI_IMAGE_MIN_HIT_RATE);
       },
       6 * 60_000,
     );

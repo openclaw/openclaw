@@ -62,15 +62,6 @@ Config merge order:
 2. `agents.defaults.models["provider/model"].params` (per-model override)
 3. `agents.list[].params` (matching agent id; overrides by key)
 
-### Legacy `cacheControlTtl`
-
-Legacy values are still accepted and mapped:
-
-- `5m` -> `short`
-- `1h` -> `long`
-
-Prefer `cacheRetention` for new config.
-
 ### `contextPruning.mode: "cache-ttl"`
 
 Prunes old tool-result context after cache TTL windows so post-idle requests do not re-cache oversized history.
@@ -114,6 +105,7 @@ Per-agent heartbeat is supported at `agents.list[].heartbeat`.
 - OpenAI responses expose cached prompt tokens via `usage.prompt_tokens_details.cached_tokens` (or `input_tokens_details.cached_tokens` on Responses API events). OpenClaw maps that to `cacheRead`.
 - OpenAI does not expose a separate cache-write token counter, so `cacheWrite` stays `0` on OpenAI paths even when the provider is warming a cache.
 - OpenAI returns useful tracing and rate-limit headers such as `x-request-id`, `openai-processing-ms`, and `x-ratelimit-*`, but cache-hit accounting should come from the usage payload, not from headers.
+- In practice, OpenAI often behaves like an initial-prefix cache rather than Anthropic-style moving full-history reuse. Stable long-prefix text turns can land near a `4864` cached-token plateau in current live probes, while tool-heavy or MCP-style transcripts often plateau near `4608` cached tokens even on exact repeats.
 
 ### Amazon Bedrock
 
@@ -162,6 +154,44 @@ agents:
 ## Cache diagnostics
 
 OpenClaw exposes dedicated cache-trace diagnostics for embedded agent runs.
+
+## Live regression tests
+
+OpenClaw keeps provider-specific live cache probes for repeated prefixes, tool turns, image turns, and MCP-style tool transcripts.
+
+- `src/agents/pi-embedded-runner.cache.live.test.ts`
+- `src/agents/pi-mcp-style.cache.live.test.ts`
+
+These tests intentionally do not use identical success criteria across providers.
+
+### Anthropic live expectations
+
+- Expect explicit warmup writes via `cacheWrite`.
+- Expect near-full history reuse on repeated turns because Anthropic cache control advances the cache breakpoint through the conversation.
+- Current live assertions still use high hit-rate thresholds for stable, tool, and image paths.
+
+### OpenAI live expectations
+
+- Expect `cacheRead` only. `cacheWrite` remains `0`.
+- Treat repeated-turn cache reuse as a provider-specific plateau, not as Anthropic-style moving full-history reuse.
+- Current live assertions use conservative floor checks derived from observed live behavior on `gpt-5.4-mini`:
+  - stable prefix: `cacheRead >= 4608`, hit rate `>= 0.90`
+  - tool transcript: `cacheRead >= 4096`, hit rate `>= 0.85`
+  - image transcript: `cacheRead >= 3840`, hit rate `>= 0.82`
+  - MCP-style transcript: `cacheRead >= 4096`, hit rate `>= 0.85`
+
+Fresh OpenAI verification on 2026-04-04 landed at:
+
+- stable prefix: `cacheRead=4864`, hit rate `0.971`
+- tool transcript: `cacheRead=4608`, hit rate `0.900`
+- image transcript: `cacheRead=4864`, hit rate `0.959`
+- MCP-style transcript: `cacheRead=4608`, hit rate `0.895`
+
+Why the assertions differ:
+
+- Anthropic exposes explicit cache breakpoints and moving conversation-history reuse.
+- OpenAI prompt caching is still exact-prefix sensitive, but the effective reusable prefix in live Responses traffic can plateau earlier than the full prompt.
+- Because of that, comparing Anthropic and OpenAI by a single cross-provider percentage threshold creates false regressions.
 
 ### `diagnostics.cacheTrace` config
 
