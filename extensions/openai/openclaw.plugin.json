@@ -2,6 +2,9 @@
   "id": "openai",
   "enabledByDefault": true,
   "providers": ["openai", "openai-codex"],
+  "modelSupport": {
+    "modelPrefixes": ["gpt-", "o1", "o3", "o4"]
+  },
   "cliBackends": ["codex-cli"],
   "providerAuthEnvVars": {
     "openai": ["OPENAI_API_KEY"]

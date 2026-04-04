@@ -147,8 +147,8 @@ describe("VoiceCallWebhookServer realtime transcription provider selection", () 
     const server = new VoiceCallWebhookServer(config, manager, provider);
     try {
       await server.start();
-      expect(mocks.getRealtimeTranscriptionProvider).toHaveBeenCalledWith(undefined, undefined);
-      expect(mocks.listRealtimeTranscriptionProviders).toHaveBeenCalledWith(undefined);
+      expect(mocks.getRealtimeTranscriptionProvider).toHaveBeenCalledWith(undefined, null);
+      expect(mocks.listRealtimeTranscriptionProviders).toHaveBeenCalledWith(null);
       expect(server.getMediaStreamHandler()).toBeTruthy();
     } finally {
       await server.stop();
@@ -739,7 +739,11 @@ describe("VoiceCallWebhookServer stream disconnect grace", () => {
       streaming: {
         ...createConfig().streaming,
         enabled: true,
-        openaiApiKey: "test-key",
+        providers: {
+          openai: {
+            apiKey: "test-key", // pragma: allowlist secret
+          },
+        },
       },
     });
     const server = new VoiceCallWebhookServer(
@@ -832,7 +836,11 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
       streaming: {
         ...createConfig().streaming,
         enabled: true,
-        openaiApiKey: "test-key",
+        providers: {
+          openai: {
+            apiKey: "test-key", // pragma: allowlist secret
+          },
+        },
       },
     });
     const server = new VoiceCallWebhookServer(
@@ -906,7 +914,11 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
       streaming: {
         ...createConfig().streaming,
         enabled: true,
-        openaiApiKey: "test-key",
+        providers: {
+          openai: {
+            apiKey: "test-key", // pragma: allowlist secret
+          },
+        },
       },
     });
     const server = new VoiceCallWebhookServer(

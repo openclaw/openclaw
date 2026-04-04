@@ -764,6 +764,50 @@ describe("block reply coalescer", () => {
     coalescer.stop();
   });
 
+  it("does not coalesce reasoning blocks into visible reply text", async () => {
+    const flushes: Array<{ text?: string; isReasoning?: boolean }> = [];
+    const coalescer = createBlockReplyCoalescer({
+      config: { minChars: 1, maxChars: 200, idleMs: 0, joiner: "\n\n" },
+      shouldAbort: () => false,
+      onFlush: (payload) => {
+        flushes.push({
+          text: payload.text,
+          isReasoning: payload.isReasoning,
+        });
+      },
+    });
+
+    coalescer.enqueue({ text: "Reasoning:\n_hidden_", isReasoning: true });
+    coalescer.enqueue({ text: "Visible answer" });
+    await coalescer.flush({ force: true });
+
+    expect(flushes).toEqual([
+      { text: "Reasoning:\n_hidden_", isReasoning: true },
+      { text: "Visible answer", isReasoning: undefined },
+    ]);
+    coalescer.stop();
+  });
+
+  it("preserves compaction notice markers across flushes", async () => {
+    const flushes: Array<{ text?: string; isCompactionNotice?: boolean }> = [];
+    const coalescer = createBlockReplyCoalescer({
+      config: { minChars: 1, maxChars: 200, idleMs: 0, joiner: "\n\n" },
+      shouldAbort: () => false,
+      onFlush: (payload) => {
+        flushes.push({
+          text: payload.text,
+          isCompactionNotice: payload.isCompactionNotice,
+        });
+      },
+    });
+
+    coalescer.enqueue({ text: "Compacting context...", isCompactionNotice: true });
+    await coalescer.flush({ force: true });
+
+    expect(flushes).toEqual([{ text: "Compacting context...", isCompactionNotice: true }]);
+    coalescer.stop();
+  });
+
   it("flushes immediately per enqueue when flushOnEnqueue is set", async () => {
     const cases = [
       {

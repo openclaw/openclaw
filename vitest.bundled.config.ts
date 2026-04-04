@@ -1,3 +1,4 @@
+import path from "node:path";
 import {
   bundledPluginDependentUnitTestFiles,
   unitTestAdditionalExcludePatterns,
@@ -5,7 +6,7 @@ import {
 import { createUnitVitestConfigWithOptions } from "./vitest.unit.config.ts";
 
 const bundledUnitExcludePatterns = unitTestAdditionalExcludePatterns.filter(
-  (pattern) => !bundledPluginDependentUnitTestFiles.includes(pattern),
+  (pattern) => !bundledPluginDependentUnitTestFiles.some((file) => path.matchesGlob(file, pattern)),
 );
 
 export default createUnitVitestConfigWithOptions(process.env, {

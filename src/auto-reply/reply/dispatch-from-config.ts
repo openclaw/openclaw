@@ -344,9 +344,9 @@ export async function dispatchReplyFromConfig(params: {
           channel: inboundClaimContext.channelId,
           accountId:
             inboundClaimContext.accountId ??
-            ((cfg.channels as Record<string, { defaultAccount?: unknown } | undefined> | undefined)?.[
-              inboundClaimContext.channelId
-            ]?.defaultAccount as string | undefined) ??
+            ((
+              cfg.channels as Record<string, { defaultAccount?: unknown } | undefined> | undefined
+            )?.[inboundClaimContext.channelId]?.defaultAccount as string | undefined) ??
             "default",
           conversationId: inboundClaimContext.conversationId,
           parentConversationId: inboundClaimContext.parentConversationId,

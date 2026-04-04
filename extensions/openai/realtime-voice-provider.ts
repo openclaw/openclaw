@@ -103,25 +103,11 @@ function normalizeProviderConfig(
       value: raw?.apiKey,
       path: "plugins.entries.voice-call.config.realtime.providers.openai.apiKey",
     }),
-    model: trimToUndefined(raw?.model) ?? trimToUndefined(process.env.REALTIME_VOICE_MODEL),
-    voice: (trimToUndefined(raw?.voice) ?? trimToUndefined(process.env.REALTIME_VOICE_VOICE)) as
-      | OpenAIRealtimeVoice
-      | undefined,
-    temperature:
-      asNumber(raw?.temperature) ??
-      (typeof process.env.REALTIME_VOICE_TEMPERATURE === "string"
-        ? Number.parseFloat(process.env.REALTIME_VOICE_TEMPERATURE)
-        : undefined),
-    vadThreshold:
-      asNumber(raw?.vadThreshold) ??
-      (typeof process.env.VAD_THRESHOLD === "string"
-        ? Number.parseFloat(process.env.VAD_THRESHOLD)
-        : undefined),
-    silenceDurationMs:
-      asNumber(raw?.silenceDurationMs) ??
-      (typeof process.env.SILENCE_DURATION_MS === "string"
-        ? Number.parseInt(process.env.SILENCE_DURATION_MS, 10)
-        : undefined),
+    model: trimToUndefined(raw?.model),
+    voice: trimToUndefined(raw?.voice) as OpenAIRealtimeVoice | undefined,
+    temperature: asNumber(raw?.temperature),
+    vadThreshold: asNumber(raw?.vadThreshold),
+    silenceDurationMs: asNumber(raw?.silenceDurationMs),
     prefixPaddingMs: asNumber(raw?.prefixPaddingMs),
     azureEndpoint: trimToUndefined(raw?.azureEndpoint),
     azureDeployment: trimToUndefined(raw?.azureDeployment),

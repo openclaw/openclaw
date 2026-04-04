@@ -45,6 +45,7 @@ import {
   resolveDefaultAgentId,
   resolveDefaultModelForAgent,
 } from "./bot-handlers.agent.runtime.js";
+import { buildTelegramInboundDebounceKey } from "./bot-handlers.debounce-key.js";
 import {
   hasInboundMedia,
   hasReplyTargetMedia,
@@ -101,7 +102,6 @@ import {
   resolveModelSelection,
   type ProviderInfo,
 } from "./model-buttons.js";
-import { buildTelegramInboundDebounceKey } from "./bot-handlers.debounce-key.js";
 import { buildInlineKeyboard } from "./send.js";
 
 export const registerTelegramHandlers = ({

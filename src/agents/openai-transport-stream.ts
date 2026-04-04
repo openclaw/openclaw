@@ -29,6 +29,7 @@ import {
 } from "./openai-responses-payload-policy.js";
 import { resolveProviderRequestCapabilities } from "./provider-attribution.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
+import { stripSystemPromptCacheBoundary } from "./system-prompt-cache-boundary.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
 import { mergeTransportMetadata, sanitizeTransportPayloadText } from "./transport-stream-shared.js";
 
@@ -225,7 +226,7 @@ function convertResponsesMessages(
   if (includeSystemPrompt && context.systemPrompt) {
     messages.push({
       role: model.reasoning && options?.supportsDeveloperRole !== false ? "developer" : "system",
-      content: sanitizeTransportPayloadText(context.systemPrompt),
+      content: sanitizeTransportPayloadText(stripSystemPromptCacheBoundary(context.systemPrompt)),
     });
   }
   let msgIndex = 0;
@@ -1294,9 +1295,15 @@ export function buildOpenAICompletionsParams(
   options: OpenAICompletionsOptions | undefined,
 ) {
   const compat = getCompat(model);
+  const completionsContext = context.systemPrompt
+    ? {
+        ...context,
+        systemPrompt: stripSystemPromptCacheBoundary(context.systemPrompt),
+      }
+    : context;
   const params: Record<string, unknown> = {
     model: model.id,
-    messages: convertMessages(model as never, context, compat as never),
+    messages: convertMessages(model as never, completionsContext, compat as never),
     stream: true,
   };
   if (compat.supportsUsageInStreaming) {

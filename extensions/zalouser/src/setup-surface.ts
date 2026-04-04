@@ -69,15 +69,11 @@ function setZalouserDmPolicy(
     resolvedAccountId,
     {
       dmPolicy: policy,
-      ...(policy === "open"
-        ? { allowFrom: addWildcardAllowFrom(resolved.config.allowFrom) }
-        : {}),
+      ...(policy === "open" ? { allowFrom: addWildcardAllowFrom(resolved.config.allowFrom) } : {}),
     },
     {
       dmPolicy: policy,
-      ...(policy === "open"
-        ? { allowFrom: addWildcardAllowFrom(resolved.config.allowFrom) }
-        : {}),
+      ...(policy === "open" ? { allowFrom: addWildcardAllowFrom(resolved.config.allowFrom) } : {}),
     },
   );
 }
@@ -318,9 +314,10 @@ export const zalouserSetupWizard: ChannelSetupWizard = {
     },
     resolveStatusLines: async ({ cfg, accountId, configured }) => {
       void cfg;
-      const label = accountId && accountId !== DEFAULT_ACCOUNT_ID
-        ? `Zalo Personal (${accountId})`
-        : "Zalo Personal";
+      const label =
+        accountId && accountId !== DEFAULT_ACCOUNT_ID
+          ? `Zalo Personal (${accountId})`
+          : "Zalo Personal";
       return [`${label}: ${configured ? "logged in" : "needs QR login"}`];
     },
   },

@@ -1,5 +1,4 @@
 export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
-export { collectBlueBubblesStatusIssues } from "../channels/plugins/status-issues/bluebubbles.js";
 export {
   projectCredentialSnapshotFields,
   resolveConfiguredFromCredentialStatuses,

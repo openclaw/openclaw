@@ -10,7 +10,7 @@ import { normalizeAccountId } from "../routing/session-key.js";
 import { chunkTextByBreakResolver } from "../shared/text-chunking.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 
-export type TextChunkProvider = ChannelId | typeof INTERNAL_MESSAGE_CHANNEL;
+export type TextChunkProvider = ChannelId;
 
 /**
  * Chunking mode for outbound messages:

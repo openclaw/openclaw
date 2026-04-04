@@ -4,10 +4,7 @@ export {
   projectCredentialSnapshotFields,
   resolveConfiguredFromRequiredCredentialStatuses,
 } from "openclaw/plugin-sdk/channel-status";
-export {
-  buildChannelConfigSchema,
-  SlackConfigSchema,
-} from "openclaw/plugin-sdk/channel-config-schema";
+export { buildChannelConfigSchema, SlackConfigSchema } from "../config-api.js";
 export type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 export { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 export type {

@@ -34,11 +34,7 @@ describe("parseWindowsCmdline", () => {
   });
 
   it("collapses consecutive spaces outside quotes", () => {
-    expect(parseWindowsCmdline("node.exe   gateway   run")).toEqual([
-      "node.exe",
-      "gateway",
-      "run",
-    ]);
+    expect(parseWindowsCmdline("node.exe   gateway   run")).toEqual(["node.exe", "gateway", "run"]);
   });
 });
 

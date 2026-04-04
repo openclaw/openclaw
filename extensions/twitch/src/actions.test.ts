@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { twitchMessageActions } from "./actions.js";
-import { twitchOutbound } from "./outbound.js";
 import { resolveTwitchAccountContext } from "./config.js";
+import { twitchOutbound } from "./outbound.js";
 
 vi.mock("./config.js", () => ({
   DEFAULT_ACCOUNT_ID: "default",

@@ -22,6 +22,7 @@ import {
   releaseWsSession,
 } from "./openai-ws-stream.js";
 import { log } from "./pi-embedded-runner/logger.js";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Mock OpenAIWebSocketManager
@@ -1851,6 +1852,36 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(sent.instructions).toBe("Be concise.");
     expect(Array.isArray(sent.tools)).toBe(true);
     expect((sent.tools ?? []).length).toBeGreaterThan(0);
+  });
+
+  it("strips the internal cache boundary from websocket instructions", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-boundary");
+    const ctx = {
+      systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+      messages: [userMsg("Hello")] as Parameters<typeof convertMessagesToInputItems>[0],
+      tools: [],
+    };
+
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      ctx as Parameters<typeof streamFn>[1],
+    );
+
+    await new Promise((r) => setImmediate(r));
+    const manager = MockManager.lastInstance!;
+    manager.simulateEvent({
+      type: "response.completed",
+      response: makeResponseObject("resp_boundary", "ok"),
+    });
+
+    for await (const _ of await resolveStream(stream)) {
+      // consume
+    }
+
+    const sent = manager.sentEvents[0] as {
+      instructions?: string;
+    };
+    expect(sent.instructions).toBe("Stable prefix\nDynamic suffix");
   });
 
   it("falls back to HTTP after the websocket send retry budget is exhausted", async () => {

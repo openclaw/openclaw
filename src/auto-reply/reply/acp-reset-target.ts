@@ -45,9 +45,9 @@ function resolveResetTargetAccountId(params: {
     return explicit;
   }
 
-  const channelCfg = (params.cfg.channels as Record<string, { defaultAccount?: unknown } | undefined>)[
-    params.channel
-  ];
+  const channelCfg = (
+    params.cfg.channels as Record<string, { defaultAccount?: unknown } | undefined>
+  )[params.channel];
   const configuredDefault = channelCfg?.defaultAccount;
   return typeof configuredDefault === "string" && configuredDefault.trim()
     ? configuredDefault.trim()

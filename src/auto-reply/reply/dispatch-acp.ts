@@ -174,7 +174,9 @@ function hasBoundConversationForSession(params: {
   if (!channel) {
     return false;
   }
-  const accountId = String(params.accountIdRaw ?? "").trim().toLowerCase();
+  const accountId = String(params.accountIdRaw ?? "")
+    .trim()
+    .toLowerCase();
   const channels = params.cfg.channels as Record<string, { defaultAccount?: unknown } | undefined>;
   const configuredDefaultAccountId = channels?.[channel]?.defaultAccount;
   const normalizedAccountId =

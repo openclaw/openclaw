@@ -80,8 +80,8 @@ function stripDisabledOpenAIReasoningPayload(payloadObj: Record<string, unknown>
     return;
   }
 
-  // GPT-5 models reject `reasoning.effort: "none"`. Treat the disabled effort
-  // as "reasoning omitted" instead of forwarding an unsupported value.
+  // Proxy/OpenAI-compat routes can reject `reasoning.effort: "none"`. Treat the
+  // disabled effort as "reasoning omitted" instead of forwarding an unsupported value.
   const reasoningObj = reasoning as Record<string, unknown>;
   if (reasoningObj.effort === "none") {
     delete payloadObj.reasoning;

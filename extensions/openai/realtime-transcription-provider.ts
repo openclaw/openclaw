@@ -57,21 +57,9 @@ function normalizeProviderConfig(
         value: raw?.openaiApiKey,
         path: "plugins.entries.voice-call.config.streaming.openaiApiKey",
       }),
-    model:
-      trimToUndefined(raw?.model) ??
-      trimToUndefined(raw?.sttModel) ??
-      trimToUndefined(process.env.REALTIME_TRANSCRIPTION_MODEL) ??
-      trimToUndefined(process.env.STREAMING_STT_MODEL),
-    silenceDurationMs:
-      asNumber(raw?.silenceDurationMs) ??
-      (typeof process.env.SILENCE_DURATION_MS === "string"
-        ? Number.parseInt(process.env.SILENCE_DURATION_MS, 10)
-        : undefined),
-    vadThreshold:
-      asNumber(raw?.vadThreshold) ??
-      (typeof process.env.VAD_THRESHOLD === "string"
-        ? Number.parseFloat(process.env.VAD_THRESHOLD)
-        : undefined),
+    model: trimToUndefined(raw?.model) ?? trimToUndefined(raw?.sttModel),
+    silenceDurationMs: asNumber(raw?.silenceDurationMs),
+    vadThreshold: asNumber(raw?.vadThreshold),
   };
 }
 

@@ -108,7 +108,8 @@ export async function handleDiscordGuildAction(
       const userId = readStringParam(params, "userId", {
         required: true,
       });
-      const effectiveAccountId = accountId ?? (cfg ? resolveDefaultDiscordAccountId(cfg) : undefined);
+      const effectiveAccountId =
+        accountId ?? (cfg ? resolveDefaultDiscordAccountId(cfg) : undefined);
       const member = effectiveAccountId
         ? await discordGuildActionRuntime.fetchMemberInfoDiscord(guildId, userId, {
             accountId: effectiveAccountId,

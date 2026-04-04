@@ -12,6 +12,13 @@ function buildProps(overrides?: Partial<DreamsProps>): DreamsProps {
     promotedCount: 12,
     dreamingOf: null,
     nextCycle: "4:00 AM",
+    mode: "core",
+    statusLoading: false,
+    statusError: null,
+    modeSaving: false,
+    managedCronPresent: true,
+    onRefresh: () => {},
+    onModeChange: () => {},
     ...overrides,
   };
 }
@@ -106,5 +113,15 @@ describe("dreams view", () => {
     const container = renderInto(buildProps({ nextCycle: null }));
     const detail = container.querySelector(".dreams__status-detail span");
     expect(detail?.textContent).not.toContain("next cycle");
+  });
+
+  it("does not render setup controls in the dreams canvas", () => {
+    const container = renderInto(buildProps({ mode: "rem" }));
+    expect(container.querySelector(".dreams__controls")).toBeNull();
+  });
+
+  it("does not render canvas setup errors", () => {
+    const container = renderInto(buildProps({ statusError: "patch failed" }));
+    expect(container.querySelector(".dreams__controls-error")).toBeNull();
   });
 });
