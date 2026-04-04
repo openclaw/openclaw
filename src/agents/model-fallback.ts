@@ -411,6 +411,9 @@ const PROBE_SCOPE_DELIMITER = "::";
 const PROBE_STATE_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_PROBE_KEYS = 256;
 
+  // Periodic cleanup to prevent memory leaks when probe functions are not called
+  setInterval(() => { pruneProbeState(Date.now()); }, 60_000);
+
 function resolveProbeThrottleKey(provider: string, agentDir?: string): string {
   const scope = String(agentDir ?? "").trim();
   return scope ? `${scope}${PROBE_SCOPE_DELIMITER}${provider}` : provider;

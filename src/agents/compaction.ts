@@ -283,6 +283,9 @@ async function summarizeChunks(params: {
     );
   }
 
+  if (summary === undefined) {
+    log.warn("Compaction summary generation failed for all chunks", { chunkCount: chunks.length });
+  }
   return summary ?? DEFAULT_SUMMARY_FALLBACK;
 }
 

@@ -440,22 +440,24 @@ function authorizeTokenAuth(params: {
   ip?: string;
   rateLimitScope: string;
 }): GatewayAuthResult {
+  // Timing attack mitigation: always call safeEqualSecret first
+  const configuredToken = params.authToken ?? "";
+  const presentedToken = params.connectToken ?? "";
+  const match = safeEqualSecret(presentedToken, configuredToken);
+
   if (!params.authToken) {
     return { ok: false, reason: "token_missing_config" };
   }
   if (!params.connectToken) {
-    // Don't burn rate-limit slots for missing credentials — the client
-    // simply hasn't provided a token yet (e.g. bare browser open).
-    // Only actual *wrong* credentials should count as failures.
     return { ok: false, reason: "token_missing" };
   }
-  if (!safeEqualSecret(params.connectToken, params.authToken)) {
+  if (!match) {
     params.limiter?.recordFailure(params.ip, params.rateLimitScope);
     return { ok: false, reason: "token_mismatch" };
   }
   params.limiter?.reset(params.ip, params.rateLimitScope);
   return { ok: true, method: "token" };
-}
+
 
 export async function authorizeGatewayConnect(
   params: AuthorizeGatewayConnectParams,
