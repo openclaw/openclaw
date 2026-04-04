@@ -1,5 +1,5 @@
 import { html, nothing } from "lit";
-import { formatRelativeTimestamp } from "../format.ts";
+import { formatFullDateTime, formatRelativeTimestamp } from "../format.ts";
 import { icons } from "../icons.ts";
 import { pathForTab } from "../navigation.ts";
 import { formatSessionTokens } from "../presenter.ts";
@@ -422,7 +422,8 @@ function renderRow(
   disabled: boolean,
   onNavigateToChat?: (sessionKey: string) => void,
 ) {
-  const updated = row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : "n/a";
+  const updatedFull = formatFullDateTime(row.updatedAt);
+  const updatedRelative = row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : "";
   const rawThinking = row.thinkingLevel ?? "";
   const isBinaryThinking = isBinaryThinkingProvider(row.modelProvider);
   const thinking = resolveThinkLevelDisplay(rawThinking, isBinaryThinking);
@@ -510,7 +511,7 @@ function renderRow(
       <td>
         <span class="data-table-badge ${badgeClass}">${row.kind}</span>
       </td>
-      <td>${updated}</td>
+      <td title=${updatedRelative}>${updatedFull}</td>
       <td>${formatSessionTokens(row)}</td>
       <td>
         <select

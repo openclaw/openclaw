@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatRelativeTimestamp, stripThinkingTags } from "./format.ts";
+import { formatFullDateTime, formatRelativeTimestamp, stripThinkingTags } from "./format.ts";
 
 describe("formatAgo", () => {
   it("returns 'in <1m' for timestamps less than 60s in the future", () => {
@@ -97,5 +97,43 @@ describe("stripThinkingTags", () => {
   it("hides unfinished <relevant-memories> block tails", () => {
     const input = ["Hello", "<relevant-memories>", "internal-only"].join("\n");
     expect(stripThinkingTags(input)).toBe("Hello\n");
+  });
+});
+
+describe("formatFullDateTime", () => {
+  it("formats a known epoch to YYYY-MM-DD HH:mm in local time", () => {
+    // Use a fixed date so the test is timezone-independent: build from local parts.
+    const d = new Date(2026, 2, 20, 14, 30, 0); // March 20, 2026 14:30 local
+    expect(formatFullDateTime(d.getTime())).toBe("2026-03-20 14:30");
+  });
+
+  it("zero-pads single-digit months and days", () => {
+    const d = new Date(2026, 0, 5, 9, 3, 0); // Jan 5, 2026 09:03 local
+    expect(formatFullDateTime(d.getTime())).toBe("2026-01-05 09:03");
+  });
+
+  it("returns fallback for null", () => {
+    expect(formatFullDateTime(null)).toBe("n/a");
+  });
+
+  it("returns fallback for undefined", () => {
+    expect(formatFullDateTime(undefined)).toBe("n/a");
+  });
+
+  it("returns custom fallback when provided", () => {
+    expect(formatFullDateTime(null, "—")).toBe("—");
+  });
+
+  it("returns fallback for NaN", () => {
+    expect(formatFullDateTime(NaN)).toBe("n/a");
+  });
+
+  it("returns fallback for epoch 0 (unset sentinel)", () => {
+    expect(formatFullDateTime(0)).toBe("n/a");
+  });
+
+  it("returns fallback for negative epoch values", () => {
+    expect(formatFullDateTime(-1)).toBe("n/a");
+    expect(formatFullDateTime(-1_000_000)).toBe("n/a");
   });
 });

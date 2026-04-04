@@ -4,6 +4,24 @@ import { stripAssistantInternalScaffolding } from "../../../src/shared/text/assi
 
 export { formatRelativeTimestamp, formatDurationHuman };
 
+/**
+ * Format an epoch timestamp as a full date-time string (e.g. "2026-03-20 14:30").
+ * Uses the user's local timezone via the `Date` instance methods
+ * (`getFullYear`, `getMonth`, `getDate`, `getHours`, `getMinutes`).
+ */
+export function formatFullDateTime(epochMs: number | null | undefined, fallback = "n/a"): string {
+  if (epochMs == null || !Number.isFinite(epochMs) || epochMs <= 0) {
+    return fallback;
+  }
+  const d = new Date(epochMs);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  const hours = String(d.getHours()).padStart(2, "0");
+  const minutes = String(d.getMinutes()).padStart(2, "0");
+  return `${year}-${month}-${day} ${hours}:${minutes}`;
+}
+
 export function formatMs(ms?: number | null): string {
   if (!ms && ms !== 0) {
     return "n/a";
