@@ -160,7 +160,7 @@ working option**:
    - Bundled fallback order:
      - Audio: OpenAI → Groq → Deepgram → Google → Mistral
      - Image: OpenAI → Anthropic → Google → MiniMax → MiniMax Portal → Z.AI
-     - Video: Google → Moonshot
+     - Video: Google → Qwen → Moonshot
 
 To disable auto-detection, set:
 
@@ -202,6 +202,7 @@ lists, OpenClaw can infer defaults:
 - `moonshot`: **image + video**
 - `openrouter`: **image**
 - `google` (Gemini API): **image + audio + video**
+- `qwen`: **image + video**
 - `mistral`: **audio**
 - `zai`: **image**
 - `groq`: **audio**
@@ -214,11 +215,11 @@ If you omit `capabilities`, the entry is eligible for the list it appears in.
 
 ## Provider support matrix (OpenClaw integrations)
 
-| Capability | Provider integration                                                             | Notes                                                                                                                                    |
-| ---------- | -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| Image      | OpenAI, OpenRouter, Anthropic, Google, MiniMax, Moonshot, Z.AI, config providers | Vendor plugins register image support; MiniMax and MiniMax OAuth both use `MiniMax-VL-01`; image-capable config providers auto-register. |
-| Audio      | OpenAI, Groq, Deepgram, Google, Mistral                                          | Provider transcription (Whisper/Deepgram/Gemini/Voxtral).                                                                                |
-| Video      | Google, Moonshot                                                                 | Provider video understanding via vendor plugins.                                                                                         |
+| Capability | Provider integration                                                                   | Notes                                                                                                                                    |
+| ---------- | -------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| Image      | OpenAI, OpenRouter, Anthropic, Google, MiniMax, Moonshot, Qwen, Z.AI, config providers | Vendor plugins register image support; MiniMax and MiniMax OAuth both use `MiniMax-VL-01`; image-capable config providers auto-register. |
+| Audio      | OpenAI, Groq, Deepgram, Google, Mistral                                                | Provider transcription (Whisper/Deepgram/Gemini/Voxtral).                                                                                |
+| Video      | Google, Qwen, Moonshot                                                                 | Provider video understanding via vendor plugins; Qwen video understanding uses the Standard DashScope endpoints.                         |
 
 MiniMax note:
 

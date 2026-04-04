@@ -22,7 +22,7 @@ can still run in OpenClaw, but Anthropic now requires **Extra Usage**
 
 If you want a clearer billing path, use an Anthropic API key instead. OpenClaw
 also supports other subscription-style options, including [OpenAI
-Codex](/providers/openai), [Alibaba Cloud Model Studio Coding
+Codex](/providers/openai), [Qwen Cloud Coding
 Plan](/providers/qwen), [MiniMax Coding Plan](/providers/minimax),
 and [Z.AI / GLM Coding Plan](/providers/glm).
 </Warning>

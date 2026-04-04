@@ -1478,7 +1478,7 @@ at 12:00 PM PT / 8:00 PM BST**. Anthropic says Claude subscription limits no
 longer cover OpenClaw, and Claude CLI usage in OpenClaw now requires **Extra
 Usage** billed separately from the subscription. For production, prefer an
 Anthropic API key or another supported subscription-style provider such as
-OpenAI Codex, Alibaba Cloud Model Studio Coding Plan, MiniMax Coding Plan, or
+OpenAI Codex, Qwen Cloud Coding Plan, MiniMax Coding Plan, or
 Z.AI / GLM Coding Plan.
 
 Anthropic Claude CLI migration:

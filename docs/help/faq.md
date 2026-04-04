@@ -587,7 +587,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     explicitly supported for external tools like OpenClaw.
 
     OpenClaw also supports other hosted subscription-style options including
-    **Alibaba Cloud Model Studio Coding Plan**, **MiniMax Coding Plan**, and
+    **Qwen Cloud Coding Plan**, **MiniMax Coding Plan**, and
     **Z.AI / GLM Coding Plan**.
 
     Docs: [Anthropic](/providers/anthropic), [OpenAI](/providers/openai),

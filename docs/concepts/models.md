@@ -30,6 +30,7 @@ Related:
   falls back to `agents.defaults.imageModel`, then the resolved session/default
   model.
 - `agents.defaults.imageGenerationModel` is used by the shared image-generation capability. If omitted, `image_generate` can still infer an auth-backed provider default. It tries the current default provider first, then the remaining registered image-generation providers in provider-id order. If you set a specific provider/model, also configure that provider's auth/API key.
+- `agents.defaults.videoGenerationModel` is used by the shared video-generation capability. If omitted, video-generation providers can still use their own default model selection; if you set a specific provider/model, configure that provider's auth/API key too.
 - Per-agent defaults can override `agents.defaults.model` via `agents.list[].model` plus bindings (see [/concepts/multi-agent](/concepts/multi-agent)).
 
 ## Quick model policy
@@ -55,6 +56,7 @@ subscription** (OAuth) and **Anthropic** (API key or Claude CLI).
 - `agents.defaults.imageModel.primary` and `agents.defaults.imageModel.fallbacks`
 - `agents.defaults.pdfModel.primary` and `agents.defaults.pdfModel.fallbacks`
 - `agents.defaults.imageGenerationModel.primary` and `agents.defaults.imageGenerationModel.fallbacks`
+- `agents.defaults.videoGenerationModel.primary` and `agents.defaults.videoGenerationModel.fallbacks`
 - `agents.defaults.models` (allowlist + aliases + provider params)
 - `models.providers` (custom providers written into `models.json`)
 

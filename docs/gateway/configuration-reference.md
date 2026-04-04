@@ -952,6 +952,10 @@ Time format in system prompt. Default: `auto` (OS preference).
         primary: "openai/gpt-image-1",
         fallbacks: ["google/gemini-3.1-flash-image-preview"],
       },
+      videoGenerationModel: {
+        primary: "qwen/wan2.6-t2v",
+        fallbacks: ["qwen/wan2.6-i2v"],
+      },
       pdfModel: {
         primary: "anthropic/claude-opus-4-6",
         fallbacks: ["openai/gpt-5.4-mini"],
@@ -982,6 +986,10 @@ Time format in system prompt. Default: `auto` (OS preference).
   - Typical values: `google/gemini-3.1-flash-image-preview` for native Gemini image generation, `fal/fal-ai/flux/dev` for fal, or `openai/gpt-image-1` for OpenAI Images.
   - If you select a provider/model directly, configure the matching provider auth/API key too (for example `GEMINI_API_KEY` or `GOOGLE_API_KEY` for `google/*`, `OPENAI_API_KEY` for `openai/*`, `FAL_KEY` for `fal/*`).
   - If omitted, `image_generate` can still infer an auth-backed provider default. It tries the current default provider first, then the remaining registered image-generation providers in provider-id order.
+- `videoGenerationModel`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
+  - Used by the shared video-generation capability.
+  - Typical values: `qwen/wan2.6-t2v` or another registered video-generation provider/model.
+  - If you select a provider/model directly, configure the matching provider auth/API key too.
 - `pdfModel`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
   - Used by the `pdf` tool for model routing.
   - If omitted, the PDF tool falls back to `imageModel`, then to the resolved session/default model.
