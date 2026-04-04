@@ -385,8 +385,12 @@ export function buildAgentSystemPrompt(params: {
       : undefined;
   const runtimeInfo = params.runtimeInfo;
   const runtimeChannel = runtimeInfo?.channel?.trim().toLowerCase();
-  const runtimeCapabilities = normalizePromptCapabilityIds(runtimeInfo?.capabilities ?? []);
-  const runtimeCapabilitiesLower = new Set(runtimeCapabilities.map((cap) => cap.toLowerCase()));
+  const runtimeCapabilities = runtimeInfo?.capabilities ?? [];
+  const runtimeCapabilitiesLower = new Set(
+    runtimeCapabilities
+      .map((cap) => String(cap).trim().toLowerCase())
+      .filter(Boolean),
+  );
   const inlineButtonsEnabled = runtimeCapabilitiesLower.has("inlinebuttons");
   const messageChannelOptions = listDeliverableMessageChannels().join("|");
   const promptMode = params.promptMode ?? "full";
