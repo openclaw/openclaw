@@ -47,6 +47,7 @@ import { deliverReplies } from "./deliver.js";
 import { createSentMessageCache } from "./echo-cache.js";
 import {
   buildIMessageInboundContext,
+  isIMessageTapback,
   resolveIMessageInboundDecision,
 } from "./inbound-processing.js";
 import { createLoopRateLimiter } from "./loop-rate-limiter.js";
@@ -218,14 +219,37 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         await handleMessageNow(last.message);
         return;
       }
-      const combinedText = entries
-        .map((entry) => entry.message.text ?? "")
+
+      const textEntries = entries.filter((entry) => {
+        const text = (entry.message.text ?? "").trim();
+        return text && !isIMessageTapback(entry.message, text);
+      });
+
+      if (textEntries.length === 0) {
+        await handleMessageNow(last.message);
+        return;
+      }
+
+      if (textEntries.length === 1) {
+        await handleMessageNow(textEntries[0].message);
+        return;
+      }
+
+      const lastTextEntry = textEntries.at(-1);
+      if (!lastTextEntry) {
+        return;
+      }
+
+      const combinedText = textEntries
+        .map((entry) => entry.message.text?.trim() ?? "")
         .filter(Boolean)
         .join("\n");
       const syntheticMessage: IMessagePayload = {
-        ...last.message,
+        ...lastTextEntry.message,
         text: combinedText,
         attachments: null,
+        is_tapback: false,
+        associated_message_type: undefined,
       };
       await handleMessageNow(syntheticMessage);
     },

@@ -75,7 +75,7 @@ const TAPBACK_TEXT_PREFIXES: string[] = [
  * 2. `associated_message_type` in the 2000-3999 range (Apple's internal codes)
  * 3. Text starts with a known tapback prefix like "Loved", "Liked", etc.
  */
-function isIMessageTapback(message: IMessagePayload, bodyText: string): boolean {
+export function isIMessageTapback(message: IMessagePayload, bodyText: string): boolean {
   // Signal 1: explicit tapback flag from imsg v0.5.0+
   if (message.is_tapback === true) {
     return true;
@@ -327,7 +327,7 @@ export function resolveIMessageInboundDecision(params: {
   // control) so they never trigger pairing flows or agent responses.  This
   // mirrors the filtering that the BlueBubbles provider already performs via
   // resolveTapbackContext.
-  if (bodyText && isIMessageTapback(params.message, bodyText)) {
+  if (isIMessageTapback(params.message, bodyText)) {
     params.logVerbose?.(
       `imessage: dropping tapback reaction: "${sanitizeTerminalText(truncateUtf16Safe(bodyText, 60))}"`,
     );

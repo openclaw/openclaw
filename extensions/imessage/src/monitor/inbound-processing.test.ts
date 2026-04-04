@@ -3,9 +3,11 @@ import { sanitizeTerminalText } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import {
   describeIMessageEchoDropLog,
+  isIMessageTapback,
   resolveIMessageInboundDecision,
 } from "./inbound-processing.js";
 import { createSelfChatCache } from "./self-chat-cache.js";
+import type { IMessagePayload } from "./types.js";
 
 describe("resolveIMessageInboundDecision echo detection", () => {
   const cfg = {} as OpenClawConfig;
@@ -355,6 +357,28 @@ describe("resolveIMessageInboundDecision command auth", () => {
   });
 });
 
+describe("isIMessageTapback", () => {
+  it("returns true for explicit tapback flag", () => {
+    expect(isIMessageTapback({ is_tapback: true } as IMessagePayload, "hello")).toBe(true);
+  });
+
+  it("returns true for associated_message_type in tapback range", () => {
+    expect(
+      isIMessageTapback({ associated_message_type: 2001 } as IMessagePayload, "hello"),
+    ).toBe(true);
+  });
+
+  it("returns true for text heuristic with quoted tapback body", () => {
+    expect(isIMessageTapback({} as IMessagePayload, 'Loved “Hello”')).toBe(true);
+  });
+
+  it("returns false for normal text that starts with a tapback-like word", () => {
+    expect(isIMessageTapback({} as IMessagePayload, "Loved the movie we watched last night")).toBe(
+      false,
+    );
+  });
+});
+
 describe("resolveIMessageInboundDecision tapback filtering", () => {
   const cfg = {} as OpenClawConfig;
   type InboundDecisionParams = Parameters<typeof resolveIMessageInboundDecision>[0];
@@ -464,6 +488,15 @@ describe("resolveIMessageInboundDecision tapback filtering", () => {
       message: { text: "some reaction", is_tapback: true },
       messageText: "some reaction",
       bodyText: "some reaction",
+    });
+    expect(decision).toEqual({ kind: "drop", reason: "tapback reaction" });
+  });
+
+  it("drops tapback messages even if text is empty", () => {
+    const decision = resolveDecision({
+      message: { text: "", is_tapback: true },
+      messageText: "",
+      bodyText: "",
     });
     expect(decision).toEqual({ kind: "drop", reason: "tapback reaction" });
   });
