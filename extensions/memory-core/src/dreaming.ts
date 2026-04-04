@@ -151,8 +151,10 @@ function normalizeDreamingMode(value: unknown): DreamingMode {
 }
 
 function normalizeNonNegativeInt(value: unknown, fallback: number): number {
-  const num =
-    typeof value === "string" && value.trim().length > 0 ? Number(value.trim()) : Number(value);
+  if (typeof value === "string" && value.trim().length === 0) {
+    return fallback;
+  }
+  const num = typeof value === "string" ? Number(value.trim()) : Number(value);
   if (!Number.isFinite(num)) {
     return fallback;
   }
@@ -164,8 +166,10 @@ function normalizeNonNegativeInt(value: unknown, fallback: number): number {
 }
 
 function normalizeScore(value: unknown, fallback: number): number {
-  const num =
-    typeof value === "string" && value.trim().length > 0 ? Number(value.trim()) : Number(value);
+  if (typeof value === "string" && value.trim().length === 0) {
+    return fallback;
+  }
+  const num = typeof value === "string" ? Number(value.trim()) : Number(value);
   if (!Number.isFinite(num)) {
     return fallback;
   }

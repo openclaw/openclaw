@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   applyShortTermPromotions,
   auditShortTermPromotionArtifacts,
@@ -9,6 +9,7 @@ import {
   rankShortTermPromotionCandidates,
   recordShortTermRecalls,
   repairShortTermPromotionArtifacts,
+  resolveShortTermRecallLockPath,
   resolveShortTermRecallStorePath,
   __testing,
 } from "./short-term-promotion.js";
@@ -423,6 +424,137 @@ describe("short-term promotion", () => {
       };
       expect(repairedRaw.entries.good?.conceptTags).toContain("router");
       expect(repairedRaw.entries.good?.recallDays).toEqual(["2026-04-04"]);
+    });
+  });
+
+  it("repairs empty recall-store files without throwing", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const storePath = resolveShortTermRecallStorePath(workspaceDir);
+      await fs.mkdir(path.dirname(storePath), { recursive: true });
+      await fs.writeFile(storePath, "   \n", "utf-8");
+
+      const repair = await repairShortTermPromotionArtifacts({ workspaceDir });
+
+      expect(repair.changed).toBe(true);
+      expect(repair.rewroteStore).toBe(true);
+      expect(JSON.parse(await fs.readFile(storePath, "utf-8"))).toMatchObject({
+        version: 1,
+        entries: {},
+      });
+    });
+  });
+
+  it("does not rewrite an already normalized healthy recall store", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const storePath = resolveShortTermRecallStorePath(workspaceDir);
+      await fs.mkdir(path.dirname(storePath), { recursive: true });
+      const snippet = "Gateway host uses qmd vector search for router notes.";
+      const raw = `${JSON.stringify(
+        {
+          version: 1,
+          updatedAt: "2026-04-04T00:00:00.000Z",
+          entries: {
+            good: {
+              key: "good",
+              path: "memory/2026-04-01.md",
+              startLine: 1,
+              endLine: 2,
+              source: "memory",
+              snippet,
+              recallCount: 2,
+              totalScore: 1.8,
+              maxScore: 0.95,
+              firstRecalledAt: "2026-04-01T00:00:00.000Z",
+              lastRecalledAt: "2026-04-04T00:00:00.000Z",
+              queryHashes: ["a", "b"],
+              recallDays: ["2026-04-04"],
+              conceptTags: __testing.deriveConceptTags({
+                path: "memory/2026-04-01.md",
+                snippet,
+              }),
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`;
+      await fs.writeFile(storePath, raw, "utf-8");
+
+      const repair = await repairShortTermPromotionArtifacts({ workspaceDir });
+
+      expect(repair.changed).toBe(false);
+      expect(repair.rewroteStore).toBe(false);
+      expect(await fs.readFile(storePath, "utf-8")).toBe(raw);
+    });
+  });
+
+  it("waits for an active short-term lock before repairing", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const storePath = resolveShortTermRecallStorePath(workspaceDir);
+      const lockPath = resolveShortTermRecallLockPath(workspaceDir);
+      await fs.mkdir(path.dirname(storePath), { recursive: true });
+      await fs.writeFile(
+        storePath,
+        JSON.stringify(
+          {
+            version: 1,
+            updatedAt: "2026-04-04T00:00:00.000Z",
+            entries: {
+              bad: {
+                path: "",
+              },
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+      await fs.writeFile(lockPath, `${process.pid}:${Date.now()}\n`, "utf-8");
+
+      let settled = false;
+      const repairPromise = repairShortTermPromotionArtifacts({ workspaceDir }).then((result) => {
+        settled = true;
+        return result;
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      expect(settled).toBe(false);
+
+      await fs.unlink(lockPath);
+      const repair = await repairPromise;
+
+      expect(repair.changed).toBe(true);
+      expect(repair.rewroteStore).toBe(true);
+      expect(repair.removedInvalidEntries).toBe(1);
+    });
+  });
+
+  it("downgrades lock inspection failures into audit issues", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const lockPath = path.join(workspaceDir, "memory", ".dreams", "short-term-promotion.lock");
+      const stat = vi.spyOn(fs, "stat").mockImplementation(async (target) => {
+        if (String(target) === lockPath) {
+          const error = Object.assign(new Error("no access"), { code: "EACCES" });
+          throw error;
+        }
+        return await vi
+          .importActual<typeof import("node:fs/promises")>("node:fs/promises")
+          .then((actual) => actual.stat(target));
+      });
+      try {
+        const audit = await auditShortTermPromotionArtifacts({ workspaceDir });
+        expect(audit.issues).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              code: "recall-lock-unreadable",
+              fixable: false,
+            }),
+          ]),
+        );
+      } finally {
+        stat.mockRestore();
+      }
     });
   });
 

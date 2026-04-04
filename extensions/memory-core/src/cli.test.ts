@@ -422,6 +422,41 @@ describe("memory cli", () => {
     });
   });
 
+  it("shows the fix hint only before --fix has been run", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-cli-fix-hint-"));
+    try {
+      const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
+      await fs.mkdir(path.dirname(storePath), { recursive: true });
+      await fs.writeFile(storePath, " \n", "utf-8");
+
+      const close = vi.fn(async () => {});
+      mockManager({
+        probeVectorAvailability: vi.fn(async () => true),
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      const log = spyRuntimeLogs(defaultRuntime);
+      await runMemoryCli(["status"]);
+      expect(log).toHaveBeenCalledWith(
+        expect.stringContaining("Fix: openclaw memory status --fix --agent main"),
+      );
+
+      log.mockClear();
+      mockManager({
+        probeVectorAvailability: vi.fn(async () => true),
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+      await runMemoryCli(["status", "--fix"]);
+      expect(log).not.toHaveBeenCalledWith(
+        expect.stringContaining("Fix: openclaw memory status --fix --agent main"),
+      );
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   it("enables verbose logging with --verbose", async () => {
     const close = vi.fn(async () => {});
     mockManager({

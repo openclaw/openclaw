@@ -103,6 +103,7 @@ export type ShortTermAuditIssue = {
     | "recall-store-empty"
     | "recall-store-invalid"
     | "recall-lock-stale"
+    | "recall-lock-unreadable"
     | "qmd-index-missing"
     | "qmd-index-empty"
     | "qmd-collections-empty";
@@ -945,8 +946,14 @@ export async function auditShortTermPromotionArtifacts(params: {
       });
     }
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw err;
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT") {
+      issues.push({
+        severity: "warn",
+        code: "recall-lock-unreadable",
+        message: `Short-term promotion lock could not be inspected: ${code ?? "error"}.`,
+        fixable: false,
+      });
     }
   }
 
@@ -1025,45 +1032,8 @@ export async function repairShortTermPromotionArtifacts(params: {
   let removedInvalidEntries = 0;
   let removedStaleLock = false;
 
-  const storePath = resolveStorePath(workspaceDir);
   try {
-    const raw = await fs.readFile(storePath, "utf-8");
-    const rawEntries = Object.keys(asRecord(JSON.parse(raw))?.entries ?? {}).length;
-    const normalized = normalizeStore(JSON.parse(raw), nowIso);
-    removedInvalidEntries = Math.max(0, rawEntries - Object.keys(normalized.entries).length);
-    const nextEntries = Object.fromEntries(
-      Object.entries(normalized.entries).map(([key, entry]) => {
-        const conceptTags = deriveConceptTags({ path: entry.path, snippet: entry.snippet });
-        const fallbackDay = normalizeIsoDay(entry.lastRecalledAt) ?? nowIso.slice(0, 10);
-        return [
-          key,
-          {
-            ...entry,
-            queryHashes: (entry.queryHashes ?? []).slice(-MAX_QUERY_HASHES),
-            recallDays: mergeRecentDistinct(entry.recallDays ?? [], fallbackDay, MAX_RECALL_DAYS),
-            conceptTags: conceptTags.length > 0 ? conceptTags : (entry.conceptTags ?? []),
-          } satisfies ShortTermRecallEntry,
-        ];
-      }),
-    );
-    const nextStore: ShortTermRecallStore = {
-      version: 1,
-      updatedAt: nowIso,
-      entries: nextEntries,
-    };
-    const nextRaw = `${JSON.stringify(nextStore, null, 2)}\n`;
-    if (nextRaw !== `${raw.trimEnd()}\n`) {
-      await writeStore(workspaceDir, nextStore);
-      rewroteStore = true;
-    }
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw err;
-    }
-  }
-
-  const lockPath = resolveLockPath(workspaceDir);
-  try {
+    const lockPath = resolveLockPath(workspaceDir);
     const stat = await fs.stat(lockPath);
     const ageMs = Date.now() - stat.mtimeMs;
     if (ageMs > SHORT_TERM_LOCK_STALE_MS && (await canStealStaleLock(lockPath))) {
@@ -1075,6 +1045,49 @@ export async function repairShortTermPromotionArtifacts(params: {
       throw err;
     }
   }
+
+  await withShortTermLock(workspaceDir, async () => {
+    const storePath = resolveStorePath(workspaceDir);
+    try {
+      const raw = await fs.readFile(storePath, "utf-8");
+      const parsed = raw.trim().length > 0 ? (JSON.parse(raw) as unknown) : emptyStore(nowIso);
+      const rawEntries = Object.keys(asRecord(parsed)?.entries ?? {}).length;
+      const normalized = normalizeStore(parsed, nowIso);
+      removedInvalidEntries = Math.max(0, rawEntries - Object.keys(normalized.entries).length);
+      const nextEntries = Object.fromEntries(
+        Object.entries(normalized.entries).map(([key, entry]) => {
+          const conceptTags = deriveConceptTags({ path: entry.path, snippet: entry.snippet });
+          const fallbackDay = normalizeIsoDay(entry.lastRecalledAt) ?? nowIso.slice(0, 10);
+          return [
+            key,
+            {
+              ...entry,
+              queryHashes: (entry.queryHashes ?? []).slice(-MAX_QUERY_HASHES),
+              recallDays: mergeRecentDistinct(entry.recallDays ?? [], fallbackDay, MAX_RECALL_DAYS),
+              conceptTags: conceptTags.length > 0 ? conceptTags : (entry.conceptTags ?? []),
+            } satisfies ShortTermRecallEntry,
+          ];
+        }),
+      );
+      const comparableStore: ShortTermRecallStore = {
+        version: 1,
+        updatedAt: normalized.updatedAt,
+        entries: nextEntries,
+      };
+      const comparableRaw = `${JSON.stringify(comparableStore, null, 2)}\n`;
+      if (comparableRaw !== `${raw.trimEnd()}\n`) {
+        await writeStore(workspaceDir, {
+          ...comparableStore,
+          updatedAt: nowIso,
+        });
+        rewroteStore = true;
+      }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw err;
+      }
+    }
+  });
 
   return {
     changed: rewroteStore || removedStaleLock,

@@ -705,8 +705,8 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
       for (const issue of audit.issues) {
         lines.push(`  ${issue.severity === "error" ? warn(issue.message) : muted(issue.message)}`);
       }
-      if (opts.fix) {
-        lines.push(`  ${muted(`Fix path: openclaw memory status --fix --agent ${agentId}`)}`);
+      if (!opts.fix) {
+        lines.push(`  ${muted(`Fix: openclaw memory status --fix --agent ${agentId}`)}`);
       }
     }
     defaultRuntime.log(lines.join("\n"));

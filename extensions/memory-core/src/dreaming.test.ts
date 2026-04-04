@@ -168,6 +168,28 @@ describe("short-term dreaming config", () => {
     });
   });
 
+  it("treats blank numeric strings as unset and keeps preset defaults", () => {
+    const resolved = resolveShortTermPromotionDreamingConfig({
+      pluginConfig: {
+        dreaming: {
+          mode: "deep",
+          limit: " ",
+          minScore: "",
+          minRecallCount: "  ",
+          minUniqueQueries: "",
+        },
+      },
+    });
+    expect(resolved).toEqual({
+      enabled: true,
+      cron: constants.DREAMING_PRESET_DEFAULTS.deep.cron,
+      limit: constants.DREAMING_PRESET_DEFAULTS.deep.limit,
+      minScore: constants.DREAMING_PRESET_DEFAULTS.deep.minScore,
+      minRecallCount: constants.DREAMING_PRESET_DEFAULTS.deep.minRecallCount,
+      minUniqueQueries: constants.DREAMING_PRESET_DEFAULTS.deep.minUniqueQueries,
+    });
+  });
+
   it("accepts limit=0 as an explicit no-op promotion cap", () => {
     const resolved = resolveShortTermPromotionDreamingConfig({
       pluginConfig: {
