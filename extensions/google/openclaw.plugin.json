@@ -39,6 +39,10 @@
       "sensitive": true,
       "placeholder": "AIza..."
     },
+    "webSearch.baseUrl": {
+      "label": "Gemini Search Base URL",
+      "help": "Base URL override (default: https://generativelanguage.googleapis.com/v1beta)."
+    },
     "webSearch.model": {
       "label": "Gemini Search Model",
       "help": "Gemini model override for web search grounding."
@@ -61,6 +65,9 @@
         "properties": {
           "apiKey": {
             "type": ["string", "object"]
+          },
+          "baseUrl": {
+            "type": "string"
           },
           "model": {
             "type": "string"

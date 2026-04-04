@@ -356,6 +356,7 @@ export const ToolsWebFetchSchema = z
 export const ToolsWebXSearchSchema = z
   .object({
     enabled: z.boolean().optional(),
+    baseUrl: z.string().optional(),
     model: z.string().optional(),
     inlineCitations: z.boolean().optional(),
     maxTurns: z.number().int().optional(),

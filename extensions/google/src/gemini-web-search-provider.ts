@@ -26,13 +26,13 @@ import {
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import { DEFAULT_GOOGLE_API_BASE_URL } from "../api.js";
+import { normalizeGoogleApiBaseUrl } from "../api.js";
 
 const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash";
-const GEMINI_API_BASE = DEFAULT_GOOGLE_API_BASE_URL;
 
 type GeminiConfig = {
   apiKey?: string;
+  baseUrl?: string;
   model?: string;
 };
 
@@ -78,13 +78,20 @@ function resolveGeminiModel(gemini?: GeminiConfig): string {
   return model || DEFAULT_GEMINI_MODEL;
 }
 
+function resolveGeminiBaseUrl(gemini?: GeminiConfig): string {
+  return normalizeGoogleApiBaseUrl(
+    typeof gemini?.baseUrl === "string" ? gemini.baseUrl : undefined,
+  );
+}
+
 async function runGeminiSearch(params: {
   query: string;
   apiKey: string;
   model: string;
+  baseUrl: string;
   timeoutSeconds: number;
 }): Promise<{ content: string; citations: Array<{ url: string; title?: string }> }> {
-  const endpoint = `${GEMINI_API_BASE}/models/${params.model}:generateContent`;
+  const endpoint = `${params.baseUrl}/models/${params.model}:generateContent`;
 
   return withTrustedWebSearchEndpoint(
     {
@@ -205,11 +212,13 @@ function createGeminiToolDefinition(
         searchConfig?.maxResults ??
         undefined;
       const model = resolveGeminiModel(geminiConfig);
+      const baseUrl = resolveGeminiBaseUrl(geminiConfig);
       const cacheKey = buildSearchCacheKey([
         "gemini",
         query,
         resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
         model,
+        baseUrl,
       ]);
       const cached = readCachedSearchPayload(cacheKey);
       if (cached) {
@@ -221,6 +230,7 @@ function createGeminiToolDefinition(
         query,
         apiKey,
         model,
+        baseUrl,
         timeoutSeconds: resolveSearchTimeoutSeconds(searchConfig),
       });
       const payload = {
@@ -279,4 +289,5 @@ export function createGeminiWebSearchProvider(): WebSearchProviderPlugin {
 export const __testing = {
   resolveGeminiApiKey,
   resolveGeminiModel,
+  resolveGeminiBaseUrl,
 } as const;

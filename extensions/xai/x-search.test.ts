@@ -1,6 +1,10 @@
 import { withFetchPreconnect } from "openclaw/plugin-sdk/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createXSearchTool } from "./x-search.js";
+import { __testing as sharedTesting } from "./src/x-search-shared.js";
+import { __testing, createXSearchTool } from "./x-search.js";
+
+const { buildXSearchCacheKey, readPluginXaiWebSearchBaseUrl, resolveXSearchBaseUrl } = __testing;
+const { XAI_X_SEARCH_DEFAULT_BASE_URL } = sharedTesting;
 
 function installXSearchFetch(payload?: Record<string, unknown>) {
   const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
@@ -267,6 +271,97 @@ describe("xai x_search tool", () => {
     expect((request?.headers as Record<string, string> | undefined)?.Authorization).toBe(
       "Bearer migrated-runtime-key",
     );
+  });
+
+  it("uses a custom baseUrl when configured in x_search", () => {
+    expect(
+      resolveXSearchBaseUrl({
+        xSearchConfig: { baseUrl: "https://custom.xai.example.com/v1" },
+      }),
+    ).toBe("https://custom.xai.example.com/v1");
+  });
+
+  it("falls back to plugins.entries.xai.config.webSearch.baseUrl when x_search.baseUrl is not set", () => {
+    expect(
+      resolveXSearchBaseUrl({
+        xSearchConfig: {},
+        cfg: {
+          plugins: {
+            entries: {
+              xai: { config: { webSearch: { baseUrl: "https://plugin-fallback.example.com/v1" } } },
+            },
+          },
+        },
+      }),
+    ).toBe("https://plugin-fallback.example.com/v1");
+  });
+
+  it("prefers runtimeConfig plugin baseUrl over source config plugin baseUrl", () => {
+    expect(
+      resolveXSearchBaseUrl({
+        xSearchConfig: {},
+        cfg: {
+          plugins: {
+            entries: {
+              xai: { config: { webSearch: { baseUrl: "https://source.example.com/v1" } } },
+            },
+          },
+        },
+        runtimeConfig: {
+          plugins: {
+            entries: {
+              xai: { config: { webSearch: { baseUrl: "https://runtime.example.com/v1" } } },
+            },
+          },
+        },
+      }),
+    ).toBe("https://runtime.example.com/v1");
+  });
+
+  it("falls back to the default xAI base URL when neither x_search.baseUrl nor plugin baseUrl is set", () => {
+    expect(
+      resolveXSearchBaseUrl({
+        xSearchConfig: {},
+      }),
+    ).toBe(XAI_X_SEARCH_DEFAULT_BASE_URL);
+  });
+
+  it("strips trailing slashes from x_search.baseUrl", () => {
+    expect(
+      resolveXSearchBaseUrl({
+        xSearchConfig: { baseUrl: "https://custom.xai.example.com/v1///" },
+      }),
+    ).toBe("https://custom.xai.example.com/v1");
+  });
+
+  it("reads plugin webSearch.baseUrl from config", () => {
+    expect(
+      readPluginXaiWebSearchBaseUrl({
+        plugins: {
+          entries: {
+            xai: { config: { webSearch: { baseUrl: "https://proxy.example.com/xai/v1" } } },
+          },
+        },
+      }),
+    ).toBe("https://proxy.example.com/xai/v1");
+    expect(readPluginXaiWebSearchBaseUrl(undefined)).toBeUndefined();
+    expect(readPluginXaiWebSearchBaseUrl({})).toBeUndefined();
+  });
+
+  it("produces different cache keys for different baseUrls", () => {
+    const base = {
+      query: "same query",
+      model: "grok-4-1-fast-non-reasoning",
+      inlineCitations: false,
+      options: {},
+    };
+    const keyA = buildXSearchCacheKey({ ...base, baseUrl: "https://endpoint-a.example.com/v1" });
+    const keyB = buildXSearchCacheKey({ ...base, baseUrl: "https://endpoint-b.example.com/v1" });
+    const keyDefault = buildXSearchCacheKey({ ...base, baseUrl: "https://api.x.ai/v1" });
+
+    expect(keyA).not.toBe(keyB);
+    expect(keyA).not.toBe(keyDefault);
+    expect(keyB).not.toBe(keyDefault);
   });
 
   it("rejects invalid date ordering before calling xAI", async () => {

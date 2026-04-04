@@ -26,6 +26,10 @@
       "help": "xAI API key for Grok web search (fallback: XAI_API_KEY env var).",
       "sensitive": true
     },
+    "webSearch.baseUrl": {
+      "label": "Grok Search Base URL",
+      "help": "Base URL override (default: https://api.x.ai/v1)."
+    },
     "webSearch.model": {
       "label": "Grok Search Model",
       "help": "Grok model override for web search."
@@ -90,6 +94,9 @@
         "properties": {
           "apiKey": {
             "type": ["string", "object"]
+          },
+          "baseUrl": {
+            "type": "string"
           },
           "model": {
             "type": "string"

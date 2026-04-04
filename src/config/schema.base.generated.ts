@@ -7474,6 +7474,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   enabled: {
                     type: "boolean",
                   },
+                  baseUrl: {
+                    type: "string",
+                  },
                   model: {
                     type: "string",
                   },
@@ -26584,6 +26587,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "tools.web.search.apiKey": {
       sensitive: true,
       tags: ["security", "auth", "tools"],
+    },
+    "tools.web.x_search.baseUrl": {
+      label: "X Search Base URL",
+      help: "Base URL override for X search (default: https://api.x.ai/v1).",
+      tags: ["advanced", "tools"],
     },
     "tools.web.fetch.firecrawl.apiKey": {
       sensitive: true,

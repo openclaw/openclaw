@@ -55,6 +55,15 @@ export function readPluginXaiWebSearchApiKey(cfg?: OpenClawConfig): string | und
   );
 }
 
+export function readPluginXaiWebSearchBaseUrl(cfg?: OpenClawConfig): string | undefined {
+  const raw = resolveProviderWebSearchPluginConfig(
+    cfg as Record<string, unknown> | undefined,
+    "xai",
+  )?.baseUrl;
+  const trimmed = typeof raw === "string" ? raw.trim().replace(/\/+$/, "") : "";
+  return trimmed || undefined;
+}
+
 export function resolveFallbackXaiAuth(cfg?: OpenClawConfig): XaiFallbackAuth | undefined {
   const pluginApiKey = readConfiguredOrManagedApiKey(
     resolveProviderWebSearchPluginConfig(cfg as Record<string, unknown> | undefined, "xai")?.apiKey,

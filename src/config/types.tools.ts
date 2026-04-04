@@ -518,6 +518,8 @@ export type ToolsConfig = {
     x_search?: {
       /** Enable X search tool (default: true when xAI auth is available via plugin config or XAI_API_KEY). */
       enabled?: boolean;
+      /** Base URL override for the xAI API (default: https://api.x.ai/v1). */
+      baseUrl?: string;
       /** Model id to use for X search. */
       model?: string;
       /** Keep inline citations in the xAI response payload when available. */
