@@ -482,6 +482,10 @@ Options:
 
 Interactive configuration wizard (models, channels, skills, gateway).
 
+Options:
+
+- `--section <section>` (repeatable; limit the wizard to specific sections)
+
 ### `config`
 
 Non-interactive config helpers (get/set/unset/file/schema/validate). Running `openclaw config` with no
@@ -518,6 +522,40 @@ Options:
 - `--repair` (alias: `--fix`): attempt automatic repairs for detected issues.
 - `--force`: force repairs even when not strictly needed.
 - `--generate-gateway-token`: generate a new gateway auth token.
+
+### `dashboard`
+
+Open the Control UI with your current token.
+
+Options:
+
+- `--no-open`: print the URL but do not launch a browser
+
+Notes:
+
+- For SecretRef-managed gateway tokens, `dashboard` prints or opens a non-tokenized URL instead of exposing the secret in terminal output or browser launch arguments.
+
+### `backup`
+
+Create and verify local backup archives for OpenClaw state.
+
+Subcommands:
+
+- `backup create`
+- `backup verify <archive>`
+
+`backup create` options:
+
+- `--output <path>`
+- `--json`
+- `--dry-run`
+- `--verify`
+- `--only-config`
+- `--no-include-workspace`
+
+`backup verify <archive>` options:
+
+- `--json`
 
 ## Channel helpers
 
