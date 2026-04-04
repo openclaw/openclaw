@@ -11,11 +11,7 @@ function normalizeProviderValue(value?: string): string | undefined {
  * otherwise cause system prompts and tool context to drift away from the
  * session's real channel, breaking prompt-cache reuse.
  */
-const SYNTHETIC_PROVIDER_VALUES = new Set([
-  "heartbeat",
-  "cron-event",
-  "exec-event",
-]);
+const SYNTHETIC_PROVIDER_VALUES = new Set(["heartbeat", "cron-event", "exec-event"]);
 
 function isSyntheticProviderValue(value: string | undefined): boolean {
   return Boolean(value && SYNTHETIC_PROVIDER_VALUES.has(value.trim().toLowerCase()));
