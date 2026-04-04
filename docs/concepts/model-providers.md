@@ -154,7 +154,10 @@ surface.
   - `<PROVIDER>_API_KEY_*` (numbered list, e.g. `<PROVIDER>_API_KEY_1`)
 - For Google providers, `GOOGLE_API_KEY` is also included as fallback.
 - Key selection order preserves priority and deduplicates values.
-- Requests are retried with the next key only on rate-limit responses (for example `429`, `rate_limit`, `quota`, `resource exhausted`).
+- Requests are retried with the next key only on rate-limit responses (for
+  example `429`, `rate_limit`, `quota`, `resource exhausted`, `Too many
+concurrent requests`, `ThrottlingException`, or periodic usage-limit
+  messages).
 - Non-rate-limit failures fail immediately; no key rotation is attempted.
 - When all candidate keys fail, the final error is returned from the last attempt.
 

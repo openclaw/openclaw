@@ -77,7 +77,7 @@ The Gateway is the single source of truth for sessions, routing, and channel con
     Discord, iMessage, Signal, Slack, Telegram, WhatsApp, WebChat, and more with a single Gateway process.
   </Card>
   <Card title="Plugin channels" icon="plug">
-    Add Matrix, Microsoft Teams, Nostr, Twitch, Zalo, and more with plugin packages.
+    Add Matrix, Nostr, Twitch, Zalo, and more with plugin packages.
   </Card>
   <Card title="Multi-agent routing" icon="route">
     Isolated sessions per agent, workspace, or sender.
@@ -165,7 +165,7 @@ Example:
     SSH and tailnet access patterns.
   </Card>
   <Card title="Channels" href="/channels/telegram" icon="message-square">
-    Channel-specific setup for WhatsApp, Telegram, Discord, and more.
+    Channel-specific setup for Feishu, Microsoft Teams, WhatsApp, Telegram, Discord, and more.
   </Card>
   <Card title="Nodes" href="/nodes" icon="smartphone">
     iOS and Android nodes with pairing, Canvas, camera, and device actions.

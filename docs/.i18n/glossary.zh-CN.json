@@ -56,6 +56,10 @@
     "target": "Qwen"
   },
   {
+    "source": "Feishu",
+    "target": "Feishu"
+  },
+  {
     "source": "BytePlus (International)",
     "target": "BytePlus（国际版）"
   },

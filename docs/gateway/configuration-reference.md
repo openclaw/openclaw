@@ -989,7 +989,7 @@ Time format in system prompt. Default: `auto` (OS preference).
 - `pdfMaxPages`: default maximum pages considered by extraction fallback mode in the `pdf` tool.
 - `verboseDefault`: default verbose level for agents. Values: `"off"`, `"on"`, `"full"`. Default: `"off"`.
 - `elevatedDefault`: default elevated-output level for agents. Values: `"off"`, `"on"`, `"ask"`, `"full"`. Default: `"on"`.
-- `model.primary`: format `provider/model` (e.g. `openai/gpt-5.4`). If you omit the provider, OpenClaw assumes the configured default provider (currently `openai`; deprecated fallback behavior, so prefer explicit `provider/model`).
+- `model.primary`: format `provider/model` (e.g. `openai/gpt-5.4`). If you omit the provider, OpenClaw tries an alias first, then a unique configured-provider match for that exact model id, and only then falls back to the configured default provider (deprecated compatibility behavior, so prefer explicit `provider/model`).
 - `models`: the configured model catalog and allowlist for `/model`. Each entry can include `alias` (shortcut) and `params` (provider-specific, for example `temperature`, `maxTokens`, `cacheRetention`, `context1m`).
 - `params`: global default provider parameters applied to all models. Set at `agents.defaults.params` (e.g. `{ cacheRetention: "long" }`).
 - `params` merge precedence (config): `agents.defaults.params` (global base) is overridden by `agents.defaults.models["provider/model"].params` (per-model), then `agents.list[].params` (matching agent id) overrides by key. See [Prompt Caching](/reference/prompt-caching) for details.
@@ -3129,7 +3129,10 @@ Notes:
 }
 ```
 
-- `billingBackoffHours`: base backoff in hours when a profile fails due to billing/insufficient credits (default: `5`).
+- `billingBackoffHours`: base backoff in hours when a profile fails due to true
+  billing/insufficient-credit errors (default: `5`). Retryable HTTP `402`
+  usage-window or organization/workspace spend-limit messages stay in the
+  `rate_limit` path instead.
 - `billingBackoffHoursByProvider`: optional per-provider overrides for billing backoff hours.
 - `billingMaxHours`: cap in hours for billing backoff exponential growth (default: `24`).
 - `authPermanentBackoffMinutes`: base backoff in minutes for high-confidence `auth_permanent` failures (default: `10`).

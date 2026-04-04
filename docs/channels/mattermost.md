@@ -12,9 +12,13 @@ Status: supported via plugin (bot token + WebSocket events). Channels, groups, a
 Mattermost is a self-hostable team messaging platform; see the official site at
 [mattermost.com](https://mattermost.com) for product details and downloads.
 
-## Plugin required
+## Bundled plugin
 
-Mattermost ships as a plugin and is not bundled with the core install.
+Mattermost ships as a bundled plugin in current OpenClaw releases, so normal
+packaged builds do not need a separate install.
+
+If you are on an older build or a custom install that excludes Mattermost,
+install it manually:
 
 Install via CLI (npm registry):
 
@@ -28,14 +32,11 @@ Local checkout (when running from a git repo):
 openclaw plugins install ./path/to/local/mattermost-plugin
 ```
 
-If you choose Mattermost during setup and a git checkout is detected,
-OpenClaw will offer the local install path automatically.
-
 Details: [Plugins](/tools/plugin)
 
 ## Quick setup
 
-1. Install the Mattermost plugin.
+1. Ensure the Mattermost bundled plugin is available.
 2. Create a Mattermost bot account and copy the **bot token**.
 3. Copy the Mattermost **base URL** (e.g., `https://chat.example.com`).
 4. Configure OpenClaw and start the gateway.
