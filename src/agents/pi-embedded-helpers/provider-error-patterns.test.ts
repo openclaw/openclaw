@@ -1,4 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("../../plugins/provider-runtime.js", () => ({
+  classifyProviderFailoverReasonWithPlugin: () => null,
+  matchesProviderContextOverflowWithPlugin: () => false,
+}));
+
 import { classifyFailoverReason, isContextOverflowError } from "./errors.js";
 import {
   classifyProviderSpecificError,

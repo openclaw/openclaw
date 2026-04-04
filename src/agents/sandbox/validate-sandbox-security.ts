@@ -114,7 +114,18 @@ export function getBlockedBindReason(bind: string): BlockedBindReason | null {
   }
 
   const normalized = normalizeHostPath(sourceRaw);
-  return getBlockedReasonForSourcePath(normalized, getBlockedHostPaths());
+  const blockedHostPaths = getBlockedHostPaths();
+  const directReason = getBlockedReasonForSourcePath(normalized, blockedHostPaths);
+  if (directReason) {
+    return directReason;
+  }
+
+  const canonical = resolveSandboxHostPathViaExistingAncestor(normalized);
+  if (canonical !== normalized) {
+    return getBlockedReasonForSourcePath(canonical, blockedHostPaths);
+  }
+
+  return null;
 }
 
 export function getBlockedReasonForSourcePath(

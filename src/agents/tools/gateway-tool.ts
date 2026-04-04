@@ -63,7 +63,7 @@ function parseGatewayConfigMutationRaw(
   return parsedRes.parsed;
 }
 
-function getValueAtPath(config: Record<string, unknown>, path: string): unknown {
+function getValueAtCanonicalPath(config: Record<string, unknown>, path: string): unknown {
   let current: unknown = config;
   for (const part of path.split(".")) {
     if (!current || typeof current !== "object" || Array.isArray(current)) {
@@ -72,6 +72,17 @@ function getValueAtPath(config: Record<string, unknown>, path: string): unknown 
     current = (current as Record<string, unknown>)[part];
   }
   return current;
+}
+
+function getValueAtPath(config: Record<string, unknown>, path: string): unknown {
+  const direct = getValueAtCanonicalPath(config, path);
+  if (direct !== undefined) {
+    return direct;
+  }
+  if (!path.startsWith("tools.exec.")) {
+    return undefined;
+  }
+  return getValueAtCanonicalPath(config, path.replace(/^tools\.exec\./, "tools.bash."));
 }
 
 function assertGatewayConfigMutationAllowed(params: {

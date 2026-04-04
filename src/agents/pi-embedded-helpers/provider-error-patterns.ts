@@ -25,6 +25,16 @@ type ProviderErrorPattern = {
  * to catch provider-specific wording that the generic regex misses.
  */
 export const PROVIDER_CONTEXT_OVERFLOW_PATTERNS: readonly RegExp[] = [
+  // AWS Bedrock validation / stream errors use provider-specific wording.
+  /\binput token count exceeds the maximum number of input tokens\b/i,
+  /\binput is too long for this model\b/i,
+
+  // Google Vertex / Gemini REST surfaces this wording.
+  /\binput exceeds the maximum number of tokens\b/i,
+
+  // Ollama may append a provider prefix and extra token wording.
+  /\bollama error:\s*context length exceeded(?:,\s*too many tokens)?\b/i,
+
   // Cohere does not currently ship a bundled provider hook.
   /\btotal tokens?.*exceeds? (?:the )?(?:model(?:'s)? )?(?:max|maximum|limit)/i,
 
@@ -38,6 +48,22 @@ export const PROVIDER_CONTEXT_OVERFLOW_PATTERNS: readonly RegExp[] = [
  * produce wrong results for specific providers.
  */
 export const PROVIDER_SPECIFIC_PATTERNS: readonly ProviderErrorPattern[] = [
+  {
+    test: /\bthrottlingexception\b/i,
+    reason: "rate_limit",
+  },
+  {
+    test: /\bconcurrency limit(?: has been)? reached\b/i,
+    reason: "rate_limit",
+  },
+  {
+    test: /\bworkers_ai\b.*\bquota limit exceeded\b/i,
+    reason: "rate_limit",
+  },
+  {
+    test: /\bmodelnotreadyexception\b/i,
+    reason: "overloaded",
+  },
   // Groq does not currently ship a bundled provider hook.
   {
     test: /model(?:_is)?_deactivated|model has been deactivated/i,

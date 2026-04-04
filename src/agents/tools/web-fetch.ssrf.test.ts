@@ -73,6 +73,7 @@ describe("web_fetch SSRF protection", () => {
   const priorFetch = global.fetch;
 
   beforeEach(() => {
+    vi.stubEnv("FIRECRAWL_API_KEY", "");
     vi.spyOn(ssrf, "resolvePinnedHostname").mockImplementation((hostname) =>
       resolvePinnedHostname(hostname, lookupMock),
     );
@@ -81,6 +82,7 @@ describe("web_fetch SSRF protection", () => {
   afterEach(() => {
     global.fetch = priorFetch;
     lookupMock.mockClear();
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
 

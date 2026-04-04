@@ -3,6 +3,17 @@ import type { ModelProviderConfig } from "../../config/config.js";
 import { discoverModels } from "../pi-model-discovery.js";
 import { createProviderRuntimeTestMock } from "./model.provider-runtime.test-support.js";
 
+vi.mock("../../plugins/provider-runtime.js", () => ({
+  applyProviderResolvedModelCompatWithPlugins: () => undefined,
+  applyProviderResolvedTransportWithPlugin: () => undefined,
+  buildProviderUnknownModelHintWithPlugin: () => undefined,
+  clearProviderRuntimeHookCache: () => {},
+  normalizeProviderTransportWithPlugin: () => undefined,
+  normalizeProviderResolvedModelWithPlugin: () => undefined,
+  prepareProviderDynamicModel: async () => {},
+  runProviderDynamicModel: () => undefined,
+}));
+
 vi.mock("../model-suppression.js", () => ({
   shouldSuppressBuiltInModel: ({ provider, id }: { provider?: string; id?: string }) =>
     (provider === "openai" || provider === "azure-openai-responses") &&
@@ -89,13 +100,14 @@ function resolveAnthropicModelWithProviderOverrides(overrides: Partial<ModelProv
 }
 
 describe("resolveModel forward-compat errors and overrides", () => {
-  it("resolves supported antigravity thinking model ids", () => {
+  it("builds a forward-compat fallback for supported antigravity thinking ids", () => {
     expectResolvedForwardCompatFallbackResult({
       result: resolveModelForTest("google-antigravity", "claude-opus-4-6-thinking", "/tmp/agent"),
       expectedModel: {
-        provider: "google-antigravity",
-        id: "claude-opus-4-6-thinking",
         api: "google-gemini-cli",
+        baseUrl: "https://cloudcode-pa.googleapis.com",
+        id: "claude-opus-4-6-thinking",
+        provider: "google-antigravity",
         reasoning: true,
       },
     });
@@ -232,7 +244,7 @@ describe("resolveModel forward-compat errors and overrides", () => {
     });
   });
 
-  it("rewrites openai api origins back to codex transport for openai-codex", () => {
+  it("normalizes openai-codex gpt-5.4 back to codex transport", () => {
     mockOpenAICodexTemplateModel(discoverModels);
 
     const cfg: OpenClawConfig = {

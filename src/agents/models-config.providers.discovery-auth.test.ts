@@ -70,7 +70,7 @@ describe("provider discovery auth marker guardrails", () => {
       },
     });
 
-    const providers = await resolveImplicitProvidersForTest({ agentDir, env: {} });
+    const providers = await resolveImplicitProvidersForTest({ agentDir, env: {}, config: {} });
     expect(providers?.vllm?.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
     const request = fetchMock.mock.calls[0]?.[1] as
       | { headers?: Record<string, string> }
@@ -108,7 +108,7 @@ describe("provider discovery auth marker guardrails", () => {
       },
     });
 
-    await resolveImplicitProvidersForTest({ agentDir, env: {} });
+    await resolveImplicitProvidersForTest({ agentDir, env: {}, config: {} });
     const vllmCall = fetchMock.mock.calls.find(([url]) => String(url).includes(":8000"));
     const request = vllmCall?.[1] as { headers?: Record<string, string> } | undefined;
     expect(request?.headers?.Authorization).toBe("Bearer ALLCAPS_SAMPLE");
