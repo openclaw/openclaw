@@ -255,7 +255,7 @@ Current bundled provider examples:
   | `plugin-sdk/keyed-async-queue` | Ordered async queue | `KeyedAsyncQueue` |
   | `plugin-sdk/media-runtime` | Shared media helpers | Media fetch/transform/store helpers plus media payload builders |
   | `plugin-sdk/media-understanding-runtime` | Media-understanding runtime facade | Media-understanding runner facade and typed result helpers |
-  | `plugin-sdk/text-runtime` | Shared text helpers | Text, markdown, logging, and formatting helpers |
+  | `plugin-sdk/text-runtime` | Shared text helpers | Assistant-visible-text stripping, markdown render/chunking/table helpers, redaction helpers, directive-tag helpers, safe-text utilities, and related text/logging helpers |
   | `plugin-sdk/text-chunking` | Text chunking helpers | Outbound text chunking helper |
   | `plugin-sdk/speech-runtime` | Speech runtime facade | TTS resolution and synthesis helpers |
   | `plugin-sdk/speech-core` | Shared speech core | Speech provider types, registry, directives, normalization |

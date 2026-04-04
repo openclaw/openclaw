@@ -224,7 +224,7 @@ explicitly promotes one as public.
     | --- | --- |
     | `plugin-sdk/media-runtime` | Shared media fetch/transform/store helpers plus media payload builders |
     | `plugin-sdk/media-understanding-runtime` | Media-understanding runner facade and typed result helpers |
-    | `plugin-sdk/text-runtime` | Shared text, markdown, logging, and formatting helpers |
+    | `plugin-sdk/text-runtime` | Shared text/markdown/logging helpers such as assistant-visible-text stripping, markdown render/chunking/table helpers, redaction helpers, directive-tag helpers, and safe-text utilities |
     | `plugin-sdk/text-chunking` | Outbound text chunking helper |
     | `plugin-sdk/speech-runtime` | Speech-core runtime facade for TTS resolution and synthesis |
     | `plugin-sdk/speech-core` | Shared speech provider types, registry, directive, and normalization helpers |
