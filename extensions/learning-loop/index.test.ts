@@ -262,6 +262,42 @@ describe("learning-loop plugin", () => {
     expect(pluginMocks.graphiti.closeConnection).toHaveBeenCalledTimes(1);
   });
 
+  it("does not track internal learning-loop runs as active Graphiti users", async () => {
+    const { api, on } = createApi();
+    pluginMocks.isLearningLoopInternalSessionId.mockImplementation(
+      (sessionId?: string) => !!sessionId?.startsWith("__openclaw_learning_loop_internal__"),
+    );
+
+    learningLoopPlugin.register(api);
+
+    const beforeAgentStartHandler = on.mock.calls.find(
+      ([name]) => name === "before_agent_start",
+    )?.[1];
+    const agentEndHandler = on.mock.calls.find(([name]) => name === "agent_end")?.[1];
+    if (typeof beforeAgentStartHandler !== "function" || typeof agentEndHandler !== "function") {
+      throw new Error("expected learning-loop plugin to register before_agent_start and agent_end");
+    }
+
+    beforeAgentStartHandler(
+      { messages: [] },
+      {
+        runId: "__openclaw_learning_loop_internal__-1-run",
+        sessionId: "__openclaw_learning_loop_internal__-1",
+      },
+    );
+    beforeAgentStartHandler({ messages: [] }, { runId: "run-normal", sessionId: "session-normal" });
+
+    await agentEndHandler(
+      {
+        success: false,
+        messages: [],
+      },
+      { runId: "run-normal", sessionId: "session-normal" },
+    );
+
+    expect(pluginMocks.graphiti.closeConnection).toHaveBeenCalledTimes(1);
+  });
+
   it("scopes evolution storage to the active session workspace", async () => {
     const { api, on } = createApi();
 

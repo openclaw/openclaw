@@ -382,6 +382,7 @@ export default definePluginEntry({
 
     // Session lifecycle: clear caches on new sessions
     api.on("before_agent_start", (_event, ctx) => {
+      if (isLearningLoopInternalSessionId(ctx.sessionId)) return;
       const runKey = ctx.runId?.trim() || ctx.sessionId?.trim();
       if (runKey) {
         activeRunKeys.add(runKey);
