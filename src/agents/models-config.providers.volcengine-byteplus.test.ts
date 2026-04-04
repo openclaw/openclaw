@@ -6,6 +6,31 @@ import { captureEnv } from "../test-utils/env.js";
 import { upsertAuthProfile } from "./auth-profiles.js";
 import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.js";
 
+const VOLC_SHARED_IMAGE_MODELS = [
+  "ark-code-latest",
+  "doubao-seed-code",
+  "glm-4.7",
+  "kimi-k2-thinking",
+  "kimi-k2.5",
+] as const;
+
+function expectSharedCodingVisionCapabilities(
+  models: { id: string; input?: string[] }[] | undefined,
+) {
+  expect(models).toBeDefined();
+
+  for (const modelId of VOLC_SHARED_IMAGE_MODELS) {
+    expect(models).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: modelId,
+          input: expect.arrayContaining(["image"]),
+        }),
+      ]),
+    );
+  }
+}
+
 describe("Volcengine and BytePlus providers", () => {
   it("includes volcengine and volcengine-plan when VOLCANO_ENGINE_API_KEY is configured", async () => {
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
@@ -18,6 +43,7 @@ describe("Volcengine and BytePlus providers", () => {
       expect(providers?.["volcengine-plan"]).toBeDefined();
       expect(providers?.volcengine?.apiKey).toBe("VOLCANO_ENGINE_API_KEY");
       expect(providers?.["volcengine-plan"]?.apiKey).toBe("VOLCANO_ENGINE_API_KEY");
+      expectSharedCodingVisionCapabilities(providers?.["volcengine-plan"]?.models);
     } finally {
       envSnapshot.restore();
     }
@@ -34,6 +60,7 @@ describe("Volcengine and BytePlus providers", () => {
       expect(providers?.["byteplus-plan"]).toBeDefined();
       expect(providers?.byteplus?.apiKey).toBe("BYTEPLUS_API_KEY");
       expect(providers?.["byteplus-plan"]?.apiKey).toBe("BYTEPLUS_API_KEY");
+      expectSharedCodingVisionCapabilities(providers?.["byteplus-plan"]?.models);
     } finally {
       envSnapshot.restore();
     }
