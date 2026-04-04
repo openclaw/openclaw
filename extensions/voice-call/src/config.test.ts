@@ -273,28 +273,6 @@ describe("normalizeVoiceCallConfig", () => {
 });
 
 describe("resolveVoiceCallConfig", () => {
-  it("keeps legacy streaming OpenAI fields inside providers.openai without forcing provider selection", () => {
-    const resolved = resolveVoiceCallConfig({
-      enabled: true,
-      provider: "twilio",
-      streaming: {
-        enabled: true,
-        openaiApiKey: "sk-test", // pragma: allowlist secret
-        sttModel: "gpt-4o-transcribe",
-        silenceDurationMs: 700,
-        vadThreshold: 0.4,
-      },
-    });
-
-    expect(resolved.streaming.provider).toBeUndefined();
-    expect(resolved.streaming.providers.openai).toEqual({
-      apiKey: "sk-test",
-      model: "gpt-4o-transcribe",
-      silenceDurationMs: 700,
-      vadThreshold: 0.4,
-    });
-  });
-
   it("preserves configured realtime instructions without env indirection", () => {
     const resolved = resolveVoiceCallConfig({
       enabled: true,
@@ -307,5 +285,14 @@ describe("resolveVoiceCallConfig", () => {
 
     expect(resolved.realtime.instructions).toBe("Stay concise.");
     expect(resolved.realtime.provider).toBeUndefined();
+  });
+
+  it("leaves responseModel unset so voice responses can inherit runtime defaults", () => {
+    const resolved = resolveVoiceCallConfig({
+      enabled: true,
+      provider: "mock",
+    });
+
+    expect(resolved.responseModel).toBeUndefined();
   });
 });

@@ -405,6 +405,7 @@ export async function installHooksFromArchive(
 
 export async function installHooksFromNpmSpec(params: {
   spec: string;
+  dangerouslyForceUnsafeInstall?: boolean;
   hooksDir?: string;
   timeoutMs?: number;
   logger?: HookInstallLogger;

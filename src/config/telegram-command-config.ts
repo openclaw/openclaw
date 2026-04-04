@@ -29,7 +29,7 @@ type TelegramCommandConfigContract = {
 function loadTelegramCommandConfigContract(): TelegramCommandConfigContract {
   const contract = getBundledChannelContractSurfaceModule<TelegramCommandConfigContract>({
     pluginId: "telegram",
-    preferredBasename: "contract-api.ts",
+    preferredBasename: "contract-surfaces.ts",
   });
   if (!contract) {
     throw new Error("telegram command config contract surface is unavailable");

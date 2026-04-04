@@ -58,10 +58,7 @@ describe("createDetectedBinaryStatus", () => {
 
     expect(
       await status.resolveStatusLines?.({ cfg: {}, accountId: "work", configured: false }),
-    ).toEqual([
-      "Signal: needs setup",
-      "signal-cli: missing (/opt/work-signal-cli)",
-    ]);
+    ).toEqual(["Signal: needs setup", "signal-cli: missing (/opt/work-signal-cli)"]);
     expect(resolveBinaryPath).toHaveBeenCalledWith({ cfg: {}, accountId: "work" });
   });
 });

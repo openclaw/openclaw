@@ -11,6 +11,7 @@ export const extensionRoutedChannelTestFiles = [];
 const extensionRoutedChannelTestFileSet = new Set(extensionRoutedChannelTestFiles);
 
 export const channelTestRoots = [
+  "src/channels",
   bundledPluginRoot("discord"),
   bundledPluginRoot("whatsapp"),
   bundledPluginRoot("slack"),

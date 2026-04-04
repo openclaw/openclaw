@@ -167,11 +167,7 @@ describe("resolveWhatsAppHeartbeatRecipients", () => {
       { accountId: "work" },
     );
 
-    expect(readChannelAllowFromStoreSyncMock).toHaveBeenCalledWith(
-      "whatsapp",
-      process.env,
-      "work",
-    );
+    expect(readChannelAllowFromStoreSyncMock).toHaveBeenCalledWith("whatsapp", process.env, "work");
     expect(result).toEqual({
       recipients: ["+15550000003", "+15550000002"],
       source: "allowFrom",
@@ -198,11 +194,7 @@ describe("resolveWhatsAppHeartbeatRecipients", () => {
       },
     });
 
-    expect(readChannelAllowFromStoreSyncMock).toHaveBeenCalledWith(
-      "whatsapp",
-      process.env,
-      "work",
-    );
+    expect(readChannelAllowFromStoreSyncMock).toHaveBeenCalledWith("whatsapp", process.env, "work");
     expect(result).toEqual({
       recipients: ["+15550000003", "+15550000002"],
       source: "allowFrom",

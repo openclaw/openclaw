@@ -1,8 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  __resetSlackChannelTypeCacheForTest,
-  resolveSlackChannelType,
-} from "./channel-type.js";
+import { __resetSlackChannelTypeCacheForTest, resolveSlackChannelType } from "./channel-type.js";
 
 const conversationsInfoMock = vi.fn();
 

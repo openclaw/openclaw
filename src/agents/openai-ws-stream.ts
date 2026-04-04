@@ -54,6 +54,7 @@ import {
   buildStreamErrorAssistantMessage,
 } from "./stream-message-shared.js";
 import { mergeTransportMetadata } from "./transport-stream-shared.js";
+import { stripSystemPromptCacheBoundary } from "./system-prompt-cache-boundary.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Per-session state
@@ -590,7 +591,9 @@ export function createOpenAIWebSocketStreamFn(
               manager: session.manager,
               modelId: model.id,
               tools: convertTools(context.tools),
-              instructions: context.systemPrompt ?? undefined,
+              instructions: context.systemPrompt
+                ? stripSystemPromptCacheBoundary(context.systemPrompt)
+                : undefined,
               metadata: resolveProviderTransportTurnState(model, {
                 sessionId,
                 turnId,

@@ -279,6 +279,36 @@ describe("discoverOpenClawPlugins", () => {
     expectCandidateIds(candidates, { includes: ["alpha", "beta"] });
   });
 
+  it("does not recurse arbitrary workspace directories for plugin auto-discovery", () => {
+    const stateDir = makeTempDir();
+    const workspaceDir = path.join(stateDir, "workspace");
+    const workspaceExt = path.join(workspaceDir, ".openclaw", "extensions");
+
+    const expectedWorkspacePluginDir = path.join(workspaceExt, "workspace-plugin");
+    createPackagePluginWithEntry({
+      packageDir: expectedWorkspacePluginDir,
+      packageName: "@openclaw/workspace-plugin",
+      pluginId: "workspace-plugin",
+    });
+
+    const unrelatedWorkspaceDir = path.join(workspaceDir, "lobster-integrations", "bin");
+    createPackagePluginWithEntry({
+      packageDir: unrelatedWorkspaceDir,
+      packageName: "@openclaw/stray-workspace-plugin",
+    });
+
+    const result = discoverOpenClawPlugins({
+      workspaceDir,
+      env: buildDiscoveryEnv(stateDir),
+    });
+
+    expectCandidatePresence(result, {
+      present: ["workspace-plugin"],
+      absent: ["stray-workspace-plugin"],
+    });
+    expect(result.diagnostics).toEqual([]);
+  });
+
   it("resolves tilde workspace dirs against the provided env", () => {
     const stateDir = makeTempDir();
     const homeDir = makeTempDir();
@@ -874,14 +904,13 @@ describe("discoverOpenClawPlugins", () => {
     expectCandidateOrder(second.candidates, ["beta", "alpha"]);
   });
 
-
   it("does not treat bare files as plugin candidates when recursing workspace directories", () => {
     const testDir = makeTempDir();
     const workspaceDir = path.join(testDir, "workspace");
     const scriptsDir = path.join(workspaceDir, "scripts");
     mkdirSafe(scriptsDir);
     fs.writeFileSync(path.join(scriptsDir, "random-script.js"), "console.log('not a plugin');");
-    
+
     const skillsDir = path.join(workspaceDir, "skills", "user", "myskill", "scripts");
     mkdirSafe(skillsDir);
     fs.writeFileSync(path.join(skillsDir, "query.js"), "console.log('also not a plugin');");
@@ -889,12 +918,17 @@ describe("discoverOpenClawPlugins", () => {
     const result = discoverOpenClawPlugins({
       workspaceDir,
       extraPaths: [],
-      env: { ...process.env, OPENCLAW_HOME: testDir },
+      env: buildDiscoveryEnv(testDir),
       cache: false,
     });
 
+    expect(result.diagnostics.filter((d) => d.level === "error")).toHaveLength(0);
     const candidatePaths = result.candidates.map((c) => normalizePathForAssertion(c.source));
-    expect(candidatePaths).not.toContain(normalizePathForAssertion(path.join(scriptsDir, "random-script.js")));
-    expect(candidatePaths).not.toContain(normalizePathForAssertion(path.join(skillsDir, "query.js")));
+    expect(candidatePaths).not.toContain(
+      normalizePathForAssertion(path.join(scriptsDir, "random-script.js")),
+    );
+    expect(candidatePaths).not.toContain(
+      normalizePathForAssertion(path.join(skillsDir, "query.js")),
+    );
   });
 });

@@ -17,6 +17,7 @@ import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
 import { detectImageReferences, loadImageFromRef } from "../pi-embedded-runner/run/images.js";
 import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
 import { detectRuntimeShell } from "../shell-utils.js";
+import { stripSystemPromptCacheBoundary } from "../system-prompt-cache-boundary.js";
 import { buildSystemPromptParams } from "../system-prompt-params.js";
 import { buildAgentSystemPrompt } from "../system-prompt.js";
 import { sanitizeImageBlocks } from "../tool-images.js";
@@ -253,7 +254,7 @@ export function buildCliArgs(params: {
     args.push(params.backend.modelArg, params.modelId);
   }
   if (!params.useResume && params.systemPrompt && params.backend.systemPromptArg) {
-    args.push(params.backend.systemPromptArg, params.systemPrompt);
+    args.push(params.backend.systemPromptArg, stripSystemPromptCacheBoundary(params.systemPrompt));
   }
   if (!params.useResume && params.sessionId) {
     if (params.backend.sessionArgs && params.backend.sessionArgs.length > 0) {

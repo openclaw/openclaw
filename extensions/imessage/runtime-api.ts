@@ -2,11 +2,11 @@ import type { OpenClawConfig as RuntimeApiOpenClawConfig } from "openclaw/plugin
 
 export {
   DEFAULT_ACCOUNT_ID,
-  buildChannelConfigSchema,
   getChatChannelMeta,
   type ChannelPlugin,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/core";
+export { buildChannelConfigSchema, IMessageConfigSchema } from "./config-api.js";
 export { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
 export {
   buildComputedAccountStatusSnapshot,
@@ -19,7 +19,6 @@ export {
 } from "./src/config-accessors.js";
 export { looksLikeIMessageTargetId, normalizeIMessageMessagingTarget } from "./src/normalize.js";
 export { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/media-runtime";
-export { IMessageConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
 export {
   resolveIMessageGroupRequireMention,
   resolveIMessageGroupToolPolicy,

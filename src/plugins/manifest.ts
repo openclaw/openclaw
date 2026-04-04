@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
+import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.plugin.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { isRecord } from "../utils.js";
@@ -12,6 +13,7 @@ export const PLUGIN_MANIFEST_FILENAMES = [PLUGIN_MANIFEST_FILENAME] as const;
 export type PluginManifestChannelConfig = {
   schema: Record<string, unknown>;
   uiHints?: Record<string, PluginConfigUiHint>;
+  runtime?: ChannelConfigRuntimeSchema;
   label?: string;
   description?: string;
   preferOver?: string[];
@@ -252,12 +254,17 @@ function normalizeChannelConfigs(
     const uiHints = isRecord(rawEntry.uiHints)
       ? (rawEntry.uiHints as Record<string, PluginConfigUiHint>)
       : undefined;
+    const runtime =
+      isRecord(rawEntry.runtime) && typeof rawEntry.runtime.safeParse === "function"
+        ? (rawEntry.runtime as ChannelConfigRuntimeSchema)
+        : undefined;
     const label = typeof rawEntry.label === "string" ? rawEntry.label.trim() : "";
     const description = typeof rawEntry.description === "string" ? rawEntry.description.trim() : "";
     const preferOver = normalizeStringList(rawEntry.preferOver);
     normalized[channelId] = {
       schema,
       ...(uiHints ? { uiHints } : {}),
+      ...(runtime ? { runtime } : {}),
       ...(label ? { label } : {}),
       ...(description ? { description } : {}),
       ...(preferOver.length > 0 ? { preferOver } : {}),

@@ -1,4 +1,5 @@
-import type { AssistantMessage } from "@mariozechner/pi-ai";
+import type { AssistantMessage, Message, Tool } from "@mariozechner/pi-ai";
+import { Type } from "@sinclair/typebox";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
   buildStableCachePrefix,
@@ -25,6 +26,159 @@ type CacheRun = {
   text: string;
   usage: AssistantMessage["usage"];
 };
+
+const NOOP_TOOL: Tool = {
+  name: "noop",
+  description: "Return ok.",
+  parameters: Type.Object({}, { additionalProperties: false }),
+};
+
+function extractFirstToolCall(message: AssistantMessage) {
+  return message.content.find((block) => block.type === "toolCall");
+}
+
+function buildToolResultMessage(toolCallId: string): Extract<Message, { role: "toolResult" }> {
+  return {
+    role: "toolResult",
+    toolCallId,
+    toolName: "noop",
+    content: [{ type: "text", text: "ok" }],
+    isError: false,
+    timestamp: Date.now(),
+  };
+}
+
+async function runToolOnlyTurn(params: {
+  apiKey: string;
+  cacheRetention: "none" | "short" | "long";
+  model: Awaited<ReturnType<typeof resolveLiveDirectModel>>["model"];
+  providerTag: "anthropic" | "openai";
+  sessionId: string;
+  systemPrompt: string;
+}) {
+  let prompt =
+    "Call the tool `noop` with {}. IMPORTANT: respond ONLY with the tool call and no other text.";
+  let response = await completeSimpleWithLiveTimeout(
+    params.model,
+    {
+      systemPrompt: params.systemPrompt,
+      messages: [
+        {
+          role: "user",
+          content: prompt,
+          timestamp: Date.now(),
+        },
+      ],
+      tools: [NOOP_TOOL],
+    },
+    {
+      apiKey: params.apiKey,
+      cacheRetention: params.cacheRetention,
+      sessionId: params.sessionId,
+      maxTokens: 128,
+      temperature: 0,
+    },
+    `${params.providerTag} tool-only turn`,
+    params.providerTag === "openai" ? OPENAI_TIMEOUT_MS : ANTHROPIC_TIMEOUT_MS,
+  );
+
+  let toolCall = extractFirstToolCall(response);
+  let text = extractAssistantText(response);
+  for (let attempt = 0; attempt < 2 && (!toolCall || text.length > 0); attempt += 1) {
+    prompt = "Return only a tool call for `noop` with {}. No text.";
+    response = await completeSimpleWithLiveTimeout(
+      params.model,
+      {
+        systemPrompt: params.systemPrompt,
+        messages: [
+          {
+            role: "user",
+            content: prompt,
+            timestamp: Date.now(),
+          },
+        ],
+        tools: [NOOP_TOOL],
+      },
+      {
+        apiKey: params.apiKey,
+        cacheRetention: params.cacheRetention,
+        sessionId: params.sessionId,
+        maxTokens: 128,
+        temperature: 0,
+      },
+      `${params.providerTag} tool-only retry ${attempt + 1}`,
+      params.providerTag === "openai" ? OPENAI_TIMEOUT_MS : ANTHROPIC_TIMEOUT_MS,
+    );
+    toolCall = extractFirstToolCall(response);
+    text = extractAssistantText(response);
+  }
+
+  expect(toolCall).toBeTruthy();
+  expect(text.length).toBe(0);
+  if (!toolCall || toolCall.type !== "toolCall") {
+    throw new Error("expected tool call");
+  }
+
+  return {
+    prompt,
+    response,
+    toolCall,
+  };
+}
+
+async function runOpenAiToolCacheProbe(params: {
+  apiKey: string;
+  model: Awaited<ReturnType<typeof resolveLiveDirectModel>>["model"];
+  sessionId: string;
+  suffix: string;
+}): Promise<CacheRun> {
+  const toolTurn = await runToolOnlyTurn({
+    apiKey: params.apiKey,
+    cacheRetention: "short",
+    model: params.model,
+    providerTag: "openai",
+    sessionId: params.sessionId,
+    systemPrompt: OPENAI_PREFIX,
+  });
+  const response = await completeSimpleWithLiveTimeout(
+    params.model,
+    {
+      systemPrompt: OPENAI_PREFIX,
+      messages: [
+        {
+          role: "user",
+          content: toolTurn.prompt,
+          timestamp: Date.now(),
+        },
+        toolTurn.response,
+        buildToolResultMessage(toolTurn.toolCall.id),
+        {
+          role: "user",
+          content: `Reply with exactly CACHE-OK ${params.suffix}.`,
+          timestamp: Date.now(),
+        },
+      ],
+      tools: [NOOP_TOOL],
+    },
+    {
+      apiKey: params.apiKey,
+      cacheRetention: "short",
+      sessionId: params.sessionId,
+      maxTokens: 64,
+      temperature: 0,
+    },
+    `openai cache probe ${params.suffix}`,
+    OPENAI_TIMEOUT_MS,
+  );
+  const text = extractAssistantText(response);
+  expect(text.toLowerCase()).toContain(params.suffix.toLowerCase());
+  return {
+    suffix: params.suffix,
+    text,
+    usage: response.usage,
+    hitRate: computeCacheHitRate(response.usage),
+  };
+}
 
 async function runOpenAiCacheProbe(params: {
   apiKey: string;
@@ -103,6 +257,61 @@ async function runAnthropicCacheProbe(params: {
   };
 }
 
+async function runAnthropicToolCacheProbe(params: {
+  apiKey: string;
+  model: Awaited<ReturnType<typeof resolveLiveDirectModel>>["model"];
+  sessionId: string;
+  suffix: string;
+  cacheRetention: "none" | "short" | "long";
+}): Promise<CacheRun> {
+  const toolTurn = await runToolOnlyTurn({
+    apiKey: params.apiKey,
+    cacheRetention: params.cacheRetention,
+    model: params.model,
+    providerTag: "anthropic",
+    sessionId: params.sessionId,
+    systemPrompt: ANTHROPIC_PREFIX,
+  });
+  const response = await completeSimpleWithLiveTimeout(
+    params.model,
+    {
+      systemPrompt: ANTHROPIC_PREFIX,
+      messages: [
+        {
+          role: "user",
+          content: toolTurn.prompt,
+          timestamp: Date.now(),
+        },
+        toolTurn.response,
+        buildToolResultMessage(toolTurn.toolCall.id),
+        {
+          role: "user",
+          content: `Reply with exactly CACHE-OK ${params.suffix}.`,
+          timestamp: Date.now(),
+        },
+      ],
+      tools: [NOOP_TOOL],
+    },
+    {
+      apiKey: params.apiKey,
+      cacheRetention: params.cacheRetention,
+      sessionId: params.sessionId,
+      maxTokens: 64,
+      temperature: 0,
+    },
+    `anthropic cache probe ${params.suffix} (${params.cacheRetention})`,
+    ANTHROPIC_TIMEOUT_MS,
+  );
+  const text = extractAssistantText(response);
+  expect(text.toLowerCase()).toContain(params.suffix.toLowerCase());
+  return {
+    suffix: params.suffix,
+    text,
+    usage: response.usage,
+    hitRate: computeCacheHitRate(response.usage),
+  };
+}
+
 describeCacheLive("pi embedded runner prompt caching (live)", () => {
   describe("openai", () => {
     let fixture: Awaited<ReturnType<typeof resolveLiveDirectModel>>;
@@ -153,6 +362,39 @@ describeCacheLive("pi embedded runner prompt caching (live)", () => {
         expect(bestHit.hitRate).toBeGreaterThanOrEqual(0.7);
       },
       6 * 60_000,
+    );
+
+    it(
+      "keeps high cache-read rates across tool-call followup turns",
+      async () => {
+        const warmup = await runOpenAiToolCacheProbe({
+          ...fixture,
+          sessionId: `${OPENAI_SESSION_ID}-tool`,
+          suffix: "tool-warmup",
+        });
+        logLiveCache(
+          `openai tool warmup cacheRead=${warmup.usage.cacheRead} input=${warmup.usage.input} rate=${warmup.hitRate.toFixed(3)}`,
+        );
+
+        const hitA = await runOpenAiToolCacheProbe({
+          ...fixture,
+          sessionId: `${OPENAI_SESSION_ID}-tool`,
+          suffix: "tool-hit-a",
+        });
+        const hitB = await runOpenAiToolCacheProbe({
+          ...fixture,
+          sessionId: `${OPENAI_SESSION_ID}-tool`,
+          suffix: "tool-hit-b",
+        });
+        const bestHit = (hitA.usage.cacheRead ?? 0) >= (hitB.usage.cacheRead ?? 0) ? hitA : hitB;
+        logLiveCache(
+          `openai tool best-hit suffix=${bestHit.suffix} cacheRead=${bestHit.usage.cacheRead} input=${bestHit.usage.input} rate=${bestHit.hitRate.toFixed(3)}`,
+        );
+
+        expect(bestHit.usage.cacheRead ?? 0).toBeGreaterThan(1_024);
+        expect(bestHit.hitRate).toBeGreaterThanOrEqual(0.7);
+      },
+      8 * 60_000,
     );
   });
 
@@ -209,6 +451,43 @@ describeCacheLive("pi embedded runner prompt caching (live)", () => {
         expect(bestHit.hitRate).toBeGreaterThanOrEqual(0.7);
       },
       6 * 60_000,
+    );
+
+    it(
+      "keeps high cache-read rates across tool-call followup turns",
+      async () => {
+        const warmup = await runAnthropicToolCacheProbe({
+          ...fixture,
+          sessionId: `${ANTHROPIC_SESSION_ID}-tool`,
+          suffix: "tool-warmup",
+          cacheRetention: "short",
+        });
+        logLiveCache(
+          `anthropic tool warmup cacheWrite=${warmup.usage.cacheWrite} cacheRead=${warmup.usage.cacheRead} input=${warmup.usage.input} rate=${warmup.hitRate.toFixed(3)}`,
+        );
+        expect(warmup.usage.cacheWrite ?? 0).toBeGreaterThan(0);
+
+        const hitA = await runAnthropicToolCacheProbe({
+          ...fixture,
+          sessionId: `${ANTHROPIC_SESSION_ID}-tool`,
+          suffix: "tool-hit-a",
+          cacheRetention: "short",
+        });
+        const hitB = await runAnthropicToolCacheProbe({
+          ...fixture,
+          sessionId: `${ANTHROPIC_SESSION_ID}-tool`,
+          suffix: "tool-hit-b",
+          cacheRetention: "short",
+        });
+        const bestHit = (hitA.usage.cacheRead ?? 0) >= (hitB.usage.cacheRead ?? 0) ? hitA : hitB;
+        logLiveCache(
+          `anthropic tool best-hit suffix=${bestHit.suffix} cacheWrite=${bestHit.usage.cacheWrite} cacheRead=${bestHit.usage.cacheRead} input=${bestHit.usage.input} rate=${bestHit.hitRate.toFixed(3)}`,
+        );
+
+        expect(bestHit.usage.cacheRead ?? 0).toBeGreaterThan(1_024);
+        expect(bestHit.hitRate).toBeGreaterThanOrEqual(0.7);
+      },
+      8 * 60_000,
     );
 
     it(

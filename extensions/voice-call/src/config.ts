@@ -241,16 +241,6 @@ export const VoiceCallStreamingConfigSchema = z
     enabled: z.boolean().default(false),
     /** Provider id from registered realtime transcription providers. */
     provider: z.string().min(1).optional(),
-    /** @deprecated Legacy alias for provider. */
-    sttProvider: z.string().min(1).optional(),
-    /** @deprecated Legacy OpenAI-specific API key field. */
-    openaiApiKey: z.string().min(1).optional(),
-    /** @deprecated Legacy OpenAI-specific transcription model field. */
-    sttModel: z.string().min(1).optional(),
-    /** @deprecated Legacy OpenAI-specific VAD silence duration. */
-    silenceDurationMs: z.number().int().positive().optional(),
-    /** @deprecated Legacy OpenAI-specific VAD threshold. */
-    vadThreshold: z.number().min(0).max(1).optional(),
     /** WebSocket path for media stream connections */
     streamPath: z.string().min(1).default("/voice/stream"),
     /** Provider-owned raw config blobs keyed by provider id. */
@@ -371,8 +361,8 @@ export const VoiceCallConfigSchema = z
     /** Store path for call logs */
     store: z.string().optional(),
 
-    /** Model for generating voice responses (e.g., "anthropic/claude-sonnet-4", "openai/gpt-4o") */
-    responseModel: z.string().default("openai/gpt-4o-mini"),
+    /** Optional model override for generating voice responses. */
+    responseModel: z.string().optional(),
 
     /** System prompt for voice responses */
     responseSystemPrompt: z.string().optional(),
@@ -448,66 +438,10 @@ function sanitizeVoiceCallProviderConfigs(
   );
 }
 
-function mergeLegacyStreamingOpenAICompat(
-  streaming: VoiceCallStreamingConfig,
-): VoiceCallStreamingConfig {
-  const providers = { ...(streaming.providers ?? {}) };
-  const legacyStreamingRaw = streaming as Record<string, unknown>;
-  const openaiRaw =
-    providers.openai && typeof providers.openai === "object"
-      ? { ...(providers.openai as Record<string, unknown>) }
-      : {};
-
-  if (typeof openaiRaw.apiKey !== "string" && typeof legacyStreamingRaw.openaiApiKey === "string") {
-    openaiRaw.apiKey = legacyStreamingRaw.openaiApiKey;
-  }
-  if (typeof openaiRaw.model !== "string" && typeof legacyStreamingRaw.sttModel === "string") {
-    openaiRaw.model = legacyStreamingRaw.sttModel;
-  }
-  if (
-    openaiRaw.silenceDurationMs == null &&
-    typeof legacyStreamingRaw.silenceDurationMs === "number"
-  ) {
-    openaiRaw.silenceDurationMs = legacyStreamingRaw.silenceDurationMs;
-  }
-  if (openaiRaw.vadThreshold == null && typeof legacyStreamingRaw.vadThreshold === "number") {
-    openaiRaw.vadThreshold = legacyStreamingRaw.vadThreshold;
-  }
-  if (Object.keys(openaiRaw).length > 0) {
-    providers.openai = openaiRaw;
-  }
-
-  return {
-    ...streaming,
-    providers,
-  };
-}
-
-function mergeLegacyRealtimeOpenAICompat(
-  realtime: VoiceCallRealtimeConfig,
-): VoiceCallRealtimeConfig {
-  const providers = { ...(realtime.providers ?? {}) };
-  const openaiRaw =
-    providers.openai && typeof providers.openai === "object"
-      ? { ...(providers.openai as Record<string, unknown>) }
-      : {};
-
-  if (Object.keys(openaiRaw).length > 0) {
-    providers.openai = openaiRaw;
-  }
-
-  return {
-    ...realtime,
-    providers,
-  };
-}
-
 export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallConfig {
   const defaults = cloneDefaultVoiceCallConfig();
   const serve = { ...defaults.serve, ...config.serve };
-  const streamingProvider =
-    config.streaming?.provider ??
-    (typeof config.streaming?.sttProvider === "string" ? config.streaming.sttProvider : undefined);
+  const streamingProvider = config.streaming?.provider;
   const streamingProviders = sanitizeVoiceCallProviderConfigs(
     config.streaming?.providers ?? defaults.streaming.providers,
   );
@@ -600,11 +534,6 @@ export function resolveVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallC
   resolved.webhookSecurity.trustForwardingHeaders =
     resolved.webhookSecurity.trustForwardingHeaders ?? false;
   resolved.webhookSecurity.trustedProxyIPs = resolved.webhookSecurity.trustedProxyIPs ?? [];
-
-  // Keep parsing legacy OpenAI-shaped fields, but isolate them to the OpenAI provider blob.
-  resolved.streaming = mergeLegacyStreamingOpenAICompat(resolved.streaming);
-
-  resolved.realtime = mergeLegacyRealtimeOpenAICompat(resolved.realtime);
 
   return normalizeVoiceCallConfig(resolved);
 }

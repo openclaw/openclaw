@@ -143,6 +143,7 @@
     },
     "responseModel": {
       "label": "Response Model",
+      "help": "Optional override. Falls back to the runtime default model when unset.",
       "advanced": true
     },
     "responseSystemPrompt": {
@@ -342,24 +343,6 @@
           },
           "provider": {
             "type": "string"
-          },
-          "sttProvider": {
-            "type": "string"
-          },
-          "openaiApiKey": {
-            "type": "string"
-          },
-          "sttModel": {
-            "type": "string"
-          },
-          "silenceDurationMs": {
-            "type": "integer",
-            "minimum": 1
-          },
-          "vadThreshold": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 1
           },
           "streamPath": {
             "type": "string"

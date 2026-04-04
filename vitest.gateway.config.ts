@@ -5,7 +5,6 @@ export function createGatewayVitestConfig(env?: Record<string, string | undefine
     dir: "src/gateway",
     env,
     name: "gateway",
-    pool: "forks",
   });
 }
 

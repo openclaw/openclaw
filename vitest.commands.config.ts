@@ -5,7 +5,6 @@ export function createCommandsVitestConfig(env?: Record<string, string | undefin
     dir: "src/commands",
     env,
     name: "commands",
-    pool: "forks",
   });
 }
 

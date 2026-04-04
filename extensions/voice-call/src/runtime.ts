@@ -7,6 +7,7 @@ import type { VoiceCallConfig } from "./config.js";
 import { resolveVoiceCallConfig, validateProviderConfig } from "./config.js";
 import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
 import { CallManager } from "./manager.js";
+import { resolveProviderRawConfig, selectConfiguredOrAutoProvider } from "./provider-selection.js";
 import type { VoiceCallProvider } from "./providers/base.js";
 import type { TwilioProvider } from "./providers/twilio.js";
 import type { TelephonyTtsRuntime } from "./telephony-tts.js";
@@ -153,32 +154,30 @@ async function resolveRealtimeProvider(params: {
 }): Promise<ResolvedRealtimeProvider> {
   const { getRealtimeVoiceProvider, listRealtimeVoiceProviders } =
     await import("./realtime-voice.runtime.js");
-  const configuredProviderId = params.config.realtime.provider?.trim();
-  const configuredProvider = getRealtimeVoiceProvider(configuredProviderId, params.fullConfig);
-  if (configuredProviderId && !configuredProvider) {
-    throw new Error(`Realtime voice provider "${configuredProviderId}" is not registered`);
+  const selection = selectConfiguredOrAutoProvider({
+    configuredProviderId: params.config.realtime.provider,
+    getConfiguredProvider: (providerId) => getRealtimeVoiceProvider(providerId, params.fullConfig),
+    listProviders: () => listRealtimeVoiceProviders(params.fullConfig),
+  });
+  if (selection.missingConfiguredProvider) {
+    throw new Error(
+      `Realtime voice provider "${selection.configuredProviderId}" is not registered`,
+    );
   }
-  const provider =
-    configuredProvider ??
-    [...listRealtimeVoiceProviders(params.fullConfig)].sort(
-      (left, right) =>
-        (left.autoSelectOrder ?? Number.MAX_SAFE_INTEGER) -
-        (right.autoSelectOrder ?? Number.MAX_SAFE_INTEGER),
-    )[0];
+  const provider = selection.provider;
   if (!provider) {
     throw new Error("No realtime voice provider registered");
   }
 
-  const rawProviderConfig =
-    (params.config.realtime.providers?.[provider.id] as RealtimeVoiceProviderConfig | undefined) ??
-    {};
+  const rawProviderConfig = resolveProviderRawConfig({
+    providerId: provider.id,
+    configuredProviderId: selection.configuredProviderId,
+    providerConfigs: params.config.realtime.providers,
+  }) as RealtimeVoiceProviderConfig;
   const providerConfig =
     provider.resolveConfig?.({
       cfg: params.fullConfig,
-      rawConfig: {
-        providers: params.config.realtime.providers,
-        [provider.id]: rawProviderConfig,
-      },
+      rawConfig: rawProviderConfig,
     }) ?? rawProviderConfig;
 
   if (!provider.isConfigured({ cfg: params.fullConfig, providerConfig })) {

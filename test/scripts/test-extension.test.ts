@@ -43,12 +43,84 @@ describe("scripts/test-extension.mjs", () => {
     expect(plan.hasTests).toBe(true);
   });
 
+  it("resolves bluebubbles onto the bluebubbles vitest config", () => {
+    const plan = resolveExtensionTestPlan({ targetArg: "bluebubbles", cwd: process.cwd() });
+
+    expect(plan.extensionId).toBe("bluebubbles");
+    expect(plan.config).toBe("vitest.extension-bluebubbles.config.ts");
+    expect(plan.roots).toContain(bundledPluginRoot("bluebubbles"));
+    expect(plan.hasTests).toBe(true);
+  });
+
+  it("resolves acpx onto the acpx vitest config", () => {
+    const plan = resolveExtensionTestPlan({ targetArg: "acpx", cwd: process.cwd() });
+
+    expect(plan.extensionId).toBe("acpx");
+    expect(plan.config).toBe("vitest.extension-acpx.config.ts");
+    expect(plan.roots).toContain(bundledPluginRoot("acpx"));
+    expect(plan.hasTests).toBe(true);
+  });
+
+  it("resolves diffs onto the diffs vitest config", () => {
+    const plan = resolveExtensionTestPlan({ targetArg: "diffs", cwd: process.cwd() });
+
+    expect(plan.extensionId).toBe("diffs");
+    expect(plan.config).toBe("vitest.extension-diffs.config.ts");
+    expect(plan.roots).toContain(bundledPluginRoot("diffs"));
+    expect(plan.hasTests).toBe(true);
+  });
+
+  it("resolves feishu onto the feishu vitest config", () => {
+    const plan = resolveExtensionTestPlan({ targetArg: "feishu", cwd: process.cwd() });
+
+    expect(plan.extensionId).toBe("feishu");
+    expect(plan.config).toBe("vitest.extension-feishu.config.ts");
+    expect(plan.roots).toContain(bundledPluginRoot("feishu"));
+    expect(plan.hasTests).toBe(true);
+  });
+
   it("resolves provider extensions onto the provider vitest config", () => {
     const plan = resolveExtensionTestPlan({ targetArg: "openai", cwd: process.cwd() });
 
     expect(plan.extensionId).toBe("openai");
     expect(plan.config).toBe("vitest.extension-providers.config.ts");
     expect(plan.roots).toContain(bundledPluginRoot("openai"));
+    expect(plan.hasTests).toBe(true);
+  });
+
+  it("resolves matrix onto the matrix vitest config", () => {
+    const plan = resolveExtensionTestPlan({ targetArg: "matrix", cwd: process.cwd() });
+
+    expect(plan.extensionId).toBe("matrix");
+    expect(plan.config).toBe("vitest.extension-matrix.config.ts");
+    expect(plan.roots).toContain(bundledPluginRoot("matrix"));
+    expect(plan.hasTests).toBe(true);
+  });
+
+  it("resolves telegram onto the telegram vitest config", () => {
+    const plan = resolveExtensionTestPlan({ targetArg: "telegram", cwd: process.cwd() });
+
+    expect(plan.extensionId).toBe("telegram");
+    expect(plan.config).toBe("vitest.extension-telegram.config.ts");
+    expect(plan.roots).toContain(bundledPluginRoot("telegram"));
+    expect(plan.hasTests).toBe(true);
+  });
+
+  it("resolves memory extensions onto the memory vitest config", () => {
+    const plan = resolveExtensionTestPlan({ targetArg: "memory-core", cwd: process.cwd() });
+
+    expect(plan.extensionId).toBe("memory-core");
+    expect(plan.config).toBe("vitest.extension-memory.config.ts");
+    expect(plan.roots).toContain(bundledPluginRoot("memory-core"));
+    expect(plan.hasTests).toBe(true);
+  });
+
+  it("resolves msteams onto the msteams vitest config", () => {
+    const plan = resolveExtensionTestPlan({ targetArg: "msteams", cwd: process.cwd() });
+
+    expect(plan.extensionId).toBe("msteams");
+    expect(plan.config).toBe("vitest.extension-msteams.config.ts");
+    expect(plan.roots).toContain(bundledPluginRoot("msteams"));
     expect(plan.hasTests).toBe(true);
   });
 
@@ -66,7 +138,7 @@ describe("scripts/test-extension.mjs", () => {
 
     expect(plan.roots).toContain(bundledPluginRoot("line"));
     expect(plan.roots).not.toContain("src/line");
-    expect(plan.config).toBe("vitest.channels.config.ts");
+    expect(plan.config).toBe("vitest.extension-channels.config.ts");
     expect(plan.hasTests).toBe(true);
   });
 
@@ -120,21 +192,95 @@ describe("scripts/test-extension.mjs", () => {
   it("batches extensions into config-specific vitest invocations", () => {
     const batch = resolveExtensionBatchPlan({
       cwd: process.cwd(),
-      extensionIds: ["slack", "firecrawl", "line", "openai"],
+      extensionIds: [
+        "slack",
+        "firecrawl",
+        "line",
+        "openai",
+        "matrix",
+        "telegram",
+        "memory-core",
+        "msteams",
+        "feishu",
+        "bluebubbles",
+        "acpx",
+        "diffs",
+      ],
     });
 
-    expect(batch.extensionIds).toEqual(["firecrawl", "line", "openai", "slack"]);
+    expect(batch.extensionIds).toEqual([
+      "acpx",
+      "bluebubbles",
+      "diffs",
+      "feishu",
+      "firecrawl",
+      "line",
+      "matrix",
+      "memory-core",
+      "msteams",
+      "openai",
+      "slack",
+      "telegram",
+    ]);
     expect(batch.planGroups).toEqual([
       {
-        config: "vitest.channels.config.ts",
+        config: "vitest.extension-acpx.config.ts",
+        extensionIds: ["acpx"],
+        roots: [bundledPluginRoot("acpx")],
+        testFileCount: expect.any(Number),
+      },
+      {
+        config: "vitest.extension-bluebubbles.config.ts",
+        extensionIds: ["bluebubbles"],
+        roots: [bundledPluginRoot("bluebubbles")],
+        testFileCount: expect.any(Number),
+      },
+      {
+        config: "vitest.extension-channels.config.ts",
         extensionIds: ["line", "slack"],
         roots: [bundledPluginRoot("slack"), bundledPluginRoot("line")],
+        testFileCount: expect.any(Number),
+      },
+      {
+        config: "vitest.extension-diffs.config.ts",
+        extensionIds: ["diffs"],
+        roots: [bundledPluginRoot("diffs")],
+        testFileCount: expect.any(Number),
+      },
+      {
+        config: "vitest.extension-feishu.config.ts",
+        extensionIds: ["feishu"],
+        roots: [bundledPluginRoot("feishu")],
+        testFileCount: expect.any(Number),
+      },
+      {
+        config: "vitest.extension-matrix.config.ts",
+        extensionIds: ["matrix"],
+        roots: [bundledPluginRoot("matrix")],
+        testFileCount: expect.any(Number),
+      },
+      {
+        config: "vitest.extension-memory.config.ts",
+        extensionIds: ["memory-core"],
+        roots: [bundledPluginRoot("memory-core")],
+        testFileCount: expect.any(Number),
+      },
+      {
+        config: "vitest.extension-msteams.config.ts",
+        extensionIds: ["msteams"],
+        roots: [bundledPluginRoot("msteams")],
         testFileCount: expect.any(Number),
       },
       {
         config: "vitest.extension-providers.config.ts",
         extensionIds: ["openai"],
         roots: [bundledPluginRoot("openai")],
+        testFileCount: expect.any(Number),
+      },
+      {
+        config: "vitest.extension-telegram.config.ts",
+        extensionIds: ["telegram"],
+        roots: [bundledPluginRoot("telegram")],
         testFileCount: expect.any(Number),
       },
       {

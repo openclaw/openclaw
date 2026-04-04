@@ -19,6 +19,7 @@ import {
   beginWebhookRequestPipelineOrReject,
   createWebhookInFlightLimiter,
 } from "openclaw/plugin-sdk/webhook-request-guards";
+import { resolveDefaultLineAccountId } from "./accounts.js";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import { createLineBot } from "./bot.js";
 import { processLineMessage } from "./markdown-to-line.js";
@@ -37,7 +38,6 @@ import {
   showLoadingAnimation,
 } from "./send.js";
 import { buildTemplateMessageFromPayload } from "./template-messages.js";
-import { resolveDefaultLineAccountId } from "./accounts.js";
 import type { LineChannelData, ResolvedLineAccount } from "./types.js";
 import { createLineNodeWebhookHandler } from "./webhook-node.js";
 
