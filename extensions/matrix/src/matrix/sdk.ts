@@ -25,7 +25,10 @@ import { matrixEventToRaw, parseMxc } from "./sdk/event-helpers.js";
 import { MatrixAuthedHttpClient } from "./sdk/http-client.js";
 import { MATRIX_IDB_PERSIST_INTERVAL_MS } from "./sdk/idb-persistence-lock.js";
 import { ConsoleLogger, LogService, noop } from "./sdk/logger.js";
-import { MatrixRecoveryKeyStore, isRepairableSecretStorageAccessError } from "./sdk/recovery-key-store.js";
+import {
+  MatrixRecoveryKeyStore,
+  isRepairableSecretStorageAccessError,
+} from "./sdk/recovery-key-store.js";
 import { createMatrixGuardedFetch, type HttpMethod, type QueryParams } from "./sdk/transport.js";
 import type {
   MatrixClientEventMap,
@@ -1151,17 +1154,11 @@ export class MatrixClient {
 
     previousVersion = await this.resolveRoomKeyBackupVersion();
 
-    // Check whether the SSSS key is currently broken (bad MAC or callback failure)
-    // before deleting the old backup. If so, we must force SSSS recreation during
-    // the bootstrap below; otherwise bootstrapSecretStorage writes the new backup
-    // key to SSSS encrypted with a key that does not match recovery_key.json, causing
-    // every subsequent cold-start loadSessionBackupPrivateKeyFromSecretStorage call
-    // to fail with bad MAC even after an apparently successful reset.
-    const preResetBackupStatus = previousVersion ? await this.getRoomKeyBackupStatus() : null;
-    const ssssKeyIsBroken =
-      preResetBackupStatus?.keyLoadAttempted === true &&
-      typeof preResetBackupStatus.keyLoadError === "string" &&
-      isRepairableSecretStorageAccessError(new Error(preResetBackupStatus.keyLoadError));
+    // Probe backup-secret access directly before reset. This keeps the reset preflight
+    // focused on durable secret-storage health instead of the broader backup status flow,
+    // and still catches stale SSSS/recovery-key state even when the server backup is gone.
+    const forceNewSecretStorage =
+      await this.shouldForceSecretStorageRecreationForBackupReset(crypto);
 
     try {
       if (previousVersion) {
@@ -1182,7 +1179,7 @@ export class MatrixClient {
         setupNewKeyBackup: true,
         // Force SSSS recreation when the existing SSSS key is broken (bad MAC), so
         // the new backup key is written into a fresh SSSS consistent with recovery_key.json.
-        forceNewSecretStorage: ssssKeyIsBroken,
+        forceNewSecretStorage,
         // Also allow recreation if bootstrapSecretStorage itself surfaces a repairable
         // error (e.g. bad MAC from a different SSSS entry).
         allowSecretStorageRecreateWithoutRecoveryKey: true,
@@ -1443,6 +1440,26 @@ export class MatrixClient {
       this.resolveCachedRoomKeyBackupDecryptionKey(crypto),
     ]);
     return { activeVersion, decryptionKeyCached };
+  }
+
+  private async shouldForceSecretStorageRecreationForBackupReset(
+    crypto: MatrixCryptoBootstrapApi,
+  ): Promise<boolean> {
+    const { decryptionKeyCached } = await this.resolveRoomKeyBackupLocalState(crypto);
+    if (decryptionKeyCached !== false) {
+      return false;
+    }
+    const loadSessionBackupPrivateKeyFromSecretStorage =
+      crypto.loadSessionBackupPrivateKeyFromSecretStorage; // pragma: allowlist secret
+    if (typeof loadSessionBackupPrivateKeyFromSecretStorage !== "function") {
+      return false;
+    }
+    try {
+      await loadSessionBackupPrivateKeyFromSecretStorage.call(crypto); // pragma: allowlist secret
+      return false;
+    } catch (err) {
+      return isRepairableSecretStorageAccessError(err);
+    }
   }
 
   private async resolveRoomKeyBackupTrustState(
