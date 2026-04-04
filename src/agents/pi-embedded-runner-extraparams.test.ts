@@ -735,7 +735,9 @@ describe("applyExtraParamsToAgent", () => {
 
     expect(payloads).toHaveLength(1);
     expect(payloads[0]).toEqual({
+      context_management: [{ type: "compaction", compact_threshold: 80000 }],
       reasoning: { effort: "none", summary: "auto" },
+      store: true,
     });
   });
 

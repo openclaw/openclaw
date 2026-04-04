@@ -519,7 +519,7 @@ describe("spawnAcpDirect", () => {
         agentTo: "room:!room:example",
       },
     );
-    expect(result.status).toBe("accepted");
+    expect(result.status, JSON.stringify(result)).toBe("accepted");
     expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
       expect.objectContaining({
         placement: "child",
@@ -533,7 +533,7 @@ describe("spawnAcpDirect", () => {
     expectAgentGatewayCall({
       deliver: true,
       channel: "matrix",
-      to: "room:!room:example",
+      to: "channel:child-thread",
       threadId: "child-thread",
     });
   });
@@ -576,7 +576,7 @@ describe("spawnAcpDirect", () => {
       },
     );
 
-    expect(result.status).toBe("accepted");
+    expect(result.status, JSON.stringify(result)).toBe("accepted");
     expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
       expect.objectContaining({
         placement: "current",
