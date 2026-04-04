@@ -125,18 +125,15 @@ export async function handleDiscordMessageAction(
   }
 
   if (action === "upload-file") {
-    const to = readSendTarget();
+    const to = readStringParam(params, "to", { required: true });
     const mediaUrl =
       readStringParam(params, "filePath", { trim: false }) ??
       readStringParam(params, "path", { trim: false }) ??
       readStringParam(params, "media", { trim: false });
     if (!mediaUrl) {
-      throw new Error("upload-file requires filePath, path, or media.");
+      throw new Error("upload-file requires filePath, path, or media");
     }
-    const content =
-      readStringParam(params, "message", { allowEmpty: true }) ??
-      readStringParam(params, "content", { allowEmpty: true });
-    const filename = readStringParam(params, "filename");
+    const content = readStringParam(params, "message") ?? readStringParam(params, "content");    const filename = readStringParam(params, "filename");
     const replyTo = readStringParam(params, "replyTo");
     const silent = readBooleanParam(params, "silent") === true;
     const sessionKey = readStringParam(params, "__sessionKey");
