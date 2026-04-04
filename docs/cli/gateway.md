@@ -91,6 +91,20 @@ Pass `--token` or `--password` explicitly. Missing explicit credentials is an er
 openclaw gateway health --url ws://127.0.0.1:18789
 ```
 
+### `gateway usage-cost`
+
+Fetch usage-cost summaries from session logs.
+
+```bash
+openclaw gateway usage-cost
+openclaw gateway usage-cost --days 7
+openclaw gateway usage-cost --json
+```
+
+Options:
+
+- `--days <days>`: number of days to include (default `30`).
+
 ### `gateway status`
 
 `gateway status` shows the Gateway service (launchd/systemd/schtasks) plus an optional RPC probe.

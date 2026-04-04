@@ -46,6 +46,7 @@ This page describes the current CLI behavior. If commands change, update this do
 - [`browser`](/cli/browser)
 - [`cron`](/cli/cron)
 - [`tasks`](/cli/index#tasks)
+- [`flows`](/cli/flows)
 - [`dns`](/cli/dns)
 - [`docs`](/cli/docs)
 - [`hooks`](/cli/hooks)
@@ -105,6 +106,7 @@ openclaw [--dev] [--profile <name>] <command>
     set
     unset
     file
+    schema
     validate
   completion
   doctor
@@ -122,6 +124,8 @@ openclaw [--dev] [--profile <name>] <command>
   reset
   uninstall
   update
+    wizard
+    status
   channels
     list
     status
@@ -133,6 +137,9 @@ openclaw [--dev] [--profile <name>] <command>
     login
     logout
   directory
+    self
+    peers list
+    groups list|members
   skills
     search
     install
@@ -157,6 +164,28 @@ openclaw [--dev] [--profile <name>] <command>
   message
     send
     broadcast
+    poll
+    react
+    reactions
+    read
+    edit
+    delete
+    pin
+    unpin
+    pins
+    permissions
+    search
+    thread create|list|reply
+    emoji list|upload
+    sticker send|upload
+    role info|add|remove
+    channel info|list
+    member info
+    voice status
+    event list|create
+    timeout
+    kick
+    ban
   agent
   agents
     list
@@ -168,18 +197,26 @@ openclaw [--dev] [--profile <name>] <command>
     set-identity
   acp
   mcp
+    serve
+    list
+    show
+    set
+    unset
   status
   health
   sessions
     cleanup
   tasks
     list
+    audit
+    maintenance
     show
     notify
     cancel
     flow list|show|cancel
   gateway
     call
+    usage-cost
     health
     status
     probe
@@ -228,13 +265,34 @@ openclaw [--dev] [--profile <name>] <command>
     runs
     run
   nodes
+    status
+    describe
+    list
+    pending
+    approve
+    reject
+    rename
+    invoke
+    notify
+    push
+    canvas snapshot|present|hide|navigate|eval
+    canvas a2ui push|reset
+    camera list|snap|clip
+    screen record
+    location get
   devices
+    list
+    remove
+    clear
+    approve
+    reject
+    rotate
+    revoke
   node
     run
     status
     install
     uninstall
-    start
     stop
     restart
   approvals
