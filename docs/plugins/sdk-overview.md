@@ -86,6 +86,7 @@ explicitly promotes one as public.
     | `plugin-sdk/channel-reply-pipeline` | `createChannelReplyPipeline` |
     | `plugin-sdk/channel-config-helpers` | `createHybridChannelConfigAdapter` |
     | `plugin-sdk/channel-config-schema` | Channel config schema types |
+    | `plugin-sdk/telegram-command-config` | Telegram custom-command normalization/validation helpers with bundled-contract fallback |
     | `plugin-sdk/channel-policy` | `resolveChannelGroupRequireMention` |
     | `plugin-sdk/channel-lifecycle` | `createAccountStatusSink` |
     | `plugin-sdk/inbound-envelope` | Shared inbound route + envelope builder helpers |
@@ -172,6 +173,7 @@ explicitly promotes one as public.
     | `plugin-sdk/cli-runtime` | CLI formatting, wait, and version helpers |
     | `plugin-sdk/gateway-runtime` | Gateway client and channel-status patch helpers |
     | `plugin-sdk/config-runtime` | Config load/write helpers |
+    | `plugin-sdk/telegram-command-config` | Telegram command-name/description normalization and duplicate/conflict checks, even when the bundled Telegram contract surface is unavailable |
     | `plugin-sdk/approval-runtime` | Exec/plugin approval helpers, approval-capability builders, auth/profile helpers, native routing/runtime helpers |
     | `plugin-sdk/reply-runtime` | Shared inbound/reply runtime helpers, chunking, dispatch, heartbeat, reply planner |
     | `plugin-sdk/reply-dispatch-runtime` | Narrow reply dispatch/finalize helpers |
