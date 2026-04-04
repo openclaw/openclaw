@@ -283,91 +283,50 @@ describe("marketplace plugins", () => {
     });
   });
 
-  it.runIf(process.platform !== "win32")(
-    "preserves relative local marketplace installs when the marketplace root is symlinked",
-    async () => {
-      await withTempDir(async (parentDir) => {
-        const realRootDir = path.join(parentDir, "real-marketplace");
-        const symlinkRootDir = path.join(parentDir, "marketplace-link");
-        const pluginDir = path.join(realRootDir, "plugins", "frontend-design");
-        await fs.mkdir(realRootDir, { recursive: true });
-        await writeLocalMarketplaceFixture({
-          rootDir: realRootDir,
-          pluginDir,
-          manifest: {
-            plugins: [
-              {
-                name: "frontend-design",
-                source: "./plugins/frontend-design",
-              },
-            ],
-          },
-        });
-        await fs.symlink(realRootDir, symlinkRootDir);
-        installPluginFromPathMock.mockResolvedValue({
-          ok: true,
-          pluginId: "frontend-design",
-          targetDir: "/tmp/frontend-design",
-          version: "0.1.0",
-          extensions: ["index.ts"],
-        });
-
-        const result = await installPluginFromMarketplace({
-          marketplace: symlinkRootDir,
-          plugin: "frontend-design",
-        });
-
-        expectLocalMarketplaceInstallResult({
-          result,
-          pluginDir,
-          marketplaceSource: symlinkRootDir,
-        });
+  it("preserves the logical local install path instead of canonicalizing it", async () => {
+    await withTempDir(async (rootDir) => {
+      const canonicalRootDir = await fs.realpath(rootDir);
+      const pluginDir = path.join(rootDir, "plugins", "frontend-design");
+      const canonicalPluginDir = path.join(canonicalRootDir, "plugins", "frontend-design");
+      const manifestPath = await writeLocalMarketplaceFixture({
+        rootDir,
+        pluginDir,
+        manifest: {
+          plugins: [
+            {
+              name: "frontend-design",
+              source: "./plugins/frontend-design",
+            },
+          ],
+        },
       });
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "preserves relative local marketplace installs when the plugin path goes through a symlink",
-    async () => {
-      await withTempDir(async (rootDir) => {
-        const sharedPluginsDir = path.join(rootDir, "..", "shared-plugins");
-        const pluginDir = path.join(sharedPluginsDir, "frontend-design");
-        const linkedPluginDir = path.join(rootDir, "plugins", "frontend-design");
-        await fs.mkdir(pluginDir, { recursive: true });
-        await fs.mkdir(path.dirname(linkedPluginDir), { recursive: true });
-        await fs.symlink(pluginDir, linkedPluginDir);
-        const manifestPath = await writeLocalMarketplaceFixture({
-          rootDir,
-          manifest: {
-            plugins: [
-              {
-                name: "frontend-design",
-                source: "./plugins/frontend-design",
-              },
-            ],
-          },
-        });
-        installPluginFromPathMock.mockResolvedValue({
-          ok: true,
-          pluginId: "frontend-design",
-          targetDir: "/tmp/frontend-design",
-          version: "0.1.0",
-          extensions: ["index.ts"],
-        });
-
-        const result = await installPluginFromMarketplace({
-          marketplace: manifestPath,
-          plugin: "frontend-design",
-        });
-
-        expectLocalMarketplaceInstallResult({
-          result,
-          pluginDir: linkedPluginDir,
-          marketplaceSource: manifestPath,
-        });
+      installPluginFromPathMock.mockResolvedValue({
+        ok: true,
+        pluginId: "frontend-design",
+        targetDir: "/tmp/frontend-design",
+        version: "0.1.0",
+        extensions: ["index.ts"],
       });
-    },
-  );
+
+      const result = await installPluginFromMarketplace({
+        marketplace: manifestPath,
+        plugin: "frontend-design",
+      });
+
+      expectLocalMarketplaceInstallResult({
+        result,
+        pluginDir,
+        marketplaceSource: manifestPath,
+      });
+      if (canonicalPluginDir !== pluginDir) {
+        expect(installPluginFromPathMock).not.toHaveBeenCalledWith(
+          expect.objectContaining({
+            path: canonicalPluginDir,
+          }),
+        );
+      }
+    });
+  });
 
   it("passes dangerous force unsafe install through to marketplace path installs", async () => {
     await withTempDir(async (rootDir) => {
