@@ -57,6 +57,10 @@ Healthy baseline: `Runtime: running` and `RPC probe: ok`.
 openclaw channels status --probe
 ```
 
+With a reachable gateway this runs live per-account channel probes and optional audits.
+If the gateway is unreachable, the CLI falls back to config-only channel summaries instead
+of live probe output.
+
   </Step>
 </Steps>
 

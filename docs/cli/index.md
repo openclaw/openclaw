@@ -669,7 +669,7 @@ Manage chat channel accounts (WhatsApp/Telegram/Discord/Google Chat/Slack/Matter
 Subcommands:
 
 - `channels list`: show configured channels and auth profiles.
-- `channels status`: check gateway reachability and channel health (`--probe` runs extra checks; use `openclaw health` or `openclaw status --deep` for gateway health probes).
+- `channels status`: check gateway reachability and channel health (`--probe` runs live per-account probe/audit checks when the gateway is reachable; if not, it falls back to config-only channel summaries. Use `openclaw health` or `openclaw status --deep` for broader gateway health probes).
 - Tip: `channels status` prints warnings with suggested fixes when it can detect common misconfigurations (then points you to `openclaw doctor`).
 - `channels logs`: show recent channel logs from the gateway log file.
 - `channels add`: wizard-style setup when no flags are passed; flags switch to non-interactive mode.
@@ -733,6 +733,7 @@ Notes:
 
 - `channels login` supports `--verbose`.
 - `channels capabilities --account` only applies when `--channel` is set.
+- `channels status --probe` can show transport state plus probe/audit results such as `works`, `probe failed`, `audit ok`, or `audit failed`, depending on channel support.
 
 More detail: [/concepts/oauth](/concepts/oauth)
 

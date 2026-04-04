@@ -27,7 +27,8 @@ Expected healthy signals:
 
 - `openclaw gateway status` shows `Runtime: running` and `RPC probe: ok`.
 - `openclaw doctor` reports no blocking config/service issues.
-- `openclaw channels status --probe` shows connected/ready channels.
+- `openclaw channels status --probe` shows live per-account transport status and,
+  where supported, probe/audit results such as `works` or `audit ok`.
 
 ## Anthropic 429 extra usage required for long context
 
