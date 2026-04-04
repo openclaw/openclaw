@@ -5744,6 +5744,20 @@
       "hasChildren": true
     },
     {
+      "path": "plugins.entries.memory-core.config.dreaming.cron",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "automation"
+      ],
+      "label": "Dreaming Cron",
+      "help": "Optional cron cadence override for managed dreaming runs.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.memory-core.config.dreaming.frequency",
       "kind": "plugin",
       "type": "string",

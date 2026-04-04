@@ -2899,10 +2899,6 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         label: "Discord Streaming Mode",
         help: 'Unified Discord stream preview mode: "off" | "partial" | "block" | "progress". "progress" maps to "partial" on Discord. Legacy boolean/streamMode keys are auto-mapped.',
       },
-      streamMode: {
-        label: "Discord Stream Mode (Legacy)",
-        help: "Legacy Discord preview mode alias (off | partial | block); auto-migrated to channels.discord.streaming.",
-      },
       "draftChunk.minChars": {
         label: "Discord Draft Chunk Min Chars",
         help: 'Minimum chars before emitting a Discord stream preview update when channels.discord.streaming="block" (default: 200).',
@@ -4477,11 +4473,6 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           },
           additionalProperties: false,
         },
-        streamMode: {
-          default: "replace",
-          type: "string",
-          enum: ["replace", "status_final", "append"],
-        },
         mediaMaxMb: {
           type: "number",
           exclusiveMinimum: 0,
@@ -4856,11 +4847,6 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 },
                 additionalProperties: false,
               },
-              streamMode: {
-                default: "replace",
-                type: "string",
-                enum: ["replace", "status_final", "append"],
-              },
               mediaMaxMb: {
                 type: "number",
                 exclusiveMinimum: 0,
@@ -4935,7 +4921,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 type: "string",
               },
             },
-            required: ["groupPolicy", "streamMode"],
+            required: ["groupPolicy"],
             additionalProperties: false,
           },
         },
@@ -4943,7 +4929,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           type: "string",
         },
       },
-      required: ["groupPolicy", "streamMode"],
+      required: ["groupPolicy"],
       additionalProperties: false,
     },
   },
@@ -11691,10 +11677,6 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         label: "Slack Native Streaming",
         help: "Enable native Slack text streaming (chat.startStream/chat.appendStream/chat.stopStream) when channels.slack.streaming is partial (default: true).",
       },
-      streamMode: {
-        label: "Slack Stream Mode (Legacy)",
-        help: "Legacy Slack preview mode alias (replace | status_final | append); auto-migrated to channels.slack.streaming.",
-      },
       "thread.historyScope": {
         label: "Slack Thread History Scope",
         help: 'Scope for Slack thread history context ("thread" isolates per thread; "channel" reuses channel history).',
@@ -12713,6 +12695,14 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           type: "string",
           format: "uri",
         },
+        trustedLocalFileRoots: {
+          description:
+            "Trusted local filesystem roots for self-hosted Telegram Bot API absolute file_path values. Only absolute paths under these roots are read directly; all other absolute paths are rejected.",
+          type: "array",
+          items: {
+            type: "string",
+          },
+        },
         autoTopicLabel: {
           anyOf: [
             {
@@ -13716,6 +13706,14 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 type: "string",
                 format: "uri",
               },
+              trustedLocalFileRoots: {
+                description:
+                  "Trusted local filesystem roots for self-hosted Telegram Bot API absolute file_path values. Only absolute paths under these roots are read directly; all other absolute paths are rejected.",
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
               autoTopicLabel: {
                 anyOf: [
                   {
@@ -13815,6 +13813,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       apiRoot: {
         label: "Telegram API Root URL",
         help: "Custom Telegram Bot API root URL. Use for self-hosted Bot API servers (https://github.com/tdlib/telegram-bot-api) or reverse proxies in regions where api.telegram.org is blocked.",
+      },
+      trustedLocalFileRoots: {
+        label: "Telegram Trusted Local File Roots",
+        help: "Trusted local filesystem roots for self-hosted Telegram Bot API absolute file_path values. Only absolute paths inside these roots are read directly; all other absolute paths are rejected.",
       },
       autoTopicLabel: {
         label: "Telegram Auto Topic Label",
