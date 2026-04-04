@@ -54,6 +54,9 @@ restrictions. Use at your own risk.
 
 - Default model: `google-gemini-cli/gemini-3.1-pro-preview`
 - Alias: `gemini-cli`
+- Install prerequisite: local Gemini CLI available as `gemini`
+  - Homebrew: `brew install gemini-cli`
+  - npm: `npm install -g @google/gemini-cli`
 - Login:
 
 ```bash
@@ -70,6 +73,10 @@ Environment variables:
 If Gemini CLI OAuth requests fail after login, set
 `GOOGLE_CLOUD_PROJECT` or `GOOGLE_CLOUD_PROJECT_ID` on the gateway host and
 retry.
+
+If login fails before the browser flow starts, make sure the local `gemini`
+command is installed and on `PATH`. OpenClaw supports both Homebrew installs
+and global npm installs, including common Windows/npm layouts.
 
 Gemini CLI JSON usage notes:
 

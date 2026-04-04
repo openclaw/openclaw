@@ -282,6 +282,9 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Auth: Vertex uses gcloud ADC; Gemini CLI uses its OAuth flow
 - Caution: Gemini CLI OAuth in OpenClaw is an unofficial integration. Some users have reported Google account restrictions after using third-party clients. Review Google terms and use a non-critical account if you choose to proceed.
 - Gemini CLI OAuth is shipped as part of the bundled `google` plugin.
+  - Install Gemini CLI first:
+    - `brew install gemini-cli`
+    - or `npm install -g @google/gemini-cli`
   - Enable: `openclaw plugins enable google`
   - Login: `openclaw models auth login --provider google-gemini-cli --set-default`
   - Default model: `google-gemini-cli/gemini-3.1-pro-preview`

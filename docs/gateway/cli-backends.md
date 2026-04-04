@@ -233,6 +233,10 @@ The bundled Google plugin also registers a default for `google-gemini-cli`:
 - `sessionMode: "existing"`
 - `sessionIdFields: ["session_id", "sessionId"]`
 
+Prerequisite: the local Gemini CLI must be installed and available as
+`gemini` on `PATH` (`brew install gemini-cli` or
+`npm install -g @google/gemini-cli`).
+
 Gemini CLI JSON notes:
 
 - Reply text is read from the JSON `response` field.
