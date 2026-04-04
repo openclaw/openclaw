@@ -322,7 +322,6 @@ img.chat-avatar {
 }
 
 @keyframes pulsing-border {
-
   0%,
   100% {
     border-color: var(--border);
@@ -480,12 +479,6 @@ img.chat-avatar {
   background: #dc2626;
 }
 
-@media (max-width: 1100px) {
-  .chat-group-messages {
-    max-width: 82%;
-  }
-}
-
 @media (max-width: 768px) {
   .chat-group {
     margin-left: 0;
@@ -493,7 +486,7 @@ img.chat-avatar {
   }
 
   .chat-group-messages {
-    max-width: 100%;
+    max-width: 82%;
   }
 }
 
