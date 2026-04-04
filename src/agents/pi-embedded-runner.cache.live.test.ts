@@ -50,7 +50,6 @@ async function runOpenAiCacheProbe(params: {
       sessionId: params.sessionId,
       maxTokens: 32,
       temperature: 0,
-      reasoning: "none",
     },
     `openai cache probe ${params.suffix}`,
     OPENAI_TIMEOUT_MS,

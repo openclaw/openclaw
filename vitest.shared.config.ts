@@ -27,10 +27,10 @@ export const jsdomOptimizedDeps = {
   optimizer: {
     web: {
       enabled: true,
-      include: ["lit", "lit-html", "@lit/reactive-element", "marked"],
+      include: ["lit", "lit-html", "@lit/reactive-element", "marked"] as string[],
     },
   },
-} as const;
+};
 
 function detectVitestHostInfo(): Required<VitestHostInfo> {
   return {
