@@ -476,6 +476,7 @@ export function buildGatewayCronService(params: {
                     channel: failureDest.channel,
                     to: failureDest.to,
                     accountId: failureDest.accountId,
+                    sessionKey: job.sessionKey,
                   },
                   `⚠️ ${failureMessage}`,
                 );
@@ -494,6 +495,7 @@ export function buildGatewayCronService(params: {
                     channel: primaryPlan.channel,
                     to: primaryPlan.to,
                     accountId: primaryPlan.accountId,
+                    sessionKey: job.sessionKey,
                   },
                   `⚠️ ${failureMessage}`,
                 );
