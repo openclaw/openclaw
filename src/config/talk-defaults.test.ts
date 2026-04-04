@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
-  type ConfigDocBaseline,
+  buildConfigDocBaseline,
   flattenConfigDocBaselineEntries,
   normalizeConfigDocBaselineHelpPath,
 } from "./doc-baseline.js";
@@ -20,11 +20,9 @@ function readRepoFile(relativePath: string): string {
 }
 
 describe("talk silence timeout defaults", () => {
-  it("keeps help text and docs aligned with the policy", () => {
+  it("keeps help text and docs aligned with the policy", async () => {
     const defaultsDescription = describeTalkSilenceTimeoutDefaults();
-    const baseline = JSON.parse(
-      readRepoFile("docs/.generated/config-baseline.json"),
-    ) as ConfigDocBaseline;
+    const baseline = await buildConfigDocBaseline();
     const talkEntry = flattenConfigDocBaselineEntries(baseline).find(
       (entry) => entry.path === normalizeConfigDocBaselineHelpPath("talk.silenceTimeoutMs"),
     );
