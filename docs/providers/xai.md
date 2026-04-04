@@ -38,14 +38,23 @@ the bundled xAI model provider now reuses that key as a fallback too.
 
 OpenClaw now includes these xAI model families out of the box:
 
+- `grok-3`, `grok-3-fast`, `grok-3-mini`, `grok-3-mini-fast`
 - `grok-4`, `grok-4-0709`
-- `grok-4-fast-reasoning`, `grok-4-fast-non-reasoning`
-- `grok-4-1-fast-reasoning`, `grok-4-1-fast-non-reasoning`
-- `grok-4.20-reasoning`, `grok-4.20-non-reasoning`
+- `grok-4-fast`, `grok-4-fast-non-reasoning`
+- `grok-4-1-fast`, `grok-4-1-fast-non-reasoning`
+- `grok-4.20-beta-latest-reasoning`, `grok-4.20-beta-latest-non-reasoning`
 - `grok-code-fast-1`
 
 The plugin also forward-resolves newer `grok-4*` and `grok-code-fast*` ids when
 they follow the same API shape.
+
+Legacy compatibility aliases still normalize to the canonical bundled ids. For
+example:
+
+- `grok-4-fast-reasoning` -> `grok-4-fast`
+- `grok-4-1-fast-reasoning` -> `grok-4-1-fast`
+- `grok-4.20-reasoning` -> `grok-4.20-beta-latest-reasoning`
+- `grok-4.20-non-reasoning` -> `grok-4.20-beta-latest-non-reasoning`
 
 ## Web search
 
