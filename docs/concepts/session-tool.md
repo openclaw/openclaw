@@ -59,6 +59,10 @@ Key options:
 
 Sub-agents get the full tool set minus session tools (no recursive spawning).
 After completion, an announce step posts the result to the requester's channel.
+Completion delivery preserves bound thread/topic routing when available, and if
+the completion origin only identifies a channel OpenClaw can still reuse the
+requester session's stored route (`lastChannel` / `lastTo`) for direct
+delivery.
 
 For ACP-specific behavior, see [ACP Agents](/tools/acp-agents).
 
