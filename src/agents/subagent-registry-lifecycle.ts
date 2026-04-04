@@ -1,4 +1,3 @@
-import { closeTrackedBrowserTabsForSessions } from "../../extensions/browser/runtime-api.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import { formatErrorMessage, readErrorName } from "../infra/errors.js";
