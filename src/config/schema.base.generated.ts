@@ -282,6 +282,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 type: "string",
                 const: "tools",
               },
+              {
+                type: "string",
+                const: "all",
+              },
             ],
           },
           redactPatterns: {
@@ -11491,7 +11495,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     },
     "logging.redactSensitive": {
       label: "Sensitive Data Redaction Mode",
-      help: 'Sensitive redaction mode: "off" disables built-in masking, while "tools" redacts sensitive tool/config payload fields. Keep "tools" in shared logs unless you have isolated secure log sinks.',
+      help: 'Sensitive redaction mode: "off" disables built-in masking, "tools" redacts sensitive tool/config payload fields, and "all" extends redaction to all log surfaces including session transcripts and file output. Keep "tools" or "all" in shared logs unless you have isolated secure log sinks.',
       tags: ["privacy", "observability"],
     },
     "logging.redactPatterns": {
