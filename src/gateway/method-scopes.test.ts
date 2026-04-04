@@ -50,6 +50,18 @@ describe("method scope resolution", () => {
       "operator.write",
     ]);
   });
+
+  it("keeps reserved admin namespaces admin-only even if a plugin scope is narrower", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.gatewayMethodScopes = {
+      "config.plugin.inspect": "operator.read",
+    };
+    setActivePluginRegistry(registry);
+
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("config.plugin.inspect")).toEqual([
+      "operator.admin",
+    ]);
+  });
 });
 
 describe("operator scope authorization", () => {
@@ -101,6 +113,19 @@ describe("operator scope authorization", () => {
 
   it("requires admin for unknown methods", () => {
     expect(authorizeOperatorScopesForMethod("unknown.method", ["operator.read"])).toEqual({
+      allowed: false,
+      missingScope: "operator.admin",
+    });
+  });
+
+  it("requires admin for reserved admin namespaces even if a plugin registered a narrower scope", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.gatewayMethodScopes = {
+      "config.plugin.inspect": "operator.read",
+    };
+    setActivePluginRegistry(registry);
+
+    expect(authorizeOperatorScopesForMethod("config.plugin.inspect", ["operator.read"])).toEqual({
       allowed: false,
       missingScope: "operator.admin",
     });

@@ -965,6 +965,47 @@ describe("loadOpenClawPlugins", () => {
       },
     },
     {
+      label: "coerces reserved gateway method namespaces to operator.admin",
+      run: () => {
+        useNoBundledPlugins();
+        const plugin = writePlugin({
+          id: "reserved-gateway-scope",
+          filename: "reserved-gateway-scope.cjs",
+          body: `module.exports = {
+  id: "reserved-gateway-scope",
+  register(api) {
+    api.registerGatewayMethod(
+      "config.plugin.inspect",
+      ({ respond }) => respond(true, { ok: true }),
+      { scope: "operator.read" },
+    );
+  },
+};`,
+        });
+
+        const registry = loadOpenClawPlugins({
+          cache: false,
+          workspaceDir: plugin.dir,
+          config: {
+            plugins: {
+              load: { paths: [plugin.file] },
+              allow: ["reserved-gateway-scope"],
+            },
+          },
+        });
+
+        expect(Object.keys(registry.gatewayHandlers)).toContain("config.plugin.inspect");
+        expect(registry.gatewayMethodScopes?.["config.plugin.inspect"]).toBe("operator.admin");
+        expect(
+          registry.diagnostics.some((diag) =>
+            String(diag.message).includes(
+              "gateway method scope coerced to operator.admin for reserved core namespace: config.plugin.inspect",
+            ),
+          ),
+        ).toBe(true);
+      },
+    },
+    {
       label: "limits imports to the requested plugin ids",
       run: () => {
         useNoBundledPlugins();

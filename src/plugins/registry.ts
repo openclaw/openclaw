@@ -9,6 +9,7 @@ import type {
 } from "../gateway/server-methods/types.js";
 import { registerInternalHook } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
+import { isReservedAdminGatewayMethod } from "../shared/gateway-method-prefixes.js";
 import { resolveUserPath } from "../utils.js";
 import { buildPluginApi } from "./api-builder.js";
 import { registerPluginCommand, validatePluginCommandDefinition } from "./command-registration.js";
@@ -433,9 +434,23 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       return;
     }
     registry.gatewayHandlers[trimmed] = handler;
-    if (opts?.scope) {
+    let effectiveScope = opts?.scope;
+    if (
+      effectiveScope &&
+      effectiveScope !== "operator.admin" &&
+      isReservedAdminGatewayMethod(trimmed)
+    ) {
+      pushDiagnostic({
+        level: "warn",
+        pluginId: record.id,
+        source: record.source,
+        message: `gateway method scope coerced to operator.admin for reserved core namespace: ${trimmed}`,
+      });
+      effectiveScope = "operator.admin";
+    }
+    if (effectiveScope) {
       registry.gatewayMethodScopes ??= {};
-      registry.gatewayMethodScopes[trimmed] = opts.scope;
+      registry.gatewayMethodScopes[trimmed] = effectiveScope;
     }
     record.gatewayMethods.push(trimmed);
   };
