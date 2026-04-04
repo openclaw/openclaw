@@ -154,7 +154,9 @@ export default definePluginEntry({
           streamFn = injectOpenRouterRouting(streamFn, providerRouting);
         }
         const skipReasoningInjection =
-          ctx.modelId === "auto" || isProxyReasoningUnsupported(ctx.modelId);
+          ctx.modelId === "auto" ||
+          ctx.modelId === "free" ||
+          isProxyReasoningUnsupported(ctx.modelId);
         const openRouterThinkingLevel = skipReasoningInjection ? undefined : ctx.thinkingLevel;
         streamFn = createOpenRouterWrapper(streamFn, openRouterThinkingLevel);
         streamFn = createOpenRouterSystemCacheWrapper(streamFn);

@@ -26,6 +26,15 @@ export function buildOpenrouterProvider(): ModelProviderConfig {
         maxTokens: OPENROUTER_DEFAULT_MAX_TOKENS,
       },
       {
+        id: "free",
+        name: "OpenRouter Free",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: OPENROUTER_DEFAULT_COST,
+        contextWindow: OPENROUTER_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: OPENROUTER_DEFAULT_MAX_TOKENS,
+      },
+      {
         id: "openrouter/hunter-alpha",
         name: "Hunter Alpha",
         reasoning: true,
