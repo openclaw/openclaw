@@ -1253,6 +1253,19 @@ describe("exec approvals", () => {
     mockNoApprovalRouteRegistration();
 
     let systemRunInvoke: unknown;
+    const preparedPlan = {
+      argv: ["/bin/sh", "-lc", "echo cron-node-ok"],
+      cwd: null,
+      commandText: "/bin/sh -lc 'echo cron-node-ok'",
+      commandPreview: "echo cron-node-ok",
+      agentId: null,
+      sessionKey: null,
+      mutableFileOperand: {
+        argvIndex: 2,
+        path: "/tmp/cron-node-ok.sh",
+        sha256: "deadbeef",
+      },
+    };
     vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
       if (method === "exec.approval.request") {
         return { id: "approval-id", decision: null };
@@ -1263,7 +1276,11 @@ describe("exec approvals", () => {
       if (method === "node.invoke") {
         const invoke = params as { command?: string };
         if (invoke.command === "system.run.prepare") {
-          return buildPreparedSystemRunPayload(params);
+          return {
+            payload: {
+              plan: preparedPlan,
+            },
+          };
         }
         if (invoke.command === "system.run") {
           systemRunInvoke = params;
@@ -1292,6 +1309,7 @@ describe("exec approvals", () => {
       params: {
         approved: true,
         approvalDecision: "allow-once",
+        systemRunPlan: preparedPlan,
       },
     });
     expect((systemRunInvoke as { params?: { runId?: string } }).params?.runId).toEqual(
