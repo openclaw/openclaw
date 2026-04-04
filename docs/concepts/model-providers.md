@@ -28,7 +28,8 @@ For model selection rules, see [/concepts/models](/concepts/models).
   map is now just for non-plugin/core providers and a few generic-precedence
   cases such as Anthropic API-key-first onboarding.
 - Provider plugins can also own provider runtime behavior via
-  `normalizeConfig`, `resolveDynamicModel`, `prepareDynamicModel`,
+  `normalizeConfig`, `applyNativeStreamingUsageCompat`, `resolveConfigApiKey`,
+  `resolveDynamicModel`, `prepareDynamicModel`,
   `normalizeResolvedModel`, `capabilities`, `prepareExtraParams`,
   `wrapStreamFn`, `formatApiKey`, `refreshOAuth`, `buildAuthDoctorHint`,
   `matchesContextOverflowError`, `classifyFailoverReason`,
@@ -53,7 +54,9 @@ Typical split:
 - `wizard.setup` / `wizard.modelPicker`: provider owns auth-choice labels,
   legacy aliases, onboarding allowlist hints, and setup entries in onboarding/model pickers
 - `catalog`: provider appears in `models.providers`
-- `normalizeConfig`: provider normalizes `models.providers.<id>` config before runtime uses it
+- `normalizeConfig`: provider normalizes `models.providers.<id>` config before runtime uses it; OpenClaw checks the matched provider first, then other hook-capable provider plugins until one actually changes the config
+- `applyNativeStreamingUsageCompat`: provider applies endpoint-driven native streaming-usage compat rewrites for config providers
+- `resolveConfigApiKey`: provider resolves env-marker auth for config providers without forcing full runtime auth loading
 - `resolveDynamicModel`: provider accepts model ids not present in the local
   static catalog yet
 - `prepareDynamicModel`: provider needs a metadata refresh before retrying
