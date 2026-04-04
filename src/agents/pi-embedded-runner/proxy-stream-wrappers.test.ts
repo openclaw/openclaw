@@ -53,7 +53,7 @@ describe("proxy stream wrappers", () => {
       {
         api: "openai-completions",
         provider: "openrouter",
-        id: "anthropic/claude-sonnet-4",
+        id: "anthropic/claude-sonnet-4.6",
       } as Model<"openai-completions">,
       { messages: [] },
       {},
@@ -78,7 +78,7 @@ describe("proxy stream wrappers", () => {
       {
         api: "openai-completions",
         provider: "openrouter",
-        id: "anthropic/claude-sonnet-4",
+        id: "anthropic/claude-sonnet-4.6",
         baseUrl: "https://proxy.example.com/v1",
       } as Model<"openai-completions">,
       { messages: [] },
@@ -102,7 +102,7 @@ describe("proxy stream wrappers", () => {
       {
         api: "openai-completions",
         provider: "custom-openrouter",
-        id: "anthropic/claude-sonnet-4",
+        id: "anthropic/claude-sonnet-4.6",
         baseUrl: "https://openrouter.ai/api/v1",
       } as Model<"openai-completions">,
       { messages: [] },
