@@ -978,6 +978,48 @@ Options:
 
 See [`acp`](/cli/acp) for full behavior, security notes, and examples.
 
+### `mcp`
+
+Manage saved MCP server definitions and expose OpenClaw channels over MCP stdio.
+
+#### `mcp serve`
+
+Expose routed OpenClaw channel conversations over MCP stdio.
+
+Options:
+
+- `--url <url>`
+- `--token <token>`
+- `--token-file <path>`
+- `--password <password>`
+- `--password-file <path>`
+- `--claude-channel-mode <auto|on|off>`
+- `--verbose`
+
+#### `mcp list`
+
+List saved MCP server definitions.
+
+Options:
+
+- `--json`
+
+#### `mcp show [name]`
+
+Show one saved MCP server definition or the full saved MCP server object.
+
+Options:
+
+- `--json`
+
+#### `mcp set <name> <value>`
+
+Save one MCP server definition from a JSON object.
+
+#### `mcp unset <name>`
+
+Remove one saved MCP server definition.
+
 ### `approvals`
 
 Manage exec approvals. Alias: `exec-approvals`.
