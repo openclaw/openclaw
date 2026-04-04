@@ -142,10 +142,20 @@ export const handleStopCommand: CommandHandler = async (params, allowTextCommand
   );
   await triggerInternalHook(hookEvent);
 
-  const { stopped } = stopSubagentsForRequester({
-    cfg: params.cfg,
-    requesterSessionKey: abortTarget.key ?? params.sessionKey,
-  });
+  const primaryRequesterKey = abortTarget.key ?? params.sessionKey;
+  let stopped = 0;
+  if (primaryRequesterKey) {
+    ({ stopped } = await stopSubagentsForRequester({
+      cfg: params.cfg,
+      requesterSessionKey: primaryRequesterKey,
+    }));
+  }
+  if (stopped === 0 && params.sessionKey && params.sessionKey !== primaryRequesterKey) {
+    ({ stopped } = await stopSubagentsForRequester({
+      cfg: params.cfg,
+      requesterSessionKey: params.sessionKey,
+    }));
+  }
 
   return { shouldContinue: false, reply: { text: formatAbortReplyText(stopped) } };
 };
