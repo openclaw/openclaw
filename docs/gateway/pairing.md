@@ -56,7 +56,7 @@ Events:
 Methods:
 
 - `node.pair.request` — create or reuse a pending request.
-- `node.pair.list` — list pending + paired nodes.
+- `node.pair.list` — list pending + paired nodes (`operator.pairing`).
 - `node.pair.approve` — approve a pending request (issues token).
 - `node.pair.reject` — reject a pending request.
 - `node.pair.verify` — verify `{ nodeId, token }`.
@@ -70,6 +70,12 @@ Notes:
 - Approval **always** generates a fresh token; no token is ever returned from
   `node.pair.request`.
 - Requests may include `silent: true` as a hint for auto-approval flows.
+- `node.pair.approve` uses the pending request's declared commands to enforce
+  extra approval scopes:
+  - commandless request: `operator.pairing`
+  - non-exec command request: `operator.pairing` + `operator.write`
+  - `system.run` / `system.run.prepare` / `system.which` request:
+    `operator.pairing` + `operator.admin`
 
 Important:
 
