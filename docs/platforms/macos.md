@@ -196,7 +196,8 @@ Discovery options:
 - `--json`: structured output for diffing
 
 Tip: compare against `openclaw gateway discover --json` to see whether the
-macOS app’s discovery pipeline (NWBrowser + tailnet DNS‑SD fallback) differs from
+macOS app’s discovery pipeline (`local.` plus the configured wide-area domain, with
+wide-area and Tailscale Serve fallbacks) differs from
 the Node CLI’s `dns-sd` based discovery.
 
 ## Remote connection plumbing (SSH tunnels)
