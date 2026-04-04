@@ -43,6 +43,9 @@ pending request is superseded and a new `requestId` is created. Re-run
 Notes:
 
 - `nodes status` marks a node as **paired** when its device pairing role includes `node`.
+- The device pairing record is the durable approved-role contract. Token
+  rotation stays inside that contract; it cannot upgrade a paired node into a
+  different role that pairing approval never granted.
 - `node.pair.*` (CLI: `openclaw nodes pending/approve/reject/rename`) is a separate gateway-owned
   node pairing store; it does **not** gate the WS `connect` handshake.
 - Approval scope follows the pending request's declared commands:

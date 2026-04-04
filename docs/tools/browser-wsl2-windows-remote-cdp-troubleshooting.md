@@ -142,6 +142,9 @@ Notes:
 
 - use the WSL2-reachable address, not whatever only works on Windows
 - keep `attachOnly: true` for externally managed browsers
+- `cdpUrl` can be `http://`, `https://`, `ws://`, or `wss://`
+- use HTTP(S) when you want OpenClaw to discover `/json/version`
+- use WS(S) only when the browser provider gives you a direct DevTools socket URL
 - test the same URL with `curl` before expecting OpenClaw to succeed
 
 ### Layer 4: Verify the Control UI layer separately
@@ -187,6 +190,8 @@ Treat each message as a layer-specific clue:
   - device approval problem
 - `Remote CDP for profile "remote" is not reachable`
   - WSL2 cannot reach the configured `cdpUrl`
+- `Browser attachOnly is enabled and CDP websocket for profile "remote" is not reachable`
+  - the HTTP endpoint answered, but the DevTools WebSocket still could not be opened
 - `gateway timeout after 1500ms`
   - often still CDP reachability or a slow/unreachable remote endpoint
 - `No Chrome tabs found for profile="user"`

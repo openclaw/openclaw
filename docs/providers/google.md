@@ -52,12 +52,24 @@ An alternative provider `google-gemini-cli` uses PKCE OAuth instead of an API
 key. This is an unofficial integration; some users report account
 restrictions. Use at your own risk.
 
+- Default model: `google-gemini-cli/gemini-3.1-pro-preview`
+- Alias: `gemini-cli`
+- Login:
+
+```bash
+openclaw models auth login --provider google-gemini-cli --set-default
+```
+
 Environment variables:
 
 - `OPENCLAW_GEMINI_OAUTH_CLIENT_ID`
 - `OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET`
 
 (Or the `GEMINI_CLI_*` variants.)
+
+If Gemini CLI OAuth requests fail after login, set
+`GOOGLE_CLOUD_PROJECT` or `GOOGLE_CLOUD_PROJECT_ID` on the gateway host and
+retry.
 
 ## Capabilities
 

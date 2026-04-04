@@ -243,10 +243,33 @@ CLI backend defaults are now part of the plugin surface:
 - Backend-specific config cleanup stays plugin-owned through the optional
   `normalizeConfig` hook.
 
+## Bundle MCP overlays
+
+CLI backends still do **not** receive OpenClaw tool calls, but a backend can opt
+into a generated MCP config overlay with `bundleMcp: true`.
+
+Current bundled behavior:
+
+- `claude-cli`: `bundleMcp: true`
+- `codex-cli`: no bundle MCP overlay
+- `google-gemini-cli`: no bundle MCP overlay
+
+When bundle MCP is enabled, OpenClaw:
+
+- loads enabled bundle-MCP servers for the current workspace
+- merges them with any existing backend `--mcp-config`
+- rewrites the CLI args to pass `--strict-mcp-config --mcp-config <generated-file>`
+
+If no MCP servers are enabled, OpenClaw still injects a strict empty config.
+That prevents background Claude CLI runs from inheriting ambient user/global MCP
+servers unexpectedly.
+
 ## Limitations
 
 - **No OpenClaw tools** (the CLI backend never receives tool calls). Some CLIs
-  may still run their own agent tooling.
+  may still run their own agent tooling. Backends with `bundleMcp: true`
+  can still receive a generated MCP config overlay for their own CLI-native MCP
+  support.
 - **Streaming is backend-specific**. Claude CLI forwards partial text from
   `stream-json`; other CLI backends may still be buffered until exit.
 - **Structured outputs** depend on the CLI’s JSON format.

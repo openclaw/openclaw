@@ -2,7 +2,6 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
-  approveDevicePairing,
   clearDeviceBootstrapTokens,
   definePluginEntry,
   issueDeviceBootstrapToken,
@@ -23,6 +22,14 @@ import {
   handleNotifyCommand,
   registerPairingNotifierService,
 } from "./notify.js";
+import {
+  approvePendingPairingRequest,
+  selectPendingApprovalRequest,
+} from "./pair-command-approve.js";
+import {
+  buildMissingPairingScopeReply,
+  resolvePairingCommandAuthState,
+} from "./pair-command-auth.js";
 
 async function renderQrDataUrl(data: string): Promise<string> {
   const pngBase64 = await renderQrPngBase64(data);
@@ -481,20 +488,6 @@ function resolveQrReplyTarget(ctx: QrCommandContext): string {
   return ctx.senderId?.trim() || ctx.from?.trim() || ctx.to?.trim() || "";
 }
 
-function buildMissingPairingScopeReply(): { text: string } {
-  return {
-    text: "⚠️ This command requires operator.pairing for internal gateway callers.",
-  };
-}
-
-function isMissingPairingScope(gatewayClientScopes: string[] | null): boolean {
-  return Boolean(
-    gatewayClientScopes &&
-    !gatewayClientScopes.includes("operator.pairing") &&
-    !gatewayClientScopes.includes("operator.admin"),
-  );
-}
-
 const PAIR_SETUP_NON_ISSUING_ACTIONS = new Set([
   "approve",
   "cleanup",
@@ -569,7 +562,11 @@ export default definePluginEntry({
         const action = tokens[0]?.toLowerCase() ?? "";
         const gatewayClientScopes = Array.isArray(ctx.gatewayClientScopes)
           ? ctx.gatewayClientScopes
-          : null;
+          : undefined;
+        const authState = resolvePairingCommandAuthState({
+          channel: ctx.channel,
+          gatewayClientScopes,
+        });
         api.logger.info?.(
           `device-pair: /pair invoked channel=${ctx.channel} sender=${ctx.senderId ?? "unknown"} action=${
             action || "new"
@@ -591,56 +588,29 @@ export default definePluginEntry({
         }
 
         if (action === "approve") {
-          if (isMissingPairingScope(gatewayClientScopes)) {
+          if (authState.isMissingInternalPairingPrivilege) {
             return buildMissingPairingScopeReply();
           }
-          const requested = tokens[1]?.trim();
           const list = await listDevicePairing();
-          if (list.pending.length === 0) {
-            return { text: "No pending device pairing requests." };
+          const selected = selectPendingApprovalRequest({
+            pending: list.pending,
+            requested: tokens[1]?.trim(),
+          });
+          if (selected.reply) {
+            return selected.reply;
           }
-
-          let pending: (typeof list.pending)[number] | undefined;
-          if (requested) {
-            if (requested.toLowerCase() === "latest") {
-              pending = [...list.pending].toSorted((a, b) => (b.ts ?? 0) - (a.ts ?? 0))[0];
-            } else {
-              pending = list.pending.find((entry) => entry.requestId === requested);
-            }
-          } else if (list.pending.length === 1) {
-            pending = list.pending[0];
-          } else {
-            return {
-              text:
-                `${formatPendingRequests(list.pending)}\n\n` +
-                "Multiple pending requests found. Approve one explicitly:\n" +
-                "/pair approve <requestId>\n" +
-                "Or approve the most recent:\n" +
-                "/pair approve latest",
-            };
-          }
+          const pending = selected.pending;
           if (!pending) {
             return { text: "Pairing request not found." };
           }
-          const approved = gatewayClientScopes
-            ? await approveDevicePairing(pending.requestId, {
-                callerScopes: gatewayClientScopes,
-              })
-            : await approveDevicePairing(pending.requestId);
-          if (!approved) {
-            return { text: "Pairing request not found." };
-          }
-          if (approved.status === "forbidden") {
-            return { text: `⚠️ Cannot approve a request requiring ${approved.missingScope}.` };
-          }
-          const label = approved.device.displayName?.trim() || approved.device.deviceId;
-          const platform = approved.device.platform?.trim();
-          const platformLabel = platform ? ` (${platform})` : "";
-          return { text: `✅ Paired ${label}${platformLabel}.` };
+          return await approvePendingPairingRequest({
+            requestId: pending.requestId,
+            callerScopes: authState.approvalCallerScopes,
+          });
         }
 
         if (action === "cleanup" || action === "clear" || action === "revoke") {
-          if (isMissingPairingScope(gatewayClientScopes)) {
+          if (authState.isMissingInternalPairingPrivilege) {
             return buildMissingPairingScopeReply();
           }
           const cleared = await clearDeviceBootstrapTokens();
@@ -656,7 +626,7 @@ export default definePluginEntry({
         if (authLabelResult.error) {
           return { text: `Error: ${authLabelResult.error}` };
         }
-        if (issuesPairSetupCode(action) && isMissingPairingScope(gatewayClientScopes)) {
+        if (issuesPairSetupCode(action) && authState.isMissingInternalPairingPrivilege) {
           return buildMissingPairingScopeReply();
         }
 

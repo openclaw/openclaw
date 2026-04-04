@@ -649,6 +649,8 @@ for usage/billing and raise limits as needed.
 
     1. Enable the plugin: `openclaw plugins enable google`
     2. Login: `openclaw models auth login --provider google-gemini-cli --set-default`
+    3. Default model after login: `google-gemini-cli/gemini-3.1-pro-preview`
+    4. If requests fail, set `GOOGLE_CLOUD_PROJECT` or `GOOGLE_CLOUD_PROJECT_ID` on the gateway host
 
     This stores OAuth tokens in auth profiles on the gateway host. Details: [Model providers](/concepts/model-providers).
 
