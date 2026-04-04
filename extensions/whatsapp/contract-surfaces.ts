@@ -12,6 +12,8 @@ export const unsupportedSecretRefSurfacePatterns = [
   "channels.whatsapp.accounts.*.creds.json",
 ] as const;
 
+export { resolveLegacyGroupSessionKey } from "./src/group-session-contract.js";
+
 export function collectUnsupportedSecretRefConfigCandidates(
   raw: unknown,
 ): UnsupportedSecretRefConfigCandidate[] {
