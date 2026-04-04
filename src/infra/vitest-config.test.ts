@@ -25,10 +25,10 @@ describe("resolveLocalVitestMaxWorkers", () => {
           loadAverage1m: 0,
           totalMemoryBytes: 64 * 1024 ** 3,
         },
-        "forks",
+        "threads",
         idleVitestStats,
       ),
-    ).toBe(3);
+    ).toBe(2);
   });
 
   it("lets OPENCLAW_VITEST_MAX_WORKERS override the inferred cap", () => {
@@ -42,7 +42,7 @@ describe("resolveLocalVitestMaxWorkers", () => {
           loadAverage1m: 0,
           totalMemoryBytes: 128 * 1024 ** 3,
         },
-        "forks",
+        "threads",
         idleVitestStats,
       ),
     ).toBe(2);
@@ -59,7 +59,7 @@ describe("resolveLocalVitestMaxWorkers", () => {
           loadAverage1m: 0,
           totalMemoryBytes: 128 * 1024 ** 3,
         },
-        "forks",
+        "threads",
         idleVitestStats,
       ),
     ).toBe(3);
@@ -74,10 +74,10 @@ describe("resolveLocalVitestMaxWorkers", () => {
           loadAverage1m: 0,
           totalMemoryBytes: 16 * 1024 ** 3,
         },
-        "forks",
+        "threads",
         idleVitestStats,
       ),
-    ).toBe(2);
+    ).toBe(1);
   });
 
   it("lets roomy hosts use more local parallelism", () => {
@@ -89,10 +89,10 @@ describe("resolveLocalVitestMaxWorkers", () => {
           loadAverage1m: 0,
           totalMemoryBytes: 128 * 1024 ** 3,
         },
-        "forks",
+        "threads",
         idleVitestStats,
       ),
-    ).toBe(4);
+    ).toBe(3);
   });
 
   it("backs off further when the host is already busy", () => {
@@ -104,10 +104,10 @@ describe("resolveLocalVitestMaxWorkers", () => {
           loadAverage1m: 16,
           totalMemoryBytes: 128 * 1024 ** 3,
         },
-        "forks",
+        "threads",
         idleVitestStats,
       ),
-    ).toBe(2);
+    ).toBe(1);
   });
 
   it("caps very large hosts at six local workers", () => {
@@ -119,10 +119,10 @@ describe("resolveLocalVitestMaxWorkers", () => {
           loadAverage1m: 0,
           totalMemoryBytes: 256 * 1024 ** 3,
         },
-        "forks",
+        "threads",
         idleVitestStats,
       ),
-    ).toBe(6);
+    ).toBe(3);
   });
 });
 
@@ -136,7 +136,7 @@ describe("resolveLocalVitestScheduling", () => {
           loadAverage1m: 0.5,
           totalMemoryBytes: 128 * 1024 ** 3,
         },
-        "forks",
+        "threads",
         {
           otherVitestRootCount: 1,
           otherVitestWorkerCount: 3,
@@ -159,7 +159,7 @@ describe("resolveLocalVitestScheduling", () => {
           loadAverage1m: 0.5,
           totalMemoryBytes: 128 * 1024 ** 3,
         },
-        "forks",
+        "threads",
         {
           otherVitestRootCount: 1,
           otherVitestWorkerCount: 0,
@@ -184,11 +184,11 @@ describe("resolveLocalVitestScheduling", () => {
           loadAverage1m: 0.5,
           totalMemoryBytes: 128 * 1024 ** 3,
         },
-        "forks",
+        "threads",
         idleVitestStats,
       ),
     ).toEqual({
-      maxWorkers: 4,
+      maxWorkers: 2,
       fileParallelism: true,
       throttledBySystem: false,
     });
@@ -217,17 +217,9 @@ describe("parseVitestProcessStats", () => {
 });
 
 describe("base vitest config", () => {
-  it("defaults the base pool to forks", () => {
-    expect(resolveDefaultVitestPool()).toBe("forks");
-    expect(baseConfig.test?.pool).toBe("forks");
-  });
-
-  it("keeps forks even when non-fork pools are requested", () => {
-    expect(
-      resolveDefaultVitestPool({
-        OPENCLAW_VITEST_POOL: "threads",
-      }),
-    ).toBe("forks");
+  it("defaults the base pool to threads", () => {
+    expect(resolveDefaultVitestPool()).toBe("threads");
+    expect(baseConfig.test?.pool).toBe("threads");
   });
 
   it("excludes fixture trees from test collection", () => {
@@ -237,10 +229,15 @@ describe("base vitest config", () => {
   it("keeps the base setup file minimal", () => {
     expect(baseConfig.test?.setupFiles).toEqual(["test/setup.ts"]);
   });
+
+  it("keeps the base runner non-isolated by default", () => {
+    expect(baseConfig.test?.isolate).toBe(false);
+    expect(baseConfig.test?.runner).toBe("./test/non-isolated-runner.ts");
+  });
 });
 
 describe("test scripts", () => {
-  it("keeps test:serial pinned to one worker", () => {
+  it("keeps test scripts on the native thread-first configs", () => {
     const pkg = JSON.parse(
       readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
     ) as {
@@ -248,10 +245,13 @@ describe("test scripts", () => {
     };
 
     expect(pkg.scripts?.["test:serial"]).toBe(
-      "OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/test-projects.mjs",
+      "OPENCLAW_VITEST_MAX_WORKERS=1 vitest run --config vitest.config.ts",
     );
     expect(pkg.scripts?.["test:fast"]).toBe(
-      "node scripts/run-vitest.mjs run --config vitest.unit.config.ts",
+      "vitest run --config vitest.unit.config.ts",
+    );
+    expect(pkg.scripts?.["test:gateway"]).toBe(
+      "vitest run --config vitest.gateway.config.ts",
     );
     expect(pkg.scripts?.["test:single"]).toBeUndefined();
   });

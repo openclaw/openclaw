@@ -31,7 +31,7 @@ type VitestHostInfo = {
   totalMemoryBytes?: number;
 };
 
-export type OpenClawVitestPool = "forks";
+export type OpenClawVitestPool = "threads";
 
 export type LocalVitestScheduling = {
   maxWorkers: number;
@@ -108,6 +108,16 @@ export function resolveLocalVitestScheduling(
     inferred = Math.max(1, inferred - 1);
   }
 
+  if (pool === "threads") {
+    inferred = Math.min(inferred, 4);
+    if (cpuCount >= 8) {
+      inferred = Math.max(1, inferred - 1);
+    }
+    if (loadRatio >= 0.5) {
+      inferred = Math.max(1, inferred - 1);
+    }
+  }
+
   inferred = clamp(inferred, 1, 16);
 
   if (isSystemThrottleDisabled(env)) {
@@ -155,13 +165,9 @@ export function resolveLocalVitestScheduling(
 }
 
 export function resolveDefaultVitestPool(
-  env: Record<string, string | undefined> = process.env,
+  _env: Record<string, string | undefined> = process.env,
 ): OpenClawVitestPool {
-  const configuredPool = (env.OPENCLAW_VITEST_POOL ?? env.OPENCLAW_TEST_POOL)?.trim();
-  if (configuredPool && configuredPool !== "forks") {
-    return "forks";
-  }
-  return "forks";
+  return "threads";
 }
 
 const repoRoot = path.dirname(fileURLToPath(import.meta.url));
@@ -205,7 +211,9 @@ export const sharedVitestConfig = {
     hookTimeout: isWindows ? 180_000 : 120_000,
     unstubEnvs: true,
     unstubGlobals: true,
+    isolate: false,
     pool: defaultPool,
+    runner: "./test/non-isolated-runner.ts",
     maxWorkers: isCI ? ciWorkers : localScheduling.maxWorkers,
     fileParallelism: isCI ? true : localScheduling.fileParallelism,
     forceRerunTriggers: [

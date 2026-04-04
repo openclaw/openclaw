@@ -1,5 +1,5 @@
 import { defineProject } from "vitest/config";
-import { loadPatternListFromEnv } from "./vitest.pattern-file.ts";
+import { loadPatternListFromEnv, narrowIncludePatternsForCli } from "./vitest.pattern-file.ts";
 import { resolveVitestIsolation } from "./vitest.scoped-config.ts";
 import { sharedVitestConfig } from "./vitest.shared.config.ts";
 import {
@@ -28,9 +28,12 @@ export function createUnitVitestConfigWithOptions(
     includePatterns?: string[];
     extraExcludePatterns?: string[];
     name?: string;
+    argv?: string[];
   } = {},
 ) {
   const isolate = resolveVitestIsolation(env);
+  const defaultIncludePatterns = options.includePatterns ?? unitTestIncludePatterns;
+  const cliIncludePatterns = narrowIncludePatternsForCli(defaultIncludePatterns, options.argv);
   return defineProject({
     ...sharedVitestConfig,
     test: {
@@ -41,8 +44,7 @@ export function createUnitVitestConfigWithOptions(
       setupFiles: [
         ...new Set([...(sharedTest.setupFiles ?? []), "test/setup-openclaw-runtime.ts"]),
       ],
-      include:
-        loadIncludePatternsFromEnv(env) ?? options.includePatterns ?? unitTestIncludePatterns,
+      include: loadIncludePatternsFromEnv(env) ?? cliIncludePatterns ?? defaultIncludePatterns,
       exclude: [
         ...new Set([
           ...exclude,
@@ -50,6 +52,7 @@ export function createUnitVitestConfigWithOptions(
           ...loadExtraExcludePatternsFromEnv(env),
         ]),
       ],
+      ...(cliIncludePatterns !== null ? { passWithNoTests: true } : {}),
     },
   });
 }

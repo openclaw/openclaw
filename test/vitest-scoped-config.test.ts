@@ -45,10 +45,10 @@ describe("resolveVitestIsolation", () => {
     expect(resolveVitestIsolation({})).toBe(false);
   });
 
-  it("restores isolate mode when explicitly requested", () => {
-    expect(resolveVitestIsolation({ OPENCLAW_TEST_ISOLATE: "1" })).toBe(true);
-    expect(resolveVitestIsolation({ OPENCLAW_TEST_NO_ISOLATE: "0" })).toBe(true);
-    expect(resolveVitestIsolation({ OPENCLAW_TEST_NO_ISOLATE: "false" })).toBe(true);
+  it("ignores the legacy isolation escape hatches", () => {
+    expect(resolveVitestIsolation({ OPENCLAW_TEST_ISOLATE: "1" })).toBe(false);
+    expect(resolveVitestIsolation({ OPENCLAW_TEST_NO_ISOLATE: "0" })).toBe(false);
+    expect(resolveVitestIsolation({ OPENCLAW_TEST_NO_ISOLATE: "false" })).toBe(false);
   });
 });
 
@@ -78,6 +78,17 @@ describe("createScopedVitestConfig", () => {
 
     expect(config.test?.include).toEqual(["**/*.test.ts"]);
     expect(config.test?.exclude).toEqual(expect.arrayContaining(["channel/**", "dist/**"]));
+  });
+
+  it("narrows scoped includes to matching CLI file filters", () => {
+    const config = createScopedVitestConfig(["extensions/**/*.test.ts"], {
+      argv: ["node", "vitest", "run", "extensions/browser/index.test.ts"],
+      dir: "extensions",
+      env: {},
+    });
+
+    expect(config.test?.include).toEqual(["browser/index.test.ts"]);
+    expect(config.test?.passWithNoTests).toBe(true);
   });
 
   it("overrides setup files when a scoped config requests them", () => {
@@ -128,6 +139,27 @@ describe("scoped vitest configs", () => {
   const defaultToolingConfig = createToolingVitestConfig({});
   const defaultTuiConfig = createTuiVitestConfig({});
   const defaultUiConfig = createUiVitestConfig({});
+
+  it("keeps every scoped lane on thread workers with the non-isolated runner", () => {
+    for (const config of [
+      defaultChannelsConfig,
+      defaultAcpConfig,
+      defaultExtensionsConfig,
+      defaultExtensionChannelsConfig,
+      defaultExtensionProvidersConfig,
+      defaultGatewayConfig,
+      defaultInfraConfig,
+      defaultCommandsConfig,
+      defaultAutoReplyConfig,
+      defaultAgentsConfig,
+      defaultToolingConfig,
+      defaultUiConfig,
+    ]) {
+      expect(config.test?.pool).toBe("threads");
+      expect(config.test?.isolate).toBe(false);
+      expect(config.test?.runner).toBe("./test/non-isolated-runner.ts");
+    }
+  });
 
   it("defaults channel tests to non-isolated mode", () => {
     expect(defaultChannelsConfig.test?.isolate).toBe(false);

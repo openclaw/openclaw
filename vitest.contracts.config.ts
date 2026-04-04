@@ -9,7 +9,6 @@ export function createContractsVitestConfig() {
     ...base,
     test: {
       ...baseTest,
-      isolate: true,
       setupFiles: baseTest.setupFiles ?? [],
       include: [
         "src/channels/plugins/contracts/**/*.test.ts",
