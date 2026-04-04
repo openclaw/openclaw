@@ -349,9 +349,12 @@ final class ControlChannel {
         Task { await HealthStore.shared.refresh(onDemand: true) }
     }
 
-    private func establishGatewayConnection(timeoutMs: Int = 5000) async throws {
+    private func establishGatewayConnection(timeoutMs: Int? = nil) async throws {
+        let bootstrapTimeoutMs =
+            timeoutMs ??
+            (CommandResolver.connectionModeIsRemote() ? 8_000 : 12_000)
         try await GatewayConnection.shared.refresh()
-        let ok = try await GatewayConnection.shared.healthOK(timeoutMs: timeoutMs)
+        let ok = try await GatewayConnection.shared.healthOK(timeoutMs: bootstrapTimeoutMs)
         if ok == false {
             throw NSError(
                 domain: "Gateway",
