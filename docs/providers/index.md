@@ -27,7 +27,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 ## Provider docs
 
 - [Amazon Bedrock](/providers/bedrock)
-- [Anthropic (API + Claude Code CLI)](/providers/anthropic)
+- [Anthropic (API + Claude CLI)](/providers/anthropic)
 - [BytePlus (International)](/concepts/model-providers#byteplus-international)
 - [Chutes](/providers/chutes)
 - [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)

@@ -68,6 +68,10 @@
     "target": "BytePlus（国际版）"
   },
   {
+    "source": "Anthropic (API + Claude CLI)",
+    "target": "Anthropic（API + Claude CLI）"
+  },
+  {
     "source": "Moonshot AI",
     "target": "Moonshot AI"
   },
