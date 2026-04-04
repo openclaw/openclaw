@@ -90,6 +90,16 @@ export function resolveExtraParams(params: {
     delete merged.textVerbosity;
   }
 
+  const resolvedCachedContent = resolveAliasedParamValue(
+    [defaultParams, globalParams, agentParams],
+    "cached_content",
+    "cachedContent",
+  );
+  if (resolvedCachedContent !== undefined) {
+    merged.cachedContent = resolvedCachedContent;
+    delete merged.cached_content;
+  }
+
   return merged;
 }
 
@@ -137,6 +147,15 @@ export function resolvePreparedExtraParams(params: {
     ...sanitizeExtraParamsRecord(resolvedExtraParams),
     ...override,
   };
+  const resolvedCachedContent = resolveAliasedParamValue(
+    [resolvedExtraParams, override],
+    "cached_content",
+    "cachedContent",
+  );
+  if (resolvedCachedContent !== undefined) {
+    merged.cachedContent = resolvedCachedContent;
+    delete merged.cached_content;
+  }
   return (
     providerRuntimeDeps.prepareProviderExtraParams({
       provider: params.provider,
@@ -207,7 +226,12 @@ function createStreamFnWithExtraParams(
   if (typeof extraParams.openaiWsWarmup === "boolean") {
     streamParams.openaiWsWarmup = extraParams.openaiWsWarmup;
   }
-  const cachedContent = resolveAliasedParamValue([extraParams], "cached_content", "cachedContent");
+  const cachedContent =
+    typeof extraParams.cachedContent === "string"
+      ? extraParams.cachedContent
+      : typeof extraParams.cached_content === "string"
+        ? extraParams.cached_content
+        : undefined;
   if (typeof cachedContent === "string" && cachedContent.trim()) {
     streamParams.cachedContent = cachedContent.trim();
   }
