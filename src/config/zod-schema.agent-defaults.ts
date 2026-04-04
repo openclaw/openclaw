@@ -144,6 +144,9 @@ export const AgentDefaultsSchema = z
           .strict()
           .optional(),
         notifyUser: z.boolean().optional(),
+        truncateAfterCompaction: z.boolean().optional(),
+        proactiveThresholdRatio: z.number().min(0).max(0.95).optional(),
+        recentMessagesToKeep: z.number().int().min(3).max(50).optional(),
       })
       .strict()
       .optional(),
@@ -209,8 +212,10 @@ export const AgentDefaultsSchema = z
         thinking: z.string().optional(),
         runTimeoutSeconds: z.number().int().min(0).optional(),
         announceTimeoutMs: z.number().int().positive().optional(),
-        requireAgentId: z.boolean().optional(),
-      })
+    requireAgentId: z.boolean().optional(),
+    operatingPrinciples: z.array(z.string()).optional(),
+    maxFailureAttempts: z.number().int().min(1).max(10).optional(),
+  })
       .strict()
       .optional(),
     sandbox: AgentSandboxSchema,

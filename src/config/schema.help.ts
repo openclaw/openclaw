@@ -1148,6 +1148,18 @@ export const FIELD_HELP: Record<string, string> = {
     "When enabled, rewrites the session JSONL file after compaction to remove entries that were summarized. Prevents unbounded file growth in long-running sessions with many compaction cycles. Default: false.",
   "agents.defaults.compaction.notifyUser":
     "When enabled, sends a brief compaction notice to the user (e.g. '🧹 Compacting context...') when compaction starts. Disabled by default to keep compaction silent and non-intrusive.",
+  "agents.defaults.compaction.proactiveThresholdRatio":
+    "Token usage ratio (0.5–0.95) at which proactive compaction triggers before each LLM call. Set to 0 to disable proactive compaction. Default: 0.8.",
+  "agents.defaults.compaction.recentMessagesToKeep":
+    "Minimum number of recent messages preserved when proactive compaction fires. Default: 10.",
+  "agents.defaults.subagents.operatingPrinciples":
+    "Operating principles injected into subagent system prompts. Options: context_first, local_before_external, act_verify_report, failure_recovery, stay_focused, complete_the_loop, trust_push, recover_compacted.",
+  "agents.defaults.subagents.maxFailureAttempts":
+    "Maximum retry attempts before subagent escalation. Default: 3.",
+  "tools.skillCache":
+    "Pre-fetches SKILL.md file contents at session startup for faster skill_search responses.",
+  "tools.skillCache.associations":
+    "Skills that should be warmed together. When one skill is eligible, its associates are also pre-fetched.",
   "agents.defaults.compaction.memoryFlush":
     "Pre-compaction memory flush settings that run an agentic memory write before heavy compaction. Keep enabled for long sessions so salient context is persisted before aggressive trimming.",
   "agents.defaults.compaction.memoryFlush.enabled":

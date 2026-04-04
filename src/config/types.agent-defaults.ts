@@ -302,6 +302,18 @@ export type AgentDefaultsConfig = {
     announceTimeoutMs?: number;
     /** Require explicit agentId in sessions_spawn (no default same-as-caller). Default: false. */
     requireAgentId?: boolean;
+    /**
+     * Operating principles injected into subagent system prompts.
+     * Valid entries: "context_first", "local_before_external", "act_verify_report",
+     * "failure_recovery", "stay_focused", "complete_the_loop", "trust_push", "recover_compacted".
+     * Default: all enabled.
+     */
+    operatingPrinciples?: string[];
+    /**
+     * Maximum retry attempts before subagent escalation (default: 3).
+     * Used when "failure_recovery" principle is enabled.
+     */
+    maxFailureAttempts?: number;
   };
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: AgentSandboxConfig;
@@ -365,6 +377,16 @@ export type AgentCompactionConfig = {
    * Default: false (silent by default).
    */
   notifyUser?: boolean;
+  /**
+   * Token usage ratio (0.0–0.95) at which proactive compaction triggers before
+   * each LLM call. Set to 0 to disable proactive compaction. Default: 0.8.
+   */
+  proactiveThresholdRatio?: number;
+  /**
+   * Minimum number of recent messages to preserve when proactive compaction fires.
+   * Only applies when message count exceeds this value. Default: 10.
+   */
+  recentMessagesToKeep?: number;
 };
 
 export type AgentCompactionMemoryFlushConfig = {
