@@ -31,17 +31,41 @@ function trySyncDirectory(pathname: string) {
   }
 }
 
+function readSymlinkTargetPath(linkPath: string): string {
+  const target = fs.readlinkSync(linkPath);
+  return path.resolve(path.dirname(linkPath), target);
+}
+
 function resolveJsonWriteTarget(pathname: string): string {
-  let stat: fs.Stats;
-  try {
-    stat = fs.lstatSync(pathname);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw error;
+  let currentPath = pathname;
+  const visited = new Set<string>();
+
+  for (;;) {
+    let stat: fs.Stats;
+    try {
+      stat = fs.lstatSync(currentPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+      return currentPath;
     }
-    return pathname;
+
+    if (!stat.isSymbolicLink()) {
+      return currentPath;
+    }
+
+    if (visited.has(currentPath)) {
+      const err = new Error(
+        `Too many symlink levels while resolving ${pathname}`,
+      ) as NodeJS.ErrnoException;
+      err.code = "ELOOP";
+      throw err;
+    }
+
+    visited.add(currentPath);
+    currentPath = readSymlinkTargetPath(currentPath);
   }
-  return stat.isSymbolicLink() ? fs.realpathSync(pathname) : pathname;
 }
 
 function renameJsonFileWithFallback(tmpPath: string, pathname: string) {
