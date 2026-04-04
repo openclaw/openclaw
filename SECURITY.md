@@ -279,6 +279,25 @@ docker run --read-only --cap-drop=ALL \
   openclaw/openclaw:latest
 ```
 
+## Automated Security Measures
+
+This repository employs multiple layers of automated security:
+
+### CI/CD Security
+- **CodeQL Analysis**: Weekly + per-PR static analysis for JavaScript/TypeScript vulnerabilities
+- **Secrets Scanning**: `detect-secrets` baseline scanning on every push and PR
+- **npm Audit**: Critical-level dependency vulnerability checks in Dagger CI
+- **Dependabot**: Automated dependency updates with auto-merge for patch-level fixes
+
+### Supply Chain
+- **pnpm ignore-scripts**: Build scripts disabled by default to prevent supply chain attacks
+- **Provenance**: Docker images built with supply chain attestation
+
+### Governance
+- **CODEOWNERS**: All changes require owner review
+- **L0-L3 Risk Classification**: PRs classified by risk level per Agentic CI/CD Protocol
+- **Constitution**: 7 immutable security laws in `.github/constitution.md`
+
 ## Security Scanning
 
 This project uses `detect-secrets` for automated secret detection in CI/CD.
