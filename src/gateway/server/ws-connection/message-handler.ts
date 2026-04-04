@@ -1064,10 +1064,8 @@ export function attachGatewayWsMessageHandler(params: {
             issuedAtMs: deviceToken.rotatedAtMs ?? deviceToken.createdAtMs,
           });
         }
-        const bootstrapProfileForHello: DeviceBootstrapProfile | null = device
-          ? bootstrapProfile
-          : null;
-        if (device && bootstrapProfileForHello !== null) {
+        if (device && bootstrapProfile !== null) {
+          const bootstrapProfileForHello = bootstrapProfile as DeviceBootstrapProfile;
           for (const bootstrapRole of bootstrapProfileForHello.roles) {
             if (bootstrapDeviceTokens.some((entry) => entry.role === bootstrapRole)) {
               continue;
