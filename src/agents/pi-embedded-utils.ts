@@ -34,7 +34,8 @@ export function stripMinimaxToolCallXml(text: string): string {
 }
 
 // Re-exported from shared module for backwards compatibility.
-export { stripModelSpecialTokens } from "../shared/text/model-special-tokens.js";
+import { stripModelSpecialTokens } from "../shared/text/model-special-tokens.js";
+export { stripModelSpecialTokens };
 
 /**
  * Strip downgraded tool call text representations that leak into text content.
