@@ -13,13 +13,13 @@ QQ Bot connects to OpenClaw via the official QQ Bot API (WebSocket gateway). The
 plugin supports C2C private chat, group @messages, and guild channel messages with
 rich media (images, voice, video, files).
 
-Status: bundled channel plugin. Direct messages, group chats, guild channels, and
+Status: bundled plugin. Direct messages, group chats, guild channels, and
 media are supported. Reactions and threads are not supported.
 
-## Bundled with OpenClaw
+## Bundled plugin
 
-Current OpenClaw installs bundle QQ Bot. You do not need a separate
-`openclaw plugins install` step for normal setup.
+Current OpenClaw releases bundle QQ Bot, so normal packaged builds do not need
+a separate `openclaw plugins install` step.
 
 ## Setup
 
