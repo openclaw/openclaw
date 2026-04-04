@@ -87,7 +87,7 @@ describe("createCacheTrace", () => {
       },
     });
 
-    const wrapped = trace?.wrapStreamFn(((model, context, options) => ({
+    const wrapped = trace?.wrapStreamFn(((model: unknown, context: unknown, options: unknown) => ({
       model,
       context,
       options,
