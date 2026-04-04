@@ -334,6 +334,8 @@ function describeMSTeamsMessageTool({
           "reactions",
           "search",
           "member-info",
+          "channel-list",
+          "channel-info",
         ] satisfies ChannelMessageActionName[])
       : [],
     capabilities: enabled ? ["cards"] : [],
@@ -863,6 +865,34 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
             const { getMemberInfoMSTeams } = await loadMSTeamsChannelRuntime();
             const result = await getMemberInfoMSTeams({ cfg: ctx.cfg, userId });
             return jsonMSTeamsOkActionResult("member-info", result);
+          }
+
+          if (ctx.action === "channel-list") {
+            const teamId = typeof ctx.params.teamId === "string" ? ctx.params.teamId.trim() : "";
+            if (!teamId) {
+              return actionError("channel-list requires a teamId.");
+            }
+            const { listChannelsMSTeams } = await loadMSTeamsChannelRuntime();
+            const result = await listChannelsMSTeams({ cfg: ctx.cfg, teamId });
+            return jsonMSTeamsOkActionResult("channel-list", result);
+          }
+
+          if (ctx.action === "channel-info") {
+            const teamId = typeof ctx.params.teamId === "string" ? ctx.params.teamId.trim() : "";
+            const channelId =
+              typeof ctx.params.channelId === "string" ? ctx.params.channelId.trim() : "";
+            if (!teamId || !channelId) {
+              return actionError("channel-info requires teamId and channelId.");
+            }
+            const { getChannelInfoMSTeams } = await loadMSTeamsChannelRuntime();
+            const result = await getChannelInfoMSTeams({
+              cfg: ctx.cfg,
+              teamId,
+              channelId,
+            });
+            return jsonMSTeamsOkActionResult("channel-info", {
+              channelInfo: result.channel,
+            });
           }
 
           // Return null to fall through to default handler
