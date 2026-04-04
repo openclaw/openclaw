@@ -1,5 +1,6 @@
 import {
   buildModelAliasIndex,
+  inferUniqueProviderFromConfiguredModels,
   parseModelRef,
   resolveConfiguredModelRef,
   resolveModelRefFromString,
@@ -40,9 +41,12 @@ export function resolveConfiguredEntries(cfg: OpenClawConfig) {
   };
 
   const addResolvedModelRef = (raw: string, tag: string) => {
+    const effectiveDefault = !raw.includes("/")
+      ? (inferUniqueProviderFromConfiguredModels({ cfg, model: raw.trim() }) ?? DEFAULT_PROVIDER)
+      : DEFAULT_PROVIDER;
     const resolved = resolveModelRefFromString({
       raw,
-      defaultProvider: DEFAULT_PROVIDER,
+      defaultProvider: effectiveDefault,
       aliasIndex,
     });
     if (resolved) {
@@ -69,7 +73,11 @@ export function resolveConfiguredEntries(cfg: OpenClawConfig) {
   });
 
   for (const key of Object.keys(cfg.agents?.defaults?.models ?? {})) {
-    const parsed = parseModelRef(String(key ?? ""), DEFAULT_PROVIDER);
+    const raw = String(key ?? "");
+    const effectiveDefault = !raw.includes("/")
+      ? (inferUniqueProviderFromConfiguredModels({ cfg, model: raw.trim() }) ?? DEFAULT_PROVIDER)
+      : DEFAULT_PROVIDER;
+    const parsed = parseModelRef(raw, effectiveDefault);
     if (!parsed) {
       continue;
     }
