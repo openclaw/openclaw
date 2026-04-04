@@ -31,10 +31,7 @@ function resolveBundledDirFromPackageRoot(
 ): string | undefined {
   const sourceExtensionsDir = path.join(packageRoot, "extensions");
   const builtExtensionsDir = path.join(packageRoot, "dist", "extensions");
-  if (
-    (preferSourceCheckout || isSourceCheckoutRoot(packageRoot)) &&
-    fs.existsSync(sourceExtensionsDir)
-  ) {
+  if (preferSourceCheckout && fs.existsSync(sourceExtensionsDir)) {
     return sourceExtensionsDir;
   }
   // Local source checkouts stage a runtime-complete bundled plugin tree under
@@ -46,6 +43,9 @@ function resolveBundledDirFromPackageRoot(
   }
   if (fs.existsSync(builtExtensionsDir)) {
     return builtExtensionsDir;
+  }
+  if (isSourceCheckoutRoot(packageRoot) && fs.existsSync(sourceExtensionsDir)) {
+    return sourceExtensionsDir;
   }
   return undefined;
 }

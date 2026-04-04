@@ -17,6 +17,18 @@ import { resolvePluginCacheInputs, resolvePluginSourceRoots } from "./roots.js";
 import type { PluginBundleFormat, PluginDiagnostic, PluginFormat, PluginOrigin } from "./types.js";
 
 const EXTENSION_EXTS = new Set([".ts", ".js", ".mts", ".cts", ".mjs", ".cjs"]);
+const SCANNED_DIRECTORY_IGNORE_NAMES = new Set([
+  ".git",
+  ".hg",
+  ".svn",
+  ".turbo",
+  ".yarn",
+  ".yarn-cache",
+  "build",
+  "coverage",
+  "dist",
+  "node_modules",
+]);
 
 export type PluginCandidate = {
   idHint: string;
@@ -290,6 +302,9 @@ function isExtensionFile(filePath: string): boolean {
 function shouldIgnoreScannedDirectory(dirName: string): boolean {
   const normalized = dirName.trim().toLowerCase();
   if (!normalized) {
+    return true;
+  }
+  if (SCANNED_DIRECTORY_IGNORE_NAMES.has(normalized)) {
     return true;
   }
   if (normalized.endsWith(".bak")) {
