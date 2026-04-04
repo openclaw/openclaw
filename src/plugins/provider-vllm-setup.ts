@@ -1,10 +1,10 @@
-import type { OpenClawConfig } from "../config/config.js";
 import {
   VLLM_DEFAULT_API_KEY_ENV_VAR,
   VLLM_DEFAULT_BASE_URL,
   VLLM_MODEL_PLACEHOLDER,
   VLLM_PROVIDER_LABEL,
-} from "../plugin-sdk/vllm.js";
+} from "../../extensions/vllm/defaults.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import {
   applyProviderDefaultModel,
@@ -14,7 +14,7 @@ import {
   promptAndConfigureOpenAICompatibleSelfHostedProvider,
 } from "./provider-self-hosted-setup.js";
 
-export { VLLM_DEFAULT_BASE_URL } from "../plugin-sdk/vllm.js";
+export { VLLM_DEFAULT_BASE_URL } from "../../extensions/vllm/defaults.js";
 export const VLLM_DEFAULT_CONTEXT_WINDOW = SELF_HOSTED_DEFAULT_CONTEXT_WINDOW;
 export const VLLM_DEFAULT_MAX_TOKENS = SELF_HOSTED_DEFAULT_MAX_TOKENS;
 export const VLLM_DEFAULT_COST = SELF_HOSTED_DEFAULT_COST;
