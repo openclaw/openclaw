@@ -17,8 +17,7 @@ import {
 import { listRiskyConfiguredSafeBins } from "../infra/exec-safe-bin-semantics.js";
 import { normalizeTrustedSafeBinDirs } from "../infra/exec-safe-bin-trust.js";
 import { isBlockedHostnameOrIp, isPrivateNetworkAllowedByPolicy } from "../infra/net/ssrf.js";
-import { redactCdpUrl } from "../plugin-sdk/browser-cdp.js";
-import { resolveBrowserConfig, resolveProfile } from "../plugin-sdk/browser-config.js";
+import { redactCdpUrl, resolveBrowserConfig, resolveProfile } from "../plugin-sdk/browser-config.js";
 import { resolveBrowserControlAuth } from "../plugin-sdk/browser-control-auth.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import {

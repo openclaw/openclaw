@@ -151,8 +151,6 @@ export const FeishuGroupSchema = z
     groupSessionScope: GroupSessionScopeSchema,
     topicSessionMode: TopicSessionModeSchema,
     replyInThread: ReplyInThreadSchema,
-    cardHeader: CardHeaderModeSchema,
-    cardFooter: CardFooterModeSchema,
   })
   .strict();
 

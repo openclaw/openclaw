@@ -1047,11 +1047,9 @@ export async function handleFeishuMessage(params: {
         ThreadLabel: threadContext.threadLabel,
         // Only use root/message ids (om_* / msg_*) as thread anchors — threadId
         // (omt_*) is a container ID and would produce invalid reply targets downstream.
-        MessageThreadId:
-          isTopicSessionForThread &&
-          (ctx.rootId ?? (configReplyInThread ? ctx.messageId : undefined))
-            ? (ctx.rootId ?? ctx.messageId)
-            : undefined,
+        MessageThreadId: isTopicSessionForThread
+          ? (ctx.rootId ?? (configReplyInThread ? ctx.messageId : undefined))
+          : undefined,
         Timestamp: messageCreateTimeMs,
         WasMentioned: wasMentioned,
         CommandAuthorized: commandAuthorized,

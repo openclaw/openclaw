@@ -2154,7 +2154,7 @@ describe("handleFeishuMessage command authorization", () => {
     const event: FeishuMessageEvent = {
       sender: { sender_id: { open_id: "ou-topic-init" } },
       message: {
-        message_id: "msg-new-topic-root",
+        message_id: "msg-new-topic-thread-id",
         chat_id: "oc-group",
         chat_type: "group",
         message_type: "text",
@@ -2166,7 +2166,7 @@ describe("handleFeishuMessage command authorization", () => {
 
     expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
       expect.objectContaining({
-        MessageThreadId: "msg-new-topic-root",
+        MessageThreadId: "msg-new-topic-thread-id",
       }),
     );
   });

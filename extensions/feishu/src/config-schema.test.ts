@@ -205,9 +205,13 @@ describe("FeishuConfigSchema cardHeader", () => {
     expect(result.cardHeader).toBe("disabled");
   });
 
-  it("accepts cardHeader in group config", () => {
-    const result = FeishuGroupSchema.parse({ cardHeader: "disabled" });
-    expect(result.cardHeader).toBe("disabled");
+  it("rejects cardHeader in group config", () => {
+    const result = FeishuConfigSchema.safeParse({
+      groups: {
+        oc_group: { cardHeader: "disabled" },
+      },
+    });
+    expect(result.success).toBe(false);
   });
 
   it("accepts cardHeader in account config", () => {
@@ -226,9 +230,13 @@ describe("FeishuConfigSchema cardFooter", () => {
     expect(result.cardFooter).toBe("disabled");
   });
 
-  it("accepts cardFooter in group config", () => {
-    const result = FeishuGroupSchema.parse({ cardFooter: "disabled" });
-    expect(result.cardFooter).toBe("disabled");
+  it("rejects cardFooter in group config", () => {
+    const result = FeishuConfigSchema.safeParse({
+      groups: {
+        oc_group: { cardFooter: "disabled" },
+      },
+    });
+    expect(result.success).toBe(false);
   });
 
   it("accepts cardFooter in account config", () => {

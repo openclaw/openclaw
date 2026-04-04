@@ -185,6 +185,8 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
       accountId: "main",
     });
 
+    // Comment-thread targets bypass IM card rendering entirely and are covered
+    // below, so this assertion only needs to lock in the structured-card path.
     expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
       expect.not.objectContaining({
         header: expect.anything(),
