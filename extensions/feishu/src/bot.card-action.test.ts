@@ -195,6 +195,9 @@ describe("Feishu Card Action Handler", () => {
         to: "chat:chat1",
         accountId: "main",
         card: expect.objectContaining({
+          config: expect.objectContaining({
+            width_mode: "fill",
+          }),
           header: expect.objectContaining({
             title: expect.objectContaining({ content: "Confirm action" }),
           }),
@@ -220,6 +223,21 @@ describe("Feishu Card Action Handler", () => {
         }),
       }),
     );
+    const firstSendArg = (sendCardFeishuMock.mock.calls as unknown[][]).at(0)?.[0] as
+      | {
+          card?: {
+            config?: {
+              width_mode?: string;
+              wide_screen_mode?: boolean;
+              enable_forward?: boolean;
+            };
+          };
+        }
+      | undefined;
+    const sentCard = firstSendArg?.card;
+    expect(sentCard).toBeDefined();
+    expect(sentCard?.config?.wide_screen_mode).toBeUndefined();
+    expect(sentCard?.config?.enable_forward).toBeUndefined();
     expect(handleFeishuMessage).not.toHaveBeenCalled();
   });
 
