@@ -936,11 +936,14 @@ Important boundary note:
 **Trust assumption:** tokenless Serve auth assumes the gateway host is trusted.
 Do not treat this as protection against hostile same-host processes. If untrusted
 local code may run on the gateway host, disable `gateway.auth.allowTailscale`
-and require token/password auth.
+and require explicit shared-secret auth with `gateway.auth.mode: "token"` or
+`"password"`.
 
 **Security rule:** do not forward these headers from your own reverse proxy. If
 you terminate TLS or proxy in front of the gateway, disable
-`gateway.auth.allowTailscale` and use token/password auth (or [Trusted Proxy Auth](/gateway/trusted-proxy-auth)) instead.
+`gateway.auth.allowTailscale` and use shared-secret auth (`gateway.auth.mode:
+"token"` or `"password"`) or [Trusted Proxy Auth](/gateway/trusted-proxy-auth)
+instead.
 
 Trusted proxies:
 

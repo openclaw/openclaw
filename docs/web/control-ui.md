@@ -141,8 +141,9 @@ By default, Control UI/WebSocket Serve requests can authenticate via Tailscale i
 verifies the identity by resolving the `x-forwarded-for` address with
 `tailscale whois` and matching it to the header, and only accepts these when the
 request hits loopback with Tailscale’s `x-forwarded-*` headers. Set
-`gateway.auth.allowTailscale: false` (or force `gateway.auth.mode: "password"`)
-if you want to require a token/password even for Serve traffic.
+`gateway.auth.allowTailscale: false` if you want to require explicit shared-secret
+credentials even for Serve traffic. Then use `gateway.auth.mode: "token"` or
+`"password"`.
 Tokenless Serve auth assumes the gateway host is trusted. If untrusted local
 code may run on that host, require token/password auth.
 
