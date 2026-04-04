@@ -337,6 +337,11 @@ The same rule applies to other generated bundled-helper families such as:
 surface `DEFAULT_COPILOT_API_BASE_URL`,
 `deriveCopilotApiBaseUrlFromToken`, and `resolveCopilotApiToken`.
 
+`plugin-sdk/whatsapp-surface` currently exposes `DEFAULT_WEB_MEDIA_BYTES`,
+WhatsApp auth/account helpers, directory-config helpers, group-policy helpers,
+outbound-target resolution, and the narrow `WebChannelStatus` /
+`WebInboundMessage` / `WebListenerCloseReason` / `WebMonitorTuning` types.
+
 For Qwen specifically, prefer the canonical `plugin-sdk/qwen` and
 `plugin-sdk/qwen-definitions` seams. `plugin-sdk/modelstudio*` remains
 exported as a compatibility alias for older plugin code.

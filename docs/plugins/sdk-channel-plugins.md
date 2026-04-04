@@ -493,6 +493,14 @@ Write colocated tests in `src/channel.test.ts`:
   </Card>
 </CardGroup>
 
+<Note>
+Reserved bundled-helper seams such as `plugin-sdk/whatsapp-surface` still
+exist for bundled-plugin maintenance and compatibility. They are not the
+recommended pattern for new channel plugins; prefer the generic channel/setup/
+reply/runtime subpaths from the common SDK surface unless you are maintaining
+that bundled plugin family directly.
+</Note>
+
 ## Next steps
 
 - [Provider Plugins](/plugins/sdk-provider-plugins) — if your plugin also provides models
