@@ -1227,6 +1227,7 @@
                 "pages": [
                   "providers/anthropic",
                   "providers/bedrock",
+                  "providers/chutes",
                   "providers/claude-max-api-proxy",
                   "providers/cloudflare-ai-gateway",
                   "providers/deepgram",

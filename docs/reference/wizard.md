@@ -35,8 +35,9 @@ For a high-level overview, see [Onboarding (CLI)](/start/wizard).
     - **Anthropic setup-token**: still supported as a manual auth flow with `openclaw models auth setup-token --provider anthropic` or `openclaw models auth paste-token --provider anthropic`, but no longer shown in the interactive assistant picker.
     - **OpenAI Code (Codex) subscription (Codex CLI)**: if `~/.codex/auth.json` exists, onboarding can reuse it. Reused Codex CLI credentials stay managed by Codex CLI; OpenClaw re-reads that source on expiry instead of rotating the copied refresh token itself.
     - **OpenAI Code (Codex) subscription (OAuth)**: browser flow; paste the `code#state`.
-      - Sets `agents.defaults.model` to `openai-codex/gpt-5.2` when model is unset or `openai/*`.
+      - Sets `agents.defaults.model` to `openai-codex/gpt-5.4` when model is unset or `openai/*`.
     - **OpenAI API key**: uses `OPENAI_API_KEY` if present or prompts for a key, then stores it in auth profiles.
+      - Sets `agents.defaults.model` to `openai/gpt-5.4` when model is unset, `openai/*`, or `openai-codex/*`.
     - **xAI (Grok) API key**: prompts for `XAI_API_KEY` and configures xAI as a model provider.
     - **OpenCode**: prompts for `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`, get it at https://opencode.ai/auth) and lets you pick the Zen or Go catalog.
     - **Ollama**: prompts for the Ollama base URL, offers **Cloud + Local** or **Local** mode, discovers available models, and auto-pulls the selected local model when needed.
@@ -178,7 +179,7 @@ Use this reference page for flag semantics and step ordering.
 ```bash
 openclaw agents add work \
   --workspace ~/.openclaw/workspace-work \
-  --model openai/gpt-5.2 \
+  --model openai/gpt-5.4 \
   --bind whatsapp:biz \
   --non-interactive \
   --json

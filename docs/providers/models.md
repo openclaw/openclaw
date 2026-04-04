@@ -26,6 +26,7 @@ model as `provider/model`.
 
 - [Anthropic (API + Claude Code CLI)](/providers/anthropic)
 - [Amazon Bedrock](/providers/bedrock)
+- [Chutes](/providers/chutes)
 - [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
 - [GLM models](/providers/glm)
 - [MiniMax](/providers/minimax)
@@ -35,6 +36,7 @@ model as `provider/model`.
 - [OpenCode (Zen + Go)](/providers/opencode)
 - [OpenRouter](/providers/openrouter)
 - [Qianfan](/providers/qianfan)
+- [Qwen](/providers/qwen)
 - [StepFun](/providers/stepfun)
 - [Synthetic](/providers/synthetic)
 - [Vercel AI Gateway](/providers/vercel-ai-gateway)
