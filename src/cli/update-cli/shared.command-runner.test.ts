@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createGlobalCommandRunner, resolveGlobalManager } from "./shared.js";
 
 const runCommandWithTimeout = vi.hoisted(() => vi.fn());
@@ -30,6 +30,8 @@ vi.mock("../../utils.js", async () => {
 });
 
 describe("createGlobalCommandRunner", () => {
+  const originalBunInstall = process.env.BUN_INSTALL;
+
   beforeEach(() => {
     vi.clearAllMocks();
     runCommandWithTimeout.mockResolvedValue({
@@ -43,6 +45,15 @@ describe("createGlobalCommandRunner", () => {
     detectGlobalInstallManagerForRoot.mockResolvedValue(null);
     detectGlobalInstallManagerByPresence.mockResolvedValue("npm");
     pathExists.mockResolvedValue(false);
+    delete process.env.BUN_INSTALL;
+  });
+
+  afterEach(() => {
+    if (originalBunInstall == null) {
+      delete process.env.BUN_INSTALL;
+      return;
+    }
+    process.env.BUN_INSTALL = originalBunInstall;
   });
 
   it("forwards argv/options and maps exec result shape", async () => {
@@ -120,6 +131,24 @@ describe("createGlobalCommandRunner", () => {
     ).resolves.toBe("npm");
 
     expect(pathExists).toHaveBeenCalledWith("/global/npm/openclaw");
+    expect(detectGlobalInstallManagerByPresence).not.toHaveBeenCalled();
+  });
+
+  it("respects BUN_INSTALL when verifying a preferred bun install", async () => {
+    process.env.BUN_INSTALL = "/opt/bun";
+    pathExists.mockResolvedValueOnce(true);
+
+    await expect(
+      resolveGlobalManager({
+        root: "/opt/openclaw",
+        installKind: "package",
+        timeoutMs: 1200,
+        preferredManager: "bun",
+      }),
+    ).resolves.toBe("bun");
+
+    expect(pathExists).toHaveBeenCalledWith("/opt/bun/install/global/node_modules/openclaw");
+    expect(runCommandWithTimeout).not.toHaveBeenCalled();
     expect(detectGlobalInstallManagerByPresence).not.toHaveBeenCalled();
   });
 });

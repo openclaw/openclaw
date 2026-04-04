@@ -46,6 +46,25 @@ describe("resolveAnnounceOrigin telegram forum topics", () => {
     });
   });
 
+  it("preserves stored forum topic thread ids for tg-prefixed requester targets", () => {
+    expect(
+      resolveAnnounceOrigin(
+        {
+          lastChannel: "telegram",
+          lastTo: "telegram:-1001234567890:topic:99",
+          lastThreadId: 99,
+        },
+        {
+          to: "tg:-1001234567890",
+        },
+      ),
+    ).toEqual({
+      channel: "telegram",
+      to: "tg:-1001234567890",
+      threadId: 99,
+    });
+  });
+
   it("still strips stale thread ids when the stored telegram route points at a different chat", () => {
     expect(
       resolveAnnounceOrigin(
@@ -138,7 +157,9 @@ describe("queued announce delivery execution boundary", () => {
           sessionKey: "agent:main:main",
           origin: { channel: "telegram", to: "telegram:123" },
         }),
-      ).rejects.toThrow(/user-visible deferred display payload|summary-only payload requires summaryLine/);
+      ).rejects.toThrow(
+        /user-visible deferred display payload|summary-only payload requires summaryLine/,
+      );
     } finally {
       __testing.setDepsForTest();
     }
@@ -202,10 +223,11 @@ describe("direct announce outbound visibility guard", () => {
 
       expect(result.delivered).toBe(false);
       expect(result.path).toBe("direct");
-      expect(result.error).toMatch(/user-visible deferred display payload|Missing user-visible deferred display payload/);
+      expect(result.error).toMatch(
+        /user-visible deferred display payload|Missing user-visible deferred display payload/,
+      );
     } finally {
       __testing.setDepsForTest();
     }
   });
-
 });
