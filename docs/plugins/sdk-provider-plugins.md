@@ -266,11 +266,21 @@ API key auth, and dynamic model resolution.
 
     Available replay families today:
 
-    - `openai-compatible`
-    - `anthropic-by-model`
-    - `google-gemini`
-    - `passthrough-gemini`
-    - `hybrid-anthropic-openai`
+    | Family | What it wires in |
+    | --- | --- |
+    | `openai-compatible` | Shared OpenAI-style replay policy for OpenAI-compatible transports, including tool-call-id sanitation, assistant-first ordering fixes, and generic Gemini-turn validation where the transport needs it |
+    | `anthropic-by-model` | Claude-aware replay policy chosen by `modelId`, so Anthropic-message transports only get Claude-specific thinking-block cleanup when the resolved model is actually a Claude id |
+    | `google-gemini` | Native Gemini replay policy plus bootstrap replay sanitation and tagged reasoning-output mode |
+    | `passthrough-gemini` | Gemini thought-signature sanitation for Gemini models running through OpenAI-compatible proxy transports; does not enable native Gemini replay validation or bootstrap rewrites |
+    | `hybrid-anthropic-openai` | Hybrid policy for providers that mix Anthropic-message and OpenAI-compatible model surfaces in one plugin; optional Claude-only thinking-block dropping stays scoped to the Anthropic side |
+
+    Real bundled examples:
+
+    - `google` and `google-gemini-cli`: `google-gemini`
+    - `openrouter`, `kilocode`, `opencode`, and `opencode-go`: `passthrough-gemini`
+    - `anthropic-vertex`: `anthropic-by-model`
+    - `minimax`: `hybrid-anthropic-openai`
+    - `moonshot`, `ollama`, `xai`, and `zai`: `openai-compatible`
 
     <Tabs>
       <Tab title="Token exchange">

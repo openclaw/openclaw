@@ -739,15 +739,32 @@ api.registerProvider({
   still runs on core OpenAI transports but owns its transport/base URL
   normalization, OAuth refresh fallback policy, default transport choice,
   synthetic Codex catalog rows, and ChatGPT usage endpoint integration.
-- Google AI Studio and Gemini CLI OAuth use `resolveDynamicModel` and
-  `isModernModelRef` because they own Gemini 3.1 forward-compat fallback and
-  modern-model matching; Gemini CLI OAuth also uses `formatApiKey`,
-  `resolveUsageAuth`, and `fetchUsageSnapshot` for token formatting, token
-  parsing, and quota endpoint wiring.
+- Google AI Studio and Gemini CLI OAuth use `resolveDynamicModel`,
+  `buildReplayPolicy`, `sanitizeReplayHistory`,
+  `resolveReasoningOutputMode`, and `isModernModelRef` because the
+  `google-gemini` replay family owns Gemini 3.1 forward-compat fallback,
+  native Gemini replay validation, bootstrap replay sanitation, tagged
+  reasoning-output mode, and modern-model matching; Gemini CLI OAuth also uses
+  `formatApiKey`, `resolveUsageAuth`, and `fetchUsageSnapshot` for token
+  formatting, token parsing, and quota endpoint wiring.
+- Anthropic Vertex uses `buildReplayPolicy` through the
+  `anthropic-by-model` replay family so Claude-specific replay cleanup stays
+  scoped to Claude ids instead of every `anthropic-messages` transport.
 - Amazon Bedrock uses `buildReplayPolicy`, `matchesContextOverflowError`,
   `classifyFailoverReason`, and `resolveDefaultThinkingLevel` because it owns
   Bedrock-specific replay policy plus throttle/not-ready/context-overflow
-  error classification for Anthropic-on-Bedrock traffic.
+  error classification for Anthropic-on-Bedrock traffic; its replay policy
+  shares the same Claude-only `anthropic-by-model` guard.
+- OpenRouter, Kilocode, Opencode, and Opencode Go use `buildReplayPolicy`
+  through the `passthrough-gemini` replay family because they proxy Gemini
+  models through OpenAI-compatible transports and need Gemini
+  thought-signature sanitation without native Gemini replay validation or
+  bootstrap rewrites.
+- MiniMax uses `buildReplayPolicy` through the
+  `hybrid-anthropic-openai` replay family because one provider owns both
+  Anthropic-message and OpenAI-compatible semantics; it keeps Claude-only
+  thinking-block dropping on the Anthropic side while overriding reasoning
+  output mode back to native.
 - Moonshot uses `catalog` plus `wrapStreamFn` because it still uses the shared
   OpenAI transport but needs provider-owned thinking payload normalization.
 - Kilocode uses `catalog`, `capabilities`, `wrapStreamFn`, and
