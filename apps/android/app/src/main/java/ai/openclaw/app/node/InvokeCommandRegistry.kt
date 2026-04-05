@@ -27,6 +27,7 @@ data class NodeRuntimeFlags(
   val motionActivityAvailable: Boolean,
   val motionPedometerAvailable: Boolean,
   val debugBuild: Boolean,
+  val httpEnabled: Boolean,
 )
 
 enum class InvokeCommandAvailability {
@@ -50,6 +51,7 @@ enum class NodeCapabilityAvailability {
   CallLogAvailable,
   VoiceWakeEnabled,
   MotionAvailable,
+  HttpEnabled,
 }
 
 data class NodeCapabilitySpec(
@@ -92,12 +94,14 @@ object InvokeCommandRegistry {
       NodeCapabilitySpec(
         name = OpenClawCapability.Motion.rawValue,
         availability = NodeCapabilityAvailability.MotionAvailable,
+  HttpEnabled,
+          NodeCapabilityAvailability.HttpEnabled,
       ),
       NodeCapabilitySpec(
         name = OpenClawCapability.CallLog.rawValue,
         availability = NodeCapabilityAvailability.CallLogAvailable,
       ),
-      NodeCapabilitySpec(name = OpenClawCapability.Http.rawValue),
+      NodeCapabilitySpec(name = OpenClawCapability.Http.rawValue, availability = NodeCapabilityAvailability.HttpEnabled),
     )
 
   val all: List<InvokeCommandSpec> =
@@ -211,6 +215,7 @@ object InvokeCommandRegistry {
       ),
       InvokeCommandSpec(
         name = OpenClawHttpCommand.Request.rawValue,
+        availability = InvokeCommandAvailability.HttpEnabled,
       ),
       InvokeCommandSpec(
         name = "debug.logs",
@@ -255,6 +260,7 @@ object InvokeCommandRegistry {
           InvokeCommandAvailability.CallLogAvailable -> flags.callLogAvailable
           InvokeCommandAvailability.MotionActivityAvailable -> flags.motionActivityAvailable
           InvokeCommandAvailability.MotionPedometerAvailable -> flags.motionPedometerAvailable
+          InvokeCommandAvailability.HttpEnabled -> flags.httpEnabled
           InvokeCommandAvailability.DebugBuild -> flags.debugBuild
         }
       }

@@ -100,6 +100,7 @@ class ConnectionManager(
       motionActivityAvailable = motionActivityAvailable(),
       motionPedometerAvailable = motionPedometerAvailable(),
       debugBuild = BuildConfig.DEBUG,
+      httpEnabled = prefs.httpAccessEnabled.value,
     )
 
   fun buildInvokeCommands(): List<String> = InvokeCommandRegistry.advertisedCommands(runtimeFlags())

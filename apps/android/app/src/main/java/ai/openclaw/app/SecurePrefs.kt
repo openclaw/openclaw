@@ -37,6 +37,7 @@ class SecurePrefs(
     private const val notificationsForwardingMaxEventsPerMinuteKey =
       "notifications.forwarding.maxEventsPerMinute"
     private const val notificationsForwardingSessionKeyKey = "notifications.forwarding.sessionKey"
+  private const val httpAccessEnabledKey = "http.access.enabled"
   }
 
   private val appContext = context.applicationContext
@@ -166,6 +167,9 @@ class SecurePrefs(
   val talkEnabled: StateFlow<Boolean> = _talkEnabled
 
   private val _speakerEnabled = MutableStateFlow(plainPrefs.getBoolean("voice.speakerEnabled", true))
+
+  private val _httpAccessEnabled = MutableStateFlow(plainPrefs.getBoolean(httpAccessEnabledKey, false))
+  val httpAccessEnabled: StateFlow<Boolean> = _httpAccessEnabled
   val speakerEnabled: StateFlow<Boolean> = _speakerEnabled
 
   fun setLastDiscoveredStableId(value: String) {
@@ -486,6 +490,11 @@ class SecurePrefs(
   fun setSpeakerEnabled(value: Boolean) {
     plainPrefs.edit { putBoolean("voice.speakerEnabled", value) }
     _speakerEnabled.value = value
+  }
+
+  fun setHttpAccessEnabled(value: Boolean) {
+    plainPrefs.edit { putBoolean(httpAccessEnabledKey, value) }
+    _httpAccessEnabled.value = value
   }
 
   private fun loadNotificationForwardingPackages(): Set<String> {

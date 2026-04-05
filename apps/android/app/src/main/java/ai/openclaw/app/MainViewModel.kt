@@ -102,6 +102,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   val canvasDebugStatusEnabled: StateFlow<Boolean> = prefs.canvasDebugStatusEnabled
   val speakerEnabled: StateFlow<Boolean> = prefs.speakerEnabled
   val micEnabled: StateFlow<Boolean> = prefs.talkEnabled
+  val httpAccessEnabled: StateFlow<Boolean> = prefs.httpAccessEnabled
 
   val micCooldown: StateFlow<Boolean> = runtimeState(initial = false) { it.micCooldown }
   val micStatusText: StateFlow<String> = runtimeState(initial = "Mic off") { it.micStatusText }
