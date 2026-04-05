@@ -18,6 +18,7 @@ import {
 import { resolveSessionParentSessionKey } from "../../channels/plugins/session-conversation.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { logDebug } from "../../logger.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import type { ThinkLevel } from "./directives.js";
 
@@ -308,7 +309,7 @@ export async function createModelSelectionState(params: {
       return;
     }
     const suffix = extra ? ` ${extra}` : "";
-    console.log(
+    logDebug(
       `[model-selection] session=${params.sessionKey ?? "(no-session)"} stage=${stage} elapsedMs=${Date.now() - startMs}${suffix}`,
     );
   };
