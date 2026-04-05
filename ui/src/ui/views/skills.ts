@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { t } from "../../i18n/index.ts";
 import { ref } from "lit/directives/ref.js";
 import type {
   ClawHubSearchResult,
@@ -129,15 +130,15 @@ export function renderSkills(props: SkillsProps) {
     <section class="card">
       <div class="row" style="justify-content: space-between;">
         <div>
-          <div class="card-title">Skills</div>
-          <div class="card-sub">Installed skills and their status.</div>
+          <div class="card-title">${t("skillsPage.title")}</div>
+          <div class="card-sub">${t("skillsPage.subtitle")}</div>
         </div>
         <button
           class="btn"
           ?disabled=${props.loading || !props.connected}
           @click=${props.onRefresh}
         >
-          ${props.loading ? "Loading\u2026" : "Refresh"}
+          ${props.loading ? t("skillsPage.loading") : t("common.refresh")}
         </button>
       </div>
 
@@ -162,19 +163,19 @@ export function renderSkills(props: SkillsProps) {
           <input
             .value=${props.filter}
             @input=${(e: Event) => props.onFilterChange((e.target as HTMLInputElement).value)}
-            placeholder="Filter installed skills"
+            placeholder=${t("skillsPage.searchPlaceholder")}
             autocomplete="off"
             name="skills-filter"
           />
         </label>
-        <div class="muted">${filtered.length} shown</div>
+        <div class="muted">${t("skillsPage.shownCount", { count: String(filtered.length) })}</div>
       </div>
 
       <div style="margin-top: 16px; border-top: 1px solid var(--border); padding-top: 16px;">
         <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
-          <div style="font-weight: 600;">ClawHub</div>
+          <div style="font-weight: 600;">${t("skillsPage.clawHubTitle")}</div>
           <div class="muted" style="font-size: 13px;">
-            Search and install skills from the registry
+            ${t("skillsPage.clawHubSubtitle")}
           </div>
         </div>
         <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
@@ -183,12 +184,12 @@ export function renderSkills(props: SkillsProps) {
               .value=${props.clawhubQuery}
               @input=${(e: Event) =>
                 props.onClawHubQueryChange((e.target as HTMLInputElement).value)}
-              placeholder="Search ClawHub skills…"
+              placeholder=${t("skillsPage.clawHubSearchPlaceholder")}
               autocomplete="off"
               name="clawhub-search"
             />
           </label>
-          ${props.clawhubSearchLoading ? html`<span class="muted">Searching…</span>` : nothing}
+          ${props.clawhubSearchLoading ? html`<span class="muted">${t("skillsPage.clawHubSearching")}</span>` : nothing}
         </div>
         ${props.clawhubSearchError
           ? html`<div class="callout danger" style="margin-top: 8px;">
@@ -213,8 +214,8 @@ export function renderSkills(props: SkillsProps) {
         ? html`
             <div class="muted" style="margin-top: 16px">
               ${!props.connected && !props.report
-                ? "Not connected to gateway."
-                : "No skills found."}
+                ? t("skillsPage.notConnected")
+                : t("skillsPage.noSkillsFound")}
             </div>
           `
         : html`
@@ -247,7 +248,7 @@ function renderClawHubResults(props: SkillsProps) {
     return nothing;
   }
   if (results.length === 0) {
-    return html`<div class="muted" style="margin-top: 8px;">No skills found on ClawHub.</div>`;
+    return html`<div class="muted" style="margin-top: 8px;">${t("skillsPage.noClawHubSkillsFound")}</div>`;
   }
   return html`
     <div class="list" style="margin-top: 8px;">
@@ -273,7 +274,7 @@ function renderClawHubResults(props: SkillsProps) {
                   props.onClawHubInstall(r.slug);
                 }}
               >
-                ${props.clawhubInstallSlug === r.slug ? "Installing\u2026" : "Install"}
+                ${props.clawhubInstallSlug === r.slug ? t("skillsPage.installing") : t("skillsPage.install")}
               </button>
             </div>
           </div>
