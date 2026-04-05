@@ -25,6 +25,7 @@ import {
 } from "../poll-types.js";
 import type { LocationMessageEventContent, MatrixClient } from "../sdk.js";
 import {
+  editMessageMatrix,
   reactMatrixMessage,
   sendMessageMatrix,
   sendReadReceiptMatrix,
@@ -74,6 +75,14 @@ const PAIRING_REPLY_COOLDOWN_MS = 5 * 60_000;
 const MAX_TRACKED_PAIRING_REPLY_SENDERS = 512;
 const MAX_TRACKED_SHARED_DM_CONTEXT_NOTICES = 512;
 type MatrixAllowBotsMode = "off" | "mentions" | "all";
+
+async function redactMatrixDraftEvent(
+  client: MatrixClient,
+  roomId: string,
+  draftEventId: string,
+): Promise<void> {
+  await client.redactEvent(roomId, draftEventId).catch(() => {});
+}
 
 export type MatrixMonitorHandlerParams = {
   client: MatrixClient;
@@ -1306,6 +1315,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       let latestDraftFullText = "";
       const pendingDraftBoundaries: PendingDraftBoundary[] = [];
       const latestQueuedDraftBoundaryOffsets = new Map<number, number>();
+      let currentDraftReplyToId = draftReplyToId;
+      // Set after the first final payload consumes the draft event so
+      // subsequent finals go through normal delivery.
+      let draftConsumed = false;
 
       const getDisplayableDraftText = () => {
         const nextDraftBoundaryOffset = pendingDraftBoundaries.find(
@@ -1372,28 +1385,125 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, _route.agentId),
           deliver: async (payload: ReplyPayload, info: { kind: string }) => {
             if (draftStream && info.kind !== "tool" && !payload.isCompactionNotice) {
+              const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+
               await draftStream.stop();
               const draftEventId = draftStream.eventId();
-              await deliverMatrixReplies({
-                cfg,
-                replies: [payload],
-                roomId,
-                client,
-                runtime,
-                textLimit,
-                replyToMode,
-                threadId: threadTarget,
-                accountId: _route.accountId,
-                mediaLocalRoots,
-                tableMode,
-              });
-              if (draftEventId) {
-                await client.redactEvent(roomId, draftEventId).catch(() => {});
+
+              if (draftConsumed) {
+                await deliverMatrixReplies({
+                  cfg,
+                  replies: [payload],
+                  roomId,
+                  client,
+                  runtime,
+                  textLimit,
+                  replyToMode,
+                  threadId: threadTarget,
+                  accountId: _route.accountId,
+                  mediaLocalRoots,
+                  tableMode,
+                });
+                return;
+              }
+
+              const payloadReplyToId = payload.replyToId?.trim() || undefined;
+              const payloadReplyMismatch =
+                replyToMode !== "off" &&
+                !threadTarget &&
+                payloadReplyToId !== currentDraftReplyToId;
+              const mustDeliverFinalNormally = draftStream.mustDeliverFinalNormally();
+
+              if (
+                draftEventId &&
+                payload.text &&
+                !hasMedia &&
+                !payloadReplyMismatch &&
+                !mustDeliverFinalNormally
+              ) {
+                if (payload.text !== draftStream.lastSentText()) {
+                  try {
+                    await editMessageMatrix(roomId, draftEventId, payload.text, {
+                      client,
+                      cfg,
+                      threadId: threadTarget,
+                      accountId: _route.accountId,
+                    });
+                  } catch {
+                    await redactMatrixDraftEvent(client, roomId, draftEventId);
+                    await deliverMatrixReplies({
+                      cfg,
+                      replies: [payload],
+                      roomId,
+                      client,
+                      runtime,
+                      textLimit,
+                      replyToMode,
+                      threadId: threadTarget,
+                      accountId: _route.accountId,
+                      mediaLocalRoots,
+                      tableMode,
+                    });
+                  }
+                }
+                draftConsumed = true;
+              } else if (draftEventId && hasMedia && !payloadReplyMismatch) {
+                let textEditOk = !mustDeliverFinalNormally;
+                if (textEditOk && payload.text && payload.text !== draftStream.lastSentText()) {
+                  textEditOk = await editMessageMatrix(roomId, draftEventId, payload.text, {
+                    client,
+                    cfg,
+                    threadId: threadTarget,
+                    accountId: _route.accountId,
+                  }).then(
+                    () => true,
+                    () => false,
+                  );
+                }
+                const reusesDraftAsFinalText = Boolean(payload.text?.trim()) && textEditOk;
+                if (!reusesDraftAsFinalText) {
+                  await redactMatrixDraftEvent(client, roomId, draftEventId);
+                }
+                await deliverMatrixReplies({
+                  cfg,
+                  replies: [
+                    { ...payload, text: reusesDraftAsFinalText ? undefined : payload.text },
+                  ],
+                  roomId,
+                  client,
+                  runtime,
+                  textLimit,
+                  replyToMode,
+                  threadId: threadTarget,
+                  accountId: _route.accountId,
+                  mediaLocalRoots,
+                  tableMode,
+                });
+                draftConsumed = true;
+              } else {
+                if (draftEventId && (payloadReplyMismatch || mustDeliverFinalNormally)) {
+                  await redactMatrixDraftEvent(client, roomId, draftEventId);
+                }
+                await deliverMatrixReplies({
+                  cfg,
+                  replies: [payload],
+                  roomId,
+                  client,
+                  runtime,
+                  textLimit,
+                  replyToMode,
+                  threadId: threadTarget,
+                  accountId: _route.accountId,
+                  mediaLocalRoots,
+                  tableMode,
+                });
               }
 
               if (info.kind === "block") {
+                draftConsumed = false;
                 advanceDraftBlockBoundary({ fallbackToLatestEnd: true });
                 draftStream.reset();
+                currentDraftReplyToId = replyToMode === "all" ? draftReplyToId : undefined;
                 updateDraftFromLatestFullText();
 
                 // Re-assert typing so the user still sees the indicator while

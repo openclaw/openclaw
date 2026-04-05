@@ -20,6 +20,8 @@ export type MatrixDraftStream = {
   eventId: () => string | undefined;
   /** The last text successfully sent or edited. */
   lastSentText: () => string;
+  /** True when preview streaming must fall back to normal final delivery. */
+  mustDeliverFinalNormally: () => boolean;
 };
 
 export function createMatrixDraftStream(params: {
@@ -38,6 +40,8 @@ export function createMatrixDraftStream(params: {
   let currentEventId: string | undefined;
   let lastSentText = "";
   let stopped = false;
+  let sendFailed = false;
+  let finalizeInPlaceBlocked = false;
   let replyToId = params.replyToId;
 
   const sendOrEdit = async (text: string): Promise<boolean> => {
@@ -47,10 +51,17 @@ export function createMatrixDraftStream(params: {
     }
     const preparedText = prepareMatrixSingleText(trimmed, { cfg, accountId });
     if (!preparedText.fitsInSingleEvent) {
+      finalizeInPlaceBlocked = true;
+      if (!currentEventId) {
+        sendFailed = true;
+      }
       stopped = true;
       log?.(
         `draft-stream: preview exceeded single-event limit (${preparedText.convertedText.length} > ${preparedText.singleEventLimit})`,
       );
+      return false;
+    }
+    if (sendFailed) {
       return false;
     }
     if (preparedText.trimmedText === lastSentText) {
@@ -84,6 +95,14 @@ export function createMatrixDraftStream(params: {
       return true;
     } catch (err) {
       log?.(`draft-stream: send/edit failed: ${String(err)}`);
+      const isPreviewLimitError =
+        err instanceof Error && err.message.startsWith("Matrix single-message text exceeds limit");
+      if (isPreviewLimitError) {
+        finalizeInPlaceBlocked = true;
+      }
+      if (!currentEventId) {
+        sendFailed = true;
+      }
       stopped = true;
       return false;
     }
@@ -111,6 +130,8 @@ export function createMatrixDraftStream(params: {
     currentEventId = undefined;
     lastSentText = "";
     stopped = false;
+    sendFailed = false;
+    finalizeInPlaceBlocked = false;
     loop.resetPending();
     loop.resetThrottleWindow();
   };
@@ -127,5 +148,6 @@ export function createMatrixDraftStream(params: {
     reset,
     eventId: () => currentEventId,
     lastSentText: () => lastSentText,
+    mustDeliverFinalNormally: () => sendFailed || finalizeInPlaceBlocked,
   };
 }
