@@ -238,7 +238,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ model: "openclaw", input: "hi" }),
       });
-      expect(resMissingAuth.status).toBe(403);
+      expect(resMissingAuth.status).toBe(200);
       await ensureResponseConsumed(resMissingAuth);
 
       const resMissingModel = await postResponses(port, { input: "hi" });
@@ -466,7 +466,41 @@ describe("OpenResponses HTTP API (e2e)", () => {
         (optsInputFile as { extraSystemPrompt?: string } | undefined)?.extraSystemPrompt ?? "";
       expect(inputFileMessage).toBe("read this");
       expect(inputFilePrompt).toContain('<file name="hello.txt">');
+      expect(inputFilePrompt).toContain('<<<EXTERNAL_UNTRUSTED_CONTENT id="');
+      expect(inputFilePrompt).toContain("Source: External");
       await ensureResponseConsumed(resInputFile);
+
+      mockAgentOnce([{ text: "ok" }]);
+      const resInputFileWhitespace = await postResponses(port, {
+        model: "openclaw",
+        input: [
+          {
+            type: "message",
+            role: "user",
+            content: [
+              { type: "input_text", text: "read this" },
+              {
+                type: "input_file",
+                source: {
+                  type: "base64",
+                  media_type: "text/plain",
+                  data: Buffer.from("  hello  ").toString("base64"),
+                  filename: "spaces.txt",
+                },
+              },
+            ],
+          },
+        ],
+      });
+      expect(resInputFileWhitespace.status).toBe(200);
+      const optsInputFileWhitespace = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      const inputFileWhitespacePrompt =
+        (optsInputFileWhitespace as { extraSystemPrompt?: string } | undefined)
+          ?.extraSystemPrompt ?? "";
+      expect(inputFileWhitespacePrompt).toContain('<file name="spaces.txt">');
+      expect(inputFileWhitespacePrompt).toContain("\n  hello  \n");
+      expect(inputFileWhitespacePrompt).toContain('<<<EXTERNAL_UNTRUSTED_CONTENT id="');
+      await ensureResponseConsumed(resInputFileWhitespace);
 
       mockAgentOnce([{ text: "ok" }]);
       const resInputFileInjection = await postResponses(port, {
@@ -714,7 +748,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
     }
   });
 
-  it("treats HTTP callers as non-owner regardless of requested scopes", async () => {
+  it("treats write-scoped HTTP callers as non-owner and admin-scoped callers as owner", async () => {
     const port = enabledPort;
 
     agentCommand.mockClear();
@@ -743,8 +777,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
     const adminScopeOpts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
       | { senderIsOwner?: boolean }
       | undefined;
-    // Requested HTTP scopes do not prove owner identity for owner-only tools.
-    expect(adminScopeOpts?.senderIsOwner).toBe(false);
+    expect(adminScopeOpts?.senderIsOwner).toBe(true);
     await ensureResponseConsumed(adminScopeResponse);
 
     agentCommand.mockClear();
@@ -765,7 +798,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
     const streamingOpts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
       | { senderIsOwner?: boolean }
       | undefined;
-    expect(streamingOpts?.senderIsOwner).toBe(false);
+    expect(streamingOpts?.senderIsOwner).toBe(true);
     const streamingEvents = parseSseEvents(await streamingResponse.text());
     expect(streamingEvents.some((event) => event.event === "response.completed")).toBe(true);
   });

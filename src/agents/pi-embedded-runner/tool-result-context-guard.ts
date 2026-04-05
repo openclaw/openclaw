@@ -108,7 +108,10 @@ function compactExistingToolResultsInPlace(params: {
   }
 
   let reduced = 0;
-  for (let i = 0; i < messages.length; i++) {
+  // Compact newest-first so more of the cached prefix survives: rewriting
+  // messages[k] for small k invalidates the provider prompt cache from that point onward.
+  // Tradeoff: the model loses recent tool output instead of old.
+  for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
     if (!isToolResultMessage(msg)) {
       continue;
@@ -179,7 +182,8 @@ function enforceToolResultContextBudgetInPlace(params: {
     return;
   }
 
-  // Compact oldest tool outputs first until the context is back under budget.
+  // Compact newest tool outputs first so more of the cached prefix survives;
+  // stop once the context is back under budget.
   compactExistingToolResultsInPlace({
     messages,
     charsNeeded: currentChars - contextBudgetChars,

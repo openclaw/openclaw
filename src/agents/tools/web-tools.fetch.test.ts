@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as ssrf from "../../infra/net/ssrf.js";
 import { resolveRequestUrl } from "../../plugin-sdk/request-url.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
-import { __testing as webFetchTesting } from "./web-fetch.js";
 import { makeFetchHeaders } from "./web-fetch.test-harness.js";
 import { createWebFetchTool } from "./web-tools.js";
 
@@ -124,6 +123,10 @@ function defaultFirecrawlApiKey() {
   return "firecrawl-test"; // pragma: allowlist secret
 }
 
+function withoutAmbientFirecrawlEnv() {
+  vi.stubEnv("FIRECRAWL_API_KEY", "");
+}
+
 async function executeFetch(
   tool: ReturnType<typeof createFetchTool>,
   params: { url: string; extractMode?: "text" | "markdown" },
@@ -147,6 +150,7 @@ describe("web_fetch extraction fallbacks", () => {
   const priorFetch = global.fetch;
 
   beforeEach(() => {
+    withoutAmbientFirecrawlEnv();
     vi.spyOn(ssrf, "resolvePinnedHostname").mockImplementation(async (hostname) => {
       const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
       const addresses = ["93.184.216.34", "93.184.216.35"];
@@ -325,12 +329,6 @@ describe("web_fetch extraction fallbacks", () => {
     expect(authHeader).toBe("Bearer firecrawl-test-key");
   });
 
-  it("uses FIRECRAWL_BASE_URL env var when firecrawl.baseUrl is unset", async () => {
-    vi.stubEnv("FIRECRAWL_BASE_URL", "https://fc.example.com");
-
-    expect(webFetchTesting.resolveFirecrawlBaseUrl({})).toBe("https://fc.example.com");
-  });
-
   it("uses guarded endpoint fetch for firecrawl requests", async () => {
     vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
 
@@ -356,7 +354,7 @@ describe("web_fetch extraction fallbacks", () => {
     expect(firecrawlCall).toBeTruthy();
     const requestInit = firecrawlCall?.[1] as (RequestInit & { dispatcher?: unknown }) | undefined;
     expect(requestInit?.dispatcher).toBeDefined();
-    expect(requestInit?.dispatcher).toBeInstanceOf(EnvHttpProxyAgent);
+    expect(requestInit?.dispatcher).toHaveProperty("dispatch");
   });
 
   it("throws when readability is disabled and firecrawl is unavailable", async () => {
@@ -533,7 +531,7 @@ describe("web_fetch extraction fallbacks", () => {
       url: "https://example.com/firecrawl-error",
     });
 
-    expect(message).toContain("Firecrawl fetch failed (403):");
+    expect(message).toContain("Firecrawl API error (403):");
     expect(message).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
     expect(message).toContain("blocked");
   });

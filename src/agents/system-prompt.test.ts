@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { typedCases } from "../test-utils/typed-cases.js";
 import { buildSubagentSystemPrompt } from "./subagent-announce.js";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 import { buildAgentSystemPrompt, buildRuntimeLine } from "./system-prompt.js";
 
 describe("buildAgentSystemPrompt", () => {
@@ -101,7 +102,7 @@ describe("buildAgentSystemPrompt", () => {
       skillsPrompt:
         "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>",
       heartbeatPrompt: "ping",
-      toolNames: ["message", "memory_search"],
+      toolNames: ["message", "memory_search", "cron"],
       docsPath: "/tmp/openclaw/docs",
       extraSystemPrompt: "Subagent details",
       ttsHint: "Voice (TTS) is enabled.",
@@ -119,7 +120,16 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("## Heartbeats");
     expect(prompt).toContain("## Safety");
     expect(prompt).toContain(
-      "For long waits, avoid rapid poll loops: use exec with enough yieldMs or process(action=poll, timeout=<ms>).",
+      'For follow-up at a future time (for example "check back in 10 minutes", reminders, run-later work, or recurring tasks), use cron instead of exec sleep, yieldMs delays, or process polling.',
+    );
+    expect(prompt).toContain(
+      "Use exec/process only for commands that start now and continue running in the background.",
+    );
+    expect(prompt).toContain(
+      "For long-running work that starts now, start it once and rely on automatic completion wake when it is enabled and the command emits output or fails; otherwise use process to confirm completion, and use it for logs, status, input, or intervention.",
+    );
+    expect(prompt).toContain(
+      "Do not emulate scheduling with sleep loops, timeout loops, or repeated polling.",
     );
     expect(prompt).toContain("You have no independent goals");
     expect(prompt).toContain("Prioritize safety and human oversight");
@@ -174,11 +184,11 @@ describe("buildAgentSystemPrompt", () => {
   it("tells native approval channels not to duplicate plain chat /approve instructions", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
-      runtimeInfo: { channel: "telegram" },
+      runtimeInfo: { channel: "telegram", capabilities: ["inlineButtons"] },
     });
 
     expect(prompt).toContain(
-      "When exec returns approval-pending on Discord, Slack, Telegram, or WebChat, rely on the native approval card/buttons when they appear",
+      "When exec returns approval-pending on this channel, rely on native approval card/buttons when they appear and do not also send plain chat /approve instructions. Only include the concrete /approve command if the tool result says chat approvals are unavailable or only manual approval is possible.",
     );
     expect(prompt).toContain(
       "Only include the concrete /approve command if the tool result says chat approvals are unavailable or only manual approval is possible.",
@@ -195,7 +205,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain(
-      "When exec returns approval-pending on Discord, Slack, Telegram, or WebChat, rely on the native approval card/buttons when they appear",
+      "When exec returns approval-pending on this channel, rely on native approval card/buttons when they appear",
     );
     expect(prompt).toContain(
       "Only include the concrete /approve command if the tool result says chat approvals are unavailable or only manual approval is possible.",
@@ -287,7 +297,13 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain(
-      "For long waits, avoid rapid poll loops: use exec with enough yieldMs or process(action=poll, timeout=<ms>).",
+      'For follow-up at a future time (for example "check back in 10 minutes", reminders, run-later work, or recurring tasks), use cron instead of exec sleep, yieldMs delays, or process polling.',
+    );
+    expect(prompt).toContain(
+      "Use exec/process only for commands that start now and continue running in the background.",
+    );
+    expect(prompt).toContain(
+      "For long-running work that starts now, start it once and rely on automatic completion wake when it is enabled and the command emits output or fails; otherwise use process to confirm completion, and use it for logs, status, input, or intervention.",
     );
     expect(prompt).toContain("Completion is push-based: it will auto-announce when done.");
     expect(prompt).toContain("Do not poll `subagents list` / `sessions_list` in a loop");
@@ -493,14 +509,14 @@ describe("buildAgentSystemPrompt", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       modelAliasLines: [
-        "- Opus: anthropic/claude-opus-4-5",
-        "- Sonnet: anthropic/claude-sonnet-4-5",
+        "- Opus: anthropic/claude-opus-4-6",
+        "- Sonnet: anthropic/claude-sonnet-4-6",
       ],
     });
 
     expect(prompt).toContain("## Model Aliases");
     expect(prompt).toContain("Prefer aliases when specifying model overrides");
-    expect(prompt).toContain("- Opus: anthropic/claude-opus-4-5");
+    expect(prompt).toContain("- Opus: anthropic/claude-opus-4-6");
   });
 
   it("adds ClaudeBot self-update guidance when gateway tool is available", () => {
@@ -607,6 +623,54 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("# Project Context");
   });
 
+  it("orders stable project context before the cache boundary and moves HEARTBEAT below it", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      contextFiles: [
+        { path: "HEARTBEAT.md", content: "Check inbox." },
+        { path: "MEMORY.md", content: "Long-term notes." },
+        { path: "AGENTS.md", content: "Follow repo rules." },
+        { path: "SOUL.md", content: "Warm but direct." },
+        { path: "TOOLS.md", content: "Prefer rg." },
+      ],
+    });
+
+    const agentsIndex = prompt.indexOf("## AGENTS.md");
+    const soulIndex = prompt.indexOf("## SOUL.md");
+    const toolsIndex = prompt.indexOf("## TOOLS.md");
+    const memoryIndex = prompt.indexOf("## MEMORY.md");
+    const boundaryIndex = prompt.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY);
+    const heartbeatHeadingIndex = prompt.indexOf("# Dynamic Project Context");
+    const heartbeatFileIndex = prompt.indexOf("## HEARTBEAT.md");
+
+    expect(agentsIndex).toBeGreaterThan(-1);
+    expect(soulIndex).toBeGreaterThan(agentsIndex);
+    expect(toolsIndex).toBeGreaterThan(soulIndex);
+    expect(memoryIndex).toBeGreaterThan(toolsIndex);
+    expect(boundaryIndex).toBeGreaterThan(memoryIndex);
+    expect(heartbeatHeadingIndex).toBeGreaterThan(boundaryIndex);
+    expect(heartbeatFileIndex).toBeGreaterThan(heartbeatHeadingIndex);
+    expect(prompt).toContain(
+      "The following frequently-changing project context files are kept below the cache boundary when possible:",
+    );
+  });
+
+  it("keeps heartbeat-only project context below the cache boundary", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      contextFiles: [{ path: "HEARTBEAT.md", content: "Check inbox." }],
+    });
+
+    const boundaryIndex = prompt.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY);
+    const projectContextIndex = prompt.indexOf("# Project Context");
+    const heartbeatFileIndex = prompt.indexOf("## HEARTBEAT.md");
+
+    expect(boundaryIndex).toBeGreaterThan(-1);
+    expect(projectContextIndex).toBeGreaterThan(boundaryIndex);
+    expect(heartbeatFileIndex).toBeGreaterThan(projectContextIndex);
+    expect(prompt).not.toContain("# Dynamic Project Context");
+  });
+
   it("summarizes the message tool when available", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -642,7 +706,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("channel=telegram");
-    expect(prompt).toContain("capabilities=inlineButtons");
+    expect(prompt).toContain("capabilities=inlinebuttons");
   });
 
   it("includes agent id in runtime when provided", () => {
@@ -682,7 +746,7 @@ describe("buildAgentSystemPrompt", () => {
         arch: "arm64",
         node: "v20",
         model: "anthropic/claude",
-        defaultModel: "anthropic/claude-opus-4-5",
+        defaultModel: "anthropic/claude-opus-4-6",
       },
       "telegram",
       ["inlineButtons"],
@@ -695,10 +759,56 @@ describe("buildAgentSystemPrompt", () => {
     expect(line).toContain("os=macOS (arm64)");
     expect(line).toContain("node=v20");
     expect(line).toContain("model=anthropic/claude");
-    expect(line).toContain("default_model=anthropic/claude-opus-4-5");
+    expect(line).toContain("default_model=anthropic/claude-opus-4-6");
     expect(line).toContain("channel=telegram");
-    expect(line).toContain("capabilities=inlineButtons");
+    expect(line).toContain("capabilities=inlinebuttons");
     expect(line).toContain("thinking=low");
+  });
+
+  it("normalizes runtime capability ordering and casing for cache stability", () => {
+    const line = buildRuntimeLine(
+      {
+        agentId: "work",
+      },
+      "telegram",
+      [" React ", "inlineButtons", "react"],
+      "low",
+    );
+
+    expect(line).toContain("capabilities=inlinebuttons,react");
+  });
+
+  it("keeps semantically equivalent structured prompt inputs byte-stable", () => {
+    const clean = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: {
+        channel: "telegram",
+        capabilities: ["inlinebuttons", "react"],
+      },
+      skillsPrompt:
+        "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>",
+      heartbeatPrompt: "ping",
+      extraSystemPrompt: "Group chat context\nSecond line",
+      workspaceNotes: ["Reminder: keep commits scoped."],
+      modelAliasLines: ["- Sonnet: anthropic/claude-sonnet-4-5"],
+    });
+    const noisy = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: {
+        channel: "telegram",
+        capabilities: [" react ", "inlineButtons", "react"],
+      },
+      skillsPrompt:
+        "<available_skills>\r\n  <skill>  \r\n    <name>demo</name>\t\r\n  </skill>\r\n</available_skills>\r\n",
+      heartbeatPrompt: " ping  \r\n",
+      extraSystemPrompt: "  Group chat context  \r\nSecond line \t\r\n",
+      workspaceNotes: ["  Reminder: keep commits scoped. \t\r\n"],
+      modelAliasLines: ["  - Sonnet: anthropic/claude-sonnet-4-5 \t\r\n"],
+    });
+
+    expect(noisy).toBe(clean);
+    expect(noisy).not.toContain("\r");
+    expect(noisy).not.toMatch(/[ \t]+$/m);
   });
 
   it("describes sandboxed runtime and elevated when allowed", () => {

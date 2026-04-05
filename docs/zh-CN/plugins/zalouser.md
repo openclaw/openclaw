@@ -6,7 +6,7 @@ summary: Zalo Personal 插件：通过 zca-cli 进行 QR 登录 + 消息（插�
 title: Zalo Personal 插件
 x-i18n:
   generated_at: "2026-02-03T07:53:33Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: b29b788b023cd50720e24fe6719f02e9f86c8bca9c73b3638fb53c2316718672
   source_path: plugins/zalouser.md

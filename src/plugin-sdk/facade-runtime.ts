@@ -2,12 +2,19 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createJiti } from "jiti";
-import { loadConfig, type OpenClawConfig } from "../config/config.js";
+import JSON5 from "json5";
+import { resolveConfigPath } from "../config/paths.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../config/types.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import { resolveBundledPluginPublicSurfacePath } from "../plugins/bundled-plugin-metadata.js";
-import { normalizePluginsConfig, resolveEffectiveEnableState } from "../plugins/config-state.js";
+import {
+  createPluginActivationSource,
+  normalizePluginsConfig,
+  resolveEffectivePluginActivationState,
+} from "../plugins/config-state.js";
 import {
   loadPluginManifestRegistry,
   type PluginManifestRecord,
@@ -34,11 +41,15 @@ const ALWAYS_ALLOWED_RUNTIME_DIR_NAMES = new Set([
 const EMPTY_FACADE_BOUNDARY_CONFIG: OpenClawConfig = {};
 const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
 const loadedFacadeModules = new Map<string, unknown>();
+const loadedFacadePluginIds = new Set<string>();
 let cachedBoundaryRawConfig: OpenClawConfig | undefined;
 let cachedBoundaryResolvedConfig:
   | {
+      rawConfig: OpenClawConfig;
       config: OpenClawConfig;
       normalizedPluginsConfig: ReturnType<typeof normalizePluginsConfig>;
+      activationSource: ReturnType<typeof createPluginActivationSource>;
+      autoEnabledReasons: Record<string, string[]>;
     }
   | undefined;
 
@@ -128,7 +139,19 @@ function getJiti(modulePath: string) {
 
 function readFacadeBoundaryConfigSafely(): OpenClawConfig {
   try {
-    return loadConfig();
+    const runtimeSnapshot = getRuntimeConfigSnapshot();
+    if (runtimeSnapshot) {
+      return runtimeSnapshot;
+    }
+    const configPath = resolveConfigPath();
+    if (!fs.existsSync(configPath)) {
+      return EMPTY_FACADE_BOUNDARY_CONFIG;
+    }
+    const raw = fs.readFileSync(configPath, "utf8");
+    const parsed = JSON5.parse(raw);
+    return parsed && typeof parsed === "object"
+      ? (parsed as OpenClawConfig)
+      : EMPTY_FACADE_BOUNDARY_CONFIG;
   } catch {
     return EMPTY_FACADE_BOUNDARY_CONFIG;
   }
@@ -140,29 +163,55 @@ function getFacadeBoundaryResolvedConfig() {
     return cachedBoundaryResolvedConfig;
   }
 
-  const config = applyPluginAutoEnable({
+  const autoEnabled = applyPluginAutoEnable({
     config: rawConfig,
     env: process.env,
-  }).config;
+  });
+  const config = autoEnabled.config;
   const resolved = {
+    rawConfig,
     config,
-    normalizedPluginsConfig: normalizePluginsConfig(config.plugins),
+    normalizedPluginsConfig: normalizePluginsConfig(config?.plugins),
+    activationSource: createPluginActivationSource({ config: rawConfig }),
+    autoEnabledReasons: autoEnabled.autoEnabledReasons,
   };
   cachedBoundaryRawConfig = rawConfig;
   cachedBoundaryResolvedConfig = resolved;
   return resolved;
 }
 
-function resolveBundledPluginManifestRecordByDirName(dirName: string): PluginManifestRecord | null {
+function resolveBundledPluginManifestRecord(params: {
+  dirName: string;
+  artifactBasename: string;
+}): PluginManifestRecord | null {
   const { config } = getFacadeBoundaryResolvedConfig();
-  return (
-    loadPluginManifestRegistry({
-      config,
-      cache: true,
-    }).plugins.find(
-      (plugin) => plugin.origin === "bundled" && path.basename(plugin.rootDir) === dirName,
-    ) ?? null
-  );
+  const registry = loadPluginManifestRegistry({
+    config,
+    cache: true,
+  }).plugins;
+  const location = resolveFacadeModuleLocation(params);
+  if (location) {
+    const normalizedModulePath = path.resolve(location.modulePath);
+    const matchedRecord = registry.find((plugin) => {
+      const normalizedRootDir = path.resolve(plugin.rootDir);
+      return (
+        normalizedModulePath === normalizedRootDir ||
+        normalizedModulePath.startsWith(`${normalizedRootDir}${path.sep}`)
+      );
+    });
+    if (matchedRecord) {
+      return matchedRecord;
+    }
+  }
+
+  return registry.find((plugin) => path.basename(plugin.rootDir) === params.dirName) ?? null;
+}
+
+function resolveTrackedFacadePluginId(params: {
+  dirName: string;
+  artifactBasename: string;
+}): string {
+  return resolveBundledPluginManifestRecord(params)?.id ?? params.dirName;
 }
 
 function resolveBundledPluginPublicSurfaceAccess(params: {
@@ -179,22 +228,25 @@ function resolveBundledPluginPublicSurfaceAccess(params: {
     };
   }
 
-  const manifestRecord = resolveBundledPluginManifestRecordByDirName(params.dirName);
+  const manifestRecord = resolveBundledPluginManifestRecord(params);
   if (!manifestRecord) {
     return {
       allowed: false,
       reason: `no bundled plugin manifest found for ${params.dirName}`,
     };
   }
-  const { config, normalizedPluginsConfig } = getFacadeBoundaryResolvedConfig();
-  const enableState = resolveEffectiveEnableState({
+  const { config, normalizedPluginsConfig, activationSource, autoEnabledReasons } =
+    getFacadeBoundaryResolvedConfig();
+  const activationState = resolveEffectivePluginActivationState({
     id: manifestRecord.id,
     origin: manifestRecord.origin,
     config: normalizedPluginsConfig,
     rootConfig: config,
     enabledByDefault: manifestRecord.enabledByDefault,
+    activationSource,
+    autoEnabledReason: autoEnabledReasons[manifestRecord.id]?.[0],
   });
-  if (enableState.enabled) {
+  if (activationState.enabled) {
     return {
       allowed: true,
       pluginId: manifestRecord.id,
@@ -204,7 +256,7 @@ function resolveBundledPluginPublicSurfaceAccess(params: {
   return {
     allowed: false,
     pluginId: manifestRecord.id,
-    reason: enableState.reason ?? "plugin runtime is not activated",
+    reason: activationState.reason ?? "plugin runtime is not activated",
   };
 }
 
@@ -313,6 +365,9 @@ export function loadBundledPluginPublicSurfaceModuleSync<T extends object>(param
 
   let loaded: T;
   try {
+    // Track the owning plugin once module evaluation begins. Facade top-level
+    // code may have already executed even if the module later throws.
+    loadedFacadePluginIds.add(resolveTrackedFacadePluginId(params));
     loaded = getJiti(location.modulePath)(location.modulePath) as T;
     Object.assign(sentinel, loaded);
   } catch (err) {
@@ -353,4 +408,16 @@ export function tryLoadActivatedBundledPluginPublicSurfaceModuleSync<T extends o
     return null;
   }
   return loadBundledPluginPublicSurfaceModuleSync<T>(params);
+}
+
+export function listImportedBundledPluginFacadeIds(): string[] {
+  return [...loadedFacadePluginIds].toSorted((left, right) => left.localeCompare(right));
+}
+
+export function resetFacadeRuntimeStateForTest(): void {
+  loadedFacadeModules.clear();
+  loadedFacadePluginIds.clear();
+  jitiLoaders.clear();
+  cachedBoundaryRawConfig = undefined;
+  cachedBoundaryResolvedConfig = undefined;
 }

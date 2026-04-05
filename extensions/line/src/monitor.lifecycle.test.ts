@@ -24,6 +24,7 @@ const {
 }));
 
 let monitorLineProvider: typeof import("./monitor.js").monitorLineProvider;
+let getLineRuntimeState: typeof import("./monitor.js").getLineRuntimeState;
 let innerLineWebhookHandlerMock: ReturnType<typeof vi.fn<LineNodeWebhookHandler>>;
 
 vi.mock("./bot.js", () => ({
@@ -35,8 +36,10 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
   dispatchReplyWithBufferedBlockDispatcher: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
+vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
+    "openclaw/plugin-sdk/runtime-env",
+  );
   return {
     ...actual,
     danger: (value: unknown) => String(value),
@@ -102,7 +105,7 @@ describe("monitorLineProvider lifecycle", () => {
       .mockImplementation(() => innerLineWebhookHandlerMock);
     unregisterHttpMock.mockReset();
     registerPluginHttpRouteMock.mockReset().mockReturnValue(unregisterHttpMock);
-    ({ monitorLineProvider } = await import("./monitor.js"));
+    ({ monitorLineProvider, getLineRuntimeState } = await import("./monitor.js"));
   });
 
   const createRouteResponse = () => {
@@ -170,6 +173,36 @@ describe("monitorLineProvider lifecycle", () => {
     monitor.stop();
     monitor.stop();
     expect(unregisterHttpMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("records startup state under configured defaultAccount when accountId is omitted", async () => {
+    const monitor = await monitorLineProvider({
+      channelAccessToken: "token",
+      channelSecret: "secret", // pragma: allowlist secret
+      config: {
+        channels: {
+          line: {
+            defaultAccount: "work",
+            accounts: {
+              work: {
+                channelAccessToken: "work-token",
+                channelSecret: "work-secret",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      runtime: {} as RuntimeEnv,
+    });
+
+    expect(getLineRuntimeState("work")).toEqual(
+      expect.objectContaining({
+        running: true,
+      }),
+    );
+    expect(getLineRuntimeState("default")).toBeUndefined();
+
+    monitor.stop();
   });
 
   it("rejects webhook requests above the shared in-flight limit before body handling", async () => {

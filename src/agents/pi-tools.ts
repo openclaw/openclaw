@@ -12,6 +12,8 @@ import { createApplyPatchTool } from "./apply-patch.js";
 import {
   createExecTool,
   createProcessTool,
+  describeExecTool,
+  describeProcessTool,
   type ExecToolDefaults,
   type ProcessToolDefaults,
 } from "./bash-tools.js";
@@ -121,6 +123,28 @@ function applyModelProviderToolPolicy(
   }
 
   return tools;
+}
+
+function applyDeferredFollowupToolDescriptions(
+  tools: AnyAgentTool[],
+  params?: { agentId?: string },
+): AnyAgentTool[] {
+  const hasCronTool = tools.some((tool) => tool.name === "cron");
+  return tools.map((tool) => {
+    if (tool.name === "exec") {
+      return {
+        ...tool,
+        description: describeExecTool({ agentId: params?.agentId, hasCronTool }),
+      };
+    }
+    if (tool.name === "process") {
+      return {
+        ...tool,
+        description: describeProcessTool({ hasCronTool }),
+      };
+    }
+    return tool;
+  });
 }
 
 function isApplyPatchAllowedForModel(params: {
@@ -617,10 +641,10 @@ export function createOpenClawCodingTools(options?: {
       ...buildDefaultToolPolicyPipelineSteps({
         profilePolicy: profilePolicyWithAlsoAllow,
         profile,
-        profileAlsoAllow,
+        profileUnavailableCoreWarningAllowlist: profilePolicy?.allow,
         providerProfilePolicy: providerProfilePolicyWithAlsoAllow,
         providerProfile,
-        providerProfileAlsoAllow,
+        providerProfileUnavailableCoreWarningAllowlist: providerProfilePolicy?.allow,
         globalPolicy,
         globalProviderPolicy,
         agentPolicy,
@@ -654,9 +678,12 @@ export function createOpenClawCodingTools(options?: {
   const withAbort = options?.abortSignal
     ? withHooks.map((tool) => wrapToolWithAbortSignal(tool, options.abortSignal))
     : withHooks;
+  const withDeferredFollowupDescriptions = applyDeferredFollowupToolDescriptions(withAbort, {
+    agentId,
+  });
 
   // NOTE: Keep canonical (lowercase) tool names here.
   // pi-ai's Anthropic OAuth transport remaps tool names to Claude Code-style names
   // on the wire and maps them back for tool dispatch.
-  return withAbort;
+  return withDeferredFollowupDescriptions;
 }

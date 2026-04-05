@@ -204,7 +204,7 @@ function isSenderAllowed(senderId: string | undefined, allowFrom: string[]): boo
 function resolveGroupRequireMention(params: {
   groupId: string;
   groupName?: string | null;
-  groups: Record<string, { allow?: boolean; enabled?: boolean; requireMention?: boolean }>;
+  groups: Record<string, { enabled?: boolean; requireMention?: boolean }>;
   allowNameMatching?: boolean;
 }): boolean {
   const entry = findZalouserGroupEntry(

@@ -20,8 +20,8 @@ const disposeSessionMcpRuntimeMock = vi.fn<(sessionId: string) => Promise<void>>
 });
 let refreshRuntimeAuthOnFirstPromptError = false;
 
-vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@mariozechner/pi-ai")>();
+vi.mock("@mariozechner/pi-ai", async () => {
+  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
 
   const buildAssistantMessage = (model: { api: string; provider: string; id: string }) => ({
     role: "assistant" as const,
@@ -101,8 +101,10 @@ const installRunEmbeddedMocks = () => {
   vi.doMock("./pi-bundle-mcp-tools.js", () => ({
     disposeSessionMcpRuntime: (sessionId: string) => disposeSessionMcpRuntimeMock(sessionId),
   }));
-  vi.doMock("./pi-embedded-runner/model.js", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("./pi-embedded-runner/model.js")>();
+  vi.doMock("./pi-embedded-runner/model.js", async () => {
+    const actual = await vi.importActual<typeof import("./pi-embedded-runner/model.js")>(
+      "./pi-embedded-runner/model.js",
+    );
     return {
       ...actual,
       resolveModelAsync: async (provider: string, modelId: string) =>
@@ -119,15 +121,17 @@ const installRunEmbeddedMocks = () => {
       stopRuntimeAuthRefreshTimer: vi.fn(),
     }),
   }));
-  vi.doMock("../plugins/provider-runtime.js", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("../plugins/provider-runtime.js")>();
+  vi.doMock("../plugins/provider-runtime.js", async () => {
+    const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
+      "../plugins/provider-runtime.js",
+    );
     return {
       ...actual,
       prepareProviderRuntimeAuth: vi.fn(async () => undefined),
     };
   });
-  vi.doMock("./models-config.js", async (importOriginal) => {
-    const mod = await importOriginal<typeof import("./models-config.js")>();
+  vi.doMock("./models-config.js", async () => {
+    const mod = await vi.importActual<typeof import("./models-config.js")>("./models-config.js");
     return {
       ...mod,
       ensureOpenClawModelsJson: vi.fn(async () => ({ wrote: false })),

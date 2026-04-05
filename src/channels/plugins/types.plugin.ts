@@ -7,6 +7,7 @@ import type {
   ChannelCommandAdapter,
   ChannelConfigAdapter,
   ChannelConversationBindingSupport,
+  ChannelDoctorAdapter,
   ChannelDirectoryAdapter,
   ChannelResolverAdapter,
   ChannelElevatedAdapter,
@@ -16,6 +17,7 @@ import type {
   ChannelLifecycleAdapter,
   ChannelOutboundAdapter,
   ChannelPairingAdapter,
+  ChannelSecretsAdapter,
   ChannelSecurityAdapter,
   ChannelSetupAdapter,
   ChannelStatusAdapter,
@@ -105,8 +107,10 @@ export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknow
   elevated?: ChannelElevatedAdapter;
   commands?: ChannelCommandAdapter;
   lifecycle?: ChannelLifecycleAdapter;
+  secrets?: ChannelSecretsAdapter;
   approvals?: ChannelApprovalAdapter;
   allowlist?: ChannelAllowlistAdapter;
+  doctor?: ChannelDoctorAdapter;
   bindings?: ChannelConfiguredBindingProvider;
   conversationBindings?: ChannelConversationBindingSupport;
   streaming?: ChannelStreamingAdapter;

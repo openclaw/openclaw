@@ -3,9 +3,13 @@ import type { LookupFn } from "../infra/net/ssrf.js";
 import {
   assertHttpUrlTargetsPrivateNetwork,
   buildHostnameAllowlistPolicyFromSuffixAllowlist,
+  hasLegacyFlatAllowPrivateNetworkAlias,
+  isPrivateNetworkOptInEnabled,
   isHttpsUrlAllowedByHostnameSuffixAllowlist,
+  migrateLegacyFlatAllowPrivateNetworkAlias,
   normalizeHostnameSuffixAllowlist,
   ssrfPolicyFromAllowPrivateNetwork,
+  ssrfPolicyFromPrivateNetworkOptIn,
 } from "./ssrf-policy.js";
 
 function createLookupFn(addresses: Array<{ address: string; family: number }>): LookupFn {
@@ -36,6 +40,137 @@ describe("ssrfPolicyFromAllowPrivateNetwork", () => {
     },
   ])("$name", ({ input, expected }) => {
     expect(ssrfPolicyFromAllowPrivateNetwork(input)).toEqual(expected);
+  });
+});
+
+describe("isPrivateNetworkOptInEnabled", () => {
+  it.each([
+    {
+      name: "returns false for missing input",
+      input: undefined,
+      expected: false,
+    },
+    {
+      name: "returns false for explicit false",
+      input: false,
+      expected: false,
+    },
+    {
+      name: "returns true for explicit boolean true",
+      input: true,
+      expected: true,
+    },
+    {
+      name: "returns true for flat allowPrivateNetwork config",
+      input: { allowPrivateNetwork: true },
+      expected: true,
+    },
+    {
+      name: "returns true for flat dangerous opt-in config",
+      input: { dangerouslyAllowPrivateNetwork: true },
+      expected: true,
+    },
+    {
+      name: "returns true for nested network dangerous opt-in config",
+      input: { network: { dangerouslyAllowPrivateNetwork: true } },
+      expected: true,
+    },
+    {
+      name: "returns false for nested false values",
+      input: { network: { dangerouslyAllowPrivateNetwork: false } },
+      expected: false,
+    },
+  ])("$name", ({ input, expected }) => {
+    expect(isPrivateNetworkOptInEnabled(input)).toBe(expected);
+  });
+});
+
+describe("ssrfPolicyFromPrivateNetworkOptIn", () => {
+  it.each([
+    {
+      name: "returns undefined for unset input",
+      input: undefined,
+      expected: undefined,
+    },
+    {
+      name: "returns undefined for explicit false input",
+      input: { allowPrivateNetwork: false },
+      expected: undefined,
+    },
+    {
+      name: "returns the compat policy for nested dangerous input",
+      input: { network: { dangerouslyAllowPrivateNetwork: true } },
+      expected: { allowPrivateNetwork: true },
+    },
+  ])("$name", ({ input, expected }) => {
+    expect(ssrfPolicyFromPrivateNetworkOptIn(input)).toEqual(expected);
+  });
+});
+
+describe("legacy private-network alias helpers", () => {
+  it("detects the flat allowPrivateNetwork alias", () => {
+    expect(hasLegacyFlatAllowPrivateNetworkAlias({ allowPrivateNetwork: true })).toBe(true);
+    expect(hasLegacyFlatAllowPrivateNetworkAlias({ network: {} })).toBe(false);
+  });
+
+  it("migrates the flat alias into network.dangerouslyAllowPrivateNetwork", () => {
+    const changes: string[] = [];
+    const migrated = migrateLegacyFlatAllowPrivateNetworkAlias({
+      entry: { allowPrivateNetwork: true },
+      pathPrefix: "channels.matrix",
+      changes,
+    });
+
+    expect(migrated.entry).toEqual({
+      network: {
+        dangerouslyAllowPrivateNetwork: true,
+      },
+    });
+    expect(changes).toEqual([
+      "Moved channels.matrix.allowPrivateNetwork → channels.matrix.network.dangerouslyAllowPrivateNetwork (true).",
+    ]);
+  });
+
+  it("prefers the canonical network key when both old and new keys are present", () => {
+    const changes: string[] = [];
+    const migrated = migrateLegacyFlatAllowPrivateNetworkAlias({
+      entry: {
+        allowPrivateNetwork: true,
+        network: {
+          dangerouslyAllowPrivateNetwork: false,
+        },
+      },
+      pathPrefix: "channels.matrix.accounts.default",
+      changes,
+    });
+
+    expect(migrated.entry).toEqual({
+      network: {
+        dangerouslyAllowPrivateNetwork: false,
+      },
+    });
+    expect(changes[0]).toContain("(false)");
+  });
+
+  it("keeps an explicit canonical true when the legacy key is false", () => {
+    const changes: string[] = [];
+    const migrated = migrateLegacyFlatAllowPrivateNetworkAlias({
+      entry: {
+        allowPrivateNetwork: false,
+        network: {
+          dangerouslyAllowPrivateNetwork: true,
+        },
+      },
+      pathPrefix: "channels.matrix.accounts.default",
+      changes,
+    });
+
+    expect(migrated.entry).toEqual({
+      network: {
+        dangerouslyAllowPrivateNetwork: true,
+      },
+    });
+    expect(changes[0]).toContain("(true)");
   });
 });
 

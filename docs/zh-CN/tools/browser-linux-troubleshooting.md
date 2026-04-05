@@ -4,7 +4,7 @@ summary: 修复 Linux 上 OpenClaw 浏览器控制的 Chrome/Brave/Edge/Chromium
 title: 浏览器故障排除
 x-i18n:
   generated_at: "2026-02-03T07:55:07Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: bac2301022511a0bf8ebe1309606cc03e8a979ff74866c894f89d280ca3e514e
   source_path: tools/browser-linux-troubleshooting.md

@@ -5,7 +5,7 @@ summary: 多智能体路由：隔离的智能体、渠道账户和绑定
 title: 多智能体路由
 x-i18n:
   generated_at: "2026-02-03T07:47:38Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 1848266c632cd6c96ff99ea9eb9c17bbfe6d35fa1f90450853083e7c548d5324
   source_path: concepts/multi-agent.md
@@ -214,13 +214,13 @@ openclaw agents list --bindings
         id: "chat",
         name: "Everyday",
         workspace: "~/.openclaw/workspace-chat",
-        model: "anthropic/claude-sonnet-4-5",
+        model: "anthropic/claude-sonnet-4-6",
       },
       {
         id: "opus",
         name: "Deep Work",
         workspace: "~/.openclaw/workspace-opus",
-        model: "anthropic/claude-opus-4-5",
+        model: "anthropic/claude-opus-4-6",
       },
     ],
   },
@@ -248,13 +248,13 @@ openclaw agents list --bindings
         id: "chat",
         name: "Everyday",
         workspace: "~/.openclaw/workspace-chat",
-        model: "anthropic/claude-sonnet-4-5",
+        model: "anthropic/claude-sonnet-4-6",
       },
       {
         id: "opus",
         name: "Deep Work",
         workspace: "~/.openclaw/workspace-opus",
-        model: "anthropic/claude-opus-4-5",
+        model: "anthropic/claude-opus-4-6",
       },
     ],
   },

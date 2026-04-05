@@ -1,4 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("../../plugins/provider-runtime.js", () => ({
+  classifyProviderFailoverReasonWithPlugin: () => null,
+  matchesProviderContextOverflowWithPlugin: () => false,
+}));
+
 import { classifyFailoverReason, isContextOverflowError } from "./errors.js";
 import {
   classifyProviderSpecificError,
@@ -57,6 +63,12 @@ describe("classifyProviderSpecificError", () => {
   it("classifies concurrency limit as rate_limit", () => {
     expect(classifyProviderSpecificError("concurrency limit has been reached")).toBe("rate_limit");
     expect(classifyProviderSpecificError("concurrency limit reached")).toBe("rate_limit");
+  });
+
+  it("classifies Cloudflare Workers AI quota errors as rate_limit", () => {
+    expect(classifyProviderSpecificError("workers_ai gateway error: quota limit exceeded")).toBe(
+      "rate_limit",
+    );
   });
 
   it("does not match generic 'model is not ready' without Bedrock prefix", () => {

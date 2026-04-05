@@ -142,7 +142,14 @@ describe("bedrock discovery", () => {
       }),
     ).toBe("AWS_BEARER_TOKEN_BEDROCK");
 
-    expect(resolveBedrockConfigApiKey({} as NodeJS.ProcessEnv)).toBe("AWS_PROFILE");
+    // When no AWS env vars are present (e.g. instance role), no marker should be injected.
+    // The aws-sdk credential chain handles auth at request time. (#49891)
+    expect(resolveBedrockConfigApiKey({} as NodeJS.ProcessEnv)).toBeUndefined();
+
+    // When AWS_PROFILE is explicitly set, it should return the marker.
+    expect(
+      resolveBedrockConfigApiKey({ AWS_PROFILE: "default" } as NodeJS.ProcessEnv),
+    ).toBe("AWS_PROFILE");
   });
 
   it("merges implicit Bedrock models into explicit provider overrides", () => {

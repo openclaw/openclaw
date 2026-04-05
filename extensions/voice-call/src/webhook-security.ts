@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { safeEqualSecret } from "openclaw/plugin-sdk/browser-support";
 import { getHeader } from "./http-headers.js";
 import type { WebhookContext } from "./types.js";
 
@@ -120,16 +121,7 @@ function buildCanonicalTwilioParamString(params: URLSearchParams): string {
  * Timing-safe string comparison to prevent timing attacks.
  */
 function timingSafeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) {
-    // Still do comparison to maintain constant time
-    const dummy = Buffer.from(a);
-    crypto.timingSafeEqual(dummy, dummy);
-    return false;
-  }
-
-  const bufA = Buffer.from(a);
-  const bufB = Buffer.from(b);
-  return crypto.timingSafeEqual(bufA, bufB);
+  return safeEqualSecret(a, b);
 }
 
 /**
@@ -745,12 +737,7 @@ function createPlivoV3ReplayKey(params: {
 }
 
 function timingSafeEqualString(a: string, b: string): boolean {
-  if (a.length !== b.length) {
-    const dummy = Buffer.from(a);
-    crypto.timingSafeEqual(dummy, dummy);
-    return false;
-  }
-  return crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
+  return safeEqualSecret(a, b);
 }
 
 function validatePlivoV2Signature(params: {

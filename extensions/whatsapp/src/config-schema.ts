@@ -1,7 +1,4 @@
-import {
-  buildChannelConfigSchema,
-  WhatsAppConfigSchema,
-} from "openclaw/plugin-sdk/channel-config-schema";
+import { buildChannelConfigSchema, WhatsAppConfigSchema } from "../config-api.js";
 import { whatsAppChannelConfigUiHints } from "./config-ui-hints.js";
 
 export const WhatsAppChannelConfigSchema = buildChannelConfigSchema(WhatsAppConfigSchema, {

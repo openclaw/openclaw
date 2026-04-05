@@ -1,5 +1,6 @@
-import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { safeEqualSecret } from "openclaw/plugin-sdk/browser-support";
+import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { createBlueBubblesDebounceRegistry } from "./monitor-debounce.js";
 import { normalizeWebhookMessage, normalizeWebhookReaction } from "./monitor-normalize.js";
 import { logVerbose, processMessage, processReaction } from "./monitor-processing.js";
@@ -15,6 +16,7 @@ import {
   type WebhookTarget,
 } from "./monitor-shared.js";
 import { fetchBlueBubblesServerInfo } from "./probe.js";
+import { getBlueBubblesRuntime } from "./runtime.js";
 import {
   WEBHOOK_RATE_LIMIT_DEFAULTS,
   createFixedWindowRateLimiter,
@@ -24,8 +26,7 @@ import {
   resolveRequestClientIp,
   resolveWebhookTargetWithAuthOrRejectSync,
   withResolvedWebhookRequestPipeline,
-} from "./runtime-api.js";
-import { getBlueBubblesRuntime } from "./runtime.js";
+} from "./webhook-ingress.js";
 
 const webhookTargets = new Map<string, WebhookTarget[]>();
 const webhookRateLimiter = createFixedWindowRateLimiter({
@@ -116,18 +117,13 @@ function normalizeAuthToken(raw: string): string {
   return value;
 }
 
-function safeEqualSecret(aRaw: string, bRaw: string): boolean {
+function safeEqualAuthToken(aRaw: string, bRaw: string): boolean {
   const a = normalizeAuthToken(aRaw);
   const b = normalizeAuthToken(bRaw);
   if (!a || !b) {
     return false;
   }
-  const bufA = Buffer.from(a, "utf8");
-  const bufB = Buffer.from(b, "utf8");
-  if (bufA.length !== bufB.length) {
-    return false;
-  }
-  return timingSafeEqual(bufA, bufB);
+  return safeEqualSecret(a, b);
 }
 
 function collectTrustedProxies(targets: readonly WebhookTarget[]): string[] {
@@ -198,7 +194,7 @@ export async function handleBlueBubblesWebhookRequest(
         res,
         isMatch: (target) => {
           const token = target.account.config.password?.trim() ?? "";
-          return safeEqualSecret(guid, token);
+          return safeEqualAuthToken(guid, token);
         },
       });
       if (!target) {
@@ -332,7 +328,7 @@ export async function monitorBlueBubblesProvider(
     password: account.config.password,
     accountId: account.accountId,
     timeoutMs: 5000,
-    allowPrivateNetwork: account.config.allowPrivateNetwork === true,
+    allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
   }).catch(() => null);
   if (serverInfo?.os_version) {
     runtime.log?.(`[${account.accountId}] BlueBubbles server macOS ${serverInfo.os_version}`);

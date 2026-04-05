@@ -6,7 +6,7 @@ summary: 后台 exec 执行和进程管理
 title: 后台 Exec 和 Process 工具
 x-i18n:
   generated_at: "2026-02-03T10:05:51Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: e11a7d74a75000d6882f703693c2c49a2ecd3e730b6ec2b475ac402abde9e465
   source_path: gateway/background-process.md

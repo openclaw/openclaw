@@ -30,17 +30,20 @@ export type RunCliAgentParams = {
   bootstrapPromptWarningSignature?: string;
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
+  messageProvider?: string;
+  agentAccountId?: string;
 };
 
 export type CliPreparedBackend = {
   backend: CliBackendConfig;
   cleanup?: () => Promise<void>;
   mcpConfigHash?: string;
+  env?: Record<string, string>;
 };
 
 export type CliReusableSession = {
   sessionId?: string;
-  invalidatedReason?: "auth-profile" | "system-prompt" | "mcp";
+  invalidatedReason?: "auth-profile" | "auth-epoch" | "system-prompt" | "mcp";
 };
 
 export type PreparedCliRunContext = {
@@ -56,5 +59,6 @@ export type PreparedCliRunContext = {
   systemPromptReport: SessionSystemPromptReport;
   bootstrapPromptWarningLines: string[];
   heartbeatPrompt?: string;
+  authEpoch?: string;
   extraSystemPromptHash?: string;
 };

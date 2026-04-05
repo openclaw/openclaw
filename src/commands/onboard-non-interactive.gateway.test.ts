@@ -66,8 +66,9 @@ vi.mock("../gateway/client.js", () => ({
   },
 }));
 
-vi.mock("./onboard-helpers.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./onboard-helpers.js")>();
+vi.mock("./onboard-helpers.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./onboard-helpers.js")>("./onboard-helpers.js");
   return {
     ...actual,
     ensureWorkspaceAndSessions: ensureWorkspaceAndSessionsMock,
@@ -255,15 +256,45 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
 
       const configPath = resolveStateConfigPath(process.env, stateDir);
       const cfg = await readJsonFile<{
-        gateway?: { auth?: { mode?: string; token?: string } };
+        gateway?: { mode?: string; auth?: { mode?: string; token?: string } };
         agents?: { defaults?: { workspace?: string } };
         tools?: { profile?: string };
       }>(configPath);
 
       expect(cfg?.agents?.defaults?.workspace).toBe(workspace);
+      expect(cfg?.gateway?.mode).toBe("local");
       expect(cfg?.tools?.profile).toBe("coding");
       expect(cfg?.gateway?.auth?.mode).toBe("token");
       expect(cfg?.gateway?.auth?.token).toBe(token);
+    });
+  }, 60_000);
+
+  it("keeps gateway.mode=local on the install-daemon onboarding path", async () => {
+    await withStateDir("state-install-daemon-local-mode-", async (stateDir) => {
+      const workspace = path.join(stateDir, "openclaw");
+
+      await runNonInteractiveSetup(
+        {
+          nonInteractive: true,
+          mode: "local",
+          workspace,
+          authChoice: "skip",
+          skipSkills: true,
+          skipHealth: true,
+          installDaemon: true,
+          gatewayBind: "loopback",
+        },
+        runtime,
+      );
+
+      const configPath = resolveStateConfigPath(process.env, stateDir);
+      const cfg = await readJsonFile<{
+        gateway?: { mode?: string; bind?: string };
+      }>(configPath);
+
+      expect(cfg?.gateway?.mode).toBe("local");
+      expect(cfg?.gateway?.bind).toBe("loopback");
+      expect(installGatewayDaemonNonInteractiveMock).toHaveBeenCalledTimes(1);
     });
   }, 60_000);
 

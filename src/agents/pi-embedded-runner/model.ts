@@ -1,7 +1,7 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { ModelDefinitionConfig } from "../../config/types.js";
+import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.js";
 import {
   applyProviderResolvedModelCompatWithPlugins,
   applyProviderResolvedTransportWithPlugin,
@@ -12,17 +12,23 @@ import {
   runProviderDynamicModel,
   normalizeProviderResolvedModelWithPlugin,
 } from "../../plugins/provider-runtime.js";
+import type { ProviderRuntimeModel } from "../../plugins/types.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
 import { isSecretRefHeaderValueMarker } from "../model-auth-markers.js";
+import { normalizeStaticProviderModelId } from "../model-ref-shared.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
 import {
   buildSuppressedBuiltInModelError,
   shouldSuppressBuiltInModel,
 } from "../model-suppression.js";
 import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
-import { resolveProviderRequestConfig } from "../provider-request-config.js";
+import {
+  attachModelProviderRequestTransport,
+  resolveProviderRequestConfig,
+  sanitizeConfiguredModelProviderRequest,
+} from "../provider-request-config.js";
 import { normalizeResolvedProviderModel } from "./model.provider-normalization.js";
 
 type InlineModelEntry = Omit<ModelDefinitionConfig, "api"> & {
@@ -37,6 +43,7 @@ type InlineProviderConfig = {
   models?: ModelDefinitionConfig[];
   headers?: unknown;
   authHeader?: boolean;
+  request?: ModelProviderConfig["request"];
 };
 
 type ProviderRuntimeHooks = {
@@ -49,6 +56,7 @@ type ProviderRuntimeHooks = {
   buildProviderUnknownModelHintWithPlugin: (
     params: Parameters<typeof buildProviderUnknownModelHintWithPlugin>[0],
   ) => string | undefined;
+  clearProviderRuntimeHookCache: () => void;
   prepareProviderDynamicModel: (
     params: Parameters<typeof prepareProviderDynamicModel>[0],
   ) => Promise<void>;
@@ -65,6 +73,7 @@ const DEFAULT_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
   applyProviderResolvedModelCompatWithPlugins,
   applyProviderResolvedTransportWithPlugin,
   buildProviderUnknownModelHintWithPlugin,
+  clearProviderRuntimeHookCache,
   prepareProviderDynamicModel,
   runProviderDynamicModel,
   normalizeProviderResolvedModelWithPlugin,
@@ -75,6 +84,7 @@ const STATIC_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
   applyProviderResolvedModelCompatWithPlugins: () => undefined,
   applyProviderResolvedTransportWithPlugin: () => undefined,
   buildProviderUnknownModelHintWithPlugin: () => undefined,
+  clearProviderRuntimeHookCache: () => {},
   prepareProviderDynamicModel: async () => {},
   runProviderDynamicModel: () => undefined,
   normalizeProviderResolvedModelWithPlugin: () => undefined,
@@ -286,12 +296,12 @@ function resolveConfiguredProviderConfig(
 
 function applyConfiguredProviderOverrides(params: {
   provider: string;
-  discoveredModel: Model<Api>;
+  discoveredModel: ProviderRuntimeModel;
   providerConfig?: InlineProviderConfig;
   modelId: string;
   cfg?: OpenClawConfig;
   runtimeHooks?: ProviderRuntimeHooks;
-}): Model<Api> {
+}): ProviderRuntimeModel {
   const { discoveredModel, providerConfig, modelId } = params;
   if (!providerConfig) {
     return {
@@ -307,10 +317,17 @@ function applyConfiguredProviderOverrides(params: {
   const providerHeaders = sanitizeModelHeaders(providerConfig.headers, {
     stripSecretRefMarkers: true,
   });
+  const providerRequest = sanitizeConfiguredModelProviderRequest(providerConfig.request);
   const configuredHeaders = sanitizeModelHeaders(configuredModel?.headers, {
     stripSecretRefMarkers: true,
   });
-  if (!configuredModel && !providerConfig.baseUrl && !providerConfig.api && !providerHeaders) {
+  if (
+    !configuredModel &&
+    !providerConfig.baseUrl &&
+    !providerConfig.api &&
+    !providerHeaders &&
+    !providerRequest
+  ) {
     return {
       ...discoveredModel,
       headers: discoveredHeaders,
@@ -340,21 +357,26 @@ function applyConfiguredProviderOverrides(params: {
     providerHeaders,
     modelHeaders: configuredHeaders,
     authHeader: providerConfig.authHeader,
+    request: providerRequest,
     capability: "llm",
     transport: "stream",
   });
-  return {
-    ...discoveredModel,
-    api: requestConfig.api ?? "openai-responses",
-    baseUrl: requestConfig.baseUrl ?? discoveredModel.baseUrl,
-    reasoning: configuredModel?.reasoning ?? discoveredModel.reasoning,
-    input: normalizedInput,
-    cost: configuredModel?.cost ?? discoveredModel.cost,
-    contextWindow: configuredModel?.contextWindow ?? discoveredModel.contextWindow,
-    maxTokens: configuredModel?.maxTokens ?? discoveredModel.maxTokens,
-    headers: requestConfig.headers,
-    compat: configuredModel?.compat ?? discoveredModel.compat,
-  };
+  return attachModelProviderRequestTransport(
+    {
+      ...discoveredModel,
+      api: requestConfig.api ?? "openai-responses",
+      baseUrl: requestConfig.baseUrl ?? discoveredModel.baseUrl,
+      reasoning: configuredModel?.reasoning ?? discoveredModel.reasoning,
+      input: normalizedInput,
+      cost: configuredModel?.cost ?? discoveredModel.cost,
+      contextWindow: configuredModel?.contextWindow ?? discoveredModel.contextWindow,
+      contextTokens: configuredModel?.contextTokens ?? discoveredModel.contextTokens,
+      maxTokens: configuredModel?.maxTokens ?? discoveredModel.maxTokens,
+      headers: requestConfig.headers,
+      compat: configuredModel?.compat ?? discoveredModel.compat,
+    },
+    providerRequest,
+  );
 }
 
 export function buildInlineProviderModels(
@@ -368,6 +390,7 @@ export function buildInlineProviderModels(
     const providerHeaders = sanitizeModelHeaders(entry?.headers, {
       stripSecretRefMarkers: true,
     });
+    const providerRequest = sanitizeConfiguredModelProviderRequest(entry?.request);
     return (entry?.models ?? []).map((model) => {
       const transport = resolveProviderTransport({
         provider: trimmed,
@@ -384,16 +407,20 @@ export function buildInlineProviderModels(
         providerHeaders,
         modelHeaders,
         authHeader: entry?.authHeader,
+        request: providerRequest,
         capability: "llm",
         transport: "stream",
       });
-      return {
-        ...model,
-        provider: trimmed,
-        baseUrl: requestConfig.baseUrl,
-        api: requestConfig.api ?? model.api,
-        headers: requestConfig.headers,
-      };
+      return attachModelProviderRequestTransport(
+        {
+          ...model,
+          provider: trimmed,
+          baseUrl: requestConfig.baseUrl ?? transport.baseUrl,
+          api: requestConfig.api ?? model.api,
+          headers: requestConfig.headers,
+        },
+        providerRequest,
+      );
     });
   });
 }
@@ -528,6 +555,7 @@ function resolveConfiguredFallbackModel(params: {
   const providerHeaders = sanitizeModelHeaders(providerConfig?.headers, {
     stripSecretRefMarkers: true,
   });
+  const providerRequest = sanitizeConfiguredModelProviderRequest(providerConfig?.request);
   const modelHeaders = sanitizeModelHeaders(configuredModel?.headers, {
     stripSecretRefMarkers: true,
   });
@@ -548,6 +576,7 @@ function resolveConfiguredFallbackModel(params: {
     providerHeaders,
     modelHeaders,
     authHeader: providerConfig?.authHeader,
+    request: providerRequest,
     capability: "llm",
     transport: "stream",
   });
@@ -555,25 +584,29 @@ function resolveConfiguredFallbackModel(params: {
     provider,
     cfg,
     agentDir,
-    model: {
-      id: modelId,
-      name: modelId,
-      api: requestConfig.api ?? "openai-responses",
-      provider,
-      baseUrl: requestConfig.baseUrl,
-      reasoning: configuredModel?.reasoning ?? false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow:
-        configuredModel?.contextWindow ??
-        providerConfig?.models?.[0]?.contextWindow ??
-        DEFAULT_CONTEXT_TOKENS,
-      maxTokens:
-        configuredModel?.maxTokens ??
-        providerConfig?.models?.[0]?.maxTokens ??
-        DEFAULT_CONTEXT_TOKENS,
-      headers: requestConfig.headers,
-    } as Model<Api>,
+    model: attachModelProviderRequestTransport(
+      {
+        id: modelId,
+        name: modelId,
+        api: requestConfig.api ?? "openai-responses",
+        provider,
+        baseUrl: requestConfig.baseUrl,
+        reasoning: configuredModel?.reasoning ?? false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow:
+          configuredModel?.contextWindow ??
+          providerConfig?.models?.[0]?.contextWindow ??
+          DEFAULT_CONTEXT_TOKENS,
+        contextTokens: configuredModel?.contextTokens ?? providerConfig?.models?.[0]?.contextTokens,
+        maxTokens:
+          configuredModel?.maxTokens ??
+          providerConfig?.models?.[0]?.maxTokens ??
+          DEFAULT_CONTEXT_TOKENS,
+        headers: requestConfig.headers,
+      } as Model<Api>,
+      providerRequest,
+    ),
     runtimeHooks,
   });
 }
@@ -586,7 +619,16 @@ export function resolveModelWithRegistry(params: {
   agentDir?: string;
   runtimeHooks?: ProviderRuntimeHooks;
 }): Model<Api> | undefined {
-  const explicitModel = resolveExplicitModelWithRegistry(params);
+  const normalizedRef = {
+    provider: params.provider,
+    model: normalizeStaticProviderModelId(normalizeProviderId(params.provider), params.modelId),
+  };
+  const normalizedParams = {
+    ...params,
+    provider: normalizedRef.provider,
+    modelId: normalizedRef.model,
+  };
+  const explicitModel = resolveExplicitModelWithRegistry(normalizedParams);
   if (explicitModel?.kind === "suppressed") {
     return undefined;
   }
@@ -594,12 +636,12 @@ export function resolveModelWithRegistry(params: {
     return explicitModel.model;
   }
 
-  const pluginDynamicModel = resolvePluginDynamicModelWithRegistry(params);
+  const pluginDynamicModel = resolvePluginDynamicModelWithRegistry(normalizedParams);
   if (pluginDynamicModel) {
     return pluginDynamicModel;
   }
 
-  return resolveConfiguredFallbackModel(params);
+  return resolveConfiguredFallbackModel(normalizedParams);
 }
 
 export function resolveModel(
@@ -619,13 +661,17 @@ export function resolveModel(
   authStorage: AuthStorage;
   modelRegistry: ModelRegistry;
 } {
+  const normalizedRef = {
+    provider,
+    model: normalizeStaticProviderModelId(normalizeProviderId(provider), modelId),
+  };
   const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
   const authStorage = options?.authStorage ?? discoverAuthStorage(resolvedAgentDir);
   const modelRegistry = options?.modelRegistry ?? discoverModels(authStorage, resolvedAgentDir);
   const runtimeHooks = resolveRuntimeHooks(options);
   const model = resolveModelWithRegistry({
-    provider,
-    modelId,
+    provider: normalizedRef.provider,
+    modelId: normalizedRef.model,
     modelRegistry,
     cfg,
     agentDir: resolvedAgentDir,
@@ -637,8 +683,8 @@ export function resolveModel(
 
   return {
     error: buildUnknownModelError({
-      provider,
-      modelId,
+      provider: normalizedRef.provider,
+      modelId: normalizedRef.model,
       cfg,
       agentDir: resolvedAgentDir,
       runtimeHooks,
@@ -666,13 +712,17 @@ export async function resolveModelAsync(
   authStorage: AuthStorage;
   modelRegistry: ModelRegistry;
 }> {
+  const normalizedRef = {
+    provider,
+    model: normalizeStaticProviderModelId(normalizeProviderId(provider), modelId),
+  };
   const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
   const authStorage = options?.authStorage ?? discoverAuthStorage(resolvedAgentDir);
   const modelRegistry = options?.modelRegistry ?? discoverModels(authStorage, resolvedAgentDir);
   const runtimeHooks = resolveRuntimeHooks(options);
   const explicitModel = resolveExplicitModelWithRegistry({
-    provider,
-    modelId,
+    provider: normalizedRef.provider,
+    modelId: normalizedRef.model,
     modelRegistry,
     cfg,
     agentDir: resolvedAgentDir,
@@ -681,8 +731,8 @@ export async function resolveModelAsync(
   if (explicitModel?.kind === "suppressed") {
     return {
       error: buildUnknownModelError({
-        provider,
-        modelId,
+        provider: normalizedRef.provider,
+        modelId: normalizedRef.model,
         cfg,
         agentDir: resolvedAgentDir,
         runtimeHooks,
@@ -691,26 +741,26 @@ export async function resolveModelAsync(
       modelRegistry,
     };
   }
-  const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
+  const providerConfig = resolveConfiguredProviderConfig(cfg, normalizedRef.provider);
   const resolveDynamicAttempt = async (attemptOptions?: { clearHookCache?: boolean }) => {
     if (attemptOptions?.clearHookCache) {
-      clearProviderRuntimeHookCache();
+      runtimeHooks.clearProviderRuntimeHookCache();
     }
     await runtimeHooks.prepareProviderDynamicModel({
-      provider,
+      provider: normalizedRef.provider,
       config: cfg,
       context: {
         config: cfg,
         agentDir: resolvedAgentDir,
-        provider,
-        modelId,
+        provider: normalizedRef.provider,
+        modelId: normalizedRef.model,
         modelRegistry,
         providerConfig,
       },
     });
     return resolveModelWithRegistry({
-      provider,
-      modelId,
+      provider: normalizedRef.provider,
+      modelId: normalizedRef.model,
       modelRegistry,
       cfg,
       agentDir: resolvedAgentDir,
@@ -731,8 +781,8 @@ export async function resolveModelAsync(
 
   return {
     error: buildUnknownModelError({
-      provider,
-      modelId,
+      provider: normalizedRef.provider,
+      modelId: normalizedRef.model,
       cfg,
       agentDir: resolvedAgentDir,
       runtimeHooks,

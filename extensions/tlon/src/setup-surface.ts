@@ -27,8 +27,9 @@ function parseList(value: string): string[] {
 export { tlonSetupAdapter } from "./setup-core.js";
 
 export const tlonSetupWizard = createTlonSetupWizardBase({
-  resolveConfigured: async ({ cfg }) => await resolveTlonSetupConfigured(cfg),
-  resolveStatusLines: async ({ cfg }) => await resolveTlonSetupStatusLines(cfg),
+  resolveConfigured: async ({ cfg, accountId }) => await resolveTlonSetupConfigured(cfg, accountId),
+  resolveStatusLines: async ({ cfg, accountId }) =>
+    await resolveTlonSetupStatusLines(cfg, accountId),
   finalize: async ({ cfg, accountId, prompter }) => {
     let next = cfg;
     const resolved = resolveTlonAccount(next, accountId);
@@ -45,7 +46,7 @@ export const tlonSetupWizard = createTlonSetupWizardBase({
         initialValue: allowPrivateNetwork,
       });
       if (!allowPrivateNetwork) {
-        throw new Error("Refusing private/internal Ship URL without explicit approval");
+        throw new Error("Refusing private/internal ship URL without explicit network opt-in");
       }
     }
     next = applyTlonSetupConfig({

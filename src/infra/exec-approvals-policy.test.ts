@@ -146,6 +146,19 @@ describe("exec approvals policy helpers", () => {
     ).toBe(true);
   });
 
+  it("treats fully allow-always-matched segments as durable trust", () => {
+    expect(
+      hasDurableExecApproval({
+        analysisOk: true,
+        segmentAllowlistEntries: [
+          { pattern: "/usr/bin/echo", source: "allow-always" },
+          { pattern: "/usr/bin/printf", source: "allow-always" },
+        ],
+        allowlist: [],
+      }),
+    ).toBe(true);
+  });
+
   it("marks policy-blocked segments as non-durable allowlist entries", () => {
     const executable = makeMockExecutableResolution({
       rawExecutable: "/usr/bin/echo",
@@ -463,8 +476,8 @@ describe("exec approvals policy helpers", () => {
     });
 
     expect(summary.askFallback).toEqual({
-      effective: "deny",
-      source: "OpenClaw default (deny)",
+      effective: "full",
+      source: "OpenClaw default (full)",
     });
   });
 

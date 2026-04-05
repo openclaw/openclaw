@@ -1,13 +1,20 @@
 import { createHmac, createHash } from "node:crypto";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { resolveChannelApprovalCapability } from "../channels/plugins/approvals.js";
+import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import { buildMemoryPromptSection } from "../plugins/memory-state.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import type { ResolvedTimeFormat } from "./date-time.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import type { EmbeddedSandboxInfo } from "./pi-embedded-runner/types.js";
+import {
+  normalizePromptCapabilityIds,
+  normalizeStructuredPromptSection,
+} from "./prompt-cache-stability.js";
 import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 
 /**
  * Controls which hardcoded sections are included in the system prompt.
@@ -17,6 +24,81 @@ import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
  */
 export type PromptMode = "full" | "minimal" | "none";
 type OwnerIdDisplay = "raw" | "hash";
+
+const CONTEXT_FILE_ORDER = new Map<string, number>([
+  ["agents.md", 10],
+  ["soul.md", 20],
+  ["identity.md", 30],
+  ["user.md", 40],
+  ["tools.md", 50],
+  ["bootstrap.md", 60],
+  ["memory.md", 70],
+]);
+
+const DYNAMIC_CONTEXT_FILE_BASENAMES = new Set(["heartbeat.md"]);
+
+function normalizeContextFilePath(pathValue: string): string {
+  return pathValue.trim().replace(/\\/g, "/");
+}
+
+function getContextFileBasename(pathValue: string): string {
+  const normalizedPath = normalizeContextFilePath(pathValue);
+  return (normalizedPath.split("/").pop() ?? normalizedPath).toLowerCase();
+}
+
+function isDynamicContextFile(pathValue: string): boolean {
+  return DYNAMIC_CONTEXT_FILE_BASENAMES.has(getContextFileBasename(pathValue));
+}
+
+function sortContextFilesForPrompt(contextFiles: EmbeddedContextFile[]): EmbeddedContextFile[] {
+  return contextFiles.toSorted((a, b) => {
+    const aPath = normalizeContextFilePath(a.path);
+    const bPath = normalizeContextFilePath(b.path);
+    const aBase = getContextFileBasename(a.path);
+    const bBase = getContextFileBasename(b.path);
+    const aOrder = CONTEXT_FILE_ORDER.get(aBase) ?? Number.MAX_SAFE_INTEGER;
+    const bOrder = CONTEXT_FILE_ORDER.get(bBase) ?? Number.MAX_SAFE_INTEGER;
+    if (aOrder !== bOrder) {
+      return aOrder - bOrder;
+    }
+    if (aBase !== bBase) {
+      return aBase.localeCompare(bBase);
+    }
+    return aPath.localeCompare(bPath);
+  });
+}
+
+function buildProjectContextSection(params: {
+  files: EmbeddedContextFile[];
+  heading: string;
+  dynamic: boolean;
+}) {
+  if (params.files.length === 0) {
+    return [];
+  }
+  const lines = [params.heading, ""];
+  if (params.dynamic) {
+    lines.push(
+      "The following frequently-changing project context files are kept below the cache boundary when possible:",
+      "",
+    );
+  } else {
+    const hasSoulFile = params.files.some(
+      (file) => getContextFileBasename(file.path) === "soul.md",
+    );
+    lines.push("The following project context files have been loaded:");
+    if (hasSoulFile) {
+      lines.push(
+        "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.",
+      );
+    }
+    lines.push("");
+  }
+  for (const file of params.files) {
+    lines.push(`## ${file.path}`, "", file.content, "");
+  }
+  return lines;
+}
 
 function buildSkillsSection(params: { skillsPrompt?: string; readToolName: string }) {
   const trimmed = params.skillsPrompt?.trim();
@@ -173,15 +255,19 @@ function buildDocsSection(params: { docsPath?: string; isMinimal: boolean; readT
   ];
 }
 
-function buildExecApprovalPromptGuidance(params: { runtimeChannel?: string }) {
+function buildExecApprovalPromptGuidance(params: {
+  runtimeChannel?: string;
+  inlineButtonsEnabled?: boolean;
+}) {
   const runtimeChannel = params.runtimeChannel?.trim().toLowerCase();
-  if (
-    runtimeChannel === "discord" ||
-    runtimeChannel === "slack" ||
-    runtimeChannel === "telegram" ||
-    runtimeChannel === "webchat"
-  ) {
-    return "When exec returns approval-pending on Discord, Slack, Telegram, or WebChat, rely on the native approval card/buttons when they appear and do not also send plain chat /approve instructions. Only include the concrete /approve command if the tool result says chat approvals are unavailable or only manual approval is possible.";
+  const usesNativeApprovalUi =
+    runtimeChannel === "webchat" ||
+    params.inlineButtonsEnabled === true ||
+    (runtimeChannel
+      ? Boolean(resolveChannelApprovalCapability(getChannelPlugin(runtimeChannel))?.native)
+      : false);
+  if (usesNativeApprovalUi) {
+    return "When exec returns approval-pending on this channel, rely on native approval card/buttons when they appear and do not also send plain chat /approve instructions. Only include the concrete /approve command if the tool result says chat approvals are unavailable or only manual approval is possible.";
   }
   return "When exec returns approval-pending, include the concrete /approve command from tool output as plain chat text for the user, and do not ask for a different or rotated code.";
 }
@@ -236,6 +322,12 @@ export function buildAgentSystemPrompt(params: {
   const acpEnabled = params.acpEnabled !== false;
   const sandboxedRuntime = params.sandboxInfo?.enabled === true;
   const acpSpawnRuntimeEnabled = acpEnabled && !sandboxedRuntime;
+  const execToolSummary =
+    "Run shell commands (pty available for TTY-required CLIs; use for work that starts now, not delayed follow-ups; background completion may wake automatically when enabled)";
+  const processToolSummary =
+    "Manage background exec sessions for commands already started (poll/log for inspection, debugging, input, intervention, or completion confirmation when auto-wake is unavailable)";
+  const cronToolSummary =
+    "Manage cron jobs and wake events (use for reminders, delayed follow-ups, and recurring tasks; for requests like 'check back in 10 minutes' or 'remind me later', use cron instead of exec sleep, yieldMs delays, or process polling; when scheduling a reminder, write the systemEvent text as something that will read like a reminder when it fires, and mention that it is a reminder depending on the time gap between setting and firing; include recent context in reminder text if appropriate)";
   const coreToolSummaries: Record<string, string> = {
     read: "Read file contents",
     write: "Create or overwrite files",
@@ -244,15 +336,15 @@ export function buildAgentSystemPrompt(params: {
     grep: "Search file contents for patterns",
     find: "Find files by glob pattern",
     ls: "List directory contents",
-    exec: "Run shell commands (pty available for TTY-required CLIs)",
-    process: "Manage background exec sessions",
+    exec: execToolSummary,
+    process: processToolSummary,
     web_search: "Search the web",
     web_fetch: "Fetch and extract readable content from a URL",
     // Channel docking: add login tools here when a channel needs interactive linking.
     browser: "Control web browser",
     canvas: "Present/eval/snapshot the Canvas",
     nodes: "List/describe/notify/camera/screen on paired nodes",
-    cron: "Manage cron jobs and wake events (use for reminders; when scheduling a reminder, write the systemEvent text as something that will read like a reminder when it fires, and mention that it is a reminder depending on the time gap between setting and firing; include recent context in reminder text if appropriate)",
+    cron: cronToolSummary,
     message: "Send messages and channel actions",
     gateway: "Restart, apply config, or run updates on the running OpenClaw process",
     agents_list: acpSpawnRuntimeEnabled
@@ -340,11 +432,16 @@ export function buildAgentSystemPrompt(params: {
     toolLines.push(summary ? `- ${name}: ${summary}` : `- ${name}`);
   }
 
+  const usingDefaultToolFallback = toolLines.length === 0;
   const hasGateway = availableTools.has("gateway");
+  const hasCronTool = availableTools.has("cron") || usingDefaultToolFallback;
   const readToolName = resolveToolName("read");
   const execToolName = resolveToolName("exec");
   const processToolName = resolveToolName("process");
-  const extraSystemPrompt = params.extraSystemPrompt?.trim();
+  const extraSystemPrompt =
+    typeof params.extraSystemPrompt === "string"
+      ? normalizeStructuredPromptSection(params.extraSystemPrompt)
+      : undefined;
   const ownerDisplay = params.ownerDisplay === "hash" ? "hash" : "raw";
   const ownerLine = buildOwnerIdentityLine(
     params.ownerNumbers ?? [],
@@ -365,14 +462,20 @@ export function buildAgentSystemPrompt(params: {
     : undefined;
   const reasoningLevel = params.reasoningLevel ?? "off";
   const userTimezone = params.userTimezone?.trim();
-  const skillsPrompt = params.skillsPrompt?.trim();
-  const heartbeatPrompt = params.heartbeatPrompt?.trim();
+  const skillsPrompt =
+    typeof params.skillsPrompt === "string"
+      ? normalizeStructuredPromptSection(params.skillsPrompt)
+      : undefined;
+  const heartbeatPrompt =
+    typeof params.heartbeatPrompt === "string"
+      ? normalizeStructuredPromptSection(params.heartbeatPrompt)
+      : undefined;
   const runtimeInfo = params.runtimeInfo;
   const runtimeChannel = runtimeInfo?.channel?.trim().toLowerCase();
-  const runtimeCapabilities = (runtimeInfo?.capabilities ?? [])
-    .map((cap) => String(cap).trim())
-    .filter(Boolean);
-  const runtimeCapabilitiesLower = new Set(runtimeCapabilities.map((cap) => cap.toLowerCase()));
+  const runtimeCapabilities = runtimeInfo?.capabilities ?? [];
+  const runtimeCapabilitiesLower = new Set(
+    runtimeCapabilities.map((cap) => String(cap).trim().toLowerCase()).filter(Boolean),
+  );
   const inlineButtonsEnabled = runtimeCapabilitiesLower.has("inlinebuttons");
   const messageChannelOptions = listDeliverableMessageChannels().join("|");
   const promptMode = params.promptMode ?? "full";
@@ -411,7 +514,12 @@ export function buildAgentSystemPrompt(params: {
     isMinimal,
     readToolName,
   });
-  const workspaceNotes = (params.workspaceNotes ?? []).map((note) => note.trim()).filter(Boolean);
+  const workspaceNotes = (params.workspaceNotes ?? [])
+    .map((note) => normalizeStructuredPromptSection(note))
+    .filter(Boolean);
+  const modelAliasLines = (params.modelAliasLines ?? [])
+    .map((line) => normalizeStructuredPromptSection(line))
+    .filter(Boolean);
 
   // For "none" mode, return just the basic identity line
   if (promptMode === "none") {
@@ -432,12 +540,12 @@ export function buildAgentSystemPrompt(params: {
           "- find: find files by glob pattern",
           "- ls: list directory contents",
           "- apply_patch: apply multi-file patches",
-          `- ${execToolName}: run shell commands (supports background via yieldMs/background)`,
-          `- ${processToolName}: manage background exec sessions`,
+          `- ${execToolName}: ${execToolSummary.toLowerCase()}`,
+          `- ${processToolName}: ${processToolSummary.toLowerCase()}`,
           "- browser: control OpenClaw's dedicated browser",
           "- canvas: present/eval/snapshot the Canvas",
           "- nodes: list/describe/notify/camera/screen on paired nodes",
-          "- cron: manage cron jobs and wake events (use for reminders; when scheduling a reminder, write the systemEvent text as something that will read like a reminder when it fires, and mention that it is a reminder depending on the time gap between setting and firing; include recent context in reminder text if appropriate)",
+          `- cron: ${cronToolSummary.toLowerCase()}`,
           "- sessions_list: list sessions",
           "- sessions_history: fetch session history",
           "- sessions_send: send to another session",
@@ -445,7 +553,17 @@ export function buildAgentSystemPrompt(params: {
           '- session_status: show usage/time/model state and answer "what model are we using?"',
         ].join("\n"),
     "TOOLS.md does not control tool availability; it is user guidance for how to use external tools.",
-    `For long waits, avoid rapid poll loops: use ${execToolName} with enough yieldMs or ${processToolName}(action=poll, timeout=<ms>).`,
+    ...(hasCronTool
+      ? [
+          `For follow-up at a future time (for example "check back in 10 minutes", reminders, run-later work, or recurring tasks), use cron instead of ${execToolName} sleep, yieldMs delays, or ${processToolName} polling.`,
+          `Use ${execToolName}/${processToolName} only for commands that start now and continue running in the background.`,
+          `For long-running work that starts now, start it once and rely on automatic completion wake when it is enabled and the command emits output or fails; otherwise use ${processToolName} to confirm completion, and use it for logs, status, input, or intervention.`,
+          "Do not emulate scheduling with sleep loops, timeout loops, or repeated polling.",
+        ]
+      : [
+          `For long waits, avoid rapid poll loops: use ${execToolName} with enough yieldMs or ${processToolName}(action=poll, timeout=<ms>).`,
+          `For long-running work that starts now, start it once and rely on automatic completion wake when it is enabled and the command emits output or fails; otherwise use ${processToolName} to confirm completion, and use it for logs, status, input, or intervention.`,
+        ]),
     "If a task is more complex or takes longer, spawn a sub-agent. Completion is push-based: it will auto-announce when done.",
     ...(acpHarnessSpawnAllowed
       ? [
@@ -465,6 +583,7 @@ export function buildAgentSystemPrompt(params: {
     "When a first-class tool exists for an action, use the tool directly instead of asking the user to run equivalent CLI or slash commands.",
     buildExecApprovalPromptGuidance({
       runtimeChannel: params.runtimeInfo?.channel,
+      inlineButtonsEnabled,
     }),
     "Never execute /approve through exec or any other shell/tool path; /approve is a user-facing approval command, not a shell command.",
     "Treat allow-once as single-command only: if another elevated command needs approval, request a fresh /approve and do not claim prior approval covered it.",
@@ -496,16 +615,12 @@ export function buildAgentSystemPrompt(params: {
     hasGateway && !isMinimal ? "" : "",
     "",
     // Skip model aliases for subagent/none modes
-    params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
-      ? "## Model Aliases"
-      : "",
-    params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
+    modelAliasLines.length > 0 && !isMinimal ? "## Model Aliases" : "",
+    modelAliasLines.length > 0 && !isMinimal
       ? "Prefer aliases when specifying model overrides; full provider/model is also accepted."
       : "",
-    params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
-      ? params.modelAliasLines.join("\n")
-      : "",
-    params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal ? "" : "",
+    modelAliasLines.length > 0 && !isMinimal ? modelAliasLines.join("\n") : "",
+    modelAliasLines.length > 0 && !isMinimal ? "" : "",
     userTimezone
       ? "If you need the current date, time, or day of week, run session_status (📊 session_status)."
       : "",
@@ -582,12 +697,6 @@ export function buildAgentSystemPrompt(params: {
     ...buildVoiceSection({ isMinimal, ttsHint: params.ttsHint }),
   ];
 
-  if (extraSystemPrompt) {
-    // Use "Subagent Context" header for minimal mode (subagents), otherwise "Group Chat Context"
-    const contextHeader =
-      promptMode === "minimal" ? "## Subagent Context" : "## Group Chat Context";
-    lines.push(contextHeader, extraSystemPrompt, "");
-  }
   if (params.reactionGuidance) {
     const { level, channel } = params.reactionGuidance;
     const guidanceText =
@@ -619,26 +728,16 @@ export function buildAgentSystemPrompt(params: {
   const validContextFiles = contextFiles.filter(
     (file) => typeof file.path === "string" && file.path.trim().length > 0,
   );
-  if (validContextFiles.length > 0) {
-    lines.push("# Project Context", "");
-    if (validContextFiles.length > 0) {
-      const hasSoulFile = validContextFiles.some((file) => {
-        const normalizedPath = file.path.trim().replace(/\\/g, "/");
-        const baseName = normalizedPath.split("/").pop() ?? normalizedPath;
-        return baseName.toLowerCase() === "soul.md";
-      });
-      lines.push("The following project context files have been loaded:");
-      if (hasSoulFile) {
-        lines.push(
-          "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.",
-        );
-      }
-      lines.push("");
-    }
-    for (const file of validContextFiles) {
-      lines.push(`## ${file.path}`, "", file.content, "");
-    }
-  }
+  const orderedContextFiles = sortContextFilesForPrompt(validContextFiles);
+  const stableContextFiles = orderedContextFiles.filter((file) => !isDynamicContextFile(file.path));
+  const dynamicContextFiles = orderedContextFiles.filter((file) => isDynamicContextFile(file.path));
+  lines.push(
+    ...buildProjectContextSection({
+      files: stableContextFiles,
+      heading: "# Project Context",
+      dynamic: false,
+    }),
+  );
 
   // Skip silent replies for subagent/none modes
   if (!isMinimal) {
@@ -656,6 +755,26 @@ export function buildAgentSystemPrompt(params: {
       `✅ Right: ${SILENT_REPLY_TOKEN}`,
       "",
     );
+  }
+
+  // Keep large stable prompt context above this seam so Anthropic-family
+  // transports can reuse it across labs and turns. Dynamic group/session
+  // additions and volatile project context below it are the primary cache invalidators.
+  lines.push(SYSTEM_PROMPT_CACHE_BOUNDARY);
+
+  lines.push(
+    ...buildProjectContextSection({
+      files: dynamicContextFiles,
+      heading: stableContextFiles.length > 0 ? "# Dynamic Project Context" : "# Project Context",
+      dynamic: true,
+    }),
+  );
+
+  if (extraSystemPrompt) {
+    // Use "Subagent Context" header for minimal mode (subagents), otherwise "Group Chat Context"
+    const contextHeader =
+      promptMode === "minimal" ? "## Subagent Context" : "## Group Chat Context";
+    lines.push(contextHeader, extraSystemPrompt, "");
   }
 
   // Skip heartbeats for subagent/none modes
@@ -696,6 +815,7 @@ export function buildRuntimeLine(
   runtimeCapabilities: string[] = [],
   defaultThinkLevel?: ThinkLevel,
 ): string {
+  const normalizedRuntimeCapabilities = normalizePromptCapabilityIds(runtimeCapabilities);
   return `Runtime: ${[
     runtimeInfo?.agentId ? `agent=${runtimeInfo.agentId}` : "",
     runtimeInfo?.host ? `host=${runtimeInfo.host}` : "",
@@ -711,7 +831,11 @@ export function buildRuntimeLine(
     runtimeInfo?.shell ? `shell=${runtimeInfo.shell}` : "",
     runtimeChannel ? `channel=${runtimeChannel}` : "",
     runtimeChannel
-      ? `capabilities=${runtimeCapabilities.length > 0 ? runtimeCapabilities.join(",") : "none"}`
+      ? `capabilities=${
+          normalizedRuntimeCapabilities.length > 0
+            ? normalizedRuntimeCapabilities.join(",")
+            : "none"
+        }`
       : "",
     `thinking=${defaultThinkLevel ?? "off"}`,
   ]
