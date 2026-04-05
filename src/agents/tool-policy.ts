@@ -46,6 +46,7 @@ export const TOOL_GROUPS: Record<string, string[]> = {
     "message",
     "gateway",
     "agents_list",
+    "self_info",
     "sessions_list",
     "sessions_history",
     "sessions_send",

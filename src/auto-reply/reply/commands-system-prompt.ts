@@ -62,6 +62,7 @@ export async function resolveCommandsSystemPromptBundle(
         groupSpace: params.sessionEntry?.space ?? undefined,
         spawnedBy: params.sessionEntry?.spawnedBy ?? undefined,
         senderIsOwner: params.command.senderIsOwner,
+        senderIsAdmin: params.command.senderIsAdmin,
         modelProvider: params.provider,
         modelId: params.model,
       });

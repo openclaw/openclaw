@@ -115,6 +115,7 @@ function baseParams(
       abortKey: "session-key",
       ownerList: [],
       senderIsOwner: false,
+      senderIsAdmin: false,
     } as never,
     commandSource: "",
     allowTextCommands: true,

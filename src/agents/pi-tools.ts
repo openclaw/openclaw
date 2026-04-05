@@ -215,6 +215,8 @@ export function createOpenClawCodingTools(options?: {
   disableMessageTool?: boolean;
   /** Whether the sender is an owner (required for owner-only tools). */
   senderIsOwner?: boolean;
+  /** Whether the sender is an admin (gets same tool access as owners). */
+  senderIsAdmin?: boolean;
 }): AnyAgentTool[] {
   const execToolName = "exec";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
@@ -461,7 +463,8 @@ export function createOpenClawCodingTools(options?: {
   ];
   // Security: treat unknown/undefined as unauthorized (opt-in, not opt-out)
   const senderIsOwner = options?.senderIsOwner === true;
-  const toolsByAuthorization = applyOwnerOnlyToolPolicy(tools, senderIsOwner);
+  const senderIsAdmin = options?.senderIsAdmin === true;
+  const toolsByAuthorization = applyOwnerOnlyToolPolicy(tools, senderIsOwner || senderIsAdmin);
   const subagentFiltered = applyToolPolicyPipeline({
     tools: toolsByAuthorization,
     toolMeta: (tool) => getPluginToolMeta(tool),

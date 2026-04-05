@@ -53,6 +53,7 @@ describe("handleInlineActions", () => {
         channelId: "whatsapp",
         ownerList: [],
         senderIsOwner: false,
+        senderIsAdmin: false,
         isAuthorizedSender: false,
         senderId: undefined,
         abortKey: "whatsapp:+999",

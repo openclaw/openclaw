@@ -66,6 +66,43 @@ function buildMemorySection(params: {
   return lines;
 }
 
+function buildSelfManagementSection(params: {
+  isMinimal: boolean;
+  availableTools: Set<string>;
+}) {
+  if (params.isMinimal) {
+    return [];
+  }
+  const hasSelfInfo = params.availableTools.has("self_info");
+  const hasCron = params.availableTools.has("cron");
+  const hasGateway = params.availableTools.has("gateway");
+  const hasBrowser = params.availableTools.has("browser");
+  if (!hasSelfInfo && !hasCron && !hasGateway && !hasBrowser) {
+    return [];
+  }
+  const lines = ["## Self-Management"];
+  if (hasSelfInfo) {
+    lines.push(
+      "- When asked about your identity, widget link, channels, model, or configuration: use `self_info`.",
+    );
+  }
+  if (hasCron) {
+    lines.push("- When asked to schedule tasks, reminders, or recurring jobs: use `cron`.");
+  }
+  if (hasGateway) {
+    lines.push(
+      "- When asked to change settings, configuration, or restart: use `gateway`.",
+    );
+  }
+  if (hasBrowser) {
+    lines.push(
+      "- When asked to browse the web, open a page, or interact with a website: use `browser`.",
+    );
+  }
+  lines.push("");
+  return lines;
+}
+
 function buildUserIdentitySection(ownerLine: string | undefined, isMinimal: boolean) {
   if (!ownerLine || isMinimal) {
     return [];
@@ -241,6 +278,8 @@ export function buildAgentSystemPrompt(params: {
     cron: "Manage cron jobs and wake events (use for reminders; when scheduling a reminder, write the systemEvent text as something that will read like a reminder when it fires, and mention that it is a reminder depending on the time gap between setting and firing; include recent context in reminder text if appropriate)",
     message: "Send messages and channel actions",
     gateway: "Restart, apply config, or run updates on the running OpenClaw process",
+    self_info:
+      "Query your own identity, widget link, enabled channels, model, or config summary — use this to answer questions about yourself",
     agents_list: "List agent ids allowed for sessions_spawn",
     sessions_list: "List other sessions (incl. sub-agents) with filters/last",
     sessions_history: "Fetch history for another session/sub-agent",
@@ -270,6 +309,7 @@ export function buildAgentSystemPrompt(params: {
     "cron",
     "message",
     "gateway",
+    "self_info",
     "agents_list",
     "sessions_list",
     "sessions_history",
@@ -447,6 +487,7 @@ export function buildAgentSystemPrompt(params: {
     "",
     ...skillsSection,
     ...memorySection,
+    ...buildSelfManagementSection({ isMinimal, availableTools }),
     // Skip self-update for subagent/none modes
     hasGateway && !isMinimal ? "## OpenClaw Self-Update" : "",
     hasGateway && !isMinimal

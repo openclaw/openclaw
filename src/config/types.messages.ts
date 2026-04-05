@@ -118,6 +118,8 @@ export type CommandsConfig = {
   useAccessGroups?: boolean;
   /** Explicit owner allowlist for owner-only tools/commands (channel-native IDs). */
   ownerAllowFrom?: Array<string | number>;
+  /** Admin allowlist — admins get the same tool access as owners (managed via dashboard). */
+  adminAllowFrom?: Array<string | number>;
   /**
    * Per-provider allowlist restricting who can use slash commands.
    * If set, overrides the channel's allowFrom for command authorization.
