@@ -34,6 +34,22 @@ describe("pickFallbackThinkingLevel", () => {
     expect(result).toBe("off");
   });
 
+  it('falls back to "minimal" when the endpoint requires reasoning', () => {
+    const result = pickFallbackThinkingLevel({
+      message: "400 Reasoning is mandatory for this endpoint and cannot be disabled.",
+      attempted: new Set(["off"]),
+    });
+    expect(result).toBe("minimal");
+  });
+
+  it('returns undefined for reasoning-required errors after "minimal" was attempted', () => {
+    const result = pickFallbackThinkingLevel({
+      message: "400 Reasoning is mandatory for this endpoint and cannot be disabled.",
+      attempted: new Set(["off", "minimal"]),
+    });
+    expect(result).toBeUndefined();
+  });
+
   it('falls back to "off" for generic not-supported messages', () => {
     const result = pickFallbackThinkingLevel({
       message: "thinking level not supported by this provider",
