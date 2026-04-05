@@ -864,6 +864,38 @@ describe("resolveSlackThreadHistory", () => {
     expect(result[0]?.text).toBe("link preview here");
   });
 
+  it("drops forwarded attachments with no text or fallback from thread history", async () => {
+    const replies = vi.fn().mockResolvedValueOnce({
+      messages: [
+        {
+          text: "",
+          user: "U1",
+          ts: "1.000",
+          attachments: [
+            {
+              is_share: true,
+              // no text, no fallback — image-only share
+              image_url: "https://files.slack.com/image.jpg",
+            },
+          ],
+        },
+      ],
+      response_metadata: { next_cursor: "" },
+    });
+    const client = {
+      conversations: { replies },
+    } as unknown as Parameters<typeof resolveSlackThreadHistory>[0]["client"];
+
+    const result = await resolveSlackThreadHistory({
+      channelId: "C1",
+      threadTs: "1.000",
+      client,
+      limit: 10,
+    });
+
+    expect(result).toHaveLength(0);
+  });
+
   it("returns empty when Slack API throws", async () => {
     const replies = vi.fn().mockRejectedValueOnce(new Error("slack down"));
     const client = {

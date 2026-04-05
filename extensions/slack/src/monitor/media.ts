@@ -488,7 +488,10 @@ export async function resolveSlackThreadHistory(params: {
       })) as SlackRepliesPage;
 
       for (const msg of response.messages ?? []) {
-        const hasForwardedAttachments = msg.attachments?.some((a) => a.is_share === true) ?? false;
+        const hasForwardedAttachments =
+          msg.attachments?.some(
+            (a) => a.is_share === true && !!(a.text?.trim() || a.fallback?.trim()),
+          ) ?? false;
         if (!msg.text?.trim() && !msg.files?.length && !hasForwardedAttachments) {
           continue;
         }
@@ -508,6 +511,7 @@ export async function resolveSlackThreadHistory(params: {
     return retained.map((msg) => {
       const forwardedText = (msg.attachments ?? [])
         .filter((a) => a.is_share === true)
+        .slice(0, MAX_SLACK_FORWARDED_ATTACHMENTS)
         .map((a) => {
           const body = a.text?.trim() || a.fallback?.trim();
           if (!body) return null;
