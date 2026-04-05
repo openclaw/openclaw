@@ -198,22 +198,22 @@ Notifications are advisory only. The durable inbox is authoritative.
 
 The gateway must expose the following Claw RPC methods.
 
-| Method | Purpose |
-| --- | --- |
-| `claw.missions.create` | Create a new mission from a goal. |
-| `claw.missions.list` | List missions with filtering and pagination. |
-| `claw.missions.get` | Get one mission with current state, files, and summary views. |
-| `claw.missions.approveStart` | Resolve the one-time start approval. |
-| `claw.missions.pause` | Pause a mission. |
-| `claw.missions.resume` | Resume a paused or blocked mission when appropriate. |
-| `claw.missions.cancel` | Cancel a mission. |
-| `claw.decisions.reply` | Resolve any pending decision. |
-| `claw.control.pauseAll` | Gracefully pause all active missions. |
-| `claw.control.stopAllNow` | Immediate emergency stop. |
-| `claw.control.setAutonomy` | Toggle global autonomy mode on or off. |
-| `claw.audit.get` | Read audit entries for one mission or globally. |
-| `claw.artifacts.list` | List mission artifacts and logs. |
-| `claw.preflight.rerun` | Re-run preflight for a mission. |
+| Method                       | Purpose                                                       |
+| ---------------------------- | ------------------------------------------------------------- |
+| `claw.missions.create`       | Create a new mission from a goal.                             |
+| `claw.missions.list`         | List missions with filtering and pagination.                  |
+| `claw.missions.get`          | Get one mission with current state, files, and summary views. |
+| `claw.missions.approveStart` | Resolve the one-time start approval.                          |
+| `claw.missions.pause`        | Pause a mission.                                              |
+| `claw.missions.resume`       | Resume a paused or blocked mission when appropriate.          |
+| `claw.missions.cancel`       | Cancel a mission.                                             |
+| `claw.decisions.reply`       | Resolve any pending decision.                                 |
+| `claw.control.pauseAll`      | Gracefully pause all active missions.                         |
+| `claw.control.stopAllNow`    | Immediate emergency stop.                                     |
+| `claw.control.setAutonomy`   | Toggle global autonomy mode on or off.                        |
+| `claw.audit.get`             | Read audit entries for one mission or globally.               |
+| `claw.artifacts.list`        | List mission artifacts and logs.                              |
+| `claw.preflight.rerun`       | Re-run preflight for a mission.                               |
 
 ### RPC requirements
 
@@ -227,16 +227,16 @@ The UI must subscribe to gateway events instead of polling as its only sync mech
 
 Required event families:
 
-| Event | Meaning |
-| --- | --- |
-| `claw.mission.created` | Mission created. |
-| `claw.mission.updated` | Mission metadata changed. |
-| `claw.mission.stateChanged` | Mission state or phase changed. |
-| `claw.decision.requested` | A new inbox item requires operator attention. |
-| `claw.decision.resolved` | A pending decision was resolved. |
-| `claw.inbox.updated` | Aggregate inbox state changed. |
-| `claw.audit.appended` | Audit entries were appended. |
-| `claw.control.changed` | Global autonomy or emergency control state changed. |
+| Event                       | Meaning                                             |
+| --------------------------- | --------------------------------------------------- |
+| `claw.mission.created`      | Mission created.                                    |
+| `claw.mission.updated`      | Mission metadata changed.                           |
+| `claw.mission.stateChanged` | Mission state or phase changed.                     |
+| `claw.decision.requested`   | A new inbox item requires operator attention.       |
+| `claw.decision.resolved`    | A pending decision was resolved.                    |
+| `claw.inbox.updated`        | Aggregate inbox state changed.                      |
+| `claw.audit.appended`       | Audit entries were appended.                        |
+| `claw.control.changed`      | Global autonomy or emergency control state changed. |
 
 ### Event requirements
 

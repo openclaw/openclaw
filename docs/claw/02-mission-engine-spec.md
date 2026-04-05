@@ -58,19 +58,19 @@ Required directories:
 
 ## File responsibilities
 
-| File | Purpose |
-| --- | --- |
-| `MISSION.md` | Executive overview: goal, owner intent, mission id, state, roots, and current summary. |
-| `PROJECT_SCOPE.md` | What is in and out of scope for the mission. |
-| `PROJECT_PLAN.md` | High-level execution plan and strategy. |
-| `PROJECT_TASKS.md` | Actionable task breakdown and current task state. |
-| `PROJECT_STATUS.md` | Live execution summary, recent progress, next step, and current phase. |
-| `PROJECT_DONE_CRITERIA.md` | Explicit acceptance criteria. |
-| `PRECHECKS.md` | Capability preflight, auth findings, setup requirements, and readiness summary. |
-| `BLOCKERS.md` | Current and historical blocker records. |
-| `DECISIONS.md` | Operator decisions and durable answers to mission questions. |
-| `ARTIFACTS.md` | Human-readable index of generated artifacts, logs, and outputs. |
-| `AUDIT_LOG.jsonl` | Append-only structured action ledger. |
+| File                       | Purpose                                                                                |
+| -------------------------- | -------------------------------------------------------------------------------------- |
+| `MISSION.md`               | Executive overview: goal, owner intent, mission id, state, roots, and current summary. |
+| `PROJECT_SCOPE.md`         | What is in and out of scope for the mission.                                           |
+| `PROJECT_PLAN.md`          | High-level execution plan and strategy.                                                |
+| `PROJECT_TASKS.md`         | Actionable task breakdown and current task state.                                      |
+| `PROJECT_STATUS.md`        | Live execution summary, recent progress, next step, and current phase.                 |
+| `PROJECT_DONE_CRITERIA.md` | Explicit acceptance criteria.                                                          |
+| `PRECHECKS.md`             | Capability preflight, auth findings, setup requirements, and readiness summary.        |
+| `BLOCKERS.md`              | Current and historical blocker records.                                                |
+| `DECISIONS.md`             | Operator decisions and durable answers to mission questions.                           |
+| `ARTIFACTS.md`             | Human-readable index of generated artifacts, logs, and outputs.                        |
+| `AUDIT_LOG.jsonl`          | Append-only structured action ledger.                                                  |
 
 ## Mission roots and artifact placement
 
