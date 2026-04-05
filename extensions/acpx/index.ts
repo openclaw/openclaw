@@ -5,7 +5,7 @@ import { createAcpxPluginConfigSchema } from "./src/config-schema.js";
 const plugin = {
   id: "acpx",
   name: "ACPX Runtime",
-  description: "ACP runtime backend powered by the acpx CLI.",
+  description: "Embedded ACP runtime backend with plugin-owned session and transport management.",
   configSchema: () => createAcpxPluginConfigSchema(),
   register(api: OpenClawPluginApi) {
     api.registerService(

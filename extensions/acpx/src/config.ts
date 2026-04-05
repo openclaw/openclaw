@@ -23,9 +23,7 @@ export {
   createAcpxPluginConfigSchema,
 } from "./config-schema.js";
 
-export const ACPX_VERSION_ANY = "any";
 export const ACPX_PLUGIN_TOOLS_MCP_SERVER_NAME = "openclaw-plugin-tools";
-const ACPX_BIN_NAME = process.platform === "win32" ? "acpx.cmd" : "acpx";
 
 function isAcpxPluginRoot(dir: string): boolean {
   return (
@@ -103,19 +101,6 @@ export function resolveAcpxPluginRoot(moduleUrl: string = import.meta.url): stri
 }
 
 export const ACPX_PLUGIN_ROOT = resolveAcpxPluginRoot();
-const pluginPkg = JSON.parse(fs.readFileSync(path.join(ACPX_PLUGIN_ROOT, "package.json"), "utf8"));
-const acpxVersion: unknown = pluginPkg?.dependencies?.acpx;
-if (typeof acpxVersion !== "string" || acpxVersion.trim() === "") {
-  throw new Error(
-    `Could not read acpx version from ${path.join(ACPX_PLUGIN_ROOT, "package.json")} — expected a non-empty string at dependencies.acpx`,
-  );
-}
-export const ACPX_PINNED_VERSION: string = acpxVersion.replace(/^[^0-9]*/, "");
-export const ACPX_BUNDLED_BIN = path.join(ACPX_PLUGIN_ROOT, "node_modules", ".bin", ACPX_BIN_NAME);
-export function buildAcpxLocalInstallCommand(version: string = ACPX_PINNED_VERSION): string {
-  return `npm install --omit=dev --no-save --package-lock=false acpx@${version}`;
-}
-export const ACPX_LOCAL_INSTALL_COMMAND = buildAcpxLocalInstallCommand();
 
 const DEFAULT_PERMISSION_MODE: AcpxPermissionMode = "approve-reads";
 const DEFAULT_NON_INTERACTIVE_POLICY: AcpxNonInteractivePermissionPolicy = "fail";
@@ -151,18 +136,6 @@ function parseAcpxPluginConfig(value: unknown): ParseResult {
     ok: true,
     value: parsed.data as AcpxPluginConfig,
   };
-}
-
-function resolveConfiguredCommand(params: { configured?: string; workspaceDir?: string }): string {
-  const configured = params.configured?.trim();
-  if (!configured) {
-    return ACPX_BUNDLED_BIN;
-  }
-  if (path.isAbsolute(configured) || configured.includes(path.sep) || configured.includes("/")) {
-    const baseDir = params.workspaceDir?.trim() || process.cwd();
-    return path.resolve(baseDir, configured);
-  }
-  return configured;
 }
 
 function resolveOpenClawRoot(currentRoot: string): string {
@@ -238,34 +211,26 @@ export function resolveAcpxPluginConfig(params: {
     throw new Error(parsed.message);
   }
   const normalized = parsed.value ?? {};
-  const fallbackCwd = params.workspaceDir?.trim() || process.cwd();
+  const workspaceDir = params.workspaceDir?.trim() || process.cwd();
+  const fallbackCwd = workspaceDir;
   const cwd = path.resolve(normalized.cwd?.trim() || fallbackCwd);
-  const command = resolveConfiguredCommand({
-    configured: normalized.command,
-    workspaceDir: params.workspaceDir,
-  });
-  const allowPluginLocalInstall = command === ACPX_BUNDLED_BIN;
-  const stripProviderAuthEnvVars = command === ACPX_BUNDLED_BIN;
-  const configuredExpectedVersion = normalized.expectedVersion;
-  const expectedVersion =
-    configuredExpectedVersion === ACPX_VERSION_ANY
-      ? undefined
-      : (configuredExpectedVersion ?? (allowPluginLocalInstall ? ACPX_PINNED_VERSION : undefined));
-  const installCommand = buildAcpxLocalInstallCommand(expectedVersion ?? ACPX_PINNED_VERSION);
+  const stateDir = path.resolve(normalized.stateDir?.trim() || path.join(workspaceDir, "state"));
   const pluginToolsMcpBridge = normalized.pluginToolsMcpBridge === true;
   const mcpServers = resolveConfiguredMcpServers({
     mcpServers: normalized.mcpServers,
     pluginToolsMcpBridge,
     moduleUrl: params.moduleUrl,
   });
+  const agents = Object.fromEntries(
+    Object.entries(normalized.agents ?? {}).map(([name, entry]) => [
+      name.trim().toLowerCase(),
+      entry.command.trim(),
+    ]),
+  );
 
   return {
-    command,
-    expectedVersion,
-    allowPluginLocalInstall,
-    stripProviderAuthEnvVars,
-    installCommand,
     cwd,
+    stateDir,
     permissionMode: normalized.permissionMode ?? DEFAULT_PERMISSION_MODE,
     nonInteractivePermissions:
       normalized.nonInteractivePermissions ?? DEFAULT_NON_INTERACTIVE_POLICY,
@@ -275,5 +240,6 @@ export function resolveAcpxPluginConfig(params: {
     timeoutSeconds: normalized.timeoutSeconds,
     queueOwnerTtlSeconds: normalized.queueOwnerTtlSeconds ?? DEFAULT_QUEUE_OWNER_TTL_SECONDS,
     mcpServers,
+    agents,
   };
 }
