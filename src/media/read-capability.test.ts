@@ -53,6 +53,22 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
     expect(result).toMatchObject({ workspaceDir: "/tmp/media-workspace" });
   });
 
+  it("preserves empty localRoots as deny-all when tools.fs.roots is []", () => {
+    const result = resolveAgentScopedOutboundMediaAccess({
+      cfg: {
+        tools: {
+          fs: {
+            roots: [],
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(result).toHaveProperty("localRoots");
+    expect(result.localRoots).toEqual([]);
+    expect(result.readFile).toBeUndefined();
+  });
+
   it("prefers explicit workspaceDir over mediaAccess.workspaceDir", () => {
     const result = resolveAgentScopedOutboundMediaAccess({
       cfg: {} as OpenClawConfig,
