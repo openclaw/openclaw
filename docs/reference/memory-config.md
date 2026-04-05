@@ -307,6 +307,8 @@ Set `memory.backend = "qmd"` to enable. All QMD settings live under
 | `update.waitForBootSync`  | `boolean` | `false` | Block startup until refresh completes |
 | `update.embedInterval`    | `string`  | --      | Separate embed cadence                |
 | `update.commandTimeoutMs` | `number`  | --      | Timeout for QMD commands              |
+| `update.updateTimeoutMs`  | `number`  | --      | Timeout for QMD update operations     |
+| `update.embedTimeoutMs`   | `number`  | --      | Timeout for QMD embed operations      |
 
 ### Limits
 
@@ -364,6 +366,52 @@ Default is DM-only. `match.keyPrefix` matches the normalized session key;
         rules: [{ action: "allow", match: { chatType: "direct" } }],
       },
       paths: [{ name: "docs", path: "~/notes", pattern: "**/*.md" }],
+    },
+  },
+}
+```
+
+---
+
+## Dreaming (experimental)
+
+Dreaming is configured under `plugins.entries.memory-core.config.dreaming`,
+not under `agents.defaults.memorySearch`. For conceptual details and chat
+commands, see [Dreaming](/concepts/memory-dreaming).
+
+| Key                | Type     | Default        | Description                               |
+| ------------------ | -------- | -------------- | ----------------------------------------- |
+| `mode`             | `string` | `"off"`        | Preset: `off`, `core`, `rem`, or `deep`   |
+| `cron`             | `string` | preset default | Cron expression override for the schedule |
+| `timezone`         | `string` | user timezone  | Timezone for schedule evaluation          |
+| `limit`            | `number` | preset default | Max candidates to promote per cycle       |
+| `minScore`         | `number` | preset default | Minimum weighted score for promotion      |
+| `minRecallCount`   | `number` | preset default | Minimum recall count threshold            |
+| `minUniqueQueries` | `number` | preset default | Minimum distinct query count threshold    |
+
+### Preset defaults
+
+| Mode   | Cadence        | minScore | minRecallCount | minUniqueQueries |
+| ------ | -------------- | -------- | -------------- | ---------------- |
+| `off`  | Disabled       | --       | --             | --               |
+| `core` | Daily 3 AM     | 0.75     | 3              | 2                |
+| `rem`  | Every 6 hours  | 0.85     | 4              | 3                |
+| `deep` | Every 12 hours | 0.80     | 3              | 3                |
+
+### Example
+
+```json5
+{
+  plugins: {
+    entries: {
+      "memory-core": {
+        config: {
+          dreaming: {
+            mode: "core",
+            timezone: "America/New_York",
+          },
+        },
+      },
     },
   },
 }

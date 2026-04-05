@@ -37,6 +37,9 @@ function createTestContext(): {
       toolMetaById: new Map<string, ToolCallSummary>(),
       toolMetas: [],
       toolSummaryById: new Set<string>(),
+      itemActiveIds: new Set<string>(),
+      itemStartedCount: 0,
+      itemCompletedCount: 0,
       pendingMessagingTargets: new Map<string, MessagingToolSend>(),
       pendingMessagingTexts: new Map<string, string>(),
       pendingMessagingMediaUrls: new Map<string, string[]>(),
@@ -121,6 +124,8 @@ describe("handleToolExecutionStart read path checks", () => {
     await pending;
 
     expect(ctx.state.toolMetaById.has("tool-await-flush")).toBe(true);
+    expect(ctx.state.itemStartedCount).toBe(1);
+    expect(ctx.state.itemActiveIds.has("tool:tool-await-flush")).toBe(true);
   });
 });
 
@@ -175,6 +180,8 @@ describe("handleToolExecutionEnd cron.add commitment tracking", () => {
     );
 
     expect(ctx.state.successfulCronAdds).toBe(0);
+    expect(ctx.state.itemCompletedCount).toBe(1);
+    expect(ctx.state.itemActiveIds.size).toBe(0);
   });
 });
 

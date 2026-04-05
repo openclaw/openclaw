@@ -140,6 +140,14 @@ timeout only when the provider context is actually OpenRouter. Generic internal
 fallback text such as `LLM request failed with an unknown error.` stays
 conservative and does not trigger failover by itself.
 
+Rate-limit cooldowns can also be model-scoped:
+
+- OpenClaw records `cooldownModel` for rate-limit failures when the failing
+  model id is known.
+- A sibling model on the same provider can still be tried when the cooldown is
+  scoped to a different model.
+- Billing/disabled windows still block the whole profile across models.
+
 Cooldowns use exponential backoff:
 
 - 1 minute
@@ -266,7 +274,9 @@ not automatically skip that provider forever. It makes a per-candidate decision:
 - The primary candidate may be probed near cooldown expiry, with a per-provider
   throttle.
 - Same-provider fallback siblings can be attempted despite cooldown when the
-  failure looks transient (`rate_limit`, `overloaded`, or unknown).
+  failure looks transient (`rate_limit`, `overloaded`, or unknown). This is
+  especially relevant when a rate limit is model-scoped and a sibling model may
+  still recover immediately.
 - Transient cooldown probes are limited to one per provider per fallback run so
   a single provider does not stall cross-provider fallback.
 
@@ -316,6 +326,13 @@ When every candidate fails, OpenClaw throws `FallbackSummaryError`. The outer
 reply runner can use that to build a more specific message such as "all models
 are temporarily rate-limited" and include the soonest cooldown expiry when one
 is known.
+
+That cooldown summary is model-aware:
+
+- unrelated model-scoped rate limits are ignored for the attempted
+  provider/model chain
+- if the remaining block is a matching model-scoped rate limit, OpenClaw
+  reports the last matching expiry that still blocks that model
 
 ## Related config
 

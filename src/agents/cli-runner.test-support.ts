@@ -191,6 +191,13 @@ export function stubBootstrapContext(params: {
   hoisted.resolveBootstrapContextForRunMock.mockResolvedValueOnce(params);
 }
 
+export function restoreCliRunnerPrepareTestDeps() {
+  setCliRunnerPrepareTestDeps({
+    makeBootstrapWarn: () => () => {},
+    resolveBootstrapContextForRun: hoisted.resolveBootstrapContextForRunMock,
+  });
+}
+
 export async function runCliAgentWithBackendConfig(params: {
   runCliAgent: typeof import("./cli-runner.js").runCliAgent;
   backend: TestCliBackendConfig;

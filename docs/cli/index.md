@@ -421,7 +421,7 @@ Most plugin changes require a gateway restart. See [/plugin](/tools/plugin).
 
 Vector search over `MEMORY.md` + `memory/*.md`:
 
-- `openclaw memory status` — show index stats; use `--deep` for provider probes or `--fix` to repair stale recall/promotion artifacts.
+- `openclaw memory status` — show index stats; use `--deep` for vector + embedding readiness checks or `--fix` to repair stale recall/promotion artifacts.
 - `openclaw memory index` — reindex memory files.
 - `openclaw memory search "<query>"` (or `--query "<query>"`) — semantic search over memory.
 - `openclaw memory promote` — rank short-term recalls and optionally append top entries into `MEMORY.md`.
@@ -579,7 +579,7 @@ Subcommands:
 - `config set --strict-json`: require JSON5 parsing for path/value input. `--json` remains a legacy alias for strict parsing outside dry-run output mode.
 - `config unset <path>`: remove a value.
 - `config file`: print the active config file path.
-- `config schema`: print the generated JSON schema for `openclaw.json`, including field docs and best-effort live plugin/channel schema metadata.
+- `config schema`: print the generated JSON schema for `openclaw.json`, including propagated field `title` / `description` docs metadata across nested object, wildcard, array-item, and composition branches, plus best-effort live plugin/channel schema metadata.
 - `config validate`: validate the current config against the schema without starting the gateway.
 - `config validate --json`: emit machine-readable JSON output.
 
@@ -1319,7 +1319,7 @@ List and manage [background task](/automation/tasks) runs across agents.
 - `tasks notify <id>` — change notification policy for a task run
 - `tasks cancel <id>` — cancel a running task
 - `tasks audit` — surface operational issues (stale, lost, delivery failures)
-- `tasks maintenance` — preview or apply tasks and TaskFlow cleanup/reconciliation (ACP/subagent child sessions, active cron jobs, live CLI runs)
+- `tasks maintenance [--apply] [--json]` — preview or apply tasks and TaskFlow cleanup/reconciliation (ACP/subagent child sessions, active cron jobs, live CLI runs)
 - `tasks flow list` — list active and recent Task Flow flows
 - `tasks flow show <lookup>` — inspect a flow by id or lookup key
 - `tasks flow cancel <lookup>` — cancel a running flow and its active tasks
@@ -1462,7 +1462,7 @@ Notes:
 
 Common RPCs:
 
-- `config.schema.lookup` (inspect one config subtree with shallow schema fields, docs, and immediate child summaries)
+- `config.schema.lookup` (inspect one config subtree with a shallow schema node, matched hint metadata, and immediate child summaries)
 - `config.get` (read current config snapshot + hash)
 - `config.set` (validate + write full config; use `baseHash` for optimistic concurrency)
 - `config.apply` (validate + write config + restart + wake)
@@ -1473,18 +1473,22 @@ Tip: when calling `config.set`/`config.apply`/`config.patch` directly, pass `bas
 `config.get` if a config already exists.
 Tip: for partial edits, inspect with `config.schema.lookup` first and prefer `config.patch`.
 Tip: these config write RPCs preflight active SecretRef resolution for refs in the submitted config payload and reject writes when an effectively active submitted ref is unresolved.
+Tip: the owner-only `gateway` runtime tool still refuses to rewrite `tools.exec.ask` or `tools.exec.security`; legacy `tools.bash.*` aliases normalize to the same protected exec paths.
 
 ## Models
 
 See [/concepts/models](/concepts/models) for fallback behavior and scanning strategy.
 
-Billing note: Anthropic changed third-party harness billing on **April 4, 2026
-at 12:00 PM PT / 8:00 PM BST**. Anthropic says Claude subscription limits no
-longer cover OpenClaw, and Claude CLI usage in OpenClaw now requires **Extra
-Usage** billed separately from the subscription. For production, prefer an
-Anthropic API key or another supported subscription-style provider such as
-OpenAI Codex, Qwen Cloud Coding Plan, MiniMax Coding Plan, or
-Z.AI / GLM Coding Plan.
+Billing note: We believe Claude Code CLI fallback is likely allowed for local,
+user-managed automation based on Anthropic's public CLI docs. That said,
+Anthropic's third-party harness policy creates enough ambiguity around
+subscription-backed use in external products that we do not recommend it for
+production. Anthropic also notified OpenClaw users on **April 4, 2026 at
+12:00 PM PT / 8:00 PM BST** that the **OpenClaw** Claude-login path counts as
+third-party harness usage and requires **Extra Usage** billed separately from
+the subscription. For production, prefer an Anthropic API key or another supported
+subscription-style provider such as OpenAI Codex, Alibaba Cloud Model Studio
+Coding Plan, MiniMax Coding Plan, or Z.AI / GLM Coding Plan.
 
 Anthropic Claude CLI migration:
 
@@ -1494,8 +1498,9 @@ openclaw models auth login --provider anthropic --method cli --set-default
 
 Onboarding shortcut: `openclaw onboard --auth-choice anthropic-cli`
 
-Existing legacy Anthropic token profiles still run if already configured, but
-OpenClaw no longer offers Anthropic setup-token as a new auth path.
+Anthropic setup-token is also available again as a legacy/manual auth path.
+Use it only with the expectation that Anthropic told OpenClaw users the
+OpenClaw Claude-login path requires **Extra Usage**.
 
 Legacy alias note: `claude-cli` is the deprecated onboarding auth-choice alias.
 Use `anthropic-cli` for onboarding, or use `models auth login` directly.
@@ -1532,9 +1537,15 @@ Options:
 - `--probe-timeout <ms>`
 - `--probe-concurrency <n>`
 - `--probe-max-tokens <n>`
+- `--agent <id>`
 
 Always includes the auth overview and OAuth expiry status for profiles in the auth store.
 `--probe` runs live requests (may consume tokens and trigger rate limits).
+Probe rows can come from auth profiles, env credentials, or `models.json`.
+Expect probe statuses like `ok`, `auth`, `rate_limit`, `billing`, `timeout`,
+`format`, `unknown`, and `no_model`.
+When an explicit `auth.order.<provider>` omits a stored profile, probe reports
+`excluded_by_auth_order` instead of silently trying that profile.
 
 ### `models set <model>`
 
@@ -1600,7 +1611,9 @@ Options:
 Notes:
 
 - `setup-token` and `paste-token` are generic token commands for providers that expose token auth methods.
-- Anthropic legacy token profiles still run if already configured, but Anthropic no longer supports `setup-token` or `paste-token` as a new OpenClaw auth path.
+- `setup-token` requires an interactive TTY and runs the provider's token-auth method.
+- `paste-token` prompts for the token value and defaults to auth profile id `<provider>:manual` when `--profile-id` is omitted.
+- Anthropic `setup-token` / `paste-token` are available again as a legacy/manual OpenClaw path. Anthropic told OpenClaw users this path requires **Extra Usage** on the Claude account.
 
 ### `models auth order get|set|clear`
 

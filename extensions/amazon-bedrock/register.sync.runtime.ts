@@ -5,7 +5,7 @@ import {
   createBedrockNoCacheWrapper,
   isAnthropicBedrockModel,
   streamWithPayloadPatch,
-} from "openclaw/plugin-sdk/provider-stream";
+} from "openclaw/plugin-sdk/provider-stream-shared";
 import {
   mergeImplicitBedrockProvider,
   resolveBedrockConfigApiKey,
@@ -17,6 +17,18 @@ type GuardrailConfig = {
   guardrailVersion: string;
   streamProcessingMode?: "sync" | "async";
   trace?: "enabled" | "disabled" | "enabled_full";
+};
+
+type AmazonBedrockPluginConfig = {
+  discovery?: {
+    enabled?: boolean;
+    region?: string;
+    providerFilter?: string[];
+    refreshInterval?: number;
+    defaultContextWindow?: number;
+    defaultMaxTokens?: number;
+  };
+  guardrail?: GuardrailConfig;
 };
 
 function createGuardrailWrapStreamFn(
@@ -57,9 +69,8 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
   const anthropicByModelReplayHooks = buildProviderReplayFamilyHooks({
     family: "anthropic-by-model",
   });
-  const guardrail = (api.pluginConfig as Record<string, unknown> | undefined)?.guardrail as
-    | GuardrailConfig
-    | undefined;
+  const pluginConfig = (api.pluginConfig ?? {}) as AmazonBedrockPluginConfig;
+  const guardrail = pluginConfig.guardrail;
 
   const baseWrapStreamFn = ({ modelId, streamFn }: { modelId: string; streamFn?: StreamFn }) =>
     isAnthropicBedrockModel(modelId) ? streamFn : createBedrockNoCacheWrapper(streamFn);
@@ -79,6 +90,7 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
       run: async (ctx) => {
         const implicit = await resolveImplicitBedrockProvider({
           config: ctx.config,
+          pluginConfig,
           env: ctx.env,
         });
         if (!implicit) {

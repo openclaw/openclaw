@@ -6,4 +6,4 @@ export {
   transcribeAudioFile,
   type RunMediaUnderstandingFileParams,
   type RunMediaUnderstandingFileResult,
-} from "../plugin-sdk/media-understanding-runtime.js";
+} from "../../extensions/media-understanding-core/runtime-api.js";

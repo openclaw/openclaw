@@ -5,14 +5,14 @@ import {
   generateImage,
   listRuntimeImageGenerationProviders,
   type GenerateImageRuntimeResult,
-} from "../plugin-sdk/image-generation-runtime.js";
+} from "./runtime.js";
 
 const mocks = vi.hoisted(() => ({
   generateImage: vi.fn<typeof generateImage>(),
   listRuntimeImageGenerationProviders: vi.fn<typeof listRuntimeImageGenerationProviders>(),
 }));
 
-vi.mock("../plugin-sdk/image-generation-runtime.js", () => ({
+vi.mock("../../extensions/image-generation-core/runtime-api.js", () => ({
   generateImage: mocks.generateImage,
   listRuntimeImageGenerationProviders: mocks.listRuntimeImageGenerationProviders,
 }));
@@ -23,7 +23,7 @@ describe("image-generation runtime facade", () => {
     mocks.listRuntimeImageGenerationProviders.mockReset();
   });
 
-  it("delegates image generation to the plugin-sdk runtime", async () => {
+  it("delegates image generation to the image runtime", async () => {
     const result: GenerateImageRuntimeResult = {
       images: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png", fileName: "sample.png" }],
       provider: "image-plugin",
@@ -48,7 +48,7 @@ describe("image-generation runtime facade", () => {
     expect(mocks.generateImage).toHaveBeenCalledWith(params);
   });
 
-  it("delegates provider listing to the plugin-sdk runtime", () => {
+  it("delegates provider listing to the image runtime", () => {
     const providers: ImageGenerationProvider[] = [
       {
         id: "image-plugin",

@@ -597,10 +597,32 @@ export async function dispatchReplyFromConfig(params: {
       }
     }
 
-    // Forum topics are threaded conversations within a group — verbose tool
-    // summaries should be delivered into the topic thread, same as DMs.
-    const shouldSendToolSummaries =
-      (ctx.ChatType !== "group" || ctx.IsForum === true) && ctx.CommandSource !== "native";
+    // Forum topics are threaded conversations within a group — tool visibility
+    // should be delivered into the topic thread, same as DMs.
+    const shouldSendToolSummaries = ctx.ChatType !== "group" || ctx.IsForum === true;
+    const shouldSendToolStartStatuses = ctx.ChatType !== "group" || ctx.IsForum === true;
+    const toolStartStatusesSent = new Set<string>();
+    let toolStartStatusCount = 0;
+    const maybeSendWorkingStatus = (label: string) => {
+      const normalizedLabel = label.trim();
+      if (
+        !shouldSendToolStartStatuses ||
+        !normalizedLabel ||
+        toolStartStatusCount >= 2 ||
+        toolStartStatusesSent.has(normalizedLabel)
+      ) {
+        return;
+      }
+      toolStartStatusesSent.add(normalizedLabel);
+      toolStartStatusCount += 1;
+      const payload: ReplyPayload = {
+        text: `Working: ${normalizedLabel}`,
+      };
+      if (shouldRouteToOriginating) {
+        return sendPayloadAsync(payload, undefined, false);
+      }
+      dispatcher.sendToolResult(payload);
+    };
     const acpDispatch = await dispatchAcpRuntime.tryDispatchAcpReply({
       ctx,
       cfg,
@@ -698,6 +720,26 @@ export async function dispatchReplyFromConfig(params: {
             }
           };
           return run();
+        },
+        onToolStart: ({ name, phase }) => {
+          if (phase !== "start") {
+            return;
+          }
+          if (typeof name !== "string") {
+            return;
+          }
+          return maybeSendWorkingStatus(name);
+        },
+        onItemEvent: ({ phase, name, title, kind }) => {
+          if (phase !== "start") {
+            return;
+          }
+          if (kind === "tool" && typeof name === "string" && name.trim()) {
+            return maybeSendWorkingStatus(name);
+          }
+          if (typeof title === "string") {
+            return maybeSendWorkingStatus(title);
+          }
         },
         onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => {
           const run = async () => {

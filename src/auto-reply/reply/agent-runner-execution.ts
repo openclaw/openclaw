@@ -718,6 +718,16 @@ export async function runAgentTurnWithFallback(params: {
                       await params.opts?.onToolStart?.({ name, phase });
                     }
                   }
+                  if (evt.stream === "item") {
+                    await params.opts?.onItemEvent?.({
+                      itemId: typeof evt.data.itemId === "string" ? evt.data.itemId : undefined,
+                      kind: typeof evt.data.kind === "string" ? evt.data.kind : undefined,
+                      title: typeof evt.data.title === "string" ? evt.data.title : undefined,
+                      name: typeof evt.data.name === "string" ? evt.data.name : undefined,
+                      phase: typeof evt.data.phase === "string" ? evt.data.phase : undefined,
+                      status: typeof evt.data.status === "string" ? evt.data.status : undefined,
+                    });
+                  }
                   // Track auto-compaction and notify higher layers.
                   if (evt.stream === "compaction") {
                     const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";

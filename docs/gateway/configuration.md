@@ -52,10 +52,10 @@ See the [full reference](/gateway/configuration-reference) for every available f
   <Tab title="Control UI">
     Open [http://127.0.0.1:18789](http://127.0.0.1:18789) and use the **Config** tab.
     The Control UI renders a form from the live config schema, including field
-    labels/help plus plugin and channel schemas when available, with a **Raw
-    JSON** editor as an escape hatch. For drill-down UIs and other tooling, the
-    gateway also exposes `config.schema.lookup` to fetch one path-scoped schema
-    node plus immediate child summaries.
+    `title` / `description` docs metadata plus plugin and channel schemas when
+    available, with a **Raw JSON** editor as an escape hatch. For drill-down
+    UIs and other tooling, the gateway also exposes `config.schema.lookup` to
+    fetch one path-scoped schema node plus immediate child summaries.
   </Tab>
   <Tab title="Direct edit">
     Edit `~/.openclaw/openclaw.json` directly. The Gateway watches the file and applies changes automatically (see [hot reload](#config-hot-reload)).
@@ -75,7 +75,9 @@ Schema tooling notes:
 - Field `title` and `description` values are carried into the schema output for
   editor and form tooling.
 - Nested object, wildcard (`*`), and array-item (`[]`) entries inherit the same
-  docs metadata where schema labels/help exist.
+  docs metadata where matching field documentation exists.
+- `anyOf` / `oneOf` / `allOf` composition branches inherit the same docs
+  metadata too, so union/intersection variants keep the same field help.
 - `config.schema.lookup` returns one normalized config path with a shallow
   schema node (`title`, `description`, `type`, `enum`, `const`, common bounds,
   and similar validation fields), matched UI hint metadata, and immediate child
@@ -532,7 +534,8 @@ Control-plane write RPCs (`config.apply`, `config.patch`, `update.run`) are rate
 
 Safe/default flow:
 
-- `config.schema.lookup`: inspect one path-scoped config subtree with field docs
+- `config.schema.lookup`: inspect one path-scoped config subtree with a shallow
+  schema node, matched hint metadata, and immediate child summaries
 - `config.get`: fetch the current snapshot + hash
 - `config.patch`: preferred partial update path
 - `config.apply`: full-config replacement only

@@ -4,35 +4,149 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { cloneFirstTemplateModel } from "openclaw/plugin-sdk/provider-model-shared";
 
+const GOOGLE_GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
+const GEMINI_2_5_PRO_PREFIX = "gemini-2.5-pro";
+const GEMINI_2_5_FLASH_LITE_PREFIX = "gemini-2.5-flash-lite";
+const GEMINI_2_5_FLASH_PREFIX = "gemini-2.5-flash";
 const GEMINI_3_1_PRO_PREFIX = "gemini-3.1-pro";
 const GEMINI_3_1_FLASH_LITE_PREFIX = "gemini-3.1-flash-lite";
 const GEMINI_3_1_FLASH_PREFIX = "gemini-3.1-flash";
+const GEMINI_2_5_PRO_TEMPLATE_IDS = ["gemini-2.5-pro"] as const;
+const GEMINI_2_5_FLASH_LITE_TEMPLATE_IDS = ["gemini-2.5-flash-lite"] as const;
+const GEMINI_2_5_FLASH_TEMPLATE_IDS = ["gemini-2.5-flash"] as const;
 const GEMINI_3_1_PRO_TEMPLATE_IDS = ["gemini-3-pro-preview"] as const;
 const GEMINI_3_1_FLASH_LITE_TEMPLATE_IDS = ["gemini-3.1-flash-lite-preview"] as const;
 const GEMINI_3_1_FLASH_TEMPLATE_IDS = ["gemini-3-flash-preview"] as const;
 
-function cloneFirstGoogleTemplateModel(params: {
+type GoogleForwardCompatFamily = {
+  googleTemplateIds: readonly string[];
+  cliTemplateIds: readonly string[];
+  preferExternalFirstForCli?: boolean;
+};
+
+type GoogleTemplateSource = {
+  templateProviderId: string;
+  templateIds: readonly string[];
+};
+
+function cloneGoogleTemplateModel(params: {
   providerId: string;
-  templateProviderId?: string;
   modelId: string;
+  templateProviderId: string;
   templateIds: readonly string[];
   ctx: ProviderResolveDynamicModelContext;
   patch?: Partial<ProviderRuntimeModel>;
 }): ProviderRuntimeModel | undefined {
-  const templateProviderIds = [params.providerId, params.templateProviderId]
-    .map((providerId) => providerId?.trim())
-    .filter((providerId): providerId is string => Boolean(providerId));
+  return cloneFirstTemplateModel({
+    providerId: params.templateProviderId,
+    modelId: params.modelId,
+    templateIds: params.templateIds,
+    ctx: params.ctx,
+    patch: {
+      ...params.patch,
+      provider: params.providerId,
+    },
+  });
+}
 
-  for (const templateProviderId of new Set(templateProviderIds)) {
-    const model = cloneFirstTemplateModel({
-      providerId: templateProviderId,
-      modelId: params.modelId,
-      templateIds: params.templateIds,
+function isGoogleGeminiCliProvider(providerId: string): boolean {
+  return providerId.trim().toLowerCase() === GOOGLE_GEMINI_CLI_PROVIDER_ID;
+}
+
+function templateIdsForProvider(
+  templateProviderId: string,
+  family: GoogleForwardCompatFamily,
+): readonly string[] {
+  return isGoogleGeminiCliProvider(templateProviderId)
+    ? family.cliTemplateIds
+    : family.googleTemplateIds;
+}
+
+function buildGoogleTemplateSources(params: {
+  providerId: string;
+  templateProviderId?: string;
+  family: GoogleForwardCompatFamily;
+}): GoogleTemplateSource[] {
+  const preferredExternalFirst =
+    isGoogleGeminiCliProvider(params.providerId) &&
+    params.family.preferExternalFirstForCli === true;
+  const orderedTemplateProviderIds = preferredExternalFirst
+    ? [params.templateProviderId, params.providerId]
+    : [params.providerId, params.templateProviderId];
+
+  const seen = new Set<string>();
+  const sources: GoogleTemplateSource[] = [];
+  for (const providerId of orderedTemplateProviderIds) {
+    const trimmed = providerId?.trim();
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
+    seen.add(trimmed);
+    sources.push({
+      templateProviderId: trimmed,
+      templateIds: templateIdsForProvider(trimmed, params.family),
+    });
+  }
+  return sources;
+}
+
+export function resolveGoogleGeminiForwardCompatModel(params: {
+  providerId: string;
+  templateProviderId?: string;
+  ctx: ProviderResolveDynamicModelContext;
+}): ProviderRuntimeModel | undefined {
+  const trimmed = params.ctx.modelId.trim();
+  const lower = trimmed.toLowerCase();
+
+  let family: GoogleForwardCompatFamily;
+  if (lower.startsWith(GEMINI_2_5_PRO_PREFIX)) {
+    family = {
+      googleTemplateIds: GEMINI_2_5_PRO_TEMPLATE_IDS,
+      cliTemplateIds: GEMINI_3_1_PRO_TEMPLATE_IDS,
+      preferExternalFirstForCli: true,
+    };
+  } else if (lower.startsWith(GEMINI_2_5_FLASH_LITE_PREFIX)) {
+    family = {
+      googleTemplateIds: GEMINI_2_5_FLASH_LITE_TEMPLATE_IDS,
+      cliTemplateIds: GEMINI_3_1_FLASH_LITE_TEMPLATE_IDS,
+      preferExternalFirstForCli: true,
+    };
+  } else if (lower.startsWith(GEMINI_2_5_FLASH_PREFIX)) {
+    family = {
+      googleTemplateIds: GEMINI_2_5_FLASH_TEMPLATE_IDS,
+      cliTemplateIds: GEMINI_3_1_FLASH_TEMPLATE_IDS,
+      preferExternalFirstForCli: true,
+    };
+  } else if (lower.startsWith(GEMINI_3_1_PRO_PREFIX)) {
+    family = {
+      googleTemplateIds: GEMINI_3_1_PRO_TEMPLATE_IDS,
+      cliTemplateIds: GEMINI_3_1_PRO_TEMPLATE_IDS,
+    };
+  } else if (lower.startsWith(GEMINI_3_1_FLASH_LITE_PREFIX)) {
+    family = {
+      googleTemplateIds: GEMINI_3_1_FLASH_LITE_TEMPLATE_IDS,
+      cliTemplateIds: GEMINI_3_1_FLASH_LITE_TEMPLATE_IDS,
+    };
+  } else if (lower.startsWith(GEMINI_3_1_FLASH_PREFIX)) {
+    family = {
+      googleTemplateIds: GEMINI_3_1_FLASH_TEMPLATE_IDS,
+      cliTemplateIds: GEMINI_3_1_FLASH_TEMPLATE_IDS,
+    };
+  } else {
+    return undefined;
+  }
+
+  for (const source of buildGoogleTemplateSources({
+    providerId: params.providerId,
+    templateProviderId: params.templateProviderId,
+    family,
+  })) {
+    const model = cloneGoogleTemplateModel({
+      providerId: params.providerId,
+      modelId: trimmed,
+      templateProviderId: source.templateProviderId,
+      templateIds: source.templateIds,
       ctx: params.ctx,
-      patch: {
-        ...params.patch,
-        provider: params.providerId,
-      },
     });
     if (model) {
       return model;
@@ -42,35 +156,7 @@ function cloneFirstGoogleTemplateModel(params: {
   return undefined;
 }
 
-export function resolveGoogle31ForwardCompatModel(params: {
-  providerId: string;
-  templateProviderId?: string;
-  ctx: ProviderResolveDynamicModelContext;
-}): ProviderRuntimeModel | undefined {
-  const trimmed = params.ctx.modelId.trim();
-  const lower = trimmed.toLowerCase();
-
-  let templateIds: readonly string[];
-  if (lower.startsWith(GEMINI_3_1_PRO_PREFIX)) {
-    templateIds = GEMINI_3_1_PRO_TEMPLATE_IDS;
-  } else if (lower.startsWith(GEMINI_3_1_FLASH_LITE_PREFIX)) {
-    templateIds = GEMINI_3_1_FLASH_LITE_TEMPLATE_IDS;
-  } else if (lower.startsWith(GEMINI_3_1_FLASH_PREFIX)) {
-    templateIds = GEMINI_3_1_FLASH_TEMPLATE_IDS;
-  } else {
-    return undefined;
-  }
-
-  return cloneFirstGoogleTemplateModel({
-    providerId: params.providerId,
-    templateProviderId: params.templateProviderId,
-    modelId: trimmed,
-    templateIds,
-    ctx: params.ctx,
-    patch: { reasoning: true },
-  });
-}
-
 export function isModernGoogleModel(modelId: string): boolean {
-  return modelId.trim().toLowerCase().startsWith("gemini-3");
+  const lower = modelId.trim().toLowerCase();
+  return lower.startsWith("gemini-2.5") || lower.startsWith("gemini-3");
 }

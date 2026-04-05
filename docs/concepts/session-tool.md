@@ -37,10 +37,14 @@ The returned view is intentionally bounded and safety-filtered:
 - assistant text is normalized before recall:
   - thinking tags are stripped
   - `<relevant-memories>` / `<relevant_memories>` scaffolding blocks are stripped
-  - plain-text tool-call XML payload blocks such as `<tool_call>...</tool_call>` / `<function_calls>...</function_calls>` are stripped
+  - plain-text tool-call XML payload blocks such as `<tool_call>...</tool_call>`,
+    `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, and
+    `<function_calls>...</function_calls>` are stripped, including truncated
+    payloads that never close cleanly
   - downgraded tool-call/result scaffolding such as `[Tool Call: ...]`,
     `[Tool Result ...]`, and `[Historical context ...]` is stripped
-  - leaked model control tokens such as `<|assistant|>` / `<｜...｜>` are stripped
+  - leaked model control tokens such as `<|assistant|>`, other ASCII
+    `<|...|>` tokens, and full-width `<｜...｜>` variants are stripped
   - malformed MiniMax tool-call XML such as `<invoke ...>` /
     `</minimax:tool_call>` is stripped
 - credential/token-like text is redacted before it is returned
@@ -79,7 +83,8 @@ sparse token/cache counters from the latest transcript usage entry, and
 
 `sessions_yield` intentionally ends the current turn so the next message can be
 the follow-up event you are waiting for. Use it after spawning sub-agents when
-you want completion results to arrive as the next message instead of polling.
+you want completion results to arrive as the next message instead of building
+poll loops.
 
 `subagents` is the control-plane helper for already spawned OpenClaw
 sub-agents. It supports:

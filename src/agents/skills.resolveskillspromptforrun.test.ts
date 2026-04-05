@@ -30,6 +30,27 @@ describe("resolveSkillsPromptForRun", () => {
     expect(prompt).toContain("/app/skills/demo-skill/SKILL.md");
   });
 
+  it("keeps legacy entries with disableModelInvocation hidden when exposure metadata is absent", () => {
+    const hidden: SkillEntry = {
+      skill: createFixtureSkill({
+        name: "hidden-skill",
+        description: "Hidden",
+        filePath: "/app/skills/hidden-skill/SKILL.md",
+        baseDir: "/app/skills/hidden-skill",
+        source: "openclaw-workspace",
+        disableModelInvocation: true,
+      }),
+      frontmatter: {},
+    };
+
+    const prompt = resolveSkillsPromptForRun({
+      entries: [hidden],
+      workspaceDir: "/tmp/openclaw",
+    });
+
+    expect(prompt).not.toContain("/app/skills/hidden-skill/SKILL.md");
+  });
+
   it("inherits agents.defaults.skills when rebuilding prompt for an agent", () => {
     const visible: SkillEntry = {
       skill: createFixtureSkill({
@@ -117,6 +138,7 @@ function createFixtureSkill(params: {
   filePath: string;
   baseDir: string;
   source: string;
+  disableModelInvocation?: boolean;
 }): SkillEntry["skill"] {
   return createCanonicalFixtureSkill(params);
 }

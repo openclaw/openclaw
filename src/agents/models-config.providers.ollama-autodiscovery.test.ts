@@ -55,7 +55,7 @@ describe("Ollama auto-discovery", () => {
     }) as unknown as typeof fetch;
 
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    const providers = await resolveImplicitProvidersForTest({ agentDir });
+    const providers = await resolveImplicitProvidersForTest({ agentDir, env: {} });
 
     expect(providers?.ollama).toBeDefined();
     expect(providers?.ollama?.apiKey).toBe("ollama-local");
@@ -73,7 +73,7 @@ describe("Ollama auto-discovery", () => {
     mockOllamaUnreachable();
 
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    const providers = await resolveImplicitProvidersForTest({ agentDir });
+    const providers = await resolveImplicitProvidersForTest({ agentDir, env: {} });
 
     expect(providers?.ollama).toBeUndefined();
     const ollamaWarnings = warnSpy.mock.calls.filter(
@@ -91,6 +91,7 @@ describe("Ollama auto-discovery", () => {
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
     await resolveImplicitProvidersForTest({
       agentDir,
+      env: {},
       explicitProviders: {
         ollama: {
           baseUrl: "http://127.0.0.1:11434/v1",

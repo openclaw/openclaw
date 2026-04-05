@@ -66,7 +66,9 @@ These tools ship with OpenClaw and are available without installing any plugins:
 | `nodes`                                    | Discover and target paired devices                                    |                                         |
 | `cron` / `gateway`                         | Manage scheduled jobs; inspect, patch, restart, or update the gateway |                                         |
 | `image` / `image_generate`                 | Analyze or generate images                                            |                                         |
+| `tts`                                      | One-shot text-to-speech conversion                                    | [TTS](/tools/tts)                       |
 | `sessions_*` / `subagents` / `agents_list` | Session management, status, and sub-agent orchestration               | [Sub-agents](/tools/subagents)          |
+| `session_status`                           | Lightweight `/status`-style readback and session model override       | [Session Tools](/concepts/session-tool) |
 
 For image work, use `image` for analysis and `image_generate` for generation or editing. If you target `openai/*`, `google/*`, `fal/*`, or another non-default image provider, configure that provider's auth/API key first.
 
@@ -86,6 +88,8 @@ active runtime model label from the latest transcript usage entry.
 
 For partial changes, prefer `config.schema.lookup` then `config.patch`. Use
 `config.apply` only when you intentionally replace the entire config.
+The tool also refuses to change `tools.exec.ask` or `tools.exec.security`;
+legacy `tools.bash.*` aliases normalize to the same protected exec paths.
 
 ### Plugin-provided tools
 
@@ -117,12 +121,12 @@ config. Deny always wins over allow.
 `tools.profile` sets a base allowlist before `allow`/`deny` is applied.
 Per-agent override: `agents.list[].tools.profile`.
 
-| Profile     | What it includes                                         |
-| ----------- | -------------------------------------------------------- |
-| `full`      | All tools (default)                                      |
-| `coding`    | Files, runtime, web, sessions, memory, cron, image tools |
-| `messaging` | Messaging, session list/history/send/status              |
-| `minimal`   | `session_status` only                                    |
+| Profile     | What it includes                                                                                              |
+| ----------- | ------------------------------------------------------------------------------------------------------------- |
+| `full`      | No restriction (same as unset)                                                                                |
+| `coding`    | `group:fs`, `group:runtime`, `group:web`, `group:sessions`, `group:memory`, `cron`, `image`, `image_generate` |
+| `messaging` | `group:messaging`, `sessions_list`, `sessions_history`, `sessions_send`, `session_status`                     |
+| `minimal`   | `session_status` only                                                                                         |
 
 ### Tool groups
 
@@ -130,7 +134,7 @@ Use `group:*` shorthands in allow/deny lists:
 
 | Group              | Tools                                                                                                     |
 | ------------------ | --------------------------------------------------------------------------------------------------------- |
-| `group:runtime`    | exec, bash, process, code_execution                                                                       |
+| `group:runtime`    | exec, process, code_execution (`bash` is accepted as an alias for `exec`)                                 |
 | `group:fs`         | read, write, edit, apply_patch                                                                            |
 | `group:sessions`   | sessions_list, sessions_history, sessions_send, sessions_spawn, sessions_yield, subagents, session_status |
 | `group:memory`     | memory_search, memory_get                                                                                 |
@@ -145,8 +149,11 @@ Use `group:*` shorthands in allow/deny lists:
 
 `sessions_history` returns a bounded, safety-filtered recall view. It strips
 thinking tags, `<relevant-memories>` scaffolding, plain-text tool-call XML
-payloads, downgraded tool-call scaffolding, leaked model control tokens, and
-malformed MiniMax tool-call XML from assistant text, then applies
+payloads (including `<tool_call>...</tool_call>`,
+`<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`,
+`<function_calls>...</function_calls>`, and truncated tool-call blocks),
+downgraded tool-call scaffolding, leaked ASCII/full-width model control
+tokens, and malformed MiniMax tool-call XML from assistant text, then applies
 redaction/truncation and possible oversized-row placeholders instead of acting
 as a raw transcript dump.
 
