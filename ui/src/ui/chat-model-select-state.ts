@@ -57,12 +57,12 @@ function resolveDefaultModelValue(state: ChatModelSelectStateInput): string {
 
 function buildChatModelOptions(
   catalog: ModelCatalogEntry[],
+  displayLookup: ReturnType<typeof buildCatalogDisplayLookup>,
   currentOverride: string,
   defaultModel: string,
 ): ChatModelSelectOption[] {
   const seen = new Set<string>();
   const options: ChatModelSelectOption[] = [];
-  const displayLookup = buildCatalogDisplayLookup(catalog);
 
   const addOption = (value: string, label?: string) => {
     const trimmed = value.trim();
@@ -108,6 +108,6 @@ export function resolveChatModelSelectState(
     defaultModel,
     defaultDisplay,
     defaultLabel: defaultModel ? `Default (${defaultDisplay})` : "Default model",
-    options: buildChatModelOptions(catalog, currentOverride, defaultModel),
+    options: buildChatModelOptions(catalog, displayLookup, currentOverride, defaultModel),
   };
 }

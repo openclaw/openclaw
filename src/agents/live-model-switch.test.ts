@@ -27,6 +27,26 @@ vi.mock("./pi-embedded-runner/runs.js", () => ({
 }));
 
 vi.mock("./model-selection.js", () => ({
+  normalizeStoredOverrideModel: (params: {
+    providerOverride?: string;
+    modelOverride?: string;
+  }) => {
+    const providerOverride = params.providerOverride?.trim();
+    const modelOverride = params.modelOverride?.trim();
+    if (!providerOverride || !modelOverride) {
+      return {
+        providerOverride,
+        modelOverride,
+      };
+    }
+    const providerPrefix = `${providerOverride.toLowerCase()}/`;
+    return {
+      providerOverride,
+      modelOverride: modelOverride.toLowerCase().startsWith(providerPrefix)
+        ? modelOverride.slice(providerOverride.length + 1).trim() || modelOverride
+        : modelOverride,
+    };
+  },
   resolveDefaultModelForAgent: (...args: unknown[]) =>
     state.resolveDefaultModelForAgentMock(...args),
   resolvePersistedSelectedModelRef: (...args: unknown[]) =>
