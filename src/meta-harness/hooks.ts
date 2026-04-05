@@ -374,6 +374,20 @@ async function handleDelegation(event: InternalHookEvent): Promise<void> {
     task_brief: taskBrief,
     status: (ctx.status as import("./types.js").RunOutcome) ?? "completed",
   });
+
+  // Write independent child trace file (fire-and-forget, never blocks main path)
+  entry.builder
+    .writeChildTrace({
+      child_trace_id: childSessionId,
+      child_session_id: childSessionId,
+      agent_type: agentType,
+      task_brief: taskBrief,
+      status: (ctx.status as import("./types.js").RunOutcome) ?? "completed",
+      verification_summary: "",
+      summarized_tool_calls: [],
+      timestamp: new Date().toISOString(),
+    })
+    .catch(() => {});
 }
 
 // ---------------------------------------------------------------------------
