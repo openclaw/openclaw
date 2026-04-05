@@ -1,0 +1,14 @@
+{
+  "name": "@openclaw/promptguard",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "id": "promptguard",
+    "type": "plugin",
+    "displayName": "PromptGuard Security"
+  }
+}

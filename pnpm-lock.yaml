@@ -573,6 +573,12 @@ importers:
 
   extensions/perplexity: {}
 
+  extensions/promptguard:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/qianfan: {}
 
   extensions/qqbot:

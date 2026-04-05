@@ -1,0 +1,85 @@
+{
+  "id": "promptguard",
+  "enabledByDefault": true,
+  "skills": ["./skills"],
+  "providerAuthEnvVars": {
+    "promptguard": ["PROMPTGUARD_API_KEY"]
+  },
+  "uiHints": {
+    "security.apiKey": {
+      "label": "PromptGuard API Key",
+      "help": "PromptGuard API key for AI security scanning (fallback: PROMPTGUARD_API_KEY env var). Get one at https://app.promptguard.co",
+      "sensitive": true,
+      "placeholder": "pg_..."
+    },
+    "security.baseUrl": {
+      "label": "PromptGuard API Base URL",
+      "help": "Custom PromptGuard API endpoint. Defaults to https://api.promptguard.co/api/v1"
+    },
+    "security.mode": {
+      "label": "Enforcement Mode",
+      "help": "enforce: block detected threats. monitor: log threats without blocking."
+    },
+    "security.scanInputs": {
+      "label": "Scan Inputs",
+      "help": "Scan user messages for prompt injection before sending to the LLM."
+    },
+    "security.scanToolArgs": {
+      "label": "Scan Tool Arguments",
+      "help": "Scan tool call arguments for injection, exfiltration, and code injection."
+    },
+    "security.redactPii": {
+      "label": "Redact PII",
+      "help": "Automatically redact personally identifiable information from outgoing messages."
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "security": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": ["string", "object"]
+          },
+          "baseUrl": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": ["enforce", "monitor"],
+            "default": "monitor"
+          },
+          "scanInputs": {
+            "type": "boolean",
+            "default": true
+          },
+          "scanToolArgs": {
+            "type": "boolean",
+            "default": true
+          },
+          "redactPii": {
+            "type": "boolean",
+            "default": false
+          },
+          "detectors": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "prompt-injection",
+                "data-exfiltration",
+                "code-injection",
+                "pii",
+                "credit-card",
+                "toxicity"
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}
