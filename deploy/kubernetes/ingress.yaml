@@ -1,0 +1,22 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: openclaw
+  namespace: openclaw
+  labels:
+    app.kubernetes.io/name: openclaw
+    app.kubernetes.io/instance: openclaw
+  annotations:
+    kubernetes.io/ingress.class: nginx
+spec:
+  rules:
+    - host: openclaw.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: openclaw
+                port:
+                  number: 18789
