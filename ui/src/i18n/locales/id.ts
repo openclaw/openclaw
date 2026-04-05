@@ -406,6 +406,7 @@ export const id: TranslationMap = {
     tr: "Türkçe (Turkish)",
     id: "Bahasa Indonesia (Indonesian)",
     pl: "Polski (Polish)",
+    ukUA: "Українська (Ukrainian)",
   },
   cron: {
     summary: {
