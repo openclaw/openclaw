@@ -9,6 +9,8 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
 const SOURCE_DOCS_DIR = path.join(ROOT, "docs");
 const SOURCE_CONFIG_PATH = path.join(SOURCE_DOCS_DIR, "docs.json");
+const JA_NAV_PATH = path.join(SOURCE_DOCS_DIR, ".i18n", "ja-navigation.json");
+const JA_TM_PATH = path.join(SOURCE_DOCS_DIR, ".i18n", "ja-JP.tm.jsonl");
 const ZH_NAV_PATH = path.join(SOURCE_DOCS_DIR, ".i18n", "zh-Hans-navigation.json");
 const ZH_TM_PATH = path.join(SOURCE_DOCS_DIR, ".i18n", "zh-CN.tm.jsonl");
 
@@ -69,6 +71,7 @@ function writeJson(filePath, value) {
 
 function composeDocsConfig() {
   const sourceConfig = readJson(SOURCE_CONFIG_PATH);
+  const jaNavigation = readJson(JA_NAV_PATH);
   const zhNavigation = readJson(ZH_NAV_PATH);
   const languages = sourceConfig?.navigation?.languages;
 
@@ -76,19 +79,22 @@ function composeDocsConfig() {
     throw new Error("docs/docs.json is missing navigation.languages");
   }
 
-  const withoutZh = languages.filter((entry) => entry?.language !== "zh-Hans");
-  const jaIndex = withoutZh.findIndex((entry) => entry?.language === "ja");
-  if (jaIndex === -1) {
-    withoutZh.push(zhNavigation);
+  const withoutGenerated = languages.filter(
+    (entry) => entry?.language !== "zh-Hans" && entry?.language !== "ja",
+  );
+  const enIndex = withoutGenerated.findIndex((entry) => entry?.language === "en");
+  const generated = [zhNavigation, jaNavigation];
+  if (enIndex === -1) {
+    withoutGenerated.push(...generated);
   } else {
-    withoutZh.splice(jaIndex, 0, zhNavigation);
+    withoutGenerated.splice(enIndex + 1, 0, ...generated);
   }
 
   return {
     ...sourceConfig,
     navigation: {
       ...sourceConfig.navigation,
-      languages: withoutZh,
+      languages: withoutGenerated,
     },
   };
 }
@@ -101,16 +107,30 @@ function syncDocsTree(targetRoot) {
     "-a",
     "--delete",
     "--filter",
+    "P ja-JP/",
+    "--filter",
     "P zh-CN/",
+    "--filter",
+    "P .i18n/ja-JP.tm.jsonl",
     "--filter",
     "P .i18n/zh-CN.tm.jsonl",
     "--exclude",
+    "ja-JP/",
+    "--exclude",
     "zh-CN/",
+    "--exclude",
+    ".i18n/ja-JP.tm.jsonl",
     "--exclude",
     ".i18n/zh-CN.tm.jsonl",
     `${SOURCE_DOCS_DIR}/`,
     `${targetDocsDir}/`,
   ]);
+
+  const targetJaTmPath = path.join(targetDocsDir, ".i18n", "ja-JP.tm.jsonl");
+  if (!fs.existsSync(targetJaTmPath) && fs.existsSync(JA_TM_PATH)) {
+    ensureDir(path.dirname(targetJaTmPath));
+    fs.copyFileSync(JA_TM_PATH, targetJaTmPath);
+  }
 
   const targetZhTmPath = path.join(targetDocsDir, ".i18n", "zh-CN.tm.jsonl");
   if (!fs.existsSync(targetZhTmPath) && fs.existsSync(ZH_TM_PATH)) {
