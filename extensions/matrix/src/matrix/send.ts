@@ -33,6 +33,7 @@ import {
   EventType,
   MsgType,
   RelationType,
+  type MatrixExtraContentFields,
   type MatrixOutboundContent,
   type MatrixSendOpts,
   type MatrixSendResult,
@@ -101,6 +102,16 @@ function resolvePreviousEditContent(previousEvent: unknown): Record<string, unkn
 
 function hasMatrixMentionsMetadata(content: Record<string, unknown> | undefined): boolean {
   return Boolean(content && Object.hasOwn(content, "m.mentions"));
+}
+
+function withMatrixExtraContentFields<T extends Record<string, unknown>>(
+  content: T,
+  extraContent?: MatrixExtraContentFields,
+): T {
+  if (!extraContent) {
+    return content;
+  }
+  return { ...content, ...extraContent };
 }
 
 async function resolvePreviousEditMentions(params: {
@@ -401,6 +412,7 @@ export async function sendSingleTextMessageMatrix(
     accountId?: string;
     msgtype?: MatrixTextMsgType;
     includeMentions?: boolean;
+    extraContent?: MatrixExtraContentFields;
   } = {},
 ): Promise<MatrixSendResult> {
   const { trimmedText, convertedText, singleEventLimit, fitsInSingleEvent } =
@@ -428,9 +440,12 @@ export async function sendSingleTextMessageMatrix(
       const relation = normalizedThreadId
         ? buildThreadRelation(normalizedThreadId, opts.replyToId)
         : buildReplyRelation(opts.replyToId);
-      const content = buildTextContent(convertedText, relation, {
-        msgtype: opts.msgtype,
-      });
+      const content = withMatrixExtraContentFields(
+        buildTextContent(convertedText, relation, {
+          msgtype: opts.msgtype,
+        }),
+        opts.extraContent,
+      );
       await enrichMatrixFormattedContent({
         client,
         content,
@@ -476,6 +491,7 @@ export async function editMessageMatrix(
     timeoutMs?: number;
     msgtype?: MatrixTextMsgType;
     includeMentions?: boolean;
+    extraContent?: MatrixExtraContentFields;
   } = {},
 ): Promise<string> {
   return await withResolvedMatrixSendClient(
@@ -494,9 +510,12 @@ export async function editMessageMatrix(
         accountId: opts.accountId,
       });
       const convertedText = getCore().channel.text.convertMarkdownTables(newText, tableMode);
-      const newContent = buildTextContent(convertedText, undefined, {
-        msgtype: opts.msgtype,
-      });
+      const newContent = withMatrixExtraContentFields(
+        buildTextContent(convertedText, undefined, {
+          msgtype: opts.msgtype,
+        }),
+        opts.extraContent,
+      );
       await enrichMatrixFormattedContent({
         client,
         content: newContent,

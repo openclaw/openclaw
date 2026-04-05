@@ -196,13 +196,67 @@ done:
 - `streaming: "partial"` creates one editable preview message for the current assistant block instead of sending multiple partial messages.
 - `blockStreaming: true` enables separate Matrix progress messages. With `streaming: "partial"`, Matrix keeps the live draft for the current block and preserves completed blocks as separate messages.
 - When `streaming: "partial"` and `blockStreaming` is off, Matrix only edits the live draft and sends the completed reply once that block or turn finishes.
-- Draft preview events use quiet Matrix notices, so notifications fire on completed blocks or the final completed reply instead of the first streamed token.
+- Draft preview events use quiet Matrix notices. On stock Matrix push rules, notice previews and later edit events are both non-notifying.
 - If the preview no longer fits in one Matrix event, OpenClaw stops preview streaming and falls back to normal final delivery.
 - Media replies still send attachments normally. If a stale preview can no longer be reused safely, OpenClaw redacts it before sending the final media reply.
 - Preview edits cost extra Matrix API calls. Leave streaming off if you want the most conservative rate-limit behavior.
 
 `blockStreaming` does not enable draft previews by itself.
 Use `streaming: "partial"` for preview edits; then add `blockStreaming: true` only if you also want completed assistant blocks to remain visible as separate progress messages.
+
+If you need notifications without custom Matrix push rules, leave `streaming` off. Then:
+
+- `blockStreaming: true` sends each finished block as a normal notifying Matrix message.
+- `blockStreaming: false` sends only the final completed reply as a normal notifying Matrix message.
+
+### Self-hosted push rules for finalized previews
+
+If you run your own Matrix infrastructure and want `streaming: "partial"` previews to notify only when a
+block or final reply is done, add a per-user push rule for finalized preview edits.
+
+OpenClaw marks finalized text-only preview edits with:
+
+```json
+{
+  "com.openclaw.finalized_preview": true
+}
+```
+
+Create an override push rule for each recipient account which should receive these notifications:
+
+```bash
+curl -X PUT \
+  "https://matrix.example.org/_matrix/client/v3/pushrules/global/override/openclaw-finalized-preview" \
+  -H "Authorization: Bearer $USER_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{
+    "conditions": [
+      { "kind": "event_match", "key": "type", "pattern": "m.room.message" },
+      {
+        "kind": "event_property_is",
+        "key": "content.m\\.relates_to.rel_type",
+        "value": "m.replace"
+      },
+      {
+        "kind": "event_property_is",
+        "key": "content.com\\.openclaw\\.finalized_preview",
+        "value": true
+      },
+      { "kind": "event_match", "key": "sender", "pattern": "@bot:example.org" }
+    ],
+    "actions": [
+      "notify",
+      { "set_tweak": "sound", "value": "default" },
+      { "set_tweak": "highlight", "value": false }
+    ]
+  }'
+```
+
+Notes:
+
+- Create the rule with the receiving user's access token, not the bot's.
+- New user-defined `override` rules are inserted ahead of default suppress rules, so no extra ordering parameter is needed.
+- This only affects text-only preview edits that OpenClaw can safely finalize in place. Media fallbacks and stale-preview fallbacks still use normal Matrix delivery.
 
 ## Encryption and verification
 

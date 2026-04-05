@@ -9,6 +9,7 @@ import {
   sendSingleTextMessageMatrix,
   sendTypingMatrix,
 } from "./send.js";
+import { MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY } from "./send/types.js";
 
 const loadOutboundMediaFromUrlMock = vi.hoisted(() => vi.fn());
 const loadWebMediaMock = vi.fn().mockResolvedValue({
@@ -621,6 +622,20 @@ describe("sendSingleTextMessageMatrix", () => {
       (sendMessage.mock.calls[0]?.[1] as { formatted_body?: string }).formatted_body,
     ).not.toContain("matrix.to");
   });
+
+  it("merges extra content fields into single-event sends", async () => {
+    const { client, sendMessage } = makeClient();
+
+    await sendSingleTextMessageMatrix("room:!room:example", "done", {
+      client,
+      extraContent: { [MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY]: true },
+    });
+
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      body: "done",
+      [MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY]: true,
+    });
+  });
 });
 
 describe("editMessageMatrix mentions", () => {
@@ -730,6 +745,22 @@ describe("editMessageMatrix mentions", () => {
         }
       )["m.new_content"]?.formatted_body,
     ).not.toContain("matrix.to");
+  });
+
+  it("merges extra content fields into edit payloads and m.new_content", async () => {
+    const { client, sendMessage } = makeClient();
+
+    await editMessageMatrix("room:!room:example", "$original", "done", {
+      client,
+      extraContent: { [MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY]: true },
+    });
+
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      [MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY]: true,
+      "m.new_content": {
+        [MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY]: true,
+      },
+    });
   });
 });
 
