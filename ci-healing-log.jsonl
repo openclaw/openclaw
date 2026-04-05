@@ -31,3 +31,14 @@
   "ai_patch": null,
   "phase": "shadow-mode"
 }
+{
+  "timestamp": null,
+  "workflow": null,
+  "run_id": null,
+  "branch": null,
+  "commit": null,
+  "conclusion": null,
+  "html_url": null,
+  "ai_patch": null,
+  "phase": "shadow-mode"
+}
