@@ -156,7 +156,7 @@ function expectElevenLabsTalkConfig(
     silenceTimeoutMs?: number;
   },
 ) {
-  expect(talk?.provider).toBe(expected.provider);
+  expect(talk?.provider).toBe(expected.provider ?? "elevenlabs");
   expect(talk?.providers?.elevenlabs?.voiceId).toBe(expected.voiceId);
   expect(talk?.resolved?.provider).toBe("elevenlabs");
   expect(talk?.resolved?.config?.voiceId).toBe(expected.voiceId);
