@@ -684,7 +684,7 @@ function extractAssistantTextForSilentCheck(message: unknown): string | undefine
   return extractAssistantVisibleText(message);
 }
 
-function sanitizeChatHistoryMessages(messages: unknown[], maxChars: number): unknown[] {
+export function sanitizeChatHistoryMessages(messages: unknown[], maxChars: number): unknown[] {
   if (messages.length === 0) {
     return messages;
   }
