@@ -14,7 +14,7 @@
   "uiHints": {
     "publicUrl": {
       "label": "Gateway URL",
-      "help": "Public WebSocket URL used for /pair setup codes (ws/wss or http/https)."
+      "help": "Public WebSocket URL used for /device-pair setup codes (ws/wss or http/https)."
     }
   }
 }

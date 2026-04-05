@@ -409,7 +409,7 @@ function formatSetupReply(payload: SetupPayload, authLabel: string): string {
     "",
     "1) Open the iOS app → Settings → Gateway",
     "2) Paste the setup code below and tap Connect",
-    "3) Back here, run /pair approve",
+    "3) Back here, run /device-pair approve",
     "",
     "Setup code:",
     setupCode,
@@ -425,7 +425,7 @@ function formatSetupInstructions(): string {
     "",
     "1) Open the iOS app → Settings → Gateway",
     "2) Paste the setup code from my next message and tap Connect",
-    "3) Back here, run /pair approve",
+    "3) Back here, run /device-pair approve",
   ].join("\n");
 }
 
@@ -460,7 +460,7 @@ function formatPendingRequests(pending: PendingPairingRequest[]): string {
 
 export default function register(api: OpenClawPluginApi) {
   api.registerCommand({
-    name: "pair",
+    name: "device-pair",
     description: "Generate setup codes and approve device pairing requests.",
     acceptsArgs: true,
     handler: async (ctx) => {
@@ -468,7 +468,7 @@ export default function register(api: OpenClawPluginApi) {
       const tokens = args.split(/\s+/).filter(Boolean);
       const action = tokens[0]?.toLowerCase() ?? "";
       api.logger.info?.(
-        `device-pair: /pair invoked channel=${ctx.channel} sender=${ctx.senderId ?? "unknown"} action=${
+        `device-pair: /device-pair invoked channel=${ctx.channel} sender=${ctx.senderId ?? "unknown"} action=${
           action || "new"
         }`,
       );
@@ -499,9 +499,9 @@ export default function register(api: OpenClawPluginApi) {
             text:
               `${formatPendingRequests(list.pending)}\n\n` +
               "Multiple pending requests found. Approve one explicitly:\n" +
-              "/pair approve <requestId>\n" +
+              "/device-pair approve <requestId>\n" +
               "Or approve the most recent:\n" +
-              "/pair approve latest",
+              "/device-pair approve latest",
           };
         }
         if (!pending) {
@@ -560,7 +560,7 @@ export default function register(api: OpenClawPluginApi) {
                   `Gateway: ${payload.url}`,
                   `Auth: ${authLabel}`,
                   "",
-                  "After scanning, come back here and run `/pair approve` to complete pairing.",
+                  "After scanning, come back here and run `/device-pair approve` to complete pairing.",
                 ].join("\n"),
               };
             }
@@ -579,7 +579,7 @@ export default function register(api: OpenClawPluginApi) {
           `Gateway: ${payload.url}`,
           `Auth: ${authLabel}`,
           "",
-          "After scanning, run `/pair approve` to complete pairing.",
+          "After scanning, run `/device-pair approve` to complete pairing.",
         ];
 
         // WebUI + CLI/TUI: ASCII QR
