@@ -1,5 +1,6 @@
-import { emitActivityEvent } from "../infra/activity-events.js";
+import { emitActivityEvent, summarizeForMetadata } from "../infra/activity-events.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { captureSubagentCompletionReply } from "./subagent-announce-output.js";
 import type { SubagentRunOutcome } from "./subagent-announce.js";
 import {
   SUBAGENT_ENDED_OUTCOME_ERROR,
@@ -91,6 +92,14 @@ export async function emitSubagentEndedHookOnce(params: {
     }
     params.entry.endedHookEmittedAt = Date.now();
     params.persist();
+    // Best-effort capture of the child agent's output for the activity panel.
+    let resultPreview: string | undefined;
+    try {
+      const reply = await captureSubagentCompletionReply(params.entry.childSessionKey);
+      resultPreview = summarizeForMetadata(reply);
+    } catch {
+      // Non-blocking — activity event still fires without the result.
+    }
     emitActivityEvent(
       runId,
       {
@@ -100,6 +109,7 @@ export async function emitSubagentEndedHookOnce(params: {
           error: params.error,
           reason: params.reason,
           childSessionKey: params.entry.childSessionKey,
+          result: resultPreview,
         },
       },
       params.entry.requesterSessionKey,

@@ -183,6 +183,14 @@ ${typeof node.metadata.task === "string"
               </div>
             `
           : nothing}
+        ${node.kind === "subagent" && node.metadata.result
+          ? html`
+              <div class="activity-detail__section">
+                <div class="activity-detail__section-title muted">Result</div>
+                ${renderJsonHighlighted(node.metadata.result)}
+              </div>
+            `
+          : nothing}
         ${node.error
           ? html`
               <div class="activity-detail__section activity-detail__section--error">
