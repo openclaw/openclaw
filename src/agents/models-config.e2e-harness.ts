@@ -287,6 +287,24 @@ async function inferImplicitProviderTestPluginIds(params: {
   for (const providerId of await inferAuthProfileProviderIds(params.agentDir)) {
     providerIds.add(providerId);
   }
+  for (const [pluginId, entry] of Object.entries(params.config?.plugins?.entries ?? {})) {
+    if (!pluginId.trim() || entry?.enabled === false) {
+      continue;
+    }
+    const pluginConfig =
+      entry.config && typeof entry.config === "object"
+        ? (entry.config as { webSearch?: { apiKey?: unknown } })
+        : undefined;
+    if (pluginConfig?.webSearch?.apiKey !== undefined) {
+      providerIds.add(pluginId);
+    }
+  }
+  const legacyGrokApiKey = (
+    params.config?.tools?.web?.search as { grok?: { apiKey?: unknown } } | undefined
+  )?.grok?.apiKey;
+  if (legacyGrokApiKey !== undefined && params.config?.plugins?.entries?.xai?.enabled !== false) {
+    providerIds.add("xai");
+  }
 
   if (providerIds.size === 0) {
     // No config/env/auth hints: keep ambient local auto-discovery focused on the
