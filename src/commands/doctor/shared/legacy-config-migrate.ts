@@ -1,7 +1,7 @@
-import { LEGACY_CONFIG_MIGRATIONS } from "../../../config/legacy.migrations.js";
 import type { OpenClawConfig } from "../../../config/types.js";
 import { validateConfigObjectWithPlugins } from "../../../config/validation.js";
 import { applyChannelDoctorCompatibilityMigrations } from "./channel-legacy-config-migrate.js";
+import { LEGACY_CONFIG_MIGRATIONS } from "./legacy-config-migrations.js";
 
 export function applyLegacyDoctorMigrations(raw: unknown): {
   next: Record<string, unknown> | null;

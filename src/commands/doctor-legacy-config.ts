@@ -3,13 +3,13 @@ import { normalizeProviderId } from "../agents/model-selection.js";
 import { shouldMoveSingleAccountChannelKey } from "../channels/plugins/setup-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveNormalizedProviderModelMaxTokens } from "../config/defaults.js";
-import { migrateLegacyWebFetchConfig } from "../config/legacy-web-fetch.js";
-import { migrateLegacyWebSearchConfig } from "../config/legacy-web-search.js";
-import { migrateLegacyXSearchConfig } from "../config/legacy-x-search.js";
 import { normalizeTalkSection } from "../config/talk.js";
 import { DEFAULT_GOOGLE_API_BASE_URL } from "../infra/google-api-base-url.js";
 import { runPluginSetupConfigMigrations } from "../plugins/setup-registry.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
+import { migrateLegacyWebFetchConfig } from "./doctor/shared/legacy-web-fetch-migrate.js";
+import { migrateLegacyWebSearchConfig } from "./doctor/shared/legacy-web-search-migrate.js";
+import { migrateLegacyXSearchConfig } from "./doctor/shared/legacy-x-search-migrate.js";
 
 export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
   config: OpenClawConfig;

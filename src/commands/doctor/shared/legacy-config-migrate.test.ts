@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { migrateLegacyConfig } from "../commands/doctor/shared/legacy-config-migrate.js";
 import {
   validateConfigObjectRawWithPlugins,
   validateConfigObjectWithPlugins,
-} from "./validation.js";
+} from "../../../config/validation.js";
+import { migrateLegacyConfig } from "./legacy-config-migrate.js";
 
 describe("legacy migrate audio transcription", () => {
   it("does not rewrite removed routing.transcribeAudio migrations", () => {

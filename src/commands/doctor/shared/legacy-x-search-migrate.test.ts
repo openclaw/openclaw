@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "./config.js";
-import { listLegacyXSearchConfigPaths, migrateLegacyXSearchConfig } from "./legacy-x-search.js";
+import type { OpenClawConfig } from "../../../config/config.js";
+import {
+  listLegacyXSearchConfigPaths,
+  migrateLegacyXSearchConfig,
+} from "./legacy-x-search-migrate.js";
 
 describe("legacy x_search config migration", () => {
   it("moves only legacy x_search auth into the xai plugin config", () => {

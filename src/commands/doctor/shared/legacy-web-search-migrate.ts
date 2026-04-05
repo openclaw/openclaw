@@ -1,6 +1,6 @@
-import { BUNDLED_WEB_SEARCH_PROVIDER_PLUGIN_IDS } from "../plugins/bundled-capability-metadata.js";
-import type { OpenClawConfig } from "./config.js";
-import { mergeMissing } from "./legacy.shared.js";
+import type { OpenClawConfig } from "../../../config/config.js";
+import { mergeMissing } from "../../../config/legacy.shared.js";
+import { BUNDLED_WEB_SEARCH_PROVIDER_PLUGIN_IDS } from "../../../plugins/bundled-capability-metadata.js";
 
 type JsonRecord = Record<string, unknown>;
 

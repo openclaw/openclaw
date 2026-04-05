@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "./config.js";
-import { listLegacyWebFetchConfigPaths, migrateLegacyWebFetchConfig } from "./legacy-web-fetch.js";
+import type { OpenClawConfig } from "../../../config/config.js";
+import {
+  listLegacyWebFetchConfigPaths,
+  migrateLegacyWebFetchConfig,
+} from "./legacy-web-fetch-migrate.js";
 
 describe("legacy web fetch config", () => {
   it("migrates legacy Firecrawl fetch config into plugin-owned config", () => {
