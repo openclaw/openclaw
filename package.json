@@ -1139,6 +1139,8 @@
     "test:perf:profile:main": "node scripts/run-vitest-profile.mjs main",
     "test:perf:profile:runner": "node scripts/run-vitest-profile.mjs runner",
     "test:sectriage": "pnpm exec vitest run --config vitest.gateway.config.ts && vitest run --config vitest.unit.config.ts --exclude src/daemon/launchd.integration.test.ts --exclude src/process/exec.test.ts",
+    "test:pdf:bench": "node --import tsx scripts/bench-pdf-extraction.ts",
+    "test:pdf:bench:smoke": "node --import tsx scripts/bench-pdf-extraction.ts --smoke --runs 3 --warmup 1 --output .artifacts/pdf-extraction-bench-smoke.json",
     "test:serial": "OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/test-projects.mjs",
     "test:startup:bench": "node --import tsx scripts/bench-cli-startup.ts",
     "test:startup:bench:check": "node scripts/test-cli-startup-bench-budget.mjs",

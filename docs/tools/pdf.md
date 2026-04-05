@@ -118,10 +118,18 @@ See [Configuration Reference](/gateway/configuration-reference) for full field d
 For a cautious rollout:
 
 1. Keep `engine: "pdfjs"` as the control.
-2. Enable `logTelemetry: true` on a staging or low-risk environment.
-3. Move to `engine: "auto"` to let non-page-filtered requests try Nutrient first while preserving `pdfjs` for `pages=...` requests.
-4. Keep `fallbackOnError: true` until you have enough telemetry to trust the Nutrient path.
-5. Use `engine: "nutrient"` only when you explicitly want hard failure instead of silent fallback behavior.
+2. Run `pnpm test:pdf:bench:smoke`, then benchmark a representative local corpus with `pnpm test:pdf:bench -- --input-dir <dir>` or repeated `--pdf` paths.
+3. Enable `logTelemetry: true` on a staging or low-risk environment.
+4. Move to `engine: "auto"` to let non-page-filtered requests try Nutrient first while preserving `pdfjs` for `pages=...` requests.
+5. Keep `fallbackOnError: true` until you have enough telemetry to trust the Nutrient path.
+6. Use `engine: "nutrient"` only when you explicitly want hard failure instead of silent fallback behavior.
+
+Benchmarking notes:
+
+- The benchmark compares extraction only: `pdfjs` versus the `pdf-to-markdown` CLI.
+- Page-filtered requests are intentionally excluded because production keeps `pages=...` on `pdfjs`.
+- The smoke corpus is synthetic; use a real local corpus before changing defaults.
+- The smoke script writes `.artifacts/pdf-extraction-bench-smoke.json`.
 
 ## Output details
 

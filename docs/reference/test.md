@@ -57,6 +57,26 @@ Last run (2025-12-31, 20 runs):
 - minimax median 1279ms (min 1114, max 2431)
 - opus median 2454ms (min 1224, max 3170)
 
+## PDF extraction bench
+
+Script: [`scripts/bench-pdf-extraction.ts`](https://github.com/openclaw/openclaw/blob/main/scripts/bench-pdf-extraction.ts)
+
+Usage:
+
+- `pnpm test:pdf:bench:smoke`
+- `pnpm test:pdf:bench -- --pdf /tmp/report.pdf`
+- `pnpm test:pdf:bench -- --input-dir ./fixtures/pdfs --runs 5 --output .artifacts/pdf-extraction-bench.json`
+- `pnpm test:pdf:bench -- --smoke --nutrient-command /Users/nuthome/.local/bin/pdf-to-markdown`
+- `pnpm tsx scripts/bench-pdf-extraction.ts --help`
+
+Notes:
+
+- Benchmarks the extraction layer directly: `pdfjs` vs the `pdf-to-markdown` CLI (`nutrient` engine in config).
+- Page-filtered requests are intentionally out of scope for this bench because production keeps `pages=...` on `pdfjs`.
+- `--smoke` generates a small synthetic PDF corpus so you can verify the integration without hunting down fixture files.
+- The smoke script writes `.artifacts/pdf-extraction-bench-smoke.json`.
+- For rollout decisions, benchmark a representative local corpus before switching `agents.defaults.pdfExtraction.engine` from `pdfjs` to `auto` or `nutrient`.
+
 ## CLI startup bench
 
 Script: [`scripts/bench-cli-startup.ts`](https://github.com/openclaw/openclaw/blob/main/scripts/bench-cli-startup.ts)
