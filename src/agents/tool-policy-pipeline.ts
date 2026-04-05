@@ -102,7 +102,15 @@ export function applyToolPolicyPipeline(params: {
     }
 
     const expanded = expandPolicyWithPluginGroups(policy, pluginGroups);
+    const before = filtered.map((t) => t.name);
     filtered = expanded ? filterToolsByPolicy(filtered, expanded) : filtered;
+    const after = filtered.map((t) => t.name);
+    const removed = before.filter((n) => !after.includes(n));
+    if (removed.length > 0) {
+      console.log(
+        `[tool-policy-pipeline] step "${step.label}" removed: ${JSON.stringify(removed)}, policy: ${JSON.stringify({ allow: expanded?.allow, deny: expanded?.deny })}`,
+      );
+    }
   }
   return filtered;
 }

@@ -465,6 +465,19 @@ export function createOpenClawCodingTools(options?: {
   const senderIsOwner = options?.senderIsOwner === true;
   const senderIsAdmin = options?.senderIsAdmin === true;
   const toolsByAuthorization = applyOwnerOnlyToolPolicy(tools, senderIsOwner || senderIsAdmin);
+  // Debug trace: tools after owner policy, before pipeline (temporary)
+  console.log(
+    "[pi-tools] after ownerOnly filter:",
+    JSON.stringify({
+      senderIsOwner,
+      senderIsAdmin,
+      hasCron: toolsByAuthorization.some((t) => t.name === "cron"),
+      hasGateway: toolsByAuthorization.some((t) => t.name === "gateway"),
+      count: toolsByAuthorization.length,
+      profile,
+      providerProfile,
+    }),
+  );
   const subagentFiltered = applyToolPolicyPipeline({
     tools: toolsByAuthorization,
     toolMeta: (tool) => getPluginToolMeta(tool),
