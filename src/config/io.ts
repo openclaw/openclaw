@@ -31,7 +31,6 @@ import {
   readConfigIncludeFileWithGuards,
   resolveConfigIncludes,
 } from "./includes.js";
-import { migrateLegacyConfig } from "./legacy-migrate.js";
 import { findLegacyConfigIssues } from "./legacy.js";
 import {
   asResolvedSourceConfig,
@@ -1646,14 +1645,7 @@ function resolveLegacyConfigForRead(
     sourceRaw,
     listPluginDoctorLegacyConfigRules(),
   );
-  if (sourceLegacyIssues.length === 0) {
-    return { effectiveConfigRaw: resolvedConfigRaw, sourceLegacyIssues };
-  }
-  const migrated = migrateLegacyConfig(resolvedConfigRaw);
-  return {
-    effectiveConfigRaw: migrated.config ?? resolvedConfigRaw,
-    sourceLegacyIssues,
-  };
+  return { effectiveConfigRaw: resolvedConfigRaw, sourceLegacyIssues };
 }
 
 type ReadConfigFileSnapshotInternalResult = {

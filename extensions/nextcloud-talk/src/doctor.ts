@@ -17,13 +17,15 @@ function hasLegacyAllowPrivateNetworkInAccounts(value: unknown): boolean {
   const accounts = isRecord(value) ? value : null;
   return Boolean(
     accounts &&
-      Object.values(accounts).some((account) =>
-        hasLegacyFlatAllowPrivateNetworkAlias(isRecord(account) ? account : {}),
-      ),
+    Object.values(accounts).some((account) =>
+      hasLegacyFlatAllowPrivateNetworkAlias(isRecord(account) ? account : {}),
+    ),
   );
 }
 
-function normalizeNextcloudTalkCompatibilityConfig(cfg: OpenClawConfig): ChannelDoctorConfigMutation {
+function normalizeNextcloudTalkCompatibilityConfig(
+  cfg: OpenClawConfig,
+): ChannelDoctorConfigMutation {
   const channels = isRecord(cfg.channels) ? cfg.channels : null;
   const nextcloudTalk = isRecord(channels?.["nextcloud-talk"]) ? channels["nextcloud-talk"] : null;
   if (!nextcloudTalk) {
@@ -77,8 +79,9 @@ function normalizeNextcloudTalkCompatibilityConfig(cfg: OpenClawConfig): Channel
       ...cfg,
       channels: {
         ...cfg.channels,
-        "nextcloud-talk":
-          updatedNextcloudTalk as NonNullable<OpenClawConfig["channels"]>["nextcloud-talk"],
+        "nextcloud-talk": updatedNextcloudTalk as NonNullable<
+          OpenClawConfig["channels"]
+        >["nextcloud-talk"],
       },
     },
     changes,
@@ -89,13 +92,13 @@ const NEXTCLOUD_TALK_LEGACY_CONFIG_RULES: ChannelDoctorLegacyConfigRule[] = [
   {
     path: ["channels", "nextcloud-talk"],
     message:
-      "channels.nextcloud-talk.allowPrivateNetwork is legacy; use channels.nextcloud-talk.network.dangerouslyAllowPrivateNetwork instead (auto-migrated on load).",
+      'channels.nextcloud-talk.allowPrivateNetwork is legacy; use channels.nextcloud-talk.network.dangerouslyAllowPrivateNetwork instead. Run "openclaw doctor --fix".',
     match: (value) => hasLegacyFlatAllowPrivateNetworkAlias(isRecord(value) ? value : {}),
   },
   {
     path: ["channels", "nextcloud-talk", "accounts"],
     message:
-      "channels.nextcloud-talk.accounts.<id>.allowPrivateNetwork is legacy; use channels.nextcloud-talk.accounts.<id>.network.dangerouslyAllowPrivateNetwork instead (auto-migrated on load).",
+      'channels.nextcloud-talk.accounts.<id>.allowPrivateNetwork is legacy; use channels.nextcloud-talk.accounts.<id>.network.dangerouslyAllowPrivateNetwork instead. Run "openclaw doctor --fix".',
     match: hasLegacyAllowPrivateNetworkInAccounts,
   },
 ];

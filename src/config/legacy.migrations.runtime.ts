@@ -219,13 +219,13 @@ function migrateLegacyTtsConfig(
 const MEMORY_SEARCH_RULE: LegacyConfigRule = {
   path: ["memorySearch"],
   message:
-    "top-level memorySearch was moved; use agents.defaults.memorySearch instead (auto-migrated on load).",
+    'top-level memorySearch was moved; use agents.defaults.memorySearch instead. Run "openclaw doctor --fix".',
 };
 
 const GATEWAY_BIND_RULE: LegacyConfigRule = {
   path: ["gateway", "bind"],
   message:
-    "gateway.bind host aliases (for example 0.0.0.0/localhost) are legacy; use bind modes (lan/loopback/custom/tailnet/auto) instead (auto-migrated on load).",
+    'gateway.bind host aliases (for example 0.0.0.0/localhost) are legacy; use bind modes (lan/loopback/custom/tailnet/auto) instead. Run "openclaw doctor --fix".',
   match: (value) => isLegacyGatewayBindHostAlias(value),
   requireSourceLiteral: true,
 };
@@ -239,20 +239,20 @@ const HEARTBEAT_RULE: LegacyConfigRule = {
 const X_SEARCH_RULE: LegacyConfigRule = {
   path: ["tools", "web", "x_search", "apiKey"],
   message:
-    "tools.web.x_search.apiKey moved to the xAI plugin; use plugins.entries.xai.config.webSearch.apiKey instead (auto-migrated on load).",
+    'tools.web.x_search.apiKey moved to the xAI plugin; use plugins.entries.xai.config.webSearch.apiKey instead. Run "openclaw doctor --fix".',
 };
 
 const LEGACY_TTS_RULES: LegacyConfigRule[] = [
   {
     path: ["messages", "tts"],
     message:
-      "messages.tts.<provider> keys (openai/elevenlabs/microsoft/edge) are legacy; use messages.tts.providers.<provider> (auto-migrated on load).",
+      'messages.tts.<provider> keys (openai/elevenlabs/microsoft/edge) are legacy; use messages.tts.providers.<provider>. Run "openclaw doctor --fix".',
     match: (value) => hasLegacyTtsProviderKeys(value),
   },
   {
     path: ["plugins", "entries"],
     message:
-      "plugins.entries.voice-call.config.tts.<provider> keys (openai/elevenlabs/microsoft/edge) are legacy; use plugins.entries.voice-call.config.tts.providers.<provider> (auto-migrated on load).",
+      'plugins.entries.voice-call.config.tts.<provider> keys (openai/elevenlabs/microsoft/edge) are legacy; use plugins.entries.voice-call.config.tts.providers.<provider>. Run "openclaw doctor --fix".',
     match: (value) => hasLegacyPluginEntryTtsProviderKeys(value),
   },
 ];
@@ -261,13 +261,13 @@ const LEGACY_SANDBOX_SCOPE_RULES: LegacyConfigRule[] = [
   {
     path: ["agents", "defaults", "sandbox"],
     message:
-      "agents.defaults.sandbox.perSession is legacy; use agents.defaults.sandbox.scope instead (auto-migrated on load).",
+      'agents.defaults.sandbox.perSession is legacy; use agents.defaults.sandbox.scope instead. Run "openclaw doctor --fix".',
     match: (value) => hasLegacySandboxPerSession(value),
   },
   {
     path: ["agents", "list"],
     message:
-      "agents.list[].sandbox.perSession is legacy; use agents.list[].sandbox.scope instead (auto-migrated on load).",
+      'agents.list[].sandbox.perSession is legacy; use agents.list[].sandbox.scope instead. Run "openclaw doctor --fix".',
     match: (value) => hasLegacyAgentListSandboxPerSession(value),
   },
 ];
@@ -346,8 +346,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME: LegacyConfigMigrationSpec[] = [
     // to seed this for new installs, but existing bind=lan/bind=custom installs that upgrade
     // crash-loop immediately on next startup with no recovery path (issue #29385).
     //
-    // This migration runs on every gateway start via migrateLegacyConfig → applyLegacyMigrations
-    // and writes the seeded origins to disk before the startup guard fires, preventing the loop.
+    // Doctor-only migration path. Runtime now stops and points users to doctor before startup.
     id: "gateway.controlUi.allowedOrigins-seed-for-non-loopback",
     describe: "Seed gateway.controlUi.allowedOrigins for existing non-loopback gateway installs",
     apply: (raw, changes) => {

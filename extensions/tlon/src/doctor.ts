@@ -17,9 +17,9 @@ function hasLegacyAllowPrivateNetworkInAccounts(value: unknown): boolean {
   const accounts = isRecord(value) ? value : null;
   return Boolean(
     accounts &&
-      Object.values(accounts).some((account) =>
-        hasLegacyFlatAllowPrivateNetworkAlias(isRecord(account) ? account : {}),
-      ),
+    Object.values(accounts).some((account) =>
+      hasLegacyFlatAllowPrivateNetworkAlias(isRecord(account) ? account : {}),
+    ),
   );
 }
 
@@ -88,13 +88,13 @@ const TLON_LEGACY_CONFIG_RULES: ChannelDoctorLegacyConfigRule[] = [
   {
     path: ["channels", "tlon"],
     message:
-      "channels.tlon.allowPrivateNetwork is legacy; use channels.tlon.network.dangerouslyAllowPrivateNetwork instead (auto-migrated on load).",
+      'channels.tlon.allowPrivateNetwork is legacy; use channels.tlon.network.dangerouslyAllowPrivateNetwork instead. Run "openclaw doctor --fix".',
     match: (value) => hasLegacyFlatAllowPrivateNetworkAlias(isRecord(value) ? value : {}),
   },
   {
     path: ["channels", "tlon", "accounts"],
     message:
-      "channels.tlon.accounts.<id>.allowPrivateNetwork is legacy; use channels.tlon.accounts.<id>.network.dangerouslyAllowPrivateNetwork instead (auto-migrated on load).",
+      'channels.tlon.accounts.<id>.allowPrivateNetwork is legacy; use channels.tlon.accounts.<id>.network.dangerouslyAllowPrivateNetwork instead. Run "openclaw doctor --fix".',
     match: hasLegacyAllowPrivateNetworkInAccounts,
   },
 ];

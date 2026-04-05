@@ -10,7 +10,6 @@ import {
   writeConfigFile,
 } from "../../config/config.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
-import { applyLegacyMigrations } from "../../config/legacy.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import {
   redactConfigObject,
@@ -489,9 +488,7 @@ export const configHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const migrated = applyLegacyMigrations(restoredMerge.result);
-    const resolved = migrated.next ?? restoredMerge.result;
-    const validated = validateConfigObjectWithPlugins(resolved);
+    const validated = validateConfigObjectWithPlugins(restoredMerge.result);
     if (!validated.ok) {
       respond(
         false,

@@ -1,8 +1,4 @@
-import {
-  applyChannelDoctorCompatibilityMigrations,
-  collectChannelLegacyConfigRules,
-} from "../channels/plugins/legacy-config.js";
-import { LEGACY_CONFIG_MIGRATIONS } from "./legacy.migrations.js";
+import { collectChannelLegacyConfigRules } from "../channels/plugins/legacy-config.js";
 import { LEGACY_CONFIG_RULES } from "./legacy.rules.js";
 import type { LegacyConfigRule } from "./legacy.shared.js";
 import type { LegacyConfigIssue } from "./types.js";
@@ -50,24 +46,4 @@ export function findLegacyConfigIssues(
     }
   }
   return issues;
-}
-
-export function applyLegacyMigrations(raw: unknown): {
-  next: Record<string, unknown> | null;
-  changes: string[];
-} {
-  if (!raw || typeof raw !== "object") {
-    return { next: null, changes: [] };
-  }
-  const next = structuredClone(raw) as Record<string, unknown>;
-  const changes: string[] = [];
-  for (const migration of LEGACY_CONFIG_MIGRATIONS) {
-    migration.apply(next, changes);
-  }
-  const compat = applyChannelDoctorCompatibilityMigrations(next);
-  changes.push(...compat.changes);
-  if (changes.length === 0) {
-    return { next: null, changes: [] };
-  }
-  return { next: compat.next, changes };
 }

@@ -28,7 +28,7 @@ import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-di
 import { appendAllowedValuesHint, summarizeAllowedValues } from "./allowed-values.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import { collectChannelSchemaMetadata } from "./channel-config-metadata.js";
-import { applyLegacyMigrations, findLegacyConfigIssues } from "./legacy.js";
+import { findLegacyConfigIssues } from "./legacy.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 import { coerceSecretRef } from "./types.secrets.js";
@@ -546,13 +546,7 @@ function validateConfigObjectWithPluginsBase(
   raw: unknown,
   opts: { applyDefaults: boolean; env?: NodeJS.ProcessEnv },
 ): ValidateConfigWithPluginsResult {
-  // Config edit flows often start from raw parsed files that may still contain legacy keys.
-  // Accept known legacy inputs here by normalizing them before schema/plugin validation.
-  const migrated = applyLegacyMigrations(raw);
-  const normalizedRaw = migrated.next ?? raw;
-  const base = opts.applyDefaults
-    ? validateConfigObject(normalizedRaw)
-    : validateConfigObjectRaw(normalizedRaw);
+  const base = opts.applyDefaults ? validateConfigObject(raw) : validateConfigObjectRaw(raw);
   if (!base.ok) {
     return { ok: false, issues: base.issues, warnings: [] };
   }

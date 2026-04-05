@@ -328,13 +328,13 @@ const THREAD_BINDING_RULES: LegacyConfigRule[] = [
   {
     path: ["session", "threadBindings"],
     message:
-      "session.threadBindings.ttlHours was renamed to session.threadBindings.idleHours (auto-migrated on load).",
+      'session.threadBindings.ttlHours was renamed to session.threadBindings.idleHours. Run "openclaw doctor --fix".',
     match: (value) => hasLegacyThreadBindingTtl(value),
   },
   {
     path: ["channels"],
     message:
-      "channels.<id>.threadBindings.ttlHours was renamed to channels.<id>.threadBindings.idleHours (auto-migrated on load).",
+      'channels.<id>.threadBindings.ttlHours was renamed to channels.<id>.threadBindings.idleHours. Run "openclaw doctor --fix".',
     match: (value) => hasLegacyThreadBindingTtlInAnyChannel(value),
   },
 ];
@@ -343,37 +343,37 @@ const CHANNEL_STREAMING_RULES: LegacyConfigRule[] = [
   {
     path: ["channels", "telegram"],
     message:
-      "channels.telegram.streamMode is legacy; use channels.telegram.streaming instead (auto-migrated on load).",
+      'channels.telegram.streamMode is legacy; use channels.telegram.streaming instead. Run "openclaw doctor --fix".',
     match: (value) => hasLegacyTelegramStreamingKeys(value),
   },
   {
     path: ["channels", "telegram", "accounts"],
     message:
-      "channels.telegram.accounts.<id>.streamMode is legacy; use channels.telegram.accounts.<id>.streaming instead (auto-migrated on load).",
+      'channels.telegram.accounts.<id>.streamMode is legacy; use channels.telegram.accounts.<id>.streaming instead. Run "openclaw doctor --fix".',
     match: (value) => hasLegacyKeysInAccounts(value, hasLegacyTelegramStreamingKeys),
   },
   {
     path: ["channels", "discord"],
     message:
-      "channels.discord.streamMode and boolean channels.discord.streaming are legacy; use channels.discord.streaming with enum values instead (auto-migrated on load).",
+      'channels.discord.streamMode and boolean channels.discord.streaming are legacy; use channels.discord.streaming with enum values instead. Run "openclaw doctor --fix".',
     match: (value) => hasLegacyDiscordStreamingKeys(value),
   },
   {
     path: ["channels", "discord", "accounts"],
     message:
-      "channels.discord.accounts.<id>.streamMode and boolean channels.discord.accounts.<id>.streaming are legacy; use channels.discord.accounts.<id>.streaming with enum values instead (auto-migrated on load).",
+      'channels.discord.accounts.<id>.streamMode and boolean channels.discord.accounts.<id>.streaming are legacy; use channels.discord.accounts.<id>.streaming with enum values instead. Run "openclaw doctor --fix".',
     match: (value) => hasLegacyKeysInAccounts(value, hasLegacyDiscordStreamingKeys),
   },
   {
     path: ["channels", "slack"],
     message:
-      "channels.slack.streamMode and boolean channels.slack.streaming are legacy; use channels.slack.streaming with enum values instead (auto-migrated on load).",
+      'channels.slack.streamMode and boolean channels.slack.streaming are legacy; use channels.slack.streaming with enum values instead. Run "openclaw doctor --fix".',
     match: (value) => hasLegacySlackStreamingKeys(value),
   },
   {
     path: ["channels", "slack", "accounts"],
     message:
-      "channels.slack.accounts.<id>.streamMode and boolean channels.slack.accounts.<id>.streaming are legacy; use channels.slack.accounts.<id>.streaming with enum values instead (auto-migrated on load).",
+      'channels.slack.accounts.<id>.streamMode and boolean channels.slack.accounts.<id>.streaming are legacy; use channels.slack.accounts.<id>.streaming with enum values instead. Run "openclaw doctor --fix".',
     match: (value) => hasLegacyKeysInAccounts(value, hasLegacySlackStreamingKeys),
   },
 ];
@@ -382,37 +382,37 @@ const CHANNEL_ENABLED_ALIAS_RULES: LegacyConfigRule[] = [
   {
     path: ["channels", "slack"],
     message:
-      "channels.slack.channels.<id>.allow is legacy; use channels.slack.channels.<id>.enabled instead (auto-migrated on load).",
+      'channels.slack.channels.<id>.allow is legacy; use channels.slack.channels.<id>.enabled instead. Run "openclaw doctor --fix".',
     match: (value) => hasLegacySlackChannelAllowAlias(value),
   },
   {
     path: ["channels", "slack", "accounts"],
     message:
-      "channels.slack.accounts.<id>.channels.<id>.allow is legacy; use channels.slack.accounts.<id>.channels.<id>.enabled instead (auto-migrated on load).",
+      'channels.slack.accounts.<id>.channels.<id>.allow is legacy; use channels.slack.accounts.<id>.channels.<id>.enabled instead. Run "openclaw doctor --fix".',
     match: (value) => hasLegacyKeysInAccounts(value, hasLegacySlackChannelAllowAlias),
   },
   {
     path: ["channels", "googlechat"],
     message:
-      "channels.googlechat.groups.<id>.allow is legacy; use channels.googlechat.groups.<id>.enabled instead (auto-migrated on load).",
+      'channels.googlechat.groups.<id>.allow is legacy; use channels.googlechat.groups.<id>.enabled instead. Run "openclaw doctor --fix".',
     match: (value) => hasLegacyGoogleChatGroupAllowAlias(value),
   },
   {
     path: ["channels", "googlechat", "accounts"],
     message:
-      "channels.googlechat.accounts.<id>.groups.<id>.allow is legacy; use channels.googlechat.accounts.<id>.groups.<id>.enabled instead (auto-migrated on load).",
+      'channels.googlechat.accounts.<id>.groups.<id>.allow is legacy; use channels.googlechat.accounts.<id>.groups.<id>.enabled instead. Run "openclaw doctor --fix".',
     match: (value) => hasLegacyKeysInAccounts(value, hasLegacyGoogleChatGroupAllowAlias),
   },
   {
     path: ["channels", "discord"],
     message:
-      "channels.discord.guilds.<id>.channels.<id>.allow is legacy; use channels.discord.guilds.<id>.channels.<id>.enabled instead (auto-migrated on load).",
+      'channels.discord.guilds.<id>.channels.<id>.allow is legacy; use channels.discord.guilds.<id>.channels.<id>.enabled instead. Run "openclaw doctor --fix".',
     match: (value) => hasLegacyDiscordGuildChannelAllowAlias(value),
   },
   {
     path: ["channels", "discord", "accounts"],
     message:
-      "channels.discord.accounts.<id>.guilds.<id>.channels.<id>.allow is legacy; use channels.discord.accounts.<id>.guilds.<id>.channels.<id>.enabled instead (auto-migrated on load).",
+      'channels.discord.accounts.<id>.guilds.<id>.channels.<id>.allow is legacy; use channels.discord.accounts.<id>.guilds.<id>.channels.<id>.enabled instead. Run "openclaw doctor --fix".',
     match: (value) => hasLegacyKeysInAccounts(value, hasLegacyDiscordGuildChannelAllowAlias),
   },
 ];
