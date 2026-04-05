@@ -584,8 +584,8 @@ describe("validateAnthropicTurns strips dangling tool_use blocks", () => {
       {
         role: "assistant",
         content: [
-          { type: "toolCall", id: "tool-1", name: "test", input: {} },
-          { type: "functionCall", id: "tool-2", name: "test2", input: {} },
+          { type: "toolCall", id: "tool-1", name: "test", arguments: {} },
+          { type: "functionCall", id: "tool-2", name: "test2", arguments: {} },
           { type: "text", text: "Checking" },
         ],
       },
@@ -640,8 +640,8 @@ describe("validateAnthropicTurns strips dangling tool_use blocks", () => {
         role: "assistant",
         content: [
           { type: "toolUse", id: "tu-1", name: "search", input: {} },
-          { type: "toolCall", id: "tc-1", name: "fetch", input: {} },
-          { type: "functionCall", id: "fc-1", name: "compute", input: {} },
+          { type: "toolCall", id: "tc-1", name: "fetch", arguments: {} },
+          { type: "functionCall", id: "fc-1", name: "compute", arguments: {} },
           { type: "text", text: "Running three tools" },
         ],
       },
@@ -679,7 +679,7 @@ describe("validateAnthropicTurns strips dangling tool_use blocks", () => {
       {
         role: "assistant",
         content: [
-          { type: "functionCall", id: "fc-1", name: "compute", input: {} },
+          { type: "functionCall", id: "fc-1", name: "compute", arguments: {} },
           { type: "text", text: "Computing..." },
         ],
       },
@@ -690,6 +690,24 @@ describe("validateAnthropicTurns strips dangling tool_use blocks", () => {
     expect(result).toHaveLength(2);
     const assistantContent = (result[1] as { content?: unknown[] }).content;
     expect(assistantContent).toEqual([{ type: "text", text: "Computing..." }]);
+  });
+
+  it("does not synthesize fallback text for aborted terminal tool-only turns", () => {
+    const msgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "Use tool" }] },
+      {
+        role: "assistant",
+        stopReason: "aborted",
+        content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
+      },
+    ]);
+
+    const result = validateAnthropicTurns(msgs);
+
+    expect(result).toHaveLength(2);
+    const assistant = result[1] as { content?: unknown[]; stopReason?: string };
+    expect(assistant.stopReason).toBe("aborted");
+    expect(assistant.content).toEqual([]);
   });
 
   it("does not crash when assistant content is non-array", () => {
