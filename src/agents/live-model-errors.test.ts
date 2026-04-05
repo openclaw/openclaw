@@ -9,6 +9,9 @@ describe("live model error helpers", () => {
     expect(isModelNotFoundErrorMessage('{"code":404,"message":"model not found"}')).toBe(true);
     expect(isModelNotFoundErrorMessage("model: MiniMax-M2.7-highspeed not found")).toBe(true);
     expect(
+      isModelNotFoundErrorMessage("404 No endpoints found for deepseek/deepseek-r1:free."),
+    ).toBe(true);
+    expect(
       isModelNotFoundErrorMessage(
         "HTTP 400 not_found_error: model: claude-3-5-haiku-20241022 (request_id: req_123)",
       ),

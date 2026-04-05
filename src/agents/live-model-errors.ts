@@ -1,7 +1,17 @@
+/**
+ * Shared model-not-found heuristics used by live probes and runtime failover.
+ * Keep this helper dependency-light so both paths can import it directly.
+ */
 export function isModelNotFoundErrorMessage(raw: string): boolean {
   const msg = raw.trim();
   if (!msg) {
     return false;
+  }
+  if (/no endpoints found for/i.test(msg)) {
+    return true;
+  }
+  if (/unknown model/i.test(msg)) {
+    return true;
   }
   if (/\b404\b/.test(msg) && /not(?:[_\-\s])?found/i.test(msg)) {
     return true;
@@ -9,7 +19,10 @@ export function isModelNotFoundErrorMessage(raw: string): boolean {
   if (/not_found_error/i.test(msg)) {
     return true;
   }
-  if (/model:\s*[a-z0-9._-]+/i.test(msg) && /not(?:[_\-\s])?found/i.test(msg)) {
+  if (/model:\s*[a-z0-9._/-]+/i.test(msg) && /not(?:[_\-\s])?found/i.test(msg)) {
+    return true;
+  }
+  if (/models\/[^\s]+ is not found/i.test(msg)) {
     return true;
   }
   if (/does not exist or you do not have access/i.test(msg)) {
@@ -22,6 +35,9 @@ export function isModelNotFoundErrorMessage(raw: string): boolean {
     return true;
   }
   if (/is not a valid model id/i.test(msg)) {
+    return true;
+  }
+  if (/invalid model/i.test(msg) && !/invalid model reference/i.test(msg)) {
     return true;
   }
   return false;
