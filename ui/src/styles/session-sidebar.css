@@ -60,7 +60,7 @@
   flex: 1;
   overflow-y: auto;
   padding: 4px 0;
-  max-height: calc(50vh - 60px);
+  max-height: calc(100vh - 180px);
   min-width: 0;
 }
 
@@ -73,13 +73,6 @@
   padding: 24px 16px;
   color: var(--muted);
   font-size: 13px;
-}
-
-.session-sidebar__footer {
-  padding: 6px 12px;
-  border-top: 1px solid var(--border);
-  flex-shrink: 0;
-  min-width: 0;
 }
 
 /* --- Session Groups --- */
@@ -190,28 +183,39 @@
   transition: width 0.3s ease;
 }
 
-/* --- New Chat Button --- */
+/* --- Footer & New Chat Button (full width, distinct color) --- */
+.session-sidebar__footer {
+  padding: 6px 12px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+  min-width: 0;
+}
+
 .session-sidebar__new-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
+  gap: 6px;
   width: 100%;
-  padding: 3px 12px;
-  border: 1px dashed var(--border);
+  padding: 6px 12px;
+  border: 1px dashed var(--accent);
   border-radius: var(--radius);
-  background: transparent;
-  color: var(--text);
-  font-size: 11px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+  font-size: 12px;
   font-weight: 500;
   cursor: pointer;
   transition: background 0.15s, border-color 0.15s;
 }
 
 .session-sidebar__new-btn:hover {
-  background: var(--bg-muted);
-  border-color: var(--accent);
-  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border-style: solid;
+}
+
+.session-sidebar__new-btn svg {
+  width: 14px;
+  height: 14px;
 }
 
 /* --- Collapsed mode (icon only) --- */

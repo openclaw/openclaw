@@ -20,10 +20,18 @@ export function renderSessionSidebar(props: SessionSidebarProps): TemplateResult
 
   // Filter: show active sessions, or ended sessions that were preserved via /new (have previousSessionKey)
   const showableSessions = rows.filter((row) => {
+    // Always show active sessions
     if (!row.endedAt) {
       return true;
     }
+    // Show preserved sessions (created via /new)
     if (row.previousSessionKey) {
+      return true;
+    }
+    // Show ended sessions within last 7 days
+    const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
+    const endedAt = row.endedAt ?? 0;
+    if (Date.now() - endedAt < sevenDaysMs) {
       return true;
     }
     return false;
