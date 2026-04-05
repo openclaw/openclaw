@@ -409,7 +409,19 @@ export async function runPreparedReply(
     const aborted = abortEmbeddedPiRun(sessionIdFinal);
     logVerbose(`Interrupting ${sessionLaneKey} (cleared ${cleared}, aborted=${aborted})`);
   }
+  const authProfileId = await resolveSessionAuthProfileOverride({
+    cfg,
+    provider,
+    agentDir,
+    sessionEntry,
+    sessionStore,
+    sessionKey,
+    storePath,
+    isNewSession,
+  });
+  const { runReplyAgent } = await loadAgentRunnerRuntime();
   const queueKey = sessionKey ?? sessionIdFinal;
+  // Keep the final ownership check synchronous with ReplyOperation registration.
   const isActive = isEmbeddedPiRunActive(sessionIdFinal);
   const isStreaming = isEmbeddedPiRunStreaming(sessionIdFinal);
   const shouldSteer = resolvedQueue.mode === "steer" || resolvedQueue.mode === "steer-backlog";
@@ -436,16 +448,6 @@ export async function runPreparedReply(
     !(shouldSteer && isStreaming && !shouldFollowup) &&
     activeRunQueueAction !== "drop" &&
     activeRunQueueAction !== "enqueue-followup";
-  const authProfileId = await resolveSessionAuthProfileOverride({
-    cfg,
-    provider,
-    agentDir,
-    sessionEntry,
-    sessionStore,
-    sessionKey,
-    storePath,
-    isNewSession,
-  });
   const authProfileIdSource = sessionEntry?.authProfileOverrideSource;
   const followupRun = {
     prompt: queuedBody,
@@ -519,7 +521,6 @@ export async function runPreparedReply(
     },
   };
 
-  const { runReplyAgent } = await loadAgentRunnerRuntime();
   const replyOperation = shouldCreateReplyOperation
     ? createReplyOperation({
         sessionId: sessionIdFinal,

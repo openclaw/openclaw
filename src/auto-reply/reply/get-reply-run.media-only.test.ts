@@ -104,6 +104,7 @@ let resolveTypingMode: typeof import("./typing-mode.js").resolveTypingMode;
 let getActiveEmbeddedRunCount: typeof import("../../agents/pi-embedded-runner/runs.js").getActiveEmbeddedRunCount;
 let abortEmbeddedPiRun: typeof import("../../agents/pi-embedded-runner/runs.js").abortEmbeddedPiRun;
 let clearActiveEmbeddedRun: typeof import("../../agents/pi-embedded-runner/runs.js").clearActiveEmbeddedRun;
+let isEmbeddedPiRunActiveActual: typeof import("../../agents/pi-embedded-runner/runs.js").isEmbeddedPiRunActive;
 let setActiveEmbeddedRun: typeof import("../../agents/pi-embedded-runner/runs.js").setActiveEmbeddedRun;
 let runsTesting: typeof import("../../agents/pi-embedded-runner/runs.js").__testing;
 let resetActiveEmbeddedRuns: typeof import("../../agents/pi-embedded-runner/runs.js").__testing.resetActiveEmbeddedRuns;
@@ -203,6 +204,7 @@ describe("runPreparedReply media-only handling", () => {
       getActiveEmbeddedRunCount,
       abortEmbeddedPiRun,
       clearActiveEmbeddedRun,
+      isEmbeddedPiRunActive: isEmbeddedPiRunActiveActual,
       setActiveEmbeddedRun,
     } = await import("../../agents/pi-embedded-runner/runs.js"));
     resetActiveEmbeddedRuns = () => {
@@ -353,6 +355,64 @@ describe("runPreparedReply media-only handling", () => {
     expect(oldAbort).toHaveBeenCalledTimes(1);
 
     clearActiveEmbeddedRun("session-overlap", oldHandle, "session-key");
+    resolveWait(true);
+
+    await expect(runPromise).resolves.toEqual({ text: "ok" });
+    expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
+  });
+  it("rechecks same-session ownership after async prep before registering a new reply operation", async () => {
+    const { resolveSessionAuthProfileOverride } =
+      await import("../../agents/auth-profiles/session-override.js");
+    const piRuntime = await import("../../agents/pi-embedded.runtime.js");
+    const queueSettings = await import("./queue/settings.js");
+
+    let resolveAuth!: () => void;
+    const authPromise = new Promise<void>((resolve) => {
+      resolveAuth = resolve;
+    });
+    let resolveWait!: (value: boolean) => void;
+    const waitPromise = new Promise<boolean>((resolve) => {
+      resolveWait = resolve;
+    });
+    const intruderAbort = vi.fn();
+    const intruderHandle = {
+      queueMessage: vi.fn(async () => {}),
+      isStreaming: () => true,
+      isCompacting: () => false,
+      abort: intruderAbort,
+    };
+
+    vi.mocked(resolveSessionAuthProfileOverride).mockImplementationOnce(
+      async () => await authPromise.then(() => undefined),
+    );
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
+    vi.mocked(piRuntime.isEmbeddedPiRunActive).mockImplementation((sessionId) =>
+      isEmbeddedPiRunActiveActual(sessionId),
+    );
+    vi.mocked(piRuntime.isEmbeddedPiRunStreaming).mockReturnValue(false);
+    vi.mocked(piRuntime.waitForEmbeddedPiRunEnd).mockImplementationOnce(
+      async () => await waitPromise,
+    );
+
+    const runPromise = runPreparedReply(
+      baseParams({
+        isNewSession: false,
+        sessionId: "session-auth-race",
+      }),
+    );
+
+    await Promise.resolve();
+    expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
+
+    setActiveEmbeddedRun("session-auth-race", intruderHandle, "session-key");
+    resolveAuth();
+
+    await Promise.resolve();
+    expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
+    expect(abortEmbeddedPiRun("session-auth-race")).toBe(true);
+    expect(intruderAbort).toHaveBeenCalledTimes(1);
+
+    clearActiveEmbeddedRun("session-auth-race", intruderHandle, "session-key");
     resolveWait(true);
 
     await expect(runPromise).resolves.toEqual({ text: "ok" });
