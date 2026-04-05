@@ -112,6 +112,9 @@ export function waitForQueueDebounce(queue: {
   debounceMs: number;
   lastEnqueuedAt: number;
 }): Promise<void> {
+  if (process.env.OPENCLAW_TEST_FAST === "1") {
+    return Promise.resolve();
+  }
   const debounceMs = Math.max(0, queue.debounceMs);
   if (debounceMs <= 0) {
     return Promise.resolve();
@@ -127,6 +130,18 @@ export function waitForQueueDebounce(queue: {
     };
     check();
   });
+}
+
+export function beginQueueDrain<T extends { draining: boolean }>(
+  map: Map<string, T>,
+  key: string,
+): T | undefined {
+  const queue = map.get(key);
+  if (!queue || queue.draining) {
+    return undefined;
+  }
+  queue.draining = true;
+  return queue;
 }
 
 export async function drainNextQueueItem<T>(
@@ -157,6 +172,23 @@ export async function drainCollectItemIfNeeded<T>(params: {
   }
   const drained = await drainNextQueueItem(params.items, params.run);
   return drained ? "drained" : "empty";
+}
+
+export async function drainCollectQueueStep<T>(params: {
+  collectState: { forceIndividualCollect: boolean };
+  isCrossChannel: boolean;
+  items: T[];
+  run: (item: T) => Promise<void>;
+}): Promise<"skipped" | "drained" | "empty"> {
+  return await drainCollectItemIfNeeded({
+    forceIndividualCollect: params.collectState.forceIndividualCollect,
+    isCrossChannel: params.isCrossChannel,
+    setForceIndividualCollect: (next) => {
+      params.collectState.forceIndividualCollect = next;
+    },
+    items: params.items,
+    run: params.run,
+  });
 }
 
 export function buildQueueSummaryPrompt(params: {

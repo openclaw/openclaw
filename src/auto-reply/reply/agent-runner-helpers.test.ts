@@ -8,16 +8,18 @@ const hoisted = vi.hoisted(() => {
   return { loadSessionStoreMock, scheduleFollowupDrainMock };
 });
 
-vi.mock("../../config/sessions.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../config/sessions.js")>();
+vi.mock("../../config/sessions.js", async () => {
+  const actual = await vi.importActual<typeof import("../../config/sessions.js")>(
+    "../../config/sessions.js",
+  );
   return {
     ...actual,
     loadSessionStore: (...args: unknown[]) => hoisted.loadSessionStoreMock(...args),
   };
 });
 
-vi.mock("./queue.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./queue.js")>();
+vi.mock("./queue.js", async () => {
+  const actual = await vi.importActual<typeof import("./queue.js")>("./queue.js");
   return {
     ...actual,
     scheduleFollowupDrain: (...args: unknown[]) => hoisted.scheduleFollowupDrainMock(...args),
@@ -34,8 +36,8 @@ const {
 
 describe("agent runner helpers", () => {
   beforeEach(() => {
-    hoisted.loadSessionStoreMock.mockReset();
-    hoisted.scheduleFollowupDrainMock.mockReset();
+    hoisted.loadSessionStoreMock.mockClear();
+    hoisted.scheduleFollowupDrainMock.mockClear();
   });
 
   it("detects audio payloads from mediaUrl/mediaUrls", () => {
@@ -80,7 +82,7 @@ describe("agent runner helpers", () => {
     });
     expect(fallbackOn()).toBe(true);
 
-    hoisted.loadSessionStoreMock.mockReset();
+    hoisted.loadSessionStoreMock.mockClear();
     hoisted.loadSessionStoreMock.mockReturnValue({
       "agent:main:main": { verboseLevel: "weird" },
     });

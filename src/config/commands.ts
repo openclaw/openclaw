@@ -1,19 +1,29 @@
-import { normalizeChannelId } from "../channels/plugins/index.js";
+import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
-import type { NativeCommandsSetting } from "./types.js";
+import { normalizeChannelId } from "../channels/registry.js";
+import { isPlainObject } from "../infra/plain-object.js";
+import type { CommandsConfig, NativeCommandsSetting } from "./types.js";
 
-function resolveAutoDefault(providerId?: ChannelId): boolean {
+export type CommandFlagKey = {
+  [K in keyof CommandsConfig]-?: Exclude<CommandsConfig[K], undefined> extends boolean ? K : never;
+}[keyof CommandsConfig];
+
+function resolveAutoDefault(
+  providerId: ChannelId | undefined,
+  kind: "native" | "nativeSkills",
+): boolean {
   const id = normalizeChannelId(providerId);
   if (!id) {
     return false;
   }
-  if (id === "discord" || id === "telegram") {
-    return true;
-  }
-  if (id === "slack") {
+  const plugin = getChannelPlugin(id);
+  if (!plugin) {
     return false;
   }
-  return false;
+  if (kind === "native") {
+    return plugin.commands?.nativeCommandsAutoEnabled === true;
+  }
+  return plugin.commands?.nativeSkillsAutoEnabled === true;
 }
 
 export function resolveNativeSkillsEnabled(params: {
@@ -21,7 +31,7 @@ export function resolveNativeSkillsEnabled(params: {
   providerSetting?: NativeCommandsSetting;
   globalSetting?: NativeCommandsSetting;
 }): boolean {
-  return resolveNativeCommandSetting(params);
+  return resolveNativeCommandSetting({ ...params, kind: "nativeSkills" });
 }
 
 export function resolveNativeCommandsEnabled(params: {
@@ -29,15 +39,16 @@ export function resolveNativeCommandsEnabled(params: {
   providerSetting?: NativeCommandsSetting;
   globalSetting?: NativeCommandsSetting;
 }): boolean {
-  return resolveNativeCommandSetting(params);
+  return resolveNativeCommandSetting({ ...params, kind: "native" });
 }
 
 function resolveNativeCommandSetting(params: {
   providerId: ChannelId;
   providerSetting?: NativeCommandsSetting;
   globalSetting?: NativeCommandsSetting;
+  kind?: "native" | "nativeSkills";
 }): boolean {
-  const { providerId, providerSetting, globalSetting } = params;
+  const { providerId, providerSetting, globalSetting, kind = "native" } = params;
   const setting = providerSetting === undefined ? globalSetting : providerSetting;
   if (setting === true) {
     return true;
@@ -45,7 +56,7 @@ function resolveNativeCommandSetting(params: {
   if (setting === false) {
     return false;
   }
-  return resolveAutoDefault(providerId);
+  return resolveAutoDefault(providerId, kind);
 }
 
 export function isNativeCommandsExplicitlyDisabled(params: {
@@ -62,6 +73,24 @@ export function isNativeCommandsExplicitlyDisabled(params: {
   return false;
 }
 
-export function isRestartEnabled(config?: { commands?: { restart?: boolean } }): boolean {
-  return config?.commands?.restart !== false;
+function getOwnCommandFlagValue(
+  config: { commands?: unknown } | undefined,
+  key: CommandFlagKey,
+): unknown {
+  const { commands } = config ?? {};
+  if (!isPlainObject(commands) || !Object.hasOwn(commands, key)) {
+    return undefined;
+  }
+  return commands[key];
+}
+
+export function isCommandFlagEnabled(
+  config: { commands?: unknown } | undefined,
+  key: CommandFlagKey,
+): boolean {
+  return getOwnCommandFlagValue(config, key) === true;
+}
+
+export function isRestartEnabled(config?: { commands?: unknown }): boolean {
+  return getOwnCommandFlagValue(config, "restart") !== false;
 }

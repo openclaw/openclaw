@@ -1,11 +1,20 @@
+import { fetchWithSsrFGuard, type SsrFPolicy } from "../../runtime-api.js";
 import { getMSTeamsRuntime } from "../runtime.js";
+import { ensureUserAgentHeader } from "../user-agent.js";
 import { downloadMSTeamsAttachments } from "./download.js";
+import { downloadAndStoreMSTeamsRemoteMedia } from "./remote-media.js";
 import {
+  applyAuthorizationHeaderForUrl,
   GRAPH_ROOT,
   inferPlaceholder,
   isRecord,
+  isUrlAllowed,
+  type MSTeamsAttachmentFetchPolicy,
   normalizeContentType,
-  resolveAllowedHosts,
+  resolveMediaSsrfPolicy,
+  resolveAttachmentFetchPolicy,
+  resolveRequestUrl,
+  safeFetchWithPolicy,
 } from "./shared.js";
 import type {
   MSTeamsAccessTokenProvider,
@@ -115,20 +124,31 @@ async function fetchGraphCollection<T>(params: {
   url: string;
   accessToken: string;
   fetchFn?: typeof fetch;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<{ status: number; items: T[] }> {
   const fetchFn = params.fetchFn ?? fetch;
-  const res = await fetchFn(params.url, {
-    headers: { Authorization: `Bearer ${params.accessToken}` },
+  const { response, release } = await fetchWithSsrFGuard({
+    url: params.url,
+    fetchImpl: fetchFn,
+    init: {
+      headers: ensureUserAgentHeader({ Authorization: `Bearer ${params.accessToken}` }),
+    },
+    policy: params.ssrfPolicy,
+    auditContext: "msteams.graph.collection",
   });
-  const status = res.status;
-  if (!res.ok) {
-    return { status, items: [] };
-  }
   try {
-    const data = (await res.json()) as { value?: T[] };
-    return { status, items: Array.isArray(data.value) ? data.value : [] };
-  } catch {
-    return { status, items: [] };
+    const status = response.status;
+    if (!response.ok) {
+      return { status, items: [] };
+    }
+    try {
+      const data = (await response.json()) as { value?: T[] };
+      return { status, items: Array.isArray(data.value) ? data.value : [] };
+    } catch {
+      return { status, items: [] };
+    }
+  } finally {
+    await release();
   }
 }
 
@@ -160,11 +180,13 @@ async function downloadGraphHostedContent(params: {
   maxBytes: number;
   fetchFn?: typeof fetch;
   preserveFilenames?: boolean;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<{ media: MSTeamsInboundMedia[]; status: number; count: number }> {
   const hosted = await fetchGraphCollection<GraphHostedContent>({
     url: `${params.messageUrl}/hostedContents`,
     accessToken: params.accessToken,
     fetchFn: params.fetchFn,
+    ssrfPolicy: params.ssrfPolicy,
   });
   if (hosted.items.length === 0) {
     return { media: [], status: hosted.status, count: 0 };
@@ -173,13 +195,44 @@ async function downloadGraphHostedContent(params: {
   const out: MSTeamsInboundMedia[] = [];
   for (const item of hosted.items) {
     const contentBytes = typeof item.contentBytes === "string" ? item.contentBytes : "";
-    if (!contentBytes) {
-      continue;
-    }
     let buffer: Buffer;
-    try {
-      buffer = Buffer.from(contentBytes, "base64");
-    } catch {
+    if (contentBytes) {
+      try {
+        buffer = Buffer.from(contentBytes, "base64");
+      } catch {
+        continue;
+      }
+    } else if (item.id) {
+      // contentBytes not inline — fetch from the individual $value endpoint.
+      try {
+        const valueUrl = `${params.messageUrl}/hostedContents/${encodeURIComponent(item.id)}/$value`;
+        const { response: valRes, release } = await fetchWithSsrFGuard({
+          url: valueUrl,
+          fetchImpl: params.fetchFn ?? fetch,
+          init: {
+            headers: ensureUserAgentHeader({ Authorization: `Bearer ${params.accessToken}` }),
+          },
+          policy: params.ssrfPolicy,
+          auditContext: "msteams.graph.hostedContent.value",
+        });
+        try {
+          if (!valRes.ok) {
+            continue;
+          }
+          // Check Content-Length before buffering to avoid RSS spikes on large files.
+          const cl = valRes.headers.get("content-length");
+          if (cl && Number(cl) > params.maxBytes) {
+            continue;
+          }
+          const ab = await valRes.arrayBuffer();
+          buffer = Buffer.from(ab);
+        } finally {
+          await release();
+        }
+      } catch {
+        continue;
+      }
+    } else {
       continue;
     }
     if (buffer.byteLength > params.maxBytes) {
@@ -223,7 +276,11 @@ export async function downloadMSTeamsGraphMedia(params: {
   if (!params.messageUrl || !params.tokenProvider) {
     return { media: [] };
   }
-  const allowHosts = resolveAllowedHosts(params.allowHosts);
+  const policy: MSTeamsAttachmentFetchPolicy = resolveAttachmentFetchPolicy({
+    allowHosts: params.allowHosts,
+    authAllowHosts: params.authAllowHosts,
+  });
+  const ssrfPolicy = resolveMediaSsrfPolicy(policy.allowHosts);
   const messageUrl = params.messageUrl;
   let accessToken: string;
   try {
@@ -237,67 +294,80 @@ export async function downloadMSTeamsGraphMedia(params: {
   const sharePointMedia: MSTeamsInboundMedia[] = [];
   const downloadedReferenceUrls = new Set<string>();
   try {
-    const msgRes = await fetchFn(messageUrl, {
-      headers: { Authorization: `Bearer ${accessToken}` },
+    const { response: msgRes, release } = await fetchWithSsrFGuard({
+      url: messageUrl,
+      fetchImpl: fetchFn,
+      init: {
+        headers: ensureUserAgentHeader({ Authorization: `Bearer ${accessToken}` }),
+      },
+      policy: ssrfPolicy,
+      auditContext: "msteams.graph.message",
     });
-    if (msgRes.ok) {
-      const msgData = (await msgRes.json()) as {
-        body?: { content?: string; contentType?: string };
-        attachments?: Array<{
-          id?: string;
-          contentUrl?: string;
-          contentType?: string;
-          name?: string;
-        }>;
-      };
+    try {
+      if (msgRes.ok) {
+        const msgData = (await msgRes.json()) as {
+          body?: { content?: string; contentType?: string };
+          attachments?: Array<{
+            id?: string;
+            contentUrl?: string;
+            contentType?: string;
+            name?: string;
+          }>;
+        };
 
-      // Extract SharePoint file attachments (contentType: "reference")
-      // Download any file type, not just images
-      const spAttachments = (msgData.attachments ?? []).filter(
-        (a) => a.contentType === "reference" && a.contentUrl && a.name,
-      );
-      for (const att of spAttachments) {
-        const name = att.name ?? "file";
+        // Extract SharePoint file attachments (contentType: "reference")
+        // Download any file type, not just images
+        const spAttachments = (msgData.attachments ?? []).filter(
+          (a) => a.contentType === "reference" && a.contentUrl && a.name,
+        );
+        for (const att of spAttachments) {
+          const name = att.name ?? "file";
 
-        try {
-          // SharePoint URLs need to be accessed via Graph shares API
-          const shareUrl = att.contentUrl!;
-          const encodedUrl = Buffer.from(shareUrl).toString("base64url");
-          const sharesUrl = `${GRAPH_ROOT}/shares/u!${encodedUrl}/driveItem/content`;
-
-          const spRes = await fetchFn(sharesUrl, {
-            headers: { Authorization: `Bearer ${accessToken}` },
-            redirect: "follow",
-          });
-
-          if (spRes.ok) {
-            const buffer = Buffer.from(await spRes.arrayBuffer());
-            if (buffer.byteLength <= params.maxBytes) {
-              const mime = await getMSTeamsRuntime().media.detectMime({
-                buffer,
-                headerMime: spRes.headers.get("content-type") ?? undefined,
-                filePath: name,
-              });
-              const originalFilename = params.preserveFilenames ? name : undefined;
-              const saved = await getMSTeamsRuntime().channel.media.saveMediaBuffer(
-                buffer,
-                mime ?? "application/octet-stream",
-                "inbound",
-                params.maxBytes,
-                originalFilename,
-              );
-              sharePointMedia.push({
-                path: saved.path,
-                contentType: saved.contentType,
-                placeholder: inferPlaceholder({ contentType: saved.contentType, fileName: name }),
-              });
-              downloadedReferenceUrls.add(shareUrl);
+          try {
+            // SharePoint URLs need to be accessed via Graph shares API
+            const shareUrl = att.contentUrl!;
+            if (!isUrlAllowed(shareUrl, policy.allowHosts)) {
+              continue;
             }
+            const encodedUrl = Buffer.from(shareUrl).toString("base64url");
+            const sharesUrl = `${GRAPH_ROOT}/shares/u!${encodedUrl}/driveItem/content`;
+
+            const media = await downloadAndStoreMSTeamsRemoteMedia({
+              url: sharesUrl,
+              filePathHint: name,
+              maxBytes: params.maxBytes,
+              contentTypeHint: "application/octet-stream",
+              preserveFilenames: params.preserveFilenames,
+              ssrfPolicy,
+              fetchImpl: async (input, init) => {
+                const requestUrl = resolveRequestUrl(input);
+                const headers = ensureUserAgentHeader(init?.headers);
+                applyAuthorizationHeaderForUrl({
+                  headers,
+                  url: requestUrl,
+                  authAllowHosts: policy.authAllowHosts,
+                  bearerToken: accessToken,
+                });
+                return await safeFetchWithPolicy({
+                  url: requestUrl,
+                  policy,
+                  fetchFn,
+                  requestInit: {
+                    ...init,
+                    headers,
+                  },
+                });
+              },
+            });
+            sharePointMedia.push(media);
+            downloadedReferenceUrls.add(shareUrl);
+          } catch {
+            // Ignore SharePoint download failures.
           }
-        } catch {
-          // Ignore SharePoint download failures.
         }
       }
+    } finally {
+      await release();
     }
   } catch {
     // Ignore message fetch failures.
@@ -309,12 +379,14 @@ export async function downloadMSTeamsGraphMedia(params: {
     maxBytes: params.maxBytes,
     fetchFn: params.fetchFn,
     preserveFilenames: params.preserveFilenames,
+    ssrfPolicy,
   });
 
   const attachments = await fetchGraphCollection<GraphAttachment>({
     url: `${messageUrl}/attachments`,
     accessToken,
     fetchFn: params.fetchFn,
+    ssrfPolicy,
   });
 
   const normalizedAttachments = attachments.items.map(normalizeGraphAttachment);
@@ -336,8 +408,8 @@ export async function downloadMSTeamsGraphMedia(params: {
     attachments: filteredAttachments,
     maxBytes: params.maxBytes,
     tokenProvider: params.tokenProvider,
-    allowHosts,
-    authAllowHosts: params.authAllowHosts,
+    allowHosts: policy.allowHosts,
+    authAllowHosts: policy.authAllowHosts,
     fetchFn: params.fetchFn,
     preserveFilenames: params.preserveFilenames,
   });

@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
-import type { RuntimeEnv } from "openclaw/plugin-sdk";
+import { fetchWithSsrFGuard, type RuntimeEnv } from "../runtime-api.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
+import { normalizeResolvedSecretInputString } from "./secret-input.js";
 
 const ROOM_CACHE_TTL_MS = 5 * 60 * 1000;
 const ROOM_CACHE_ERROR_TTL_MS = 30 * 1000;
@@ -10,16 +11,26 @@ const roomCache = new Map<
   { kind?: "direct" | "group"; fetchedAt: number; error?: string }
 >();
 
+export const __testing = {
+  resetRoomCache() {
+    roomCache.clear();
+  },
+};
+
 function resolveRoomCacheKey(params: { accountId: string; roomToken: string }) {
   return `${params.accountId}:${params.roomToken}`;
 }
 
 function readApiPassword(params: {
-  apiPassword?: string;
+  apiPassword?: unknown;
   apiPasswordFile?: string;
 }): string | undefined {
-  if (params.apiPassword?.trim()) {
-    return params.apiPassword.trim();
+  const inlinePassword = normalizeResolvedSecretInputString({
+    value: params.apiPassword,
+    path: "channels.nextcloud-talk.apiPassword",
+  });
+  if (inlinePassword) {
+    return inlinePassword;
   }
   if (!params.apiPasswordFile) {
     return undefined;
@@ -89,31 +100,41 @@ export async function resolveNextcloudTalkRoomKind(params: {
   const auth = Buffer.from(`${apiUser}:${apiPassword}`, "utf-8").toString("base64");
 
   try {
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        Authorization: `Basic ${auth}`,
-        "OCS-APIRequest": "true",
-        Accept: "application/json",
+    const { response, release } = await fetchWithSsrFGuard({
+      url,
+      init: {
+        method: "GET",
+        headers: {
+          Authorization: `Basic ${auth}`,
+          "OCS-APIRequest": "true",
+          Accept: "application/json",
+        },
       },
+      auditContext: "nextcloud-talk.room-info",
+      policy: account.config?.allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined,
     });
+    try {
+      if (!response.ok) {
+        roomCache.set(key, {
+          fetchedAt: Date.now(),
+          error: `status:${response.status}`,
+        });
+        runtime?.log?.(
+          `nextcloud-talk: room lookup failed (${response.status}) token=${roomToken}`,
+        );
+        return undefined;
+      }
 
-    if (!response.ok) {
-      roomCache.set(key, {
-        fetchedAt: Date.now(),
-        error: `status:${response.status}`,
-      });
-      runtime?.log?.(`nextcloud-talk: room lookup failed (${response.status}) token=${roomToken}`);
-      return undefined;
+      const payload = (await response.json()) as {
+        ocs?: { data?: { type?: number | string } };
+      };
+      const type = coerceRoomType(payload.ocs?.data?.type);
+      const kind = resolveRoomKindFromType(type);
+      roomCache.set(key, { fetchedAt: Date.now(), kind });
+      return kind;
+    } finally {
+      await release();
     }
-
-    const payload = (await response.json()) as {
-      ocs?: { data?: { type?: number | string } };
-    };
-    const type = coerceRoomType(payload.ocs?.data?.type);
-    const kind = resolveRoomKindFromType(type);
-    roomCache.set(key, { fetchedAt: Date.now(), kind });
-    return kind;
   } catch (err) {
     roomCache.set(key, {
       fetchedAt: Date.now(),

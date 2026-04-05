@@ -1,15 +1,21 @@
 ---
-summary: "Use Claude Max/Pro subscription as an OpenAI-compatible API endpoint"
+summary: "Community proxy to expose Claude subscription credentials as an OpenAI-compatible endpoint"
 read_when:
   - You want to use Claude Max subscription with OpenAI-compatible tools
   - You want a local API server that wraps Claude Code CLI
-  - You want to save money by using subscription instead of API keys
+  - You want to evaluate subscription-based vs API-key-based Anthropic access
 title: "Claude Max API Proxy"
 ---
 
 # Claude Max API Proxy
 
 **claude-max-api-proxy** is a community tool that exposes your Claude Max/Pro subscription as an OpenAI-compatible API endpoint. This allows you to use your subscription with any tool that supports the OpenAI API format.
+
+<Warning>
+This path is technical compatibility only. Anthropic has blocked some subscription
+usage outside Claude Code in the past. You must decide for yourself whether to use
+it and verify Anthropic's current terms before relying on it.
+</Warning>
 
 ## Why Use This?
 
@@ -18,7 +24,7 @@ title: "Claude Max API Proxy"
 | Anthropic API           | Pay per token (~$15/M input, $75/M output for Opus) | Production apps, high volume               |
 | Claude Max subscription | $200/month flat                                     | Personal use, development, unlimited usage |
 
-If you have a Claude Max subscription and want to use it with OpenAI-compatible tools, this proxy can save you significant money.
+If you have a Claude Max subscription and want to use it with OpenAI-compatible tools, this proxy may reduce cost for some workflows. API keys remain the clearer policy path for production use.
 
 ## How It Works
 
@@ -88,6 +94,15 @@ You can point OpenClaw at the proxy as a custom OpenAI-compatible endpoint:
 }
 ```
 
+This path uses the same proxy-style OpenAI-compatible route as other custom
+`/v1` backends:
+
+- native OpenAI-only request shaping does not apply
+- no `service_tier`, no Responses `store`, no prompt-cache hints, and no
+  OpenAI reasoning-compat payload shaping
+- hidden OpenClaw attribution headers (`originator`, `version`, `User-Agent`)
+  are not injected on the proxy URL
+
 ## Available Models
 
 | Model ID          | Maps To         |
@@ -144,5 +159,5 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claude-max-api.plist
 
 ## See Also
 
-- [Anthropic provider](/providers/anthropic) - Native OpenClaw integration with Claude setup-token or API keys
+- [Anthropic provider](/providers/anthropic) - Native OpenClaw integration with Claude CLI or API keys
 - [OpenAI provider](/providers/openai) - For OpenAI/Codex subscriptions

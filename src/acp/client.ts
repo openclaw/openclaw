@@ -13,115 +13,39 @@ import {
   type SessionNotification,
 } from "@agentclientprotocol/sdk";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
-import { DANGEROUS_ACP_TOOLS } from "../security/dangerous-tools.js";
-
-const SAFE_AUTO_APPROVE_KINDS = new Set(["read", "search"]);
+import {
+  materializeWindowsSpawnProgram,
+  resolveWindowsSpawnProgram,
+} from "../plugin-sdk/windows-spawn.js";
+import {
+  listKnownProviderAuthEnvVarNames,
+  omitEnvKeysCaseInsensitive,
+} from "../secrets/provider-env-vars.js";
+import { sanitizeTerminalText } from "../terminal/safe-text.js";
+import { classifyAcpToolApproval, type AcpApprovalClass } from "./approval-classifier.js";
 
 type PermissionOption = RequestPermissionRequest["options"][number];
 
 type PermissionResolverDeps = {
   prompt?: (toolName: string | undefined, toolTitle?: string) => Promise<boolean>;
   log?: (line: string) => void;
+  cwd?: string;
 };
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function readFirstStringValue(
-  source: Record<string, unknown> | undefined,
-  keys: string[],
-): string | undefined {
-  if (!source) {
-    return undefined;
-  }
-  for (const key of keys) {
-    const value = source[key];
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
-  }
-  return undefined;
-}
-
-function normalizeToolName(value: string): string | undefined {
-  const normalized = value.trim().toLowerCase();
-  if (!normalized) {
-    return undefined;
-  }
-  return normalized;
-}
-
-function parseToolNameFromTitle(title: string | undefined | null): string | undefined {
-  if (!title) {
-    return undefined;
-  }
-  const head = title.split(":", 1)[0]?.trim();
-  if (!head || !/^[a-zA-Z0-9._-]+$/.test(head)) {
-    return undefined;
-  }
-  return normalizeToolName(head);
-}
-
 function resolveToolKindForPermission(
-  params: RequestPermissionRequest,
   toolName: string | undefined,
+  approvalClass: AcpApprovalClass,
 ): string | undefined {
-  const toolCall = params.toolCall as unknown as { kind?: unknown; title?: unknown } | undefined;
-  const kindRaw = typeof toolCall?.kind === "string" ? toolCall.kind.trim().toLowerCase() : "";
-  if (kindRaw) {
-    return kindRaw;
-  }
-  const name =
-    toolName ??
-    parseToolNameFromTitle(typeof toolCall?.title === "string" ? toolCall.title : undefined);
-  if (!name) {
+  if (!toolName && approvalClass === "unknown") {
     return undefined;
   }
-  const normalized = name.toLowerCase();
-
-  const hasToken = (token: string) => {
-    // Tool names tend to be snake_case. Avoid substring heuristics (ex: "thread" contains "read").
-    const re = new RegExp(`(?:^|[._-])${token}(?:$|[._-])`);
-    return re.test(normalized);
-  };
-
-  // Prefer a conservative classifier: only classify safe kinds when confident.
-  if (normalized === "read" || hasToken("read")) {
-    return "read";
+  if (approvalClass === "readonly_scoped") {
+    return "readonly_scoped";
   }
-  if (normalized === "search" || hasToken("search") || hasToken("find")) {
-    return "search";
+  if (approvalClass === "readonly_search") {
+    return "readonly_search";
   }
-  if (normalized.includes("fetch") || normalized.includes("http")) {
-    return "fetch";
-  }
-  if (normalized.includes("write") || normalized.includes("edit") || normalized.includes("patch")) {
-    return "edit";
-  }
-  if (normalized.includes("delete") || normalized.includes("remove")) {
-    return "delete";
-  }
-  if (normalized.includes("move") || normalized.includes("rename")) {
-    return "move";
-  }
-  if (normalized.includes("exec") || normalized.includes("run") || normalized.includes("bash")) {
-    return "execute";
-  }
-  return "other";
-}
-
-function resolveToolNameForPermission(params: RequestPermissionRequest): string | undefined {
-  const toolCall = params.toolCall;
-  const toolMeta = asRecord(toolCall?._meta);
-  const rawInput = asRecord(toolCall?.rawInput);
-
-  const fromMeta = readFirstStringValue(toolMeta, ["toolName", "tool_name", "name"]);
-  const fromRawInput = readFirstStringValue(rawInput, ["tool", "toolName", "tool_name", "name"]);
-  const fromTitle = parseToolNameFromTitle(toolCall?.title);
-  return normalizeToolName(fromMeta ?? fromRawInput ?? fromTitle ?? "");
+  return approvalClass;
 }
 
 function pickOption(
@@ -191,10 +115,12 @@ export async function resolvePermissionRequest(
 ): Promise<RequestPermissionResponse> {
   const log = deps.log ?? ((line: string) => console.error(line));
   const prompt = deps.prompt ?? promptUserPermission;
+  const cwd = deps.cwd ?? process.cwd();
   const options = params.options ?? [];
-  const toolTitle = params.toolCall?.title ?? "tool";
-  const toolName = resolveToolNameForPermission(params);
-  const toolKind = resolveToolKindForPermission(params, toolName);
+  const toolTitle = sanitizeTerminalText(params.toolCall?.title ?? "tool");
+  const classification = classifyAcpToolApproval({ toolCall: params.toolCall, cwd });
+  const toolName = classification.toolName;
+  const toolKind = resolveToolKindForPermission(toolName, classification.approvalClass);
 
   if (options.length === 0) {
     log(`[permission cancelled] ${toolName ?? "unknown"}: no options available`);
@@ -203,8 +129,7 @@ export async function resolvePermissionRequest(
 
   const allowOption = pickOption(options, ["allow_once", "allow_always"]);
   const rejectOption = pickOption(options, ["reject_once", "reject_always"]);
-  const isSafeKind = Boolean(toolKind && SAFE_AUTO_APPROVE_KINDS.has(toolKind));
-  const promptRequired = !toolName || !isSafeKind || DANGEROUS_ACP_TOOLS.has(toolName);
+  const promptRequired = !classification.autoApprove;
 
   if (!promptRequired) {
     const option = allowOption ?? options[0];
@@ -261,6 +186,88 @@ function buildServerArgs(opts: AcpClientOptions): string[] {
     args.push("--verbose");
   }
   return args;
+}
+
+type AcpClientSpawnEnvOptions = {
+  stripKeys?: Iterable<string>;
+};
+
+export function resolveAcpClientSpawnEnv(
+  baseEnv: NodeJS.ProcessEnv = process.env,
+  options: AcpClientSpawnEnvOptions = {},
+): NodeJS.ProcessEnv {
+  const env = omitEnvKeysCaseInsensitive(baseEnv, options.stripKeys ?? []);
+  env.OPENCLAW_SHELL = "acp-client";
+  return env;
+}
+
+export function shouldStripProviderAuthEnvVarsForAcpServer(
+  params: {
+    serverCommand?: string;
+    serverArgs?: string[];
+    defaultServerCommand?: string;
+    defaultServerArgs?: string[];
+  } = {},
+): boolean {
+  const serverCommand = params.serverCommand?.trim();
+  if (!serverCommand) {
+    return true;
+  }
+  const defaultServerCommand = params.defaultServerCommand?.trim();
+  if (!defaultServerCommand || serverCommand !== defaultServerCommand) {
+    return false;
+  }
+  const serverArgs = params.serverArgs ?? [];
+  const defaultServerArgs = params.defaultServerArgs ?? [];
+  return (
+    serverArgs.length === defaultServerArgs.length &&
+    serverArgs.every((arg, index) => arg === defaultServerArgs[index])
+  );
+}
+
+export function buildAcpClientStripKeys(params: {
+  stripProviderAuthEnvVars?: boolean;
+  activeSkillEnvKeys?: Iterable<string>;
+}): Set<string> {
+  const stripKeys = new Set<string>(params.activeSkillEnvKeys ?? []);
+  if (params.stripProviderAuthEnvVars) {
+    for (const key of listKnownProviderAuthEnvVarNames()) {
+      stripKeys.add(key);
+    }
+  }
+  return stripKeys;
+}
+
+type AcpSpawnRuntime = {
+  platform: NodeJS.Platform;
+  env: NodeJS.ProcessEnv;
+  execPath: string;
+};
+
+const DEFAULT_ACP_SPAWN_RUNTIME: AcpSpawnRuntime = {
+  platform: process.platform,
+  env: process.env,
+  execPath: process.execPath,
+};
+
+export function resolveAcpClientSpawnInvocation(
+  params: { serverCommand: string; serverArgs: string[] },
+  runtime: AcpSpawnRuntime = DEFAULT_ACP_SPAWN_RUNTIME,
+): { command: string; args: string[]; shell?: boolean; windowsHide?: boolean } {
+  const program = resolveWindowsSpawnProgram({
+    command: params.serverCommand,
+    platform: runtime.platform,
+    env: runtime.env,
+    execPath: runtime.execPath,
+    packageName: "openclaw",
+  });
+  const resolved = materializeWindowsSpawnProgram(program, params.serverArgs);
+  return {
+    command: resolved.command,
+    args: resolved.argv,
+    shell: resolved.shell,
+    windowsHide: resolved.windowsHide,
+  };
 }
 
 function resolveSelfEntryPath(): string | null {
@@ -326,14 +333,39 @@ export async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpC
   const serverArgs = buildServerArgs(opts);
 
   const entryPath = resolveSelfEntryPath();
-  const serverCommand = opts.serverCommand ?? (entryPath ? process.execPath : "openclaw");
-  const effectiveArgs = opts.serverCommand || !entryPath ? serverArgs : [entryPath, ...serverArgs];
+  const defaultServerCommand = entryPath ? process.execPath : "openclaw";
+  const defaultServerArgs = entryPath ? [entryPath, ...serverArgs] : serverArgs;
+  const serverCommand = opts.serverCommand ?? defaultServerCommand;
+  const effectiveArgs = opts.serverCommand || !entryPath ? serverArgs : defaultServerArgs;
+  const { getActiveSkillEnvKeys } = await import("../agents/skills/env-overrides.runtime.js");
+  const stripProviderAuthEnvVars = shouldStripProviderAuthEnvVarsForAcpServer({
+    serverCommand,
+    serverArgs: effectiveArgs,
+    defaultServerCommand,
+    defaultServerArgs,
+  });
+  const stripKeys = buildAcpClientStripKeys({
+    stripProviderAuthEnvVars,
+    activeSkillEnvKeys: getActiveSkillEnvKeys(),
+  });
+  const spawnEnv = resolveAcpClientSpawnEnv(process.env, { stripKeys });
+  const spawnInvocation = resolveAcpClientSpawnInvocation(
+    { serverCommand, serverArgs: effectiveArgs },
+    {
+      platform: process.platform,
+      env: spawnEnv,
+      execPath: process.execPath,
+    },
+  );
 
-  log(`spawning: ${serverCommand} ${effectiveArgs.join(" ")}`);
+  log(`spawning: ${spawnInvocation.command} ${spawnInvocation.args.join(" ")}`);
 
-  const agent = spawn(serverCommand, effectiveArgs, {
+  const agent = spawn(spawnInvocation.command, spawnInvocation.args, {
     stdio: ["pipe", "pipe", "inherit"],
     cwd,
+    env: spawnEnv,
+    shell: spawnInvocation.shell,
+    windowsHide: spawnInvocation.windowsHide,
   });
 
   if (!agent.stdin || !agent.stdout) {
@@ -350,7 +382,7 @@ export async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpC
         printSessionUpdate(params);
       },
       requestPermission: async (params: RequestPermissionRequest) => {
-        return resolvePermissionRequest(params);
+        return resolvePermissionRequest(params, { cwd });
       },
     }),
     stream,

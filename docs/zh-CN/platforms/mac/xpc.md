@@ -5,7 +5,7 @@ summary: OpenClaw 应用的 macOS IPC 架构、Gateway 网关节点传输和 Pee
 title: macOS IPC
 x-i18n:
   generated_at: "2026-02-03T07:52:57Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: d0211c334a4a59b71afb29dd7b024778172e529fa618985632d3d11d795ced92
   source_path: platforms/mac/xpc.md

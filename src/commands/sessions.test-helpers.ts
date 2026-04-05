@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -5,8 +6,9 @@ import { vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 
 export function mockSessionsConfig() {
-  vi.mock("../config/config.js", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("../config/config.js")>();
+  vi.mock("../config/config.js", async () => {
+    const actual =
+      await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
     return {
       ...actual,
       loadConfig: () => ({
@@ -49,10 +51,8 @@ export function makeRuntime(params?: { throwOnError?: boolean }): {
 }
 
 export function writeStore(data: unknown, prefix = "sessions"): string {
-  const file = path.join(
-    os.tmpdir(),
-    `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
-  );
+  const fileName = `${[prefix, Date.now(), randomUUID()].join("-")}.json`;
+  const file = path.join(os.tmpdir(), fileName);
   fs.writeFileSync(file, JSON.stringify(data, null, 2));
   return file;
 }

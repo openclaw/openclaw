@@ -1,36 +1,16 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { Type } from "@sinclair/typebox";
 import Ajv from "ajv";
-// NOTE: This extension is intended to be bundled with OpenClaw.
-// When running from source (tests/dev), OpenClaw internals live under src/.
-// When running from a built install, internals live under dist/ (no src/ tree).
-// So we resolve internal imports dynamically with src-first, dist-fallback.
-import type { OpenClawPluginApi } from "../../../src/plugins/types.js";
+import {
+  formatXHighModelHint,
+  normalizeThinkLevel,
+  resolvePreferredOpenClawTmpDir,
+  supportsXHighThinking,
+} from "../api.js";
+import type { OpenClawPluginApi } from "../api.js";
 
-type RunEmbeddedPiAgentFn = (params: Record<string, unknown>) => Promise<unknown>;
-
-async function loadRunEmbeddedPiAgent(): Promise<RunEmbeddedPiAgentFn> {
-  // Source checkout (tests/dev)
-  try {
-    const mod = await import("../../../src/agents/pi-embedded-runner.js");
-    // oxlint-disable-next-line typescript/no-explicit-any
-    if (typeof (mod as any).runEmbeddedPiAgent === "function") {
-      // oxlint-disable-next-line typescript/no-explicit-any
-      return (mod as any).runEmbeddedPiAgent;
-    }
-  } catch {
-    // ignore
-  }
-
-  // Bundled install (built)
-  const mod = await import("../../../src/agents/pi-embedded-runner.js");
-  if (typeof mod.runEmbeddedPiAgent !== "function") {
-    throw new Error("Internal error: runEmbeddedPiAgent not available");
-  }
-  return mod.runEmbeddedPiAgent as RunEmbeddedPiAgentFn;
-}
+const AjvCtor = Ajv as unknown as typeof import("ajv").default;
 
 function stripCodeFences(s: string): string {
   const trimmed = s.trim();
@@ -66,6 +46,9 @@ type PluginCfg = {
   timeoutMs?: number;
 };
 
+const INVALID_THINKING_LEVELS_HINT =
+  "off, minimal, low, medium, high, adaptive, and xhigh where supported";
+
 export function createLlmTaskTool(api: OpenClawPluginApi) {
   return {
     name: "llm-task",
@@ -82,6 +65,7 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
         Type.String({ description: "Provider override (e.g. openai-codex, anthropic)." }),
       ),
       model: Type.Optional(Type.String({ description: "Model id override." })),
+      thinking: Type.Optional(Type.String({ description: "Thinking level override." })),
       authProfileId: Type.Optional(Type.String({ description: "Auth profile override." })),
       temperature: Type.Optional(Type.Number({ description: "Best-effort temperature override." })),
       maxTokens: Type.Optional(Type.Number({ description: "Best-effort maxTokens override." })),
@@ -96,7 +80,11 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
 
       const pluginCfg = (api.pluginConfig ?? {}) as PluginCfg;
 
-      const primary = api.config?.agents?.defaults?.model?.primary;
+      const defaultsModel = api.config?.agents?.defaults?.model;
+      const primary =
+        typeof defaultsModel === "string"
+          ? defaultsModel.trim()
+          : (defaultsModel?.primary?.trim() ?? undefined);
       const primaryProvider = typeof primary === "string" ? primary.split("/")[0] : undefined;
       const primaryModel =
         typeof primary === "string" ? primary.split("/").slice(1).join("/") : undefined;
@@ -134,6 +122,18 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
         throw new Error(
           `Model not allowed by llm-task plugin config: ${modelKey}. Allowed models: ${allowed.join(", ")}`,
         );
+      }
+
+      const thinkingRaw =
+        typeof params.thinking === "string" && params.thinking.trim() ? params.thinking : undefined;
+      const thinkLevel = thinkingRaw ? normalizeThinkLevel(thinkingRaw) : undefined;
+      if (thinkingRaw && !thinkLevel) {
+        throw new Error(
+          `Invalid thinking level "${thinkingRaw}". Use one of: ${INVALID_THINKING_LEVELS_HINT}.`,
+        );
+      }
+      if (thinkLevel === "xhigh" && !supportsXHighThinking(provider, model)) {
+        throw new Error(`Thinking level "xhigh" is only supported for ${formatXHighModelHint()}.`);
       }
 
       const timeoutMs =
@@ -176,13 +176,13 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
 
       let tmpDir: string | null = null;
       try {
-        tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-llm-task-"));
+        tmpDir = await fs.mkdtemp(
+          path.join(resolvePreferredOpenClawTmpDir(), "openclaw-llm-task-"),
+        );
         const sessionId = `llm-task-${Date.now()}`;
         const sessionFile = path.join(tmpDir, "session.json");
 
-        const runEmbeddedPiAgent = await loadRunEmbeddedPiAgent();
-
-        const result = await runEmbeddedPiAgent({
+        const result = await api.runtime.agent.runEmbeddedPiAgent({
           sessionId,
           sessionFile,
           workspaceDir: api.config?.agents?.defaults?.workspace ?? process.cwd(),
@@ -194,6 +194,7 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
           model,
           authProfileId,
           authProfileIdSource: authProfileId ? "user" : "auto",
+          thinkLevel,
           streamParams,
           disableTools: true,
         });
@@ -215,7 +216,7 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
         // oxlint-disable-next-line typescript/no-explicit-any
         const schema = (params as any).schema as unknown;
         if (schema && typeof schema === "object" && !Array.isArray(schema)) {
-          const ajv = new Ajv.default({ allErrors: true, strict: false });
+          const ajv = new AjvCtor({ allErrors: true, strict: false });
           // oxlint-disable-next-line typescript/no-explicit-any
           const validate = ajv.compile(schema as any);
           const ok = validate(parsed);

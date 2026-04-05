@@ -1,13 +1,14 @@
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { getFinishedSession, getSession, markExited } from "../../agents/bash-process-registry.js";
+import { getFinishedSession, getSession } from "../../agents/bash-process-registry.js";
 import { createExecTool } from "../../agents/bash-tools.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
-import { killProcessTree } from "../../agents/shell-utils.js";
+import { isCommandFlagEnabled } from "../../config/commands.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
 import { clampInt } from "../../utils.js";
 import type { MsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
+import { buildDisabledCommandReply } from "./command-gates.js";
 import { formatElevatedUnavailableMessage } from "./elevated-unavailable.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 
@@ -186,10 +187,12 @@ export async function handleBashChatCommand(params: {
     failures: Array<{ gate: string; key: string }>;
   };
 }): Promise<ReplyPayload> {
-  if (params.cfg.commands?.bash !== true) {
-    return {
-      text: "⚠️ bash is disabled. Set commands.bash=true to enable. Docs: https://docs.openclaw.ai/tools/slash-commands#config",
-    };
+  if (!isCommandFlagEnabled(params.cfg, "bash")) {
+    return buildDisabledCommandReply({
+      label: "bash",
+      configKey: "bash",
+      docsUrl: "https://docs.openclaw.ai/tools/slash-commands#config",
+    });
   }
 
   const agentId =
@@ -294,15 +297,15 @@ export async function handleBashChatCommand(params: {
       };
     }
     const pid = running.pid ?? running.child?.pid;
-    if (pid) {
-      killProcessTree(pid);
+    if (!pid) {
+      return {
+        text: `⚠️ Unable to stop bash session ${formatSessionSnippet(sessionId)} because no process ID is available. Use !poll ${sessionId} to check whether it exits on its own.`,
+      };
     }
-    markExited(running, null, "SIGKILL", "failed");
-    if (activeJob?.state === "running" && activeJob.sessionId === sessionId) {
-      activeJob = null;
-    }
+    const { killProcessTree } = await import("../../process/kill-tree.js");
+    killProcessTree(pid);
     return {
-      text: `⚙️ bash stopped (session ${formatSessionSnippet(sessionId)}).`,
+      text: `⚙️ bash stopping (session ${formatSessionSnippet(sessionId)}). Use !poll ${sessionId} to confirm exit.`,
     };
   }
 

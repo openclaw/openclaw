@@ -14,9 +14,16 @@ BUILD_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 GIT_COMMIT=$(cd "$ROOT_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 GIT_BUILD_NUMBER=$(cd "$ROOT_DIR" && git rev-list --count HEAD 2>/dev/null || echo "0")
 APP_VERSION="${APP_VERSION:-$PKG_VERSION}"
-APP_BUILD="${APP_BUILD:-$GIT_BUILD_NUMBER}"
+APP_BUILD="${APP_BUILD:-}"
 BUILD_CONFIG="${BUILD_CONFIG:-debug}"
-BUILD_ARCHS_VALUE="${BUILD_ARCHS:-$(uname -m)}"
+if [[ -n "${BUILD_ARCHS:-}" ]]; then
+  BUILD_ARCHS_VALUE="${BUILD_ARCHS}"
+elif [[ "$BUILD_CONFIG" == "release" ]]; then
+  # Release packaging should be universal unless explicitly overridden.
+  BUILD_ARCHS_VALUE="all"
+else
+  BUILD_ARCHS_VALUE="$(uname -m)"
+fi
 if [[ "${BUILD_ARCHS_VALUE}" == "all" ]]; then
   BUILD_ARCHS_VALUE="arm64 x86_64"
 fi
@@ -29,10 +36,10 @@ if [[ "$BUNDLE_ID" == *.debug ]]; then
   SPARKLE_FEED_URL=""
   AUTO_CHECKS=false
 fi
-if [[ "$AUTO_CHECKS" == "true" && ! "$APP_BUILD" =~ ^[0-9]+$ ]]; then
-  echo "ERROR: APP_BUILD must be numeric for Sparkle compare (CFBundleVersion). Got: $APP_BUILD" >&2
-  exit 1
-fi
+
+sparkle_canonical_build_from_version() {
+  node --import tsx "$ROOT_DIR/scripts/sparkle-build.ts" canonical-build "$1"
+}
 
 build_path_for_arch() {
   echo "$BUILD_ROOT/$1"
@@ -107,8 +114,31 @@ merge_framework_machos() {
   done < <(find "$primary" -type f -print0)
 }
 
-echo "📦 Ensuring deps (pnpm install)"
-(cd "$ROOT_DIR" && pnpm install --no-frozen-lockfile --config.node-linker=hoisted)
+if [[ "${SKIP_PNPM_INSTALL:-0}" != "1" ]]; then
+  echo "📦 Ensuring deps (pnpm install)"
+  (cd "$ROOT_DIR" && pnpm install --no-frozen-lockfile --config.node-linker=hoisted)
+else
+  echo "📦 Skipping pnpm install (SKIP_PNPM_INSTALL=1)"
+fi
+
+if [[ -z "${APP_BUILD:-}" ]]; then
+  APP_BUILD="$GIT_BUILD_NUMBER"
+  if [[ "$APP_VERSION" =~ ^[0-9]{4}\.[0-9]{1,2}\.[0-9]{1,2}([.-].*)?$ ]]; then
+    CANONICAL_BUILD="$(sparkle_canonical_build_from_version "$APP_VERSION")" || {
+      echo "ERROR: Failed to derive canonical Sparkle APP_BUILD from APP_VERSION '$APP_VERSION'." >&2
+      exit 1
+    }
+    if [[ "$CANONICAL_BUILD" =~ ^[0-9]+$ ]] && (( CANONICAL_BUILD > APP_BUILD )); then
+      APP_BUILD="$CANONICAL_BUILD"
+    fi
+  fi
+fi
+
+if [[ "$AUTO_CHECKS" == "true" && ! "$APP_BUILD" =~ ^[0-9]+$ ]]; then
+  echo "ERROR: APP_BUILD must be numeric for Sparkle compare (CFBundleVersion). Got: $APP_BUILD" >&2
+  exit 1
+fi
+
 if [[ "${SKIP_TSC:-0}" != "1" ]]; then
   echo "📦 Building JS (pnpm build)"
   (cd "$ROOT_DIR" && pnpm build)
@@ -214,6 +244,17 @@ if [ -f "$MODEL_CATALOG_SRC" ]; then
   cp "$MODEL_CATALOG_SRC" "$MODEL_CATALOG_DEST"
 else
   echo "WARN: model catalog missing at $MODEL_CATALOG_SRC (continuing)" >&2
+fi
+
+echo "📦 Copying Control UI assets"
+CONTROL_UI_SRC="$ROOT_DIR/dist/control-ui"
+CONTROL_UI_DEST="$APP_ROOT/Contents/Resources/control-ui"
+if [ -d "$CONTROL_UI_SRC" ] && [ -f "$CONTROL_UI_SRC/index.html" ]; then
+  rm -rf "$CONTROL_UI_DEST"
+  cp -R "$CONTROL_UI_SRC" "$CONTROL_UI_DEST"
+else
+  echo "ERROR: Control UI assets missing at $CONTROL_UI_SRC. Run pnpm ui:build first." >&2
+  exit 1
 fi
 
 echo "📦 Copying OpenClawKit resources"

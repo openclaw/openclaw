@@ -1,5 +1,18 @@
-import type { BaseProbeResult } from "openclaw/plugin-sdk";
-import { createMatrixClient, isBunRuntime } from "./client.js";
+import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/infra-runtime";
+import type { SsrFPolicy } from "../runtime-api.js";
+import type { BaseProbeResult } from "../runtime-api.js";
+import { isBunRuntime } from "./client/runtime.js";
+
+type MatrixProbeRuntimeDeps = Pick<typeof import("./probe.runtime.js"), "createMatrixClient">;
+
+let matrixProbeRuntimeDepsPromise: Promise<MatrixProbeRuntimeDeps> | undefined;
+
+async function loadMatrixProbeRuntimeDeps(): Promise<MatrixProbeRuntimeDeps> {
+  matrixProbeRuntimeDepsPromise ??= import("./probe.runtime.js").then((runtimeModule) => ({
+    createMatrixClient: runtimeModule.createMatrixClient,
+  }));
+  return await matrixProbeRuntimeDepsPromise;
+}
 
 export type MatrixProbe = BaseProbeResult & {
   status?: number | null;
@@ -12,6 +25,10 @@ export async function probeMatrix(params: {
   accessToken: string;
   userId?: string;
   timeoutMs: number;
+  accountId?: string | null;
+  allowPrivateNetwork?: boolean;
+  ssrfPolicy?: SsrFPolicy;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
 }): Promise<MatrixProbe> {
   const started = Date.now();
   const result: MatrixProbe = {
@@ -42,13 +59,19 @@ export async function probeMatrix(params: {
     };
   }
   try {
+    const { createMatrixClient } = await loadMatrixProbeRuntimeDeps();
+    const inputUserId = params.userId?.trim() || undefined;
     const client = await createMatrixClient({
       homeserver: params.homeserver,
-      userId: params.userId ?? "",
+      userId: inputUserId,
       accessToken: params.accessToken,
       localTimeoutMs: params.timeoutMs,
+      accountId: params.accountId,
+      allowPrivateNetwork: params.allowPrivateNetwork,
+      ssrfPolicy: params.ssrfPolicy,
+      dispatcherPolicy: params.dispatcherPolicy,
     });
-    // @vector-im/matrix-bot-sdk uses getUserId() which calls whoami internally
+    // The client wrapper resolves user ID via whoami when needed.
     const userId = await client.getUserId();
     result.ok = true;
     result.userId = userId ?? null;

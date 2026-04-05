@@ -6,7 +6,7 @@ summary: 通过 Gateway 网关 + CLI 发送投票
 title: 投票
 x-i18n:
   generated_at: "2026-02-03T07:43:12Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 760339865d27ec40def7996cac1d294d58ab580748ad6b32cc34d285d0314eaf
   source_path: automation/poll.md

@@ -1,3 +1,4 @@
+import { resolveSessionThreadInfo } from "../../channels/plugins/session-conversation.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { SessionConfig, SessionResetConfig } from "../types.base.js";
 import { DEFAULT_IDLE_MINUTES } from "./types.js";
@@ -20,15 +21,10 @@ export type SessionFreshness = {
 export const DEFAULT_RESET_MODE: SessionResetMode = "daily";
 export const DEFAULT_RESET_AT_HOUR = 4;
 
-const THREAD_SESSION_MARKERS = [":thread:", ":topic:"];
 const GROUP_SESSION_MARKERS = [":group:", ":channel:"];
 
 export function isThreadSessionKey(sessionKey?: string | null): boolean {
-  const normalized = (sessionKey ?? "").toLowerCase();
-  if (!normalized) {
-    return false;
-  }
-  return THREAD_SESSION_MARKERS.some((marker) => normalized.includes(marker));
+  return Boolean(resolveSessionThreadInfo(sessionKey).threadId);
 }
 
 export function resolveSessionResetType(params: {
@@ -110,7 +106,7 @@ export function resolveSessionResetPolicy(params: {
   if (idleMinutesRaw != null) {
     const normalized = Math.floor(idleMinutesRaw);
     if (Number.isFinite(normalized)) {
-      idleMinutes = Math.max(normalized, 1);
+      idleMinutes = Math.max(normalized, 0);
     }
   } else if (mode === "idle") {
     idleMinutes = DEFAULT_IDLE_MINUTES;
@@ -146,7 +142,7 @@ export function evaluateSessionFreshness(params: {
       ? resolveDailyResetAtMs(params.now, params.policy.atHour)
       : undefined;
   const idleExpiresAt =
-    params.policy.idleMinutes != null
+    params.policy.idleMinutes != null && params.policy.idleMinutes > 0
       ? params.updatedAt + params.policy.idleMinutes * 60_000
       : undefined;
   const staleDaily = dailyResetAt != null && params.updatedAt < dailyResetAt;

@@ -1,6 +1,11 @@
 import fs from "node:fs/promises";
 import type { Command } from "commander";
 import JSON5 from "json5";
+import { readBestEffortConfig, type OpenClawConfig } from "../config/config.js";
+import {
+  collectExecPolicyScopeSnapshots,
+  type ExecPolicyScopeSnapshot,
+} from "../infra/exec-approvals-effective.js";
 import {
   readExecApprovalsSnapshot,
   saveExecApprovals,
@@ -10,7 +15,7 @@ import {
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
-import { renderTable } from "../terminal/table.js";
+import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { isRich, theme } from "../terminal/theme.js";
 import { describeUnknownError } from "./gateway-cli/shared.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
@@ -22,6 +27,15 @@ type ExecApprovalsSnapshot = {
   exists: boolean;
   hash: string;
   file: ExecApprovalsFile;
+};
+
+type ConfigSnapshotLike = {
+  config?: OpenClawConfig;
+};
+type ApprovalsTargetSource = "gateway" | "node" | "local";
+type EffectivePolicyReport = {
+  scopes: ExecPolicyScopeSnapshot[];
+  note?: string;
 };
 
 type ExecApprovalsCliOpts = NodesRpcOpts & {
@@ -79,7 +93,7 @@ function saveSnapshotLocal(file: ExecApprovalsFile): ExecApprovalsSnapshot {
 async function loadSnapshotTarget(opts: ExecApprovalsCliOpts): Promise<{
   snapshot: ExecApprovalsSnapshot;
   nodeId: string | null;
-  source: "gateway" | "node" | "local";
+  source: ApprovalsTargetSource;
 }> {
   if (!opts.gateway && !opts.node) {
     return { snapshot: loadSnapshotLocal(), nodeId: null, source: "local" };
@@ -106,7 +120,7 @@ function requireTrimmedNonEmpty(value: string, message: string): string {
 async function loadWritableSnapshotTarget(opts: ExecApprovalsCliOpts): Promise<{
   snapshot: ExecApprovalsSnapshot;
   nodeId: string | null;
-  source: "gateway" | "node" | "local";
+  source: ApprovalsTargetSource;
   targetLabel: string;
   baseHash: string;
 }> {
@@ -124,7 +138,7 @@ async function loadWritableSnapshotTarget(opts: ExecApprovalsCliOpts): Promise<{
 
 async function saveSnapshotTargeted(params: {
   opts: ExecApprovalsCliOpts;
-  source: "gateway" | "node" | "local";
+  source: ApprovalsTargetSource;
   nodeId: string | null;
   file: ExecApprovalsFile;
   baseHash: string;
@@ -135,7 +149,7 @@ async function saveSnapshotTargeted(params: {
       ? saveSnapshotLocal(params.file)
       : await saveSnapshot(params.opts, params.nodeId, params.file, params.baseHash);
   if (params.opts.json) {
-    defaultRuntime.log(JSON.stringify(next));
+    defaultRuntime.writeJson(next, 0);
     return;
   }
   defaultRuntime.log(theme.muted(`Target: ${params.targetLabel}`));
@@ -147,11 +161,105 @@ function formatCliError(err: unknown): string {
   return msg.includes("\n") ? msg.split("\n")[0] : msg;
 }
 
+async function loadConfigForApprovalsTarget(params: {
+  opts: ExecApprovalsCliOpts;
+  source: ApprovalsTargetSource;
+}): Promise<OpenClawConfig | null> {
+  try {
+    if (params.source === "local") {
+      return await readBestEffortConfig();
+    }
+    const snapshot = (await callGatewayFromCli(
+      "config.get",
+      params.opts,
+      {},
+    )) as ConfigSnapshotLike;
+    return snapshot.config && typeof snapshot.config === "object" ? snapshot.config : null;
+  } catch {
+    return null;
+  }
+}
+
+function buildEffectivePolicyReport(params: {
+  cfg: OpenClawConfig | null;
+  source: ApprovalsTargetSource;
+  approvals: ExecApprovalsFile;
+  hostPath: string;
+}): EffectivePolicyReport {
+  if (params.source === "node") {
+    if (!params.cfg) {
+      return {
+        scopes: [],
+        note: "Gateway config unavailable. Node output above shows host approvals state only, and final runtime policy still intersects with gateway tools.exec.",
+      };
+    }
+    return {
+      scopes: collectExecPolicyScopeSnapshots({
+        cfg: params.cfg,
+        approvals: params.approvals,
+        hostPath: params.hostPath,
+      }),
+      note: "Effective exec policy is the node host approvals file intersected with gateway tools.exec policy.",
+    };
+  }
+  if (!params.cfg) {
+    return {
+      scopes: [],
+      note: "Config unavailable.",
+    };
+  }
+  return {
+    scopes: collectExecPolicyScopeSnapshots({
+      cfg: params.cfg,
+      approvals: params.approvals,
+      hostPath: params.hostPath,
+    }),
+    note: "Effective exec policy is the host approvals file intersected with requested tools.exec policy.",
+  };
+}
+
+function renderEffectivePolicy(params: { report: EffectivePolicyReport }) {
+  const rich = isRich();
+  const heading = (text: string) => (rich ? theme.heading(text) : text);
+  const muted = (text: string) => (rich ? theme.muted(text) : text);
+  if (params.report.scopes.length === 0 && !params.report.note) {
+    return;
+  }
+  defaultRuntime.log("");
+  defaultRuntime.log(heading("Effective Policy"));
+  if (params.report.scopes.length === 0) {
+    defaultRuntime.log(muted(params.report.note ?? "No effective policy details available."));
+    return;
+  }
+  const rows = params.report.scopes.map((summary) => ({
+    Scope: summary.scopeLabel,
+    Requested: `security=${summary.security.requested} (${summary.security.requestedSource})\nask=${summary.ask.requested} (${summary.ask.requestedSource})`,
+    Host: `security=${summary.security.host} (${summary.security.hostSource})\nask=${summary.ask.host} (${summary.ask.hostSource})\naskFallback=${summary.askFallback.effective} (${summary.askFallback.source})`,
+    Effective: `security=${summary.security.effective}\nask=${summary.ask.effective}`,
+    Notes: `${summary.security.note}; ${summary.ask.note}`,
+  }));
+  defaultRuntime.log(
+    renderTable({
+      width: getTerminalTableWidth(),
+      columns: [
+        { key: "Scope", header: "Scope", minWidth: 12 },
+        { key: "Requested", header: "Requested", minWidth: 24, flex: true },
+        { key: "Host", header: "Host", minWidth: 24, flex: true },
+        { key: "Effective", header: "Effective", minWidth: 16 },
+        { key: "Notes", header: "Notes", minWidth: 20, flex: true },
+      ],
+      rows,
+    }).trimEnd(),
+  );
+  defaultRuntime.log("");
+  defaultRuntime.log(muted(`Precedence: ${params.report.note}`));
+}
+
 function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: string) {
   const rich = isRich();
   const heading = (text: string) => (rich ? theme.heading(text) : text);
   const muted = (text: string) => (rich ? theme.muted(text) : text);
-  const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+  const tableWidth = getTerminalTableWidth();
 
   const file = snapshot.file ?? { version: 1 };
   const defaults = file.defaults ?? {};
@@ -295,11 +403,12 @@ async function loadWritableAllowlistAgent(opts: ExecApprovalsCliOpts): Promise<{
 type WritableAllowlistAgentContext = Awaited<ReturnType<typeof loadWritableAllowlistAgent>> & {
   trimmedPattern: string;
 };
+type AllowlistMutation = (context: WritableAllowlistAgentContext) => boolean | Promise<boolean>;
 
 async function runAllowlistMutation(
   pattern: string,
   opts: ExecApprovalsCliOpts,
-  mutate: (context: WritableAllowlistAgentContext) => boolean | Promise<boolean>,
+  mutate: AllowlistMutation,
 ): Promise<void> {
   try {
     const trimmedPattern = requireTrimmedNonEmpty(pattern, "Pattern required.");
@@ -320,6 +429,25 @@ async function runAllowlistMutation(
     defaultRuntime.error(formatCliError(err));
     defaultRuntime.exit(1);
   }
+}
+
+function registerAllowlistMutationCommand(params: {
+  allowlist: Command;
+  name: "add" | "remove";
+  description: string;
+  mutate: AllowlistMutation;
+}): Command {
+  const command = params.allowlist
+    .command(`${params.name} <pattern>`)
+    .description(params.description)
+    .option("--node <node>", "Target node id/name/IP")
+    .option("--gateway", "Force gateway approvals", false)
+    .option("--agent <id>", 'Agent id (defaults to "*")')
+    .action(async (pattern: string, opts: ExecApprovalsCliOpts) => {
+      await runAllowlistMutation(pattern, opts, params.mutate);
+    });
+  nodesCallOpts(command);
+  return command;
 }
 
 export function registerExecApprovalsCli(program: Command) {
@@ -344,8 +472,15 @@ export function registerExecApprovalsCli(program: Command) {
     .action(async (opts: ExecApprovalsCliOpts) => {
       try {
         const { snapshot, nodeId, source } = await loadSnapshotTarget(opts);
+        const cfg = await loadConfigForApprovalsTarget({ opts, source });
+        const effectivePolicy = buildEffectivePolicyReport({
+          cfg,
+          source,
+          approvals: snapshot.file,
+          hostPath: snapshot.path,
+        });
         if (opts.json) {
-          defaultRuntime.log(JSON.stringify(snapshot));
+          defaultRuntime.writeJson({ ...snapshot, effectivePolicy }, 0);
           return;
         }
 
@@ -356,6 +491,7 @@ export function registerExecApprovalsCli(program: Command) {
         }
         const targetLabel = source === "local" ? "local" : nodeId ? `node:${nodeId}` : "gateway";
         renderApprovalsSnapshot(snapshot, targetLabel);
+        renderEffectivePolicy({ report: effectivePolicy });
       } catch (err) {
         defaultRuntime.error(formatCliError(err));
         defaultRuntime.exit(1);
@@ -416,63 +552,47 @@ export function registerExecApprovalsCli(program: Command) {
         )}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/approvals", "docs.openclaw.ai/cli/approvals")}\n`,
     );
 
-  const allowlistAdd = allowlist
-    .command("add <pattern>")
-    .description("Add a glob pattern to an allowlist")
-    .option("--node <node>", "Target node id/name/IP")
-    .option("--gateway", "Force gateway approvals", false)
-    .option("--agent <id>", 'Agent id (defaults to "*")')
-    .action(async (pattern: string, opts: ExecApprovalsCliOpts) => {
-      await runAllowlistMutation(
-        pattern,
-        opts,
-        ({ trimmedPattern, file, agent, agentKey, allowlistEntries }) => {
-          if (allowlistEntries.some((entry) => normalizeAllowlistEntry(entry) === trimmedPattern)) {
-            defaultRuntime.log("Already allowlisted.");
-            return false;
-          }
-          allowlistEntries.push({ pattern: trimmedPattern, lastUsedAt: Date.now() });
-          agent.allowlist = allowlistEntries;
-          file.agents = { ...file.agents, [agentKey]: agent };
-          return true;
-        },
-      );
-    });
-  nodesCallOpts(allowlistAdd);
+  registerAllowlistMutationCommand({
+    allowlist,
+    name: "add",
+    description: "Add a glob pattern to an allowlist",
+    mutate: ({ trimmedPattern, file, agent, agentKey, allowlistEntries }) => {
+      if (allowlistEntries.some((entry) => normalizeAllowlistEntry(entry) === trimmedPattern)) {
+        defaultRuntime.log("Already allowlisted.");
+        return false;
+      }
+      allowlistEntries.push({ pattern: trimmedPattern, lastUsedAt: Date.now() });
+      agent.allowlist = allowlistEntries;
+      file.agents = { ...file.agents, [agentKey]: agent };
+      return true;
+    },
+  });
 
-  const allowlistRemove = allowlist
-    .command("remove <pattern>")
-    .description("Remove a glob pattern from an allowlist")
-    .option("--node <node>", "Target node id/name/IP")
-    .option("--gateway", "Force gateway approvals", false)
-    .option("--agent <id>", 'Agent id (defaults to "*")')
-    .action(async (pattern: string, opts: ExecApprovalsCliOpts) => {
-      await runAllowlistMutation(
-        pattern,
-        opts,
-        ({ trimmedPattern, file, agent, agentKey, allowlistEntries }) => {
-          const nextEntries = allowlistEntries.filter(
-            (entry) => normalizeAllowlistEntry(entry) !== trimmedPattern,
-          );
-          if (nextEntries.length === allowlistEntries.length) {
-            defaultRuntime.log("Pattern not found.");
-            return false;
-          }
-          if (nextEntries.length === 0) {
-            delete agent.allowlist;
-          } else {
-            agent.allowlist = nextEntries;
-          }
-          if (isEmptyAgent(agent)) {
-            const agents = { ...file.agents };
-            delete agents[agentKey];
-            file.agents = Object.keys(agents).length > 0 ? agents : undefined;
-          } else {
-            file.agents = { ...file.agents, [agentKey]: agent };
-          }
-          return true;
-        },
+  registerAllowlistMutationCommand({
+    allowlist,
+    name: "remove",
+    description: "Remove a glob pattern from an allowlist",
+    mutate: ({ trimmedPattern, file, agent, agentKey, allowlistEntries }) => {
+      const nextEntries = allowlistEntries.filter(
+        (entry) => normalizeAllowlistEntry(entry) !== trimmedPattern,
       );
-    });
-  nodesCallOpts(allowlistRemove);
+      if (nextEntries.length === allowlistEntries.length) {
+        defaultRuntime.log("Pattern not found.");
+        return false;
+      }
+      if (nextEntries.length === 0) {
+        delete agent.allowlist;
+      } else {
+        agent.allowlist = nextEntries;
+      }
+      if (isEmptyAgent(agent)) {
+        const agents = { ...file.agents };
+        delete agents[agentKey];
+        file.agents = Object.keys(agents).length > 0 ? agents : undefined;
+      } else {
+        file.agents = { ...file.agents, [agentKey]: agent };
+      }
+      return true;
+    },
+  });
 }

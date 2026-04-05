@@ -5,7 +5,7 @@ summary: "`openclaw config` 的 CLI 参考（获取/设置/取消设置配置值
 title: config
 x-i18n:
   generated_at: "2026-02-03T10:04:13Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: d60a35f5330f22bc99a0df090590586109d329ddd2ca294aeed191a22560c1c2
   source_path: cli/config.md
@@ -24,7 +24,7 @@ openclaw config get browser.executablePath
 openclaw config set browser.executablePath "/usr/bin/google-chrome"
 openclaw config set agents.defaults.heartbeat.every "2h"
 openclaw config set agents.list[0].tools.exec.node "node-id-or-name"
-openclaw config unset tools.web.search.apiKey
+openclaw config unset plugins.entries.brave.config.webSearch.apiKey
 ```
 
 ## 路径

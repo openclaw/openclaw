@@ -10,7 +10,8 @@ import { randomUUID } from "node:crypto";
 import type * as LanceDB from "@lancedb/lancedb";
 import { Type } from "@sinclair/typebox";
 import OpenAI from "openai";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
+import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
 import {
   DEFAULT_CAPTURE_MAX_CHARS,
   MEMORY_CATEGORIES,
@@ -18,23 +19,11 @@ import {
   memoryConfigSchema,
   vectorDimsForModel,
 } from "./config.js";
+import { loadLanceDbModule } from "./lancedb-runtime.js";
 
 // ============================================================================
 // Types
 // ============================================================================
-
-let lancedbImportPromise: Promise<typeof import("@lancedb/lancedb")> | null = null;
-const loadLanceDB = async (): Promise<typeof import("@lancedb/lancedb")> => {
-  if (!lancedbImportPromise) {
-    lancedbImportPromise = import("@lancedb/lancedb");
-  }
-  try {
-    return await lancedbImportPromise;
-  } catch (err) {
-    // Common on macOS today: upstream package may not ship darwin native bindings.
-    throw new Error(`memory-lancedb: failed to load LanceDB. ${String(err)}`, { cause: err });
-  }
-};
 
 type MemoryEntry = {
   id: string;
@@ -79,7 +68,7 @@ class MemoryDB {
   }
 
   private async doInitialize(): Promise<void> {
-    const lancedb = await loadLanceDB();
+    const lancedb = await loadLanceDbModule();
     this.db = await lancedb.connect(this.dbPath);
     const tables = await this.db.tableNames();
 
@@ -166,15 +155,22 @@ class Embeddings {
   constructor(
     apiKey: string,
     private model: string,
+    baseUrl?: string,
+    private dimensions?: number,
   ) {
-    this.client = new OpenAI({ apiKey });
+    this.client = new OpenAI({ apiKey, baseURL: baseUrl });
   }
 
   async embed(text: string): Promise<number[]> {
-    const response = await this.client.embeddings.create({
+    const params: { model: string; input: string; dimensions?: number } = {
       model: this.model,
       input: text,
-    });
+    };
+    if (this.dimensions) {
+      params.dimensions = this.dimensions;
+    }
+    ensureGlobalUndiciEnvProxyDispatcher();
+    const response = await this.client.embeddings.create(params);
     return response.data[0].embedding;
   }
 }
@@ -283,7 +279,7 @@ export function detectCategory(text: string): MemoryCategory {
 // Plugin Definition
 // ============================================================================
 
-const memoryPlugin = {
+export default definePluginEntry({
   id: "memory-lancedb",
   name: "Memory (LanceDB)",
   description: "LanceDB-backed long-term memory with auto-recall/capture",
@@ -293,9 +289,11 @@ const memoryPlugin = {
   register(api: OpenClawPluginApi) {
     const cfg = memoryConfigSchema.parse(api.pluginConfig);
     const resolvedDbPath = api.resolvePath(cfg.dbPath!);
-    const vectorDim = vectorDimsForModel(cfg.embedding.model ?? "text-embedding-3-small");
+    const { model, dimensions, apiKey, baseUrl } = cfg.embedding;
+
+    const vectorDim = dimensions ?? vectorDimsForModel(model);
     const db = new MemoryDB(resolvedDbPath, vectorDim);
-    const embeddings = new Embeddings(cfg.embedding.apiKey, cfg.embedding.model!);
+    const embeddings = new Embeddings(apiKey, model, baseUrl, dimensions);
 
     api.logger.info(`memory-lancedb: plugin registered (db: ${resolvedDbPath}, lazy init)`);
 
@@ -665,6 +663,4 @@ const memoryPlugin = {
       },
     });
   },
-};
-
-export default memoryPlugin;
+});

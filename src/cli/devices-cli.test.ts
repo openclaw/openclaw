@@ -1,49 +1,75 @@
 import { Command } from "commander";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { registerDevicesCli } from "./devices-cli.js";
 
-const callGateway = vi.fn();
-const withProgress = vi.fn(async (_opts: unknown, fn: () => Promise<unknown>) => await fn());
-const runtime = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(),
-};
+const mocks = vi.hoisted(() => ({
+  runtime: {
+    log: vi.fn(),
+    error: vi.fn(),
+    exit: vi.fn(),
+    writeJson: vi.fn(),
+  },
+  callGateway: vi.fn(),
+  buildGatewayConnectionDetails: vi.fn(() => ({
+    url: "ws://127.0.0.1:18789",
+    urlSource: "local loopback",
+    message: "",
+  })),
+  listDevicePairing: vi.fn(),
+  approveDevicePairing: vi.fn(),
+  summarizeDeviceTokens: vi.fn(),
+  withProgress: vi.fn(async (_opts: unknown, fn: () => Promise<unknown>) => await fn()),
+}));
+
+const {
+  runtime,
+  callGateway,
+  buildGatewayConnectionDetails,
+  listDevicePairing,
+  approveDevicePairing,
+  summarizeDeviceTokens,
+} = mocks;
 
 vi.mock("../gateway/call.js", () => ({
-  callGateway,
+  callGateway: mocks.callGateway,
+  buildGatewayConnectionDetails: mocks.buildGatewayConnectionDetails,
 }));
 
 vi.mock("./progress.js", () => ({
-  withProgress,
+  withProgress: mocks.withProgress,
+}));
+
+vi.mock("../infra/device-pairing.js", () => ({
+  listDevicePairing: mocks.listDevicePairing,
+  approveDevicePairing: mocks.approveDevicePairing,
+  summarizeDeviceTokens: mocks.summarizeDeviceTokens,
 }));
 
 vi.mock("../runtime.js", () => ({
-  defaultRuntime: runtime,
+  defaultRuntime: mocks.runtime,
+  writeRuntimeJson: (
+    targetRuntime: { log: (...args: unknown[]) => void },
+    value: unknown,
+    space = 2,
+  ) => targetRuntime.log(JSON.stringify(value, null, space > 0 ? space : undefined)),
 }));
 
 async function runDevicesApprove(argv: string[]) {
-  const { registerDevicesCli } = await import("./devices-cli.js");
-  const program = new Command();
-  registerDevicesCli(program);
-  await program.parseAsync(["devices", "approve", ...argv], { from: "user" });
+  await runDevicesCommand(["approve", ...argv]);
 }
 
 async function runDevicesCommand(argv: string[]) {
-  const { registerDevicesCli } = await import("./devices-cli.js");
   const program = new Command();
   registerDevicesCli(program);
   await program.parseAsync(["devices", ...argv], { from: "user" });
 }
 
-describe("devices cli approve", () => {
-  afterEach(() => {
-    callGateway.mockReset();
-    withProgress.mockClear();
-    runtime.log.mockReset();
-    runtime.error.mockReset();
-    runtime.exit.mockReset();
-  });
+function readRuntimeCallText(call: unknown[] | undefined): string {
+  const value = call?.[0];
+  return typeof value === "string" ? value : "";
+}
 
+describe("devices cli approve", () => {
   it("approves an explicit request id without listing", async () => {
     callGateway.mockResolvedValueOnce({ device: { deviceId: "device-1" } });
 
@@ -58,17 +84,33 @@ describe("devices cli approve", () => {
     );
   });
 
-  it("auto-approves the latest pending request when id is omitted", async () => {
+  it.each([
+    {
+      name: "id is omitted",
+      args: [] as string[],
+      pending: [
+        { requestId: "req-1", ts: 1000 },
+        { requestId: "req-2", ts: 2000 },
+      ],
+      expectedRequestId: "req-2",
+    },
+    {
+      name: "--latest is passed",
+      args: ["req-old", "--latest"] as string[],
+      pending: [
+        { requestId: "req-2", ts: 2000 },
+        { requestId: "req-3", ts: 3000 },
+      ],
+      expectedRequestId: "req-3",
+    },
+  ])("uses latest pending request when $name", async ({ args, pending, expectedRequestId }) => {
     callGateway
       .mockResolvedValueOnce({
-        pending: [
-          { requestId: "req-1", ts: 1000 },
-          { requestId: "req-2", ts: 2000 },
-        ],
+        pending,
       })
       .mockResolvedValueOnce({ device: { deviceId: "device-2" } });
 
-    await runDevicesApprove([]);
+    await runDevicesApprove(args);
 
     expect(callGateway).toHaveBeenNthCalledWith(
       1,
@@ -78,28 +120,7 @@ describe("devices cli approve", () => {
       2,
       expect.objectContaining({
         method: "device.pair.approve",
-        params: { requestId: "req-2" },
-      }),
-    );
-  });
-
-  it("uses latest pending request when --latest is passed", async () => {
-    callGateway
-      .mockResolvedValueOnce({
-        pending: [
-          { requestId: "req-2", ts: 2000 },
-          { requestId: "req-3", ts: 3000 },
-        ],
-      })
-      .mockResolvedValueOnce({ device: { deviceId: "device-3" } });
-
-    await runDevicesApprove(["req-old", "--latest"]);
-
-    expect(callGateway).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        method: "device.pair.approve",
-        params: { requestId: "req-3" },
+        params: { requestId: expectedRequestId },
       }),
     );
   });
@@ -122,14 +143,6 @@ describe("devices cli approve", () => {
 });
 
 describe("devices cli remove", () => {
-  afterEach(() => {
-    callGateway.mockReset();
-    withProgress.mockClear();
-    runtime.log.mockReset();
-    runtime.error.mockReset();
-    runtime.exit.mockReset();
-  });
-
   it("removes a paired device by id", async () => {
     callGateway.mockResolvedValueOnce({ deviceId: "device-1" });
 
@@ -146,14 +159,6 @@ describe("devices cli remove", () => {
 });
 
 describe("devices cli clear", () => {
-  afterEach(() => {
-    callGateway.mockReset();
-    withProgress.mockClear();
-    runtime.log.mockReset();
-    runtime.error.mockReset();
-    runtime.exit.mockReset();
-  });
-
   it("requires --yes before clearing", async () => {
     await runDevicesCommand(["clear"]);
 
@@ -194,55 +199,44 @@ describe("devices cli clear", () => {
 });
 
 describe("devices cli tokens", () => {
-  afterEach(() => {
-    callGateway.mockReset();
-    withProgress.mockClear();
-    runtime.log.mockReset();
-    runtime.error.mockReset();
-    runtime.exit.mockReset();
-  });
-
-  it("rotates a token for a device role", async () => {
-    callGateway.mockResolvedValueOnce({ ok: true });
-
-    await runDevicesCommand([
-      "rotate",
-      "--device",
-      "device-1",
-      "--role",
-      "main",
-      "--scope",
-      "messages:send",
-      "--scope",
-      "messages:read",
-    ]);
-
-    expect(callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
+  it.each([
+    {
+      label: "rotates a token for a device role",
+      argv: [
+        "rotate",
+        "--device",
+        "device-1",
+        "--role",
+        "main",
+        "--scope",
+        "messages:send",
+        "--scope",
+        "messages:read",
+      ],
+      expectedCall: {
         method: "device.token.rotate",
         params: {
           deviceId: "device-1",
           role: "main",
           scopes: ["messages:send", "messages:read"],
         },
-      }),
-    );
-  });
-
-  it("revokes a token for a device role", async () => {
-    callGateway.mockResolvedValueOnce({ ok: true });
-
-    await runDevicesCommand(["revoke", "--device", "device-1", "--role", "main"]);
-
-    expect(callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
+      },
+    },
+    {
+      label: "revokes a token for a device role",
+      argv: ["revoke", "--device", "device-1", "--role", "main"],
+      expectedCall: {
         method: "device.token.revoke",
         params: {
           deviceId: "device-1",
           role: "main",
         },
-      }),
-    );
+      },
+    },
+  ])("$label", async ({ argv, expectedCall }) => {
+    callGateway.mockResolvedValueOnce({ ok: true });
+    await runDevicesCommand(argv);
+    expect(callGateway).toHaveBeenCalledWith(expect.objectContaining(expectedCall));
   });
 
   it("rejects blank device or role values", async () => {
@@ -252,4 +246,102 @@ describe("devices cli tokens", () => {
     expect(runtime.error).toHaveBeenCalledWith("--device and --role required");
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
+});
+
+describe("devices cli local fallback", () => {
+  const fallbackNotice = "Direct scope access failed; using local fallback.";
+
+  it("falls back to local pairing list when gateway returns pairing required on loopback", async () => {
+    callGateway.mockRejectedValueOnce(new Error("gateway closed (1008): pairing required"));
+    listDevicePairing.mockResolvedValueOnce({
+      pending: [{ requestId: "req-1", deviceId: "device-1", publicKey: "pk", ts: 1 }],
+      paired: [],
+    });
+    summarizeDeviceTokens.mockReturnValue(undefined);
+
+    await runDevicesCommand(["list"]);
+
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({ method: "device.pair.list" }),
+    );
+    expect(listDevicePairing).toHaveBeenCalledTimes(1);
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining(fallbackNotice));
+  });
+
+  it("falls back to local approve when gateway returns pairing required on loopback", async () => {
+    callGateway
+      .mockRejectedValueOnce(new Error("gateway closed (1008): pairing required"))
+      .mockRejectedValueOnce(new Error("gateway closed (1008): pairing required"));
+    listDevicePairing.mockResolvedValueOnce({
+      pending: [{ requestId: "req-latest", deviceId: "device-1", publicKey: "pk", ts: 2 }],
+      paired: [],
+    });
+    approveDevicePairing.mockResolvedValueOnce({
+      requestId: "req-latest",
+      device: {
+        deviceId: "device-1",
+        publicKey: "pk",
+        approvedAtMs: 1,
+        createdAtMs: 1,
+      },
+    });
+    summarizeDeviceTokens.mockReturnValue(undefined);
+
+    await runDevicesApprove(["--latest"]);
+
+    expect(approveDevicePairing).toHaveBeenCalledWith("req-latest", {
+      callerScopes: ["operator.admin"],
+    });
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining(fallbackNotice));
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Approved"));
+  });
+
+  it("does not use local fallback when an explicit --url is provided", async () => {
+    callGateway.mockRejectedValueOnce(new Error("gateway closed (1008): pairing required"));
+
+    await expect(
+      runDevicesCommand(["list", "--json", "--url", "ws://127.0.0.1:18789"]),
+    ).rejects.toThrow("pairing required");
+    expect(listDevicePairing).not.toHaveBeenCalled();
+  });
+});
+
+describe("devices cli list", () => {
+  it("renders pending scopes when present", async () => {
+    callGateway.mockResolvedValueOnce({
+      pending: [
+        {
+          requestId: "req-1",
+          deviceId: "device-1",
+          displayName: "Device One",
+          role: "operator",
+          scopes: ["operator.admin", "operator.read"],
+          ts: 1,
+        },
+      ],
+      paired: [],
+    });
+
+    await runDevicesCommand(["list"]);
+
+    const output = runtime.log.mock.calls.map((entry) => readRuntimeCallText(entry)).join("\n");
+    expect(output).toContain("Scopes");
+    expect(output).toContain("operator.admin, operator.read");
+  });
+});
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  runtime.exit.mockImplementation(() => {});
+});
+
+afterEach(() => {
+  buildGatewayConnectionDetails.mockReturnValue({
+    url: "ws://127.0.0.1:18789",
+    urlSource: "local loopback",
+    message: "",
+  });
+  listDevicePairing.mockResolvedValue({ pending: [], paired: [] });
+  approveDevicePairing.mockResolvedValue(undefined);
+  summarizeDeviceTokens.mockReturnValue(undefined);
 });

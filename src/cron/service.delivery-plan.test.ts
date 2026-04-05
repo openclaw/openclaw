@@ -1,32 +1,20 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { ChannelId } from "../channels/plugins/types.js";
 import { CronService, type CronServiceDeps } from "./service.js";
+import {
+  createCronStoreHarness,
+  createNoopLogger,
+  withCronServiceForTest,
+} from "./service.test-harness.js";
 
-const noopLogger = {
-  debug: vi.fn(),
-  info: vi.fn(),
-  warn: vi.fn(),
-  error: vi.fn(),
-};
-
-async function makeStorePath() {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-delivery-"));
-  return {
-    storePath: path.join(dir, "cron", "jobs.json"),
-    cleanup: async () => {
-      await fs.rm(dir, { recursive: true, force: true });
-    },
-  };
-}
+const noopLogger = createNoopLogger();
+const { makeStorePath } = createCronStoreHarness({ prefix: "openclaw-cron-delivery-" });
 
 type DeliveryMode = "none" | "announce";
 
 type DeliveryOverride = {
   mode: DeliveryMode;
-  channel?: ChannelId | "last";
+  channel?: ChannelId;
   to?: string;
 };
 
@@ -40,27 +28,15 @@ async function withCronService(
     requestHeartbeatNow: ReturnType<typeof vi.fn>;
   }) => Promise<void>,
 ) {
-  const store = await makeStorePath();
-  const enqueueSystemEvent = vi.fn();
-  const requestHeartbeatNow = vi.fn();
-  const cron = new CronService({
-    cronEnabled: true,
-    storePath: store.storePath,
-    log: noopLogger,
-    enqueueSystemEvent,
-    requestHeartbeatNow,
-    runIsolatedAgentJob:
-      params.runIsolatedAgentJob ??
-      (vi.fn(async () => ({ status: "ok" as const, summary: "done" })) as never),
-  });
-
-  await cron.start();
-  try {
-    await run({ cron, enqueueSystemEvent, requestHeartbeatNow });
-  } finally {
-    cron.stop();
-    await store.cleanup();
-  }
+  await withCronServiceForTest(
+    {
+      makeStorePath,
+      logger: noopLogger,
+      cronEnabled: false,
+      runIsolatedAgentJob: params.runIsolatedAgentJob,
+    },
+    run,
+  );
 }
 
 async function addIsolatedAgentTurnJob(
@@ -68,7 +44,6 @@ async function addIsolatedAgentTurnJob(
   params: {
     name: string;
     wakeMode: "next-heartbeat" | "now";
-    payload?: { deliver?: boolean };
     delivery?: DeliveryOverride;
   },
 ) {
@@ -81,7 +56,6 @@ async function addIsolatedAgentTurnJob(
     payload: {
       kind: "agentTurn",
       message: "hello",
-      ...params.payload,
     } as unknown as { kind: "agentTurn"; message: string },
     ...(params.delivery
       ? {
@@ -96,12 +70,12 @@ async function addIsolatedAgentTurnJob(
 }
 
 describe("CronService delivery plan consistency", () => {
-  it("does not post isolated summary when legacy deliver=false", async () => {
+  it("does not post isolated summary when delivery.mode=none", async () => {
     await withCronService({}, async ({ cron, enqueueSystemEvent }) => {
       const job = await addIsolatedAgentTurnJob(cron, {
-        name: "legacy-off",
+        name: "delivery-off",
         wakeMode: "next-heartbeat",
-        payload: { deliver: false },
+        delivery: { mode: "none" },
       });
 
       const result = await cron.run(job.id, "force");
@@ -110,7 +84,7 @@ describe("CronService delivery plan consistency", () => {
     });
   });
 
-  it("treats delivery object without mode as announce", async () => {
+  it("treats delivery object without mode as announce without reviving legacy relay fallback", async () => {
     await withCronService({}, async ({ cron, enqueueSystemEvent }) => {
       const job = await addIsolatedAgentTurnJob(cron, {
         name: "partial-delivery",
@@ -120,10 +94,8 @@ describe("CronService delivery plan consistency", () => {
 
       const result = await cron.run(job.id, "force");
       expect(result).toEqual({ ok: true, ran: true });
-      expect(enqueueSystemEvent).toHaveBeenCalledWith(
-        "Cron: done",
-        expect.objectContaining({ agentId: undefined }),
-      );
+      expect(enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(cron.getJob(job.id)?.state.lastDeliveryStatus).toBe("unknown");
     });
   });
 

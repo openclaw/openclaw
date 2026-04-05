@@ -1,12 +1,20 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { spawnMock } = vi.hoisted(() => ({
   spawnMock: vi.fn(),
 }));
 
-vi.mock("node:child_process", () => ({
-  spawn: (...args: unknown[]) => spawnMock(...args),
-}));
+vi.mock("node:child_process", async () => {
+  const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
+  return mockNodeBuiltinModule(
+    () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
+    {
+      spawn: (...args: unknown[]) => spawnMock(...args),
+    },
+  );
+});
+
+let killProcessTree: typeof import("./kill-tree.js").killProcessTree;
 
 async function withPlatform<T>(platform: NodeJS.Platform, run: () => Promise<T> | T): Promise<T> {
   const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
@@ -23,8 +31,12 @@ async function withPlatform<T>(platform: NodeJS.Platform, run: () => Promise<T> 
 describe("killProcessTree", () => {
   let killSpy: ReturnType<typeof vi.spyOn>;
 
+  beforeAll(async () => {
+    ({ killProcessTree } = await import("./kill-tree.js"));
+  });
+
   beforeEach(() => {
-    spawnMock.mockReset();
+    spawnMock.mockClear();
     killSpy = vi.spyOn(process, "kill");
     vi.useFakeTimers();
   });
@@ -32,7 +44,6 @@ describe("killProcessTree", () => {
   afterEach(() => {
     killSpy.mockRestore();
     vi.useRealTimers();
-    vi.resetModules();
     vi.clearAllMocks();
   });
 
@@ -45,7 +56,6 @@ describe("killProcessTree", () => {
     }) as typeof process.kill);
 
     await withPlatform("win32", async () => {
-      const { killProcessTree } = await import("./kill-tree.js");
       killProcessTree(4242, { graceMs: 25 });
 
       expect(spawnMock).toHaveBeenCalledTimes(1);
@@ -70,7 +80,6 @@ describe("killProcessTree", () => {
     }) as typeof process.kill);
 
     await withPlatform("win32", async () => {
-      const { killProcessTree } = await import("./kill-tree.js");
       killProcessTree(5252, { graceMs: 10 });
 
       await vi.advanceTimersByTimeAsync(10);
@@ -103,7 +112,6 @@ describe("killProcessTree", () => {
     }) as typeof process.kill);
 
     await withPlatform("linux", async () => {
-      const { killProcessTree } = await import("./kill-tree.js");
       killProcessTree(3333, { graceMs: 10 });
 
       await vi.advanceTimersByTimeAsync(10);
@@ -123,7 +131,6 @@ describe("killProcessTree", () => {
     }) as typeof process.kill);
 
     await withPlatform("linux", async () => {
-      const { killProcessTree } = await import("./kill-tree.js");
       killProcessTree(4444, { graceMs: 5 });
 
       await vi.advanceTimersByTimeAsync(5);

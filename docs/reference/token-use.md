@@ -18,7 +18,7 @@ OpenClaw assembles its own system prompt on every run. It includes:
 - Tool list + short descriptions
 - Skills list (only metadata; instructions are loaded on demand with `read`)
 - Self-update instructions
-- Workspace + bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md` when new, plus `MEMORY.md` and/or `memory.md` when present). Large files are truncated by `agents.defaults.bootstrapMaxChars` (default: 20000), and total bootstrap injection is capped by `agents.defaults.bootstrapTotalMaxChars` (default: 150000). `memory/*.md` files are on-demand via memory tools and are not auto-injected.
+- Workspace + bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md` when new, plus `MEMORY.md` when present or `memory.md` as a lowercase fallback). Large files are truncated by `agents.defaults.bootstrapMaxChars` (default: 20000), and total bootstrap injection is capped by `agents.defaults.bootstrapTotalMaxChars` (default: 150000). `memory/*.md` files are on-demand via memory tools and are not auto-injected.
 - Time (UTC + user timezone)
 - Reply tags + heartbeat behavior
 - Runtime metadata (host/OS/model/thinking)
@@ -59,7 +59,28 @@ Other surfaces:
 
 - **TUI/Web TUI:** `/status` + `/usage` are supported.
 - **CLI:** `openclaw status --usage` and `openclaw channels list` show
-  provider quota windows (not per-response costs).
+  normalized provider quota windows (`X% left`, not per-response costs).
+  Current usage-window providers: Anthropic, GitHub Copilot, Gemini CLI,
+  OpenAI Codex, MiniMax, Xiaomi, and z.ai.
+
+Usage surfaces normalize common provider-native field aliases before display.
+For OpenAI-family Responses traffic, that includes both `input_tokens` /
+`output_tokens` and `prompt_tokens` / `completion_tokens`, so transport-specific
+field names do not change `/status`, `/usage`, or session summaries.
+Gemini CLI JSON usage is normalized too: reply text comes from `response`, and
+`stats.cached` maps to `cacheRead` with `stats.input_tokens - stats.cached`
+used when the CLI omits an explicit `stats.input` field.
+For native OpenAI-family Responses traffic, WebSocket/SSE usage aliases are
+normalized the same way, and totals fall back to normalized input + output when
+`total_tokens` is missing or `0`.
+When the current session snapshot is sparse, `/status` and `session_status` can
+also recover token/cache counters and the active runtime model label from the
+most recent transcript usage log. Existing nonzero live values still take
+precedence over transcript fallback values, and larger prompt-oriented
+transcript totals can win when stored totals are missing or smaller.
+Usage auth for provider quota windows comes from provider-specific hooks when
+available; otherwise OpenClaw falls back to matching OAuth/API-key credentials
+from auth profiles, env, or config.
 
 ## Cost estimation (when shown)
 
@@ -88,6 +109,11 @@ Heartbeat can keep the cache **warm** across idle gaps. If your model cache TTL
 is `1h`, setting the heartbeat interval just under that (e.g., `55m`) can avoid
 re-caching the full prompt, reducing cache write costs.
 
+In multi-agent setups, you can keep one shared model config and tune cache behavior
+per agent with `agents.list[].params.cacheRetention`.
+
+For a full knob-by-knob guide, see [Prompt Caching](/reference/prompt-caching).
+
 For Anthropic API pricing, cache reads are significantly cheaper than input
 tokens, while cache writes are billed at a higher multiplier. See Anthropic’s
 prompt caching pricing for the latest rates and TTL multipliers:
@@ -108,6 +134,30 @@ agents:
       every: "55m"
 ```
 
+### Example: mixed traffic with per-agent cache strategy
+
+```yaml
+agents:
+  defaults:
+    model:
+      primary: "anthropic/claude-opus-4-6"
+    models:
+      "anthropic/claude-opus-4-6":
+        params:
+          cacheRetention: "long" # default baseline for most agents
+  list:
+    - id: "research"
+      default: true
+      heartbeat:
+        every: "55m" # keep long cache warm for deep sessions
+    - id: "alerts"
+      params:
+        cacheRetention: "none" # avoid cache writes for bursty notifications
+```
+
+`agents.list[].params` merges on top of the selected model's `params`, so you can
+override only `cacheRetention` and inherit other model defaults unchanged.
+
 ### Example: enable Anthropic 1M context beta header
 
 Anthropic's 1M context window is currently beta-gated. OpenClaw can inject the
@@ -124,6 +174,17 @@ agents:
 ```
 
 This maps to Anthropic's `context-1m-2025-08-07` beta header.
+
+This only applies when `context1m: true` is set on that model entry.
+
+Requirement: the credential must be eligible for long-context usage (API key
+billing, or OpenClaw's Claude-login path with Extra Usage enabled). If not,
+Anthropic responds
+with `HTTP 429: rate_limit_error: Extra usage is required for long context requests`.
+
+If you authenticate Anthropic with OAuth/subscription tokens (`sk-ant-oat-*`),
+OpenClaw skips the `context-1m-*` beta header because Anthropic currently
+rejects that combination with HTTP 401.
 
 ## Tips for reducing token pressure
 

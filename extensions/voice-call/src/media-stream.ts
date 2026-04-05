@@ -3,24 +3,35 @@
  *
  * Handles bidirectional audio streaming between Twilio and the AI services.
  * - Receives mu-law audio from Twilio via WebSocket
- * - Forwards to OpenAI Realtime STT for transcription
+ * - Forwards to the selected realtime transcription provider
  * - Sends TTS audio back to Twilio
  */
 
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
-import { WebSocket, WebSocketServer } from "ws";
 import type {
-  OpenAIRealtimeSTTProvider,
-  RealtimeSTTSession,
-} from "./providers/stt-openai-realtime.js";
+  RealtimeTranscriptionProviderConfig,
+  RealtimeTranscriptionProviderPlugin,
+  RealtimeTranscriptionSession,
+} from "openclaw/plugin-sdk/realtime-transcription";
+import { type RawData, WebSocket, WebSocketServer } from "ws";
 
 /**
  * Configuration for the media stream handler.
  */
 export interface MediaStreamConfig {
-  /** STT provider for transcription */
-  sttProvider: OpenAIRealtimeSTTProvider;
+  /** Realtime transcription provider for streaming STT. */
+  transcriptionProvider: RealtimeTranscriptionProviderPlugin;
+  /** Provider-owned config blob passed into the transcription session. */
+  providerConfig: RealtimeTranscriptionProviderConfig;
+  /** Close sockets that never send a valid `start` frame within this window. */
+  preStartTimeoutMs?: number;
+  /** Max concurrent pre-start sockets. */
+  maxPendingConnections?: number;
+  /** Max concurrent pre-start sockets from a single source IP. */
+  maxPendingConnectionsPerIp?: number;
+  /** Max total open sockets (pending + active sessions). */
+  maxConnections?: number;
   /** Validate whether to accept a media stream for the given call ID */
   shouldAcceptStream?: (params: { callId: string; streamSid: string; token?: string }) => boolean;
   /** Callback when transcript is received */
@@ -32,7 +43,7 @@ export interface MediaStreamConfig {
   /** Callback when speech starts (barge-in) */
   onSpeechStart?: (callId: string) => void;
   /** Callback when stream disconnects */
-  onDisconnect?: (callId: string) => void;
+  onDisconnect?: (callId: string, streamSid: string) => void;
 }
 
 /**
@@ -42,7 +53,7 @@ interface StreamSession {
   callId: string;
   streamSid: string;
   ws: WebSocket;
-  sttSession: RealtimeSTTSession;
+  sttSession: RealtimeTranscriptionSession;
 }
 
 type TtsQueueEntry = {
@@ -52,6 +63,47 @@ type TtsQueueEntry = {
   reject: (error: unknown) => void;
 };
 
+type StreamSendResult = {
+  sent: boolean;
+  readyState?: number;
+  bufferedBeforeBytes: number;
+  bufferedAfterBytes: number;
+};
+
+type PendingConnection = {
+  ip: string;
+  timeout: ReturnType<typeof setTimeout>;
+};
+
+const DEFAULT_PRE_START_TIMEOUT_MS = 5000;
+const DEFAULT_MAX_PENDING_CONNECTIONS = 32;
+const DEFAULT_MAX_PENDING_CONNECTIONS_PER_IP = 4;
+const DEFAULT_MAX_CONNECTIONS = 128;
+const MAX_INBOUND_MESSAGE_BYTES = 64 * 1024;
+const MAX_WS_BUFFERED_BYTES = 1024 * 1024;
+const CLOSE_REASON_LOG_MAX_CHARS = 120;
+
+export function sanitizeLogText(value: string, maxChars: number): string {
+  const sanitized = value
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (sanitized.length <= maxChars) {
+    return sanitized;
+  }
+  return `${sanitized.slice(0, maxChars)}...`;
+}
+
+function normalizeWsMessageData(data: RawData): Buffer {
+  if (Buffer.isBuffer(data)) {
+    return data;
+  }
+  if (Array.isArray(data)) {
+    return Buffer.concat(data);
+  }
+  return Buffer.from(data);
+}
+
 /**
  * Manages WebSocket connections for Twilio media streams.
  */
@@ -59,6 +111,14 @@ export class MediaStreamHandler {
   private wss: WebSocketServer | null = null;
   private sessions = new Map<string, StreamSession>();
   private config: MediaStreamConfig;
+  /** Pending sockets that have upgraded but not yet sent an accepted `start` frame. */
+  private pendingConnections = new Map<WebSocket, PendingConnection>();
+  /** Pending socket count per remote IP for pre-auth throttling. */
+  private pendingByIp = new Map<string, number>();
+  private preStartTimeoutMs: number;
+  private maxPendingConnections: number;
+  private maxPendingConnectionsPerIp: number;
+  private maxConnections: number;
   /** TTS playback queues per stream (serialize audio to prevent overlap) */
   private ttsQueues = new Map<string, TtsQueueEntry[]>();
   /** Whether TTS is currently playing per stream */
@@ -68,6 +128,11 @@ export class MediaStreamHandler {
 
   constructor(config: MediaStreamConfig) {
     this.config = config;
+    this.preStartTimeoutMs = config.preStartTimeoutMs ?? DEFAULT_PRE_START_TIMEOUT_MS;
+    this.maxPendingConnections = config.maxPendingConnections ?? DEFAULT_MAX_PENDING_CONNECTIONS;
+    this.maxPendingConnectionsPerIp =
+      config.maxPendingConnectionsPerIp ?? DEFAULT_MAX_PENDING_CONNECTIONS_PER_IP;
+    this.maxConnections = config.maxConnections ?? DEFAULT_MAX_CONNECTIONS;
   }
 
   /**
@@ -75,8 +140,18 @@ export class MediaStreamHandler {
    */
   handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): void {
     if (!this.wss) {
-      this.wss = new WebSocketServer({ noServer: true });
+      this.wss = new WebSocketServer({
+        noServer: true,
+        // Reject oversized frames before app-level parsing runs on unauthenticated sockets.
+        maxPayload: MAX_INBOUND_MESSAGE_BYTES,
+      });
       this.wss.on("connection", (ws, req) => this.handleConnection(ws, req));
+    }
+
+    const currentConnections = this.wss.clients.size;
+    if (currentConnections >= this.maxConnections) {
+      this.rejectUpgrade(socket, 503, "Too many media stream connections");
+      return;
     }
 
     this.wss.handleUpgrade(request, socket, head, (ws) => {
@@ -90,10 +165,17 @@ export class MediaStreamHandler {
   private async handleConnection(ws: WebSocket, _request: IncomingMessage): Promise<void> {
     let session: StreamSession | null = null;
     const streamToken = this.getStreamToken(_request);
+    const ip = this.getClientIp(_request);
 
-    ws.on("message", async (data: Buffer) => {
+    if (!this.registerPendingConnection(ws, ip)) {
+      ws.close(1013, "Too many pending media stream connections");
+      return;
+    }
+
+    ws.on("message", async (data: RawData) => {
       try {
-        const message = JSON.parse(data.toString()) as TwilioMediaMessage;
+        const raw = normalizeWsMessageData(data);
+        const message = JSON.parse(raw.toString("utf8")) as TwilioMediaMessage;
 
         switch (message.event) {
           case "connected":
@@ -102,6 +184,9 @@ export class MediaStreamHandler {
 
           case "start":
             session = await this.handleStart(ws, message, streamToken);
+            if (session) {
+              this.clearPendingConnection(ws);
+            }
             break;
 
           case "media":
@@ -124,7 +209,13 @@ export class MediaStreamHandler {
       }
     });
 
-    ws.on("close", () => {
+    ws.on("close", (code, reason) => {
+      const rawReason = Buffer.isBuffer(reason) ? reason.toString("utf8") : String(reason || "");
+      const reasonText = sanitizeLogText(rawReason, CLOSE_REASON_LOG_MAX_CHARS);
+      console.log(
+        `[MediaStream] WebSocket closed (code: ${code}, reason: ${reasonText || "none"})`,
+      );
+      this.clearPendingConnection(ws);
       if (session) {
         this.handleStop(session);
       }
@@ -166,20 +257,20 @@ export class MediaStreamHandler {
       return null;
     }
 
-    // Create STT session
-    const sttSession = this.config.sttProvider.createSession();
-
-    // Set up transcript callbacks
-    sttSession.onPartial((partial) => {
-      this.config.onPartialTranscript?.(callSid, partial);
-    });
-
-    sttSession.onTranscript((transcript) => {
-      this.config.onTranscript?.(callSid, transcript);
-    });
-
-    sttSession.onSpeechStart(() => {
-      this.config.onSpeechStart?.(callSid);
+    const sttSession = this.config.transcriptionProvider.createSession({
+      providerConfig: this.config.providerConfig,
+      onPartial: (partial) => {
+        this.config.onPartialTranscript?.(callSid, partial);
+      },
+      onTranscript: (transcript) => {
+        this.config.onTranscript?.(callSid, transcript);
+      },
+      onSpeechStart: () => {
+        this.config.onSpeechStart?.(callSid);
+      },
+      onError: (error) => {
+        console.warn("[MediaStream] Transcription session error:", error.message);
+      },
     });
 
     const session: StreamSession = {
@@ -194,7 +285,7 @@ export class MediaStreamHandler {
     // Notify connection BEFORE STT connect so TTS can work even if STT fails
     this.config.onConnect?.(callSid, streamSid);
 
-    // Connect to OpenAI STT (non-blocking, log errors but don't fail the call)
+    // Connect to transcription service (non-blocking, log errors but don't fail the call)
     sttSession.connect().catch((err) => {
       console.warn(`[MediaStream] STT connection failed (TTS still works):`, err.message);
     });
@@ -211,7 +302,7 @@ export class MediaStreamHandler {
     this.clearTtsState(session.streamSid);
     session.sttSession.close();
     this.sessions.delete(session.streamSid);
-    this.config.onDisconnect?.(session.callId);
+    this.config.onDisconnect?.(session.callId, session.streamSid);
   }
 
   private getStreamToken(request: IncomingMessage): string | undefined {
@@ -226,6 +317,69 @@ export class MediaStreamHandler {
     }
   }
 
+  private getClientIp(request: IncomingMessage): string {
+    return request.socket.remoteAddress || "unknown";
+  }
+
+  private registerPendingConnection(ws: WebSocket, ip: string): boolean {
+    if (this.pendingConnections.size >= this.maxPendingConnections) {
+      console.warn("[MediaStream] Rejecting connection: pending connection limit reached");
+      return false;
+    }
+
+    const pendingForIp = this.pendingByIp.get(ip) ?? 0;
+    if (pendingForIp >= this.maxPendingConnectionsPerIp) {
+      console.warn(`[MediaStream] Rejecting connection: pending per-IP limit reached (${ip})`);
+      return false;
+    }
+
+    const timeout = setTimeout(() => {
+      if (!this.pendingConnections.has(ws)) {
+        return;
+      }
+      console.warn(
+        `[MediaStream] Closing pre-start idle connection after ${this.preStartTimeoutMs}ms (${ip})`,
+      );
+      ws.close(1008, "Start timeout");
+    }, this.preStartTimeoutMs);
+
+    timeout.unref?.();
+    this.pendingConnections.set(ws, { ip, timeout });
+    this.pendingByIp.set(ip, pendingForIp + 1);
+    return true;
+  }
+
+  private clearPendingConnection(ws: WebSocket): void {
+    const pending = this.pendingConnections.get(ws);
+    if (!pending) {
+      return;
+    }
+
+    clearTimeout(pending.timeout);
+    this.pendingConnections.delete(ws);
+
+    const current = this.pendingByIp.get(pending.ip) ?? 0;
+    if (current <= 1) {
+      this.pendingByIp.delete(pending.ip);
+      return;
+    }
+    this.pendingByIp.set(pending.ip, current - 1);
+  }
+
+  private rejectUpgrade(socket: Duplex, statusCode: 429 | 503, message: string): void {
+    const statusText = statusCode === 429 ? "Too Many Requests" : "Service Unavailable";
+    const body = `${message}\n`;
+    socket.write(
+      `HTTP/1.1 ${statusCode} ${statusText}\r\n` +
+        "Connection: close\r\n" +
+        "Content-Type: text/plain; charset=utf-8\r\n" +
+        `Content-Length: ${Buffer.byteLength(body)}\r\n` +
+        "\r\n" +
+        body,
+    );
+    socket.destroy();
+  }
+
   /**
    * Get an active session with an open WebSocket, or undefined if unavailable.
    */
@@ -237,17 +391,78 @@ export class MediaStreamHandler {
   /**
    * Send a message to a stream's WebSocket if available.
    */
-  private sendToStream(streamSid: string, message: unknown): void {
-    const session = this.getOpenSession(streamSid);
-    session?.ws.send(JSON.stringify(message));
+  private sendToStream(streamSid: string, message: unknown): StreamSendResult {
+    const session = this.sessions.get(streamSid);
+    if (!session) {
+      return {
+        sent: false,
+        bufferedBeforeBytes: 0,
+        bufferedAfterBytes: 0,
+      };
+    }
+
+    const readyState = session.ws.readyState;
+    const bufferedBeforeBytes = session.ws.bufferedAmount;
+    if (readyState !== WebSocket.OPEN) {
+      return {
+        sent: false,
+        readyState,
+        bufferedBeforeBytes,
+        bufferedAfterBytes: session.ws.bufferedAmount,
+      };
+    }
+    if (bufferedBeforeBytes > MAX_WS_BUFFERED_BYTES) {
+      try {
+        session.ws.close(1013, "Backpressure: send buffer exceeded");
+      } catch {
+        // Best-effort close; caller still receives sent:false.
+      }
+      return {
+        sent: false,
+        readyState,
+        bufferedBeforeBytes,
+        bufferedAfterBytes: session.ws.bufferedAmount,
+      };
+    }
+
+    try {
+      session.ws.send(JSON.stringify(message));
+      const bufferedAfterBytes = session.ws.bufferedAmount;
+      if (bufferedAfterBytes > MAX_WS_BUFFERED_BYTES) {
+        try {
+          session.ws.close(1013, "Backpressure: send buffer exceeded");
+        } catch {
+          // Best-effort close; caller still receives sent:false.
+        }
+        return {
+          sent: false,
+          readyState,
+          bufferedBeforeBytes,
+          bufferedAfterBytes,
+        };
+      }
+      return {
+        sent: true,
+        readyState,
+        bufferedBeforeBytes,
+        bufferedAfterBytes,
+      };
+    } catch {
+      return {
+        sent: false,
+        readyState,
+        bufferedBeforeBytes,
+        bufferedAfterBytes: session.ws.bufferedAmount,
+      };
+    }
   }
 
   /**
    * Send audio to a specific stream (for TTS playback).
    * Audio should be mu-law encoded at 8kHz mono.
    */
-  sendAudio(streamSid: string, muLawAudio: Buffer): void {
-    this.sendToStream(streamSid, {
+  sendAudio(streamSid: string, muLawAudio: Buffer): StreamSendResult {
+    return this.sendToStream(streamSid, {
       event: "media",
       streamSid,
       media: { payload: muLawAudio.toString("base64") },
@@ -257,8 +472,8 @@ export class MediaStreamHandler {
   /**
    * Send a mark event to track audio playback position.
    */
-  sendMark(streamSid: string, name: string): void {
-    this.sendToStream(streamSid, {
+  sendMark(streamSid: string, name: string): StreamSendResult {
+    return this.sendToStream(streamSid, {
       event: "mark",
       streamSid,
       mark: { name },
@@ -268,8 +483,8 @@ export class MediaStreamHandler {
   /**
    * Clear audio buffer (interrupt playback).
    */
-  clearAudio(streamSid: string): void {
-    this.sendToStream(streamSid, { event: "clear", streamSid });
+  clearAudio(streamSid: string): StreamSendResult {
+    return this.sendToStream(streamSid, { event: "clear", streamSid });
   }
 
   /**
@@ -302,7 +517,7 @@ export class MediaStreamHandler {
   /**
    * Clear TTS queue and interrupt current playback (barge-in).
    */
-  clearTtsQueue(streamSid: string): void {
+  clearTtsQueue(streamSid: string, _reason = "unspecified"): void {
     const queue = this.getTtsQueue(streamSid);
     queue.length = 0;
     this.ttsActiveControllers.get(streamSid)?.abort();

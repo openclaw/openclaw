@@ -1,50 +1,105 @@
 import { describe, expect, it } from "vitest";
-import { sanitizeEnv } from "./invoke.js";
+import { withEnv } from "../test-utils/env.js";
+import { decodeCapturedOutputBuffer, parseWindowsCodePage, sanitizeEnv } from "./invoke.js";
 import { buildNodeInvokeResultParams } from "./runner.js";
+
+function getEnvValueCaseInsensitive(
+  env: Record<string, string>,
+  expectedKey: string,
+): string | undefined {
+  const direct = env[expectedKey];
+  if (direct !== undefined) {
+    return direct;
+  }
+  const upper = expectedKey.toUpperCase();
+  const actualKey = Object.keys(env).find((key) => key.toUpperCase() === upper);
+  return actualKey ? env[actualKey] : undefined;
+}
 
 describe("node-host sanitizeEnv", () => {
   it("ignores PATH overrides", () => {
-    const prev = process.env.PATH;
-    process.env.PATH = "/usr/bin";
-    try {
-      const env = sanitizeEnv({ PATH: "/tmp/evil:/usr/bin" }) ?? {};
+    withEnv({ PATH: "/usr/bin" }, () => {
+      const env = sanitizeEnv({ PATH: "/tmp/evil:/usr/bin" });
       expect(env.PATH).toBe("/usr/bin");
-    } finally {
-      if (prev === undefined) {
-        delete process.env.PATH;
-      } else {
-        process.env.PATH = prev;
-      }
-    }
+    });
   });
 
   it("blocks dangerous env keys/prefixes", () => {
-    const prevPythonPath = process.env.PYTHONPATH;
-    const prevLdPreload = process.env.LD_PRELOAD;
-    try {
-      delete process.env.PYTHONPATH;
-      delete process.env.LD_PRELOAD;
-      const env =
-        sanitizeEnv({
+    withEnv(
+      { PYTHONPATH: undefined, LD_PRELOAD: undefined, BASH_ENV: undefined, SHELLOPTS: undefined },
+      () => {
+        const env = sanitizeEnv({
           PYTHONPATH: "/tmp/pwn",
           LD_PRELOAD: "/tmp/pwn.so",
+          BASH_ENV: "/tmp/pwn.sh",
+          SHELLOPTS: "xtrace",
+          PS4: "$(touch /tmp/pwned)",
           FOO: "bar",
-        }) ?? {};
-      expect(env.FOO).toBe("bar");
-      expect(env.PYTHONPATH).toBeUndefined();
-      expect(env.LD_PRELOAD).toBeUndefined();
-    } finally {
-      if (prevPythonPath === undefined) {
-        delete process.env.PYTHONPATH;
-      } else {
-        process.env.PYTHONPATH = prevPythonPath;
-      }
-      if (prevLdPreload === undefined) {
-        delete process.env.LD_PRELOAD;
-      } else {
-        process.env.LD_PRELOAD = prevLdPreload;
-      }
+        });
+        expect(env.FOO).toBe("bar");
+        expect(env.PYTHONPATH).toBeUndefined();
+        expect(env.LD_PRELOAD).toBeUndefined();
+        expect(env.BASH_ENV).toBeUndefined();
+        expect(env.SHELLOPTS).toBeUndefined();
+        expect(env.PS4).toBeUndefined();
+      },
+    );
+  });
+
+  it("blocks dangerous override-only env keys", () => {
+    withEnv({ HOME: "/Users/trusted", ZDOTDIR: "/Users/trusted/.zdot" }, () => {
+      const env = sanitizeEnv({
+        HOME: "/tmp/evil-home",
+        ZDOTDIR: "/tmp/evil-zdotdir",
+      });
+      expect(env.HOME).toBe("/Users/trusted");
+      expect(env.ZDOTDIR).toBe("/Users/trusted/.zdot");
+    });
+  });
+
+  it("drops dangerous inherited env keys even without overrides", () => {
+    withEnv({ PATH: "/usr/bin:/bin", BASH_ENV: "/tmp/pwn.sh" }, () => {
+      const env = sanitizeEnv(undefined);
+      expect(env.PATH).toBe("/usr/bin:/bin");
+      expect(env.BASH_ENV).toBeUndefined();
+    });
+  });
+
+  it("preserves inherited non-portable Windows-style env keys", () => {
+    withEnv({ "ProgramFiles(x86)": "C:\\Program Files (x86)" }, () => {
+      const env = sanitizeEnv(undefined);
+      expect(getEnvValueCaseInsensitive(env, "ProgramFiles(x86)")).toBe("C:\\Program Files (x86)");
+    });
+  });
+});
+
+describe("node-host output decoding", () => {
+  it("parses code pages from chcp output text", () => {
+    expect(parseWindowsCodePage("Active code page: 936")).toBe(936);
+    expect(parseWindowsCodePage("活动代码页: 65001")).toBe(65001);
+    expect(parseWindowsCodePage("no code page")).toBeNull();
+  });
+
+  it("decodes GBK output on Windows when code page is known", () => {
+    let supportsGbk = true;
+    try {
+      void new TextDecoder("gbk");
+    } catch {
+      supportsGbk = false;
     }
+
+    const raw = Buffer.from([0xb2, 0xe2, 0xca, 0xd4, 0xa1, 0xab, 0xa3, 0xbb]);
+    const decoded = decodeCapturedOutputBuffer({
+      buffer: raw,
+      platform: "win32",
+      windowsEncoding: "gbk",
+    });
+
+    if (!supportsGbk) {
+      expect(decoded).toContain("�");
+      return;
+    }
+    expect(decoded).toBe("测试～；");
   });
 });
 

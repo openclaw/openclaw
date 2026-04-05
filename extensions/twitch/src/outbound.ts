@@ -5,7 +5,7 @@
  * Supports text and media (URL) sending with markdown stripping and chunking.
  */
 
-import { DEFAULT_ACCOUNT_ID, getAccountConfig } from "./config.js";
+import { DEFAULT_ACCOUNT_ID, resolveTwitchAccountContext } from "./config.js";
 import { sendMessageTwitchInternal } from "./send.js";
 import type {
   ChannelOutboundAdapter,
@@ -113,13 +113,12 @@ export const twitchOutbound: ChannelOutboundAdapter = {
       throw new Error("Outbound delivery aborted");
     }
 
-    const resolvedAccountId = accountId ?? DEFAULT_ACCOUNT_ID;
-    const account = getAccountConfig(cfg, resolvedAccountId);
+    const resolvedAccountId = accountId ?? resolveTwitchAccountContext(cfg).accountId;
+    const { account, availableAccountIds } = resolveTwitchAccountContext(cfg, resolvedAccountId);
     if (!account) {
-      const availableIds = Object.keys(cfg.channels?.twitch?.accounts ?? {});
       throw new Error(
         `Twitch account not found: ${resolvedAccountId}. ` +
-          `Available accounts: ${availableIds.join(", ") || "none"}`,
+          `Available accounts: ${availableAccountIds.join(", ") || "none"}`,
       );
     }
 

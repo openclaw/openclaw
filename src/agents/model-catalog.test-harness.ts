@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, vi } from "vitest";
+import { resetProviderRuntimeHookCacheForTest } from "../plugins/provider-runtime.js";
 import { __setModelCatalogImportForTest, resetModelCatalogCacheForTest } from "./model-catalog.js";
 
 export type PiSdkModule = typeof import("./pi-model-discovery.js");
@@ -11,14 +12,20 @@ vi.mock("./agent-paths.js", () => ({
   resolveOpenClawAgentDir: () => "/tmp/openclaw",
 }));
 
+vi.mock("../plugins/provider-runtime.runtime.js", () => ({
+  augmentModelCatalogWithProviderPlugins: vi.fn().mockResolvedValue([]),
+}));
+
 export function installModelCatalogTestHooks() {
   beforeEach(() => {
     resetModelCatalogCacheForTest();
+    resetProviderRuntimeHookCacheForTest();
   });
 
   afterEach(() => {
     __setModelCatalogImportForTest();
     resetModelCatalogCacheForTest();
+    resetProviderRuntimeHookCacheForTest();
     vi.restoreAllMocks();
   });
 }
@@ -31,6 +38,7 @@ export function mockCatalogImportFailThenRecover() {
       throw new Error("boom");
     }
     return {
+      discoverAuthStorage: () => ({}),
       AuthStorage: class {},
       ModelRegistry: class {
         getAll() {

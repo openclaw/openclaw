@@ -1,226 +1,25 @@
-import fs from "node:fs";
-import path from "node:path";
 import { splitShellArgs } from "../utils/shell-argv.js";
-import type { ExecAllowlistEntry } from "./exec-approvals.js";
-import { expandHomePrefix } from "./home-dir.js";
+import {
+  resolveCommandResolutionFromArgv,
+  type CommandResolution,
+} from "./exec-command-resolution.js";
 
-export const DEFAULT_SAFE_BINS = ["jq", "grep", "cut", "sort", "uniq", "head", "tail", "tr", "wc"];
-
-export type CommandResolution = {
-  rawExecutable: string;
-  resolvedPath?: string;
-  executableName: string;
-};
-
-function isExecutableFile(filePath: string): boolean {
-  try {
-    const stat = fs.statSync(filePath);
-    if (!stat.isFile()) {
-      return false;
-    }
-    if (process.platform !== "win32") {
-      fs.accessSync(filePath, fs.constants.X_OK);
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function parseFirstToken(command: string): string | null {
-  const trimmed = command.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const first = trimmed[0];
-  if (first === '"' || first === "'") {
-    const end = trimmed.indexOf(first, 1);
-    if (end > 1) {
-      return trimmed.slice(1, end);
-    }
-    return trimmed.slice(1);
-  }
-  const match = /^[^\s]+/.exec(trimmed);
-  return match ? match[0] : null;
-}
-
-function resolveExecutablePath(rawExecutable: string, cwd?: string, env?: NodeJS.ProcessEnv) {
-  const expanded = rawExecutable.startsWith("~") ? expandHomePrefix(rawExecutable) : rawExecutable;
-  if (expanded.includes("/") || expanded.includes("\\")) {
-    if (path.isAbsolute(expanded)) {
-      return isExecutableFile(expanded) ? expanded : undefined;
-    }
-    const base = cwd && cwd.trim() ? cwd.trim() : process.cwd();
-    const candidate = path.resolve(base, expanded);
-    return isExecutableFile(candidate) ? candidate : undefined;
-  }
-  const envPath = env?.PATH ?? env?.Path ?? process.env.PATH ?? process.env.Path ?? "";
-  const entries = envPath.split(path.delimiter).filter(Boolean);
-  const hasExtension = process.platform === "win32" && path.extname(expanded).length > 0;
-  const extensions =
-    process.platform === "win32"
-      ? hasExtension
-        ? [""]
-        : (
-            env?.PATHEXT ??
-            env?.Pathext ??
-            process.env.PATHEXT ??
-            process.env.Pathext ??
-            ".EXE;.CMD;.BAT;.COM"
-          )
-            .split(";")
-            .map((ext) => ext.toLowerCase())
-      : [""];
-  for (const entry of entries) {
-    for (const ext of extensions) {
-      const candidate = path.join(entry, expanded + ext);
-      if (isExecutableFile(candidate)) {
-        return candidate;
-      }
-    }
-  }
-  return undefined;
-}
-
-export function resolveCommandResolution(
-  command: string,
-  cwd?: string,
-  env?: NodeJS.ProcessEnv,
-): CommandResolution | null {
-  const rawExecutable = parseFirstToken(command);
-  if (!rawExecutable) {
-    return null;
-  }
-  const resolvedPath = resolveExecutablePath(rawExecutable, cwd, env);
-  const executableName = resolvedPath ? path.basename(resolvedPath) : rawExecutable;
-  return { rawExecutable, resolvedPath, executableName };
-}
-
-export function resolveCommandResolutionFromArgv(
-  argv: string[],
-  cwd?: string,
-  env?: NodeJS.ProcessEnv,
-): CommandResolution | null {
-  const rawExecutable = argv[0]?.trim();
-  if (!rawExecutable) {
-    return null;
-  }
-  const resolvedPath = resolveExecutablePath(rawExecutable, cwd, env);
-  const executableName = resolvedPath ? path.basename(resolvedPath) : rawExecutable;
-  return { rawExecutable, resolvedPath, executableName };
-}
-
-function normalizeMatchTarget(value: string): string {
-  if (process.platform === "win32") {
-    const stripped = value.replace(/^\\\\[?.]\\/, "");
-    return stripped.replace(/\\/g, "/").toLowerCase();
-  }
-  return value.replace(/\\\\/g, "/").toLowerCase();
-}
-
-function tryRealpath(value: string): string | null {
-  try {
-    return fs.realpathSync(value);
-  } catch {
-    return null;
-  }
-}
-
-function globToRegExp(pattern: string): RegExp {
-  let regex = "^";
-  let i = 0;
-  while (i < pattern.length) {
-    const ch = pattern[i];
-    if (ch === "*") {
-      const next = pattern[i + 1];
-      if (next === "*") {
-        regex += ".*";
-        i += 2;
-        continue;
-      }
-      regex += "[^/]*";
-      i += 1;
-      continue;
-    }
-    if (ch === "?") {
-      regex += ".";
-      i += 1;
-      continue;
-    }
-    regex += ch.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&");
-    i += 1;
-  }
-  regex += "$";
-  return new RegExp(regex, "i");
-}
-
-function matchesPattern(pattern: string, target: string): boolean {
-  const trimmed = pattern.trim();
-  if (!trimmed) {
-    return false;
-  }
-  const expanded = trimmed.startsWith("~") ? expandHomePrefix(trimmed) : trimmed;
-  const hasWildcard = /[*?]/.test(expanded);
-  let normalizedPattern = expanded;
-  let normalizedTarget = target;
-  if (process.platform === "win32" && !hasWildcard) {
-    normalizedPattern = tryRealpath(expanded) ?? expanded;
-    normalizedTarget = tryRealpath(target) ?? target;
-  }
-  normalizedPattern = normalizeMatchTarget(normalizedPattern);
-  normalizedTarget = normalizeMatchTarget(normalizedTarget);
-  const regex = globToRegExp(normalizedPattern);
-  return regex.test(normalizedTarget);
-}
-
-export function resolveAllowlistCandidatePath(
-  resolution: CommandResolution | null,
-  cwd?: string,
-): string | undefined {
-  if (!resolution) {
-    return undefined;
-  }
-  if (resolution.resolvedPath) {
-    return resolution.resolvedPath;
-  }
-  const raw = resolution.rawExecutable?.trim();
-  if (!raw) {
-    return undefined;
-  }
-  const expanded = raw.startsWith("~") ? expandHomePrefix(raw) : raw;
-  if (!expanded.includes("/") && !expanded.includes("\\")) {
-    return undefined;
-  }
-  if (path.isAbsolute(expanded)) {
-    return expanded;
-  }
-  const base = cwd && cwd.trim() ? cwd.trim() : process.cwd();
-  return path.resolve(base, expanded);
-}
-
-export function matchAllowlist(
-  entries: ExecAllowlistEntry[],
-  resolution: CommandResolution | null,
-): ExecAllowlistEntry | null {
-  if (!entries.length || !resolution?.resolvedPath) {
-    return null;
-  }
-  const resolvedPath = resolution.resolvedPath;
-  for (const entry of entries) {
-    const pattern = entry.pattern?.trim();
-    if (!pattern) {
-      continue;
-    }
-    const hasPath = pattern.includes("/") || pattern.includes("\\") || pattern.includes("~");
-    if (!hasPath) {
-      continue;
-    }
-    if (matchesPattern(pattern, resolvedPath)) {
-      return entry;
-    }
-  }
-  return null;
-}
+export {
+  matchAllowlist,
+  parseExecArgvToken,
+  resolveAllowlistCandidatePath,
+  resolveApprovalAuditCandidatePath,
+  resolveCommandResolution,
+  resolveCommandResolutionFromArgv,
+  resolveExecutionTargetCandidatePath,
+  resolveExecutionTargetResolution,
+  resolvePolicyAllowlistCandidatePath,
+  resolvePolicyTargetCandidatePath,
+  resolvePolicyTargetResolution,
+  type CommandResolution,
+  type ExecutableResolution,
+  type ExecArgvToken,
+} from "./exec-command-resolution.js";
 
 export type ExecCommandSegment = {
   raw: string;
@@ -243,7 +42,7 @@ export type ShellChainPart = {
 };
 
 const DISALLOWED_PIPELINE_TOKENS = new Set([">", "<", "`", "\n", "\r", "(", ")"]);
-const DOUBLE_QUOTE_ESCAPES = new Set(["\\", '"', "$", "`", "\n", "\r"]);
+const DOUBLE_QUOTE_ESCAPES = new Set(["\\", '"', "$", "`"]);
 const WINDOWS_UNSUPPORTED_TOKENS = new Set([
   "&",
   "|",
@@ -254,6 +53,7 @@ const WINDOWS_UNSUPPORTED_TOKENS = new Set([
   ")",
   "%",
   "!",
+  "`",
   "\n",
   "\r",
 ]);
@@ -262,16 +62,32 @@ function isDoubleQuoteEscape(next: string | undefined): next is string {
   return Boolean(next && DOUBLE_QUOTE_ESCAPES.has(next));
 }
 
+function isEscapedLineContinuation(next: string | undefined): next is string {
+  return next === "\n" || next === "\r";
+}
+
+function isShellCommentStart(source: string, index: number): boolean {
+  if (source[index] !== "#") {
+    return false;
+  }
+  if (index === 0) {
+    return true;
+  }
+  const prev = source[index - 1];
+  return Boolean(prev && /\s/.test(prev));
+}
+
 function splitShellPipeline(command: string): { ok: boolean; reason?: string; segments: string[] } {
   type HeredocSpec = {
     delimiter: string;
     stripTabs: boolean;
+    quoted: boolean;
   };
 
   const parseHeredocDelimiter = (
     source: string,
     start: number,
-  ): { delimiter: string; end: number } | null => {
+  ): { delimiter: string; end: number; quoted: boolean } | null => {
     let i = start;
     while (i < source.length && (source[i] === " " || source[i] === "\t")) {
       i += 1;
@@ -296,7 +112,7 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
           continue;
         }
         if (ch === quote) {
-          return { delimiter, end: i + 1 };
+          return { delimiter, end: i + 1, quoted: true };
         }
         delimiter += ch;
         i += 1;
@@ -316,7 +132,7 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
     if (!delimiter) {
       return null;
     }
-    return { delimiter, end: i };
+    return { delimiter, end: i, quoted: false };
   };
 
   const segments: string[] = [];
@@ -337,6 +153,30 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
     buf = "";
   };
 
+  const isEscapedInHeredocLine = (line: string, index: number): boolean => {
+    let slashes = 0;
+    for (let i = index - 1; i >= 0 && line[i] === "\\"; i -= 1) {
+      slashes += 1;
+    }
+    return slashes % 2 === 1;
+  };
+
+  const hasUnquotedHeredocExpansionToken = (line: string): boolean => {
+    for (let i = 0; i < line.length; i += 1) {
+      const ch = line[i];
+      if (ch === "`" && !isEscapedInHeredocLine(line, i)) {
+        return true;
+      }
+      if (ch === "$" && !isEscapedInHeredocLine(line, i)) {
+        const next = line[i + 1];
+        if (next === "(" || next === "{") {
+          return true;
+        }
+      }
+    }
+    return false;
+  };
+
   for (let i = 0; i < command.length; i += 1) {
     const ch = command[i];
     const next = command[i + 1];
@@ -348,6 +188,8 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
           const line = current.stripTabs ? heredocLine.replace(/^\t+/, "") : heredocLine;
           if (line === current.delimiter) {
             pendingHeredocs.shift();
+          } else if (!current.quoted && hasUnquotedHeredocExpansionToken(heredocLine)) {
+            return { ok: false, reason: "command substitution in unquoted heredoc", segments: [] };
           }
         }
         heredocLine = "";
@@ -384,6 +226,9 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
       continue;
     }
     if (inDouble) {
+      if (ch === "\\" && isEscapedLineContinuation(next)) {
+        return { ok: false, reason: "unsupported shell token: newline", segments: [] };
+      }
       if (ch === "\\" && isDoubleQuoteEscape(next)) {
         buf += ch;
         buf += next;
@@ -418,6 +263,9 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
       buf += ch;
       emptySegment = false;
       continue;
+    }
+    if (isShellCommentStart(command, i)) {
+      break;
     }
 
     if ((ch === "\n" || ch === "\r") && pendingHeredocs.length > 0) {
@@ -458,7 +306,7 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
 
       const parsed = parseHeredocDelimiter(command, scanIndex);
       if (parsed) {
-        pendingHeredocs.push({ delimiter: parsed.delimiter, stripTabs });
+        pendingHeredocs.push({ delimiter: parsed.delimiter, stripTabs, quoted: parsed.quoted });
         buf += command.slice(scanIndex, parsed.end);
         i = parsed.end - 1;
       }
@@ -479,7 +327,14 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
     const line = current.stripTabs ? heredocLine.replace(/^\t+/, "") : heredocLine;
     if (line === current.delimiter) {
       pendingHeredocs.shift();
+      if (pendingHeredocs.length === 0) {
+        inHeredocBody = false;
+      }
     }
+  }
+
+  if (pendingHeredocs.length > 0 || inHeredocBody) {
+    return { ok: false, reason: "unterminated heredoc", segments: [] };
   }
 
   if (escaped || inSingle || inDouble) {
@@ -497,9 +352,50 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
   return { ok: true, segments };
 }
 
+// Characters that remain unsafe even inside double-quoted strings.
+// - \n / \r: newlines break command parsing regardless of quoting.
+// - %: cmd.exe expands %VAR% inside double quotes, so % can still be used
+//   for injection even when quoted.
+// - `: PowerShell escape character; forms escape sequences (`n, `0, `") even
+//   inside double-quoted strings, so it cannot be safely quoted.
+const WINDOWS_ALWAYS_UNSAFE_TOKENS = new Set(["\n", "\r", "%", "`"]);
+
 function findWindowsUnsupportedToken(command: string): string | null {
-  for (const ch of command) {
+  let inDouble = false;
+  // Single-quote tracking is intentionally omitted here.  cmd.exe (used by the
+  // node-host exec path via buildNodeShellCommand) does not recognise single
+  // quotes as quoting, so metacharacters inside single-quoted strings remain
+  // active at runtime.  Rejecting them at this layer keeps both execution paths
+  // (PowerShell gateway and cmd.exe node-host) safe.
+  // tokenizeWindowsSegment does track single quotes for accurate argv extraction
+  // during enforcement, which is a separate concern from the safety check here.
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    if (ch === '"') {
+      inDouble = !inDouble;
+      continue;
+    }
+    // PowerShell expands $var, ${var}, and $(expr) inside double-quoted strings,
+    // so $ followed by an identifier-start character, {, or ( is always unsafe —
+    // regardless of quoting context.  A bare $ not followed by those characters
+    // is safe (e.g. UNC admin share suffix \\host\C$).
+    if (ch === "$") {
+      const next = command[i + 1];
+      // Block $var, ${var}, $(expr), $?  (exit status), and $$ (PID) — all expanded
+      // by PowerShell inside double-quoted strings.  A bare $ not followed by these
+      // characters is safe (e.g. the UNC admin share suffix \\host\C$).
+      if (next !== undefined && /[A-Za-z_{(?$]/.test(next)) {
+        return "$";
+      }
+      continue;
+    }
     if (WINDOWS_UNSUPPORTED_TOKENS.has(ch)) {
+      // Inside double-quoted strings, most special characters are safe literal
+      // values (e.g. "2026-03-28 (土) - LifeLog" contains "()" which are fine).
+      // tokenizeWindowsSegment already handles all of these correctly inside quotes.
+      if (inDouble && !WINDOWS_ALWAYS_UNSAFE_TOKENS.has(ch)) {
+        continue;
+      }
       if (ch === "\n" || ch === "\r") {
         return "newline";
       }
@@ -513,32 +409,149 @@ function tokenizeWindowsSegment(segment: string): string[] | null {
   const tokens: string[] = [];
   let buf = "";
   let inDouble = false;
+  let inSingle = false;
+  // Set to true when a quote-open is seen; ensures empty quoted args ("" or '')
+  // are preserved as empty-string tokens rather than being silently dropped.
+  let wasQuoted = false;
 
   const pushToken = () => {
-    if (buf.length > 0) {
+    if (buf.length > 0 || wasQuoted) {
       tokens.push(buf);
       buf = "";
     }
+    wasQuoted = false;
   };
 
   for (let i = 0; i < segment.length; i += 1) {
     const ch = segment[i];
-    if (ch === '"') {
+    // Double-quote toggle (not inside single quotes).
+    if (ch === '"' && !inSingle) {
+      if (!inDouble) {
+        wasQuoted = true;
+      }
       inDouble = !inDouble;
       continue;
     }
-    if (!inDouble && /\s/.test(ch)) {
+    // Single-quote toggle (not inside double quotes) — PowerShell literal strings.
+    // '' inside a single-quoted string is the PowerShell escape for a literal apostrophe.
+    if (ch === "'" && !inDouble) {
+      if (inSingle && segment[i + 1] === "'") {
+        buf += "'";
+        i += 1;
+        continue;
+      }
+      if (!inSingle) {
+        wasQuoted = true;
+      }
+      inSingle = !inSingle;
+      continue;
+    }
+    if (!inDouble && !inSingle && /\s/.test(ch)) {
       pushToken();
       continue;
     }
     buf += ch;
   }
 
-  if (inDouble) {
+  if (inDouble || inSingle) {
     return null;
   }
   pushToken();
   return tokens.length > 0 ? tokens : null;
+}
+
+/**
+ * Recursively strip transparent Windows shell wrappers from a command string.
+ *
+ * LLMs generate commands with arbitrary nesting of shell wrappers:
+ *   powershell -NoProfile -Command "& node 'C:\path' --count 3"
+ *   cmd /c "node C:\path --count 3"
+ *   & node C:\path --count 3
+ *
+ * All of these should resolve to: node C:\path --count 3
+ *
+ * Recognised wrappers (applied repeatedly until stable):
+ *   - PowerShell call-operator: `& exe args`
+ *   - cmd.exe pass-through:    `cmd /c "..."` or `cmd /c ...`
+ *   - PowerShell invocation:   `powershell [-flags] -Command "..."`
+ */
+function stripWindowsShellWrapper(command: string): string {
+  const MAX_DEPTH = 5;
+  let result = command;
+  for (let i = 0; i < MAX_DEPTH; i++) {
+    const prev = result;
+    result = stripWindowsShellWrapperOnce(result.trim());
+    if (result === prev) {
+      break;
+    }
+  }
+  return result;
+}
+
+function stripWindowsShellWrapperOnce(command: string): string {
+  // PowerShell call-operator: & exe args → exe args
+  const psCallMatch = command.match(/^&\s+(.+)$/s);
+  if (psCallMatch) {
+    return psCallMatch[1];
+  }
+
+  // PowerShell invocation: powershell[.exe] [-flags] -Command|-c|--command "inner"
+  // Also handles pwsh[.exe] and the common -c / --command abbreviations of -Command.
+  // Flags before -Command may be bare (-NoProfile) or take a single value
+  // (-ExecutionPolicy Bypass, -WindowStyle Hidden).  The lookahead (?!-)
+  // prevents a flag value from consuming the next flag name.
+  // psFlags matches zero or more PowerShell flags before the command-introducing flag.
+  // Each flag is either bare (-NoProfile) or takes a single value.
+  // Flag values may be unquoted (-ExecutionPolicy Bypass) or quoted with
+  // double-quotes (-WorkingDirectory "C:\Users\Jane Doe\proj") or single-
+  // quotes (-WorkingDirectory 'C:\Users\Jane Doe\proj').  \S+ alone cannot
+  // match quoted values that contain spaces, so we try double-quoted and
+  // single-quoted patterns first, then fall back to \S+ for unquoted values.
+  //
+  // The negative lookahead (?!c(?:ommand)?\b|-command\b) prevents psFlags from
+  // consuming -c or -command as an ordinary flag before the command-introducing
+  // flag is matched.  Without it, -c "inner" would be swallowed as a value-taking
+  // flag and the outer pattern would never see -c to match against psCommandFlag.
+  const psFlags =
+    /(?:-(?!c(?:ommand)?\b|-command\b)\w+(?:\s+(?!-)(?:"[^"]*(?:""[^"]*)*"|'[^']*(?:''[^']*)*'|\S+))?\s+)*/i
+      .source;
+  // Matches -Command, its abbreviation -c, and the --command double-dash alias.
+  const psCommandFlag = `(?:-command|-c|--command)`;
+  const psInvokeMatch = command.match(
+    new RegExp(`^(?:powershell|pwsh)(?:\\.exe)?\\s+${psFlags}${psCommandFlag}\\s+"(.+)"$`, "is"),
+  );
+  if (psInvokeMatch) {
+    // Within a double-quoted -Command argument, "" is the escape sequence for a
+    // literal ".  Unescape before passing the payload to the tokenizer so that
+    // `powershell -Command "node a.js ""hello world"""` correctly yields the
+    // single argv token "hello world" rather than splitting on the space.
+    return psInvokeMatch[1].replace(/""/g, '"');
+  }
+  // PowerShell -Command (or -c/--command) with single-quoted payload
+  const psInvokeSingleQuote = command.match(
+    new RegExp(`^(?:powershell|pwsh)(?:\\.exe)?\\s+${psFlags}${psCommandFlag}\\s+'(.+)'$`, "is"),
+  );
+  if (psInvokeSingleQuote) {
+    // Inside a PowerShell single-quoted string '' encodes a literal apostrophe.
+    // Unescape before tokenizing so that 'node a.js ''hello world''' correctly
+    // yields the single argv token "hello world".
+    return psInvokeSingleQuote[1].replace(/''/g, "'");
+  }
+  // PowerShell -Command (or -c/--command) without quotes (bare unquoted payload)
+  const psInvokeNoQuote = command.match(
+    new RegExp(`^(?:powershell|pwsh)(?:\\.exe)?\\s+${psFlags}${psCommandFlag}\\s+(.+)$`, "is"),
+  );
+  if (psInvokeNoQuote) {
+    return psInvokeNoQuote[1];
+  }
+
+  // Note: cmd /c is intentionally NOT stripped here.  If a command is wrapped
+  // with `cmd /c`, its inner payload would later be executed by PowerShell, which
+  // changes semantics for cmd.exe builtins (dir, copy, etc.).  Callers that submit
+  // `cmd /c <thing>` must have an explicit allowlist entry for `cmd` itself, or
+  // the command will require user approval.
+
+  return command;
 }
 
 function analyzeWindowsShellCommand(params: {
@@ -546,7 +559,8 @@ function analyzeWindowsShellCommand(params: {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
 }): ExecCommandAnalysis {
-  const unsupported = findWindowsUnsupportedToken(params.command);
+  const effective = stripWindowsShellWrapper(params.command.trim());
+  const unsupported = findWindowsUnsupportedToken(effective);
   if (unsupported) {
     return {
       ok: false,
@@ -554,7 +568,7 @@ function analyzeWindowsShellCommand(params: {
       segments: [],
     };
   }
-  const argv = tokenizeWindowsSegment(params.command);
+  const argv = tokenizeWindowsSegment(effective);
   if (!argv || argv.length === 0) {
     return { ok: false, reason: "unable to parse windows command", segments: [] };
   }
@@ -641,6 +655,10 @@ export function splitCommandChainWithOperators(command: string): ShellChainPart[
       continue;
     }
     if (inDouble) {
+      if (ch === "\\" && isEscapedLineContinuation(next)) {
+        invalidChain = true;
+        break;
+      }
       if (ch === "\\" && isDoubleQuoteEscape(next)) {
         buf += ch;
         buf += next;
@@ -662,6 +680,9 @@ export function splitCommandChainWithOperators(command: string): ShellChainPart[
       inDouble = true;
       buf += ch;
       continue;
+    }
+    if (isShellCommentStart(command, i)) {
+      break;
     }
 
     if (ch === "&" && next === "&") {
@@ -712,6 +733,98 @@ function shellEscapeSingleArg(value: string): string {
   return `'${value.replace(/'/g, singleQuoteEscape)}'`;
 }
 
+// Characters that cannot be safely double-quoted in PowerShell enforced commands.
+// %   — cmd.exe immediate/delayed expansion; also blocked in analysis phase.
+// $id — PowerShell variable expansion: "$env:SECRET", "${var}", "$x" ($ followed by identifier
+//       start or {). A bare $ not followed by [A-Za-z_{] is treated literally (e.g. "C$").
+// `   — PowerShell escape character; can form escape sequences like `n, `0 inside double quotes.
+// Note: ! is intentionally omitted — PowerShell does not treat ! as special in double-quoted
+// strings (unlike cmd.exe delayed expansion), so "Hello!" is safe to pass through.
+const WINDOWS_UNSAFE_CMD_META = /[%`]|\$(?=[A-Za-z_{(?$])/;
+
+export function windowsEscapeArg(value: string): { ok: true; escaped: string } | { ok: false } {
+  if (value === "") {
+    return { ok: true, escaped: '""' };
+  }
+  // Reject tokens containing cmd.exe / PowerShell meta characters that cannot be safely quoted.
+  if (WINDOWS_UNSAFE_CMD_META.test(value)) {
+    return { ok: false };
+  }
+  // If the value contains only safe characters, return as-is.
+  if (/^[a-zA-Z0-9_./:~\\=-]+$/.test(value)) {
+    return { ok: true, escaped: value };
+  }
+  // Double-quote the value, escaping embedded double-quotes.
+  const escaped = value.replace(/"/g, '""');
+  return { ok: true, escaped: `"${escaped}"` };
+}
+
+type ShellSegmentRenderResult = { ok: true; rendered: string } | { ok: false; reason: string };
+
+function rebuildWindowsShellCommandFromSource(params: {
+  command: string;
+  renderSegment: (rawSegment: string, segmentIndex: number) => ShellSegmentRenderResult;
+}): { ok: boolean; command?: string; reason?: string; segmentCount?: number } {
+  const source = stripWindowsShellWrapper(params.command.trim());
+  if (!source) {
+    return { ok: false, reason: "empty command" };
+  }
+  const unsupported = findWindowsUnsupportedToken(source);
+  if (unsupported) {
+    return { ok: false, reason: `unsupported windows shell token: ${unsupported}` };
+  }
+  const rendered = params.renderSegment(source, 0);
+  if (!rendered.ok) {
+    return { ok: false, reason: rendered.reason };
+  }
+  // Prefix with PowerShell call operator (&) so that quoted executable paths
+  // (e.g. "C:\Program Files\nodejs\node.exe") are treated as commands, not
+  // string literals.  The & operator is harmless for unquoted paths too.
+  return { ok: true, command: `& ${rendered.rendered}`, segmentCount: 1 };
+}
+
+function rebuildShellCommandFromSource(params: {
+  command: string;
+  platform?: string | null;
+  renderSegment: (rawSegment: string, segmentIndex: number) => ShellSegmentRenderResult;
+}): { ok: boolean; command?: string; reason?: string; segmentCount?: number } {
+  const platform = params.platform ?? null;
+  if (isWindowsPlatform(platform)) {
+    return rebuildWindowsShellCommandFromSource(params);
+  }
+  const source = params.command.trim();
+  if (!source) {
+    return { ok: false, reason: "empty command" };
+  }
+
+  const chain = splitCommandChainWithOperators(source);
+  const chainParts: ShellChainPart[] = chain ?? [{ part: source, opToNext: null }];
+  let segmentCount = 0;
+  let out = "";
+
+  for (const part of chainParts) {
+    const pipelineSplit = splitShellPipeline(part.part);
+    if (!pipelineSplit.ok) {
+      return { ok: false, reason: pipelineSplit.reason ?? "unable to parse pipeline" };
+    }
+    const renderedSegments: string[] = [];
+    for (const segmentRaw of pipelineSplit.segments) {
+      const rendered = params.renderSegment(segmentRaw, segmentCount);
+      if (!rendered.ok) {
+        return { ok: false, reason: rendered.reason };
+      }
+      renderedSegments.push(rendered.rendered);
+      segmentCount += 1;
+    }
+    out += renderedSegments.join(" | ");
+    if (part.opToNext) {
+      out += ` ${part.opToNext} `;
+    }
+  }
+
+  return { ok: true, command: out, segmentCount };
+}
+
 /**
  * Builds a shell command string that preserves pipes/chaining, but forces *arguments* to be
  * literal (no globbing, no env-var expansion) by single-quoting every argv token.
@@ -723,44 +836,89 @@ export function buildSafeShellCommand(params: { command: string; platform?: stri
   command?: string;
   reason?: string;
 } {
-  const platform = params.platform ?? null;
-  if (isWindowsPlatform(platform)) {
-    return { ok: false, reason: "unsupported platform" };
-  }
-  const source = params.command.trim();
-  if (!source) {
-    return { ok: false, reason: "empty command" };
-  }
-
-  const chain = splitCommandChainWithOperators(source);
-  const chainParts = chain ?? [{ part: source, opToNext: null }];
-  let out = "";
-
-  for (let i = 0; i < chainParts.length; i += 1) {
-    const part = chainParts[i];
-    const pipelineSplit = splitShellPipeline(part.part);
-    if (!pipelineSplit.ok) {
-      return { ok: false, reason: pipelineSplit.reason ?? "unable to parse pipeline" };
-    }
-    const renderedSegments: string[] = [];
-    for (const segmentRaw of pipelineSplit.segments) {
-      const argv = splitShellArgs(segmentRaw);
-      if (!argv || argv.length === 0) {
+  const isWindows = isWindowsPlatform(params.platform);
+  const rebuilt = rebuildShellCommandFromSource({
+    command: params.command,
+    platform: params.platform,
+    renderSegment: (segmentRaw) => {
+      const argv = isWindows
+        ? (tokenizeWindowsSegment(segmentRaw) ?? [])
+        : (splitShellArgs(segmentRaw) ?? []);
+      if (argv.length === 0) {
         return { ok: false, reason: "unable to parse shell segment" };
       }
-      renderedSegments.push(argv.map((token) => shellEscapeSingleArg(token)).join(" "));
-    }
-    out += renderedSegments.join(" | ");
-    if (part.opToNext) {
-      out += ` ${part.opToNext} `;
-    }
-  }
-
-  return { ok: true, command: out };
+      if (isWindows) {
+        return renderWindowsQuotedArgv(argv);
+      }
+      return { ok: true, rendered: argv.map((token) => shellEscapeSingleArg(token)).join(" ") };
+    },
+  });
+  return finalizeRebuiltShellCommand(rebuilt);
 }
 
-function renderQuotedArgv(argv: string[]): string {
+function renderWindowsQuotedArgv(argv: string[]): ShellSegmentRenderResult {
+  const parts: string[] = [];
+  for (const token of argv) {
+    const result = windowsEscapeArg(token);
+    if (!result.ok) {
+      return { ok: false, reason: `unsafe windows token: ${token}` };
+    }
+    parts.push(result.escaped);
+  }
+  return { ok: true, rendered: parts.join(" ") };
+}
+
+function renderQuotedArgv(argv: string[], platform?: string | null): string | null {
+  if (isWindowsPlatform(platform)) {
+    const result = renderWindowsQuotedArgv(argv);
+    return result.ok ? result.rendered : null;
+  }
   return argv.map((token) => shellEscapeSingleArg(token)).join(" ");
+}
+
+function finalizeRebuiltShellCommand(
+  rebuilt: ReturnType<typeof rebuildShellCommandFromSource>,
+  expectedSegmentCount?: number,
+): { ok: boolean; command?: string; reason?: string } {
+  if (!rebuilt.ok) {
+    return { ok: false, reason: rebuilt.reason };
+  }
+  if (typeof expectedSegmentCount === "number" && rebuilt.segmentCount !== expectedSegmentCount) {
+    return { ok: false, reason: "segment count mismatch" };
+  }
+  return { ok: true, command: rebuilt.command };
+}
+
+export function resolvePlannedSegmentArgv(segment: ExecCommandSegment): string[] | null {
+  if (segment.resolution?.policyBlocked === true) {
+    return null;
+  }
+  const baseArgv =
+    segment.resolution?.effectiveArgv && segment.resolution.effectiveArgv.length > 0
+      ? segment.resolution.effectiveArgv
+      : segment.argv;
+  if (baseArgv.length === 0) {
+    return null;
+  }
+  const argv = [...baseArgv];
+  const execution = segment.resolution?.execution;
+  const resolvedExecutable =
+    execution?.resolvedRealPath?.trim() ?? execution?.resolvedPath?.trim() ?? "";
+  if (resolvedExecutable) {
+    argv[0] = resolvedExecutable;
+  }
+  return argv;
+}
+
+function renderSafeBinSegmentArgv(
+  segment: ExecCommandSegment,
+  platform?: string | null,
+): string | null {
+  const argv = resolvePlannedSegmentArgv(segment);
+  if (!argv || argv.length === 0) {
+    return null;
+  }
+  return renderQuotedArgv(argv, platform);
 }
 
 /**
@@ -771,51 +929,60 @@ function renderQuotedArgv(argv: string[]): string {
 export function buildSafeBinsShellCommand(params: {
   command: string;
   segments: ExecCommandSegment[];
-  segmentSatisfiedBy: ("allowlist" | "safeBins" | "skills" | null)[];
+  segmentSatisfiedBy: ("allowlist" | "safeBins" | "skills" | "skillPrelude" | null)[];
   platform?: string | null;
 }): { ok: boolean; command?: string; reason?: string } {
-  const platform = params.platform ?? null;
-  if (isWindowsPlatform(platform)) {
-    return { ok: false, reason: "unsupported platform" };
-  }
   if (params.segments.length !== params.segmentSatisfiedBy.length) {
     return { ok: false, reason: "segment metadata mismatch" };
   }
-
-  const chain = splitCommandChainWithOperators(params.command.trim());
-  const chainParts: ShellChainPart[] = chain ?? [{ part: params.command.trim(), opToNext: null }];
-  let segIndex = 0;
-  let out = "";
-
-  for (const part of chainParts) {
-    const pipelineSplit = splitShellPipeline(part.part);
-    if (!pipelineSplit.ok) {
-      return { ok: false, reason: pipelineSplit.reason ?? "unable to parse pipeline" };
-    }
-
-    const rendered: string[] = [];
-    for (const raw of pipelineSplit.segments) {
-      const seg = params.segments[segIndex];
-      const by = params.segmentSatisfiedBy[segIndex];
+  const rebuilt = rebuildShellCommandFromSource({
+    command: params.command,
+    platform: params.platform,
+    renderSegment: (raw, segmentIndex) => {
+      const seg = params.segments[segmentIndex];
+      const by = params.segmentSatisfiedBy[segmentIndex];
       if (!seg || by === undefined) {
         return { ok: false, reason: "segment mapping failed" };
       }
       const needsLiteral = by === "safeBins";
-      rendered.push(needsLiteral ? renderQuotedArgv(seg.argv) : raw.trim());
-      segIndex += 1;
-    }
+      if (!needsLiteral) {
+        return { ok: true, rendered: raw.trim() };
+      }
+      const rendered = renderSafeBinSegmentArgv(seg, params.platform);
+      if (!rendered) {
+        return { ok: false, reason: "segment execution plan unavailable" };
+      }
+      return { ok: true, rendered };
+    },
+  });
+  return finalizeRebuiltShellCommand(rebuilt, params.segments.length);
+}
 
-    out += rendered.join(" | ");
-    if (part.opToNext) {
-      out += ` ${part.opToNext} `;
-    }
-  }
-
-  if (segIndex !== params.segments.length) {
-    return { ok: false, reason: "segment count mismatch" };
-  }
-
-  return { ok: true, command: out };
+export function buildEnforcedShellCommand(params: {
+  command: string;
+  segments: ExecCommandSegment[];
+  platform?: string | null;
+}): { ok: boolean; command?: string; reason?: string } {
+  const rebuilt = rebuildShellCommandFromSource({
+    command: params.command,
+    platform: params.platform,
+    renderSegment: (_raw, segmentIndex) => {
+      const seg = params.segments[segmentIndex];
+      if (!seg) {
+        return { ok: false, reason: "segment mapping failed" };
+      }
+      const argv = resolvePlannedSegmentArgv(seg);
+      if (!argv) {
+        return { ok: false, reason: "segment execution plan unavailable" };
+      }
+      const rendered = renderQuotedArgv(argv, params.platform);
+      if (!rendered) {
+        return { ok: false, reason: "unsafe windows token in argv" };
+      }
+      return { ok: true, rendered };
+    },
+  });
+  return finalizeRebuiltShellCommand(rebuilt, params.segments.length);
 }
 
 /**

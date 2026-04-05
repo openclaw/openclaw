@@ -12,24 +12,23 @@ export async function writeSessionStore(
   home: string,
   session: { lastProvider: string; lastTo: string; lastChannel?: string },
 ): Promise<string> {
+  return writeSessionStoreEntries(home, {
+    "agent:main:main": {
+      sessionId: "main-session",
+      updatedAt: Date.now(),
+      ...session,
+    },
+  });
+}
+
+export async function writeSessionStoreEntries(
+  home: string,
+  entries: Record<string, Record<string, unknown>>,
+): Promise<string> {
   const dir = path.join(home, ".openclaw", "sessions");
   await fs.mkdir(dir, { recursive: true });
   const storePath = path.join(dir, "sessions.json");
-  await fs.writeFile(
-    storePath,
-    JSON.stringify(
-      {
-        "agent:main:main": {
-          sessionId: "main-session",
-          updatedAt: Date.now(),
-          ...session,
-        },
-      },
-      null,
-      2,
-    ),
-    "utf-8",
-  );
+  await fs.writeFile(storePath, JSON.stringify(entries, null, 2), "utf-8");
   return storePath;
 }
 
@@ -41,7 +40,7 @@ export function makeCfg(
   const base: OpenClawConfig = {
     agents: {
       defaults: {
-        model: "anthropic/claude-opus-4-5",
+        model: "anthropic/claude-opus-4-6",
         workspace: path.join(home, "openclaw"),
       },
     },

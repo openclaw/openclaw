@@ -1,5 +1,9 @@
 ---
 title: "Pi Development Workflow"
+summary: "Developer workflow for Pi integration: build, test, and live validation"
+read_when:
+  - Working on Pi integration code or tests
+  - Running Pi-specific lint, typecheck, and live test flows
 ---
 
 # Pi Development Workflow
@@ -8,33 +12,38 @@ This guide summarizes a sane workflow for working on the pi integration in OpenC
 
 ## Type Checking and Linting
 
-- Type check and build: `pnpm build`
-- Lint: `pnpm lint`
-- Format check: `pnpm format`
-- Full gate before pushing: `pnpm lint && pnpm build && pnpm test`
+- Default local gate: `pnpm check`
+- Build gate: `pnpm build` when the change can affect build output, packaging, or lazy-loading/module boundaries
+- Full landing gate for Pi-heavy changes: `pnpm check && pnpm test`
 
 ## Running Pi Tests
 
-Use the dedicated script for the pi integration test set:
+Run the Pi-focused test set directly with Vitest:
 
 ```bash
-scripts/pi/run-tests.sh
+pnpm test \
+  "src/agents/pi-*.test.ts" \
+  "src/agents/pi-embedded-*.test.ts" \
+  "src/agents/pi-tools*.test.ts" \
+  "src/agents/pi-settings.test.ts" \
+  "src/agents/pi-tool-definition-adapter*.test.ts" \
+  "src/agents/pi-hooks/**/*.test.ts"
 ```
 
-To include the live test that exercises real provider behavior:
+To include the live provider exercise:
 
 ```bash
-scripts/pi/run-tests.sh --live
+OPENCLAW_LIVE_TEST=1 pnpm test src/agents/pi-embedded-runner-extraparams.live.test.ts
 ```
 
-The script runs all pi related unit tests via these globs:
+This covers the main Pi unit suites:
 
 - `src/agents/pi-*.test.ts`
 - `src/agents/pi-embedded-*.test.ts`
 - `src/agents/pi-tools*.test.ts`
 - `src/agents/pi-settings.test.ts`
 - `src/agents/pi-tool-definition-adapter.test.ts`
-- `src/agents/pi-extensions/*.test.ts`
+- `src/agents/pi-hooks/*.test.ts`
 
 ## Manual Testing
 
@@ -56,15 +65,16 @@ State lives under the OpenClaw state directory. Default is `~/.openclaw`. If `OP
 To reset everything:
 
 - `openclaw.json` for config
-- `credentials/` for auth profiles and tokens
+- `agents/<agentId>/agent/auth-profiles.json` for model auth profiles (API keys + OAuth)
+- `credentials/` for provider/channel state that still lives outside the auth profile store
 - `agents/<agentId>/sessions/` for agent session history
-- `agents/<agentId>/sessions.json` for the session index
+- `agents/<agentId>/sessions/sessions.json` for the session index
 - `sessions/` if legacy paths exist
 - `workspace/` if you want a blank workspace
 
-If you only want to reset sessions, delete `agents/<agentId>/sessions/` and `agents/<agentId>/sessions.json` for that agent. Keep `credentials/` if you do not want to reauthenticate.
+If you only want to reset sessions, delete `agents/<agentId>/sessions/` for that agent. If you want to keep auth, leave `agents/<agentId>/agent/auth-profiles.json` and any provider state under `credentials/` in place.
 
 ## References
 
-- [https://docs.openclaw.ai/testing](https://docs.openclaw.ai/testing)
-- [https://docs.openclaw.ai/start/getting-started](https://docs.openclaw.ai/start/getting-started)
+- [Testing](/help/testing)
+- [Getting Started](/start/getting-started)

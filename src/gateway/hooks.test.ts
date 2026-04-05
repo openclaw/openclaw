@@ -1,19 +1,35 @@
 import type { IncomingMessage } from "node:http";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import { createIMessageTestPlugin } from "../../test/helpers/channels/imessage-test-plugin.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
-import { createIMessageTestPlugin } from "../test-utils/imessage-test-plugin.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   extractHookToken,
   isHookAgentAllowed,
+  normalizeHookDispatchSessionKey,
   resolveHookSessionKey,
   resolveHookTargetAgentId,
   normalizeAgentPayload,
   normalizeWakePayload,
   resolveHooksConfig,
 } from "./hooks.js";
+
+const createDemoAliasPlugin = () => ({
+  ...createChannelTestPluginBase({
+    id: "demo-alias-channel",
+    label: "Demo Alias Channel",
+    docsPath: "/channels/demo-alias-channel",
+  }),
+  meta: {
+    ...createChannelTestPluginBase({
+      id: "demo-alias-channel",
+      label: "Demo Alias Channel",
+      docsPath: "/channels/demo-alias-channel",
+    }).meta,
+    aliases: ["workspace-chat"],
+  },
+});
 
 describe("gateway hooks helpers", () => {
   const resolveHooksConfigOrThrow = (cfg: OpenClawConfig) => {
@@ -128,16 +144,16 @@ describe("gateway hooks helpers", () => {
     setActivePluginRegistry(
       createTestRegistry([
         {
-          pluginId: "msteams",
+          pluginId: "demo-alias-channel",
           source: "test",
-          plugin: createMSTeamsPlugin({ aliases: ["teams"] }),
+          plugin: createDemoAliasPlugin(),
         },
       ]),
     );
-    const teams = normalizeAgentPayload({ message: "yo", channel: "teams" });
-    expect(teams.ok).toBe(true);
-    if (teams.ok) {
-      expect(teams.value.channel).toBe("msteams");
+    const aliasChannel = normalizeAgentPayload({ message: "yo", channel: "workspace-chat" });
+    expect(aliasChannel.ok).toBe(true);
+    if (aliasChannel.ok) {
+      expect(aliasChannel.value.channel).toBe("demo-alias-channel");
     }
 
     const bad = normalizeAgentPayload({ message: "yo", channel: "sms" });
@@ -281,6 +297,24 @@ describe("gateway hooks helpers", () => {
     expect(resolvedKey).toEqual({ ok: true, value: "hook:ingress" });
   });
 
+  test("normalizeHookDispatchSessionKey preserves target agent scope", () => {
+    expect(
+      normalizeHookDispatchSessionKey({
+        sessionKey: "agent:hooks:slack:channel:c123",
+        targetAgentId: "hooks",
+      }),
+    ).toBe("agent:hooks:slack:channel:c123");
+  });
+
+  test("normalizeHookDispatchSessionKey rebinds non-target agent scoped keys to the target agent", () => {
+    expect(
+      normalizeHookDispatchSessionKey({
+        sessionKey: "agent:main:slack:channel:c123",
+        targetAgentId: "hooks",
+      }),
+    ).toBe("agent:hooks:slack:channel:c123");
+  });
+
   test("resolveHooksConfig validates defaultSessionKey and generated fallback against prefixes", () => {
     expect(() =>
       resolveHooksConfig({
@@ -308,20 +342,3 @@ describe("gateway hooks helpers", () => {
 });
 
 const emptyRegistry = createTestRegistry([]);
-
-const createMSTeamsPlugin = (params: { aliases?: string[] }): ChannelPlugin => ({
-  id: "msteams",
-  meta: {
-    id: "msteams",
-    label: "Microsoft Teams",
-    selectionLabel: "Microsoft Teams (Bot Framework)",
-    docsPath: "/channels/msteams",
-    blurb: "Bot Framework; enterprise support.",
-    aliases: params.aliases,
-  },
-  capabilities: { chatTypes: ["direct"] },
-  config: {
-    listAccountIds: () => [],
-    resolveAccount: () => ({}),
-  },
-});

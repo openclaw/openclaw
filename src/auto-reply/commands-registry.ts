@@ -1,6 +1,8 @@
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import type { SkillCommandSpec } from "../agents/skills.js";
+import { getChannelPlugin } from "../channels/plugins/index.js";
+import { isCommandFlagEnabled } from "../config/commands.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { escapeRegExp } from "../utils.js";
 import { getChatCommands, getNativeCommandSurfaces } from "./commands-registry.data.js";
@@ -96,13 +98,19 @@ export function listChatCommands(params?: {
 
 export function isCommandEnabled(cfg: OpenClawConfig, commandKey: string): boolean {
   if (commandKey === "config") {
-    return cfg.commands?.config === true;
+    return isCommandFlagEnabled(cfg, "config");
+  }
+  if (commandKey === "mcp") {
+    return isCommandFlagEnabled(cfg, "mcp");
+  }
+  if (commandKey === "plugins") {
+    return isCommandFlagEnabled(cfg, "plugins");
   }
   if (commandKey === "debug") {
-    return cfg.commands?.debug === true;
+    return isCommandFlagEnabled(cfg, "debug");
   }
   if (commandKey === "bash") {
-    return cfg.commands?.bash === true;
+    return isCommandFlagEnabled(cfg, "bash");
   }
   return true;
 }
@@ -118,23 +126,19 @@ export function listChatCommandsForConfig(
   return [...base, ...buildSkillCommandDefinitions(params.skillCommands)];
 }
 
-const NATIVE_NAME_OVERRIDES: Record<string, Record<string, string>> = {
-  discord: {
-    tts: "voice",
-  },
-};
-
 function resolveNativeName(command: ChatCommandDefinition, provider?: string): string | undefined {
   if (!command.nativeName) {
     return undefined;
   }
-  if (provider) {
-    const override = NATIVE_NAME_OVERRIDES[provider]?.[command.key];
-    if (override) {
-      return override;
-    }
+  if (!provider) {
+    return command.nativeName;
   }
-  return command.nativeName;
+  return (
+    getChannelPlugin(provider)?.commands?.resolveNativeCommandName?.({
+      commandKey: command.key,
+      defaultName: command.nativeName,
+    }) ?? command.nativeName
+  );
 }
 
 function toNativeCommandSpec(command: ChatCommandDefinition, provider?: string): NativeCommandSpec {

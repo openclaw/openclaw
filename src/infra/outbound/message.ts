@@ -1,7 +1,5 @@
-import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { OpenClawConfig } from "../../config/config.js";
-import { loadConfig } from "../../config/config.js";
-import { callGateway, randomIdempotencyKey } from "../../gateway/call.js";
 import type { PollInput } from "../../polls.js";
 import { normalizePollInput } from "../../polls.js";
 import {
@@ -10,14 +8,32 @@ import {
   type GatewayClientMode,
   type GatewayClientName,
 } from "../../utils/message-channel.js";
+import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import { resolveMessageChannelSelection } from "./channel-selection.js";
 import {
   deliverOutboundPayloads,
   type OutboundDeliveryResult,
   type OutboundSendDeps,
 } from "./deliver.js";
+import type { OutboundMirror } from "./mirror.js";
 import { normalizeReplyPayloadsForDelivery } from "./payloads.js";
+import { buildOutboundSessionContext } from "./session-context.js";
 import { resolveOutboundTarget } from "./targets.js";
+
+let messageConfigRuntimePromise: Promise<typeof import("./message.config.runtime.js")> | null =
+  null;
+let messageGatewayRuntimePromise: Promise<typeof import("./message.gateway.runtime.js")> | null =
+  null;
+
+function loadMessageConfigRuntime() {
+  messageConfigRuntimePromise ??= import("./message.config.runtime.js");
+  return messageConfigRuntimePromise;
+}
+
+function loadMessageGatewayRuntime() {
+  messageGatewayRuntimePromise ??= import("./message.gateway.runtime.js");
+  return messageGatewayRuntimePromise;
+}
 
 export type MessageGatewayOptions = {
   url?: string;
@@ -37,6 +53,7 @@ type MessageSendParams = {
   mediaUrl?: string;
   mediaUrls?: string[];
   gifPlayback?: boolean;
+  forceDocument?: boolean;
   accountId?: string;
   replyToId?: string;
   threadId?: string | number;
@@ -46,12 +63,7 @@ type MessageSendParams = {
   cfg?: OpenClawConfig;
   gateway?: MessageGatewayOptions;
   idempotencyKey?: string;
-  mirror?: {
-    sessionKey: string;
-    agentId?: string;
-    text?: string;
-    mediaUrls?: string[];
-  };
+  mirror?: OutboundMirror;
   abortSignal?: AbortSignal;
   silent?: boolean;
 };
@@ -103,21 +115,46 @@ export type MessagePollResult = {
   dryRun?: boolean;
 };
 
+function buildMessagePollResult(params: {
+  channel: string;
+  to: string;
+  normalized: {
+    question: string;
+    options: string[];
+    maxSelections: number;
+    durationSeconds?: number | null;
+    durationHours?: number | null;
+  };
+  result?: MessagePollResult["result"];
+  dryRun?: boolean;
+}): MessagePollResult {
+  return {
+    channel: params.channel,
+    to: params.to,
+    question: params.normalized.question,
+    options: params.normalized.options,
+    maxSelections: params.normalized.maxSelections,
+    durationSeconds: params.normalized.durationSeconds ?? null,
+    durationHours: params.normalized.durationHours ?? null,
+    via: "gateway",
+    ...(params.dryRun ? { dryRun: true } : { result: params.result }),
+  };
+}
+
 async function resolveRequiredChannel(params: {
   cfg: OpenClawConfig;
   channel?: string;
 }): Promise<string> {
-  const channel = params.channel?.trim()
-    ? normalizeChannelId(params.channel)
-    : (await resolveMessageChannelSelection({ cfg: params.cfg })).channel;
-  if (!channel) {
-    throw new Error(`Unknown channel: ${params.channel}`);
-  }
-  return channel;
+  return (
+    await resolveMessageChannelSelection({
+      cfg: params.cfg,
+      channel: params.channel,
+    })
+  ).channel;
 }
 
-function resolveRequiredPlugin(channel: string) {
-  const plugin = getChannelPlugin(channel);
+function resolveRequiredPlugin(channel: string, cfg: OpenClawConfig) {
+  const plugin = resolveOutboundChannelPlugin({ channel, cfg });
   if (!plugin) {
     throw new Error(`Unknown channel: ${channel}`);
   }
@@ -150,8 +187,9 @@ async function callMessageGateway<T>(params: {
   method: string;
   params: Record<string, unknown>;
 }): Promise<T> {
+  const { callGatewayLeastPrivilege } = await loadMessageGatewayRuntime();
   const gateway = resolveGatewayOptions(params.gateway);
-  return await callGateway<T>({
+  return await callGatewayLeastPrivilege<T>({
     url: gateway.url,
     token: gateway.token,
     method: params.method,
@@ -163,10 +201,26 @@ async function callMessageGateway<T>(params: {
   });
 }
 
+async function resolveMessageConfig(cfg?: OpenClawConfig): Promise<OpenClawConfig> {
+  if (cfg) {
+    return cfg;
+  }
+  const { loadConfig } = await loadMessageConfigRuntime();
+  return loadConfig();
+}
+
+async function resolveGatewayIdempotencyKey(idempotencyKey?: string): Promise<string> {
+  if (idempotencyKey) {
+    return idempotencyKey;
+  }
+  const { randomIdempotencyKey } = await loadMessageGatewayRuntime();
+  return randomIdempotencyKey();
+}
+
 export async function sendMessage(params: MessageSendParams): Promise<MessageSendResult> {
-  const cfg = params.cfg ?? loadConfig();
+  const cfg = await resolveMessageConfig(params.cfg);
   const channel = await resolveRequiredChannel({ cfg, channel: params.channel });
-  const plugin = resolveRequiredPlugin(channel);
+  const plugin = resolveRequiredPlugin(channel, cfg);
   const deliveryMode = plugin.outbound?.deliveryMode ?? "direct";
   const normalizedPayloads = normalizeReplyPayloadsForDelivery([
     {
@@ -180,7 +234,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
     .filter(Boolean)
     .join("\n");
   const mirrorMediaUrls = normalizedPayloads.flatMap(
-    (payload) => payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []),
+    (payload) => resolveSendableOutboundReplyParts(payload).mediaUrls,
   );
   const primaryMediaUrl = mirrorMediaUrls[0] ?? params.mediaUrl ?? null;
 
@@ -208,16 +262,22 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       throw resolvedTarget.error;
     }
 
+    const outboundSession = buildOutboundSessionContext({
+      cfg,
+      agentId: params.agentId,
+      sessionKey: params.mirror?.sessionKey,
+    });
     const results = await deliverOutboundPayloads({
       cfg,
       channel: outboundChannel,
       to: resolvedTarget.to,
-      agentId: params.agentId,
+      session: outboundSession,
       accountId: params.accountId,
       payloads: normalizedPayloads,
       replyToId: params.replyToId,
       threadId: params.threadId,
       gifPlayback: params.gifPlayback,
+      forceDocument: params.forceDocument,
       deps: params.deps,
       bestEffort: params.bestEffort,
       abortSignal: params.abortSignal,
@@ -227,6 +287,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
             ...params.mirror,
             text: mirrorText || params.content,
             mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : undefined,
+            idempotencyKey: params.mirror.idempotencyKey ?? params.idempotencyKey,
           }
         : undefined,
     });
@@ -251,9 +312,10 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : params.mediaUrls,
       gifPlayback: params.gifPlayback,
       accountId: params.accountId,
+      agentId: params.agentId,
       channel,
       sessionKey: params.mirror?.sessionKey,
-      idempotencyKey: params.idempotencyKey ?? randomIdempotencyKey(),
+      idempotencyKey: await resolveGatewayIdempotencyKey(params.idempotencyKey),
     },
   });
 
@@ -268,7 +330,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
 }
 
 export async function sendPoll(params: MessagePollParams): Promise<MessagePollResult> {
-  const cfg = params.cfg ?? loadConfig();
+  const cfg = await resolveMessageConfig(params.cfg);
   const channel = await resolveRequiredChannel({ cfg, channel: params.channel });
 
   const pollInput: PollInput = {
@@ -278,7 +340,7 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
     durationSeconds: params.durationSeconds,
     durationHours: params.durationHours,
   };
-  const plugin = resolveRequiredPlugin(channel);
+  const plugin = resolveRequiredPlugin(channel, cfg);
   const outbound = plugin?.outbound;
   if (!outbound?.sendPoll) {
     throw new Error(`Unsupported poll channel: ${channel}`);
@@ -288,17 +350,12 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
     : normalizePollInput(pollInput);
 
   if (params.dryRun) {
-    return {
+    return buildMessagePollResult({
       channel,
       to: params.to,
-      question: normalized.question,
-      options: normalized.options,
-      maxSelections: normalized.maxSelections,
-      durationSeconds: normalized.durationSeconds ?? null,
-      durationHours: normalized.durationHours ?? null,
-      via: "gateway",
+      normalized,
       dryRun: true,
-    };
+    });
   }
 
   const result = await callMessageGateway<{
@@ -322,19 +379,14 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
       isAnonymous: params.isAnonymous,
       channel,
       accountId: params.accountId,
-      idempotencyKey: params.idempotencyKey ?? randomIdempotencyKey(),
+      idempotencyKey: await resolveGatewayIdempotencyKey(params.idempotencyKey),
     },
   });
 
-  return {
+  return buildMessagePollResult({
     channel,
     to: params.to,
-    question: normalized.question,
-    options: normalized.options,
-    maxSelections: normalized.maxSelections,
-    durationSeconds: normalized.durationSeconds ?? null,
-    durationHours: normalized.durationHours ?? null,
-    via: "gateway",
+    normalized,
     result,
-  };
+  });
 }

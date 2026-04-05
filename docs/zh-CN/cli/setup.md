@@ -1,16 +1,16 @@
 ---
 read_when:
-  - 你在不使用完整新手引导向导的情况下进行首次设置
+  - 你正在进行首次运行设置，但不使用完整的 CLI 新手引导
   - 你想设置默认工作区路径
 summary: "`openclaw setup` 的 CLI 参考（初始化配置 + 工作区）"
 title: setup
 x-i18n:
-  generated_at: "2026-02-01T20:21:26Z"
-  model: claude-opus-4-5
-  provider: pi
-  source_hash: 7f3fc8b246924edf48501785be2c0d356bd31bfbb133e75a139a5ee41dbf57f4
+  generated_at: "2026-03-16T06:21:20Z"
+  model: gpt-5.4
+  provider: openai
+  source_hash: b6d6fef6642a4fdf9880ea4f752981b5ed0404289274ee3429ee31702873e3ea
   source_path: cli/setup.md
-  workflow: 14
+  workflow: 15
 ---
 
 # `openclaw setup`
@@ -19,8 +19,8 @@ x-i18n:
 
 相关内容：
 
-- 快速开始：[快速开始](/start/getting-started)
-- 向导：[新手引导](/start/onboarding)
+- 入门指南：[入门指南](/start/getting-started)
+- CLI 新手引导：[CLI 新手引导](/start/wizard)
 
 ## 示例
 
@@ -29,7 +29,7 @@ openclaw setup
 openclaw setup --workspace ~/.openclaw/workspace
 ```
 
-通过 setup 运行向导：
+通过 setup 运行新手引导：
 
 ```bash
 openclaw setup --wizard

@@ -10,7 +10,7 @@ import {
 } from "../pairing/pairing-store.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
-import { renderTable } from "../terminal/table.js";
+import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { formatCliCommand } from "./command-format.js";
 
@@ -68,7 +68,7 @@ export function registerPairingCli(program: Command) {
     .argument("[channel]", `Channel (${channels.join(", ")})`)
     .option("--json", "Print JSON", false)
     .action(async (channelArg, opts) => {
-      const channelRaw = opts.channel ?? channelArg;
+      const channelRaw = opts.channel ?? channelArg ?? (channels.length === 1 ? channels[0] : "");
       if (!channelRaw) {
         throw new Error(
           `Channel required. Use --channel <channel> or pass it as the first argument (expected one of: ${channels.join(", ")})`,
@@ -80,7 +80,7 @@ export function registerPairingCli(program: Command) {
         ? await listChannelPairingRequests(channel, process.env, accountId)
         : await listChannelPairingRequests(channel);
       if (opts.json) {
-        defaultRuntime.log(JSON.stringify({ channel, requests }, null, 2));
+        defaultRuntime.writeJson({ channel, requests });
         return;
       }
       if (requests.length === 0) {
@@ -88,7 +88,7 @@ export function registerPairingCli(program: Command) {
         return;
       }
       const idLabel = resolvePairingIdLabel(channel);
-      const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+      const tableWidth = getTerminalTableWidth();
       defaultRuntime.log(
         `${theme.heading("Pairing requests")} ${theme.muted(`(${requests.length})`)}`,
       );
@@ -120,9 +120,20 @@ export function registerPairingCli(program: Command) {
     .argument("[code]", "Pairing code (when channel is passed as the 1st arg)")
     .option("--notify", "Notify the requester on the same channel", false)
     .action(async (codeOrChannel, code, opts) => {
-      const channelRaw = opts.channel ?? codeOrChannel;
-      const resolvedCode = opts.channel ? codeOrChannel : code;
-      if (!opts.channel && !code) {
+      const defaultChannel = channels.length === 1 ? channels[0] : "";
+      const usingExplicitChannel = Boolean(opts.channel);
+      const hasPositionalCode = code != null;
+      const channelRaw = usingExplicitChannel
+        ? opts.channel
+        : hasPositionalCode
+          ? codeOrChannel
+          : defaultChannel;
+      const resolvedCode = usingExplicitChannel
+        ? codeOrChannel
+        : hasPositionalCode
+          ? code
+          : codeOrChannel;
+      if (!channelRaw || !resolvedCode) {
         throw new Error(
           `Usage: ${formatCliCommand("openclaw pairing approve <channel> <code>")} (or: ${formatCliCommand("openclaw pairing approve --channel <channel> <code>")})`,
         );

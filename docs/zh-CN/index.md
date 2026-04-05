@@ -5,7 +5,7 @@ summary: OpenClaw 是一个多渠道 AI 智能体 Gateway 网关，可在任何�
 title: OpenClaw
 x-i18n:
   generated_at: "2026-02-04T17:53:40Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: fc8babf7885ef91d526795051376d928599c4cf8aff75400138a0d7d9fa3b75f
   source_path: index.md
@@ -40,7 +40,7 @@ x-i18n:
   <Card title="入门指南" href="/start/getting-started" icon="rocket">
     安装 OpenClaw 并在几分钟内启动 Gateway 网关。
   </Card>
-  <Card title="运行向导" href="/start/wizard" icon="sparkles">
+  <Card title="运行新手引导" href="/start/wizard" icon="sparkles">
     通过 `openclaw onboard` 和配对流程进行引导式设置。
   </Card>
   <Card title="打开控制界面" href="/web/control-ui" icon="layout-dashboard">
@@ -118,7 +118,7 @@ Gateway 网关启动后，打开浏览器控制界面。
 - 远程访问：[Web 界面](/web)和 [Tailscale](/gateway/tailscale)
 
 <p align="center">
-  <img src="whatsapp-openclaw.jpg" alt="OpenClaw" width="420" />
+  <img src="/whatsapp-openclaw.jpg" alt="OpenClaw" width="420" />
 </p>
 
 ## 配置（可选）

@@ -1,60 +1,221 @@
-import { readConfigFileSnapshot } from "../../config/config.js";
+import { loadConfig, readConfigFileSnapshot } from "../../config/config.js";
 import { redactConfigObject } from "../../config/redact-snapshot.js";
+import { buildTalkConfigResponse, resolveActiveTalkProviderConfig } from "../../config/talk.js";
+import type { TalkProviderConfig } from "../../config/types.gateway.js";
+import type { OpenClawConfig, TtsConfig, TtsProviderConfigMap } from "../../config/types.js";
+import { canonicalizeSpeechProviderId, getSpeechProvider } from "../../tts/provider-registry.js";
+import { synthesizeSpeech, type TtsDirectiveOverrides } from "../../tts/tts.js";
+import { ADMIN_SCOPE, TALK_SECRETS_SCOPE } from "../operator-scopes.js";
 import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
+  type TalkSpeakParams,
   validateTalkConfigParams,
   validateTalkModeParams,
+  validateTalkSpeakParams,
 } from "../protocol/index.js";
+import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
-const ADMIN_SCOPE = "operator.admin";
-const TALK_SECRETS_SCOPE = "operator.talk.secrets";
+type TalkSpeakReason =
+  | "talk_unconfigured"
+  | "talk_provider_unsupported"
+  | "method_unavailable"
+  | "synthesis_failed"
+  | "invalid_audio_result";
 
+type TalkSpeakErrorDetails = {
+  reason: TalkSpeakReason;
+  fallbackEligible: boolean;
+};
 function canReadTalkSecrets(client: { connect?: { scopes?: string[] } } | null): boolean {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
   return scopes.includes(ADMIN_SCOPE) || scopes.includes(TALK_SECRETS_SCOPE);
 }
 
-function normalizeTalkConfigSection(value: unknown): Record<string, unknown> | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+function trimString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
     return undefined;
   }
-  const source = value as Record<string, unknown>;
-  const talk: Record<string, unknown> = {};
-  if (typeof source.voiceId === "string") {
-    talk.voiceId = source.voiceId;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function normalizeAliasKey(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function resolveTalkVoiceId(
+  providerConfig: TalkProviderConfig,
+  requested: string | undefined,
+): string | undefined {
+  if (!requested) {
+    return undefined;
+  }
+  const aliases = providerConfig.voiceAliases;
+  if (!aliases) {
+    return requested;
+  }
+  const normalizedRequested = normalizeAliasKey(requested);
+  for (const [alias, voiceId] of Object.entries(aliases)) {
+    if (normalizeAliasKey(alias) === normalizedRequested) {
+      return voiceId;
+    }
+  }
+  return requested;
+}
+
+function buildTalkTtsConfig(
+  config: OpenClawConfig,
+):
+  | { cfg: OpenClawConfig; provider: string; providerConfig: TalkProviderConfig }
+  | { error: string; reason: TalkSpeakReason } {
+  const resolved = resolveActiveTalkProviderConfig(config.talk);
+  const provider = canonicalizeSpeechProviderId(resolved?.provider, config);
+  if (!resolved || !provider) {
+    return {
+      error: "talk.speak unavailable: talk provider not configured",
+      reason: "talk_unconfigured",
+    };
+  }
+
+  const speechProvider = getSpeechProvider(provider, config);
+  if (!speechProvider) {
+    return {
+      error: `talk.speak unavailable: speech provider "${provider}" does not support Talk mode`,
+      reason: "talk_provider_unsupported",
+    };
+  }
+
+  const baseTts = config.messages?.tts ?? {};
+  const providerConfig = resolved.config;
+  const resolvedProviderConfig =
+    speechProvider.resolveTalkConfig?.({
+      cfg: config,
+      baseTtsConfig: baseTts as Record<string, unknown>,
+      talkProviderConfig: providerConfig,
+      timeoutMs: baseTts.timeoutMs ?? 30_000,
+    }) ?? providerConfig;
+  const talkTts: TtsConfig = {
+    ...baseTts,
+    auto: "always",
+    provider,
+    providers: {
+      ...((asRecord(baseTts.providers) ?? {}) as TtsProviderConfigMap),
+      [provider]: resolvedProviderConfig,
+    },
+  };
+
+  return {
+    provider,
+    providerConfig,
+    cfg: {
+      ...config,
+      messages: {
+        ...config.messages,
+        tts: talkTts,
+      },
+    },
+  };
+}
+
+function isFallbackEligibleTalkReason(reason: TalkSpeakReason): boolean {
+  return (
+    reason === "talk_unconfigured" ||
+    reason === "talk_provider_unsupported" ||
+    reason === "method_unavailable"
+  );
+}
+
+function talkSpeakError(reason: TalkSpeakReason, message: string) {
+  const details: TalkSpeakErrorDetails = {
+    reason,
+    fallbackEligible: isFallbackEligibleTalkReason(reason),
+  };
+  return errorShape(ErrorCodes.UNAVAILABLE, message, { details });
+}
+
+function resolveTalkSpeed(params: TalkSpeakParams): number | undefined {
+  if (typeof params.speed === "number") {
+    return params.speed;
+  }
+  if (typeof params.rateWpm !== "number" || params.rateWpm <= 0) {
+    return undefined;
+  }
+  const resolved = params.rateWpm / 175;
+  if (resolved <= 0.5 || resolved >= 2.0) {
+    return undefined;
+  }
+  return resolved;
+}
+
+function buildTalkSpeakOverrides(
+  provider: string,
+  providerConfig: TalkProviderConfig,
+  config: OpenClawConfig,
+  params: TalkSpeakParams,
+): TtsDirectiveOverrides {
+  const speechProvider = getSpeechProvider(provider, config);
+  if (!speechProvider?.resolveTalkOverrides) {
+    return { provider };
+  }
+  const resolvedSpeed = resolveTalkSpeed(params);
+  const resolvedVoiceId = resolveTalkVoiceId(providerConfig, trimString(params.voiceId));
+  const providerOverrides = speechProvider.resolveTalkOverrides({
+    talkProviderConfig: providerConfig,
+    params: {
+      ...params,
+      ...(resolvedVoiceId == null ? {} : { voiceId: resolvedVoiceId }),
+      ...(resolvedSpeed == null ? {} : { speed: resolvedSpeed }),
+    },
+  });
+  if (!providerOverrides || Object.keys(providerOverrides).length === 0) {
+    return { provider };
+  }
+  return {
+    provider,
+    providerOverrides: {
+      [provider]: providerOverrides,
+    },
+  };
+}
+
+function inferMimeType(
+  outputFormat: string | undefined,
+  fileExtension: string | undefined,
+): string | undefined {
+  const normalizedOutput = outputFormat?.trim().toLowerCase();
+  const normalizedExtension = fileExtension?.trim().toLowerCase();
+  if (
+    normalizedOutput === "mp3" ||
+    normalizedOutput?.startsWith("mp3_") ||
+    normalizedOutput?.endsWith("-mp3") ||
+    normalizedExtension === ".mp3"
+  ) {
+    return "audio/mpeg";
   }
   if (
-    source.voiceAliases &&
-    typeof source.voiceAliases === "object" &&
-    !Array.isArray(source.voiceAliases)
+    normalizedOutput === "opus" ||
+    normalizedOutput?.startsWith("opus_") ||
+    normalizedExtension === ".opus" ||
+    normalizedExtension === ".ogg"
   ) {
-    const aliases: Record<string, string> = {};
-    for (const [alias, id] of Object.entries(source.voiceAliases as Record<string, unknown>)) {
-      if (typeof id !== "string") {
-        continue;
-      }
-      aliases[alias] = id;
-    }
-    if (Object.keys(aliases).length > 0) {
-      talk.voiceAliases = aliases;
-    }
+    return "audio/ogg";
   }
-  if (typeof source.modelId === "string") {
-    talk.modelId = source.modelId;
+  if (normalizedOutput?.endsWith("-wav") || normalizedExtension === ".wav") {
+    return "audio/wav";
   }
-  if (typeof source.outputFormat === "string") {
-    talk.outputFormat = source.outputFormat;
+  if (normalizedOutput?.endsWith("-webm") || normalizedExtension === ".webm") {
+    return "audio/webm";
   }
-  if (typeof source.apiKey === "string") {
-    talk.apiKey = source.apiKey;
-  }
-  if (typeof source.interruptOnSpeech === "boolean") {
-    talk.interruptOnSpeech = source.interruptOnSpeech;
-  }
-  return Object.keys(talk).length > 0 ? talk : undefined;
+  return undefined;
 }
 
 export const talkHandlers: GatewayRequestHandlers = {
@@ -87,7 +248,7 @@ export const talkHandlers: GatewayRequestHandlers = {
     const talkSource = includeSecrets
       ? snapshot.config.talk
       : redactConfigObject(snapshot.config.talk);
-    const talk = normalizeTalkConfigSection(talkSource);
+    const talk = buildTalkConfigResponse(talkSource);
     if (talk) {
       configPayload.talk = talk;
     }
@@ -103,6 +264,103 @@ export const talkHandlers: GatewayRequestHandlers = {
     }
 
     respond(true, { config: configPayload }, undefined);
+  },
+  "talk.speak": async ({ params, respond }) => {
+    if (!validateTalkSpeakParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid talk.speak params: ${formatValidationErrors(validateTalkSpeakParams.errors)}`,
+        ),
+      );
+      return;
+    }
+
+    const typedParams = params;
+    const text = trimString(typedParams.text);
+    if (!text) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "talk.speak requires text"));
+      return;
+    }
+
+    if (
+      typedParams.speed == null &&
+      typedParams.rateWpm != null &&
+      resolveTalkSpeed(typedParams) == null
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid talk.speak params: rateWpm must resolve to speed between 0.5 and 2.0`,
+        ),
+      );
+      return;
+    }
+
+    try {
+      const runtimeConfig = loadConfig();
+      const setup = buildTalkTtsConfig(runtimeConfig);
+      if ("error" in setup) {
+        respond(false, undefined, talkSpeakError(setup.reason, setup.error));
+        return;
+      }
+
+      const overrides = buildTalkSpeakOverrides(
+        setup.provider,
+        setup.providerConfig,
+        runtimeConfig,
+        typedParams,
+      );
+      const result = await synthesizeSpeech({
+        text,
+        cfg: setup.cfg,
+        overrides,
+        disableFallback: true,
+      });
+      if (!result.success || !result.audioBuffer) {
+        respond(
+          false,
+          undefined,
+          talkSpeakError("synthesis_failed", result.error ?? "talk synthesis failed"),
+        );
+        return;
+      }
+      if ((result.provider ?? setup.provider).trim().length === 0) {
+        respond(
+          false,
+          undefined,
+          talkSpeakError("invalid_audio_result", "talk synthesis returned empty provider"),
+        );
+        return;
+      }
+      if (result.audioBuffer.length === 0) {
+        respond(
+          false,
+          undefined,
+          talkSpeakError("invalid_audio_result", "talk synthesis returned empty audio"),
+        );
+        return;
+      }
+
+      respond(
+        true,
+        {
+          audioBase64: result.audioBuffer.toString("base64"),
+          provider: result.provider ?? setup.provider,
+          outputFormat: result.outputFormat,
+          voiceCompatible: result.voiceCompatible,
+          mimeType: inferMimeType(result.outputFormat, result.fileExtension),
+          fileExtension: result.fileExtension,
+        },
+        undefined,
+      );
+    } catch (err) {
+      respond(false, undefined, talkSpeakError("synthesis_failed", formatForLog(err)));
+    }
   },
   "talk.mode": ({ params, respond, context, client, isWebchatConnect }) => {
     if (client && isWebchatConnect(client.connect) && !context.hasConnectedMobileNode()) {

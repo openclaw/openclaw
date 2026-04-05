@@ -1,12 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  addSession,
-  getFinishedSession,
-  getSession,
-  resetProcessRegistryForTests,
-} from "./bash-process-registry.js";
-import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
-import { createProcessTool } from "./bash-tools.process.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { supervisorMock } = vi.hoisted(() => ({
   supervisorMock: {
@@ -30,6 +22,13 @@ vi.mock("../process/kill-tree.js", () => ({
   killProcessTree: (...args: unknown[]) => killProcessTreeMock(...args),
 }));
 
+let addSession: typeof import("./bash-process-registry.js").addSession;
+let getFinishedSession: typeof import("./bash-process-registry.js").getFinishedSession;
+let getSession: typeof import("./bash-process-registry.js").getSession;
+let resetProcessRegistryForTests: typeof import("./bash-process-registry.js").resetProcessRegistryForTests;
+let createProcessSessionFixture: typeof import("./bash-process-registry.test-helpers.js").createProcessSessionFixture;
+let createProcessTool: typeof import("./bash-tools.process.js").createProcessTool;
+
 function createBackgroundSession(id: string, pid?: number) {
   return createProcessSessionFixture({
     id,
@@ -40,13 +39,20 @@ function createBackgroundSession(id: string, pid?: number) {
 }
 
 describe("process tool supervisor cancellation", () => {
+  beforeAll(async () => {
+    ({ addSession, getFinishedSession, getSession, resetProcessRegistryForTests } =
+      await import("./bash-process-registry.js"));
+    ({ createProcessSessionFixture } = await import("./bash-process-registry.test-helpers.js"));
+    ({ createProcessTool } = await import("./bash-tools.process.js"));
+  });
+
   beforeEach(() => {
-    supervisorMock.spawn.mockReset();
-    supervisorMock.cancel.mockReset();
-    supervisorMock.cancelScope.mockReset();
-    supervisorMock.reconcileOrphans.mockReset();
-    supervisorMock.getRecord.mockReset();
-    killProcessTreeMock.mockReset();
+    supervisorMock.spawn.mockClear();
+    supervisorMock.cancel.mockClear();
+    supervisorMock.cancelScope.mockClear();
+    supervisorMock.reconcileOrphans.mockClear();
+    supervisorMock.getRecord.mockClear();
+    killProcessTreeMock.mockClear();
   });
 
   afterEach(() => {

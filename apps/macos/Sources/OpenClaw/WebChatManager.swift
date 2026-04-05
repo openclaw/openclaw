@@ -111,13 +111,7 @@ final class WebChatManager {
     }
 
     func close() {
-        self.windowController?.close()
-        self.windowController = nil
-        self.windowSessionKey = nil
-        self.panelController?.close()
-        self.panelController = nil
-        self.panelSessionKey = nil
-        self.cachedPreferredSessionKey = nil
+        self.resetTunnels()
     }
 
     private func panelHidden() {

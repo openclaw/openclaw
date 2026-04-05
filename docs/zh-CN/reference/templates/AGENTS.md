@@ -4,7 +4,7 @@ read_when:
 summary: AGENTS.md 的工作区模板
 x-i18n:
   generated_at: "2026-02-01T21:37:51Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 137c1346c44158b0688968b3b33cbc5cedcc978822e7737d21b54f67ccd7933a
   source_path: reference/templates/AGENTS.md
@@ -19,7 +19,7 @@ x-i18n:
 
 如果 `BOOTSTRAP.md` 存在，那就是你的"出生证明"。按照它的指引，弄清楚你是谁，然后删除它。你不会再需要它了。
 
-## 每次会话
+## 会话启动
 
 在做任何事情之前：
 
@@ -58,7 +58,7 @@ x-i18n:
 - 当你犯了错误 → 记录下来，这样未来的你不会重蹈覆辙
 - **文件 > 大脑** 📝
 
-## 安全
+## 红线
 
 - 不要泄露隐私数据。绝对不要。
 - 不要在未询问的情况下执行破坏性命令。

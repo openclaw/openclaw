@@ -1,7 +1,11 @@
 import path from "node:path";
 import { Type } from "@sinclair/typebox";
-import { loadConfig } from "../../config/config.js";
-import { resolveSessionFilePath } from "../../config/sessions.js";
+import { type OpenClawConfig, loadConfig } from "../../config/config.js";
+import {
+  resolveSessionFilePath,
+  resolveSessionFilePathOptions,
+  resolveStorePath,
+} from "../../config/sessions.js";
 import { callGateway } from "../../gateway/call.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { AnyAgentTool } from "./common.js";
@@ -26,9 +30,13 @@ const SessionsListToolSchema = Type.Object({
   messageLimit: Type.Optional(Type.Number({ minimum: 0 })),
 });
 
+type GatewayCaller = typeof callGateway;
+
 export function createSessionsListTool(opts?: {
   agentSessionKey?: string;
   sandboxed?: boolean;
+  config?: OpenClawConfig;
+  callGateway?: GatewayCaller;
 }): AnyAgentTool {
   return {
     label: "Sessions",
@@ -37,7 +45,7 @@ export function createSessionsListTool(opts?: {
     parameters: SessionsListToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      const cfg = loadConfig();
+      const cfg = opts?.config ?? loadConfig();
       const { mainKey, alias, requesterInternalKey, restrictToSpawned } =
         resolveSandboxedSessionToolContext({
           cfg,
@@ -71,8 +79,9 @@ export function createSessionsListTool(opts?: {
           ? Math.max(0, Math.floor(params.messageLimit))
           : 0;
       const messageLimit = Math.min(messageLimitRaw, 20);
+      const gatewayCall = opts?.callGateway ?? callGateway;
 
-      const list = await callGateway<{ sessions: Array<SessionListRow>; path: string }>({
+      const list = await gatewayCall<{ sessions: Array<SessionListRow>; path: string }>({
         method: "sessions.list",
         params: {
           limit,
@@ -128,6 +137,12 @@ export function createSessionsListTool(opts?: {
         });
 
         const entryChannel = typeof entry.channel === "string" ? entry.channel : undefined;
+        const entryOrigin =
+          entry.origin && typeof entry.origin === "object"
+            ? (entry.origin as Record<string, unknown>)
+            : undefined;
+        const originChannel =
+          typeof entryOrigin?.provider === "string" ? entryOrigin.provider : undefined;
         const deliveryContext =
           entry.deliveryContext && typeof entry.deliveryContext === "object"
             ? (entry.deliveryContext as Record<string, unknown>)
@@ -137,6 +152,12 @@ export function createSessionsListTool(opts?: {
         const deliveryTo = typeof deliveryContext?.to === "string" ? deliveryContext.to : undefined;
         const deliveryAccountId =
           typeof deliveryContext?.accountId === "string" ? deliveryContext.accountId : undefined;
+        const deliveryThreadId =
+          typeof deliveryContext?.threadId === "string" ||
+          (typeof deliveryContext?.threadId === "number" &&
+            Number.isFinite(deliveryContext.threadId))
+            ? deliveryContext.threadId
+            : undefined;
         const lastChannel =
           deliveryChannel ??
           (typeof entry.lastChannel === "string" ? entry.lastChannel : undefined);
@@ -146,7 +167,7 @@ export function createSessionsListTool(opts?: {
         const derivedChannel = deriveChannel({
           key,
           kind,
-          channel: entryChannel,
+          channel: entryChannel ?? originChannel,
           lastChannel,
         });
 
@@ -154,15 +175,26 @@ export function createSessionsListTool(opts?: {
         const sessionFileRaw = (entry as { sessionFile?: unknown }).sessionFile;
         const sessionFile = typeof sessionFileRaw === "string" ? sessionFileRaw : undefined;
         let transcriptPath: string | undefined;
-        if (sessionId && storePath) {
+        if (sessionId) {
           try {
+            const agentId = resolveAgentIdFromSessionKey(key);
+            const trimmedStorePath = storePath?.trim();
+            let effectiveStorePath: string | undefined;
+            if (trimmedStorePath && trimmedStorePath !== "(multiple)") {
+              if (trimmedStorePath.includes("{agentId}") || trimmedStorePath.startsWith("~")) {
+                effectiveStorePath = resolveStorePath(trimmedStorePath, { agentId });
+              } else if (path.isAbsolute(trimmedStorePath)) {
+                effectiveStorePath = trimmedStorePath;
+              }
+            }
+            const filePathOpts = resolveSessionFilePathOptions({
+              agentId,
+              storePath: effectiveStorePath,
+            });
             transcriptPath = resolveSessionFilePath(
               sessionId,
               sessionFile ? { sessionFile } : undefined,
-              {
-                agentId: resolveAgentIdFromSessionKey(key),
-                sessionsDir: path.dirname(storePath),
-              },
+              filePathOpts,
             );
           } catch {
             transcriptPath = undefined;
@@ -173,14 +205,40 @@ export function createSessionsListTool(opts?: {
           key: displayKey,
           kind,
           channel: derivedChannel,
+          origin:
+            originChannel ||
+            (typeof entryOrigin?.accountId === "string" ? entryOrigin.accountId : undefined)
+              ? {
+                  provider: originChannel,
+                  accountId:
+                    typeof entryOrigin?.accountId === "string" ? entryOrigin.accountId : undefined,
+                }
+              : undefined,
+          spawnedBy:
+            typeof entry.spawnedBy === "string"
+              ? resolveDisplaySessionKey({
+                  key: entry.spawnedBy,
+                  alias,
+                  mainKey,
+                })
+              : undefined,
           label: typeof entry.label === "string" ? entry.label : undefined,
           displayName: typeof entry.displayName === "string" ? entry.displayName : undefined,
+          parentSessionKey:
+            typeof entry.parentSessionKey === "string"
+              ? resolveDisplaySessionKey({
+                  key: entry.parentSessionKey,
+                  alias,
+                  mainKey,
+                })
+              : undefined,
           deliveryContext:
-            deliveryChannel || deliveryTo || deliveryAccountId
+            deliveryChannel || deliveryTo || deliveryAccountId || deliveryThreadId
               ? {
                   channel: deliveryChannel,
                   to: deliveryTo,
                   accountId: deliveryAccountId,
+                  threadId: deliveryThreadId,
                 }
               : undefined,
           updatedAt: typeof entry.updatedAt === "number" ? entry.updatedAt : undefined,
@@ -188,8 +246,30 @@ export function createSessionsListTool(opts?: {
           model: typeof entry.model === "string" ? entry.model : undefined,
           contextTokens: typeof entry.contextTokens === "number" ? entry.contextTokens : undefined,
           totalTokens: typeof entry.totalTokens === "number" ? entry.totalTokens : undefined,
+          estimatedCostUsd:
+            typeof entry.estimatedCostUsd === "number" ? entry.estimatedCostUsd : undefined,
+          status: typeof entry.status === "string" ? entry.status : undefined,
+          startedAt: typeof entry.startedAt === "number" ? entry.startedAt : undefined,
+          endedAt: typeof entry.endedAt === "number" ? entry.endedAt : undefined,
+          runtimeMs: typeof entry.runtimeMs === "number" ? entry.runtimeMs : undefined,
+          childSessions: Array.isArray(entry.childSessions)
+            ? entry.childSessions
+                .filter((value): value is string => typeof value === "string")
+                .map((value) =>
+                  resolveDisplaySessionKey({
+                    key: value,
+                    alias,
+                    mainKey,
+                  }),
+                )
+            : undefined,
           thinkingLevel: typeof entry.thinkingLevel === "string" ? entry.thinkingLevel : undefined,
+          fastMode: typeof entry.fastMode === "boolean" ? entry.fastMode : undefined,
           verboseLevel: typeof entry.verboseLevel === "string" ? entry.verboseLevel : undefined,
+          reasoningLevel:
+            typeof entry.reasoningLevel === "string" ? entry.reasoningLevel : undefined,
+          elevatedLevel: typeof entry.elevatedLevel === "string" ? entry.elevatedLevel : undefined,
+          responseUsage: typeof entry.responseUsage === "string" ? entry.responseUsage : undefined,
           systemSent: typeof entry.systemSent === "boolean" ? entry.systemSent : undefined,
           abortedLastRun:
             typeof entry.abortedLastRun === "boolean" ? entry.abortedLastRun : undefined,
@@ -201,7 +281,7 @@ export function createSessionsListTool(opts?: {
         };
         if (messageLimit > 0) {
           const resolvedKey = resolveInternalSessionKey({
-            key: displayKey,
+            key,
             alias,
             mainKey,
           });
@@ -221,7 +301,7 @@ export function createSessionsListTool(opts?: {
               return;
             }
             const target = historyTargets[next];
-            const history = await callGateway<{ messages: Array<unknown> }>({
+            const history = await gatewayCall<{ messages: Array<unknown> }>({
               method: "chat.history",
               params: { sessionKey: target.resolvedKey, limit: messageLimit },
             });
