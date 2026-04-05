@@ -66,6 +66,7 @@ openclaw tasks maintenance --apply
 # Inspect TaskFlow state
 openclaw tasks flow list
 openclaw tasks flow show <lookup>
+openclaw tasks flow retry <lookup>
 openclaw tasks flow cancel <lookup>
 ```
 
@@ -225,13 +226,16 @@ Completion cleanup is also runtime-aware:
 - Subagent completion delivery prefers the latest visible assistant text; if that is empty it falls back to sanitized latest tool/toolResult text, and timeout-only tool-call runs can collapse to a short partial-progress summary.
 - Cleanup failures do not mask the real task outcome.
 
-### `tasks flow list|show|cancel`
+### `tasks flow list|show|retry|cancel`
 
 ```bash
 openclaw tasks flow list [--status <status>] [--json]
 openclaw tasks flow show <lookup> [--json]
+openclaw tasks flow retry <lookup>
 openclaw tasks flow cancel <lookup>
 ```
+
+`retry` only applies to managed child-task flows with a durable stored launch that can be safely replayed. Flows whose original launch used inline attachments stay explicitly non-retryable and expose the reason in both CLI and web control surfaces.
 
 Use these when the orchestrating Task Flow is the thing you care about rather
 than one individual background task record.

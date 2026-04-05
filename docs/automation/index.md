@@ -73,7 +73,7 @@ See [Background Tasks](/automation/tasks).
 
 ### Task Flow
 
-Task Flow is the flow orchestration substrate above background tasks. It manages durable multi-step flows with managed and mirrored sync modes, revision tracking, and `openclaw tasks flow list|show|cancel` for inspection.
+Task Flow is the flow orchestration substrate above background tasks. It manages durable multi-step flows with managed and mirrored sync modes, revision tracking, and `openclaw tasks flow list|show|retry|cancel` for inspection and recovery.
 
 See [Task Flow](/automation/taskflow).
 

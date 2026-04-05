@@ -60,7 +60,9 @@ export type TaskRunCancelResult = {
 export type TaskFlowView = {
   id: string;
   ownerKey: string;
+  syncMode?: import("../../tasks/task-flow-registry.types.js").TaskFlowSyncMode;
   requesterOrigin?: DeliveryContext;
+  controllerId?: string;
   status: import("../../tasks/task-flow-registry.types.js").TaskFlowStatus;
   notifyPolicy: TaskNotifyPolicy;
   goal: string;

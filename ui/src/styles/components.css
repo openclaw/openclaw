@@ -2443,6 +2443,15 @@ td.data-table-key-col {
   font-weight: 600;
 }
 
+.task-flow-card__identity {
+  margin-top: 4px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.4;
+  word-break: break-all;
+}
+
 .task-flow-card__actions {
   display: flex;
   flex-wrap: wrap;
@@ -2482,14 +2491,108 @@ td.data-table-key-col {
   color: var(--text);
 }
 
+.task-flow-card__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.task-flow-card__fact {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  border: 1px solid var(--border);
+}
+
+.task-flow-card__fact-label,
+.task-flow-card__section-title {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.3;
+  font-family: var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.task-flow-card__fact-value {
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
 .task-flow-card__reason {
   color: var(--muted);
 }
 
-.task-flow-card__error {
-  color: var(--danger);
+.task-flow-card__tasks {
+  display: grid;
+  gap: 8px;
 }
 
+.task-flow-card__task-list {
+  display: grid;
+  gap: 8px;
+}
+
+.task-flow-card__task-row {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.task-flow-card__task-topline,
+.task-flow-card__task-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.task-flow-card__task-title,
+.task-flow-card__task-status {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.task-flow-card__task-title {
+  font-weight: 600;
+}
+
+.task-flow-card__task-status {
+  color: var(--muted);
+}
+
+.task-flow-card__task-meta,
+.task-flow-card__task-summary {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.task-flow-card__debug {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+.task-flow-card__debug summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.task-flow-card__debug-block {
+  margin-top: 10px;
+  display: grid;
+  gap: 6px;
+}
+
+.task-flow-card__debug pre,
 .task-flow-card__command code {
   display: block;
   overflow-x: auto;
@@ -2498,6 +2601,18 @@ td.data-table-key-col {
   background: var(--panel);
   border: 1px solid var(--border);
   color: var(--text);
+}
+
+.task-flow-card__debug pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.task-flow-card__error {
+  color: var(--danger);
 }
 
 /* Chat queue */

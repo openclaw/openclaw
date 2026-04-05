@@ -12,6 +12,7 @@ Flow commands are subcommands of `openclaw tasks`, not a standalone `flows` comm
 ```bash
 openclaw tasks flow list [--json]
 openclaw tasks flow show <lookup>
+openclaw tasks flow retry <lookup>
 openclaw tasks flow cancel <lookup>
 ```
 

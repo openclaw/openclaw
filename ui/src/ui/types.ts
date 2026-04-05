@@ -445,6 +445,8 @@ export type TaskRunAggregateSummary = {
 export type TaskRunView = {
   id: string;
   runtime: string;
+  runId?: string;
+  childSessionKey?: string;
   title: string;
   status: string;
   deliveryStatus: string;
@@ -462,6 +464,17 @@ export type TaskRunView = {
 export type TaskFlowDetail = {
   id: string;
   ownerKey: string;
+  syncMode?: string;
+  requesterOrigin?: {
+    channel?: string | null;
+    to?: string | null;
+    accountId?: string | null;
+    threadId?: string | null;
+    groupId?: string | null;
+    groupChannel?: string | null;
+    groupSpace?: string | null;
+  };
+  controllerId?: string;
   status: string;
   notifyPolicy: string;
   goal: string;

@@ -60,15 +60,52 @@ openclaw tasks flow list
 # Show details for a specific flow
 openclaw tasks flow show <lookup>
 
+# Retry a failed, lost, or blocked managed child-task flow
+openclaw tasks flow retry <lookup>
+
 # Cancel a running flow and its active tasks
 openclaw tasks flow cancel <lookup>
 ```
 
-| Command                           | Description                                   |
-| --------------------------------- | --------------------------------------------- |
-| `openclaw tasks flow list`        | Shows tracked flows with status and sync mode |
-| `openclaw tasks flow show <id>`   | Inspect one flow by flow id or lookup key     |
-| `openclaw tasks flow cancel <id>` | Cancel a running flow and its active tasks    |
+| Command                           | Description                                                        |
+| --------------------------------- | ------------------------------------------------------------------ |
+| `openclaw tasks flow list`        | Shows tracked flows with status and sync mode                      |
+| `openclaw tasks flow show <id>`   | Inspect one flow by flow id or lookup key                          |
+| `openclaw tasks flow retry <id>`  | Relaunch a retryable managed child-task flow from its stored spawn |
+| `openclaw tasks flow cancel <id>` | Cancel a running flow and its active tasks                         |
+
+## Task Flow v1 closure state
+
+Task Flow v1 is considered shippable when all of the following are true:
+
+- **Durable orchestration works end-to-end** — managed and mirrored flows persist state across gateway restarts.
+- **Recovery is explicit** — managed child-task flows can be retried from `failed`, `lost`, or `blocked` when stored launch data is safely replayable.
+- **Unsafe replay is rejected on purpose** — child launches that originally carried inline attachments are marked non-retryable with a durable operator-facing reason instead of attempting a lossy replay.
+- **Control surfaces are usable** — CLI and web chat both expose the latest flow's status, reason, retry/cancel affordances, linked task visibility, and lightweight debug state.
+- **Operator intent survives restarts** — cancel intent stays sticky and retry/cancel results remain owner-scoped.
+- **Validation exists** — targeted gateway, task executor, runtime, command, and UI tests cover the retry/cancel and latest-flow inspection path.
+
+### In scope for v1
+
+- Managed child-task flow creation, status sync, retry, and cancellation
+- Mirrored flow tracking for externally created tasks
+- Latest-flow visibility in the web chat control surface
+- CLI inspection and intervention commands (`list`, `show`, `retry`, `cancel`)
+- Durable operator/debuggability metadata: flow id, controller, requester origin, wait/state snapshots, linked task summaries
+
+### Out of scope for v1
+
+- Arbitrary historical flow browsing in the web UI
+- Automatic attachment materialization/replay for retried child tasks
+- Full DAG/graph editing or visual flow design tooling
+- Bulk retry/cancel operations across many flows
+
+### Post-v1 next slices
+
+- A dedicated historical flows view in the web UI with filter/search beyond "latest flow"
+- Optional durable attachment replay based on stored blobs or explicit operator re-attach flows
+- Higher-fidelity recovery validation for restart-in-the-middle edge cases and merge/post-merge operator acceptance
+- Richer observability surfaces such as flow-event timelines and per-step state diffs
 
 ## How flows relate to tasks
 

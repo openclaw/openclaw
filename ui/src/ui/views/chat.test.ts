@@ -361,6 +361,12 @@ describe("chat view", () => {
           taskFlow: {
             id: "flow-1",
             ownerKey: "main",
+            syncMode: "managed",
+            controllerId: "sessions_spawn_child",
+            requesterOrigin: {
+              channel: "feishu",
+              to: "ou_test",
+            },
             status: "blocked",
             notifyPolicy: "summary",
             goal: "Retry the long-running flow",
@@ -368,6 +374,8 @@ describe("chat view", () => {
             retryCount: 1,
             createdAt: Date.now() - 60_000,
             updatedAt: Date.now() - 5_000,
+            wait: { kind: "child_task", runId: "run-child-1" },
+            state: { launch: { runtime: "subagent" }, note: "preserved" },
             resolution: {
               code: "retry_available",
               retryable: true,
@@ -380,7 +388,20 @@ describe("chat view", () => {
               reason: "User can retry after confirming the task.",
               command: "/retry flow-1",
             },
-            tasks: [],
+            tasks: [
+              {
+                id: "task-1",
+                runtime: "subagent",
+                title: "Inspect child session",
+                status: "failed",
+                deliveryStatus: "delivered",
+                notifyPolicy: "summary",
+                createdAt: Date.now() - 60_000,
+                lastEventAt: Date.now() - 4_000,
+                runId: "run-child-1",
+                terminalSummary: "Needs confirmation before continuing.",
+              },
+            ],
             taskSummary: {
               total: 2,
               active: 0,
@@ -399,6 +420,15 @@ describe("chat view", () => {
 
     expect(container.textContent).toContain("Task flow");
     expect(container.textContent).toContain("Retry the long-running flow");
+    expect(container.textContent).toContain("flow-1");
+    expect(container.textContent).toContain("Mode: managed");
+    expect(container.textContent).toContain("Controller");
+    expect(container.textContent).toContain("sessions_spawn_child");
+    expect(container.textContent).toContain("Requester");
+    expect(container.textContent).toContain("feishu → ou_test");
+    expect(container.textContent).toContain("Linked tasks");
+    expect(container.textContent).toContain("Inspect child session");
+    expect(container.textContent).toContain("run-child-1");
     expect(container.textContent).toContain("Flow blocked while waiting for user confirmation.");
     expect(container.textContent).toContain("Retry: User can retry after confirming the task.");
     expect(container.textContent).toContain("/retry flow-1");

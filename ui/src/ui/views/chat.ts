@@ -363,6 +363,43 @@ function formatTokensCompact(n: number): string {
   return String(n);
 }
 
+function stringifyTaskFlowDebugValue(value: unknown): string | null {
+  if (value == null) {
+    return null;
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return null;
+  }
+}
+
+function renderTaskFlowRequester(flow: TaskFlowDetail): string | null {
+  const origin = flow.requesterOrigin;
+  if (!origin) {
+    return null;
+  }
+  const channel = origin.channel?.trim();
+  const to = origin.to?.trim();
+  if (channel && to) {
+    return `${channel} → ${to}`;
+  }
+  return channel ?? to ?? null;
+}
+
+function renderTaskFlowTaskSummary(flow: TaskFlowDetail): string | null {
+  const entries = Object.entries(flow.taskSummary.byRuntime ?? {})
+    .filter(([, count]) => typeof count === "number" && count > 0)
+    .map(([runtime, count]) => `${runtime} ${count}`);
+  if (entries.length === 0) {
+    return null;
+  }
+  return entries.join(" · ");
+}
+
 function renderTaskFlowCard(props: ChatProps) {
   const flow = props.taskFlow ?? null;
   const loading = Boolean(props.taskFlowLoading);
@@ -375,6 +412,10 @@ function renderTaskFlowCard(props: ChatProps) {
   const resolution = flow?.resolution;
   const activeTasks = flow?.taskSummary.active ?? 0;
   const latestTask = flow?.tasks?.[0];
+  const requester = flow ? renderTaskFlowRequester(flow) : null;
+  const runtimeSummary = flow ? renderTaskFlowTaskSummary(flow) : null;
+  const debugState = flow ? stringifyTaskFlowDebugValue(flow.state) : null;
+  const debugWait = flow ? stringifyTaskFlowDebugValue(flow.wait) : null;
   return html`
     <section class="task-flow-card" aria-live="polite">
       <div class="task-flow-card__header">
@@ -383,6 +424,7 @@ function renderTaskFlowCard(props: ChatProps) {
           <div class="task-flow-card__title">
             ${flow ? flow.goal : loading ? "Loading latest flow…" : "Task flow unavailable"}
           </div>
+          ${flow?.id ? html`<div class="task-flow-card__identity">${flow.id}</div>` : nothing}
         </div>
         <div class="task-flow-card__actions">
           <button
@@ -421,6 +463,9 @@ function renderTaskFlowCard(props: ChatProps) {
         ? html`
             <div class="task-flow-card__meta">
               <span class="task-flow-card__pill task-flow-card__pill--status">${flow.status}</span>
+              ${flow.syncMode
+                ? html`<span class="task-flow-card__pill">Mode: ${flow.syncMode}</span>`
+                : nothing}
               ${flow.currentStep
                 ? html`<span class="task-flow-card__pill">Step: ${flow.currentStep}</span>`
                 : nothing}
@@ -431,10 +476,19 @@ function renderTaskFlowCard(props: ChatProps) {
               ${activeTasks > 0
                 ? html`<span class="task-flow-card__pill">Active ${activeTasks}</span>`
                 : nothing}
+              ${flow.taskSummary.failures > 0
+                ? html`<span class="task-flow-card__pill"
+                    >Issues ${flow.taskSummary.failures}</span
+                  >`
+                : nothing}
               ${typeof flow.retryCount === "number"
                 ? html`<span class="task-flow-card__pill">Retries ${flow.retryCount}</span>`
                 : nothing}
+              ${flow.cancelRequestedAt
+                ? html`<span class="task-flow-card__pill">Cancel requested</span>`
+                : nothing}
             </div>
+
             ${resolution?.summary ||
             retry?.reason ||
             flow.blocked?.summary ||
@@ -450,11 +504,108 @@ function renderTaskFlowCard(props: ChatProps) {
                   </div>
                 `
               : nothing}
+
+            <div class="task-flow-card__grid">
+              ${flow.controllerId
+                ? html`
+                    <div class="task-flow-card__fact">
+                      <div class="task-flow-card__fact-label">Controller</div>
+                      <div class="task-flow-card__fact-value">${flow.controllerId}</div>
+                    </div>
+                  `
+                : nothing}
+              ${requester
+                ? html`
+                    <div class="task-flow-card__fact">
+                      <div class="task-flow-card__fact-label">Requester</div>
+                      <div class="task-flow-card__fact-value">${requester}</div>
+                    </div>
+                  `
+                : nothing}
+              ${runtimeSummary
+                ? html`
+                    <div class="task-flow-card__fact">
+                      <div class="task-flow-card__fact-label">Runtimes</div>
+                      <div class="task-flow-card__fact-value">${runtimeSummary}</div>
+                    </div>
+                  `
+                : nothing}
+              ${latestTask
+                ? html`
+                    <div class="task-flow-card__fact">
+                      <div class="task-flow-card__fact-label">Latest child task</div>
+                      <div class="task-flow-card__fact-value">
+                        ${latestTask.title} ·
+                        ${latestTask.status}${latestTask.runId ? ` · ${latestTask.runId}` : ""}
+                      </div>
+                    </div>
+                  `
+                : nothing}
+            </div>
+
             ${retry?.reason
               ? html`<div class="task-flow-card__reason">Retry: ${retry.reason}</div>`
               : nothing}
             ${retry?.command
               ? html`<div class="task-flow-card__command"><code>${retry.command}</code></div>`
+              : nothing}
+            ${flow.tasks.length > 0
+              ? html`
+                  <div class="task-flow-card__tasks">
+                    <div class="task-flow-card__section-title">Linked tasks</div>
+                    <div class="task-flow-card__task-list">
+                      ${flow.tasks.slice(0, 3).map(
+                        (task) => html`
+                          <div class="task-flow-card__task-row">
+                            <div class="task-flow-card__task-topline">
+                              <span class="task-flow-card__task-title">${task.title}</span>
+                              <span class="task-flow-card__task-status">${task.status}</span>
+                            </div>
+                            <div class="task-flow-card__task-meta">
+                              <span>${task.runtime}</span>
+                              ${task.runId ? html`<span>${task.runId}</span>` : nothing}
+                              ${task.lastEventAt
+                                ? html`<span
+                                    >Updated ${formatRelativeTimestamp(task.lastEventAt)}</span
+                                  >`
+                                : nothing}
+                            </div>
+                            ${task.progressSummary || task.terminalSummary || task.error
+                              ? html`
+                                  <div class="task-flow-card__task-summary">
+                                    ${task.progressSummary ?? task.terminalSummary ?? task.error}
+                                  </div>
+                                `
+                              : nothing}
+                          </div>
+                        `,
+                      )}
+                    </div>
+                  </div>
+                `
+              : nothing}
+            ${debugState || debugWait
+              ? html`
+                  <details class="task-flow-card__debug">
+                    <summary>Debug state</summary>
+                    ${debugWait
+                      ? html`
+                          <div class="task-flow-card__debug-block">
+                            <div class="task-flow-card__fact-label">Wait</div>
+                            <pre>${debugWait}</pre>
+                          </div>
+                        `
+                      : nothing}
+                    ${debugState
+                      ? html`
+                          <div class="task-flow-card__debug-block">
+                            <div class="task-flow-card__fact-label">State</div>
+                            <pre>${debugState}</pre>
+                          </div>
+                        `
+                      : nothing}
+                  </details>
+                `
               : nothing}
           `
         : nothing}

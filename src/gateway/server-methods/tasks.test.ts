@@ -36,6 +36,10 @@ describe("taskHandlers", () => {
       const flow = createManagedTaskFlow({
         ownerKey: "agent:main:main",
         controllerId: "tests/task-handlers/latest",
+        requesterOrigin: {
+          channel: "feishu",
+          to: "ou_latest",
+        },
         goal: "Inspect failed long task",
         status: "blocked",
         currentStep: "waiting for user",
@@ -73,6 +77,12 @@ describe("taskHandlers", () => {
       expect(payload).toMatchObject({
         flow: {
           id: flow.flowId,
+          syncMode: "managed",
+          controllerId: "tests/task-handlers/latest",
+          requesterOrigin: {
+            channel: "feishu",
+            to: "ou_latest",
+          },
           goal: "Inspect failed long task",
           status: "blocked",
           currentStep: "waiting for user",

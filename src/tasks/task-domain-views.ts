@@ -60,7 +60,9 @@ export function mapTaskFlowView(flow: TaskFlowRecord): TaskFlowView {
   return {
     id: flow.flowId,
     ownerKey: flow.ownerKey,
+    syncMode: flow.syncMode,
     ...(flow.requesterOrigin ? { requesterOrigin: { ...flow.requesterOrigin } } : {}),
+    ...(flow.controllerId ? { controllerId: flow.controllerId } : {}),
     status: flow.status,
     notifyPolicy: flow.notifyPolicy,
     goal: flow.goal,

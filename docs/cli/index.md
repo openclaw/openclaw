@@ -1322,6 +1322,7 @@ List and manage [background task](/automation/tasks) runs across agents.
 - `tasks maintenance` — preview or apply tasks and TaskFlow cleanup/reconciliation (ACP/subagent child sessions, active cron jobs, live CLI runs)
 - `tasks flow list` — list active and recent Task Flow flows
 - `tasks flow show <lookup>` — inspect a flow by id or lookup key
+- `tasks flow retry <lookup>` — retry a retryable managed child-task flow
 - `tasks flow cancel <lookup>` — cancel a running flow and its active tasks
 
 ### `flows`
@@ -1330,6 +1331,7 @@ Legacy docs shortcut. Flow commands live under `openclaw tasks flow`:
 
 - `tasks flow list [--json]`
 - `tasks flow show <lookup>`
+- `tasks flow retry <lookup>`
 - `tasks flow cancel <lookup>`
 
 ## Gateway
