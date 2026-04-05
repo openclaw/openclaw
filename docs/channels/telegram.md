@@ -358,7 +358,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
        - `/pair approve` when there is only one pending request
        - `/pair approve latest` for most recent
 
-    The setup code carries a short-lived bootstrap token. Built-in bootstrap handoff keeps the primary node token at `scopes: []`; any handed-off operator token stays bounded to `operator.approvals`, `operator.read`, `operator.talk.secrets`, and `operator.write`.
+    The setup code carries a short-lived bootstrap token. Built-in bootstrap handoff keeps the primary node token at `scopes: []`; any handed-off operator token stays bounded to `operator.approvals`, `operator.read`, `operator.talk.secrets`, and `operator.write`. Bootstrap scope checks are role-prefixed, so that operator allowlist only satisfies operator requests; non-operator roles still need scopes under their own role prefix.
 
     If a device retries with changed auth details (for example role/scopes/public key), the previous pending request is superseded and the new request uses a different `requestId`. Re-run `/pair pending` before approving.
 
@@ -823,6 +823,9 @@ openclaw message poll --channel telegram --target -1001234567890:topic:42 \
     Approvers must be numeric Telegram user IDs. Telegram auto-enables native exec approvals when `enabled` is unset or `"auto"` and at least one approver can be resolved, either from `execApprovals.approvers` or from the account's numeric owner config (`allowFrom` and direct-message `defaultTo`). Set `enabled: false` to disable Telegram as a native approval client explicitly. Approval requests otherwise fall back to other configured approval routes or the exec approval fallback policy.
 
     Telegram also renders the shared approval buttons used by other chat channels. The native Telegram adapter mainly adds approver DM routing, channel/topic fanout, and typing hints before delivery.
+    When those buttons are present, they are the primary approval UX; OpenClaw
+    should only include a manual `/approve` command when the tool result says
+    chat approvals are unavailable or manual approval is the only path.
 
     Delivery rules:
 

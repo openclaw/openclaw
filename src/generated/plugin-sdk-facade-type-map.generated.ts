@@ -166,6 +166,18 @@ export interface PluginSdkFacadeTypeMap {
       GenerateImageRuntimeResult: import("@openclaw/image-generation-core/runtime-api.js").GenerateImageRuntimeResult;
     };
   };
+  "video-generation-runtime": {
+    module: typeof import("@openclaw/video-generation-core/runtime-api.js");
+    sourceModules: {
+      source1: {
+        module: typeof import("@openclaw/video-generation-core/runtime-api.js");
+      };
+    };
+    types: {
+      GenerateVideoParams: import("@openclaw/video-generation-core/runtime-api.js").GenerateVideoParams;
+      GenerateVideoRuntimeResult: import("@openclaw/video-generation-core/runtime-api.js").GenerateVideoRuntimeResult;
+    };
+  };
   "kimi-coding": {
     module: typeof import("@openclaw/kimi-coding/api.js");
     sourceModules: {
@@ -337,20 +349,38 @@ export interface PluginSdkFacadeTypeMap {
     };
     types: {};
   };
-  modelstudio: {
-    module: typeof import("@openclaw/modelstudio/api.js");
+  qwen: {
+    module: typeof import("@openclaw/qwen/api.js");
     sourceModules: {
       source1: {
-        module: typeof import("@openclaw/modelstudio/api.js");
+        module: typeof import("@openclaw/qwen/api.js");
+      };
+    };
+    types: {};
+  };
+  "qwen-definitions": {
+    module: typeof import("@openclaw/qwen/api.js");
+    sourceModules: {
+      source1: {
+        module: typeof import("@openclaw/qwen/api.js");
+      };
+    };
+    types: {};
+  };
+  modelstudio: {
+    module: typeof import("@openclaw/qwen/api.js");
+    sourceModules: {
+      source1: {
+        module: typeof import("@openclaw/qwen/api.js");
       };
     };
     types: {};
   };
   "modelstudio-definitions": {
-    module: typeof import("@openclaw/modelstudio/api.js");
+    module: typeof import("@openclaw/qwen/api.js");
     sourceModules: {
       source1: {
-        module: typeof import("@openclaw/modelstudio/api.js");
+        module: typeof import("@openclaw/qwen/api.js");
       };
     };
     types: {};
@@ -381,31 +411,6 @@ export interface PluginSdkFacadeTypeMap {
       };
     };
     types: {};
-  };
-  ollama: {
-    module: typeof import("@openclaw/ollama/runtime-api.js");
-    sourceModules: {
-      source1: {
-        module: typeof import("@openclaw/ollama/runtime-api.js");
-      };
-    };
-    types: {
-      OllamaEmbeddingClient: import("@openclaw/ollama/runtime-api.js").OllamaEmbeddingClient;
-      OllamaEmbeddingProvider: import("@openclaw/ollama/runtime-api.js").OllamaEmbeddingProvider;
-    };
-  };
-  "ollama-surface": {
-    module: typeof import("@openclaw/ollama/api.js");
-    sourceModules: {
-      source1: {
-        module: typeof import("@openclaw/ollama/api.js");
-      };
-    };
-    types: {
-      OllamaModelWithContext: import("@openclaw/ollama/api.js").OllamaModelWithContext;
-      OllamaTagModel: import("@openclaw/ollama/api.js").OllamaTagModel;
-      OllamaTagsResponse: import("@openclaw/ollama/api.js").OllamaTagsResponse;
-    };
   };
   openai: {
     module: typeof import("@openclaw/openai/api.js");

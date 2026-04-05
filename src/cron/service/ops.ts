@@ -8,6 +8,7 @@ import {
 import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
 import {
   applyJobPatch,
+  assertSupportedJobSpec,
   computeJobNextRunAtMs,
   createJob,
   findJobOrThrow,
@@ -488,6 +489,7 @@ async function inspectManualRunPreflight(
     // persist does not block manual triggers for up to STUCK_RUN_MS (#17554).
     recomputeNextRunsForMaintenance(state);
     const job = findJobOrThrow(state, id);
+    assertSupportedJobSpec(job);
     if (typeof job.state.runningAtMs === "number") {
       return { ok: true, ran: false, reason: "already-running" as const };
     }

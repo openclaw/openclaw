@@ -157,10 +157,10 @@ describe("normalizeModelCompat", () => {
     });
   });
 
-  it("keeps supportsUsageInStreaming on for native ModelStudio endpoints", () => {
+  it("keeps supportsUsageInStreaming on for native Qwen endpoints", () => {
     const model = {
       ...baseModel(),
-      provider: "modelstudio",
+      provider: "qwen",
       baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
     };
     delete (model as { compat?: unknown }).compat;

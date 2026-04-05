@@ -282,6 +282,17 @@ A complete delegate configuration for an organizational assistant that handles e
 
 The delegate's `AGENTS.md` defines its autonomous authority — what it may do without asking, what requires approval, and what is forbidden. [Cron Jobs](/automation/cron-jobs) drive its daily schedule.
 
+If you grant `sessions_history`, remember it is a bounded, safety-filtered
+recall view. OpenClaw redacts credential/token-like text, truncates long
+content, strips thinking tags / `<relevant-memories>` scaffolding / plain-text
+tool-call XML payloads (including `<tool_call>...</tool_call>`,
+`<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`,
+`<function_calls>...</function_calls>`, and truncated tool-call blocks) /
+downgraded tool-call scaffolding / leaked ASCII/full-width model control
+tokens / malformed MiniMax tool-call XML from assistant recall, and can
+replace oversized rows with `[sessions_history omitted: message too large]`
+instead of returning a raw transcript dump.
+
 ## Scaling pattern
 
 The delegate model works for any small organization:

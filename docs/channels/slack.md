@@ -218,10 +218,23 @@ openclaw gateway
 
 - `botToken` + `appToken` are required for Socket Mode.
 - HTTP mode requires `botToken` + `signingSecret`.
+- `botToken`, `appToken`, `signingSecret`, and `userToken` accept plaintext
+  strings or SecretRef objects.
 - Config tokens override env fallback.
 - `SLACK_BOT_TOKEN` / `SLACK_APP_TOKEN` env fallback applies only to the default account.
 - `userToken` (`xoxp-...`) is config-only (no env fallback) and defaults to read-only behavior (`userTokenReadOnly: true`).
 - Optional: add `chat:write.customize` if you want outgoing messages to use the active agent identity (custom `username` and icon). `icon_emoji` uses `:emoji_name:` syntax.
+
+Status snapshot behavior:
+
+- Slack account inspection tracks per-credential `*Source` and `*Status`
+  fields (`botToken`, `appToken`, `signingSecret`, `userToken`).
+- Status is `available`, `configured_unavailable`, or `missing`.
+- `configured_unavailable` means the account is configured through SecretRef
+  or another non-inline secret source, but the current command/runtime path
+  could not resolve the actual value.
+- In HTTP mode, `signingSecretStatus` is included; in Socket Mode, the
+  required pair is `botTokenStatus` + `appTokenStatus`.
 
 <Tip>
 For actions/directory reads, user token can be preferred when configured. For writes, bot token remains preferred; user-token writes are only allowed when `userTokenReadOnly: false` and bot token is unavailable.
@@ -354,8 +367,6 @@ Notes:
 
 ## Text streaming
 
-OpenClaw supports Slack native text streaming via the Agents and AI Apps API.
-
 `channels.slack.streaming` controls live preview behavior:
 
 - `off`: disable live preview streaming.
@@ -363,15 +374,23 @@ OpenClaw supports Slack native text streaming via the Agents and AI Apps API.
 - `block`: append chunked preview updates.
 - `progress`: show progress status text while generating, then send final text.
 
-`channels.slack.nativeStreaming` controls Slack's native streaming API (`chat.startStream` / `chat.appendStream` / `chat.stopStream`) when `streaming` is `partial` (default: `true`).
+`channels.slack.nativeStreaming` controls Slack native text streaming when `streaming` is `partial` (default: `true`).
 
-Disable native Slack streaming (keep draft preview behavior):
+- A reply thread must be available for native text streaming to appear. Thread selection still follows `replyToMode`. Without one, the normal draft preview is used.
+- Media and non-text payloads fall back to normal delivery.
+- If streaming fails mid-reply, OpenClaw falls back to normal delivery for remaining payloads.
 
-```yaml
-channels:
-  slack:
-    streaming: partial
-    nativeStreaming: false
+Use draft preview instead of Slack native text streaming:
+
+```json5
+{
+  channels: {
+    slack: {
+      streaming: "partial",
+      nativeStreaming: false,
+    },
+  },
+}
 ```
 
 Legacy keys:
@@ -379,23 +398,9 @@ Legacy keys:
 - `channels.slack.streamMode` (`replace | status_final | append`) is auto-migrated to `channels.slack.streaming`.
 - boolean `channels.slack.streaming` is auto-migrated to `channels.slack.nativeStreaming`.
 
-### Requirements
-
-1. Enable **Agents and AI Apps** in your Slack app settings.
-2. Ensure the app has the `assistant:write` scope.
-3. A reply thread must be available for that message. Thread selection still follows `replyToMode`.
-
-### Behavior
-
-- First text chunk starts a stream (`chat.startStream`).
-- Later text chunks append to the same stream (`chat.appendStream`).
-- End of reply finalizes stream (`chat.stopStream`).
-- Media and non-text payloads fall back to normal delivery.
-- If streaming fails mid-reply, OpenClaw falls back to normal delivery for remaining payloads.
-
 ## Typing reaction fallback
 
-`typingReaction` adds a temporary reaction to the inbound Slack message while OpenClaw is processing a reply, then removes it when the run finishes. This is a useful fallback when Slack native assistant typing is unavailable, especially in DMs.
+`typingReaction` adds a temporary reaction to the inbound Slack message while OpenClaw is processing a reply, then removes it when the run finishes. This is most useful outside of thread replies, which use a default "is typing..." status indicator.
 
 Resolution order:
 
@@ -520,6 +525,9 @@ Slack can act as a native approval client with interactive buttons and interacti
 - Approver authorization is still enforced: only users identified as approvers can approve or deny requests through Slack.
 
 This uses the same shared approval button surface as other channels. When `interactivity` is enabled in your Slack app settings, approval prompts render as Block Kit buttons directly in the conversation.
+When those buttons are present, they are the primary approval UX; OpenClaw
+should only include a manual `/approve` command when the tool result says chat
+approvals are unavailable or manual approval is the only path.
 
 Config path:
 
@@ -571,7 +579,6 @@ Same-chat `/approve` also works in Slack channels and DMs that already support c
 - Message edits/deletes/thread broadcasts are mapped into system events.
 - Reaction add/remove events are mapped into system events.
 - Member join/leave, channel created/renamed, and pin add/remove events are mapped into system events.
-- Assistant thread status updates (for "is typing..." indicators in threads) use `assistant.threads.setStatus` and require bot scope `assistant:write`.
 - `channel_id_changed` can migrate channel config keys when `configWrites` is enabled.
 - Channel topic/purpose metadata is treated as untrusted context and can be injected into routing context.
 - Thread starter and initial thread-history context seeding are filtered by configured sender allowlists when applicable.
@@ -630,6 +637,12 @@ openclaw pairing list slack
 
   <Accordion title="Socket mode not connecting">
     Validate bot + app tokens and Socket Mode enablement in Slack app settings.
+
+    If `openclaw channels status --probe --json` shows `botTokenStatus` or
+    `appTokenStatus: "configured_unavailable"`, the Slack account is
+    configured but the current runtime could not resolve the SecretRef-backed
+    value.
+
   </Accordion>
 
   <Accordion title="HTTP mode not receiving events">
@@ -639,6 +652,10 @@ openclaw pairing list slack
     - webhook path
     - Slack Request URLs (Events + Interactivity + Slash Commands)
     - unique `webhookPath` per HTTP account
+
+    If `signingSecretStatus: "configured_unavailable"` appears in account
+    snapshots, the HTTP account is configured but the current runtime could not
+    resolve the SecretRef-backed signing secret.
 
   </Accordion>
 

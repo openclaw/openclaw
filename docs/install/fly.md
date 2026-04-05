@@ -110,7 +110,7 @@ read_when:
 
     **Notes:**
 
-    - Non-loopback binds (`--bind lan`) require `OPENCLAW_GATEWAY_TOKEN` for security.
+    - Non-loopback binds (`--bind lan`) require a valid gateway auth path. This Fly.io example uses `OPENCLAW_GATEWAY_TOKEN`, but `gateway.auth.password` or a correctly configured non-loopback `trusted-proxy` deployment also satisfy the requirement.
     - Treat these tokens like passwords.
     - **Prefer env vars over config file** for all API keys and tokens. This keeps secrets out of `openclaw.json` where they could be accidentally exposed or logged.
 
@@ -229,7 +229,9 @@ read_when:
 
     Or visit `https://my-openclaw.fly.dev/`
 
-    Paste your gateway token (the one from `OPENCLAW_GATEWAY_TOKEN`) to authenticate.
+    Authenticate with the configured shared secret. This guide uses the gateway
+    token from `OPENCLAW_GATEWAY_TOKEN`; if you switched to password auth, use
+    that password instead.
 
     ### Logs
 
