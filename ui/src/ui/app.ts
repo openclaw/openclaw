@@ -316,7 +316,9 @@ export class OpenClawApp extends LitElement {
   @state() usageError: string | null = null;
   @state() usageStartDate = (() => {
     const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    const start = new Date(d);
+    start.setDate(start.getDate() - 6);
+    return `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, "0")}-${String(start.getDate()).padStart(2, "0")}`;
   })();
   @state() usageEndDate = (() => {
     const d = new Date();
