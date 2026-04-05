@@ -68,10 +68,10 @@ describe("loadExtraExcludePatternsFromEnv", () => {
 });
 
 describe("unit vitest config", () => {
-  it("defaults unit tests to isolated mode", () => {
+  it("defaults unit tests to the non-isolated runner", () => {
     const unitConfig = createUnitVitestConfig({});
-    expect(unitConfig.test?.isolate).toBe(true);
-    expect(unitConfig.test?.runner).toBeUndefined();
+    expect(unitConfig.test?.isolate).toBe(false);
+    expect(unitConfig.test?.runner).toBe("./test/non-isolated-runner.ts");
   });
 
   it("keeps acp and ui tests out of the generic unit lane", () => {

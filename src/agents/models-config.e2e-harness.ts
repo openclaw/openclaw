@@ -108,6 +108,7 @@ export const MODELS_CONFIG_IMPLICIT_ENV_VARS = [
   "HF_TOKEN",
   "HUGGINGFACE_HUB_TOKEN",
   "MINIMAX_API_KEY",
+  "MINIMAX_API_HOST",
   "MINIMAX_OAUTH_TOKEN",
   "MOONSHOT_API_KEY",
   "NVIDIA_API_KEY",
@@ -212,6 +213,8 @@ export function snapshotImplicitProviderEnv(env?: NodeJS.ProcessEnv): NodeJS.Pro
   // Provider discovery tests can temporarily scrub VITEST/NODE_ENV to exercise
   // live HTTP paths. Keep the bundled plugin root pinned to the source checkout
   // so those tests do not fall back to potentially stale dist-runtime wrappers.
+  snapshot.VITEST ??= process.env.VITEST;
+  snapshot.NODE_ENV ??= process.env.NODE_ENV;
   snapshot.OPENCLAW_BUNDLED_PLUGINS_DIR ??=
     resolveBundledPluginsDir({ VITEST: "true" } as NodeJS.ProcessEnv) ?? undefined;
 
@@ -274,6 +277,24 @@ async function inferImplicitProviderTestPluginIds(params: {
   }
   for (const providerId of await inferAuthProfileProviderIds(params.agentDir)) {
     providerIds.add(providerId);
+  }
+  for (const [pluginId, entry] of Object.entries(params.config?.plugins?.entries ?? {})) {
+    if (!pluginId.trim() || entry?.enabled === false) {
+      continue;
+    }
+    const pluginConfig =
+      entry.config && typeof entry.config === "object"
+        ? (entry.config as { webSearch?: { apiKey?: unknown } })
+        : undefined;
+    if (pluginConfig?.webSearch?.apiKey !== undefined) {
+      providerIds.add(pluginId);
+    }
+  }
+  const legacyGrokApiKey = (
+    params.config?.tools?.web?.search as { grok?: { apiKey?: unknown } } | undefined
+  )?.grok?.apiKey;
+  if (legacyGrokApiKey !== undefined && params.config?.plugins?.entries?.xai?.enabled !== false) {
+    providerIds.add("xai");
   }
 
   if (providerIds.size === 0) {

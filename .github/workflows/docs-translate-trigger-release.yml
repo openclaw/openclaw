@@ -25,7 +25,8 @@ jobs:
             translate-pt-br-release \
             translate-ko-release \
             translate-de-release \
-            translate-fr-release
+            translate-fr-release \
+            translate-ar-release
           do
             gh api repos/openclaw/docs/dispatches \
               --method POST \

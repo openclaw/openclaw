@@ -296,7 +296,6 @@ export function buildAgentSystemPrompt(params: {
   ownerDisplaySecret?: string;
   reasoningTagHint?: boolean;
   toolNames?: string[];
-  toolSummaries?: Record<string, string>;
   modelAliasLines?: string[];
   userTimezone?: string;
   userTime?: string;
@@ -337,76 +336,6 @@ export function buildAgentSystemPrompt(params: {
   const acpEnabled = params.acpEnabled !== false;
   const sandboxedRuntime = params.sandboxInfo?.enabled === true;
   const acpSpawnRuntimeEnabled = acpEnabled && !sandboxedRuntime;
-  const execToolSummary =
-    "Run shell commands (pty available for TTY-required CLIs; use for work that starts now, not delayed follow-ups; background completion may wake automatically when enabled)";
-  const processToolSummary =
-    "Manage background exec sessions for commands already started (poll/log for inspection, debugging, input, intervention, or completion confirmation when auto-wake is unavailable)";
-  const cronToolSummary =
-    "Manage cron jobs and wake events (use for reminders, delayed follow-ups, and recurring tasks; for requests like 'check back in 10 minutes' or 'remind me later', use cron instead of exec sleep, yieldMs delays, or process polling; when scheduling a reminder, write the systemEvent text as something that will read like a reminder when it fires, and mention that it is a reminder depending on the time gap between setting and firing; include recent context in reminder text if appropriate)";
-  const coreToolSummaries: Record<string, string> = {
-    read: "Read file contents",
-    write: "Create or overwrite files",
-    edit: "Make precise edits to files",
-    apply_patch: "Apply multi-file patches",
-    grep: "Search file contents for patterns",
-    find: "Find files by glob pattern",
-    ls: "List directory contents",
-    exec: execToolSummary,
-    process: processToolSummary,
-    web_search: "Search the web",
-    web_fetch: "Fetch and extract readable content from a URL",
-    // Channel docking: add login tools here when a channel needs interactive linking.
-    browser: "Control web browser",
-    canvas: "Present/eval/snapshot the Canvas",
-    nodes: "List/describe/notify/camera/screen on paired nodes",
-    cron: cronToolSummary,
-    message: "Send messages and channel actions",
-    gateway: "Restart, apply config, or run updates on the running OpenClaw process",
-    agents_list: acpSpawnRuntimeEnabled
-      ? 'List OpenClaw agent ids allowed for sessions_spawn when runtime="subagent" (not ACP harness ids)'
-      : "List OpenClaw agent ids allowed for sessions_spawn",
-    sessions_list: "List other sessions (incl. sub-agents) with filters/last",
-    sessions_history: "Fetch history for another session/sub-agent",
-    sessions_send: "Send a message to another session/sub-agent",
-    sessions_spawn: acpSpawnRuntimeEnabled
-      ? 'Spawn an isolated sub-agent or ACP coding session (runtime="acp" requires `agentId` unless `acp.defaultAgent` is configured; ACP harness ids follow acp.allowedAgents, not agents_list)'
-      : "Spawn an isolated sub-agent session",
-    subagents: "List, steer, or kill sub-agent runs for this requester session",
-    session_status:
-      "Show a /status-equivalent status card (usage + time + Reasoning/Verbose/Elevated); use for model-use questions (📊 session_status); optional per-session model override",
-    image: "Analyze an image with the configured image model",
-    image_generate: "Generate images with the configured image-generation model",
-  };
-
-  const toolOrder = [
-    "read",
-    "write",
-    "edit",
-    "apply_patch",
-    "grep",
-    "find",
-    "ls",
-    "exec",
-    "process",
-    "code_execution",
-    "web_search",
-    "web_fetch",
-    "browser",
-    "canvas",
-    "nodes",
-    "cron",
-    "message",
-    "gateway",
-    "agents_list",
-    "sessions_list",
-    "sessions_history",
-    "sessions_send",
-    "subagents",
-    "session_status",
-    "image",
-    "image_generate",
-  ];
-
   const rawToolNames = (params.toolNames ?? []).map((tool) => tool.trim());
   const canonicalToolNames = rawToolNames.filter(Boolean);
   // Preserve caller casing while deduping tool names by lowercase.
@@ -424,32 +353,8 @@ export function buildAgentSystemPrompt(params: {
   const availableTools = new Set(normalizedTools);
   const hasSessionsSpawn = availableTools.has("sessions_spawn");
   const acpHarnessSpawnAllowed = hasSessionsSpawn && acpSpawnRuntimeEnabled;
-  const externalToolSummaries = new Map<string, string>();
-  for (const [key, value] of Object.entries(params.toolSummaries ?? {})) {
-    const normalized = key.trim().toLowerCase();
-    if (!normalized || !value?.trim()) {
-      continue;
-    }
-    externalToolSummaries.set(normalized, value.trim());
-  }
-  const extraTools = Array.from(
-    new Set(normalizedTools.filter((tool) => !toolOrder.includes(tool))),
-  );
-  const enabledTools = toolOrder.filter((tool) => availableTools.has(tool));
-  const toolLines = enabledTools.map((tool) => {
-    const summary = coreToolSummaries[tool] ?? externalToolSummaries.get(tool);
-    const name = resolveToolName(tool);
-    return summary ? `- ${name}: ${summary}` : `- ${name}`;
-  });
-  for (const tool of extraTools.toSorted()) {
-    const summary = coreToolSummaries[tool] ?? externalToolSummaries.get(tool);
-    const name = resolveToolName(tool);
-    toolLines.push(summary ? `- ${name}: ${summary}` : `- ${name}`);
-  }
-
-  const usingDefaultToolFallback = toolLines.length === 0;
   const hasGateway = availableTools.has("gateway");
-  const hasCronTool = availableTools.has("cron") || usingDefaultToolFallback;
+  const hasCronTool = availableTools.has("cron") || canonicalToolNames.length === 0;
   const readToolName = resolveToolName("read");
   const execToolName = resolveToolName("exec");
   const processToolName = resolveToolName("process");
@@ -545,28 +450,9 @@ export function buildAgentSystemPrompt(params: {
     "You are a personal assistant running inside OpenClaw.",
     "",
     "## Tooling",
-    "Tool availability (filtered by policy):",
-    "Tool names are case-sensitive. Call tools exactly as listed.",
-    toolLines.length > 0
-      ? toolLines.join("\n")
-      : [
-          "Pi lists the standard tools above. This runtime enables:",
-          "- grep: search file contents for patterns",
-          "- find: find files by glob pattern",
-          "- ls: list directory contents",
-          "- apply_patch: apply multi-file patches",
-          `- ${execToolName}: ${execToolSummary.toLowerCase()}`,
-          `- ${processToolName}: ${processToolSummary.toLowerCase()}`,
-          "- browser: control OpenClaw's dedicated browser",
-          "- canvas: present/eval/snapshot the Canvas",
-          "- nodes: list/describe/notify/camera/screen on paired nodes",
-          `- cron: ${cronToolSummary.toLowerCase()}`,
-          "- sessions_list: list sessions",
-          "- sessions_history: fetch session history",
-          "- sessions_send: send to another session",
-          "- subagents: list/steer/kill sub-agent runs",
-          '- session_status: show usage/time/model state and answer "what model are we using?"',
-        ].join("\n"),
+    "Structured tool definitions are the source of truth for tool names, descriptions, and parameters.",
+    "Tool names are case-sensitive. Call tools exactly as listed in the structured tool definitions.",
+    "If a tool is present in the structured tool definitions, it is available unless a later tool call reports a policy/runtime restriction.",
     "TOOLS.md does not control tool availability; it is user guidance for how to use external tools.",
     ...(hasCronTool
       ? [

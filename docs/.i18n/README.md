@@ -11,7 +11,7 @@ Generated locale trees and live translation memory now live in the publish repo:
 
 - English docs are authored in `openclaw/openclaw`.
 - The source docs tree lives under `docs/`.
-- The source repo no longer keeps committed generated locale trees such as `docs/zh-CN/**`, `docs/ja-JP/**`, `docs/es/**`, `docs/pt-BR/**`, `docs/ko/**`, `docs/de/**`, or `docs/fr/**`.
+- The source repo no longer keeps committed generated locale trees such as `docs/zh-CN/**`, `docs/ja-JP/**`, `docs/es/**`, `docs/pt-BR/**`, `docs/ko/**`, `docs/de/**`, `docs/fr/**`, or `docs/ar/**`.
 
 ## End-to-end flow
 
@@ -21,7 +21,7 @@ Generated locale trees and live translation memory now live in the publish repo:
 4. The sync script rewrites the publish `docs/docs.json` so the generated locale picker blocks exist there even though they are no longer committed in the source repo.
 5. `openclaw/docs/.github/workflows/translate-zh-cn.yml` refreshes `docs/zh-CN/**` once a day, on demand, and after source-repo release dispatches.
 6. `openclaw/docs/.github/workflows/translate-ja-jp.yml` does the same for `docs/ja-JP/**`.
-7. `openclaw/docs/.github/workflows/translate-es.yml`, `translate-pt-br.yml`, `translate-ko.yml`, `translate-de.yml`, and `translate-fr.yml` do the same for `docs/es/**`, `docs/pt-BR/**`, `docs/ko/**`, `docs/de/**`, and `docs/fr/**`.
+7. `openclaw/docs/.github/workflows/translate-es.yml`, `translate-pt-br.yml`, `translate-ko.yml`, `translate-de.yml`, `translate-fr.yml`, and `translate-ar.yml` do the same for `docs/es/**`, `docs/pt-BR/**`, `docs/ko/**`, `docs/de/**`, `docs/fr/**`, and `docs/ar/**`.
 
 ## Why the split exists
 
@@ -32,10 +32,10 @@ Generated locale trees and live translation memory now live in the publish repo:
 ## Files in this folder
 
 - `glossary.<lang>.json` — preferred term mappings used as prompt guidance.
-- `de-navigation.json`, `es-navigation.json`, `fr-navigation.json`, `ja-navigation.json`, `ko-navigation.json`, `pt-BR-navigation.json`, `zh-Hans-navigation.json` — Mintlify locale picker blocks reinserted into the publish repo during sync.
+- `ar-navigation.json`, `de-navigation.json`, `es-navigation.json`, `fr-navigation.json`, `ja-navigation.json`, `ko-navigation.json`, `pt-BR-navigation.json`, `zh-Hans-navigation.json` — Mintlify locale picker blocks reinserted into the publish repo during sync.
 - `<lang>.tm.jsonl` — translation memory keyed by workflow + model + text hash.
 
-In this repo, generated locale TM files such as `docs/.i18n/zh-CN.tm.jsonl`, `docs/.i18n/ja-JP.tm.jsonl`, `docs/.i18n/es.tm.jsonl`, `docs/.i18n/pt-BR.tm.jsonl`, `docs/.i18n/ko.tm.jsonl`, `docs/.i18n/de.tm.jsonl`, and `docs/.i18n/fr.tm.jsonl` are intentionally no longer committed.
+In this repo, generated locale TM files such as `docs/.i18n/zh-CN.tm.jsonl`, `docs/.i18n/ja-JP.tm.jsonl`, `docs/.i18n/es.tm.jsonl`, `docs/.i18n/pt-BR.tm.jsonl`, `docs/.i18n/ko.tm.jsonl`, `docs/.i18n/de.tm.jsonl`, `docs/.i18n/fr.tm.jsonl`, and `docs/.i18n/ar.tm.jsonl` are intentionally no longer committed.
 
 ## Glossary format
 
@@ -61,7 +61,7 @@ Fields:
 - If the pending count is `0`, the expensive translation step is skipped entirely.
 - If there are pending files, the workflow translates only those files.
 - The publish workflow retries transient model-format failures, but unchanged files stay skipped because the same hash check runs on each retry.
-- The source repo also dispatches zh-CN, ja-JP, es, pt-BR, ko, de, and fr refreshes after published GitHub releases so release docs can catch up without waiting for the daily cron.
+- The source repo also dispatches zh-CN, ja-JP, es, pt-BR, ko, de, fr, and ar refreshes after published GitHub releases so release docs can catch up without waiting for the daily cron.
 
 ## Operational notes
 

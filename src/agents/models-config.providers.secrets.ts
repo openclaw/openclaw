@@ -511,5 +511,30 @@ function resolveXaiConfigFallbackAuth(params: { provider: string; config?: OpenC
       mode: "api-key",
     };
   }
+  const legacyGrokApiKey = normalizeOptionalSecretInput(
+    (params.config?.tools?.web?.search as { grok?: { apiKey?: unknown } } | undefined | null)?.grok
+      ?.apiKey,
+  );
+  if (legacyGrokApiKey) {
+    return {
+      apiKey: legacyGrokApiKey,
+      source: "tools.web.search.grok.apiKey",
+      mode: "api-key",
+    };
+  }
+  const legacyGrokApiKeyRef = coerceSecretRef(
+    (params.config?.tools?.web?.search as { grok?: { apiKey?: unknown } } | undefined | null)?.grok
+      ?.apiKey,
+  );
+  if (legacyGrokApiKeyRef) {
+    return {
+      apiKey:
+        legacyGrokApiKeyRef.source === "env"
+          ? legacyGrokApiKeyRef.id.trim()
+          : resolveNonEnvSecretRefApiKeyMarker(legacyGrokApiKeyRef.source),
+      source: "tools.web.search.grok.apiKey",
+      mode: "api-key",
+    };
+  }
   return undefined;
 }

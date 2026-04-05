@@ -19,7 +19,6 @@ import { resolveBootstrapContextForRun } from "./bootstrap-files.js";
 import { buildEmbeddedSystemPrompt } from "./pi-embedded-runner/system-prompt.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
 import { createStubTool } from "./test-helpers/pi-tool-stubs.js";
-import { buildToolSummaryMap } from "./tool-summaries.js";
 
 export type PromptScenarioTurn = {
   id: string;
@@ -50,9 +49,6 @@ function buildCommonSystemParams(workspaceDir: string) {
     "x_search",
     "web_fetch",
   ];
-  const toolSummaries = buildToolSummaryMap(
-    toolNames.map((name) => ({ name, description: `${name} tool` }) as never),
-  );
   return {
     runtimeInfo: {
       agentId: "main",
@@ -69,7 +65,6 @@ function buildCommonSystemParams(workspaceDir: string) {
     userTime: "Monday, March 16th, 2026 — 9:00 PM",
     userTimeFormat: "12" as const,
     toolNames,
-    toolSummaries,
   };
 }
 
@@ -80,7 +75,7 @@ function buildSystemPrompt(params: {
   reactionGuidance?: { level: "minimal" | "extensive"; channel: string };
   contextFiles?: Array<{ path: string; content: string }>;
 }) {
-  const { runtimeInfo, userTimezone, userTime, userTimeFormat, toolNames, toolSummaries } =
+  const { runtimeInfo, userTimezone, userTime, userTimeFormat, toolNames } =
     buildCommonSystemParams(params.workspaceDir);
   return buildAgentSystemPrompt({
     workspaceDir: params.workspaceDir,
@@ -90,7 +85,6 @@ function buildSystemPrompt(params: {
     userTime,
     userTimeFormat,
     toolNames,
-    toolSummaries,
     modelAliasLines: [],
     promptMode: "full",
     acpEnabled: true,

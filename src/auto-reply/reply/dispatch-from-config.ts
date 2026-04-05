@@ -603,8 +603,25 @@ export async function dispatchReplyFromConfig(params: {
     const shouldSendToolStartStatuses = ctx.ChatType !== "group" || ctx.IsForum === true;
     const toolStartStatusesSent = new Set<string>();
     let toolStartStatusCount = 0;
+    const normalizeWorkingLabel = (label: string) => {
+      const collapsed = label.replace(/\s+/g, " ").trim();
+      if (collapsed.length <= 80) {
+        return collapsed;
+      }
+      return `${collapsed.slice(0, 77).trimEnd()}...`;
+    };
+    const summarizePlanLabel = (payload: { explanation?: string; steps?: string[] }) => {
+      const firstStep = payload.steps?.find((step) => typeof step === "string" && step.trim());
+      if (firstStep) {
+        return normalizeWorkingLabel(firstStep);
+      }
+      if (payload.explanation?.trim()) {
+        return normalizeWorkingLabel(payload.explanation);
+      }
+      return "planning next steps";
+    };
     const maybeSendWorkingStatus = (label: string) => {
-      const normalizedLabel = label.trim();
+      const normalizedLabel = normalizeWorkingLabel(label);
       if (
         !shouldSendToolStartStatuses ||
         !normalizedLabel ||
@@ -622,6 +639,34 @@ export async function dispatchReplyFromConfig(params: {
         return sendPayloadAsync(payload, undefined, false);
       }
       dispatcher.sendToolResult(payload);
+    };
+    const summarizeApprovalLabel = (payload: {
+      status?: string;
+      command?: string;
+      message?: string;
+    }) => {
+      if (payload.status === "pending") {
+        if (payload.command?.trim()) {
+          return normalizeWorkingLabel(`awaiting approval: ${payload.command}`);
+        }
+        return "awaiting approval";
+      }
+      if (payload.status === "unavailable") {
+        if (payload.message?.trim()) {
+          return normalizeWorkingLabel(payload.message);
+        }
+        return "approval unavailable";
+      }
+      return "";
+    };
+    const summarizePatchLabel = (payload: { summary?: string; title?: string }) => {
+      if (payload.summary?.trim()) {
+        return normalizeWorkingLabel(payload.summary);
+      }
+      if (payload.title?.trim()) {
+        return normalizeWorkingLabel(payload.title);
+      }
+      return "";
     };
     const acpDispatch = await dispatchAcpRuntime.tryDispatchAcpReply({
       ctx,
@@ -740,6 +785,32 @@ export async function dispatchReplyFromConfig(params: {
           if (typeof title === "string") {
             return maybeSendWorkingStatus(title);
           }
+        },
+        onPlanUpdate: ({ phase, explanation, steps }) => {
+          if (phase !== "update") {
+            return;
+          }
+          return maybeSendWorkingStatus(summarizePlanLabel({ explanation, steps }));
+        },
+        onApprovalEvent: ({ phase, status, command, message }) => {
+          if (phase !== "requested") {
+            return;
+          }
+          const label = summarizeApprovalLabel({ status, command, message });
+          if (!label) {
+            return;
+          }
+          return maybeSendWorkingStatus(label);
+        },
+        onPatchSummary: ({ phase, summary, title }) => {
+          if (phase !== "end") {
+            return;
+          }
+          const label = summarizePatchLabel({ summary, title });
+          if (!label) {
+            return;
+          }
+          return maybeSendWorkingStatus(label);
         },
         onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => {
           const run = async () => {

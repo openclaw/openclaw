@@ -339,16 +339,25 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
-  it("lists available tools when provided", () => {
+  it("uses structured tool definitions as the source of truth", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["exec", "sessions_list", "sessions_history", "sessions_send"],
     });
 
-    expect(prompt).toContain("Tool availability (filtered by policy):");
-    expect(prompt).toContain("sessions_list");
-    expect(prompt).toContain("sessions_history");
-    expect(prompt).toContain("sessions_send");
+    expect(prompt).toContain(
+      "Structured tool definitions are the source of truth for tool names, descriptions, and parameters.",
+    );
+    expect(prompt).toContain(
+      "Tool names are case-sensitive. Call tools exactly as listed in the structured tool definitions.",
+    );
+    expect(prompt).toContain(
+      "TOOLS.md does not control tool availability; it is user guidance for how to use external tools.",
+    );
+    expect(prompt).not.toContain("Tool availability (filtered by policy):");
+    expect(prompt).not.toContain("- sessions_list:");
+    expect(prompt).not.toContain("- sessions_history:");
+    expect(prompt).not.toContain("- sessions_send:");
   });
 
   it("documents ACP sessions_spawn agent targeting requirements", () => {
@@ -431,8 +440,12 @@ describe("buildAgentSystemPrompt", () => {
       docsPath: "/tmp/openclaw/docs",
     });
 
-    expect(prompt).toContain("- Read: Read file contents");
-    expect(prompt).toContain("- Exec: Run shell commands");
+    expect(prompt).toContain(
+      "Tool names are case-sensitive. Call tools exactly as listed in the structured tool definitions.",
+    );
+    expect(prompt).toContain(
+      "For long waits, avoid rapid poll loops: use Exec with enough yieldMs or process(action=poll, timeout=<ms>).",
+    );
     expect(prompt).toContain(
       "- If exactly one skill clearly applies: read its SKILL.md at <location> with `Read`, then follow it.",
     );
