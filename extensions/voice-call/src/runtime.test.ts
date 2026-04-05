@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { VoiceCallConfig } from "./config.js";
 import type { CoreConfig } from "./core-bridge.js";
@@ -10,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   webhookStart: vi.fn(),
   webhookStop: vi.fn(),
   webhookGetMediaStreamHandler: vi.fn(),
+  webhookCtorArgs: [] as unknown[][],
   startTunnel: vi.fn(),
   setupTailscaleExposure: vi.fn(),
   cleanupTailscaleExposure: vi.fn(),
@@ -28,6 +30,9 @@ vi.mock("./manager.js", () => ({
 
 vi.mock("./webhook.js", () => ({
   VoiceCallWebhookServer: class {
+    constructor(...args: unknown[]) {
+      mocks.webhookCtorArgs.push(args);
+    }
     start = mocks.webhookStart;
     stop = mocks.webhookStop;
     getMediaStreamHandler = mocks.webhookGetMediaStreamHandler;
@@ -58,6 +63,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     mocks.webhookStart.mockResolvedValue("http://127.0.0.1:3334/voice/webhook");
     mocks.webhookStop.mockResolvedValue(undefined);
     mocks.webhookGetMediaStreamHandler.mockReturnValue(undefined);
+    mocks.webhookCtorArgs.length = 0;
     mocks.startTunnel.mockResolvedValue(null);
     mocks.setupTailscaleExposure.mockResolvedValue(null);
     mocks.cleanupTailscaleExposure.mockResolvedValue(undefined);
@@ -105,5 +111,26 @@ describe("createVoiceCallRuntime lifecycle", () => {
     expect(tunnelStop).toHaveBeenCalledTimes(1);
     expect(mocks.cleanupTailscaleExposure).toHaveBeenCalledTimes(1);
     expect(mocks.webhookStop).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes fullConfig to the webhook server for streaming provider resolution", async () => {
+    const coreConfig = { messages: { tts: { provider: "openai" } } } as CoreConfig;
+    const fullConfig = {
+      plugins: {
+        entries: {
+          openai: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+
+    await createVoiceCallRuntime({
+      config: createBaseConfig(),
+      coreConfig,
+      fullConfig,
+      agentRuntime: {} as never,
+    });
+
+    expect(mocks.webhookCtorArgs[0]?.[3]).toBe(coreConfig);
+    expect(mocks.webhookCtorArgs[0]?.[4]).toBe(fullConfig);
   });
 });

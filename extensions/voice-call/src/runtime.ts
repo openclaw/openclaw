@@ -231,6 +231,7 @@ export async function createVoiceCallRuntime(params: {
     manager,
     provider,
     coreConfig,
+    (fullConfig ?? (coreConfig as OpenClawConfig)) as OpenClawConfig,
     agentRuntime,
   );
   if (realtimeProvider) {
