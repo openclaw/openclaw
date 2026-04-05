@@ -1,7 +1,12 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../../i18n/index.ts";
 import { icons } from "../icons.ts";
-import { BORDER_RADIUS_STOPS, type BorderRadiusStop } from "../storage.ts";
+import {
+  BORDER_RADIUS_STOPS,
+  TEXT_SCALE_STOPS,
+  type BorderRadiusStop,
+  type TextScaleStop,
+} from "../storage.ts";
 import type { ThemeTransitionContext } from "../theme-transition.ts";
 import type { ThemeMode, ThemeName } from "../theme.ts";
 import type { ConfigUiHints } from "../types.ts";
@@ -22,6 +27,12 @@ const BORDER_RADIUS_LABELS: Record<BorderRadiusStop, string> = {
   50: "Default",
   75: "Round",
   100: "Full",
+};
+
+const TEXT_SCALE_LABELS: Record<TextScaleStop, string> = {
+  100: "Compact",
+  110: "Comfort",
+  120: "Large",
 };
 
 export type ConfigProps = {
@@ -63,6 +74,8 @@ export type ConfigProps = {
   setThemeMode: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
   borderRadius: number;
   setBorderRadius: (value: number) => void;
+  textScale: number;
+  setTextScale: (value: number) => void;
   gatewayUrl: string;
   assistantName: string;
   configPath?: string | null;
@@ -623,6 +636,31 @@ function renderAppearanceSection(props: ConfigProps) {
                     style="border-radius: ${Math.round(10 * (stop / 50))}px"
                   ></span>
                   <span class="settings-roundness__label">${BORDER_RADIUS_LABELS[stop]}</span>
+                </button>
+              `,
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-appearance__section">
+        <h3 class="settings-appearance__heading">Text size</h3>
+        <p class="settings-appearance__hint">Choose a more comfortable base reading size.</p>
+        <div class="settings-text-scale">
+          <div class="settings-text-scale__options">
+            ${TEXT_SCALE_STOPS.map(
+              (stop) => html`
+                <button
+                  type="button"
+                  class="settings-text-scale__btn ${stop === props.textScale ? "active" : ""}"
+                  @click=${() => props.setTextScale(stop)}
+                >
+                  <span
+                    class="settings-text-scale__preview"
+                    style="font-size: ${Math.round((stop / 100) * 16)}px"
+                    >Aa</span
+                  >
+                  <span class="settings-text-scale__label">${TEXT_SCALE_LABELS[stop]}</span>
                 </button>
               `,
             )}

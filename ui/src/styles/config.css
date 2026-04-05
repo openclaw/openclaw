@@ -606,6 +606,57 @@
   color: var(--accent);
 }
 
+.settings-text-scale__options {
+  display: flex;
+  gap: 6px;
+}
+
+.settings-text-scale__btn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) ease,
+    border-color var(--duration-fast) ease;
+}
+
+.settings-text-scale__btn:hover {
+  background: var(--bg-hover);
+}
+
+.settings-text-scale__btn.active {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+}
+
+.settings-text-scale__preview {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+
+.settings-text-scale__label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.settings-text-scale__btn.active .settings-text-scale__label,
+.settings-text-scale__btn.active .settings-text-scale__preview {
+  color: var(--accent);
+}
+
 .settings-info-grid {
   display: grid;
   gap: 10px;

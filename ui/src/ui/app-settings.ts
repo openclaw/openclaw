@@ -127,6 +127,7 @@ export function applySettings(host: SettingsHost, next: UiSettings) {
     applyResolvedTheme(host, resolveTheme(next.theme, next.themeMode));
   }
   applyBorderRadius(next.borderRadius);
+  applyTextScale(next.textScale);
   host.applySessionKey = host.settings.lastActiveSessionKey;
 }
 
@@ -379,6 +380,7 @@ export function syncThemeWithSettings(host: SettingsHost) {
   host.themeMode = host.settings.themeMode ?? "system";
   applyResolvedTheme(host, resolveTheme(host.theme, host.themeMode));
   applyBorderRadius(host.settings.borderRadius ?? 50);
+  applyTextScale(host.settings.textScale ?? 110);
   syncSystemThemeListener(host);
 }
 
@@ -401,6 +403,15 @@ export function applyBorderRadius(value: number) {
   root.style.setProperty("--radius-xl", `${Math.round(BASE_RADII.xl * scale)}px`);
   root.style.setProperty("--radius-full", `${Math.round(BASE_RADII.full * scale)}px`);
   root.style.setProperty("--radius", `${Math.round(BASE_RADII.default * scale)}px`);
+}
+
+export function applyTextScale(value: number) {
+  if (typeof document === "undefined") {
+    return;
+  }
+  const root = document.documentElement;
+  const clamped = Math.min(120, Math.max(100, value));
+  root.style.setProperty("--ui-text-scale", (clamped / 100).toFixed(2));
 }
 
 export function applyResolvedTheme(host: SettingsHost, resolved: ResolvedTheme) {

@@ -117,6 +117,7 @@ function createHost(): TestGatewayHost {
       navCollapsed: false,
       navGroupsCollapsed: {},
       borderRadius: 50,
+      textScale: 110,
     },
     password: "",
     clientInstanceId: "instance-test",
