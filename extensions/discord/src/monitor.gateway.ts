@@ -1,9 +1,37 @@
 import type { EventEmitter } from "node:events";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { DiscordGatewayHandle } from "./monitor/gateway-handle.js";
 import type {
   DiscordGatewayEvent,
   DiscordGatewaySupervisor,
 } from "./monitor/gateway-supervisor.js";
+
+/**
+ * Call `gateway.disconnect()` and catch the known Carbon synchronous throw.
+ *
+ * Carbon's `SafeGatewayPlugin.handleReconnectionAttempt` throws synchronously
+ * inside the WebSocket close callback when `maxAttempts` is 0 or the socket
+ * closes with no close frame (code 1005). This throw bypasses the gateway
+ * supervisor's event-based error handler. Catching it here prevents an uncaught
+ * exception from crashing the gateway process during health-monitor restarts.
+ */
+function safeDisconnect(gateway: DiscordGatewayHandle | undefined, runtime?: RuntimeEnv): void {
+  try {
+    gateway?.disconnect?.();
+  } catch (err) {
+    // This runs inside an abort/event callback — any re-thrown error would
+    // escape as an uncaught exception (the same crash this fix addresses).
+    // Log all errors: expected ones at info, unexpected ones at error.
+    const message = String(err);
+    if (message.includes("Max reconnect attempts")) {
+      runtime?.log?.(`discord: suppressed expected Carbon throw during disconnect: ${message}`);
+    } else {
+      runtime?.error?.(
+        `discord: unexpected error during disconnect (suppressed to avoid uncaught exception): ${message}`,
+      );
+    }
+  }
+}
 
 export type WaitForDiscordGatewayStopParams = {
   gateway?: DiscordGatewayHandle;
@@ -18,7 +46,7 @@ export function getDiscordGatewayEmitter(gateway?: unknown): EventEmitter | unde
 }
 
 export async function waitForDiscordGatewayStop(
-  params: WaitForDiscordGatewayStopParams,
+  params: WaitForDiscordGatewayStopParams & { runtime?: RuntimeEnv },
 ): Promise<void> {
   const { gateway, abortSignal } = params;
   return await new Promise<void>((resolve, reject) => {
@@ -33,7 +61,7 @@ export async function waitForDiscordGatewayStop(
       }
       settled = true;
       try {
-        gateway?.disconnect?.();
+        safeDisconnect(gateway, params.runtime);
       } finally {
         // remove listeners after disconnect so late "error" events emitted
         // during disconnect are still handled instead of becoming uncaught
@@ -47,7 +75,7 @@ export async function waitForDiscordGatewayStop(
       }
       settled = true;
       try {
-        gateway?.disconnect?.();
+        safeDisconnect(gateway, params.runtime);
       } finally {
         cleanup();
         reject(err);
