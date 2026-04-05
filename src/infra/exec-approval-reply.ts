@@ -402,7 +402,7 @@ export function buildExecApprovalUnavailableReplyPayload(
       "Exec approval is required, but no interactive approval client is currently available.",
     );
     lines.push(
-      `${buildGenericNativeExecApprovalFallbackText()} Then retry the command. If those accounts already know your owner ID via allowFrom or owner config, you can usually leave execApprovals.approvers unset.`,
+      `${buildGenericNativeExecApprovalFallbackText()} Then retry the command. You can usually leave execApprovals.approvers unset when owner config already identifies the approvers.`,
     );
   }
 

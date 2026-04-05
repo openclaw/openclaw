@@ -93,6 +93,19 @@ describe("exec approval reply helpers", () => {
     expect(text).toContain("Telegram");
   });
 
+  it("avoids repeating allowFrom guidance in the no-route fallback", () => {
+    const text = buildExecApprovalUnavailableReplyPayload({
+      reason: "no-approval-route",
+    }).text;
+
+    expect(text).not.toContain(
+      "Then retry the command. If those accounts already know your owner ID via allowFrom or owner config",
+    );
+    expect(text).toContain(
+      "You can usually leave execApprovals.approvers unset when owner config already identifies the approvers.",
+    );
+  });
+
   it("explains how to enable Matrix native approvals when Matrix is the initiating platform", () => {
     const text = buildExecApprovalUnavailableReplyPayload({
       reason: "initiating-platform-disabled",
