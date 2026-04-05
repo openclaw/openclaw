@@ -394,12 +394,12 @@ export function resolveConfiguredModelRef(params: {
         return aliasMatch.ref;
       }
 
-      const inferredProvider = inferUniqueProviderFromConfiguredModels({
+      const inferred = inferUniqueProviderFromConfiguredModels({
         cfg: params.cfg,
         model: trimmed,
       });
-      if (inferredProvider) {
-        return { provider: inferredProvider, model: trimmed };
+      if (inferred) {
+        return { provider: inferred.provider, model: inferred.configuredModelId };
       }
 
       // Default to the configured provider if no provider is specified, but warn as this is deprecated.
@@ -705,10 +705,10 @@ export function resolveAllowedModelRef(params: {
   // correct provider from the configured allowlist before falling back to the
   // session's current default provider. This prevents provider prefix drift
   // when switching models across different providers (see #48369).
-  const effectiveDefaultProvider = !trimmed.includes("/")
-    ? (inferUniqueProviderFromConfiguredModels({ cfg: params.cfg, model: trimmed }) ??
-      params.defaultProvider)
-    : params.defaultProvider;
+  const inferred = !trimmed.includes("/")
+    ? inferUniqueProviderFromConfiguredModels({ cfg: params.cfg, model: trimmed })
+    : undefined;
+  const effectiveDefaultProvider = inferred?.provider ?? params.defaultProvider;
 
   const resolved = resolveModelRefFromString({
     raw: trimmed,

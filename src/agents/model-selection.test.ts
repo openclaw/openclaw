@@ -912,6 +912,37 @@ describe("model-selection", () => {
         expect(result.error).toContain("sonnet");
       }
     });
+
+    it("falls back to defaultProvider when bare model has no alias and ambiguous provider inference", () => {
+      // "some-model" exists under two providers so inference returns undefined.
+      // Without an alias either, it falls back to defaultProvider. The resulting
+      // "google/some-model" is not in the allowlist, so the call returns an error.
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-sonnet-4-6" },
+            models: {
+              "anthropic/some-model": {},
+              "openai/some-model": {},
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveAllowedModelRef({
+        cfg,
+        catalog: [],
+        raw: "some-model",
+        defaultProvider: "google",
+        defaultModel: "claude-sonnet-4-6",
+      });
+
+      // "google/some-model" is not in the allowlist → error.
+      expect(result).toHaveProperty("error");
+      if ("error" in result) {
+        expect(result.error).toContain("model not allowed");
+      }
+    });
   });
 
   describe("resolveModelRefFromString", () => {
@@ -1255,6 +1286,42 @@ describe("model-selection", () => {
 
       // "gpt 5.4" normalizes to "gpt-5.4" alias → openai-codex/gpt-5.4.
       expect(result).toEqual({ provider: "openai-codex", model: "gpt-5.4" });
+    });
+
+    it("falls back to defaultProvider when bare model has no alias and ambiguous provider inference", () => {
+      // "some-model" exists under two providers so inference is ambiguous (returns undefined).
+      // With no alias configured either, the code should fall back to defaultProvider and warn.
+      setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const cfg: Partial<OpenClawConfig> = {
+          agents: {
+            defaults: {
+              model: { primary: "some-model" },
+              models: {
+                "anthropic/some-model": {},
+                "openai/some-model": {},
+              },
+            },
+          },
+        };
+
+        const result = resolveConfiguredModelRef({
+          cfg: cfg as OpenClawConfig,
+          defaultProvider: "google",
+          defaultModel: "gemini-pro",
+        });
+
+        // Ambiguous inference → falls back to the default provider.
+        expect(result).toEqual({ provider: "google", model: "some-model" });
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining('Falling back to "google/some-model"'),
+        );
+      } finally {
+        warnSpy.mockRestore();
+        setLoggerOverride(null);
+        resetLogger();
+      }
     });
   });
 
