@@ -138,6 +138,7 @@ Docs: https://docs.openclaw.ai
 - Plugin SDK/context engines: export the missing context-engine result and subagent lifecycle types from `openclaw/plugin-sdk` so context engine plugins can type `ContextEngine` implementations without local workarounds. (#61251) Thanks @DaevMithran.
 - Agents/errors: surface an explicit disk-full message when local session or transcript writes fail with `ENOSPC`/`disk full`, so those runs stop degrading into opaque `NO_REPLY`-style failures. Thanks @vincentkoc.
 - Telegram/reasoning: only create a Telegram reasoning preview lane when the session is explicitly `reasoning:stream`, so hidden `<think>` traces from streamed replies stop surfacing as chat previews on normal sessions. Thanks @vincentkoc.
+- Feishu/reasoning: only expose streamed reasoning previews when the session is explicitly `reasoning:stream`, so hidden reasoning traces do not surface on normal streaming sessions. Thanks @vincentkoc.
 
 ## 2026.4.2
 

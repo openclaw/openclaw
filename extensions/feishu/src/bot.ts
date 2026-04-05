@@ -49,6 +49,7 @@ import {
   resolveFeishuAllowlistMatch,
   isFeishuGroupAllowed,
 } from "./policy.js";
+import { resolveFeishuReasoningPreviewEnabled } from "./reasoning-preview.js";
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu, listFeishuThreadMessages, sendMessageFeishu } from "./send.js";
@@ -1112,6 +1113,10 @@ export async function handleFeishuMessage(params: {
         }
 
         const agentSessionKey = buildBroadcastSessionKey(route.sessionKey, route.agentId, agentId);
+        const allowReasoningPreview = resolveFeishuReasoningPreviewEnabled({
+          storePath: core.channel.session.resolveStorePath(cfg.session?.store, { agentId }),
+          sessionKey: agentSessionKey,
+        });
         const agentCtx = await buildCtxPayloadForAgent(
           agentId,
           agentSessionKey,
@@ -1127,6 +1132,7 @@ export async function handleFeishuMessage(params: {
             agentId,
             runtime: runtime as RuntimeEnv,
             chatId: ctx.chatId,
+            allowReasoningPreview,
             replyToMessageId: replyTargetMessageId,
             skipReplyToInMessages: !isGroup,
             replyInThread,
@@ -1224,11 +1230,18 @@ export async function handleFeishuMessage(params: {
       );
 
       const identity = resolveAgentOutboundIdentity(cfg, route.agentId);
+      const allowReasoningPreview = resolveFeishuReasoningPreviewEnabled({
+        storePath: core.channel.session.resolveStorePath(cfg.session?.store, {
+          agentId: route.agentId,
+        }),
+        sessionKey: route.sessionKey,
+      });
       const { dispatcher, replyOptions, markDispatchIdle } = createFeishuReplyDispatcher({
         cfg,
         agentId: route.agentId,
         runtime: runtime as RuntimeEnv,
         chatId: ctx.chatId,
+        allowReasoningPreview,
         replyToMessageId: replyTargetMessageId,
         skipReplyToInMessages: !isGroup,
         replyInThread,
