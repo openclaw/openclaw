@@ -50,9 +50,42 @@ function resolveKind(eventKind: string): ActivityNodeKind {
   return "run";
 }
 
+function summarizeToolArgs(args: unknown): string {
+  if (!args) {
+    return "";
+  }
+  const str = typeof args === "string" ? args : "";
+  if (!str) {
+    return "";
+  }
+  try {
+    const parsed = JSON.parse(str);
+    if (typeof parsed !== "object" || parsed === null) {
+      return "";
+    }
+    // Show the most informative field as a short suffix
+    const path = parsed.path ?? parsed.file_path ?? parsed.filePath;
+    if (typeof path === "string") {
+      return path.length > 60 ? `…${path.slice(-55)}` : path;
+    }
+    const cmd = parsed.command ?? parsed.cmd;
+    if (typeof cmd === "string") {
+      return cmd.length > 60 ? `${cmd.slice(0, 57)}…` : cmd;
+    }
+    const action = parsed.action;
+    if (typeof action === "string") {
+      return action;
+    }
+  } catch {
+    // not JSON
+  }
+  return "";
+}
+
 function resolveLabel(data: ActivityEventData): string {
   if (data.toolName) {
-    return data.toolName;
+    const argsSummary = summarizeToolArgs(data.metadata?.args);
+    return argsSummary ? `${data.toolName}  ${argsSummary}` : data.toolName;
   }
   if (data.agentId) {
     return data.agentId;

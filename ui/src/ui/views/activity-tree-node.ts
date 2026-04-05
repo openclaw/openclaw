@@ -28,6 +28,21 @@ function kindIcon(kind: string) {
   }
 }
 
+function kindTag(kind: string) {
+  switch (kind) {
+    case "tool":
+      return "tool";
+    case "thinking":
+      return "think";
+    case "subagent":
+      return "agent";
+    case "run":
+      return "run";
+    default:
+      return kind;
+  }
+}
+
 function formatDuration(ms: number | null): string {
   if (ms === null) {
     return "";
@@ -55,6 +70,9 @@ export function renderActivityTreeNode(
       <div class="activity-node__row" @click=${handleClick} role="button" tabindex="0">
         ${statusIndicator(node.status, node.isError)}
         <span class="activity-node__icon nav-item__icon">${kindIcon(node.kind)}</span>
+        <span class="activity-node__kind-tag activity-node__kind-tag--${node.kind}"
+          >${kindTag(node.kind)}</span
+        >
         <span class="activity-node__label">${node.label}</span>
         ${node.durationMs !== null
           ? html`<span class="activity-node__duration muted"

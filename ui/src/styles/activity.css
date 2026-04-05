@@ -193,8 +193,44 @@
   height: 14px;
 }
 
+.activity-node__kind-tag {
+  font-size: 0.65rem;
+  padding: 1px 5px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+  flex-shrink: 0;
+  background: var(--bg-card, rgba(255, 255, 255, 0.06));
+  color: var(--color-muted, #888);
+}
+
+.activity-node__kind-tag--run {
+  color: var(--color-accent, #ff5a36);
+  background: rgba(255, 90, 54, 0.12);
+}
+
+.activity-node__kind-tag--tool {
+  color: var(--color-accent, #5b9bd5);
+  background: rgba(91, 155, 213, 0.12);
+}
+
+.activity-node__kind-tag--thinking {
+  color: #9b59b6;
+  background: rgba(155, 89, 182, 0.12);
+}
+
+.activity-node__kind-tag--subagent {
+  color: var(--color-success, #2ecc71);
+  background: rgba(46, 204, 113, 0.12);
+}
+
 .activity-node__label {
   font-weight: 500;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .activity-node__duration {
