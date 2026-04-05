@@ -57,6 +57,49 @@ describe("pi tool definition adapter", () => {
     });
   });
 
+  it("includes error cause chain in tool error messages", async () => {
+    const innerCause = new Error("ENOTFOUND api.search.brave.com");
+    const outerCause = new TypeError("fetch failed", { cause: innerCause });
+
+    const tool = {
+      name: "web_search",
+      label: "Web Search",
+      description: "throws with cause chain",
+      parameters: Type.Object({}),
+      execute: async () => {
+        throw outerCause;
+      },
+    } satisfies AgentTool;
+
+    const result = await executeTool(tool, "call-cause");
+    const details = result.details as { error?: string };
+    expect(details.error).toContain("fetch failed");
+    expect(details.error).toContain("ENOTFOUND api.search.brave.com");
+    expect(details.error).toContain("cause:");
+  });
+
+  it("includes deeply nested error cause chain (max 3 levels)", async () => {
+    const level3 = new Error("connection refused");
+    const level2 = new Error("connect ECONNREFUSED", { cause: level3 });
+    const level1 = new TypeError("fetch failed", { cause: level2 });
+
+    const tool = {
+      name: "web_search",
+      label: "Web Search",
+      description: "throws with deep cause chain",
+      parameters: Type.Object({}),
+      execute: async () => {
+        throw level1;
+      },
+    } satisfies AgentTool;
+
+    const result = await executeTool(tool, "call-deep-cause");
+    const details = result.details as { error?: string };
+    expect(details.error).toContain("fetch failed");
+    expect(details.error).toContain("connect ECONNREFUSED");
+    expect(details.error).toContain("connection refused");
+  });
+
   it("coerces details-only tool results to include content", async () => {
     const tool = {
       name: "memory_query",

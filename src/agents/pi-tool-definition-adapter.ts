@@ -52,12 +52,39 @@ function isLegacyToolExecuteArgs(args: ToolExecuteArgsAny): args is ToolExecuteA
   return isAbortSignal(fifth);
 }
 
+/**
+ * Walk the `.cause` chain (max depth 3) and return a human-readable summary.
+ * Many network errors (e.g. undici `TypeError: fetch failed`) store the
+ * actionable detail in nested `.cause` properties that would otherwise be lost.
+ */
+function describeCauseChain(err: Error, maxDepth = 3): string | undefined {
+  const parts: string[] = [];
+  let current: unknown = err.cause;
+  for (let i = 0; i < maxDepth && current; i++) {
+    if (current instanceof Error) {
+      if (current.message?.trim()) {
+        parts.push(current.message);
+      }
+      current = current.cause;
+    } else {
+      const desc = typeof current === "string" ? current : JSON.stringify(current);
+      if (desc?.trim()) {
+        parts.push(desc);
+      }
+      break;
+    }
+  }
+  return parts.length > 0 ? parts.join(" → ") : undefined;
+}
+
 function describeToolExecutionError(err: unknown): {
   message: string;
   stack?: string;
 } {
   if (err instanceof Error) {
-    const message = err.message?.trim() ? err.message : String(err);
+    const base = err.message?.trim() ? err.message : String(err);
+    const causeDetail = describeCauseChain(err);
+    const message = causeDetail ? `${base} (cause: ${causeDetail})` : base;
     return { message, stack: err.stack };
   }
   return { message: String(err) };

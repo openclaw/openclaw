@@ -734,4 +734,29 @@ describe("fetchWithSsrFGuard hardening", () => {
       expectEnvProxy: true,
     });
   });
+
+  it("skips pinned dispatcher in trusted proxy mode when no proxy env vars are set", async () => {
+    // Simulates transparent proxy setups (e.g. Proxifier + V2Ray) where no
+    // HTTP_PROXY / HTTPS_PROXY env vars exist. The default fetch path should
+    // be used so the OS / transparent proxy can intercept the connection.
+    const lookupFn = createPublicLookup();
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const requestInit = init as RequestInit & { dispatcher?: unknown };
+      // No dispatcher should be attached — globalThis.fetch default path
+      expect(requestInit.dispatcher).toBeUndefined();
+      return okResponse();
+    });
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://api.search.brave.com/res/v1/web/search",
+      fetchImpl,
+      lookupFn,
+      mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    // lookupFn should NOT have been called — DNS pinning is skipped entirely
+    expect(lookupFn).not.toHaveBeenCalled();
+    await result.release();
+  });
 });

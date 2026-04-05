@@ -279,19 +279,31 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
     try {
       assertExplicitProxySupportsPinnedDns(parsedUrl, params.dispatcherPolicy, params.pinDns);
       await assertExplicitProxyAllowed(params.dispatcherPolicy, params.lookupFn, params.policy);
-      const pinned = await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
-        lookupFn: params.lookupFn,
-        policy: params.policy,
-      });
-      const canUseTrustedEnvProxy =
-        mode === GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY && hasProxyEnvConfigured();
-      if (canUseTrustedEnvProxy) {
-        const { EnvHttpProxyAgent } = loadUndiciRuntimeDeps();
-        dispatcher = new EnvHttpProxyAgent();
-      } else if (params.pinDns === false) {
-        dispatcher = createPolicyDispatcherWithoutPinnedDns(params.dispatcherPolicy);
+
+      if (mode === GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY) {
+        // Trusted-endpoint mode (web_search, operator-controlled URLs):
+        // - With explicit proxy env vars: route through EnvHttpProxyAgent.
+        // - Without proxy env vars: skip DNS pinning and custom dispatcher
+        //   entirely so the default fetch path works with system-level
+        //   transparent proxies (e.g. Proxifier, V2Ray) that cannot intercept
+        //   connections made through a custom undici Agent/connect callback.
+        if (hasProxyEnvConfigured()) {
+          const { EnvHttpProxyAgent } = loadUndiciRuntimeDeps();
+          dispatcher = new EnvHttpProxyAgent();
+        }
+        // else: dispatcher stays null — use globalThis.fetch default path
       } else {
-        dispatcher = createPinnedDispatcher(pinned, params.dispatcherPolicy, params.policy);
+        // STRICT mode (web_fetch, untrusted user URLs): always pin DNS for
+        // SSRF protection.
+        const pinned = await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
+          lookupFn: params.lookupFn,
+          policy: params.policy,
+        });
+        if (params.pinDns === false) {
+          dispatcher = createPolicyDispatcherWithoutPinnedDns(params.dispatcherPolicy);
+        } else {
+          dispatcher = createPinnedDispatcher(pinned, params.dispatcherPolicy, params.policy);
+        }
       }
 
       const init: DispatcherAwareRequestInit = {
