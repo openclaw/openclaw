@@ -50,7 +50,7 @@ describe("exec approval reply helpers", () => {
 
   it("returns the approver DM notice text", () => {
     expect(getExecApprovalApproverDmNoticeText()).toBe(
-      "Approval required. I sent approval DMs to the approvers for this account.",
+      "Approval required. I sent this request to the configured approver DMs.",
     );
   });
 
@@ -334,7 +334,7 @@ describe("exec approval reply helpers", () => {
         sentApproverDms: true,
       }),
     ).toEqual({
-      text: "Careful.\n\nApproval required. I sent approval DMs to the approvers for this account.",
+      text: "Careful.\n\nApproval required. I sent this request to the configured approver DMs.",
     });
   });
 

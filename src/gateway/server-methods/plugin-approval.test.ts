@@ -163,6 +163,63 @@ describe("createPluginApprovalHandlers", () => {
       expect(hasExecApprovalClients).toHaveBeenCalledWith("backend-conn-42");
     });
 
+    it("suppresses operator-client broadcast when forwarding owns routing", async () => {
+      vi.useFakeTimers();
+      try {
+        const forwarder = {
+          handleRequested: vi.fn(async () => false),
+          handleResolved: vi.fn(async () => {}),
+          handlePluginApprovalRequested: vi.fn(async () => true),
+          handlePluginApprovalResolved: vi.fn(async () => {}),
+          stop: vi.fn(),
+        };
+        const handlers = createPluginApprovalHandlers(manager, { forwarder });
+        const respond = vi.fn();
+        const broadcast = vi.fn();
+        const opts = createMockOptions(
+          "plugin.approval.request",
+          {
+            title: "Sensitive action",
+            description: "Desc",
+            twoPhase: true,
+          },
+          {
+            respond,
+            context: {
+              broadcast,
+              logGateway: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
+              hasExecApprovalClients: () => true,
+            } as unknown as GatewayRequestHandlerOptions["context"],
+          },
+        );
+
+        const requestPromise = handlers["plugin.approval.request"](opts);
+        await vi.waitFor(() => {
+          expect(respond).toHaveBeenCalledWith(
+            true,
+            expect.objectContaining({ status: "accepted", id: expect.any(String) }),
+            undefined,
+          );
+        });
+
+        expect(forwarder.handlePluginApprovalRequested).toHaveBeenCalledTimes(1);
+        expect(broadcast).not.toHaveBeenCalledWith(
+          "plugin.approval.requested",
+          expect.anything(),
+          expect.anything(),
+        );
+
+        const acceptedCall = respond.mock.calls.find(
+          (call) => (call[1] as Record<string, unknown>)?.status === "accepted",
+        );
+        const approvalId = (acceptedCall?.[1] as Record<string, unknown>)?.id as string;
+        manager.resolve(approvalId, "allow-once");
+        await requestPromise;
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("keeps plugin approvals pending when the originating chat can handle /approve directly", async () => {
       vi.useFakeTimers();
       try {

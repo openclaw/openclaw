@@ -181,20 +181,12 @@ export function createExecApprovalHandlers(
         );
         return;
       }
-      context.broadcast(
-        "exec.approval.requested",
-        {
-          id: record.id,
-          request: record.request,
-          createdAtMs: record.createdAtMs,
-          expiresAtMs: record.expiresAtMs,
-        },
-        { dropIfSlow: true },
-      );
-      const hasExecApprovalClients = context.hasExecApprovalClients?.(client?.connId) ?? false;
       const hasTurnSourceRoute = hasApprovalTurnSourceRoute({
+        approvalKind: "exec",
         turnSourceChannel: record.request.turnSourceChannel,
+        turnSourceTo: record.request.turnSourceTo,
         turnSourceAccountId: record.request.turnSourceAccountId,
+        sessionKey: record.request.sessionKey,
       });
       let forwarded = false;
       if (opts?.forwarder) {
@@ -209,6 +201,22 @@ export function createExecApprovalHandlers(
           context.logGateway?.error?.(`exec approvals: forward request failed: ${String(err)}`);
         }
       }
+      const shouldBroadcastApprovalClients = !(forwarded && !hasTurnSourceRoute);
+      if (shouldBroadcastApprovalClients) {
+        context.broadcast(
+          "exec.approval.requested",
+          {
+            id: record.id,
+            request: record.request,
+            createdAtMs: record.createdAtMs,
+            expiresAtMs: record.expiresAtMs,
+          },
+          { dropIfSlow: true },
+        );
+      }
+      const hasExecApprovalClients = shouldBroadcastApprovalClients
+        ? (context.hasExecApprovalClients?.(client?.connId) ?? false)
+        : false;
 
       if (!hasExecApprovalClients && !forwarded && !hasTurnSourceRoute) {
         manager.expire(record.id, "no-approval-route");

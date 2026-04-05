@@ -179,11 +179,14 @@ function buildSyntheticApprovalRequest(routeRequest: ApprovalRouteRequest): Exec
 }
 
 function shouldSkipForwardingFallback(params: {
-  approvalKind: "exec" | "plugin";
-  target: ExecApprovalForwardTarget;
+  approvalKind: ApprovalKind;
+  target: ForwardTarget;
   cfg: OpenClawConfig;
   routeRequest: ApprovalRouteRequest;
 }): boolean {
+  if (params.target.source !== "session") {
+    return false;
+  }
   const channel = normalizeMessageChannel(params.target.channel) ?? params.target.channel;
   if (!channel) {
     return false;
@@ -503,16 +506,15 @@ function createApprovalHandlers<
     const config = params.strategy.config(cfg);
     const requestId = params.strategy.getRequestId(request);
     const routeRequest = params.strategy.getRouteRequestFromRequest(request);
-    const filteredTargets = [
-      ...(shouldForwardRoute({ config, routeRequest })
-        ? await resolveForwardTargets({
-            cfg,
-            config,
-            routeRequest,
-            resolveSessionTarget: params.resolveSessionTarget,
-          })
-        : []),
-    ].filter(
+    const requestedTargets = shouldForwardRoute({ config, routeRequest })
+      ? await resolveForwardTargets({
+          cfg,
+          config,
+          routeRequest,
+          resolveSessionTarget: params.resolveSessionTarget,
+        })
+      : [];
+    const filteredTargets = requestedTargets.filter(
       (target) =>
         !shouldSkipForwardingFallback({
           approvalKind: params.strategy.kind,
@@ -522,7 +524,10 @@ function createApprovalHandlers<
         }),
     );
     if (filteredTargets.length === 0) {
-      return false;
+      // A channel-native adapter may intentionally suppress generic forwarding
+      // fallback for this target. Surface this as "handled" so callers do not
+      // treat it as a no-route approval failure.
+      return requestedTargets.length > 0;
     }
 
     const expiresInMs = Math.max(0, params.strategy.getExpiresAtMs(request) - params.nowMs());

@@ -394,33 +394,6 @@ function getTelegramExecApprovalApprovers(params: {
   });
 }
 
-function isTelegramExecApprovalTargetRecipient(params: {
-  cfg: OpenClawConfig;
-  senderId?: string | null;
-  accountId?: string | null;
-}): boolean {
-  const senderId = params.senderId?.trim();
-  const execApprovals = params.cfg.approvals?.exec;
-  if (
-    !senderId ||
-    execApprovals?.enabled !== true ||
-    (execApprovals.mode !== "targets" && execApprovals.mode !== "both")
-  ) {
-    return false;
-  }
-  const accountId = params.accountId ? normalizeAccountId(params.accountId) : undefined;
-  return (execApprovals.targets ?? []).some((target) => {
-    if (target.channel?.trim().toLowerCase() !== "telegram") {
-      return false;
-    }
-    if (accountId && target.accountId && normalizeAccountId(target.accountId) !== accountId) {
-      return false;
-    }
-    const to = target.to ? normalizeTelegramDirectApproverId(target.to) : undefined;
-    return Boolean(to && to === senderId);
-  });
-}
-
 function isTelegramExecApprovalAuthorizedSender(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -430,10 +403,7 @@ function isTelegramExecApprovalAuthorizedSender(params: {
   if (!senderId) {
     return false;
   }
-  return (
-    getTelegramExecApprovalApprovers(params).includes(senderId) ||
-    isTelegramExecApprovalTargetRecipient(params)
-  );
+  return getTelegramExecApprovalApprovers(params).includes(senderId);
 }
 
 function isTelegramExecApprovalClientEnabled(params: {
@@ -449,6 +419,29 @@ function resolveTelegramExecApprovalTarget(params: {
   accountId?: string | null;
 }): "dm" | "channel" | "both" {
   return resolveTelegramTestAccount(params.cfg, params.accountId).execApprovals?.target ?? "dm";
+}
+
+function isTelegramExecApprovalTargetRecipient(params: {
+  cfg: OpenClawConfig;
+  senderId?: string | null;
+  accountId?: string | null;
+}): boolean {
+  const senderId = params.senderId ? normalizeTelegramDirectApproverId(params.senderId) : undefined;
+  if (!senderId) {
+    return false;
+  }
+  const targets = params.cfg.approvals?.exec?.targets ?? [];
+  const accountId = params.accountId ? normalizeAccountId(params.accountId) : undefined;
+  return targets.some((target) => {
+    if (target.channel?.trim().toLowerCase() !== "telegram") {
+      return false;
+    }
+    if (accountId && target.accountId && normalizeAccountId(target.accountId) !== accountId) {
+      return false;
+    }
+    const to = target.to ? normalizeTelegramDirectApproverId(target.to) : undefined;
+    return Boolean(to && to === senderId);
+  });
 }
 
 const telegramNativeApprovalAdapter = createApproverRestrictedNativeApprovalAdapter({
@@ -1078,7 +1071,7 @@ describe("/approve command", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
-  it("accepts Telegram /approve from exec target recipients when native approvals are disabled", async () => {
+  it("ignores Telegram /approve from exec target recipients when sender is not an approver", async () => {
     const cfg = {
       commands: { text: true },
       approvals: {
@@ -1105,13 +1098,8 @@ describe("/approve command", () => {
 
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("Approval allow-once submitted");
-    expect(callGatewayMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "exec.approval.resolve",
-        params: { id: "abc12345", decision: "allow-once" },
-      }),
-    );
+    expect(result.reply).toBeUndefined();
+    expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
   it("requires configured Discord approvers for exec approvals", async () => {
