@@ -155,6 +155,21 @@ export const en: TranslationMap = {
       noResults: "No results",
     },
   },
+  instances: {
+    title: "Connected Instances",
+    subtitle: "Presence beacons from the gateway and clients.",
+    showHosts: "Show hosts and IPs",
+    hideHosts: "Hide hosts and IPs",
+    toggleHostVisibility: "Toggle host visibility",
+    loading: "Loading…",
+    noInstances: "No instances reported yet.",
+    lastInput: "Last input {value}",
+    reason: "Reason {value}",
+    unknown: "unknown",
+    unknownHost: "unknown host",
+    scopesCount: "{count} scopes",
+    scopesList: "scopes: {value}",
+  },
   usage: {
     page: {
       subtitle: "See where tokens go, when sessions spike, and what drives cost.",
