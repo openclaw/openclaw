@@ -22,6 +22,7 @@ import {
   extractThinkingFromTaggedText,
   formatReasoningMessage,
   promoteThinkingTagsToBlocks,
+  UNBACKED_EXECUTION_INTENT_REPLY_FALLBACK,
 } from "./pi-embedded-utils.js";
 
 const stripTrailingDirective = (text: string): string => {
@@ -306,7 +307,12 @@ export function handleMessageUpdate(
     }
     const parsedDelta = visibleDelta ? ctx.consumePartialReplyDirectives(visibleDelta) : null;
     const parsedFull = parseReplyDirectives(stripTrailingDirective(next));
-    const cleanedText = parsedFull.text;
+    const blockedExecutionIntent = parsedFull.text
+      ? ctx.markUnbackedExecutionIntentReply(parsedFull.text)
+      : false;
+    const cleanedText = blockedExecutionIntent
+      ? UNBACKED_EXECUTION_INTENT_REPLY_FALLBACK
+      : parsedFull.text;
     const { mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedDelta ?? {});
     const hasAudio = Boolean(parsedDelta?.audioAsVoice);
     const previousCleaned = ctx.state.lastStreamedAssistantCleaned ?? "";
@@ -328,6 +334,10 @@ export function handleMessageUpdate(
     ctx.state.lastStreamedAssistantCleaned = cleanedText;
 
     if (ctx.params.silentExpected) {
+      shouldEmit = false;
+    }
+
+    if (blockedExecutionIntent) {
       shouldEmit = false;
     }
 
@@ -404,10 +414,14 @@ export function handleMessageEnd(
     rawThinking: extractAssistantThinking(assistantMessage),
   });
 
-  const text = resolveSilentReplyFallbackText({
+  let text = resolveSilentReplyFallbackText({
     text: ctx.stripBlockTags(rawText, { thinking: false, final: false }),
     messagingToolSentTexts: ctx.state.messagingToolSentTexts,
   });
+  const blockedExecutionIntent = text ? ctx.markUnbackedExecutionIntentReply(text) : false;
+  if (blockedExecutionIntent) {
+    text = UNBACKED_EXECUTION_INTENT_REPLY_FALLBACK;
+  }
   const rawThinking =
     ctx.state.includeReasoning || ctx.state.streamReasoning
       ? extractAssistantThinking(assistantMessage) || extractThinkingFromTaggedText(rawText)
@@ -454,7 +468,11 @@ export function handleMessageEnd(
   const silentExpectedWithoutSentinel =
     ctx.params.silentExpected && !isSilentReplyText(trimmedText, SILENT_REPLY_TOKEN);
   const finalAssistantText = silentExpectedWithoutSentinel ? "" : text;
-  const addedDuringMessage = ctx.state.assistantTexts.length > ctx.state.assistantTextBaseline;
+  let addedDuringMessage = ctx.state.assistantTexts.length > ctx.state.assistantTextBaseline;
+  if (blockedExecutionIntent) {
+    ctx.replaceCurrentAssistantMessageText(finalAssistantText);
+    addedDuringMessage = false;
+  }
   const chunkerHasBuffered = ctx.blockChunker?.hasBuffered() ?? false;
   ctx.finalizeAssistantTexts({
     text: finalAssistantText,
@@ -545,6 +563,17 @@ export function handleMessageEnd(
   }
   if (!ctx.params.silentExpected && ctx.state.streamReasoning && rawThinking) {
     ctx.emitReasoningStream(rawThinking);
+  }
+
+  if (
+    blockedExecutionIntent &&
+    !ctx.params.silentExpected &&
+    ctx.state.blockReplyBreak === "text_end" &&
+    onBlockReply &&
+    !ctx.state.executionIntentFallbackSent
+  ) {
+    ctx.state.executionIntentFallbackSent = true;
+    ctx.emitBlockReply({ text: UNBACKED_EXECUTION_INTENT_REPLY_FALLBACK });
   }
 
   if (!ctx.params.silentExpected && ctx.state.blockReplyBreak === "text_end" && onBlockReply) {

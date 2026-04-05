@@ -73,6 +73,8 @@ export type EmbeddedPiSubscribeState = {
   pendingToolMediaUrls: string[];
   pendingToolAudioAsVoice: boolean;
   deterministicApprovalPromptSent: boolean;
+  executionIntentReplyBlocked: boolean;
+  executionIntentFallbackSent: boolean;
   lastAssistant?: AgentMessage;
 };
 
@@ -121,6 +123,9 @@ export type EmbeddedPiSubscribeContext = {
   getUsageTotals: () => NormalizedUsage | undefined;
   getCompactionCount: () => number;
   emitBlockReply: (payload: BlockReplyPayload) => void;
+  hasToolActivityForAssistantReply: () => boolean;
+  markUnbackedExecutionIntentReply: (text: string) => boolean;
+  replaceCurrentAssistantMessageText: (text: string) => void;
 };
 
 /**
@@ -156,6 +161,8 @@ export type ToolHandlerState = Pick<
   | "messagingToolSentTargets"
   | "successfulCronAdds"
   | "deterministicApprovalPromptSent"
+  | "executionIntentReplyBlocked"
+  | "executionIntentFallbackSent"
 >;
 
 export type ToolHandlerContext = {

@@ -10,6 +10,7 @@ import {
   findLifecycleErrorAgentEvent,
 } from "./pi-embedded-subscribe.e2e-harness.js";
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
+import { UNBACKED_EXECUTION_INTENT_REPLY_FALLBACK } from "./pi-embedded-utils.js";
 
 describe("subscribeEmbeddedPiSession", () => {
   async function flushBlockReplyCallbacks(): Promise<void> {
@@ -207,6 +208,82 @@ describe("subscribeEmbeddedPiSession", () => {
 
     expect(resolveToolResult).toBeTypeOf("function");
     resolveToolResult?.();
+  });
+
+  it("replaces fake execution-intent shell replies when no tool call ran", async () => {
+    const { session, emit } = createStubSessionHarness();
+    const onBlockReply = vi.fn();
+    const onAgentEvent = vi.fn();
+    const subscription = subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      onBlockReply,
+      onAgentEvent,
+      blockReplyBreak: "message_end",
+    });
+    const text = `I will install/check this now.
+
+\`\`\`bash
+exec npx -y @tencent-weixin/openclaw-weixin-cli@latest install
+\`\`\``;
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta(emit, text);
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text }],
+      } as AssistantMessage,
+    });
+    await flushBlockReplyCallbacks();
+
+    expect(subscription.assistantTexts).toEqual([UNBACKED_EXECUTION_INTENT_REPLY_FALLBACK]);
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: UNBACKED_EXECUTION_INTENT_REPLY_FALLBACK }),
+    );
+    const payloadTexts = extractAgentEventPayloads(onAgentEvent.mock.calls)
+      .map((payload) => payload.text)
+      .filter((value): value is string => typeof value === "string");
+    expect(payloadTexts).toContain(UNBACKED_EXECUTION_INTENT_REPLY_FALLBACK);
+    expect(payloadTexts.join("\n")).not.toContain("exec npx -y");
+  });
+
+  it("keeps execution-intent shell replies when real tool activity exists", async () => {
+    const { session, emit } = createStubSessionHarness();
+    const onBlockReply = vi.fn();
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      onBlockReply,
+      blockReplyBreak: "message_end",
+    });
+    const text = `Let me check that now.
+
+\`\`\`bash
+git status
+\`\`\``;
+
+    emitToolRun({
+      emit,
+      toolName: "read",
+      toolCallId: "tool-1",
+      args: { path: "/tmp/file.txt" },
+      isError: false,
+      result: { text: "ok" },
+    });
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta(emit, text);
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text }],
+      } as AssistantMessage,
+    });
+    await flushBlockReplyCallbacks();
+
+    expect(onBlockReply).toHaveBeenCalledWith(expect.objectContaining({ text }));
   });
 
   it.each(THINKING_TAG_CASES)(

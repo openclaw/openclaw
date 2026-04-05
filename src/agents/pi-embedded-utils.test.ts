@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   extractAssistantText,
   formatReasoningMessage,
+  looksLikeUnbackedExecutionIntentReply,
   promoteThinkingTagsToBlocks,
   stripDowngradedToolCallText,
 } from "./pi-embedded-utils.js";
@@ -566,6 +567,26 @@ describe("stripDowngradedToolCallText", () => {
     for (const testCase of cases) {
       expect(stripDowngradedToolCallText(testCase.text), testCase.name).toBe(testCase.expected);
     }
+  });
+});
+
+describe("looksLikeUnbackedExecutionIntentReply", () => {
+  it("matches first-person execution intent paired with a runnable shell fence", () => {
+    const text = `I will install/check this now.
+
+\`\`\`bash
+exec npx -y @tencent-weixin/openclaw-weixin-cli@latest install
+\`\`\``;
+    expect(looksLikeUnbackedExecutionIntentReply(text)).toBe(true);
+  });
+
+  it("ignores ordinary command examples without execution-intent phrasing", () => {
+    const text = `Run this command locally if you want to install it:
+
+\`\`\`bash
+npm install
+\`\`\``;
+    expect(looksLikeUnbackedExecutionIntentReply(text)).toBe(false);
   });
 });
 

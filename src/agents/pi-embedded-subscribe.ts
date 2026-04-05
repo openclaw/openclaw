@@ -23,7 +23,12 @@ import type {
 import { isPromiseLike } from "./pi-embedded-subscribe.promise.js";
 import { filterToolResultMediaUrls } from "./pi-embedded-subscribe.tools.js";
 import type { SubscribeEmbeddedPiSessionParams } from "./pi-embedded-subscribe.types.js";
-import { formatReasoningMessage, stripDowngradedToolCallText } from "./pi-embedded-utils.js";
+import {
+  formatReasoningMessage,
+  looksLikeUnbackedExecutionIntentReply,
+  stripDowngradedToolCallText,
+  UNBACKED_EXECUTION_INTENT_REPLY_FALLBACK,
+} from "./pi-embedded-utils.js";
 import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
 
 const THINKING_TAG_SCAN_RE = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
@@ -86,6 +91,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     pendingToolMediaUrls: [],
     pendingToolAudioAsVoice: false,
     deterministicApprovalPromptSent: false,
+    executionIntentReplyBlocked: false,
+    executionIntentFallbackSent: false,
   };
   const usageTotals = {
     input: 0,
@@ -167,6 +174,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.lastReasoningSent = undefined;
     state.reasoningStreamOpen = false;
     state.suppressBlockChunks = false;
+    state.executionIntentReplyBlocked = false;
+    state.executionIntentFallbackSent = false;
     state.assistantMessageIndex += 1;
     state.lastAssistantTextMessageIndex = -1;
     state.lastAssistantTextNormalized = undefined;
@@ -208,6 +217,35 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     }
     assistantTexts.push(text);
     rememberAssistantText(text);
+  };
+
+  const hasToolActivityForAssistantReply = () =>
+    state.toolSummaryById.size > 0 ||
+    state.toolMetas.length > 0 ||
+    state.deterministicApprovalPromptSent;
+
+  const replaceCurrentAssistantMessageText = (text: string) => {
+    assistantTexts.splice(state.assistantTextBaseline);
+    state.lastAssistantTextMessageIndex = -1;
+    state.lastAssistantTextNormalized = undefined;
+    state.lastAssistantTextTrimmed = undefined;
+    state.lastBlockReplyText = undefined;
+    if (text) {
+      pushAssistantText(text);
+    }
+  };
+
+  const markUnbackedExecutionIntentReply = (text: string) => {
+    if (state.executionIntentReplyBlocked) {
+      return true;
+    }
+    if (hasToolActivityForAssistantReply() || !looksLikeUnbackedExecutionIntentReply(text)) {
+      return false;
+    }
+    state.executionIntentReplyBlocked = true;
+    state.executionIntentFallbackSent = false;
+    replaceCurrentAssistantMessageText("");
+    return true;
   };
 
   const finalizeAssistantTexts = (args: {
@@ -519,6 +557,20 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     if (state.suppressBlockChunks || params.silentExpected) {
       return;
     }
+    if (state.executionIntentReplyBlocked) {
+      if (state.executionIntentFallbackSent) {
+        return;
+      }
+      state.executionIntentFallbackSent = true;
+      replaceCurrentAssistantMessageText(UNBACKED_EXECUTION_INTENT_REPLY_FALLBACK);
+      emitBlockReply(
+        { text: UNBACKED_EXECUTION_INTENT_REPLY_FALLBACK },
+        {
+          assistantMessageIndex: options?.assistantMessageIndex ?? state.assistantMessageIndex,
+        },
+      );
+      return;
+    }
     // Strip <think> and <final> blocks across chunk boundaries to avoid leaking reasoning.
     // Also strip downgraded tool call text ([Tool Call: ...], [Historical context: ...], etc.).
     const chunk = stripDowngradedToolCallText(stripBlockTags(text, state.blockState)).trimEnd();
@@ -657,6 +709,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.pendingToolMediaUrls = [];
     state.pendingToolAudioAsVoice = false;
     state.deterministicApprovalPromptSent = false;
+    state.executionIntentReplyBlocked = false;
+    state.executionIntentFallbackSent = false;
     resetAssistantMessageState(0);
   };
 
@@ -697,6 +751,9 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     incrementCompactionCount,
     getUsageTotals,
     getCompactionCount: () => compactionCount,
+    hasToolActivityForAssistantReply,
+    markUnbackedExecutionIntentReply,
+    replaceCurrentAssistantMessageText,
   };
 
   const sessionUnsubscribe = params.session.subscribe(createEmbeddedPiSessionEventHandler(ctx));
