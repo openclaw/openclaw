@@ -43,6 +43,9 @@ export function normalizeProviderSpecificConfig(
   providerKey: string,
   provider: ProviderConfig,
 ): ProviderConfig {
+  if (shouldNormalizeGoogleProviderConfig(providerKey, provider)) {
+    return normalizeGoogleProviderConfig(providerKey, provider);
+  }
   const runtimeProviderKey = resolveProviderPluginLookupKey(providerKey, provider);
   const normalized =
     normalizeProviderConfigWithPlugin({
@@ -54,9 +57,6 @@ export function normalizeProviderSpecificConfig(
     }) ?? undefined;
   if (normalized && normalized !== provider) {
     return normalized;
-  }
-  if (shouldNormalizeGoogleProviderConfig(providerKey, provider)) {
-    return normalizeGoogleProviderConfig(providerKey, provider);
   }
   return provider;
 }

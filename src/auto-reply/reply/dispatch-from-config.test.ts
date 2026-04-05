@@ -894,97 +894,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
-  it("emits concise tool-start progress updates for direct sessions", async () => {
-    setNoAbort();
-    const cfg = emptyConfig;
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "telegram",
-      ChatType: "direct",
-    });
-
-    const replyResolver = async (
-      _ctx: MsgContext,
-      opts?: GetReplyOptions,
-      _cfg?: OpenClawConfig,
-    ) => {
-      await opts?.onToolStart?.({ name: "read", phase: "start" });
-      await opts?.onToolStart?.({ name: "read", phase: "update" });
-      await opts?.onToolStart?.({ name: "grep", phase: "start" });
-      await opts?.onToolStart?.({ name: "exec", phase: "start" });
-      return { text: "done" } satisfies ReplyPayload;
-    };
-
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
-
-    expect(dispatcher.sendToolResult).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ text: "Working: read" }),
-    );
-    expect(dispatcher.sendToolResult).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({ text: "Working: grep" }),
-    );
-    expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(2);
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
-  });
-
-  it("prefers item-start progress updates for direct sessions", async () => {
-    setNoAbort();
-    const cfg = emptyConfig;
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "telegram",
-      ChatType: "direct",
-    });
-
-    const replyResolver = async (
-      _ctx: MsgContext,
-      opts?: GetReplyOptions,
-      _cfg?: OpenClawConfig,
-    ) => {
-      await opts?.onItemEvent?.({
-        itemId: "tool:read-1",
-        kind: "tool",
-        title: "read config",
-        name: "read",
-        phase: "start",
-        status: "running",
-      });
-      await opts?.onItemEvent?.({
-        itemId: "tool:read-1",
-        kind: "tool",
-        title: "read config",
-        name: "read",
-        phase: "end",
-        status: "completed",
-      });
-      await opts?.onItemEvent?.({
-        itemId: "tool:grep-1",
-        kind: "tool",
-        title: "grep",
-        name: "grep",
-        phase: "start",
-        status: "running",
-      });
-      return { text: "done" } satisfies ReplyPayload;
-    };
-
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
-
-    expect(dispatcher.sendToolResult).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ text: "Working: read" }),
-    );
-    expect(dispatcher.sendToolResult).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({ text: "Working: grep" }),
-    );
-    expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(2);
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
-  });
-
-  it("renders concise plan and approval progress updates for direct sessions", async () => {
+  it("renders plain-text plan updates and concise approval progress for direct sessions", async () => {
     setNoAbort();
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
@@ -1015,7 +925,9 @@ describe("dispatchReplyFromConfig", () => {
 
     expect(dispatcher.sendToolResult).toHaveBeenNthCalledWith(
       1,
-      expect.objectContaining({ text: "Working: Inspect code" }),
+      expect.objectContaining({
+        text: "Inspect code, patch it, run tests.\n\n1. Inspect code\n2. Patch code\n3. Run tests",
+      }),
     );
     expect(dispatcher.sendToolResult).toHaveBeenNthCalledWith(
       2,
@@ -1056,7 +968,6 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(1);
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });
-
   it("delivers deterministic exec approval tool payloads for native commands", async () => {
     setNoAbort();
     const cfg = emptyConfig;

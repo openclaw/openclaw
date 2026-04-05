@@ -14,14 +14,17 @@ Docs: https://docs.openclaw.ai
 - Agents/cache: stabilize cache-relevant system prompt fingerprints by normalizing equivalent structured prompt whitespace, line endings, hook-added system context, and runtime capability ordering so semantically unchanged prompts reuse KV/cache more reliably. Thanks @vincentkoc.
 - Agents/Claude CLI: expose OpenClaw tools to background Claude CLI runs through a loopback MCP bridge that reuses gateway tool policy, honors session/account/channel scoping, and only advertises the bridge when the local runtime is actually live. (#35676) Thanks @mylukin.
 - Agents/Claude CLI: switch bundled Claude CLI runs to stdin + `stream-json` partial-message streaming so prompts stop riding argv, long replies show live progress, and final session/usage metadata still land cleanly.
+- Agents/tool prompts: remove the duplicate in-band tool inventory from agent system prompts so tool-calling models rely on the structured tool definitions as the single source of truth, improving prompt stability and reducing stale tool guidance.
 - Channels/context visibility: add configurable `contextVisibility` per channel (`all`, `allowlist`, `allowlist_quote`) so supplemental quote, thread, and fetched history context can be filtered by sender allowlists instead of always passing through as received.
 - Config/schema: enrich the exported `openclaw config schema` JSON Schema with field titles and descriptions so editors, agents, and other schema consumers receive the same config help metadata. (#60067) Thanks @solavrc.
 - Control UI/skills: add ClawHub search, detail, and install flows directly in the Skills panel. (#60134) Thanks @samzong.
+- Docs/IRC: replace public IRC hostname examples with `irc.example.com` and recommend private servers for bot coordination while listing common public networks for intentional use.
 - Matrix/exec approvals: add Matrix-native exec approval prompts with account-scoped approvers, channel-or-DM delivery, and room-thread aware resolution handling. (#58635) Thanks @gumadeiras.
 - Memory/dreaming (experimental): add weighted short-term recall promotion, managed dreaming modes (`off|core|rem|deep`), a `/dreaming` command, Dreams UI, multilingual conceptual tagging, and doctor/status repair support so durable memory promotion can run in the background with less manual setup. (#60569, #60697) Thanks @vignesh07.
 - MiniMax/TTS: add a bundled MiniMax speech provider backed by the T2A v2 API so speech synthesis can run through MiniMax-native voices and auth. (#55921) Thanks @duncanita.
 - Plugins/install: add `openclaw plugins install --force` to overwrite existing plugin and hook-pack install targets without using the dangerous-code override flag. (#60544) Thanks @gumadeiras.
 - Plugins/onboarding: add plugin config TUI prompts to onboard and configure wizards so more plugin setup can stay in the guided flow. (#60590) Thanks @odysseus0.
+- Providers/OpenAI: move GPT-5 prompt tuning onto provider-owned system-prompt contributions so cache-stable guidance stays above the prompt cache boundary and embedded runner paths reuse the same provider-specific prompt behavior.
 - Prompt caching: keep prompt prefixes more reusable across transport fallback, deterministic MCP tool ordering, compaction, and embedded image history so follow-up turns hit cache more reliably. (#58036, #58037, #58038, #59054, #60603, #60691) Thanks @bcherny.
 - Providers/Amazon Bedrock: discover regional and global inference profiles, inherit their backing model capabilities, and inject the Bedrock request region automatically so cross-region Claude profiles work without manual provider overrides. (#61299) Thanks @wirjo.
 - Providers/Amazon Bedrock Mantle: add a bundled OpenAI-compatible Mantle provider with bearer-token discovery, automatic OSS model catalog loading, and Bedrock Mantle region detection for hosted GPT-OSS, Qwen, Kimi, GLM, and similar routes. (#61296) Thanks @wirjo.
@@ -32,6 +35,7 @@ Docs: https://docs.openclaw.ai
 - Providers/request overrides: add shared model and media request transport overrides across OpenAI-, Anthropic-, Google-, and compatible provider paths, including headers, auth, proxy, and TLS controls. (#60200)
 - Providers/StepFun: add the bundled StepFun provider plugin with standard and Step Plan endpoints, China/global onboarding choices, `step-3.5-flash` on both catalogs, and `step-3.5-flash-2603` currently exposed on Step Plan. (#60032) Thanks @hengm3467.
 - Tools/web_search: add a bundled MiniMax Search provider backed by the Coding Plan search API, with region reuse from `MINIMAX_API_HOST` and plugin-owned credential config. (#54648) Thanks @fengmk2.
+- Control UI/multilingual: add localized control UI support for Simplified Chinese, Traditional Chinese, Brazilian Portuguese, German, Spanish, Japanese, Korean, and French. Thanks @vincentkoc.
 
 ### Fixes
 
@@ -120,7 +124,6 @@ Docs: https://docs.openclaw.ai
 - Plugins/auth-choice: apply provider-owned auth config patches without recursively preserving replaced default-model maps, so Anthropic Claude CLI and similar migrations can intentionally swap model allowlists during onboarding and setup instead of accumulating stale entries. Thanks @vincentkoc.
 - Plugins/cache: inherit the active gateway workspace for provider, web-search, and web-fetch snapshot loads when callers omit `workspaceDir`, so compatible plugin registries and snapshot caches stop missing on gateway-owned runtime paths. (#61138) Thanks @jzakirov.
 - Plugins/facades: back-fill facade sentinels before tracked-plugin resolution re-enters config loading, so facade exports stay defined during circular provider normalization. (#61180) Thanks @adam91holt.
-- Providers/OpenAI GPT: treat short approval turns like `ok do it` and `go ahead` as immediate action turns, and trim overly memo-like GPT-5 chat confirmations so OpenAI replies stay shorter and more conversational by default.
 - Plugins/install: preserve unsafe override flags across linked plugin and hook-pack probes so local `--link` installs honor the documented override behavior. (#60624) Thanks @JerrettDavis.
 - Plugins/Kimi Coding: parse tagged tool calls and keep Anthropic-native tool payloads so Kimi coding endpoints execute tools instead of echoing raw markup. (#60051, #60391) Thanks @obviyus and @Eric-Guo.
 - Plugins/marketplace: block remote marketplace symlink escapes without breaking ordinary local marketplace install paths. (#60556) Thanks @eleqtrizit.
@@ -137,6 +140,7 @@ Docs: https://docs.openclaw.ai
 - Providers/Google: add model-level `cacheRetention` support for direct Gemini system prompts by creating, reusing, and refreshing `cachedContents` automatically on Google AI Studio runs. (#51372) Thanks @rafaelmariano-glitch.
 - Providers/Model Studio: preserve native streaming usage reporting for DashScope-compatible endpoints even when they are configured under a generic provider key, so streamed token totals stop sticking at zero. (#52395) Thanks @IVY-AI-gif.
 - Providers/OpenAI Codex: split native `contextWindow` from runtime `contextTokens`, keep the default effective cap at `272000`, and expose a per-model `contextTokens` override on `models.providers.*.models[]`.
+- Providers/OpenAI GPT: treat short approval turns like `ok do it` and `go ahead` as immediate action turns, and trim overly memo-like GPT-5 chat confirmations so OpenAI replies stay shorter and more conversational by default.
 - Providers/OpenAI-compatible WS: compute fallback token totals from normalized usage when providers omit or zero `total_tokens`, so DashScope-compatible sessions stop storing zero totals after alias normalization. (#54940) Thanks @lyfuci.
 - Providers/OpenAI: make GPT-5 and Codex runs act sooner with lower-verbosity defaults, visible progress during tool work, and a one-shot retry when a turn only narrates the plan instead of taking action.
 - Providers/OpenAI: preserve native `reasoning.effort: "none"` and strict tool schemas on direct OpenAI-family endpoints, keep compat routes on compat shaping, fix Responses WebSocket warm-up behavior, keep stable session and turn metadata, and fall back more gracefully after early WebSocket failures.

@@ -2212,6 +2212,26 @@ Notes:
 - File permissions are `0700` for directories and `0600` for files.
 - Cleanup follows the `cleanup` policy: `delete` always removes attachments; `keep` retains them only when `retainOnSessionKeep: true`.
 
+### `tools.experimental`
+
+Experimental built-in tool flags. Default off unless a runtime-specific auto-enable rule applies.
+
+```json5
+{
+  tools: {
+    experimental: {
+      planTool: true, // enable experimental update_plan
+    },
+  },
+}
+```
+
+Notes:
+
+- `planTool`: enables the structured `update_plan` tool for non-trivial multi-step work tracking.
+- Default: `false` for non-OpenAI providers. OpenAI and OpenAI Codex runs auto-enable it.
+- When enabled, the system prompt also adds usage guidance so the model only uses it for substantial work and keeps at most one step `in_progress`.
+
 ### `agents.defaults.subagents`
 
 ```json5

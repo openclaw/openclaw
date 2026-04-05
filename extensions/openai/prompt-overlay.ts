@@ -1,4 +1,5 @@
 const OPENAI_PROVIDER_IDS = new Set(["openai", "openai-codex"]);
+const OPENAI_GPT5_MODEL_PREFIX = "gpt-5";
 
 export const OPENAI_FRIENDLY_PROMPT_OVERLAY = `## Interaction Style
 
@@ -21,6 +22,20 @@ Default to short natural replies unless the user asks for depth.
 Avoid walls of text, long preambles, and repetitive restatement.
 Keep replies concise by default; friendly does not mean verbose.`;
 
+export const OPENAI_GPT5_OUTPUT_CONTRACT = `## GPT-5 Output Contract
+
+Return the requested sections only, in the requested order.
+Prefer terse answers by default; expand only when depth materially helps.
+Avoid restating large internal plans when the next action is already clear.`;
+
+export const OPENAI_GPT5_EXECUTION_BIAS = `## Execution Bias
+
+Start the real work in the same turn when the next step is clear.
+Do prerequisite lookup or discovery before dependent actions.
+If another tool call would likely improve correctness or completeness, keep going instead of stopping at partial progress.
+Multi-part requests stay incomplete until every requested item is handled or clearly marked blocked.
+Before the final answer, quickly verify correctness, coverage, formatting, and obvious side effects.`;
+
 export type OpenAIPromptOverlayMode = "friendly" | "off";
 
 export function resolveOpenAIPromptOverlayMode(
@@ -30,8 +45,34 @@ export function resolveOpenAIPromptOverlayMode(
 }
 
 export function shouldApplyOpenAIPromptOverlay(params: {
+  modelProviderId?: string;
+  modelId?: string;
+}): boolean {
+  if (!OPENAI_PROVIDER_IDS.has(params.modelProviderId ?? "")) {
+    return false;
+  }
+  const normalizedModelId = params.modelId?.trim().toLowerCase() ?? "";
+  return normalizedModelId.startsWith(OPENAI_GPT5_MODEL_PREFIX);
+}
+
+export function resolveOpenAISystemPromptContribution(params: {
   mode: OpenAIPromptOverlayMode;
   modelProviderId?: string;
-}): boolean {
-  return params.mode === "friendly" && OPENAI_PROVIDER_IDS.has(params.modelProviderId ?? "");
+  modelId?: string;
+}) {
+  if (
+    !shouldApplyOpenAIPromptOverlay({
+      modelProviderId: params.modelProviderId,
+      modelId: params.modelId,
+    })
+  ) {
+    return undefined;
+  }
+  return {
+    stablePrefix: OPENAI_GPT5_OUTPUT_CONTRACT,
+    sectionOverrides: {
+      execution_bias: OPENAI_GPT5_EXECUTION_BIAS,
+      ...(params.mode === "friendly" ? { interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY } : {}),
+    },
+  };
 }
