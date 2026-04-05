@@ -10,8 +10,8 @@
 # Before first deploy:
 #   1. Copy openclaw.render.json5 to /data/.openclaw/openclaw.json on the Render disk
 #   2. Set all secrets in Render dashboard
-#   4. Create Discord bot with Message Content + Server Members intents
-#   5. Invite bot to private server with Connect, Speak, View Channels,
+#   3. Create Discord bot with Message Content + Server Members intents
+#   4. Invite bot to private server with Connect, Speak, View Channels,
 #      Send Messages, Read Message History permissions
 
 services:
@@ -20,6 +20,11 @@ services:
     runtime: docker
     plan: starter
     healthCheckPath: /health
+    dockerContext: .
+    dockerfilePath: ./Dockerfile
+    buildArgs:
+      OPENCLAW_EXTENSIONS: "discord whatsapp elevenlabs deepgram anthropic media-understanding-core memory-core speech-core"
+      OPENCLAW_DOCKER_APT_PACKAGES: "ffmpeg"
     envVars:
       - key: OPENCLAW_GATEWAY_PORT
         value: "8080"
@@ -31,10 +36,6 @@ services:
         value: /data/.openclaw/openclaw.json
       - key: OPENCLAW_GATEWAY_TOKEN
         generateValue: true
-      - key: OPENCLAW_EXTENSIONS
-        value: "discord whatsapp elevenlabs deepgram anthropic media-understanding-core memory-core speech-core"
-      - key: OPENCLAW_DOCKER_APT_PACKAGES
-        value: "ffmpeg"
     disk:
       name: openclaw-data
       mountPath: /data

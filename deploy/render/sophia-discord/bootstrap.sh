@@ -27,8 +27,7 @@ if [ ! -f "$CONFIG_FILE" ]; then
     exit 1
   fi
 
-  # Strip JSON5 comments for runtime compatibility (openclaw reads JSON5 natively,
-  # but stripping comments keeps the file parseable by plain JSON tools too)
+  # openclaw reads JSON5 natively; copy the template as-is
   cp "$TEMPLATE" "$CONFIG_FILE"
   echo "[bootstrap] Config deployed to $CONFIG_FILE"
 else
