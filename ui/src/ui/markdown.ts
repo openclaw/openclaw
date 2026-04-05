@@ -1,4 +1,5 @@
 import DOMPurify from "dompurify";
+import katex from "katex";
 import { marked } from "marked";
 import { truncateText } from "./format.ts";
 
@@ -34,6 +35,30 @@ const allowedTags = [
   "tr",
   "ul",
   "img",
+  "math",
+  "annotation",
+  "semantics",
+  "mrow",
+  "mi",
+  "mn",
+  "mo",
+  "msup",
+  "msub",
+  "msubsup",
+  "mfrac",
+  "msqrt",
+  "mroot",
+  "mstyle",
+  "mspace",
+  "mtext",
+  "mtable",
+  "mtr",
+  "mtd",
+  "mover",
+  "munder",
+  "munderover",
+  "merror",
+  "annotation-xml",
 ];
 
 const allowedAttrs = [
@@ -48,6 +73,11 @@ const allowedAttrs = [
   "data-code",
   "type",
   "aria-label",
+  "style",
+  "xmlns",
+  "encoding",
+  "aria-hidden",
+  "focusable",
 ];
 const sanitizeOptions = {
   ALLOWED_TAGS: allowedTags,
@@ -64,6 +94,77 @@ const INLINE_DATA_IMAGE_RE = /^data:image\/[a-z0-9.+-]+;base64,/i;
 const markdownCache = new Map<string, string>();
 const TAIL_LINK_BLUR_CLASS = "chat-link-tail-blur";
 const TRAILING_CJK_TAIL_RE = /([\u4E00-\u9FFF\u3000-\u303F\uFF01-\uFF5E\s]+)$/;
+const BLOCK_MATH_RE = /^\$\$([\s\S]+?)\$\$(?:\n|$)/;
+const INLINE_MATH_RE = /^\$([^$\n]|\\\$|\\.)+\$/;
+
+function renderMath(expression: string, displayMode: boolean): string {
+  return katex.renderToString(expression, {
+    throwOnError: false,
+    strict: false,
+    output: "htmlAndMathml",
+    displayMode,
+  });
+}
+
+const blockMathExtension = {
+  name: "blockMath",
+  level: "block",
+  start(src: string) {
+    const idx = src.indexOf("$$");
+    return idx;
+  },
+  tokenizer(src: string) {
+    const match = BLOCK_MATH_RE.exec(src);
+    if (!match) {
+      return undefined;
+    }
+    const expression = match[1]?.trim();
+    if (!expression) {
+      return undefined;
+    }
+    return {
+      type: "blockMath",
+      raw: match[0],
+      expression,
+      html: `<div class="math-block">${renderMath(expression, true)}</div>`,
+    };
+  },
+  renderer(token: { html: string }) {
+    return token.html;
+  },
+};
+
+const inlineMathExtension = {
+  name: "inlineMath",
+  level: "inline",
+  start(src: string) {
+    const idx = src.indexOf("$");
+    return idx;
+  },
+  tokenizer(src: string) {
+    if (/^\$\d/.test(src)) {
+      return undefined;
+    }
+    const match = INLINE_MATH_RE.exec(src);
+    if (!match) {
+      return undefined;
+    }
+    const raw = match[0];
+    const expression = raw.slice(1, -1).trim();
+    if (!expression) {
+      return undefined;
+    }
+    return {
+      type: "inlineMath",
+      raw,
+      expression,
+      html: renderMath(expression, false),
+    };
+  },
+  renderer(token: { html: string }) {
+    return token.html;
+  },
+};
 
 function getCachedMarkdown(key: string): string | null {
   const cached = markdownCache.get(key);
@@ -163,7 +264,11 @@ const cjkAutoLinkExtension = {
 };
 
 marked.use({
-  extensions: [cjkAutoLinkExtension as unknown as import("marked").TokenizerAndRendererExtension],
+  extensions: [
+    blockMathExtension as unknown as import("marked").TokenizerAndRendererExtension,
+    inlineMathExtension as unknown as import("marked").TokenizerAndRendererExtension,
+    cjkAutoLinkExtension as unknown as import("marked").TokenizerAndRendererExtension,
+  ],
 });
 
 export function toSanitizedMarkdownHtml(markdown: string): string {

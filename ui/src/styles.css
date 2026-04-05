@@ -6,6 +6,7 @@
 @import "./styles/config.css";
 @import "./styles/usage.css";
 @import "./styles/dreams.css";
+@import "katex/dist/katex.min.css";
 @import "@create-markdown/preview/themes/system.css";
 
 .cm-preview {

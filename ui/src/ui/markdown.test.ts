@@ -30,6 +30,42 @@ describe("toSanitizedMarkdownHtml", () => {
     expect(html).toContain("console.log(1)");
   });
 
+  it("renders inline math with katex", () => {
+    const html = toSanitizedMarkdownHtml("Euler: $e^{i\\pi}+1=0$");
+    expect(html).toContain("katex");
+    expect(html).toContain("Euler:");
+  });
+
+  it("renders block math with katex", () => {
+    const html = toSanitizedMarkdownHtml("$$\\int_0^1 x^2 dx$$");
+    expect(html).toContain("math-block");
+    expect(html).toContain("katex-display");
+  });
+
+  it("does not parse inline code as math", () => {
+    const html = toSanitizedMarkdownHtml("Use `$x$` literally.");
+    expect(html).toContain("<code>$x$</code>");
+    expect(html).not.toContain("katex");
+  });
+
+  it("does not parse fenced code blocks as math", () => {
+    const html = toSanitizedMarkdownHtml(["```text", "$x$", "```"].join("\n"));
+    expect(html).toContain("$x$");
+    expect(html).not.toContain("katex");
+  });
+
+  it("leaves plain currency alone", () => {
+    const html = toSanitizedMarkdownHtml("This costs $5 today.");
+    expect(html).toContain("This costs $5 today.");
+    expect(html).not.toContain("katex");
+  });
+
+  it("handles invalid math gracefully", () => {
+    const html = toSanitizedMarkdownHtml("$\\notARealCommand$");
+    expect(html).toContain("\\notARealCommand");
+    expect(html).toContain("katex");
+  });
+
   it("flattens remote markdown images into alt text", () => {
     const html = toSanitizedMarkdownHtml("![Alt text](https://example.com/image.png)");
     expect(html).not.toContain("<img");
