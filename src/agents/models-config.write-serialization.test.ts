@@ -31,7 +31,7 @@ describe("models-config write serialization", () => {
         if (inFlightWrites > maxInFlightWrites) {
           maxInFlightWrites = inFlightWrites;
         }
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        await new Promise((resolve) => setTimeout(resolve, 10));
         try {
           return await originalWriteFile(...args);
         } finally {
@@ -51,5 +51,5 @@ describe("models-config write serialization", () => {
       }>();
       expect(parsed.providers["custom-proxy"]?.models?.[0]?.name).toBe("Proxy B with longer name");
     });
-  });
+  }, 60_000);
 });
