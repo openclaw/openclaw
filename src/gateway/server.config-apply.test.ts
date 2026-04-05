@@ -36,18 +36,15 @@ function requireWs() {
   return startedServer.ws;
 }
 
-const sendConfigApply = async (
-  _id: string,
-  params: { raw: unknown; baseHash?: string },
-  timeoutMs?: number,
-) => {
+const sendConfigApply = async (params: { raw: unknown; baseHash?: string }, timeoutMs?: number) => {
   return await rpcReq(requireWs(), "config.apply", params, timeoutMs);
 };
 
-const sendConfigGet = async (_id: string) => {
+const sendConfigGet = async () => {
   return await rpcReq<{
-    ok: boolean;
-    payload?: { hash?: string; raw?: string | null; config?: Record<string, unknown> };
+    hash?: string;
+    raw?: string | null;
+    config?: Record<string, unknown>;
   }>(requireWs(), "config.get", {});
 };
 
@@ -59,7 +56,7 @@ describe("gateway config.apply", () => {
   it("rejects config.apply when SecretRef resolution fails", async () => {
     const missingEnvVar = `OPENCLAW_MISSING_SECRETREF_APPLY_${Date.now()}`;
     delete process.env[missingEnvVar];
-    const current = await sendConfigGet("req-secretref-get-before");
+    const current = await sendConfigGet();
     expect(current.ok).toBe(true);
     expect(typeof current.payload?.hash).toBe("string");
     const nextConfig = structuredClone(current.payload?.config ?? {});
@@ -70,9 +67,7 @@ describe("gateway config.apply", () => {
     const defaultTelegramAccount = (telegramAccounts.default ??= {}) as Record<string, unknown>;
     defaultTelegramAccount.enabled = true;
 
-    const id = "req-secretref-apply";
     const res = await sendConfigApply(
-      id,
       {
         raw: JSON.stringify(nextConfig, null, 2),
         baseHash: current.payload?.hash,
@@ -82,7 +77,7 @@ describe("gateway config.apply", () => {
     expect(res.ok).toBe(false);
     expect(res.error?.message ?? "").toContain("active SecretRef resolution failed");
 
-    const after = await sendConfigGet("req-secretref-get-after");
+    const after = await sendConfigGet();
     expect(after.ok).toBe(true);
     expect(after.payload?.hash).toBe(current.payload?.hash);
     expect(after.payload?.raw).toBe(current.payload?.raw);
@@ -113,11 +108,11 @@ describe("gateway config.apply", () => {
       "utf-8",
     );
 
-    const current = await sendConfigGet("req-auth-profile-get-before");
+    const current = await sendConfigGet();
     expect(current.ok).toBe(true);
     expect(current.payload?.config).toBeTruthy();
 
-    const res = await sendConfigApply("req-auth-profile-apply", {
+    const res = await sendConfigApply({
       raw: JSON.stringify(current.payload?.config ?? {}, null, 2),
       baseHash: current.payload?.hash,
     });
@@ -126,19 +121,17 @@ describe("gateway config.apply", () => {
   });
 
   it("rejects invalid raw config", async () => {
-    const current = await sendConfigGet("req-invalid-raw-get-before");
+    const current = await sendConfigGet();
     expect(current.ok).toBe(true);
-    const id = "req-1";
-    const res = await sendConfigApply(id, { raw: "{", baseHash: current.payload?.hash });
+    const res = await sendConfigApply({ raw: "{", baseHash: current.payload?.hash });
     expect(res.ok).toBe(false);
     expect(res.error?.message ?? "").toMatch(/invalid|SyntaxError/i);
   });
 
   it("requires raw to be a string", async () => {
-    const current = await sendConfigGet("req-non-string-raw-get-before");
+    const current = await sendConfigGet();
     expect(current.ok).toBe(true);
-    const id = "req-2";
-    const res = await sendConfigApply(id, {
+    const res = await sendConfigApply({
       raw: { gateway: { mode: "local" } },
       baseHash: current.payload?.hash,
     });
