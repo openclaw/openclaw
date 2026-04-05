@@ -2,7 +2,7 @@ import "./isolated-agent.mocks.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
+import { withTempHome as withTempHomeHelper } from "../../test/helpers/temp-home.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import type { CliDeps } from "../cli/deps.js";
@@ -11,7 +11,7 @@ import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import type { CronJob } from "./types.js";
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  return withTempHomeBase(fn, { prefix: "openclaw-cron-submodel-" });
+  return withTempHomeHelper(fn, { prefix: "openclaw-cron-submodel-" });
 }
 
 async function writeSessionStore(home: string) {
@@ -45,7 +45,7 @@ function makeCfg(
   const base: OpenClawConfig = {
     agents: {
       defaults: {
-        model: "anthropic/claude-sonnet-4-5",
+        model: "anthropic/claude-sonnet-4-6",
         workspace: path.join(home, "openclaw"),
       },
     },
@@ -95,12 +95,16 @@ async function runSubagentModelCase(params: {
   home: string;
   cfgOverrides?: Partial<OpenClawConfig>;
   jobModelOverride?: string;
+  agentId?: string;
 }) {
   const storePath = await writeSessionStore(params.home);
   mockEmbeddedAgent();
   const job = makeJob();
   if (params.jobModelOverride) {
     job.payload = { kind: "agentTurn", message: "do work", model: params.jobModelOverride };
+  }
+  if (params.agentId) {
+    job.agentId = params.agentId;
   }
 
   await runCronIsolatedAgentTurn({
@@ -127,7 +131,7 @@ describe("runCronIsolatedAgentTurn: subagent model resolution (#11461)", () => {
       cfgOverrides: {
         agents: {
           defaults: {
-            model: "anthropic/claude-sonnet-4-5",
+            model: "anthropic/claude-sonnet-4-6",
             subagents: { model: "ollama/llama3.2:3b" },
           },
         },
@@ -139,14 +143,14 @@ describe("runCronIsolatedAgentTurn: subagent model resolution (#11461)", () => {
       name: "falls back to main model when subagents.model is unset",
       cfgOverrides: undefined,
       expectedProvider: "anthropic",
-      expectedModel: "claude-sonnet-4-5",
+      expectedModel: "claude-sonnet-4-6",
     },
     {
       name: "supports subagents.model with {primary} object format",
       cfgOverrides: {
         agents: {
           defaults: {
-            model: "anthropic/claude-sonnet-4-5",
+            model: "anthropic/claude-sonnet-4-6",
             subagents: { model: { primary: "google/gemini-2.5-flash" } },
           },
         },
@@ -180,7 +184,7 @@ describe("runCronIsolatedAgentTurn: subagent model resolution (#11461)", () => {
         cfgOverrides: {
           agents: {
             defaults: {
-              model: "anthropic/claude-sonnet-4-5",
+              model: "anthropic/claude-sonnet-4-6",
               workspace: path.join(home, "openclaw"),
               subagents: { model: "ollama/llama3.2:3b" },
             },
@@ -190,6 +194,27 @@ describe("runCronIsolatedAgentTurn: subagent model resolution (#11461)", () => {
       });
       expect(call?.provider).toBe("openai");
       expect(call?.model).toBe("gpt-4o");
+    });
+  });
+
+  it("prefers the agent model over agents.defaults.subagents.model", async () => {
+    await withTempHome(async (home) => {
+      const call = await runSubagentModelCase({
+        home,
+        agentId: "research",
+        cfgOverrides: {
+          agents: {
+            defaults: {
+              model: "anthropic/claude-sonnet-4-6",
+              workspace: path.join(home, "openclaw"),
+              subagents: { model: "ollama/llama3.2:3b" },
+            },
+            list: [{ id: "research", model: { primary: "anthropic/claude-opus-4-6" } }],
+          },
+        },
+      });
+      expect(call?.provider).toBe("anthropic");
+      expect(call?.model).toBe("claude-opus-4-6");
     });
   });
 });

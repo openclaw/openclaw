@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
@@ -1238,3 +1239,18 @@ export async function resolveImplicitBedrockProvider(params: {
     models,
   } satisfies ProviderConfig;
 }
+=======
+export * from "./models-config.providers.static.js";
+export { resolveImplicitProviders } from "./models-config.providers.implicit.js";
+export { normalizeProviders } from "./models-config.providers.normalize.js";
+export type {
+  ProfileApiKeyResolution,
+  ProviderApiKeyResolver,
+  ProviderAuthResolver,
+  ProviderConfig,
+  SecretDefaults,
+} from "./models-config.providers.secrets.js";
+export { applyNativeStreamingUsageCompat } from "./models-config.providers.policy.js";
+export { enforceSourceManagedProviderSecrets } from "./models-config.providers.source-managed.js";
+export { resolveOllamaApiBase } from "../../extensions/ollama/api.js";
+>>>>>>> upstream/main

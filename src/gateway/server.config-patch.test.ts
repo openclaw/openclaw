@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
+import { AUTH_PROFILE_FILENAME } from "../agents/auth-profiles/constants.js";
 import {
   connectOk,
   installGatewayTestHooks,
@@ -46,13 +48,274 @@ async function resetTempDir(name: string): Promise<string> {
   return dir;
 }
 
+async function getConfigHash() {
+  const current = await rpcReq<{
+    hash?: string;
+  }>(requireWs(), "config.get", {});
+  expect(current.ok).toBe(true);
+  expect(typeof current.payload?.hash).toBe("string");
+  return String(current.payload?.hash);
+}
+
+async function expectSchemaLookupInvalid(path: unknown) {
+  const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.schema.lookup", { path });
+  expect(res.ok).toBe(false);
+  expect(res.error?.message ?? "").toContain("invalid config.schema.lookup params");
+}
+
 describe("gateway config methods", () => {
-  it("rejects config.patch when raw is not an object", async () => {
+  it("rejects config.set when SecretRef resolution fails", async () => {
+    const missingEnvVar = `OPENCLAW_MISSING_SECRETREF_${Date.now()}`;
+    delete process.env[missingEnvVar];
+    const current = await rpcReq<{
+      hash?: string;
+      config?: Record<string, unknown>;
+    }>(requireWs(), "config.get", {});
+    expect(current.ok).toBe(true);
+    expect(typeof current.payload?.hash).toBe("string");
+    expect(current.payload?.config).toBeTruthy();
+
+    const nextConfig = structuredClone(current.payload?.config ?? {});
+    const channels = (nextConfig.channels ??= {}) as Record<string, unknown>;
+    const telegram = (channels.telegram ??= {}) as Record<string, unknown>;
+    telegram.botToken = { source: "env", provider: "default", id: missingEnvVar };
+    const telegramAccounts = (telegram.accounts ??= {}) as Record<string, unknown>;
+    const defaultTelegramAccount = (telegramAccounts.default ??= {}) as Record<string, unknown>;
+    defaultTelegramAccount.enabled = true;
+
+    const res = await rpcReq<{ ok?: boolean; error?: { message?: string } }>(
+      requireWs(),
+      "config.set",
+      {
+        raw: JSON.stringify(nextConfig, null, 2),
+        baseHash: current.payload?.hash,
+      },
+    );
+    expect(res.ok).toBe(false);
+    expect(res.error?.message ?? "").toContain("active SecretRef resolution failed");
+    const afterHash = await getConfigHash();
+    expect(afterHash).toBe(current.payload?.hash);
+  });
+
+  it("round-trips config.set and returns the live config path", async () => {
+    const { createConfigIO } = await import("../config/config.js");
+    const current = await rpcReq<{
+      raw?: unknown;
+      hash?: string;
+      config?: Record<string, unknown>;
+    }>(requireWs(), "config.get", {});
+    expect(current.ok).toBe(true);
+    expect(typeof current.payload?.hash).toBe("string");
+    expect(current.payload?.config).toBeTruthy();
+
+    const res = await rpcReq<{
+      ok?: boolean;
+      path?: string;
+      config?: Record<string, unknown>;
+    }>(requireWs(), "config.set", {
+      raw: JSON.stringify(current.payload?.config ?? {}, null, 2),
+      baseHash: current.payload?.hash,
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.payload?.path).toBe(createConfigIO().configPath);
+    expect(res.payload?.config).toBeTruthy();
+  });
+
+  it("does not reject config.set for unresolved auth-profile refs outside submitted config", async () => {
+    const missingEnvVar = `OPENCLAW_MISSING_AUTH_PROFILE_REF_${Date.now()}`;
+    delete process.env[missingEnvVar];
+
+    const authStorePath = path.join(resolveOpenClawAgentDir(), AUTH_PROFILE_FILENAME);
+    await fs.mkdir(path.dirname(authStorePath), { recursive: true });
+    await fs.writeFile(
+      authStorePath,
+      `${JSON.stringify(
+        {
+          version: 1,
+          profiles: {
+            "custom:token": {
+              type: "token",
+              provider: "custom",
+              tokenRef: { source: "env", provider: "default", id: missingEnvVar },
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
+
+    const current = await rpcReq<{
+      hash?: string;
+      config?: Record<string, unknown>;
+    }>(requireWs(), "config.get", {});
+    expect(current.ok).toBe(true);
+    expect(typeof current.payload?.hash).toBe("string");
+    expect(current.payload?.config).toBeTruthy();
+
+    const res = await rpcReq<{ ok?: boolean; error?: { message?: string } }>(
+      requireWs(),
+      "config.set",
+      {
+        raw: JSON.stringify(current.payload?.config ?? {}, null, 2),
+        baseHash: current.payload?.hash,
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    expect(res.error).toBeUndefined();
+  });
+
+  it("returns config.set validation details in the top-level error message", async () => {
+    const res = await rpcReq<{
+      ok?: boolean;
+      error?: {
+        message?: string;
+      };
+    }>(requireWs(), "config.set", {
+      raw: JSON.stringify({ gateway: { bind: 123 } }),
+      baseHash: await getConfigHash(),
+    });
+    const error = res.error as
+      | {
+          message?: string;
+          details?: {
+            issues?: Array<{ path?: string; message?: string }>;
+          };
+        }
+      | undefined;
+
+    expect(res.ok).toBe(false);
+    expect(error?.message ?? "").toContain("invalid config:");
+    expect(error?.message ?? "").toContain("gateway.bind");
+    expect(error?.message ?? "").toContain("allowed:");
+    expect(error?.details?.issues?.[0]?.path).toBe("gateway.bind");
+  });
+
+  it("returns a path-scoped config schema lookup", async () => {
+    const res = await rpcReq<{
+      path: string;
+      hintPath?: string;
+      children?: Array<{ key: string; path: string; required: boolean; hintPath?: string }>;
+      schema?: { properties?: unknown };
+    }>(requireWs(), "config.schema.lookup", {
+      path: "gateway.auth",
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.payload?.path).toBe("gateway.auth");
+    expect(res.payload?.hintPath).toBe("gateway.auth");
+    const tokenChild = res.payload?.children?.find((child) => child.key === "token");
+    expect(tokenChild).toMatchObject({
+      key: "token",
+      path: "gateway.auth.token",
+      hintPath: "gateway.auth.token",
+    });
+    expect(res.payload?.schema?.properties).toBeUndefined();
+  });
+
+  it("rejects config.schema.lookup when the path is missing", async () => {
+    const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.schema.lookup", {
+      path: "gateway.notReal.path",
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.error?.message).toBe("config schema path not found");
+  });
+
+  it.each([
+    { name: "rejects config.schema.lookup when the path is only whitespace", path: "   " },
+    {
+      name: "rejects config.schema.lookup when the path exceeds the protocol limit",
+      path: `gateway.${"a".repeat(1020)}`,
+    },
+    {
+      name: "rejects config.schema.lookup when the path contains invalid characters",
+      path: "gateway.auth\nspoof",
+    },
+    {
+      name: "rejects config.schema.lookup when the path is not a string",
+      path: 42,
+    },
+  ])("$name", async ({ path }) => {
+    await expectSchemaLookupInvalid(path);
+  });
+
+  it("rejects prototype-chain config.schema.lookup paths without reflecting them", async () => {
+    const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.schema.lookup", {
+      path: "constructor",
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.error?.message).toBe("config schema path not found");
+  });
+
+  it("returns noop for config.patch when config is unchanged", async () => {
+    const current = await rpcReq<{
+      config?: Record<string, unknown>;
+      hash?: string;
+    }>(requireWs(), "config.get", {});
+    expect(current.ok).toBe(true);
+
+    // Patch with the same config — no actual changes
+    const res = await rpcReq<{
+      ok?: boolean;
+      noop?: boolean;
+      config?: Record<string, unknown>;
+    }>(requireWs(), "config.patch", {
+      raw: JSON.stringify(current.payload?.config ?? {}),
+      baseHash: current.payload?.hash,
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.payload?.noop).toBe(true);
+    // Config hash should not change (no file write)
+    const after = await rpcReq<{ hash?: string }>(requireWs(), "config.get", {});
+    expect(after.payload?.hash).toBe(current.payload?.hash);
+  });
+
+  it("rejects config.patch when raw is null", async () => {
     const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
-      raw: "[]",
+      raw: "null",
+      baseHash: await getConfigHash(),
     });
     expect(res.ok).toBe(false);
     expect(res.error?.message ?? "").toContain("raw must be an object");
+  });
+
+  it("rejects config.patch when merged SecretRefs cannot resolve", async () => {
+    const missingEnvVar = `OPENCLAW_MISSING_SECRETREF_PATCH_${Date.now()}`;
+    delete process.env[missingEnvVar];
+    const beforeHash = await getConfigHash();
+    const res = await rpcReq<{ ok?: boolean; error?: { message?: string } }>(
+      requireWs(),
+      "config.patch",
+      {
+        raw: JSON.stringify({
+          channels: {
+            telegram: {
+              botToken: {
+                source: "env",
+                provider: "default",
+                id: missingEnvVar,
+              },
+              accounts: {
+                default: {
+                  enabled: true,
+                },
+              },
+            },
+          },
+        }),
+        baseHash: beforeHash,
+      },
+    );
+    expect(res.ok).toBe(false);
+    expect(res.error?.message ?? "").toContain("active SecretRef resolution failed");
+    const afterHash = await getConfigHash();
+    expect(afterHash).toBe(beforeHash);
   });
 });
 

@@ -1,19 +1,23 @@
 import { Type } from "@sinclair/typebox";
-import { loadConfig } from "../../config/config.js";
+import { type OpenClawConfig, loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
 import { capArrayByJsonBytes } from "../../gateway/session-utils.fs.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { truncateUtf16Safe } from "../../utils.js";
+import {
+  describeSessionsHistoryTool,
+  SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY,
+} from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam } from "./common.js";
 import {
   createSessionVisibilityGuard,
   createAgentToAgentPolicy,
-  isResolvedSessionVisibleToRequester,
   resolveEffectiveSessionToolsVisibility,
   resolveSessionReference,
   resolveSandboxedSessionToolContext,
+  resolveVisibleSessionReference,
   stripToolMessages,
 } from "./sessions-helpers.js";
 
@@ -25,6 +29,7 @@ const SessionsHistoryToolSchema = Type.Object({
 
 const SESSIONS_HISTORY_MAX_BYTES = 80 * 1024;
 const SESSIONS_HISTORY_TEXT_MAX_CHARS = 4000;
+type GatewayCaller = typeof callGateway;
 
 // sandbox policy handling is shared with sessions-list-tool via sessions-helpers.ts
 
@@ -169,18 +174,22 @@ function enforceSessionsHistoryHardCap(params: {
 export function createSessionsHistoryTool(opts?: {
   agentSessionKey?: string;
   sandboxed?: boolean;
+  config?: OpenClawConfig;
+  callGateway?: GatewayCaller;
 }): AnyAgentTool {
   return {
     label: "Session History",
     name: "sessions_history",
-    description: "Fetch message history for a session.",
+    displaySummary: SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY,
+    description: describeSessionsHistoryTool(),
     parameters: SessionsHistoryToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
+      const gatewayCall = opts?.callGateway ?? callGateway;
       const sessionKeyParam = readStringParam(params, "sessionKey", {
         required: true,
       });
-      const cfg = loadConfig();
+      const cfg = opts?.config ?? loadConfig();
       const { mainKey, alias, effectiveRequesterKey, restrictToSpawned } =
         resolveSandboxedSessionToolContext({
           cfg,
@@ -197,23 +206,21 @@ export function createSessionsHistoryTool(opts?: {
       if (!resolvedSession.ok) {
         return jsonResult({ status: resolvedSession.status, error: resolvedSession.error });
       }
-      // From here on, use the canonical key (sessionId inputs already resolved).
-      const resolvedKey = resolvedSession.key;
-      const displayKey = resolvedSession.displayKey;
-      const resolvedViaSessionId = resolvedSession.resolvedViaSessionId;
-
-      const visible = await isResolvedSessionVisibleToRequester({
+      const visibleSession = await resolveVisibleSessionReference({
+        resolvedSession,
         requesterSessionKey: effectiveRequesterKey,
-        targetSessionKey: resolvedKey,
         restrictToSpawned,
-        resolvedViaSessionId,
+        visibilitySessionKey: sessionKeyParam,
       });
-      if (!visible) {
+      if (!visibleSession.ok) {
         return jsonResult({
-          status: "forbidden",
-          error: `Session not visible from this sandboxed agent session: ${sessionKeyParam}`,
+          status: visibleSession.status,
+          error: visibleSession.error,
         });
       }
+      // From here on, use the canonical key (sessionId inputs already resolved).
+      const resolvedKey = visibleSession.key;
+      const displayKey = visibleSession.displayKey;
 
       const a2aPolicy = createAgentToAgentPolicy(cfg);
       const visibility = resolveEffectiveSessionToolsVisibility({
@@ -239,7 +246,7 @@ export function createSessionsHistoryTool(opts?: {
           ? Math.max(1, Math.floor(params.limit))
           : undefined;
       const includeTools = Boolean(params.includeTools);
-      const result = await callGateway<{ messages: Array<unknown> }>({
+      const result = await gatewayCall<{ messages: Array<unknown> }>({
         method: "chat.history",
         params: { sessionKey: resolvedKey, limit },
       });

@@ -1,41 +1,43 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
+import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import {
   CONTEXT_LIMIT_TRUNCATION_NOTICE,
+  PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE,
   PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER,
   installToolResultContextGuard,
 } from "./tool-result-context-guard.js";
 
 function makeUser(text: string): AgentMessage {
-  return {
+  return castAgentMessage({
     role: "user",
     content: text,
     timestamp: Date.now(),
-  } as unknown as AgentMessage;
+  });
 }
 
 function makeToolResult(id: string, text: string): AgentMessage {
-  return {
+  return castAgentMessage({
     role: "toolResult",
     toolCallId: id,
     toolName: "read",
     content: [{ type: "text", text }],
     isError: false,
     timestamp: Date.now(),
-  } as unknown as AgentMessage;
+  });
 }
 
 function makeLegacyToolResult(id: string, text: string): AgentMessage {
-  return {
+  return castAgentMessage({
     role: "tool",
     tool_call_id: id,
     tool_name: "read",
     content: text,
-  } as unknown as AgentMessage;
+  });
 }
 
 function makeToolResultWithDetails(id: string, text: string, detailText: string): AgentMessage {
-  return {
+  return castAgentMessage({
     role: "toolResult",
     toolCallId: id,
     toolName: "read",
@@ -49,7 +51,7 @@ function makeToolResultWithDetails(id: string, text: string, detailText: string)
     },
     isError: false,
     timestamp: Date.now(),
-  } as unknown as AgentMessage;
+  });
 }
 
 function getToolResultText(msg: AgentMessage): string {
@@ -104,7 +106,7 @@ function expectCompactedToolResultsWithoutContextNotice(
 }
 
 describe("installToolResultContextGuard", () => {
-  it("compacts oldest-first when total context overflows, even if each result fits individually", async () => {
+  it("compacts newest-first when total context overflows, even if each result fits individually", async () => {
     const agent = makeGuardableAgent();
     const contextForNextCall = makeTwoToolResultOverflowContext();
     const transformed = await applyGuardToContext(agent, contextForNextCall);
@@ -113,7 +115,7 @@ describe("installToolResultContextGuard", () => {
     expectCompactedToolResultsWithoutContextNotice(contextForNextCall, 1, 2);
   });
 
-  it("keeps compacting oldest-first until context is back under budget", async () => {
+  it("keeps compacting newest-first until context is back under budget", async () => {
     const agent = makeGuardableAgent();
 
     installToolResultContextGuard({
@@ -139,7 +141,7 @@ describe("installToolResultContextGuard", () => {
     expect(third).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
   });
 
-  it("survives repeated large tool results by compacting older outputs before later turns", async () => {
+  it("survives repeated large tool results by compacting the newest output each turn", async () => {
     const agent = makeGuardableAgent();
 
     installToolResultContextGuard({
@@ -157,8 +159,10 @@ describe("installToolResultContextGuard", () => {
       .filter((msg) => msg.role === "toolResult")
       .map((msg) => getToolResultText(msg as AgentMessage));
 
-    expect(toolResultTexts[0]).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
-    expect(toolResultTexts[3]?.length).toBe(95_000);
+    // Newest-first compaction: oldest results stay intact to preserve the
+    // cached prefix; the newest overflowing result is compacted.
+    expect(toolResultTexts[0]?.length).toBe(95_000);
+    expect(toolResultTexts[3]).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
     expect(toolResultTexts.join("\n")).not.toContain(CONTEXT_LIMIT_TRUNCATION_NOTICE);
   });
 
@@ -179,7 +183,7 @@ describe("installToolResultContextGuard", () => {
     expect(newResultText).toContain(CONTEXT_LIMIT_TRUNCATION_NOTICE);
   });
 
-  it("keeps compacting oldest-first until overflow clears, including the newest tool result when needed", async () => {
+  it("keeps compacting newest-first until overflow clears, reaching older tool results when needed", async () => {
     const agent = makeGuardableAgent();
 
     installToolResultContextGuard({
@@ -199,11 +203,10 @@ describe("installToolResultContextGuard", () => {
 
   it("wraps an existing transformContext and guards the transformed output", async () => {
     const agent = makeGuardableAgent((messages) => {
-      return messages.map(
-        (msg) =>
-          ({
-            ...(msg as unknown as Record<string, unknown>),
-          }) as unknown as AgentMessage,
+      return messages.map((msg) =>
+        castAgentMessage({
+          ...(msg as unknown as Record<string, unknown>),
+        }),
       );
     });
     const contextForNextCall = makeTwoToolResultOverflowContext();
@@ -254,10 +257,10 @@ describe("installToolResultContextGuard", () => {
 
     await agent.transformContext?.(contextForNextCall, new AbortController().signal);
 
-    const oldResult = contextForNextCall[1] as unknown as {
+    const oldResult = contextForNextCall[1] as {
       details?: unknown;
     };
-    const newResult = contextForNextCall[2] as unknown as {
+    const newResult = contextForNextCall[2] as {
       details?: unknown;
     };
     const oldResultText = getToolResultText(contextForNextCall[1]);
@@ -267,5 +270,64 @@ describe("installToolResultContextGuard", () => {
     expect(newResultText).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
     expect(oldResult.details).toBeUndefined();
     expect(newResult.details).toBeUndefined();
+  });
+
+  it("throws preemptive context overflow when context exceeds 90% after tool-result compaction", async () => {
+    const agent = makeGuardableAgent();
+
+    installToolResultContextGuard({
+      agent,
+      // contextBudgetChars = 1000 * 4 * 0.75 = 3000
+      // preemptiveOverflowChars = 1000 * 4 * 0.9 = 3600
+      contextWindowTokens: 1_000,
+    });
+
+    // Large user message (non-compactable) pushes context past 90% threshold.
+    const contextForNextCall = [makeUser("u".repeat(3_700)), makeToolResult("call_1", "small")];
+
+    await expect(
+      agent.transformContext?.(contextForNextCall, new AbortController().signal),
+    ).rejects.toThrow(PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE);
+  });
+
+  it("does not throw when context is under 90% after tool-result compaction", async () => {
+    const agent = makeGuardableAgent();
+
+    installToolResultContextGuard({
+      agent,
+      contextWindowTokens: 1_000,
+    });
+
+    // Context well under the 3600-char preemptive threshold.
+    const contextForNextCall = [makeUser("u".repeat(1_000)), makeToolResult("call_1", "small")];
+
+    await expect(
+      agent.transformContext?.(contextForNextCall, new AbortController().signal),
+    ).resolves.not.toThrow();
+  });
+
+  it("compacts tool results before checking the preemptive overflow threshold", async () => {
+    const agent = makeGuardableAgent();
+
+    installToolResultContextGuard({
+      agent,
+      contextWindowTokens: 1_000,
+    });
+
+    // Large user message + large tool result. The guard should compact the tool
+    // result first, then check the overflow threshold. Even after compaction the
+    // user content alone pushes past 90%, so the overflow error fires.
+    const contextForNextCall = [
+      makeUser("u".repeat(3_700)),
+      makeToolResult("call_old", "x".repeat(2_000)),
+    ];
+
+    await expect(
+      agent.transformContext?.(contextForNextCall, new AbortController().signal),
+    ).rejects.toThrow(PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE);
+
+    // Tool result should have been compacted before the overflow check.
+    const toolResultText = getToolResultText(contextForNextCall[1]);
+    expect(toolResultText).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
   });
 });

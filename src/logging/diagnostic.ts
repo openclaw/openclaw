@@ -1,4 +1,4 @@
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
 import {
@@ -25,6 +25,14 @@ let lastActivityAt = 0;
 const DEFAULT_STUCK_SESSION_WARN_MS = 120_000;
 const MIN_STUCK_SESSION_WARN_MS = 1_000;
 const MAX_STUCK_SESSION_WARN_MS = 24 * 60 * 60 * 1000;
+let commandPollBackoffRuntimePromise: Promise<
+  typeof import("../agents/command-poll-backoff.runtime.js")
+> | null = null;
+
+function loadCommandPollBackoffRuntime() {
+  commandPollBackoffRuntimePromise ??= import("../agents/command-poll-backoff.runtime.js");
+  return commandPollBackoffRuntimePromise;
+}
 
 function markActivity() {
   lastActivityAt = Date.now();
@@ -322,7 +330,10 @@ export function logActiveRuns() {
 
 let heartbeatInterval: NodeJS.Timeout | null = null;
 
-export function startDiagnosticHeartbeat(config?: OpenClawConfig) {
+export function startDiagnosticHeartbeat(
+  config?: OpenClawConfig,
+  opts?: { getConfig?: () => OpenClawConfig },
+) {
   if (heartbeatInterval) {
     return;
   }
@@ -330,7 +341,7 @@ export function startDiagnosticHeartbeat(config?: OpenClawConfig) {
     let heartbeatConfig = config;
     if (!heartbeatConfig) {
       try {
-        heartbeatConfig = loadConfig();
+        heartbeatConfig = (opts?.getConfig ?? getRuntimeConfig)();
       } catch {
         heartbeatConfig = undefined;
       }
@@ -376,7 +387,7 @@ export function startDiagnosticHeartbeat(config?: OpenClawConfig) {
       queued: totalQueued,
     });
 
-    import("../agents/command-poll-backoff.js")
+    void loadCommandPollBackoffRuntime()
       .then(({ pruneStaleCommandPolls }) => {
         for (const [, state] of diagnosticSessionStates) {
           pruneStaleCommandPolls(state);

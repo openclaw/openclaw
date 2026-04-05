@@ -3,7 +3,7 @@ summary: "Model providers (LLMs) supported by OpenClaw"
 read_when:
   - You want to choose a model provider
   - You need a quick overview of supported LLM backends
-title: "Model Providers"
+title: "Provider Directory"
 ---
 
 # Model Providers
@@ -27,9 +27,16 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 ## Provider docs
 
 - [Amazon Bedrock](/providers/bedrock)
-- [Anthropic (API + Claude Code CLI)](/providers/anthropic)
+- [Anthropic (API + Claude CLI)](/providers/anthropic)
+- [BytePlus (International)](/concepts/model-providers#byteplus-international)
+- [Chutes](/providers/chutes)
 - [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
+- [DeepSeek](/providers/deepseek)
+- [Fireworks](/providers/fireworks)
+- [GitHub Copilot](/providers/github-copilot)
 - [GLM models](/providers/glm)
+- [Google (Gemini)](/providers/google)
+- [Groq (LPU inference)](/providers/groq)
 - [Hugging Face (Inference)](/providers/huggingface)
 - [Kilocode](/providers/kilocode)
 - [LiteLLM (unified gateway)](/providers/litellm)
@@ -37,18 +44,30 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [Mistral](/providers/mistral)
 - [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot)
 - [NVIDIA](/providers/nvidia)
-- [Ollama (local models)](/providers/ollama)
+- [Ollama (cloud + local models)](/providers/ollama)
 - [OpenAI (API + Codex)](/providers/openai)
-- [OpenCode Zen](/providers/opencode)
+- [OpenCode](/providers/opencode)
+- [OpenCode Go](/providers/opencode-go)
 - [OpenRouter](/providers/openrouter)
+- [Perplexity (web search)](/providers/perplexity-provider)
 - [Qianfan](/providers/qianfan)
-- [Qwen (OAuth)](/providers/qwen)
+- [Qwen Cloud](/providers/qwen)
+- [Qwen / Model Studio (endpoint detail; `qwen-*` canonical, `modelstudio-*` legacy)](/providers/qwen_modelstudio)
+- [SGLang (local models)](/providers/sglang)
+- [StepFun](/providers/stepfun)
+- [Synthetic](/providers/synthetic)
 - [Together AI](/providers/together)
-- [Vercel AI Gateway](/providers/vercel-ai-gateway)
 - [Venice (Venice AI, privacy-focused)](/providers/venice)
+- [Vercel AI Gateway](/providers/vercel-ai-gateway)
 - [vLLM (local models)](/providers/vllm)
+- [Volcengine (Doubao)](/providers/volcengine)
+- [xAI](/providers/xai)
 - [Xiaomi](/providers/xiaomi)
 - [Z.AI](/providers/zai)
+
+## Shared overview pages
+
+- [Additional bundled variants](/providers/models#additional-bundled-provider-variants) - Anthropic Vertex, Copilot Proxy, and Gemini CLI OAuth
 
 ## Transcription providers
 
@@ -56,7 +75,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 
 ## Community tools
 
-- [Claude Max API Proxy](/providers/claude-max-api-proxy) - Use Claude Max/Pro subscription as an OpenAI-compatible API endpoint
+- [Claude Max API Proxy](/providers/claude-max-api-proxy) - Community proxy for Claude subscription credentials (verify Anthropic policy/terms before use)
 
 For the full provider catalog (xAI, Groq, Mistral, etc.) and advanced configuration,
 see [Model providers](/concepts/model-providers).

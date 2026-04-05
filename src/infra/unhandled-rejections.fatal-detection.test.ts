@@ -86,7 +86,7 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
 
   describe("non-fatal errors", () => {
     it("does not exit on known transient network errors", () => {
-      const transientCases = [
+      const transientCases: unknown[] = [
         Object.assign(new TypeError("fetch failed"), {
           cause: { code: "UND_ERR_CONNECT_TIMEOUT", syscall: "connect" },
         }),
@@ -111,6 +111,11 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
         }),
       ];
 
+      // Wrapped fetch-failed (e.g. Discord: "Failed to get gateway information from Discord: fetch failed")
+      transientCases.push(
+        new Error("Failed to get gateway information from Discord: fetch failed"),
+      );
+
       for (const transientErr of transientCases) {
         expectExitCodeFromUnhandled(transientErr, []);
       }
@@ -118,6 +123,29 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
       expect(consoleWarnSpy).toHaveBeenCalledWith(
         "[openclaw] Non-fatal unhandled rejection (continuing):",
         expect.stringContaining("fetch failed"),
+      );
+    });
+
+    it("does not exit on transient SQLite errors", () => {
+      const sqliteCases: unknown[] = [
+        Object.assign(new Error("unable to open database file"), {
+          code: "SQLITE_CANTOPEN",
+        }),
+        Object.assign(new Error("database is locked"), {
+          code: "ERR_SQLITE_ERROR",
+          errcode: 5,
+          errstr: "database is locked",
+        }),
+        new Error("SQLITE_IOERR: disk I/O error"),
+      ];
+
+      for (const sqliteErr of sqliteCases) {
+        expectExitCodeFromUnhandled(sqliteErr, []);
+      }
+
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        "[openclaw] Non-fatal unhandled rejection (continuing):",
+        expect.stringContaining("unable to open database file"),
       );
     });
 

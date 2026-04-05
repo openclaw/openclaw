@@ -1,4 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { importFreshModule } from "../../test/helpers/import-fresh.js";
+import { CommandLane } from "./lanes.js";
 
 const diagnosticMocks = vi.hoisted(() => ({
   logLaneEnqueue: vi.fn(),
@@ -16,19 +18,20 @@ vi.mock("../logging/diagnostic.js", () => ({
   diagnosticLogger: diagnosticMocks.diag,
 }));
 
-import {
-  clearCommandLane,
-  CommandLaneClearedError,
-  enqueueCommand,
-  enqueueCommandInLane,
-  GatewayDrainingError,
-  getActiveTaskCount,
-  getQueueSize,
-  markGatewayDraining,
-  resetAllLanes,
-  setCommandLaneConcurrency,
-  waitForActiveTasks,
-} from "./command-queue.js";
+type CommandQueueModule = typeof import("./command-queue.js");
+
+let clearCommandLane: CommandQueueModule["clearCommandLane"];
+let CommandLaneClearedError: CommandQueueModule["CommandLaneClearedError"];
+let enqueueCommand: CommandQueueModule["enqueueCommand"];
+let enqueueCommandInLane: CommandQueueModule["enqueueCommandInLane"];
+let GatewayDrainingError: CommandQueueModule["GatewayDrainingError"];
+let getActiveTaskCount: CommandQueueModule["getActiveTaskCount"];
+let getQueueSize: CommandQueueModule["getQueueSize"];
+let markGatewayDraining: CommandQueueModule["markGatewayDraining"];
+let resetAllLanes: CommandQueueModule["resetAllLanes"];
+let resetCommandQueueStateForTest: CommandQueueModule["resetCommandQueueStateForTest"];
+let setCommandLaneConcurrency: CommandQueueModule["setCommandLaneConcurrency"];
+let waitForActiveTasks: CommandQueueModule["waitForActiveTasks"];
 
 function createDeferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void;
@@ -53,13 +56,38 @@ function enqueueBlockedMainTask<T = void>(
 }
 
 describe("command queue", () => {
+  beforeAll(async () => {
+    ({
+      clearCommandLane,
+      CommandLaneClearedError,
+      enqueueCommand,
+      enqueueCommandInLane,
+      GatewayDrainingError,
+      getActiveTaskCount,
+      getQueueSize,
+      markGatewayDraining,
+      resetAllLanes,
+      resetCommandQueueStateForTest,
+      setCommandLaneConcurrency,
+      waitForActiveTasks,
+    } = await import("./command-queue.js"));
+  });
+
   beforeEach(() => {
-    resetAllLanes();
+    vi.useRealTimers();
+    resetCommandQueueStateForTest();
+    // Queue state is global across module instances, so reset main lane
+    // concurrency explicitly to avoid cross-file leakage.
+    setCommandLaneConcurrency(CommandLane.Main, 1);
     diagnosticMocks.logLaneEnqueue.mockClear();
     diagnosticMocks.logLaneDequeue.mockClear();
     diagnosticMocks.diag.debug.mockClear();
     diagnosticMocks.diag.warn.mockClear();
     diagnosticMocks.diag.error.mockClear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("resetAllLanes is safe when no lanes have been created", () => {
@@ -135,6 +163,22 @@ describe("command queue", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("demotes live model switch lane failures to debug noise", async () => {
+    const error = new Error("Live session model switch requested: anthropic/claude-opus-4-6");
+    error.name = "LiveSessionModelSwitchError";
+
+    await expect(
+      enqueueCommandInLane("nested", async () => {
+        throw error;
+      }),
+    ).rejects.toBe(error);
+
+    expect(diagnosticMocks.diag.error).not.toHaveBeenCalled();
+    expect(diagnosticMocks.diag.debug).toHaveBeenCalledWith(
+      expect.stringContaining("lane task interrupted: lane=nested"),
+    );
   });
 
   it("getActiveTaskCount returns count of currently executing tasks", async () => {
@@ -213,9 +257,7 @@ describe("command queue", () => {
       await blocker;
     });
 
-    await vi.waitFor(() => {
-      expect(getActiveTaskCount()).toBeGreaterThanOrEqual(1);
-    });
+    expect(getActiveTaskCount()).toBeGreaterThanOrEqual(1);
 
     // Enqueue another task — it should be stuck behind the blocker
     let task2Ran = false;
@@ -223,9 +265,7 @@ describe("command queue", () => {
       task2Ran = true;
     });
 
-    await vi.waitFor(() => {
-      expect(getQueueSize(lane)).toBeGreaterThanOrEqual(2);
-    });
+    expect(getQueueSize(lane)).toBeGreaterThanOrEqual(2);
     expect(task2Ran).toBe(false);
 
     // Simulate SIGUSR1: reset all lanes. Queued work (task2) should be
@@ -254,10 +294,13 @@ describe("command queue", () => {
     const blocker2 = new Promise<void>((r) => {
       resolve2 = r;
     });
+    const firstStarted = createDeferred();
 
     const first = enqueueCommandInLane(lane, async () => {
+      firstStarted.resolve();
       await blocker1;
     });
+    await firstStarted.promise;
     const drainPromise = waitForActiveTasks(2000);
 
     // Starts after waitForActiveTasks snapshot and should not block drain completion.
@@ -333,5 +376,41 @@ describe("command queue", () => {
     markGatewayDraining();
     resetAllLanes();
     await expect(enqueueCommand(async () => "ok")).resolves.toBe("ok");
+  });
+
+  it("shares lane state across distinct module instances", async () => {
+    const commandQueueA = await importFreshModule<typeof import("./command-queue.js")>(
+      import.meta.url,
+      "./command-queue.js?scope=shared-a",
+    );
+    const commandQueueB = await importFreshModule<typeof import("./command-queue.js")>(
+      import.meta.url,
+      "./command-queue.js?scope=shared-b",
+    );
+    const lane = `shared-state-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+    let release!: () => void;
+    const blocker = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    commandQueueA.resetAllLanes();
+
+    try {
+      const task = commandQueueA.enqueueCommandInLane(lane, async () => {
+        await blocker;
+        return "done";
+      });
+
+      expect(commandQueueB.getQueueSize(lane)).toBe(1);
+      expect(commandQueueB.getActiveTaskCount()).toBe(1);
+
+      release();
+      await expect(task).resolves.toBe("done");
+      expect(commandQueueB.getQueueSize(lane)).toBe(0);
+    } finally {
+      release();
+      commandQueueA.resetAllLanes();
+    }
   });
 });

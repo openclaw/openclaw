@@ -19,7 +19,7 @@ describe("extractTextFromMessage", () => {
 
     expect(text).toContain("HTTP 429");
     expect(text).toContain("rate_limit_error");
-    expect(text).toContain("req_123");
+    expect(text).toContain("This request would exceed your account's rate limit.");
   });
 
   it("falls back to a generic message when errorMessage is missing", () => {
@@ -244,6 +244,20 @@ describe("sanitizeRenderableText", () => {
 
   it("preserves long file-like underscore tokens for copy safety", () => {
     const input = "administrators_authorized_keys_with_extra_suffix".repeat(2);
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+  });
+
+  it("preserves long credential-like mixed alnum tokens for copy safety", () => {
+    const input = "e3b19c3b87bcf364b23eebb2c276e96ec478956ba1d84c93"; // pragma: allowlist secret
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+  });
+
+  it("preserves quoted credential-like mixed alnum tokens for copy safety", () => {
+    const input = "'e3b19c3b87bcf364b23eebb2c276e96ec478956ba1d84c93'"; // pragma: allowlist secret
     const sanitized = sanitizeRenderableText(input);
 
     expect(sanitized).toBe(input);

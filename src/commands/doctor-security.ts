@@ -2,11 +2,164 @@ import { listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig, GatewayBindMode } from "../config/config.js";
+import type { AgentConfig } from "../config/types.agents.js";
+import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { isLoopbackHost, resolveGatewayBindHost } from "../gateway/net.js";
+import { resolveExecPolicyScopeSnapshot } from "../infra/exec-approvals-effective.js";
+import { loadExecApprovals, type ExecAsk, type ExecSecurity } from "../infra/exec-approvals.js";
 import { resolveDmAllowState } from "../security/dm-policy-shared.js";
 import { note } from "../terminal/note.js";
 import { resolveDefaultChannelAccountContext } from "./channel-account-context.js";
+
+function collectImplicitHeartbeatDirectPolicyWarnings(cfg: OpenClawConfig): string[] {
+  const warnings: string[] = [];
+
+  const maybeWarn = (params: {
+    label: string;
+    heartbeat: AgentConfig["heartbeat"] | undefined;
+    pathHint: string;
+  }) => {
+    const heartbeat = params.heartbeat;
+    if (!heartbeat || heartbeat.target === undefined || heartbeat.target === "none") {
+      return;
+    }
+    if (heartbeat.directPolicy !== undefined) {
+      return;
+    }
+    warnings.push(
+      `- ${params.label}: heartbeat delivery is configured while ${params.pathHint} is unset.`,
+      '  Heartbeat now allows direct/DM targets by default. Set it explicitly to "allow" or "block" to pin upgrade behavior.',
+    );
+  };
+
+  maybeWarn({
+    label: "Heartbeat defaults",
+    heartbeat: cfg.agents?.defaults?.heartbeat,
+    pathHint: "agents.defaults.heartbeat.directPolicy",
+  });
+
+  for (const agent of cfg.agents?.list ?? []) {
+    maybeWarn({
+      label: `Heartbeat agent "${agent.id}"`,
+      heartbeat: agent.heartbeat,
+      pathHint: `heartbeat.directPolicy for agent "${agent.id}"`,
+    });
+  }
+
+  return warnings;
+}
+
+function execSecurityRank(value: ExecSecurity): number {
+  switch (value) {
+    case "deny":
+      return 0;
+    case "allowlist":
+      return 1;
+    case "full":
+      return 2;
+  }
+}
+
+function execAskRank(value: ExecAsk): number {
+  switch (value) {
+    case "off":
+      return 0;
+    case "on-miss":
+      return 1;
+    case "always":
+      return 2;
+  }
+}
+
+function collectExecPolicyConflictWarnings(cfg: OpenClawConfig): string[] {
+  const warnings: string[] = [];
+  const approvals = loadExecApprovals();
+  const defaultRequestedSecuritySource = "OpenClaw default (full)";
+  const defaultRequestedAskSource = "OpenClaw default (off)";
+
+  const maybeWarn = (params: {
+    scopeLabel: string;
+    scopeExecConfig: { security?: ExecSecurity; ask?: ExecAsk } | undefined;
+    globalExecConfig?: { security?: ExecSecurity; ask?: ExecAsk } | undefined;
+    agentId?: string;
+  }) => {
+    const scopeExecConfig = params.scopeExecConfig;
+    const globalExecConfig = params.globalExecConfig;
+    if (
+      !scopeExecConfig?.security &&
+      !scopeExecConfig?.ask &&
+      !globalExecConfig?.security &&
+      !globalExecConfig?.ask
+    ) {
+      return;
+    }
+    const snapshot = resolveExecPolicyScopeSnapshot({
+      approvals,
+      scopeExecConfig,
+      globalExecConfig,
+      configPath:
+        params.scopeLabel === "tools.exec"
+          ? "tools.exec"
+          : `agents.list.${params.agentId}.tools.exec`,
+      scopeLabel: params.scopeLabel,
+      agentId: params.agentId,
+    });
+    const securityConfigured = snapshot.security.requestedSource !== defaultRequestedSecuritySource;
+    const askConfigured = snapshot.ask.requestedSource !== defaultRequestedAskSource;
+    const securityConflict =
+      securityConfigured &&
+      execSecurityRank(snapshot.security.requested) > execSecurityRank(snapshot.security.effective);
+    const askConflict =
+      askConfigured && execAskRank(snapshot.ask.requested) < execAskRank(snapshot.ask.effective);
+    if (!securityConflict && !askConflict) {
+      return;
+    }
+
+    const configParts: string[] = [];
+    const hostParts: string[] = [];
+    if (securityConflict) {
+      configParts.push(`${snapshot.security.requestedSource}="${snapshot.security.requested}"`);
+      hostParts.push(`${snapshot.security.hostSource}="${snapshot.security.host}"`);
+    }
+    if (askConflict) {
+      configParts.push(`${snapshot.ask.requestedSource}="${snapshot.ask.requested}"`);
+      hostParts.push(`${snapshot.ask.hostSource}="${snapshot.ask.host}"`);
+    }
+
+    warnings.push(
+      [
+        `- ${params.scopeLabel} is broader than the host exec policy.`,
+        `  Config: ${configParts.join(", ")}`,
+        `  Host: ${hostParts.join(", ")}`,
+        `  Effective host exec stays security="${snapshot.security.effective}" ask="${snapshot.ask.effective}" because the stricter side wins.`,
+        "  Headless runs like isolated cron cannot answer approval prompts; align both files or enable Web UI, terminal UI, or chat exec approvals.",
+        `  Inspect with: ${formatCliCommand("openclaw approvals get --gateway")}`,
+      ].join("\n"),
+    );
+  };
+
+  maybeWarn({
+    scopeLabel: "tools.exec",
+    scopeExecConfig: cfg.tools?.exec,
+  });
+
+  for (const agent of cfg.agents?.list ?? []) {
+    maybeWarn({
+      scopeLabel: `agents.list.${agent.id}.tools.exec`,
+      scopeExecConfig: agent.tools?.exec,
+      globalExecConfig: cfg.tools?.exec,
+      agentId: agent.id,
+    });
+  }
+
+  return warnings;
+}
+
+function collectDurableExecApprovalWarnings(cfg: OpenClawConfig): string[] {
+  void cfg;
+  return [];
+}
 
 export async function noteSecurityWarnings(cfg: OpenClawConfig) {
   const warnings: string[] = [];
@@ -19,6 +172,10 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
       `  Check local policy with: ${formatCliCommand("openclaw approvals get --gateway")}`,
     );
   }
+
+  warnings.push(...collectImplicitHeartbeatDirectPolicyWarnings(cfg));
+  warnings.push(...collectExecPolicyConflictWarnings(cfg));
+  warnings.push(...collectDurableExecApprovalWarnings(cfg));
 
   // ===========================================
   // GATEWAY NETWORK EXPOSURE CHECK
@@ -44,8 +201,12 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
   });
   const authToken = resolvedAuth.token?.trim() ?? "";
   const authPassword = resolvedAuth.password?.trim() ?? "";
-  const hasToken = authToken.length > 0;
-  const hasPassword = authPassword.length > 0;
+  const hasToken =
+    authToken.length > 0 ||
+    hasConfiguredSecretInput(cfg.gateway?.auth?.token, cfg.secrets?.defaults);
+  const hasPassword =
+    authPassword.length > 0 ||
+    hasConfiguredSecretInput(cfg.gateway?.auth?.password, cfg.secrets?.defaults);
   const hasSharedSecret =
     (resolvedAuth.mode === "token" && hasToken) ||
     (resolvedAuth.mode === "password" && hasPassword);
@@ -143,8 +304,14 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
     if (!plugin.security) {
       continue;
     }
-    const { defaultAccountId, account, enabled, configured } =
-      await resolveDefaultChannelAccountContext(plugin, cfg);
+    const { defaultAccountId, account, enabled, configured, diagnostics } =
+      await resolveDefaultChannelAccountContext(plugin, cfg, {
+        mode: "read_only",
+        commandName: "doctor",
+      });
+    for (const diagnostic of diagnostics) {
+      warnings.push(`- [secrets] ${diagnostic}`);
+    }
     if (!enabled) {
       continue;
     }

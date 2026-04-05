@@ -2,53 +2,114 @@ import { describe, expect, it } from "vitest";
 import { classifyControlUiRequest } from "./control-ui-routing.js";
 
 describe("classifyControlUiRequest", () => {
-  it("falls through non-read root requests for plugin webhooks", () => {
-    const classified = classifyControlUiRequest({
-      basePath: "",
-      pathname: "/bluebubbles-webhook",
-      search: "",
-      method: "POST",
+  describe("root-mounted control ui", () => {
+    it.each([
+      {
+        name: "serves the root entrypoint",
+        pathname: "/",
+        method: "GET",
+        expected: { kind: "serve" as const },
+      },
+      {
+        name: "serves other read-only SPA routes",
+        pathname: "/chat",
+        method: "HEAD",
+        expected: { kind: "serve" as const },
+      },
+      {
+        name: "keeps health probes outside the SPA catch-all",
+        pathname: "/healthz",
+        method: "GET",
+        expected: { kind: "not-control-ui" as const },
+      },
+      {
+        name: "keeps readiness probes outside the SPA catch-all",
+        pathname: "/ready",
+        method: "HEAD",
+        expected: { kind: "not-control-ui" as const },
+      },
+      {
+        name: "keeps plugin routes outside the SPA catch-all",
+        pathname: "/plugins/webhook",
+        method: "GET",
+        expected: { kind: "not-control-ui" as const },
+      },
+      {
+        name: "keeps API routes outside the SPA catch-all",
+        pathname: "/api/sessions",
+        method: "GET",
+        expected: { kind: "not-control-ui" as const },
+      },
+      {
+        name: "returns not-found for legacy ui routes",
+        pathname: "/ui/settings",
+        method: "GET",
+        expected: { kind: "not-found" as const },
+      },
+      {
+        name: "falls through non-read requests",
+        pathname: "/bluebubbles-webhook",
+        method: "POST",
+        expected: { kind: "not-control-ui" as const },
+      },
+    ])("$name", ({ pathname, method, expected }) => {
+      expect(
+        classifyControlUiRequest({
+          basePath: "",
+          pathname,
+          search: "",
+          method,
+        }),
+      ).toEqual(expected);
     });
-    expect(classified).toEqual({ kind: "not-control-ui" });
   });
 
-  it("returns not-found for legacy /ui routes when root-mounted", () => {
-    const classified = classifyControlUiRequest({
-      basePath: "",
-      pathname: "/ui/settings",
-      search: "",
-      method: "GET",
+  describe("basePath-mounted control ui", () => {
+    it.each([
+      {
+        name: "redirects the basePath entrypoint",
+        pathname: "/openclaw",
+        search: "?foo=1",
+        method: "GET",
+        expected: { kind: "redirect" as const, location: "/openclaw/?foo=1" },
+      },
+      {
+        name: "serves nested read-only routes",
+        pathname: "/openclaw/chat",
+        search: "",
+        method: "HEAD",
+        expected: { kind: "serve" as const },
+      },
+      {
+        name: "falls through unmatched paths",
+        pathname: "/elsewhere/chat",
+        search: "",
+        method: "GET",
+        expected: { kind: "not-control-ui" as const },
+      },
+      {
+        name: "falls through write requests to the basePath entrypoint",
+        pathname: "/openclaw",
+        search: "",
+        method: "POST",
+        expected: { kind: "not-control-ui" as const },
+      },
+      ...["PUT", "DELETE", "PATCH", "OPTIONS"].map((method) => ({
+        name: `falls through ${method} subroute requests`,
+        pathname: "/openclaw/webhook",
+        search: "",
+        method,
+        expected: { kind: "not-control-ui" as const },
+      })),
+    ])("$name", ({ pathname, search, method, expected }) => {
+      expect(
+        classifyControlUiRequest({
+          basePath: "/openclaw",
+          pathname,
+          search,
+          method,
+        }),
+      ).toEqual(expected);
     });
-    expect(classified).toEqual({ kind: "not-found" });
-  });
-
-  it("returns method-not-allowed for basePath non-read methods", () => {
-    const classified = classifyControlUiRequest({
-      basePath: "/openclaw",
-      pathname: "/openclaw",
-      search: "",
-      method: "POST",
-    });
-    expect(classified).toEqual({ kind: "method-not-allowed" });
-  });
-
-  it("returns redirect for basePath entrypoint GET", () => {
-    const classified = classifyControlUiRequest({
-      basePath: "/openclaw",
-      pathname: "/openclaw",
-      search: "?foo=1",
-      method: "GET",
-    });
-    expect(classified).toEqual({ kind: "redirect", location: "/openclaw/?foo=1" });
-  });
-
-  it("classifies basePath subroutes as control ui", () => {
-    const classified = classifyControlUiRequest({
-      basePath: "/openclaw",
-      pathname: "/openclaw/chat",
-      search: "",
-      method: "HEAD",
-    });
-    expect(classified).toEqual({ kind: "serve" });
   });
 });

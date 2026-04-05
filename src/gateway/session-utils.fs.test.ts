@@ -7,6 +7,7 @@ import {
   archiveSessionTranscripts,
   readFirstUserMessageFromTranscript,
   readLastMessagePreviewFromTranscript,
+  readLatestSessionUsageFromTranscript,
   readSessionMessages,
   readSessionTitleFieldsFromTranscript,
   readSessionPreviewItemsFromTranscript,
@@ -56,51 +57,47 @@ describe("readFirstUserMessageFromTranscript", () => {
     storePath = nextStorePath;
   });
 
-  test("extracts first user text across supported content formats", () => {
-    const cases = [
-      {
-        sessionId: "test-session-1",
-        lines: [
-          JSON.stringify({ type: "session", version: 1, id: "test-session-1" }),
-          JSON.stringify({ message: { role: "user", content: "Hello world" } }),
-          JSON.stringify({ message: { role: "assistant", content: "Hi there" } }),
-        ],
-        expected: "Hello world",
-      },
-      {
-        sessionId: "test-session-2",
-        lines: [
-          JSON.stringify({ type: "session", version: 1, id: "test-session-2" }),
-          JSON.stringify({
-            message: {
-              role: "user",
-              content: [{ type: "text", text: "Array message content" }],
-            },
-          }),
-        ],
-        expected: "Array message content",
-      },
-      {
-        sessionId: "test-session-2b",
-        lines: [
-          JSON.stringify({ type: "session", version: 1, id: "test-session-2b" }),
-          JSON.stringify({
-            message: {
-              role: "user",
-              content: [{ type: "input_text", text: "Input text content" }],
-            },
-          }),
-        ],
-        expected: "Input text content",
-      },
-    ] as const;
-
-    for (const testCase of cases) {
-      const transcriptPath = path.join(tmpDir, `${testCase.sessionId}.jsonl`);
-      fs.writeFileSync(transcriptPath, testCase.lines.join("\n"), "utf-8");
-      const result = readFirstUserMessageFromTranscript(testCase.sessionId, storePath);
-      expect(result, testCase.sessionId).toBe(testCase.expected);
-    }
+  test.each([
+    {
+      sessionId: "test-session-1",
+      lines: [
+        JSON.stringify({ type: "session", version: 1, id: "test-session-1" }),
+        JSON.stringify({ message: { role: "user", content: "Hello world" } }),
+        JSON.stringify({ message: { role: "assistant", content: "Hi there" } }),
+      ],
+      expected: "Hello world",
+    },
+    {
+      sessionId: "test-session-2",
+      lines: [
+        JSON.stringify({ type: "session", version: 1, id: "test-session-2" }),
+        JSON.stringify({
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "Array message content" }],
+          },
+        }),
+      ],
+      expected: "Array message content",
+    },
+    {
+      sessionId: "test-session-2b",
+      lines: [
+        JSON.stringify({ type: "session", version: 1, id: "test-session-2b" }),
+        JSON.stringify({
+          message: {
+            role: "user",
+            content: [{ type: "input_text", text: "Input text content" }],
+          },
+        }),
+      ],
+      expected: "Input text content",
+    },
+  ] as const)("extracts first user text for $sessionId", ({ sessionId, lines, expected }) => {
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+    const result = readFirstUserMessageFromTranscript(sessionId, storePath);
+    expect(result, sessionId).toBe(expected);
   });
   test("skips non-user messages to find first user message", () => {
     const sessionId = "test-session-3";
@@ -197,34 +194,33 @@ describe("readLastMessagePreviewFromTranscript", () => {
     expect(result).toBeNull();
   });
 
-  test("returns the last user or assistant message from transcript", () => {
-    const cases = [
-      {
-        sessionId: "test-last-user",
-        lines: [
-          JSON.stringify({ message: { role: "user", content: "First user" } }),
-          JSON.stringify({ message: { role: "assistant", content: "First assistant" } }),
-          JSON.stringify({ message: { role: "user", content: "Last user message" } }),
-        ],
-        expected: "Last user message",
-      },
-      {
-        sessionId: "test-last-assistant",
-        lines: [
-          JSON.stringify({ message: { role: "user", content: "User question" } }),
-          JSON.stringify({ message: { role: "assistant", content: "Final assistant reply" } }),
-        ],
-        expected: "Final assistant reply",
-      },
-    ] as const;
-
-    for (const testCase of cases) {
-      const transcriptPath = path.join(tmpDir, `${testCase.sessionId}.jsonl`);
-      fs.writeFileSync(transcriptPath, testCase.lines.join("\n"), "utf-8");
-      const result = readLastMessagePreviewFromTranscript(testCase.sessionId, storePath);
-      expect(result).toBe(testCase.expected);
-    }
-  });
+  test.each([
+    {
+      sessionId: "test-last-user",
+      lines: [
+        JSON.stringify({ message: { role: "user", content: "First user" } }),
+        JSON.stringify({ message: { role: "assistant", content: "First assistant" } }),
+        JSON.stringify({ message: { role: "user", content: "Last user message" } }),
+      ],
+      expected: "Last user message",
+    },
+    {
+      sessionId: "test-last-assistant",
+      lines: [
+        JSON.stringify({ message: { role: "user", content: "User question" } }),
+        JSON.stringify({ message: { role: "assistant", content: "Final assistant reply" } }),
+      ],
+      expected: "Final assistant reply",
+    },
+  ] as const)(
+    "returns the last user or assistant message from transcript for $sessionId",
+    ({ sessionId, lines, expected }) => {
+      const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+      fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+      const result = readLastMessagePreviewFromTranscript(sessionId, storePath);
+      expect(result).toBe(expected);
+    },
+  );
 
   test("skips system messages to find last user/assistant", () => {
     const sessionId = "test-last-skip-system";
@@ -265,32 +261,32 @@ describe("readLastMessagePreviewFromTranscript", () => {
     expect(result).toBe("Valid first");
   });
 
-  test("handles array/output_text content formats", () => {
-    const cases = [
-      {
-        sessionId: "test-last-array",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "Array content response" }],
-        },
-        expected: "Array content response",
+  test.each([
+    {
+      sessionId: "test-last-array",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Array content response" }],
       },
-      {
-        sessionId: "test-last-output-text",
-        message: {
-          role: "assistant",
-          content: [{ type: "output_text", text: "Output text response" }],
-        },
-        expected: "Output text response",
+      expected: "Array content response",
+    },
+    {
+      sessionId: "test-last-output-text",
+      message: {
+        role: "assistant",
+        content: [{ type: "output_text", text: "Output text response" }],
       },
-    ] as const;
-    for (const testCase of cases) {
-      const transcriptPath = path.join(tmpDir, `${testCase.sessionId}.jsonl`);
-      fs.writeFileSync(transcriptPath, JSON.stringify({ message: testCase.message }), "utf-8");
-      const result = readLastMessagePreviewFromTranscript(testCase.sessionId, storePath);
-      expect(result, testCase.sessionId).toBe(testCase.expected);
-    }
-  });
+      expected: "Output text response",
+    },
+  ] as const)(
+    "handles array/output_text content format for $sessionId",
+    ({ sessionId, message, expected }) => {
+      const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+      fs.writeFileSync(transcriptPath, JSON.stringify({ message }), "utf-8");
+      const result = readLastMessagePreviewFromTranscript(sessionId, storePath);
+      expect(result, sessionId).toBe(expected);
+    },
+  );
 
   test("skips empty content to find previous message", () => {
     const sessionId = "test-last-skip-empty";
@@ -505,54 +501,40 @@ describe("readSessionMessages", () => {
     expect(typeof marker.timestamp).toBe("number");
   });
 
-  test("reads cross-agent absolute sessionFile across store-root layouts", () => {
-    const cases = [
-      {
-        sessionId: "cross-agent-default-root",
-        sessionFile: path.join(
-          tmpDir,
-          "agents",
-          "ops",
-          "sessions",
-          "cross-agent-default-root.jsonl",
-        ),
-        wrongStorePath: path.join(tmpDir, "agents", "main", "sessions", "sessions.json"),
-        message: { role: "user", content: "from-ops" },
-      },
-      {
-        sessionId: "cross-agent-custom-root",
-        sessionFile: path.join(
-          tmpDir,
-          "custom",
-          "agents",
-          "ops",
-          "sessions",
-          "cross-agent-custom-root.jsonl",
-        ),
-        wrongStorePath: path.join(tmpDir, "custom", "agents", "main", "sessions", "sessions.json"),
-        message: { role: "assistant", content: "from-custom-ops" },
-      },
-    ] as const;
-
-    for (const testCase of cases) {
-      fs.mkdirSync(path.dirname(testCase.sessionFile), { recursive: true });
+  test.each([
+    {
+      sessionId: "cross-agent-default-root",
+      sessionFileParts: ["agents", "ops", "sessions", "cross-agent-default-root.jsonl"],
+      wrongStorePathParts: ["agents", "main", "sessions", "sessions.json"],
+      message: { role: "user", content: "from-ops" },
+    },
+    {
+      sessionId: "cross-agent-custom-root",
+      sessionFileParts: ["custom", "agents", "ops", "sessions", "cross-agent-custom-root.jsonl"],
+      wrongStorePathParts: ["custom", "agents", "main", "sessions", "sessions.json"],
+      message: { role: "assistant", content: "from-custom-ops" },
+    },
+  ] as const)(
+    "reads cross-agent absolute sessionFile across store-root layouts for $sessionId",
+    ({ sessionId, sessionFileParts, wrongStorePathParts, message }) => {
+      const sessionFile = path.join(tmpDir, ...sessionFileParts);
+      const wrongStorePath = path.join(tmpDir, ...wrongStorePathParts);
+      fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
       fs.writeFileSync(
-        testCase.sessionFile,
+        sessionFile,
         [
-          JSON.stringify({ type: "session", version: 1, id: testCase.sessionId }),
-          JSON.stringify({ message: testCase.message }),
+          JSON.stringify({ type: "session", version: 1, id: sessionId }),
+          JSON.stringify({ message }),
         ].join("\n"),
         "utf-8",
       );
 
-      const out = readSessionMessages(
-        testCase.sessionId,
-        testCase.wrongStorePath,
-        testCase.sessionFile,
-      );
-      expect(out).toEqual([testCase.message]);
-    }
-  });
+      const out = readSessionMessages(sessionId, wrongStorePath, sessionFile);
+      expect(out).toHaveLength(1);
+      expect(out[0]).toMatchObject(message);
+      expect((out[0] as { __openclaw?: { seq?: number } }).__openclaw?.seq).toBe(1);
+    },
+  );
 });
 
 describe("readSessionPreviewItemsFromTranscript", () => {
@@ -648,6 +630,156 @@ describe("readSessionPreviewItemsFromTranscript", () => {
   });
 });
 
+describe("readLatestSessionUsageFromTranscript", () => {
+  let tmpDir: string;
+  let storePath: string;
+
+  registerTempSessionStore("openclaw-session-usage-test-", (nextTmpDir, nextStorePath) => {
+    tmpDir = nextTmpDir;
+    storePath = nextStorePath;
+  });
+
+  test("returns the latest assistant usage snapshot and skips delivery mirrors", () => {
+    const sessionId = "usage-session";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      {
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.4",
+          usage: {
+            input: 1200,
+            output: 300,
+            cacheRead: 50,
+            cost: { total: 0.0042 },
+          },
+        },
+      },
+      {
+        message: {
+          role: "assistant",
+          provider: "openclaw",
+          model: "delivery-mirror",
+          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        },
+      },
+    ]);
+
+    expect(readLatestSessionUsageFromTranscript(sessionId, storePath)).toEqual({
+      modelProvider: "openai",
+      model: "gpt-5.4",
+      inputTokens: 1200,
+      outputTokens: 300,
+      cacheRead: 50,
+      totalTokens: 1250,
+      totalTokensFresh: true,
+      costUsd: 0.0042,
+    });
+  });
+
+  test("aggregates assistant usage across the full transcript and keeps the latest context snapshot", () => {
+    const sessionId = "usage-aggregate";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      {
+        message: {
+          role: "assistant",
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          usage: {
+            input: 1_800,
+            output: 400,
+            cacheRead: 600,
+            cost: { total: 0.0055 },
+          },
+        },
+      },
+      {
+        message: {
+          role: "assistant",
+          usage: {
+            input: 2_400,
+            output: 250,
+            cacheRead: 900,
+            cost: { total: 0.006 },
+          },
+        },
+      },
+    ]);
+
+    const snapshot = readLatestSessionUsageFromTranscript(sessionId, storePath);
+    expect(snapshot).toMatchObject({
+      modelProvider: "anthropic",
+      model: "claude-sonnet-4-6",
+      inputTokens: 4200,
+      outputTokens: 650,
+      cacheRead: 1500,
+      totalTokens: 3300,
+      totalTokensFresh: true,
+    });
+    expect(snapshot?.costUsd).toBeCloseTo(0.0115, 8);
+  });
+
+  test("reads earlier assistant usage outside the old tail window", () => {
+    const sessionId = "usage-full-transcript";
+    const filler = "x".repeat(20_000);
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      {
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.4",
+          usage: {
+            input: 1_000,
+            output: 200,
+            cacheRead: 100,
+            cost: { total: 0.0042 },
+          },
+        },
+      },
+      ...Array.from({ length: 80 }, () => ({ message: { role: "user", content: filler } })),
+      {
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.4",
+          usage: {
+            input: 500,
+            output: 150,
+            cacheRead: 50,
+            cost: { total: 0.0021 },
+          },
+        },
+      },
+    ]);
+
+    const snapshot = readLatestSessionUsageFromTranscript(sessionId, storePath);
+    expect(snapshot).toMatchObject({
+      modelProvider: "openai",
+      model: "gpt-5.4",
+      inputTokens: 1500,
+      outputTokens: 350,
+      cacheRead: 150,
+      totalTokens: 550,
+      totalTokensFresh: true,
+    });
+    expect(snapshot?.costUsd).toBeCloseTo(0.0063, 8);
+  });
+
+  test("returns null when the transcript has no assistant usage snapshot", () => {
+    const sessionId = "usage-empty";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "hello" } },
+      { message: { role: "assistant", content: "hi" } },
+    ]);
+
+    expect(readLatestSessionUsageFromTranscript(sessionId, storePath)).toBeNull();
+  });
+});
+
 describe("resolveSessionTranscriptCandidates", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -666,29 +798,22 @@ describe("resolveSessionTranscriptCandidates", () => {
 });
 
 describe("resolveSessionTranscriptCandidates safety", () => {
-  test("keeps cross-agent absolute sessionFile for standard and custom store roots", () => {
-    const cases = [
-      {
-        storePath: "/tmp/openclaw/agents/main/sessions/sessions.json",
-        sessionFile: "/tmp/openclaw/agents/ops/sessions/sess-safe.jsonl",
-      },
-      {
-        storePath: "/srv/custom/agents/main/sessions/sessions.json",
-        sessionFile: "/srv/custom/agents/ops/sessions/sess-safe.jsonl",
-      },
-    ] as const;
-
-    for (const testCase of cases) {
-      const candidates = resolveSessionTranscriptCandidates(
-        "sess-safe",
-        testCase.storePath,
-        testCase.sessionFile,
-      );
-      expect(candidates.map((value) => path.resolve(value))).toContain(
-        path.resolve(testCase.sessionFile),
-      );
-    }
-  });
+  test.each([
+    {
+      storePath: "/tmp/openclaw/agents/main/sessions/sessions.json",
+      sessionFile: "/tmp/openclaw/agents/ops/sessions/sess-safe.jsonl",
+    },
+    {
+      storePath: "/srv/custom/agents/main/sessions/sessions.json",
+      sessionFile: "/srv/custom/agents/ops/sessions/sess-safe.jsonl",
+    },
+  ] as const)(
+    "keeps cross-agent absolute sessionFile candidate for $storePath",
+    ({ storePath, sessionFile }) => {
+      const candidates = resolveSessionTranscriptCandidates("sess-safe", storePath, sessionFile);
+      expect(candidates.map((value) => path.resolve(value))).toContain(path.resolve(sessionFile));
+    },
+  );
 
   test("drops unsafe session IDs instead of producing traversal paths", () => {
     const candidates = resolveSessionTranscriptCandidates(
@@ -712,6 +837,78 @@ describe("resolveSessionTranscriptCandidates safety", () => {
     expect(candidates.some((value) => value.includes("etc/passwd"))).toBe(false);
     expect(normalizedCandidates).toContain(expectedFallback);
   });
+
+  test("prefers the current sessionId transcript before a stale sessionFile candidate", () => {
+    const storePath = "/tmp/openclaw/agents/main/sessions/sessions.json";
+    const candidates = resolveSessionTranscriptCandidates(
+      "11111111-1111-4111-8111-111111111111",
+      storePath,
+      "/tmp/openclaw/agents/main/sessions/22222222-2222-4222-8222-222222222222.jsonl",
+    );
+
+    expect(candidates[0]).toBe(
+      path.resolve("/tmp/openclaw/agents/main/sessions/11111111-1111-4111-8111-111111111111.jsonl"),
+    );
+    expect(candidates).toContain(
+      path.resolve("/tmp/openclaw/agents/main/sessions/22222222-2222-4222-8222-222222222222.jsonl"),
+    );
+  });
+
+  test("keeps explicit custom sessionFile ahead of synthesized fallback", () => {
+    const storePath = "/tmp/openclaw/agents/main/sessions/sessions.json";
+    const sessionFile = "/tmp/openclaw/agents/main/sessions/custom-transcript.jsonl";
+    const candidates = resolveSessionTranscriptCandidates(
+      "11111111-1111-4111-8111-111111111111",
+      storePath,
+      sessionFile,
+    );
+
+    expect(candidates[0]).toBe(path.resolve(sessionFile));
+  });
+
+  test("keeps custom topic-like transcript paths ahead of synthesized fallback", () => {
+    const storePath = "/tmp/openclaw/agents/main/sessions/sessions.json";
+    const sessionFile = "/tmp/openclaw/agents/main/sessions/custom-topic-notes.jsonl";
+    const candidates = resolveSessionTranscriptCandidates(
+      "11111111-1111-4111-8111-111111111111",
+      storePath,
+      sessionFile,
+    );
+
+    expect(candidates[0]).toBe(path.resolve(sessionFile));
+  });
+
+  test("keeps forked transcript paths ahead of synthesized fallback", () => {
+    const storePath = "/tmp/openclaw/agents/main/sessions/sessions.json";
+    const sessionId = "11111111-1111-4111-8111-111111111111";
+    const sessionFile =
+      "/tmp/openclaw/agents/main/sessions/2026-03-23T16-30-00-000Z_11111111-1111-4111-8111-111111111111.jsonl";
+    const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile);
+
+    expect(candidates[0]).toBe(path.resolve(sessionFile));
+  });
+
+  test("keeps timestamped custom transcript paths ahead of synthesized fallback", () => {
+    const storePath = "/tmp/openclaw/agents/main/sessions/sessions.json";
+    const sessionId = "11111111-1111-4111-8111-111111111111";
+    const sessionFile = "/tmp/openclaw/agents/main/sessions/2026-03-23T16-30-00-000Z_notes.jsonl";
+    const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile);
+
+    expect(candidates[0]).toBe(path.resolve(sessionFile));
+  });
+
+  test("still treats generated topic transcripts from another session as stale", () => {
+    const storePath = "/tmp/openclaw/agents/main/sessions/sessions.json";
+    const sessionId = "11111111-1111-4111-8111-111111111111";
+    const staleSessionFile =
+      "/tmp/openclaw/agents/main/sessions/22222222-2222-4222-8222-222222222222-topic-thread.jsonl";
+    const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, staleSessionFile);
+
+    expect(candidates[0]).toBe(
+      path.resolve("/tmp/openclaw/agents/main/sessions/11111111-1111-4111-8111-111111111111.jsonl"),
+    );
+    expect(candidates).toContain(path.resolve(staleSessionFile));
+  });
 });
 
 describe("archiveSessionTranscripts", () => {
@@ -731,34 +928,35 @@ describe("archiveSessionTranscripts", () => {
     vi.unstubAllEnvs();
   });
 
-  test("archives transcript from default and explicit sessionFile paths", () => {
-    const cases = [
-      {
-        sessionId: "sess-archive-1",
-        transcriptPath: path.join(tmpDir, "sess-archive-1.jsonl"),
-        args: { sessionId: "sess-archive-1", storePath, reason: "reset" as const },
-      },
-      {
+  test.each([
+    {
+      sessionId: "sess-archive-1",
+      transcriptFileName: "sess-archive-1.jsonl",
+      buildArgs: () => ({ sessionId: "sess-archive-1", storePath, reason: "reset" as const }),
+    },
+    {
+      sessionId: "sess-archive-2",
+      transcriptFileName: "custom-transcript.jsonl",
+      buildArgs: () => ({
         sessionId: "sess-archive-2",
-        transcriptPath: path.join(tmpDir, "custom-transcript.jsonl"),
-        args: {
-          sessionId: "sess-archive-2",
-          storePath: undefined,
-          sessionFile: path.join(tmpDir, "custom-transcript.jsonl"),
-          reason: "reset" as const,
-        },
-      },
-    ] as const;
-
-    for (const testCase of cases) {
-      fs.writeFileSync(testCase.transcriptPath, '{"type":"session"}\n', "utf-8");
-      const archived = archiveSessionTranscripts(testCase.args);
+        storePath: undefined,
+        sessionFile: path.join(tmpDir, "custom-transcript.jsonl"),
+        reason: "reset" as const,
+      }),
+    },
+  ] as const)(
+    "archives transcript from default and explicit sessionFile path for $sessionId",
+    ({ transcriptFileName, buildArgs }) => {
+      const transcriptPath = path.join(tmpDir, transcriptFileName);
+      const args = buildArgs();
+      fs.writeFileSync(transcriptPath, '{"type":"session"}\n', "utf-8");
+      const archived = archiveSessionTranscripts(args);
       expect(archived).toHaveLength(1);
       expect(archived[0]).toContain(".reset.");
-      expect(fs.existsSync(testCase.transcriptPath)).toBe(false);
+      expect(fs.existsSync(transcriptPath)).toBe(false);
       expect(fs.existsSync(archived[0])).toBe(true);
-    }
-  });
+    },
+  );
 
   test("returns empty array when no transcript files exist", () => {
     const archived = archiveSessionTranscripts({

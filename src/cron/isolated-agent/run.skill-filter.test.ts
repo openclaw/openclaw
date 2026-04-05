@@ -1,62 +1,37 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
+import {
+  makeIsolatedAgentTurnJob,
+  makeIsolatedAgentTurnParams,
+  setupRunCronIsolatedAgentTurnSuite,
+} from "./run.suite-helpers.js";
 import {
   buildWorkspaceSkillSnapshotMock,
-  clearFastTestEnv,
   getCliSessionIdMock,
   isCliProviderMock,
+  lookupContextTokensMock,
   loadRunCronIsolatedAgentTurn,
   logWarnMock,
   makeCronSession,
+  makeCronSessionEntry,
   resolveAgentConfigMock,
   resolveAgentSkillsFilterMock,
   resolveAllowedModelRefMock,
   resolveCronSessionMock,
-  resetRunCronIsolatedAgentTurnHarness,
-  restoreFastTestEnv,
   runCliAgentMock,
   runWithModelFallbackMock,
 } from "./run.test-harness.js";
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
-
-function makeSkillJob(overrides?: Record<string, unknown>) {
-  return {
-    id: "test-job",
-    name: "Test Job",
-    schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
-    sessionTarget: "isolated",
-    payload: { kind: "agentTurn", message: "test" },
-    ...overrides,
-  } as never;
-}
-
-function makeSkillParams(overrides?: Record<string, unknown>) {
-  return {
-    cfg: {},
-    deps: {} as never,
-    job: makeSkillJob(overrides?.job as Record<string, unknown> | undefined),
-    message: "test",
-    sessionKey: "cron:test",
-    ...overrides,
-  };
-}
+const makeSkillJob = makeIsolatedAgentTurnJob;
+const makeSkillParams = makeIsolatedAgentTurnParams;
 
 // ---------- tests ----------
 
 describe("runCronIsolatedAgentTurn — skill filter", () => {
-  let previousFastTestEnv: string | undefined;
-  beforeEach(() => {
-    previousFastTestEnv = clearFastTestEnv();
-    resetRunCronIsolatedAgentTurnHarness();
-    resolveCronSessionMock.mockReturnValue(makeCronSession());
-  });
-
-  afterEach(() => {
-    restoreFastTestEnv(previousFastTestEnv);
-  });
+  setupRunCronIsolatedAgentTurnSuite();
 
   async function runSkillFilterCase(overrides?: Record<string, unknown>) {
-    const result = await runCronIsolatedAgentTurn(makeSkillParams(overrides));
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentTurnParams(overrides));
     expect(result.status).toBe("ok");
     return result;
   }
@@ -193,7 +168,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
         cfg: {
           agents: {
             defaults: {
-              model: { primary: "openai-codex/gpt-5.3-codex", fallbacks: defaultFallbacks },
+              model: { primary: "openai-codex/gpt-5.4", fallbacks: defaultFallbacks },
             },
           },
         },
@@ -201,17 +176,17 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       });
 
       expectDefaultModelCall({
-        primary: "anthropic/claude-sonnet-4-5",
+        primary: "anthropic/claude-sonnet-4-6",
         fallbacks: defaultFallbacks,
       });
     }
 
     it("preserves defaults when agent overrides primary as string", async () => {
-      await expectPrimaryOverridePreservesDefaults("anthropic/claude-sonnet-4-5");
+      await expectPrimaryOverridePreservesDefaults("anthropic/claude-sonnet-4-6");
     });
 
     it("preserves defaults when agent overrides primary in object form", async () => {
-      await expectPrimaryOverridePreservesDefaults({ primary: "anthropic/claude-sonnet-4-5" });
+      await expectPrimaryOverridePreservesDefaults({ primary: "anthropic/claude-sonnet-4-6" });
     });
 
     it("applies payload.model override when model is allowed", async () => {
@@ -244,7 +219,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
         cfg: {
           agents: {
             defaults: {
-              model: { primary: "openai-codex/gpt-5.3-codex", fallbacks: defaultFallbacks },
+              model: { primary: "openai-codex/gpt-5.4", fallbacks: defaultFallbacks },
             },
           },
         },
@@ -256,7 +231,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
         "cron: payload.model 'anthropic/claude-sonnet-4-6' not allowed, falling back to agent defaults",
       );
       expectDefaultModelCall({
-        primary: "openai-codex/gpt-5.3-codex",
+        primary: "openai-codex/gpt-5.4",
         fallbacks: defaultFallbacks,
       });
     });
@@ -346,6 +321,41 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
         "cliSessionId",
         "existing-cli-session-def",
       );
+    });
+  });
+
+  describe("context token fallback", () => {
+    it("preserves existing session contextTokens when no configured or cached model window is loaded", async () => {
+      const session = makeCronSession({
+        sessionEntry: makeCronSessionEntry({
+          contextTokens: 222_000,
+        }),
+      });
+      resolveCronSessionMock.mockReturnValue(session);
+      lookupContextTokensMock.mockReturnValue(undefined);
+
+      const result = await runSkillFilterCase();
+
+      expect(result.status).toBe("ok");
+      expect(session.sessionEntry.contextTokens).toBe(222_000);
+    });
+
+    it("prefers sync-configured model contextTokens over the previous session value", async () => {
+      const session = makeCronSession({
+        sessionEntry: makeCronSessionEntry({
+          contextTokens: 222_000,
+        }),
+      });
+      resolveCronSessionMock.mockReturnValue(session);
+      lookupContextTokensMock.mockReturnValue(512_000);
+
+      const result = await runSkillFilterCase();
+
+      expect(result.status).toBe("ok");
+      expect(session.sessionEntry.contextTokens).toBe(512_000);
+      expect(lookupContextTokensMock).toHaveBeenCalledWith("gpt-4", {
+        allowAsyncLoad: false,
+      });
     });
   });
 });

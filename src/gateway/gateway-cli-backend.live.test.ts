@@ -1,10 +1,12 @@
+import { spawn } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import { parseModelRef } from "../agents/model-selection.js";
-import { loadConfig } from "../config/config.js";
+import { clearRuntimeConfigSnapshot, loadConfig } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -13,14 +15,27 @@ import { renderCatNoncePngBase64 } from "./live-image-probe.js";
 import { startGatewayServer } from "./server.js";
 import { extractPayloadText } from "./test-helpers.agent-results.js";
 
-const LIVE = isTruthyEnvValue(process.env.LIVE) || isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST);
+const LIVE = isLiveTestEnabled();
 const CLI_LIVE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CLI_BACKEND);
 const CLI_IMAGE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CLI_BACKEND_IMAGE_PROBE);
 const CLI_RESUME = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CLI_BACKEND_RESUME_PROBE);
 const describeLive = LIVE && CLI_LIVE ? describe : describe.skip;
 
 const DEFAULT_MODEL = "claude-cli/claude-sonnet-4-6";
-const DEFAULT_CLAUDE_ARGS = ["-p", "--output-format", "json", "--dangerously-skip-permissions"];
+const BOOTSTRAP_LIVE_MODEL = process.env.OPENCLAW_LIVE_CLI_BACKEND_MODEL ?? DEFAULT_MODEL;
+const describeClaudeBootstrapLive =
+  LIVE && CLI_LIVE && BOOTSTRAP_LIVE_MODEL.startsWith("claude-cli/") ? describe : describe.skip;
+const DEFAULT_CLAUDE_ARGS = [
+  "-p",
+  "--output-format",
+  "stream-json",
+  "--include-partial-messages",
+  "--verbose",
+  "--setting-sources",
+  "user",
+  "--permission-mode",
+  "bypassPermissions",
+];
 const DEFAULT_CODEX_ARGS = [
   "exec",
   "--json",
@@ -30,7 +45,27 @@ const DEFAULT_CODEX_ARGS = [
   "read-only",
   "--skip-git-repo-check",
 ];
-const DEFAULT_CLEAR_ENV = ["ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY_OLD"];
+const DEFAULT_CLEAR_ENV = [
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_API_KEY_OLD",
+  "ANTHROPIC_AUTH_TOKEN",
+  "ANTHROPIC_BASE_URL",
+  "ANTHROPIC_UNIX_SOCKET",
+  "CLAUDE_CONFIG_DIR",
+  "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
+  "CLAUDE_CODE_ENTRYPOINT",
+  "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+  "CLAUDE_CODE_OAUTH_SCOPES",
+  "CLAUDE_CODE_OAUTH_TOKEN",
+  "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
+  "CLAUDE_CODE_PLUGIN_CACHE_DIR",
+  "CLAUDE_CODE_PLUGIN_SEED_DIR",
+  "CLAUDE_CODE_REMOTE",
+  "CLAUDE_CODE_USE_COWORK_PLUGINS",
+  "CLAUDE_CODE_USE_BEDROCK",
+  "CLAUDE_CODE_USE_FOUNDRY",
+  "CLAUDE_CODE_USE_VERTEX",
+];
 
 function randomImageProbeCode(len = 6): string {
   // Chosen to avoid common OCR confusions in our 5x7 bitmap font.
@@ -158,8 +193,79 @@ async function connectClient(params: { url: string; token: string }) {
   });
 }
 
+async function runGatewayCliBootstrapLiveProbe(): Promise<{
+  ok: boolean;
+  text: string;
+  expectedText: string;
+  systemPromptReport: {
+    injectedWorkspaceFiles?: Array<{ name?: string }>;
+  } | null;
+}> {
+  return await new Promise((resolve, reject) => {
+    const env = { ...process.env };
+    delete env.VITEST;
+    const child = spawn(
+      "pnpm",
+      ["exec", "tsx", path.join("scripts", "gateway-cli-bootstrap-live-probe.ts")],
+      {
+        cwd: process.cwd(),
+        env,
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    let stdout = "";
+    let stderr = "";
+    const timeout = setTimeout(() => {
+      child.kill("SIGTERM");
+      reject(new Error(`bootstrap probe timed out\nstdout:\n${stdout}\nstderr:\n${stderr}`));
+    }, 120_000);
+    timeout.unref();
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.on("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.on("close", (code) => {
+      clearTimeout(timeout);
+      if (code !== 0) {
+        reject(
+          new Error(`bootstrap probe exit=${String(code)}\nstdout:\n${stdout}\nstderr:\n${stderr}`),
+        );
+        return;
+      }
+      const line = stdout
+        .trim()
+        .split(/\r?\n/)
+        .map((entry) => entry.trim())
+        .findLast((entry) => entry.startsWith("{") && entry.endsWith("}"));
+      if (!line) {
+        reject(
+          new Error(`bootstrap probe missing JSON result\nstdout:\n${stdout}\nstderr:\n${stderr}`),
+        );
+        return;
+      }
+      resolve(JSON.parse(line) as Awaited<ReturnType<typeof runGatewayCliBootstrapLiveProbe>>);
+    });
+  });
+}
+
 describeLive("gateway live (cli backend)", () => {
   it("runs the agent pipeline against the local CLI backend", async () => {
+    const preservedEnv = new Set(
+      parseJsonStringArray(
+        "OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV",
+        process.env.OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV,
+      ) ?? [],
+    );
+
+    clearRuntimeConfigSnapshot();
     const previous = {
       configPath: process.env.OPENCLAW_CONFIG_PATH,
       token: process.env.OPENCLAW_GATEWAY_TOKEN,
@@ -175,8 +281,12 @@ describeLive("gateway live (cli backend)", () => {
     process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
     process.env.OPENCLAW_SKIP_CRON = "1";
     process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
-    delete process.env.ANTHROPIC_API_KEY;
-    delete process.env.ANTHROPIC_API_KEY_OLD;
+    if (!preservedEnv.has("ANTHROPIC_API_KEY")) {
+      delete process.env.ANTHROPIC_API_KEY;
+    }
+    if (!preservedEnv.has("ANTHROPIC_API_KEY_OLD")) {
+      delete process.env.ANTHROPIC_API_KEY_OLD;
+    }
 
     const token = `test-${randomUUID()}`;
     process.env.OPENCLAW_GATEWAY_TOKEN = token;
@@ -217,6 +327,12 @@ describeLive("gateway live (cli backend)", () => {
         "OPENCLAW_LIVE_CLI_BACKEND_CLEAR_ENV",
         process.env.OPENCLAW_LIVE_CLI_BACKEND_CLEAR_ENV,
       ) ?? (providerId === "claude-cli" ? DEFAULT_CLEAR_ENV : []);
+    const filteredCliClearEnv = cliClearEnv.filter((name) => !preservedEnv.has(name));
+    const preservedCliEnv = Object.fromEntries(
+      [...preservedEnv]
+        .map((name) => [name, process.env[name]])
+        .filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+    );
     const cliImageArg = process.env.OPENCLAW_LIVE_CLI_BACKEND_IMAGE_ARG?.trim() || undefined;
     const cliImageMode = parseImageMode(process.env.OPENCLAW_LIVE_CLI_BACKEND_IMAGE_MODE);
 
@@ -252,7 +368,8 @@ describeLive("gateway live (cli backend)", () => {
             [providerId]: {
               command: cliCommand,
               args: cliArgs,
-              clearEnv: cliClearEnv.length > 0 ? cliClearEnv : undefined,
+              clearEnv: filteredCliClearEnv.length > 0 ? filteredCliClearEnv : undefined,
+              env: Object.keys(preservedCliEnv).length > 0 ? preservedCliEnv : undefined,
               systemPromptWhen: "never",
               ...(cliImageArg ? { imageArg: cliImageArg, imageMode: cliImageMode } : {}),
             },
@@ -378,7 +495,8 @@ describeLive("gateway live (cli backend)", () => {
         }
       }
     } finally {
-      client.stop();
+      clearRuntimeConfigSnapshot();
+      await client.stopAndWait();
       await server.close();
       await fs.rm(tempDir, { recursive: true, force: true });
       if (previous.configPath === undefined) {
@@ -422,5 +540,16 @@ describeLive("gateway live (cli backend)", () => {
         process.env.ANTHROPIC_API_KEY_OLD = previous.anthropicApiKeyOld;
       }
     }
+  }, 60_000);
+});
+
+describeClaudeBootstrapLive("gateway live (claude-cli bootstrap context)", () => {
+  it("injects AGENTS, SOUL, IDENTITY, and USER files into the first Claude CLI turn", async () => {
+    const result = await runGatewayCliBootstrapLiveProbe();
+    expect(result.ok).toBe(true);
+    expect(result.text).toBe(result.expectedText);
+    expect(
+      result.systemPromptReport?.injectedWorkspaceFiles?.map((entry) => entry.name) ?? [],
+    ).toEqual(expect.arrayContaining(["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md"]));
   }, 60_000);
 });

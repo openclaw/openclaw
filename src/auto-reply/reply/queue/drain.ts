@@ -1,4 +1,5 @@
 import { defaultRuntime } from "../../../runtime.js";
+import { resolveGlobalMap } from "../../../shared/global-singleton.js";
 import {
   buildCollectPrompt,
   beginQueueDrain,
@@ -12,6 +13,34 @@ import {
 import { isRoutableChannel } from "../route-reply.js";
 import { FOLLOWUP_QUEUES } from "./state.js";
 import type { FollowupRun } from "./types.js";
+
+// Persists the most recent runFollowup callback per queue key so that
+// enqueueFollowupRun can restart a drain that finished and deleted the queue.
+const FOLLOWUP_DRAIN_CALLBACKS_KEY = Symbol.for("openclaw.followupDrainCallbacks");
+
+const FOLLOWUP_RUN_CALLBACKS = resolveGlobalMap<string, (run: FollowupRun) => Promise<void>>(
+  FOLLOWUP_DRAIN_CALLBACKS_KEY,
+);
+
+export function rememberFollowupDrainCallback(
+  key: string,
+  runFollowup: (run: FollowupRun) => Promise<void>,
+): void {
+  FOLLOWUP_RUN_CALLBACKS.set(key, runFollowup);
+}
+
+export function clearFollowupDrainCallback(key: string): void {
+  FOLLOWUP_RUN_CALLBACKS.delete(key);
+}
+
+/** Restart the drain for `key` if it is currently idle, using the stored callback. */
+export function kickFollowupDrainIfIdle(key: string): void {
+  const cb = FOLLOWUP_RUN_CALLBACKS.get(key);
+  if (!cb) {
+    return;
+  }
+  scheduleFollowupDrain(key, cb);
+}
 
 type OriginRoutingMetadata = Pick<
   FollowupRun,
@@ -54,6 +83,10 @@ export function scheduleFollowupDrain(
   if (!queue) {
     return;
   }
+  const effectiveRunFollowup = FOLLOWUP_RUN_CALLBACKS.get(key) ?? runFollowup;
+  // Cache callback only when a drain actually starts. Avoid keeping stale
+  // callbacks around from finalize calls where no queue work is pending.
+  rememberFollowupDrainCallback(key, effectiveRunFollowup);
   void (async () => {
     try {
       const collectState = { forceIndividualCollect: false };
@@ -72,7 +105,7 @@ export function scheduleFollowupDrain(
             collectState,
             isCrossChannel,
             items: queue.items,
-            run: runFollowup,
+            run: effectiveRunFollowup,
           });
           if (collectDrainResult === "empty") {
             break;
@@ -96,7 +129,7 @@ export function scheduleFollowupDrain(
             summary,
             renderItem: (item, idx) => `---\nQueued #${idx + 1}\n${item.prompt}`.trim(),
           });
-          await runFollowup({
+          await effectiveRunFollowup({
             prompt,
             run,
             enqueuedAt: Date.now(),
@@ -117,7 +150,7 @@ export function scheduleFollowupDrain(
           }
           if (
             !(await drainNextQueueItem(queue.items, async (item) => {
-              await runFollowup({
+              await effectiveRunFollowup({
                 prompt: summaryPrompt,
                 run,
                 enqueuedAt: Date.now(),
@@ -134,7 +167,7 @@ export function scheduleFollowupDrain(
           continue;
         }
 
-        if (!(await drainNextQueueItem(queue.items, runFollowup))) {
+        if (!(await drainNextQueueItem(queue.items, effectiveRunFollowup))) {
           break;
         }
       }
@@ -145,8 +178,9 @@ export function scheduleFollowupDrain(
       queue.draining = false;
       if (queue.items.length === 0 && queue.droppedCount === 0) {
         FOLLOWUP_QUEUES.delete(key);
+        clearFollowupDrainCallback(key);
       } else {
-        scheduleFollowupDrain(key, runFollowup);
+        scheduleFollowupDrain(key, effectiveRunFollowup);
       }
     }
   })();

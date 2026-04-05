@@ -1,65 +1,17 @@
 import "./isolated-agent.mocks.js";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
+import * as modelSelection from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
 import type { CliDeps } from "../cli/deps.js";
+import { callGateway } from "../gateway/call.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import { makeCfg, makeJob, writeSessionStore } from "./isolated-agent.test-harness.js";
 import { setupIsolatedAgentTurnMocks } from "./isolated-agent.test-setup.js";
 
-let tempRoot = "";
-let tempHomeId = 0;
-
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  if (!tempRoot) {
-    throw new Error("temp root not initialized");
-  }
-  const home = path.join(tempRoot, `case-${tempHomeId++}`);
-  await fs.mkdir(path.join(home, ".openclaw", "agents", "main", "sessions"), {
-    recursive: true,
-  });
-  const snapshot = {
-    HOME: process.env.HOME,
-    USERPROFILE: process.env.USERPROFILE,
-    HOMEDRIVE: process.env.HOMEDRIVE,
-    HOMEPATH: process.env.HOMEPATH,
-    OPENCLAW_HOME: process.env.OPENCLAW_HOME,
-    OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
-  };
-  process.env.HOME = home;
-  process.env.USERPROFILE = home;
-  delete process.env.OPENCLAW_HOME;
-  process.env.OPENCLAW_STATE_DIR = path.join(home, ".openclaw");
-
-  if (process.platform === "win32") {
-    const driveMatch = home.match(/^([A-Za-z]:)(.*)$/);
-    if (driveMatch) {
-      process.env.HOMEDRIVE = driveMatch[1];
-      process.env.HOMEPATH = driveMatch[2] || "\\";
-    }
-  }
-
-  try {
-    return await fn(home);
-  } finally {
-    const restoreKey = (key: keyof typeof snapshot) => {
-      const value = snapshot[key];
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    };
-    restoreKey("HOME");
-    restoreKey("USERPROFILE");
-    restoreKey("HOMEDRIVE");
-    restoreKey("HOMEPATH");
-    restoreKey("OPENCLAW_HOME");
-    restoreKey("OPENCLAW_STATE_DIR");
-  }
+  return withTempHomeBase(fn, { prefix: "openclaw-cron-heartbeat-suite-" });
 }
 
 async function createTelegramDeliveryFixture(home: string): Promise<{
@@ -120,18 +72,8 @@ async function runTelegramAnnounceTurn(params: {
 }
 
 describe("runCronIsolatedAgentTurn", () => {
-  beforeAll(async () => {
-    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-heartbeat-suite-"));
-  });
-
-  afterAll(async () => {
-    if (!tempRoot) {
-      return;
-    }
-    await fs.rm(tempRoot, { recursive: true, force: true });
-  });
-
   beforeEach(() => {
+    vi.spyOn(modelSelection, "resolveThinkingDefault").mockReturnValue("off");
     setupIsolatedAgentTurnMocks({ fast: true });
   });
 
@@ -177,11 +119,31 @@ describe("runCronIsolatedAgentTurn", () => {
     });
   });
 
-  it("handles media heartbeat delivery and announce cleanup modes", async () => {
+  it("suppresses announce delivery for multi-payload narration ending in HEARTBEAT_OK", async () => {
+    await withTempHome(async (home) => {
+      const { storePath, deps } = await createTelegramDeliveryFixture(home);
+      mockEmbeddedAgentPayloads([
+        { text: "Checked inbox and calendar. Nothing actionable yet." },
+        { text: "HEARTBEAT_OK" },
+      ]);
+
+      const res = await runTelegramAnnounceTurn({
+        home,
+        storePath,
+        deps,
+      });
+
+      expect(res.status).toBe("ok");
+      expect(res.delivered).toBe(false);
+      expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
+      expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+    });
+  });
+
+  it("delivers media payloads even when heartbeat text is suppressed", async () => {
     await withTempHome(async (home) => {
       const { storePath, deps } = await createTelegramDeliveryFixture(home);
 
-      // Media should still be delivered even if text is just HEARTBEAT_OK.
       mockEmbeddedAgentPayloads([
         { text: "HEARTBEAT_OK", mediaUrl: "https://example.com/img.png" },
       ]);
@@ -195,9 +157,15 @@ describe("runCronIsolatedAgentTurn", () => {
       expect(mediaRes.status).toBe("ok");
       expect(deps.sendMessageTelegram).toHaveBeenCalled();
       expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+    });
+  });
+
+  it("keeps non-empty heartbeat text when last-target ack suppression is disabled", async () => {
+    await withTempHome(async (home) => {
+      const { storePath, deps } = await createTelegramDeliveryFixture(home);
 
       vi.mocked(runSubagentAnnounceFlow).mockClear();
-      vi.mocked(deps.sendMessageTelegram).mockClear();
+      vi.mocked(deps.sendMessageTelegram as (...args: unknown[]) => unknown).mockClear();
       mockEmbeddedAgentPayloads([{ text: "HEARTBEAT_OK 🦞" }]);
 
       const cfg = makeCfg(home, storePath);
@@ -225,14 +193,35 @@ describe("runCronIsolatedAgentTurn", () => {
       });
 
       expect(keepRes.status).toBe("ok");
-      expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
-      const keepArgs = vi.mocked(runSubagentAnnounceFlow).mock.calls[0]?.[0] as
-        | { cleanup?: "keep" | "delete" }
-        | undefined;
-      expect(keepArgs?.cleanup).toBe("keep");
-      expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
+      expect(keepRes.delivered).toBe(true);
+      expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+      expect(deps.sendMessageTelegram).toHaveBeenCalledTimes(1);
+      expect(deps.sendMessageTelegram).toHaveBeenCalledWith(
+        "123",
+        "HEARTBEAT_OK 🦞",
+        expect.objectContaining({ accountId: undefined }),
+      );
+    });
+  });
 
+  it("deletes the direct cron session after last-target text delivery", async () => {
+    await withTempHome(async (home) => {
+      const { storePath, deps } = await createTelegramDeliveryFixture(home);
+
+      mockEmbeddedAgentPayloads([{ text: "HEARTBEAT_OK 🦞" }]);
+
+      const cfg = makeCfg(home, storePath);
+      cfg.agents = {
+        ...cfg.agents,
+        defaults: {
+          ...cfg.agents?.defaults,
+          heartbeat: { ackMaxChars: 0 },
+        },
+      };
+
+      vi.mocked(deps.sendMessageTelegram as (...args: unknown[]) => unknown).mockClear();
       vi.mocked(runSubagentAnnounceFlow).mockClear();
+      vi.mocked(callGateway).mockClear();
 
       const deleteRes = await runCronIsolatedAgentTurn({
         cfg,
@@ -251,12 +240,25 @@ describe("runCronIsolatedAgentTurn", () => {
       });
 
       expect(deleteRes.status).toBe("ok");
-      expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
-      const deleteArgs = vi.mocked(runSubagentAnnounceFlow).mock.calls[0]?.[0] as
-        | { cleanup?: "keep" | "delete" }
-        | undefined;
-      expect(deleteArgs?.cleanup).toBe("delete");
-      expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
+      expect(deleteRes.delivered).toBe(true);
+      expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+      expect(deps.sendMessageTelegram).toHaveBeenCalledTimes(1);
+      expect(deps.sendMessageTelegram).toHaveBeenCalledWith(
+        "123",
+        "HEARTBEAT_OK 🦞",
+        expect.objectContaining({ accountId: undefined }),
+      );
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      expect(callGateway).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "sessions.delete",
+          params: expect.objectContaining({
+            key: "agent:main:cron:job-1",
+            deleteTranscript: true,
+            emitLifecycleHooks: false,
+          }),
+        }),
+      );
     });
   });
 
@@ -281,72 +283,6 @@ describe("runCronIsolatedAgentTurn", () => {
       expect(res.error).toContain("timed out");
       expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
       expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
-    });
-  });
-
-  it("uses a unique announce childRunId for each cron run", async () => {
-    await withTempHome(async (home) => {
-      const storePath = await writeSessionStore(home, {
-        lastProvider: "telegram",
-        lastChannel: "telegram",
-        lastTo: "123",
-      });
-      const deps: CliDeps = {
-        sendMessageSlack: vi.fn(),
-        sendMessageWhatsApp: vi.fn(),
-        sendMessageTelegram: vi.fn(),
-        sendMessageDiscord: vi.fn(),
-        sendMessageSignal: vi.fn(),
-        sendMessageIMessage: vi.fn(),
-      };
-
-      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
-        payloads: [{ text: "final summary" }],
-        meta: {
-          durationMs: 5,
-          agentMeta: { sessionId: "s", provider: "p", model: "m" },
-        },
-      });
-
-      const cfg = makeCfg(home, storePath);
-      const job = makeJob({ kind: "agentTurn", message: "do it" });
-      job.delivery = { mode: "announce", channel: "last" };
-
-      const nowSpy = vi.spyOn(Date, "now");
-      let now = Date.now();
-      nowSpy.mockImplementation(() => now);
-      try {
-        await runCronIsolatedAgentTurn({
-          cfg,
-          deps,
-          job,
-          message: "do it",
-          sessionKey: "cron:job-1",
-          lane: "cron",
-        });
-        now += 5;
-        await runCronIsolatedAgentTurn({
-          cfg,
-          deps,
-          job,
-          message: "do it",
-          sessionKey: "cron:job-1",
-          lane: "cron",
-        });
-      } finally {
-        nowSpy.mockRestore();
-      }
-
-      expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(2);
-      const firstArgs = vi.mocked(runSubagentAnnounceFlow).mock.calls[0]?.[0] as
-        | { childRunId?: string }
-        | undefined;
-      const secondArgs = vi.mocked(runSubagentAnnounceFlow).mock.calls[1]?.[0] as
-        | { childRunId?: string }
-        | undefined;
-      expect(firstArgs?.childRunId).toBeTruthy();
-      expect(secondArgs?.childRunId).toBeTruthy();
-      expect(secondArgs?.childRunId).not.toBe(firstArgs?.childRunId);
     });
   });
 });

@@ -1,3 +1,4 @@
+import { buildAttemptReplayMetadata } from "./run/incomplete-turn.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 export const DEFAULT_OVERFLOW_ERROR_MESSAGE =
@@ -9,16 +10,18 @@ export function makeOverflowError(message: string = DEFAULT_OVERFLOW_ERROR_MESSA
 
 export function makeCompactionSuccess(params: {
   summary: string;
-  firstKeptEntryId: string;
-  tokensBefore: number;
+  firstKeptEntryId?: string;
+  tokensBefore?: number;
+  tokensAfter?: number;
 }) {
   return {
     ok: true as const,
     compacted: true as const,
     result: {
       summary: params.summary,
-      firstKeptEntryId: params.firstKeptEntryId,
-      tokensBefore: params.tokensBefore,
+      ...(params.firstKeptEntryId ? { firstKeptEntryId: params.firstKeptEntryId } : {}),
+      ...(params.tokensBefore !== undefined ? { tokensBefore: params.tokensBefore } : {}),
+      ...(params.tokensAfter !== undefined ? { tokensAfter: params.tokensAfter } : {}),
     },
   };
 }
@@ -26,6 +29,9 @@ export function makeCompactionSuccess(params: {
 export function makeAttemptResult(
   overrides: Partial<EmbeddedRunAttemptResult> = {},
 ): EmbeddedRunAttemptResult {
+  const toolMetas = overrides.toolMetas ?? [];
+  const didSendViaMessagingTool = overrides.didSendViaMessagingTool ?? false;
+  const successfulCronAdds = overrides.successfulCronAdds;
   return {
     aborted: false,
     timedOut: false,
@@ -33,10 +39,22 @@ export function makeAttemptResult(
     promptError: null,
     sessionIdUsed: "test-session",
     assistantTexts: ["Hello!"],
-    toolMetas: [],
+    toolMetas,
     lastAssistant: undefined,
     messagesSnapshot: [],
-    didSendViaMessagingTool: false,
+    replayMetadata:
+      overrides.replayMetadata ??
+      buildAttemptReplayMetadata({
+        toolMetas,
+        didSendViaMessagingTool,
+        successfulCronAdds,
+      }),
+    itemLifecycle: {
+      startedCount: 0,
+      completedCount: 0,
+      activeCount: 0,
+    },
+    didSendViaMessagingTool,
     messagingToolSentTexts: [],
     messagingToolSentMediaUrls: [],
     messagingToolSentTargets: [],
@@ -55,8 +73,9 @@ type MockCompactDirect = {
     compacted: true;
     result: {
       summary: string;
-      firstKeptEntryId: string;
-      tokensBefore: number;
+      firstKeptEntryId?: string;
+      tokensBefore?: number;
+      tokensAfter?: number;
     };
   }) => unknown;
 };

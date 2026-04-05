@@ -3,44 +3,78 @@ import {
   resolveAcpThreadSessionDetailLines,
 } from "../../../acp/runtime/session-identifiers.js";
 import { readAcpSessionEntry } from "../../../acp/runtime/session-meta.js";
+import { normalizeChatType } from "../../../channels/chat-type.js";
 import {
-  resolveDiscordThreadBindingIdleTimeoutMs,
-  resolveDiscordThreadBindingMaxAgeMs,
   resolveThreadBindingIntroText,
   resolveThreadBindingThreadName,
-} from "../../../discord/monitor/thread-bindings.js";
+} from "../../../channels/thread-bindings-messages.js";
+import {
+  formatThreadBindingDisabledError,
+  formatThreadBindingSpawnDisabledError,
+  resolveThreadBindingIdleTimeoutMsForChannel,
+  resolveThreadBindingMaxAgeMsForChannel,
+  resolveThreadBindingPlacementForCurrentContext,
+  resolveThreadBindingSpawnPolicy,
+} from "../../../channels/thread-bindings-policy.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
 import type { CommandHandlerResult } from "../commands-types.js";
-import {
-  type SubagentsCommandContext,
-  isDiscordSurface,
-  resolveDiscordAccountId,
-  resolveDiscordChannelIdForFocus,
-  resolveFocusTargetSession,
-  stopWithText,
-} from "./shared.js";
+import { resolveConversationBindingContextFromAcpCommand } from "../conversation-binding-input.js";
+import { type SubagentsCommandContext, resolveFocusTargetSession, stopWithText } from "./shared.js";
+
+type FocusBindingContext = {
+  channel: string;
+  accountId: string;
+  conversationId: string;
+  parentConversationId?: string;
+  placement: "current" | "child";
+};
+
+function resolveFocusBindingContext(
+  params: SubagentsCommandContext["params"],
+): FocusBindingContext | null {
+  const bindingContext = resolveConversationBindingContextFromAcpCommand(params);
+  if (!bindingContext) {
+    return null;
+  }
+  const chatType = normalizeChatType(params.ctx.ChatType);
+  return {
+    channel: bindingContext.channel,
+    accountId: bindingContext.accountId,
+    conversationId: bindingContext.conversationId,
+    ...(bindingContext.parentConversationId
+      ? { parentConversationId: bindingContext.parentConversationId }
+      : {}),
+    placement:
+      chatType === "direct"
+        ? "current"
+        : resolveThreadBindingPlacementForCurrentContext({
+            channel: bindingContext.channel,
+            threadId: bindingContext.threadId || undefined,
+          }),
+  };
+}
 
 export async function handleSubagentsFocusAction(
   ctx: SubagentsCommandContext,
 ): Promise<CommandHandlerResult> {
   const { params, runs, restTokens } = ctx;
-  if (!isDiscordSurface(params)) {
-    return stopWithText("⚠️ /focus is only available on Discord.");
-  }
-
   const token = restTokens.join(" ").trim();
   if (!token) {
     return stopWithText("Usage: /focus <subagent-label|session-key|session-id|session-label>");
   }
 
-  const accountId = resolveDiscordAccountId(params);
+  const bindingContext = resolveFocusBindingContext(params);
+  if (!bindingContext) {
+    return stopWithText("⚠️ /focus must be run inside a bindable conversation.");
+  }
+
   const bindingService = getSessionBindingService();
   const capabilities = bindingService.getCapabilities({
-    channel: "discord",
-    accountId,
+    channel: bindingContext.channel,
+    accountId: bindingContext.accountId,
   });
   if (!capabilities.adapterAvailable || !capabilities.bindSupported) {
-    return stopWithText("⚠️ Discord thread bindings are unavailable for this account.");
+    return stopWithText("⚠️ Conversation bindings are unavailable for this account.");
   }
 
   const focusTarget = await resolveFocusTargetSession({ runs, token });
@@ -48,30 +82,53 @@ export async function handleSubagentsFocusAction(
     return stopWithText(`⚠️ Unable to resolve focus target: ${token}`);
   }
 
-  const currentThreadId =
-    params.ctx.MessageThreadId != null ? String(params.ctx.MessageThreadId).trim() : "";
-  const parentChannelId = currentThreadId ? undefined : resolveDiscordChannelIdForFocus(params);
-  if (!currentThreadId && !parentChannelId) {
-    return stopWithText("⚠️ Could not resolve a Discord channel for /focus.");
-  }
-
-  const senderId = params.command.senderId?.trim() || "";
-  if (currentThreadId) {
-    const existingBinding = bindingService.resolveByConversation({
-      channel: "discord",
-      accountId,
-      conversationId: currentThreadId,
+  if (bindingContext.placement === "child") {
+    const spawnPolicy = resolveThreadBindingSpawnPolicy({
+      cfg: params.cfg,
+      channel: bindingContext.channel,
+      accountId: bindingContext.accountId,
+      kind: "subagent",
     });
-    const boundBy =
-      typeof existingBinding?.metadata?.boundBy === "string"
-        ? existingBinding.metadata.boundBy.trim()
-        : "";
-    if (existingBinding && boundBy && boundBy !== "system" && senderId && senderId !== boundBy) {
-      return stopWithText(`⚠️ Only ${boundBy} can refocus this thread.`);
+    if (!spawnPolicy.enabled) {
+      return stopWithText(
+        `⚠️ ${formatThreadBindingDisabledError({
+          channel: spawnPolicy.channel,
+          accountId: spawnPolicy.accountId,
+          kind: "subagent",
+        })}`,
+      );
+    }
+    if (bindingContext.placement === "child" && !spawnPolicy.spawnEnabled) {
+      return stopWithText(
+        `⚠️ ${formatThreadBindingSpawnDisabledError({
+          channel: spawnPolicy.channel,
+          accountId: spawnPolicy.accountId,
+          kind: "subagent",
+        })}`,
+      );
     }
   }
 
+  const senderId = params.command.senderId?.trim() || "";
+  const existingBinding = bindingService.resolveByConversation({
+    channel: bindingContext.channel,
+    accountId: bindingContext.accountId,
+    conversationId: bindingContext.conversationId,
+    ...(bindingContext.parentConversationId &&
+    bindingContext.parentConversationId !== bindingContext.conversationId
+      ? { parentConversationId: bindingContext.parentConversationId }
+      : {}),
+  });
+  const boundBy =
+    typeof existingBinding?.metadata?.boundBy === "string"
+      ? existingBinding.metadata.boundBy.trim()
+      : "";
+  if (existingBinding && boundBy && boundBy !== "system" && senderId && senderId !== boundBy) {
+    return stopWithText(`⚠️ Only ${boundBy} can refocus this conversation.`);
+  }
+
   const label = focusTarget.label || token;
+  const accountId = bindingContext.accountId;
   const acpMeta =
     focusTarget.targetKind === "acp"
       ? readAcpSessionEntry({
@@ -79,13 +136,8 @@ export async function handleSubagentsFocusAction(
           sessionKey: focusTarget.targetSessionKey,
         })?.acp
       : undefined;
-  const placement = currentThreadId ? "current" : "child";
-  if (!capabilities.placements.includes(placement)) {
-    return stopWithText("⚠️ Discord thread bindings are unavailable for this account.");
-  }
-  const conversationId = currentThreadId || parentChannelId;
-  if (!conversationId) {
-    return stopWithText("⚠️ Could not resolve a Discord channel for /focus.");
+  if (!capabilities.placements.includes(bindingContext.placement)) {
+    return stopWithText("⚠️ Conversation bindings are unavailable for this account.");
   }
 
   let binding;
@@ -94,11 +146,15 @@ export async function handleSubagentsFocusAction(
       targetSessionKey: focusTarget.targetSessionKey,
       targetKind: focusTarget.targetKind === "acp" ? "session" : "subagent",
       conversation: {
-        channel: "discord",
-        accountId,
-        conversationId,
+        channel: bindingContext.channel,
+        accountId: bindingContext.accountId,
+        conversationId: bindingContext.conversationId,
+        ...(bindingContext.parentConversationId &&
+        bindingContext.parentConversationId !== bindingContext.conversationId
+          ? { parentConversationId: bindingContext.parentConversationId }
+          : {}),
       },
-      placement,
+      placement: bindingContext.placement,
       metadata: {
         threadName: resolveThreadBindingThreadName({
           agentId: focusTarget.agentId,
@@ -110,12 +166,14 @@ export async function handleSubagentsFocusAction(
         introText: resolveThreadBindingIntroText({
           agentId: focusTarget.agentId,
           label,
-          idleTimeoutMs: resolveDiscordThreadBindingIdleTimeoutMs({
+          idleTimeoutMs: resolveThreadBindingIdleTimeoutMsForChannel({
             cfg: params.cfg,
+            channel: bindingContext.channel,
             accountId,
           }),
-          maxAgeMs: resolveDiscordThreadBindingMaxAgeMs({
+          maxAgeMs: resolveThreadBindingMaxAgeMsForChannel({
             cfg: params.cfg,
+            channel: bindingContext.channel,
             accountId,
           }),
           sessionCwd: focusTarget.targetKind === "acp" ? resolveAcpSessionCwd(acpMeta) : undefined,
@@ -130,11 +188,12 @@ export async function handleSubagentsFocusAction(
       },
     });
   } catch {
-    return stopWithText("⚠️ Failed to bind a Discord thread to the target session.");
+    return stopWithText("⚠️ Failed to bind this conversation to the target session.");
   }
 
-  const actionText = currentThreadId
-    ? `bound this thread to ${binding.targetSessionKey}`
-    : `created thread ${binding.conversation.conversationId} and bound it to ${binding.targetSessionKey}`;
+  const actionText =
+    bindingContext.placement === "child"
+      ? `created child conversation ${binding.conversation.conversationId} and bound it to ${binding.targetSessionKey}`
+      : `bound this conversation to ${binding.targetSessionKey}`;
   return stopWithText(`✅ ${actionText} (${focusTarget.targetKind}).`);
 }

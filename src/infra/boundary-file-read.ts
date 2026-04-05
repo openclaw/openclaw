@@ -29,6 +29,8 @@ export type BoundaryFileOpenResult =
   | { ok: true; path: string; fd: number; stat: fs.Stats; rootRealPath: string }
   | { ok: false; reason: BoundaryFileOpenFailureReason; error?: unknown };
 
+export type BoundaryFileOpenFailure = Extract<BoundaryFileOpenResult, { ok: false }>;
+
 export type OpenBoundaryFileSyncParams = {
   absolutePath: string;
   rootPath: string;
@@ -80,18 +82,32 @@ export function openBoundaryFileSync(params: OpenBoundaryFileSyncParams): Bounda
   if (resolved instanceof Promise) {
     return toBoundaryValidationError(new Error("Unexpected async boundary resolution"));
   }
-  if ("ok" in resolved) {
-    return resolved;
-  }
-  return openBoundaryFileResolved({
-    absolutePath: resolved.absolutePath,
-    resolvedPath: resolved.resolvedPath,
-    rootRealPath: resolved.rootRealPath,
+  return finalizeBoundaryFileOpen({
+    resolved,
     maxBytes: params.maxBytes,
     rejectHardlinks: params.rejectHardlinks,
     allowedType: params.allowedType,
     ioFs,
   });
+}
+
+export function matchBoundaryFileOpenFailure<T>(
+  failure: BoundaryFileOpenFailure,
+  handlers: {
+    path?: (failure: BoundaryFileOpenFailure) => T;
+    validation?: (failure: BoundaryFileOpenFailure) => T;
+    io?: (failure: BoundaryFileOpenFailure) => T;
+    fallback: (failure: BoundaryFileOpenFailure) => T;
+  },
+): T {
+  switch (failure.reason) {
+    case "path":
+      return handlers.path ? handlers.path(failure) : handlers.fallback(failure);
+    case "validation":
+      return handlers.validation ? handlers.validation(failure) : handlers.fallback(failure);
+    case "io":
+      return handlers.io ? handlers.io(failure) : handlers.fallback(failure);
+  }
 }
 
 function openBoundaryFileResolved(params: {
@@ -123,6 +139,27 @@ function openBoundaryFileResolved(params: {
   };
 }
 
+function finalizeBoundaryFileOpen(params: {
+  resolved: ResolvedBoundaryFilePath | BoundaryFileOpenResult;
+  maxBytes?: number;
+  rejectHardlinks?: boolean;
+  allowedType?: SafeOpenSyncAllowedType;
+  ioFs: BoundaryReadFs;
+}): BoundaryFileOpenResult {
+  if ("ok" in params.resolved) {
+    return params.resolved;
+  }
+  return openBoundaryFileResolved({
+    absolutePath: params.resolved.absolutePath,
+    resolvedPath: params.resolved.resolvedPath,
+    rootRealPath: params.resolved.rootRealPath,
+    maxBytes: params.maxBytes,
+    rejectHardlinks: params.rejectHardlinks,
+    allowedType: params.allowedType,
+    ioFs: params.ioFs,
+  });
+}
+
 export async function openBoundaryFile(
   params: OpenBoundaryFileParams,
 ): Promise<BoundaryFileOpenResult> {
@@ -140,13 +177,8 @@ export async function openBoundaryFile(
       }),
   });
   const resolved = maybeResolved instanceof Promise ? await maybeResolved : maybeResolved;
-  if ("ok" in resolved) {
-    return resolved;
-  }
-  return openBoundaryFileResolved({
-    absolutePath: resolved.absolutePath,
-    resolvedPath: resolved.resolvedPath,
-    rootRealPath: resolved.rootRealPath,
+  return finalizeBoundaryFileOpen({
+    resolved,
     maxBytes: params.maxBytes,
     rejectHardlinks: params.rejectHardlinks,
     allowedType: params.allowedType,

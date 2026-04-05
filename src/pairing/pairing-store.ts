@@ -24,6 +24,15 @@ const PAIRING_STORE_LOCK_OPTIONS = {
   },
   stale: 30_000,
 } as const;
+type AllowFromReadCacheEntry = {
+  exists: boolean;
+  mtimeMs: number | null;
+  size: number | null;
+  entries: string[];
+};
+type AllowFromStatLike = { mtimeMs: number; size: number } | null;
+
+const allowFromReadCache = new Map<string, AllowFromReadCacheEntry>();
 
 export type PairingChannel = ChannelId;
 
@@ -93,6 +102,14 @@ function resolveAllowFromPath(
     resolveCredentialsDir(env),
     `${base}-${safeAccountKey(normalizedAccountId)}-allowFrom.json`,
   );
+}
+
+export function resolveChannelAllowFromPath(
+  channel: PairingChannel,
+  env: NodeJS.ProcessEnv = process.env,
+  accountId?: string,
+): string {
+  return resolveAllowFromPath(channel, env, accountId);
 }
 
 async function readJsonFile<T>(
@@ -176,12 +193,44 @@ function resolveLastSeenAt(entry: PairingRequest): number {
   return parseTimestamp(entry.lastSeenAt) ?? parseTimestamp(entry.createdAt) ?? 0;
 }
 
-function pruneExcessRequests(reqs: PairingRequest[], maxPending: number) {
+function resolvePairingRequestAccountId(entry: PairingRequest): string {
+  return normalizePairingAccountId(String(entry.meta?.accountId ?? "")) || DEFAULT_ACCOUNT_ID;
+}
+
+function pruneExcessRequestsByAccount(reqs: PairingRequest[], maxPending: number) {
   if (maxPending <= 0 || reqs.length <= maxPending) {
     return { requests: reqs, removed: false };
   }
-  const sorted = reqs.slice().toSorted((a, b) => resolveLastSeenAt(a) - resolveLastSeenAt(b));
-  return { requests: sorted.slice(-maxPending), removed: true };
+  const grouped = new Map<string, number[]>();
+  for (const [index, entry] of reqs.entries()) {
+    const accountId = resolvePairingRequestAccountId(entry);
+    const current = grouped.get(accountId);
+    if (current) {
+      current.push(index);
+      continue;
+    }
+    grouped.set(accountId, [index]);
+  }
+
+  const droppedIndexes = new Set<number>();
+  for (const indexes of grouped.values()) {
+    if (indexes.length <= maxPending) {
+      continue;
+    }
+    const sortedIndexes = indexes
+      .slice()
+      .toSorted((left, right) => resolveLastSeenAt(reqs[left]) - resolveLastSeenAt(reqs[right]));
+    for (const index of sortedIndexes.slice(0, sortedIndexes.length - maxPending)) {
+      droppedIndexes.add(index);
+    }
+  }
+  if (droppedIndexes.size === 0) {
+    return { requests: reqs, removed: false };
+  }
+  return {
+    requests: reqs.filter((_, index) => !droppedIndexes.has(index)),
+    removed: true,
+  };
 }
 
 function randomCode(): string {
@@ -212,11 +261,7 @@ function requestMatchesAccountId(entry: PairingRequest, normalizedAccountId: str
   if (!normalizedAccountId) {
     return true;
   }
-  return (
-    String(entry.meta?.accountId ?? "")
-      .trim()
-      .toLowerCase() === normalizedAccountId
-  );
+  return resolvePairingRequestAccountId(entry) === normalizedAccountId;
 }
 
 function shouldIncludeLegacyAllowFromEntries(normalizedAccountId: string): boolean {
@@ -278,15 +323,100 @@ async function readAllowFromStateForPath(
   return (await readAllowFromStateForPathWithExists(channel, filePath)).entries;
 }
 
+function cloneAllowFromCacheEntry(entry: AllowFromReadCacheEntry): AllowFromReadCacheEntry {
+  return {
+    exists: entry.exists,
+    mtimeMs: entry.mtimeMs,
+    size: entry.size,
+    entries: entry.entries.slice(),
+  };
+}
+
+function setAllowFromReadCache(filePath: string, entry: AllowFromReadCacheEntry): void {
+  allowFromReadCache.set(filePath, cloneAllowFromCacheEntry(entry));
+}
+
+function resolveAllowFromReadCacheHit(params: {
+  filePath: string;
+  exists: boolean;
+  mtimeMs: number | null;
+  size: number | null;
+}): AllowFromReadCacheEntry | null {
+  const cached = allowFromReadCache.get(params.filePath);
+  if (!cached) {
+    return null;
+  }
+  if (cached.exists !== params.exists) {
+    return null;
+  }
+  if (!params.exists) {
+    return cloneAllowFromCacheEntry(cached);
+  }
+  if (cached.mtimeMs !== params.mtimeMs || cached.size !== params.size) {
+    return null;
+  }
+  return cloneAllowFromCacheEntry(cached);
+}
+
+function resolveAllowFromReadCacheOrMissing(
+  filePath: string,
+  stat: AllowFromStatLike,
+): { entries: string[]; exists: boolean } | null {
+  const cached = resolveAllowFromReadCacheHit({
+    filePath,
+    exists: Boolean(stat),
+    mtimeMs: stat?.mtimeMs ?? null,
+    size: stat?.size ?? null,
+  });
+  if (cached) {
+    return { entries: cached.entries, exists: cached.exists };
+  }
+  if (!stat) {
+    setAllowFromReadCache(filePath, {
+      exists: false,
+      mtimeMs: null,
+      size: null,
+      entries: [],
+    });
+    return { entries: [], exists: false };
+  }
+  return null;
+}
+
 async function readAllowFromStateForPathWithExists(
   channel: PairingChannel,
   filePath: string,
 ): Promise<{ entries: string[]; exists: boolean }> {
+  let stat: Awaited<ReturnType<typeof fs.promises.stat>> | null = null;
+  try {
+    stat = await fs.promises.stat(filePath);
+  } catch (err) {
+    const code = (err as { code?: string }).code;
+    if (code !== "ENOENT") {
+      throw err;
+    }
+  }
+
+  const cachedOrMissing = resolveAllowFromReadCacheOrMissing(filePath, stat);
+  if (cachedOrMissing) {
+    return cachedOrMissing;
+  }
+  if (!stat) {
+    return { entries: [], exists: false };
+  }
+
   const { value, exists } = await readJsonFile<AllowFromStore>(filePath, {
     version: 1,
     allowFrom: [],
   });
   const entries = normalizeAllowFromList(channel, value);
+  // stat is guaranteed non-null here: resolveAllowFromReadCacheOrMissing returns early when stat is null.
+  setAllowFromReadCache(filePath, {
+    exists,
+    mtimeMs: stat.mtimeMs,
+    size: stat.size,
+    entries,
+  });
   return { entries, exists };
 }
 
@@ -298,6 +428,24 @@ function readAllowFromStateForPathSyncWithExists(
   channel: PairingChannel,
   filePath: string,
 ): { entries: string[]; exists: boolean } {
+  let stat: fs.Stats | null = null;
+  try {
+    stat = fs.statSync(filePath);
+  } catch (err) {
+    const code = (err as { code?: string }).code;
+    if (code !== "ENOENT") {
+      return { entries: [], exists: false };
+    }
+  }
+
+  const cachedOrMissing = resolveAllowFromReadCacheOrMissing(filePath, stat);
+  if (cachedOrMissing) {
+    return cachedOrMissing;
+  }
+  if (!stat) {
+    return { entries: [], exists: false };
+  }
+
   let raw = "";
   try {
     raw = fs.readFileSync(filePath, "utf8");
@@ -308,12 +456,25 @@ function readAllowFromStateForPathSyncWithExists(
     }
     return { entries: [], exists: false };
   }
+  // stat is guaranteed non-null here: resolveAllowFromReadCacheOrMissing returns early when stat is null.
   try {
     const parsed = JSON.parse(raw) as AllowFromStore;
     const entries = normalizeAllowFromList(channel, parsed);
+    setAllowFromReadCache(filePath, {
+      exists: true,
+      mtimeMs: stat.mtimeMs,
+      size: stat.size,
+      entries,
+    });
     return { entries, exists: true };
   } catch {
     // Keep parity with async reads: malformed JSON still means the file exists.
+    setAllowFromReadCache(filePath, {
+      exists: true,
+      mtimeMs: stat.mtimeMs,
+      size: stat.size,
+      entries: [],
+    });
     return { entries: [], exists: true };
   }
 }
@@ -337,6 +498,16 @@ async function writeAllowFromState(filePath: string, allowFrom: string[]): Promi
     version: 1,
     allowFrom,
   } satisfies AllowFromStore);
+  let stat: Awaited<ReturnType<typeof fs.promises.stat>> | null = null;
+  try {
+    stat = await fs.promises.stat(filePath);
+  } catch {}
+  setAllowFromReadCache(filePath, {
+    exists: true,
+    mtimeMs: stat?.mtimeMs ?? null,
+    size: stat?.size ?? null,
+    entries: allowFrom.slice(),
+  });
 }
 
 async function readNonDefaultAccountAllowFrom(params: {
@@ -448,6 +619,10 @@ export function readChannelAllowFromStoreSync(
   return dedupePreserveOrder([...scopedEntries, ...legacyEntries]);
 }
 
+export function clearPairingAllowFromReadCacheForTest(): void {
+  allowFromReadCache.clear();
+}
+
 type AllowFromStoreEntryUpdateParams = {
   channel: PairingChannel;
   entry: string | number;
@@ -519,7 +694,7 @@ export async function listChannelPairingRequests(
     async () => {
       const { requests: prunedExpired, removed: expiredRemoved } =
         await readPrunedPairingRequests(filePath);
-      const { requests: pruned, removed: cappedRemoved } = pruneExcessRequests(
+      const { requests: pruned, removed: cappedRemoved } = pruneExcessRequestsByAccount(
         prunedExpired,
         PAIRING_PENDING_MAX,
       );
@@ -610,7 +785,7 @@ export async function upsertChannelPairingRequest(params: {
           meta: meta ?? existing?.meta,
         };
         reqs[existingIdx] = next;
-        const { requests: capped } = pruneExcessRequests(reqs, PAIRING_PENDING_MAX);
+        const { requests: capped } = pruneExcessRequestsByAccount(reqs, PAIRING_PENDING_MAX);
         await writeJsonFile(filePath, {
           version: 1,
           requests: capped,
@@ -618,12 +793,15 @@ export async function upsertChannelPairingRequest(params: {
         return { code, created: false };
       }
 
-      const { requests: capped, removed: cappedRemoved } = pruneExcessRequests(
+      const { requests: capped, removed: cappedRemoved } = pruneExcessRequestsByAccount(
         reqs,
         PAIRING_PENDING_MAX,
       );
       reqs = capped;
-      if (PAIRING_PENDING_MAX > 0 && reqs.length >= PAIRING_PENDING_MAX) {
+      const accountRequestCount = reqs.filter((r) =>
+        requestMatchesAccountId(r, normalizedMatchingAccountId),
+      ).length;
+      if (PAIRING_PENDING_MAX > 0 && accountRequestCount >= PAIRING_PENDING_MAX) {
         if (expiredRemoved || cappedRemoved) {
           await writeJsonFile(filePath, {
             version: 1,

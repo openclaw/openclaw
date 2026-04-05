@@ -30,6 +30,23 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
     });
   }
 
+  function setDefaultAllowAgents(allowAgents: string[]) {
+    setSessionsSpawnConfigOverride({
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      agents: {
+        defaults: {
+          subagents: {
+            allowAgents,
+          },
+        },
+        list: [{ id: "main" }],
+      },
+    });
+  }
+
   function mockAcceptedSpawn(acceptedAt: number) {
     let childSessionKey: string | undefined;
     callGatewayMock.mockImplementation(async (opts: unknown) => {
@@ -55,6 +72,40 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
     return tool.execute(callId, { task: "do thing", agentId, sandbox });
   }
 
+  function setResearchUnsandboxedConfig(params?: { includeSandboxedDefault?: boolean }) {
+    setSessionsSpawnConfigOverride({
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      agents: {
+        ...(params?.includeSandboxedDefault
+          ? {
+              defaults: {
+                sandbox: {
+                  mode: "all",
+                },
+              },
+            }
+          : {}),
+        list: [
+          {
+            id: "main",
+            subagents: {
+              allowAgents: ["research"],
+            },
+          },
+          {
+            id: "research",
+            sandbox: {
+              mode: "off",
+            },
+          },
+        ],
+      },
+    });
+  }
+
   async function expectAllowedSpawn(params: {
     allowAgents: string[];
     agentId: string;
@@ -71,6 +122,24 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
       runId: "run-1",
     });
     expect(getChildSessionKey()?.startsWith(`agent:${params.agentId}:subagent:`)).toBe(true);
+  }
+
+  async function expectInvalidAgentId(callId: string, agentId: string) {
+    setSessionsSpawnConfigOverride({
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        list: [{ id: "main", subagents: { allowAgents: ["*"] } }],
+      },
+    });
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "main",
+      agentChannel: "whatsapp",
+    });
+    const result = await tool.execute(callId, { task: "do thing", agentId });
+    const details = result.details as { status?: string; error?: string };
+    expect(details.status).toBe("error");
+    expect(details.error).toContain("Invalid agentId");
+    expect(callGatewayMock).not.toHaveBeenCalled();
   }
 
   beforeEach(() => {
@@ -137,6 +206,19 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
     });
   });
 
+  it("sessions_spawn falls back to default allowlist when agent config omits allowAgents", async () => {
+    setDefaultAllowAgents(["beta"]);
+    const getChildSessionKey = mockAcceptedSpawn(5050);
+
+    const result = await executeSpawn("call7b", "beta");
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      runId: "run-1",
+    });
+    expect(getChildSessionKey()?.startsWith("agent:beta:subagent:")).toBe(true);
+  });
+
   it("sessions_spawn allows any agent when allowlist is *", async () => {
     await expectAllowedSpawn({
       allowAgents: ["*"],
@@ -156,33 +238,7 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
   });
 
   it("forbids sandboxed cross-agent spawns that would unsandbox the child", async () => {
-    setSessionsSpawnConfigOverride({
-      session: {
-        mainKey: "main",
-        scope: "per-sender",
-      },
-      agents: {
-        defaults: {
-          sandbox: {
-            mode: "all",
-          },
-        },
-        list: [
-          {
-            id: "main",
-            subagents: {
-              allowAgents: ["research"],
-            },
-          },
-          {
-            id: "research",
-            sandbox: {
-              mode: "off",
-            },
-          },
-        ],
-      },
-    });
+    setResearchUnsandboxedConfig({ includeSandboxedDefault: true });
 
     const result = await executeSpawn("call11", "research");
     const details = result.details as { status?: string; error?: string };
@@ -193,28 +249,7 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
   });
 
   it('forbids sandbox="require" when target runtime is unsandboxed', async () => {
-    setSessionsSpawnConfigOverride({
-      session: {
-        mainKey: "main",
-        scope: "per-sender",
-      },
-      agents: {
-        list: [
-          {
-            id: "main",
-            subagents: {
-              allowAgents: ["research"],
-            },
-          },
-          {
-            id: "research",
-            sandbox: {
-              mode: "off",
-            },
-          },
-        ],
-      },
-    });
+    setResearchUnsandboxedConfig();
 
     const result = await executeSpawn("call12", "research", "require");
     const details = result.details as { status?: string; error?: string };
@@ -226,6 +261,92 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
   // ---------------------------------------------------------------------------
   // agentId format validation (#31311)
   // ---------------------------------------------------------------------------
+
+  it("sessions_spawn forbids omit agentId when requireAgentId is configured", async () => {
+    setSessionsSpawnConfigOverride({
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      agents: {
+        defaults: {
+          subagents: { requireAgentId: true },
+        },
+        list: [{ id: "main" }],
+      },
+    });
+
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "main",
+      agentChannel: "whatsapp",
+    });
+
+    const result = await tool.execute("call13", { task: "do thing" });
+    expect(result.details).toMatchObject({
+      status: "forbidden",
+      error: expect.stringContaining("sessions_spawn requires explicit agentId"),
+    });
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("sessions_spawn allows omit agentId when requireAgentId is false", async () => {
+    setSessionsSpawnConfigOverride({
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      agents: {
+        defaults: {
+          subagents: { requireAgentId: false },
+        },
+        list: [{ id: "main" }],
+      },
+    });
+
+    const getChildSessionKey = mockAcceptedSpawn(5300);
+
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "main",
+      agentChannel: "whatsapp",
+    });
+
+    const result = await tool.execute("call14", { task: "do thing" });
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      runId: "run-1",
+    });
+    expect(getChildSessionKey()?.startsWith("agent:main:subagent:")).toBe(true);
+  });
+
+  it("sessions_spawn allows explicit agentId when requireAgentId is configured", async () => {
+    setSessionsSpawnConfigOverride({
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      agents: {
+        list: [
+          {
+            id: "main",
+            subagents: {
+              allowAgents: ["worker"],
+              requireAgentId: true,
+            },
+          },
+        ],
+      },
+    });
+
+    mockAcceptedSpawn(5400);
+
+    const result = await executeSpawn("call15", "worker");
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      runId: "run-1",
+    });
+    expect(callGatewayMock).toHaveBeenCalled();
+  });
 
   it("rejects error-message-like strings as agentId (#31311)", async () => {
     setSessionsSpawnConfigOverride({
@@ -250,45 +371,11 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
   });
 
   it("rejects agentId containing path separators (#31311)", async () => {
-    setSessionsSpawnConfigOverride({
-      session: { mainKey: "main", scope: "per-sender" },
-      agents: {
-        list: [{ id: "main", subagents: { allowAgents: ["*"] } }],
-      },
-    });
-    const tool = await getSessionsSpawnTool({
-      agentSessionKey: "main",
-      agentChannel: "whatsapp",
-    });
-    const result = await tool.execute("call-path", {
-      task: "do thing",
-      agentId: "../../../etc/passwd",
-    });
-    const details = result.details as { status?: string; error?: string };
-    expect(details.status).toBe("error");
-    expect(details.error).toContain("Invalid agentId");
-    expect(callGatewayMock).not.toHaveBeenCalled();
+    await expectInvalidAgentId("call-path", "../../../etc/passwd");
   });
 
   it("rejects agentId exceeding 64 characters (#31311)", async () => {
-    setSessionsSpawnConfigOverride({
-      session: { mainKey: "main", scope: "per-sender" },
-      agents: {
-        list: [{ id: "main", subagents: { allowAgents: ["*"] } }],
-      },
-    });
-    const tool = await getSessionsSpawnTool({
-      agentSessionKey: "main",
-      agentChannel: "whatsapp",
-    });
-    const result = await tool.execute("call-long", {
-      task: "do thing",
-      agentId: "a".repeat(65),
-    });
-    const details = result.details as { status?: string; error?: string };
-    expect(details.status).toBe("error");
-    expect(details.error).toContain("Invalid agentId");
-    expect(callGatewayMock).not.toHaveBeenCalled();
+    await expectInvalidAgentId("call-long", "a".repeat(65));
   });
 
   it("accepts well-formed agentId with hyphens and underscores (#31311)", async () => {
@@ -298,19 +385,8 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
         list: [{ id: "main", subagents: { allowAgents: ["*"] } }, { id: "my-research_agent01" }],
       },
     });
-    callGatewayMock.mockImplementation(async () => ({
-      runId: "run-1",
-      status: "accepted",
-      acceptedAt: 1000,
-    }));
-    const tool = await getSessionsSpawnTool({
-      agentSessionKey: "main",
-      agentChannel: "whatsapp",
-    });
-    const result = await tool.execute("call-valid", {
-      task: "do thing",
-      agentId: "my-research_agent01",
-    });
+    mockAcceptedSpawn(1000);
+    const result = await executeSpawn("call-valid", "my-research_agent01");
     const details = result.details as { status?: string };
     expect(details.status).toBe("accepted");
   });
@@ -325,19 +401,8 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
         ],
       },
     });
-    callGatewayMock.mockImplementation(async () => ({
-      runId: "run-1",
-      status: "accepted",
-      acceptedAt: 1000,
-    }));
-    const tool = await getSessionsSpawnTool({
-      agentSessionKey: "main",
-      agentChannel: "whatsapp",
-    });
-    const result = await tool.execute("call-unconfigured", {
-      task: "do thing",
-      agentId: "research",
-    });
+    mockAcceptedSpawn(1000);
+    const result = await executeSpawn("call-unconfigured", "research");
     const details = result.details as { status?: string };
     // Must pass: "research" is in allowAgents even though not in agents.list
     expect(details.status).toBe("accepted");

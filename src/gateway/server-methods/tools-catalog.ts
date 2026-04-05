@@ -9,12 +9,14 @@ import {
   PROFILE_OPTIONS,
   resolveCoreToolProfiles,
 } from "../../agents/tool-catalog.js";
+import { summarizeToolDescriptionText } from "../../agents/tool-description-summary.js";
 import { loadConfig } from "../../config/config.js";
 import { getPluginToolMeta, resolvePluginTools } from "../../plugins/tools.js";
 import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
+  type ToolsCatalogResult,
   validateToolsCatalogParams,
 } from "../protocol/index.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
@@ -85,6 +87,7 @@ function buildPluginGroups(params: {
     existingToolNames: params.existingToolNames,
     toolAllowlist: ["group:plugins"],
     suppressNameConflicts: true,
+    allowGatewaySubagentBinding: true,
   });
   const groups = new Map<string, ToolCatalogGroup>();
   for (const tool of pluginTools) {
@@ -103,10 +106,10 @@ function buildPluginGroups(params: {
     existing.tools.push({
       id: tool.name,
       label: typeof tool.label === "string" && tool.label.trim() ? tool.label.trim() : tool.name,
-      description:
-        typeof tool.description === "string" && tool.description.trim()
-          ? tool.description.trim()
-          : "Plugin tool",
+      description: summarizeToolDescriptionText({
+        rawDescription: typeof tool.description === "string" ? tool.description : undefined,
+        displaySummary: tool.displaySummary,
+      }),
       source: "plugin",
       pluginId,
       optional: meta?.optional,
@@ -120,6 +123,33 @@ function buildPluginGroups(params: {
       tools: group.tools.toSorted((a, b) => a.id.localeCompare(b.id)),
     }))
     .toSorted((a, b) => a.label.localeCompare(b.label));
+}
+
+export function buildToolsCatalogResult(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  agentId?: string;
+  includePlugins?: boolean;
+}): ToolsCatalogResult {
+  const agentId = params.agentId?.trim() || resolveDefaultAgentId(params.cfg);
+  const includePlugins = params.includePlugins !== false;
+  const groups = buildCoreGroups();
+  if (includePlugins) {
+    const existingToolNames = new Set(
+      groups.flatMap((group) => group.tools.map((tool) => tool.id)),
+    );
+    groups.push(
+      ...buildPluginGroups({
+        cfg: params.cfg,
+        agentId,
+        existingToolNames,
+      }),
+    );
+  }
+  return {
+    agentId,
+    profiles: PROFILE_OPTIONS.map((profile) => ({ id: profile.id, label: profile.label })),
+    groups,
+  };
 }
 
 export const toolsCatalogHandlers: GatewayRequestHandlers = {
@@ -139,27 +169,13 @@ export const toolsCatalogHandlers: GatewayRequestHandlers = {
     if (!resolved) {
       return;
     }
-    const includePlugins = params.includePlugins !== false;
-    const groups = buildCoreGroups();
-    if (includePlugins) {
-      const existingToolNames = new Set(
-        groups.flatMap((group) => group.tools.map((tool) => tool.id)),
-      );
-      groups.push(
-        ...buildPluginGroups({
-          cfg: resolved.cfg,
-          agentId: resolved.agentId,
-          existingToolNames,
-        }),
-      );
-    }
     respond(
       true,
-      {
+      buildToolsCatalogResult({
+        cfg: resolved.cfg,
         agentId: resolved.agentId,
-        profiles: PROFILE_OPTIONS.map((profile) => ({ id: profile.id, label: profile.label })),
-        groups,
-      },
+        includePlugins: params.includePlugins,
+      }),
       undefined,
     );
   },

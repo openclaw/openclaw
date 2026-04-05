@@ -9,6 +9,21 @@ title: "WhatsApp"
 
 Status: production-ready via WhatsApp Web (Baileys). Gateway owns linked session(s).
 
+## Install (on demand)
+
+- Onboarding (`openclaw onboard`) and `openclaw channels add --channel whatsapp`
+  prompt to install the WhatsApp plugin the first time you select it.
+- `openclaw channels login --channel whatsapp` also offers the install flow when
+  the plugin is not present yet.
+- Dev channel + git checkout: defaults to the local plugin path.
+- Stable/Beta: defaults to the npm package `@openclaw/whatsapp`.
+
+Manual install stays available:
+
+```bash
+openclaw plugins install @openclaw/whatsapp
+```
+
 <CardGroup cols={3}>
   <Card title="Pairing" icon="link" href="/channels/pairing">
     Default DM policy is pairing for unknown senders.
@@ -76,7 +91,7 @@ openclaw pairing approve whatsapp <CODE>
 </Steps>
 
 <Note>
-OpenClaw recommends running WhatsApp on a separate number when possible. (The channel metadata and onboarding flow are optimized for that setup, but personal-number setups are also supported.)
+OpenClaw recommends running WhatsApp on a separate number when possible. (The channel metadata and setup flow are optimized for that setup, but personal-number setups are also supported.)
 </Note>
 
 ## Deployment patterns
@@ -308,15 +323,42 @@ When the linked self number is also present in `allowFrom`, WhatsApp self-chat s
 
   <Accordion title="Media size limits and fallback behavior">
     - inbound media save cap: `channels.whatsapp.mediaMaxMb` (default `50`)
-    - outbound media cap for auto-replies: `agents.defaults.mediaMaxMb` (default `5MB`)
+    - outbound media send cap: `channels.whatsapp.mediaMaxMb` (default `50`)
+    - per-account overrides use `channels.whatsapp.accounts.<accountId>.mediaMaxMb`
     - images are auto-optimized (resize/quality sweep) to fit limits
     - on media send failure, first-item fallback sends text warning instead of dropping the response silently
   </Accordion>
 </AccordionGroup>
 
+## Reaction level
+
+`channels.whatsapp.reactionLevel` controls how broadly the agent uses emoji reactions on WhatsApp:
+
+| Level         | Ack reactions | Agent-initiated reactions | Description                                      |
+| ------------- | ------------- | ------------------------- | ------------------------------------------------ |
+| `"off"`       | No            | No                        | No reactions at all                              |
+| `"ack"`       | Yes           | No                        | Ack reactions only (pre-reply receipt)           |
+| `"minimal"`   | Yes           | Yes (conservative)        | Ack + agent reactions with conservative guidance |
+| `"extensive"` | Yes           | Yes (encouraged)          | Ack + agent reactions with encouraged guidance   |
+
+Default: `"minimal"`.
+
+Per-account overrides use `channels.whatsapp.accounts.<id>.reactionLevel`.
+
+```json5
+{
+  channels: {
+    whatsapp: {
+      reactionLevel: "ack",
+    },
+  },
+}
+```
+
 ## Acknowledgment reactions
 
 WhatsApp supports immediate ack reactions on inbound receipt via `channels.whatsapp.ackReaction`.
+Ack reactions are gated by `reactionLevel` — they are suppressed when `reactionLevel` is `"off"`.
 
 ```json5
 {
@@ -431,7 +473,7 @@ Primary reference:
 High-signal WhatsApp fields:
 
 - access: `dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`, `groups`
-- delivery: `textChunkLimit`, `chunkMode`, `mediaMaxMb`, `sendReadReceipts`, `ackReaction`
+- delivery: `textChunkLimit`, `chunkMode`, `mediaMaxMb`, `sendReadReceipts`, `ackReaction`, `reactionLevel`
 - multi-account: `accounts.<id>.enabled`, `accounts.<id>.authDir`, account-level overrides
 - operations: `configWrites`, `debounceMs`, `web.enabled`, `web.heartbeatSeconds`, `web.reconnect.*`
 - session behavior: `session.dmScope`, `historyLimit`, `dmHistoryLimit`, `dms.<id>.historyLimit`
@@ -439,6 +481,8 @@ High-signal WhatsApp fields:
 ## Related
 
 - [Pairing](/channels/pairing)
+- [Groups](/channels/groups)
+- [Security](/gateway/security)
 - [Channel routing](/channels/channel-routing)
 - [Multi-agent routing](/concepts/multi-agent)
 - [Troubleshooting](/channels/troubleshooting)

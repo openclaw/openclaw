@@ -1,5 +1,9 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  resetHeartbeatWakeStateForTests,
+  setHeartbeatWakeHandler,
+} from "../infra/heartbeat-wake.js";
 import { applyPathPrepend, findPathKey } from "../infra/path-prepend.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
 import { captureEnv } from "../test-utils/env.js";
@@ -14,7 +18,6 @@ const defaultShell = isWin
 // PowerShell: Start-Sleep for delays, ; for command separation, $null for null device
 const shortDelayCmd = isWin ? "Start-Sleep -Milliseconds 4" : "sleep 0.004";
 const yieldDelayCmd = isWin ? "Start-Sleep -Milliseconds 16" : "sleep 0.016";
-const longDelayCmd = isWin ? "Start-Sleep -Milliseconds 72" : "sleep 0.072";
 const POLL_INTERVAL_MS = 15;
 const BACKGROUND_POLL_TIMEOUT_MS = isWin ? 8000 : 1200;
 const NOTIFY_EVENT_TIMEOUT_MS = isWin ? 12_000 : 5_000;
@@ -41,7 +44,11 @@ const COMMAND_PRINT_PATH = isWin ? "Write-Output $env:PATH" : "echo $PATH";
 const COMMAND_EXIT_WITH_ERROR = "exit 1";
 const SCOPE_KEY_ALPHA = "agent:alpha";
 const SCOPE_KEY_BETA = "agent:beta";
-const TEST_EXEC_DEFAULTS = { security: "full" as const, ask: "off" as const };
+const TEST_EXEC_DEFAULTS = {
+  host: "gateway" as const,
+  security: "full" as const,
+  ask: "off" as const,
+};
 const DEFAULT_NOTIFY_SESSION_KEY = "agent:main:main";
 const ECHO_HI_COMMAND = shellEcho("hi");
 let callIdCounter = 0;
@@ -403,6 +410,38 @@ const runNotifyNoopCase = async ({ label, notifyOnExitEmptySuccess }: NotifyNoop
   expectNotifyNoopEvents(events, notifyOnExitEmptySuccess, label);
 };
 
+describe("tool descriptions", () => {
+  it("adds cron-specific deferred follow-up guidance only when cron is available", () => {
+    const execWithCron = createTestExecTool({ hasCronTool: true });
+    const processWithCron = createProcessTool({ hasCronTool: true });
+
+    expect(execWithCron.description).toContain(
+      "rely on automatic completion wake when it is enabled and the command emits output or fails; otherwise use process to confirm completion. Use process whenever you need logs, status, input, or intervention.",
+    );
+    expect(processWithCron.description).toContain(
+      "completion confirmation when automatic completion wake is unavailable.",
+    );
+    expect(processWithCron.description).toContain(
+      "Use write/send-keys/submit/paste/kill for input or intervention.",
+    );
+    expect(execWithCron.description).toContain(
+      "Do not use exec sleep or delay loops for reminders or deferred follow-ups; use cron instead.",
+    );
+    expect(processWithCron.description).toContain(
+      "Do not use process polling to emulate timers or reminders; use cron for scheduled follow-ups.",
+    );
+    expect(execTool.description).not.toContain("use cron instead");
+    expect(processTool.description).not.toContain("scheduled follow-ups");
+    expect(execTool.description).toContain("otherwise use process to confirm completion");
+    expect(processTool.description).toContain(
+      "completion confirmation when automatic completion wake is unavailable",
+    );
+    expect(processTool.description).toContain(
+      "Use write/send-keys/submit/paste/kill for input or intervention.",
+    );
+  });
+});
+
 beforeEach(() => {
   callIdCounter = 0;
   resetProcessRegistryForTests();
@@ -449,15 +488,6 @@ describe("exec tool backgrounding", () => {
     const sessions = await listProcessSessions(processTool);
     expect(hasSession(sessions, sessionId)).toBe(true);
     expect(sessions.find((s) => s.sessionId === sessionId)?.name).toBe(COMMAND_ECHO_HELLO);
-  });
-
-  it("uses default timeout when timeout is omitted", async () => {
-    const customBash = createTestExecTool({
-      timeoutSec: 0.05,
-      backgroundMs: 10,
-      allowBackground: false,
-    });
-    await expect(executeExecCommand(customBash, longDelayCmd)).rejects.toThrow(/timed out/i);
   });
 
   it.each<DisallowedElevationCase>(DISALLOWED_ELEVATION_CASES)(
@@ -507,6 +537,14 @@ describe("exec exit codes", () => {
 });
 
 describe("exec notifyOnExit", () => {
+  beforeEach(() => {
+    resetHeartbeatWakeStateForTests();
+  });
+
+  afterEach(() => {
+    resetHeartbeatWakeStateForTests();
+  });
+
   it("enqueues a system event when a backgrounded exec exits", async () => {
     const tool = createNotifyOnExitExecTool();
 
@@ -516,6 +554,45 @@ describe("exec notifyOnExit", () => {
 
     expect(finished).toBeTruthy();
     expect(hasEvent).toBe(true);
+  });
+
+  it("scopes notifyOnExit heartbeat wake to the exec session key", async () => {
+    const tool = createNotifyOnExitExecTool();
+    const wakeHandler = vi.fn().mockResolvedValue({ status: "skipped", reason: "disabled" });
+    const dispose = setHeartbeatWakeHandler(
+      wakeHandler as unknown as Parameters<typeof setHeartbeatWakeHandler>[0],
+    );
+    try {
+      const _sessionId = await startBackgroundCommand(tool, echoAfterDelay("notify"));
+
+      await expect
+        .poll(() => wakeHandler.mock.calls[0]?.[0], NOTIFY_POLL_OPTIONS)
+        .toMatchObject({
+          reason: "exec-event",
+          sessionKey: DEFAULT_NOTIFY_SESSION_KEY,
+        });
+    } finally {
+      dispose();
+    }
+  });
+
+  it("keeps notifyOnExit heartbeat wake unscoped for non-agent session keys", async () => {
+    const tool = createNotifyOnExitExecTool({ sessionKey: "global" });
+    const wakeHandler = vi.fn().mockResolvedValue({ status: "skipped", reason: "disabled" });
+    const dispose = setHeartbeatWakeHandler(
+      wakeHandler as unknown as Parameters<typeof setHeartbeatWakeHandler>[0],
+    );
+    try {
+      const _sessionId = await startBackgroundCommand(tool, echoAfterDelay("notify"));
+
+      await expect
+        .poll(() => wakeHandler.mock.calls[0]?.[0], NOTIFY_POLL_OPTIONS)
+        .toEqual({
+          reason: "exec-event",
+        });
+    } finally {
+      dispose();
+    }
   });
 
   it.each<NotifyNoopCase>(NOOP_NOTIFY_CASES)("$label", runNotifyNoopCase);

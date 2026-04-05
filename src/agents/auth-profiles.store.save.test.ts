@@ -3,7 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveAuthStorePath } from "./auth-profiles/paths.js";
-import { saveAuthProfileStore } from "./auth-profiles/store.js";
+import {
+  clearRuntimeAuthProfileStoreSnapshots,
+  ensureAuthProfileStore,
+  replaceRuntimeAuthProfileStoreSnapshots,
+  saveAuthProfileStore,
+} from "./auth-profiles/store.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 
 describe("saveAuthProfileStore", () => {
@@ -58,6 +63,65 @@ describe("saveAuthProfileStore", () => {
 
       expect(parsed.profiles["anthropic:default"]?.key).toBe("sk-anthropic-plain");
     } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("refreshes the runtime snapshot when a saved store rotates oauth tokens", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-save-runtime-"));
+    try {
+      replaceRuntimeAuthProfileStoreSnapshots([
+        {
+          agentDir,
+          store: {
+            version: 1,
+            profiles: {
+              "anthropic:default": {
+                type: "oauth",
+                provider: "anthropic",
+                access: "access-1",
+                refresh: "refresh-1",
+                expires: 1,
+              },
+            },
+          },
+        },
+      ]);
+
+      expect(ensureAuthProfileStore(agentDir).profiles["anthropic:default"]).toMatchObject({
+        access: "access-1",
+        refresh: "refresh-1",
+      });
+
+      const rotatedStore: AuthProfileStore = {
+        version: 1,
+        profiles: {
+          "anthropic:default": {
+            type: "oauth",
+            provider: "anthropic",
+            access: "access-2",
+            refresh: "refresh-2",
+            expires: 2,
+          },
+        },
+      };
+
+      saveAuthProfileStore(rotatedStore, agentDir);
+
+      expect(ensureAuthProfileStore(agentDir).profiles["anthropic:default"]).toMatchObject({
+        access: "access-2",
+        refresh: "refresh-2",
+      });
+
+      const persisted = JSON.parse(await fs.readFile(resolveAuthStorePath(agentDir), "utf8")) as {
+        profiles: Record<string, { access?: string; refresh?: string }>;
+      };
+      expect(persisted.profiles["anthropic:default"]).toMatchObject({
+        access: "access-2",
+        refresh: "refresh-2",
+      });
+    } finally {
+      clearRuntimeAuthProfileStoreSnapshots();
       await fs.rm(agentDir, { recursive: true, force: true });
     }
   });

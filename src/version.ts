@@ -90,17 +90,60 @@ export type RuntimeVersionEnv = {
   [key: string]: string | undefined;
 };
 
-export function resolveRuntimeServiceVersion(
-  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
-  fallback = "dev",
-): string {
+export const RUNTIME_SERVICE_VERSION_FALLBACK = "unknown";
+type RuntimeVersionPreference = "env-first" | "runtime-first";
+
+export function resolveUsableRuntimeVersion(version: string | undefined): string | undefined {
+  const trimmed = version?.trim();
+  // "0.0.0" is the resolver's hard fallback when module metadata cannot be read.
+  // Prefer explicit service/package markers in that edge case.
+  if (!trimmed || trimmed === "0.0.0") {
+    return undefined;
+  }
+  return trimmed;
+}
+
+function resolveVersionFromRuntimeSources(params: {
+  env: RuntimeVersionEnv;
+  runtimeVersion: string | undefined;
+  fallback: string;
+  preference: RuntimeVersionPreference;
+}): string {
+  const preferredCandidates =
+    params.preference === "env-first"
+      ? [params.env["OPENCLAW_VERSION"], params.runtimeVersion]
+      : [params.runtimeVersion, params.env["OPENCLAW_VERSION"]];
   return (
     firstNonEmpty(
-      env["OPENCLAW_VERSION"],
-      env["OPENCLAW_SERVICE_VERSION"],
-      env["npm_package_version"],
-    ) ?? fallback
+      ...preferredCandidates,
+      params.env["OPENCLAW_SERVICE_VERSION"],
+      params.env["npm_package_version"],
+    ) ?? params.fallback
   );
+}
+
+export function resolveRuntimeServiceVersion(
+  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
+  fallback = RUNTIME_SERVICE_VERSION_FALLBACK,
+): string {
+  return resolveVersionFromRuntimeSources({
+    env,
+    runtimeVersion: resolveUsableRuntimeVersion(VERSION),
+    fallback,
+    preference: "env-first",
+  });
+}
+
+export function resolveCompatibilityHostVersion(
+  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
+  fallback = RUNTIME_SERVICE_VERSION_FALLBACK,
+): string {
+  return resolveVersionFromRuntimeSources({
+    env,
+    runtimeVersion: resolveUsableRuntimeVersion(VERSION),
+    fallback,
+    preference: env === (process.env as RuntimeVersionEnv) ? "runtime-first" : "env-first",
+  });
 }
 
 // Single source of truth for the current OpenClaw version.

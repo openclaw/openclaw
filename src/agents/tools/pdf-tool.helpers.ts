@@ -4,22 +4,16 @@ import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../../config/model-input.js";
+import { providerSupportsNativePdfDocument } from "../../media-understanding/defaults.js";
 import { extractAssistantText } from "../pi-embedded-utils.js";
 
 export type PdfModelConfig = { primary?: string; fallbacks?: string[] };
 
 /**
- * Providers known to support native PDF document input.
- * When the model's provider is in this set, the tool sends raw PDF bytes
- * via provider-specific API calls instead of extracting text/images first.
- */
-export const NATIVE_PDF_PROVIDERS = new Set(["anthropic", "google"]);
-
-/**
  * Check whether a provider supports native PDF document input.
  */
 export function providerSupportsNativePdf(provider: string): boolean {
-  return NATIVE_PDF_PROVIDERS.has(provider.toLowerCase().trim());
+  return providerSupportsNativePdfDocument({ providerId: provider });
 }
 
 /**
@@ -60,32 +54,38 @@ export function coercePdfAssistantText(params: {
   provider: string;
   model: string;
 }): string {
-  const stop = params.message.stopReason;
+  const label = `${params.provider}/${params.model}`;
   const errorMessage = params.message.errorMessage?.trim();
-  if (stop === "error" || stop === "aborted") {
+  const fail = (message?: string) => {
     throw new Error(
-      errorMessage
-        ? `PDF model failed (${params.provider}/${params.model}): ${errorMessage}`
-        : `PDF model failed (${params.provider}/${params.model})`,
+      message ? `PDF model failed (${label}): ${message}` : `PDF model failed (${label})`,
     );
+  };
+  if (params.message.stopReason === "error" || params.message.stopReason === "aborted") {
+    fail(errorMessage);
   }
   if (errorMessage) {
-    throw new Error(`PDF model failed (${params.provider}/${params.model}): ${errorMessage}`);
+    fail(errorMessage);
   }
   const text = extractAssistantText(params.message);
-  if (text.trim()) {
-    return text.trim();
+  const trimmed = text.trim();
+  if (trimmed) {
+    return trimmed;
   }
-  throw new Error(`PDF model returned no text (${params.provider}/${params.model}).`);
+  throw new Error(`PDF model returned no text (${label}).`);
 }
 
 export function coercePdfModelConfig(cfg?: OpenClawConfig): PdfModelConfig {
   const primary = resolveAgentModelPrimaryValue(cfg?.agents?.defaults?.pdfModel);
   const fallbacks = resolveAgentModelFallbackValues(cfg?.agents?.defaults?.pdfModel);
-  return {
-    ...(primary?.trim() ? { primary: primary.trim() } : {}),
-    ...(fallbacks.length > 0 ? { fallbacks } : {}),
-  };
+  const modelConfig: PdfModelConfig = {};
+  if (primary?.trim()) {
+    modelConfig.primary = primary.trim();
+  }
+  if (fallbacks.length > 0) {
+    modelConfig.fallbacks = fallbacks;
+  }
+  return modelConfig;
 }
 
 export function resolvePdfToolMaxTokens(

@@ -1,52 +1,63 @@
-import type { sendMessageWhatsApp } from "../channels/web/index.js";
-import type { sendMessageDiscord } from "../discord/send.js";
-import type { sendMessageIMessage } from "../imessage/send.js";
-import type { OutboundSendDeps } from "../infra/outbound/deliver.js";
-import type { sendMessageSignal } from "../signal/send.js";
-import type { sendMessageSlack } from "../slack/send.js";
-import type { sendMessageTelegram } from "../telegram/send.js";
+import { listChannelPlugins } from "../channels/plugins/index.js";
+import type { OutboundSendDeps } from "../infra/outbound/send-deps.js";
+import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { createOutboundSendDepsFromCliSource } from "./outbound-send-mapping.js";
+import { createChannelOutboundRuntimeSend } from "./send-runtime/channel-outbound-send.js";
 
-export type CliDeps = {
-  sendMessageWhatsApp: typeof sendMessageWhatsApp;
-  sendMessageTelegram: typeof sendMessageTelegram;
-  sendMessageDiscord: typeof sendMessageDiscord;
-  sendMessageSlack: typeof sendMessageSlack;
-  sendMessageSignal: typeof sendMessageSignal;
-  sendMessageIMessage: typeof sendMessageIMessage;
+/**
+ * Lazy-loaded per-channel send functions, keyed by channel ID.
+ * Values are proxy functions that dynamically import the real module on first use.
+ */
+export type CliDeps = { [channelId: string]: unknown };
+type RuntimeSend = {
+  sendMessage: (...args: unknown[]) => Promise<unknown>;
+};
+type RuntimeSendModule = {
+  runtimeSend: RuntimeSend;
 };
 
-export function createDefaultDeps(): CliDeps {
-  return {
-    sendMessageWhatsApp: async (...args) => {
-      const { sendMessageWhatsApp } = await import("../channels/web/index.js");
-      return await sendMessageWhatsApp(...args);
-    },
-    sendMessageTelegram: async (...args) => {
-      const { sendMessageTelegram } = await import("../telegram/send.js");
-      return await sendMessageTelegram(...args);
-    },
-    sendMessageDiscord: async (...args) => {
-      const { sendMessageDiscord } = await import("../discord/send.js");
-      return await sendMessageDiscord(...args);
-    },
-    sendMessageSlack: async (...args) => {
-      const { sendMessageSlack } = await import("../slack/send.js");
-      return await sendMessageSlack(...args);
-    },
-    sendMessageSignal: async (...args) => {
-      const { sendMessageSignal } = await import("../signal/send.js");
-      return await sendMessageSignal(...args);
-    },
-    sendMessageIMessage: async (...args) => {
-      const { sendMessageIMessage } = await import("../imessage/send.js");
-      return await sendMessageIMessage(...args);
-    },
+// Per-channel module caches for lazy loading.
+const senderCache = new Map<string, Promise<RuntimeSend>>();
+
+/**
+ * Create a lazy-loading send function proxy for a channel.
+ * The channel's module is loaded on first call and cached for reuse.
+ */
+function createLazySender(
+  channelId: string,
+  loader: () => Promise<RuntimeSendModule>,
+): (...args: unknown[]) => Promise<unknown> {
+  const loadRuntimeSend = createLazyRuntimeSurface(loader, ({ runtimeSend }) => runtimeSend);
+  return async (...args: unknown[]) => {
+    let cached = senderCache.get(channelId);
+    if (!cached) {
+      cached = loadRuntimeSend();
+      senderCache.set(channelId, cached);
+    }
+    const runtimeSend = await cached;
+    return await runtimeSend.sendMessage(...args);
   };
+}
+
+export function createDefaultDeps(): CliDeps {
+  // Keep the default dependency barrel limited to lazy senders so callers that
+  // only need outbound deps do not pull channel runtime boundaries on import.
+  const deps: CliDeps = {};
+  for (const plugin of listChannelPlugins()) {
+    deps[plugin.id] = createLazySender(
+      plugin.id,
+      async () =>
+        ({
+          runtimeSend: createChannelOutboundRuntimeSend({
+            channelId: plugin.id,
+            unavailableMessage: `${plugin.meta.label ?? plugin.id} outbound adapter is unavailable.`,
+          }) as RuntimeSend,
+        }) satisfies RuntimeSendModule,
+    );
+  }
+  return deps;
 }
 
 export function createOutboundSendDeps(deps: CliDeps): OutboundSendDeps {
   return createOutboundSendDepsFromCliSource(deps);
 }
-
-export { logWebSelfId } from "../web/auth-store.js";

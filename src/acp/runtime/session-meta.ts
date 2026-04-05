@@ -1,15 +1,23 @@
-import path from "node:path";
-import { resolveAgentSessionDirs } from "../../agents/session-dirs.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
-import { resolveStateDir } from "../../config/paths.js";
-import { loadSessionStore, resolveStorePath, updateSessionStore } from "../../config/sessions.js";
+import { resolveStorePath } from "../../config/sessions/paths.js";
+import { loadSessionStore } from "../../config/sessions/store-load.js";
+import { resolveAllAgentSessionStoreTargets } from "../../config/sessions/targets.js";
 import {
   mergeSessionEntry,
   type SessionAcpMeta,
   type SessionEntry,
 } from "../../config/sessions/types.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
+
+let sessionStoreRuntimePromise:
+  | Promise<typeof import("../../config/sessions/store.runtime.js")>
+  | undefined;
+
+function loadSessionStoreRuntime() {
+  sessionStoreRuntimePromise ??= import("../../config/sessions/store.runtime.js");
+  return sessionStoreRuntimePromise;
+}
 
 export type AcpSessionStoreEntry = {
   cfg: OpenClawConfig;
@@ -88,14 +96,17 @@ export function readAcpSessionEntry(params: {
 
 export async function listAcpSessionEntries(params: {
   cfg?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
 }): Promise<AcpSessionStoreEntry[]> {
   const cfg = params.cfg ?? loadConfig();
-  const stateDir = resolveStateDir(process.env);
-  const sessionDirs = await resolveAgentSessionDirs(stateDir);
+  const storeTargets = await resolveAllAgentSessionStoreTargets(
+    cfg,
+    params.env ? { env: params.env } : undefined,
+  );
   const entries: AcpSessionStoreEntry[] = [];
 
-  for (const sessionsDir of sessionDirs) {
-    const storePath = path.join(sessionsDir, "sessions.json");
+  for (const target of storeTargets) {
+    const storePath = target.storePath;
     let store: Record<string, SessionEntry>;
     try {
       store = loadSessionStore(storePath);
@@ -136,6 +147,7 @@ export async function upsertAcpSessionMeta(params: {
     sessionKey,
     cfg: params.cfg,
   });
+  const { updateSessionStore } = await loadSessionStoreRuntime();
   return await updateSessionStore(
     storePath,
     (store) => {
@@ -160,6 +172,7 @@ export async function upsertAcpSessionMeta(params: {
     },
     {
       activeSessionKey: sessionKey.toLowerCase(),
+      allowDropAcpMetaSessionKeys: [sessionKey],
     },
   );
 }
