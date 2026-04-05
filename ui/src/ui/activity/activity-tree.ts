@@ -157,15 +157,39 @@ export function applyActivityEvent(tree: ActivityTree, event: IncomingEvent): Ac
     }
 
     // For run nodes, check if this session was spawned by a subagent.
-    if (nodeKind === "run" && event.sessionKey) {
-      const spawnerNodeId = tree.sessionKeyToSpawner.get(event.sessionKey);
-      if (spawnerNodeId) {
-        const spawner = tree.nodeById.get(spawnerNodeId);
-        if (spawner) {
-          node.parentId = spawnerNodeId;
-          node.depth = spawner.depth + 1;
-          if (!spawner.children.includes(nodeId)) {
-            spawner.children.push(nodeId);
+    if (nodeKind === "run" && !node.parentId) {
+      let matched = false;
+
+      // Try session key matching first.
+      if (event.sessionKey) {
+        const spawnerNodeId = tree.sessionKeyToSpawner.get(event.sessionKey);
+        if (spawnerNodeId) {
+          const spawner = tree.nodeById.get(spawnerNodeId);
+          if (spawner) {
+            node.parentId = spawnerNodeId;
+            node.depth = spawner.depth + 1;
+            if (!spawner.children.includes(nodeId)) {
+              spawner.children.push(nodeId);
+            }
+            matched = true;
+          }
+        }
+      }
+
+      // Fallback: find a recent unmatched subagent node with the same agentId.
+      if (!matched && data.agentId) {
+        for (const [candidateId, candidate] of tree.nodeById) {
+          if (
+            candidate.kind === "subagent" &&
+            candidate.label.startsWith(data.agentId) &&
+            candidate.children.length === 0
+          ) {
+            node.parentId = candidateId;
+            node.depth = candidate.depth + 1;
+            if (!candidate.children.includes(nodeId)) {
+              candidate.children.push(nodeId);
+            }
+            break;
           }
         }
       }
