@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import {
   cancelFlowByIdForOwner,
   getFlowTaskSummary,
+  retryManagedChildTaskFlowForOwner,
   runTaskInFlowForOwner,
 } from "../../tasks/task-executor.js";
 import {
@@ -63,6 +64,9 @@ export type BoundTaskFlowTaskRunResult =
     };
 
 export type BoundTaskFlowCancelResult = Awaited<ReturnType<typeof cancelFlowByIdForOwner>>;
+export type BoundTaskFlowRetryResult = Awaited<
+  ReturnType<typeof retryManagedChildTaskFlowForOwner>
+>;
 
 export type BoundTaskFlowRuntime = {
   readonly sessionKey: string;
@@ -125,6 +129,10 @@ export type BoundTaskFlowRuntime = {
     cancelRequestedAt?: number;
   }) => ManagedTaskFlowMutationResult;
   cancel: (params: { flowId: string; cfg: OpenClawConfig }) => Promise<BoundTaskFlowCancelResult>;
+  retryChildTask: (params: {
+    flowId: string;
+    cfg?: OpenClawConfig;
+  }) => Promise<BoundTaskFlowRetryResult>;
   runTask: (params: {
     flowId: string;
     runtime: TaskRuntime;
@@ -386,6 +394,12 @@ function createBoundTaskFlowRuntime(params: {
     },
     cancel: ({ flowId, cfg }) =>
       cancelFlowByIdForOwner({
+        cfg,
+        flowId,
+        callerOwnerKey: ownerKey,
+      }),
+    retryChildTask: ({ flowId, cfg }) =>
+      retryManagedChildTaskFlowForOwner({
         cfg,
         flowId,
         callerOwnerKey: ownerKey,

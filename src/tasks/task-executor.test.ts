@@ -13,6 +13,8 @@ import {
   failTaskRunByRunId,
   recordTaskRunProgressByRunId,
   retryBlockedFlowAsQueuedTaskRun,
+  retryManagedChildTaskFlow,
+  retryManagedChildTaskFlowForOwner,
   runTaskInFlow,
   runTaskInFlowForOwner,
   setDetachedTaskDeliveryStatusByRunId,
@@ -38,10 +40,24 @@ const hoisted = vi.hoisted(() => {
   const sendMessageMock = vi.fn();
   const cancelSessionMock = vi.fn();
   const killSubagentRunAdminMock = vi.fn();
+  const spawnSubagentDirectMock = vi.fn(async () => ({
+    status: "accepted" as const,
+    childSessionKey: "agent:main:subagent:retry-child",
+    runId: "run-managed-retry-subagent",
+    mode: "run" as const,
+  }));
+  const spawnAcpDirectMock = vi.fn(async () => ({
+    status: "accepted" as const,
+    childSessionKey: "agent:codex:acp:retry-child",
+    runId: "run-managed-retry-acp",
+    mode: "run" as const,
+  }));
   return {
     sendMessageMock,
     cancelSessionMock,
     killSubagentRunAdminMock,
+    spawnSubagentDirectMock,
+    spawnAcpDirectMock,
   };
 });
 
@@ -53,6 +69,14 @@ vi.mock("../acp/control-plane/manager.js", () => ({
 
 vi.mock("../agents/subagent-control.js", () => ({
   killSubagentRunAdmin: (params: unknown) => hoisted.killSubagentRunAdminMock(params),
+}));
+
+vi.mock("../agents/subagent-spawn.js", () => ({
+  spawnSubagentDirect: hoisted.spawnSubagentDirectMock,
+}));
+
+vi.mock("../agents/acp-spawn.js", () => ({
+  spawnAcpDirect: hoisted.spawnAcpDirectMock,
 }));
 
 async function withTaskExecutorStateDir(run: (stateDir: string) => Promise<void>): Promise<void> {
@@ -98,6 +122,8 @@ describe("task-executor", () => {
     hoisted.sendMessageMock.mockReset();
     hoisted.cancelSessionMock.mockReset();
     hoisted.killSubagentRunAdminMock.mockReset();
+    hoisted.spawnSubagentDirectMock.mockReset();
+    hoisted.spawnAcpDirectMock.mockReset();
   });
 
   it("advances a queued run through start and completion", async () => {
@@ -306,6 +332,166 @@ describe("task-executor", () => {
         terminalOutcome: "blocked",
         terminalSummary: "Writable session required.",
       });
+    });
+  });
+
+  it("retries a failed managed child-task flow by relaunching the stored subagent spawn", async () => {
+    await withTaskExecutorStateDir(async () => {
+      hoisted.spawnSubagentDirectMock.mockResolvedValue({
+        status: "accepted",
+        childSessionKey: "agent:main:subagent:retry-child",
+        runId: "run-managed-retry-subagent",
+        mode: "run",
+      });
+
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/managed-flow-retry",
+        goal: "Inspect PR batch",
+        status: "failed",
+        currentStep: "failed",
+        requesterOrigin: {
+          channel: "telegram",
+          to: "telegram:123",
+        },
+        stateJson: {
+          task: "Inspect PR 1",
+          runtime: "subagent",
+          label: "Inspect PR 1",
+          launch: {
+            kind: "sessions_spawn_child",
+            runtime: "subagent",
+            task: "Inspect PR 1",
+            label: "Inspect PR 1",
+            agentId: "main",
+            mode: "run",
+          },
+        },
+        createdAt: 10,
+        updatedAt: 20,
+        endedAt: 20,
+      });
+
+      const retried = await retryManagedChildTaskFlow({
+        flowId: flow.flowId,
+      });
+
+      expect(retried).toMatchObject({
+        found: true,
+        retried: true,
+        flow: expect.objectContaining({
+          flowId: flow.flowId,
+          status: "waiting",
+          currentStep: "wait_worker",
+        }),
+      });
+      expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          task: "Inspect PR 1",
+          parentFlowId: flow.flowId,
+        }),
+        expect.objectContaining({
+          agentSessionKey: "agent:main:main",
+        }),
+      );
+      expect(getTaskFlowById(flow.flowId)).toMatchObject({
+        status: "waiting",
+        waitJson: expect.objectContaining({
+          kind: "child_task",
+          runId: "run-managed-retry-subagent",
+        }),
+      });
+    });
+  });
+
+  it("retries a lost managed child-task flow by relaunching the stored ACP spawn", async () => {
+    await withTaskExecutorStateDir(async () => {
+      hoisted.spawnAcpDirectMock.mockResolvedValue({
+        status: "accepted",
+        childSessionKey: "agent:codex:acp:retry-child",
+        runId: "run-managed-retry-acp",
+        mode: "run",
+      });
+
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/managed-flow-retry-acp",
+        goal: "Inspect PR batch",
+        status: "lost",
+        currentStep: "lost",
+        requesterOrigin: {
+          channel: "telegram",
+          to: "telegram:123",
+        },
+        stateJson: {
+          task: "Inspect PR 3",
+          runtime: "acp",
+          launch: {
+            kind: "sessions_spawn_child",
+            runtime: "acp",
+            task: "Inspect PR 3",
+            agentId: "codex",
+            cwd: "/workspace",
+          },
+        },
+        createdAt: 10,
+        updatedAt: 20,
+        endedAt: 20,
+      });
+
+      const retried = await retryManagedChildTaskFlow({
+        flowId: flow.flowId,
+      });
+
+      expect(retried).toMatchObject({
+        found: true,
+        retried: true,
+        flow: expect.objectContaining({
+          flowId: flow.flowId,
+          status: "waiting",
+        }),
+      });
+      expect(hoisted.spawnAcpDirectMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          task: "Inspect PR 3",
+          agentId: "codex",
+          cwd: "/workspace",
+        }),
+        expect.objectContaining({
+          agentSessionKey: "agent:main:main",
+          agentTo: "telegram:123",
+        }),
+      );
+    });
+  });
+
+  it("keeps managed child-task retry owner-scoped", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/managed-flow-retry-owner",
+        goal: "Inspect PR batch",
+        status: "failed",
+        currentStep: "failed",
+        stateJson: {
+          task: "Inspect PR 2",
+          runtime: "subagent",
+        },
+        createdAt: 10,
+        updatedAt: 20,
+        endedAt: 20,
+      });
+
+      const retried = await retryManagedChildTaskFlowForOwner({
+        flowId: flow.flowId,
+        callerOwnerKey: "agent:main:other",
+      });
+
+      expect(retried).toMatchObject({
+        found: false,
+        retried: false,
+      });
+      expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
     });
   });
 

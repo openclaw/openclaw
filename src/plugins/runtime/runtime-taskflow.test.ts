@@ -12,10 +12,17 @@ const hoisted = vi.hoisted(() => {
   const sendMessageMock = vi.fn();
   const cancelSessionMock = vi.fn();
   const killSubagentRunAdminMock = vi.fn();
+  const spawnSubagentDirectMock = vi.fn(async () => ({
+    status: "accepted" as const,
+    childSessionKey: "agent:main:subagent:retry-child",
+    runId: "runtime-taskflow-retry-run",
+    mode: "run" as const,
+  }));
   return {
     sendMessageMock,
     cancelSessionMock,
     killSubagentRunAdminMock,
+    spawnSubagentDirectMock,
   };
 });
 
@@ -27,6 +34,14 @@ vi.mock("../../acp/control-plane/manager.js", () => ({
 
 vi.mock("../../agents/subagent-control.js", () => ({
   killSubagentRunAdmin: (params: unknown) => hoisted.killSubagentRunAdminMock(params),
+}));
+
+vi.mock("../../agents/subagent-spawn.js", () => ({
+  spawnSubagentDirect: hoisted.spawnSubagentDirectMock,
+}));
+
+vi.mock("../../agents/acp-spawn.js", () => ({
+  spawnAcpDirect: vi.fn(),
 }));
 
 afterEach(() => {
@@ -106,6 +121,53 @@ describe("runtime TaskFlow", () => {
         deliveryContext: undefined,
       }),
     ).toThrow("TaskFlow runtime requires tool context with a sessionKey.");
+  });
+
+  it("retries managed child-task flows under the bound owner", async () => {
+    const runtime = createRuntimeTaskFlow();
+    const ownerTaskFlow = runtime.bindSession({
+      sessionKey: "agent:main:main",
+    });
+
+    const created = ownerTaskFlow.createManaged({
+      controllerId: "tests/runtime-taskflow",
+      goal: "Retry failed child task",
+      status: "failed",
+      currentStep: "failed",
+      stateJson: {
+        task: "Inspect PR 1",
+        runtime: "subagent",
+        launch: {
+          kind: "sessions_spawn_child",
+          runtime: "subagent",
+          task: "Inspect PR 1",
+          agentId: "main",
+        },
+      },
+      endedAt: 20,
+    });
+
+    const result = await ownerTaskFlow.retryChildTask({
+      flowId: created.flowId,
+    });
+
+    expect(result).toMatchObject({
+      found: true,
+      retried: true,
+      flow: expect.objectContaining({
+        flowId: created.flowId,
+        status: "waiting",
+      }),
+    });
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "Inspect PR 1",
+        parentFlowId: created.flowId,
+      }),
+      expect.objectContaining({
+        agentSessionKey: "agent:main:main",
+      }),
+    );
   });
 
   it("keeps TaskFlow reads owner-scoped and runs child tasks under the bound TaskFlow", () => {

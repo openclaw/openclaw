@@ -4,6 +4,7 @@ import {
   cancelTaskById,
   createTaskRecord,
   findLatestTaskForFlowId,
+  findTaskByRunId,
   isParentFlowLinkError,
   linkTaskToFlowById,
   listTasksForFlowId,
@@ -14,7 +15,7 @@ import {
   setTaskRunDeliveryStatusByRunId,
 } from "./runtime-internal.js";
 import { getTaskFlowByIdForOwner } from "./task-flow-owner-access.js";
-import type { TaskFlowRecord } from "./task-flow-registry.types.js";
+import type { JsonValue, TaskFlowRecord } from "./task-flow-registry.types.js";
 import {
   createTaskFlowForTask,
   deleteTaskFlowRecordById,
@@ -259,6 +260,394 @@ type RetryBlockedFlowParams = {
   lastEventAt?: number;
   progressSummary?: string | null;
 };
+
+type RetryManagedChildTaskFlowResult = {
+  found: boolean;
+  retried: boolean;
+  reason?: string;
+  flow?: TaskFlowRecord;
+  previousTask?: TaskRecord;
+  task?: TaskRecord;
+};
+
+type ManagedChildTaskRetryLaunch = {
+  runtime: Extract<TaskRuntime, "acp" | "subagent">;
+  task: string;
+  label?: string;
+  agentId?: string;
+  model?: string;
+  thinking?: string;
+  runTimeoutSeconds?: number;
+  thread?: boolean;
+  mode?: "run" | "session";
+  cleanup?: "delete" | "keep";
+  sandbox?: "inherit" | "require";
+  cwd?: string;
+  resumeSessionId?: string;
+};
+
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return value != null && typeof value === "object" && !Array.isArray(value);
+}
+
+function readTrimmedString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readBoolean(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function readNonNegativeNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function readManagedChildTaskRetryLaunch(params: {
+  flow: TaskFlowRecord;
+  latestTask?: TaskRecord;
+}): ManagedChildTaskRetryLaunch | null {
+  const state = isJsonObject(params.flow.stateJson) ? params.flow.stateJson : undefined;
+  const launch = isJsonObject(state?.launch) ? state.launch : undefined;
+  const runtimeRaw =
+    readTrimmedString(launch?.runtime) ??
+    readTrimmedString(state?.runtime) ??
+    readTrimmedString(params.latestTask?.runtime);
+  const runtime = runtimeRaw === "acp" || runtimeRaw === "subagent" ? runtimeRaw : undefined;
+  const task =
+    readTrimmedString(launch?.task) ??
+    readTrimmedString(state?.task) ??
+    readTrimmedString(params.latestTask?.task);
+  if (!runtime || !task) {
+    return null;
+  }
+  const label =
+    readTrimmedString(launch?.label) ??
+    readTrimmedString(state?.label) ??
+    readTrimmedString(params.latestTask?.label);
+  const agentId =
+    readTrimmedString(launch?.agentId) ?? readTrimmedString(params.latestTask?.agentId);
+  const model = readTrimmedString(launch?.model);
+  const thinking = readTrimmedString(launch?.thinking);
+  const runTimeoutSeconds = readNonNegativeNumber(launch?.runTimeoutSeconds);
+  const thread = readBoolean(launch?.thread);
+  const cwd = readTrimmedString(launch?.cwd);
+  const resumeSessionId = readTrimmedString(launch?.resumeSessionId);
+  return {
+    runtime,
+    task,
+    ...(label ? { label } : {}),
+    ...(agentId ? { agentId } : {}),
+    ...(model ? { model } : {}),
+    ...(thinking ? { thinking } : {}),
+    ...(runTimeoutSeconds !== undefined ? { runTimeoutSeconds } : {}),
+    ...(thread !== undefined ? { thread } : {}),
+    ...(launch?.mode === "run" || launch?.mode === "session" ? { mode: launch.mode } : {}),
+    ...(launch?.cleanup === "delete" || launch?.cleanup === "keep"
+      ? { cleanup: launch.cleanup }
+      : {}),
+    ...(launch?.sandbox === "inherit" || launch?.sandbox === "require"
+      ? { sandbox: launch.sandbox }
+      : {}),
+    ...(cwd ? { cwd } : {}),
+    ...(resumeSessionId ? { resumeSessionId } : {}),
+  };
+}
+
+function buildManagedChildTaskRetryState(params: {
+  flow: TaskFlowRecord;
+  launch: ManagedChildTaskRetryLaunch;
+  childSessionKey?: string;
+  runId?: string;
+}): Record<string, JsonValue> {
+  const current = isJsonObject(params.flow.stateJson)
+    ? ({ ...params.flow.stateJson } as Record<string, JsonValue>)
+    : {};
+  delete current.completion;
+  delete current.progressSummary;
+  delete current.error;
+  return {
+    ...current,
+    task: params.launch.task,
+    runtime: params.launch.runtime,
+    label: params.launch.label ?? null,
+    childSessionKey: params.childSessionKey ?? null,
+    runId: params.runId ?? null,
+    launch: {
+      kind: "sessions_spawn_child",
+      runtime: params.launch.runtime,
+      task: params.launch.task,
+      ...(params.launch.label ? { label: params.launch.label } : {}),
+      ...(params.launch.agentId ? { agentId: params.launch.agentId } : {}),
+      ...(params.launch.model ? { model: params.launch.model } : {}),
+      ...(params.launch.thinking ? { thinking: params.launch.thinking } : {}),
+      ...(params.launch.runTimeoutSeconds !== undefined
+        ? { runTimeoutSeconds: params.launch.runTimeoutSeconds }
+        : {}),
+      ...(params.launch.thread !== undefined ? { thread: params.launch.thread } : {}),
+      ...(params.launch.mode ? { mode: params.launch.mode } : {}),
+      ...(params.launch.cleanup ? { cleanup: params.launch.cleanup } : {}),
+      ...(params.launch.sandbox ? { sandbox: params.launch.sandbox } : {}),
+      ...(params.launch.cwd ? { cwd: params.launch.cwd } : {}),
+      ...(params.launch.resumeSessionId ? { resumeSessionId: params.launch.resumeSessionId } : {}),
+    },
+  };
+}
+
+function resolveRetryableManagedChildTaskFlow(flowId: string): {
+  flowFound: boolean;
+  retryable: boolean;
+  flow?: TaskFlowRecord;
+  latestTask?: TaskRecord;
+  launch?: ManagedChildTaskRetryLaunch;
+  reason?: string;
+} {
+  const flow = getTaskFlowById(flowId);
+  if (!flow) {
+    return {
+      flowFound: false,
+      retryable: false,
+      reason: "Flow not found.",
+    };
+  }
+  if (flow.syncMode !== "managed") {
+    return {
+      flowFound: true,
+      retryable: false,
+      flow,
+      reason: "Flow does not accept managed child-task retries.",
+    };
+  }
+  if (flow.cancelRequestedAt != null) {
+    return {
+      flowFound: true,
+      retryable: false,
+      flow,
+      reason: "Flow cancellation has already been requested.",
+    };
+  }
+  if (flow.status !== "blocked" && flow.status !== "failed" && flow.status !== "lost") {
+    return {
+      flowFound: true,
+      retryable: false,
+      flow,
+      reason: `Flow is not retryable from status ${flow.status}.`,
+    };
+  }
+  const tasks = listTasksForFlowId(flowId);
+  if (tasks.some((task) => isActiveTaskStatus(task.status))) {
+    return {
+      flowFound: true,
+      retryable: false,
+      flow,
+      reason: "Flow already has an active child task.",
+    };
+  }
+  const latestTask = findLatestTaskForFlowId(flowId);
+  const launch = readManagedChildTaskRetryLaunch({ flow, latestTask: latestTask ?? undefined });
+  if (!launch) {
+    return {
+      flowFound: true,
+      retryable: false,
+      flow,
+      latestTask,
+      reason: "Flow has no stored child-task launch details.",
+    };
+  }
+  return {
+    flowFound: true,
+    retryable: true,
+    flow,
+    latestTask,
+    launch,
+  };
+}
+
+async function retryManagedChildTaskFlowUnchecked(params: {
+  flowId: string;
+}): Promise<RetryManagedChildTaskFlowResult> {
+  const resolved = resolveRetryableManagedChildTaskFlow(params.flowId);
+  if (!resolved.retryable || !resolved.flow || !resolved.launch) {
+    return {
+      found: resolved.flowFound,
+      retried: false,
+      reason: resolved.reason,
+      ...(resolved.flow ? { flow: resolved.flow } : {}),
+      ...(resolved.latestTask ? { previousTask: resolved.latestTask } : {}),
+    };
+  }
+
+  const flow = resolved.flow;
+  const launch = resolved.launch;
+  const updatedAt = Date.now();
+
+  if (launch.runtime === "subagent") {
+    const { spawnSubagentDirect } = await import("../agents/subagent-spawn.js");
+    const result = await spawnSubagentDirect(
+      {
+        task: launch.task,
+        ...(launch.label ? { label: launch.label } : {}),
+        ...(launch.agentId ? { agentId: launch.agentId } : {}),
+        ...(launch.model ? { model: launch.model } : {}),
+        ...(launch.thinking ? { thinking: launch.thinking } : {}),
+        ...(launch.runTimeoutSeconds !== undefined
+          ? { runTimeoutSeconds: launch.runTimeoutSeconds }
+          : {}),
+        ...(launch.thread !== undefined ? { thread: launch.thread } : {}),
+        ...(launch.mode ? { mode: launch.mode } : {}),
+        ...(launch.cleanup ? { cleanup: launch.cleanup } : {}),
+        ...(launch.sandbox ? { sandbox: launch.sandbox } : {}),
+        parentFlowId: flow.flowId,
+        expectsCompletionMessage: true,
+      },
+      {
+        agentSessionKey: flow.ownerKey,
+      },
+    );
+    if (result.status !== "accepted") {
+      return {
+        found: true,
+        retried: false,
+        reason: result.error ?? "Spawn failed.",
+        flow,
+        ...(resolved.latestTask ? { previousTask: resolved.latestTask } : {}),
+      };
+    }
+    const refreshed = getTaskFlowById(flow.flowId) ?? flow;
+    const waitPatch = updateFlowRecordByIdExpectedRevision({
+      flowId: refreshed.flowId,
+      expectedRevision: refreshed.revision,
+      patch: {
+        status: "waiting",
+        currentStep: "wait_worker",
+        stateJson: buildManagedChildTaskRetryState({
+          flow: refreshed,
+          launch,
+          childSessionKey: result.childSessionKey?.trim(),
+          runId: result.runId?.trim(),
+        }),
+        waitJson: {
+          kind: "child_task",
+          runtime: launch.runtime,
+          ...(result.childSessionKey?.trim() ? { childSessionKey: result.childSessionKey } : {}),
+          ...(result.runId?.trim() ? { runId: result.runId } : {}),
+        },
+        blockedTaskId: null,
+        blockedSummary: null,
+        endedAt: null,
+        updatedAt,
+      },
+    });
+    const task = result.runId
+      ? findTaskByRunId(result.runId)
+      : findLatestTaskForFlowId(flow.flowId);
+    return {
+      found: true,
+      retried: waitPatch.applied,
+      ...(waitPatch.applied ? {} : { reason: "Flow changed while retry was starting." }),
+      flow: waitPatch.applied ? waitPatch.flow : (waitPatch.current ?? refreshed),
+      ...(resolved.latestTask ? { previousTask: resolved.latestTask } : {}),
+      ...(task ? { task } : {}),
+    };
+  }
+
+  const { spawnAcpDirect } = await import("../agents/acp-spawn.js");
+  const result = await spawnAcpDirect(
+    {
+      task: launch.task,
+      ...(launch.label ? { label: launch.label } : {}),
+      ...(launch.agentId ? { agentId: launch.agentId } : {}),
+      ...(launch.resumeSessionId ? { resumeSessionId: launch.resumeSessionId } : {}),
+      ...(launch.cwd ? { cwd: launch.cwd } : {}),
+      ...(launch.mode ? { mode: launch.mode } : {}),
+      ...(launch.thread !== undefined ? { thread: launch.thread } : {}),
+      ...(launch.sandbox ? { sandbox: launch.sandbox } : {}),
+    },
+    {
+      agentSessionKey: flow.ownerKey,
+      agentChannel: flow.requesterOrigin?.channel,
+      agentAccountId: flow.requesterOrigin?.accountId,
+      agentTo: flow.requesterOrigin?.to,
+      agentThreadId: flow.requesterOrigin?.threadId,
+    },
+  );
+  if (result.status !== "accepted") {
+    return {
+      found: true,
+      retried: false,
+      reason: result.error ?? "Spawn failed.",
+      flow,
+      ...(resolved.latestTask ? { previousTask: resolved.latestTask } : {}),
+    };
+  }
+  const spawnedTask = result.runId ? findTaskByRunId(result.runId) : undefined;
+  const linkedTask =
+    spawnedTask && !spawnedTask.parentFlowId?.trim()
+      ? (linkTaskToFlowById({ taskId: spawnedTask.taskId, flowId: flow.flowId }) ?? spawnedTask)
+      : spawnedTask;
+  const refreshed = getTaskFlowById(flow.flowId) ?? flow;
+  const waitPatch = updateFlowRecordByIdExpectedRevision({
+    flowId: refreshed.flowId,
+    expectedRevision: refreshed.revision,
+    patch: {
+      status: "waiting",
+      currentStep: "wait_worker",
+      stateJson: buildManagedChildTaskRetryState({
+        flow: refreshed,
+        launch,
+        childSessionKey: result.childSessionKey?.trim(),
+        runId: result.runId?.trim(),
+      }),
+      waitJson: {
+        kind: "child_task",
+        runtime: launch.runtime,
+        ...(result.childSessionKey?.trim() ? { childSessionKey: result.childSessionKey } : {}),
+        ...(result.runId?.trim() ? { runId: result.runId } : {}),
+      },
+      blockedTaskId: null,
+      blockedSummary: null,
+      endedAt: null,
+      updatedAt,
+    },
+  });
+  return {
+    found: true,
+    retried: waitPatch.applied,
+    ...(waitPatch.applied ? {} : { reason: "Flow changed while retry was starting." }),
+    flow: waitPatch.applied ? waitPatch.flow : (waitPatch.current ?? refreshed),
+    ...(resolved.latestTask ? { previousTask: resolved.latestTask } : {}),
+    ...(linkedTask ? { task: linkedTask } : {}),
+  };
+}
+
+export async function retryManagedChildTaskFlow(params: {
+  flowId: string;
+  cfg?: OpenClawConfig;
+}): Promise<RetryManagedChildTaskFlowResult> {
+  return await retryManagedChildTaskFlowUnchecked({
+    flowId: params.flowId,
+  });
+}
+
+export async function retryManagedChildTaskFlowForOwner(params: {
+  flowId: string;
+  callerOwnerKey: string;
+  cfg?: OpenClawConfig;
+}): Promise<RetryManagedChildTaskFlowResult> {
+  const flow = getTaskFlowByIdForOwner({
+    flowId: params.flowId,
+    callerOwnerKey: params.callerOwnerKey,
+  });
+  if (!flow) {
+    return {
+      found: false,
+      retried: false,
+      reason: "Flow not found.",
+    };
+  }
+  return await retryManagedChildTaskFlowUnchecked({
+    flowId: flow.flowId,
+  });
+}
 
 function resolveRetryableBlockedFlowTask(flowId: string): {
   flowFound: boolean;

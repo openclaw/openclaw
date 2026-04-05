@@ -1,5 +1,10 @@
 import type { Command } from "commander";
-import { flowsCancelCommand, flowsListCommand, flowsShowCommand } from "../../commands/flows.js";
+import {
+  flowsCancelCommand,
+  flowsListCommand,
+  flowsRetryCommand,
+  flowsShowCommand,
+} from "../../commands/flows.js";
 import { healthCommand } from "../../commands/health.js";
 import { sessionsCleanupCommand } from "../../commands/sessions-cleanup.js";
 import { sessionsCommand } from "../../commands/sessions.js";
@@ -416,6 +421,21 @@ export function registerStatusHealthSessionsCommands(program: Command) {
           {
             lookup,
             json: Boolean(opts.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  tasksFlowCmd
+    .command("retry")
+    .description("Retry a failed, lost, or blocked managed child-task TaskFlow")
+    .argument("<lookup>", "Flow id or owner key")
+    .action(async (lookup) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await flowsRetryCommand(
+          {
+            lookup,
           },
           defaultRuntime,
         );

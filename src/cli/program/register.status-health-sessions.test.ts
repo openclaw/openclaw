@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   tasksCancelCommand: vi.fn(),
   flowsListCommand: vi.fn(),
   flowsShowCommand: vi.fn(),
+  flowsRetryCommand: vi.fn(),
   flowsCancelCommand: vi.fn(),
   setVerbose: vi.fn(),
   runtime: {
@@ -36,6 +37,7 @@ const tasksNotifyCommand = mocks.tasksNotifyCommand;
 const tasksCancelCommand = mocks.tasksCancelCommand;
 const flowsListCommand = mocks.flowsListCommand;
 const flowsShowCommand = mocks.flowsShowCommand;
+const flowsRetryCommand = mocks.flowsRetryCommand;
 const flowsCancelCommand = mocks.flowsCancelCommand;
 const setVerbose = mocks.setVerbose;
 const runtime = mocks.runtime;
@@ -68,6 +70,7 @@ vi.mock("../../commands/tasks.js", () => ({
 vi.mock("../../commands/flows.js", () => ({
   flowsListCommand: mocks.flowsListCommand,
   flowsShowCommand: mocks.flowsShowCommand,
+  flowsRetryCommand: mocks.flowsRetryCommand,
   flowsCancelCommand: mocks.flowsCancelCommand,
 }));
 
@@ -101,6 +104,7 @@ describe("registerStatusHealthSessionsCommands", () => {
     tasksCancelCommand.mockResolvedValue(undefined);
     flowsListCommand.mockResolvedValue(undefined);
     flowsShowCommand.mockResolvedValue(undefined);
+    flowsRetryCommand.mockResolvedValue(undefined);
     flowsCancelCommand.mockResolvedValue(undefined);
   });
 
@@ -316,6 +320,14 @@ describe("registerStatusHealthSessionsCommands", () => {
 
     await runCli(["tasks", "flow", "show", "flow-123", "--json"]);
     expect(flowsShowCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lookup: "flow-123",
+      }),
+      runtime,
+    );
+
+    await runCli(["tasks", "flow", "retry", "flow-123"]);
+    expect(flowsRetryCommand).toHaveBeenCalledWith(
       expect.objectContaining({
         lookup: "flow-123",
       }),

@@ -2,7 +2,11 @@ import { loadConfig } from "../config/config.js";
 import { info } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { listTasksForFlowId } from "../tasks/runtime-internal.js";
-import { cancelFlowById, getFlowTaskSummary } from "../tasks/task-executor.js";
+import {
+  cancelFlowById,
+  getFlowTaskSummary,
+  retryManagedChildTaskFlow,
+} from "../tasks/task-executor.js";
 import { getTaskFlowGuidance } from "../tasks/task-flow-guidance.js";
 import type { TaskFlowRecord, TaskFlowStatus } from "../tasks/task-flow-registry.types.js";
 import {
@@ -222,6 +226,7 @@ export async function flowsShowCommand(
     `notify: ${flow.notifyPolicy}`,
     ...(stateSummary ? [`state: ${safeFlowDisplayText(stateSummary)}`] : []),
     ...(guidance ? [`nextAction: ${safeFlowDisplayText(guidance.summary)}`] : []),
+    ...(guidance?.retryable ? [`retryCommand: openclaw tasks flow retry ${flow.flowId}`] : []),
     ...(flow.cancelRequestedAt
       ? [`cancelRequestedAt: ${new Date(flow.cancelRequestedAt).toISOString()}`]
       : []),
@@ -242,6 +247,31 @@ export async function flowsShowCommand(
     const safeLabel = safeFlowDisplayText(task.label ?? task.task);
     runtime.log(`- ${task.taskId} ${task.status} ${task.runId ?? "n/a"} ${safeLabel}`);
   }
+}
+
+export async function flowsRetryCommand(opts: { lookup: string }, runtime: RuntimeEnv) {
+  const flow = resolveTaskFlowForLookupToken(opts.lookup);
+  if (!flow) {
+    runtime.error(`Flow not found: ${opts.lookup}`);
+    runtime.exit(1);
+    return;
+  }
+  const result = await retryManagedChildTaskFlow({
+    flowId: flow.flowId,
+    cfg: loadConfig(),
+  });
+  if (!result.found) {
+    runtime.error(result.reason ?? `Flow not found: ${opts.lookup}`);
+    runtime.exit(1);
+    return;
+  }
+  if (!result.retried) {
+    runtime.error(result.reason ?? `Could not retry TaskFlow: ${opts.lookup}`);
+    runtime.exit(1);
+    return;
+  }
+  const updated = getTaskFlowById(flow.flowId) ?? result.flow ?? flow;
+  runtime.log(`Retried ${updated.flowId} (${updated.syncMode}) with status ${updated.status}.`);
 }
 
 export async function flowsCancelCommand(opts: { lookup: string }, runtime: RuntimeEnv) {

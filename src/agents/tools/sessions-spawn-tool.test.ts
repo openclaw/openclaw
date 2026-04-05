@@ -41,7 +41,7 @@ vi.mock("../../plugins/runtime/runtime-taskflow.js", () => ({
 }));
 
 vi.mock("../subagent-capabilities.js", async () => {
-  const actual = await vi.importActual<Record<string, unknown>>("../subagent-capabilities.js");
+  const actual = await vi.importActual("../subagent-capabilities.js");
   return {
     ...actual,
     SUBAGENT_INTENT_LANES: ["research", "planning", "execution", "verification"],
@@ -182,6 +182,13 @@ describe("sessions_spawn tool", () => {
       expect.objectContaining({
         flowId: "flow-1",
         currentStep: "wait_worker",
+        stateJson: expect.objectContaining({
+          launch: expect.objectContaining({
+            kind: "sessions_spawn_child",
+            runtime: "subagent",
+            task: "review repo",
+          }),
+        }),
       }),
     );
     expect(hoisted.setWaitingMock).toHaveBeenCalledWith(

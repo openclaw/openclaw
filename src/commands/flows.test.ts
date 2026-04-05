@@ -1,5 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
+
+const hoisted = vi.hoisted(() => ({
+  spawnSubagentDirectMock: vi.fn(async () => ({
+    status: "accepted" as const,
+    childSessionKey: "agent:main:subagent:retry-child",
+    runId: "run-flow-retry",
+    mode: "run" as const,
+  })),
+}));
 import { createRunningTaskRun } from "../tasks/task-executor.js";
 import {
   createManagedTaskFlow,
@@ -10,7 +19,20 @@ import {
   resetTaskRegistryForTests,
 } from "../tasks/task-registry.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
-import { flowsCancelCommand, flowsListCommand, flowsShowCommand } from "./flows.js";
+import {
+  flowsCancelCommand,
+  flowsListCommand,
+  flowsRetryCommand,
+  flowsShowCommand,
+} from "./flows.js";
+
+vi.mock("../agents/subagent-spawn.js", () => ({
+  spawnSubagentDirect: hoisted.spawnSubagentDirectMock,
+}));
+
+vi.mock("../agents/acp-spawn.js", () => ({
+  spawnAcpDirect: vi.fn(),
+}));
 
 vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
@@ -56,6 +78,7 @@ describe("flows commands", () => {
     resetTaskRegistryDeliveryRuntimeForTests();
     resetTaskRegistryForTests();
     resetTaskFlowRegistryForTests();
+    hoisted.spawnSubagentDirectMock.mockClear();
   });
 
   it("lists TaskFlows as JSON with linked tasks and summaries", async () => {
@@ -158,6 +181,7 @@ describe("flows commands", () => {
       expect(output).toContain("currentStep: spawn_child");
       expect(output).toContain("owner: agent:main:main");
       expect(output).toContain("state: Waiting on child task output");
+      expect(output).toContain("retryCommand: openclaw tasks flow retry");
       expect(output).toContain("Linked tasks:");
       expect(output).toContain("run-child-2");
       expect(output).toContain("Collect logs");
@@ -209,6 +233,38 @@ describe("flows commands", () => {
         lines.some((line) => line.includes("run-child-3") && line.includes("Collect\\nlogs")),
       ).toBe(true);
       expect(lines.join("\n")).not.toContain("\u001b[");
+    });
+  });
+
+  it("retries a failed managed child-task TaskFlow", async () => {
+    await withTaskFlowCommandStateDir(async () => {
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/flows-command",
+        goal: "Retry detached work",
+        status: "failed",
+        currentStep: "failed",
+        stateJson: {
+          task: "Collect logs",
+          runtime: "subagent",
+          launch: {
+            kind: "sessions_spawn_child",
+            runtime: "subagent",
+            task: "Collect logs",
+            agentId: "main",
+          },
+        },
+        createdAt: 100,
+        updatedAt: 100,
+        endedAt: 120,
+      });
+
+      const runtime = createRuntime();
+      await flowsRetryCommand({ lookup: flow.flowId }, runtime);
+
+      expect(vi.mocked(runtime.error)).not.toHaveBeenCalled();
+      expect(vi.mocked(runtime.exit)).not.toHaveBeenCalled();
+      expect(String(vi.mocked(runtime.log).mock.calls[0]?.[0])).toContain("Retried");
     });
   });
 
