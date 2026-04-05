@@ -16,6 +16,7 @@ import {
   TEST_SESSION_ID,
 } from "./pi-embedded-runner.sanitize-session-history.test-harness.js";
 import { castAgentMessage, castAgentMessages } from "./test-helpers/agent-message-fixtures.js";
+import type { TranscriptPolicy } from "./transcript-policy.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
 
 vi.mock("./pi-embedded-helpers.js", async () => ({
@@ -121,6 +122,7 @@ describe("sanitizeSessionHistory", () => {
     provider?: string;
     modelApi?: string;
     modelId?: string;
+    policy?: TranscriptPolicy;
   }) =>
     sanitizeSessionHistory({
       messages: params.messages,
@@ -129,6 +131,7 @@ describe("sanitizeSessionHistory", () => {
       modelId: params.modelId ?? "claude-opus-4-6",
       sessionManager: makeMockSessionManager(),
       sessionId: TEST_SESSION_ID,
+      policy: params.policy,
     });
 
   const getAssistantMessage = (messages: AgentMessage[]) => {
@@ -928,6 +931,79 @@ describe("sanitizeSessionHistory", () => {
       },
       { type: "text", text: "hi" },
     ]);
+  });
+
+  it("keeps the earlier anthropic replay prefix stable after a later subagent turn", async () => {
+    setNonGoogleModelApi();
+
+    const priorToolId = "toolu_01ABCDEF1234567890";
+    const laterToolId = "toolu_01ZZZZZZ9999999999";
+    const nativeAnthropicPolicy: TranscriptPolicy = {
+      sanitizeMode: "full",
+      sanitizeToolCallIds: true,
+      toolCallIdMode: "strict",
+      preserveNativeAnthropicToolUseIds: true,
+      repairToolUseResultPairing: true,
+      preserveSignatures: true,
+      sanitizeThoughtSignatures: undefined,
+      sanitizeThinkingSignatures: false,
+      dropThinkingBlocks: true,
+      applyGoogleTurnOrdering: false,
+      validateGeminiTurns: false,
+      validateAnthropicTurns: true,
+      allowSyntheticToolResults: true,
+    };
+    const baseMessages = castAgentMessages([
+      makeUserMessage("Read IDENTITY.md"),
+      makeAssistantMessage(
+        [{ type: "toolUse", id: priorToolId, name: "read", input: { path: "IDENTITY.md" } }],
+        { stopReason: "toolUse" },
+      ),
+      {
+        role: "toolResult",
+        toolCallId: priorToolId,
+        toolUseId: priorToolId,
+        toolName: "read",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+      },
+      makeAssistantMessage([{ type: "text", text: "done" }]),
+    ]);
+    const withSubagentMessages = castAgentMessages([
+      ...baseMessages,
+      makeUserMessage("Ask a subagent for an emoji"),
+      makeAssistantMessage(
+        [{ type: "toolUse", id: laterToolId, name: "subagent", input: { prompt: "emoji" } }],
+        { stopReason: "toolUse" },
+      ),
+      {
+        role: "toolResult",
+        toolCallId: laterToolId,
+        toolUseId: laterToolId,
+        toolName: "subagent",
+        content: [{ type: "text", text: "😀" }],
+        isError: false,
+      },
+      makeAssistantMessage([{ type: "text", text: "it was 😀" }]),
+    ]);
+
+    const sanitizedBase = await sanitizeAnthropicHistory({
+      messages: baseMessages,
+      policy: nativeAnthropicPolicy,
+    });
+    const sanitizedWithSubagent = await sanitizeAnthropicHistory({
+      messages: withSubagentMessages,
+      policy: nativeAnthropicPolicy,
+    });
+
+    expect(sanitizedWithSubagent.slice(0, sanitizedBase.length)).toEqual(sanitizedBase);
+    expect((sanitizedBase[1] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([
+      { type: "toolUse", id: priorToolId, name: "read", input: { path: "IDENTITY.md" } },
+    ]);
+    expect(
+      (sanitizedBase[2] as Extract<AgentMessage, { role: "toolResult" }> & { toolUseId?: string })
+        .toolCallId,
+    ).toBe(priorToolId);
   });
 
   it("preserves latest assistant thinking blocks for amazon-bedrock replay", async () => {

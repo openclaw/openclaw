@@ -1039,7 +1039,13 @@ export async function runEmbeddedAttempt(
           if (!Array.isArray(messages)) {
             return inner(model, context, options);
           }
-          const sanitized = sanitizeToolCallIdsForCloudCodeAssist(messages as AgentMessage[], mode);
+          const sanitized = sanitizeToolCallIdsForCloudCodeAssist(
+            messages as AgentMessage[],
+            mode,
+            {
+              preserveNativeAnthropicToolUseIds: transcriptPolicy.preserveNativeAnthropicToolUseIds,
+            },
+          );
           if (sanitized === messages) {
             return inner(model, context, options);
           }

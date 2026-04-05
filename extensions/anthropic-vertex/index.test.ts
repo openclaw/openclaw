@@ -70,6 +70,7 @@ describe("anthropic-vertex provider plugin", () => {
       sanitizeMode: "full",
       sanitizeToolCallIds: true,
       toolCallIdMode: "strict",
+      preserveNativeAnthropicToolUseIds: true,
       preserveSignatures: true,
       repairToolUseResultPairing: true,
       validateAnthropicTurns: true,
