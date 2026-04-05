@@ -5,6 +5,7 @@ import {
   agentsBindingsCommand,
   agentsBindCommand,
   agentsDeleteCommand,
+  agentsImportCommand,
   agentsListCommand,
   agentsSetIdentityCommand,
   agentsUnbindCommand,
@@ -262,6 +263,26 @@ ${formatHelpExamples([
           {
             id: String(id),
             force: Boolean(opts.force),
+            json: Boolean(opts.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  agents
+    .command("import <file>")
+    .description("Import an agent from a .tar.gz archive")
+    .option("--force", "Overwrite existing agent without prompting", false)
+    .option("--non-interactive", "Disable prompts; requires --force", false)
+    .option("--json", "Output JSON summary", false)
+    .action(async (file, opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await agentsImportCommand(
+          {
+            file: String(file),
+            force: Boolean(opts.force),
+            nonInteractive: Boolean(opts.nonInteractive),
             json: Boolean(opts.json),
           },
           defaultRuntime,
