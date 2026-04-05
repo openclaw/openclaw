@@ -106,8 +106,13 @@ class HttpHandler(
         if (inputStream != null) {
           inputStream.use { stream ->
             val buffer = ByteArray(MAX_BODY_SIZE_BYTES)
-            val bytesRead = stream.read(buffer, 0, MAX_BODY_SIZE_BYTES)
-            if (bytesRead > 0) String(buffer, 0, bytesRead, Charsets.UTF_8) else null
+            var offset = 0
+            while (offset < MAX_BODY_SIZE_BYTES) {
+              val n = stream.read(buffer, offset, MAX_BODY_SIZE_BYTES - offset)
+              if (n == -1) break
+              offset += n
+            }
+            if (offset > 0) String(buffer, 0, offset, Charsets.UTF_8) else null
           }
         } else {
           null
