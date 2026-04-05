@@ -9,7 +9,7 @@ import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-str
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
 import { fetchGeminiUsage } from "openclaw/plugin-sdk/provider-usage";
 import { formatGoogleOauthApiKey, parseGoogleUsageToken } from "./oauth-token-shared.js";
-import { isModernGoogleModel, resolveGoogle31ForwardCompatModel } from "./provider-models.js";
+import { isModernGoogleModel, resolveGoogleGeminiForwardCompatModel } from "./provider-models.js";
 
 const PROVIDER_ID = "google-gemini-cli";
 const PROVIDER_LABEL = "Gemini CLI OAuth";
@@ -106,7 +106,11 @@ export function registerGoogleGeminiCliProvider(api: OpenClawPluginApi) {
       },
     },
     resolveDynamicModel: (ctx) =>
-      resolveGoogle31ForwardCompatModel({ providerId: PROVIDER_ID, ctx }),
+      resolveGoogleGeminiForwardCompatModel({
+        providerId: PROVIDER_ID,
+        templateProviderId: "google",
+        ctx,
+      }),
     ...GOOGLE_GEMINI_CLI_PROVIDER_HOOKS,
     isModernModelRef: ({ modelId }) => isModernGoogleModel(modelId),
     formatApiKey: (cred) => formatGoogleOauthApiKey(cred),
