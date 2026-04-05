@@ -1,0 +1,64 @@
+{
+  "name": "@openclaw/plugin-sdk",
+  "version": "0.0.0-private",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./config-runtime": {
+      "types": "./types/config-runtime.d.ts",
+      "default": "./src/config-runtime.ts"
+    },
+    "./core": {
+      "types": "./types/core.d.ts",
+      "default": "./src/core.ts"
+    },
+    "./plugin-entry": {
+      "types": "./types/plugin-entry.d.ts",
+      "default": "./src/plugin-entry.ts"
+    },
+    "./provider-auth": {
+      "types": "./types/provider-auth.d.ts",
+      "default": "./src/provider-auth.ts"
+    },
+    "./provider-auth-runtime": {
+      "types": "./types/provider-auth-runtime.d.ts",
+      "default": "./src/provider-auth-runtime.ts"
+    },
+    "./provider-entry": {
+      "types": "./types/provider-entry.d.ts",
+      "default": "./src/provider-entry.ts"
+    },
+    "./provider-model-shared": {
+      "types": "./types/provider-model-shared.d.ts",
+      "default": "./src/provider-model-shared.ts"
+    },
+    "./provider-onboard": {
+      "types": "./types/provider-onboard.d.ts",
+      "default": "./src/provider-onboard.ts"
+    },
+    "./provider-stream-shared": {
+      "types": "./types/provider-stream-shared.d.ts",
+      "default": "./src/provider-stream-shared.ts"
+    },
+    "./provider-tools": {
+      "types": "./types/provider-tools.d.ts",
+      "default": "./src/provider-tools.ts"
+    },
+    "./provider-web-search": {
+      "types": "./types/provider-web-search.d.ts",
+      "default": "./src/provider-web-search.ts"
+    },
+    "./runtime-env": {
+      "types": "./types/runtime-env.d.ts",
+      "default": "./src/runtime-env.ts"
+    },
+    "./secret-input": {
+      "types": "./types/secret-input.d.ts",
+      "default": "./src/secret-input.ts"
+    },
+    "./testing": {
+      "types": "./types/testing.d.ts",
+      "default": "./src/testing.ts"
+    }
+  }
+}
