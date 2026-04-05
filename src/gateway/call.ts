@@ -706,12 +706,22 @@ async function executeGatewayRequestWithScopes<T>(params: {
   token?: string;
   password?: string;
   tlsFingerprint?: string;
+  connectChallengeTimeoutMs?: number;
   timeoutMs: number;
   safeTimerTimeoutMs: number;
   connectionDetails: GatewayConnectionDetails;
 }): Promise<T> {
-  const { opts, scopes, url, token, password, tlsFingerprint, timeoutMs, safeTimerTimeoutMs } =
-    params;
+  const {
+    opts,
+    scopes,
+    url,
+    token,
+    password,
+    tlsFingerprint,
+    connectChallengeTimeoutMs,
+    timeoutMs,
+    safeTimerTimeoutMs,
+  } = params;
   // Yield to the event loop before starting the WebSocket connection.
   // On Windows with large dist bundles, heavy synchronous module loading
   // can starve the event loop, preventing timely processing of the
@@ -738,6 +748,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
       token,
       password,
       tlsFingerprint,
+      connectChallengeTimeoutMs,
       instanceId: opts.instanceId ?? randomUUID(),
       clientName: opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI,
       clientDisplayName: opts.clientDisplayName,
@@ -811,6 +822,10 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     urlSource: context.urlOverrideSource,
     ...(opts.configPath ? { configPath: opts.configPath } : {}),
   });
+  const connectChallengeTimeoutMs =
+    typeof opts.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
+      ? timeoutMs
+      : context.config.gateway?.connectChallengeTimeoutMs;
   const url = connectionDetails.url;
   const tlsFingerprint = await resolveGatewayTlsFingerprint({ opts, context, url });
   const { token, password } = resolvedCredentials;
@@ -821,6 +836,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     token,
     password,
     tlsFingerprint,
+    connectChallengeTimeoutMs,
     timeoutMs,
     safeTimerTimeoutMs,
     connectionDetails,

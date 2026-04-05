@@ -406,6 +406,8 @@ export type GatewayConfig = {
   http?: GatewayHttpConfig;
   push?: GatewayPushConfig;
   nodes?: GatewayNodesConfig;
+  /** WebSocket pre-auth/connect handshake timeout in milliseconds (default: 10000). */
+  connectChallengeTimeoutMs?: number;
   /**
    * IPs of trusted reverse proxies (e.g. Traefik, nginx). When a connection
    * arrives from one of these IPs, the Gateway trusts `x-forwarded-for`
