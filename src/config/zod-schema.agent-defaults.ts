@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { isValidNonNegativeByteSizeString } from "./byte-size.js";
+import { AgentModelObjectSchema } from "./zod-schema.agent-model.js";
 import {
   HeartbeatSchema,
   AgentSandboxSchema,
@@ -14,11 +15,18 @@ import {
   TypingModeSchema,
 } from "./zod-schema.core.js";
 
+const AgentDefaultModelSchema = z.union([
+  z.string(),
+  AgentModelObjectSchema.extend({
+    fallbacksFromModels: z.boolean().optional(),
+  }).strict(),
+]);
+
 export const AgentDefaultsSchema = z
   .object({
     /** Global default provider params applied to all models before per-model and per-agent overrides. */
     params: z.record(z.string(), z.unknown()).optional(),
-    model: AgentModelSchema.optional(),
+    model: AgentDefaultModelSchema.optional(),
     imageModel: AgentModelSchema.optional(),
     imageGenerationModel: AgentModelSchema.optional(),
     videoGenerationModel: AgentModelSchema.optional(),

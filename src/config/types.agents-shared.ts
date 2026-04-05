@@ -5,19 +5,14 @@ import type {
   SandboxSshSettings,
 } from "./types.sandbox.js";
 
-export type AgentModelConfig =
-  | string
-  | {
-      /** Primary model (provider/model). */
-      primary?: string;
-      /** Per-agent model fallbacks (provider/model). */
-      fallbacks?: string[];
-      /**
-       * When true and `fallbacks` is omitted, derive fallback candidates from
-       * `agents.defaults.models` in config order (excluding the configured primary).
-       */
-      fallbacksFromModels?: boolean;
-    };
+export type AgentModelConfig = string | AgentModelObjectConfig;
+
+export type AgentModelObjectConfig = {
+  /** Primary model (provider/model). */
+  primary?: string;
+  /** Per-agent model fallbacks (provider/model). */
+  fallbacks?: string[];
+};
 
 export type AgentSandboxConfig = {
   mode?: "off" | "non-main" | "all";

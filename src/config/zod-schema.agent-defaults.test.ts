@@ -11,4 +11,26 @@ describe("agent defaults schema", () => {
       }),
     ).not.toThrow();
   });
+
+  it("accepts fallbacksFromModels on agents.defaults.model", () => {
+    expect(() =>
+      AgentDefaultsSchema.parse({
+        model: {
+          primary: "openai/gpt-5.4",
+          fallbacksFromModels: true,
+        },
+      }),
+    ).not.toThrow();
+  });
+
+  it("rejects fallbacksFromModels on imageModel", () => {
+    expect(() =>
+      AgentDefaultsSchema.parse({
+        imageModel: {
+          primary: "openai/gpt-4.1-mini",
+          fallbacksFromModels: true,
+        } as never,
+      }),
+    ).toThrow();
+  });
 });

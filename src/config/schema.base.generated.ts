@@ -3023,6 +3023,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       },
                       fallbacksFromModels: {
                         type: "boolean",
+                        title: "Fallbacks From Models",
+                        description:
+                          "When true and explicit fallbacks are omitted, derive fallback candidates from agents.defaults.models in config order.",
                       },
                     },
                     additionalProperties: false,
@@ -3050,9 +3053,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         },
                         title: "Image Model Fallbacks",
                         description: "Ordered fallback image models (provider/model).",
-                      },
-                      fallbacksFromModels: {
-                        type: "boolean",
                       },
                     },
                     additionalProperties: false,
@@ -3096,15 +3096,17 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     properties: {
                       primary: {
                         type: "string",
+                        title: "Video Generation Model",
+                        description:
+                          "Optional video-generation model (provider/model) used by the shared video generation capability.",
                       },
                       fallbacks: {
                         type: "array",
                         items: {
                           type: "string",
                         },
-                      },
-                      fallbacksFromModels: {
-                        type: "boolean",
+                        title: "Video Generation Model Fallbacks",
+                        description: "Ordered fallback video-generation models (provider/model).",
                       },
                     },
                     additionalProperties: false,
@@ -3132,9 +3134,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         },
                         title: "PDF Model Fallbacks",
                         description: "Ordered fallback PDF models (provider/model).",
-                      },
-                      fallbacksFromModels: {
-                        type: "boolean",
                       },
                     },
                     additionalProperties: false,
@@ -4802,9 +4801,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                               type: "string",
                             },
                           },
-                          fallbacksFromModels: {
-                            type: "boolean",
-                          },
                         },
                         additionalProperties: false,
                       },
@@ -5402,9 +5398,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                           items: {
                             type: "string",
                           },
-                        },
-                        fallbacksFromModels: {
-                          type: "boolean",
                         },
                       },
                       additionalProperties: false,
