@@ -1,20 +1,20 @@
-import { countPendingDescendantRuns } from "../../../agents/subagent-registry.js";
-import { loadSessionStore, resolveStorePath } from "../../../config/sessions.js";
+import { countPendingDescendantRunsFromRuns } from "../../../agents/subagent-registry-queries.js";
+import { subagentRuns } from "../../../agents/subagent-registry-memory.js";
 import { formatDurationCompact } from "../../../shared/subagents-format.js";
 import { findTaskByRunIdForOwner } from "../../../tasks/task-owner-access.js";
 import { sanitizeTaskStatusText } from "../../../tasks/task-status.js";
 import type { CommandHandlerResult } from "../commands-types.js";
+import type { SubagentsRunsContext } from "../commands-subagents-types.js";
 import { formatRunLabel } from "../subagents-utils.js";
 import {
-  type SubagentsCommandContext,
   formatTimestampWithAge,
   loadSubagentSessionEntry,
   resolveDisplayStatus,
   resolveSubagentEntryForToken,
   stopWithText,
-} from "./shared.js";
+} from "../commands-subagents-read.js";
 
-export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): CommandHandlerResult {
+export function handleSubagentsInfoAction(ctx: SubagentsRunsContext): CommandHandlerResult {
   const { params, runs, restTokens } = ctx;
   const target = restTokens[0];
   if (!target) {
@@ -27,10 +27,7 @@ export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): Command
   }
 
   const run = targetResolution.entry;
-  const { entry: sessionEntry } = loadSubagentSessionEntry(params, run.childSessionKey, {
-    loadSessionStore,
-    resolveStorePath,
-  });
+  const { entry: sessionEntry } = loadSubagentSessionEntry(params, run.childSessionKey);
   const runtime =
     run.startedAt && Number.isFinite(run.startedAt)
       ? (formatDurationCompact((run.endedAt ?? Date.now()) - run.startedAt) ?? "n/a")
@@ -52,7 +49,9 @@ export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): Command
 
   const lines = [
     "ℹ️ Subagent info",
-    `Status: ${resolveDisplayStatus(run, { pendingDescendants: countPendingDescendantRuns(run.childSessionKey) })}`,
+    `Status: ${resolveDisplayStatus(run, {
+      pendingDescendants: countPendingDescendantRunsFromRuns(subagentRuns, run.childSessionKey),
+    })}`,
     `Label: ${formatRunLabel(run)}`,
     `Task: ${taskText}`,
     `Run: ${run.runId}`,

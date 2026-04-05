@@ -1,16 +1,12 @@
-import {
-  sendControlledSubagentMessage,
-  steerControlledSubagentRun,
-} from "../../../agents/subagent-control.js";
 import type { CommandHandlerResult } from "../commands-types.js";
+import type { SubagentsCommandContext } from "../commands-subagents-types.js";
 import { formatRunLabel } from "../subagents-utils.js";
 import {
-  type SubagentsCommandContext,
   COMMAND,
   resolveCommandSubagentController,
-  resolveSubagentEntryForToken,
   stopWithText,
-} from "./shared.js";
+} from "./core.js";
+import { resolveSubagentEntryForToken } from "../commands-subagents-read.js";
 
 export async function handleSubagentsSendAction(
   ctx: SubagentsCommandContext,
@@ -34,9 +30,10 @@ export async function handleSubagentsSendAction(
     return targetResolution.reply;
   }
 
-  const controller = resolveCommandSubagentController(params, ctx.requesterKey);
+  const controller = await resolveCommandSubagentController(params, ctx.requesterKey);
 
   if (steerRequested) {
+    const { steerControlledSubagentRun } = await import("../../../agents/subagent-control.js");
     const result = await steerControlledSubagentRun({
       cfg: params.cfg,
       controller,
@@ -57,6 +54,7 @@ export async function handleSubagentsSendAction(
     return stopWithText(`⚠️ ${result.error ?? "send failed"}`);
   }
 
+  const { sendControlledSubagentMessage } = await import("../../../agents/subagent-control.js");
   const result = await sendControlledSubagentMessage({
     cfg: params.cfg,
     controller,

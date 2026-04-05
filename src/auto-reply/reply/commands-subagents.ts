@@ -1,26 +1,49 @@
-import { listControlledSubagentRuns } from "../../agents/subagent-control.js";
 import { logVerbose } from "../../globals.js";
-import { handleSubagentsAgentsAction } from "./commands-subagents/action-agents.js";
-import { handleSubagentsFocusAction } from "./commands-subagents/action-focus.js";
-import { handleSubagentsHelpAction } from "./commands-subagents/action-help.js";
-import { handleSubagentsInfoAction } from "./commands-subagents/action-info.js";
-import { handleSubagentsKillAction } from "./commands-subagents/action-kill.js";
-import { handleSubagentsListAction } from "./commands-subagents/action-list.js";
-import { handleSubagentsLogAction } from "./commands-subagents/action-log.js";
-import { handleSubagentsSendAction } from "./commands-subagents/action-send.js";
-import { handleSubagentsSpawnAction } from "./commands-subagents/action-spawn.js";
-import { handleSubagentsUnfocusAction } from "./commands-subagents/action-unfocus.js";
+import type { SubagentRunRecord } from "../../agents/subagent-registry.types.js";
+import type { CommandHandler } from "./commands-types.js";
 import {
-  type SubagentsCommandContext,
-  extractMessageText,
   resolveHandledPrefix,
   resolveRequesterSessionKey,
   resolveSubagentsAction,
   stopWithText,
-} from "./commands-subagents/shared.js";
-import type { CommandHandler } from "./commands-types.js";
+} from "./commands-subagents/core.js";
+import { extractMessageText } from "./commands-subagents-text.js";
 
 export { extractMessageText };
+
+function sortSubagentRuns(runs: SubagentRunRecord[]) {
+  return [...runs].toSorted((a, b) => {
+    const aTime = a.startedAt ?? a.createdAt ?? 0;
+    const bTime = b.startedAt ?? b.createdAt ?? 0;
+    return bTime - aTime;
+  });
+}
+
+async function listControlledSubagentRunsLight(
+  controllerSessionKey: string,
+): Promise<SubagentRunRecord[]> {
+  const key = controllerSessionKey.trim();
+  if (!key) {
+    return [];
+  }
+
+  const { listSubagentRunsForController, getLatestSubagentRunByChildSessionKey } = await import(
+    "../../agents/subagent-registry-read.js"
+  );
+
+  const filtered: SubagentRunRecord[] = [];
+  for (const entry of sortSubagentRuns(listSubagentRunsForController(key))) {
+    const latest = getLatestSubagentRunByChildSessionKey(entry.childSessionKey);
+    const latestControllerSessionKey =
+      latest?.controllerSessionKey?.trim() || latest?.requesterSessionKey?.trim();
+    if (!latest || latest.runId !== entry.runId || latestControllerSessionKey !== key) {
+      continue;
+    }
+    filtered.push(entry);
+  }
+
+  return filtered;
+}
 
 export const handleSubagentsCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
@@ -44,6 +67,7 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
   const restTokens = rest.split(/\s+/).filter(Boolean);
   const action = resolveSubagentsAction({ handledPrefix, restTokens });
   if (!action) {
+    const { handleSubagentsHelpAction } = await import("./commands-subagents/action-help.js");
     return handleSubagentsHelpAction();
   }
 
@@ -57,38 +81,62 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
     return stopWithText("⚠️ Missing session key.");
   }
 
-  const ctx: SubagentsCommandContext = {
+  const ctx = {
     params,
     handledPrefix,
     requesterKey,
-    runs: listControlledSubagentRuns(requesterKey),
+    runs: await listControlledSubagentRunsLight(requesterKey),
     restTokens,
   };
 
   switch (action) {
-    case "help":
+    case "help": {
+      const { handleSubagentsHelpAction } = await import("./commands-subagents/action-help.js");
       return handleSubagentsHelpAction();
-    case "agents":
+    }
+    case "agents": {
+      const { handleSubagentsAgentsAction } = await import("./commands-subagents/action-agents.js");
       return handleSubagentsAgentsAction(ctx);
-    case "focus":
+    }
+    case "focus": {
+      const { handleSubagentsFocusAction } = await import("./commands-subagents/action-focus.js");
       return await handleSubagentsFocusAction(ctx);
-    case "unfocus":
+    }
+    case "unfocus": {
+      const { handleSubagentsUnfocusAction } = await import("./commands-subagents/action-unfocus.js");
       return await handleSubagentsUnfocusAction(ctx);
-    case "list":
+    }
+    case "list": {
+      const { handleSubagentsListAction } = await import("./commands-subagents/action-list.js");
       return handleSubagentsListAction(ctx);
-    case "kill":
+    }
+    case "kill": {
+      const { handleSubagentsKillAction } = await import("./commands-subagents/action-kill.js");
       return await handleSubagentsKillAction(ctx);
-    case "info":
+    }
+    case "info": {
+      const { handleSubagentsInfoAction } = await import("./commands-subagents/action-info.js");
       return handleSubagentsInfoAction(ctx);
-    case "log":
+    }
+    case "log": {
+      const { handleSubagentsLogAction } = await import("./commands-subagents/action-log.js");
       return await handleSubagentsLogAction(ctx);
-    case "send":
+    }
+    case "send": {
+      const { handleSubagentsSendAction } = await import("./commands-subagents/action-send.js");
       return await handleSubagentsSendAction(ctx, false);
-    case "steer":
+    }
+    case "steer": {
+      const { handleSubagentsSendAction } = await import("./commands-subagents/action-send.js");
       return await handleSubagentsSendAction(ctx, true);
-    case "spawn":
+    }
+    case "spawn": {
+      const { handleSubagentsSpawnAction } = await import("./commands-subagents/action-spawn.js");
       return await handleSubagentsSpawnAction(ctx);
-    default:
+    }
+    default: {
+      const { handleSubagentsHelpAction } = await import("./commands-subagents/action-help.js");
       return handleSubagentsHelpAction();
+    }
   }
 };

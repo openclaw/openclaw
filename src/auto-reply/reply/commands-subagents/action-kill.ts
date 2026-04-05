@@ -1,15 +1,11 @@
-import {
-  killAllControlledSubagentRuns,
-  killControlledSubagentRun,
-} from "../../../agents/subagent-control.js";
 import type { CommandHandlerResult } from "../commands-types.js";
+import type { SubagentsCommandContext } from "../commands-subagents-types.js";
 import {
-  type SubagentsCommandContext,
   COMMAND,
   resolveCommandSubagentController,
-  resolveSubagentEntryForToken,
   stopWithText,
-} from "./shared.js";
+} from "./core.js";
+import { resolveSubagentEntryForToken } from "../commands-subagents-read.js";
 
 export async function handleSubagentsKillAction(
   ctx: SubagentsCommandContext,
@@ -23,7 +19,8 @@ export async function handleSubagentsKillAction(
   }
 
   if (target === "all" || target === "*") {
-    const controller = resolveCommandSubagentController(params, requesterKey);
+    const controller = await resolveCommandSubagentController(params, requesterKey);
+    const { killAllControlledSubagentRuns } = await import("../../../agents/subagent-control.js");
     const result = await killAllControlledSubagentRuns({
       cfg: params.cfg,
       controller,
@@ -43,7 +40,8 @@ export async function handleSubagentsKillAction(
     return targetResolution.reply;
   }
 
-  const controller = resolveCommandSubagentController(params, requesterKey);
+  const controller = await resolveCommandSubagentController(params, requesterKey);
+  const { killControlledSubagentRun } = await import("../../../agents/subagent-control.js");
   const result = await killControlledSubagentRun({
     cfg: params.cfg,
     controller,

@@ -1,25 +1,10 @@
-import {
-  resolveAcpSessionCwd,
-  resolveAcpThreadSessionDetailLines,
-} from "../../../acp/runtime/session-identifiers.js";
-import { readAcpSessionEntry } from "../../../acp/runtime/session-meta.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
-import {
-  resolveThreadBindingIntroText,
-  resolveThreadBindingThreadName,
-} from "../../../channels/thread-bindings-messages.js";
-import {
-  formatThreadBindingDisabledError,
-  formatThreadBindingSpawnDisabledError,
-  resolveThreadBindingIdleTimeoutMsForChannel,
-  resolveThreadBindingMaxAgeMsForChannel,
-  resolveThreadBindingPlacementForCurrentContext,
-  resolveThreadBindingSpawnPolicy,
-} from "../../../channels/thread-bindings-policy.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
+import { stopWithText } from "../commands-subagents/core.js";
 import type { CommandHandlerResult } from "../commands-types.js";
+import type { SubagentsRunsContext } from "../commands-subagents-types.js";
 import { resolveConversationBindingContextFromAcpCommand } from "../conversation-binding-input.js";
-import { type SubagentsCommandContext, resolveFocusTargetSession, stopWithText } from "./shared.js";
+import { resolveFocusTargetSession } from "./focus-target.js";
 
 type FocusBindingContext = {
   channel: string;
@@ -29,14 +14,17 @@ type FocusBindingContext = {
   placement: "current" | "child";
 };
 
-function resolveFocusBindingContext(
-  params: SubagentsCommandContext["params"],
-): FocusBindingContext | null {
+async function resolveFocusBindingContext(
+  params: SubagentsRunsContext["params"],
+): Promise<FocusBindingContext | null> {
   const bindingContext = resolveConversationBindingContextFromAcpCommand(params);
   if (!bindingContext) {
     return null;
   }
   const chatType = normalizeChatType(params.ctx.ChatType);
+  const { resolveThreadBindingPlacementForCurrentContext } = await import(
+    "../../../channels/thread-bindings-policy.js"
+  );
   return {
     channel: bindingContext.channel,
     accountId: bindingContext.accountId,
@@ -55,7 +43,7 @@ function resolveFocusBindingContext(
 }
 
 export async function handleSubagentsFocusAction(
-  ctx: SubagentsCommandContext,
+  ctx: SubagentsRunsContext,
 ): Promise<CommandHandlerResult> {
   const { params, runs, restTokens } = ctx;
   const token = restTokens.join(" ").trim();
@@ -63,7 +51,7 @@ export async function handleSubagentsFocusAction(
     return stopWithText("Usage: /focus <subagent-label|session-key|session-id|session-label>");
   }
 
-  const bindingContext = resolveFocusBindingContext(params);
+  const bindingContext = await resolveFocusBindingContext(params);
   if (!bindingContext) {
     return stopWithText("⚠️ /focus must be run inside a bindable conversation.");
   }
@@ -83,6 +71,11 @@ export async function handleSubagentsFocusAction(
   }
 
   if (bindingContext.placement === "child") {
+    const {
+      formatThreadBindingDisabledError,
+      formatThreadBindingSpawnDisabledError,
+      resolveThreadBindingSpawnPolicy,
+    } = await import("../../../channels/thread-bindings-policy.js");
     const spawnPolicy = resolveThreadBindingSpawnPolicy({
       cfg: params.cfg,
       channel: bindingContext.channel,
@@ -131,7 +124,9 @@ export async function handleSubagentsFocusAction(
   const accountId = bindingContext.accountId;
   const acpMeta =
     focusTarget.targetKind === "acp"
-      ? readAcpSessionEntry({
+      ? (
+          await import("../../../acp/runtime/session-meta.js")
+        ).readAcpSessionEntry({
           cfg: params.cfg,
           sessionKey: focusTarget.targetSessionKey,
         })?.acp
@@ -142,6 +137,17 @@ export async function handleSubagentsFocusAction(
 
   let binding;
   try {
+    const {
+      resolveThreadBindingIntroText,
+      resolveThreadBindingThreadName,
+    } = await import("../../../channels/thread-bindings-messages.js");
+    const {
+      resolveThreadBindingIdleTimeoutMsForChannel,
+      resolveThreadBindingMaxAgeMsForChannel,
+    } = await import("../../../channels/thread-bindings-policy.js");
+    const { resolveAcpSessionCwd, resolveAcpThreadSessionDetailLines } = await import(
+      "../../../acp/runtime/session-identifiers.js"
+    );
     binding = await bindingService.bind({
       targetSessionKey: focusTarget.targetSessionKey,
       targetKind: focusTarget.targetKind === "acp" ? "session" : "subagent",

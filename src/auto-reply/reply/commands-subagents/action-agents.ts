@@ -1,15 +1,14 @@
-import { countPendingDescendantRuns } from "../../../agents/subagent-registry.js";
+import { countPendingDescendantRunsFromRuns } from "../../../agents/subagent-registry-queries.js";
+import type { SubagentRunRecord } from "../../../agents/subagent-registry.types.js";
 import { getChannelPlugin, normalizeChannelId } from "../../../channels/plugins/index.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
+import { parseAgentSessionKey } from "../../../sessions/session-key-utils.js";
+import { resolveChannelAccountId, resolveCommandSurfaceChannel } from "../channel-context.js";
+import { stopWithText } from "../commands-subagents/core.js";
 import type { CommandHandlerResult } from "../commands-types.js";
-import { formatRunLabel, sortSubagentRuns } from "../subagents-utils.js";
-import {
-  RECENT_WINDOW_MINUTES,
-  type SubagentsCommandContext,
-  resolveChannelAccountId,
-  resolveCommandSurfaceChannel,
-  stopWithText,
-} from "./shared.js";
+import type { SubagentsRequesterContext } from "../commands-subagents-types.js";
+
+const RECENT_WINDOW_MINUTES = 30;
 
 function formatConversationBindingText(params: { conversationId: string }): string {
   return `binding:${params.conversationId}`;
@@ -25,13 +24,39 @@ function supportsConversationBindings(channel: string): boolean {
   );
 }
 
-export function handleSubagentsAgentsAction(ctx: SubagentsCommandContext): CommandHandlerResult {
+function resolveSubagentLabel(entry: SubagentRunRecord, fallback = "subagent") {
+  const raw = entry.label?.trim() || entry.task?.trim() || "";
+  return raw || fallback;
+}
+
+function formatRunLabel(entry: SubagentRunRecord, options?: { maxLength?: number }) {
+  const raw = resolveSubagentLabel(entry);
+  const maxLength = options?.maxLength ?? 72;
+  if (!Number.isFinite(maxLength) || maxLength <= 0 || raw.length <= maxLength) {
+    return raw;
+  }
+  return `${raw.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
+}
+
+function sortSubagentRuns(runs: SubagentRunRecord[]) {
+  return [...runs].toSorted((a, b) => {
+    const aTime = a.startedAt ?? a.createdAt ?? 0;
+    const bTime = b.startedAt ?? b.createdAt ?? 0;
+    return bTime - aTime;
+  });
+}
+
+export function handleSubagentsAgentsAction(ctx: SubagentsRequesterContext): CommandHandlerResult {
   const { params, requesterKey, runs } = ctx;
   const channel = resolveCommandSurfaceChannel(params);
   const accountId = resolveChannelAccountId(params);
+  const requesterAgentId = params.agentId ?? parseAgentSessionKey(requesterKey)?.agentId ?? "main";
   const currentConversationBindingsSupported = supportsConversationBindings(channel);
   const bindingService = getSessionBindingService();
   const bindingsBySession = new Map<string, ReturnType<typeof bindingService.listBySession>>();
+  const runsMap = new Map(runs.map((entry) => [entry.runId, entry] as const));
+  const countPendingDescendants = (sessionKey: string) =>
+    Math.max(0, countPendingDescendantRunsFromRuns(runsMap, sessionKey));
 
   const resolveSessionBindings = (sessionKey: string) => {
     const cached = bindingsBySession.get(sessionKey);
@@ -63,12 +88,12 @@ export function handleSubagentsAgentsAction(ctx: SubagentsCommandContext): Comma
   const recentCutoff = Date.now() - RECENT_WINDOW_MINUTES * 60_000;
   const numericOrder = [
     ...dedupedRuns.filter(
-      (entry) => !entry.endedAt || countPendingDescendantRuns(entry.childSessionKey) > 0,
+      (entry) => !entry.endedAt || countPendingDescendants(entry.childSessionKey) > 0,
     ),
     ...dedupedRuns.filter(
       (entry) =>
         entry.endedAt &&
-        countPendingDescendantRuns(entry.childSessionKey) === 0 &&
+        countPendingDescendants(entry.childSessionKey) === 0 &&
         entry.endedAt >= recentCutoff,
     ),
   ];
@@ -80,7 +105,7 @@ export function handleSubagentsAgentsAction(ctx: SubagentsCommandContext): Comma
   for (const entry of dedupedRuns) {
     const visible =
       !entry.endedAt ||
-      countPendingDescendantRuns(entry.childSessionKey) > 0 ||
+      countPendingDescendants(entry.childSessionKey) > 0 ||
       resolveSessionBindings(entry.childSessionKey).length > 0;
     if (!visible) {
       continue;
@@ -88,7 +113,13 @@ export function handleSubagentsAgentsAction(ctx: SubagentsCommandContext): Comma
     visibleRuns.push(entry);
   }
 
-  const lines = ["agents:", "-----"];
+  const lines = [
+    `Agent: ${requesterAgentId}`,
+    ...params.workspaceDir ? [`Workspace: ${params.workspaceDir}`] : [],
+    "",
+    "agents:",
+    "-----",
+  ];
   if (visibleRuns.length === 0) {
     lines.push("(none)");
   } else {

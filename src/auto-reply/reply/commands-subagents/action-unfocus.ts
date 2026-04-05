@@ -1,10 +1,11 @@
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
+import { stopWithText } from "../commands-subagents/core.js";
 import type { CommandHandlerResult } from "../commands-types.js";
+import type { SubagentsRunsContext } from "../commands-subagents-types.js";
 import { resolveConversationBindingContextFromAcpCommand } from "../conversation-binding-input.js";
-import { type SubagentsCommandContext, stopWithText } from "./shared.js";
 
 export async function handleSubagentsUnfocusAction(
-  ctx: SubagentsCommandContext,
+  ctx: SubagentsRunsContext,
 ): Promise<CommandHandlerResult> {
   const { params } = ctx;
   const bindingService = getSessionBindingService();

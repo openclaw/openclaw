@@ -1,17 +1,12 @@
 import { callGateway } from "../../../gateway/call.js";
 import type { CommandHandlerResult } from "../commands-types.js";
+import type { SubagentsRunsContext } from "../commands-subagents-types.js";
 import { formatRunLabel } from "../subagents-utils.js";
-import {
-  type ChatMessage,
-  type SubagentsCommandContext,
-  formatLogLines,
-  resolveSubagentEntryForToken,
-  stopWithText,
-  stripToolMessages,
-} from "./shared.js";
+import { type ChatMessage, formatLogLines, stripToolMessages } from "../commands-subagents-text.js";
+import { resolveSubagentEntryForToken, stopWithText } from "../commands-subagents-read.js";
 
 export async function handleSubagentsLogAction(
-  ctx: SubagentsCommandContext,
+  ctx: SubagentsRunsContext,
 ): Promise<CommandHandlerResult> {
   const { runs, restTokens } = ctx;
   const target = restTokens[0];
