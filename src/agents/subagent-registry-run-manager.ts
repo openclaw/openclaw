@@ -270,6 +270,7 @@ export function createSubagentRunManager(params: {
     runTimeoutSeconds?: number;
     expectsCompletionMessage?: boolean;
     spawnMode?: "run" | "session";
+    parentFlowId?: string;
     attachmentsDir?: string;
     attachmentsRootDir?: string;
     retainAttachmentsOnKeep?: boolean;
@@ -321,6 +322,7 @@ export function createSubagentRunManager(params: {
         ownerKey: registerParams.requesterSessionKey,
         scopeKind: "session",
         requesterOrigin,
+        parentFlowId: registerParams.parentFlowId,
         childSessionKey: registerParams.childSessionKey,
         runId: registerParams.runId,
         label: registerParams.label,

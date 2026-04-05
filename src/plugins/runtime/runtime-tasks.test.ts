@@ -154,6 +154,62 @@ describe("runtime tasks", () => {
     expect(taskDetail).not.toHaveProperty("scopeKind");
   });
 
+  it("exposes managed flow resolution hints for retryable and blocked outcomes", () => {
+    const legacyTaskFlow = createRuntimeTaskFlow().bindSession({
+      sessionKey: "agent:main:main",
+    });
+    const taskFlows = createRuntimeTaskFlows().bindSession({
+      sessionKey: "agent:main:main",
+    });
+
+    const blocked = legacyTaskFlow.createManaged({
+      controllerId: "tests/runtime-tasks-blocked",
+      goal: "Review repository",
+    });
+    const blockedUpdated = legacyTaskFlow.setWaiting({
+      flowId: blocked.flowId,
+      expectedRevision: blocked.revision,
+      blockedTaskId: "task-1",
+      blockedSummary: "Writable session required.",
+      waitJson: {
+        kind: "child_task",
+        runId: "run-blocked",
+      },
+    });
+    expect(blockedUpdated.applied).toBe(true);
+    if (!blockedUpdated.applied) {
+      throw new Error(`Expected blocked flow update to apply: ${blockedUpdated.code}`);
+    }
+
+    const failed = legacyTaskFlow.createManaged({
+      controllerId: "tests/runtime-tasks-failed",
+      goal: "Investigate CI",
+      status: "failed",
+      stateJson: {
+        completion: {
+          status: "timed_out",
+        },
+      },
+    });
+
+    expect(taskFlows.get(blocked.flowId)).toMatchObject({
+      resolution: {
+        code: "user_action_required",
+        retryable: true,
+        needsUserAction: true,
+        summary: "Needs user action before retrying.",
+      },
+    });
+    expect(taskFlows.get(failed.flowId)).toMatchObject({
+      resolution: {
+        code: "retry_available",
+        retryable: true,
+        needsUserAction: false,
+        summary: "Retry available.",
+      },
+    });
+  });
+
   it("maps task cancellation results onto canonical task DTOs", async () => {
     const legacyTaskFlow = createRuntimeTaskFlow().bindSession({
       sessionKey: "agent:main:main",

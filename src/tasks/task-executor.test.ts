@@ -396,6 +396,296 @@ describe("task-executor", () => {
     });
   });
 
+  it("completes managed child-task flows when the tracked run succeeds", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/sessions-spawn-success",
+        goal: "Review repository",
+        status: "waiting",
+        currentStep: "wait_worker",
+        stateJson: {
+          task: "review repo",
+          runtime: "subagent",
+          childSessionKey: "agent:main:subagent:child",
+          runId: "run-flow-success",
+        },
+        waitJson: {
+          kind: "child_task",
+          runtime: "subagent",
+          childSessionKey: "agent:main:subagent:child",
+          runId: "run-flow-success",
+        },
+        blockedSummary: "review repo",
+      });
+
+      const child = createRunningTaskRun({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        parentFlowId: flow.flowId,
+        childSessionKey: "agent:main:subagent:child",
+        runId: "run-flow-success",
+        task: "review repo",
+        startedAt: 10,
+      });
+
+      completeTaskRunByRunId({
+        runId: "run-flow-success",
+        endedAt: 40,
+        lastEventAt: 40,
+        progressSummary: "Patched the flow manager and tests.",
+      });
+
+      expect(getTaskFlowById(flow.flowId)).toMatchObject({
+        flowId: flow.flowId,
+        status: "succeeded",
+        currentStep: "completed",
+        waitJson: null,
+        blockedSummary: undefined,
+        endedAt: 40,
+        stateJson: {
+          task: "review repo",
+          runtime: "subagent",
+          childSessionKey: "agent:main:subagent:child",
+          runId: "run-flow-success",
+          progressSummary: "Patched the flow manager and tests.",
+          completion: {
+            taskId: child.taskId,
+            status: "succeeded",
+            childSessionKey: "agent:main:subagent:child",
+            runId: "run-flow-success",
+            progressSummary: "Patched the flow manager and tests.",
+            endedAt: 40,
+          },
+        },
+      });
+    });
+  });
+
+  it("fails managed child-task flows with completion context on task errors", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/sessions-spawn-failure",
+        goal: "Review repository",
+        status: "waiting",
+        currentStep: "wait_worker",
+        stateJson: {
+          task: "review repo",
+          runtime: "subagent",
+        },
+        waitJson: {
+          kind: "child_task",
+          runtime: "subagent",
+          childSessionKey: "agent:main:subagent:child",
+          runId: "run-flow-failure",
+        },
+        blockedSummary: "review repo",
+      });
+
+      createRunningTaskRun({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        parentFlowId: flow.flowId,
+        childSessionKey: "agent:main:subagent:child",
+        runId: "run-flow-failure",
+        task: "review repo",
+        startedAt: 10,
+      });
+
+      failTaskRunByRunId({
+        runId: "run-flow-failure",
+        status: "timed_out",
+        endedAt: 55,
+        lastEventAt: 55,
+        error: "Timed out waiting for test results.",
+        progressSummary: "Tests were still running.",
+      });
+
+      expect(getTaskFlowById(flow.flowId)).toMatchObject({
+        flowId: flow.flowId,
+        status: "failed",
+        currentStep: "failed",
+        waitJson: null,
+        blockedSummary: "Timed out waiting for test results.",
+        endedAt: 55,
+        stateJson: {
+          task: "review repo",
+          runtime: "subagent",
+          progressSummary: "Tests were still running.",
+          completion: {
+            status: "timed_out",
+            childSessionKey: "agent:main:subagent:child",
+            runId: "run-flow-failure",
+            progressSummary: "Tests were still running.",
+            error: "Timed out waiting for test results.",
+            endedAt: 55,
+          },
+        },
+      });
+    });
+  });
+
+  it("marks managed child-task flows blocked when the tracked run ends blocked", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/sessions-spawn-blocked",
+        goal: "Review repository",
+        status: "waiting",
+        currentStep: "wait_worker",
+        waitJson: {
+          kind: "child_task",
+          runtime: "subagent",
+          childSessionKey: "agent:main:subagent:child",
+          runId: "run-flow-blocked",
+        },
+      });
+
+      createRunningTaskRun({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        parentFlowId: flow.flowId,
+        childSessionKey: "agent:main:subagent:child",
+        runId: "run-flow-blocked",
+        task: "review repo",
+        startedAt: 10,
+      });
+
+      completeTaskRunByRunId({
+        runId: "run-flow-blocked",
+        endedAt: 60,
+        lastEventAt: 60,
+        progressSummary: "Waiting for workspace approval.",
+        terminalSummary: "Writable session required.",
+        terminalOutcome: "blocked",
+      });
+
+      expect(getTaskFlowById(flow.flowId)).toMatchObject({
+        flowId: flow.flowId,
+        status: "blocked",
+        currentStep: "blocked",
+        waitJson: null,
+        blockedTaskId: expect.any(String),
+        blockedSummary: "Writable session required.",
+        endedAt: 60,
+        stateJson: {
+          completion: {
+            status: "succeeded",
+            terminalOutcome: "blocked",
+            childSessionKey: "agent:main:subagent:child",
+            runId: "run-flow-blocked",
+            progressSummary: "Waiting for workspace approval.",
+            terminalSummary: "Writable session required.",
+            endedAt: 60,
+          },
+        },
+      });
+    });
+  });
+
+  it("marks managed child-task flows cancelled when the tracked run is cancelled", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/sessions-spawn-cancelled",
+        goal: "Review repository",
+        status: "waiting",
+        currentStep: "wait_worker",
+        waitJson: {
+          kind: "child_task",
+          runtime: "subagent",
+          childSessionKey: "agent:main:subagent:child",
+          runId: "run-flow-cancelled",
+        },
+      });
+
+      createRunningTaskRun({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        parentFlowId: flow.flowId,
+        childSessionKey: "agent:main:subagent:child",
+        runId: "run-flow-cancelled",
+        task: "review repo",
+        startedAt: 10,
+      });
+
+      failTaskRunByRunId({
+        runId: "run-flow-cancelled",
+        status: "cancelled",
+        endedAt: 65,
+        lastEventAt: 65,
+        error: "Cancelled by the requester.",
+      });
+
+      expect(getTaskFlowById(flow.flowId)).toMatchObject({
+        flowId: flow.flowId,
+        status: "cancelled",
+        currentStep: "cancelled",
+        waitJson: null,
+        blockedSummary: "Cancelled by the requester.",
+        endedAt: 65,
+        stateJson: {
+          completion: {
+            status: "cancelled",
+            childSessionKey: "agent:main:subagent:child",
+            runId: "run-flow-cancelled",
+            error: "Cancelled by the requester.",
+            endedAt: 65,
+          },
+        },
+      });
+    });
+  });
+
+  it("leaves unrelated managed flows open when they are not waiting on a child task", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/manual-managed-flow",
+        goal: "Manual orchestration",
+        status: "waiting",
+        currentStep: "external_event",
+        waitJson: {
+          kind: "external_event",
+          source: "operator",
+        },
+      });
+
+      createRunningTaskRun({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        parentFlowId: flow.flowId,
+        childSessionKey: "agent:main:subagent:child",
+        runId: "run-unrelated-managed-flow",
+        task: "review repo",
+        startedAt: 10,
+      });
+
+      completeTaskRunByRunId({
+        runId: "run-unrelated-managed-flow",
+        endedAt: 70,
+        lastEventAt: 70,
+        progressSummary: "Done.",
+      });
+
+      expect(getTaskFlowById(flow.flowId)).toMatchObject({
+        flowId: flow.flowId,
+        status: "waiting",
+        currentStep: "external_event",
+        waitJson: {
+          kind: "external_event",
+          source: "operator",
+        },
+      });
+    });
+  });
+
   it("refuses to add child tasks once cancellation is requested on a managed TaskFlow", async () => {
     await withTaskExecutorStateDir(async () => {
       const flow = createManagedTaskFlow({

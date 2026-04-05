@@ -6,18 +6,23 @@ import {
   createManagedTaskFlow,
   deleteTaskFlowRecordById,
   failFlow,
+  finishFlow,
   getTaskFlowById,
   listTaskFlowRecords,
   requestFlowCancel,
   resetTaskFlowRegistryForTests,
   resumeFlow,
   setFlowWaiting,
+  setTaskFlowDeliveryRuntimeForTests,
   syncFlowFromTask,
   updateFlowRecordByIdExpectedRevision,
 } from "./task-flow-registry.js";
 import { configureTaskFlowRegistryRuntime } from "./task-flow-registry.store.js";
 
 const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
+const hoisted = vi.hoisted(() => ({
+  sendMessageMock: vi.fn(),
+}));
 
 async function withFlowRegistryTempDir<T>(run: (root: string) => Promise<T>): Promise<T> {
   return await withTempDir({ prefix: "openclaw-task-flow-registry-" }, async (root) => {
@@ -34,6 +39,10 @@ async function withFlowRegistryTempDir<T>(run: (root: string) => Promise<T>): Pr
 describe("task-flow-registry", () => {
   beforeEach(() => {
     vi.useRealTimers();
+    hoisted.sendMessageMock.mockReset();
+    setTaskFlowDeliveryRuntimeForTests({
+      sendMessage: hoisted.sendMessageMock,
+    });
   });
 
   afterEach(() => {
@@ -331,6 +340,245 @@ describe("task-flow-registry", () => {
         currentStep: "wait_for",
         waitJson: { kind: "external_event" },
       });
+    });
+  });
+
+  it("delivers managed flow start/wait and completion updates", async () => {
+    await withFlowRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskFlowRegistryForTests();
+      setTaskFlowDeliveryRuntimeForTests({
+        sendMessage: hoisted.sendMessageMock,
+      });
+
+      const created = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        requesterOrigin: {
+          channel: "discord",
+          to: "discord:123",
+        },
+        controllerId: "tests/notifications",
+        goal: "Review repository",
+      });
+
+      const waiting = setFlowWaiting({
+        flowId: created.flowId,
+        expectedRevision: created.revision,
+        currentStep: "wait_worker",
+        waitJson: { kind: "child_task", runId: "run-1" },
+      });
+      expect(waiting).toMatchObject({
+        applied: true,
+        flow: expect.objectContaining({
+          status: "waiting",
+        }),
+      });
+      expect(waiting.applied).toBe(true);
+      if (!waiting.applied) {
+        throw new Error(`Expected waiting flow update to apply: ${waiting.reason}`);
+      }
+
+      await vi.waitFor(() =>
+        expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            channel: "discord",
+            to: "discord:123",
+            content: "Background task started: Review repository. Waiting on child task.",
+          }),
+        ),
+      );
+
+      hoisted.sendMessageMock.mockClear();
+      const done = finishFlow({
+        flowId: created.flowId,
+        expectedRevision: waiting.flow.revision,
+      });
+      expect(done).toMatchObject({
+        applied: true,
+        flow: expect.objectContaining({
+          status: "succeeded",
+        }),
+      });
+
+      await vi.waitFor(() =>
+        expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            channel: "discord",
+            to: "discord:123",
+            content: "Background task done: Review repository.",
+          }),
+        ),
+      );
+    });
+  });
+
+  it("delivers managed flow failure updates", async () => {
+    await withFlowRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskFlowRegistryForTests();
+      setTaskFlowDeliveryRuntimeForTests({
+        sendMessage: hoisted.sendMessageMock,
+      });
+
+      const created = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        requesterOrigin: {
+          channel: "discord",
+          to: "discord:123",
+        },
+        controllerId: "tests/notifications-fail",
+        goal: "Investigate flaky CI",
+      });
+
+      const waiting = setFlowWaiting({
+        flowId: created.flowId,
+        expectedRevision: created.revision,
+        currentStep: "wait_worker",
+        waitJson: { kind: "child_task", runId: "run-2" },
+      });
+      expect(waiting).toMatchObject({
+        applied: true,
+      });
+      expect(waiting.applied).toBe(true);
+      if (!waiting.applied) {
+        throw new Error(`Expected waiting flow update to apply: ${waiting.reason}`);
+      }
+      await vi.waitFor(() => expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(1));
+
+      hoisted.sendMessageMock.mockClear();
+      const failed = failFlow({
+        flowId: created.flowId,
+        expectedRevision: waiting.flow.revision,
+        blockedSummary: "Permission denied by child task",
+      });
+      expect(failed).toMatchObject({
+        applied: true,
+        flow: expect.objectContaining({
+          status: "failed",
+        }),
+      });
+
+      await vi.waitFor(() =>
+        expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            channel: "discord",
+            to: "discord:123",
+            content:
+              "Background task failed: Investigate flaky CI. Permission denied by child task. Retry available.",
+          }),
+        ),
+      );
+    });
+  });
+
+  it("debounces noisy managed child-task progress updates", async () => {
+    await withFlowRegistryTempDir(async (root) => {
+      vi.useFakeTimers();
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskFlowRegistryForTests();
+      setTaskFlowDeliveryRuntimeForTests({
+        sendMessage: hoisted.sendMessageMock,
+      });
+
+      const created = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        requesterOrigin: {
+          channel: "discord",
+          to: "discord:123",
+        },
+        controllerId: "tests/notifications-debounce",
+        goal: "Review repository",
+        notifyPolicy: "state_changes",
+      });
+
+      const waiting = setFlowWaiting({
+        flowId: created.flowId,
+        expectedRevision: created.revision,
+        currentStep: "wait_worker",
+        waitJson: { kind: "child_task", runId: "run-3" },
+      });
+      expect(waiting.applied).toBe(true);
+      if (!waiting.applied) {
+        throw new Error(`Expected waiting flow update to apply: ${waiting.reason}`);
+      }
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(1);
+
+      hoisted.sendMessageMock.mockClear();
+      const running = resumeFlow({
+        flowId: created.flowId,
+        expectedRevision: waiting.flow.revision,
+        status: "running",
+        currentStep: "worker_running",
+      });
+      expect(running.applied).toBe(true);
+      if (!running.applied) {
+        throw new Error(`Expected running flow update to apply: ${running.reason}`);
+      }
+
+      const waitingAgain = setFlowWaiting({
+        flowId: created.flowId,
+        expectedRevision: running.flow.revision,
+        currentStep: "wait_worker",
+        waitJson: { kind: "child_task", runId: "run-3" },
+      });
+      expect(waitingAgain.applied).toBe(true);
+      if (!waitingAgain.applied) {
+        throw new Error(`Expected waiting flow update to apply: ${waitingAgain.reason}`);
+      }
+
+      expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1_500);
+      await Promise.resolve();
+      expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          content:
+            "Background task update: Review repository. Waiting on child task. 1 intermediate update was folded in.",
+        }),
+      );
+    });
+  });
+
+  it("delivers blocked managed flow guidance when user action is required", async () => {
+    await withFlowRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskFlowRegistryForTests();
+      setTaskFlowDeliveryRuntimeForTests({
+        sendMessage: hoisted.sendMessageMock,
+      });
+
+      const created = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        requesterOrigin: {
+          channel: "discord",
+          to: "discord:123",
+        },
+        controllerId: "tests/notifications-blocked",
+        goal: "Review repository",
+      });
+
+      const blocked = setFlowWaiting({
+        flowId: created.flowId,
+        expectedRevision: created.revision,
+        currentStep: "wait_worker",
+        blockedTaskId: "task-blocked",
+        blockedSummary: "Writable session required.",
+        waitJson: { kind: "child_task", runId: "run-4" },
+      });
+      expect(blocked.applied).toBe(true);
+      if (!blocked.applied) {
+        throw new Error(`Expected blocked flow update to apply: ${blocked.reason}`);
+      }
+
+      await vi.waitFor(() =>
+        expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            content:
+              "Background task blocked: Review repository. Writable session required. Needs user action before retrying.",
+          }),
+        ),
+      );
     });
   });
 

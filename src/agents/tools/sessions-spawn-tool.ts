@@ -1,6 +1,7 @@
 import { Type } from "@sinclair/typebox";
 import { loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
+import { createRuntimeTaskFlow } from "../../plugins/runtime/runtime-taskflow.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { isSpawnAcpAcceptedResult, spawnAcpDirect } from "../acp-spawn.js";
@@ -51,6 +52,41 @@ function resolveTrackedSpawnMode(params: {
   return params.threadRequested ? "session" : "run";
 }
 
+function resolveRequesterContext(opts?: {
+  agentSessionKey?: string;
+  agentChannel?: GatewayMessageChannel;
+  agentAccountId?: string;
+  agentTo?: string;
+  agentThreadId?: string | number;
+}) {
+  const cfg = loadConfig();
+  const { mainKey, alias } = resolveMainSessionAlias(cfg);
+  const requesterInternalKey = opts?.agentSessionKey
+    ? resolveInternalSessionKey({
+        key: opts.agentSessionKey,
+        alias,
+        mainKey,
+      })
+    : alias;
+  const requesterDisplayKey = resolveDisplaySessionKey({
+    key: requesterInternalKey,
+    alias,
+    mainKey,
+  });
+  const requesterOrigin = normalizeDeliveryContext({
+    channel: opts?.agentChannel,
+    accountId: opts?.agentAccountId,
+    to: opts?.agentTo,
+    threadId: opts?.agentThreadId,
+  });
+  return {
+    cfg,
+    requesterInternalKey,
+    requesterDisplayKey,
+    requesterOrigin,
+  };
+}
+
 async function cleanupUntrackedAcpSession(sessionKey: string): Promise<void> {
   const key = sessionKey.trim();
   if (!key) {
@@ -74,6 +110,17 @@ async function cleanupUntrackedAcpSession(sessionKey: string): Promise<void> {
 const SessionsSpawnToolSchema = Type.Object({
   task: Type.String(),
   label: Type.Optional(Type.String()),
+  taskFlow: Type.Optional(
+    Type.Object({
+      controllerId: Type.Optional(Type.String()),
+      goal: Type.Optional(Type.String()),
+      currentStep: Type.Optional(Type.String()),
+      notifyPolicy: Type.Optional(
+        optionalStringEnum(["done_only", "state_changes", "silent"] as const),
+      ),
+      stateJson: Type.Optional(Type.Any()),
+    }),
+  ),
   runtime: optionalStringEnum(SESSIONS_SPAWN_RUNTIMES),
   agentId: Type.Optional(Type.String()),
   resumeSessionId: Type.Optional(
@@ -177,8 +224,63 @@ export function createSessionsSpawnTool(
             mimeType?: string;
           }>)
         : undefined;
+      const taskFlowInput =
+        params.taskFlow && typeof params.taskFlow === "object"
+          ? (params.taskFlow as Record<string, unknown>)
+          : undefined;
+
+      if (taskFlowInput && streamTo === "parent") {
+        return jsonResult({
+          status: "error",
+          error:
+            "taskFlow requires tracked child tasks and cannot be combined with streamTo=parent.",
+        });
+      }
+
+      const requesterContext = resolveRequesterContext({
+        agentSessionKey: opts?.agentSessionKey,
+        agentChannel: opts?.agentChannel,
+        agentAccountId: opts?.agentAccountId,
+        agentTo: opts?.agentTo,
+        agentThreadId: opts?.agentThreadId,
+      });
+      const taskFlow = taskFlowInput
+        ? createRuntimeTaskFlow().bindSession({
+            sessionKey: requesterContext.requesterInternalKey,
+            requesterOrigin: requesterContext.requesterOrigin,
+          })
+        : undefined;
+      const createdFlow =
+        taskFlow && taskFlowInput
+          ? taskFlow.createManaged({
+              controllerId:
+                readStringParam(taskFlowInput, "controllerId") || "sessions_spawn/long-task",
+              goal: readStringParam(taskFlowInput, "goal") || label || task,
+              currentStep: readStringParam(taskFlowInput, "currentStep") || "spawn_worker",
+              notifyPolicy:
+                (readStringParam(taskFlowInput, "notifyPolicy") as
+                  | "done_only"
+                  | "state_changes"
+                  | "silent"
+                  | undefined) ?? "done_only",
+              stateJson: (taskFlowInput.stateJson ?? {
+                task,
+                runtime,
+                label: label || null,
+              }) as import("../../tasks/task-flow-registry.types.js").JsonValue,
+            })
+          : undefined;
 
       if (streamTo && runtime !== "acp") {
+        if (createdFlow && taskFlow) {
+          const latest = taskFlow.get(createdFlow.flowId) ?? createdFlow;
+          taskFlow.fail({
+            flowId: createdFlow.flowId,
+            expectedRevision: latest.revision,
+            stateJson: { task, runtime, error: `Unsupported streamTo for runtime=${runtime}` },
+            blockedSummary: `Unsupported streamTo for runtime=${runtime}`,
+          });
+        }
         return jsonResult({
           status: "error",
           error: `streamTo is only supported for runtime=acp; got runtime=${runtime}`,
@@ -186,6 +288,19 @@ export function createSessionsSpawnTool(
       }
 
       if (resumeSessionId && runtime !== "acp") {
+        if (createdFlow && taskFlow) {
+          const latest = taskFlow.get(createdFlow.flowId) ?? createdFlow;
+          taskFlow.fail({
+            flowId: createdFlow.flowId,
+            expectedRevision: latest.revision,
+            stateJson: {
+              task,
+              runtime,
+              error: `Unsupported resumeSessionId for runtime=${runtime}`,
+            },
+            blockedSummary: `Unsupported resumeSessionId for runtime=${runtime}`,
+          });
+        }
         return jsonResult({
           status: "error",
           error: `resumeSessionId is only supported for runtime=acp; got runtime=${runtime}`,
@@ -194,6 +309,19 @@ export function createSessionsSpawnTool(
 
       if (runtime === "acp") {
         if (Array.isArray(attachments) && attachments.length > 0) {
+          if (createdFlow && taskFlow) {
+            const latest = taskFlow.get(createdFlow.flowId) ?? createdFlow;
+            taskFlow.fail({
+              flowId: createdFlow.flowId,
+              expectedRevision: latest.revision,
+              stateJson: {
+                task,
+                runtime,
+                error: "attachments are currently unsupported for runtime=acp",
+              },
+              blockedSummary: "attachments are currently unsupported for runtime=acp",
+            });
+          }
           return jsonResult({
             status: "error",
             error:
@@ -230,44 +358,25 @@ export function createSessionsSpawnTool(
           Boolean(childRunId) &&
           streamTo !== "parent";
         if (shouldTrackViaRegistry && childSessionKey && childRunId) {
-          const cfg = loadConfig();
           const trackedSpawnMode = resolveTrackedSpawnMode({
             requestedMode: result.mode,
             threadRequested: thread,
           });
           const trackedCleanup = trackedSpawnMode === "session" ? "keep" : cleanup;
-          const { mainKey, alias } = resolveMainSessionAlias(cfg);
-          const requesterInternalKey = opts?.agentSessionKey
-            ? resolveInternalSessionKey({
-                key: opts.agentSessionKey,
-                alias,
-                mainKey,
-              })
-            : alias;
-          const requesterDisplayKey = resolveDisplaySessionKey({
-            key: requesterInternalKey,
-            alias,
-            mainKey,
-          });
-          const requesterOrigin = normalizeDeliveryContext({
-            channel: opts?.agentChannel,
-            accountId: opts?.agentAccountId,
-            to: opts?.agentTo,
-            threadId: opts?.agentThreadId,
-          });
           try {
             registerSubagentRun({
               runId: childRunId,
               childSessionKey,
-              requesterSessionKey: requesterInternalKey,
-              requesterOrigin,
-              requesterDisplayKey,
+              requesterSessionKey: requesterContext.requesterInternalKey,
+              requesterOrigin: requesterContext.requesterOrigin,
+              requesterDisplayKey: requesterContext.requesterDisplayKey,
               task,
               cleanup: trackedCleanup,
               label: label || undefined,
               runTimeoutSeconds,
               expectsCompletionMessage: true,
               spawnMode: trackedSpawnMode,
+              parentFlowId: createdFlow?.flowId,
             });
           } catch (err) {
             // Best-effort only: the ACP turn was already started above, so deleting the
@@ -281,7 +390,31 @@ export function createSessionsSpawnTool(
             });
           }
         }
-        return jsonResult(result);
+        if (createdFlow && taskFlow) {
+          const latest = taskFlow.get(createdFlow.flowId) ?? createdFlow;
+          taskFlow.setWaiting({
+            flowId: createdFlow.flowId,
+            expectedRevision: latest.revision,
+            currentStep: "wait_worker",
+            stateJson: {
+              task,
+              runtime,
+              label: label || null,
+              childSessionKey: childSessionKey ?? null,
+              runId: childRunId ?? null,
+            },
+            waitJson: {
+              kind: "child_task",
+              runtime,
+              childSessionKey: childSessionKey ?? null,
+              runId: childRunId ?? null,
+            },
+          });
+        }
+        return jsonResult({
+          ...result,
+          ...(createdFlow ? { flowId: createdFlow.flowId } : {}),
+        });
       }
 
       const result = await spawnSubagentDirect(
@@ -297,6 +430,7 @@ export function createSessionsSpawnTool(
           cleanup,
           sandbox,
           expectsCompletionMessage: true,
+          parentFlowId: createdFlow?.flowId,
           attachments,
           attachMountPath:
             params.attachAs && typeof params.attachAs === "object"
@@ -317,7 +451,49 @@ export function createSessionsSpawnTool(
         },
       );
 
-      return jsonResult(result);
+      if (createdFlow && taskFlow && result.status === "accepted") {
+        const childSessionKey = result.childSessionKey?.trim() || undefined;
+        const childRunId = result.runId?.trim() || undefined;
+        const latest = taskFlow.get(createdFlow.flowId) ?? createdFlow;
+        taskFlow.setWaiting({
+          flowId: createdFlow.flowId,
+          expectedRevision: latest.revision,
+          currentStep: "wait_worker",
+          stateJson: {
+            task,
+            runtime,
+            label: label || null,
+            childSessionKey: childSessionKey ?? null,
+            runId: childRunId ?? null,
+          },
+          waitJson: {
+            kind: "child_task",
+            runtime,
+            childSessionKey: childSessionKey ?? null,
+            runId: childRunId ?? null,
+          },
+        });
+      }
+
+      if (createdFlow && taskFlow && result.status !== "accepted") {
+        const latest = taskFlow.get(createdFlow.flowId) ?? createdFlow;
+        taskFlow.fail({
+          flowId: createdFlow.flowId,
+          expectedRevision: latest.revision,
+          stateJson: {
+            task,
+            runtime,
+            label: label || null,
+            error: result.error ?? "Spawn failed.",
+          },
+          blockedSummary: result.error ?? "Spawn failed.",
+        });
+      }
+
+      return jsonResult({
+        ...result,
+        ...(createdFlow ? { flowId: createdFlow.flowId } : {}),
+      });
     },
   };
 }

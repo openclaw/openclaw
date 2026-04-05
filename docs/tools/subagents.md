@@ -89,6 +89,7 @@ Tool params:
 
 - `task` (required)
 - `label?` (optional)
+- `lane?` (`research|planning|execution|verification`; optional intent hint for subagent framing and list metadata; does **not** change the real runtime queue lane, which remains `subagent`)
 - `agentId?` (optional; spawn under another agent id if allowed)
 - `model?` (optional; overrides the sub-agent model; invalid values are skipped and the sub-agent runs on the default model with a warning in the tool result)
 - `thinking?` (optional; overrides thinking level for the sub-agent run)
@@ -100,7 +101,22 @@ Tool params:
   - `mode: "session"` requires `thread: true`
 - `cleanup?` (`delete|keep`, default `keep`)
 - `sandbox?` (`inherit|require`, default `inherit`; `require` rejects spawn unless target child runtime is sandboxed)
+- `taskFlow?` (optional; when set, `sessions_spawn` creates a managed TaskFlow for this long-running spawn, links the child task into that flow, and marks the flow as `waiting` on the child run. Useful for repo/research style work where the caller wants durable progress state instead of a one-shot detached task.)
+  - `controllerId?` (defaults to `sessions_spawn/long-task`)
+  - `goal?` (defaults to `label` or `task`)
+  - `currentStep?` (defaults to `spawn_worker`)
+  - `notifyPolicy?` (`done_only|state_changes|silent`, defaults to `done_only`)
+  - `stateJson?` (optional seed state for the managed flow)
 - `sessions_spawn` does **not** accept channel-delivery params (`target`, `channel`, `to`, `threadId`, `replyTo`, `transport`). For delivery, use `message`/`sessions_send` from the spawned run.
+
+Lane guidance:
+
+- `research`: gather evidence, compare options, summarize uncertainty
+- `planning`: produce plans, assumptions, sequencing, and tradeoffs
+- `execution`: implement concrete changes with tight scope
+- `verification`: test, audit, review, and surface gaps
+
+This lane is intentionally lightweight: it is used for subagent prompt framing and metadata/list output, but it does not change scheduling, permissions, or backward-compatible defaults.
 
 ## Thread-bound sessions
 

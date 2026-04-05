@@ -16,7 +16,7 @@ import {
   shouldAutoDeliverTaskTerminalUpdate,
   shouldSuppressDuplicateTerminalDelivery,
 } from "./task-executor-policy.js";
-import type { TaskFlowRecord } from "./task-flow-registry.types.js";
+import type { JsonValue, TaskFlowRecord } from "./task-flow-registry.types.js";
 import {
   getTaskFlowById,
   syncFlowFromTask,
@@ -780,6 +780,207 @@ function resolveTaskDeliveryOwner(task: TaskRecord): TaskDeliveryOwner {
   };
 }
 
+function isJsonObject(value: JsonValue | undefined): value is Record<string, JsonValue> {
+  return value != null && typeof value === "object" && !Array.isArray(value);
+}
+
+function getManagedChildWaitState(flow: Pick<TaskFlowRecord, "waitJson">): {
+  kind: "child_task";
+  runtime?: string;
+  childSessionKey?: string;
+  runId?: string;
+} | null {
+  const wait = flow.waitJson;
+  if (!isJsonObject(wait) || wait.kind !== "child_task") {
+    return null;
+  }
+  return {
+    kind: "child_task",
+    ...(typeof wait.runtime === "string" && wait.runtime.trim() ? { runtime: wait.runtime } : {}),
+    ...(typeof wait.childSessionKey === "string" && wait.childSessionKey.trim()
+      ? { childSessionKey: wait.childSessionKey }
+      : {}),
+    ...(typeof wait.runId === "string" && wait.runId.trim() ? { runId: wait.runId } : {}),
+  };
+}
+
+function matchesManagedChildWaitState(
+  flow: Pick<TaskFlowRecord, "waitJson">,
+  task: Pick<TaskRecord, "runId" | "childSessionKey">,
+): boolean {
+  const wait = getManagedChildWaitState(flow);
+  if (!wait) {
+    return false;
+  }
+  if (wait.runId?.trim() && task.runId?.trim() && wait.runId.trim() !== task.runId.trim()) {
+    return false;
+  }
+  if (
+    wait.childSessionKey?.trim() &&
+    task.childSessionKey?.trim() &&
+    wait.childSessionKey.trim() !== task.childSessionKey.trim()
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function resolveManagedFlowTerminalPatch(
+  task: TaskRecord,
+  flow: TaskFlowRecord,
+  endedAt: number,
+): {
+  status: import("./task-flow-registry.types.js").TaskFlowStatus;
+  currentStep: string;
+  blockedTaskId?: string | null;
+  blockedSummary: string | null;
+  stateJson: Record<string, JsonValue>;
+} {
+  const progressSummary = task.progressSummary?.trim() || undefined;
+  const terminalSummary = task.terminalSummary?.trim() || undefined;
+  const error = task.error?.trim() || undefined;
+  const completion: Record<string, JsonValue> = {
+    taskId: task.taskId,
+    status: task.status,
+    endedAt,
+    ...(task.runId?.trim() ? { runId: task.runId } : {}),
+    ...(task.childSessionKey?.trim() ? { childSessionKey: task.childSessionKey } : {}),
+    ...(task.terminalOutcome ? { terminalOutcome: task.terminalOutcome } : {}),
+    ...(progressSummary ? { progressSummary } : {}),
+    ...(terminalSummary ? { terminalSummary } : {}),
+    ...(error ? { error } : {}),
+  };
+  const stateJson: Record<string, JsonValue> = isJsonObject(flow.stateJson)
+    ? {
+        ...structuredClone(flow.stateJson),
+      }
+    : {};
+  if (flow.stateJson !== undefined && !isJsonObject(flow.stateJson)) {
+    stateJson.previousStateJson = structuredClone(flow.stateJson);
+  }
+  if (progressSummary) {
+    stateJson.progressSummary = progressSummary;
+  }
+  stateJson.completion = completion;
+
+  if (task.status === "succeeded" && task.terminalOutcome !== "blocked") {
+    return {
+      status: "succeeded" as const,
+      currentStep: "completed",
+      blockedSummary: null,
+      stateJson,
+    };
+  }
+
+  const failureSummary =
+    terminalSummary ||
+    error ||
+    progressSummary ||
+    (task.status === "cancelled"
+      ? "Child task was cancelled."
+      : task.status === "timed_out"
+        ? "Child task timed out."
+        : task.status === "lost"
+          ? "Child task was lost."
+          : task.terminalOutcome === "blocked"
+            ? "Child task finished blocked."
+            : "Child task failed.");
+
+  if (task.status === "cancelled") {
+    return {
+      status: "cancelled" as const,
+      currentStep: "cancelled",
+      blockedSummary: failureSummary,
+      stateJson,
+    };
+  }
+
+  if (task.status === "lost") {
+    return {
+      status: "lost" as const,
+      currentStep: "lost",
+      blockedSummary: failureSummary,
+      stateJson,
+    };
+  }
+
+  if (task.terminalOutcome === "blocked") {
+    return {
+      status: "blocked" as const,
+      currentStep: "blocked",
+      blockedTaskId: task.taskId,
+      blockedSummary: failureSummary,
+      stateJson,
+    };
+  }
+
+  return {
+    status: "failed" as const,
+    currentStep: "failed",
+    blockedSummary: failureSummary,
+    stateJson,
+  };
+}
+
+function syncManagedFlowCompletionFromTask(task: TaskRecord): void {
+  if (!isTerminalTaskStatus(task.status)) {
+    return;
+  }
+  const flowId = task.parentFlowId?.trim();
+  if (!flowId) {
+    return;
+  }
+  let flow = getTaskFlowById(flowId);
+  if (!flow || flow.syncMode !== "managed" || isTerminalFlowStatus(flow.status)) {
+    return;
+  }
+  if (!matchesManagedChildWaitState(flow, task)) {
+    return;
+  }
+  if (
+    listTasksForFlowId(flowId).some(
+      (candidate) => candidate.taskId !== task.taskId && isActiveTaskStatus(candidate.status),
+    )
+  ) {
+    return;
+  }
+  const endedAt = task.endedAt ?? task.lastEventAt ?? Date.now();
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const patch = resolveManagedFlowTerminalPatch(task, flow, endedAt);
+    const result = updateFlowRecordByIdExpectedRevision({
+      flowId,
+      expectedRevision: flow.revision,
+      patch: {
+        status: patch.status,
+        currentStep: patch.currentStep,
+        stateJson: patch.stateJson,
+        waitJson: null,
+        blockedTaskId: patch.blockedTaskId ?? null,
+        blockedSummary: patch.blockedSummary,
+        endedAt,
+        updatedAt: endedAt,
+      },
+    });
+    if (result.applied || result.reason === "not_found") {
+      return;
+    }
+    flow = result.current;
+    if (!flow || flow.syncMode !== "managed" || isTerminalFlowStatus(flow.status)) {
+      return;
+    }
+    if (!matchesManagedChildWaitState(flow, task)) {
+      return;
+    }
+    if (
+      listTasksForFlowId(flowId).some(
+        (candidate) => candidate.taskId !== task.taskId && isActiveTaskStatus(candidate.status),
+      )
+    ) {
+      return;
+    }
+  }
+}
+
 function syncManagedFlowCancellationFromTask(task: TaskRecord): void {
   const flowId = task.parentFlowId?.trim();
   if (!flowId) {
@@ -897,6 +1098,15 @@ function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskRecord | nu
     syncFlowFromTask(next);
   } catch (error) {
     log.warn("Failed to sync parent flow from task update", {
+      taskId,
+      flowId: next.parentFlowId,
+      error,
+    });
+  }
+  try {
+    syncManagedFlowCompletionFromTask(next);
+  } catch (error) {
+    log.warn("Failed to finalize managed flow from task update", {
       taskId,
       flowId: next.parentFlowId,
       error,
@@ -1474,6 +1684,15 @@ export function createTaskRecord(params: {
     syncFlowFromTask(record);
   } catch (error) {
     log.warn("Failed to sync parent flow from task create", {
+      taskId: record.taskId,
+      flowId: record.parentFlowId,
+      error,
+    });
+  }
+  try {
+    syncManagedFlowCompletionFromTask(record);
+  } catch (error) {
+    log.warn("Failed to finalize managed flow from task create", {
       taskId: record.taskId,
       flowId: record.parentFlowId,
       error,

@@ -5,6 +5,7 @@ import type {
   TaskRunDetail,
   TaskRunView,
 } from "../plugins/runtime/task-domain-types.js";
+import { getTaskFlowGuidance } from "./task-flow-guidance.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import { summarizeTaskRecords } from "./task-registry.summary.js";
 import type { TaskRecord, TaskRegistrySummary } from "./task-registry.types.js";
@@ -77,6 +78,7 @@ export function mapTaskFlowDetail(params: {
 }): TaskFlowDetail {
   const summary = params.summary ?? summarizeTaskRecords(params.tasks);
   const base = mapTaskFlowView(params.flow);
+  const resolution = getTaskFlowGuidance(params.flow);
   return {
     ...base,
     ...(params.flow.stateJson !== undefined ? { state: params.flow.stateJson } : {}),
@@ -89,6 +91,7 @@ export function mapTaskFlowDetail(params: {
           },
         }
       : {}),
+    ...(resolution ? { resolution } : {}),
     tasks: params.tasks.map((task) => mapTaskRunView(task)),
     taskSummary: mapTaskRunAggregateSummary(summary),
   };

@@ -62,11 +62,27 @@ x-i18n:
 
 - `task`（必需）
 - `label?`（可选）
+- `lane?`（`research|planning|execution|verification`；可选的意图提示，用于子智能体提示词分层与列表元数据展示；**不会**改变真实运行队列，运行队列仍然是 `subagent`）
 - `agentId?`（可选；如果允许，在另一个智能体 id 下生成）
 - `model?`（可选；覆盖子智能体模型；无效值会被跳过，子智能体将使用默认模型运行并在工具结果中显示警告）
 - `thinking?`（可选；覆盖子智能体运行的思考级别）
 - `runTimeoutSeconds?`（默认 `0`；设置后，子智能体运行在 N 秒后中止）
 - `cleanup?`（`delete|keep`，默认 `keep`）
+- `taskFlow?`（可选；设置后，`sessions_spawn` 会为这次长任务创建一个 managed TaskFlow，把子任务挂到该 flow 下，并在 spawn 成功后把 flow 置为 `waiting`。适合 repo / research 这类希望有持久进度状态的长任务。）
+  - `controllerId?`（默认 `sessions_spawn/long-task`）
+  - `goal?`（默认取 `label`，否则取 `task`）
+  - `currentStep?`（默认 `spawn_worker`）
+  - `notifyPolicy?`（`done_only|state_changes|silent`，默认 `done_only`）
+  - `stateJson?`（可选；managed flow 的初始状态）
+
+Lane 用法建议：
+
+- `research`：收集信息、比较选项、整理不确定性
+- `planning`：输出计划、假设、步骤顺序与权衡
+- `execution`：执行具体改动，保持范围收敛
+- `verification`：测试、审计、复核并指出缺口
+
+这个 lane 设计得很轻量：它只会进入子智能体提示词分层，并显示在子智能体元数据/列表里；不会改变调度、权限或现有默认行为。
 
 允许列表：
 
