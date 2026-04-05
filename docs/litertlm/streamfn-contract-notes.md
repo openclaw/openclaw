@@ -7,28 +7,37 @@ Capture the minimum code-level understanding needed before implementing a real `
 ## Key findings
 
 ### 1. Best reference provider is still Ollama
+
 Most relevant implementation:
+
 - `openclaw-src/extensions/ollama/src/stream.ts`
 
 Why:
+
 - it implements `createStreamFn(...)`
 - it owns a custom transport path
 - it constructs an assistant-message event stream directly
 
 ### 2. `createStreamFn(...)` returns a `StreamFn`
+
 Observed usage in:
+
 - `openclaw-src/src/agents/provider-stream.ts`
 
 OpenClaw flow:
+
 - resolve provider plugin stream function
 - register custom API transport via `ensureCustomApiRegistered(...)`
 - let the embedded runner use that stream function for the selected model
 
 ### 3. Practical StreamFn shape from Ollama example
+
 The custom stream function returns a stream created by:
+
 - `createAssistantMessageEventStream()` from `@mariozechner/pi-ai`
 
 Then it pushes events like:
+
 - `start`
 - `text_start`
 - `text_delta`
@@ -37,7 +46,9 @@ Then it pushes events like:
 - `error`
 
 ### 4. For a first LiteRT-LM version, full token streaming is not required conceptually
+
 The first realistic approach can be:
+
 - create assistant-message event stream
 - run the shim in background async task
 - when full text is available, emit:
@@ -63,21 +74,27 @@ openclaw-src/extensions/litertlm/
 ```
 
 ### `index.ts`
+
 Should:
+
 - register provider id such as `litertlm-local`
 - publish discovery/catalog entry for `litertlm/gemma4-e2b-edge-gallery`
 - use synthetic auth
 - attach `createStreamFn(...)`
 
 ### `src/stream.ts`
+
 Should:
+
 - import `createAssistantMessageEventStream`
 - shell out to `scripts/litertlm_provider_shim.py`
 - parse normalized JSON
 - emit assistant-message events
 
 ### `src/provider-models.ts`
+
 Should:
+
 - define initial model rows
 - keep E2B as default experimental row
 - optionally add E4B as secondary experimental row later
@@ -85,6 +102,7 @@ Should:
 ## Suggested first event strategy for LiteRT-LM
 
 ### Success path
+
 1. create event stream
 2. start async shim run
 3. when shim returns success:
@@ -95,6 +113,7 @@ Should:
    - emit `done`
 
 ### Error path
+
 - emit `error` with a synthesized assistant error message
 
 ## Why this matters
@@ -102,6 +121,7 @@ Should:
 This reduces the remaining unknown significantly.
 
 The LiteRT-LM provider no longer looks blocked on hidden core abstractions. It mainly needs:
+
 - a provider plugin entry
 - a shim-backed stream emitter
 - a small model catalog definition

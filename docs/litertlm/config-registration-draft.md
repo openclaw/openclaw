@@ -9,6 +9,7 @@ Describe how the validated LiteRT-LM local model path could be represented as an
 OpenClaw would call a **process-based shim** instead of embedding LiteRT-LM directly in-process for the first experimental version.
 
 Current shim entry:
+
 - `python3 scripts/litertlm_provider_shim.py --input '<json>'`
 
 ## Suggested experimental model ids
@@ -17,6 +18,7 @@ Current shim entry:
 - `litertlm/gemma4-e4b-edge-gallery` — validated as functional, but recommended only as an optional experimental registration for now
 
 These model ids represent:
+
 - LiteRT-LM runtime
 - local `.litertlm` files downloaded by Edge Gallery
 - process-based experimental adapter
@@ -133,6 +135,7 @@ These model ids represent:
 ### OpenClaw-side error interpretation
 
 Map to a user-facing error like:
+
 - local model runtime missing
 - local model file missing
 - invalid experimental backend input
@@ -141,13 +144,16 @@ Map to a user-facing error like:
 ## Recommended first registration behavior
 
 ### Behavior
+
 - mark model as experimental
 - disable by default unless explicitly enabled
 - prefer explicit selection, not silent fallback
 - surface diagnostics in logs or debug panel
 
 ### Why
+
 Because this path still depends on:
+
 - a Python runtime
 - a machine-local venv / package install
 - a local Edge Gallery model download path
@@ -184,6 +190,7 @@ Example draft shape:
 ## Recommended next code step
 
 If this moves beyond design, the next implementation task should be:
+
 - a tiny OpenClaw-side adapter that shells out to `litertlm_provider_shim.py`
 - maps success/error JSON
 - exposes one experimental local model id first, preferably E2B
@@ -191,9 +198,11 @@ If this moves beyond design, the next implementation task should be:
 ## Recommendation
 
 Start with one model registration first:
+
 - `litertlm/gemma4-e2b-edge-gallery`
 
 E4B has now been practically validated as functional on this machine through the wrapper path, but current recommendation remains:
+
 - keep E2B as the default experimental registration
 - expose E4B only as an optional secondary experimental model
 - defer making E4B the default until repeated-run latency and comfort are better understood

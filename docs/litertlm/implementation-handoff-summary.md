@@ -5,9 +5,11 @@
 This work established that Edge Gallery-downloaded `.litertlm` files can be used as real local models for OpenClaw — not by automating the Edge Gallery UI, but by loading those files directly with LiteRT-LM.
 
 ### Critical validated fact
+
 - LiteRT-LM Python API on macOS successfully loaded the Edge Gallery-downloaded Gemma 4 E2B `.litertlm` model and returned correct local inference output.
 
 ### Also validated
+
 - Gemma 4 E4B `.litertlm` also loads and answers successfully on CPU, though it is heavier and should remain optional experimental rather than default.
 
 ## Recommended architecture
@@ -26,6 +28,7 @@ OpenClaw
 ## What now exists in the workspace
 
 ### Runtime / wrapper prototypes
+
 - `scripts/litertlm_model_resolver.py`
 - `scripts/litertlm_runtime_resolver.py`
 - `scripts/litertlm_local_chat.py`
@@ -33,6 +36,7 @@ OpenClaw
 - `scripts/litertlm_provider_shim.py`
 
 ### Key docs
+
 - `docs/litertlm-openclaw-provider-design.md`
 - `docs/litertlm-local-model-setup.md`
 - `docs/litertlm-provider-shim-notes.md`
@@ -45,6 +49,7 @@ OpenClaw
 - `docs/litertlm-extension-compile-oriented-cleanup-plan.md`
 
 ### `openclaw-src` draft extension skeleton
+
 - `openclaw-src/extensions/litertlm/index.ts`
 - `openclaw-src/extensions/litertlm/src/provider-models.ts`
 - `openclaw-src/extensions/litertlm/src/stream.ts`
@@ -54,17 +59,21 @@ OpenClaw
 ## Current technical recommendation
 
 ### Default experimental model
+
 - `litertlm/gemma4-e2b-edge-gallery`
 
 ### Secondary optional experimental model
+
 - `litertlm/gemma4-e4b-edge-gallery`
 
 ### Provider id
+
 - `litertlm-local`
 
 ## Current provider strategy
 
 Use a bundled provider plugin modeled loosely after Ollama, but with a major difference:
+
 - **do not use HTTP transport to a local server**
 - **do use a process-based shim over LiteRT-LM**
 
@@ -73,6 +82,7 @@ Use a bundled provider plugin modeled loosely after Ollama, but with a major dif
 For the first experimental version, do not block on token-level streaming.
 
 Use a one-shot event strategy through `createAssistantMessageEventStream()`:
+
 - `start`
 - `text_start`
 - one full `text_delta`
@@ -83,12 +93,14 @@ Use a one-shot event strategy through `createAssistantMessageEventStream()`:
 ## Important implementation constraints
 
 ### Keep
+
 - process-based shim for first version
 - CPU backend only
 - E2B as default
 - E4B as optional
 
 ### Avoid for now
+
 - Edge Gallery UI integration
 - pretending LiteRT-LM is OpenAI-compatible HTTP
 - in-process runtime embedding on first pass
@@ -114,6 +126,7 @@ If continuing in `openclaw-src`, the next practical move is:
 This investigation is no longer blocked on architecture uncertainty.
 
 The remaining work is standard implementation work:
+
 - type alignment
 - test alignment
 - plugin wiring
