@@ -292,9 +292,31 @@ function stripDisallowedChatControlChars(message: string): string {
 }
 
 export function sanitizeChatSendMessageInput(
-  message: string,
+  message: unknown,
 ): { ok: true; message: string } | { ok: false; error: string } {
-  const normalized = message.normalize("NFC");
+  // Guard: if message is not a string, attempt to extract text from common
+  // channel object shapes (Telegram caption objects, WhatsApp/Baileys raw
+  // message structures, etc.) before falling back to rejection.
+  let text: string;
+  if (typeof message === "string") {
+    text = message;
+  } else if (message != null && typeof message === "object") {
+    const obj = message as Record<string, unknown>;
+    const extracted =
+      (typeof obj.text === "string" ? obj.text : undefined) ??
+      (typeof obj.caption === "string" ? obj.caption : undefined) ??
+      (typeof obj.body === "string" ? obj.body : undefined) ??
+      (typeof obj.conversation === "string" ? obj.conversation : undefined) ??
+      (typeof obj.content === "string" ? obj.content : undefined);
+    if (!extracted) {
+      return { ok: false, error: "message must be a string (received unsupported object)" };
+    }
+    text = extracted;
+  } else {
+    return { ok: false, error: "message must be a string" };
+  }
+
+  const normalized = text.normalize("NFC");
   if (normalized.includes("\u0000")) {
     return { ok: false, error: "message must not contain null bytes" };
   }
