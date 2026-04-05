@@ -799,10 +799,13 @@ export async function compactEmbeddedPiSessionDirect(
         effectiveModel,
         agentDir,
       );
-      resolveAgentTransportOverride({
+      const agentTransportOverride = resolveAgentTransportOverride({
         settingsManager,
         effectiveExtraParams,
       });
+      if (agentTransportOverride && session.agent.transport !== agentTransportOverride) {
+        session.agent.setTransport(agentTransportOverride);
+      }
 
       try {
         const prior = await sanitizeSessionHistory({
