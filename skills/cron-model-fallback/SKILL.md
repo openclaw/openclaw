@@ -1,3 +1,12 @@
+---
+name: cron-model-fallback
+description: "Cron job model fallback chain for OpenClaw. Tries models in priority order until one succeeds. Solves silent cron failures when a provider is unavailable."
+homepage: https://looi.ru/a/looi-clawd
+metadata:
+  author: Arthur Arsyonov
+  license: MIT
+---
+
 # cron-model-fallback
 
 **Cron job model fallback chain for OpenClaw.**
@@ -11,18 +20,19 @@ OpenClaw cron jobs accept a single `model` string in `payload.model`. If that mo
 ## Solution
 
 A wrapper script that:
-1. Checks each model in priority order for reachability
-2. Runs the task with the first available model via `openclaw agent --message`
-3. Logs which model was used and how many attempts were made
+1. Checks each model for reachability before attempting (skippable with `--skip-reachability`)
+2. Passes the selected model explicitly via `--model` flag to `openclaw agent`
+3. Tries the next model in the chain if the current one fails
+4. Logs which model was used and how many attempts were made
 
 ## Installation
 
 ```bash
-# Manual install
-cp fallback.py /usr/local/bin/cron-model-fallback
-chmod +x /usr/local/bin/cron-model-fallback
+# Place in your OpenClaw workspace skills directory
+cp -r cron-model-fallback/ ~/.openclaw/workspace/skills/
 
-# Or place in your OpenClaw workspace skills directory
+# Install dependency
+pip3 install requests
 ```
 
 ## Usage
@@ -31,27 +41,17 @@ chmod +x /usr/local/bin/cron-model-fallback
 
 ```bash
 # Test model availability
-python3 fallback.py --test --models "ollama-host/gemma3:12b,google/gemini-2.5-flash,groq/llama-3.3-70b"
+python3 fallback.py --test --models "ollama/gemma3:12b,google/gemini-2.5-flash,groq/llama-3.3-70b"
 
 # Run a task with fallback
 python3 fallback.py \
-  --models "ollama-host/gemma3:12b,google/gemini-2.5-flash" \
+  --models "ollama/gemma3:12b,google/gemini-2.5-flash" \
   --prompt "Your cron task prompt here"
-```
 
-### In OpenClaw Cron Jobs
-
-Instead of a single model, use this script as the cron task:
-
-```json
-{
-  "name": "My Nightly Task",
-  "schedule": {"kind": "cron", "expr": "0 2 * * *"},
-  "payload": {
-    "kind": "agentTurn",
-    "message": "python3 /path/to/fallback.py --models 'custom-YOUR-OLLAMA-HOST-11434/gemma3:27b-it-qat,google/gemini-2.5-flash,groq/llama-3.3-70b-versatile' --prompt 'Your actual task prompt here'"
-  }
-}
+# Use a specific agent
+python3 fallback.py \
+  --models "ollama/gemma3:12b,google/gemini-2.5-flash" \
+  --agent my-agent --prompt "Your task"
 ```
 
 ## Parameters
@@ -61,10 +61,13 @@ Instead of a single model, use this script as the cron task:
 | `--models` | required | Comma-separated model list, first = most preferred |
 | `--prompt` | — | Task prompt string |
 | `--prompt-file` | — | Path to file containing the prompt |
-| `--timeout` | 30 | Seconds to wait per model attempt |
+| `--agent` | (default agent) | OpenClaw agent name (optional) |
+| `--timeout` | 120 | Seconds to wait per model attempt |
+| `--max-tokens` | 4096 | Maximum tokens in the response |
 | `--test` | false | Test reachability only, don't run task |
 | `--quiet` | false | Suppress progress output |
-| `--base-url` | http://127.0.0.1:18789 | OpenClaw gateway URL |
+| `--skip-reachability` | false | Skip pre-checks, just try each model |
+| `--base-url` | from env or localhost | OpenClaw gateway URL |
 
 ## Architecture
 
@@ -72,10 +75,13 @@ Instead of a single model, use this script as the cron task:
 fallback.py
   │
   ├─ For each model in priority order:
-  │   ├─ Ollama models → GET {ollama_host}/api/tags (check model exists)
-  │   └─ Cloud models → GET {openclaw_gateway}/health (check gateway alive)
+  │   ├─ Check reachability (unless --skip-reachability):
+  │   │   ├─ Ollama models → GET {ollama_host}/api/tags
+  │   │   └─ Cloud models → GET {gateway}/health
+  │   │
+  │   └─ Run task: openclaw agent --message {prompt} --model {model} --json
   │
-  └─ First reachable model → subprocess: openclaw agent --message {prompt} --json
+  └─ First successful response → stdout
 ```
 
 ## Authentication
@@ -90,7 +96,7 @@ Token is read from (in priority order):
 
 | Provider | Format | Example |
 |----------|--------|---------|
-| Ollama (local) | `custom-HOST-PORT/model:tag` | `custom-YOUR-OLLAMA-HOST-11434/gemma3:27b-it-qat` |
+| Ollama (local) | `custom-HOST-PORT/model:tag` | `custom-localhost-11434/gemma3:27b` |
 | Google | `google/model-id` | `google/gemini-2.5-flash` |
 | Groq | `groq/model-id` | `groq/llama-3.3-70b-versatile` |
 | Anthropic | `anthropic/model-id` | `anthropic/claude-haiku-4-5` |

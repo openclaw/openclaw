@@ -20,12 +20,12 @@ Authentication (in priority order):
 import argparse
 import json
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
 from typing import Optional
 
-# Conditionally import requests — fail early with a helpful message
 try:
     import requests
 except ImportError:
@@ -33,9 +33,9 @@ except ImportError:
     sys.exit(2)
 
 # --- Constants ---
-DEFAULT_TIMEOUT_SEC = 30
+DEFAULT_TIMEOUT_SEC = 120
 DEFAULT_MAX_TOKENS = 4096
-OPENCLAW_BASE_URL = "http://127.0.0.1:18789"
+DEFAULT_BASE_URL = os.environ.get("OPENCLAW_BASE_URL", "http://127.0.0.1:18789")
 TOKEN_ENV_VAR = "OPENCLAW_TOKEN"
 CONFIG_PATH = Path.home() / ".openclaw" / "openclaw.json"
 
@@ -52,24 +52,22 @@ EXIT_TEST_NO_MODELS = 3
 
 def load_token() -> Optional[str]:
     """Load the OpenClaw auth token from env var or config file."""
-    # 1. Environment variable (highest priority)
     token = os.environ.get(TOKEN_ENV_VAR)
     if token:
         return token.strip()
 
-    # 2. Config file
     if CONFIG_PATH.exists():
         try:
             with CONFIG_PATH.open("r", encoding="utf-8") as fh:
                 config = json.load(fh)
-            token = (
+            token = str(
                 config
                 .get("gateway", {})
                 .get("auth", {})
-                .get("token")
+                .get("token", "")
             )
             if token:
-                return str(token).strip()
+                return token.strip()
         except (json.JSONDecodeError, OSError) as exc:
             print(f"WARNING: Could not read config file {CONFIG_PATH}: {exc}", file=sys.stderr)
 
@@ -80,20 +78,20 @@ def load_token() -> Optional[str]:
 # OpenClaw API helpers
 # ---------------------------------------------------------------------------
 
-
 def _check_ollama_model(model: str, timeout_sec: int) -> bool:
     """
     Check if an Ollama model is reachable.
-    Parses 'custom-HOST:PORT/model-name' or 'HOST:PORT/model-name' format.
+    Parses 'custom-HOST-PORT/model-name' format.
+
+    Examples:
+        custom-192-168-7-194-11434/gemma3:12b  → http://192.168.7.194:11434
+        custom-localhost-11434/gemma3:12b       → http://localhost:11434
     """
-    # Extract host from model string like 'custom-YOUR-OLLAMA-HOST-PORT/gemma3:12b'
     try:
         if "/" not in model:
             return False
         host_part, model_name = model.split("/", 1)
-        # 'custom-YOUR-OLLAMA-HOST-PORT' → 'YOUR-OLLAMA-HOST:11434'
         host_part = host_part.replace("custom-", "")
-        # Replace dashes-as-dots pattern: last segment after final dash is port
         parts = host_part.rsplit("-", 1)
         if len(parts) == 2 and parts[1].isdigit():
             ip_dashes, port = parts
@@ -107,8 +105,23 @@ def _check_ollama_model(model: str, timeout_sec: int) -> bool:
             return False
         tags = resp.json().get("models", [])
         available = [m.get("name", "") for m in tags]
-        # Check if model_name matches any available (exact or prefix)
         return any(model_name == a or a.startswith(model_name) for a in available)
+    except Exception:
+        return False
+
+
+def check_model_reachable(model: str, base_url: str, timeout_sec: int) -> bool:
+    """
+    Quick reachability check for a model.
+    - For Ollama models (custom-HOST/model): checks /api/tags directly.
+    - For cloud models: checks OpenClaw gateway /health endpoint.
+    """
+    if model.startswith("custom-") or (":" in model.split("/")[0] if "/" in model else False):
+        return _check_ollama_model(model, timeout_sec)
+
+    try:
+        resp = requests.get(f"{base_url}/health", timeout=5)
+        return resp.status_code == 200
     except Exception:
         return False
 
@@ -117,37 +130,51 @@ def try_model(
     model: str,
     prompt: str,
     token: str,
+    agent: str,
+    base_url: str,
     timeout_sec: int,
+    max_tokens: int,
     quiet: bool,
 ) -> Optional[str]:
     """
     Attempt to run a prompt against a single model via OpenClaw CLI.
 
-    Uses: openclaw agent --message <prompt> --agent klin --json
-    The model is checked for reachability before running.
+    The model is passed explicitly via --model flag so the fallback chain
+    actually switches between providers.
 
     Returns the response text on success, or None on any failure.
     """
-    import subprocess
-
     if not quiet:
         print(f"  → Trying model: {model}", file=sys.stderr)
 
     start = time.monotonic()
 
     try:
+        cmd = [
+            "openclaw", "agent",
+            "--message", prompt,
+            "--model", model,
+            "--max-tokens", str(max_tokens),
+            "--json",
+        ]
+        if agent:
+            cmd.extend(["--agent", agent])
+
+        env = {**os.environ, TOKEN_ENV_VAR: token} if token else dict(os.environ)
+
         result = subprocess.run(
-            ["openclaw", "agent", "--message", prompt, "--agent", "klin", "--json"],
+            cmd,
             capture_output=True,
             text=True,
             timeout=timeout_sec,
-            env={**os.environ, "OPENCLAW_TOKEN": token} if token else os.environ,
+            env=env,
         )
         elapsed = time.monotonic() - start
 
         if result.returncode != 0:
             if not quiet:
-                print(f"  ✗ {model}: CLI error after {elapsed:.1f}s — {result.stderr[:200]}", file=sys.stderr)
+                stderr_preview = result.stderr[:200].strip()
+                print(f"  ✗ {model}: CLI error after {elapsed:.1f}s — {stderr_preview}", file=sys.stderr)
             return None
 
         output = result.stdout.strip()
@@ -176,25 +203,6 @@ def try_model(
         return None
 
 
-def check_model_reachable(model: str, token: str, timeout_sec: int) -> bool:
-    """
-    Quick reachability check for a model.
-    - For Ollama models (custom-HOST/model): checks /api/tags directly.
-    - For cloud models: checks OpenClaw gateway /health endpoint.
-    Returns True if reachable, False otherwise.
-    """
-    # Ollama models
-    if model.startswith("custom-") or (":" in model.split("/")[0] if "/" in model else False):
-        return _check_ollama_model(model, timeout_sec)
-
-    # Cloud models — check via OpenClaw gateway health
-    try:
-        resp = requests.get(f"{OPENCLAW_BASE_URL}/health", timeout=5)
-        return resp.status_code == 200
-    except Exception:
-        return False
-
-
 # ---------------------------------------------------------------------------
 # Main logic
 # ---------------------------------------------------------------------------
@@ -203,23 +211,39 @@ def run_with_fallback(
     models: list[str],
     prompt: str,
     token: str,
+    agent: str,
+    base_url: str,
     timeout_sec: int,
     max_tokens: int,
     quiet: bool,
+    skip_reachability: bool = False,
 ) -> tuple[Optional[str], str, int]:
     """
     Try each model in order. Return (result_text, winning_model, attempts).
     result_text is None if all models failed.
+
+    By default, checks reachability before attempting each model to save time.
     """
     if not quiet:
         print(f"\n[cron-model-fallback] Starting with {len(models)} model(s)", file=sys.stderr)
 
     for attempt, model in enumerate(models, start=1):
+        # Pre-check reachability to skip known-unreachable models fast
+        if not skip_reachability:
+            reachable = check_model_reachable(model, base_url, min(timeout_sec, 10))
+            if not reachable:
+                if not quiet:
+                    print(f"  ⊘ {model}: unreachable, skipping", file=sys.stderr)
+                continue
+
         result = try_model(
             model=model,
             prompt=prompt,
             token=token,
+            agent=agent,
+            base_url=base_url,
             timeout_sec=timeout_sec,
+            max_tokens=max_tokens,
             quiet=quiet,
         )
         if result is not None:
@@ -239,17 +263,15 @@ def run_with_fallback(
     return None, "", len(models)
 
 
-def run_test_mode(models: list[str], token: str, timeout_sec: int) -> int:
-    """
-    Test mode: check which models are reachable. Return exit code.
-    """
+def run_test_mode(models: list[str], base_url: str, timeout_sec: int) -> int:
+    """Test mode: check which models are reachable. Return exit code."""
     print(f"[cron-model-fallback] TEST MODE — checking {len(models)} model(s)\n")
     reachable = []
     unreachable = []
 
     for model in models:
         print(f"  Checking: {model} ...", end=" ", flush=True)
-        ok = check_model_reachable(model, token, timeout_sec)
+        ok = check_model_reachable(model, base_url, timeout_sec)
         if ok:
             print("✓ REACHABLE")
             reachable.append(model)
@@ -275,17 +297,17 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Cron model fallback chain for OpenClaw.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
+        epilog="""\
 Examples:
   # Run a task with fallback chain
   python3 fallback.py \\
     --models "ollama/gemma3:27b,anthropic/claude-haiku-4-5" \\
     --prompt "Summarize today's news"
 
-  # Use a prompt file
+  # Use a specific agent
   python3 fallback.py \\
-    --models "ollama/gemma3:27b,anthropic/claude-haiku-4-5" \\
-    --prompt-file /path/to/task.txt
+    --models "ollama/gemma3:27b,google/gemini-2.5-flash" \\
+    --agent my-agent --prompt "Your task"
 
   # Test which models are available
   python3 fallback.py --test \\
@@ -297,51 +319,44 @@ Authentication:
     )
 
     parser.add_argument(
-        "--models",
-        type=str,
-        required=True,
+        "--models", type=str, required=True,
         help="Comma-separated list of models in priority order (first = most preferred)",
     )
     parser.add_argument(
-        "--prompt",
-        type=str,
-        default=None,
+        "--prompt", type=str, default=None,
         help="Task prompt string",
     )
     parser.add_argument(
-        "--prompt-file",
-        type=str,
-        default=None,
-        metavar="FILE",
+        "--prompt-file", type=str, default=None, metavar="FILE",
         help="Path to file containing the task prompt",
     )
     parser.add_argument(
-        "--timeout",
-        type=int,
-        default=DEFAULT_TIMEOUT_SEC,
+        "--agent", type=str, default=None,
+        help="OpenClaw agent name (optional — uses default agent if omitted)",
+    )
+    parser.add_argument(
+        "--timeout", type=int, default=DEFAULT_TIMEOUT_SEC,
         help=f"Seconds to wait per model attempt (default: {DEFAULT_TIMEOUT_SEC})",
     )
     parser.add_argument(
-        "--max-tokens",
-        type=int,
-        default=DEFAULT_MAX_TOKENS,
+        "--max-tokens", type=int, default=DEFAULT_MAX_TOKENS,
         help=f"Maximum tokens in the response (default: {DEFAULT_MAX_TOKENS})",
     )
     parser.add_argument(
-        "--test",
-        action="store_true",
+        "--test", action="store_true",
         help="Test mode: check model reachability without running a task",
     )
     parser.add_argument(
-        "--quiet",
-        action="store_true",
+        "--quiet", action="store_true",
         help="Suppress progress output; only print the final result",
     )
     parser.add_argument(
-        "--base-url",
-        type=str,
-        default=OPENCLAW_BASE_URL,
-        help=f"OpenClaw gateway base URL (default: {OPENCLAW_BASE_URL})",
+        "--skip-reachability", action="store_true",
+        help="Skip pre-check reachability (just try each model directly)",
+    )
+    parser.add_argument(
+        "--base-url", type=str, default=DEFAULT_BASE_URL,
+        help=f"OpenClaw gateway base URL (default: from OPENCLAW_BASE_URL env or localhost:18789)",
     )
 
     return parser.parse_args()
@@ -350,7 +365,7 @@ Authentication:
 def main() -> int:
     args = parse_args()
 
-    # Parse model list (strip whitespace, skip empty entries)
+    # Parse model list
     models = [m.strip() for m in args.models.split(",") if m.strip()]
     if not models:
         print("ERROR: --models must contain at least one model name.", file=sys.stderr)
@@ -367,18 +382,11 @@ def main() -> int:
         )
         return EXIT_CONFIG_ERROR
 
-    # Override base URL if provided
-    if args.base_url != OPENCLAW_BASE_URL:
-        # Update module-level constant used by check_model_reachable for /health checks
-        import sys as _sys
-        _sys.modules[__name__].__dict__['OPENCLAW_BASE_URL'] = args.base_url
-
     # --- TEST MODE ---
     if args.test:
-        return run_test_mode(models, token, args.timeout)
+        return run_test_mode(models, args.base_url, args.timeout)
 
     # --- NORMAL MODE ---
-    # Resolve prompt
     prompt: Optional[str] = None
 
     if args.prompt_file:
@@ -391,24 +399,23 @@ def main() -> int:
         except OSError as exc:
             print(f"ERROR: Could not read prompt file: {exc}", file=sys.stderr)
             return EXIT_CONFIG_ERROR
-
     elif args.prompt:
         prompt = args.prompt.strip()
 
     if not prompt:
-        print(
-            "ERROR: Provide a task via --prompt or --prompt-file.",
-            file=sys.stderr,
-        )
+        print("ERROR: Provide a task via --prompt or --prompt-file.", file=sys.stderr)
         return EXIT_CONFIG_ERROR
 
-    # Run with fallback chain
     result, winning_model, attempts = run_with_fallback(
         models=models,
         prompt=prompt,
         token=token,
+        agent=args.agent or "",
+        base_url=args.base_url,
         timeout_sec=args.timeout,
+        max_tokens=args.max_tokens,
         quiet=args.quiet,
+        skip_reachability=args.skip_reachability,
     )
 
     if result is None:
@@ -419,7 +426,6 @@ def main() -> int:
         )
         return EXIT_ALL_FAILED
 
-    # Print result to stdout (clean, for piping / log capture)
     print(result)
     return EXIT_SUCCESS
 
