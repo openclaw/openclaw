@@ -51,10 +51,15 @@ interface BundledRuntimeRemap {
   packageRoot: string | null;
 }
 
+type ResolvedPluginSkillDir = {
+  loadDir: string;
+  watchDir: string;
+};
+
 function maybeResolveBundledRuntimeSkillDir(candidate: string): BundledRuntimeRemap {
   const normalized = path.normalize(candidate);
   const runtimeMarker = path.join("dist-runtime", "extensions") + path.sep;
-  const markerIndex = normalized.lastIndexOf(runtimeMarker);
+  const markerIndex = normalized.indexOf(runtimeMarker);
   if (markerIndex === -1) {
     return { remapped: candidate, builtPluginRoot: null, packageRoot: null };
   }
@@ -76,10 +81,10 @@ function maybeResolveBundledRuntimeSkillDir(candidate: string): BundledRuntimeRe
   return { remapped: builtCandidate, builtPluginRoot, packageRoot };
 }
 
-export function resolvePluginSkillDirs(params: {
+function resolvePluginSkillDirEntries(params: {
   workspaceDir: string | undefined;
   config?: OpenClawConfig;
-}): string[] {
+}): ResolvedPluginSkillDir[] {
   const workspaceDir = (params.workspaceDir ?? "").trim();
   if (!workspaceDir) {
     return [];
@@ -98,8 +103,8 @@ export function resolvePluginSkillDirs(params: {
   const acpEnabled = params.config?.acp?.enabled !== false;
   const memorySlot = normalizedPlugins.slots.memory;
   let selectedMemoryPluginId: string | null = null;
-  const seen = new Set<string>();
-  const resolved: string[] = [];
+  const seenLoadDirs = new Set<string>();
+  const resolvedEntries: ResolvedPluginSkillDir[] = [];
 
   for (const record of registry.plugins) {
     if (!record.skills || record.skills.length === 0) {
@@ -144,7 +149,7 @@ export function resolvePluginSkillDirs(params: {
         log.warn(`plugin skill path escapes plugin root (${record.id}): ${candidate}`);
         continue;
       }
-      if (seen.has(candidate)) {
+      if (seenLoadDirs.has(candidate)) {
         continue;
       }
       const { remapped, builtPluginRoot, packageRoot } =
@@ -167,13 +172,32 @@ export function resolvePluginSkillDirs(params: {
           continue;
         }
       }
-      if (seen.has(preferredCandidate)) {
+      if (seenLoadDirs.has(preferredCandidate)) {
         continue;
       }
-      seen.add(preferredCandidate);
-      resolved.push(preferredCandidate);
+      seenLoadDirs.add(preferredCandidate);
+      resolvedEntries.push({
+        loadDir: preferredCandidate,
+        // Keep watching the original validated root so local dist-runtime overlays
+        // are not dropped by the watcher ignore rule for /dist/.
+        watchDir: candidate,
+      });
     }
   }
 
-  return resolved;
+  return resolvedEntries;
+}
+
+export function resolvePluginSkillDirs(params: {
+  workspaceDir: string | undefined;
+  config?: OpenClawConfig;
+}): string[] {
+  return resolvePluginSkillDirEntries(params).map((entry) => entry.loadDir);
+}
+
+export function resolvePluginSkillWatchDirs(params: {
+  workspaceDir: string | undefined;
+  config?: OpenClawConfig;
+}): string[] {
+  return resolvePluginSkillDirEntries(params).map((entry) => entry.watchDir);
 }

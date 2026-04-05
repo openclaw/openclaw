@@ -267,6 +267,34 @@ describe("resolvePluginSkillDirs", () => {
     expect(dirs).toEqual([path.resolve(builtPluginRoot, "skills")]);
   });
 
+  it("falls back to dist-runtime path when dist counterpart does not exist", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-");
+    const packageRoot = await tempDirs.make("openclaw-package-");
+    const runtimePluginRoot = path.join(packageRoot, "dist-runtime", "extensions", "helper");
+    await fs.mkdir(path.join(runtimePluginRoot, "skills"), { recursive: true });
+    // No dist/extensions/helper/skills created — dist counterpart missing.
+
+    hoisted.loadPluginManifestRegistry.mockReturnValue(
+      createSinglePluginRegistry({
+        pluginRoot: runtimePluginRoot,
+        skills: ["./skills"],
+      }),
+    );
+
+    const dirs = resolvePluginSkillDirs({
+      workspaceDir,
+      config: {
+        plugins: {
+          entries: {
+            helper: { enabled: true },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(dirs).toEqual([path.resolve(runtimePluginRoot, "skills")]);
+  });
+
   it("rejects remapped built path when it symlinks outside plugin root", async () => {
     const { workspaceDir, builtPluginRoot, runtimePluginRoot } =
       await setupBundledRuntimeOverlayPlugin();
