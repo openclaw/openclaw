@@ -163,6 +163,30 @@ class WearChatControllerTest {
   }
 
   @Test
+  fun `main session key event does not override a user selected session`() = runTest {
+    val client = FakeGatewayClient().apply {
+      historyResponse = historyJson(userText = "Custom", assistantText = "Pinned session")
+    }
+    val controllerScope = TestScope(StandardTestDispatcher(testScheduler))
+    val controller = WearChatController(controllerScope, client, ::testString)
+    advanceUntilIdle()
+
+    controller.switchSession("agent:custom")
+    runCurrent()
+
+    client.emitEvent(
+      GatewayEvent(
+        event = "mainSessionKey",
+        payloadJson = "agent:watch-main",
+      ),
+    )
+    runCurrent()
+
+    assertEquals("agent:custom", controller.sessionKey.value)
+    controllerScope.cancel()
+  }
+
+  @Test
   fun `out of order final event still resolves pending send`() = runTest {
     val client = FakeGatewayClient().apply {
       chatSendDeferred = CompletableDeferred()

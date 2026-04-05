@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.android.gateway.ChatSessionEntry
+import ai.openclaw.app.gateway.GatewayConnectAuth
 import ai.openclaw.app.gateway.GatewayTrustPrompt
 import ai.openclaw.app.chat.OutgoingAttachment
 import ai.openclaw.app.gateway.GatewayEndpoint
@@ -313,7 +314,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   ) {
     ensureRuntime().connect(
       endpoint,
-      NodeRuntime.GatewayConnectAuth(
+      GatewayConnectAuth(
         token = token,
         bootstrapToken = bootstrapToken,
         password = password,

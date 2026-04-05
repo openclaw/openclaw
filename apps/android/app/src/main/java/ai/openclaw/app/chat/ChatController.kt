@@ -2,10 +2,14 @@ package ai.openclaw.app.chat
 
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.android.gateway.ChatSessionEntry
+import ai.openclaw.android.gateway.applyMainSessionKey
 import ai.openclaw.android.gateway.asArrayOrNull
 import ai.openclaw.android.gateway.asLongOrNull
 import ai.openclaw.android.gateway.asObjectOrNull
 import ai.openclaw.android.gateway.asStringOrNull
+import ai.openclaw.android.gateway.buildChatHistoryParams
+import ai.openclaw.android.gateway.buildSessionsListParams
+import ai.openclaw.android.gateway.parseChatRunId
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
@@ -221,7 +225,7 @@ class ChatController(
           }
         }
       val res = session.request("chat.send", params.toString())
-      val actualRunId = parseRunId(res) ?: runId
+      val actualRunId = parseChatRunId(res) ?: runId
       if (actualRunId != runId) {
         clearPendingRun(runId)
         armPendingRunTimeout(actualRunId)
@@ -299,7 +303,7 @@ class ChatController(
         session.sendNodeEvent("chat.subscribe", """{"sessionKey":"$key"}""")
       }
 
-      val historyJson = session.request("chat.history", """{"sessionKey":"$key"}""")
+      val historyJson = session.request("chat.history", buildChatHistoryParams(key).toString())
       val history = parseHistory(historyJson, sessionKey = key, previousMessages = _messages.value)
       _messages.value = history.messages
       _sessionId.value = history.sessionId
@@ -316,13 +320,7 @@ class ChatController(
 
   private suspend fun fetchSessions(limit: Int?) {
     try {
-      val params =
-        buildJsonObject {
-          put("includeGlobal", JsonPrimitive(true))
-          put("includeUnknown", JsonPrimitive(false))
-          if (limit != null && limit > 0) put("limit", JsonPrimitive(limit))
-        }
-      val res = session.request("sessions.list", params.toString())
+      val res = session.request("sessions.list", buildSessionsListParams(limit).toString())
       _sessions.value = ChatSessionEntry.parseList(res)
     } catch (_: Throwable) {
       // best-effort
@@ -372,7 +370,7 @@ class ChatController(
         scope.launch {
           try {
             val historyJson =
-              session.request("chat.history", """{"sessionKey":"${_sessionKey.value}"}""")
+              session.request("chat.history", buildChatHistoryParams(_sessionKey.value).toString())
             val history = parseHistory(historyJson, sessionKey = _sessionKey.value, previousMessages = _messages.value)
             _messages.value = history.messages
             _sessionId.value = history.sessionId
@@ -534,14 +532,6 @@ class ChatController(
     }
   }
 
-  private fun parseRunId(resJson: String): String? {
-    return try {
-      json.parseToJsonElement(resJson).asObjectOrNull()?.get("runId").asStringOrNull()
-    } catch (_: Throwable) {
-      null
-    }
-  }
-
   private fun normalizeThinking(raw: String): String {
     return when (raw.trim().lowercase()) {
       "low" -> "low"
@@ -550,28 +540,6 @@ class ChatController(
       else -> "off"
     }
   }
-}
-
-internal data class MainSessionState(
-  val currentSessionKey: String,
-  val appliedMainSessionKey: String,
-)
-
-internal fun applyMainSessionKey(
-  currentSessionKey: String,
-  appliedMainSessionKey: String,
-  nextMainSessionKey: String,
-): MainSessionState {
-  if (currentSessionKey == appliedMainSessionKey) {
-    return MainSessionState(
-      currentSessionKey = nextMainSessionKey,
-      appliedMainSessionKey = nextMainSessionKey,
-    )
-  }
-  return MainSessionState(
-    currentSessionKey = currentSessionKey,
-    appliedMainSessionKey = nextMainSessionKey,
-  )
 }
 
 internal fun reconcileMessageIds(previous: List<ChatMessage>, incoming: List<ChatMessage>): List<ChatMessage> {

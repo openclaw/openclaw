@@ -3,9 +3,13 @@ package ai.openclaw.wear.chat
 import ai.openclaw.wear.R
 import ai.openclaw.android.gateway.GatewayEvent
 import ai.openclaw.android.gateway.ChatSessionEntry
+import ai.openclaw.android.gateway.applyMainSessionKey
 import ai.openclaw.android.gateway.asObjectOrNull
 import ai.openclaw.android.gateway.asLongOrNull
 import ai.openclaw.android.gateway.asStringOrNull
+import ai.openclaw.android.gateway.buildChatHistoryParams
+import ai.openclaw.android.gateway.buildSessionsListParams
+import ai.openclaw.android.gateway.parseChatRunId
 import ai.openclaw.wear.gateway.GatewayClientInterface
 import java.util.UUID
 import java.util.Locale
@@ -65,6 +69,7 @@ class WearChatController(
   private var pendingHistoryRefreshJob: Job? = null
   private var historyLoadJob: Job? = null
   private val historyRequestVersion = AtomicLong(0)
+  private var appliedMainSessionKey = "main"
 
   private val _sessionKey = MutableStateFlow("main")
   val sessionKey: StateFlow<String> = _sessionKey.asStateFlow()
@@ -113,6 +118,7 @@ class WearChatController(
     historyLoadJob = null
     historyRequestVersion.incrementAndGet()
     client = newClient
+    appliedMainSessionKey = "main"
     _messages.value = emptyList()
     _streamingText.value = null
     _errorText.value = null
@@ -164,12 +170,7 @@ class WearChatController(
   fun fetchSessions() {
     scope.launch {
       try {
-        val params = buildJsonObject {
-          put("includeGlobal", JsonPrimitive(true))
-          put("includeUnknown", JsonPrimitive(false))
-          put("limit", JsonPrimitive(50))
-        }
-        val result = client.request("sessions.list", params.toString())
+        val result = client.request("sessions.list", buildSessionsListParams(limit = 50).toString())
         _sessions.value = ChatSessionEntry.parseList(result)
       } catch (_: Throwable) {
         // best-effort
@@ -178,7 +179,7 @@ class WearChatController(
   }
 
   fun switchSession(key: String) {
-    val trimmed = key.trim()
+    val trimmed = normalizeRequestedSessionKey(key)
     if (trimmed.isEmpty() || trimmed == _sessionKey.value) return
     _sessionKey.value = trimmed
     _messages.value = emptyList()
@@ -309,7 +310,7 @@ class WearChatController(
               put("idempotencyKey", JsonPrimitive(runId))
             }
             val response = client.request("chat.send", params.toString())
-            val actualRunId = parseRunId(response) ?: runId
+            val actualRunId = parseChatRunId(response) ?: runId
             if (actualRunId != runId) {
               replacePendingRunId(from = runId, to = actualRunId)
             }
@@ -346,9 +347,27 @@ class WearChatController(
     when (event.event) {
       "mainSessionKey" -> {
         val key = event.payloadJson?.trim()
-        if (!key.isNullOrEmpty() && _sessionKey.value == "main") {
-          _sessionKey.value = key
-          loadHistory()
+        if (!key.isNullOrEmpty()) {
+          val nextState =
+            applyMainSessionKey(
+              currentSessionKey = normalizeRequestedSessionKey(_sessionKey.value),
+              appliedMainSessionKey = appliedMainSessionKey,
+              nextMainSessionKey = key,
+            )
+          appliedMainSessionKey = nextState.appliedMainSessionKey
+          if (_sessionKey.value != nextState.currentSessionKey) {
+            _sessionKey.value = nextState.currentSessionKey
+            _messages.value = emptyList()
+            _streamingText.value = null
+            _errorText.value = null
+            lastSyncedHistory = emptyList()
+            hasSyncedHistory = false
+            clearPendingRuns()
+            clearQueuedOutboundMessages()
+            clearSideResults()
+            lastAnnouncedAssistantId = null
+            loadHistory()
+          }
         }
       }
       "chat" -> {
@@ -486,11 +505,7 @@ class WearChatController(
   }
 
   private suspend fun fetchHistory(sessionKey: String): List<WearChatMessage> {
-    val params =
-      buildJsonObject {
-        put("sessionKey", JsonPrimitive(sessionKey))
-      }
-    val result = client.request("chat.history", params.toString())
+    val result = client.request("chat.history", buildChatHistoryParams(sessionKey).toString())
     return parseHistory(result)
   }
 
@@ -653,8 +668,11 @@ class WearChatController(
     return if (el is JsonPrimitive && el !is JsonNull) el.content else null
   }
 
-  private fun parseRunId(resultJson: String): String? {
-    return parseObject(resultJson)?.str("runId")?.trim()?.ifEmpty { null }
+  private fun normalizeRequestedSessionKey(sessionKey: String): String {
+    val key = sessionKey.trim()
+    if (key.isEmpty()) return appliedMainSessionKey
+    if (key == "main" && appliedMainSessionKey != "main") return appliedMainSessionKey
+    return key
   }
 
   private fun isPendingRun(runId: String): Boolean {

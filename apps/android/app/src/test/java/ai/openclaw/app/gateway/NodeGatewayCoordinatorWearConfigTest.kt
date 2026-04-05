@@ -86,6 +86,7 @@ class NodeGatewayCoordinatorWearConfigTest {
         motionPedometerAvailable = { false },
         sendSmsAvailable = { false },
         readSmsAvailable = { false },
+        smsSearchPossible = { false },
         callLogAvailable = { false },
         hasRecordAudioPermission = { false },
         manualTls = { true },

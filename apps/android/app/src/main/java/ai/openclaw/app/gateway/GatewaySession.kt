@@ -5,6 +5,7 @@ import ai.openclaw.android.gateway.GATEWAY_PROTOCOL_VERSION
 import ai.openclaw.android.gateway.GatewayClientInfo
 import ai.openclaw.android.gateway.GatewayConnectOptions
 import ai.openclaw.android.gateway.GatewayConnectBuilder
+import ai.openclaw.android.gateway.asArrayOrNull
 import ai.openclaw.android.gateway.asBooleanOrNull
 import ai.openclaw.android.gateway.asLongOrNull
 import ai.openclaw.android.gateway.asObjectOrNull

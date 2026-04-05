@@ -13,11 +13,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
-data class GatewayTrustPrompt(
-  val endpoint: GatewayEndpoint,
-  val fingerprintSha256: String,
-)
-
 class NodeGatewayCoordinator(
   context: Context,
   private val scope: CoroutineScope,
@@ -25,6 +20,7 @@ class NodeGatewayCoordinator(
   private val connectionManager: ConnectionManager,
   private val identityStore: DeviceIdentityStore,
   private val callbacks: Callbacks,
+  private val tlsFingerprintProbe: suspend (String, Int) -> GatewayTlsProbeResult = ::probeGatewayTlsFingerprint,
 ) {
   data class Callbacks(
     val onOperatorConnected: (serverName: String?, remoteAddress: String?, mainSessionKey: String?) -> Unit,
@@ -66,6 +62,9 @@ class NodeGatewayCoordinator(
   val seamColorArgb: StateFlow<Long> = _seamColorArgb.asStateFlow()
 
   private var connectedEndpoint: GatewayEndpoint? = null
+  private var desiredNodeConnectAuth: GatewayConnectAuth? = null
+  private var desiredOperatorConnectAuth: GatewayConnectAuth? = null
+  private var shouldConnectOperator: Boolean = true
   private var didAutoConnect = false
   private var autoConnectJob: Job? = null
 
@@ -160,23 +159,38 @@ class NodeGatewayCoordinator(
     connectSessions(endpoint, tls, reconnect = true)
   }
 
-  fun connect(endpoint: GatewayEndpoint) {
+  fun connect(
+    endpoint: GatewayEndpoint,
+    auth: GatewayConnectAuth? = null,
+  ) {
+    val connectPlan = resolveConnectPlan(auth)
+    desiredNodeConnectAuth = connectPlan.nodeAuth
+    desiredOperatorConnectAuth = connectPlan.operatorAuth
+    shouldConnectOperator = connectPlan.connectOperator
     val tls = connectionManager.resolveTlsParams(endpoint)
     if (tls?.required == true && tls.expectedFingerprint.isNullOrBlank()) {
       // First-time TLS: capture fingerprint, ask user to verify out-of-band, then store and connect.
       _statusText.value = "Verify gateway TLS fingerprint…"
       scope.launch {
-        val fp = probeGatewayTlsFingerprint(endpoint.host, endpoint.port) ?: run {
-          _statusText.value = "Failed: can't read TLS fingerprint"
+        val probe = tlsFingerprintProbe(endpoint.host, endpoint.port)
+        val fp = probe.fingerprintSha256
+        if (fp.isNullOrBlank()) {
+          _pendingGatewayTrust.value = null
+          _statusText.value = gatewayTlsProbeFailureMessage(probe.failure)
           return@launch
         }
-        _pendingGatewayTrust.value = GatewayTrustPrompt(endpoint = endpoint, fingerprintSha256 = fp)
+        _pendingGatewayTrust.value =
+          GatewayTrustPrompt(
+            endpoint = endpoint,
+            fingerprintSha256 = fp,
+            auth = connectPlan.nodeAuth,
+          )
       }
       return
     }
 
     connectedEndpoint = endpoint
-    _operatorStatusText.value = "Connecting…"
+    _operatorStatusText.value = if (connectPlan.connectOperator) "Connecting…" else "Offline"
     nodeStatusText = "Connecting…"
     updateStatus()
     connectSessions(endpoint, tls, reconnect = false)
@@ -194,6 +208,9 @@ class NodeGatewayCoordinator(
 
   fun disconnect() {
     connectedEndpoint = null
+    desiredNodeConnectAuth = null
+    desiredOperatorConnectAuth = null
+    shouldConnectOperator = true
     _pendingGatewayTrust.value = null
     operatorSession.disconnect()
     nodeSession.disconnect()
@@ -203,7 +220,7 @@ class NodeGatewayCoordinator(
     val prompt = _pendingGatewayTrust.value ?: return
     _pendingGatewayTrust.value = null
     prefs.saveGatewayTlsFingerprint(prompt.endpoint.stableId, prompt.fingerprintSha256)
-    connect(prompt.endpoint)
+    connect(prompt.endpoint, prompt.auth)
   }
 
   fun declineGatewayTrustPrompt() {
@@ -289,22 +306,25 @@ class NodeGatewayCoordinator(
   }
 
   private fun connectSessions(endpoint: GatewayEndpoint, tls: GatewayTlsParams?, reconnect: Boolean) {
-    val token = prefs.loadGatewayToken()
-    val bootstrapToken = prefs.loadGatewayBootstrapToken()
-    val password = prefs.loadGatewayPassword()
-    operatorSession.connect(
-      endpoint,
-      token,
-      bootstrapToken,
-      password,
-      connectionManager.buildOperatorConnectOptions(),
-      tls,
-    )
+    val nodeAuth = desiredNodeConnectAuth ?: loadConfiguredGatewayConnectAuth()
+    val operatorAuth = desiredOperatorConnectAuth
+    if (shouldConnectOperator) {
+      operatorSession.connect(
+        endpoint,
+        operatorAuth?.token,
+        operatorAuth?.bootstrapToken,
+        operatorAuth?.password,
+        connectionManager.buildOperatorConnectOptions(),
+        tls,
+      )
+    } else {
+      operatorSession.disconnect()
+    }
     nodeSession.connect(
       endpoint,
-      token,
-      bootstrapToken,
-      password,
+      nodeAuth.token,
+      nodeAuth.bootstrapToken,
+      nodeAuth.password,
       connectionManager.buildNodeConnectOptions(),
       tls,
     )
@@ -350,5 +370,51 @@ class NodeGatewayCoordinator(
     val targetStableId = prefs.lastDiscoveredStableId.value.trim()
     if (targetStableId.isEmpty()) return null
     return gateways.value.firstOrNull { it.stableId == targetStableId }
+  }
+
+  private data class ConnectPlan(
+    val nodeAuth: GatewayConnectAuth,
+    val operatorAuth: GatewayConnectAuth?,
+    val connectOperator: Boolean,
+  )
+
+  private fun resolveConnectPlan(auth: GatewayConnectAuth?): ConnectPlan {
+    val nodeAuth = auth ?: loadConfiguredGatewayConnectAuth()
+    val storedOperatorToken =
+      if (nodeAuth.token.isNullOrBlank() && nodeAuth.password.isNullOrBlank()) {
+        loadStoredOperatorToken()
+      } else {
+        null
+      }
+    val operatorAuth = resolveOperatorSessionConnectAuth(nodeAuth, storedOperatorToken)
+    return ConnectPlan(
+      nodeAuth = nodeAuth,
+      operatorAuth = operatorAuth,
+      connectOperator = operatorAuth != null,
+    )
+  }
+
+  private fun loadConfiguredGatewayConnectAuth(): GatewayConnectAuth {
+    return GatewayConnectAuth(
+      token = prefs.loadGatewayToken(),
+      bootstrapToken = prefs.loadGatewayBootstrapToken(),
+      password = prefs.loadGatewayPassword(),
+    )
+  }
+
+  private fun loadStoredOperatorToken(): String? {
+    return runCatching {
+      val deviceId = identityStore.loadOrCreate().deviceId
+      deviceAuthStore.loadToken(deviceId, role = "operator")
+    }.getOrNull()
+  }
+
+  private fun gatewayTlsProbeFailureMessage(failure: GatewayTlsProbeFailure?): String {
+    return when (failure) {
+      GatewayTlsProbeFailure.TLS_UNAVAILABLE ->
+        "Failed: this host requires wss:// or Tailscale Serve. No TLS endpoint detected."
+      GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE, null ->
+        "Failed: couldn't reach the secure gateway endpoint for this host."
+    }
   }
 }

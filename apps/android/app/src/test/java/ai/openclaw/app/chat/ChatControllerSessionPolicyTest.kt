@@ -1,5 +1,6 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.android.gateway.applyMainSessionKey
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
