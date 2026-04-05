@@ -83,11 +83,11 @@
 
 ## Docs i18n (generated publish locales)
 
-- Generated publish output lives in the sibling `openclaw-docs` repo; do not add or edit `docs/zh-CN/**`, `docs/ja-JP/**`, `docs/es/**`, `docs/pt-BR/**`, `docs/ko/**`, `docs/de/**`, or `docs/fr/**` here.
-- Pipeline: update English docs here → adjust glossary (`docs/.i18n/glossary.zh-CN.json`, `docs/.i18n/glossary.ja-JP.json`, `docs/.i18n/glossary.es.json`, `docs/.i18n/glossary.pt-BR.json`, `docs/.i18n/glossary.ko.json`, `docs/.i18n/glossary.de.json`, `docs/.i18n/glossary.fr.json`) → let the publish-repo sync + `scripts/docs-i18n` run in `openclaw-docs` → apply targeted fixes only if instructed.
+- Generated publish output lives in the sibling `openclaw-docs` repo; do not add or edit `docs/zh-CN/**`, `docs/ja-JP/**`, `docs/es/**`, `docs/pt-BR/**`, `docs/ko/**`, `docs/de/**`, `docs/fr/**`, or `docs/ar/**` here.
+- Pipeline: update English docs here → adjust glossary (`docs/.i18n/glossary.zh-CN.json`, `docs/.i18n/glossary.ja-JP.json`, `docs/.i18n/glossary.es.json`, `docs/.i18n/glossary.pt-BR.json`, `docs/.i18n/glossary.ko.json`, `docs/.i18n/glossary.de.json`, `docs/.i18n/glossary.fr.json`, `docs/.i18n/glossary.ar.json`) → let the publish-repo sync + `scripts/docs-i18n` run in `openclaw-docs` → apply targeted fixes only if instructed.
 - Before rerunning `scripts/docs-i18n`, add glossary entries for any new technical terms, page titles, or short nav labels that must stay in English or use a fixed translation (for example `Doctor` or `Polls`).
 - `pnpm docs:check-i18n-glossary` enforces glossary coverage for changed English doc titles and short internal doc labels before translation reruns.
-- Translation memory: locale TM files such as `docs/.i18n/zh-CN.tm.jsonl`, `docs/.i18n/ja-JP.tm.jsonl`, `docs/.i18n/es.tm.jsonl`, `docs/.i18n/pt-BR.tm.jsonl`, `docs/.i18n/ko.tm.jsonl`, `docs/.i18n/de.tm.jsonl`, and `docs/.i18n/fr.tm.jsonl` (generated in the publish repo).
+- Translation memory: locale TM files such as `docs/.i18n/zh-CN.tm.jsonl`, `docs/.i18n/ja-JP.tm.jsonl`, `docs/.i18n/es.tm.jsonl`, `docs/.i18n/pt-BR.tm.jsonl`, `docs/.i18n/ko.tm.jsonl`, `docs/.i18n/de.tm.jsonl`, `docs/.i18n/fr.tm.jsonl`, and `docs/.i18n/ar.tm.jsonl` (generated in the publish repo).
 - See `docs/.i18n/README.md`.
 - The pipeline can be slow/inefficient; if it’s dragging, ping @jospalmbier on Discord instead of hacking around it.
 

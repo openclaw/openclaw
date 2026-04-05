@@ -22,6 +22,7 @@ const GENERATED_LOCALES = [
   { language: "ko", dir: "ko", navFile: "ko-navigation.json", tmFile: "ko.tm.jsonl" },
   { language: "de", dir: "de", navFile: "de-navigation.json", tmFile: "de.tm.jsonl" },
   { language: "fr", dir: "fr", navFile: "fr-navigation.json", tmFile: "fr.tm.jsonl" },
+  { language: "ar", dir: "ar", navFile: "ar-navigation.json", tmFile: "ar.tm.jsonl" },
 ];
 
 function parseArgs(argv) {
