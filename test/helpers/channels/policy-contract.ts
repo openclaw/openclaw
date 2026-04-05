@@ -1,8 +1,5 @@
-export { whatsappAccessControlTesting } from "../../../extensions/whatsapp/contract-api.js";
-export {
-  evaluateZaloGroupAccess,
-  resolveZaloRuntimeGroupPolicy,
-} from "../../../extensions/zalo/contract-api.js";
+export { resolveWhatsAppRuntimeGroupPolicy } from "../../../extensions/whatsapp/test-api.js";
+export { resolveZaloRuntimeGroupPolicy } from "../../../extensions/zalo/test-api.js";
 export {
   isSignalSenderAllowed,
   type SignalSender,

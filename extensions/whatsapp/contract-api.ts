@@ -23,6 +23,7 @@ import {
   createWhatsAppPollFixture as createWhatsAppPollFixtureImpl,
   expectWhatsAppPollSent as expectWhatsAppPollSentImpl,
 } from "./src/outbound-test-support.js";
+import { resolveWhatsAppRuntimeGroupPolicy as resolveWhatsAppRuntimeGroupPolicyImpl } from "./src/runtime-group-policy.js";
 import {
   canonicalizeLegacySessionKey as canonicalizeLegacySessionKeyImpl,
   isLegacyGroupSessionKey as isLegacyGroupSessionKeyImpl,
@@ -35,6 +36,7 @@ export const isLegacyGroupSessionKey = isLegacyGroupSessionKeyImpl;
 export const isWhatsAppGroupJid = isWhatsAppGroupJidImpl;
 export const normalizeWhatsAppTarget = normalizeWhatsAppTargetImpl;
 export const resolveLegacyGroupSessionKey = resolveLegacyGroupSessionKeyImpl;
+export const resolveWhatsAppRuntimeGroupPolicy = resolveWhatsAppRuntimeGroupPolicyImpl;
 export const whatsappAccessControlTesting = whatsappAccessControlTestingImpl;
 export const whatsappCommandPolicy = whatsappCommandPolicyImpl;
 
