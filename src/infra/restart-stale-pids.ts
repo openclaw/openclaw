@@ -7,7 +7,9 @@ import { resolveLsofCommandSync } from "./ports-lsof.js";
 import {
   readWindowsListeningPidsOnPortSync,
   readWindowsListeningPidsResultSync,
+  readWindowsProcessArgsResultSync,
   readWindowsProcessArgsSync,
+  type WindowsProcessArgsResult,
   type WindowsListeningPidsResult,
 } from "./windows-port-pids.js";
 
@@ -99,6 +101,26 @@ function filterVerifiedWindowsGatewayPids(rawPids: number[]): number[] {
     });
 }
 
+function filterVerifiedWindowsGatewayPidsResult(
+  rawPids: number[],
+  processArgsResult: (pid: number) => WindowsProcessArgsResult,
+): WindowsListeningPidsResult {
+  const verified: number[] = [];
+  for (const pid of Array.from(new Set(rawPids))) {
+    if (!Number.isFinite(pid) || pid <= 0 || pid === process.pid) {
+      continue;
+    }
+    const argsResult = processArgsResult(pid);
+    if (!argsResult.ok) {
+      return { ok: false, permanent: argsResult.permanent };
+    }
+    if (argsResult.args != null && isGatewayArgv(argsResult.args, { allowGatewayBinary: true })) {
+      verified.push(pid);
+    }
+  }
+  return { ok: true, pids: verified };
+}
+
 function findVerifiedWindowsGatewayPidsOnPortSync(port: number): number[] {
   return filterVerifiedWindowsGatewayPids(readWindowsListeningPidsOnPortSync(port));
 }
@@ -108,10 +130,9 @@ function findVerifiedWindowsGatewayPidsOnPortResultSync(port: number): WindowsLi
   if (!result.ok) {
     return result;
   }
-  return {
-    ok: true,
-    pids: filterVerifiedWindowsGatewayPids(result.pids),
-  };
+  return filterVerifiedWindowsGatewayPidsResult(result.pids, (pid) =>
+    readWindowsProcessArgsResultSync(pid),
+  );
 }
 
 /**

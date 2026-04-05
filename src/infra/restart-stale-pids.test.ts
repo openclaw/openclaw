@@ -21,6 +21,11 @@ const mockReadWindowsListeningPidsResult = vi.hoisted(() =>
 const mockReadWindowsProcessArgs = vi.hoisted(() =>
   vi.fn((_pid: number, _timeoutMs?: number): string[] | null => null),
 );
+const mockReadWindowsProcessArgsResult = vi.hoisted(() =>
+  vi.fn<(_pid: number, _timeoutMs?: number) => MockWindowsProcessArgsResult>(
+    (_pid: number, _timeoutMs?: number) => ({ ok: true, args: null }),
+  ),
+);
 
 vi.mock("node:child_process", async () => {
   const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
@@ -58,6 +63,8 @@ vi.mock("./windows-port-pids.js", () => ({
     mockReadWindowsListeningPidsResult(port, timeoutMs),
   readWindowsProcessArgsSync: (pid: number, timeoutMs?: number) =>
     mockReadWindowsProcessArgs(pid, timeoutMs),
+  readWindowsProcessArgsResultSync: (pid: number, timeoutMs?: number) =>
+    mockReadWindowsProcessArgsResult(pid, timeoutMs),
 }));
 
 import { resolveLsofCommandSync } from "./ports-lsof.js";
@@ -78,6 +85,10 @@ type MockLsofResult = {
 
 type MockWindowsListeningPidsResult =
   | { ok: true; pids: number[] }
+  | { ok: false; permanent: boolean };
+
+type MockWindowsProcessArgsResult =
+  | { ok: true; args: string[] | null }
   | { ok: false; permanent: boolean };
 
 function createLsofResult(overrides: Partial<MockLsofResult> = {}): MockLsofResult {
@@ -131,10 +142,12 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
     mockReadWindowsListeningPids.mockReset();
     mockReadWindowsListeningPidsResult.mockReset();
     mockReadWindowsProcessArgs.mockReset();
+    mockReadWindowsProcessArgsResult.mockReset();
     mockResolveGatewayPort.mockReturnValue(18789);
     mockReadWindowsListeningPids.mockReturnValue([]);
     mockReadWindowsListeningPidsResult.mockReturnValue({ ok: true, pids: [] });
     mockReadWindowsProcessArgs.mockReturnValue(null);
+    mockReadWindowsProcessArgsResult.mockReturnValue({ ok: true, args: null });
     __testing.setSleepSyncOverride(() => {});
   });
 
@@ -655,6 +668,7 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       try {
         mockReadWindowsListeningPids.mockReturnValue([stalePid]);
         mockReadWindowsProcessArgs.mockReturnValue(["openclaw", "gateway"]);
+        mockReadWindowsProcessArgsResult.mockReturnValue({ ok: true, args: ["openclaw", "gateway"] });
         mockSpawnSync.mockReturnValue({
           error: null,
           status: 0,
@@ -724,6 +738,36 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       }
     });
 
+    it("waits for port release when Windows listener argv inspection is inconclusive", () => {
+      const origDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+      const stalePid = process.pid + 913;
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      try {
+        let fakeNow = 0;
+        __testing.setDateNowOverride(() => fakeNow);
+        mockReadWindowsListeningPidsResult.mockImplementation((_port, timeoutMs) => {
+          if (timeoutMs === 400) {
+            fakeNow += 2001;
+          }
+          return { ok: true, pids: [stalePid] };
+        });
+        mockReadWindowsProcessArgsResult.mockReturnValue({ ok: false, permanent: false });
+        const killSpy = vi.spyOn(process, "kill").mockReturnValue(true);
+
+        expect(cleanStaleGatewayProcessesSync()).toEqual([]);
+        expect(mockReadWindowsProcessArgsResult).toHaveBeenCalledWith(stalePid, undefined);
+        expect(mockRestartWarn).toHaveBeenCalledWith(
+          expect.stringContaining("port 18789 still in use after 2000ms"),
+        );
+        expect(killSpy).not.toHaveBeenCalled();
+      } finally {
+        __testing.setDateNowOverride(null);
+        if (origDescriptor) {
+          Object.defineProperty(process, "platform", origDescriptor);
+        }
+      }
+    });
+
     it("does not report Windows pids as killed when taskkill fails", () => {
       const origDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
       const stalePid = process.pid + 911;
@@ -731,6 +775,7 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       try {
         mockReadWindowsListeningPids.mockReturnValue([stalePid]);
         mockReadWindowsProcessArgs.mockReturnValue(["openclaw", "gateway"]);
+        mockReadWindowsProcessArgsResult.mockReturnValue({ ok: true, args: ["openclaw", "gateway"] });
         mockReadWindowsListeningPidsResult.mockReturnValue({ ok: true, pids: [stalePid] });
         mockSpawnSync.mockReturnValue({
           error: null,
@@ -765,6 +810,7 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       try {
         mockReadWindowsListeningPidsResult.mockReturnValue({ ok: true, pids: [stalePid] });
         mockReadWindowsProcessArgs.mockReturnValue(["openclaw", "gateway"]);
+        mockReadWindowsProcessArgsResult.mockReturnValue({ ok: true, args: ["openclaw", "gateway"] });
         mockSpawnSync
           .mockReturnValueOnce({
             error: null,

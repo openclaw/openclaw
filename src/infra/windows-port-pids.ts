@@ -7,6 +7,10 @@ export type WindowsListeningPidsResult =
   | { ok: true; pids: number[] }
   | { ok: false; permanent: boolean };
 
+export type WindowsProcessArgsResult =
+  | { ok: true; args: string[] | null }
+  | { ok: false; permanent: boolean };
+
 // ---------------------------------------------------------------------------
 // Windows listening-PID discovery (PowerShell → netstat fallback)
 // ---------------------------------------------------------------------------
@@ -100,8 +104,19 @@ function extractWindowsCommandLine(raw: string): string | null {
   return lines.find((line) => line.toLowerCase() !== "commandline") ?? null;
 }
 
-function readProcessArgsViaPowerShell(pid: number, timeoutMs: number): string[] | null {
-  const ps = spawnSync(
+export function readWindowsProcessArgsSync(
+  pid: number,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+): string[] | null {
+  const result = readWindowsProcessArgsResultSync(pid, timeoutMs);
+  return result.ok ? result.args : null;
+}
+
+export function readWindowsProcessArgsResultSync(
+  pid: number,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+): WindowsProcessArgsResult {
+  const powershell = spawnSync(
     "powershell",
     [
       "-NoProfile",
@@ -114,14 +129,10 @@ function readProcessArgsViaPowerShell(pid: number, timeoutMs: number): string[] 
       windowsHide: true,
     },
   );
-  if (ps.error || ps.status !== 0) {
-    return null;
+  if (!powershell.error && powershell.status === 0) {
+    const command = powershell.stdout.trim();
+    return { ok: true, args: command ? parseCmdScriptCommandLine(command) : null };
   }
-  const command = ps.stdout.trim();
-  return command ? parseCmdScriptCommandLine(command) : null;
-}
-
-function readProcessArgsViaWmic(pid: number, timeoutMs: number): string[] | null {
   const wmic = spawnSync(
     "wmic",
     ["process", "where", `ProcessId=${pid}`, "get", "CommandLine", "/value"],
@@ -131,16 +142,10 @@ function readProcessArgsViaWmic(pid: number, timeoutMs: number): string[] | null
       windowsHide: true,
     },
   );
-  if (wmic.error || wmic.status !== 0) {
-    return null;
+  if (!wmic.error && wmic.status === 0) {
+    const command = extractWindowsCommandLine(wmic.stdout);
+    return { ok: true, args: command ? parseCmdScriptCommandLine(command) : null };
   }
-  const command = extractWindowsCommandLine(wmic.stdout);
-  return command ? parseCmdScriptCommandLine(command) : null;
-}
-
-export function readWindowsProcessArgsSync(
-  pid: number,
-  timeoutMs = DEFAULT_TIMEOUT_MS,
-): string[] | null {
-  return readProcessArgsViaPowerShell(pid, timeoutMs) ?? readProcessArgsViaWmic(pid, timeoutMs);
+  const code = ((wmic.error ?? powershell.error) as NodeJS.ErrnoException | undefined)?.code;
+  return { ok: false, permanent: code === "ENOENT" || code === "EACCES" || code === "EPERM" };
 }
