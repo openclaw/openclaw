@@ -720,6 +720,12 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.web.fetch.userAgent": "Override User-Agent header for web_fetch requests.",
   "tools.web.fetch.readability":
     "Use Readability to extract main content from HTML (fallbacks to basic HTML cleanup).",
+  "tools.web.fetch.ssrfPolicy":
+    "SSRF policy overrides for web_fetch. Use when DNS resolves to virtual IP ranges (e.g. Clash/mihomo fake-ip mode).",
+  "tools.web.fetch.ssrfPolicy.allowRfc2544BenchmarkRange":
+    "Allow web_fetch requests that resolve to the RFC 2544 benchmarking range (198.18.0.0/15). Enable when using Clash or mihomo in fake-ip mode.",
+  "tools.web.fetch.ssrfPolicy.dangerouslyAllowPrivateNetwork":
+    "Dangerously allow web_fetch requests that resolve to private/internal IP addresses.",
   models:
     "Model catalog root for provider definitions, merge/replace behavior, and optional Bedrock discovery integration. Keep provider definitions explicit and validated before relying on production failover paths.",
   "models.mode":

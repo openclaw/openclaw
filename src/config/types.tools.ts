@@ -550,6 +550,13 @@ export type ToolsConfig = {
       userAgent?: string;
       /** Use Readability to extract main content (default: true). */
       readability?: boolean;
+      /** SSRF policy overrides for environments using virtual IP ranges (e.g. Clash fake-ip). */
+      ssrfPolicy?: {
+        /** Allow requests resolved to the RFC 2544 benchmarking range (198.18.0.0/15). */
+        allowRfc2544BenchmarkRange?: boolean;
+        /** Dangerously allow requests resolved to private/internal addresses. */
+        dangerouslyAllowPrivateNetwork?: boolean;
+      };
     };
   };
   media?: MediaToolsConfig;
