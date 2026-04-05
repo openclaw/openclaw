@@ -49,6 +49,30 @@ describe("resolveLlmIdleTimeoutMs", () => {
     } as OpenClawConfig;
     expect(resolveLlmIdleTimeoutMs(cfg)).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
   });
+
+  it("falls back to agents.defaults.timeoutSeconds when llm.idleTimeoutSeconds is not set", () => {
+    const cfg = { agents: { defaults: { timeoutSeconds: 300 } } } as OpenClawConfig;
+    expect(resolveLlmIdleTimeoutMs(cfg)).toBe(300_000);
+  });
+
+  it("prefers llm.idleTimeoutSeconds over agents.defaults.timeoutSeconds", () => {
+    const cfg = {
+      agents: { defaults: { timeoutSeconds: 300, llm: { idleTimeoutSeconds: 120 } } },
+    } as OpenClawConfig;
+    expect(resolveLlmIdleTimeoutMs(cfg)).toBe(120_000);
+  });
+
+  it("llm.idleTimeoutSeconds=0 disables timeout even when timeoutSeconds is set", () => {
+    const cfg = {
+      agents: { defaults: { timeoutSeconds: 300, llm: { idleTimeoutSeconds: 0 } } },
+    } as OpenClawConfig;
+    expect(resolveLlmIdleTimeoutMs(cfg)).toBe(0);
+  });
+
+  it("falls back to default when both are unset", () => {
+    const cfg = { agents: { defaults: {} } } as OpenClawConfig;
+    expect(resolveLlmIdleTimeoutMs(cfg)).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
+  });
 });
 
 describe("streamWithIdleTimeout", () => {

@@ -17,17 +17,33 @@ const MAX_SAFE_TIMEOUT_MS = 2_147_000_000;
 
 /**
  * Resolves the LLM idle timeout from configuration.
+ *
+ * Priority:
+ * 1. `agents.defaults.llm.idleTimeoutSeconds` (explicit; 0 disables)
+ * 2. `agents.defaults.timeoutSeconds` (overall agent timeout as fallback)
+ * 3. DEFAULT_LLM_IDLE_TIMEOUT_MS (60 s)
+ *
  * @param cfg - OpenClaw configuration
  * @returns Idle timeout in milliseconds, or 0 to disable
  */
 export function resolveLlmIdleTimeoutMs(cfg?: OpenClawConfig): number {
   const raw = cfg?.agents?.defaults?.llm?.idleTimeoutSeconds;
-  // 0 means disabled (no timeout)
+  // 0 means explicitly disabled (no timeout)
   if (raw === 0) {
     return 0;
   }
   if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
     return Math.min(Math.floor(raw) * 1000, MAX_SAFE_TIMEOUT_MS);
+  }
+  // Fall back to the overall agent timeout so users who configure a large
+  // timeoutSeconds (e.g. for slow local models) don't hit the 60 s default.
+  const agentTimeoutSeconds = cfg?.agents?.defaults?.timeoutSeconds;
+  if (
+    typeof agentTimeoutSeconds === "number" &&
+    Number.isFinite(agentTimeoutSeconds) &&
+    agentTimeoutSeconds > 0
+  ) {
+    return Math.min(Math.floor(agentTimeoutSeconds) * 1000, MAX_SAFE_TIMEOUT_MS);
   }
   return DEFAULT_LLM_IDLE_TIMEOUT_MS;
 }
