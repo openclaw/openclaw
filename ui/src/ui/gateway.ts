@@ -216,26 +216,26 @@ const CONNECT_FAILED_CLOSE_CODE = 4008;
  * Reconnect backoff: initial delay (ms) before the first reconnect attempt.
  * Resets to this value after a successful connection.
  */
-export const INITIAL_BACKOFF_MS = 800;
+const INITIAL_BACKOFF_MS = 800;
 
 /**
  * Reconnect backoff: maximum delay (ms) between reconnect attempts.
  * Prevents unbounded growth during prolonged disconnections.
  */
-export const MAX_BACKOFF_MS = 15_000;
+const MAX_BACKOFF_MS = 15_000;
 
 /**
  * Reconnect backoff: exponential growth multiplier applied after each failed attempt.
  * e.g. 800 → 1360 → 2312 → ... → capped at MAX_BACKOFF_MS.
  */
-export const BACKOFF_MULTIPLIER = 1.7;
+const BACKOFF_MULTIPLIER = 1.7;
 
 /**
  * Delay (ms) between WebSocket open and sending the connect handshake.
  * Provides a window for the server to send a challenge nonce before the
  * client initiates authentication.
  */
-export const CONNECT_QUEUE_DELAY_MS = 750;
+const CONNECT_QUEUE_DELAY_MS = 750;
 function buildGatewayConnectAuth(
   selectedAuth: SelectedConnectAuth,
 ): GatewayConnectAuth | undefined {
