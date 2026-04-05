@@ -3,14 +3,14 @@
  * Calls gateway RPC methods and returns formatted results.
  */
 
-import { createChatModelOverride, resolvePreferredServerChatModel } from "../chat-model-ref.ts";
+import { createChatModelOverride, resolvePreferredServerChatModelValue } from "../chat-model-ref.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import {
   DEFAULT_AGENT_ID,
   DEFAULT_MAIN_KEY,
   isSubagentSessionKey,
   parseAgentSessionKey,
-} from "../session-key.ts";
+} from "../../../../src/routing/session-key.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -214,11 +214,11 @@ async function executeModel(
         ? Promise.resolve(modelCatalog)
         : loadModelCatalog(client, { allowFailure: true }),
     ]);
-    const resolvedValue = resolvePreferredServerChatModel(
+    const resolvedValue = resolvePreferredServerChatModelValue(
       patched.resolved?.model ?? args.trim(),
       patched.resolved?.modelProvider,
       resolvedModelCatalog,
-    ).value;
+    );
     return {
       content: `Model set to \`${args.trim()}\`.`,
       action: "refresh",
