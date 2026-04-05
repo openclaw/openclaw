@@ -1,0 +1,36 @@
+{
+  "id": "amazon-polly",
+  "contracts": {
+    "speechProviders": ["amazon-polly"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "description": "Enable or disable the Amazon Polly speech provider."
+      },
+      "voice": {
+        "type": "string",
+        "description": "Default Polly voice ID (e.g. Joanna, Mia)."
+      },
+      "engine": {
+        "type": "string",
+        "description": "Polly engine type (neural, standard, generative, long-form)."
+      },
+      "region": {
+        "type": "string",
+        "description": "AWS region for the Polly service (e.g. us-east-1)."
+      },
+      "languageCode": {
+        "type": "string",
+        "description": "Optional BCP-47 language code (e.g. en-US, es-MX)."
+      },
+      "sampleRate": {
+        "type": "string",
+        "description": "Audio sample rate in Hz (e.g. 22050, 24000)."
+      }
+    }
+  }
+}
