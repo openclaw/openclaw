@@ -54,6 +54,7 @@ export type ExecApprovalUnavailableReplyParams = {
   warningText?: string;
   channel?: string;
   channelLabel?: string;
+  accountId?: string;
   reason: ExecApprovalUnavailableReason;
   sentApproverDms?: boolean;
 };
@@ -381,6 +382,7 @@ export function buildExecApprovalUnavailableReplyPayload(
         ? describeNativeExecApprovalClientSetup({
             channel,
             channelLabel: params.channelLabel,
+            accountId: params.accountId,
           })
         : null;
     if (setupText) {

@@ -115,6 +115,18 @@ describe("slack native approval adapter", () => {
     expect(text).not.toContain("`channels.slack.dm.allowFrom`");
   });
 
+  it("describes the named-account Slack exec-approval setup path", () => {
+    const text = slackApprovalCapability.describeExecApprovalSetup?.({
+      channel: "slack",
+      channelLabel: "Slack",
+      accountId: "work",
+    });
+
+    expect(text).toContain("`channels.slack.accounts.work.execApprovals.approvers`");
+    expect(text).toContain("`commands.ownerAllowFrom`");
+    expect(text).not.toContain("`channels.slack.execApprovals.approvers`");
+  });
+
   it("resolves origin targets from slack turn source", async () => {
     const target = await slackNativeApprovalAdapter.native?.resolveOriginTarget?.({
       cfg: buildConfig(),

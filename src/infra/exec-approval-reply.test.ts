@@ -3,20 +3,29 @@ import type { ReplyPayload } from "../auto-reply/types.js";
 
 vi.mock("./exec-approval-surface.js", () => ({
   describeNativeExecApprovalClientSetup: vi.fn(
-    (params: { channel?: string | null; channelLabel?: string | null }) => {
+    (params: {
+      channel?: string | null;
+      channelLabel?: string | null;
+      accountId?: string | null;
+    }) => {
       const channel = (params.channel ?? "").trim().toLowerCase();
       const label = params.channelLabel ?? channel;
+      const accountId = params.accountId?.trim();
+      const accountPrefix =
+        accountId && accountId !== "default"
+          ? `channels.${channel}.accounts.${accountId}`
+          : `channels.${channel}`;
       if (channel === "matrix") {
-        return `Approve it from the Web UI or terminal UI for now. ${label} supports native exec approvals for this account. Configure \`channels.matrix.execApprovals.approvers\` or \`channels.matrix.dm.allowFrom\`; leave \`channels.matrix.execApprovals.enabled\` unset/\`auto\` or set it to \`true\`.`;
+        return `Approve it from the Web UI or terminal UI for now. ${label} supports native exec approvals for this account. Configure \`${accountPrefix}.execApprovals.approvers\` or \`${accountPrefix}.dm.allowFrom\`; leave \`${accountPrefix}.execApprovals.enabled\` unset/\`auto\` or set it to \`true\`.`;
       }
       if (channel === "discord") {
-        return `Approve it from the Web UI or terminal UI for now. ${label} supports native exec approvals for this account. Configure \`channels.discord.execApprovals.approvers\` or \`commands.ownerAllowFrom\`; leave \`channels.discord.execApprovals.enabled\` unset/\`auto\` or set it to \`true\`.`;
+        return `Approve it from the Web UI or terminal UI for now. ${label} supports native exec approvals for this account. Configure \`${accountPrefix}.execApprovals.approvers\` or \`commands.ownerAllowFrom\`; leave \`${accountPrefix}.execApprovals.enabled\` unset/\`auto\` or set it to \`true\`.`;
       }
       if (channel === "slack") {
-        return `Approve it from the Web UI or terminal UI for now. ${label} supports native exec approvals for this account. Configure \`channels.slack.execApprovals.approvers\` or \`commands.ownerAllowFrom\`; leave \`channels.slack.execApprovals.enabled\` unset/\`auto\` or set it to \`true\`.`;
+        return `Approve it from the Web UI or terminal UI for now. ${label} supports native exec approvals for this account. Configure \`${accountPrefix}.execApprovals.approvers\` or \`commands.ownerAllowFrom\`; leave \`${accountPrefix}.execApprovals.enabled\` unset/\`auto\` or set it to \`true\`.`;
       }
       if (channel === "telegram") {
-        return `Approve it from the Web UI or terminal UI for now. ${label} supports native exec approvals for this account. Configure \`channels.telegram.execApprovals.approvers\`; if you leave it unset, OpenClaw can infer numeric owner IDs from \`channels.telegram.allowFrom\` or direct-message \`defaultTo\` when possible. Leave \`channels.telegram.execApprovals.enabled\` unset/\`auto\` or set it to \`true\`.`;
+        return `Approve it from the Web UI or terminal UI for now. ${label} supports native exec approvals for this account. Configure \`${accountPrefix}.execApprovals.approvers\`; if you leave it unset, OpenClaw can infer numeric owner IDs from \`${accountPrefix}.allowFrom\` or direct-message \`${accountPrefix}.defaultTo\` when possible. Leave \`${accountPrefix}.execApprovals.enabled\` unset/\`auto\` or set it to \`true\`.`;
       }
       return null;
     },
@@ -145,6 +154,50 @@ describe("exec approval reply helpers", () => {
         reason: "initiating-platform-disabled",
         channel,
         channelLabel,
+      }).text;
+
+      expect(text).toContain(expected);
+      expect(text).not.toContain(unexpected);
+    },
+  );
+
+  it.each([
+    {
+      channel: "discord",
+      channelLabel: "Discord",
+      accountId: "work",
+      expected: "`channels.discord.accounts.work.execApprovals.approvers`",
+      unexpected: "`channels.discord.execApprovals.approvers`",
+    },
+    {
+      channel: "slack",
+      channelLabel: "Slack",
+      accountId: "work",
+      expected: "`channels.slack.accounts.work.execApprovals.approvers`",
+      unexpected: "`channels.slack.execApprovals.approvers`",
+    },
+    {
+      channel: "telegram",
+      channelLabel: "Telegram",
+      accountId: "work",
+      expected: "`channels.telegram.accounts.work.allowFrom`",
+      unexpected: "`channels.telegram.allowFrom`",
+    },
+    {
+      channel: "matrix",
+      channelLabel: "Matrix",
+      accountId: "work",
+      expected: "`channels.matrix.accounts.work.dm.allowFrom`",
+      unexpected: "`channels.matrix.dm.allowFrom`",
+    },
+  ])(
+    "uses account-scoped disabled setup guidance for $channelLabel named account",
+    ({ channel, channelLabel, accountId, expected, unexpected }) => {
+      const text = buildExecApprovalUnavailableReplyPayload({
+        reason: "initiating-platform-disabled",
+        channel,
+        channelLabel,
+        accountId,
       }).text;
 
       expect(text).toContain(expected);

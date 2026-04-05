@@ -741,6 +741,7 @@ export type ChannelApprovalAdapter = {
   describeExecApprovalSetup?: (params: {
     channel: string;
     channelLabel: string;
+    accountId?: string;
   }) => string | null | undefined;
 };
 

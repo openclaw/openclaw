@@ -99,6 +99,18 @@ describe("createDiscordNativeApprovalAdapter", () => {
     expect(text).not.toContain("`channels.discord.dm.allowFrom`");
   });
 
+  it("describes the named-account Discord exec-approval setup path", () => {
+    const text = getDiscordApprovalCapability().describeExecApprovalSetup?.({
+      channel: "discord",
+      channelLabel: "Discord",
+      accountId: "work",
+    });
+
+    expect(text).toContain("`channels.discord.accounts.work.execApprovals.approvers`");
+    expect(text).toContain("`commands.ownerAllowFrom`");
+    expect(text).not.toContain("`channels.discord.execApprovals.approvers`");
+  });
+
   it("normalizes prefixed turn-source channel ids", async () => {
     const adapter = createDiscordNativeApprovalAdapter();
 

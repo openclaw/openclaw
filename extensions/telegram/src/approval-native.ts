@@ -91,8 +91,13 @@ const resolveTelegramApproverDmTargets = createChannelApproverDmTargetResolver({
 const telegramNativeApprovalCapability = createApproverRestrictedNativeApprovalCapability({
   channel: "telegram",
   channelLabel: "Telegram",
-  describeExecApprovalSetup: () =>
-    "Approve it from the Web UI or terminal UI for now. Telegram supports native exec approvals for this account. Configure `channels.telegram.execApprovals.approvers`; if you leave it unset, OpenClaw can infer numeric owner IDs from `channels.telegram.allowFrom` or direct-message `defaultTo` when possible. Leave `channels.telegram.execApprovals.enabled` unset/`auto` or set it to `true`.",
+  describeExecApprovalSetup: ({ accountId }) => {
+    const prefix =
+      accountId && accountId !== "default"
+        ? `channels.telegram.accounts.${accountId}`
+        : "channels.telegram";
+    return `Approve it from the Web UI or terminal UI for now. Telegram supports native exec approvals for this account. Configure \`${prefix}.execApprovals.approvers\`; if you leave it unset, OpenClaw can infer numeric owner IDs from \`${prefix}.allowFrom\` or direct-message \`${prefix}.defaultTo\` when possible. Leave \`${prefix}.execApprovals.enabled\` unset/\`auto\` or set it to \`true\`.`;
+  },
   listAccountIds: listTelegramAccountIds,
   hasApprovers: ({ cfg, accountId }) =>
     getTelegramExecApprovalApprovers({ cfg, accountId }).length > 0,

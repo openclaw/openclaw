@@ -347,6 +347,7 @@ function readExecApprovalUnavailableDetails(result: unknown): {
   warningText?: string;
   channel?: string;
   channelLabel?: string;
+  accountId?: string;
   sentApproverDms?: boolean;
 } | null {
   if (!result || typeof result !== "object") {
@@ -374,6 +375,7 @@ function readExecApprovalUnavailableDetails(result: unknown): {
     warningText: typeof details.warningText === "string" ? details.warningText : undefined,
     channel: typeof details.channel === "string" ? details.channel : undefined,
     channelLabel: typeof details.channelLabel === "string" ? details.channelLabel : undefined,
+    accountId: typeof details.accountId === "string" ? details.accountId : undefined,
     sentApproverDms: details.sentApproverDms === true,
   };
 }
@@ -435,6 +437,7 @@ async function emitToolResultOutput(params: {
           warningText: approvalUnavailable.warningText,
           channel: approvalUnavailable.channel,
           channelLabel: approvalUnavailable.channelLabel,
+          accountId: approvalUnavailable.accountId,
           sentApproverDms: approvalUnavailable.sentApproverDms,
         }),
       );

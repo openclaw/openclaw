@@ -393,6 +393,7 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
             reason: "initiating-platform-disabled",
             channel: "discord",
             channelLabel: "Discord",
+            accountId: "work",
           },
         },
       } as never,

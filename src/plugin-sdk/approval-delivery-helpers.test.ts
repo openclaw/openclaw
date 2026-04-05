@@ -232,8 +232,15 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
 describe("createApproverRestrictedNativeApprovalCapability", () => {
   it("builds the canonical approval capability and preserves legacy split compatibility", () => {
     const describeExecApprovalSetup = vi.fn(
-      ({ channel, channelLabel }: { channel: string; channelLabel: string }) =>
-        `${channelLabel}:${channel}:setup`,
+      ({
+        channel,
+        channelLabel,
+        accountId,
+      }: {
+        channel: string;
+        channelLabel: string;
+        accountId?: string;
+      }) => `${channelLabel}:${channel}:${accountId ?? "default"}:setup`,
     );
     const capability = createApproverRestrictedNativeApprovalCapability({
       channel: "matrix",
@@ -261,8 +268,9 @@ describe("createApproverRestrictedNativeApprovalCapability", () => {
       capability.describeExecApprovalSetup?.({
         channel: "matrix",
         channelLabel: "Matrix",
+        accountId: "ops",
       }),
-    ).toBe("Matrix:matrix:setup");
+    ).toBe("Matrix:matrix:ops:setup");
     expect(
       capability.native?.describeDeliveryCapabilities({
         cfg: {} as never,

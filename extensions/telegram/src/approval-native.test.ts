@@ -40,8 +40,21 @@ describe("telegram native approval adapter", () => {
 
     expect(text).toContain("`channels.telegram.execApprovals.approvers`");
     expect(text).toContain("`channels.telegram.allowFrom`");
-    expect(text).toContain("`defaultTo`");
+    expect(text).toContain("`channels.telegram.defaultTo`");
     expect(text).not.toContain("`channels.telegram.dm.allowFrom`");
+  });
+
+  it("describes the named-account Telegram exec-approval setup path", () => {
+    const text = telegramApprovalCapability.describeExecApprovalSetup?.({
+      channel: "telegram",
+      channelLabel: "Telegram",
+      accountId: "work",
+    });
+
+    expect(text).toContain("`channels.telegram.accounts.work.execApprovals.approvers`");
+    expect(text).toContain("`channels.telegram.accounts.work.allowFrom`");
+    expect(text).toContain("`channels.telegram.accounts.work.defaultTo`");
+    expect(text).not.toContain("`channels.telegram.allowFrom`");
   });
 
   it("normalizes direct-chat origin targets so DM dedupe can converge", async () => {

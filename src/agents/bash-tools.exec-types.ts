@@ -76,6 +76,7 @@ export type ExecToolDetails =
         | "no-approval-route";
       channel?: string;
       channelLabel?: string;
+      accountId?: string;
       sentApproverDms?: boolean;
       host: ExecHost;
       command: string;
