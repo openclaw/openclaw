@@ -103,7 +103,10 @@ vi.mock("./subagent-announce-delivery.js", () => ({
       params: {
         sessionKey: params.targetRequesterSessionKey,
         message: params.triggerMessage,
-        deliver: false,
+        deliver:
+          !params.requesterIsSubagent &&
+          params.requesterOrigin?.channel !== "webchat" &&
+          Boolean(params.requesterOrigin?.channel && params.requesterOrigin?.to),
         bestEffortDeliver: params.bestEffortDeliver,
         ...(params.requesterIsSubagent
           ? {}
@@ -127,8 +130,27 @@ vi.mock("./subagent-announce-delivery.js", () => ({
     const store = loadSessionStoreMock("/tmp/sessions.json") as Record<string, unknown>;
     return store?.[sessionKey] ?? { sessionId: sessionKey };
   },
-  resolveAnnounceOrigin: (entry: { origin?: unknown } | undefined, requesterOrigin?: unknown) =>
-    requesterOrigin ?? entry?.origin,
+  resolveAnnounceOrigin: (
+    entry:
+      | {
+          lastChannel?: string;
+          lastTo?: string;
+          lastAccountId?: string;
+          lastThreadId?: string;
+          origin?: { provider?: string; channel?: string; accountId?: string };
+        }
+      | undefined,
+    requesterOrigin?: { channel?: string; to?: string; accountId?: string; threadId?: string },
+  ) => ({
+    channel:
+      requesterOrigin?.channel ??
+      entry?.lastChannel ??
+      entry?.origin?.provider ??
+      entry?.origin?.channel,
+    to: requesterOrigin?.to ?? entry?.lastTo,
+    accountId: requesterOrigin?.accountId ?? entry?.lastAccountId ?? entry?.origin?.accountId,
+    threadId: requesterOrigin?.threadId ?? entry?.lastThreadId,
+  }),
   resolveSubagentCompletionOrigin: async (params: { requesterOrigin?: unknown }) =>
     params.requesterOrigin,
   resolveSubagentAnnounceTimeoutMs: () => 10_000,
