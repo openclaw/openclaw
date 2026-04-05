@@ -170,6 +170,7 @@ Serialization notes:
 - `serialize: true` keeps same-lane runs ordered.
 - Most CLIs serialize on one provider lane.
 - `claude-cli` is narrower: resumed runs serialize per Claude session id, and fresh runs serialize per workspace path. Independent workspaces can run in parallel.
+- OpenClaw drops stored CLI session reuse when the backend auth state changes, including relogin, token rotation, or a changed auth profile credential.
 
 ## Images (pass-through)
 

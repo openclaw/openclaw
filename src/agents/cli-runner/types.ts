@@ -43,7 +43,7 @@ export type CliPreparedBackend = {
 
 export type CliReusableSession = {
   sessionId?: string;
-  invalidatedReason?: "auth-profile" | "system-prompt" | "mcp";
+  invalidatedReason?: "auth-profile" | "auth-epoch" | "system-prompt" | "mcp";
 };
 
 export type PreparedCliRunContext = {
@@ -59,5 +59,6 @@ export type PreparedCliRunContext = {
   systemPromptReport: SessionSystemPromptReport;
   bootstrapPromptWarningLines: string[];
   heartbeatPrompt?: string;
+  authEpoch?: string;
   extraSystemPromptHash?: string;
 };

@@ -14,6 +14,7 @@ import {
   makeBootstrapWarn as makeBootstrapWarnImpl,
   resolveBootstrapContextForRun as resolveBootstrapContextForRunImpl,
 } from "../bootstrap-files.js";
+import { resolveCliAuthEpoch } from "../cli-auth-epoch.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
 import { hashCliSessionText, resolveCliSessionReuse } from "../cli-session.js";
 import { resolveOpenClawDocsPath } from "../docs-path.js";
@@ -65,6 +66,10 @@ export async function prepareCliRunContext(
   if (!backendResolved) {
     throw new Error(`Unknown CLI backend: ${params.provider}`);
   }
+  const authEpoch = await resolveCliAuthEpoch({
+    provider: params.provider,
+    authProfileId: params.authProfileId,
+  });
   const extraSystemPrompt = params.extraSystemPrompt?.trim() ?? "";
   const extraSystemPromptHash = hashCliSessionText(extraSystemPrompt);
   const modelId = (params.model ?? "default").trim() || "default";
@@ -130,6 +135,7 @@ export async function prepareCliRunContext(
       params.cliSessionBinding ??
       (params.cliSessionId ? { sessionId: params.cliSessionId } : undefined),
     authProfileId: params.authProfileId,
+    authEpoch,
     extraSystemPromptHash,
     mcpConfigHash: preparedBackend.mcpConfigHash,
   });
@@ -197,6 +203,7 @@ export async function prepareCliRunContext(
     systemPromptReport,
     bootstrapPromptWarningLines: bootstrapPromptWarning.lines,
     heartbeatPrompt,
+    authEpoch,
     extraSystemPromptHash,
   };
 }
