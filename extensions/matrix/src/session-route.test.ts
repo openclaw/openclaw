@@ -187,4 +187,62 @@ describe("resolveMatrixOutboundSessionRoute", () => {
       to: "room:@alice:example.org",
     });
   });
+
+  it("reuses the canonical DM room after user-target outbound metadata overwrites latest to fields", () => {
+    const storePath = createTempStore({
+      "agent:main:matrix:channel:!dm:example.org": {
+        sessionId: "sess-1",
+        updatedAt: Date.now(),
+        chatType: "direct",
+        origin: {
+          chatType: "direct",
+          from: "matrix:@alice:example.org",
+          to: "room:@alice:example.org",
+          nativeChannelId: "!dm:example.org",
+          accountId: "ops",
+        },
+        deliveryContext: {
+          channel: "matrix",
+          to: "room:@alice:example.org",
+          accountId: "ops",
+        },
+        lastTo: "room:@alice:example.org",
+        lastAccountId: "ops",
+      },
+    });
+    const cfg = {
+      session: {
+        store: storePath,
+      },
+      channels: {
+        matrix: {
+          dm: {
+            sessionScope: "per-room",
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const route = resolveMatrixOutboundSessionRoute({
+      cfg,
+      agentId: "main",
+      accountId: "ops",
+      currentSessionKey: "agent:main:matrix:channel:!dm:example.org",
+      target: "@alice:example.org",
+      resolvedTarget: {
+        to: "@alice:example.org",
+        kind: "user",
+        source: "normalized",
+      },
+    });
+
+    expect(route).toMatchObject({
+      sessionKey: "agent:main:matrix:channel:!dm:example.org",
+      baseSessionKey: "agent:main:matrix:channel:!dm:example.org",
+      peer: { kind: "channel", id: "!dm:example.org" },
+      chatType: "direct",
+      from: "matrix:@alice:example.org",
+      to: "room:!dm:example.org",
+    });
+  });
 });

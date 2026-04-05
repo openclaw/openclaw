@@ -26,11 +26,13 @@ export function resolveMatrixSessionAccountId(value: unknown): string | undefine
 export function resolveMatrixStoredRoomId(params: {
   deliveryTo?: unknown;
   lastTo?: unknown;
+  originNativeChannelId?: unknown;
   originTo?: unknown;
 }): string | undefined {
   return (
     resolveMatrixRoomTargetId(params.deliveryTo) ??
     resolveMatrixRoomTargetId(params.lastTo) ??
+    resolveMatrixRoomTargetId(params.originNativeChannelId) ??
     resolveMatrixRoomTargetId(params.originTo)
   );
 }

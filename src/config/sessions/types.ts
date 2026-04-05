@@ -18,6 +18,7 @@ export type SessionOrigin = {
   chatType?: SessionChatType;
   from?: string;
   to?: string;
+  nativeChannelId?: string;
   accountId?: string;
   threadId?: string | number;
 };

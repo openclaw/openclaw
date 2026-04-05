@@ -32,6 +32,9 @@ const mergeOrigin = (
   if (next?.to) {
     merged.to = next.to;
   }
+  if (next?.nativeChannelId) {
+    merged.nativeChannelId = next.nativeChannelId;
+  }
   if (next?.accountId) {
     merged.accountId = next.accountId;
   }
@@ -53,6 +56,7 @@ export function deriveSessionOrigin(ctx: MsgContext): SessionOrigin | undefined 
   const from = ctx.From?.trim();
   const to =
     (typeof ctx.OriginatingTo === "string" ? ctx.OriginatingTo : ctx.To)?.trim() ?? undefined;
+  const nativeChannelId = ctx.NativeChannelId?.trim();
   const accountId = ctx.AccountId?.trim();
   const threadId = ctx.MessageThreadId ?? undefined;
 
@@ -74,6 +78,9 @@ export function deriveSessionOrigin(ctx: MsgContext): SessionOrigin | undefined 
   }
   if (to) {
     origin.to = to;
+  }
+  if (nativeChannelId) {
+    origin.nativeChannelId = nativeChannelId;
   }
   if (accountId) {
     origin.accountId = accountId;

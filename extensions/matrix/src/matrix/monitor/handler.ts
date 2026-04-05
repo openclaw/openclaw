@@ -213,7 +213,12 @@ function resolveMatrixSharedDmContextNotice(params: {
     }).existing as
       | {
           deliveryContext?: { channel?: unknown; to?: unknown; accountId?: unknown };
-          origin?: { provider?: unknown; to?: unknown; accountId?: unknown };
+          origin?: {
+            provider?: unknown;
+            to?: unknown;
+            nativeChannelId?: unknown;
+            accountId?: unknown;
+          };
           lastChannel?: unknown;
           lastTo?: unknown;
           lastAccountId?: unknown;
@@ -242,6 +247,7 @@ function resolveMatrixSharedDmContextNotice(params: {
     const priorRoomId = resolveMatrixStoredRoomId({
       deliveryTo: existing.deliveryContext?.to,
       lastTo: existing.lastTo,
+      originNativeChannelId: existing.origin?.nativeChannelId,
       originTo: existing.origin?.to,
     });
     if (!priorRoomId || priorRoomId === params.roomId) {
@@ -1182,6 +1188,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         ...locationPayload?.context,
         CommandAuthorized: commandAuthorized,
         CommandSource: "text" as const,
+        NativeChannelId: roomId,
         OriginatingChannel: "matrix" as const,
         OriginatingTo: `room:${roomId}`,
       });

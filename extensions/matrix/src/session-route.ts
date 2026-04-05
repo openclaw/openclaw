@@ -56,19 +56,25 @@ function resolveMatrixCurrentDmRoomId(params: {
     if (!currentAccountId || currentAccountId !== normalizeAccountId(params.accountId)) {
       return undefined;
     }
+    const currentRoomId = resolveMatrixStoredRoomId({
+      deliveryTo: existing.deliveryContext?.to,
+      lastTo: existing.lastTo,
+      originNativeChannelId: existing.origin?.nativeChannelId,
+      originTo: existing.origin?.to,
+    });
     const currentUserId = resolveMatrixDirectUserId({
       from: existing.origin?.from,
-      to: existing.deliveryContext?.to ?? existing.lastTo ?? existing.origin?.to,
+      to:
+        (currentRoomId ? `room:${currentRoomId}` : undefined) ??
+        existing.deliveryContext?.to ??
+        existing.lastTo ??
+        existing.origin?.to,
       chatType: existing.origin?.chatType ?? existing.chatType,
     });
     if (!currentUserId || currentUserId !== params.targetUserId) {
       return undefined;
     }
-    return resolveMatrixStoredRoomId({
-      deliveryTo: existing.deliveryContext?.to,
-      lastTo: existing.lastTo,
-      originTo: existing.origin?.to,
-    });
+    return currentRoomId;
   } catch {
     return undefined;
   }
