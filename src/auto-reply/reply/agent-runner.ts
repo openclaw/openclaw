@@ -65,7 +65,7 @@ import {
   ReplyRunAlreadyActiveError,
   replyRunRegistry,
   type ReplyOperation,
-} from "./reply-operation.js";
+} from "./reply-run-registry.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";

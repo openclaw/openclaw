@@ -8,7 +8,7 @@ import {
   replyRunRegistry,
   resolveActiveReplyRunSessionId,
   waitForReplyRunEndBySessionId,
-} from "./reply-operation.js";
+} from "./reply-run-registry.js";
 
 describe("reply run registry", () => {
   afterEach(() => {

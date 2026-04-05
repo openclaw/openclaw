@@ -38,7 +38,7 @@ import {
 } from "./abort-primitives.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { clearSessionQueues } from "./queue.js";
-import { replyRunRegistry } from "./reply-operation.js";
+import { replyRunRegistry } from "./reply-run-registry.js";
 
 export { resolveAbortCutoffFromContext, shouldSkipMessageByAbortCutoff } from "./abort-cutoff.js";
 export {

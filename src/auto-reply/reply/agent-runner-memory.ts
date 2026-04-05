@@ -41,7 +41,7 @@ import {
 } from "./memory-flush.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
-import type { ReplyOperation } from "./reply-operation.js";
+import type { ReplyOperation } from "./reply-run-registry.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
 export function estimatePromptTokensForMemoryFlush(prompt?: string): number | undefined {

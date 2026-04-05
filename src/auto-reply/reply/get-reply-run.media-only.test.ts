@@ -105,11 +105,11 @@ let drainFormattedSystemEvents: typeof import("./session-system-events.js").drai
 let resolveTypingMode: typeof import("./typing-mode.js").resolveTypingMode;
 let abortEmbeddedPiRunActual: typeof import("../../agents/pi-embedded-runner/runs.js").abortEmbeddedPiRun;
 let clearActiveEmbeddedRun: typeof import("../../agents/pi-embedded-runner/runs.js").clearActiveEmbeddedRun;
-let createReplyOperation: typeof import("./reply-operation.js").createReplyOperation;
-let getActiveReplyRunCount: typeof import("./reply-operation.js").getActiveReplyRunCount;
+let createReplyOperation: typeof import("./reply-run-registry.js").createReplyOperation;
+let getActiveReplyRunCount: typeof import("./reply-run-registry.js").getActiveReplyRunCount;
 let isEmbeddedPiRunActiveActual: typeof import("../../agents/pi-embedded-runner/runs.js").isEmbeddedPiRunActive;
 let isEmbeddedPiRunStreamingActual: typeof import("../../agents/pi-embedded-runner/runs.js").isEmbeddedPiRunStreaming;
-let replyRunTesting: typeof import("./reply-operation.js").__testing;
+let replyRunTesting: typeof import("./reply-run-registry.js").__testing;
 let resolveActiveEmbeddedRunSessionIdActual: typeof import("../../agents/pi-embedded-runner/runs.js").resolveActiveEmbeddedRunSessionId;
 let runsTesting: typeof import("../../agents/pi-embedded-runner/runs.js").__testing;
 let setActiveEmbeddedRun: typeof import("../../agents/pi-embedded-runner/runs.js").setActiveEmbeddedRun;
@@ -225,7 +225,7 @@ describe("runPreparedReply media-only handling", () => {
       __testing: replyRunTesting,
       createReplyOperation,
       getActiveReplyRunCount,
-    } = await import("./reply-operation.js"));
+    } = await import("./reply-run-registry.js"));
   });
 
   beforeEach(async () => {

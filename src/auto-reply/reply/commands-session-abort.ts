@@ -18,7 +18,7 @@ import { rejectUnauthorizedCommand } from "./command-gates.js";
 import { persistAbortTargetEntry } from "./commands-session-store.js";
 import type { CommandHandler } from "./commands-types.js";
 import { clearSessionQueues } from "./queue.js";
-import { replyRunRegistry } from "./reply-operation.js";
+import { replyRunRegistry } from "./reply-run-registry.js";
 
 type AbortTarget = {
   entry?: SessionEntry;

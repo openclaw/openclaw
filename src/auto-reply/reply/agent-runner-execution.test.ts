@@ -6,7 +6,7 @@ import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import { MAX_LIVE_SWITCH_RETRIES } from "./agent-runner-execution.js";
 import type { FollowupRun } from "./queue.js";
-import type { ReplyOperation } from "./reply-operation.js";
+import type { ReplyOperation } from "./reply-run-registry.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
 const state = vi.hoisted(() => ({

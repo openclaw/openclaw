@@ -8,7 +8,7 @@ import {
   queueReplyRunMessage,
   resolveActiveReplyRunSessionId,
   waitForReplyRunEndBySessionId,
-} from "../../auto-reply/reply/reply-operation.js";
+} from "../../auto-reply/reply/reply-run-registry.js";
 import {
   diagnosticLogger as diag,
   logMessageQueued,
@@ -364,72 +364,6 @@ export function updateActiveEmbeddedRunSnapshot(
     return;
   }
   ACTIVE_EMBEDDED_RUN_SNAPSHOTS.set(sessionId, snapshot);
-}
-
-export function moveActiveEmbeddedRun(params: {
-  fromSessionId: string;
-  toSessionId: string;
-  handle: EmbeddedPiQueueHandle;
-  fromSessionKey?: string;
-  toSessionKey?: string;
-}): boolean {
-  const fromSessionId = params.fromSessionId.trim();
-  const toSessionId = params.toSessionId.trim();
-  if (!fromSessionId || !toSessionId) {
-    return false;
-  }
-  if (fromSessionId === toSessionId) {
-    return ACTIVE_EMBEDDED_RUNS.get(fromSessionId) === params.handle;
-  }
-  if (ACTIVE_EMBEDDED_RUNS.get(fromSessionId) !== params.handle) {
-    diag.debug(`run move skipped: sessionId=${fromSessionId} reason=handle_mismatch`);
-    return false;
-  }
-  const targetHandle = ACTIVE_EMBEDDED_RUNS.get(toSessionId);
-  if (targetHandle && targetHandle !== params.handle) {
-    diag.debug(`run move skipped: nextSessionId=${toSessionId} reason=target_occupied`);
-    return false;
-  }
-
-  ACTIVE_EMBEDDED_RUNS.delete(fromSessionId);
-  ACTIVE_EMBEDDED_RUNS.set(toSessionId, params.handle);
-  clearActiveRunSessionKeys(fromSessionId, params.fromSessionKey);
-  setActiveRunSessionKey(params.toSessionKey ?? params.fromSessionKey, toSessionId);
-
-  const snapshot = ACTIVE_EMBEDDED_RUN_SNAPSHOTS.get(fromSessionId);
-  if (snapshot) {
-    ACTIVE_EMBEDDED_RUN_SNAPSHOTS.delete(fromSessionId);
-    ACTIVE_EMBEDDED_RUN_SNAPSHOTS.set(toSessionId, snapshot);
-  }
-
-  const modelSwitchRequest = EMBEDDED_RUN_MODEL_SWITCH_REQUESTS.get(fromSessionId);
-  if (modelSwitchRequest) {
-    EMBEDDED_RUN_MODEL_SWITCH_REQUESTS.delete(fromSessionId);
-    EMBEDDED_RUN_MODEL_SWITCH_REQUESTS.set(toSessionId, modelSwitchRequest);
-  }
-
-  const fromWaiters = EMBEDDED_RUN_WAITERS.get(fromSessionId);
-  if (fromWaiters) {
-    EMBEDDED_RUN_WAITERS.delete(fromSessionId);
-    const existingWaiters = EMBEDDED_RUN_WAITERS.get(toSessionId);
-    EMBEDDED_RUN_WAITERS.set(
-      toSessionId,
-      existingWaiters ? new Set([...existingWaiters, ...fromWaiters]) : fromWaiters,
-    );
-  }
-
-  logSessionStateChange({
-    sessionId: toSessionId,
-    sessionKey: params.toSessionKey ?? params.fromSessionKey,
-    state: "processing",
-    reason: `run_session_rotated:${fromSessionId}`,
-  });
-  if (!toSessionId.startsWith("probe-")) {
-    diag.debug(
-      `run moved: sessionId=${fromSessionId} nextSessionId=${toSessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`,
-    );
-  }
-  return true;
 }
 
 export function clearActiveEmbeddedRun(

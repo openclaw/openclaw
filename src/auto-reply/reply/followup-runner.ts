@@ -28,13 +28,13 @@ import {
   resolveOriginMessageTo,
 } from "./origin-routing.js";
 import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
-import { createReplyOperation } from "./reply-operation.js";
 import {
   applyReplyThreading,
   filterMessagingToolDuplicates,
   filterMessagingToolMediaDuplicates,
   shouldSuppressMessagingToolReplies,
 } from "./reply-payloads.js";
+import { createReplyOperation } from "./reply-run-registry.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
