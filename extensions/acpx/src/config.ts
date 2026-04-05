@@ -67,6 +67,27 @@ function resolveRepoAcpxPluginRoot(currentRoot: string): string | null {
   return isAcpxPluginRoot(workspaceRoot) ? workspaceRoot : null;
 }
 
+function resolveAcpxPluginRootFromOpenClawLayout(moduleUrl: string): string | null {
+  let cursor = path.dirname(fileURLToPath(moduleUrl));
+  for (let i = 0; i < 5; i += 1) {
+    const candidates = [
+      path.join(cursor, "extensions", "acpx"),
+      path.join(cursor, "dist", "extensions", "acpx"),
+      path.join(cursor, "dist-runtime", "extensions", "acpx"),
+    ];
+    for (const candidate of candidates) {
+      if (isAcpxPluginRoot(candidate)) {
+        return candidate;
+      }
+    }
+    const parent = path.dirname(cursor);
+    if (parent === cursor) {
+      break;
+    }
+    cursor = parent;
+  }
+  return null;
+}
 export function resolveAcpxPluginRoot(moduleUrl: string = import.meta.url): string {
   const resolvedRoot = resolveNearestAcpxPluginRoot(moduleUrl);
   // In a live repo checkout, dist/ can be rebuilt out from under the running gateway.
@@ -74,6 +95,9 @@ export function resolveAcpxPluginRoot(moduleUrl: string = import.meta.url): stri
   return (
     resolveWorkspaceAcpxPluginRoot(resolvedRoot) ??
     resolveRepoAcpxPluginRoot(resolvedRoot) ??
+    // Shared dist/dist-runtime chunks can load this module outside the plugin tree.
+    // Scan common OpenClaw layouts before falling back to the nearest path guess.
+    resolveAcpxPluginRootFromOpenClawLayout(moduleUrl) ??
     resolvedRoot
   );
 }

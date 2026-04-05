@@ -80,6 +80,21 @@ describe("acpx plugin config parsing", () => {
     }
   });
 
+  it("resolves workspace plugin root from dist-runtime shared chunks", () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "acpx-root-shared-dist-runtime-"));
+    const workspacePluginRoot = bundledPluginRootAt(repoRoot, "acpx");
+    try {
+      fs.mkdirSync(workspacePluginRoot, { recursive: true });
+      fs.mkdirSync(path.join(repoRoot, "dist-runtime"), { recursive: true });
+      fs.writeFileSync(path.join(workspacePluginRoot, "package.json"), "{}\n", "utf8");
+      fs.writeFileSync(path.join(workspacePluginRoot, "openclaw.plugin.json"), "{}\n", "utf8");
+
+      const moduleUrl = pathToFileURL(path.join(repoRoot, "dist-runtime", "register.runtime.js")).href;
+      expect(resolveAcpxPluginRoot(moduleUrl)).toBe(workspacePluginRoot);
+    } finally {
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
   it("resolves bundled acpx with pinned version by default", () => {
     const resolved = resolveAcpxPluginConfig({
       rawConfig: {
