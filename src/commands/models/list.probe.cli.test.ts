@@ -115,6 +115,7 @@ describe("runAuthProbes CLI backend dispatch", () => {
           "Reply with exactly OK and nothing else. Do not use tools. Keep the reply to at most 16 tokens.",
         provider: "claude-cli",
         model: "opus",
+        thinkLevel: "off",
         streamParams: { maxTokens: 16 },
       }),
     );
