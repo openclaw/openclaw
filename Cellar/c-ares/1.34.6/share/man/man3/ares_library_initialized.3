@@ -1,0 +1,23 @@
+.\"
+.\" Copyright (C) 2016 by Daniel Stenberg
+.\" SPDX-License-Identifier: MIT
+.\"
+.TH ARES_LIBRARY_INITIALIZED 3 "29 Sep 2016"
+.SH NAME
+ares_library_initialized \- get the initialization state
+.SH SYNOPSIS
+.nf
+#include <ares.h>
+
+int ares_library_initialized(void)
+.fi
+.SH DESCRIPTION
+Returns information if c-ares needs to get initialized.
+.SH RETURN VALUE
+\fIARES_ENOTINITIALIZED\fP if not initialized and \fIARES_SUCCESS\fP if no
+initialization is needed.
+.SH AVAILABILITY
+This function was first introduced in c-ares version 1.11.0
+.SH SEE ALSO
+.BR ares_library_init (3),
+.BR ares_library_cleanup (3)

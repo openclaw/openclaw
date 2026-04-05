@@ -1,0 +1,50 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_SIGNATURE-HMAC</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_SIGNATURE-HMAC, EVP_SIGNATURE-Siphash, EVP_SIGNATURE-Poly1305, EVP_SIGNATURE-CMAC - The legacy <b>EVP_PKEY</b> MAC signature implementations</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The algorithms described here have legacy support for creating MACs using <a href="../man3/EVP_DigestSignInit.html">EVP_DigestSignInit(3)</a> and related functions. This is not the preferred way of creating MACs. Instead you should use the newer <a href="../man3/EVP_MAC_init.html">EVP_MAC_init(3)</a> functions. This mechanism is provided for backwards compatibility with older versions of OpenSSL.</p>
+
+<p>The same signature parameters can be set using EVP_PKEY_CTX_set_params() as can be set via EVP_MAC_CTX_set_params() for the underlying EVP_MAC. See <a href="../man7/EVP_MAC-HMAC.html">EVP_MAC-HMAC(7)</a>, <a href="../man7/EVP_MAC-Siphash.html">EVP_MAC-Siphash(7)</a>, <a href="../man7/EVP_MAC-Poly1305.html">EVP_MAC-Poly1305(7)</a> and <a href="../man7/EVP_MAC-CMAC.html">EVP_MAC-CMAC(7)</a> for details.</p>
+
+<pre><code>See L&lt;EVP_PKEY-HMAC(7)&gt;, L&lt;EVP_PKEY-Siphash(7)&gt;, L&lt;EVP_PKEY-Poly1305(7)&gt; or
+L&lt;EVP_PKEY-CMAC(7)&gt; for details about parameters that are supported during the
+creation of an EVP_PKEY.</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_MAC_init.html">EVP_MAC_init(3)</a>, <a href="../man3/EVP_DigestSignInit.html">EVP_DigestSignInit(3)</a>, <a href="../man7/EVP_PKEY-HMAC.html">EVP_PKEY-HMAC(7)</a>, <a href="../man7/EVP_PKEY-Siphash.html">EVP_PKEY-Siphash(7)</a>, <a href="../man7/EVP_PKEY-Poly1305.html">EVP_PKEY-Poly1305(7)</a>, <a href="../man7/EVP_PKEY-CMAC.html">EVP_PKEY-CMAC(7)</a>, <a href="../man7/EVP_MAC-HMAC.html">EVP_MAC-HMAC(7)</a>, <a href="../man7/EVP_MAC-Siphash.html">EVP_MAC-Siphash(7)</a>, <a href="../man7/EVP_MAC-Poly1305.html">EVP_MAC-Poly1305(7)</a>, <a href="../man7/EVP_MAC-CMAC.html">EVP_MAC-CMAC(7)</a>, <a href="../man7/provider-signature.html">provider-signature(7)</a>,</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2020 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

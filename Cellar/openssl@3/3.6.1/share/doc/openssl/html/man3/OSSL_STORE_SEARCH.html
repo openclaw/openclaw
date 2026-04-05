@@ -1,0 +1,151 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OSSL_STORE_SEARCH</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Types">Types</a></li>
+      <li><a href="#Application-Functions">Application Functions</a></li>
+      <li><a href="#Loader-Functions">Loader Functions</a></li>
+    </ul>
+  </li>
+  <li><a href="#SUPPORTED-CRITERION-TYPES">SUPPORTED CRITERION TYPES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OSSL_STORE_SEARCH, OSSL_STORE_SEARCH_by_name, OSSL_STORE_SEARCH_by_issuer_serial, OSSL_STORE_SEARCH_by_key_fingerprint, OSSL_STORE_SEARCH_by_alias, OSSL_STORE_SEARCH_free, OSSL_STORE_SEARCH_get_type, OSSL_STORE_SEARCH_get0_name, OSSL_STORE_SEARCH_get0_serial, OSSL_STORE_SEARCH_get0_bytes, OSSL_STORE_SEARCH_get0_string, OSSL_STORE_SEARCH_get0_digest - Type and functions to create OSSL_STORE search criteria</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/store.h&gt;
+
+typedef struct ossl_store_search_st OSSL_STORE_SEARCH;
+
+OSSL_STORE_SEARCH *OSSL_STORE_SEARCH_by_name(X509_NAME *name);
+OSSL_STORE_SEARCH *OSSL_STORE_SEARCH_by_issuer_serial(X509_NAME *name,
+                                                      const ASN1_INTEGER
+                                                      *serial);
+OSSL_STORE_SEARCH *OSSL_STORE_SEARCH_by_key_fingerprint(const EVP_MD *digest,
+                                                        const unsigned char
+                                                        *bytes, int len);
+OSSL_STORE_SEARCH *OSSL_STORE_SEARCH_by_alias(const char *alias);
+
+void OSSL_STORE_SEARCH_free(OSSL_STORE_SEARCH *search);
+
+int OSSL_STORE_SEARCH_get_type(const OSSL_STORE_SEARCH *criterion);
+X509_NAME *OSSL_STORE_SEARCH_get0_name(OSSL_STORE_SEARCH *criterion);
+const ASN1_INTEGER *OSSL_STORE_SEARCH_get0_serial(const OSSL_STORE_SEARCH
+                                                  *criterion);
+const unsigned char *OSSL_STORE_SEARCH_get0_bytes(const OSSL_STORE_SEARCH
+                                                  *criterion, size_t *length);
+const char *OSSL_STORE_SEARCH_get0_string(const OSSL_STORE_SEARCH *criterion);
+const EVP_MD *OSSL_STORE_SEARCH_get0_digest(const OSSL_STORE_SEARCH
+                                            *criterion);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>These functions are used to specify search criteria to help search for specific objects through other names than just the URI that&#39;s given to OSSL_STORE_open(). For example, this can be useful for an application that has received a URI and then wants to add on search criteria in a uniform and supported manner.</p>
+
+<h2 id="Types">Types</h2>
+
+<p><b>OSSL_STORE_SEARCH</b> is an opaque type that holds the constructed search criterion, and that can be given to an OSSL_STORE context with OSSL_STORE_find().</p>
+
+<p>The calling application owns the allocation of an <b>OSSL_STORE_SEARCH</b> at all times, and should therefore be careful not to deallocate it before OSSL_STORE_close() has been called for the OSSL_STORE context it was given to.</p>
+
+<h2 id="Application-Functions">Application Functions</h2>
+
+<p>OSSL_STORE_SEARCH_by_name(), OSSL_STORE_SEARCH_by_issuer_serial(), OSSL_STORE_SEARCH_by_key_fingerprint(), and OSSL_STORE_SEARCH_by_alias() are used to create an <b>OSSL_STORE_SEARCH</b> from a subject name, an issuer name and serial number pair, a key fingerprint, and an alias (for example a friendly name). The parameters that are provided are not copied, only referred to in a criterion, so they must have at least the same life time as the created <b>OSSL_STORE_SEARCH</b>.</p>
+
+<p>OSSL_STORE_SEARCH_free() is used to free the <b>OSSL_STORE_SEARCH</b>. If the argument is NULL, nothing is done.</p>
+
+<h2 id="Loader-Functions">Loader Functions</h2>
+
+<p>OSSL_STORE_SEARCH_get_type() returns the criterion type for the given <b>OSSL_STORE_SEARCH</b>.</p>
+
+<p>OSSL_STORE_SEARCH_get0_name(), OSSL_STORE_SEARCH_get0_serial(), OSSL_STORE_SEARCH_get0_bytes(), OSSL_STORE_SEARCH_get0_string(), and OSSL_STORE_SEARCH_get0_digest() are used to retrieve different data from a <b>OSSL_STORE_SEARCH</b>, as available for each type. For more information, see <a href="#SUPPORTED-CRITERION-TYPES">&quot;SUPPORTED CRITERION TYPES&quot;</a> below.</p>
+
+<h1 id="SUPPORTED-CRITERION-TYPES">SUPPORTED CRITERION TYPES</h1>
+
+<p>Currently supported criterion types are:</p>
+
+<dl>
+
+<dt id="OSSL_STORE_SEARCH_BY_NAME">OSSL_STORE_SEARCH_BY_NAME</dt>
+<dd>
+
+<p>This criterion supports a search by exact match of subject name. The subject name itself is a <b>X509_NAME</b> pointer. A criterion of this type is created with OSSL_STORE_SEARCH_by_name(), and the actual subject name is retrieved with OSSL_STORE_SEARCH_get0_name().</p>
+
+</dd>
+<dt id="OSSL_STORE_SEARCH_BY_ISSUER_SERIAL">OSSL_STORE_SEARCH_BY_ISSUER_SERIAL</dt>
+<dd>
+
+<p>This criterion supports a search by exact match of both issuer name and serial number. The issuer name itself is a <b>X509_NAME</b> pointer, and the serial number is a <b>ASN1_INTEGER</b> pointer. A criterion of this type is created with OSSL_STORE_SEARCH_by_issuer_serial() and the actual issuer name and serial number are retrieved with OSSL_STORE_SEARCH_get0_name() and OSSL_STORE_SEARCH_get0_serial().</p>
+
+</dd>
+<dt id="OSSL_STORE_SEARCH_BY_KEY_FINGERPRINT">OSSL_STORE_SEARCH_BY_KEY_FINGERPRINT</dt>
+<dd>
+
+<p>This criterion supports a search by exact match of key fingerprint. The key fingerprint in itself is a string of bytes and its length, as well as the algorithm that was used to compute the fingerprint. The digest may be left unspecified (NULL), and in that case, the loader has to decide on a default digest and compare fingerprints accordingly. A criterion of this type is created with OSSL_STORE_SEARCH_by_key_fingerprint() and the actual fingerprint and its length can be retrieved with OSSL_STORE_SEARCH_get0_bytes(). The digest can be retrieved with OSSL_STORE_SEARCH_get0_digest().</p>
+
+</dd>
+<dt id="OSSL_STORE_SEARCH_BY_ALIAS">OSSL_STORE_SEARCH_BY_ALIAS</dt>
+<dd>
+
+<p>This criterion supports a search by match of an alias of some kind. The alias in itself is a simple C string. A criterion of this type is created with OSSL_STORE_SEARCH_by_alias() and the actual alias is retrieved with OSSL_STORE_SEARCH_get0_string().</p>
+
+</dd>
+</dl>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>OSSL_STORE_SEARCH_by_name(), OSSL_STORE_SEARCH_by_issuer_serial(), OSSL_STORE_SEARCH_by_key_fingerprint(), and OSSL_STORE_SEARCH_by_alias() return a <b>OSSL_STORE_SEARCH</b> pointer on success, or NULL on failure.</p>
+
+<p>OSSL_STORE_SEARCH_get_type() returns the criterion type of the given <b>OSSL_STORE_SEARCH</b>. There is no error value.</p>
+
+<p>OSSL_STORE_SEARCH_get0_name() returns a <b>X509_NAME</b> pointer on success, or NULL when the given <b>OSSL_STORE_SEARCH</b> was of a different type.</p>
+
+<p>OSSL_STORE_SEARCH_get0_serial() returns a <b>ASN1_INTEGER</b> pointer on success, or NULL when the given <b>OSSL_STORE_SEARCH</b> was of a different type.</p>
+
+<p>OSSL_STORE_SEARCH_get0_bytes() returns a <b>const unsigned char</b> pointer and sets <i>*length</i> to the strings length on success, or NULL when the given <b>OSSL_STORE_SEARCH</b> was of a different type.</p>
+
+<p>OSSL_STORE_SEARCH_get0_string() returns a <b>const char</b> pointer on success, or NULL when the given <b>OSSL_STORE_SEARCH</b> was of a different type.</p>
+
+<p>OSSL_STORE_SEARCH_get0_digest() returns a <b>const EVP_MD</b> pointer. NULL is a valid value and means that the store loader default will be used when applicable.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ossl_store.html">ossl_store(7)</a>, <a href="../man3/OSSL_STORE_supports_search.html">OSSL_STORE_supports_search(3)</a>, <a href="../man3/OSSL_STORE_find.html">OSSL_STORE_find(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p><b>OSSL_STORE_SEARCH</b>, OSSL_STORE_SEARCH_by_name(), OSSL_STORE_SEARCH_by_issuer_serial(), OSSL_STORE_SEARCH_by_key_fingerprint(), OSSL_STORE_SEARCH_by_alias(), OSSL_STORE_SEARCH_free(), OSSL_STORE_SEARCH_get_type(), OSSL_STORE_SEARCH_get0_name(), OSSL_STORE_SEARCH_get0_serial(), OSSL_STORE_SEARCH_get0_bytes(), and OSSL_STORE_SEARCH_get0_string() were added in OpenSSL 1.1.1.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2018-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

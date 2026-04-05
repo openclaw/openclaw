@@ -1,0 +1,211 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>ossl-guide-libraries-introduction</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#INTRODUCTION">INTRODUCTION</a></li>
+  <li><a href="#PROVIDERS">PROVIDERS</a></li>
+  <li><a href="#LIBRARY-CONTEXTS">LIBRARY CONTEXTS</a></li>
+  <li><a href="#PROPERTY-QUERY-STRINGS">PROPERTY QUERY STRINGS</a></li>
+  <li><a href="#MULTI-THREADED-APPLICATIONS">MULTI-THREADED APPLICATIONS</a></li>
+  <li><a href="#ERROR-HANDLING">ERROR HANDLING</a></li>
+  <li><a href="#OPENSSL-PROVIDERS">OPENSSL PROVIDERS</a>
+    <ul>
+      <li><a href="#Default-provider">Default provider</a></li>
+      <li><a href="#Base-provider">Base provider</a></li>
+      <li><a href="#FIPS-provider">FIPS provider</a></li>
+      <li><a href="#Legacy-provider">Legacy provider</a></li>
+      <li><a href="#Null-provider">Null provider</a></li>
+    </ul>
+  </li>
+  <li><a href="#CONFIGURATION">CONFIGURATION</a></li>
+  <li><a href="#LIBRARY-CONVENTIONS">LIBRARY CONVENTIONS</a></li>
+  <li><a href="#DEMO-APPLICATIONS">DEMO APPLICATIONS</a></li>
+  <li><a href="#FURTHER-READING">FURTHER READING</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>ossl-guide-libraries-introduction - OpenSSL Guide: An introduction to the OpenSSL libraries</p>
+
+<h1 id="INTRODUCTION">INTRODUCTION</h1>
+
+<p>OpenSSL supplies two libraries that can be used by applications known as <code>libcrypto</code> and <code>libssl</code>.</p>
+
+<p>The <code>libcrypto</code> library provides APIs for general purpose cryptography such as encryption, digital signatures, hash functions, etc. It additionally supplies supporting APIs for cryptography related standards, e.g. for reading and writing digital certificates (also known as X.509 certificates). Finally it also supplies various additional supporting APIs that are not directly cryptography related but are nonetheless useful and depended upon by other APIs. For example the &quot;BIO&quot; functions provide capabilities for abstracting I/O, e.g. via a file or over a network.</p>
+
+<p>The <code>libssl</code> library provides functions to perform secure communication between two peers across a network. Most significantly it implements support for the SSL/TLS, DTLS and QUIC standards.</p>
+
+<p>The <code>libssl</code> library depends on and uses many of the capabilities supplied by <code>libcrypto</code>. Any application linked against <code>libssl</code> will also link against <code>libcrypto</code>, and most applications that do this will directly use API functions supplied by both libraries.</p>
+
+<p>Applications may be written that only use <code>libcrypto</code> capabilities and do not link against <code>libssl</code> at all.</p>
+
+<h1 id="PROVIDERS">PROVIDERS</h1>
+
+<p>As well as the two main libraries, OpenSSL also comes with a set of providers.</p>
+
+<p>A provider in OpenSSL is a component that collects together algorithm implementations (for example an implementation of the symmetric encryption algorithm AES). In order to use an algorithm you must have at least one provider loaded that contains an implementation of it. OpenSSL comes with a number of providers and they may also be obtained from third parties.</p>
+
+<p>Providers may either be &quot;built-in&quot; or in the form of a separate loadable module file (typically one ending in &quot;.so&quot; or &quot;.dll&quot; dependent on the platform). A built-in provider is one that is either already present in <code>libcrypto</code> or one that the application has supplied itself directly. Third parties can also supply providers in the form of loadable modules.</p>
+
+<p>If you don&#39;t load a provider explicitly (either in program code or via config) then the OpenSSL built-in &quot;default&quot; provider will be automatically loaded.</p>
+
+<p>See <a href="#OPENSSL-PROVIDERS">&quot;OPENSSL PROVIDERS&quot;</a> below for a description of the providers that OpenSSL itself supplies.</p>
+
+<p>Loading and unloading providers is quite an expensive operation. It is normally done once, early on in the application lifecycle and those providers are kept loaded for the duration of the application execution.</p>
+
+<h1 id="LIBRARY-CONTEXTS">LIBRARY CONTEXTS</h1>
+
+<p>Many OpenSSL API functions make use of a library context. A library context can be thought of as a &quot;scope&quot; within which configuration options take effect. When a provider is loaded, it is only loaded within the scope of a given library context. In this way it is possible for different components of a complex application to each use a different library context and have different providers loaded with different configuration settings.</p>
+
+<p>If an application does not explicitly create a library context then the &quot;default&quot; library context will be used.</p>
+
+<p>Library contexts are represented by the <b>OSSL_LIB_CTX</b> type. Many OpenSSL API functions take a library context as a parameter. Applications can always pass <b>NULL</b> for this parameter to just use the default library context.</p>
+
+<p>The default library context is automatically created the first time it is needed. This will automatically load any available configuration file and will initialise OpenSSL for use. Unlike in earlier versions of OpenSSL (prior to 1.1.0) no explicit initialisation steps need to be taken.</p>
+
+<p>Similarly when the application exits, the default library context is automatically destroyed. No explicit de-initialisation steps need to be taken.</p>
+
+<p>See <a href="../man3/OSSL_LIB_CTX.html">OSSL_LIB_CTX(3)</a> for more information about library contexts. See also <a href="../man7/ossl-guide-libcrypto-introduction.html">&quot;ALGORITHM FETCHING&quot; in ossl-guide-libcrypto-introduction(7)</a>.</p>
+
+<h1 id="PROPERTY-QUERY-STRINGS">PROPERTY QUERY STRINGS</h1>
+
+<p>In some cases the available providers may mean that more than one implementation of any given algorithm might be available. For example the OpenSSL FIPS provider supplies alternative implementations of many of the same algorithms that are available in the OpenSSL default provider.</p>
+
+<p>The process of selecting an algorithm implementation is known as &quot;fetching&quot;. When OpenSSL fetches an algorithm to use it is possible to specify a &quot;property query string&quot; to guide the selection process. For example a property query string of &quot;provider=default&quot; could be used to force the selection to only consider algorithm implementations in the default provider.</p>
+
+<p>Property query strings can be specified explicitly as an argument to a function. It is also possible to specify a default property query string for the whole library context using the <a href="../man3/EVP_set_default_properties.html">EVP_set_default_properties(3)</a> or <a href="../man3/EVP_default_properties_enable_fips.html">EVP_default_properties_enable_fips(3)</a> functions. Where both default properties and function specific properties are specified then they are combined. Function specific properties will override default properties where there is a conflict.</p>
+
+<p>See <a href="../man7/ossl-guide-libcrypto-introduction.html">&quot;ALGORITHM FETCHING&quot; in ossl-guide-libcrypto-introduction(7)</a> for more information about fetching. See <a href="../man7/property.html">property(7)</a> for more information about properties.</p>
+
+<h1 id="MULTI-THREADED-APPLICATIONS">MULTI-THREADED APPLICATIONS</h1>
+
+<p>As long as OpenSSL has been built with support for threads (the default case on most platforms) then most OpenSSL <i>functions</i> are thread-safe in the sense that it is safe to call the same function from multiple threads at the same time. However most OpenSSL <i>data structures</i> are not thread-safe. For example the <a href="../man3/BIO_write.html">BIO_write(3)</a> and <a href="../man3/BIO_read.html">BIO_read(3)</a> functions are thread safe. However it would not be thread safe to call BIO_write() from one thread while calling BIO_read() in another where both functions are passed the same <b>BIO</b> object since both of them may attempt to make changes to the same <b>BIO</b> object.</p>
+
+<p>There are exceptions to these rules. A small number of functions are not thread safe at all. Where this is the case this restriction should be noted in the documentation for the function. Similarly some data structures may be partially or fully thread safe. For example it is always safe to use an <b>OSSL_LIB_CTX</b> in multiple threads.</p>
+
+<p>See <a href="../man7/openssl-threads.html">openssl-threads(7)</a> for a more detailed discussion on OpenSSL threading support.</p>
+
+<h1 id="ERROR-HANDLING">ERROR HANDLING</h1>
+
+<p>Most OpenSSL functions will provide a return value indicating whether the function has been successful or not. It is considered best practice to always check the return value from OpenSSL functions (where one is available).</p>
+
+<p>Most functions that return a pointer value will return NULL in the event of a failure.</p>
+
+<p>Most functions that return an integer value will return a positive integer for success. Some of these functions will return 0 to indicate failure. Others may return 0 or a negative value for failure.</p>
+
+<p>Some functions cannot fail and have a <b>void</b> return type. There are also a small number of functions that do not conform to the above conventions (e.g. they may return 0 to indicate success).</p>
+
+<p>Due to the above variations in behaviour it is important to check the documentation for each function for information about how to interpret the return value for it.</p>
+
+<p>It is sometimes necessary to get further information about the cause of a failure (e.g. for debugging or logging purposes). Many (but not all) functions will add further information about a failure to the OpenSSL error stack. By using the error stack you can find out information such as a reason code/string for the error as well as the exact file and source line within OpenSSL that emitted the error.</p>
+
+<p>OpenSSL supplies a set of error handling functions to query the error stack. See <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a> for information about the functions available for querying error data. Also see <a href="../man3/ERR_print_errors.html">ERR_print_errors(3)</a> for information on some simple helper functions for printing error data. Finally look at <a href="../man3/ERR_clear_error.html">ERR_clear_error(3)</a> for how to clear old errors from the error stack.</p>
+
+<h1 id="OPENSSL-PROVIDERS">OPENSSL PROVIDERS</h1>
+
+<p>OpenSSL comes with a set of providers.</p>
+
+<p>The algorithms available in each of these providers may vary due to build time configuration options. The <a href="../man1/openssl-list.html">openssl-list(1)</a> command can be used to list the currently available algorithms.</p>
+
+<p>The names of the algorithms shown from <a href="../man1/openssl-list.html">openssl-list(1)</a> can be used as an algorithm identifier to the appropriate fetching function. Also see the provider specific manual pages linked below for further details about using the algorithms available in each of the providers.</p>
+
+<p>As well as the OpenSSL providers third parties can also implement providers. For information on writing a provider see <a href="../man7/provider.html">provider(7)</a>.</p>
+
+<h2 id="Default-provider">Default provider</h2>
+
+<p>The default provider is built-in as part of the <i>libcrypto</i> library and contains all of the most commonly used algorithm implementations. Should it be needed (if other providers are loaded and offer implementations of the same algorithms), the property query string &quot;provider=default&quot; can be used as a search criterion for these implementations. The default provider includes all of the functionality in the base provider below.</p>
+
+<p>If you don&#39;t load any providers at all then the &quot;default&quot; provider will be automatically loaded. If you explicitly load any provider then the &quot;default&quot; provider would also need to be explicitly loaded if it is required.</p>
+
+<p>See <a href="../man7/OSSL_PROVIDER-default.html">OSSL_PROVIDER-default(7)</a>.</p>
+
+<h2 id="Base-provider">Base provider</h2>
+
+<p>The base provider is built in as part of the <i>libcrypto</i> library and contains algorithm implementations for encoding and decoding of OpenSSL keys. Should it be needed (if other providers are loaded and offer implementations of the same algorithms), the property query string &quot;provider=base&quot; can be used as a search criterion for these implementations. Some encoding and decoding algorithm implementations are not FIPS algorithm implementations in themselves but support algorithms from the FIPS provider and are allowed for use in &quot;FIPS mode&quot;. The property query string &quot;fips=yes&quot; can be used to select such algorithms.</p>
+
+<p>See <a href="../man7/OSSL_PROVIDER-base.html">OSSL_PROVIDER-base(7)</a>.</p>
+
+<h2 id="FIPS-provider">FIPS provider</h2>
+
+<p>The FIPS provider is a dynamically loadable module, and must therefore be loaded explicitly, either in code or through OpenSSL configuration (see <a href="../man5/config.html">config(5)</a>). It contains algorithm implementations that have been validated according to FIPS standards. Should it be needed (if other providers are loaded and offer implementations of the same algorithms), the property query string &quot;provider=fips&quot; can be used as a search criterion for these implementations. All approved algorithm implementations in the FIPS provider can also be selected with the property &quot;fips=yes&quot;. The FIPS provider may also contain non-approved algorithm implementations and these can be selected with the property &quot;fips=no&quot;.</p>
+
+<p>Typically the <a href="#Base-provider">&quot;Base provider&quot;</a> will also need to be loaded because the FIPS provider does not support the encoding or decoding of keys.</p>
+
+<p>See <a href="../man7/OSSL_PROVIDER-FIPS.html">OSSL_PROVIDER-FIPS(7)</a> and <a href="../man7/fips_module.html">fips_module(7)</a>.</p>
+
+<h2 id="Legacy-provider">Legacy provider</h2>
+
+<p>The legacy provider is a dynamically loadable module, and must therefore be loaded explicitly, either in code or through OpenSSL configuration (see <a href="../man5/config.html">config(5)</a>). It contains algorithm implementations that are considered insecure, or are no longer in common use such as MD2 or RC4. Should it be needed (if other providers are loaded and offer implementations of the same algorithms), the property &quot;provider=legacy&quot; can be used as a search criterion for these implementations.</p>
+
+<p>See <a href="../man7/OSSL_PROVIDER-legacy.html">OSSL_PROVIDER-legacy(7)</a>.</p>
+
+<h2 id="Null-provider">Null provider</h2>
+
+<p>The null provider is built in as part of the <i>libcrypto</i> library. It contains no algorithms in it at all. When fetching algorithms the default provider will be automatically loaded if no other provider has been explicitly loaded. To prevent that from happening you can explicitly load the null provider.</p>
+
+<p>You can use this if you create your own library context and want to ensure that all API calls have correctly passed the created library context and are not accidentally using the default library context. Load the null provider into the default library context so that the default library context has no algorithm implementations available.</p>
+
+<p>See <a href="../man7/OSSL_PROVIDER-null.html">OSSL_PROVIDER-null(7)</a>.</p>
+
+<h1 id="CONFIGURATION">CONFIGURATION</h1>
+
+<p>By default OpenSSL will load a configuration file when it is first used. This will set up various configuration settings within the default library context. Applications that create their own library contexts may optionally configure them with a config file using the <a href="../man3/OSSL_LIB_CTX_load_config.html">OSSL_LIB_CTX_load_config(3)</a> function.</p>
+
+<p>The configuration file can be used to automatically load providers and set up default property query strings.</p>
+
+<p>For information on the OpenSSL configuration file format see <a href="../man5/config.html">config(5)</a>.</p>
+
+<h1 id="LIBRARY-CONVENTIONS">LIBRARY CONVENTIONS</h1>
+
+<p>Many OpenSSL functions that &quot;get&quot; or &quot;set&quot; a value follow a naming convention using the numbers <b>0</b> and <b>1</b>, i.e. &quot;get0&quot;, &quot;get1&quot;, &quot;set0&quot; and &quot;set1&quot;. This can also apply to some functions that &quot;add&quot; a value to an existing set, i.e. &quot;add0&quot; and &quot;add1&quot;.</p>
+
+<p>For example the functions:</p>
+
+<pre><code>int X509_CRL_add0_revoked(X509_CRL *crl, X509_REVOKED *rev);
+int X509_add1_trust_object(X509 *x, const ASN1_OBJECT *obj);</code></pre>
+
+<p>In the <b>0</b> version the ownership of the object is passed to (for an add or set) or retained by (for a get) the parent object. For example after calling the X509_CRL_add0_revoked() function above, ownership of the <i>rev</i> object is passed to the <i>crl</i> object. Therefore, after calling this function <i>rev</i> should not be freed directly. It will be freed implicitly when <i>crl</i> is freed.</p>
+
+<p>In the <b>1</b> version the ownership of the object is not passed to or retained by the parent object. Instead a copy or &quot;up ref&quot; of the object is performed. So after calling the X509_add1_trust_object() function above the application will still be responsible for freeing the <i>obj</i> value where appropriate.</p>
+
+<p>Many OpenSSL functions conform to a naming convention of the form <b>CLASSNAME_func_name()</b>. In this naming convention the <b>CLASSNAME</b> is the name of an OpenSSL data structure (given in capital letters) that the function is primarily operating on. The <b>func_name</b> portion of the name is usually in lowercase letters and indicates the purpose of the function.</p>
+
+<h1 id="DEMO-APPLICATIONS">DEMO APPLICATIONS</h1>
+
+<p>OpenSSL is distributed with a set of demo applications which provide some examples of how to use the various API functions. To look at them download the OpenSSL source code from the OpenSSL website (<a href="https://www.openssl.org/source/">https://www.openssl.org/source/</a>). Extract the downloaded <b>.tar.gz</b> file for the version of OpenSSL that you are using and look at the various files in the <b>demos</b> sub-directory.</p>
+
+<p>The Makefiles in the subdirectories give instructions on how to build and run the demo applications.</p>
+
+<h1 id="FURTHER-READING">FURTHER READING</h1>
+
+<p>See <a href="../man7/ossl-guide-libcrypto-introduction.html">ossl-guide-libcrypto-introduction(7)</a> for a more detailed introduction to using <code>libcrypto</code> and <a href="../man7/ossl-guide-libssl-introduction.html">ossl-guide-libssl-introduction(7)</a> for more information on <code>libssl</code>.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man1/openssl.html">openssl(1)</a>, <a href="../man7/ssl.html">ssl(7)</a>, <a href="../man7/evp.html">evp(7)</a>, <a href="../man3/OSSL_LIB_CTX.html">OSSL_LIB_CTX(3)</a>, <a href="../man7/openssl-threads.html">openssl-threads(7)</a>, <a href="../man7/property.html">property(7)</a>, <a href="../man7/OSSL_PROVIDER-default.html">OSSL_PROVIDER-default(7)</a>, <a href="../man7/OSSL_PROVIDER-base.html">OSSL_PROVIDER-base(7)</a>, <a href="../man7/OSSL_PROVIDER-FIPS.html">OSSL_PROVIDER-FIPS(7)</a>, <a href="../man7/OSSL_PROVIDER-legacy.html">OSSL_PROVIDER-legacy(7)</a>, <a href="../man7/OSSL_PROVIDER-null.html">OSSL_PROVIDER-null(7)</a>, <a href="../man7/openssl-glossary.html">openssl-glossary(7)</a>, <a href="../man7/provider.html">provider(7)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

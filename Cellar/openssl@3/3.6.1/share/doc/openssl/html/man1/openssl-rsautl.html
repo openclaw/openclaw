@@ -1,0 +1,279 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>openssl-rsautl</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#OPTIONS">OPTIONS</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>openssl-rsautl - RSA command</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<p><b>openssl</b> <b>rsautl</b> [<b>-help</b>] [<b>-in</b> <i>file</i>] [<b>-passin</b> <i>arg</i>] [<b>-rev</b>] [<b>-out</b> <i>file</i>] [<b>-inkey</b> <i>filename</i>|<i>uri</i>] [<b>-keyform</b> <b>DER</b>|<b>PEM</b>|<b>P12</b>|<b>ENGINE</b>] [<b>-pubin</b>] [<b>-certin</b>] [<b>-sign</b>] [<b>-verify</b>] [<b>-encrypt</b>] [<b>-decrypt</b>] [<b>-pkcs</b>] [<b>-x931</b>] [<b>-oaep</b>] [<b>-raw</b>] [<b>-hexdump</b>] [<b>-asn1parse</b>] [<b>-engine</b> <i>id</i>] [<b>-rand</b> <i>files</i>] [<b>-writerand</b> <i>file</i>] [<b>-provider</b> <i>name</i>] [<b>-provider-path</b> <i>path</i>] [<b>-provparam</b> <i>[name:]key=value</i>] [<b>-propquery</b> <i>propq</i>]</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>This command has been deprecated. The <a href="../man1/openssl-pkeyutl.html">openssl-pkeyutl(1)</a> command should be used instead.</p>
+
+<p>This command can be used to sign, verify, encrypt and decrypt data using the RSA algorithm.</p>
+
+<h1 id="OPTIONS">OPTIONS</h1>
+
+<dl>
+
+<dt id="help"><b>-help</b></dt>
+<dd>
+
+<p>Print out a usage message.</p>
+
+</dd>
+<dt id="in-filename"><b>-in</b> <i>filename</i></dt>
+<dd>
+
+<p>This specifies the input filename to read data from or standard input if this option is not specified.</p>
+
+</dd>
+<dt id="passin-arg"><b>-passin</b> <i>arg</i></dt>
+<dd>
+
+<p>The passphrase used in the output file. See see <a href="../man1/openssl-passphrase-options.html">openssl-passphrase-options(1)</a>.</p>
+
+</dd>
+<dt id="rev"><b>-rev</b></dt>
+<dd>
+
+<p>Reverse the order of the input.</p>
+
+</dd>
+<dt id="out-filename"><b>-out</b> <i>filename</i></dt>
+<dd>
+
+<p>Specifies the output filename to write to or standard output by default.</p>
+
+</dd>
+<dt id="inkey-filename-uri"><b>-inkey</b> <i>filename</i>|<i>uri</i></dt>
+<dd>
+
+<p>The input key, by default it should be an RSA private key.</p>
+
+</dd>
+<dt id="keyform-DER-PEM-P12-ENGINE"><b>-keyform</b> <b>DER</b>|<b>PEM</b>|<b>P12</b>|<b>ENGINE</b></dt>
+<dd>
+
+<p>The key format; unspecified by default. See <a href="../man1/openssl-format-options.html">openssl-format-options(1)</a> for details.</p>
+
+</dd>
+<dt id="pubin"><b>-pubin</b></dt>
+<dd>
+
+<p>By default a private key is read from the key input. With this option a public key is read instead. If the input contains no public key but a private key, its public part is used.</p>
+
+</dd>
+<dt id="certin"><b>-certin</b></dt>
+<dd>
+
+<p>The input is a certificate containing an RSA public key.</p>
+
+</dd>
+<dt id="sign"><b>-sign</b></dt>
+<dd>
+
+<p>Sign the input data and output the signed result. This requires an RSA private key.</p>
+
+</dd>
+<dt id="verify"><b>-verify</b></dt>
+<dd>
+
+<p>Verify the input data and output the recovered data.</p>
+
+</dd>
+<dt id="encrypt"><b>-encrypt</b></dt>
+<dd>
+
+<p>Encrypt the input data using an RSA public key.</p>
+
+</dd>
+<dt id="decrypt"><b>-decrypt</b></dt>
+<dd>
+
+<p>Decrypt the input data using an RSA private key.</p>
+
+</dd>
+<dt id="pkcs--oaep--x931--raw"><b>-pkcs</b>, <b>-oaep</b>, <b>-x931</b>, <b>-raw</b></dt>
+<dd>
+
+<p>The padding to use: PKCS#1 v1.5 (the default), PKCS#1 OAEP, ANSI X9.31, or no padding, respectively. For signatures, only <b>-pkcs</b> and <b>-raw</b> can be used.</p>
+
+<p>Note: because of protection against Bleichenbacher attacks, decryption using PKCS#1 v1.5 mode will not return errors in case padding check failed. Use <b>-raw</b> and inspect the returned value manually to check if the padding is correct.</p>
+
+</dd>
+<dt id="hexdump"><b>-hexdump</b></dt>
+<dd>
+
+<p>Hex dump the output data.</p>
+
+</dd>
+<dt id="asn1parse"><b>-asn1parse</b></dt>
+<dd>
+
+<p>Parse the ASN.1 output data, this is useful when combined with the <b>-verify</b> option.</p>
+
+</dd>
+<dt id="engine-id"><b>-engine</b> <i>id</i></dt>
+<dd>
+
+<p>See <a href="../man1/openssl.html">&quot;Engine Options&quot; in openssl(1)</a>. This option is deprecated.</p>
+
+</dd>
+<dt id="rand-files--writerand-file"><b>-rand</b> <i>files</i>, <b>-writerand</b> <i>file</i></dt>
+<dd>
+
+<p>See <a href="../man1/openssl.html">&quot;Random State Options&quot; in openssl(1)</a> for details.</p>
+
+</dd>
+<dt id="provider-name"><b>-provider</b> <i>name</i></dt>
+<dd>
+
+</dd>
+<dt id="provider-path-path"><b>-provider-path</b> <i>path</i></dt>
+<dd>
+
+</dd>
+<dt id="provparam-name:-key-value"><b>-provparam</b> <i>[name:]key=value</i></dt>
+<dd>
+
+</dd>
+<dt id="propquery-propq"><b>-propquery</b> <i>propq</i></dt>
+<dd>
+
+<p>See <a href="../man1/openssl.html">&quot;Provider Options&quot; in openssl(1)</a>, <a href="../man7/provider.html">provider(7)</a>, and <a href="../man7/property.html">property(7)</a>.</p>
+
+</dd>
+</dl>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>Since this command uses the RSA algorithm directly, it can only be used to sign or verify small pieces of data.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>Examples equivalent to these can be found in the documentation for the non-deprecated <a href="../man1/openssl-pkeyutl.html">openssl-pkeyutl(1)</a> command.</p>
+
+<p>Sign some data using a private key:</p>
+
+<pre><code>openssl rsautl -sign -in file -inkey key.pem -out sig</code></pre>
+
+<p>Recover the signed data</p>
+
+<pre><code>openssl rsautl -verify -in sig -inkey key.pem</code></pre>
+
+<p>Examine the raw signed data:</p>
+
+<pre><code>openssl rsautl -verify -in sig -inkey key.pem -raw -hexdump
+
+0000 - 00 01 ff ff ff ff ff ff-ff ff ff ff ff ff ff ff   ................
+0010 - ff ff ff ff ff ff ff ff-ff ff ff ff ff ff ff ff   ................
+0020 - ff ff ff ff ff ff ff ff-ff ff ff ff ff ff ff ff   ................
+0030 - ff ff ff ff ff ff ff ff-ff ff ff ff ff ff ff ff   ................
+0040 - ff ff ff ff ff ff ff ff-ff ff ff ff ff ff ff ff   ................
+0050 - ff ff ff ff ff ff ff ff-ff ff ff ff ff ff ff ff   ................
+0060 - ff ff ff ff ff ff ff ff-ff ff ff ff ff ff ff ff   ................
+0070 - ff ff ff ff 00 68 65 6c-6c 6f 20 77 6f 72 6c 64   .....hello world</code></pre>
+
+<p>The PKCS#1 block formatting is evident from this. If this was done using encrypt and decrypt the block would have been of type 2 (the second byte) and random padding data visible instead of the 0xff bytes.</p>
+
+<p>It is possible to analyse the signature of certificates using this command in conjunction with <a href="../man1/openssl-asn1parse.html">openssl-asn1parse(1)</a>. Consider the self signed example in <i>certs/pca-cert.pem</i>. Running <a href="../man1/openssl-asn1parse.html">openssl-asn1parse(1)</a> as follows yields:</p>
+
+<pre><code>openssl asn1parse -in pca-cert.pem
+
+   0:d=0  hl=4 l= 742 cons: SEQUENCE
+   4:d=1  hl=4 l= 591 cons:  SEQUENCE
+   8:d=2  hl=2 l=   3 cons:   cont [ 0 ]
+  10:d=3  hl=2 l=   1 prim:    INTEGER           :02
+  13:d=2  hl=2 l=   1 prim:   INTEGER           :00
+  16:d=2  hl=2 l=  13 cons:   SEQUENCE
+  18:d=3  hl=2 l=   9 prim:    OBJECT            :md5WithRSAEncryption
+  29:d=3  hl=2 l=   0 prim:    NULL
+  31:d=2  hl=2 l=  92 cons:   SEQUENCE
+  33:d=3  hl=2 l=  11 cons:    SET
+  35:d=4  hl=2 l=   9 cons:     SEQUENCE
+  37:d=5  hl=2 l=   3 prim:      OBJECT            :countryName
+  42:d=5  hl=2 l=   2 prim:      PRINTABLESTRING   :AU
+ ....
+ 599:d=1  hl=2 l=  13 cons:  SEQUENCE
+ 601:d=2  hl=2 l=   9 prim:   OBJECT            :md5WithRSAEncryption
+ 612:d=2  hl=2 l=   0 prim:   NULL
+ 614:d=1  hl=3 l= 129 prim:  BIT STRING</code></pre>
+
+<p>The final BIT STRING contains the actual signature. It can be extracted with:</p>
+
+<pre><code>openssl asn1parse -in pca-cert.pem -out sig -noout -strparse 614</code></pre>
+
+<p>The certificate public key can be extracted with:</p>
+
+<pre><code>openssl x509 -in test/testx509.pem -pubkey -noout &gt;pubkey.pem</code></pre>
+
+<p>The signature can be analysed with:</p>
+
+<pre><code>openssl rsautl -in sig -verify -asn1parse -inkey pubkey.pem -pubin
+
+   0:d=0  hl=2 l=  32 cons: SEQUENCE
+   2:d=1  hl=2 l=  12 cons:  SEQUENCE
+   4:d=2  hl=2 l=   8 prim:   OBJECT            :md5
+  14:d=2  hl=2 l=   0 prim:   NULL
+  16:d=1  hl=2 l=  16 prim:  OCTET STRING
+     0000 - f3 46 9e aa 1a 4a 73 c9-37 ea 93 00 48 25 08 b5   .F...Js.7...H%..</code></pre>
+
+<p>This is the parsed version of an ASN1 DigestInfo structure. It can be seen that the digest used was md5. The actual part of the certificate that was signed can be extracted with:</p>
+
+<pre><code>openssl asn1parse -in pca-cert.pem -out tbs -noout -strparse 4</code></pre>
+
+<p>and its digest computed with:</p>
+
+<pre><code>openssl md5 -c tbs
+MD5(tbs)= f3:46:9e:aa:1a:4a:73:c9:37:ea:93:00:48:25:08:b5</code></pre>
+
+<p>which it can be seen agrees with the recovered value above.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man1/openssl.html">openssl(1)</a>, <a href="../man1/openssl-pkeyutl.html">openssl-pkeyutl(1)</a>, <a href="../man1/openssl-dgst.html">openssl-dgst(1)</a>, <a href="../man1/openssl-rsa.html">openssl-rsa(1)</a>, <a href="../man1/openssl-genrsa.html">openssl-genrsa(1)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>This command was deprecated in OpenSSL 3.0.</p>
+
+<p>The <b>-engine</b> option was deprecated in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

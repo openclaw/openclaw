@@ -1,0 +1,115 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_new_domain</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Supported-Operations">Supported Operations</a></li>
+    </ul>
+  </li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_new_domain, SSL_is_domain, SSL_get0_domain - SSL object interface for managing QUIC event domains</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+SSL *SSL_new_domain(SSL_CTX *ctx, uint64_t flags);
+
+int SSL_is_domain(SSL *ssl);
+SSL *SSL_get0_domain(SSL *ssl);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The SSL_new_domain() function creates a new QUIC event domain, represented as an SSL object. This is known as a QUIC domain SSL object (QDSO). The concept of a QUIC event domain is discussed in detail in <a href="../man7/openssl-quic-concurrency.html">openssl-quic-concurrency(7)</a>.</p>
+
+<p>The <i>flags</i> argument to SSL_new_domain() specifies a set of domain flags. If the <i>flags</i> argument to SSL_new_domain() does not specify one of the flags <b>SSL_DOMAIN_FLAG_SINGLE_THREAD</b>, <b>SSL_DOMAIN_FLAG_MULTI_THREAD</b> or <b>SSL_DOMAIN_FLAG_THREAD_ASSISTED</b>, the domain flags configured on the <b>SSL_CTX</b> are inherited as a default and any other flags in <i>flags</i> are added to the set of inherited flags. Otherwise, the domain flags in <i>flags</i> are used. See <a href="../man3/SSL_CTX_set_domain_flags.html">SSL_CTX_set_domain_flags(3)</a> for details of the available domain flags and how they can be configured on a <b>SSL_CTX</b>.</p>
+
+<p>A QUIC domain SSL object can be managed in the same way as any other SSL object, in that it can be refcounted and freed normally. A QUIC domain SSL object is the parent of a number of child objects such as QUIC listener SSL objects. Once a QUIC domain SSL object has been created, a listener can be created under it using <a href="../man3/SSL_new_listener_from.html">SSL_new_listener_from(3)</a>.</p>
+
+<p>SSL_is_domain() returns 1 if a SSL object is a QUIC domain SSL object.</p>
+
+<p>SSL_get0_domain() obtains a pointer to the QUIC domain SSL object in a SSL object hierarchy (if any).</p>
+
+<p>All SSL objects in a QUIC event domain use the same domain flags, and the domain flags for a QUIC domain cannot be changed after construction.</p>
+
+<h2 id="Supported-Operations">Supported Operations</h2>
+
+<p>A QUIC domain SSL object exists to contain other QUIC SSL objects and provide unified event handling. As such, it supports only the following operations:</p>
+
+<ul>
+
+<li><p>Standard reference counting and free operations, such as <a href="../man3/SSL_up_ref.html">SSL_up_ref(3)</a> and <a href="../man3/SSL_free.html">SSL_free(3)</a>;</p>
+
+</li>
+<li><p>Event processing and polling enablement APIs such as <a href="../man3/SSL_handle_events.html">SSL_handle_events(3)</a>, and <a href="../man3/SSL_get_event_timeout.html">SSL_get_event_timeout(3)</a>.</p>
+
+</li>
+<li><p>Creating listeners under the domain using <a href="../man3/SSL_new_listener_from.html">SSL_new_listener_from(3)</a>.</p>
+
+</li>
+</ul>
+
+<p>The basic workflow of using a domain object is as follows:</p>
+
+<ul>
+
+<li><p>Create a new domain object using SSL_new_domain() using a <b>SSL_CTX</b> which uses a supported <b>SSL_METHOD</b> (such as <a href="../man3/OSSL_QUIC_server_method.html">OSSL_QUIC_server_method(3)</a>);</p>
+
+</li>
+<li><p>Create listeners under the domain using <a href="../man3/SSL_new_listener_from.html">SSL_new_listener_from(3)</a>.</p>
+
+</li>
+</ul>
+
+<p>Refer to <a href="../man3/SSL_new_listener_from.html">SSL_new_listener_from(3)</a> for details on using listeners.</p>
+
+<p>Currently, domain SSL objects are only supported for QUIC usage via any QUIC <b>SSL_METHOD</b>.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_new_domain() returns a new domain SSL object or NULL on failure.</p>
+
+<p>SSL_is_domain() returns 0 or 1 depending on the type of the SSL object on which it is called.</p>
+
+<p>SSL_get0_domain() returns an SSL object pointer (potentially to the same object on which it is called) or NULL.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/SSL_new_listener_from.html">SSL_new_listener_from(3)</a> <a href="../man3/SSL_handle_events.html">SSL_handle_events(3)</a>, <a href="../man3/SSL_CTX_set_domain_flags.html">SSL_CTX_set_domain_flags(3)</a>, <a href="../man7/openssl-quic-concurrency.html">openssl-quic-concurrency(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>These functions were added in OpenSSL 3.5.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2024-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,128 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>CMS_verify</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#VERIFY-PROCESS">VERIFY PROCESS</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#BUGS">BUGS</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>CMS_verify, CMS_SignedData_verify, CMS_get0_signers - verify a CMS SignedData structure</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/cms.h&gt;
+
+int CMS_verify(CMS_ContentInfo *cms, STACK_OF(X509) *certs, X509_STORE *store,
+               BIO *detached_data, BIO *out, unsigned int flags);
+BIO *CMS_SignedData_verify(CMS_SignedData *sd, BIO *detached_data,
+                           STACK_OF(X509) *scerts, X509_STORE *store,
+                           STACK_OF(X509) *extra, STACK_OF(X509_CRL) *crls,
+                           unsigned int flags,
+                           OSSL_LIB_CTX *libctx, const char *propq);
+
+STACK_OF(X509) *CMS_get0_signers(CMS_ContentInfo *cms);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>CMS_verify() is very similar to <a href="../man3/PKCS7_verify.html">PKCS7_verify(3)</a>. It verifies a <b>CMS SignedData</b> structure contained in a structure of type <b>CMS_ContentInfo</b>. <i>cms</i> points to the <b>CMS_ContentInfo</b> structure to verify. The optional <i>certs</i> parameter refers to a set of certificates in which to search for signing certificates. It is also used as a source of untrusted intermediate CA certificates for chain building. <i>cms</i> may contain extra untrusted CA certificates that may be used for chain building as well as CRLs that may be used for certificate validation. <i>store</i> may be NULL or point to the trusted certificate store to use for chain verification. <i>detached_data</i> refers to the signed data if the content is detached from <i>cms</i>. Otherwise <i>detached_data</i> should be NULL and the signed data must be in <i>cms</i>. The content is written to the BIO <i>out</i> unless it is NULL. <i>flags</i> is an optional set of flags, which can be used to modify the operation.</p>
+
+<p>CMS_SignedData_verify() is like CMS_verify() except that it operates on <b>CMS SignedData</b> input in the <i>sd</i> argument, it has some additional parameters described next, and on success it returns the verified content as a memory BIO. The optional <i>extra</i> parameter may be used to provide untrusted CA certificates that may be helpful for chain building in certificate validation. This list of certificates must not contain duplicates. The optional <i>crls</i> parameter may be used to provide extra CRLs. Also the list of CRLs must not contain duplicates. The optional parameters library context <i>libctx</i> and property query <i>propq</i> are used when retrieving algorithms from providers.</p>
+
+<p>CMS_get0_signers() retrieves the signing certificate(s) from <i>cms</i>; it may only be called after a successful CMS_verify() or CMS_SignedData_verify() operation.</p>
+
+<h1 id="VERIFY-PROCESS">VERIFY PROCESS</h1>
+
+<p>Normally the verify process proceeds as follows.</p>
+
+<p>Initially some sanity checks are performed on <i>cms</i>. The type of <i>cms</i> must be SignedData. There must be at least one signature on the data and if the content is detached <i>detached_data</i> cannot be NULL.</p>
+
+<p>An attempt is made to locate all the signing certificate(s), first looking in the <i>certs</i> parameter (if it is not NULL) and then looking in any certificates contained in the <i>cms</i> structure unless <b>CMS_NOINTERN</b> is set. If any signing certificate cannot be located the operation fails.</p>
+
+<p>Each signing certificate is chain verified using the <i>smimesign</i> purpose and using the trusted certificate store <i>store</i> if supplied. Any internal certificates in the message, which may have been added using <a href="../man3/CMS_add1_cert.html">CMS_add1_cert(3)</a>, are used as untrusted CAs. If CRL checking is enabled in <i>store</i> and <b>CMS_NOCRL</b> is not set, any internal CRLs, which may have been added using <a href="../man3/CMS_add1_crl.html">CMS_add1_crl(3)</a>, are used in addition to attempting to look them up in <i>store</i>. If <i>store</i> is not NULL and any chain verify fails an error code is returned.</p>
+
+<p>Finally the signed content is read (and written to <i>out</i> unless it is NULL) and the signature is checked.</p>
+
+<p>If all signatures verify correctly then the function is successful.</p>
+
+<p>Any of the following flags (ored together) can be passed in the <i>flags</i> parameter to change the default verify behaviour.</p>
+
+<p>If <b>CMS_NOINTERN</b> is set the certificates in the message itself are not searched when locating the signing certificate(s). This means that all the signing certificates must be in the <i>certs</i> parameter.</p>
+
+<p>If <b>CMS_NOCRL</b> is set and CRL checking is enabled in <i>store</i> then any CRLs in the message itself and provided via the <i>crls</i> parameter are ignored.</p>
+
+<p>If the <b>CMS_TEXT</b> flag is set MIME headers for type <code>text/plain</code> are deleted from the content. If the content is not of type <code>text/plain</code> then an error is returned.</p>
+
+<p>If <b>CMS_NO_SIGNER_CERT_VERIFY</b> is set the signing certificates are not chain verified, unless <b>CMS_CADES</b> flag is also set.</p>
+
+<p>If <b>CMS_NO_ATTR_VERIFY</b> is set the signed attributes signature is not verified, unless CMS_CADES flag is also set.</p>
+
+<p>If <b>CMS_CADES</b> is set, each signer certificate is checked against the ESS signingCertificate or ESS signingCertificateV2 extension that is required in the signed attributes of the signature.</p>
+
+<p>If <b>CMS_NO_CONTENT_VERIFY</b> is set then the content digest is not checked.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>One application of <b>CMS_NOINTERN</b> is to only accept messages signed by a small number of certificates. The acceptable certificates would be passed in the <i>certs</i> parameter. In this case if the signer certificate is not one of the certificates supplied in <i>certs</i> then the verify will fail because the signer cannot be found.</p>
+
+<p>In some cases the standard techniques for looking up and validating certificates are not appropriate: for example an application may wish to lookup certificates in a database or perform customised verification. This can be achieved by setting and verifying the signer certificates manually using the signed data utility functions.</p>
+
+<p>Care should be taken when modifying the default verify behaviour, for example setting <b>CMS_NO_CONTENT_VERIFY</b> will totally disable all content verification and any modified content will be considered valid. This combination is however useful if one merely wishes to write the content to <i>out</i> and its validity is not considered important.</p>
+
+<p>Chain verification should arguably be performed using the signing time rather than the current time. However, since the signing time is supplied by the signer it cannot be trusted without additional evidence (such as a trusted timestamp).</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>CMS_verify() returns 1 for a successful verification and 0 if an error occurred.</p>
+
+<p>CMS_SignedData_verify() returns a memory BIO containing the verified content, or NULL on error.</p>
+
+<p>CMS_get0_signers() returns all signers or NULL if an error occurred.</p>
+
+<p>The error can be obtained from <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>.</p>
+
+<h1 id="BUGS">BUGS</h1>
+
+<p>The trusted certificate store is not searched for the signing certificate. This is primarily due to the inadequacies of the current <b>X509_STORE</b> functionality.</p>
+
+<p>The lack of single pass processing means that the signed content must all be held in memory if it is not detached.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/PKCS7_verify.html">PKCS7_verify(3)</a>, <a href="../man3/CMS_add1_cert.html">CMS_add1_cert(3)</a>, <a href="../man3/CMS_add1_crl.html">CMS_add1_crl(3)</a>, <a href="../man3/OSSL_ESS_check_signing_certs.html">OSSL_ESS_check_signing_certs(3)</a>, <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>, <a href="../man3/CMS_sign.html">CMS_sign(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>CMS_SignedData_verify() was added in OpenSSL 3.2.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2008-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

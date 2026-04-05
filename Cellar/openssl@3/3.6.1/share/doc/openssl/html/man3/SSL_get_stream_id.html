@@ -1,0 +1,112 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_get_stream_id</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_get_stream_id, SSL_get_stream_type, SSL_STREAM_TYPE_NONE, SSL_STREAM_TYPE_READ, SSL_STREAM_TYPE_WRITE, SSL_STREAM_TYPE_BIDI, SSL_is_stream_local - get QUIC stream ID and stream type information</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+uint64_t SSL_get_stream_id(SSL *ssl);
+
+#define SSL_STREAM_TYPE_NONE
+#define SSL_STREAM_TYPE_BIDI
+#define SSL_STREAM_TYPE_READ
+#define SSL_STREAM_TYPE_WRITE
+int SSL_get_stream_type(SSL *ssl);
+
+int SSL_is_stream_local(SSL *ssl);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The SSL_get_stream_id() function returns the QUIC stream ID for a QUIC stream SSL object, or for a QUIC connection SSL object which has a default stream attached.</p>
+
+<p>The SSL_get_stream_type() function identifies what operations can be performed on the stream, and returns one of the following values:</p>
+
+<dl>
+
+<dt id="SSL_STREAM_TYPE_NONE"><b>SSL_STREAM_TYPE_NONE</b></dt>
+<dd>
+
+<p>The SSL object is a QUIC connection SSL object without a default stream attached.</p>
+
+</dd>
+<dt id="SSL_STREAM_TYPE_BIDI"><b>SSL_STREAM_TYPE_BIDI</b></dt>
+<dd>
+
+<p>The SSL object is a non-QUIC SSL object, or is a QUIC stream object (or QUIC connection SSL object with a default stream attached), and that stream is a bidirectional QUIC stream.</p>
+
+</dd>
+<dt id="SSL_STREAM_TYPE_READ"><b>SSL_STREAM_TYPE_READ</b></dt>
+<dd>
+
+<p>The SSL object is a QUIC stream object (or QUIC connection SSL object with a default stream attached), and that stream is a unidirectional QUIC stream which was initiated by the remote peer; thus, it can be read from, but not written to.</p>
+
+</dd>
+<dt id="SSL_STREAM_TYPE_WRITE"><b>SSL_STREAM_TYPE_WRITE</b></dt>
+<dd>
+
+<p>The SSL object is a QUIC stream object (or QUIC connection SSL object with a default stream attached), and that stream is a unidirectional QUIC stream which was initiated by the local application; thus, it can be written to, but not read from.</p>
+
+</dd>
+</dl>
+
+<p>The SSL_is_stream_local() function determines whether a stream was locally created.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>While QUICv1 assigns specific meaning to the low two bits of a QUIC stream ID, QUIC stream IDs in future versions of QUIC are not required to have the same semantics. Do not determine stream properties using these bits. Instead, use SSL_get_stream_type() to determine the stream type and SSL_get_stream_is_local() to determine the stream initiator.</p>
+
+<p>The SSL_get_stream_type() identifies the type of a QUIC stream based on its identity, and does not indicate whether an operation can currently be successfully performed on a stream. For example, you might locally initiate a unidirectional stream, write to it, and then conclude the stream using <a href="../man3/SSL_stream_conclude.html">SSL_stream_conclude(3)</a>, meaning that it can no longer be written to, but SSL_get_stream_type() would still return <b>SSL_STREAM_TYPE_WRITE</b>. The value returned by SSL_get_stream_type() does not vary over the lifespan of a stream.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_get_stream_id() returns a QUIC stream ID, or <b>UINT64_MAX</b> if called on an SSL object which is not a QUIC SSL object, or if called on a QUIC connection SSL object without a default stream attached. Note that valid QUIC stream IDs are always below 2**62.</p>
+
+<p>SSL_get_stream_type() returns one of the <b>SSL_STREAM_TYPE</b> values.</p>
+
+<p>SSL_is_stream_local() returns 1 if called on a QUIC stream SSL object which represents a stream which was locally initiated. It returns 0 if called on a QUIC stream SSL object which represents a stream which was remotely initiated by a peer, and -1 if called on any other kind of SSL object.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/SSL_new_stream.html">SSL_new_stream(3)</a>, <a href="../man3/SSL_accept_stream.html">SSL_accept_stream(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>These functions were added in OpenSSL 3.2.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2002-2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

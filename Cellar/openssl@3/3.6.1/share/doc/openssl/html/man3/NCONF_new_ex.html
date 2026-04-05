@@ -1,0 +1,91 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>NCONF_new_ex</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>NCONF_new_ex, NCONF_new, NCONF_free, NCONF_default, NCONF_load, NCONF_get0_libctx, NCONF_get_section, NCONF_get_section_names - functionality to Load and parse configuration files manually</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/conf.h&gt;
+
+typedef struct {
+    char *section;
+    char *name;
+    char *value;
+} CONF_VALUE;
+
+CONF *NCONF_new_ex(OSSL_LIB_CTX *libctx, CONF_METHOD *meth);
+CONF *NCONF_new(CONF_METHOD *meth);
+void NCONF_free(CONF *conf);
+CONF_METHOD *NCONF_default(void);
+int NCONF_load(CONF *conf, const char *file, long *eline);
+OSSL_LIB_CTX *NCONF_get0_libctx(const CONF *conf);
+
+STACK_OF(CONF_VALUE) *NCONF_get_section(const CONF *conf, const char *name);
+STACK_OF(OPENSSL_CSTRING) *NCONF_get_section_names(const CONF *conf);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>NCONF_new_ex() creates a new CONF object in heap memory and assigns to it a context <i>libctx</i> that can be used during loading. If the method table <i>meth</i> is set to NULL then the default value of NCONF_default() is used.</p>
+
+<p>NCONF_new() is similar to NCONF_new_ex() but sets the <i>libctx</i> to NULL.</p>
+
+<p>NCONF_free() frees the data associated with <i>conf</i> and then frees the <i>conf</i> object. If the argument is NULL, nothing is done.</p>
+
+<p>NCONF_load() parses the file named <i>filename</i> and adds the values found to <i>conf</i>. If an error occurs <i>file</i> and <i>eline</i> list the file and line that the load failed on if they are not NULL.</p>
+
+<p>NCONF_default() gets the default method table for processing a configuration file.</p>
+
+<p>NCONF_get0_libctx() gets the library context associated with the <i>conf</i> parameter.</p>
+
+<p>NCONF_get_section_names() gets the names of the sections associated with the <i>conf</i> as <b>STACK_OF(OPENSSL_CSTRING)</b> strings. The individual strings are associated with the <i>conf</i> and will be invalid after <i>conf</i> is freed. The returned stack must be freed with sk_OPENSSL_CSTRING_free().</p>
+
+<p>NCONF_get_section() gets the config values associated with the <i>conf</i> from the config section <i>name</i> as <b>STACK_OF(CONF_VALUE)</b> structures. The returned stack is associated with the <i>conf</i> and will be invalid after <i>conf</i> is freed. It must not be freed by the caller.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>NCONF_load() returns 1 on success or 0 on error.</p>
+
+<p>NCONF_new_ex() and NCONF_new() return a newly created <i>CONF</i> object or NULL if an error occurs.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/CONF_modules_load_file.html">CONF_modules_load_file(3)</a>,</p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>NCONF_new_ex(), NCONF_get0_libctx(), and NCONF_get_section_names() were added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2020-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

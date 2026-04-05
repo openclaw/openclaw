@@ -1,0 +1,44 @@
+.\"
+.\" Copyright 2023 by the c-ares project and its contributors
+.\" SPDX-License-Identifier: MIT
+.\"
+.TH ARES_THREADSAFETY 3 "26 November 2023"
+.SH NAME
+ares_threadsafety \- Query if c-ares was built with thread-safety
+.SH SYNOPSIS
+.nf
+#include <ares.h>
+
+ares_bool_t ares_threadsafety(void);
+.fi
+.SH DESCRIPTION
+The \fBares_threadsafety(3)\fP function returns if the library was built with
+thread safety enabled or not.
+
+As of c-ares 1.23.0, this simply means that every public function which
+references an \fIares_channel_t\fP object will lock the channel on entry and
+release the lock on exit of the function.  This will prevent concurrent
+thread access to the channel, thus ensuring no corruption can occur.
+
+As of c-ares 1.26.0, this also indicates if \fBARES_OPT_EVENT_THREAD\fP can
+be passed to \fIares_init_options(3)\fP.
+
+.SH RETURN VALUES
+\fIares_threadsafety(3)\fP can return any of the following values:
+.TP 14
+.B ARES_TRUE
+Built with thread safety.
+.TP 14
+.B ARES_FALSE
+Built without thread safety
+.TP 14
+
+.SH AVAILABILITY
+This function was first introduced in c-ares version 1.23.0.
+.SH SEE ALSO
+.BR ares_init (3),
+.BR ares_init_options (3),
+.BR ares_destroy (3),
+.BR ares_dup (3),
+.BR ares_library_init (3),
+.BR ares_set_servers (3)

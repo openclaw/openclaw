@@ -1,0 +1,84 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>PKCS12_item_decrypt_d2i</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>PKCS12_item_decrypt_d2i, PKCS12_item_decrypt_d2i_ex, PKCS12_item_i2d_encrypt, PKCS12_item_i2d_encrypt_ex - PKCS12 item encrypt/decrypt functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/pkcs12.h&gt;
+
+void *PKCS12_item_decrypt_d2i(const X509_ALGOR *algor, const ASN1_ITEM *it,
+                              const char *pass, int passlen,
+                              const ASN1_OCTET_STRING *oct, int zbuf);
+void *PKCS12_item_decrypt_d2i_ex(const X509_ALGOR *algor, const ASN1_ITEM *it,
+                                 const char *pass, int passlen,
+                                 const ASN1_OCTET_STRING *oct, int zbuf,
+                                 OSSL_LIB_CTX *libctx,
+                                 const char *propq);
+ASN1_OCTET_STRING *PKCS12_item_i2d_encrypt(X509_ALGOR *algor,
+                                           const ASN1_ITEM *it,
+                                           const char *pass, int passlen,
+                                           void *obj, int zbuf);
+ASN1_OCTET_STRING *PKCS12_item_i2d_encrypt_ex(X509_ALGOR *algor,
+                                              const ASN1_ITEM *it,
+                                              const char *pass, int passlen,
+                                              void *obj, int zbuf,
+                                              OSSL_LIB_CTX *ctx,
+                                              const char *propq);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>PKCS12_item_decrypt_d2i() and PKCS12_item_decrypt_d2i_ex() decrypt an octet string containing an ASN.1 encoded object using the algorithm <i>algor</i> and password <i>pass</i> of length <i>passlen</i>. If <i>zbuf</i> is nonzero then the output buffer will zeroed after the decrypt.</p>
+
+<p>PKCS12_item_i2d_encrypt() and PKCS12_item_i2d_encrypt_ex() encrypt an ASN.1 object <i>it</i> using the algorithm <i>algor</i> and password <i>pass</i> of length <i>passlen</i>, returning an encoded object in <i>obj</i>. If <i>zbuf</i> is nonzero then the buffer containing the input encoding will be zeroed after the encrypt.</p>
+
+<p>Functions ending in _ex() allow for a library context <i>ctx</i> and property query <i>propq</i> to be used to select algorithm implementations.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>PKCS12_item_decrypt_d2i() and PKCS12_item_decrypt_d2i_ex() return the decrypted object or NULL if an error occurred.</p>
+
+<p>PKCS12_item_i2d_encrypt() and PKCS12_item_i2d_encrypt_ex() return the encrypted data as an ASN.1 Octet String or NULL if an error occurred.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/PKCS12_pbe_crypt_ex.html">PKCS12_pbe_crypt_ex(3)</a>, <a href="../man3/PKCS8_encrypt_ex.html">PKCS8_encrypt_ex(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>PKCS12_item_decrypt_d2i_ex() and PKCS12_item_i2d_encrypt_ex() were added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

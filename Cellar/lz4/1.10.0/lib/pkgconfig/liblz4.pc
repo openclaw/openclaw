@@ -1,0 +1,14 @@
+#   LZ4 - Fast LZ compression algorithm
+#   Copyright (C) 2011-2020, Yann Collet.
+#   BSD 2-Clause License (http://www.opensource.org/licenses/bsd-license.php)
+
+prefix=/opt/homebrew/opt/lz4
+libdir=${prefix}/lib
+includedir=${prefix}/include
+
+Name: lz4
+Description: extremely fast lossless compression algorithm library
+URL: http://www.lz4.org/
+Version: 1.10.0
+Libs: -L${libdir} -llz4
+Cflags: -I${includedir}

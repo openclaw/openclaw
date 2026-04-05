@@ -1,0 +1,133 @@
+.\" Hey, Emacs! This is -*-nroff-*- you know...
+.\"
+.\" gendict.1: manual page for the gendict utility
+.\"
+.\" Copyright (C) 2016 and later: Unicode, Inc. and others.
+.\" License & terms of use: http://www.unicode.org/copyright.html
+.\" Copyright (C) 2012 International Business Machines Corporation and others
+.\"
+.TH GENDICT 1 "1 June 2012" "ICU MANPAGE" "ICU 78.3 Manual"
+.SH NAME
+.B gendict
+\- Compiles word list into ICU string trie dictionary
+.SH SYNOPSIS
+.B gendict
+[
+.BR "\fB\-\-uchars"
+|
+.BR "\fB\-\-bytes"
+.BI "\fB\-\-transform" " transform"
+]
+[
+.BR "\-h\fP, \fB\-?\fP, \fB\-\-help"
+]
+[
+.BR "\-V\fP, \fB\-\-version"
+]
+[
+.BR "\-c\fP, \fB\-\-copyright"
+]
+[
+.BR "\-v\fP, \fB\-\-verbose"
+]
+[
+.BI "\-i\fP, \fB\-\-icudatadir" " directory"
+]
+.IR " input-file"
+.IR " output\-file"
+.SH DESCRIPTION
+.B gendict
+reads the word list from
+.I dictionary-file
+and creates a string trie dictionary file. Normally this data file has the 
+.B .dict
+extension.
+.PP
+Words begin at the beginning of a line and are terminated by the first whitespace.
+Lines that begin with whitespace are ignored.
+.SH OPTIONS
+.TP
+.BR "\-h\fP, \fB\-?\fP, \fB\-\-help"
+Print help about usage and exit.
+.TP
+.BR "\-V\fP, \fB\-\-version"
+Print the version of
+.B gendict
+and exit.
+.TP
+.BR "\-c\fP, \fB\-\-copyright"
+Embeds the standard ICU copyright into the
+.IR output-file .
+.TP
+.BR "\-v\fP, \fB\-\-verbose"
+Display extra informative messages during execution.
+.TP
+.BI "\-i\fP, \fB\-\-icudatadir" " directory"
+Look for any necessary ICU data files in
+.IR directory .
+For example, the file
+.B pnames.icu
+must be located when ICU's data is not built as a shared library.
+The default ICU data directory is specified by the environment variable
+.BR ICU_DATA .
+Most configurations of ICU do not require this argument.
+.TP
+.BR "\fB\-\-uchars"
+Set the output trie type to UChar. Mutually exclusive with
+.BR --bytes.
+.TP
+.BR "\fB\-\-bytes"
+Set the output trie type to Bytes. Mutually exclusive with 
+.BR --uchars.
+.TP
+.BR "\fB\-\-transform"
+Set the transform type. Should only be specified with
+.BR --bytes.
+Currently supported transforms are:
+.BR offset-<hex-number>,
+which specifies an offset to subtract from all input characters.
+It should be noted that the offset transform also maps U+200D 
+to 0xFF and U+200C to 0xFE, in order to offer compatibility to 
+languages that require these characters.
+A transform must be specified for a bytes trie, and when applied 
+to the non-value characters in the 
+.IR input-file
+must produce output between 0x00 and 0xFF.
+.TP
+.BI " input\-file"
+The source file to read.
+.TP
+.BI " output\-file"
+The file to write the output dictionary to.
+.SH CAVEATS
+The 
+.IR input-file
+is assumed to be encoded in UTF-8.
+The integers in the 
+.IR input-file 
+that are used as values must be made up of ASCII digits. They 
+may be specified either in hex, by using a 0x prefix, or in 
+decimal.
+Either
+.BI --bytes
+or 
+.BI --uchars
+must be specified.
+.SH ENVIRONMENT
+.TP 10
+.B ICU_DATA
+Specifies the directory containing ICU data. Defaults to
+.BR ${prefix}/share/icu/78.3/ .
+Some tools in ICU depend on the presence of the trailing slash. It is thus
+important to make sure that it is present if
+.B ICU_DATA
+is set.
+.SH AUTHORS
+Maxime Serrano
+.SH VERSION
+1.0
+.SH COPYRIGHT
+Copyright (C) 2012 International Business Machines Corporation and others
+.SH SEE ALSO
+.BR http://www.icu-project.org/userguide/boundaryAnalysis.html
+

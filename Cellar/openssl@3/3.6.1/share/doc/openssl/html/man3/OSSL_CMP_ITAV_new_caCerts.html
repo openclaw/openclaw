@@ -1,0 +1,158 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OSSL_CMP_ITAV_new_caCerts</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OSSL_CMP_ITAV_new_caCerts, OSSL_CMP_ITAV_get0_caCerts, OSSL_CMP_ITAV_new_rootCaCert, OSSL_CMP_ITAV_get0_rootCaCert, OSSL_CMP_ITAV_new_rootCaKeyUpdate, OSSL_CMP_ITAV_get0_rootCaKeyUpdate, OSSL_CMP_CRLSTATUS_new1, OSSL_CMP_CRLSTATUS_create, OSSL_CMP_CRLSTATUS_get0, OSSL_CMP_ITAV_new0_crlStatusList, OSSL_CMP_ITAV_get0_crlStatusList, OSSL_CMP_ITAV_new_crls, OSSL_CMP_ITAV_get0_crls, OSSL_CMP_ITAV_new0_certReqTemplate, OSSL_CMP_ITAV_get1_certReqTemplate - CMP utility functions for handling specific genm and genp messages</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/cmp.h&gt;
+
+OSSL_CMP_ITAV *OSSL_CMP_ITAV_new_caCerts(const STACK_OF(X509) *caCerts);
+int OSSL_CMP_ITAV_get0_caCerts(const OSSL_CMP_ITAV *itav, STACK_OF(X509) **out);
+
+OSSL_CMP_ITAV *OSSL_CMP_ITAV_new_rootCaCert(const X509 *rootCaCert);
+int OSSL_CMP_ITAV_get0_rootCaCert(const OSSL_CMP_ITAV *itav, X509 **out);
+OSSL_CMP_ITAV *OSSL_CMP_ITAV_new_rootCaKeyUpdate(const X509 *newWithNew,
+                                                 const X509 *newWithOld,
+                                                 const X509 *oldWithNew);
+int OSSL_CMP_ITAV_get0_rootCaKeyUpdate(const OSSL_CMP_ITAV *itav,
+                                       X509 **newWithNew,
+                                       X509 **newWithOld,
+                                       X509 **oldWithNew);
+
+OSSL_CMP_CRLSTATUS *OSSL_CMP_CRLSTATUS_new1(const DIST_POINT_NAME *dpn,
+                                            const GENERAL_NAMES *issuer,
+                                            const ASN1_TIME *thisUpdate);
+OSSL_CMP_CRLSTATUS *OSSL_CMP_CRLSTATUS_create(const X509_CRL *crl,
+                                              const X509 *cert, int only_DN);
+int OSSL_CMP_CRLSTATUS_get0(const OSSL_CMP_CRLSTATUS *crlstatus,
+                            DIST_POINT_NAME **dpn, GENERAL_NAMES **issuer,
+                            ASN1_TIME **thisUpdate);
+OSSL_CMP_ITAV
+*OSSL_CMP_ITAV_new0_crlStatusList(STACK_OF(OSSL_CMP_CRLSTATUS) *crlStatusList);
+int OSSL_CMP_ITAV_get0_crlStatusList(const OSSL_CMP_ITAV *itav,
+                                     STACK_OF(OSSL_CMP_CRLSTATUS) **out);
+OSSL_CMP_ITAV *OSSL_CMP_ITAV_new_crls(const X509_CRL *crl);
+int OSSL_CMP_ITAV_get0_crls(const OSSL_CMP_ITAV *itav, STACK_OF(X509_CRL) **out);
+OSSL_CMP_ITAV
+*OSSL_CMP_ITAV_new0_certReqTemplate(OSSL_CRMF_CERTTEMPLATE *certTemplate,
+                                    OSSL_CMP_ATAVS *keySpec);
+int OSSL_CMP_ITAV_get1_certReqTemplate(const OSSL_CMP_ITAV *itav,
+                                       OSSL_CRMF_CERTTEMPLATE **certTemplate,
+                                       OSSL_CMP_ATAVS **keySpec);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>ITAV is short for InfoTypeAndValue.</p>
+
+<p>OSSL_CMP_ITAV_new_caCerts() creates an <b>OSSL_CMP_ITAV</b> structure of type <b>caCerts</b> and fills it with a copy of the provided list of certificates. The <i>caCerts</i> argument may be NULL or contain any number of certificates.</p>
+
+<p>OSSL_CMP_ITAV_get0_caCerts() requires that <i>itav</i> has type <b>caCerts</b>. It assigns NULL to <i>*out</i> if there are no CA certificates in <i>itav</i>, otherwise the internal pointer of type <b>STACK_OF(X509)</b> with the certificates present.</p>
+
+<p>OSSL_CMP_ITAV_new_rootCaCert() creates a new <b>OSSL_CMP_ITAV</b> structure of type <b>rootCaCert</b> that includes the optionally given certificate.</p>
+
+<p>OSSL_CMP_ITAV_get0_rootCaCert() requires that <i>itav</i> has type <b>rootCaCert</b>. It assigns NULL to <i>*out</i> if no certificate is included in <i>itav</i>, otherwise the internal pointer to the certificate contained in the infoValue field.</p>
+
+<p>OSSL_CMP_ITAV_new_rootCaKeyUpdate() creates a new <b>OSSL_CMP_ITAV</b> structure of type <b>rootCaKeyUpdate</b> that includes an RootCaKeyUpdateContent structure with the optional <i>newWithNew</i>, <i>newWithOld</i>, and <i>oldWithNew</i> certificates. An RootCaKeyUpdateContent structure is included only if <i>newWithNew</i> is not NULL.</p>
+
+<p>OSSL_CMP_ITAV_get0_rootCaKeyUpdate() requires that <i>itav</i> has infoType <b>rootCaKeyUpdate</b>. If an update of a root CA certificate is included, it assigns to <i>*newWithNew</i> the internal pointer to the certificate contained in the newWithNew infoValue sub-field of <i>itav</i>. If <i>newWithOld</i> is not NULL, it assigns to <i>*newWithOld</i> the internal pointer to the certificate contained in the newWithOld infoValue sub-field of <i>itav</i>. If <i>oldWithNew</i> is not NULL, it assigns to <i>*oldWithNew</i> the internal pointer to the certificate contained in the oldWithNew infoValue sub-field of <i>itav</i>. Each of these pointers will be set to NULL if no root CA certificate update is present or the respective sub-field is not included.</p>
+
+<p>OSSL_CMP_CRLSTATUS_new1() allocates a new <b>OSSL_CMP_CRLSTATUS</b> structure that contains either a copy of the distribution point name <i>dpn</i> or a copy of the certificate issuer <i>issuer</i>, while giving both is an error. If given, a copy of the CRL issuance time <i>thisUpdate</i> is also included.</p>
+
+<p>OSSL_CMP_CRLSTATUS_create() is a high-level variant of OSSL_CMP_CRLSTATUS_new1(). It fills the thisUpdate field with a copy of the thisUpdate field of <i>crl</i> if present. It fills the CRLSource field with a copy of the first data item found using the <i>crl</i> and/or <i>cert</i> parameters as follows. Any available distribution point name is preferred over issuer names. Data from <i>cert</i>, if present, is preferred over data from <i>crl</i>. If no distribution point names are available, candidate issuer names are taken from following sources, as far as present:</p>
+
+<dl>
+
+<dt id="the-list-of-distribution-points-in-the-first-cRLDistributionPoints-extension-of-cert">the list of distribution points in the first cRLDistributionPoints extension of <i>cert</i>,</dt>
+<dd>
+
+</dd>
+<dt id="the-issuer-field-of-the-authority-key-identifier-of-cert">the issuer field of the authority key identifier of <i>cert</i>,</dt>
+<dd>
+
+</dd>
+<dt id="the-issuer-DN-of-cert">the issuer DN of <i>cert</i>,</dt>
+<dd>
+
+</dd>
+<dt id="the-issuer-field-of-the-authority-key-identifier-of-crl-and">the issuer field of the authority key identifier of <i>crl</i>, and</dt>
+<dd>
+
+</dd>
+<dt id="the-issuer-DN-of-crl">the issuer DN of <i>crl</i>.</dt>
+<dd>
+
+</dd>
+</dl>
+
+<p>If &lt;only_DN&gt; is set, a candidate issuer name of type <b>GENERAL_NAMES</b> is accepted only if it contains exactly one general name of type directoryName.</p>
+
+<p>OSSL_CMP_CRLSTATUS_get0() reads the fields of <i>crlstatus</i> and assigns them to <i>*dpn</i>, <i>*issuer</i>, and <i>*thisUpdate</i>. <i>*thisUpdate</i> is assigned only if the <i>thisUpdate</i> argument is not NULL. Depending on the choice present, either <i>*dpn</i> or <i>*issuer</i> will be NULL. <i>*thisUpdate</i> can also be NULL if the field is not present.</p>
+
+<p>OSSL_CMP_ITAV_new0_crlStatusList() creates a new <b>OSSL_CMP_ITAV</b> structure of type <b>crlStatusList</b> that includes the optionally given list of CRL status data, each of which is of type <b>OSSL_CMP_CRLSTATUS</b>.</p>
+
+<p>OSSL_CMP_ITAV_get0_crlStatusList() on success assigns to <i>*out</i> an internal pointer to the list of CRL status data in the infoValue field of <i>itav</i>. The pointer may be NULL if no CRL status data is included. It is an error if the infoType of <i>itav</i> is not <b>crlStatusList</b>.</p>
+
+<p>OSSL_CMP_ITAV_new_crls() creates a new <b>OSSL_CMP_ITAV</b> structure of type <b>crls</b> including an empty list of CRLs if the <i>crl</i> argument is NULL or including a singleton list a with copy of the provided CRL otherwise.</p>
+
+<p>OSSL_CMP_ITAV_get0_crls() on success assigns to <i>*out</i> an internal pointer to the list of CRLs contained in the infoValue field of <i>itav</i>. The pointer may be NULL if no CRL is included. It is an error if the infoType of <i>itav</i> is not <b>crls</b>.</p>
+
+<p>OSSL_CMP_ITAV_new0_certReqTemplate() creates an <b>OSSL_CMP_ITAV</b> structure of type <b>certReqTemplate</b>. If <i>certTemplate</i> is NULL then also <i>keySpec</i> must be NULL, and the resulting ITAV can be used in a <b>genm</b> message to obtain the requirements a PKI has on the certificate template used to request certificates, or in a <b>genp</b> message stating that there are no such requirements. Otherwise the resulting ITAV includes a CertReqTemplateValue structure with <i>certTemplate</i> of type <b>OSSL_CRMF_CERTTEMPLATE</b> and an optional list of key specifications <i>keySpec</i>, each being of type <b>OSSL_CMP_ATAV</b>, and the resulting ATAV can be used in a <b>genp</b> message to provide requirements.</p>
+
+<p>OSSL_CMP_ITAV_get1_certReqTemplate() requires that <i>itav</i> has type <b>certReqTemplate</b>. If assigns NULL to <i>*certTemplate</i> if no <b>OSSL_CRMF_CERTTEMPLATE</b> structure with a certificate template value is in <i>itav</i>, otherwise a copy of the certTemplate field value. If <i>keySpec</i> is not NULL, it is assigned NULL if the structure is not present in <i>itav</i> or the keySpec field is absent. Otherwise, the function checks that all elements of keySpec field are of type <b>algId</b> or <b>rsaKeyLen</b> and assigns to <i>*keySpec</i> a copy of the keySpec field.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>CMP is defined in RFC 9810.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>OSSL_CMP_ITAV_new_caCerts(), OSSL_CMP_ITAV_new_rootCaCert(), OSSL_CMP_ITAV_new_rootCaKeyUpdate(), OSSL_CMP_CRLSTATUS_new1(), OSSL_CMP_CRLSTATUS_create(), OSSL_CMP_ITAV_new0_crlStatusList(), OSSL_CMP_ITAV_new_crls() and OSSL_CMP_ITAV_new0_certReqTemplate() return a pointer to the new ITAV structure on success, or NULL on error.</p>
+
+<p>OSSL_CMP_ITAV_get0_caCerts(), OSSL_CMP_ITAV_get0_rootCaCert(), OSSL_CMP_ITAV_get0_rootCaKeyUpdate(), OSSL_CMP_CRLSTATUS_get0(), OSSL_CMP_ITAV_get0_crlStatusList(), OSSL_CMP_ITAV_get0_crls() and OSSL_CMP_ITAV_get1_certReqTemplate() return 1 on success, 0 on error.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/OSSL_CMP_ITAV_create.html">OSSL_CMP_ITAV_create(3)</a> and <a href="../man3/OSSL_CMP_ITAV_get0_type.html">OSSL_CMP_ITAV_get0_type(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>OSSL_CMP_ITAV_new_caCerts(), OSSL_CMP_ITAV_get0_caCerts(), OSSL_CMP_ITAV_new_rootCaCert(), OSSL_CMP_ITAV_get0_rootCaCert(), OSSL_CMP_ITAV_new_rootCaKeyUpdate(), and OSSL_CMP_ITAV_get0_rootCaKeyUpdate() were added in OpenSSL 3.2.</p>
+
+<p>OSSL_CMP_CRLSTATUS_new1(), OSSL_CMP_CRLSTATUS_create(), OSSL_CMP_CRLSTATUS_get0(), OSSL_CMP_ITAV_new0_crlStatusList(), OSSL_CMP_ITAV_get0_crlStatusList(), OSSL_CMP_ITAV_new_crls(), OSSL_CMP_ITAV_get0_crls(), OSSL_CMP_ITAV_new0_certReqTemplate() and OSSL_CMP_ITAV_get1_certReqTemplate() were added in OpenSSL 3.4.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2022-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,2171 @@
+.\"
+.\" Standard preamble:
+.\" ========================================================================
+.de Sp \" Vertical space (when we can't use .PP)
+.if t .sp .5v
+.if n .sp
+..
+.de Vb \" Begin verbatim text
+.ft CW
+.nf
+.ne \\$1
+..
+.de Ve \" End verbatim text
+.ft R
+.fi
+..
+.\" Set up some character translations and predefined strings.  \*(-- will
+.\" give an unbreakable dash, \*(PI will give pi, \*(L" will give a left
+.\" double quote, and \*(R" will give a right double quote.  \*(C+ will
+.\" give a nicer C++.  Capital omega is used to do unbreakable dashes and
+.\" therefore won't be available.  \*(C` and \*(C' expand to `' in nroff,
+.\" nothing in troff, for use with C<>.
+.tr \(*W-
+.ds C+ C\v'-.1v'\h'-1p'\s-2+\h'-1p'+\s0\v'.1v'\h'-1p'
+.ie n \{\
+.    ds -- \(*W-
+.    ds PI pi
+.    if (\n(.H=4u)&(1m=24u) .ds -- \(*W\h'-12u'\(*W\h'-12u'-\" diablo 10 pitch
+.    if (\n(.H=4u)&(1m=20u) .ds -- \(*W\h'-12u'\(*W\h'-8u'-\"  diablo 12 pitch
+.    ds L" ""
+.    ds R" ""
+.    ds C` ""
+.    ds C' ""
+'br\}
+.el\{\
+.    ds -- \|\(em\|
+.    ds PI \(*p
+.    ds L" ``
+.    ds R" ''
+.    ds C`
+.    ds C'
+'br\}
+.\"
+.\" Escape single quotes in literal strings from groff's Unicode transform.
+.ie \n(.g .ds Aq \(aq
+.el       .ds Aq '
+.\"
+.\" If the F register is >0, we'll generate index entries on stderr for
+.\" titles (.TH), headers (.SH), subsections (.SS), items (.Ip), and index
+.\" entries marked with X<> in POD.  Of course, you'll have to process the
+.\" output yourself in some meaningful fashion.
+.\"
+.\" Avoid warning from groff about undefined register 'F'.
+.de IX
+..
+.nr rF 0
+.if \n(.g .if rF .nr rF 1
+.if (\n(rF:(\n(.g==0)) \{\
+.    if \nF \{\
+.        de IX
+.        tm Index:\\$1\t\\n%\t"\\$2"
+..
+.        if !\nF==2 \{\
+.            nr % 0
+.            nr F 2
+.        \}
+.    \}
+.\}
+.rr rF
+.\"
+.\" Accent mark definitions (@(#)ms.acc 1.5 88/02/08 SMI; from UCB 4.2).
+.\" Fear.  Run.  Save yourself.  No user-serviceable parts.
+.    \" fudge factors for nroff and troff
+.if n \{\
+.    ds #H 0
+.    ds #V .8m
+.    ds #F .3m
+.    ds #[ \f1
+.    ds #] \fP
+.\}
+.if t \{\
+.    ds #H ((1u-(\\\\n(.fu%2u))*.13m)
+.    ds #V .6m
+.    ds #F 0
+.    ds #[ \&
+.    ds #] \&
+.\}
+.    \" simple accents for nroff and troff
+.if n \{\
+.    ds ' \&
+.    ds ` \&
+.    ds ^ \&
+.    ds , \&
+.    ds ~ ~
+.    ds /
+.\}
+.if t \{\
+.    ds ' \\k:\h'-(\\n(.wu*8/10-\*(#H)'\'\h"|\\n:u"
+.    ds ` \\k:\h'-(\\n(.wu*8/10-\*(#H)'\`\h'|\\n:u'
+.    ds ^ \\k:\h'-(\\n(.wu*10/11-\*(#H)'^\h'|\\n:u'
+.    ds , \\k:\h'-(\\n(.wu*8/10)',\h'|\\n:u'
+.    ds ~ \\k:\h'-(\\n(.wu-\*(#H-.1m)'~\h'|\\n:u'
+.    ds / \\k:\h'-(\\n(.wu*8/10-\*(#H)'\z\(sl\h'|\\n:u'
+.\}
+.    \" troff and (daisy-wheel) nroff accents
+.ds : \\k:\h'-(\\n(.wu*8/10-\*(#H+.1m+\*(#F)'\v'-\*(#V'\z.\h'.2m+\*(#F'.\h'|\\n:u'\v'\*(#V'
+.ds 8 \h'\*(#H'\(*b\h'-\*(#H'
+.ds o \\k:\h'-(\\n(.wu+\w'\(de'u-\*(#H)/2u'\v'-.3n'\*(#[\z\(de\v'.3n'\h'|\\n:u'\*(#]
+.ds d- \h'\*(#H'\(pd\h'-\w'~'u'\v'-.25m'\f2\(hy\fP\v'.25m'\h'-\*(#H'
+.ds D- D\\k:\h'-\w'D'u'\v'-.11m'\z\(hy\v'.11m'\h'|\\n:u'
+.ds th \*(#[\v'.3m'\s+1I\s-1\v'-.3m'\h'-(\w'I'u*2/3)'\s-1o\s+1\*(#]
+.ds Th \*(#[\s+2I\s-2\h'-\w'I'u*3/5'\v'-.3m'o\v'.3m'\*(#]
+.ds ae a\h'-(\w'a'u*4/10)'e
+.ds Ae A\h'-(\w'A'u*4/10)'E
+.    \" corrections for vroff
+.if v .ds ~ \\k:\h'-(\\n(.wu*9/10-\*(#H)'\s-2\u~\d\s+2\h'|\\n:u'
+.if v .ds ^ \\k:\h'-(\\n(.wu*10/11-\*(#H)'\v'-.4m'^\v'.4m'\h'|\\n:u'
+.    \" for low resolution devices (crt and lpr)
+.if \n(.H>23 .if \n(.V>19 \
+\{\
+.    ds : e
+.    ds 8 ss
+.    ds o a
+.    ds d- d\h'-1'\(ga
+.    ds D- D\h'-1'\(hy
+.    ds th \o'bp'
+.    ds Th \o'LP'
+.    ds ae ae
+.    ds Ae AE
+.\}
+.rm #[ #] #H #V #F C
+.\" ========================================================================
+.\"
+.IX Title "FFMPEG-DEVICES 1"
+.TH FFMPEG-DEVICES 1 " " " " " "
+.\" For nroff, turn off justification.  Always turn off hyphenation; it makes
+.\" way too many mistakes in technical documents.
+.if n .ad l
+.nh
+.SH "NAME"
+ffmpeg\-devices \- FFmpeg devices
+.SH "DESCRIPTION"
+.IX Header "DESCRIPTION"
+This document describes the input and output devices provided by the
+libavdevice library.
+.SH "DEVICE OPTIONS"
+.IX Header "DEVICE OPTIONS"
+The libavdevice library provides the same interface as
+libavformat. Namely, an input device is considered like a demuxer, and
+an output device like a muxer, and the interface and generic device
+options are the same provided by libavformat (see the ffmpeg-formats
+manual).
+.PP
+In addition each input or output device may support so-called private
+options, which are specific for that component.
+.PP
+Options may be set by specifying \-\fIoption\fR \fIvalue\fR in the
+FFmpeg tools, or by setting the value explicitly in the device
+\&\f(CW\*(C`AVFormatContext\*(C'\fR options or using the \fIlibavutil/opt.h\fR \s-1API\s0
+for programmatic use.
+.SH "INPUT DEVICES"
+.IX Header "INPUT DEVICES"
+Input devices are configured elements in FFmpeg which enable accessing
+the data coming from a multimedia device attached to your system.
+.PP
+When you configure your FFmpeg build, all the supported input devices
+are enabled by default. You can list all available ones using the
+configure option \*(L"\-\-list\-indevs\*(R".
+.PP
+You can disable all the input devices using the configure option
+\&\*(L"\-\-disable\-indevs\*(R", and selectively enable an input device using the
+option "\-\-enable\-indev=\fI\s-1INDEV\s0\fR\*(L", or you can disable a particular
+input device using the option \*(R"\-\-disable\-indev=\fI\s-1INDEV\s0\fR".
+.PP
+The option \*(L"\-devices\*(R" of the ff* tools will display the list of
+supported input devices.
+.PP
+A description of the currently available input devices follows.
+.SS "alsa"
+.IX Subsection "alsa"
+\&\s-1ALSA\s0 (Advanced Linux Sound Architecture) input device.
+.PP
+To enable this input device during configuration you need libasound
+installed on your system.
+.PP
+This device allows capturing from an \s-1ALSA\s0 device. The name of the
+device to capture has to be an \s-1ALSA\s0 card identifier.
+.PP
+An \s-1ALSA\s0 identifier has the syntax:
+.PP
+.Vb 1
+\&        hw:<CARD>[,<DEV>[,<SUBDEV>]]
+.Ve
+.PP
+where the \fI\s-1DEV\s0\fR and \fI\s-1SUBDEV\s0\fR components are optional.
+.PP
+The three arguments (in order: \fI\s-1CARD\s0\fR,\fI\s-1DEV\s0\fR,\fI\s-1SUBDEV\s0\fR)
+specify card number or identifier, device number and subdevice number
+(\-1 means any).
+.PP
+To see the list of cards currently recognized by your system check the
+files \fI/proc/asound/cards\fR and \fI/proc/asound/devices\fR.
+.PP
+For example to capture with \fBffmpeg\fR from an \s-1ALSA\s0 device with
+card id 0, you may run the command:
+.PP
+.Vb 1
+\&        ffmpeg \-f alsa \-i hw:0 alsaout.wav
+.Ve
+.PP
+For more information see:
+<\fBhttp://www.alsa\-project.org/alsa\-doc/alsa\-lib/pcm.html\fR>
+.PP
+\fIOptions\fR
+.IX Subsection "Options"
+.IP "\fBsample_rate\fR" 4
+.IX Item "sample_rate"
+Set the sample rate in Hz. Default is 48000.
+.IP "\fBchannels\fR" 4
+.IX Item "channels"
+Set the number of channels. Default is 2.
+.SS "android_camera"
+.IX Subsection "android_camera"
+Android camera input device.
+.PP
+This input devices uses the Android Camera2 \s-1NDK API\s0 which is
+available on devices with \s-1API\s0 level 24+. The availability of
+android_camera is autodetected during configuration.
+.PP
+This device allows capturing from all cameras on an Android device,
+which are integrated into the Camera2 \s-1NDK API.\s0
+.PP
+The available cameras are enumerated internally and can be selected
+with the \fIcamera_index\fR parameter. The input file string is
+discarded.
+.PP
+Generally the back facing camera has index 0 while the front facing
+camera has index 1.
+.PP
+\fIOptions\fR
+.IX Subsection "Options"
+.IP "\fBvideo_size\fR" 4
+.IX Item "video_size"
+Set the video size given as a string such as 640x480 or hd720.
+Falls back to the first available configuration reported by
+Android if requested video size is not available or by default.
+.IP "\fBframerate\fR" 4
+.IX Item "framerate"
+Set the video framerate.
+Falls back to the first available configuration reported by
+Android if requested framerate is not available or by default (\-1).
+.IP "\fBcamera_index\fR" 4
+.IX Item "camera_index"
+Set the index of the camera to use. Default is 0.
+.IP "\fBinput_queue_size\fR" 4
+.IX Item "input_queue_size"
+Set the maximum number of frames to buffer. Default is 5.
+.SS "avfoundation"
+.IX Subsection "avfoundation"
+AVFoundation input device.
+.PP
+AVFoundation is the currently recommended framework by Apple for streamgrabbing on \s-1OSX\s0 >= 10.7 as well as on iOS.
+.PP
+The input filename has to be given in the following syntax:
+.PP
+.Vb 1
+\&        \-i "[[VIDEO]:[AUDIO]]"
+.Ve
+.PP
+The first entry selects the video input while the latter selects the audio input.
+The stream has to be specified by the device name or the device index as shown by the device list.
+Alternatively, the video and/or audio input device can be chosen by index using the
+.PP
+.Vb 1
+\&    B<\-video_device_index E<lt>INDEXE<gt>>
+.Ve
+.PP
+and/or
+.PP
+.Vb 1
+\&    B<\-audio_device_index E<lt>INDEXE<gt>>
+.Ve
+.PP
+, overriding any
+device name or index given in the input filename.
+.PP
+All available devices can be enumerated by using \fB\-list_devices true\fR, listing
+all device names and corresponding indices.
+.PP
+There are two device name aliases:
+.ie n .IP """default""" 4
+.el .IP "\f(CWdefault\fR" 4
+.IX Item "default"
+Select the AVFoundation default device of the corresponding type.
+.ie n .IP """none""" 4
+.el .IP "\f(CWnone\fR" 4
+.IX Item "none"
+Do not record the corresponding media type.
+This is equivalent to specifying an empty device name or index.
+.PP
+\fIOptions\fR
+.IX Subsection "Options"
+.PP
+AVFoundation supports the following options:
+.IP "\fB\-list_devices <TRUE|FALSE>\fR" 4
+.IX Item "-list_devices <TRUE|FALSE>"
+If set to true, a list of all available input devices is given showing all
+device names and indices.
+.IP "\fB\-video_device_index <\s-1INDEX\s0>\fR" 4
+.IX Item "-video_device_index <INDEX>"
+Specify the video device by its index. Overrides anything given in the input filename.
+.IP "\fB\-audio_device_index <\s-1INDEX\s0>\fR" 4
+.IX Item "-audio_device_index <INDEX>"
+Specify the audio device by its index. Overrides anything given in the input filename.
+.IP "\fB\-pixel_format <\s-1FORMAT\s0>\fR" 4
+.IX Item "-pixel_format <FORMAT>"
+Request the video device to use a specific pixel format.
+If the specified format is not supported, a list of available formats is given
+and the first one in this list is used instead. Available pixel formats are:
+\&\f(CW\*(C`monob, rgb555be, rgb555le, rgb565be, rgb565le, rgb24, bgr24, 0rgb, bgr0, 0bgr, rgb0,
+ bgr48be, uyvy422, yuva444p, yuva444p16le, yuv444p, yuv422p16, yuv422p10, yuv444p10,
+ yuv420p, nv12, yuyv422, gray\*(C'\fR
+.IP "\fB\-framerate\fR" 4
+.IX Item "-framerate"
+Set the grabbing frame rate. Default is \f(CW\*(C`ntsc\*(C'\fR, corresponding to a
+frame rate of \f(CW\*(C`30000/1001\*(C'\fR.
+.IP "\fB\-video_size\fR" 4
+.IX Item "-video_size"
+Set the video frame size.
+.IP "\fB\-capture_cursor\fR" 4
+.IX Item "-capture_cursor"
+Capture the mouse pointer. Default is 0.
+.IP "\fB\-capture_mouse_clicks\fR" 4
+.IX Item "-capture_mouse_clicks"
+Capture the screen mouse clicks. Default is 0.
+.IP "\fB\-capture_raw_data\fR" 4
+.IX Item "-capture_raw_data"
+Capture the raw device data. Default is 0.
+Using this option may result in receiving the underlying data delivered to the AVFoundation framework. E.g. for muxed devices that sends raw \s-1DV\s0 data to the framework (like tape-based camcorders), setting this option to false results in extracted video frames captured in the designated pixel format only. Setting this option to true results in receiving the raw \s-1DV\s0 stream untouched.
+.PP
+\fIExamples\fR
+.IX Subsection "Examples"
+.IP "\(bu" 4
+Print the list of AVFoundation supported devices and exit:
+.Sp
+.Vb 1
+\&        $ ffmpeg \-f avfoundation \-list_devices true \-i ""
+.Ve
+.IP "\(bu" 4
+Record video from video device 0 and audio from audio device 0 into out.avi:
+.Sp
+.Vb 1
+\&        $ ffmpeg \-f avfoundation \-i "0:0" out.avi
+.Ve
+.IP "\(bu" 4
+Record video from video device 2 and audio from audio device 1 into out.avi:
+.Sp
+.Vb 1
+\&        $ ffmpeg \-f avfoundation \-video_device_index 2 \-i ":1" out.avi
+.Ve
+.IP "\(bu" 4
+Record video from the system default video device using the pixel format bgr0 and do not record any audio into out.avi:
+.Sp
+.Vb 1
+\&        $ ffmpeg \-f avfoundation \-pixel_format bgr0 \-i "default:none" out.avi
+.Ve
+.IP "\(bu" 4
+Record raw \s-1DV\s0 data from a suitable input device and write the output into out.dv:
+.Sp
+.Vb 1
+\&        $ ffmpeg \-f avfoundation \-capture_raw_data true \-i "zr100:none" out.dv
+.Ve
+.SS "decklink"
+.IX Subsection "decklink"
+The decklink input device provides capture capabilities for Blackmagic
+DeckLink devices.
+.PP
+To enable this input device, you need the Blackmagic DeckLink \s-1SDK\s0 and you
+need to configure with the appropriate \f(CW\*(C`\-\-extra\-cflags\*(C'\fR
+and \f(CW\*(C`\-\-extra\-ldflags\*(C'\fR.
+On Windows, you need to run the \s-1IDL\s0 files through \fBwidl\fR.
+.PP
+DeckLink is very picky about the formats it supports. Pixel format of the
+input can be set with \fBraw_format\fR.
+Framerate and video size must be determined for your device with
+\&\fB\-list_formats 1\fR. Audio sample rate is always 48 kHz and the number
+of channels can be 2, 8 or 16. Note that all audio channels are bundled in one single
+audio track.
+.PP
+\fIOptions\fR
+.IX Subsection "Options"
+.IP "\fBlist_devices\fR" 4
+.IX Item "list_devices"
+If set to \fBtrue\fR, print a list of devices and exit.
+Defaults to \fBfalse\fR. This option is deprecated, please use the
+\&\f(CW\*(C`\-sources\*(C'\fR option of ffmpeg to list the available input devices.
+.IP "\fBlist_formats\fR" 4
+.IX Item "list_formats"
+If set to \fBtrue\fR, print a list of supported formats and exit.
+Defaults to \fBfalse\fR.
+.IP "\fBformat_code <FourCC>\fR" 4
+.IX Item "format_code <FourCC>"
+This sets the input video format to the format given by the FourCC. To see
+the supported values of your device(s) use \fBlist_formats\fR.
+Note that there is a FourCC \fB'pal '\fR that can also be used
+as \fBpal\fR (3 letters).
+Default behavior is autodetection of the input video format, if the hardware
+supports it.
+.IP "\fBraw_format\fR" 4
+.IX Item "raw_format"
+Set the pixel format of the captured video.
+Available values are:
+.RS 4
+.IP "\fBauto\fR" 4
+.IX Item "auto"
+This is the default which means 8\-bit \s-1YUV 422\s0 or 8\-bit \s-1ARGB\s0 if format
+autodetection is used, 8\-bit \s-1YUV 422\s0 otherwise.
+.IP "\fBuyvy422\fR" 4
+.IX Item "uyvy422"
+8\-bit \s-1YUV 422.\s0
+.IP "\fByuv422p10\fR" 4
+.IX Item "yuv422p10"
+10\-bit \s-1YUV 422.\s0
+.IP "\fBargb\fR" 4
+.IX Item "argb"
+8\-bit \s-1RGB.\s0
+.IP "\fBbgra\fR" 4
+.IX Item "bgra"
+8\-bit \s-1RGB.\s0
+.IP "\fBrgb10\fR" 4
+.IX Item "rgb10"
+10\-bit \s-1RGB.\s0
+.RE
+.RS 4
+.RE
+.IP "\fBteletext_lines\fR" 4
+.IX Item "teletext_lines"
+If set to nonzero, an additional teletext stream will be captured from the
+vertical ancillary data. Both \s-1SD PAL\s0 (576i) and \s-1HD\s0 (1080i or 1080p)
+sources are supported. In case of \s-1HD\s0 sources, \s-1OP47\s0 packets are decoded.
+.Sp
+This option is a bitmask of the \s-1SD PAL VBI\s0 lines captured, specifically lines 6
+to 22, and lines 318 to 335. Line 6 is the \s-1LSB\s0 in the mask. Selected lines
+which do not contain teletext information will be ignored. You can use the
+special \fBall\fR constant to select all possible lines, or
+\&\fBstandard\fR to skip lines 6, 318 and 319, which are not compatible with
+all receivers.
+.Sp
+For \s-1SD\s0 sources, ffmpeg needs to be compiled with \f(CW\*(C`\-\-enable\-libzvbi\*(C'\fR. For
+\&\s-1HD\s0 sources, on older (pre\-4K) DeckLink card models you have to capture in 10
+bit mode.
+.IP "\fBchannels\fR" 4
+.IX Item "channels"
+Defines number of audio channels to capture. Must be \fB2\fR, \fB8\fR or \fB16\fR.
+Defaults to \fB2\fR.
+.IP "\fBduplex_mode\fR" 4
+.IX Item "duplex_mode"
+Sets the decklink device duplex/profile mode. Must be \fBunset\fR, \fBhalf\fR, \fBfull\fR,
+\&\fBone_sub_device_full\fR, \fBone_sub_device_half\fR, \fBtwo_sub_device_full\fR,
+\&\fBfour_sub_device_half\fR
+Defaults to \fBunset\fR.
+.Sp
+Note: DeckLink \s-1SDK 11.0\s0 have replaced the duplex property by a profile property.
+For the DeckLink Duo 2 and DeckLink Quad 2, a profile is shared between any 2
+sub-devices that utilize the same connectors. For the DeckLink 8K Pro, a profile
+is shared between all 4 sub-devices. So DeckLink 8K Pro support four profiles.
+.Sp
+Valid profile modes for DeckLink 8K Pro(with DeckLink \s-1SDK\s0 >= 11.0):
+\&\fBone_sub_device_full\fR, \fBone_sub_device_half\fR, \fBtwo_sub_device_full\fR,
+\&\fBfour_sub_device_half\fR
+.Sp
+Valid profile modes for DeckLink Quad 2 and DeckLink Duo 2:
+\&\fBhalf\fR, \fBfull\fR
+.IP "\fBtimecode_format\fR" 4
+.IX Item "timecode_format"
+Timecode type to include in the frame and video stream metadata. Must be
+\&\fBnone\fR, \fBrp188vitc\fR, \fBrp188vitc2\fR, \fBrp188ltc\fR,
+\&\fBrp188hfr\fR, \fBrp188any\fR, \fBvitc\fR, \fBvitc2\fR, or \fBserial\fR.
+Defaults to \fBnone\fR (not included).
+.Sp
+In order to properly support 50/60 fps timecodes, the ordering of the queried
+timecode types for \fBrp188any\fR is \s-1HFR, VITC1, VITC2\s0 and \s-1LTC\s0 for >30 fps
+content. Note that this is slightly different to the ordering used by the
+DeckLink \s-1API,\s0 which is \s-1HFR, VITC1, LTC, VITC2.\s0
+.IP "\fBvideo_input\fR" 4
+.IX Item "video_input"
+Sets the video input source. Must be \fBunset\fR, \fBsdi\fR, \fBhdmi\fR,
+\&\fBoptical_sdi\fR, \fBcomponent\fR, \fBcomposite\fR or \fBs_video\fR.
+Defaults to \fBunset\fR.
+.IP "\fBaudio_input\fR" 4
+.IX Item "audio_input"
+Sets the audio input source. Must be \fBunset\fR, \fBembedded\fR,
+\&\fBaes_ebu\fR, \fBanalog\fR, \fBanalog_xlr\fR, \fBanalog_rca\fR or
+\&\fBmicrophone\fR. Defaults to \fBunset\fR.
+.IP "\fBvideo_pts\fR" 4
+.IX Item "video_pts"
+Sets the video packet timestamp source. Must be \fBvideo\fR, \fBaudio\fR,
+\&\fBreference\fR, \fBwallclock\fR or \fBabs_wallclock\fR.
+Defaults to \fBvideo\fR.
+.IP "\fBaudio_pts\fR" 4
+.IX Item "audio_pts"
+Sets the audio packet timestamp source. Must be \fBvideo\fR, \fBaudio\fR,
+\&\fBreference\fR, \fBwallclock\fR or \fBabs_wallclock\fR.
+Defaults to \fBaudio\fR.
+.IP "\fBdraw_bars\fR" 4
+.IX Item "draw_bars"
+If set to \fBtrue\fR, color bars are drawn in the event of a signal loss.
+Defaults to \fBtrue\fR.
+This option is deprecated, please use the \f(CW\*(C`signal_loss_action\*(C'\fR option.
+.IP "\fBsignal_loss_action\fR" 4
+.IX Item "signal_loss_action"
+Sets the action to take in the event of a signal loss. Accepts one of the
+following values:
+.RS 4
+.IP "\fB1, none\fR" 4
+.IX Item "1, none"
+Do nothing on signal loss. This usually results in black frames.
+.IP "\fB2, bars\fR" 4
+.IX Item "2, bars"
+Draw color bars on signal loss. Only supported for 8\-bit input signals.
+.IP "\fB3, repeat\fR" 4
+.IX Item "3, repeat"
+Repeat the last video frame on signal loss.
+.RE
+.RS 4
+.Sp
+Defaults to \fBbars\fR.
+.RE
+.IP "\fBqueue_size\fR" 4
+.IX Item "queue_size"
+Sets maximum input buffer size in bytes. If the buffering reaches this value,
+incoming frames will be dropped.
+Defaults to \fB1073741824\fR.
+.IP "\fBaudio_depth\fR" 4
+.IX Item "audio_depth"
+Sets the audio sample bit depth. Must be \fB16\fR or \fB32\fR.
+Defaults to \fB16\fR.
+.IP "\fBdecklink_copyts\fR" 4
+.IX Item "decklink_copyts"
+If set to \fBtrue\fR, timestamps are forwarded as they are without removing
+the initial offset.
+Defaults to \fBfalse\fR.
+.IP "\fBtimestamp_align\fR" 4
+.IX Item "timestamp_align"
+Capture start time alignment in seconds. If set to nonzero, input frames are
+dropped till the system timestamp aligns with configured value.
+Alignment difference of up to one frame duration is tolerated.
+This is useful for maintaining input synchronization across N different
+hardware devices deployed for 'N\-way' redundancy. The system time of different
+hardware devices should be synchronized with protocols such as \s-1NTP\s0 or \s-1PTP,\s0
+before using this option.
+Note that this method is not foolproof. In some border cases input
+synchronization may not happen due to thread scheduling jitters in the \s-1OS.\s0
+Either sync could go wrong by 1 frame or in a rarer case
+\&\fBtimestamp_align\fR seconds.
+Defaults to \fB0\fR.
+.IP "\fBwait_for_tc (\fR\fIbool\fR\fB)\fR" 4
+.IX Item "wait_for_tc (bool)"
+Drop frames till a frame with timecode is received. Sometimes serial timecode
+isn't received with the first input frame. If that happens, the stored stream
+timecode will be inaccurate. If this option is set to \fBtrue\fR, input frames
+are dropped till a frame with timecode is received.
+Option \fItimecode_format\fR must be specified.
+Defaults to \fBfalse\fR.
+.IP "\fBenable_klv(\fR\fIbool\fR\fB)\fR" 4
+.IX Item "enable_klv(bool)"
+If set to \fBtrue\fR, extracts \s-1KLV\s0 data from \s-1VANC\s0 and outputs \s-1KLV\s0 packets.
+\&\s-1KLV VANC\s0 packets are joined based on \s-1MID\s0 and \s-1PSC\s0 fields and aggregated into
+one \s-1KLV\s0 packet.
+Defaults to \fBfalse\fR.
+.PP
+\fIExamples\fR
+.IX Subsection "Examples"
+.IP "\(bu" 4
+List input devices:
+.Sp
+.Vb 1
+\&        ffmpeg \-sources decklink
+.Ve
+.IP "\(bu" 4
+List supported formats:
+.Sp
+.Vb 1
+\&        ffmpeg \-f decklink \-list_formats 1 \-i \*(AqIntensity Pro\*(Aq
+.Ve
+.IP "\(bu" 4
+Capture video clip at 1080i50:
+.Sp
+.Vb 1
+\&        ffmpeg \-format_code Hi50 \-f decklink \-i \*(AqIntensity Pro\*(Aq \-c:a copy \-c:v copy output.avi
+.Ve
+.IP "\(bu" 4
+Capture video clip at 1080i50 10 bit:
+.Sp
+.Vb 1
+\&        ffmpeg \-raw_format yuv422p10 \-format_code Hi50 \-f decklink \-i \*(AqUltraStudio Mini Recorder\*(Aq \-c:a copy \-c:v copy output.avi
+.Ve
+.IP "\(bu" 4
+Capture video clip at 1080i50 with 16 audio channels:
+.Sp
+.Vb 1
+\&        ffmpeg \-channels 16 \-format_code Hi50 \-f decklink \-i \*(AqUltraStudio Mini Recorder\*(Aq \-c:a copy \-c:v copy output.avi
+.Ve
+.SS "dshow"
+.IX Subsection "dshow"
+Windows DirectShow input device.
+.PP
+DirectShow support is enabled when FFmpeg is built with the mingw\-w64 project.
+Currently only audio and video devices are supported.
+.PP
+Multiple devices may be opened as separate inputs, but they may also be
+opened on the same input, which should improve synchronism between them.
+.PP
+The input name should be in the format:
+.PP
+.Vb 1
+\&        <TYPE>=<NAME>[:<TYPE>=<NAME>]
+.Ve
+.PP
+where \fI\s-1TYPE\s0\fR can be either \fIaudio\fR or \fIvideo\fR,
+and \fI\s-1NAME\s0\fR is the device's name or alternative name..
+.PP
+\fIOptions\fR
+.IX Subsection "Options"
+.PP
+If no options are specified, the device's defaults are used.
+If the device does not support the requested options, it will
+fail to open.
+.IP "\fBvideo_size\fR" 4
+.IX Item "video_size"
+Set the video size in the captured video.
+.IP "\fBframerate\fR" 4
+.IX Item "framerate"
+Set the frame rate in the captured video.
+.IP "\fBsample_rate\fR" 4
+.IX Item "sample_rate"
+Set the sample rate (in Hz) of the captured audio.
+.IP "\fBsample_size\fR" 4
+.IX Item "sample_size"
+Set the sample size (in bits) of the captured audio.
+.IP "\fBchannels\fR" 4
+.IX Item "channels"
+Set the number of channels in the captured audio.
+.IP "\fBlist_devices\fR" 4
+.IX Item "list_devices"
+If set to \fBtrue\fR, print a list of devices and exit.
+.IP "\fBlist_options\fR" 4
+.IX Item "list_options"
+If set to \fBtrue\fR, print a list of selected device's options
+and exit.
+.IP "\fBvideo_device_number\fR" 4
+.IX Item "video_device_number"
+Set video device number for devices with the same name (starts at 0,
+defaults to 0).
+.IP "\fBaudio_device_number\fR" 4
+.IX Item "audio_device_number"
+Set audio device number for devices with the same name (starts at 0,
+defaults to 0).
+.IP "\fBpixel_format\fR" 4
+.IX Item "pixel_format"
+Select pixel format to be used by DirectShow. This may only be set when
+the video codec is not set or set to rawvideo.
+.IP "\fBaudio_buffer_size\fR" 4
+.IX Item "audio_buffer_size"
+Set audio device buffer size in milliseconds (which can directly
+impact latency, depending on the device).
+Defaults to using the audio device's
+default buffer size (typically some multiple of 500ms).
+Setting this value too low can degrade performance.
+See also
+<\fBhttp://msdn.microsoft.com/en\-us/library/windows/desktop/dd377582(v=vs.85).aspx\fR>
+.IP "\fBvideo_pin_name\fR" 4
+.IX Item "video_pin_name"
+Select video capture pin to use by name or alternative name.
+.IP "\fBaudio_pin_name\fR" 4
+.IX Item "audio_pin_name"
+Select audio capture pin to use by name or alternative name.
+.IP "\fBcrossbar_video_input_pin_number\fR" 4
+.IX Item "crossbar_video_input_pin_number"
+Select video input pin number for crossbar device. This will be
+routed to the crossbar device's Video Decoder output pin.
+Note that changing this value can affect future invocations
+(sets a new default) until system reboot occurs.
+.IP "\fBcrossbar_audio_input_pin_number\fR" 4
+.IX Item "crossbar_audio_input_pin_number"
+Select audio input pin number for crossbar device. This will be
+routed to the crossbar device's Audio Decoder output pin.
+Note that changing this value can affect future invocations
+(sets a new default) until system reboot occurs.
+.IP "\fBshow_video_device_dialog\fR" 4
+.IX Item "show_video_device_dialog"
+If set to \fBtrue\fR, before capture starts, popup a display dialog
+to the end user, allowing them to change video filter properties
+and configurations manually.
+Note that for crossbar devices, adjusting values in this dialog
+may be needed at times to toggle between \s-1PAL\s0 (25 fps) and \s-1NTSC\s0 (29.97)
+input frame rates, sizes, interlacing, etc.  Changing these values can
+enable different scan rates/frame rates and avoiding green bars at
+the bottom, flickering scan lines, etc.
+Note that with some devices, changing these properties can also affect future
+invocations (sets new defaults) until system reboot occurs.
+.IP "\fBshow_audio_device_dialog\fR" 4
+.IX Item "show_audio_device_dialog"
+If set to \fBtrue\fR, before capture starts, popup a display dialog
+to the end user, allowing them to change audio filter properties
+and configurations manually.
+.IP "\fBshow_video_crossbar_connection_dialog\fR" 4
+.IX Item "show_video_crossbar_connection_dialog"
+If set to \fBtrue\fR, before capture starts, popup a display
+dialog to the end user, allowing them to manually
+modify crossbar pin routings, when it opens a video device.
+.IP "\fBshow_audio_crossbar_connection_dialog\fR" 4
+.IX Item "show_audio_crossbar_connection_dialog"
+If set to \fBtrue\fR, before capture starts, popup a display
+dialog to the end user, allowing them to manually
+modify crossbar pin routings, when it opens an audio device.
+.IP "\fBshow_analog_tv_tuner_dialog\fR" 4
+.IX Item "show_analog_tv_tuner_dialog"
+If set to \fBtrue\fR, before capture starts, popup a display
+dialog to the end user, allowing them to manually
+modify \s-1TV\s0 channels and frequencies.
+.IP "\fBshow_analog_tv_tuner_audio_dialog\fR" 4
+.IX Item "show_analog_tv_tuner_audio_dialog"
+If set to \fBtrue\fR, before capture starts, popup a display
+dialog to the end user, allowing them to manually
+modify \s-1TV\s0 audio (like mono vs. stereo, Language A,B or C).
+.IP "\fBaudio_device_load\fR" 4
+.IX Item "audio_device_load"
+Load an audio capture filter device from file instead of searching
+it by name. It may load additional parameters too, if the filter
+supports the serialization of its properties to.
+To use this an audio capture source has to be specified, but it can
+be anything even fake one.
+.IP "\fBaudio_device_save\fR" 4
+.IX Item "audio_device_save"
+Save the currently used audio capture filter device and its
+parameters (if the filter supports it) to a file.
+If a file with the same name exists it will be overwritten.
+.IP "\fBvideo_device_load\fR" 4
+.IX Item "video_device_load"
+Load a video capture filter device from file instead of searching
+it by name. It may load additional parameters too, if the filter
+supports the serialization of its properties to.
+To use this a video capture source has to be specified, but it can
+be anything even fake one.
+.IP "\fBvideo_device_save\fR" 4
+.IX Item "video_device_save"
+Save the currently used video capture filter device and its
+parameters (if the filter supports it) to a file.
+If a file with the same name exists it will be overwritten.
+.IP "\fBuse_video_device_timestamps\fR" 4
+.IX Item "use_video_device_timestamps"
+If set to \fBfalse\fR, the timestamp for video frames will be
+derived from the wallclock instead of the timestamp provided by
+the capture device. This allows working around devices that
+provide unreliable timestamps.
+.PP
+\fIExamples\fR
+.IX Subsection "Examples"
+.IP "\(bu" 4
+Print the list of DirectShow supported devices and exit:
+.Sp
+.Vb 1
+\&        $ ffmpeg \-list_devices true \-f dshow \-i dummy
+.Ve
+.IP "\(bu" 4
+Open video device \fICamera\fR:
+.Sp
+.Vb 1
+\&        $ ffmpeg \-f dshow \-i video="Camera"
+.Ve
+.IP "\(bu" 4
+Open second video device with name \fICamera\fR:
+.Sp
+.Vb 1
+\&        $ ffmpeg \-f dshow \-video_device_number 1 \-i video="Camera"
+.Ve
+.IP "\(bu" 4
+Open video device \fICamera\fR and audio device \fIMicrophone\fR:
+.Sp
+.Vb 1
+\&        $ ffmpeg \-f dshow \-i video="Camera":audio="Microphone"
+.Ve
+.IP "\(bu" 4
+Print the list of supported options in selected device and exit:
+.Sp
+.Vb 1
+\&        $ ffmpeg \-list_options true \-f dshow \-i video="Camera"
+.Ve
+.IP "\(bu" 4
+Specify pin names to capture by name or alternative name, specify alternative device name:
+.Sp
+.Vb 1
+\&        $ ffmpeg \-f dshow \-audio_pin_name "Audio Out" \-video_pin_name 2 \-i video=video="@device_pnp_\e\e?\epci#ven_1a0a&dev_6200&subsys_62021461&rev_01#4&e2c7dd6&0&00e1#{65e8773d\-8f56\-11d0\-a3b9\-00a0c9223196}\e{ca465100\-deb0\-4d59\-818f\-8c477184adf6}":audio="Microphone"
+.Ve
+.IP "\(bu" 4
+Configure a crossbar device, specifying crossbar pins, allow user to adjust video capture properties at startup:
+.Sp
+.Vb 2
+\&        $ ffmpeg \-f dshow \-show_video_device_dialog true \-crossbar_video_input_pin_number 0
+\&             \-crossbar_audio_input_pin_number 3 \-i video="AVerMedia BDA Analog Capture":audio="AVerMedia BDA Analog Capture"
+.Ve
+.SS "fbdev"
+.IX Subsection "fbdev"
+Linux framebuffer input device.
+.PP
+The Linux framebuffer is a graphic hardware-independent abstraction
+layer to show graphics on a computer monitor, typically on the
+console. It is accessed through a file device node, usually
+\&\fI/dev/fb0\fR.
+.PP
+For more detailed information read the file
+Documentation/fb/framebuffer.txt included in the Linux source tree.
+.PP
+See also <\fBhttp://linux\-fbdev.sourceforge.net/\fR>, and \fBfbset\fR\|(1).
+.PP
+To record from the framebuffer device \fI/dev/fb0\fR with
+\&\fBffmpeg\fR:
+.PP
+.Vb 1
+\&        ffmpeg \-f fbdev \-framerate 10 \-i /dev/fb0 out.avi
+.Ve
+.PP
+You can take a single screenshot image with the command:
+.PP
+.Vb 1
+\&        ffmpeg \-f fbdev \-framerate 1 \-i /dev/fb0 \-frames:v 1 screenshot.jpeg
+.Ve
+.PP
+\fIOptions\fR
+.IX Subsection "Options"
+.IP "\fBframerate\fR" 4
+.IX Item "framerate"
+Set the frame rate. Default is 25.
+.SS "gdigrab"
+.IX Subsection "gdigrab"
+Win32 GDI-based screen capture device.
+.PP
+This device allows you to capture a region of the display on Windows.
+.PP
+Amongst options for the input filenames are such elements as:
+.PP
+.Vb 1
+\&        desktop
+.Ve
+.PP
+or
+.PP
+.Vb 1
+\&        title=<window_title>
+.Ve
+.PP
+or
+.PP
+.Vb 1
+\&        hwnd=<window_hwnd>
+.Ve
+.PP
+The first option will capture the entire desktop, or a fixed region of the
+desktop. The second and third options will instead capture the contents of a single
+window, regardless of its position on the screen.
+.PP
+For example, to grab the entire desktop using \fBffmpeg\fR:
+.PP
+.Vb 1
+\&        ffmpeg \-f gdigrab \-framerate 6 \-i desktop out.mpg
+.Ve
+.PP
+Grab a 640x480 region at position \f(CW\*(C`10,20\*(C'\fR:
+.PP
+.Vb 1
+\&        ffmpeg \-f gdigrab \-framerate 6 \-offset_x 10 \-offset_y 20 \-video_size vga \-i desktop out.mpg
+.Ve
+.PP
+Grab the contents of the window named \*(L"Calculator\*(R"
+.PP
+.Vb 1
+\&        ffmpeg \-f gdigrab \-framerate 6 \-i title=Calculator out.mpg
+.Ve
+.PP
+\fIOptions\fR
+.IX Subsection "Options"
+.IP "\fBdraw_mouse\fR" 4
+.IX Item "draw_mouse"
+Specify whether to draw the mouse pointer. Use the value \f(CW0\fR to
+not draw the pointer. Default value is \f(CW1\fR.
+.IP "\fBframerate\fR" 4
+.IX Item "framerate"
+Set the grabbing frame rate. Default value is \f(CW\*(C`ntsc\*(C'\fR,
+corresponding to a frame rate of \f(CW\*(C`30000/1001\*(C'\fR.
+.IP "\fBshow_region\fR" 4
+.IX Item "show_region"
+Show grabbed region on screen.
+.Sp
+If \fIshow_region\fR is specified with \f(CW1\fR, then the grabbing
+region will be indicated on screen. With this option, it is easy to
+know what is being grabbed if only a portion of the screen is grabbed.
+.Sp
+Note that \fIshow_region\fR is incompatible with grabbing the contents
+of a single window.
+.Sp
+For example:
+.Sp
+.Vb 1
+\&        ffmpeg \-f gdigrab \-show_region 1 \-framerate 6 \-video_size cif \-offset_x 10 \-offset_y 20 \-i desktop out.mpg
+.Ve
+.IP "\fBvideo_size\fR" 4
+.IX Item "video_size"
+Set the video frame size. The default is to capture the full screen if \fIdesktop\fR is selected, or the full window size if \fItitle=\fIwindow_title\fI\fR is selected.
+.IP "\fBoffset_x\fR" 4
+.IX Item "offset_x"
+When capturing a region with \fIvideo_size\fR, set the distance from the left edge of the screen or desktop.
+.Sp
+Note that the offset calculation is from the top left corner of the primary monitor on Windows. If you have a monitor positioned to the left of your primary monitor, you will need to use a negative \fIoffset_x\fR value to move the region to that monitor.
+.IP "\fBoffset_y\fR" 4
+.IX Item "offset_y"
+When capturing a region with \fIvideo_size\fR, set the distance from the top edge of the screen or desktop.
+.Sp
+Note that the offset calculation is from the top left corner of the primary monitor on Windows. If you have a monitor positioned above your primary monitor, you will need to use a negative \fIoffset_y\fR value to move the region to that monitor.
+.SS "iec61883"
+.IX Subsection "iec61883"
+FireWire \s-1DV/HDV\s0 input device using libiec61883.
+.PP
+To enable this input device, you need libiec61883, libraw1394 and
+libavc1394 installed on your system. Use the configure option
+\&\f(CW\*(C`\-\-enable\-libiec61883\*(C'\fR to compile with the device enabled.
+.PP
+The iec61883 capture device supports capturing from a video device
+connected via \s-1IEEE1394\s0 (FireWire), using libiec61883 and the new Linux
+FireWire stack (juju). This is the default \s-1DV/HDV\s0 input method in Linux
+Kernel 2.6.37 and later, since the old FireWire stack was removed.
+.PP
+Specify the FireWire port to be used as input file, or \*(L"auto\*(R"
+to choose the first port connected.
+.PP
+\fIOptions\fR
+.IX Subsection "Options"
+.IP "\fBdvtype\fR" 4
+.IX Item "dvtype"
+Override autodetection of \s-1DV/HDV.\s0 This should only be used if auto
+detection does not work, or if usage of a different device type
+should be prohibited. Treating a \s-1DV\s0 device as \s-1HDV\s0 (or vice versa) will
+not work and result in undefined behavior.
+The values \fBauto\fR, \fBdv\fR and \fBhdv\fR are supported.
+.IP "\fBdvbuffer\fR" 4
+.IX Item "dvbuffer"
+Set maximum size of buffer for incoming data, in frames. For \s-1DV,\s0 this
+is an exact value. For \s-1HDV,\s0 it is not frame exact, since \s-1HDV\s0 does
+not have a fixed frame size.
+.IP "\fBdvguid\fR" 4
+.IX Item "dvguid"
+Select the capture device by specifying its \s-1GUID.\s0 Capturing will only
+be performed from the specified device and fails if no device with the
+given \s-1GUID\s0 is found. This is useful to select the input if multiple
+devices are connected at the same time.
+Look at /sys/bus/firewire/devices to find out the GUIDs.
+.PP
+\fIExamples\fR
+.IX Subsection "Examples"
+.IP "\(bu" 4
+Grab and show the input of a FireWire \s-1DV/HDV\s0 device.
+.Sp
+.Vb 1
+\&        ffplay \-f iec61883 \-i auto
+.Ve
+.IP "\(bu" 4
+Grab and record the input of a FireWire \s-1DV/HDV\s0 device,
+using a packet buffer of 100000 packets if the source is \s-1HDV.\s0
+.Sp
+.Vb 1
+\&        ffmpeg \-f iec61883 \-i auto \-dvbuffer 100000 out.mpg
+.Ve
+.SS "jack"
+.IX Subsection "jack"
+\&\s-1JACK\s0 input device.
+.PP
+To enable this input device during configuration you need libjack
+installed on your system.
+.PP
+A \s-1JACK\s0 input device creates one or more \s-1JACK\s0 writable clients, one for
+each audio channel, with name \fIclient_name\fR:input_\fIN\fR, where
+\&\fIclient_name\fR is the name provided by the application, and \fIN\fR
+is a number which identifies the channel.
+Each writable client will send the acquired data to the FFmpeg input
+device.
+.PP
+Once you have created one or more \s-1JACK\s0 readable clients, you need to
+connect them to one or more \s-1JACK\s0 writable clients.
+.PP
+To connect or disconnect \s-1JACK\s0 clients you can use the \fBjack_connect\fR
+and \fBjack_disconnect\fR programs, or do it through a graphical interface,
+for example with \fBqjackctl\fR.
+.PP
+To list the \s-1JACK\s0 clients and their properties you can invoke the command
+\&\fBjack_lsp\fR.
+.PP
+Follows an example which shows how to capture a \s-1JACK\s0 readable client
+with \fBffmpeg\fR.
+.PP
+.Vb 2
+\&        # Create a JACK writable client with name "ffmpeg".
+\&        $ ffmpeg \-f jack \-i ffmpeg \-y out.wav
+\&        
+\&        # Start the sample jack_metro readable client.
+\&        $ jack_metro \-b 120 \-d 0.2 \-f 4000
+\&        
+\&        # List the current JACK clients.
+\&        $ jack_lsp \-c
+\&        system:capture_1
+\&        system:capture_2
+\&        system:playback_1
+\&        system:playback_2
+\&        ffmpeg:input_1
+\&        metro:120_bpm
+\&        
+\&        # Connect metro to the ffmpeg writable client.
+\&        $ jack_connect metro:120_bpm ffmpeg:input_1
+.Ve
+.PP
+For more information read:
+<\fBhttp://jackaudio.org/\fR>
+.PP
+\fIOptions\fR
+.IX Subsection "Options"
+.IP "\fBchannels\fR" 4
+.IX Item "channels"
+Set the number of channels. Default is 2.
+.SS "kmsgrab"
+.IX Subsection "kmsgrab"
+\&\s-1KMS\s0 video input device.
+.PP
+Captures the \s-1KMS\s0 scanout framebuffer associated with a specified \s-1CRTC\s0 or plane as a
+\&\s-1DRM\s0 object that can be passed to other hardware functions.
+.PP
+Requires either \s-1DRM\s0 master or \s-1CAP_SYS_ADMIN\s0 to run.
+.PP
+If you don't understand what all of that means, you probably don't want this.  Look at
+\&\fBx11grab\fR instead.
+.PP
+\fIOptions\fR
+.IX Subsection "Options"
+.IP "\fBdevice\fR" 4
+.IX Item "device"
+\&\s-1DRM\s0 device to capture on.  Defaults to \fB/dev/dri/card0\fR.
+.IP "\fBformat\fR" 4
+.IX Item "format"
+Pixel format of the framebuffer.  This can be autodetected if you are running Linux 5.7
+or later, but needs to be provided for earlier versions.  Defaults to \fBbgr0\fR,
+which is the most common format used by the Linux console and Xorg X server.
+.IP "\fBformat_modifier\fR" 4
+.IX Item "format_modifier"
+Format modifier to signal on output frames.  This is necessary to import correctly into
+some APIs.  It can be autodetected if you are running Linux 5.7 or later, but will need
+to be provided explicitly when needed in earlier versions.  See the libdrm documentation
+for possible values.
+.IP "\fBcrtc_id\fR" 4
+.IX Item "crtc_id"
+\&\s-1KMS CRTC ID\s0 to define the capture source.  The first active plane on the given \s-1CRTC\s0
+will be used.
+.IP "\fBplane_id\fR" 4
+.IX Item "plane_id"
+\&\s-1KMS\s0 plane \s-1ID\s0 to define the capture source.  Defaults to the first active plane found if
+neither \fBcrtc_id\fR nor \fBplane_id\fR are specified.
+.IP "\fBframerate\fR" 4
+.IX Item "framerate"
+Framerate to capture at.  This is not synchronised to any page flipping or framebuffer
+changes \- it just defines the interval at which the framebuffer is sampled.  Sampling
+faster than the framebuffer update rate will generate independent frames with the same
+content.  Defaults to \f(CW30\fR.
+.PP
+\fIExamples\fR
+.IX Subsection "Examples"
+.IP "\(bu" 4
+Capture from the first active plane, download the result to normal frames and encode.
+This will only work if the framebuffer is both linear and mappable \- if not, the result
+may be scrambled or fail to download.
+.Sp
+.Vb 1
+\&        ffmpeg \-f kmsgrab \-i \- \-vf \*(Aqhwdownload,format=bgr0\*(Aq output.mp4
+.Ve
+.IP "\(bu" 4
+Capture from \s-1CRTC ID 42\s0 at 60fps, map the result to \s-1VAAPI,\s0 convert to \s-1NV12\s0 and encode as H.264.
+.Sp
+.Vb 1
+\&        ffmpeg \-crtc_id 42 \-framerate 60 \-f kmsgrab \-i \- \-vf \*(Aqhwmap=derive_device=vaapi,scale_vaapi=w=1920:h=1080:format=nv12\*(Aq \-c:v h264_vaapi output.mp4
+.Ve
+.IP "\(bu" 4
+To capture only part of a plane the output can be cropped \- this can be used to capture
+a single window, as long as it has a known absolute position and size.  For example, to
+capture and encode the middle quarter of a 1920x1080 plane:
+.Sp
+.Vb 1
+\&        ffmpeg \-f kmsgrab \-i \- \-vf \*(Aqhwmap=derive_device=vaapi,crop=960:540:480:270,scale_vaapi=960:540:nv12\*(Aq \-c:v h264_vaapi output.mp4
+.Ve
+.SS "lavfi"
+.IX Subsection "lavfi"
+Libavfilter input virtual device.
+.PP
+This input device reads data from the open output pads of a libavfilter
+filtergraph.
+.PP
+For each filtergraph open output, the input device will create a
+corresponding stream which is mapped to the generated output.
+The filtergraph is specified through the option \fBgraph\fR.
+.PP
+\fIOptions\fR
+.IX Subsection "Options"
+.IP "\fBgraph\fR" 4
+.IX Item "graph"
+Specify the filtergraph to use as input. Each video open output must be
+labelled by a unique string of the form "out\fIN\fR", where \fIN\fR is a
+number starting from 0 corresponding to the mapped input stream
+generated by the device.
+The first unlabelled output is automatically assigned to the \*(L"out0\*(R"
+label, but all the others need to be specified explicitly.
+.Sp
+The suffix \*(L"+subcc\*(R" can be appended to the output label to create an extra
+stream with the closed captions packets attached to that output
+(experimental; only for \s-1EIA\-608 / CEA\-708\s0 for now).
+The subcc streams are created after all the normal streams, in the order of
+the corresponding stream.
+For example, if there is \*(L"out19+subcc\*(R", \*(L"out7+subcc\*(R" and up to \*(L"out42\*(R", the
+stream #43 is subcc for stream #7 and stream #44 is subcc for stream #19.
+.Sp
+If not specified defaults to the filename specified for the input
+device.
+.IP "\fBgraph_file\fR" 4
+.IX Item "graph_file"
+Set the filename of the filtergraph to be read and sent to the other
+filters. Syntax of the filtergraph is the same as the one specified by
+the option \fIgraph\fR.
+.IP "\fBdumpgraph\fR" 4
+.IX Item "dumpgraph"
+Dump graph to stderr.
+.PP
+\fIExamples\fR
+.IX Subsection "Examples"
+.IP "\(bu" 4
+Create a color video stream and play it back with \fBffplay\fR:
+.Sp
+.Vb 1
+\&        ffplay \-f lavfi \-graph "color=c=pink [out0]" dummy
+.Ve
+.IP "\(bu" 4
+As the previous example, but use filename for specifying the graph
+description, and omit the \*(L"out0\*(R" label:
+.Sp
+.Vb 1
+\&        ffplay \-f lavfi color=c=pink
+.Ve
+.IP "\(bu" 4
+Create three different video test filtered sources and play them:
+.Sp
+.Vb 1
+\&        ffplay \-f lavfi \-graph "testsrc [out0]; testsrc,hflip [out1]; testsrc,negate [out2]" test3
+.Ve
+.IP "\(bu" 4
+Read an audio stream from a file using the amovie source and play it
+back with \fBffplay\fR:
+.Sp
+.Vb 1
+\&        ffplay \-f lavfi "amovie=test.wav"
+.Ve
+.IP "\(bu" 4
+Read an audio stream and a video stream and play it back with
+\&\fBffplay\fR:
+.Sp
+.Vb 1
+\&        ffplay \-f lavfi "movie=test.avi[out0];amovie=test.wav[out1]"
+.Ve
+.IP "\(bu" 4
+Dump decoded frames to images and Closed Captions to an \s-1RCWT\s0 backup:
+.Sp
+.Vb 1
+\&        ffmpeg \-f lavfi \-i "movie=test.ts[out0+subcc]" \-map v frame%08d.png \-map s \-c copy \-f rcwt subcc.bin
+.Ve
+.SS "libcdio"
+.IX Subsection "libcdio"
+Audio-CD input device based on libcdio.
+.PP
+To enable this input device during configuration you need libcdio
+installed on your system. It requires the configure option
+\&\f(CW\*(C`\-\-enable\-libcdio\*(C'\fR.
+.PP
+This device allows playing and grabbing from an Audio-CD.
+.PP
+For example to copy with \fBffmpeg\fR the entire Audio-CD in \fI/dev/sr0\fR,
+you may run the command:
+.PP
+.Vb 1
+\&        ffmpeg \-f libcdio \-i /dev/sr0 cd.wav
+.Ve
+.PP
+\fIOptions\fR
+.IX Subsection "Options"
+.IP "\fBspeed\fR" 4
+.IX Item "speed"
+Set drive reading speed. Default value is 0.
+.Sp
+The speed is specified CD-ROM speed units. The speed is set through
+the libcdio \f(CW\*(C`cdio_cddap_speed_set\*(C'\fR function. On many CD-ROM
+drives, specifying a value too large will result in using the fastest
+speed.
+.IP "\fBparanoia_mode\fR" 4
+.IX Item "paranoia_mode"
+Set paranoia recovery mode flags. It accepts one of the following values:
+.RS 4
+.IP "\fBdisable\fR" 4
+.IX Item "disable"
+.PD 0
+.IP "\fBverify\fR" 4
+.IX Item "verify"
+.IP "\fBoverlap\fR" 4
+.IX Item "overlap"
+.IP "\fBneverskip\fR" 4
+.IX Item "neverskip"
+.IP "\fBfull\fR" 4
+.IX Item "full"
+.RE
+.RS 4
+.PD
+.Sp
+Default value is \fBdisable\fR.
+.Sp
+For more information about the available recovery modes, consult the
+paranoia project documentation.
+.RE
+.SS "libdc1394"
+.IX Subsection "libdc1394"
+\&\s-1IIDC1394\s0 input device, based on libdc1394 and libraw1394.
+.PP
+Requires the configure option \f(CW\*(C`\-\-enable\-libdc1394\*(C'\fR.
+.PP
+\fIOptions\fR
+.IX Subsection "Options"
+.IP "\fBframerate\fR" 4
+.IX Item "framerate"
+Set the frame rate. Default is \f(CW\*(C`ntsc\*(C'\fR, corresponding to a frame
+rate of \f(CW\*(C`30000/1001\*(C'\fR.
+.IP "\fBpixel_format\fR" 4
+.IX Item "pixel_format"
+Select the pixel format. Default is \f(CW\*(C`uyvy422\*(C'\fR.
+.IP "\fBvideo_size\fR" 4
+.IX Item "video_size"
+Set the video size given as a string such as \f(CW\*(C`640x480\*(C'\fR or \f(CW\*(C`hd720\*(C'\fR.
+Default is \f(CW\*(C`qvga\*(C'\fR.
+.SS "openal"
+.IX Subsection "openal"
+The OpenAL input device provides audio capture on all systems with a
+working OpenAL 1.1 implementation.
+.PP
+To enable this input device during configuration, you need OpenAL
+headers and libraries installed on your system, and need to configure
+FFmpeg with \f(CW\*(C`\-\-enable\-openal\*(C'\fR.
+.PP
+OpenAL headers and libraries should be provided as part of your OpenAL
+implementation, or as an additional download (an \s-1SDK\s0). Depending on your
+installation you may need to specify additional flags via the
+\&\f(CW\*(C`\-\-extra\-cflags\*(C'\fR and \f(CW\*(C`\-\-extra\-ldflags\*(C'\fR for allowing the build
+system to locate the OpenAL headers and libraries.
+.PP
+An incomplete list of OpenAL implementations follows:
+.IP "\fBCreative\fR" 4
+.IX Item "Creative"
+The official Windows implementation, providing hardware acceleration
+with supported devices and software fallback.
+See <\fBhttp://openal.org/\fR>.
+.IP "\fBOpenAL Soft\fR" 4
+.IX Item "OpenAL Soft"
+Portable, open source (\s-1LGPL\s0) software implementation. Includes
+backends for the most common sound APIs on the Windows, Linux,
+Solaris, and \s-1BSD\s0 operating systems.
+See <\fBhttp://kcat.strangesoft.net/openal.html\fR>.
+.IP "\fBApple\fR" 4
+.IX Item "Apple"
+OpenAL is part of Core Audio, the official Mac \s-1OS X\s0 Audio interface.
+See <\fBhttp://developer.apple.com/technologies/mac/audio\-and\-video.html\fR>
+.PP
+This device allows one to capture from an audio input device handled
+through OpenAL.
+.PP
+You need to specify the name of the device to capture in the provided
+filename. If the empty string is provided, the device will
+automatically select the default device. You can get the list of the
+supported devices by using the option \fIlist_devices\fR.
+.PP
+\fIOptions\fR
+.IX Subsection "Options"
+.IP "\fBchannels\fR" 4
+.IX Item "channels"
+Set the number of channels in the captured audio. Only the values
+\&\fB1\fR (monaural) and \fB2\fR (stereo) are currently supported.
+Defaults to \fB2\fR.
+.IP "\fBsample_size\fR" 4
+.IX Item "sample_size"
+Set the sample size (in bits) of the captured audio. Only the values
+\&\fB8\fR and \fB16\fR are currently supported. Defaults to
+\&\fB16\fR.
+.IP "\fBsample_rate\fR" 4
+.IX Item "sample_rate"
+Set the sample rate (in Hz) of the captured audio.
+Defaults to \fB44.1k\fR.
+.IP "\fBlist_devices\fR" 4
+.IX Item "list_devices"
+If set to \fBtrue\fR, print a list of devices and exit.
+Defaults to \fBfalse\fR.
+.PP
+\fIExamples\fR
+.IX Subsection "Examples"
+.PP
+Print the list of OpenAL supported devices and exit:
+.PP
+.Vb 1
+\&        $ ffmpeg \-list_devices true \-f openal \-i dummy out.ogg
+.Ve
+.PP
+Capture from the OpenAL device \fI\s-1DR\-BT101\s0 via PulseAudio\fR:
+.PP
+.Vb 1
+\&        $ ffmpeg \-f openal \-i \*(AqDR\-BT101 via PulseAudio\*(Aq out.ogg
+.Ve
+.PP
+Capture from the default device (note the empty string '' as filename):
+.PP
+.Vb 1
+\&        $ ffmpeg \-f openal \-i \*(Aq\*(Aq out.ogg
+.Ve
+.PP
+Capture from two devices simultaneously, writing to two different files,
+within the same \fBffmpeg\fR command:
+.PP
+.Vb 1
+\&        $ ffmpeg \-f openal \-i \*(AqDR\-BT101 via PulseAudio\*(Aq out1.ogg \-f openal \-i \*(AqALSA Default\*(Aq out2.ogg
+.Ve
+.PP
+Note: not all OpenAL implementations support multiple simultaneous capture \-
+try the latest OpenAL Soft if the above does not work.
+.SS "oss"
+.IX Subsection "oss"
+Open Sound System input device.
+.PP
+The filename to provide to the input device is the device node
+representing the \s-1OSS\s0 input device, and is usually set to
+\&\fI/dev/dsp\fR.
+.PP
+For example to grab from \fI/dev/dsp\fR using \fBffmpeg\fR use the
+command:
+.PP
+.Vb 1
+\&        ffmpeg \-f oss \-i /dev/dsp /tmp/oss.wav
+.Ve
+.PP
+For more information about \s-1OSS\s0 see:
+<\fBhttp://manuals.opensound.com/usersguide/dsp.html\fR>
+.PP
+\fIOptions\fR
+.IX Subsection "Options"
+.IP "\fBsample_rate\fR" 4
+.IX Item "sample_rate"
+Set the sample rate in Hz. Default is 48000.
+.IP "\fBchannels\fR" 4
+.IX Item "channels"
+Set the number of channels. Default is 2.
+.SS "pulse"
+.IX Subsection "pulse"
+PulseAudio input device.
+.PP
+To enable this output device you need to configure FFmpeg with \f(CW\*(C`\-\-enable\-libpulse\*(C'\fR.
+.PP
+The filename to provide to the input device is a source device or the
+string \*(L"default\*(R"
+.PP
+To list the PulseAudio source devices and their properties you can invoke
+the command \fBpactl list sources\fR.
+.PP
+More information about PulseAudio can be found on <\fBhttp://www.pulseaudio.org\fR>.
+.PP
+\fIOptions\fR
+.IX Subsection "Options"
+.IP "\fBserver\fR" 4
+.IX Item "server"
+Connect to a specific PulseAudio server, specified by an \s-1IP\s0 address.
+Default server is used when not provided.
+.IP "\fBname\fR" 4
+.IX Item "name"
+Specify the application name PulseAudio will use when showing active clients,
+by default it is the \f(CW\*(C`LIBAVFORMAT_IDENT\*(C'\fR string.
+.IP "\fBstream_name\fR" 4
+.IX Item "stream_name"
+Specify the stream name PulseAudio will use when showing active streams,
+by default it is \*(L"record\*(R".
+.IP "\fBsample_rate\fR" 4
+.IX Item "sample_rate"
+Specify the samplerate in Hz, by default 48kHz is used.
+.IP "\fBchannels\fR" 4
+.IX Item "channels"
+Specify the channels in use, by default 2 (stereo) is set.
+.IP "\fBframe_size\fR" 4
+.IX Item "frame_size"
+This option does nothing and is deprecated.
+.IP "\fBfragment_size\fR" 4
+.IX Item "fragment_size"
+Specify the size in bytes of the minimal buffering fragment in PulseAudio, it
+will affect the audio latency. By default it is set to 50 ms amount of data.
+.IP "\fBwallclock\fR" 4
+.IX Item "wallclock"
+Set the initial \s-1PTS\s0 using the current time. Default is 1.
+.PP
+\fIExamples\fR
+.IX Subsection "Examples"
+.PP
+Record a stream from default device:
+.PP
+.Vb 1
+\&        ffmpeg \-f pulse \-i default /tmp/pulse.wav
+.Ve
+.SS "sndio"
+.IX Subsection "sndio"
+sndio input device.
+.PP
+To enable this input device during configuration you need libsndio
+installed on your system.
+.PP
+The filename to provide to the input device is the device node
+representing the sndio input device, and is usually set to
+\&\fI/dev/audio0\fR.
+.PP
+For example to grab from \fI/dev/audio0\fR using \fBffmpeg\fR use the
+command:
+.PP
+.Vb 1
+\&        ffmpeg \-f sndio \-i /dev/audio0 /tmp/oss.wav
+.Ve
+.PP
+\fIOptions\fR
+.IX Subsection "Options"
+.IP "\fBsample_rate\fR" 4
+.IX Item "sample_rate"
+Set the sample rate in Hz. Default is 48000.
+.IP "\fBchannels\fR" 4
+.IX Item "channels"
+Set the number of channels. Default is 2.
+.SS "video4linux2, v4l2"
+.IX Subsection "video4linux2, v4l2"
+Video4Linux2 input video device.
+.PP
+\&\*(L"v4l2\*(R" can be used as alias for \*(L"video4linux2\*(R".
+.PP
+If FFmpeg is built with v4l\-utils support (by using the
+\&\f(CW\*(C`\-\-enable\-libv4l2\*(C'\fR configure option), it is possible to use it with the
+\&\f(CW\*(C`\-use_libv4l2\*(C'\fR input device option.
+.PP
+The name of the device to grab is a file device node, usually Linux
+systems tend to automatically create such nodes when the device
+(e.g. an \s-1USB\s0 webcam) is plugged into the system, and has a name of the
+kind \fI/dev/video\fIN\fI\fR, where \fIN\fR is a number associated to
+the device.
+.PP
+Video4Linux2 devices usually support a limited set of
+\&\fIwidth\fRx\fIheight\fR sizes and frame rates. You can check which are
+supported using \fB\-list_formats all\fR for Video4Linux2 devices.
+Some devices, like \s-1TV\s0 cards, support one or more standards. It is possible
+to list all the supported standards using \fB\-list_standards all\fR.
+.PP
+The time base for the timestamps is 1 microsecond. Depending on the kernel
+version and configuration, the timestamps may be derived from the real time
+clock (origin at the Unix Epoch) or the monotonic clock (origin usually at
+boot time, unaffected by \s-1NTP\s0 or manual changes to the clock). The
+\&\fB\-timestamps abs\fR or \fB\-ts abs\fR option can be used to force
+conversion into the real time clock.
+.PP
+Some usage examples of the video4linux2 device with \fBffmpeg\fR
+and \fBffplay\fR:
+.IP "\(bu" 4
+List supported formats for a video4linux2 device:
+.Sp
+.Vb 1
+\&        ffplay \-f video4linux2 \-list_formats all /dev/video0
+.Ve
+.IP "\(bu" 4
+Grab and show the input of a video4linux2 device:
+.Sp
+.Vb 1
+\&        ffplay \-f video4linux2 \-framerate 30 \-video_size hd720 /dev/video0
+.Ve
+.IP "\(bu" 4
+Grab and record the input of a video4linux2 device, leave the
+frame rate and size as previously set:
+.Sp
+.Vb 1
+\&        ffmpeg \-f video4linux2 \-input_format mjpeg \-i /dev/video0 out.mpeg
+.Ve
+.PP
+For more information about Video4Linux, check <\fBhttp://linuxtv.org/\fR>.
+.PP
+\fIOptions\fR
+.IX Subsection "Options"
+.IP "\fBstandard\fR" 4
+.IX Item "standard"
+Set the standard. Must be the name of a supported standard. To get a
+list of the supported standards, use the \fBlist_standards\fR
+option.
+.IP "\fBchannel\fR" 4
+.IX Item "channel"
+Set the input channel number. Default to \-1, which means using the
+previously selected channel.
+.IP "\fBvideo_size\fR" 4
+.IX Item "video_size"
+Set the video frame size. The argument must be a string in the form
+\&\fI\s-1WIDTH\s0\fRx\fI\s-1HEIGHT\s0\fR or a valid size abbreviation.
+.IP "\fBpixel_format\fR" 4
+.IX Item "pixel_format"
+Select the pixel format (only valid for raw video input).
+.IP "\fBinput_format\fR" 4
+.IX Item "input_format"
+Set the preferred pixel format (for raw video) or a codec name.
+This option allows one to select the input format, when several are
+available.
+.IP "\fBframerate\fR" 4
+.IX Item "framerate"
+Set the preferred video frame rate.
+.IP "\fBlist_formats\fR" 4
+.IX Item "list_formats"
+List available formats (supported pixel formats, codecs, and frame
+sizes) and exit.
+.Sp
+Available values are:
+.RS 4
+.IP "\fBall\fR" 4
+.IX Item "all"
+Show all available (compressed and non-compressed) formats.
+.IP "\fBraw\fR" 4
+.IX Item "raw"
+Show only raw video (non-compressed) formats.
+.IP "\fBcompressed\fR" 4
+.IX Item "compressed"
+Show only compressed formats.
+.RE
+.RS 4
+.RE
+.IP "\fBlist_standards\fR" 4
+.IX Item "list_standards"
+List supported standards and exit.
+.Sp
+Available values are:
+.RS 4
+.IP "\fBall\fR" 4
+.IX Item "all"
+Show all supported standards.
+.RE
+.RS 4
+.RE
+.IP "\fBtimestamps, ts\fR" 4
+.IX Item "timestamps, ts"
+Set type of timestamps for grabbed frames.
+.Sp
+Available values are:
+.RS 4
+.IP "\fBdefault\fR" 4
+.IX Item "default"
+Use timestamps from the kernel.
+.IP "\fBabs\fR" 4
+.IX Item "abs"
+Use absolute timestamps (wall clock).
+.IP "\fBmono2abs\fR" 4
+.IX Item "mono2abs"
+Force conversion from monotonic to absolute timestamps.
+.RE
+.RS 4
+.Sp
+Default value is \f(CW\*(C`default\*(C'\fR.
+.RE
+.IP "\fBuse_libv4l2\fR" 4
+.IX Item "use_libv4l2"
+Use libv4l2 (v4l\-utils) conversion functions. Default is 0.
+.SS "vfwcap"
+.IX Subsection "vfwcap"
+VfW (Video for Windows) capture input device.
+.PP
+The filename passed as input is the capture driver number, ranging from
+0 to 9. You may use \*(L"list\*(R" as filename to print a list of drivers. Any
+other filename will be interpreted as device number 0.
+.PP
+\fIOptions\fR
+.IX Subsection "Options"
+.IP "\fBvideo_size\fR" 4
+.IX Item "video_size"
+Set the video frame size.
+.IP "\fBframerate\fR" 4
+.IX Item "framerate"
+Set the grabbing frame rate. Default value is \f(CW\*(C`ntsc\*(C'\fR,
+corresponding to a frame rate of \f(CW\*(C`30000/1001\*(C'\fR.
+.SS "x11grab"
+.IX Subsection "x11grab"
+X11 video input device.
+.PP
+To enable this input device during configuration you need libxcb
+installed on your system. It will be automatically detected during
+configuration.
+.PP
+This device allows one to capture a region of an X11 display.
+.PP
+The filename passed as input has the syntax:
+.PP
+.Vb 1
+\&        [<hostname>]:<display_number>.<screen_number>[+<x_offset>,<y_offset>]
+.Ve
+.PP
+\&\fIhostname\fR:\fIdisplay_number\fR.\fIscreen_number\fR specifies the
+X11 display name of the screen to grab from. \fIhostname\fR can be
+omitted, and defaults to \*(L"localhost\*(R". The environment variable
+\&\fB\s-1DISPLAY\s0\fR contains the default display name.
+.PP
+\&\fIx_offset\fR and \fIy_offset\fR specify the offsets of the grabbed
+area with respect to the top-left border of the X11 screen. They
+default to 0.
+.PP
+Check the X11 documentation (e.g. \fBman X\fR) for more detailed
+information.
+.PP
+Use the \fBxdpyinfo\fR program for getting basic information about
+the properties of your X11 display (e.g. grep for \*(L"name\*(R" or
+\&\*(L"dimensions\*(R").
+.PP
+For example to grab from \fI:0.0\fR using \fBffmpeg\fR:
+.PP
+.Vb 1
+\&        ffmpeg \-f x11grab \-framerate 25 \-video_size cif \-i :0.0 out.mpg
+.Ve
+.PP
+Grab at position \f(CW\*(C`10,20\*(C'\fR:
+.PP
+.Vb 1
+\&        ffmpeg \-f x11grab \-framerate 25 \-video_size cif \-i :0.0+10,20 out.mpg
+.Ve
+.PP
+\fIOptions\fR
+.IX Subsection "Options"
+.IP "\fBselect_region\fR" 4
+.IX Item "select_region"
+Specify whether to select the grabbing area graphically using the pointer.
+A value of \f(CW1\fR prompts the user to select the grabbing area graphically
+by clicking and dragging. A single click with no dragging will select the
+whole screen. A region with zero width or height will also select the whole
+screen. This option overwrites the \fIvideo_size\fR, \fIgrab_x\fR, and
+\&\fIgrab_y\fR options. Default value is \f(CW0\fR.
+.IP "\fBdraw_mouse\fR" 4
+.IX Item "draw_mouse"
+Specify whether to draw the mouse pointer. A value of \f(CW0\fR specifies
+not to draw the pointer. Default value is \f(CW1\fR.
+.IP "\fBfollow_mouse\fR" 4
+.IX Item "follow_mouse"
+Make the grabbed area follow the mouse. The argument can be
+\&\f(CW\*(C`centered\*(C'\fR or a number of pixels \fI\s-1PIXELS\s0\fR.
+.Sp
+When it is specified with \*(L"centered\*(R", the grabbing region follows the mouse
+pointer and keeps the pointer at the center of region; otherwise, the region
+follows only when the mouse pointer reaches within \fI\s-1PIXELS\s0\fR (greater than
+zero) to the edge of region.
+.Sp
+For example:
+.Sp
+.Vb 1
+\&        ffmpeg \-f x11grab \-follow_mouse centered \-framerate 25 \-video_size cif \-i :0.0 out.mpg
+.Ve
+.Sp
+To follow only when the mouse pointer reaches within 100 pixels to edge:
+.Sp
+.Vb 1
+\&        ffmpeg \-f x11grab \-follow_mouse 100 \-framerate 25 \-video_size cif \-i :0.0 out.mpg
+.Ve
+.IP "\fBframerate\fR" 4
+.IX Item "framerate"
+Set the grabbing frame rate. Default value is \f(CW\*(C`ntsc\*(C'\fR,
+corresponding to a frame rate of \f(CW\*(C`30000/1001\*(C'\fR.
+.IP "\fBshow_region\fR" 4
+.IX Item "show_region"
+Show grabbed region on screen.
+.Sp
+If \fIshow_region\fR is specified with \f(CW1\fR, then the grabbing
+region will be indicated on screen. With this option, it is easy to
+know what is being grabbed if only a portion of the screen is grabbed.
+.IP "\fBregion_border\fR" 4
+.IX Item "region_border"
+Set the region border thickness if \fB\-show_region 1\fR is used.
+Range is 1 to 128 and default is 3 (XCB-based x11grab only).
+.Sp
+For example:
+.Sp
+.Vb 1
+\&        ffmpeg \-f x11grab \-show_region 1 \-framerate 25 \-video_size cif \-i :0.0+10,20 out.mpg
+.Ve
+.Sp
+With \fIfollow_mouse\fR:
+.Sp
+.Vb 1
+\&        ffmpeg \-f x11grab \-follow_mouse centered \-show_region 1 \-framerate 25 \-video_size cif \-i :0.0 out.mpg
+.Ve
+.IP "\fBwindow_id\fR" 4
+.IX Item "window_id"
+Grab this window, instead of the whole screen. Default value is 0, which maps to
+the whole screen (root window).
+.Sp
+The id of a window can be found using the \fBxwininfo\fR program, possibly with options \-tree and
+\&\-root.
+.Sp
+If the window is later enlarged, the new area is not recorded. Video ends when
+the window is closed, unmapped (i.e., iconified) or shrunk beyond the video
+size (which defaults to the initial window size).
+.Sp
+This option disables options \fBfollow_mouse\fR and \fBselect_region\fR.
+.IP "\fBvideo_size\fR" 4
+.IX Item "video_size"
+Set the video frame size. Default is the full desktop or window.
+.IP "\fBgrab_x\fR" 4
+.IX Item "grab_x"
+.PD 0
+.IP "\fBgrab_y\fR" 4
+.IX Item "grab_y"
+.PD
+Set the grabbing region coordinates. They are expressed as offset from
+the top left corner of the X11 window and correspond to the
+\&\fIx_offset\fR and \fIy_offset\fR parameters in the device name. The
+default value for both options is 0.
+.SH "OUTPUT DEVICES"
+.IX Header "OUTPUT DEVICES"
+Output devices are configured elements in FFmpeg that can write
+multimedia data to an output device attached to your system.
+.PP
+When you configure your FFmpeg build, all the supported output devices
+are enabled by default. You can list all available ones using the
+configure option \*(L"\-\-list\-outdevs\*(R".
+.PP
+You can disable all the output devices using the configure option
+\&\*(L"\-\-disable\-outdevs\*(R", and selectively enable an output device using the
+option "\-\-enable\-outdev=\fI\s-1OUTDEV\s0\fR\*(L", or you can disable a particular
+input device using the option \*(R"\-\-disable\-outdev=\fI\s-1OUTDEV\s0\fR".
+.PP
+The option \*(L"\-devices\*(R" of the ff* tools will display the list of
+enabled output devices.
+.PP
+A description of the currently available output devices follows.
+.SS "alsa"
+.IX Subsection "alsa"
+\&\s-1ALSA\s0 (Advanced Linux Sound Architecture) output device.
+.PP
+\fIExamples\fR
+.IX Subsection "Examples"
+.IP "\(bu" 4
+Play a file on default \s-1ALSA\s0 device:
+.Sp
+.Vb 1
+\&        ffmpeg \-i INPUT \-f alsa default
+.Ve
+.IP "\(bu" 4
+Play a file on soundcard 1, audio device 7:
+.Sp
+.Vb 1
+\&        ffmpeg \-i INPUT \-f alsa hw:1,7
+.Ve
+.SS "AudioToolbox"
+.IX Subsection "AudioToolbox"
+AudioToolbox output device.
+.PP
+Allows native output to CoreAudio devices on \s-1OSX.\s0
+.PP
+The output filename can be empty (or \f(CW\*(C`\-\*(C'\fR) to refer to the default system output device or a number that refers to the device index as shown using: \f(CW\*(C`\-list_devices true\*(C'\fR.
+.PP
+Alternatively, the audio input device can be chosen by index using the
+.PP
+.Vb 1
+\&    B<\-audio_device_index E<lt>INDEXE<gt>>
+.Ve
+.PP
+, overriding any device name or index given in the input filename.
+.PP
+All available devices can be enumerated by using \fB\-list_devices true\fR, listing
+all device names, UIDs and corresponding indices.
+.PP
+\fIOptions\fR
+.IX Subsection "Options"
+.PP
+AudioToolbox supports the following options:
+.IP "\fB\-audio_device_index <\s-1INDEX\s0>\fR" 4
+.IX Item "-audio_device_index <INDEX>"
+Specify the audio device by its index. Overrides anything given in the output filename.
+.PP
+\fIExamples\fR
+.IX Subsection "Examples"
+.IP "\(bu" 4
+Print the list of supported devices and output a sine wave to the default device:
+.Sp
+.Vb 1
+\&        $ ffmpeg \-f lavfi \-i sine=r=44100 \-f audiotoolbox \-list_devices true \-
+.Ve
+.IP "\(bu" 4
+Output a sine wave to the device with the index 2, overriding any output filename:
+.Sp
+.Vb 1
+\&        $ ffmpeg \-f lavfi \-i sine=r=44100 \-f audiotoolbox \-audio_device_index 2 \-
+.Ve
+.SS "caca"
+.IX Subsection "caca"
+\&\s-1CACA\s0 output device.
+.PP
+This output device allows one to show a video stream in \s-1CACA\s0 window.
+Only one \s-1CACA\s0 window is allowed per application, so you can
+have only one instance of this output device in an application.
+.PP
+To enable this output device you need to configure FFmpeg with
+\&\f(CW\*(C`\-\-enable\-libcaca\*(C'\fR.
+libcaca is a graphics library that outputs text instead of pixels.
+.PP
+For more information about libcaca, check:
+<\fBhttp://caca.zoy.org/wiki/libcaca\fR>
+.PP
+\fIOptions\fR
+.IX Subsection "Options"
+.IP "\fBwindow_title\fR" 4
+.IX Item "window_title"
+Set the \s-1CACA\s0 window title, if not specified default to the filename
+specified for the output device.
+.IP "\fBwindow_size\fR" 4
+.IX Item "window_size"
+Set the \s-1CACA\s0 window size, can be a string of the form
+\&\fIwidth\fRx\fIheight\fR or a video size abbreviation.
+If not specified it defaults to the size of the input video.
+.IP "\fBdriver\fR" 4
+.IX Item "driver"
+Set display driver.
+.IP "\fBalgorithm\fR" 4
+.IX Item "algorithm"
+Set dithering algorithm. Dithering is necessary
+because the picture being rendered has usually far more colours than
+the available palette.
+The accepted values are listed with \f(CW\*(C`\-list_dither algorithms\*(C'\fR.
+.IP "\fBantialias\fR" 4
+.IX Item "antialias"
+Set antialias method. Antialiasing smoothens the rendered
+image and avoids the commonly seen staircase effect.
+The accepted values are listed with \f(CW\*(C`\-list_dither antialiases\*(C'\fR.
+.IP "\fBcharset\fR" 4
+.IX Item "charset"
+Set which characters are going to be used when rendering text.
+The accepted values are listed with \f(CW\*(C`\-list_dither charsets\*(C'\fR.
+.IP "\fBcolor\fR" 4
+.IX Item "color"
+Set color to be used when rendering text.
+The accepted values are listed with \f(CW\*(C`\-list_dither colors\*(C'\fR.
+.IP "\fBlist_drivers\fR" 4
+.IX Item "list_drivers"
+If set to \fBtrue\fR, print a list of available drivers and exit.
+.IP "\fBlist_dither\fR" 4
+.IX Item "list_dither"
+List available dither options related to the argument.
+The argument must be one of \f(CW\*(C`algorithms\*(C'\fR, \f(CW\*(C`antialiases\*(C'\fR,
+\&\f(CW\*(C`charsets\*(C'\fR, \f(CW\*(C`colors\*(C'\fR.
+.PP
+\fIExamples\fR
+.IX Subsection "Examples"
+.IP "\(bu" 4
+The following command shows the \fBffmpeg\fR output is an
+\&\s-1CACA\s0 window, forcing its size to 80x25:
+.Sp
+.Vb 1
+\&        ffmpeg \-i INPUT \-c:v rawvideo \-pix_fmt rgb24 \-window_size 80x25 \-f caca \-
+.Ve
+.IP "\(bu" 4
+Show the list of available drivers and exit:
+.Sp
+.Vb 1
+\&        ffmpeg \-i INPUT \-pix_fmt rgb24 \-f caca \-list_drivers true \-
+.Ve
+.IP "\(bu" 4
+Show the list of available dither colors and exit:
+.Sp
+.Vb 1
+\&        ffmpeg \-i INPUT \-pix_fmt rgb24 \-f caca \-list_dither colors \-
+.Ve
+.SS "decklink"
+.IX Subsection "decklink"
+The decklink output device provides playback capabilities for Blackmagic
+DeckLink devices.
+.PP
+To enable this output device, you need the Blackmagic DeckLink \s-1SDK\s0 and you
+need to configure with the appropriate \f(CW\*(C`\-\-extra\-cflags\*(C'\fR
+and \f(CW\*(C`\-\-extra\-ldflags\*(C'\fR.
+On Windows, you need to run the \s-1IDL\s0 files through \fBwidl\fR.
+.PP
+DeckLink is very picky about the formats it supports. Pixel format is always
+uyvy422, framerate, field order and video size must be determined for your
+device with \fB\-list_formats 1\fR. Audio sample rate is always 48 kHz.
+.PP
+\fIOptions\fR
+.IX Subsection "Options"
+.IP "\fBlist_devices\fR" 4
+.IX Item "list_devices"
+If set to \fBtrue\fR, print a list of devices and exit.
+Defaults to \fBfalse\fR. This option is deprecated, please use the
+\&\f(CW\*(C`\-sinks\*(C'\fR option of ffmpeg to list the available output devices.
+.IP "\fBlist_formats\fR" 4
+.IX Item "list_formats"
+If set to \fBtrue\fR, print a list of supported formats and exit.
+Defaults to \fBfalse\fR.
+.IP "\fBpreroll\fR" 4
+.IX Item "preroll"
+Amount of time to preroll video in seconds.
+Defaults to \fB0.5\fR.
+.IP "\fBduplex_mode\fR" 4
+.IX Item "duplex_mode"
+Sets the decklink device duplex/profile mode. Must be \fBunset\fR, \fBhalf\fR, \fBfull\fR,
+\&\fBone_sub_device_full\fR, \fBone_sub_device_half\fR, \fBtwo_sub_device_full\fR,
+\&\fBfour_sub_device_half\fR
+Defaults to \fBunset\fR.
+.Sp
+Note: DeckLink \s-1SDK 11.0\s0 have replaced the duplex property by a profile property.
+For the DeckLink Duo 2 and DeckLink Quad 2, a profile is shared between any 2
+sub-devices that utilize the same connectors. For the DeckLink 8K Pro, a profile
+is shared between all 4 sub-devices. So DeckLink 8K Pro support four profiles.
+.Sp
+Valid profile modes for DeckLink 8K Pro(with DeckLink \s-1SDK\s0 >= 11.0):
+\&\fBone_sub_device_full\fR, \fBone_sub_device_half\fR, \fBtwo_sub_device_full\fR,
+\&\fBfour_sub_device_half\fR
+.Sp
+Valid profile modes for DeckLink Quad 2 and DeckLink Duo 2:
+\&\fBhalf\fR, \fBfull\fR
+.IP "\fBtiming_offset\fR" 4
+.IX Item "timing_offset"
+Sets the genlock timing pixel offset on the used output.
+Defaults to \fBunset\fR.
+.IP "\fBlink\fR" 4
+.IX Item "link"
+Sets the \s-1SDI\s0 video link configuration on the used output. Must be
+\&\fBunset\fR, \fBsingle\fR link \s-1SDI,\s0 \fBdual\fR link \s-1SDI\s0 or \fBquad\fR link
+\&\s-1SDI.\s0
+Defaults to \fBunset\fR.
+.IP "\fBsqd\fR" 4
+.IX Item "sqd"
+Enable Square Division Quad Split mode for Quad-link \s-1SDI\s0 output.
+Must be \fBunset\fR, \fBtrue\fR or \fBfalse\fR.
+Defaults to \fBunset\fR.
+.IP "\fBlevel_a\fR" 4
+.IX Item "level_a"
+Enable \s-1SMPTE\s0 Level A mode on the used output.
+Must be \fBunset\fR, \fBtrue\fR or \fBfalse\fR.
+Defaults to \fBunset\fR.
+.IP "\fBvanc_queue_size\fR" 4
+.IX Item "vanc_queue_size"
+Sets maximum output buffer size in bytes for \s-1VANC\s0 data. If the buffering reaches this value,
+outgoing \s-1VANC\s0 data will be dropped.
+Defaults to \fB1048576\fR.
+.PP
+\fIExamples\fR
+.IX Subsection "Examples"
+.IP "\(bu" 4
+List output devices:
+.Sp
+.Vb 1
+\&        ffmpeg \-sinks decklink
+.Ve
+.IP "\(bu" 4
+List supported formats:
+.Sp
+.Vb 1
+\&        ffmpeg \-i test.avi \-f decklink \-list_formats 1 \*(AqDeckLink Mini Monitor\*(Aq
+.Ve
+.IP "\(bu" 4
+Play video clip:
+.Sp
+.Vb 1
+\&        ffmpeg \-i test.avi \-f decklink \-pix_fmt uyvy422 \*(AqDeckLink Mini Monitor\*(Aq
+.Ve
+.IP "\(bu" 4
+Play video clip with non-standard framerate or video size:
+.Sp
+.Vb 1
+\&        ffmpeg \-i test.avi \-f decklink \-pix_fmt uyvy422 \-s 720x486 \-r 24000/1001 \*(AqDeckLink Mini Monitor\*(Aq
+.Ve
+.SS "fbdev"
+.IX Subsection "fbdev"
+Linux framebuffer output device.
+.PP
+The Linux framebuffer is a graphic hardware-independent abstraction
+layer to show graphics on a computer monitor, typically on the
+console. It is accessed through a file device node, usually
+\&\fI/dev/fb0\fR.
+.PP
+For more detailed information read the file
+\&\fIDocumentation/fb/framebuffer.txt\fR included in the Linux source tree.
+.PP
+\fIOptions\fR
+.IX Subsection "Options"
+.IP "\fBxoffset\fR" 4
+.IX Item "xoffset"
+.PD 0
+.IP "\fByoffset\fR" 4
+.IX Item "yoffset"
+.PD
+Set x/y coordinate of top left corner. Default is 0.
+.PP
+\fIExamples\fR
+.IX Subsection "Examples"
+.PP
+Play a file on framebuffer device \fI/dev/fb0\fR.
+Required pixel format depends on current framebuffer settings.
+.PP
+.Vb 1
+\&        ffmpeg \-re \-i INPUT \-c:v rawvideo \-pix_fmt bgra \-f fbdev /dev/fb0
+.Ve
+.PP
+See also <\fBhttp://linux\-fbdev.sourceforge.net/\fR>, and \fBfbset\fR\|(1).
+.SS "oss"
+.IX Subsection "oss"
+\&\s-1OSS\s0 (Open Sound System) output device.
+.SS "pulse"
+.IX Subsection "pulse"
+PulseAudio output device.
+.PP
+To enable this output device you need to configure FFmpeg with \f(CW\*(C`\-\-enable\-libpulse\*(C'\fR.
+.PP
+More information about PulseAudio can be found on <\fBhttp://www.pulseaudio.org\fR>
+.PP
+\fIOptions\fR
+.IX Subsection "Options"
+.IP "\fBserver\fR" 4
+.IX Item "server"
+Connect to a specific PulseAudio server, specified by an \s-1IP\s0 address.
+Default server is used when not provided.
+.IP "\fBname\fR" 4
+.IX Item "name"
+Specify the application name PulseAudio will use when showing active clients,
+by default it is the \f(CW\*(C`LIBAVFORMAT_IDENT\*(C'\fR string.
+.IP "\fBstream_name\fR" 4
+.IX Item "stream_name"
+Specify the stream name PulseAudio will use when showing active streams,
+by default it is set to the specified output name.
+.IP "\fBdevice\fR" 4
+.IX Item "device"
+Specify the device to use. Default device is used when not provided.
+List of output devices can be obtained with command \fBpactl list sinks\fR.
+.IP "\fBbuffer_size\fR" 4
+.IX Item "buffer_size"
+.PD 0
+.IP "\fBbuffer_duration\fR" 4
+.IX Item "buffer_duration"
+.PD
+Control the size and duration of the PulseAudio buffer. A small buffer
+gives more control, but requires more frequent updates.
+.Sp
+\&\fBbuffer_size\fR specifies size in bytes while
+\&\fBbuffer_duration\fR specifies duration in milliseconds.
+.Sp
+When both options are provided then the highest value is used
+(duration is recalculated to bytes using stream parameters). If they
+are set to 0 (which is default), the device will use the default
+PulseAudio duration value. By default PulseAudio set buffer duration
+to around 2 seconds.
+.IP "\fBprebuf\fR" 4
+.IX Item "prebuf"
+Specify pre-buffering size in bytes. The server does not start with
+playback before at least \fBprebuf\fR bytes are available in the
+buffer. By default this option is initialized to the same value as
+\&\fBbuffer_size\fR or \fBbuffer_duration\fR (whichever is bigger).
+.IP "\fBminreq\fR" 4
+.IX Item "minreq"
+Specify minimum request size in bytes. The server does not request less
+than \fBminreq\fR bytes from the client, instead waits until the buffer
+is free enough to request more bytes at once. It is recommended to not set
+this option, which will initialize this to a value that is deemed sensible
+by the server.
+.PP
+\fIExamples\fR
+.IX Subsection "Examples"
+.PP
+Play a file on default device on default server:
+.PP
+.Vb 1
+\&        ffmpeg  \-i INPUT \-f pulse "stream name"
+.Ve
+.SS "sndio"
+.IX Subsection "sndio"
+sndio audio output device.
+.SS "v4l2"
+.IX Subsection "v4l2"
+Video4Linux2 output device.
+.SS "xv"
+.IX Subsection "xv"
+\&\s-1XV\s0 (XVideo) output device.
+.PP
+This output device allows one to show a video stream in a X Window System
+window.
+.PP
+\fIOptions\fR
+.IX Subsection "Options"
+.IP "\fBdisplay_name\fR" 4
+.IX Item "display_name"
+Specify the hardware display name, which determines the display and
+communications domain to be used.
+.Sp
+The display name or \s-1DISPLAY\s0 environment variable can be a string in
+the format \fIhostname\fR[:\fInumber\fR[.\fIscreen_number\fR]].
+.Sp
+\&\fIhostname\fR specifies the name of the host machine on which the
+display is physically attached. \fInumber\fR specifies the number of
+the display server on that host machine. \fIscreen_number\fR specifies
+the screen to be used on that server.
+.Sp
+If unspecified, it defaults to the value of the \s-1DISPLAY\s0 environment
+variable.
+.Sp
+For example, \f(CW\*(C`dual\-headed:0.1\*(C'\fR would specify screen 1 of display
+0 on the machine named ``dual\-headed''.
+.Sp
+Check the X11 specification for more detailed information about the
+display name format.
+.IP "\fBwindow_id\fR" 4
+.IX Item "window_id"
+When set to non-zero value then device doesn't create new window,
+but uses existing one with provided \fIwindow_id\fR. By default
+this options is set to zero and device creates its own window.
+.IP "\fBwindow_size\fR" 4
+.IX Item "window_size"
+Set the created window size, can be a string of the form
+\&\fIwidth\fRx\fIheight\fR or a video size abbreviation. If not
+specified it defaults to the size of the input video.
+Ignored when \fIwindow_id\fR is set.
+.IP "\fBwindow_x\fR" 4
+.IX Item "window_x"
+.PD 0
+.IP "\fBwindow_y\fR" 4
+.IX Item "window_y"
+.PD
+Set the X and Y window offsets for the created window. They are both
+set to 0 by default. The values may be ignored by the window manager.
+Ignored when \fIwindow_id\fR is set.
+.IP "\fBwindow_title\fR" 4
+.IX Item "window_title"
+Set the window title, if not specified default to the filename
+specified for the output device. Ignored when \fIwindow_id\fR is set.
+.PP
+For more information about XVideo see <\fBhttp://www.x.org/\fR>.
+.PP
+\fIExamples\fR
+.IX Subsection "Examples"
+.IP "\(bu" 4
+Decode, display and encode video input with \fBffmpeg\fR at the
+same time:
+.Sp
+.Vb 1
+\&        ffmpeg \-i INPUT OUTPUT \-f xv display
+.Ve
+.IP "\(bu" 4
+Decode and display the input video to multiple X11 windows:
+.Sp
+.Vb 1
+\&        ffmpeg \-i INPUT \-f xv normal \-vf negate \-f xv negated
+.Ve
+.SH "SEE ALSO"
+.IX Header "SEE ALSO"
+\&\fBffmpeg\fR\|(1), \fBffplay\fR\|(1), \fBffprobe\fR\|(1), \fBlibavdevice\fR\|(3)
+.SH "AUTHORS"
+.IX Header "AUTHORS"
+The FFmpeg developers.
+.PP
+For details about the authorship, see the Git history of the project
+(https://git.ffmpeg.org/ffmpeg), e.g. by typing the command
+\&\fBgit log\fR in the FFmpeg source directory, or browsing the
+online repository at <\fBhttps://git.ffmpeg.org/ffmpeg\fR>.
+.PP
+Maintainers for the specific components are listed in the file
+\&\fI\s-1MAINTAINERS\s0\fR in the source code tree.

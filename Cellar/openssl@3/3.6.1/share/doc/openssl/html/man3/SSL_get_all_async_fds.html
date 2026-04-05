@@ -1,0 +1,76 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_get_all_async_fds</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_waiting_for_async, SSL_get_all_async_fds, SSL_get_changed_async_fds - manage asynchronous operations</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/async.h&gt;
+#include &lt;openssl/ssl.h&gt;
+
+int SSL_waiting_for_async(SSL *s);
+int SSL_get_all_async_fds(SSL *s, OSSL_ASYNC_FD *fd, size_t *numfds);
+int SSL_get_changed_async_fds(SSL *s, OSSL_ASYNC_FD *addfd, size_t *numaddfds,
+                              OSSL_ASYNC_FD *delfd, size_t *numdelfds);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_waiting_for_async() determines whether an SSL connection is currently waiting for asynchronous operations to complete (see the <b>SSL_MODE_ASYNC</b> mode in <a href="../man3/SSL_CTX_set_mode.html">SSL_CTX_set_mode(3)</a>).</p>
+
+<p>SSL_get_all_async_fds() returns a list of file descriptor which can be used in a call to select() or poll() to determine whether the current asynchronous operation has completed or not. A completed operation will result in data appearing as &quot;read ready&quot; on the file descriptor (no actual data should be read from the file descriptor). This function should only be called if the <b>SSL</b> object is currently waiting for asynchronous work to complete (i.e. <b>SSL_ERROR_WANT_ASYNC</b> has been received - see <a href="../man3/SSL_get_error.html">SSL_get_error(3)</a>). Typically the list will only contain one file descriptor. However, if multiple asynchronous capable engines are in use then more than one is possible. The number of file descriptors returned is stored in <i>*numfds</i> and the file descriptors themselves are in <i>*fds</i>. The <i>fds</i> parameter may be NULL in which case no file descriptors are returned but <i>*numfds</i> is still populated. It is the callers responsibility to ensure sufficient memory is allocated at <i>*fds</i> so typically this function is called twice (once with a NULL <i>fds</i> parameter and once without).</p>
+
+<p>SSL_get_changed_async_fds() returns a list of the asynchronous file descriptors that have been added and a list that have been deleted since the last <b>SSL_ERROR_WANT_ASYNC</b> was received (or since the <b>SSL</b> object was created if no <b>SSL_ERROR_WANT_ASYNC</b> has been received). Similar to SSL_get_all_async_fds() it is the callers responsibility to ensure that <i>*addfd</i> and <i>*delfd</i> have sufficient memory allocated, although they may be NULL. The number of added fds and the number of deleted fds are stored in <i>*numaddfds</i> and <i>*numdelfds</i> respectively.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_waiting_for_async() will return 1 if the current SSL operation is waiting for an async operation to complete and 0 otherwise.</p>
+
+<p>SSL_get_all_async_fds() and SSL_get_changed_async_fds() return 1 on success or 0 on error.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>On Windows platforms the <i>&lt;openssl/async.h&gt;</i> header is dependent on some of the types customarily made available by including <i>&lt;windows.h&gt;</i>. The application developer is likely to require control over when the latter is included, commonly as one of the first included headers. Therefore, it is defined as an application developer&#39;s responsibility to include <i>&lt;windows.h&gt;</i> prior to <i>&lt;openssl/async.h&gt;</i>.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a>, <a href="../man3/SSL_get_error.html">SSL_get_error(3)</a>, <a href="../man3/SSL_CTX_set_mode.html">SSL_CTX_set_mode(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The SSL_waiting_for_async(), SSL_get_all_async_fds() and SSL_get_changed_async_fds() functions were added in OpenSSL 1.1.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2016-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

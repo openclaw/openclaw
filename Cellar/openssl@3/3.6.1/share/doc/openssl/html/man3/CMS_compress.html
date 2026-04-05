@@ -1,0 +1,79 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>CMS_compress</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>CMS_compress - create a CMS CompressedData structure</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/cms.h&gt;
+
+CMS_ContentInfo *CMS_compress(BIO *in, int comp_nid, unsigned int flags);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>CMS_compress() creates and returns a CMS CompressedData structure. <b>comp_nid</b> is the compression algorithm to use or <b>NID_undef</b> to use the default algorithm (zlib compression). <b>in</b> is the content to be compressed. <b>flags</b> is an optional set of flags.</p>
+
+<p>The only currently supported compression algorithm is zlib using the NID NID_zlib_compression.</p>
+
+<p>If zlib support is not compiled into OpenSSL then CMS_compress() will return an error.</p>
+
+<p>If the <b>CMS_TEXT</b> flag is set MIME headers for type <b>text/plain</b> are prepended to the data.</p>
+
+<p>Normally the supplied content is translated into MIME canonical format (as required by the S/MIME specifications) if <b>CMS_BINARY</b> is set no translation occurs. This option should be used if the supplied data is in binary format otherwise the translation will corrupt it. If <b>CMS_BINARY</b> is set then <b>CMS_TEXT</b> is ignored.</p>
+
+<p>If the <b>CMS_STREAM</b> flag is set a partial <b>CMS_ContentInfo</b> structure is returned suitable for streaming I/O: no data is read from the BIO <b>in</b>.</p>
+
+<p>The compressed data is included in the CMS_ContentInfo structure, unless <b>CMS_DETACHED</b> is set in which case it is omitted. This is rarely used in practice and is not supported by SMIME_write_CMS().</p>
+
+<p>If the flag <b>CMS_STREAM</b> is set the returned <b>CMS_ContentInfo</b> structure is <b>not</b> complete and outputting its contents via a function that does not properly finalize the <b>CMS_ContentInfo</b> structure will give unpredictable results.</p>
+
+<p>Several functions including SMIME_write_CMS(), i2d_CMS_bio_stream(), PEM_write_bio_CMS_stream() finalize the structure. Alternatively finalization can be performed by obtaining the streaming ASN1 <b>BIO</b> directly using BIO_new_CMS().</p>
+
+<p>Additional compression parameters such as the zlib compression level cannot currently be set.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>CMS_compress() returns either a CMS_ContentInfo structure or NULL if an error occurred. The error can be obtained from ERR_get_error(3).</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>, <a href="../man3/CMS_uncompress.html">CMS_uncompress(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The <b>CMS_STREAM</b> flag was added in OpenSSL 1.0.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2008-2016 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

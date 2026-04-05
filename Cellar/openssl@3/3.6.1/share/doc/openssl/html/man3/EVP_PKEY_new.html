@@ -1,0 +1,152 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_PKEY_new</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_PKEY, EVP_PKEY_new, EVP_PKEY_up_ref, EVP_PKEY_dup, EVP_PKEY_free, EVP_PKEY_new_raw_private_key_ex, EVP_PKEY_new_raw_private_key, EVP_PKEY_new_raw_public_key_ex, EVP_PKEY_new_raw_public_key, EVP_PKEY_new_CMAC_key, EVP_PKEY_new_mac_key, EVP_PKEY_get_raw_private_key, EVP_PKEY_get_raw_public_key - public/private key allocation and raw key handling functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+
+typedef evp_pkey_st EVP_PKEY;
+
+EVP_PKEY *EVP_PKEY_new(void);
+int EVP_PKEY_up_ref(EVP_PKEY *key);
+EVP_PKEY *EVP_PKEY_dup(EVP_PKEY *key);
+void EVP_PKEY_free(EVP_PKEY *key);
+
+EVP_PKEY *EVP_PKEY_new_raw_private_key_ex(OSSL_LIB_CTX *libctx,
+                                          const char *keytype,
+                                          const char *propq,
+                                          const unsigned char *key,
+                                          size_t keylen);
+EVP_PKEY *EVP_PKEY_new_raw_private_key(int type, ENGINE *e,
+                                       const unsigned char *key, size_t keylen);
+EVP_PKEY *EVP_PKEY_new_raw_public_key_ex(OSSL_LIB_CTX *libctx,
+                                         const char *keytype,
+                                         const char *propq,
+                                         const unsigned char *key,
+                                         size_t keylen);
+EVP_PKEY *EVP_PKEY_new_raw_public_key(int type, ENGINE *e,
+                                      const unsigned char *key, size_t keylen);
+EVP_PKEY *EVP_PKEY_new_mac_key(int type, ENGINE *e, const unsigned char *key,
+                               int keylen);
+
+int EVP_PKEY_get_raw_private_key(const EVP_PKEY *pkey, unsigned char *priv,
+                                 size_t *len);
+int EVP_PKEY_get_raw_public_key(const EVP_PKEY *pkey, unsigned char *pub,
+                                size_t *len);</code></pre>
+
+<p>The following function has been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>EVP_PKEY *EVP_PKEY_new_CMAC_key(ENGINE *e, const unsigned char *priv,
+                                size_t len, const EVP_CIPHER *cipher);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p><b>EVP_PKEY</b> is a generic structure to hold diverse types of asymmetric keys (also known as &quot;key pairs&quot;), and can be used for diverse operations, like signing, verifying signatures, key derivation, etc. The asymmetric keys themselves are often referred to as the &quot;internal key&quot;, and are handled by backends, such as providers (through <a href="../man3/EVP_KEYMGMT.html">EVP_KEYMGMT(3)</a>) or <b>ENGINE</b>s.</p>
+
+<p>Conceptually, an <b>EVP_PKEY</b> internal key may hold a private key, a public key, or both (a keypair), and along with those, key parameters if the key type requires them. The presence of these components determine what operations can be made; for example, signing normally requires the presence of a private key, and verifying normally requires the presence of a public key.</p>
+
+<p><b>EVP_PKEY</b> has also been used for MAC algorithm that were conceived as producing signatures, although not being public key algorithms; &quot;POLY1305&quot;, &quot;SIPHASH&quot;, &quot;HMAC&quot;, &quot;CMAC&quot;. This usage is considered legacy and is discouraged in favor of the <a href="../man3/EVP_MAC.html">EVP_MAC(3)</a> API.</p>
+
+<p>The EVP_PKEY_new() function allocates an empty <b>EVP_PKEY</b> structure which is used by OpenSSL to store public and private keys. The reference count is set to <b>1</b>.</p>
+
+<p>EVP_PKEY_up_ref() increments the reference count of <i>key</i>.</p>
+
+<p>EVP_PKEY_dup() duplicates the <i>key</i>. The <i>key</i> must not be ENGINE based or a raw key, otherwise the duplication will fail.</p>
+
+<p>EVP_PKEY_free() decrements the reference count of <i>key</i> and, if the reference count is zero, frees it up. If <i>key</i> is NULL, nothing is done.</p>
+
+<p>EVP_PKEY_new_raw_private_key_ex() allocates a new <b>EVP_PKEY</b>. Unless an engine should be used for the key type, a provider for the key is found using the library context <i>libctx</i> and the property query string <i>propq</i>. The <i>keytype</i> argument indicates what kind of key this is. The value should be a string for a public key algorithm that supports raw private keys, e.g., one of: <code>ED25519</code>, <code>ED448</code>, <code>X25519</code>, <code>X448</code>, <code>ML-DSA-44</code>, <code>ML-DSA-65</code>, <code>ML-DSA-87</code>, <code>ML-KEM-512</code>, <code>ML-KEM-768</code>, or <code>ML-KEM-1024</code>. <i>key</i> points to the raw private key data for this <b>EVP_PKEY</b> which should be of length <i>keylen</i>. The length should be appropriate for the type of the key. The public key data will be automatically derived from the given private key data (if appropriate for the algorithm type).</p>
+
+<p>EVP_PKEY_new_raw_private_key() does the same as EVP_PKEY_new_raw_private_key_ex() except that the default library context and default property query are used instead. If <i>e</i> is non-NULL then the new <b>EVP_PKEY</b> structure is associated with the engine <i>e</i>. The <i>type</i> argument indicates what kind of key this is. The value should be a NID for a public key algorithm that supports raw private keys, i.e. one of <b>EVP_PKEY_X25519</b>, <b>EVP_PKEY_ED25519</b>, <b>EVP_PKEY_X448</b> or <b>EVP_PKEY_ED448</b>.</p>
+
+<p>EVP_PKEY_new_raw_private_key_ex() and EVP_PKEY_new_raw_private_key() may also be used with most MACs implemented as public key algorithms, so key types such as &quot;HMAC&quot;, &quot;POLY1305&quot;, &quot;SIPHASH&quot;, or their NID form <b>EVP_PKEY_POLY1305</b>, <b>EVP_PKEY_SIPHASH</b>, <b>EVP_PKEY_HMAC</b> are also accepted. This usage is, as mentioned above, discouraged in favor of the <a href="../man3/EVP_MAC.html">EVP_MAC(3)</a> API.</p>
+
+<p>EVP_PKEY_new_raw_public_key_ex() works in the same way as EVP_PKEY_new_raw_private_key_ex() except that <i>key</i> points to the raw public key data. The <b>EVP_PKEY</b> structure will be initialised without any private key information. Algorithm types that support raw public keys are <b>ED25519</b>, <b>ED448</b>, <b>X25519</b>, <b>X448</b>, <code>ML-DSA-44</code>, <code>ML-DSA-65</code>, <code>ML-DSA-87</code>, <b>ML-KEM-512</b>, <b>ML-KEM-768</b>, and <b>ML-KEM-1024</b>.</p>
+
+<p>EVP_PKEY_new_raw_public_key() works in the same way as EVP_PKEY_new_raw_private_key_ex() except that <i>key</i> points to the raw public key data. The <b>EVP_PKEY</b> structure will be initialised without any private key information.</p>
+
+<p>EVP_PKEY_new_mac_key() works in the same way as EVP_PKEY_new_raw_private_key(). New applications should use EVP_PKEY_new_raw_private_key() instead.</p>
+
+<p>EVP_PKEY_get_raw_private_key() fills the buffer provided by <i>priv</i> with raw private key data. The size of the <i>priv</i> buffer should be in <i>*len</i> on entry to the function, and on exit <i>*len</i> is updated with the number of bytes actually written. If the buffer <i>priv</i> is NULL then <i>*len</i> is populated with the number of bytes required to hold the key. The calling application is responsible for ensuring that the buffer is large enough to receive the private key data. This function only works for algorithms that support raw private keys. These include: <b>ED25519</b>, <b>ED448</b>, <b>X25519</b>, <b>X448</b>, <b>HMAC</b>, <b>POLY1305</b>, and <b>SIPHASH</b>. EVP_PKEY_get_raw_private_key() also works with <code>ML-DSA-44</code>, <code>ML-DSA-65</code>, <code>ML-DSA-87</code>, <b>ML-KEM-512</b>, <b>ML-KEM-768</b> and <b>ML-KEM-1024</b> keys, which don&#39;t have legacy numeric <i>NID</i> assignments, but their raw form is nevertheless available.</p>
+
+<p>EVP_PKEY_get_raw_public_key() fills the buffer provided by <i>pub</i> with raw public key data. The size of the <i>pub</i> buffer should be in <i>*len</i> on entry to the function, and on exit <i>*len</i> is updated with the number of bytes actually written. If the buffer <i>pub</i> is NULL then <i>*len</i> is populated with the number of bytes required to hold the key. The calling application is responsible for ensuring that the buffer is large enough to receive the public key data. This function only works for algorithms that support raw public keys. These include: <b>ED25519</b>, <b>ED448</b>, <b>X25519</b>, and <b>X448</b> EVP_PKEY_get_raw_public_key() also works with <code>ML-DSA-44</code>, <code>ML-DSA-65</code>, <code>ML-DSA-87</code>, <b>ML-KEM-512</b>, <b>ML-KEM-768</b> and <b>ML-KEM-1024</b> keys, which don&#39;t have legacy numeric <i>NID</i> assignments, but their raw form is nevertheless available.</p>
+
+<p>EVP_PKEY_new_CMAC_key() works in the same way as EVP_PKEY_new_raw_private_key() except it is only for the <b>EVP_PKEY_CMAC</b> algorithm type. In addition to the raw private key data, it also takes a cipher algorithm to be used during creation of a CMAC in the <b>cipher</b> argument. The cipher should be a standard encryption-only cipher. For example AEAD and XTS ciphers should not be used.</p>
+
+<p>Applications should use the <a href="../man3/EVP_MAC.html">EVP_MAC(3)</a> API instead and set the <b>OSSL_MAC_PARAM_CIPHER</b> parameter on the <b>EVP_MAC_CTX</b> object with the name of the cipher being used.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The <b>EVP_PKEY</b> structure is used by various OpenSSL functions which require a general private key without reference to any particular algorithm.</p>
+
+<p>The structure returned by EVP_PKEY_new() is empty. To add a private or public key to this empty structure use the appropriate functions described in <a href="../man3/EVP_PKEY_set1_RSA.html">EVP_PKEY_set1_RSA(3)</a>, <a href="../man3/EVP_PKEY_set1_DSA.html">EVP_PKEY_set1_DSA(3)</a>, <a href="../man3/EVP_PKEY_set1_DH.html">EVP_PKEY_set1_DH(3)</a> or <a href="../man3/EVP_PKEY_set1_EC_KEY.html">EVP_PKEY_set1_EC_KEY(3)</a> for legacy key types implemented in internal OpenSSL providers.</p>
+
+<p>For fully provider-managed key types (see <a href="../man7/provider-keymgmt.html">provider-keymgmt(7)</a>), possibly implemented in external providers, use functions such as <a href="../man3/EVP_PKEY_set1_encoded_public_key.html">EVP_PKEY_set1_encoded_public_key(3)</a> or <a href="../man3/EVP_PKEY_fromdata.html">EVP_PKEY_fromdata(3)</a> to populate key data.</p>
+
+<p>Generally caution is advised for using an <b>EVP_PKEY</b> structure across different library contexts: In order for an <b>EVP_PKEY</b> to be shared by multiple library contexts the providers associated with the library contexts must have key managers that support the key type and implement the OSSL_FUNC_keymgmt_import() and OSSL_FUNC_keymgmt_export() functions.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>EVP_PKEY_new(), EVP_PKEY_new_raw_private_key(), EVP_PKEY_new_raw_public_key(), EVP_PKEY_new_CMAC_key() and EVP_PKEY_new_mac_key() return either the newly allocated <b>EVP_PKEY</b> structure or NULL if an error occurred.</p>
+
+<p>EVP_PKEY_dup() returns the key duplicate or NULL if an error occurred.</p>
+
+<p>EVP_PKEY_up_ref(), EVP_PKEY_get_raw_private_key() and EVP_PKEY_get_raw_public_key() return 1 for success and 0 for failure.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_PKEY_set1_RSA.html">EVP_PKEY_set1_RSA(3)</a>, <a href="../man3/EVP_PKEY_set1_DSA.html">EVP_PKEY_set1_DSA(3)</a>, <a href="../man3/EVP_PKEY_set1_DH.html">EVP_PKEY_set1_DH(3)</a>, <a href="../man3/EVP_PKEY_set1_EC_KEY.html">EVP_PKEY_set1_EC_KEY(3)</a>, <a href="../man7/EVP_PKEY-ED25519.html">EVP_PKEY-ED25519(7)</a>, <a href="../man7/EVP_PKEY-ED448.html">EVP_PKEY-ED448(7)</a>. <a href="../man7/EVP_PKEY-HMAC.html">EVP_PKEY-HMAC(7)</a>, <a href="../man7/EVP_PKEY-Poly1305.html">EVP_PKEY-Poly1305(7)</a>, <a href="../man7/EVP_PKEY-Siphash.html">EVP_PKEY-Siphash(7)</a>, <a href="../man7/EVP_PKEY-X25519.html">EVP_PKEY-X25519(7)</a>, <a href="../man7/EVP_PKEY-X448.html">EVP_PKEY-X448(7)</a>, <a href="../man7/EVP_PKEY-ML-DSA.html">EVP_PKEY-ML-DSA(7)</a>, <a href="../man7/EVP_PKEY-ML-KEM.html">EVP_PKEY-ML-KEM(7)</a>.</p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The EVP_PKEY_new() and EVP_PKEY_free() functions exist in all versions of OpenSSL.</p>
+
+<p>The EVP_PKEY_up_ref() function was added in OpenSSL 1.1.0.</p>
+
+<p>The EVP_PKEY_new_raw_private_key(), EVP_PKEY_new_raw_public_key(), EVP_PKEY_new_CMAC_key(), EVP_PKEY_new_raw_private_key() and EVP_PKEY_get_raw_public_key() functions were added in OpenSSL 1.1.1.</p>
+
+<p>The EVP_PKEY_dup(), EVP_PKEY_new_raw_private_key_ex(), and EVP_PKEY_new_raw_public_key_ex() functions were added in OpenSSL 3.0.</p>
+
+<p>The EVP_PKEY_new_CMAC_key() was deprecated in OpenSSL 3.0.</p>
+
+<p>The documentation of <b>EVP_PKEY</b> was amended in OpenSSL 3.0 to allow there to be the private part of the keypair without the public part, where this was previously implied to be disallowed.</p>
+
+<p>Support for <b>ML-DSA</b> and <b>ML-KEM</b> was added in OpenSSL 3.5.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2002-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

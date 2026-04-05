@@ -1,0 +1,66 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>X509_ACERT_get_attr</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>X509_ACERT_get_attr, X509_ACERT_get_attr_by_NID, X509_ACERT_get_attr_by_OBJ, X509_ACERT_get_attr_count - Retrieve attributes from an X509_ACERT structure</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/x509_acert.h&gt;
+
+X509_ATTRIBUTE *X509_ACERT_get_attr(const X509_ACERT *x, int loc);
+int X509_ACERT_get_attr_by_NID(const X509_ACERT *x, int nid, int lastpos);
+int X509_ACERT_get_attr_by_OBJ(const X509_ACERT *x, const ASN1_OBJECT *obj,
+                               int lastpos);
+int X509_ACERT_get_attr_count(const X509_ACERT *x);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>X509_ACERT_get0_attr() retrieves the <i>loc</i>th <b>X509_ATTRIBUTE</b> from an <b>X509_ACERT</b> <i>x</i>. X509_ACERT_get_attr_count() returns the total number of attributes in the <b>X509_ACERT</b>.</p>
+
+<p>X509_ACERT_get_attr_by_NID() and X509_ACERT_get_attr_by_OBJ() retrieve the next attribute location matching <i>nid</i> or <i>obj</i> after <i>lastpos</i>. <i>lastpos</i> should initially be set to -1. If there are no more entries -1 is returned. If <i>nid</i> is invalid (doesn&#39;t correspond to a valid OID) then -2 is returned.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>X509_ACERT_get0_attr() return a <b>X509_ATTRIBUTE</b> from an attribute certificate, or NULL if the specified attribute is not found.</p>
+
+<p>X509_ACERT_get_attr_by_NID() and X509_ACERT_get_attr_by_OBJ() return the location of the next attribute requested or -1 if not found. X509_ACERT_get_attr_by_NID() can also return -2 if the supplied NID is invalid.</p>
+
+<p>X509_ACERT_get_attr_count() returns the number of attributes in the given attribute certificate.</p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>X509_ACERT_get0_attr(), X509_ACERT_get_attr_by_NID(), X509_ACERT_get_attr_by_OBJ() and X509_ACERT_get_attr_count() were added in OpenSSL 3.4.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2023-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

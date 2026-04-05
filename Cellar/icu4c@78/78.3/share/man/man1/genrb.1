@@ -1,0 +1,148 @@
+.\" Hey, Emacs! This is -*-nroff-*- you know...
+.\"
+.\" genrb.1: manual page for the genrb utility
+.\"
+.\" Copyright (C) 2016 and later: Unicode, Inc. and others.
+.\" License & terms of use: http://www.unicode.org/copyright.html
+.\" Copyright (C) 2000-2002 IBM, Inc. and others.
+.\"
+.\" Manual page by Yves Arrouye <yves@realnames.com>.
+.\"
+.TH GENRB 1 "16 April 2002" "ICU MANPAGE" "ICU 78.3 Manual"
+.SH NAME
+.B genrb
+\- compile a resource bundle
+.SH SYNOPSIS
+.B genrb
+[
+.BR "\-h\fP, \fB\-?\fP, \fB\-\-help"
+]
+[
+.BR "\-V\fP, \fB\-\-version"
+]
+[
+.BR "\-v\fP, \fB\-\-verbose"
+]
+[
+.BI "\-e\fP, \fB\-\-encoding" " encoding"
+]
+[
+.BI "\-j\fP, \fB\-\-write\-java" " \fR[ \fPencoding\fR ]\fP"
+]
+[
+.BI "\-s\fP, \fB\-\-sourcedir" " source"
+]
+[
+.BI "\-d\fP, \fB\-\-destdir" " destination"
+]
+[
+.BI "\-i\fP, \fB\-\-icudatadir" " directory"
+]
+.IR bundle " \.\.\."
+.SH DESCRIPTION
+.B genrb
+converts the resource
+.I bundle
+source files passed on the command line to their binary form or to
+a Java source file for use with ICU4J.
+The resulting binary files have a
+.B .res
+extension while resource bundle source files typically have a 
+.B .txt
+extension. Java source files have a
+.B java
+extension and follow the ICU4J naming conventions.
+.PP
+It is customary to name the resource bundles by their locale name,
+i.e. to use a local identifier for the
+.I bundle
+filename, e.g.
+.B ja_JP.txt
+for Japanese (Japan) data, or
+.B root.txt
+for the root bundle.
+In any case,
+.B genrb
+will produce a file whose base name is the name of the locale found
+in the resource file, not the base name of the resource file itself.
+.PP
+The binary files can be read directly by ICU, or used by
+.BR pkgdata (1)
+for incorporation into a larger archive or library.
+.SH OPTIONS
+.TP
+.BR "\-h\fP, \fB\-?\fP, \fB\-\-help"
+Print help about usage and exit.
+.TP
+.BR "\-V\fP, \fB\-\-version"
+Print the version of
+.B genrb
+and exit.
+.TP
+.BR "\-v\fP, \fB\-\-verbose"
+Display extra informative messages during execution.
+.TP
+.BI "\-e\fP, \fB\-\-encoding" " encoding"
+Set the encoding used to read input files to
+.IR encoding .
+The default encoding is the invariant (subset of ASCII or EBCDIC)
+codepage for the system (see section
+.BR "INVARIANT CHARACTERS" ).
+The encodings UTF-8, UTF-16BE, and UTF-16LE are automatically detected
+if a byte order mark (BOM) is present.
+.TP
+.BI "\-j\fP, \fB\-\-write\-java" " \fR[ \fPencoding\fR ]\fP"
+Generate a Java source code for use with ICU4J. An optional
+.I encoding
+for the Java file can be given.
+.TP
+.BI "\-s\fP, \fB\-\-sourcedir" " source"
+Set the source directory to
+.IR source .
+The default source directory is specified by the environment variable
+.BR ICU_DATA ,
+or the location set when ICU was built if 
+.B ICU_DATA
+is not set.
+.TP
+.BI "\-d\fP, \fB\-\-destdir" " destination"
+Set the destination directory to
+.IR destination .
+The default destination directory is specified by the environment variable
+.BR ICU_DATA
+or is the location set when ICU was built if 
+.B ICU_DATA
+is not set.
+.TP
+.BI "\-i\fP, \fB\-\-icudatadir" " directory"
+Look for any necessary ICU data files in
+.IR directory .
+For example, when processing collation overrides, the file
+.B ucadata.dat
+must be located.
+The default ICU data directory is specified by the environment variable
+.BR ICU_DATA .
+.SH INVARIANT CHARACTERS
+The
+.B invariant character set
+consists of the following set of characters, expressed as a standard POSIX
+regular expression:
+.BR "[a-z]|[A-Z]|[0-9]|_| |+|-|*|/" .
+This is the set which is guaranteed to be available regardless of code page.
+.SH ENVIRONMENT
+.TP 10
+.B ICU_DATA
+Specifies the directory containing ICU data. Defaults to
+.BR ${prefix}/share/icu/78.3/ .
+Some tools in ICU depend on the presence of the trailing slash. It is thus
+important to make sure that it is present if
+.B ICU_DATA
+is set.
+.SH VERSION
+78.3
+.SH COPYRIGHT
+Copyright (C) 2000-2002 IBM, Inc. and others.
+.SH SEE ALSO
+.BR derb (1)
+.br
+.BR pkgdata (1)

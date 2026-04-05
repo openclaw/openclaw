@@ -1,0 +1,181 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>openssl-storeutl</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#OPTIONS">OPTIONS</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>openssl-storeutl - STORE command</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<p><b>openssl</b> <b>storeutl</b> [<b>-help</b>] [<b>-out</b> <i>file</i>] [<b>-noout</b>] [<b>-passin</b> <i>arg</i>] [<b>-text</b> <i>arg</i>] [<b>-r</b>] [<b>-certs</b>] [<b>-keys</b>] [<b>-crls</b>] [<b>-subject</b> <i>arg</i>] [<b>-issuer</b> <i>arg</i>] [<b>-serial</b> <i>arg</i>] [<b>-alias</b> <i>arg</i>] [<b>-fingerprint</b> <i>arg</i>] [<b>-<i>digest</i></b>] [<b>-engine</b> <i>id</i>] [<b>-provider</b> <i>name</i>] [<b>-provider-path</b> <i>path</i>] [<b>-provparam</b> <i>[name:]key=value</i>] [<b>-propquery</b> <i>propq</i>] <i>uri</i></p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>This command can be used to display the contents (after decryption as the case may be) fetched from the given URI.</p>
+
+<h1 id="OPTIONS">OPTIONS</h1>
+
+<dl>
+
+<dt id="help"><b>-help</b></dt>
+<dd>
+
+<p>Print out a usage message.</p>
+
+</dd>
+<dt id="out-filename"><b>-out</b> <i>filename</i></dt>
+<dd>
+
+<p>This specifies the output file to write to. Standard output is used if this option is not present. The output file can be the same as the input, which leads to replacing the file contents. Note that file I/O is not atomic. The output file is truncated and then written.</p>
+
+</dd>
+<dt id="noout"><b>-noout</b></dt>
+<dd>
+
+<p>this option prevents output of the PEM data.</p>
+
+</dd>
+<dt id="passin-arg"><b>-passin</b> <i>arg</i></dt>
+<dd>
+
+<p>the key password source. For more information about the format of <i>arg</i> see <a href="../man1/openssl-passphrase-options.html">openssl-passphrase-options(1)</a>.</p>
+
+</dd>
+<dt id="text"><b>-text</b></dt>
+<dd>
+
+<p>Prints out the objects in text form, similarly to the <b>-text</b> output from <a href="../man1/openssl-x509.html">openssl-x509(1)</a>, <a href="../man1/openssl-pkey.html">openssl-pkey(1)</a>, etc.</p>
+
+</dd>
+<dt id="r"><b>-r</b></dt>
+<dd>
+
+<p>Fetch objects recursively when possible.</p>
+
+</dd>
+<dt id="certs"><b>-certs</b></dt>
+<dd>
+
+</dd>
+<dt id="keys"><b>-keys</b></dt>
+<dd>
+
+</dd>
+<dt id="crls"><b>-crls</b></dt>
+<dd>
+
+<p>Only select the certificates, keys or CRLs from the given URI. However, if this URI would return a set of names (URIs), those are always returned.</p>
+
+<p>Note that all options must be given before the <i>uri</i> argument.</p>
+
+<p>Note <i>-keys</i> selects exclusively private keys, there is no selector for public keys only.</p>
+
+</dd>
+<dt id="subject-arg"><b>-subject</b> <i>arg</i></dt>
+<dd>
+
+<p>Search for an object having the subject name <i>arg</i>.</p>
+
+<p>The arg must be formatted as <code>/type0=value0/type1=value1/type2=...</code>. Special characters may be escaped by <code>\</code> (backslash), whitespace is retained. Empty values are permitted but are ignored for the search. That is, a search with an empty value will have the same effect as not specifying the type at all. Giving a single <code>/</code> will lead to an empty sequence of RDNs (a NULL-DN). Multi-valued RDNs can be formed by placing a <code>+</code> character instead of a <code>/</code> between the AttributeValueAssertions (AVAs) that specify the members of the set.</p>
+
+<p>Example:</p>
+
+<p><code>/DC=org/DC=OpenSSL/DC=users/UID=123456+CN=John Doe</code></p>
+
+</dd>
+<dt id="issuer-arg"><b>-issuer</b> <i>arg</i></dt>
+<dd>
+
+</dd>
+<dt id="serial-arg"><b>-serial</b> <i>arg</i></dt>
+<dd>
+
+<p>Search for an object having the given issuer name and serial number. These two options <i>must</i> be used together. The issuer arg must be formatted as <code>/type0=value0/type1=value1/type2=...</code>, characters may be escaped by \ (backslash), no spaces are skipped. The serial arg may be specified as a decimal value or a hex value if preceded by <code>0x</code>.</p>
+
+</dd>
+<dt id="alias-arg"><b>-alias</b> <i>arg</i></dt>
+<dd>
+
+<p>Search for an object having the given alias.</p>
+
+</dd>
+<dt id="fingerprint-arg"><b>-fingerprint</b> <i>arg</i></dt>
+<dd>
+
+<p>Search for an object having the given fingerprint.</p>
+
+</dd>
+<dt id="digest"><b>-<i>digest</i></b></dt>
+<dd>
+
+<p>The digest that was used to compute the fingerprint given with <b>-fingerprint</b>.</p>
+
+</dd>
+<dt id="engine-id"><b>-engine</b> <i>id</i></dt>
+<dd>
+
+<p>See <a href="../man1/openssl.html">&quot;Engine Options&quot; in openssl(1)</a>. This option is deprecated.</p>
+
+</dd>
+<dt id="provider-name"><b>-provider</b> <i>name</i></dt>
+<dd>
+
+</dd>
+<dt id="provider-path-path"><b>-provider-path</b> <i>path</i></dt>
+<dd>
+
+</dd>
+<dt id="provparam-name:-key-value"><b>-provparam</b> <i>[name:]key=value</i></dt>
+<dd>
+
+</dd>
+<dt id="propquery-propq"><b>-propquery</b> <i>propq</i></dt>
+<dd>
+
+<p>See <a href="../man1/openssl.html">&quot;Provider Options&quot; in openssl(1)</a>, <a href="../man7/provider.html">provider(7)</a>, and <a href="../man7/property.html">property(7)</a>.</p>
+
+</dd>
+</dl>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man1/openssl.html">openssl(1)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>This command was added in OpenSSL 1.1.1.</p>
+
+<p>The <b>-engine</b> option was deprecated in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2016-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

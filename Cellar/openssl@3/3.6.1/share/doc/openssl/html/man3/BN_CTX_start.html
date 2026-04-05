@@ -1,0 +1,66 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>BN_CTX_start</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>BN_CTX_start, BN_CTX_get, BN_CTX_end - use temporary BIGNUM variables</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/bn.h&gt;
+
+void BN_CTX_start(BN_CTX *ctx);
+
+BIGNUM *BN_CTX_get(BN_CTX *ctx);
+
+void BN_CTX_end(BN_CTX *ctx);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>These functions are used to obtain temporary <b>BIGNUM</b> variables from a <b>BN_CTX</b> (which can been created by using <a href="../man3/BN_CTX_new.html">BN_CTX_new(3)</a>) in order to save the overhead of repeatedly creating and freeing <b>BIGNUM</b>s in functions that are called from inside a loop.</p>
+
+<p>A function must call BN_CTX_start() first. Then, BN_CTX_get() may be called repeatedly to obtain temporary <b>BIGNUM</b>s. All BN_CTX_get() calls must be made before calling any other functions that use the <b>ctx</b> as an argument.</p>
+
+<p>Finally, BN_CTX_end() must be called before returning from the function. If <b>ctx</b> is NULL, nothing is done. When BN_CTX_end() is called, the <b>BIGNUM</b> pointers obtained from BN_CTX_get() become invalid.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>BN_CTX_start() and BN_CTX_end() return no values.</p>
+
+<p>BN_CTX_get() returns a pointer to the <b>BIGNUM</b>, or <b>NULL</b> on error. Once BN_CTX_get() has failed, the subsequent calls will return <b>NULL</b> as well, so it is sufficient to check the return value of the last BN_CTX_get() call. In case of an error, an error code is set, which can be obtained by <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/BN_CTX_new.html">BN_CTX_new(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2016 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

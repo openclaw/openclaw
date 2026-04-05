@@ -1,0 +1,22 @@
+.\"
+.\" Copyright 1998 by the Massachusetts Institute of Technology.
+.\" SPDX-License-Identifier: MIT
+.\"
+.TH ARES_STRERROR 3 "25 July 1998"
+.SH NAME
+ares_strerror \- Get the description of an ares library error code
+.SH SYNOPSIS
+.nf
+#include <ares.h>
+
+const char *ares_strerror(int \fIcode\fP)
+.fi
+.SH DESCRIPTION
+The
+.B ares_strerror
+function gets the description of the ares library error code
+.IR code ,
+returning the result as a NUL-terminated C string.
+.SH NOTES
+This function is not compatible with ares, it takes a different set of
+arguments.

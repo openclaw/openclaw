@@ -1,0 +1,1 @@
+/Applications/QuickLook Video.app

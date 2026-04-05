@@ -1,0 +1,112 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_CIPHER-NULL</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Algorithm-Name">Algorithm Name</a></li>
+      <li><a href="#Parameters">Parameters</a>
+        <ul>
+          <li><a href="#Gettable-EVP_CIPHER-parameters">Gettable EVP_CIPHER parameters</a></li>
+          <li><a href="#Gettable-EVP_CIPHER_CTX-parameters">Gettable EVP_CIPHER_CTX parameters</a></li>
+          <li><a href="#Settable-EVP_CIPHER_CTX-parameters">Settable EVP_CIPHER_CTX parameters</a></li>
+        </ul>
+      </li>
+    </ul>
+  </li>
+  <li><a href="#CONFORMING-TO">CONFORMING TO</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_CIPHER-NULL - The NULL EVP_CIPHER implementation</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>Support for a NULL symmetric encryption using the <b>EVP_CIPHER</b> API. This is used when the TLS cipher suite is TLS_NULL_WITH_NULL_NULL. This does no encryption (just copies the data) and has a mac size of zero.</p>
+
+<h2 id="Algorithm-Name">Algorithm Name</h2>
+
+<p>The following algorithm is available in the default provider:</p>
+
+<dl>
+
+<dt id="NULL">&quot;NULL&quot;</dt>
+<dd>
+
+</dd>
+</dl>
+
+<h2 id="Parameters">Parameters</h2>
+
+<p>This implementation supports the following parameters:</p>
+
+<h3 id="Gettable-EVP_CIPHER-parameters">Gettable EVP_CIPHER parameters</h3>
+
+<p>See <a href="../man3/EVP_EncryptInit.html">&quot;Gettable EVP_CIPHER parameters&quot; in EVP_EncryptInit(3)</a></p>
+
+<h3 id="Gettable-EVP_CIPHER_CTX-parameters">Gettable EVP_CIPHER_CTX parameters</h3>
+
+<dl>
+
+<dt id="keylen-OSSL_CIPHER_PARAM_KEYLEN-unsigned-integer">&quot;keylen&quot; (<b>OSSL_CIPHER_PARAM_KEYLEN</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+</dd>
+<dt id="ivlen-OSSL_CIPHER_PARAM_IVLEN-and-OSSL_CIPHER_PARAM_AEAD_IVLEN-unsigned-integer">&quot;ivlen&quot; (<b>OSSL_CIPHER_PARAM_IVLEN</b> and &lt;<b>OSSL_CIPHER_PARAM_AEAD_IVLEN</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+</dd>
+<dt id="tls-mac-OSSL_CIPHER_PARAM_TLS_MAC-octet-ptr">&quot;tls-mac&quot; (<b>OSSL_CIPHER_PARAM_TLS_MAC</b>) &lt;octet ptr&gt;</dt>
+<dd>
+
+</dd>
+</dl>
+
+<p>See <a href="../man3/EVP_EncryptInit.html">&quot;PARAMETERS&quot; in EVP_EncryptInit(3)</a> for further information.</p>
+
+<h3 id="Settable-EVP_CIPHER_CTX-parameters">Settable EVP_CIPHER_CTX parameters</h3>
+
+<dl>
+
+<dt id="tls-mac-size-OSSL_CIPHER_PARAM_TLS_MAC_SIZE-unsigned-integer">&quot;tls-mac-size&quot; (<b>OSSL_CIPHER_PARAM_TLS_MAC_SIZE</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+</dd>
+</dl>
+
+<p>See <a href="../man3/EVP_EncryptInit.html">&quot;PARAMETERS&quot; in EVP_EncryptInit(3)</a> for further information.</p>
+
+<h1 id="CONFORMING-TO">CONFORMING TO</h1>
+
+<p>RFC 5246 section-6.2.3.1</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/provider-cipher.html">provider-cipher(7)</a>, <a href="../man7/OSSL_PROVIDER-default.html">OSSL_PROVIDER-default(7)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

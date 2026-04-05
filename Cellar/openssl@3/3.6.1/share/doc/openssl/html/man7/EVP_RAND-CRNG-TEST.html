@@ -1,0 +1,99 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_RAND-CRNG-TEST</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Identity">Identity</a></li>
+      <li><a href="#Supported-parameters">Supported parameters</a></li>
+    </ul>
+  </li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_RAND-CRNG-TEST - The FIPS health testing EVP_RAND filter</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>This <b>EVP_RAND</b> object acts as a filter between the entropy source and its users. It performs CRNG health tests as defined in <a href="https://csrc.nist.gov/pubs/sp/800/90/b/final">SP 800-90B</a> Section 4 &quot;Health Tests&quot;. Most requests are forwarded to the entropy source, either via its parent reference or via the provider entropy upcalls.</p>
+
+<h2 id="Identity">Identity</h2>
+
+<p>&quot;CRNG-TEST&quot; is the name for this implementation; it can be used with the EVP_RAND_fetch() function.</p>
+
+<h2 id="Supported-parameters">Supported parameters</h2>
+
+<p>If a parent EVP_RAND is specified on context creation, the parent&#39;s parameters are supported because the request is forwarded to the parent seed source for processing.</p>
+
+<p>If no parent EVP_RAND is specified on context creation, the following parameters are supported:</p>
+
+<dl>
+
+<dt id="state-OSSL_RAND_PARAM_STATE-integer">&quot;state&quot; (<b>OSSL_RAND_PARAM_STATE</b>) &lt;integer&gt;</dt>
+<dd>
+
+</dd>
+<dt id="strength-OSSL_RAND_PARAM_STRENGTH-unsigned-integer">&quot;strength&quot; (<b>OSSL_RAND_PARAM_STRENGTH</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+</dd>
+<dt id="max_request-OSSL_RAND_PARAM_MAX_REQUEST-unsigned-integer">&quot;max_request&quot; (<b>OSSL_RAND_PARAM_MAX_REQUEST</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+<p>These parameters work as described in <a href="../man3/EVP_RAND.html">&quot;PARAMETERS&quot; in EVP_RAND(3)</a>.</p>
+
+</dd>
+<dt id="fips-indicator-OSSL_DRBG_PARAM_FIPS_APPROVED_INDICATOR-integer">&quot;fips-indicator&quot; (<b>OSSL_DRBG_PARAM_FIPS_APPROVED_INDICATOR</b>) &lt;integer&gt;</dt>
+<dd>
+
+<p>This parameter works as described in <a href="../man7/provider-rand.html">&quot;PARAMETERS&quot; in provider-rand(7)</a>.</p>
+
+</dd>
+</dl>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>This EVP_RAND is only implemented by the OpenSSL FIPS provider.</p>
+
+<p>A context for a health test filter can be obtained by calling:</p>
+
+<pre><code>EVP_RAND *parent = ...;
+EVP_RAND *rand = EVP_RAND_fetch(NULL, &quot;CRNG-TEST&quot;, NULL);
+EVP_RAND_CTX *rctx = EVP_RAND_CTX_new(rand, parent);</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_RAND.html">EVP_RAND(3)</a>, <a href="../man7/OSSL_PROVIDER-FIPS.html">OSSL_PROVIDER-FIPS(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>This functionality was added in OpenSSL 3.4.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

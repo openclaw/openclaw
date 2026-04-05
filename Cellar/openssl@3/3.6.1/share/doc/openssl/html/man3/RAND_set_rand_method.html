@@ -1,0 +1,91 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>RAND_set_rand_method</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#THE-RAND_METHOD-STRUCTURE">THE RAND_METHOD STRUCTURE</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>RAND_set_rand_method, RAND_get_rand_method, RAND_OpenSSL - select RAND method</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/rand.h&gt;</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>RAND_METHOD *RAND_OpenSSL(void);
+
+int RAND_set_rand_method(const RAND_METHOD *meth);
+
+const RAND_METHOD *RAND_get_rand_method(void);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>All of the functions described on this page are deprecated. Applications should instead use <a href="../man3/RAND_set_DRBG_type.html">RAND_set_DRBG_type(3)</a>, <a href="../man3/EVP_RAND.html">EVP_RAND(3)</a> and <a href="../man7/EVP_RAND.html">EVP_RAND(7)</a>.</p>
+
+<p>A <b>RAND_METHOD</b> specifies the functions that OpenSSL uses for random number generation.</p>
+
+<p>RAND_OpenSSL() returns the default <b>RAND_METHOD</b> implementation by OpenSSL. This implementation ensures that the PRNG state is unique for each thread.</p>
+
+<p>If an <b>ENGINE</b> is loaded that provides the RAND API, however, it will be used instead of the method returned by RAND_OpenSSL(). This is deprecated in OpenSSL 3.0.</p>
+
+<p>RAND_set_rand_method() makes <b>meth</b> the method for PRNG use. If an ENGINE was providing the method, it will be released first.</p>
+
+<p>RAND_get_rand_method() returns a pointer to the current <b>RAND_METHOD</b>.</p>
+
+<h1 id="THE-RAND_METHOD-STRUCTURE">THE RAND_METHOD STRUCTURE</h1>
+
+<pre><code>typedef struct rand_meth_st {
+    int (*seed)(const void *buf, int num);
+    int (*bytes)(unsigned char *buf, int num);
+    void (*cleanup)(void);
+    int (*add)(const void *buf, int num, double entropy);
+    int (*pseudorand)(unsigned char *buf, int num);
+    int (*status)(void);
+} RAND_METHOD;</code></pre>
+
+<p>The fields point to functions that are used by, in order, RAND_seed(), RAND_bytes(), internal RAND cleanup, RAND_add(), RAND_pseudo_rand() and RAND_status(). Each pointer may be NULL if the function is not implemented.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>RAND_set_rand_method() returns 1 on success and 0 on failure. RAND_get_rand_method() and RAND_OpenSSL() return pointers to the respective methods.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_RAND.html">EVP_RAND(3)</a>, <a href="../man3/RAND_set_DRBG_type.html">RAND_set_DRBG_type(3)</a>, <a href="../man3/RAND_bytes.html">RAND_bytes(3)</a>, <a href="../man3/ENGINE_by_id.html">ENGINE_by_id(3)</a>, <a href="../man7/EVP_RAND.html">EVP_RAND(7)</a>, <a href="../man7/RAND.html">RAND(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>All of these functions were deprecated in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

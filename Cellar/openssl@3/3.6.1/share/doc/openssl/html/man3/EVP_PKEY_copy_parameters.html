@@ -1,0 +1,103 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_PKEY_copy_parameters</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_PKEY_missing_parameters, EVP_PKEY_copy_parameters, EVP_PKEY_parameters_eq, EVP_PKEY_cmp_parameters, EVP_PKEY_eq, EVP_PKEY_cmp - public key parameter and comparison functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+
+int EVP_PKEY_missing_parameters(const EVP_PKEY *pkey);
+int EVP_PKEY_copy_parameters(EVP_PKEY *to, const EVP_PKEY *from);
+
+int EVP_PKEY_parameters_eq(const EVP_PKEY *a, const EVP_PKEY *b);
+int EVP_PKEY_eq(const EVP_PKEY *a, const EVP_PKEY *b);</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>int EVP_PKEY_cmp_parameters(const EVP_PKEY *a, const EVP_PKEY *b);
+int EVP_PKEY_cmp(const EVP_PKEY *a, const EVP_PKEY *b);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The function EVP_PKEY_missing_parameters() returns 1 if the public key parameters of <b>pkey</b> are missing and 0 if they are present or the algorithm doesn&#39;t use parameters.</p>
+
+<p>The function EVP_PKEY_copy_parameters() copies the parameters from key <b>from</b> to key <b>to</b>. An error is returned if the parameters are missing in <b>from</b> or present in both <b>from</b> and <b>to</b> and mismatch. If the parameters in <b>from</b> and <b>to</b> are both present and match this function has no effect.</p>
+
+<p>The function EVP_PKEY_parameters_eq() checks the parameters of keys <b>a</b> and <b>b</b> for equality.</p>
+
+<p>The function EVP_PKEY_eq() checks the keys <b>a</b> and <b>b</b> for equality, including their parameters if they are available.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The main purpose of the functions EVP_PKEY_missing_parameters() and EVP_PKEY_copy_parameters() is to handle public keys in certificates where the parameters are sometimes omitted from a public key if they are inherited from the CA that signed it.</p>
+
+<p>The deprecated functions EVP_PKEY_cmp() and EVP_PKEY_cmp_parameters() differ in their return values compared to other _cmp() functions. They are aliases for EVP_PKEY_eq() and EVP_PKEY_parameters_eq().</p>
+
+<p>The function EVP_PKEY_cmp() previously only checked the key parameters (if there are any) and the public key, assuming that there always was a public key and that private key equality could be derived from that. Because it&#39;s no longer assumed that the private key in an <a href="../man3/EVP_PKEY.html">EVP_PKEY(3)</a> is always accompanied by a public key, the comparison can not rely on public key comparison alone.</p>
+
+<p>Instead, EVP_PKEY_eq() (and therefore also EVP_PKEY_cmp()) now compares:</p>
+
+<ol>
+
+<li><p>the key parameters (if there are any)</p>
+
+</li>
+<li><p>the public keys or the private keys of the two <b>EVP_PKEY</b>s, depending on what they both contain.</p>
+
+</li>
+</ol>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>The function EVP_PKEY_missing_parameters() returns 1 if the public key parameters of <b>pkey</b> are missing and 0 if they are present or the algorithm doesn&#39;t use parameters.</p>
+
+<p>These functions EVP_PKEY_copy_parameters() returns 1 for success and 0 for failure.</p>
+
+<p>The functions EVP_PKEY_cmp_parameters(), EVP_PKEY_parameters_eq(), EVP_PKEY_cmp() and EVP_PKEY_eq() return 1 if their inputs match, 0 if they don&#39;t match, -1 if the key types are different and -2 if the operation is not supported.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_PKEY_CTX_new.html">EVP_PKEY_CTX_new(3)</a>, <a href="../man3/EVP_PKEY_keygen.html">EVP_PKEY_keygen(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The EVP_PKEY_cmp() and EVP_PKEY_cmp_parameters() functions were deprecated in OpenSSL 3.0.</p>
+
+<p>The EVP_PKEY_eq() and EVP_PKEY_parameters_eq() were added in OpenSSL 3.0 to replace EVP_PKEY_cmp() and EVP_PKEY_cmp_parameters().</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2006-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

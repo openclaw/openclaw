@@ -1,0 +1,69 @@
+.\"
+.\" Copyright 1998 by the Massachusetts Institute of Technology.
+.\" SPDX-License-Identifier: MIT
+.\"
+.TH ARES_PARSE_SOA_REPLY 3 "29 May 2012"
+.SH NAME
+ares_parse_soa_reply \- Parse a reply to a DNS query of type SOA
+.SH SYNOPSIS
+.nf
+#include <ares.h>
+
+int ares_parse_soa_reply(const unsigned char* \fIabuf\fP, int \fIalen\fP,
+                         struct ares_soa_reply** \fIsoa_out\fP);
+.fi
+.SH DESCRIPTION
+The
+.B ares_parse_soa_reply
+function parses the response to a query of type SOA into a
+.IR struct\ ares_soa_reply .
+The parameters
+.I abuf
+and
+.I alen
+give the contents of the response.  The result is stored in allocated
+memory and a pointer to it stored into the variable pointed to by
+.IR soa_out .
+It is the caller's responsibility to free the resulting
+.IR soa_out
+structure when it is no longer needed using the function
+\fBares_free_data(3)\fP.
+.PP
+The structure 
+.I ares_soa_reply
+contains the following fields:
+.sp
+.in +4n
+.nf
+struct ares_soa_reply {
+	char *nsname;
+	char *hostmaster;
+	unsigned int serial;
+	unsigned int refresh;
+	unsigned int retry;
+	unsigned int expire;
+	unsigned int minttl;
+};
+.fi
+.in
+.PP
+.SH RETURN VALUES
+.B ares_parse_soa_reply
+can return any of the following values:
+.TP 15
+.B ARES_SUCCESS
+The response was successfully parsed.
+.TP 15
+.B ARES_EBADRESP
+The response was malformatted.
+.TP 15
+.B ARES_ENODATA
+The response did not contain an answer to the query.
+.TP 15
+.B ARES_ENOMEM
+Memory was exhausted.
+.SH AVAILABILITY
+This function was first introduced in c-ares version 1.9.0.
+.SH SEE ALSO
+.BR ares_query (3)
+.BR ares_free_data (3)

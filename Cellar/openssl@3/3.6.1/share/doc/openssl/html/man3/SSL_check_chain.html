@@ -1,0 +1,89 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_check_chain</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_check_chain - check certificate chain suitability</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+int SSL_check_chain(SSL *s, X509 *x, EVP_PKEY *pk, STACK_OF(X509) *chain);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_check_chain() checks whether certificate <b>x</b>, private key <b>pk</b> and certificate chain <b>chain</b> is suitable for use with the current session <b>s</b>.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_check_chain() returns a bitmap of flags indicating the validity of the chain.</p>
+
+<p><b>CERT_PKEY_VALID</b>: the chain can be used with the current session. If this flag is <b>not</b> set then the certificate will never be used even if the application tries to set it because it is inconsistent with the peer preferences.</p>
+
+<p><b>CERT_PKEY_SIGN</b>: the EE key can be used for signing.</p>
+
+<p><b>CERT_PKEY_EE_SIGNATURE</b>: the signature algorithm of the EE certificate is acceptable.</p>
+
+<p><b>CERT_PKEY_CA_SIGNATURE</b>: the signature algorithms of all CA certificates are acceptable.</p>
+
+<p><b>CERT_PKEY_EE_PARAM</b>: the parameters of the end entity certificate are acceptable (e.g. it is a supported curve).</p>
+
+<p><b>CERT_PKEY_CA_PARAM</b>: the parameters of all CA certificates are acceptable.</p>
+
+<p><b>CERT_PKEY_EXPLICIT_SIGN</b>: the end entity certificate algorithm can be used explicitly for signing (i.e. it is mentioned in the signature algorithms extension).</p>
+
+<p><b>CERT_PKEY_ISSUER_NAME</b>: the issuer name is acceptable. This is only meaningful for client authentication.</p>
+
+<p><b>CERT_PKEY_CERT_TYPE</b>: the certificate type is acceptable. Only meaningful for client authentication.</p>
+
+<p><b>CERT_PKEY_SUITEB</b>: chain is suitable for Suite B use.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>SSL_check_chain() must be called in servers after a client hello message or in clients after a certificate request message. It will typically be called in the certificate callback.</p>
+
+<p>An application wishing to support multiple certificate chains may call this function on each chain in turn: starting with the one it considers the most secure. It could then use the chain of the first set which returns suitable flags.</p>
+
+<p>As a minimum the flag <b>CERT_PKEY_VALID</b> must be set for a chain to be usable. An application supporting multiple chains with different CA signature algorithms may also wish to check <b>CERT_PKEY_CA_SIGNATURE</b> too. If no chain is suitable a server should fall back to the most secure chain which sets <b>CERT_PKEY_VALID</b>.</p>
+
+<p>The validity of a chain is determined by checking if it matches a supported signature algorithm, supported curves and in the case of client authentication certificate types and issuer names.</p>
+
+<p>Since the supported signature algorithms extension is only used in TLS 1.2, TLS 1.3 and DTLS 1.2 the results for earlier versions of TLS and DTLS may not be very useful. Applications may wish to specify a different &quot;legacy&quot; chain for earlier versions of TLS or DTLS.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/SSL_CTX_set_cert_cb.html">SSL_CTX_set_cert_cb(3)</a>, <a href="../man7/ssl.html">ssl(7)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2015-2018 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

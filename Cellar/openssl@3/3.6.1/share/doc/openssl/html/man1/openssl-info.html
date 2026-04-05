@@ -1,0 +1,120 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>openssl-info</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#OPTIONS">OPTIONS</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>openssl-info - print OpenSSL built-in information</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<p><b>openssl info</b> [<b>-help</b>] [<b>-configdir</b>] [<b>-enginesdir</b>] [<b>-modulesdir</b> ] [<b>-dsoext</b>] [<b>-dirnamesep</b>] [<b>-listsep</b>] [<b>-seeds</b>] [<b>-cpusettings</b>] [<b>-windowscontext</b>]</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>This command is used to print out information about OpenSSL. The information is written exactly as it is with no extra text, which makes useful for scripts.</p>
+
+<p>As a consequence, only one item may be chosen for each run of this command.</p>
+
+<h1 id="OPTIONS">OPTIONS</h1>
+
+<dl>
+
+<dt id="help"><b>-help</b></dt>
+<dd>
+
+<p>Print out a usage message.</p>
+
+</dd>
+<dt id="configdir"><b>-configdir</b></dt>
+<dd>
+
+<p>Outputs the default directory for OpenSSL configuration files.</p>
+
+</dd>
+<dt id="enginesdir"><b>-enginesdir</b></dt>
+<dd>
+
+<p>Outputs the default directory for OpenSSL engine modules.</p>
+
+</dd>
+<dt id="modulesdir"><b>-modulesdir</b></dt>
+<dd>
+
+<p>Outputs the default directory for OpenSSL dynamically loadable modules other than engine modules.</p>
+
+</dd>
+<dt id="dsoext"><b>-dsoext</b></dt>
+<dd>
+
+<p>Outputs the DSO extension OpenSSL uses.</p>
+
+</dd>
+<dt id="dirnamesep"><b>-dirnamesep</b></dt>
+<dd>
+
+<p>Outputs the separator character between a directory specification and a filename. Note that on some operating systems, this is not the same as the separator between directory elements.</p>
+
+</dd>
+<dt id="listsep"><b>-listsep</b></dt>
+<dd>
+
+<p>Outputs the OpenSSL list separator character. This is typically used to construct <code>$PATH</code> (<code>%PATH%</code> on Windows) style lists.</p>
+
+</dd>
+<dt id="seeds"><b>-seeds</b></dt>
+<dd>
+
+<p>Outputs the randomness seed sources.</p>
+
+</dd>
+<dt id="cpusettings"><b>-cpusettings</b></dt>
+<dd>
+
+<p>Outputs the OpenSSL CPU settings info.</p>
+
+</dd>
+<dt id="windowscontext"><b>-windowscontext</b></dt>
+<dd>
+
+<p>Outputs the Windows install context.</p>
+
+</dd>
+</dl>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>This command was added in OpenSSL 3.0.</p>
+
+<p>The <b>-windowscontext</b> option was added in OpenSSL 3.4.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2019-2020 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

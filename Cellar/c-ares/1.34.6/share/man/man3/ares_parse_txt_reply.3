@@ -1,0 +1,96 @@
+.\"
+.\" Copyright 1998 by the Massachusetts Institute of Technology.
+.\" SPDX-License-Identifier: MIT
+.\"
+.TH ARES_PARSE_TXT_REPLY 3 "27 October 2009"
+.SH NAME
+ares_parse_txt_reply \- Parse a reply to a DNS query of type TXT
+.SH SYNOPSIS
+.nf
+#include <ares.h>
+
+int ares_parse_txt_reply(const unsigned char* \fIabuf\fP, int \fIalen\fP,
+                         struct ares_txt_reply **\fItxt_out\fP);
+
+int ares_parse_txt_reply_ext(const unsigned char* \fIabuf\fP, int \fIalen\fP,
+                             struct ares_txt_ext **\fItxt_out\fP);
+.fi
+.SH DESCRIPTION
+The \fIares_parse_txt_reply(3)\fP and \fIares_parse_txt_reply_ext(3)\fP
+functions parse the response to a query of type TXT into a linked list (one
+element per sub-string) of
+.IR "struct ares_txt_reply" " (" "struct ares_txt_ext" ")"
+The parameters
+.I abuf
+and
+.I alen
+give the contents of the response.  The result is stored in allocated
+memory and a pointer to it stored into the variable pointed to by
+.IR txt_out .
+It is the caller's responsibility to free the resulting
+.IR txt_out
+structure when it is no longer needed using the function
+\fBares_free_data(3)\fP.
+
+The structure 
+.I ares_txt_reply
+contains the following fields:
+.nf
+struct ares_txt_reply {
+  struct ares_txt_reply  *next;
+  unsigned int  length;
+  unsigned char *txt;
+};
+.fi
+
+The structure
+.I ares_txt_ext
+contains the following fields:
+.nf
+struct ares_txt_ext {
+  struct ares_txt_ext  *next;
+  unsigned int  length;
+  unsigned char *txt;
+  unsigned char record_start;
+};
+.fi
+The
+.I record_start
+field in
+.I struct ares_txt_ext
+is 1 if this structure is a start of a TXT record, and 0 if the structure is a
+continuation of a previous record. The linked list of the
+.I struct ares_txt_ext
+will have at least one item with
+.I record_start
+equal to 1, and may have some items with
+.I record_start
+equal to 0 between them.
+
+These sequences of
+.I struct ares_txt_ext
+(starting from the item with
+.I record_start
+equal to 1, and ending right before the record start item) may be treated as
+either components of a single TXT record or as a multi-parted TXT record,
+depending on particular use case.
+.SH RETURN VALUES
+.BR "ares_parse_txt_reply" " (" "ares_parse_txt_reply_ext" ")"
+can return any of the following values:
+.TP 15
+.B ARES_SUCCESS
+The response was successfully parsed.
+.TP 15
+.B ARES_EBADRESP
+The response was malformatted.
+.TP 15
+.B ARES_ENODATA
+The response did not contain an answer to the query.
+.TP 15
+.B ARES_ENOMEM
+Memory was exhausted.
+.SH AVAILABILITY
+This function was first introduced in c-ares version 1.7.0.
+.SH SEE ALSO
+.BR ares_query (3)
+.BR ares_free_data (3)

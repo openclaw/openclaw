@@ -1,0 +1,78 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>X509_ALGOR_dup</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>X509_ALGOR_dup, X509_ALGOR_set0, X509_ALGOR_get0, X509_ALGOR_set_md, X509_ALGOR_cmp, X509_ALGOR_copy - AlgorithmIdentifier functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/x509.h&gt;
+
+X509_ALGOR *X509_ALGOR_dup(X509_ALGOR *alg);
+int X509_ALGOR_set0(X509_ALGOR *alg, ASN1_OBJECT *aobj, int ptype, void *pval);
+void X509_ALGOR_get0(const ASN1_OBJECT **paobj, int *pptype,
+                     const void **ppval, const X509_ALGOR *alg);
+void X509_ALGOR_set_md(X509_ALGOR *alg, const EVP_MD *md);
+int X509_ALGOR_cmp(const X509_ALGOR *a, const X509_ALGOR *b);
+int X509_ALGOR_copy(X509_ALGOR *dest, const X509_ALGOR *src);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>X509_ALGOR_dup() returns a copy of <i>alg</i>.</p>
+
+<p>X509_ALGOR_set0() sets the algorithm OID of <i>alg</i> to <i>aobj</i> and the associated parameter type to <i>ptype</i> with value <i>pval</i>. If <i>ptype</i> is <b>V_ASN1_UNDEF</b> the parameter is omitted, otherwise <i>ptype</i> and <i>pval</i> have the same meaning as the <i>type</i> and <i>value</i> parameters to ASN1_TYPE_set(). All the supplied parameters are used internally so must <b>NOT</b> be freed after this call succeeded; otherwise ownership remains with the caller and <i>alg</i> remains untouched.</p>
+
+<p>X509_ALGOR_get0() is the inverse of X509_ALGOR_set0(): it returns the algorithm OID in <i>*paobj</i> and the associated parameter in <i>*pptype</i> and <i>*ppval</i> from the <b>AlgorithmIdentifier</b> <i>alg</i>.</p>
+
+<p>X509_ALGOR_set_md() sets the <b>AlgorithmIdentifier</b> <i>alg</i> to appropriate values for the message digest <i>md</i>.</p>
+
+<p>X509_ALGOR_cmp() compares <i>a</i> and <i>b</i> and returns 0 if they have identical encodings and nonzero otherwise.</p>
+
+<p>X509_ALGOR_copy() copies the source values into the dest structs; making a duplicate of each (and free any thing pointed to from within *dest).</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>X509_ALGOR_dup() returns a valid <b>X509_ALGOR</b> structure or NULL if an error occurred.</p>
+
+<p>X509_ALGOR_set0() and X509_ALGOR_copy() return 1 on success or 0 on error.</p>
+
+<p>X509_ALGOR_get0() and X509_ALGOR_set_md() return no values.</p>
+
+<p>X509_ALGOR_cmp() returns 0 if the two parameters have identical encodings and nonzero otherwise.</p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The X509_ALGOR_copy() was added in 1.1.1e.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2002-2022 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

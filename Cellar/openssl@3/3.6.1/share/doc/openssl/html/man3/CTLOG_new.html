@@ -1,0 +1,90 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>CTLOG_new</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>CTLOG_new_ex, CTLOG_new, CTLOG_new_from_base64, CTLOG_new_from_base64_ex, CTLOG_free, CTLOG_get0_name, CTLOG_get0_log_id, CTLOG_get0_public_key - encapsulates information about a Certificate Transparency log</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ct.h&gt;
+
+CTLOG *CTLOG_new_ex(EVP_PKEY *public_key, const char *name,
+                    OSSL_LIB_CTX *libctx, const char *propq);
+CTLOG *CTLOG_new(EVP_PKEY *public_key, const char *name);
+
+int CTLOG_new_from_base64_ex(CTLOG **ct_log, const char *pkey_base64,
+                             const char *name, OSSL_LIB_CTX *libctx,
+                             const char *propq);
+int CTLOG_new_from_base64(CTLOG ** ct_log,
+                          const char *pkey_base64, const char *name);
+void CTLOG_free(CTLOG *log);
+const char *CTLOG_get0_name(const CTLOG *log);
+void CTLOG_get0_log_id(const CTLOG *log, const uint8_t **log_id,
+                       size_t *log_id_len);
+EVP_PKEY *CTLOG_get0_public_key(const CTLOG *log);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>CTLOG_new_ex() returns a new CTLOG that represents the Certificate Transparency (CT) log with the given public key and associates it with the library context <i>libctx</i> and property query string <i>propq</i>. A name must also be provided that can be used to help users identify this log. Ownership of the public key is transferred.</p>
+
+<p>CTLOG_new() does the same thing as CTLOG_new_ex() but with the default library context and the default property query string.</p>
+
+<p>CTLOG_new_from_base64_ex() also creates a new CTLOG, but takes the public key in base64-encoded DER form and sets the ct_log pointer to point to the new CTLOG. The base64 will be decoded and the public key parsed. The CTLOG will be associated with the given library context <i>libctx</i> and property query string <i>propq</i>.</p>
+
+<p>CTLOG_new_from_base64() does the same thing as CTLOG_new_from_base64_ex() except that the default library context and property query string are used.</p>
+
+<p>Regardless of whether CTLOG_new() or CTLOG_new_from_base64() is used, it is the caller&#39;s responsibility to pass the CTLOG to CTLOG_free() once it is no longer needed. This will delete it and, if created by CTLOG_new(), the EVP_PKEY that was passed to it. If the argument to CTLOG_free() is NULL, nothing is done.</p>
+
+<p>CTLOG_get0_name() returns the name of the log, as provided when the CTLOG was created. Ownership of the string remains with the CTLOG.</p>
+
+<p>CTLOG_get0_log_id() sets *log_id to point to a string containing that log&#39;s LogID (see RFC 6962). It sets *log_id_len to the length of that LogID. For a v1 CT log, the LogID will be a SHA-256 hash (i.e. 32 bytes long). Ownership of the string remains with the CTLOG.</p>
+
+<p>CTLOG_get0_public_key() returns the public key of the CT log. Ownership of the EVP_PKEY remains with the CTLOG.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>CTLOG_new() will return NULL if an error occurs.</p>
+
+<p>CTLOG_new_from_base64() will return 1 on success, 0 otherwise.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ct.html">ct(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The functions CTLOG_new_ex() and CTLOG_new_from_base64_ex() were added in OpenSSL 3.0. All other functions were added in OpenSSL 1.1.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2016-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

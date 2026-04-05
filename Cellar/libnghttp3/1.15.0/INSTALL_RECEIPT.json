@@ -1,0 +1,38 @@
+{
+  "homebrew_version": "5.0.11-8-g8582f2a",
+  "used_options": [],
+  "unused_options": [],
+  "built_as_bottle": true,
+  "poured_from_bottle": true,
+  "loaded_from_api": true,
+  "loaded_from_internal_api": false,
+  "installed_as_dependency": true,
+  "installed_on_request": false,
+  "changed_files": ["lib/pkgconfig/libnghttp3.pc"],
+  "time": 1775053758,
+  "source_modified_time": 1768903772,
+  "compiler": "clang",
+  "aliases": [],
+  "runtime_dependencies": [],
+  "source": {
+    "spec": "stable",
+    "versions": {
+      "stable": "1.15.0",
+      "head": null,
+      "version_scheme": 0,
+      "compatibility_version": null
+    },
+    "path": "/Users/kdh/Library/Caches/Homebrew/api/formula.jws.json",
+    "tap_git_head": null,
+    "tap": "homebrew/core"
+  },
+  "arch": "arm64",
+  "built_on": {
+    "os": "Macintosh",
+    "os_version": "macOS 26",
+    "cpu_family": "dunno",
+    "xcode": "26.2",
+    "clt": "26.2.0.0.1.1764812424",
+    "preferred_perl": "5.34"
+  }
+}

@@ -1,0 +1,94 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SMIME_read_CMS</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#BUGS">BUGS</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SMIME_read_CMS_ex, SMIME_read_CMS - parse S/MIME message</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/cms.h&gt;
+
+CMS_ContentInfo *SMIME_read_CMS_ex(BIO *bio, int flags, BIO **bcont,
+                                   CMS_ContentInfo **cms);
+CMS_ContentInfo *SMIME_read_CMS(BIO *in, BIO **bcont);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SMIME_read_CMS() parses a message in S/MIME format.</p>
+
+<p><b>in</b> is a BIO to read the message from.</p>
+
+<p>If cleartext signing is used then the content is saved in a memory bio which is written to <b>*bcont</b>, otherwise <b>*bcont</b> is set to NULL.</p>
+
+<p>The parsed CMS_ContentInfo structure is returned or NULL if an error occurred.</p>
+
+<p>SMIME_read_CMS_ex() is similar to SMIME_read_CMS() but optionally a previously created <i>cms</i> CMS_ContentInfo object can be supplied as well as some <i>flags</i>. To create a <i>cms</i> object use <a href="../man3/CMS_ContentInfo_new_ex.html">CMS_ContentInfo_new_ex(3)</a>. If the <i>flags</i> argument contains <b>CMS_BINARY</b> then the input is assumed to be in binary format and is not translated to canonical form. If in addition <b>SMIME_ASCIICRLF</b> is set then the binary input is assumed to be followed by <b>CR</b> and <b>LF</b> characters, else only by an <b>LF</b> character. If <i>flags</i> is 0 and <i>cms</i> is NULL then it is identical to SMIME_read_CMS().</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>If <b>*bcont</b> is not NULL then the message is clear text signed. <b>*bcont</b> can then be passed to CMS_verify() with the <b>CMS_DETACHED</b> flag set.</p>
+
+<p>Otherwise the type of the returned structure can be determined using CMS_get0_type().</p>
+
+<p>To support future functionality if <b>bcont</b> is not NULL <b>*bcont</b> should be initialized to NULL. For example:</p>
+
+<pre><code>BIO *cont = NULL;
+CMS_ContentInfo *cms;
+
+cms = SMIME_read_CMS(in, &amp;cont);</code></pre>
+
+<h1 id="BUGS">BUGS</h1>
+
+<p>The MIME parser used by SMIME_read_CMS() is somewhat primitive. While it will handle most S/MIME messages more complex compound formats may not work.</p>
+
+<p>The parser assumes that the CMS_ContentInfo structure is always base64 encoded and will not handle the case where it is in binary format or uses quoted printable format.</p>
+
+<p>The use of a memory BIO to hold the signed content limits the size of message which can be processed due to memory restraints: a streaming single pass option should be available.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SMIME_read_CMS_ex() and SMIME_read_CMS() return a valid <b>CMS_ContentInfo</b> structure or <b>NULL</b> if an error occurred. The error can be obtained from ERR_get_error(3).</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>, <a href="../man3/CMS_sign.html">CMS_sign(3)</a>, <a href="../man3/CMS_verify.html">CMS_verify(3)</a>, <a href="../man3/CMS_encrypt.html">CMS_encrypt(3)</a>, <a href="../man3/CMS_decrypt.html">CMS_decrypt(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The function SMIME_read_CMS_ex() was added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2008-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,141 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_CTX_load_verify_locations</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#WARNINGS">WARNINGS</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_CTX_load_verify_dir, SSL_CTX_load_verify_file, SSL_CTX_load_verify_store, SSL_CTX_set_default_verify_paths, SSL_CTX_set_default_verify_dir, SSL_CTX_set_default_verify_file, SSL_CTX_set_default_verify_store, SSL_CTX_load_verify_locations - set default locations for trusted CA certificates</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+int SSL_CTX_load_verify_dir(SSL_CTX *ctx, const char *CApath);
+int SSL_CTX_load_verify_file(SSL_CTX *ctx, const char *CAfile);
+int SSL_CTX_load_verify_store(SSL_CTX *ctx, const char *CAstore);
+
+int SSL_CTX_set_default_verify_paths(SSL_CTX *ctx);
+
+int SSL_CTX_set_default_verify_dir(SSL_CTX *ctx);
+int SSL_CTX_set_default_verify_file(SSL_CTX *ctx);
+int SSL_CTX_set_default_verify_store(SSL_CTX *ctx);
+
+int SSL_CTX_load_verify_locations(SSL_CTX *ctx, const char *CAfile,
+                                  const char *CApath);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_CTX_load_verify_locations(), SSL_CTX_load_verify_dir(), SSL_CTX_load_verify_file(), SSL_CTX_load_verify_store() specifies the locations for <b>ctx</b>, at which CA certificates for verification purposes are located. The certificates available via <b>CAfile</b>, <b>CApath</b> and <b>CAstore</b> are trusted. <b>ctx</b> <b>MUST NOT</b> be NULL</p>
+
+<p>Details of the certificate verification and chain checking process are described in <a href="../man1/openssl-verification-options.html">&quot;Certification Path Validation&quot; in openssl-verification-options(1)</a>.</p>
+
+<p>SSL_CTX_set_default_verify_paths() specifies that the default locations from which CA certificates are loaded should be used. There is one default directory, one default file and one default store. The default CA certificates directory is called <i>certs</i> in the default OpenSSL directory, and this is also the default store. Alternatively the <b>SSL_CERT_DIR</b> environment variable can be defined to override this location. The default CA certificates file is called <i>cert.pem</i> in the default OpenSSL directory. Alternatively the <b>SSL_CERT_FILE</b> environment variable can be defined to override this location. <b>ctx</b> <b>MUST NOT</b> be NULL.</p>
+
+<p>SSL_CTX_set_default_verify_dir() is similar to SSL_CTX_set_default_verify_paths() except that just the default directory is used.</p>
+
+<p>SSL_CTX_set_default_verify_file() is similar to SSL_CTX_set_default_verify_paths() except that just the default file is used.</p>
+
+<p>SSL_CTX_set_default_verify_store() is similar to SSL_CTX_set_default_verify_paths() except that just the default store is used.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>If <b>CAfile</b> is not NULL, it points to a file of CA certificates in PEM format. The file can contain several CA certificates identified by</p>
+
+<pre><code>-----BEGIN CERTIFICATE-----
+... (CA certificate in base64 encoding) ...
+-----END CERTIFICATE-----</code></pre>
+
+<p>sequences. Before, between, and after the certificates text is allowed which can be used e.g. for descriptions of the certificates.</p>
+
+<p>The <b>CAfile</b> is processed on execution of the SSL_CTX_load_verify_locations() function.</p>
+
+<p>If <b>CApath</b> is not NULL, it points to a directory containing CA certificates in PEM format. The files each contain one CA certificate. The files are looked up by the CA subject name hash value, which must hence be available. If more than one CA certificate with the same name hash value exist, the extension must be different (e.g. 9d66eef0.0, 9d66eef0.1 etc). The search is performed in the ordering of the extension number, regardless of other properties of the certificates. Use the <b>c_rehash</b> utility to create the necessary links.</p>
+
+<p>The certificates in <b>CApath</b> are only looked up when required, e.g. when building the certificate chain or when actually performing the verification of a peer certificate.</p>
+
+<p>When looking up CA certificates for chain building, the OpenSSL library will search for suitable certificates first in <b>CAfile</b>, then in <b>CApath</b>. Details of the chain building process are described in <a href="../man1/openssl-verification-options.html">&quot;Certification Path Building&quot; in openssl-verification-options(1)</a>.</p>
+
+<p>If <b>CAstore</b> is not NULL, it&#39;s a URI for to a store, which may represent a single container or a whole catalogue of containers. Apart from the <b>CAstore</b> not necessarily being a local file or directory, it&#39;s generally treated the same way as a <b>CApath</b>.</p>
+
+<p>In server mode, when requesting a client certificate, the server must send the list of CAs of which it will accept client certificates. This list is not influenced by the contents of <b>CAfile</b> or <b>CApath</b> and must explicitly be set using the <a href="../man3/SSL_CTX_set_client_CA_list.html">SSL_CTX_set_client_CA_list(3)</a> family of functions.</p>
+
+<p>When building its own certificate chain, an OpenSSL client/server will try to fill in missing certificates from <b>CAfile</b>/<b>CApath</b>, if the certificate chain was not explicitly specified (see <a href="../man3/SSL_CTX_add_extra_chain_cert.html">SSL_CTX_add_extra_chain_cert(3)</a>, <a href="../man3/SSL_CTX_use_certificate.html">SSL_CTX_use_certificate(3)</a>.</p>
+
+<h1 id="WARNINGS">WARNINGS</h1>
+
+<p>If several CA certificates matching the name, key identifier, and serial number condition are available, only the first one will be examined. This may lead to unexpected results if the same CA certificate is available with different expiration dates. If a &quot;certificate expired&quot; verification error occurs, no other certificate will be searched. Make sure to not have expired certificates mixed with valid ones.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>For SSL_CTX_load_verify_locations the following return values can occur:</p>
+
+<dl>
+
+<dt id="pod0">0</dt>
+<dd>
+
+<p>The operation failed because <b>CAfile</b> and <b>CApath</b> are NULL or the processing at one of the locations specified failed. Check the error stack to find out the reason.</p>
+
+</dd>
+<dt id="pod1">1</dt>
+<dd>
+
+<p>The operation succeeded.</p>
+
+</dd>
+</dl>
+
+<p>SSL_CTX_set_default_verify_paths(), SSL_CTX_set_default_verify_dir() and SSL_CTX_set_default_verify_file() all return 1 on success or 0 on failure. A missing default location is still treated as a success.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>Generate a CA certificate file with descriptive text from the CA certificates ca1.pem ca2.pem ca3.pem:</p>
+
+<pre><code>#!/bin/sh
+rm CAfile.pem
+for i in ca1.pem ca2.pem ca3.pem ; do
+    openssl x509 -in $i -text &gt;&gt; CAfile.pem
+done</code></pre>
+
+<p>Prepare the directory /some/where/certs containing several CA certificates for use as <b>CApath</b>:</p>
+
+<pre><code>cd /some/where/certs
+c_rehash .</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a>, <a href="../man3/SSL_CTX_set_client_CA_list.html">SSL_CTX_set_client_CA_list(3)</a>, <a href="../man3/SSL_get_client_CA_list.html">SSL_get_client_CA_list(3)</a>, <a href="../man3/SSL_CTX_use_certificate.html">SSL_CTX_use_certificate(3)</a>, <a href="../man3/SSL_CTX_add_extra_chain_cert.html">SSL_CTX_add_extra_chain_cert(3)</a>, <a href="../man3/SSL_CTX_set_cert_store.html">SSL_CTX_set_cert_store(3)</a>, <a href="../man3/SSL_CTX_set_client_CA_list.html">SSL_CTX_set_client_CA_list(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

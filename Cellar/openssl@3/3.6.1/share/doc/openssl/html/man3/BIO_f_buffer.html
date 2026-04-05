@@ -1,0 +1,89 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>BIO_f_buffer</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>BIO_get_buffer_num_lines, BIO_set_read_buffer_size, BIO_set_write_buffer_size, BIO_set_buffer_size, BIO_set_buffer_read_data, BIO_f_buffer - buffering BIO</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/bio.h&gt;
+
+const BIO_METHOD *BIO_f_buffer(void);
+
+long BIO_get_buffer_num_lines(BIO *b);
+long BIO_set_read_buffer_size(BIO *b, long size);
+long BIO_set_write_buffer_size(BIO *b, long size);
+long BIO_set_buffer_size(BIO *b, long size);
+long BIO_set_buffer_read_data(BIO *b, void *buf, long num);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>BIO_f_buffer() returns the buffering BIO method.</p>
+
+<p>Data written to a buffering BIO is buffered and periodically written to the next BIO in the chain. Data read from a buffering BIO comes from an internal buffer which is filled from the next BIO in the chain. Both BIO_gets() and BIO_puts() are supported.</p>
+
+<p>Calling BIO_reset() on a buffering BIO clears any buffered data.</p>
+
+<p>BIO_get_buffer_num_lines() returns the number of lines currently buffered.</p>
+
+<p>BIO_set_read_buffer_size(), BIO_set_write_buffer_size() and BIO_set_buffer_size() set the read, write or both read and write buffer sizes to <b>size</b>. The initial buffer size is DEFAULT_BUFFER_SIZE, currently 4096. Any attempt to reduce the buffer size below DEFAULT_BUFFER_SIZE is ignored. Any buffered data is cleared when the buffer is resized.</p>
+
+<p>BIO_set_buffer_read_data() clears the read buffer and fills it with <b>num</b> bytes of <b>buf</b>. If <b>num</b> is larger than the current buffer size the buffer is expanded.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>These functions, other than BIO_f_buffer(), are implemented as macros.</p>
+
+<p>Buffering BIOs implement BIO_read_ex() and BIO_gets() by using BIO_read_ex() operations on the next BIO in the chain and storing the result in an internal buffer, from which bytes are given back to the caller as appropriate for the call; a BIO_gets() is guaranteed to give the caller a whole line, and BIO_read_ex() is guaranteed to give the caller the number of bytes it asks for, unless there&#39;s an error or end of communication is reached in the next BIO. By prepending a buffering BIO to a chain it is therefore possible to provide BIO_gets() or exact size BIO_read_ex() functionality if the following BIOs do not support it.</p>
+
+<p>Do not add more than one BIO_f_buffer() to a BIO chain. The result of doing so will force a full read of the size of the internal buffer of the top BIO_f_buffer(), which is 4 KiB at a minimum.</p>
+
+<p>Data is only written to the next BIO in the chain when the write buffer fills or when BIO_flush() is called. It is therefore important to call BIO_flush() whenever any pending data should be written such as when removing a buffering BIO using BIO_pop(). BIO_flush() may need to be retried if the ultimate source/sink BIO is non blocking.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>BIO_f_buffer() returns the buffering BIO method.</p>
+
+<p>BIO_get_buffer_num_lines() returns the number of lines buffered (may be 0) or a negative value in case of errors.</p>
+
+<p>BIO_set_read_buffer_size(), BIO_set_write_buffer_size() and BIO_set_buffer_size() return 1 if the buffer was successfully resized or &lt;=0 for failure.</p>
+
+<p>BIO_set_buffer_read_data() returns 1 if the data was set correctly or &lt;=0 if there was an error.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/bio.html">bio(7)</a>, <a href="../man3/BIO_reset.html">BIO_reset(3)</a>, <a href="../man3/BIO_flush.html">BIO_flush(3)</a>, <a href="../man3/BIO_pop.html">BIO_pop(3)</a>, <a href="../man3/BIO_ctrl.html">BIO_ctrl(3)</a>.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2020 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

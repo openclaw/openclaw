@@ -1,0 +1,156 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>openssl-rehash</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Script-Configuration">Script Configuration</a></li>
+    </ul>
+  </li>
+  <li><a href="#OPTIONS">OPTIONS</a></li>
+  <li><a href="#ENVIRONMENT">ENVIRONMENT</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>openssl-rehash, c_rehash - Create symbolic links to files named by the hash values</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<p><b>openssl</b> <b>rehash</b> [<b>-h</b>] [<b>-help</b>] [<b>-old</b>] [<b>-compat</b>] [<b>-n</b>] [<b>-v</b>] [<b>-provider</b> <i>name</i>] [<b>-provider-path</b> <i>path</i>] [<b>-provparam</b> <i>[name:]key=value</i>] [<b>-propquery</b> <i>propq</i>] [<i>directory</i>] ...</p>
+
+<p><b>c_rehash</b> [<b>-h</b>] [<b>-help</b>] [<b>-old</b>] [<b>-n</b>] [<b>-v</b>] [<b>-provider</b> <i>name</i>] [<b>-provider-path</b> <i>path</i>] [<b>-provparam</b> <i>[name:]key=value</i>] [<b>-propquery</b> <i>propq</i>] [<i>directory</i>] ...</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>This command is generally equivalent to the external script <b>c_rehash</b>, except for minor differences noted below.</p>
+
+<p><b>openssl rehash</b> scans directories and calculates a hash value of each <i>.pem</i>, <i>.crt</i>, <i>.cer</i>, or <i>.crl</i> file in the specified directory list and creates symbolic links for each file, where the name of the link is the hash value. (If the platform does not support symbolic links, a copy is made.) This command is useful as many programs that use OpenSSL require directories to be set up like this in order to find certificates.</p>
+
+<p>If any directories are named on the command line, then those are processed in turn. If not, then the <b>SSL_CERT_DIR</b> environment variable is consulted; this should be a colon-separated list of directories, like the Unix <b>PATH</b> variable. If that is not set then the default directory (installation-specific but often <i>/usr/local/ssl/certs</i>) is processed.</p>
+
+<p>In order for a directory to be processed, the user must have write permissions on that directory, otherwise an error will be generated.</p>
+
+<p>The links created are of the form <i>HHHHHHHH.D</i>, where each <i>H</i> is a hexadecimal character and <i>D</i> is a single decimal digit. When a directory is processed, all links in it that have a name in that syntax are first removed, even if they are being used for some other purpose. To skip the removal step, use the <b>-n</b> flag. Hashes for CRL&#39;s look similar except the letter <b>r</b> appears after the period, like this: <i>HHHHHHHH.</i><b>r</b><i>D</i>.</p>
+
+<p>Multiple objects may have the same hash; they will be indicated by incrementing the <i>D</i> value. Duplicates are found by comparing the full SHA-1 fingerprint. A warning will be displayed if a duplicate is found.</p>
+
+<p>A warning will also be displayed if there are files that cannot be parsed as either a certificate or a CRL or if more than one such object appears in the file.</p>
+
+<h2 id="Script-Configuration">Script Configuration</h2>
+
+<p>The <b>c_rehash</b> script uses the <b>openssl</b> program to compute the hashes and fingerprints. If not found in the user&#39;s <b>PATH</b>, then set the <b>OPENSSL</b> environment variable to the full pathname. Any program can be used, it will be invoked as follows for either a certificate or CRL:</p>
+
+<pre><code>$OPENSSL x509 -hash -fingerprint -noout -in FILENAME
+$OPENSSL crl -hash -fingerprint -noout -in FILENAME</code></pre>
+
+<p>where <i>FILENAME</i> is the filename. It must output the hash of the file on the first line, and the fingerprint on the second, optionally prefixed with some text and an equals sign.</p>
+
+<h1 id="OPTIONS">OPTIONS</h1>
+
+<dl>
+
+<dt id="help--h"><b>-help</b> <b>-h</b></dt>
+<dd>
+
+<p>Display a brief usage message.</p>
+
+</dd>
+<dt id="old"><b>-old</b></dt>
+<dd>
+
+<p>Use old-style hashing (MD5, as opposed to SHA-1) for generating links to be used for releases before 1.0.0. Note that current versions will not use the old style.</p>
+
+</dd>
+<dt id="n"><b>-n</b></dt>
+<dd>
+
+<p>Do not remove existing links. This is needed when keeping new and old-style links in the same directory.</p>
+
+</dd>
+<dt id="compat"><b>-compat</b></dt>
+<dd>
+
+<p>Generate links for both old-style (MD5) and new-style (SHA1) hashing. This allows releases before 1.0.0 to use these links along-side newer releases.</p>
+
+</dd>
+<dt id="v"><b>-v</b></dt>
+<dd>
+
+<p>Print messages about old links removed and new links created. By default, this command only lists each directory as it is processed.</p>
+
+</dd>
+<dt id="provider-name"><b>-provider</b> <i>name</i></dt>
+<dd>
+
+</dd>
+<dt id="provider-path-path"><b>-provider-path</b> <i>path</i></dt>
+<dd>
+
+</dd>
+<dt id="provparam-name:-key-value"><b>-provparam</b> <i>[name:]key=value</i></dt>
+<dd>
+
+</dd>
+<dt id="propquery-propq"><b>-propquery</b> <i>propq</i></dt>
+<dd>
+
+<p>See <a href="../man1/openssl.html">&quot;Provider Options&quot; in openssl(1)</a>, <a href="../man7/provider.html">provider(7)</a>, and <a href="../man7/property.html">property(7)</a>.</p>
+
+</dd>
+</dl>
+
+<h1 id="ENVIRONMENT">ENVIRONMENT</h1>
+
+<dl>
+
+<dt id="OPENSSL"><b>OPENSSL</b></dt>
+<dd>
+
+<p>The path to an executable to use to generate hashes and fingerprints (see above).</p>
+
+</dd>
+<dt id="PATH"><b>PATH</b></dt>
+<dd>
+
+<p>List of paths, separated by colons (or semicolons, on Windows platforms), where the <b>openssl</b> executable is searched in case the path to the hash generating executable is not provided in the <b>OPENSSL</b> environment variable or it is not usable (that is, does not exist or is not executable).</p>
+
+</dd>
+<dt id="SSL_CERT_DIR"><b>SSL_CERT_DIR</b></dt>
+<dd>
+
+<p>Colon separated list of directories to operate on. Ignored if directories are listed on the command line.</p>
+
+</dd>
+</dl>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man1/openssl.html">openssl(1)</a>, <a href="../man1/openssl-crl.html">openssl-crl(1)</a>, <a href="../man1/openssl-x509.html">openssl-x509(1)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2015-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

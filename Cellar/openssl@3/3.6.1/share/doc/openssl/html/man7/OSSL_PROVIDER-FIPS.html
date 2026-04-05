@@ -1,0 +1,885 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OSSL_PROVIDER-FIPS</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Properties">Properties</a></li>
+      <li><a href="#Approved-algorithms">Approved algorithms</a></li>
+      <li><a href="#Provider-parameters">Provider parameters</a></li>
+    </ul>
+  </li>
+  <li><a href="#OPERATIONS-AND-ALGORITHMS">OPERATIONS AND ALGORITHMS</a>
+    <ul>
+      <li><a href="#Hashing-Algorithms-Message-Digests">Hashing Algorithms / Message Digests</a></li>
+      <li><a href="#Symmetric-Ciphers">Symmetric Ciphers</a></li>
+      <li><a href="#Message-Authentication-Code-MAC">Message Authentication Code (MAC)</a></li>
+      <li><a href="#Key-Derivation-Function-KDF">Key Derivation Function (KDF)</a></li>
+      <li><a href="#Key-Exchange">Key Exchange</a></li>
+      <li><a href="#Asymmetric-Signature">Asymmetric Signature</a></li>
+      <li><a href="#Asymmetric-Cipher">Asymmetric Cipher</a></li>
+      <li><a href="#Asymmetric-Key-Encapsulation">Asymmetric Key Encapsulation</a></li>
+      <li><a href="#Asymmetric-Key-Management">Asymmetric Key Management</a></li>
+      <li><a href="#Random-Number-Generation">Random Number Generation</a></li>
+    </ul>
+  </li>
+  <li><a href="#SELF-TESTING">SELF TESTING</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OSSL_PROVIDER-FIPS - OpenSSL FIPS provider</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The OpenSSL FIPS provider is a special provider that conforms to the Federal Information Processing Standards (FIPS) specified in FIPS 140-3. This &#39;module&#39; contains an approved set of cryptographic algorithms that is validated by an accredited testing laboratory.</p>
+
+<h2 id="Properties">Properties</h2>
+
+<p>The implementations in this provider specifically have these properties defined for approved algorithms:</p>
+
+<dl>
+
+<dt id="provider-fips">&quot;provider=fips&quot;</dt>
+<dd>
+
+</dd>
+<dt id="fips-yes">&quot;fips=yes&quot;</dt>
+<dd>
+
+</dd>
+</dl>
+
+<p>It may be used in a property query string with fetching functions such as <a href="../man3/EVP_MD_fetch.html">EVP_MD_fetch(3)</a> or <a href="../man3/EVP_CIPHER_fetch.html">EVP_CIPHER_fetch(3)</a>, as well as with other functions that take a property query string, such as <a href="../man3/EVP_PKEY_CTX_new_from_name.html">EVP_PKEY_CTX_new_from_name(3)</a>.</p>
+
+<p>To be FIPS compliant, it is mandatory to include <code>fips=yes</code> as part of all property queries. This ensures that only FIPS approved implementations are used for cryptographic operations. The <code>fips=yes</code> query may also include other non-crypto support operations that are not in the FIPS provider, such as asymmetric key encoders, see <a href="../man7/OSSL_PROVIDER-default.html">&quot;Asymmetric Key Management&quot; in OSSL_PROVIDER-default(7)</a>.</p>
+
+<p>It is not mandatory to include <code>provider=fips</code> as part of your property query. Including <code>provider=fips</code> in your property query guarantees that the OpenSSL FIPS provider is used for cryptographic operations rather than other FIPS capable providers.</p>
+
+<h2 id="Approved-algorithms">Approved algorithms</h2>
+
+<p>Algorithms that are fetched using &quot;fips=yes&quot; may still be unapproved if certain conditions are not met. See <a href="../man7/fips_module.html">&quot;FIPS indicators&quot; in fips_module(7)</a> for additional information.</p>
+
+<h2 id="Provider-parameters">Provider parameters</h2>
+
+<p>See <a href="../man7/provider-base.html">&quot;Provider parameters&quot; in provider-base(7)</a> for a list of base parameters. The OpenSSL FIPS provider also handles FIPS indicator related parameters as specified by <a href="../man5/fips_config.html">&quot;FIPS indicator options&quot; in fips_config(5)</a>.</p>
+
+<h1 id="OPERATIONS-AND-ALGORITHMS">OPERATIONS AND ALGORITHMS</h1>
+
+<p>The OpenSSL FIPS provider supports these operations and algorithms:</p>
+
+<h2 id="Hashing-Algorithms-Message-Digests">Hashing Algorithms / Message Digests</h2>
+
+<dl>
+
+<dt id="SHA1-see-EVP_MD-SHA1-7">SHA1, see <a href="../man7/EVP_MD-SHA1.html">EVP_MD-SHA1(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="SHA2-see-EVP_MD-SHA2-7">SHA2, see <a href="../man7/EVP_MD-SHA2.html">EVP_MD-SHA2(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="SHA3-see-EVP_MD-SHA3-7">SHA3, see <a href="../man7/EVP_MD-SHA3.html">EVP_MD-SHA3(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="SHAKE-see-EVP_MD-SHAKE-7">SHAKE, see <a href="../man7/EVP_MD-SHAKE.html">EVP_MD-SHAKE(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="KECCAK-KMAC-see-EVP_MD-KECCAK-KMAC-7">KECCAK-KMAC, see <a href="../man7/EVP_MD-KECCAK-KMAC.html">EVP_MD-KECCAK-KMAC(7)</a></dt>
+<dd>
+
+<p>KECCAK-KMAC is only used internally as a sub algorithm of KMAC.</p>
+
+</dd>
+</dl>
+
+<h2 id="Symmetric-Ciphers">Symmetric Ciphers</h2>
+
+<dl>
+
+<dt id="AES-see-EVP_CIPHER-AES-7">AES, see <a href="../man7/EVP_CIPHER-AES.html">EVP_CIPHER-AES(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="DES-see-EVP_CIPHER-DES-7">3DES, see <a href="../man7/EVP_CIPHER-DES.html">EVP_CIPHER-DES(7)</a></dt>
+<dd>
+
+</dd>
+</dl>
+
+<h2 id="Message-Authentication-Code-MAC">Message Authentication Code (MAC)</h2>
+
+<dl>
+
+<dt id="CMAC-see-EVP_MAC-CMAC-7">CMAC, see <a href="../man7/EVP_MAC-CMAC.html">EVP_MAC-CMAC(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="GMAC-see-EVP_MAC-GMAC-7">GMAC, see <a href="../man7/EVP_MAC-GMAC.html">EVP_MAC-GMAC(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="HMAC-see-EVP_MAC-HMAC-7">HMAC, see <a href="../man7/EVP_MAC-HMAC.html">EVP_MAC-HMAC(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="KMAC-see-EVP_MAC-KMAC-7">KMAC, see <a href="../man7/EVP_MAC-KMAC.html">EVP_MAC-KMAC(7)</a></dt>
+<dd>
+
+</dd>
+</dl>
+
+<h2 id="Key-Derivation-Function-KDF">Key Derivation Function (KDF)</h2>
+
+<dl>
+
+<dt id="HKDF-see-EVP_KDF-HKDF-7">HKDF, see <a href="../man7/EVP_KDF-HKDF.html">EVP_KDF-HKDF(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="HKDF-SHA256-see-EVP_KDF-HKDF-7">HKDF-SHA256, see <a href="../man7/EVP_KDF-HKDF.html">EVP_KDF-HKDF(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="HKDF-SHA384-see-EVP_KDF-HKDF-7">HKDF-SHA384, see <a href="../man7/EVP_KDF-HKDF.html">EVP_KDF-HKDF(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="HKDF-SHA512-see-EVP_KDF-HKDF-7">HKDF-SHA512, see <a href="../man7/EVP_KDF-HKDF.html">EVP_KDF-HKDF(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="TLS13-KDF-see-EVP_KDF-TLS13_KDF-7">TLS13-KDF, see <a href="../man7/EVP_KDF-TLS13_KDF.html">EVP_KDF-TLS13_KDF(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="SSKDF-see-EVP_KDF-SS-7">SSKDF, see <a href="../man7/EVP_KDF-SS.html">EVP_KDF-SS(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="PBKDF2-see-EVP_KDF-PBKDF2-7">PBKDF2, see <a href="../man7/EVP_KDF-PBKDF2.html">EVP_KDF-PBKDF2(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="SSHKDF-see-EVP_KDF-SSHKDF-7">SSHKDF, see <a href="../man7/EVP_KDF-SSHKDF.html">EVP_KDF-SSHKDF(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="TLS1-PRF-see-EVP_KDF-TLS1_PRF-7">TLS1-PRF, see <a href="../man7/EVP_KDF-TLS1_PRF.html">EVP_KDF-TLS1_PRF(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="KBKDF-see-EVP_KDF-KB-7">KBKDF, see <a href="../man7/EVP_KDF-KB.html">EVP_KDF-KB(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="X942KDF-ASN1-see-EVP_KDF-X942-ASN1-7">X942KDF-ASN1, see <a href="../man7/EVP_KDF-X942-ASN1.html">EVP_KDF-X942-ASN1(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="X942KDF-CONCAT-see-EVP_KDF-X942-CONCAT-7">X942KDF-CONCAT, see <a href="../man7/EVP_KDF-X942-CONCAT.html">EVP_KDF-X942-CONCAT(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="X963KDF-see-EVP_KDF-X963-7">X963KDF, see <a href="../man7/EVP_KDF-X963.html">EVP_KDF-X963(7)</a></dt>
+<dd>
+
+</dd>
+</dl>
+
+<h2 id="Key-Exchange">Key Exchange</h2>
+
+<dl>
+
+<dt id="DH-see-EVP_KEYEXCH-DH-7">DH, see <a href="../man7/EVP_KEYEXCH-DH.html">EVP_KEYEXCH-DH(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="ECDH-see-EVP_KEYEXCH-ECDH-7">ECDH, see <a href="../man7/EVP_KEYEXCH-ECDH.html">EVP_KEYEXCH-ECDH(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="X25519-see-EVP_KEYEXCH-X25519-7">X25519, see <a href="../man7/EVP_KEYEXCH-X25519.html">EVP_KEYEXCH-X25519(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="X448-see-EVP_KEYEXCH-X448-7">X448, see <a href="../man7/EVP_KEYEXCH-X448.html">EVP_KEYEXCH-X448(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="ML-KEM-see-EVP_KEM-ML-KEM-7">ML-KEM, see <a href="../man7/EVP_KEM-ML-KEM.html">EVP_KEM-ML-KEM(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="TLS1-PRF">TLS1-PRF</dt>
+<dd>
+
+</dd>
+<dt id="HKDF">HKDF</dt>
+<dd>
+
+</dd>
+</dl>
+
+<h2 id="Asymmetric-Signature">Asymmetric Signature</h2>
+
+<dl>
+
+<dt id="RSA-see-EVP_SIGNATURE-RSA-7">RSA, see <a href="../man7/EVP_SIGNATURE-RSA.html">EVP_SIGNATURE-RSA(7)</a></dt>
+<dd>
+
+<p>The <b>X931</b> padding mode &quot;OSSL_PKEY_RSA_PAD_MODE_X931&quot; is no longer supported for signature generation, but may be used for verification for legacy use cases. (This is a FIPS 140-3 requirement)</p>
+
+</dd>
+<dt id="DSA-see-EVP_SIGNATURE-DSA-7">DSA, see <a href="../man7/EVP_SIGNATURE-DSA.html">EVP_SIGNATURE-DSA(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="ED25519-see-EVP_SIGNATURE-ED25519-7">ED25519, see <a href="../man7/EVP_SIGNATURE-ED25519.html">EVP_SIGNATURE-ED25519(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="ED448-see-EVP_SIGNATURE-ED448-7">ED448, see <a href="../man7/EVP_SIGNATURE-ED448.html">EVP_SIGNATURE-ED448(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="ECDSA-see-EVP_SIGNATURE-ECDSA-7">ECDSA, see <a href="../man7/EVP_SIGNATURE-ECDSA.html">EVP_SIGNATURE-ECDSA(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="ML-DSA-44-see-EVP_SIGNATURE-ML-DSA-7">ML-DSA-44, see <a href="../man7/EVP_SIGNATURE-ML-DSA.html">EVP_SIGNATURE-ML-DSA(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="ML-DSA-65-see-EVP_SIGNATURE-ML-DSA-7">ML-DSA-65, see <a href="../man7/EVP_SIGNATURE-ML-DSA.html">EVP_SIGNATURE-ML-DSA(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="ML-DSA-87-see-EVP_SIGNATURE-ML-DSA-7">ML-DSA-87, see <a href="../man7/EVP_SIGNATURE-ML-DSA.html">EVP_SIGNATURE-ML-DSA(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="SLH-DSA-see-EVP_SIGNATURE-SLH-DSA-7">SLH-DSA, see <a href="../man7/EVP_SIGNATURE-SLH-DSA.html">EVP_SIGNATURE-SLH-DSA(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="HMAC-see-EVP_SIGNATURE-HMAC-7">HMAC, see <a href="../man7/EVP_SIGNATURE-HMAC.html">EVP_SIGNATURE-HMAC(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="CMAC-see-EVP_SIGNATURE-CMAC-7">CMAC, see <a href="../man7/EVP_SIGNATURE-CMAC.html">EVP_SIGNATURE-CMAC(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="LMS-see-EVP_SIGNATURE-LMS-7">LMS, see <a href="../man7/EVP_SIGNATURE-LMS.html">EVP_SIGNATURE-LMS(7)</a></dt>
+<dd>
+
+</dd>
+</dl>
+
+<h2 id="Asymmetric-Cipher">Asymmetric Cipher</h2>
+
+<dl>
+
+<dt id="RSA-see-EVP_ASYM_CIPHER-RSA-7">RSA, see <a href="../man7/EVP_ASYM_CIPHER-RSA.html">EVP_ASYM_CIPHER-RSA(7)</a></dt>
+<dd>
+
+</dd>
+</dl>
+
+<h2 id="Asymmetric-Key-Encapsulation">Asymmetric Key Encapsulation</h2>
+
+<dl>
+
+<dt id="RSA-see-EVP_KEM-RSA-7">RSA, see <a href="../man7/EVP_KEM-RSA.html">EVP_KEM-RSA(7)</a></dt>
+<dd>
+
+</dd>
+</dl>
+
+<h2 id="Asymmetric-Key-Management">Asymmetric Key Management</h2>
+
+<dl>
+
+<dt id="DH-see-EVP_KEYMGMT-DH-7">DH, see <a href="../man7/EVP_KEYMGMT-DH.html">EVP_KEYMGMT-DH(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="DHX-see-EVP_KEYMGMT-DHX-7">DHX, see <a href="../man7/EVP_KEYMGMT-DHX.html">EVP_KEYMGMT-DHX(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="DSA-see-EVP_KEYMGMT-DSA-7">DSA, see <a href="../man7/EVP_KEYMGMT-DSA.html">EVP_KEYMGMT-DSA(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="RSA-see-EVP_KEYMGMT-RSA-7">RSA, see <a href="../man7/EVP_KEYMGMT-RSA.html">EVP_KEYMGMT-RSA(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="RSA-PSS">RSA-PSS</dt>
+<dd>
+
+</dd>
+<dt id="EC-see-EVP_KEYMGMT-EC-7">EC, see <a href="../man7/EVP_KEYMGMT-EC.html">EVP_KEYMGMT-EC(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="ED25519-see-EVP_KEYMGMT-ED25519-7">ED25519, see <a href="../man7/EVP_KEYMGMT-ED25519.html">EVP_KEYMGMT-ED25519(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="ED448-see-EVP_KEYMGMT-ED448-7">ED448, see <a href="../man7/EVP_KEYMGMT-ED448.html">EVP_KEYMGMT-ED448(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="X25519-see-EVP_KEYMGMT-X25519-7">X25519, see <a href="../man7/EVP_KEYMGMT-X25519.html">EVP_KEYMGMT-X25519(7)</a></dt>
+<dd>
+
+<p>This is an unapproved algorithm. The FIPS 140-3 IG states that &quot;Curves that are included in SP 800-186 but not included in SP 800-56Arev3 are not approved for key agreement&quot;.</p>
+
+</dd>
+<dt id="X448-see-EVP_KEYMGMT-X448-7">X448, see <a href="../man7/EVP_KEYMGMT-X448.html">EVP_KEYMGMT-X448(7)</a></dt>
+<dd>
+
+<p>This is an unapproved algorithm. The FIPS 140-3 IG states that &quot;Curves that are included in SP 800-186 but not&quot; included in SP 800-56Arev3 are not approved for key agreement&quot;.</p>
+
+</dd>
+<dt id="TLS1-PRF1">TLS1-PRF</dt>
+<dd>
+
+</dd>
+<dt id="HKDF1">HKDF</dt>
+<dd>
+
+</dd>
+<dt id="HMAC-see-EVP_KEYMGMT-HMAC-7">HMAC, see <a href="../man7/EVP_KEYMGMT-HMAC.html">EVP_KEYMGMT-HMAC(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="CMAC-see-EVP_KEYMGMT-CMAC-7">CMAC, see <a href="../man7/EVP_KEYMGMT-CMAC.html">EVP_KEYMGMT-CMAC(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="ML-DSA-44-see-EVP_KEYMGMT-ML-DSA-7">ML-DSA-44, see <a href="../man7/EVP_KEYMGMT-ML-DSA.html">EVP_KEYMGMT-ML-DSA(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="ML-DSA-65-see-EVP_KEYMGMT-ML-DSA-7">ML-DSA-65, see <a href="../man7/EVP_KEYMGMT-ML-DSA.html">EVP_KEYMGMT-ML-DSA(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="ML-DSA-87-see-EVP_KEYMGMT-ML-DSA-7">ML-DSA-87, see <a href="../man7/EVP_KEYMGMT-ML-DSA.html">EVP_KEYMGMT-ML-DSA(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="SLH-DSA-SHA2-128s-see-EVP_KEYMGMT-SLH-DSA-7">SLH-DSA-SHA2-128s, see <a href="../man7/EVP_KEYMGMT-SLH-DSA.html">EVP_KEYMGMT-SLH-DSA(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="SLH-DSA-SHA2-128f-see-EVP_KEYMGMT-SLH-DSA-7">SLH-DSA-SHA2-128f, see <a href="../man7/EVP_KEYMGMT-SLH-DSA.html">EVP_KEYMGMT-SLH-DSA(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="SLH-DSA-SHA2-192s-see-EVP_KEYMGMT-SLH-DSA-7">SLH-DSA-SHA2-192s, see <a href="../man7/EVP_KEYMGMT-SLH-DSA.html">EVP_KEYMGMT-SLH-DSA(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="SLH-DSA-SHA2-192f-see-EVP_KEYMGMT-SLH-DSA-7">SLH-DSA-SHA2-192f, see <a href="../man7/EVP_KEYMGMT-SLH-DSA.html">EVP_KEYMGMT-SLH-DSA(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="SLH-DSA-SHA2-256s-see-EVP_KEYMGMT-SLH-DSA-7">SLH-DSA-SHA2-256s, see <a href="../man7/EVP_KEYMGMT-SLH-DSA.html">EVP_KEYMGMT-SLH-DSA(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="SLH-DSA-SHA2-256f-see-EVP_KEYMGMT-SLH-DSA-7">SLH-DSA-SHA2-256f, see <a href="../man7/EVP_KEYMGMT-SLH-DSA.html">EVP_KEYMGMT-SLH-DSA(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="SLH-DSA-SHAKE-128s-see-EVP_KEYMGMT-SLH-DSA-7">SLH-DSA-SHAKE-128s, see <a href="../man7/EVP_KEYMGMT-SLH-DSA.html">EVP_KEYMGMT-SLH-DSA(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="SLH-DSA-SHAKE-128f-see-EVP_KEYMGMT-SLH-DSA-7">SLH-DSA-SHAKE-128f, see <a href="../man7/EVP_KEYMGMT-SLH-DSA.html">EVP_KEYMGMT-SLH-DSA(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="SLH-DSA-SHAKE-192s-see-EVP_KEYMGMT-SLH-DSA-7">SLH-DSA-SHAKE-192s, see <a href="../man7/EVP_KEYMGMT-SLH-DSA.html">EVP_KEYMGMT-SLH-DSA(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="SLH-DSA-SHAKE-192f-see-EVP_KEYMGMT-SLH-DSA-7">SLH-DSA-SHAKE-192f, see <a href="../man7/EVP_KEYMGMT-SLH-DSA.html">EVP_KEYMGMT-SLH-DSA(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="SLH-DSA-SHAKE-256s-see-EVP_KEYMGMT-SLH-DSA-7">SLH-DSA-SHAKE-256s, see <a href="../man7/EVP_KEYMGMT-SLH-DSA.html">EVP_KEYMGMT-SLH-DSA(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="SLH-DSA-SHAKE-256f-see-EVP_KEYMGMT-SLH-DSA-7">SLH-DSA-SHAKE-256f, see <a href="../man7/EVP_KEYMGMT-SLH-DSA.html">EVP_KEYMGMT-SLH-DSA(7)</a></dt>
+<dd>
+
+</dd>
+</dl>
+
+<h2 id="Random-Number-Generation">Random Number Generation</h2>
+
+<dl>
+
+<dt id="CRNG-TEST-see-EVP_RAND-CRNG-TEST-7">CRNG-TEST, see <a href="../man7/EVP_RAND-CRNG-TEST.html">EVP_RAND-CRNG-TEST(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="CTR-DRBG-see-EVP_RAND-CTR-DRBG-7">CTR-DRBG, see <a href="../man7/EVP_RAND-CTR-DRBG.html">EVP_RAND-CTR-DRBG(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="HASH-DRBG-see-EVP_RAND-HASH-DRBG-7">HASH-DRBG, see <a href="../man7/EVP_RAND-HASH-DRBG.html">EVP_RAND-HASH-DRBG(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="HMAC-DRBG-see-EVP_RAND-HMAC-DRBG-7">HMAC-DRBG, see <a href="../man7/EVP_RAND-HMAC-DRBG.html">EVP_RAND-HMAC-DRBG(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="TEST-RAND-see-EVP_RAND-TEST-RAND-7">TEST-RAND, see <a href="../man7/EVP_RAND-TEST-RAND.html">EVP_RAND-TEST-RAND(7)</a></dt>
+<dd>
+
+<p>TEST-RAND is an unapproved algorithm.</p>
+
+</dd>
+</dl>
+
+<h1 id="SELF-TESTING">SELF TESTING</h1>
+
+<p>A requirement of FIPS modules is to run cryptographic algorithm self tests. FIPS 140-3 requires known answer tests to be run on startup as well as conditional tests that run during cryptographic operations.</p>
+
+<p>An optional callback mechanism is available to return information to the user using <a href="../man3/OSSL_SELF_TEST_set_callback.html">OSSL_SELF_TEST_set_callback(3)</a>.</p>
+
+<p>The parameters passed to the callback are described in <a href="../man3/OSSL_SELF_TEST_new.html">OSSL_SELF_TEST_new(3)</a></p>
+
+<p>The OpenSSL FIPS module uses the following mechanism to provide information about the self tests as they run. This is useful for debugging if a self test is failing. The callback also allows forcing any self test to fail, in order to check that it operates correctly on failure. Note that all self tests run even if a self test failure occurs.</p>
+
+<p>The FIPS module passes the following type(s) to OSSL_SELF_TEST_onbegin().</p>
+
+<dl>
+
+<dt id="Module_Integrity-OSSL_SELF_TEST_TYPE_MODULE_INTEGRITY">&quot;Module_Integrity&quot; (<b>OSSL_SELF_TEST_TYPE_MODULE_INTEGRITY</b>)</dt>
+<dd>
+
+<p>Uses HMAC SHA256 on the module file to validate that the module has not been modified. The integrity value is compared to a value written to a configuration file during installation.</p>
+
+</dd>
+<dt id="KAT_Integrity-OSSL_SELF_TEST_TYPE_KAT_INTEGRITY">&quot;KAT_Integrity&quot; (<b>OSSL_SELF_TEST_TYPE_KAT_INTEGRITY</b>)</dt>
+<dd>
+
+<p>Used during the Module Integrity test to perform a known answer test on HMAC SHA256 prior to using it.</p>
+
+</dd>
+<dt id="KAT_Cipher-OSSL_SELF_TEST_TYPE_KAT_CIPHER">&quot;KAT_Cipher&quot; (<b>OSSL_SELF_TEST_TYPE_KAT_CIPHER</b>)</dt>
+<dd>
+
+<p>Known answer test for a symmetric cipher.</p>
+
+</dd>
+<dt id="KAT_AsymmetricCipher-OSSL_SELF_TEST_TYPE_KAT_ASYM_CIPHER">&quot;KAT_AsymmetricCipher&quot; (<b>OSSL_SELF_TEST_TYPE_KAT_ASYM_CIPHER</b>)</dt>
+<dd>
+
+<p>Known answer test for a asymmetric cipher.</p>
+
+</dd>
+<dt id="KAT_Digest-OSSL_SELF_TEST_TYPE_KAT_DIGEST">&quot;KAT_Digest&quot; (<b>OSSL_SELF_TEST_TYPE_KAT_DIGEST</b>)</dt>
+<dd>
+
+<p>Known answer test for a digest.</p>
+
+</dd>
+<dt id="KAT_AsymmetricKeyGeneration-OSSL_SELF_TEST_TYPE_KAT_ASYM_KEYGEN">&quot;KAT_AsymmetricKeyGeneration&quot; (<b>OSSL_SELF_TEST_TYPE_KAT_ASYM_KEYGEN</b>)</dt>
+<dd>
+
+<p>Known answer test for asymmetric key generation.</p>
+
+</dd>
+<dt id="KAT_Signature-OSSL_SELF_TEST_TYPE_KAT_SIGNATURE">&quot;KAT_Signature&quot; (<b>OSSL_SELF_TEST_TYPE_KAT_SIGNATURE</b>)</dt>
+<dd>
+
+<p>Known answer test for a signature.</p>
+
+</dd>
+<dt id="PCT_Signature-OSSL_SELF_TEST_TYPE_PCT_SIGNATURE">&quot;PCT_Signature&quot; (<b>OSSL_SELF_TEST_TYPE_PCT_SIGNATURE</b>)</dt>
+<dd>
+
+<p>Pairwise Consistency check for a signature.</p>
+
+</dd>
+<dt id="KAT_KDF-OSSL_SELF_TEST_TYPE_KAT_KDF">&quot;KAT_KDF&quot; (<b>OSSL_SELF_TEST_TYPE_KAT_KDF</b>)</dt>
+<dd>
+
+<p>Known answer test for a key derivation function.</p>
+
+</dd>
+<dt id="KAT_KA-OSSL_SELF_TEST_TYPE_KAT_KA">&quot;KAT_KA&quot; (<b>OSSL_SELF_TEST_TYPE_KAT_KA</b>)</dt>
+<dd>
+
+<p>Known answer test for key agreement.</p>
+
+</dd>
+<dt id="KAT_KEM-OSSL_SELF_TEST_TYPE_KAT_KEM">&quot;KAT_KEM&quot; (<b>OSSL_SELF_TEST_TYPE_KAT_KEM</b>)</dt>
+<dd>
+
+<p>Known answer test for key encapsulation.</p>
+
+</dd>
+<dt id="DRBG-OSSL_SELF_TEST_TYPE_DRBG">&quot;DRBG&quot; (<b>OSSL_SELF_TEST_TYPE_DRBG</b>)</dt>
+<dd>
+
+<p>Known answer test for a Deterministic Random Bit Generator.</p>
+
+</dd>
+<dt id="Conditional_PCT-OSSL_SELF_TEST_TYPE_PCT">&quot;Conditional_PCT&quot; (<b>OSSL_SELF_TEST_TYPE_PCT</b>)</dt>
+<dd>
+
+<p>Conditional test that is run during the generation of key pairs.</p>
+
+</dd>
+<dt id="Import_PCT-OSSL_SELF_TEST_TYPE_PCT_IMPORT">&quot;Import_PCT&quot; (<b>OSSL_SELF_TEST_TYPE_PCT_IMPORT</b>)</dt>
+<dd>
+
+<p>Conditional test that is run during the import of key pairs.</p>
+
+</dd>
+<dt id="Conditional_KAT-OSSL_SELF_TEST_TYPE_PCT_KAT">&quot;Conditional_KAT&quot; (<b>OSSL_SELF_TEST_TYPE_PCT_KAT</b>)</dt>
+<dd>
+
+<p>Conditional test run during generation that derive the public key from the private key and checks that the public key matches. This is a SP 800-56A requirement.</p>
+
+</dd>
+<dt id="Continuous_RNG_Test-OSSL_SELF_TEST_TYPE_CRNG">&quot;Continuous_RNG_Test&quot; (<b>OSSL_SELF_TEST_TYPE_CRNG</b>)</dt>
+<dd>
+
+<p>Continuous random number generator test.</p>
+
+</dd>
+<dt id="Install_Integrity-OSSL_SELF_TEST_TYPE_INSTALL_INTEGRITY">&quot;Install_Integrity&quot; (<b>OSSL_SELF_TEST_TYPE_INSTALL_INTEGRITY</b>)</dt>
+<dd>
+
+<p>This is deprecated. The option is no longer used since FIPS 140-3 requires self tests to always run on startup. Previous FIPS 140-2 validations allowed the self tests to be run just once.</p>
+
+</dd>
+</dl>
+
+<p>The FIPS module passes the following descriptions(s) to OSSL_SELF_TEST_onbegin().</p>
+
+<dl>
+
+<dt id="HMAC-OSSL_SELF_TEST_DESC_INTEGRITY_HMAC">&quot;HMAC&quot; (<b>OSSL_SELF_TEST_DESC_INTEGRITY_HMAC</b>)</dt>
+<dd>
+
+<p>&quot;Module_Integrity&quot; uses this.</p>
+
+</dd>
+<dt id="RSA-OSSL_SELF_TEST_DESC_PCT_RSA_PKCS1">&quot;RSA&quot; (<b>OSSL_SELF_TEST_DESC_PCT_RSA_PKCS1</b>)</dt>
+<dd>
+
+</dd>
+<dt id="RSA-OSSL_SELF_TEST_DESC_PCT_RSA">&quot;RSA&quot; (<b>OSSL_SELF_TEST_DESC_PCT_RSA</b>)</dt>
+<dd>
+
+</dd>
+<dt id="ECDSA-OSSL_SELF_TEST_DESC_PCT_ECDSA">&quot;ECDSA&quot; (<b>OSSL_SELF_TEST_DESC_PCT_ECDSA</b>)</dt>
+<dd>
+
+</dd>
+<dt id="EDDSA-OSSL_SELF_TEST_DESC_PCT_EDDSA">&quot;EDDSA&quot; (<b>OSSL_SELF_TEST_DESC_PCT_EDDSA</b>)</dt>
+<dd>
+
+</dd>
+<dt id="DSA-OSSL_SELF_TEST_DESC_PCT_DSA">&quot;DSA&quot; (<b>OSSL_SELF_TEST_DESC_PCT_DSA</b>)</dt>
+<dd>
+
+</dd>
+<dt id="ML-DSA-OSSL_SELF_TEST_DESC_PCT_ML_DSA">&quot;ML-DSA&quot; (<b>OSSL_SELF_TEST_DESC_PCT_ML_DSA</b>)</dt>
+<dd>
+
+</dd>
+<dt id="ML-KEM-OSSL_SELF_TEST_DESC_PCT_ML_KEM">&quot;ML-KEM&quot; (<b>OSSL_SELF_TEST_DESC_PCT_ML_KEM</b>)</dt>
+<dd>
+
+</dd>
+<dt id="SLH-DSA-OSSL_SELF_TEST_DESC_PCT_SLH_DSA">&quot;SLH-DSA&quot; (<b>OSSL_SELF_TEST_DESC_PCT_SLH_DSA</b>)</dt>
+<dd>
+
+<p>Key generation tests used with the &quot;Pairwise_Consistency_Test&quot; type.</p>
+
+</dd>
+<dt id="RSA_Encrypt-OSSL_SELF_TEST_DESC_ASYM_RSA_ENC">&quot;RSA_Encrypt&quot; (<b>OSSL_SELF_TEST_DESC_ASYM_RSA_ENC</b>)</dt>
+<dd>
+
+</dd>
+<dt id="RSA_Decrypt-OSSL_SELF_TEST_DESC_ASYM_RSA_DEC">&quot;RSA_Decrypt&quot; (<b>OSSL_SELF_TEST_DESC_ASYM_RSA_DEC</b>)</dt>
+<dd>
+
+<p>&quot;KAT_AsymmetricCipher&quot; uses this to indicate an encrypt or decrypt KAT.</p>
+
+</dd>
+<dt id="ML-DSA-OSSL_SELF_TEST_DESC_KEYGEN_ML_DSA">&quot;ML-DSA&quot; (<b>OSSL_SELF_TEST_DESC_KEYGEN_ML_DSA</b>)</dt>
+<dd>
+
+</dd>
+<dt id="ML-KEM-OSSL_SELF_TEST_DESC_KEYGEN_ML_KEM">&quot;ML-KEM&quot; (<b>OSSL_SELF_TEST_DESC_KEYGEN_ML_KEM</b>)</dt>
+<dd>
+
+</dd>
+<dt id="SLH-DSA-OSSL_SELF_TEST_DESC_KEYGEN_SLH_DSA">&quot;SLH-DSA&quot; (<b>OSSL_SELF_TEST_DESC_KEYGEN_SLH_DSA</b>)</dt>
+<dd>
+
+<p>&quot;KAT_AsymmetricKeyGeneration&quot; uses this to indicate a key generation KAT.</p>
+
+</dd>
+<dt id="AES_GCM-OSSL_SELF_TEST_DESC_CIPHER_AES_GCM">&quot;AES_GCM&quot; (<b>OSSL_SELF_TEST_DESC_CIPHER_AES_GCM</b>)</dt>
+<dd>
+
+</dd>
+<dt id="AES_ECB_Decrypt-OSSL_SELF_TEST_DESC_CIPHER_AES_ECB">&quot;AES_ECB_Decrypt&quot; (<b>OSSL_SELF_TEST_DESC_CIPHER_AES_ECB</b>)</dt>
+<dd>
+
+</dd>
+<dt id="TDES-OSSL_SELF_TEST_DESC_CIPHER_TDES">&quot;TDES&quot; (<b>OSSL_SELF_TEST_DESC_CIPHER_TDES</b>)</dt>
+<dd>
+
+<p>Symmetric cipher tests used with the &quot;KAT_Cipher&quot; type.</p>
+
+</dd>
+<dt id="SHA1-OSSL_SELF_TEST_DESC_MD_SHA1">&quot;SHA1&quot; (<b>OSSL_SELF_TEST_DESC_MD_SHA1</b>)</dt>
+<dd>
+
+</dd>
+<dt id="SHA2-OSSL_SELF_TEST_DESC_MD_SHA2">&quot;SHA2&quot; (<b>OSSL_SELF_TEST_DESC_MD_SHA2</b>)</dt>
+<dd>
+
+</dd>
+<dt id="SHA3-OSSL_SELF_TEST_DESC_MD_SHA3">&quot;SHA3&quot; (<b>OSSL_SELF_TEST_DESC_MD_SHA3</b>)</dt>
+<dd>
+
+<p>Digest tests used with the &quot;KAT_Digest&quot; type.</p>
+
+</dd>
+<dt id="DSA-OSSL_SELF_TEST_DESC_SIGN_DSA">&quot;DSA&quot; (<b>OSSL_SELF_TEST_DESC_SIGN_DSA</b>)</dt>
+<dd>
+
+</dd>
+<dt id="RSA-OSSL_SELF_TEST_DESC_SIGN_RSA">&quot;RSA&quot; (<b>OSSL_SELF_TEST_DESC_SIGN_RSA</b>)</dt>
+<dd>
+
+</dd>
+<dt id="ECDSA-OSSL_SELF_TEST_DESC_SIGN_ECDSA">&quot;ECDSA&quot; (<b>OSSL_SELF_TEST_DESC_SIGN_ECDSA</b>)</dt>
+<dd>
+
+</dd>
+<dt id="DetECDSA-OSSL_SELF_TEST_DESC_SIGN_DetECDSA">&quot;DetECDSA&quot; (<b>OSSL_SELF_TEST_DESC_SIGN_DetECDSA</b>)</dt>
+<dd>
+
+</dd>
+<dt id="EDDSA-OSSL_SELF_TEST_DESC_SIGN_EDDSA">&quot;EDDSA&quot; (<b>OSSL_SELF_TEST_DESC_SIGN_EDDSA</b>)</dt>
+<dd>
+
+</dd>
+<dt id="LMS-OSSL_SELF_TEST_DESC_SIGN_LMS">&quot;LMS&quot; (<b>OSSL_SELF_TEST_DESC_SIGN_LMS</b>)</dt>
+<dd>
+
+</dd>
+<dt id="ML-DSA-OSSL_SELF_TEST_DESC_SIGN_ML_DSA">&quot;ML-DSA&quot; (<b>OSSL_SELF_TEST_DESC_SIGN_ML_DSA</b>)</dt>
+<dd>
+
+</dd>
+<dt id="SLH-DSA-OSSL_SELF_TEST_DESC_SIGN_SLH_DSA">&quot;SLH-DSA&quot; (<b>OSSL_SELF_TEST_DESC_SIGN_SLH_DSA</b>)</dt>
+<dd>
+
+<p>Signature tests used with the &quot;KAT_Signature&quot; type.</p>
+
+</dd>
+<dt id="ECDH-OSSL_SELF_TEST_DESC_KA_ECDH">&quot;ECDH&quot; (<b>OSSL_SELF_TEST_DESC_KA_ECDH</b>)</dt>
+<dd>
+
+</dd>
+<dt id="DH-OSSL_SELF_TEST_DESC_KA_DH">&quot;DH&quot; (<b>OSSL_SELF_TEST_DESC_KA_DH</b>)</dt>
+<dd>
+
+<p>Key agreement tests used with the &quot;KAT_KA&quot; type.</p>
+
+</dd>
+<dt id="HKDF-OSSL_SELF_TEST_DESC_KDF_HKDF">&quot;HKDF&quot; (<b>OSSL_SELF_TEST_DESC_KDF_HKDF</b>)</dt>
+<dd>
+
+</dd>
+<dt id="TLS13_KDF_EXTRACT-OSSL_SELF_TEST_DESC_KDF_TLS13_EXTRACT">&quot;TLS13_KDF_EXTRACT&quot; (<b>OSSL_SELF_TEST_DESC_KDF_TLS13_EXTRACT</b>)</dt>
+<dd>
+
+</dd>
+<dt id="TLS13_KDF_EXPAND-OSSL_SELF_TEST_DESC_KDF_TLS13_EXPAND">&quot;TLS13_KDF_EXPAND&quot; (<b>OSSL_SELF_TEST_DESC_KDF_TLS13_EXPAND</b>)</dt>
+<dd>
+
+</dd>
+<dt id="SSKDF-OSSL_SELF_TEST_DESC_KDF_SSKDF">&quot;SSKDF&quot; (<b>OSSL_SELF_TEST_DESC_KDF_SSKDF</b>)</dt>
+<dd>
+
+</dd>
+<dt id="X963KDF-OSSL_SELF_TEST_DESC_KDF_X963KDF">&quot;X963KDF&quot; (<b>OSSL_SELF_TEST_DESC_KDF_X963KDF</b>)</dt>
+<dd>
+
+</dd>
+<dt id="X942KDF-OSSL_SELF_TEST_DESC_KDF_X942KDF">&quot;X942KDF&quot; (<b>OSSL_SELF_TEST_DESC_KDF_X942KDF</b>)</dt>
+<dd>
+
+</dd>
+<dt id="PBKDF2-OSSL_SELF_TEST_DESC_KDF_PBKDF2">&quot;PBKDF2&quot; (<b>OSSL_SELF_TEST_DESC_KDF_PBKDF2</b>)</dt>
+<dd>
+
+</dd>
+<dt id="SSHKDF-OSSL_SELF_TEST_DESC_KDF_SSHKDF">&quot;SSHKDF&quot; (<b>OSSL_SELF_TEST_DESC_KDF_SSHKDF</b>)</dt>
+<dd>
+
+</dd>
+<dt id="TLS12_PRF-OSSL_SELF_TEST_DESC_KDF_TLS12_PRF">&quot;TLS12_PRF&quot; (<b>OSSL_SELF_TEST_DESC_KDF_TLS12_PRF</b>)</dt>
+<dd>
+
+</dd>
+<dt id="KBKDF-OSSL_SELF_TEST_DESC_KDF_KBKDF">&quot;KBKDF&quot; (<b>OSSL_SELF_TEST_DESC_KDF_KBKDF</b>)</dt>
+<dd>
+
+<p>Key Encapsulation Function tests used with the &quot;KAT_KEM&quot; type.</p>
+
+</dd>
+<dt id="KEM_Encap-OSSL_SELF_TEST_DESC_ENCAP_KEM">&quot;KEM_Encap&quot; (<b>OSSL_SELF_TEST_DESC_ENCAP_KEM</b>)</dt>
+<dd>
+
+</dd>
+<dt id="KEM_Decap-OSSL_SELF_TEST_DESC_DECAP_KEM">&quot;KEM_Decap&quot; (<b>OSSL_SELF_TEST_DESC_DECAP_KEM</b>)</dt>
+<dd>
+
+</dd>
+<dt id="KEM_Decap_Reject-OSSL_SELF_TEST_DESC_DECAP_REJ_KEM">&quot;KEM_Decap_Reject&quot; (<b>OSSL_SELF_TEST_DESC_DECAP_REJ_KEM</b>)</dt>
+<dd>
+
+<p>Key Derivation Function tests used with the &quot;KAT_KDF&quot; type.</p>
+
+</dd>
+<dt id="CTR-OSSL_SELF_TEST_DESC_DRBG_CTR">&quot;CTR&quot; (<b>OSSL_SELF_TEST_DESC_DRBG_CTR</b>)</dt>
+<dd>
+
+</dd>
+<dt id="HASH-OSSL_SELF_TEST_DESC_DRBG_HASH">&quot;HASH&quot; (<b>OSSL_SELF_TEST_DESC_DRBG_HASH</b>)</dt>
+<dd>
+
+</dd>
+<dt id="HMAC-OSSL_SELF_TEST_DESC_DRBG_HMAC">&quot;HMAC&quot; (<b>OSSL_SELF_TEST_DESC_DRBG_HMAC</b>)</dt>
+<dd>
+
+<p>DRBG tests used with the &quot;DRBG&quot; type.</p>
+
+</dd>
+<dt id="RNG-OSSL_SELF_TEST_DESC_RNG">&quot;RNG&quot; (<b>OSSL_SELF_TEST_DESC_RNG</b>)</dt>
+<dd>
+
+<p>&quot;Continuous_RNG_Test&quot; uses this.</p>
+
+</dd>
+</dl>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>A simple self test callback is shown below for illustrative purposes.</p>
+
+<pre><code>#include &lt;openssl/self_test.h&gt;
+
+static OSSL_CALLBACK self_test_cb;
+
+static int self_test_cb(const OSSL_PARAM params[], void *arg)
+{
+  int ret = 0;
+  const OSSL_PARAM *p = NULL;
+  const char *phase = NULL, *type = NULL, *desc = NULL;
+
+  p = OSSL_PARAM_locate_const(params, OSSL_PROV_PARAM_SELF_TEST_PHASE);
+  if (p == NULL || p-&gt;data_type != OSSL_PARAM_UTF8_STRING)
+      goto err;
+  phase = (const char *)p-&gt;data;
+
+  p = OSSL_PARAM_locate_const(params, OSSL_PROV_PARAM_SELF_TEST_DESC);
+  if (p == NULL || p-&gt;data_type != OSSL_PARAM_UTF8_STRING)
+      goto err;
+  desc = (const char *)p-&gt;data;
+
+  p = OSSL_PARAM_locate_const(params, OSSL_PROV_PARAM_SELF_TEST_TYPE);
+  if (p == NULL || p-&gt;data_type != OSSL_PARAM_UTF8_STRING)
+      goto err;
+  type = (const char *)p-&gt;data;
+
+  /* Do some logging */
+  if (strcmp(phase, OSSL_SELF_TEST_PHASE_START) == 0)
+      BIO_printf(bio_out, &quot;%s : (%s) : &quot;, desc, type);
+  if (strcmp(phase, OSSL_SELF_TEST_PHASE_PASS) == 0
+          || strcmp(phase, OSSL_SELF_TEST_PHASE_FAIL) == 0)
+      BIO_printf(bio_out, &quot;%s\n&quot;, phase);
+
+  /* Corrupt the SHA1 self test during the &#39;corrupt&#39; phase by returning 0 */
+  if (strcmp(phase, OSSL_SELF_TEST_PHASE_CORRUPT) == 0
+          &amp;&amp; strcmp(desc, OSSL_SELF_TEST_DESC_MD_SHA1) == 0) {
+      BIO_printf(bio_out, &quot;%s %s&quot;, phase, desc);
+      return 0;
+  }
+  ret = 1;
+err:
+  return ret;
+}</code></pre>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>Some released versions of OpenSSL do not include a validated FIPS provider. To determine which versions have undergone the validation process, please refer to the <a href="https://www.openssl.org/source/">OpenSSL Downloads page</a>. If you require FIPS-approved functionality, it is essential to build your FIPS provider using one of the validated versions listed there. Normally, it is possible to utilize a FIPS provider constructed from one of the validated versions alongside <i>libcrypto</i> and <i>libssl</i> compiled from any release within the same major release series. This flexibility enables you to address bug fixes and CVEs that fall outside the FIPS boundary.</p>
+
+<p>You can load the FIPS provider into multiple library contexts as any other provider. However the following restriction applies. The FIPS provider cannot be used by multiple copies of OpenSSL libcrypto in a single process.</p>
+
+<p>As the provider saves core callbacks to the libcrypto obtained in the OSSL_provider_init() call to global data it will fail if subsequent invocations of its OSSL_provider_init() function yield different addresses of these callbacks than in the initial call. This happens when different copies of libcrypto are present in the memory of the process and both try to load the same FIPS provider. A workaround is to have a different copy of the FIPS provider loaded for each of the libcrypto instances in the process.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man1/openssl-fipsinstall.html">openssl-fipsinstall(1)</a>, <a href="../man5/fips_config.html">fips_config(5)</a>, <a href="../man3/OSSL_SELF_TEST_set_callback.html">OSSL_SELF_TEST_set_callback(3)</a>, <a href="../man3/OSSL_SELF_TEST_new.html">OSSL_SELF_TEST_new(3)</a>, <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a>, <a href="../man7/openssl-core.h.html">openssl-core.h(7)</a>, <a href="../man7/openssl-core_dispatch.h.html">openssl-core_dispatch.h(7)</a>, <a href="../man7/provider.html">provider(7)</a>, <a href="https://www.openssl.org/source/">https://www.openssl.org/source/</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The HKDF-SHA256, HKDF-SHA384 and HKDF-SHA512 algorithms were added in OpenSSL 3.6.</p>
+
+<p>All other functionality was added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2019-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

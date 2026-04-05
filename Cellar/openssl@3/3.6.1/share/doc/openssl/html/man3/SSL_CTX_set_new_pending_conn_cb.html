@@ -1,0 +1,78 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_CTX_set_new_pending_conn_cb</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_CTX_set_new_pending_conn_cb, SSL_set_new_pending_conn_cb_fn - callback function to report creation of QUIC connection SSL objects</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>typedef int (*SSL_set_new_pending_conn_cb_fn)(SSL_CTX *c, SSL *new_ssl,
+                                              void *arg);
+void SSL_CTX_set_new_pending_conn_cb(SSL_CTX *c,
+                                    SSL_set_new_pending_conn_cb_fn *f,
+                                    void *arg);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_CTX_set_new_pending_conn_cb() sets the new_pending_conn callback function and associated application data argument <i>arg</i>. When using the QUIC transport, TLS handshake processing may occur independently from the thread which accepts the connection that the handshake is establishing. As such, <b>SSL</b> objects representing the connection may be allocated and initialized prior to a call to SSL_accept_connection(). This registered callback may be used to decorate the preallocated <b>SSL</b> object or create other associations with its parent <b>SSL</b> prior to a call to SSL_accept_connection().</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_CTX_set_new_pending_conn_cb() returns no value.</p>
+
+<p>SSL_set_new_pending_conn_cb_fn() returns an integer value. A return value of 0 indicates that the QUIC stack must discard this newly created <b>SSL</b> object, implying that the associated new connection will not be available for handling on a subsequent call to SSL_accept_connection(). A nonzero return value is treated as success, allowing the new connection to be enqueued to the accept queue.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/SSL_set_ex_data.html">SSL_set_ex_data(3)</a></p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>Callbacks in QUIC connections have some limitations to them that should be taken into consideration when writing an application.</p>
+
+<ul>
+
+<p>QUIC connections may begin processing prior to when an application calls SSL_accept_connection() on them. As such, it may occur that callbacks are delivered to applications&#39; registered TLS callbacks prior to those SSL objects being returned in SSL_accept_connection(). Applications should expect this possibility.</p>
+
+<p>In particular no references should be held on SSL objects passed to callbacks for QUIC connections until such time as they are returned through a call to SSL_accept_connection.</p>
+
+</ul>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>SSL_CTX_set_new_pending_conn_cb() was added in OpenSSL 3.5</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

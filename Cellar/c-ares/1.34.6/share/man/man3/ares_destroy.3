@@ -1,0 +1,29 @@
+.\"
+.\" Copyright 1998 by the Massachusetts Institute of Technology.
+.\" SPDX-License-Identifier: MIT
+.\"
+.TH ARES_DESTROY 3 "7 December 2004"
+.SH NAME
+ares_destroy \- Destroy a resolver channel
+.SH SYNOPSIS
+.nf
+#include <ares.h>
+
+void ares_destroy(ares_channel_t *\fIchannel\fP)
+.fi
+.SH DESCRIPTION
+The \fBares_destroy(3)\fP function destroys the name service channel
+identified by \fIchannel\fP, freeing all memory and closing all sockets used
+by the channel.
+
+\fBares_destroy(3)\fP invokes the callbacks for each pending query on the
+channel, passing a status of \fIARES_EDESTRUCTION\fP. These calls give the
+callbacks a chance to clean up any state which might have been stored in their
+arguments. A callback must not add new requests to a channel being destroyed.
+
+There is no ability to make this function thread-safe.  No additional calls
+using this channel may be made once this function is called.
+.SH SEE ALSO
+.BR ares_init (3),
+.BR ares_cancel (3),
+.BR ares_threadsafety (3)

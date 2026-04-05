@@ -1,0 +1,120 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>BN_bn2bin</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>BN_bn2binpad, BN_signed_bn2bin, BN_bn2bin, BN_bin2bn, BN_signed_bin2bn, BN_bn2lebinpad, BN_signed_bn2lebin, BN_lebin2bn, BN_signed_lebin2bn, BN_bn2nativepad, BN_signed_bn2native, BN_native2bn, BN_signed_native2bn, BN_bn2hex, BN_bn2dec, BN_hex2bn, BN_dec2bn, BN_print, BN_print_fp, BN_bn2mpi, BN_mpi2bn - format conversions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/bn.h&gt;
+
+int BN_bn2bin(const BIGNUM *a, unsigned char *to);
+int BN_bn2binpad(const BIGNUM *a, unsigned char *to, int tolen);
+int BN_signed_bn2bin(const BIGNUM *a, unsigned char *to, int tolen);
+BIGNUM *BN_bin2bn(const unsigned char *s, int len, BIGNUM *ret);
+BIGNUM *BN_signed_bin2bn(const unsigned char *s, int len, BIGNUM *ret);
+
+int BN_bn2lebinpad(const BIGNUM *a, unsigned char *to, int tolen);
+int BN_signed_bn2lebin(const BIGNUM *a, unsigned char *to, int tolen);
+BIGNUM *BN_lebin2bn(const unsigned char *s, int len, BIGNUM *ret);
+BIGNUM *BN_signed_lebin2bn(const unsigned char *s, int len, BIGNUM *ret);
+
+int BN_bn2nativepad(const BIGNUM *a, unsigned char *to, int tolen);
+int BN_signed_bn2native(const BIGNUM *a, unsigned char *to, int tolen);
+BIGNUM *BN_native2bn(const unsigned char *s, int len, BIGNUM *ret);
+BIGNUM *BN_signed_native2bn(const unsigned char *s, int len, BIGNUM *ret);
+
+char *BN_bn2hex(const BIGNUM *a);
+char *BN_bn2dec(const BIGNUM *a);
+int BN_hex2bn(BIGNUM **a, const char *str);
+int BN_dec2bn(BIGNUM **a, const char *str);
+
+int BN_print(BIO *fp, const BIGNUM *a);
+int BN_print_fp(FILE *fp, const BIGNUM *a);
+
+int BN_bn2mpi(const BIGNUM *a, unsigned char *to);
+BIGNUM *BN_mpi2bn(unsigned char *s, int len, BIGNUM *ret);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>BN_bn2bin() converts the absolute value of <b>a</b> into big-endian form and stores it at <b>to</b>. <b>to</b> must point to BN_num_bytes(<b>a</b>) bytes of memory. <b>a</b> and <b>to</b> <b>MUST NOT</b> be NULL.</p>
+
+<p>BN_bn2binpad() also converts the absolute value of <b>a</b> into big-endian form and stores it at <b>to</b>. <b>tolen</b> indicates the length of the output buffer <b>to</b>. The result is padded with zeros if necessary. If <b>tolen</b> is less than BN_num_bytes(<b>a</b>) an error is returned.</p>
+
+<p>BN_signed_bn2bin() converts the value of <b>a</b> into big-endian signed 2&#39;s complements form and stores it at <b>to</b>. <b>tolen</b> indicates the length of the output buffer <b>to</b>. The result is signed extended (padded with 0x00 for positive numbers or with 0xff for negative numbers) if necessary. If <b>tolen</b> is smaller than the necessary size (which may be <code>&lt;BN_num_bytes(<b>a</b>) + 1</code>&gt;), an error is returned.</p>
+
+<p>BN_bin2bn() converts the positive integer in big-endian form of length <b>len</b> at <b>s</b> into a <b>BIGNUM</b> and places it in <b>ret</b>. If <b>ret</b> is NULL, a new <b>BIGNUM</b> is created. <b>s</b> <b>MUST NOT</b> be NULL.</p>
+
+<p>BN_signed_bin2bn() converts the integer in big-endian signed 2&#39;s complement form of length <b>len</b> at <b>s</b> into a <b>BIGNUM</b> and places it in <b>ret</b>. If <b>ret</b> is NULL, a new <b>BIGNUM</b> is created.</p>
+
+<p>BN_bn2lebinpad(), BN_signed_bn2lebin() and BN_lebin2bn() are identical to BN_bn2binpad(), BN_signed_bn2bin() and BN_bin2bn() except the buffer is in little-endian format.</p>
+
+<p>BN_bn2nativepad(), BN_signed_bn2native() and BN_native2bn() are identical to BN_bn2binpad(), BN_signed_bn2bin() and BN_bin2bn() except the buffer is in native format, i.e. most significant byte first on big-endian platforms, and least significant byte first on little-endian platforms.</p>
+
+<p>BN_bn2hex() and BN_bn2dec() return printable strings containing the hexadecimal and decimal encoding of <b>a</b> respectively. For negative numbers, the string is prefaced with a leading &#39;-&#39;. The string must be freed later using OPENSSL_free().</p>
+
+<p>BN_hex2bn() takes as many characters as possible from the string <b>str</b>, including the leading character &#39;-&#39; which means negative, to form a valid hexadecimal number representation and converts them to a <b>BIGNUM</b> and stores it in **<b>a</b>. If *<b>a</b> is NULL, a new <b>BIGNUM</b> is created. If <b>a</b> is NULL, it only computes the length of valid representation. A &quot;negative zero&quot; is converted to zero. BN_dec2bn() is the same using the decimal system.</p>
+
+<p>BN_print() and BN_print_fp() write the hexadecimal encoding of <b>a</b>, with a leading &#39;-&#39; for negative numbers, to the <b>BIO</b> or <b>FILE</b> <b>fp</b>.</p>
+
+<p>BN_bn2mpi() and BN_mpi2bn() convert <b>BIGNUM</b>s from and to a format that consists of the number&#39;s length in bytes represented as a 4-byte big-endian number, and the number itself in big-endian format, where the most significant bit signals a negative number (the representation of numbers with the MSB set is prefixed with null byte).</p>
+
+<p>BN_bn2mpi() stores the representation of <b>a</b> at <b>to</b>, where <b>to</b> must be large enough to hold the result. The size can be determined by calling BN_bn2mpi(<b>a</b>, NULL).</p>
+
+<p>BN_mpi2bn() converts the <b>len</b> bytes long representation at <b>s</b> to a <b>BIGNUM</b> and stores it at <b>ret</b>, or in a newly allocated <b>BIGNUM</b> if <b>ret</b> is NULL.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>BN_bn2bin() returns the length of the big-endian number placed at <b>to</b>. BN_bin2bn() returns the <b>BIGNUM</b>, NULL on error.</p>
+
+<p>BN_bn2binpad(), BN_signed_bn2bin(), BN_bn2lebinpad(), BN_signed_bn2lebin(), BN_bn2nativepad(), and_signed BN_bn2native() return the number of bytes written or -1 if the supplied buffer is too small.</p>
+
+<p>BN_bn2hex() and BN_bn2dec() return a NUL-terminated string, or NULL on error. BN_hex2bn() and BN_dec2bn() return the number of characters used in parsing, or 0 on error, in which case no new <b>BIGNUM</b> will be created.</p>
+
+<p>BN_print_fp() and BN_print() return 1 on success, 0 on write errors.</p>
+
+<p>BN_bn2mpi() returns the length of the representation. BN_mpi2bn() returns the <b>BIGNUM</b>, and NULL on error.</p>
+
+<p>The error codes can be obtained by <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>, <a href="../man3/BN_zero.html">BN_zero(3)</a>, <a href="../man3/ASN1_INTEGER_to_BN.html">ASN1_INTEGER_to_BN(3)</a>, <a href="../man3/BN_num_bytes.html">BN_num_bytes(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The functions BN_signed_bin2bn(), BN_signed_bn2bin(), BN_signed_lebin2bn(), BN_signed_bn2lebin(), BN_signed_native2bn(), BN_signed_bn2native() were added in OpenSSL 3.2.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

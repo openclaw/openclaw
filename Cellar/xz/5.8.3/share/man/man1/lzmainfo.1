@@ -1,0 +1,58 @@
+.\" SPDX-License-Identifier: 0BSD
+.\"
+.\" Author: Lasse Collin
+.\"
+.TH LZMAINFO 1 "2013-06-30" "Tukaani" "XZ Utils"
+.SH NAME
+lzmainfo \- show information stored in the .lzma file header
+.SH SYNOPSIS
+.B lzmainfo
+.RB [ \-\-help ]
+.RB [ \-\-version ]
+.RI [ file... ]
+.SH DESCRIPTION
+.B lzmainfo
+shows information stored in the
+.B .lzma
+file header.
+It reads the first 13 bytes from the specified
+.IR file ,
+decodes the header, and prints it to standard output in human
+readable format.
+If no
+.I files
+are given or
+.I file
+is
+.BR \- ,
+standard input is read.
+.PP
+Usually the most interesting information is
+the uncompressed size and the dictionary size.
+Uncompressed size can be shown only if
+the file is in the non-streamed
+.B .lzma
+format variant.
+The amount of memory required to decompress the file is
+a few dozen kilobytes plus the dictionary size.
+.PP
+.B lzmainfo
+is included in XZ Utils primarily for
+backward compatibility with LZMA Utils.
+.SH "EXIT STATUS"
+.TP
+.B 0
+All is good.
+.TP
+.B 1
+An error occurred.
+.SH BUGS
+.B lzmainfo
+uses
+.B MB
+while the correct suffix would be
+.B MiB
+(2^20 bytes).
+This is to keep the output compatible with LZMA Utils.
+.SH "SEE ALSO"
+.BR xz (1)

@@ -1,0 +1,432 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>openssl-fipsinstall</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#OPTIONS">OPTIONS</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>openssl-fipsinstall - perform FIPS configuration installation</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<p><b>openssl fipsinstall</b> [<b>-help</b>] [<b>-in</b> <i>configfilename</i>] [<b>-out</b> <i>configfilename</i>] [<b>-module</b> <i>modulefilename</i>] [<b>-provider_name</b> <i>providername</i>] [<b>-section_name</b> <i>sectionname</i>] [<b>-verify</b>] [<b>-mac_name</b> <i>macname</i>] [<b>-macopt</b> <i>nm</i>:<i>v</i>] [<b>-noout</b>] [<b>-quiet</b>] [<b>-pedantic</b>] [<b>-no_conditional_errors</b>] [<b>-no_security_checks</b>] [<b>-hmac_key_check</b>] [<b>-kmac_key_check</b>] [<b>-ems_check</b>] [<b>-no_drbg_truncated_digests</b>] [<b>-signature_digest_check</b>] [<b>-hkdf_digest_check</b>] [<b>-tls13_kdf_digest_check</b>] [<b>-tls1_prf_digest_check</b>] [<b>-sshkdf_digest_check</b>] [<b>-sskdf_digest_check</b>] [<b>-x963kdf_digest_check</b>] [<b>-dsa_sign_disabled</b>] [<b>-no_pbkdf2_lower_bound_check</b>] [<b>-no_short_mac</b>] [<b>-tdes_encrypt_disabled</b>] [<b>-rsa_pkcs15_padding_disabled</b>] [<b>-rsa_pss_saltlen_check</b>] [<b>-rsa_sign_x931_disabled</b>] [<b>-hkdf_key_check</b>] [<b>-kbkdf_key_check</b>] [<b>-tls13_kdf_key_check</b>] [<b>-tls1_prf_key_check</b>] [<b>-sshkdf_key_check</b>] [<b>-sskdf_key_check</b>] [<b>-x963kdf_key_check</b>] [<b>-x942kdf_key_check</b>] [<b>-ecdh_cofactor_check</b>] [<b>-self_test_onload</b>] [<b>-self_test_oninstall</b>] [<b>-corrupt_desc</b> <i>selftest_description</i>] [<b>-corrupt_type</b> <i>selftest_type</i>] [<b>-config</b> <i>parent_config</i>]</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>This command is used to generate a FIPS module configuration file. This configuration file can be used each time a FIPS module is loaded in order to pass data to the FIPS module self tests. The FIPS module always verifies its MAC, but optionally only needs to run the KAT&#39;s once, at installation.</p>
+
+<p>The generated configuration file consists of:</p>
+
+<dl>
+
+<dt id="A-MAC-of-the-FIPS-module-file">- A MAC of the FIPS module file.</dt>
+<dd>
+
+</dd>
+<dt id="A-test-status-indicator">- A test status indicator.</dt>
+<dd>
+
+<p>This indicates if the Known Answer Self Tests (KAT&#39;s) have successfully run.</p>
+
+</dd>
+<dt id="A-MAC-of-the-status-indicator">- A MAC of the status indicator.</dt>
+<dd>
+
+</dd>
+<dt id="A-control-for-conditional-self-tests-errors">- A control for conditional self tests errors.</dt>
+<dd>
+
+<p>By default if a continuous test (e.g a key pair test) fails then the FIPS module will enter an error state, and no services or cryptographic algorithms will be able to be accessed after this point. The default value of &#39;1&#39; will cause the fips module error state to be entered. If the value is &#39;0&#39; then the module error state will not be entered. Regardless of whether the error state is entered or not, the current operation (e.g. key generation) will return an error. The user is responsible for retrying the operation if the module error state is not entered.</p>
+
+</dd>
+<dt id="A-control-to-indicate-whether-run-time-security-checks-are-done">- A control to indicate whether run-time security checks are done.</dt>
+<dd>
+
+<p>This indicates if run-time checks related to enforcement of security parameters such as minimum security strength of keys and approved curve names are used. The default value of &#39;1&#39; will perform the checks. If the value is &#39;0&#39; the checks are not performed and FIPS compliance must be done by procedures documented in the relevant Security Policy.</p>
+
+</dd>
+</dl>
+
+<p>This file is described in <a href="../man5/fips_config.html">fips_config(5)</a>.</p>
+
+<h1 id="OPTIONS">OPTIONS</h1>
+
+<dl>
+
+<dt id="help"><b>-help</b></dt>
+<dd>
+
+<p>Print a usage message.</p>
+
+</dd>
+<dt id="module-filename"><b>-module</b> <i>filename</i></dt>
+<dd>
+
+<p>Filename of the FIPS module to perform an integrity check on. The path provided in the filename is used to load the module when it is activated, and this overrides the environment variable <b>OPENSSL_MODULES</b>.</p>
+
+</dd>
+<dt id="out-configfilename"><b>-out</b> <i>configfilename</i></dt>
+<dd>
+
+<p>Filename to output the configuration data to; the default is standard output.</p>
+
+</dd>
+<dt id="in-configfilename"><b>-in</b> <i>configfilename</i></dt>
+<dd>
+
+<p>Input filename to load configuration data from. Must be used if the <b>-verify</b> option is specified.</p>
+
+</dd>
+<dt id="verify"><b>-verify</b></dt>
+<dd>
+
+<p>Verify that the input configuration file contains the correct information.</p>
+
+</dd>
+<dt id="provider_name-providername"><b>-provider_name</b> <i>providername</i></dt>
+<dd>
+
+<p>Name of the provider inside the configuration file. The default value is <code>fips</code>.</p>
+
+</dd>
+<dt id="section_name-sectionname"><b>-section_name</b> <i>sectionname</i></dt>
+<dd>
+
+<p>Name of the section inside the configuration file. The default value is <code>fips_sect</code>.</p>
+
+</dd>
+<dt id="mac_name-name"><b>-mac_name</b> <i>name</i></dt>
+<dd>
+
+<p>Specifies the name of a supported MAC algorithm which will be used. The MAC mechanisms that are available will depend on the options used when building OpenSSL. To see the list of supported MAC&#39;s use the command <code>openssl list -mac-algorithms</code>. The default is <b>HMAC</b>.</p>
+
+</dd>
+<dt id="macopt-nm:v"><b>-macopt</b> <i>nm</i>:<i>v</i></dt>
+<dd>
+
+<p>Passes options to the MAC algorithm. A comprehensive list of controls can be found in the EVP_MAC implementation documentation. Common control strings used for this command are:</p>
+
+<dl>
+
+<dt id="key:string"><b>key</b>:<i>string</i></dt>
+<dd>
+
+<p>Specifies the MAC key as an alphanumeric string (use if the key contains printable characters only). The string length must conform to any restrictions of the MAC algorithm. A key must be specified for every MAC algorithm. If no key is provided, the default that was specified when OpenSSL was configured is used.</p>
+
+</dd>
+<dt id="hexkey:string"><b>hexkey</b>:<i>string</i></dt>
+<dd>
+
+<p>Specifies the MAC key in hexadecimal form (two hex digits per byte). The key length must conform to any restrictions of the MAC algorithm. A key must be specified for every MAC algorithm. If no key is provided, the default that was specified when OpenSSL was configured is used.</p>
+
+</dd>
+<dt id="digest:string"><b>digest</b>:<i>string</i></dt>
+<dd>
+
+<p>Used by HMAC as an alphanumeric string (use if the key contains printable characters only). The string length must conform to any restrictions of the MAC algorithm. To see the list of supported digests, use the command <code>openssl list -digest-commands</code>. The default digest is SHA-256.</p>
+
+</dd>
+</dl>
+
+</dd>
+<dt id="noout"><b>-noout</b></dt>
+<dd>
+
+<p>Disable logging of the self tests.</p>
+
+</dd>
+<dt id="pedantic"><b>-pedantic</b></dt>
+<dd>
+
+<p>Configure the module so that it is strictly FIPS compliant rather than being backwards compatible. This enables conditional errors, security checks etc. Note that any previous configuration options will be overwritten and any subsequent configuration options that violate FIPS compliance will result in an error.</p>
+
+</dd>
+<dt id="no_conditional_errors"><b>-no_conditional_errors</b></dt>
+<dd>
+
+<p>Configure the module to not enter an error state if a conditional self test fails as described above.</p>
+
+</dd>
+<dt id="no_security_checks"><b>-no_security_checks</b></dt>
+<dd>
+
+<p>Configure the module to not perform run-time security checks as described above.</p>
+
+<p>Enabling the configuration option &quot;no-fips-securitychecks&quot; provides another way to turn off the check at compile time.</p>
+
+</dd>
+<dt id="ems_check"><b>-ems_check</b></dt>
+<dd>
+
+<p>Configure the module to enable a run-time Extended Master Secret (EMS) check when using the TLS1_PRF KDF algorithm. This check is disabled by default. See RFC 7627 for information related to EMS.</p>
+
+</dd>
+<dt id="no_short_mac"><b>-no_short_mac</b></dt>
+<dd>
+
+<p>Configure the module to not allow short MAC outputs. See SP 800-185 8.4.2 and FIPS 140-3 ID C.D for details.</p>
+
+</dd>
+<dt id="hmac_key_check"><b>-hmac_key_check</b></dt>
+<dd>
+
+<p>Configure the module to not allow small keys sizes when using HMAC. See SP 800-131Ar2 for details.</p>
+
+</dd>
+<dt id="kmac_key_check"><b>-kmac_key_check</b></dt>
+<dd>
+
+<p>Configure the module to not allow small keys sizes when using KMAC. See SP 800-131Ar2 for details.</p>
+
+</dd>
+<dt id="no_drbg_truncated_digests"><b>-no_drbg_truncated_digests</b></dt>
+<dd>
+
+<p>Configure the module to not allow truncated digests to be used with Hash and HMAC DRBGs. See FIPS 140-3 IG D.R for details.</p>
+
+</dd>
+<dt id="signature_digest_check"><b>-signature_digest_check</b></dt>
+<dd>
+
+<p>Configure the module to enforce signature algorithms to use digests that are explicitly permitted by the various standards.</p>
+
+</dd>
+<dt id="hkdf_digest_check"><b>-hkdf_digest_check</b></dt>
+<dd>
+
+<p>This option is deprecated.</p>
+
+</dd>
+<dt id="tls13_kdf_digest_check"><b>-tls13_kdf_digest_check</b></dt>
+<dd>
+
+<p>Configure the module to enable a run-time digest check when deriving a key by TLS13 KDF. See RFC 8446 for details.</p>
+
+</dd>
+<dt id="tls1_prf_digest_check"><b>-tls1_prf_digest_check</b></dt>
+<dd>
+
+<p>Configure the module to enable a run-time digest check when deriving a key by TLS_PRF. See NIST SP 800-135r1 for details.</p>
+
+</dd>
+<dt id="sshkdf_digest_check"><b>-sshkdf_digest_check</b></dt>
+<dd>
+
+<p>Configure the module to enable a run-time digest check when deriving a key by SSHKDF. See NIST SP 800-135r1 for details.</p>
+
+</dd>
+<dt id="sskdf_digest_check"><b>-sskdf_digest_check</b></dt>
+<dd>
+
+<p>This option is deprecated.</p>
+
+</dd>
+<dt id="x963kdf_digest_check"><b>-x963kdf_digest_check</b></dt>
+<dd>
+
+<p>Configure the module to enable a run-time digest check when deriving a key by X963KDF. See NIST SP 800-131Ar2 for details.</p>
+
+</dd>
+<dt id="dsa_sign_disabled"><b>-dsa_sign_disabled</b></dt>
+<dd>
+
+<p>Configure the module to not allow DSA signing (DSA signature verification is still allowed). See FIPS 140-3 IG C.K for details.</p>
+
+</dd>
+<dt id="tdes_encrypt_disabled"><b>-tdes_encrypt_disabled</b></dt>
+<dd>
+
+<p>Configure the module to not allow Triple-DES encryption. Triple-DES decryption is still allowed for legacy purposes. See SP800-131Ar2 for details.</p>
+
+</dd>
+<dt id="rsa_pkcs15_padding_disabled"><b>-rsa_pkcs15_padding_disabled</b></dt>
+<dd>
+
+<p>Configure the module to not allow PKCS#1 version 1.5 padding to be used with RSA for key transport and key agreement. See NIST&#39;s SP 800-131A Revision 2 for details.</p>
+
+</dd>
+<dt id="rsa_pss_saltlen_check"><b>-rsa_pss_saltlen_check</b></dt>
+<dd>
+
+<p>Configure the module to enable a run-time salt length check when generating or verifying a RSA-PSS signature. See FIPS 186-5 5.4 (g) for details.</p>
+
+</dd>
+<dt id="rsa_sign_x931_disabled"><b>-rsa_sign_x931_disabled</b></dt>
+<dd>
+
+<p>Configure the module to not allow X9.31 padding to be used when signing with RSA. See FIPS 140-3 IG C.K for details.</p>
+
+</dd>
+<dt id="hkdf_key_check"><b>-hkdf_key_check</b></dt>
+<dd>
+
+<p>Configure the module to enable a run-time short key-derivation key check when deriving a key by HKDF. See NIST SP 800-131Ar2 for details.</p>
+
+</dd>
+<dt id="kbkdf_key_check"><b>-kbkdf_key_check</b></dt>
+<dd>
+
+<p>Configure the module to enable a run-time short key-derivation key check when deriving a key by KBKDF. See NIST SP 800-131Ar2 for details.</p>
+
+</dd>
+<dt id="tls13_kdf_key_check"><b>-tls13_kdf_key_check</b></dt>
+<dd>
+
+<p>Configure the module to enable a run-time short key-derivation key check when deriving a key by TLS13 KDF. See NIST SP 800-131Ar2 for details.</p>
+
+</dd>
+<dt id="tls1_prf_key_check"><b>-tls1_prf_key_check</b></dt>
+<dd>
+
+<p>Configure the module to enable a run-time short key-derivation key check when deriving a key by TLS_PRF. See NIST SP 800-131Ar2 for details.</p>
+
+</dd>
+<dt id="sshkdf_key_check"><b>-sshkdf_key_check</b></dt>
+<dd>
+
+<p>Configure the module to enable a run-time short key-derivation key check when deriving a key by SSHKDF. See NIST SP 800-131Ar2 for details.</p>
+
+</dd>
+<dt id="sskdf_key_check"><b>-sskdf_key_check</b></dt>
+<dd>
+
+<p>Configure the module to enable a run-time short key-derivation key check when deriving a key by SSKDF. See NIST SP 800-131Ar2 for details.</p>
+
+</dd>
+<dt id="x963kdf_key_check"><b>-x963kdf_key_check</b></dt>
+<dd>
+
+<p>Configure the module to enable a run-time short key-derivation key check when deriving a key by X963KDF. See NIST SP 800-131Ar2 for details.</p>
+
+</dd>
+<dt id="x942kdf_key_check"><b>-x942kdf_key_check</b></dt>
+<dd>
+
+<p>Configure the module to enable a run-time short key-derivation key check when deriving a key by X942KDF. See NIST SP 800-131Ar2 for details.</p>
+
+</dd>
+<dt id="no_pbkdf2_lower_bound_check"><b>-no_pbkdf2_lower_bound_check</b></dt>
+<dd>
+
+<p>Configure the module to not perform run-time lower bound check for PBKDF2. See NIST SP 800-132 for details.</p>
+
+</dd>
+<dt id="ecdh_cofactor_check"><b>-ecdh_cofactor_check</b></dt>
+<dd>
+
+<p>Configure the module to enable a run-time check that ECDH uses the EC curves cofactor value when deriving a key. This only affects the &#39;B&#39; and &#39;K&#39; curves. See SP 800-56A r3 Section 5.7.1.2 for details.</p>
+
+</dd>
+<dt id="self_test_onload"><b>-self_test_onload</b></dt>
+<dd>
+
+<p>Do not write the two fields related to the &quot;test status indicator&quot; and &quot;MAC status indicator&quot; to the output configuration file. Without these fields the self tests KATS will run each time the module is loaded. This option could be used for cross compiling, since the self tests need to run at least once on each target machine. Once the self tests have run on the target machine the user could possibly then add the 2 fields into the configuration using some other mechanism. This option defaults to 0 for any OpenSSL FIPS 140-2 provider (OpenSSL 3.0.X). and is not relevant for an OpenSSL FIPS 140-3 provider, since this is no longer allowed.</p>
+
+</dd>
+<dt id="self_test_oninstall"><b>-self_test_oninstall</b></dt>
+<dd>
+
+<p>The converse of <b>-self_test_onload</b>. The two fields related to the &quot;test status indicator&quot; and &quot;MAC status indicator&quot; are written to the output configuration file. This field is not relevant for an OpenSSL FIPS 140-3 provider, since this is no longer allowed.</p>
+
+</dd>
+<dt id="quiet"><b>-quiet</b></dt>
+<dd>
+
+<p>Do not output pass/fail messages. Implies <b>-noout</b>.</p>
+
+</dd>
+<dt id="corrupt_desc-selftest_description--corrupt_type-selftest_type"><b>-corrupt_desc</b> <i>selftest_description</i>, <b>-corrupt_type</b> <i>selftest_type</i></dt>
+<dd>
+
+<p>The corrupt options can be used to test failure of one or more self tests by name. Either option or both may be used to select the tests to corrupt. Refer to the entries for <b>st-desc</b> and <b>st-type</b> in <a href="../man7/OSSL_PROVIDER-FIPS.html">OSSL_PROVIDER-FIPS(7)</a> for values that can be used.</p>
+
+</dd>
+<dt id="config-parent_config"><b>-config</b> <i>parent_config</i></dt>
+<dd>
+
+<p>Test that a FIPS provider can be loaded from the specified configuration file. A previous call to this application needs to generate the extra configuration data that is included by the base <code>parent_config</code> configuration file. See <a href="../man5/config.html">config(5)</a> for further information on how to set up a provider section. All other options are ignored if &#39;-config&#39; is used.</p>
+
+</dd>
+</dl>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>Self tests results are logged by default if the options <b>-quiet</b> and <b>-noout</b> are not specified, or if either of the options <b>-corrupt_desc</b> or <b>-corrupt_type</b> are used. If the base configuration file is set up to autoload the fips module, then the fips module will be loaded and self tested BEFORE the fipsinstall application has a chance to set up its own self test callback. As a result of this the self test output and the options <b>-corrupt_desc</b> and <b>-corrupt_type</b> will be ignored. For normal usage the base configuration file should use the default provider when generating the fips configuration file.</p>
+
+<p>The <b>-self_test_oninstall</b> option was added and the <b>-self_test_onload</b> option was made the default in OpenSSL 3.1.</p>
+
+<p>The command and all remaining options were added in OpenSSL 3.0.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>Calculate the mac of a FIPS module <i>fips.so</i> and run a FIPS self test for the module, and save the <i>fips.cnf</i> configuration file:</p>
+
+<pre><code>openssl fipsinstall -module ./fips.so -out fips.cnf -provider_name fips</code></pre>
+
+<p>Verify that the configuration file <i>fips.cnf</i> contains the correct info:</p>
+
+<pre><code>openssl fipsinstall -module ./fips.so -in fips.cnf  -provider_name fips -verify</code></pre>
+
+<p>Corrupt any self tests which have the description <code>SHA1</code>:</p>
+
+<pre><code>openssl fipsinstall -module ./fips.so -out fips.cnf -provider_name fips \
+        -corrupt_desc &#39;SHA1&#39;</code></pre>
+
+<p>Validate that the fips module can be loaded from a base configuration file:</p>
+
+<pre><code>export OPENSSL_CONF_INCLUDE=&lt;path of configuration files&gt;
+export OPENSSL_MODULES=&lt;provider-path&gt;
+openssl fipsinstall -config&#39; &#39;default.cnf&#39;</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man5/config.html">config(5)</a>, <a href="../man5/fips_config.html">fips_config(5)</a>, <a href="../man7/OSSL_PROVIDER-FIPS.html">OSSL_PROVIDER-FIPS(7)</a>, <a href="../man3/EVP_MAC.html">EVP_MAC(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The <b>openssl-fipsinstall</b> application was added in OpenSSL 3.0.</p>
+
+<p>The following options were added in OpenSSL 3.1:</p>
+
+<p><b>-ems_check</b>, <b>-self_test_oninstall</b></p>
+
+<p>The following options were added in OpenSSL 3.2:</p>
+
+<p><b>-pedantic</b>, <b>-no_drbg_truncated_digests</b></p>
+
+<p>The following options were added in OpenSSL 3.4:</p>
+
+<p><b>-hmac_key_check</b>, <b>-kmac_key_check</b>, <b>-signature_digest_check</b>, <b>-hkdf_digest_check</b>, <b>-tls13_kdf_digest_check</b>, <b>-tls1_prf_digest_check</b>, <b>-sshkdf_digest_check</b>, <b>-sskdf_digest_check</b>, <b>-x963kdf_digest_check</b>, <b>-dsa_sign_disabled</b>, <b>-no_pbkdf2_lower_bound_check</b>, <b>-no_short_mac</b>, <b>-tdes_encrypt_disabled</b>, <b>-rsa_pkcs15_padding_disabled</b>, <b>-rsa_pss_saltlen_check</b>, <b>-rsa_sign_x931_disabled</b>, <b>-hkdf_key_check</b>, <b>-kbkdf_key_check</b>, <b>-tls13_kdf_key_check</b>, <b>-tls1_prf_key_check</b>, <b>-sshkdf_key_check</b>, <b>-sskdf_key_check</b>, <b>-x963kdf_key_check</b>, <b>-x942kdf_key_check</b>, <b>-ecdh_cofactor_check</b></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2019-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

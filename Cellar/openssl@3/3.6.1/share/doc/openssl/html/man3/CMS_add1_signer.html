@@ -1,0 +1,91 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>CMS_add1_signer</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>CMS_add1_signer, CMS_SignerInfo_sign - add a signer to a CMS_ContentInfo signed data structure</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/cms.h&gt;
+
+CMS_SignerInfo *CMS_add1_signer(CMS_ContentInfo *cms, X509 *signcert,
+                                EVP_PKEY *pkey, const EVP_MD *md,
+                                unsigned int flags);
+
+int CMS_SignerInfo_sign(CMS_SignerInfo *si);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>CMS_add1_signer() adds a signer with certificate <b>signcert</b> and private key <b>pkey</b> using message digest <b>md</b> to CMS_ContentInfo SignedData structure <b>cms</b>.</p>
+
+<p>The CMS_ContentInfo structure should be obtained from an initial call to CMS_sign() with the flag <b>CMS_PARTIAL</b> set or in the case or re-signing a valid CMS_ContentInfo SignedData structure.</p>
+
+<p>If the <b>md</b> parameter is <b>NULL</b> then the default digest for the public key algorithm will be used.</p>
+
+<p>Unless the <b>CMS_REUSE_DIGEST</b> flag is set the returned CMS_ContentInfo structure is not complete and must be finalized either by streaming (if applicable) or a call to CMS_final().</p>
+
+<p>The CMS_SignerInfo_sign() function explicitly signs a CMS_SignerInfo structure, its main use is when the <b>CMS_REUSE_DIGEST</b> and <b>CMS_PARTIAL</b> flags are both set.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The main purpose of CMS_add1_signer() is to provide finer control over a CMS signed data structure where the simpler CMS_sign() function defaults are not appropriate. For example if multiple signers or non default digest algorithms are needed. New attributes can also be added using the returned CMS_SignerInfo structure and the CMS attribute utility functions or the CMS signed receipt request functions.</p>
+
+<p>Any of the following flags (ored together) can be passed in the <b>flags</b> parameter.</p>
+
+<p>If <b>CMS_REUSE_DIGEST</b> is set then an attempt is made to copy the content digest value from the CMS_ContentInfo structure: to add a signer to an existing structure. An error occurs if a matching digest value cannot be found to copy. The returned CMS_ContentInfo structure will be valid and finalized when this flag is set.</p>
+
+<p>If <b>CMS_PARTIAL</b> is set in addition to <b>CMS_REUSE_DIGEST</b> then the CMS_SignerInfo structure will not be finalized so additional attributes can be added. In this case an explicit call to CMS_SignerInfo_sign() is needed to finalize it.</p>
+
+<p>If <b>CMS_NOCERTS</b> is set the signer&#39;s certificate will not be included in the CMS_ContentInfo structure, the signer&#39;s certificate must still be supplied in the <b>signcert</b> parameter though. This can reduce the size of the signature if the signers certificate can be obtained by other means: for example a previously signed message.</p>
+
+<p>The SignedData structure includes several CMS signedAttributes including the signing time, the CMS content type and the supported list of ciphers in an SMIMECapabilities attribute. If <b>CMS_NOATTR</b> is set then no signedAttributes will be used at all. If <b>CMS_NOSMIMECAP</b> is set then the SMIMECapabilities will be omitted. If <b>CMS_NO_SIGNING_TIME</b> is set then the signing time will be omitted.</p>
+
+<p>OpenSSL will by default identify signing certificates using issuer name and serial number. If <b>CMS_USE_KEYID</b> is set it will use the subject key identifier value instead. An error occurs if the signing certificate does not have a subject key identifier extension.</p>
+
+<p>If present the SMIMECapabilities attribute indicates support for the following algorithms in preference order: 256 bit AES, Gost R3411-94, Gost 28147-89, 192 bit AES, 128 bit AES, triple DES, 128 bit RC2, 64 bit RC2, DES and 40 bit RC2. If any of these algorithms is not available then it will not be included: for example the GOST algorithms will not be included if the GOST ENGINE is not loaded.</p>
+
+<p>CMS_add1_signer() returns an internal pointer to the CMS_SignerInfo structure just added, this can be used to set additional attributes before it is finalized.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>CMS_add1_signer() returns an internal pointer to the CMS_SignerInfo structure just added or NULL if an error occurs.</p>
+
+<p>CMS_SignerInfo_sign() returns 1 on success, 0 on failure.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>, <a href="../man3/CMS_sign.html">CMS_sign(3)</a>, <a href="../man3/CMS_final.html">CMS_final(3)</a>,</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2014-2016 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

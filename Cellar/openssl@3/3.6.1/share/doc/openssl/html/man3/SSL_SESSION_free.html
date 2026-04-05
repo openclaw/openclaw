@@ -1,0 +1,81 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_SESSION_free</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_SESSION_new, SSL_SESSION_dup, SSL_SESSION_up_ref, SSL_SESSION_free - create, free and manage SSL_SESSION structures</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+SSL_SESSION *SSL_SESSION_new(void);
+SSL_SESSION *SSL_SESSION_dup(const SSL_SESSION *src);
+int SSL_SESSION_up_ref(SSL_SESSION *ses);
+void SSL_SESSION_free(SSL_SESSION *session);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_SESSION_new() creates a new SSL_SESSION structure and returns a pointer to it.</p>
+
+<p>SSL_SESSION_dup() creates a new SSL_SESSION structure that is a copy of <b>src</b>. The copy is not owned by any cache that <b>src</b> may have been in.</p>
+
+<p>SSL_SESSION_up_ref() increments the reference count on the given SSL_SESSION structure.</p>
+
+<p>SSL_SESSION_free() decrements the reference count of <b>session</b> and removes the <b>SSL_SESSION</b> structure pointed to by <b>session</b> and frees up the allocated memory, if the reference count has reached 0. If <b>session</b> is NULL nothing is done.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>SSL_SESSION objects are allocated, when a TLS/SSL handshake operation is successfully completed. Depending on the settings, see <a href="../man3/SSL_CTX_set_session_cache_mode.html">SSL_CTX_set_session_cache_mode(3)</a>, the SSL_SESSION objects are internally referenced by the SSL_CTX and linked into its session cache. SSL objects may be using the SSL_SESSION object; as a session may be reused, several SSL objects may be using one SSL_SESSION object at the same time. It is therefore crucial to keep the reference count (usage information) correct and not delete an SSL_SESSION object that is still used, as this may lead to program failures due to dangling pointers. These failures may also appear delayed, e.g. when an SSL_SESSION object was completely freed as the reference count incorrectly became 0, but it is still referenced in the internal session cache and the cache list is processed during a <a href="../man3/SSL_CTX_flush_sessions.html">SSL_CTX_flush_sessions(3)</a> operation.</p>
+
+<p>SSL_SESSION_free() must only be called for SSL_SESSION objects, for which the reference count was explicitly incremented (e.g. by calling SSL_get1_session(), see <a href="../man3/SSL_get_session.html">SSL_get_session(3)</a>) or when the SSL_SESSION object was generated outside a TLS handshake operation, e.g. by using <a href="../man3/d2i_SSL_SESSION.html">d2i_SSL_SESSION(3)</a>. It must not be called on other SSL_SESSION objects, as this would cause incorrect reference counts and therefore program failures.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_SESSION_new returns a pointer to the newly allocated SSL_SESSION structure or NULL on error.</p>
+
+<p>SSL_SESSION_dup returns a pointer to the new copy or NULL on error.</p>
+
+<p>SSL_SESSION_up_ref returns 1 on success or 0 on error.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a>, <a href="../man3/SSL_get_session.html">SSL_get_session(3)</a>, <a href="../man3/SSL_CTX_set_session_cache_mode.html">SSL_CTX_set_session_cache_mode(3)</a>, <a href="../man3/SSL_CTX_flush_sessions.html">SSL_CTX_flush_sessions(3)</a>, <a href="../man3/d2i_SSL_SESSION.html">d2i_SSL_SESSION(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The SSL_SESSION_dup() function was added in OpenSSL 1.1.1.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

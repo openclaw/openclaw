@@ -1,0 +1,141 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>DH_meth_new</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>DH_meth_new, DH_meth_free, DH_meth_dup, DH_meth_get0_name, DH_meth_set1_name, DH_meth_get_flags, DH_meth_set_flags, DH_meth_get0_app_data, DH_meth_set0_app_data, DH_meth_get_generate_key, DH_meth_set_generate_key, DH_meth_get_compute_key, DH_meth_set_compute_key, DH_meth_get_bn_mod_exp, DH_meth_set_bn_mod_exp, DH_meth_get_init, DH_meth_set_init, DH_meth_get_finish, DH_meth_set_finish, DH_meth_get_generate_params, DH_meth_set_generate_params - Routines to build up DH methods</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/dh.h&gt;</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>DH_METHOD *DH_meth_new(const char *name, int flags);
+
+void DH_meth_free(DH_METHOD *dhm);
+
+DH_METHOD *DH_meth_dup(const DH_METHOD *dhm);
+
+const char *DH_meth_get0_name(const DH_METHOD *dhm);
+int DH_meth_set1_name(DH_METHOD *dhm, const char *name);
+
+int DH_meth_get_flags(const DH_METHOD *dhm);
+int DH_meth_set_flags(DH_METHOD *dhm, int flags);
+
+void *DH_meth_get0_app_data(const DH_METHOD *dhm);
+int DH_meth_set0_app_data(DH_METHOD *dhm, void *app_data);
+
+int (*DH_meth_get_generate_key(const DH_METHOD *dhm))(DH *);
+int DH_meth_set_generate_key(DH_METHOD *dhm, int (*generate_key)(DH *));
+
+int (*DH_meth_get_compute_key(const DH_METHOD *dhm))
+    (unsigned char *key, const BIGNUM *pub_key, DH *dh);
+int DH_meth_set_compute_key(DH_METHOD *dhm,
+    int (*compute_key)(unsigned char *key, const BIGNUM *pub_key, DH *dh));
+
+int (*DH_meth_get_bn_mod_exp(const DH_METHOD *dhm))
+    (const DH *dh, BIGNUM *r, const BIGNUM *a, const BIGNUM *p,
+     const BIGNUM *m, BN_CTX *ctx, BN_MONT_CTX *m_ctx);
+int DH_meth_set_bn_mod_exp(DH_METHOD *dhm,
+    int (*bn_mod_exp)(const DH *dh, BIGNUM *r, const BIGNUM *a,
+                      const BIGNUM *p, const BIGNUM *m, BN_CTX *ctx,
+                      BN_MONT_CTX *m_ctx));
+
+int (*DH_meth_get_init(const DH_METHOD *dhm))(DH *);
+int DH_meth_set_init(DH_METHOD *dhm, int (*init)(DH *));
+
+int (*DH_meth_get_finish(const DH_METHOD *dhm))(DH *);
+int DH_meth_set_finish(DH_METHOD *dhm, int (*finish)(DH *));
+
+int (*DH_meth_get_generate_params(const DH_METHOD *dhm))
+    (DH *, int, int, BN_GENCB *);
+int DH_meth_set_generate_params(DH_METHOD *dhm,
+    int (*generate_params)(DH *, int, int, BN_GENCB *));</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>All of the functions described on this page are deprecated. Applications should instead use the provider APIs.</p>
+
+<p>The <b>DH_METHOD</b> type is a structure used for the provision of custom DH implementations. It provides a set of functions used by OpenSSL for the implementation of the various DH capabilities.</p>
+
+<p>DH_meth_new() creates a new <b>DH_METHOD</b> structure. It should be given a unique <b>name</b> and a set of <b>flags</b>. The <b>name</b> should be a NULL terminated string, which will be duplicated and stored in the <b>DH_METHOD</b> object. It is the callers responsibility to free the original string. The flags will be used during the construction of a new <b>DH</b> object based on this <b>DH_METHOD</b>. Any new <b>DH</b> object will have those flags set by default.</p>
+
+<p>DH_meth_dup() creates a duplicate copy of the <b>DH_METHOD</b> object passed as a parameter. This might be useful for creating a new <b>DH_METHOD</b> based on an existing one, but with some differences.</p>
+
+<p>DH_meth_free() destroys a <b>DH_METHOD</b> structure and frees up any memory associated with it. If the argument is NULL, nothing is done.</p>
+
+<p>DH_meth_get0_name() will return a pointer to the name of this DH_METHOD. This is a pointer to the internal name string and so should not be freed by the caller. DH_meth_set1_name() sets the name of the DH_METHOD to <b>name</b>. The string is duplicated and the copy is stored in the DH_METHOD structure, so the caller remains responsible for freeing the memory associated with the name.</p>
+
+<p>DH_meth_get_flags() returns the current value of the flags associated with this DH_METHOD. DH_meth_set_flags() provides the ability to set these flags.</p>
+
+<p>The functions DH_meth_get0_app_data() and DH_meth_set0_app_data() provide the ability to associate implementation specific data with the DH_METHOD. It is the application&#39;s responsibility to free this data before the DH_METHOD is freed via a call to DH_meth_free().</p>
+
+<p>DH_meth_get_generate_key() and DH_meth_set_generate_key() get and set the function used for generating a new DH key pair respectively. This function will be called in response to the application calling DH_generate_key(). The parameter for the function has the same meaning as for DH_generate_key().</p>
+
+<p>DH_meth_get_compute_key() and DH_meth_set_compute_key() get and set the function used for computing a new DH shared secret respectively. This function will be called in response to the application calling DH_compute_key(). The parameters for the function have the same meaning as for DH_compute_key().</p>
+
+<p>DH_meth_get_bn_mod_exp() and DH_meth_set_bn_mod_exp() get and set the function used for computing the following value:</p>
+
+<pre><code>r = a ^ p mod m</code></pre>
+
+<p>This function will be called by the default OpenSSL function for DH_generate_key(). The result is stored in the <b>r</b> parameter. This function may be NULL unless using the default generate key function, in which case it must be present.</p>
+
+<p>DH_meth_get_init() and DH_meth_set_init() get and set the function used for creating a new DH instance respectively. This function will be called in response to the application calling DH_new() (if the current default DH_METHOD is this one) or DH_new_method(). The DH_new() and DH_new_method() functions will allocate the memory for the new DH object, and a pointer to this newly allocated structure will be passed as a parameter to the function. This function may be NULL.</p>
+
+<p>DH_meth_get_finish() and DH_meth_set_finish() get and set the function used for destroying an instance of a DH object respectively. This function will be called in response to the application calling DH_free(). A pointer to the DH to be destroyed is passed as a parameter. The destroy function should be used for DH implementation specific clean up. The memory for the DH itself should not be freed by this function. This function may be NULL.</p>
+
+<p>DH_meth_get_generate_params() and DH_meth_set_generate_params() get and set the function used for generating DH parameters respectively. This function will be called in response to the application calling DH_generate_parameters_ex() (or DH_generate_parameters()). The parameters for the function have the same meaning as for DH_generate_parameters_ex(). This function may be NULL.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>DH_meth_new() and DH_meth_dup() return the newly allocated DH_METHOD object or NULL on failure.</p>
+
+<p>DH_meth_get0_name() and DH_meth_get_flags() return the name and flags associated with the DH_METHOD respectively.</p>
+
+<p>All other DH_meth_get_*() functions return the appropriate function pointer that has been set in the DH_METHOD, or NULL if no such pointer has yet been set.</p>
+
+<p>DH_meth_set1_name() and all DH_meth_set_*() functions return 1 on success or 0 on failure.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/DH_new.html">DH_new(3)</a>, <a href="../man3/DH_new.html">DH_new(3)</a>, <a href="../man3/DH_generate_parameters.html">DH_generate_parameters(3)</a>, <a href="../man3/DH_generate_key.html">DH_generate_key(3)</a>, <a href="../man3/DH_set_method.html">DH_set_method(3)</a>, <a href="../man3/DH_size.html">DH_size(3)</a>, <a href="../man3/DH_get0_pqg.html">DH_get0_pqg(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>All of these functions were deprecated in OpenSSL 3.0.</p>
+
+<p>The functions described here were added in OpenSSL 1.1.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2016-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

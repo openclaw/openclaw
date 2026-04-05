@@ -1,0 +1,28 @@
+.\"
+.\" Copyright 2010 by Ben Greear <greearb@candelatech.com>
+.\" SPDX-License-Identifier: MIT
+.\"
+.TH ARES_SET_LOCAL_DEV 3 "23 September 2024"
+.SH NAME
+ares_set_local_dev \- Bind to a specific network device when creating sockets.
+.SH SYNOPSIS
+.nf
+#include <ares.h>
+
+void ares_set_local_dev(ares_channel_t *\fIchannel\fP, const char* \fIlocal_dev_name\fP)
+.fi
+.SH DESCRIPTION
+The \fBares_set_local_dev\fP function causes all future sockets
+to be bound to this device with SO_BINDTODEVICE.  This forces communications
+to go over a certain interface, which can be useful on multi-homed machines.
+This option is only supported on Linux, the interface must not be already bound to the 
+socket or the current effective user must have CAP_NET_RAW capability in the current
+network namespace for the option to work.  If SO_BINDTODEVICE is not supported or the
+setsockopt call fails (probably because of permissions), the error is
+silently ignored.
+.SH SEE ALSO
+.BR ares_set_local_ip4 (3)
+.BR ares_set_local_ip6 (3)
+.BR network_namespaces (7)
+.SH NOTES
+This function was added in c-ares 1.7.4

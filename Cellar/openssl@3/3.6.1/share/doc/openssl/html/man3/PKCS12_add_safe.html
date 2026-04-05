@@ -1,0 +1,100 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>PKCS12_add_safe</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#CONFORMING-TO">CONFORMING TO</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>PKCS12_add_safe, PKCS12_add_safe_ex, PKCS12_add_safes, PKCS12_add_safes_ex - Create and add objects to a PKCS#12 structure</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/pkcs12.h&gt;
+
+int PKCS12_add_safe(STACK_OF(PKCS7) **psafes, STACK_OF(PKCS12_SAFEBAG) *bags,
+                   int safe_nid, int iter, const char *pass);
+int PKCS12_add_safe_ex(STACK_OF(PKCS7) **psafes, STACK_OF(PKCS12_SAFEBAG) *bags,
+                       int safe_nid, int iter, const char *pass,
+                       OSSL_LIB_CTX *ctx, const char *propq);
+
+PKCS12 *PKCS12_add_safes(STACK_OF(PKCS7) *safes, int p7_nid);
+PKCS12 *PKCS12_add_safes_ex(STACK_OF(PKCS7) *safes, int p7_nid,
+                            OSSL_LIB_CTX *ctx, const char *propq);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>PKCS12_add_safe() creates a new PKCS7 contentInfo containing the supplied <b>PKCS12_SAFEBAG</b>s and adds this to a set of PKCS7 contentInfos. Its type depends on the value of <b>safe_nid</b>:</p>
+
+<ul>
+
+<li><p>If <i>safe_nid</i> is -1, a plain PKCS7 <i>data</i> contentInfo is created.</p>
+
+</li>
+<li><p>If <i>safe_nid</i> is a valid PBE algorithm NID, a PKCS7 <b>encryptedData</b> contentInfo is created. The algorithm uses <i>pass</i> as the passphrase and <i>iter</i> as the iteration count. If <i>iter</i> is zero then a default value for iteration count of 2048 is used.</p>
+
+</li>
+<li><p>If <i>safe_nid</i> is 0, a PKCS7 <b>encryptedData</b> contentInfo is created using a default encryption algorithm, currently <b>NID_pbe_WithSHA1And3_Key_TripleDES_CBC</b>.</p>
+
+</li>
+</ul>
+
+<p>PKCS12_add_safe_ex() is identical to PKCS12_add_safe() but allows for a library context <i>ctx</i> and property query <i>propq</i> to be used to select algorithm implementations.</p>
+
+<p>PKCS12_add_safes() creates a <b>PKCS12</b> structure containing the supplied set of PKCS7 contentInfos. The <i>safes</i> are enclosed first within a PKCS7 contentInfo of type <i>p7_nid</i>. Currently the only supported type is <b>NID_pkcs7_data</b>.</p>
+
+<p>PKCS12_add_safes_ex() is identical to PKCS12_add_safes() but allows for a library context <i>ctx</i> and property query <i>propq</i> to be used to select algorithm implementations.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>PKCS12_add_safe() makes assumptions regarding the encoding of the given pass phrase. See <a href="../man7/passphrase-encoding.html">passphrase-encoding(7)</a> for more information.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>PKCS12_add_safe() returns a value of 1 indicating success or 0 for failure.</p>
+
+<p>PKCS12_add_safes() returns a valid <b>PKCS12</b> structure or NULL if an error occurred.</p>
+
+<h1 id="CONFORMING-TO">CONFORMING TO</h1>
+
+<p>IETF RFC 7292 (<a href="https://tools.ietf.org/html/rfc7292">https://tools.ietf.org/html/rfc7292</a>)</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/PKCS12_create.html">PKCS12_create(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>PKCS12_add_safe_ex() and PKCS12_add_safes_ex() were added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2020-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

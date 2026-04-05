@@ -1,0 +1,40 @@
+# Copyright (C) 2016 and later: Unicode, Inc. and others.
+# License & terms of use: http://www.unicode.org/copyright.html
+# Copyright (C) 2010-2013, International Business Machines Corporation. All Rights Reserved.
+
+# CFLAGS contains only anything end users should set
+CFLAGS =  -std=c11
+# CXXFLAGS contains only anything end users should set
+CXXFLAGS =  -std=c++17
+# DEFS only contains those UCONFIG_CPPFLAGS which are not auto-set by platform.h
+DEFS = 
+prefix = /opt/homebrew/opt/icu4c@78
+exec_prefix = ${prefix}
+#bindir = ${exec_prefix}/bin
+libdir = /opt/homebrew/opt/icu4c@78/lib
+includedir = ${prefix}/include
+baselibs = -lpthread -lm 
+#datarootdir = ${prefix}/share
+#datadir = ${datarootdir}
+#sbindir = ${exec_prefix}/sbin
+#mandir = ${datarootdir}/man
+#sysconfdir = ${prefix}/etc
+UNICODE_VERSION=17.0
+ICUPREFIX=icu
+ICULIBSUFFIX=
+LIBICU=lib${ICUPREFIX}
+#SHAREDLIBCFLAGS=-fPIC
+pkglibdir=${libdir}/icu${ICULIBSUFFIX}/78.3
+#pkgdatadir=${datadir}/icu${ICULIBSUFFIX}/78.3
+ICUDATA_NAME = icudt78l
+#ICUPKGDATA_DIR=/opt/homebrew/opt/icu4c@78/lib
+#ICUDATA_DIR=${pkgdatadir}
+ICUDESC=International Components for Unicode
+
+Version: 78.3
+Cflags: -I${includedir}
+# end of icu.pc.in
+Description: International Components for Unicode: Common and Data libraries
+Name: icu-uc
+Libs: -L${libdir} -licuuc
+Libs.private: -licudata ${baselibs}

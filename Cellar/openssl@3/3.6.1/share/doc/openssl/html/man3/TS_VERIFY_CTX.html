@@ -1,0 +1,133 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>TS_VERIFY_CTX</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>TS_VERIFY_CTX, TS_VERIFY_CTX_new, TS_VERIFY_CTX_init, TS_VERIFY_CTX_free, TS_VERIFY_CTX_cleanup, TS_VERIFY_CTX_set_flags, TS_VERIFY_CTX_add_flags, TS_VERIFY_CTX_set0_data, TS_VERIFY_CTX_set0_imprint, TS_VERIFY_CTX_set0_store, TS_VERIFY_CTX_set0_certs, TS_VERIFY_CTX_set_certs, TS_VERIFY_CTS_set_certs, TS_VERIFY_CTX_set_data, TS_VERIFY_CTX_set_imprint, TS_VERIFY_CTX_set_store - manage the TS response verification context</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ts.h&gt;
+
+typedef struct TS_verify_ctx TS_VERIFY_CTX;
+
+TS_VERIFY_CTX *TS_VERIFY_CTX_new(void);
+void TS_VERIFY_CTX_init(TS_VERIFY_CTX *ctx);
+void TS_VERIFY_CTX_free(TS_VERIFY_CTX *ctx);
+void TS_VERIFY_CTX_cleanup(TS_VERIFY_CTX *ctx);
+int TS_VERIFY_CTX_set_flags(TS_VERIFY_CTX *ctx, int f);
+int TS_VERIFY_CTX_add_flags(TS_VERIFY_CTX *ctx, int f);
+int TS_VERIFY_CTX_set0_data(TS_VERIFY_CTX *ctx, BIO *b);
+int TS_VERIFY_CTX_set0_imprint(TS_VERIFY_CTX *ctx,
+                               unsigned char *hexstr, long len);
+int TS_VERIFY_CTX_set0_store(TS_VERIFY_CTX *ctx, X509_STORE *s);
+int TS_VERIFY_CTX_set0_certs(TS_VERIFY_CTX *ctx, STACK_OF(X509) *certs);</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.4:</p>
+
+<pre><code>BIO *TS_VERIFY_CTX_set_data(TS_VERIFY_CTX *ctx, BIO *b);
+unsigned char *TS_VERIFY_CTX_set_imprint(TS_VERIFY_CTX *ctx,
+                                         unsigned char *hexstr, long len);
+X509_STORE *TS_VERIFY_CTX_set_store(TS_VERIFY_CTX *ctx, X509_STORE *s);
+STACK_OF(X509) *TS_VERIFY_CTX_set_certs(TS_VERIFY_CTX *ctx,
+                                        STACK_OF(X509) *certs);</code></pre>
+
+<p>The following function has been deprecated since OpenSSL 3.0:</p>
+
+<pre><code>STACK_OF(X509) *TS_VERIFY_CTS_set_certs(TS_VERIFY_CTX *ctx,
+                                        STACK_OF(X509) *certs);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The Time-Stamp Protocol (TSP) is defined by RFC 3161. TSP is a protocol used to provide long-term proof of the existence of certain data before a particular time. TSP defines a Time Stamping Authority (TSA) and an entity that makes requests to the TSA. Usually, the TSA is referred to as the server side, and the requesting entity is referred to as the client.</p>
+
+<p>In TSP, when a server sends a response to a client, the server normally needs to sign the response data - the TimeStampToken (TST) - with its private key. Then the client verifies the received TST using the server&#39;s certificate chain.</p>
+
+<p>For all the following methods, unless noted otherwise, <i>ctx</i> is the verification context created in advance.</p>
+
+<p>TS_VERIFY_CTX_new() returns an allocated <b>TS_VERIFY_CTX</b> structure.</p>
+
+<p>TS_VERIFY_CTX_init() initializes a verification context.</p>
+
+<p>TS_VERIFY_CTX_free() frees up a <b>TS_VERIFY_CTX</b> object. <i>ctx</i> is the verification context to be freed. If <i>ctx</i> is NULL, the call is ignored.</p>
+
+<p>TS_VERIFY_CTX_set_flags() sets the flags in the verification context. <i>f</i> are the flags to be set.</p>
+
+<p>TS_VERIFY_CTX_add_flags() adds flags to the verification context. <i>f</i> are the flags to be added (OR&#39;d).</p>
+
+<p>TS_VERIFY_CTX_set0_data() sets the data to be verified. <i>b</i> is the <b>BIO</b> with the data. A previously assigned <b>BIO</b> is freed.</p>
+
+<p>TS_VERIFY_CTX_set0_imprint() sets the message imprint. <i>hexstr</i> is the message imprint to be assigned. A previously assigned imprint is freed.</p>
+
+<p>TS_VERIFY_CTX_set0_store() sets the store for the verification context. <i>s</i> is the store to be assigned. A previously assigned store is freed.</p>
+
+<p>TS_VERIFY_CTX_set0_certs() is used to set the server&#39;s certificate chain when verifying a TST. <i>certs</i> is a stack of <b>X509</b> certificates.</p>
+
+<p>TS_VERIFY_CTX_cleanup() frees all data associated with the given <b>TS_VERIFY_CTX</b> object and initializes it. <i>ctx</i> is the verification context created in advance. If <i>ctx</i> is NULL, the call is ignored.</p>
+
+<p>All of the following functions described are deprecated. Applications should instead use the functions <a href="../man3/TS_VERIFY_CTX_set0_data.html">TS_VERIFY_CTX_set0_data(3)</a>, <a href="../man3/TS_VERIFY_CTX_set0_imprint.html">TS_VERIFY_CTX_set0_imprint(3)</a>, <a href="../man3/TS_VERIFY_CTX_set0_store.html">TS_VERIFY_CTX_set0_store(3)</a>, <a href="../man3/TS_VERIFY_CTX_set0_certs.html">TS_VERIFY_CTX_set0_certs(3)</a>.</p>
+
+<p>TS_VERIFY_CTX_set_data() is used to set the BIO with the data to be verified. A previously assigned BIO is <b>not freed</b> by this call. <i>b</i> is the <b>BIO</b> with the data to assign.</p>
+
+<p>TS_VERIFY_CTX_set_imprint() is used to set the message imprint. A previously assigned imprint <b>is freed</b> by this call. <i>hexstr</i> is the string with the message imprint to assign.</p>
+
+<p>TS_VERIFY_CTX_set_store() is used to set the certificate store. A previously assigned store is <b>not freed</b> by this call. <i>s</i> is the store to assign.</p>
+
+<p>TS_VERIFY_CTX_set_certs() is used to set the server&#39;s certificate chain. A previously assigned stack is <b>not freed</b> by this call. <i>certs</i> is a stack of <b>X509</b> certificates.</p>
+
+<p>TS_VERIFY_CTS_set_certs() is a misspelled version of TS_VERIFY_CTX_set_certs() which takes the same parameters and returns the same result.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>TS_VERIFY_CTX_new() returns an allocated <b>TS_VERIFY_CTX</b> structure.</p>
+
+<p>TS_VERIFY_CTX_set_flags() returns the flags passed via parameter <i>f</i>.</p>
+
+<p>TS_VERIFY_CTX_add_flags() returns the flags of the context after the ones passed via parameter <i>f</i> are added to it.</p>
+
+<p>TS_VERIFY_CTX_set0_data(), TS_VERIFY_CTX_set0_imprint(), TS_VERIFY_CTX_set0_store(), and TS_VERIFY_CTX_set0_certs() return 1 if the value could be successfully set and 0 in case of any error.</p>
+
+<p>The deprecated functions TS_VERIFY_CTX_set_data(), TS_VERIFY_CTX_set_imprint(), TS_VERIFY_CTX_set_store(), TS_VERIFY_CTX_set_certs() return the parameter the user passes via parameter <i>bio</i>, <i>hexstr</i>, <i>s</i> or <i>certs</i>.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/OSSL_ESS_check_signing_certs.html">OSSL_ESS_check_signing_certs(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>TS_VERIFY_CTX_set0_data(), TS_VERIFY_CTX_set0_imprint(), TS_VERIFY_CTX_set0_store(), TS_VERIFY_CTX_set0_certs() replace the functions TS_VERIFY_CTX_set_data(), TS_VERIFY_CTX_set_imprint(), TS_VERIFY_CTX_set_store(), TS_VERIFY_CTX_set_certs() that were deprecated in OpenSSL 3.4.0.</p>
+
+<p>The spelling of TS_VERIFY_CTX_set_certs() was corrected in OpenSSL 3.0.0. The misspelled version TS_VERIFY_CTS_set_certs() has been retained for compatibility reasons, but it is deprecated in OpenSSL 3.0.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2019-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

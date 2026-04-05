@@ -1,0 +1,80 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_CTX_set_timeout</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_CTX_set_timeout, SSL_CTX_get_timeout - manipulate timeout values for session caching</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+long SSL_CTX_set_timeout(SSL_CTX *ctx, long t);
+long SSL_CTX_get_timeout(SSL_CTX *ctx);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_CTX_set_timeout() sets the timeout for newly created sessions for <b>ctx</b> to <b>t</b>. The timeout value <b>t</b> must be given in seconds.</p>
+
+<p>SSL_CTX_get_timeout() returns the currently set timeout value for <b>ctx</b>.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>Whenever a new session is created, it is assigned a maximum lifetime. This lifetime is specified by storing the creation time of the session and the timeout value valid at this time. If the actual time is later than creation time plus timeout, the session is not reused.</p>
+
+<p>Due to this realization, all sessions behave according to the timeout value valid at the time of the session negotiation. Changes of the timeout value do not affect already established sessions.</p>
+
+<p>The expiration time of a single session can be modified using the <a href="../man3/SSL_SESSION_get_time.html">SSL_SESSION_get_time(3)</a> family of functions.</p>
+
+<p>Expired sessions are removed from the internal session cache, whenever <a href="../man3/SSL_CTX_flush_sessions.html">SSL_CTX_flush_sessions(3)</a> is called, either directly by the application or automatically (see <a href="../man3/SSL_CTX_set_session_cache_mode.html">SSL_CTX_set_session_cache_mode(3)</a>)</p>
+
+<p>The default value for session timeout is decided on a per protocol basis, see <a href="../man3/SSL_get_default_timeout.html">SSL_get_default_timeout(3)</a>. All currently supported protocols have the same default timeout value of 300 seconds.</p>
+
+<p>This timeout value is used as the ticket lifetime hint for stateless session tickets. It is also used as the timeout value within the ticket itself.</p>
+
+<p>For TLSv1.3, RFC8446 limits transmission of this value to 1 week (604800 seconds).</p>
+
+<p>For TLSv1.2, tickets generated during an initial handshake use the value as specified. Tickets generated during a resumed handshake have a value of 0 for the ticket lifetime hint.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_CTX_set_timeout() returns the previously set timeout value.</p>
+
+<p>SSL_CTX_get_timeout() returns the currently set timeout value.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a>, <a href="../man3/SSL_CTX_set_session_cache_mode.html">SSL_CTX_set_session_cache_mode(3)</a>, <a href="../man3/SSL_SESSION_get_time.html">SSL_SESSION_get_time(3)</a>, <a href="../man3/SSL_CTX_flush_sessions.html">SSL_CTX_flush_sessions(3)</a>, <a href="../man3/SSL_get_default_timeout.html">SSL_get_default_timeout(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2001-2022 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

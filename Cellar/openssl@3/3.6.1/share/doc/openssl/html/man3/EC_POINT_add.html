@@ -1,0 +1,103 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EC_POINT_add</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EC_POINT_add, EC_POINT_dbl, EC_POINT_invert, EC_POINT_is_at_infinity, EC_POINT_is_on_curve, EC_POINT_cmp, EC_POINT_make_affine, EC_POINTs_make_affine, EC_POINTs_mul, EC_POINT_mul, EC_GROUP_precompute_mult, EC_GROUP_have_precompute_mult - Functions for performing mathematical operations and tests on EC_POINT objects</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ec.h&gt;
+
+int EC_POINT_add(const EC_GROUP *group, EC_POINT *r, const EC_POINT *a,
+                 const EC_POINT *b, BN_CTX *ctx);
+int EC_POINT_dbl(const EC_GROUP *group, EC_POINT *r, const EC_POINT *a, BN_CTX *ctx);
+int EC_POINT_invert(const EC_GROUP *group, EC_POINT *a, BN_CTX *ctx);
+int EC_POINT_is_at_infinity(const EC_GROUP *group, const EC_POINT *p);
+int EC_POINT_is_on_curve(const EC_GROUP *group, const EC_POINT *point, BN_CTX *ctx);
+int EC_POINT_cmp(const EC_GROUP *group, const EC_POINT *a, const EC_POINT *b, BN_CTX *ctx);
+int EC_POINT_mul(const EC_GROUP *group, EC_POINT *r, const BIGNUM *n,
+                 const EC_POINT *q, const BIGNUM *m, BN_CTX *ctx);</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>int EC_POINT_make_affine(const EC_GROUP *group, EC_POINT *point, BN_CTX *ctx);
+int EC_POINTs_make_affine(const EC_GROUP *group, size_t num,
+                          EC_POINT *points[], BN_CTX *ctx);
+int EC_POINTs_mul(const EC_GROUP *group, EC_POINT *r, const BIGNUM *n, size_t num,
+                  const EC_POINT *p[], const BIGNUM *m[], BN_CTX *ctx);
+int EC_GROUP_precompute_mult(EC_GROUP *group, BN_CTX *ctx);
+int EC_GROUP_have_precompute_mult(const EC_GROUP *group);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>EC_POINT_add adds the two points <b>a</b> and <b>b</b> and places the result in <b>r</b>. Similarly EC_POINT_dbl doubles the point <b>a</b> and places the result in <b>r</b>. In both cases it is valid for <b>r</b> to be one of <b>a</b> or <b>b</b>.</p>
+
+<p>EC_POINT_invert calculates the inverse of the supplied point <b>a</b>. The result is placed back in <b>a</b>.</p>
+
+<p>The function EC_POINT_is_at_infinity tests whether the supplied point is at infinity or not.</p>
+
+<p>EC_POINT_is_on_curve tests whether the supplied point is on the curve or not.</p>
+
+<p>EC_POINT_cmp compares the two supplied points and tests whether or not they are equal.</p>
+
+<p>The functions EC_POINT_make_affine and EC_POINTs_make_affine force the internal representation of the EC_POINT(s) into the affine coordinate system. In the case of EC_POINTs_make_affine the value <b>num</b> provides the number of points in the array <b>points</b> to be forced. These functions were deprecated in OpenSSL 3.0 and should no longer be used. Modern versions automatically perform this conversion when needed.</p>
+
+<p>EC_POINT_mul calculates the value generator * <b>n</b> + <b>q</b> * <b>m</b> and stores the result in <b>r</b>. The value <b>n</b> may be NULL in which case the result is just <b>q</b> * <b>m</b> (variable point multiplication). Alternatively, both <b>q</b> and <b>m</b> may be NULL, and <b>n</b> non-NULL, in which case the result is just generator * <b>n</b> (fixed point multiplication). When performing a single fixed or variable point multiplication, the underlying implementation uses a constant time algorithm, when the input scalar (either <b>n</b> or <b>m</b>) is in the range [0, ec_group_order).</p>
+
+<p>Although deprecated in OpenSSL 3.0 and should no longer be used, EC_POINTs_mul calculates the value generator * <b>n</b> + <b>q[0]</b> * <b>m[0]</b> + ... + <b>q[num-1]</b> * <b>m[num-1]</b>. As for EC_POINT_mul the value <b>n</b> may be NULL or <b>num</b> may be zero. When performing a fixed point multiplication (<b>n</b> is non-NULL and <b>num</b> is 0) or a variable point multiplication (<b>n</b> is NULL and <b>num</b> is 1), the underlying implementation uses a constant time algorithm, when the input scalar (either <b>n</b> or <b>m[0]</b>) is in the range [0, ec_group_order). Modern versions should instead use EC_POINT_mul(), combined (if needed) with EC_POINT_add() in such rare circumstances.</p>
+
+<p>The function EC_GROUP_precompute_mult stores multiples of the generator for faster point multiplication, whilst EC_GROUP_have_precompute_mult tests whether precomputation has already been done. See <a href="../man3/EC_GROUP_copy.html">EC_GROUP_copy(3)</a> for information about the generator. Precomputation functionality was deprecated in OpenSSL 3.0. Users of EC_GROUP_precompute_mult() and EC_GROUP_have_precompute_mult() should switch to named curves which OpenSSL has hardcoded lookup tables for.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>The following functions return 1 on success or 0 on error: EC_POINT_add, EC_POINT_dbl, EC_POINT_invert, EC_POINT_make_affine, EC_POINTs_make_affine, EC_POINTs_make_affine, EC_POINT_mul, EC_POINTs_mul and EC_GROUP_precompute_mult.</p>
+
+<p>EC_POINT_is_at_infinity returns 1 if the point is at infinity, or 0 otherwise.</p>
+
+<p>EC_POINT_is_on_curve returns 1 if the point is on the curve, 0 if not, or -1 on error.</p>
+
+<p>EC_POINT_cmp returns 1 if the points are not equal, 0 if they are, or -1 on error.</p>
+
+<p>EC_GROUP_have_precompute_mult return 1 if a precomputation has been done, or 0 if not.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/crypto.html">crypto(7)</a>, <a href="../man3/EC_GROUP_new.html">EC_GROUP_new(3)</a>, <a href="../man3/EC_GROUP_copy.html">EC_GROUP_copy(3)</a>, <a href="../man3/EC_POINT_new.html">EC_POINT_new(3)</a>, <a href="../man3/EC_KEY_new.html">EC_KEY_new(3)</a>, <a href="../man3/EC_GFp_simple_method.html">EC_GFp_simple_method(3)</a>, <a href="../man3/d2i_ECPKParameters.html">d2i_ECPKParameters(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>EC_POINT_make_affine(), EC_POINTs_make_affine(), EC_POINTs_mul(), EC_GROUP_precompute_mult(), and EC_GROUP_have_precompute_mult() were deprecated in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2013-2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,75 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>X509_get0_uids</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>X509_get0_uids, X509_ACERT_get0_issuerUID - get certificate and attribute certificate unique identifiers</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code> #include &lt;openssl/x509.h&gt;
+
+ void X509_get0_uids(const X509 *x, const ASN1_BIT_STRING **piuid,
+                     const ASN1_BIT_STRING **psuid);
+
+ #include &lt;openssl/x509_acert.h&gt;
+
+ ASN1_BIT_STRING *X509_ACERT_get0_issuerUID(X509_ACERT *x);
+=head1 DESCRIPTION</code></pre>
+
+<p>X509_get0_uids() sets <b>*piuid</b> and <b>*psuid</b> to the issuer and subject unique identifiers of certificate <b>x</b> or NULL if the fields are not present.</p>
+
+<p>X509_ACERT_get0_issuerUID() returns the issuer unique identifier of the attribute certificate <b>x</b> or NULL if the field is not present.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The issuer and subject unique identifier fields are very rarely encountered in practice outside test cases.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>X509_get0_uids() does not return a value.</p>
+
+<p>X509_ACERT_get0_issuerUID() returns a unique identifier on success or NULL on failure.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/d2i_X509.html">d2i_X509(3)</a>, <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>, <a href="../man3/X509_CRL_get0_by_serial.html">X509_CRL_get0_by_serial(3)</a>, <a href="../man3/X509_get0_signature.html">X509_get0_signature(3)</a>, <a href="../man3/X509_get_ext_d2i.html">X509_get_ext_d2i(3)</a>, <a href="../man3/X509_get_extension_flags.html">X509_get_extension_flags(3)</a>, <a href="../man3/X509_get_pubkey.html">X509_get_pubkey(3)</a>, <a href="../man3/X509_get_subject_name.html">X509_get_subject_name(3)</a>, <a href="../man3/X509_get_version.html">X509_get_version(3)</a>, <a href="../man3/X509_NAME_add_entry_by_txt.html">X509_NAME_add_entry_by_txt(3)</a>, <a href="../man3/X509_NAME_ENTRY_get_object.html">X509_NAME_ENTRY_get_object(3)</a>, <a href="../man3/X509_NAME_get_index_by_NID.html">X509_NAME_get_index_by_NID(3)</a>, <a href="../man3/X509_NAME_print_ex.html">X509_NAME_print_ex(3)</a>, <a href="../man3/X509_new.html">X509_new(3)</a>, <a href="../man3/X509_sign.html">X509_sign(3)</a>, <a href="../man3/X509V3_get_d2i.html">X509V3_get_d2i(3)</a>, <a href="../man3/X509_verify_cert.html">X509_verify_cert(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>X509_get0_uids() was added in OpenSSL 1.1.0.</p>
+
+<p>X509_ACERT_get0_issuerUID() was added in OpenSSL 3.4.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2015-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

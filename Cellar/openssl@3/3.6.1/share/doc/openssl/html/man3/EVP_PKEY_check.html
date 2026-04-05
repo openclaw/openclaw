@@ -1,0 +1,90 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_PKEY_check</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_PKEY_check, EVP_PKEY_param_check, EVP_PKEY_param_check_quick, EVP_PKEY_public_check, EVP_PKEY_public_check_quick, EVP_PKEY_private_check, EVP_PKEY_pairwise_check - key and parameter validation functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+
+int EVP_PKEY_check(EVP_PKEY_CTX *ctx);
+int EVP_PKEY_param_check(EVP_PKEY_CTX *ctx);
+int EVP_PKEY_param_check_quick(EVP_PKEY_CTX *ctx);
+int EVP_PKEY_public_check(EVP_PKEY_CTX *ctx);
+int EVP_PKEY_public_check_quick(EVP_PKEY_CTX *ctx);
+int EVP_PKEY_private_check(EVP_PKEY_CTX *ctx);
+int EVP_PKEY_pairwise_check(EVP_PKEY_CTX *ctx);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>EVP_PKEY_param_check() validates the parameters component of the key given by <b>ctx</b>. This check will always succeed for key types that do not have parameters.</p>
+
+<p>EVP_PKEY_param_check_quick() validates the parameters component of the key given by <b>ctx</b> like EVP_PKEY_param_check() does. However some algorithm implementations may offer a quicker form of validation that omits some checks in order to perform a lightweight sanity check of the key. If a quicker form is not provided then this function call does the same thing as EVP_PKEY_param_check().</p>
+
+<p>EVP_PKEY_public_check() validates the public component of the key given by <b>ctx</b>.</p>
+
+<p>EVP_PKEY_public_check_quick() validates the public component of the key given by <b>ctx</b> like EVP_PKEY_public_check() does. However some algorithm implementations may offer a quicker form of validation that omits some checks in order to perform a lightweight sanity check of the key. If a quicker form is not provided then this function call does the same thing as EVP_PKEY_public_check().</p>
+
+<p>EVP_PKEY_private_check() validates the private component of the key given by <b>ctx</b>.</p>
+
+<p>EVP_PKEY_pairwise_check() validates that the public and private components have the correct mathematical relationship to each other for the key given by <b>ctx</b>.</p>
+
+<p>EVP_PKEY_check() is an alias for the EVP_PKEY_pairwise_check() function.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>Key validation used by the OpenSSL FIPS provider complies with the rules within SP800-56A and SP800-56B. For backwards compatibility reasons the OpenSSL default provider may use checks that are not as restrictive for certain key types. For further information see <a href="../man7/EVP_PKEY-DSA.html">&quot;DSA key validation&quot; in EVP_PKEY-DSA(7)</a>, <a href="../man7/EVP_PKEY-DH.html">&quot;DH key validation&quot; in EVP_PKEY-DH(7)</a>, <a href="../man7/EVP_PKEY-EC.html">&quot;EC key validation&quot; in EVP_PKEY-EC(7)</a> and <a href="../man7/EVP_PKEY-RSA.html">&quot;RSA key validation&quot; in EVP_PKEY-RSA(7)</a>.</p>
+
+<p>Refer to SP800-56A and SP800-56B for rules relating to when these functions should be called during key establishment. It is not necessary to call these functions after locally calling an approved key generation method, but may be required for assurance purposes when receiving keys from a third party.</p>
+
+<p>The EVP_PKEY_pairwise_check() and EVP_PKEY_private_check() might not be bounded by any key size limits as private keys are not expected to be supplied by attackers. For that reason they might take an unbounded time if run on arbitrarily large keys.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>All functions return 1 for success or others for failure. They return -2 if the operation is not supported for the specific algorithm.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_PKEY_CTX_new.html">EVP_PKEY_CTX_new(3)</a>, <a href="../man3/EVP_PKEY_fromdata.html">EVP_PKEY_fromdata(3)</a>, <a href="../man7/EVP_PKEY-DH.html">EVP_PKEY-DH(7)</a>, <a href="../man7/EVP_PKEY-FFC.html">EVP_PKEY-FFC(7)</a>, <a href="../man7/EVP_PKEY-DSA.html">EVP_PKEY-DSA(7)</a>, <a href="../man7/EVP_PKEY-EC.html">EVP_PKEY-EC(7)</a>, <a href="../man7/EVP_PKEY-RSA.html">EVP_PKEY-RSA(7)</a>,</p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>EVP_PKEY_check(), EVP_PKEY_public_check() and EVP_PKEY_param_check() were added in OpenSSL 1.1.1.</p>
+
+<p>EVP_PKEY_param_check_quick(), EVP_PKEY_public_check_quick(), EVP_PKEY_private_check() and EVP_PKEY_pairwise_check() were added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2006-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

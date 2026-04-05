@@ -1,0 +1,30 @@
+.\"
+.\" Copyright 1998 by the Massachusetts Institute of Technology.
+.\" SPDX-License-Identifier: MIT
+.\"
+.TH ARES_FREE_HOSTENT 3 "23 July 1998"
+.SH NAME
+ares_free_hostent \- Free host structure allocated by ares functions
+.SH SYNOPSIS
+.nf
+#include <ares.h>
+
+void ares_free_hostent(struct hostent *\fIhost\fP)
+.fi
+.SH DESCRIPTION
+The
+.I ares_free_hostent
+function frees a
+.B struct hostent
+allocated by one of the functions \fIares_parse_a_reply(3)\fP,
+\fIares_parse_aaaa_reply(3)\fP, or \fIares_parse_ptr_reply(3)\fP.
+.SH NOTES
+It is not necessary (and is not correct) to free the host structure passed to
+the callback functions for \fIares_gethostbyname(3)\fP or
+\fIares_gethostbyaddr(3)\fP. c-ares will automatically free such host
+structures when the callback returns.
+.SH SEE ALSO
+.BR ares_parse_a_reply (3),
+.BR ares_parse_aaaa_reply (3),
+.BR ares_parse_ptr_reply (3),
+.BR ares_parse_ns_reply (3)

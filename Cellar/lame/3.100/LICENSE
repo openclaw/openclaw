@@ -1,0 +1,13 @@
+Can I use LAME in my commercial program?  
+
+Yes, you can, under the restrictions of the LGPL (see COPYING
+in this folder). The easiest way to do this is to:
+
+1. Link to LAME as separate library (libmp3lame.a on unix or 
+   lame_enc.dll or libmp3lame.dll on windows)
+
+2. Fully acknowledge that you are using LAME, and give a link
+   to our web site, www.mp3dev.org
+
+3. If you make modifications to LAME, you *must* release these
+   modifications back to the LAME project, under the LGPL.

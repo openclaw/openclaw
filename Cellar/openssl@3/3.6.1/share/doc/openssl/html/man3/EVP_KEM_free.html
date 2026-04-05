@@ -1,0 +1,100 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_KEM_free</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_KEM_fetch, EVP_KEM_free, EVP_KEM_up_ref, EVP_KEM_get0_name, EVP_KEM_is_a, EVP_KEM_get0_provider, EVP_KEM_do_all_provided, EVP_KEM_names_do_all, EVP_KEM_get0_description, EVP_KEM_gettable_ctx_params, EVP_KEM_settable_ctx_params - Functions to manage EVP_KEM algorithm objects</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+
+EVP_KEM *EVP_KEM_fetch(OSSL_LIB_CTX *ctx, const char *algorithm,
+                       const char *properties);
+void EVP_KEM_free(EVP_KEM *kem);
+int EVP_KEM_up_ref(EVP_KEM *kem);
+const char *EVP_KEM_get0_name(const EVP_KEM *kem);
+int EVP_KEM_is_a(const EVP_KEM *kem, const char *name);
+OSSL_PROVIDER *EVP_KEM_get0_provider(const EVP_KEM *kem);
+void EVP_KEM_do_all_provided(OSSL_LIB_CTX *libctx,
+                             void (*fn)(EVP_KEM *kem, void *arg), void *arg);
+int EVP_KEM_names_do_all(const EVP_KEM *kem,
+                         void (*fn)(const char *name, void *data), void *data);
+const char *EVP_KEM_get0_description(const EVP_KEM *kem);
+const OSSL_PARAM *EVP_KEM_gettable_ctx_params(const EVP_KEM *kem);
+const OSSL_PARAM *EVP_KEM_settable_ctx_params(const EVP_KEM *kem);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>EVP_KEM_fetch() fetches the implementation for the given <b>algorithm</b> from any provider offering it, within the criteria given by the <b>properties</b> and in the scope of the given library context <b>ctx</b> (see <a href="../man3/OSSL_LIB_CTX.html">OSSL_LIB_CTX(3)</a>). The algorithm will be one offering functions for performing asymmetric kem related tasks such as key encapsulation and decapsulation. See <a href="../man7/crypto.html">&quot;ALGORITHM FETCHING&quot; in crypto(7)</a> for further information.</p>
+
+<p>The returned value must eventually be freed with EVP_KEM_free().</p>
+
+<p>EVP_KEM_free() decrements the reference count for the <b>EVP_KEM</b> structure. Typically this structure will have been obtained from an earlier call to EVP_KEM_fetch(). If the reference count drops to 0 then the structure is freed. If the argument is NULL, nothing is done.</p>
+
+<p>EVP_KEM_up_ref() increments the reference count for an <b>EVP_KEM</b> structure.</p>
+
+<p>EVP_KEM_is_a() returns 1 if <i>kem</i> is an implementation of an algorithm that&#39;s identifiable with <i>name</i>, otherwise 0.</p>
+
+<p>EVP_KEM_get0_provider() returns the provider that <i>kem</i> was fetched from.</p>
+
+<p>EVP_KEM_do_all_provided() traverses all EVP_KEMs implemented by all activated providers in the given library context <i>libctx</i>, and for each of the implementations, calls the given function <i>fn</i> with the implementation method and the given <i>arg</i> as argument.</p>
+
+<p>EVP_KEM_get0_name() returns the algorithm name from the provided implementation for the given <i>kem</i>. Note that the <i>kem</i> may have multiple synonyms associated with it. In this case the first name from the algorithm definition is returned. Ownership of the returned string is retained by the <i>kem</i> object and should not be freed by the caller.</p>
+
+<p>EVP_KEM_names_do_all() traverses all names for <i>kem</i>, and calls <i>fn</i> with each name and <i>data</i>.</p>
+
+<p>EVP_KEM_get0_description() returns a description of the <i>kem</i>, meant for display and human consumption. The description is at the discretion of the <i>kem</i> implementation.</p>
+
+<p>EVP_KEM_gettable_ctx_params() and EVP_KEM_settable_ctx_params() return a constant <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> array that describes the names and types of key parameters that can be retrieved or set by a key encapsulation algorithm using <a href="../man3/EVP_PKEY_CTX_get_params.html">EVP_PKEY_CTX_get_params(3)</a> and <a href="../man3/EVP_PKEY_CTX_set_params.html">EVP_PKEY_CTX_set_params(3)</a>.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>EVP_KEM_fetch() returns a pointer to an <b>EVP_KEM</b> for success or <b>NULL</b> for failure.</p>
+
+<p>EVP_KEM_up_ref() returns 1 for success or 0 otherwise.</p>
+
+<p>EVP_KEM_names_do_all() returns 1 if the callback was called for all names. A return value of 0 means that the callback was not called for any names.</p>
+
+<p>EVP_KEM_gettable_ctx_params() and EVP_KEM_settable_ctx_params() return a constant <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> array or NULL on error.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/crypto.html">&quot;ALGORITHM FETCHING&quot; in crypto(7)</a>, <a href="../man3/OSSL_PROVIDER.html">OSSL_PROVIDER(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The functions described here were added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2020-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

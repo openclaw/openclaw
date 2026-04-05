@@ -1,0 +1,200 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>BN_generate_prime</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#REMOVED-FUNCTIONALITY">REMOVED FUNCTIONALITY</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>BN_generate_prime_ex2, BN_generate_prime_ex, BN_is_prime_ex, BN_check_prime, BN_is_prime_fasttest_ex, BN_GENCB_call, BN_GENCB_new, BN_GENCB_free, BN_GENCB_set_old, BN_GENCB_set, BN_GENCB_get_arg, BN_generate_prime, BN_is_prime, BN_is_prime_fasttest - generate primes and test for primality</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/bn.h&gt;
+
+int BN_generate_prime_ex2(BIGNUM *ret, int bits, int safe,
+                          const BIGNUM *add, const BIGNUM *rem, BN_GENCB *cb,
+                          BN_CTX *ctx);
+
+int BN_generate_prime_ex(BIGNUM *ret, int bits, int safe, const BIGNUM *add,
+                         const BIGNUM *rem, BN_GENCB *cb);
+
+int BN_check_prime(const BIGNUM *p, BN_CTX *ctx, BN_GENCB *cb);
+
+int BN_GENCB_call(BN_GENCB *cb, int a, int b);
+
+BN_GENCB *BN_GENCB_new(void);
+
+void BN_GENCB_free(BN_GENCB *cb);
+
+void BN_GENCB_set_old(BN_GENCB *gencb,
+                      void (*callback)(int, int, void *), void *cb_arg);
+
+void BN_GENCB_set(BN_GENCB *gencb,
+                  int (*callback)(int, int, BN_GENCB *), void *cb_arg);
+
+void *BN_GENCB_get_arg(BN_GENCB *cb);</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 0.9.8, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>BIGNUM *BN_generate_prime(BIGNUM *ret, int num, int safe, BIGNUM *add,
+                          BIGNUM *rem, void (*callback)(int, int, void *),
+                          void *cb_arg);
+
+int BN_is_prime(const BIGNUM *p, int nchecks,
+                void (*callback)(int, int, void *), BN_CTX *ctx, void *cb_arg);
+
+int BN_is_prime_fasttest(const BIGNUM *p, int nchecks,
+                         void (*callback)(int, int, void *), BN_CTX *ctx,
+                         void *cb_arg, int do_trial_division);</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>int BN_is_prime_ex(const BIGNUM *p, int nchecks, BN_CTX *ctx, BN_GENCB *cb);
+
+int BN_is_prime_fasttest_ex(const BIGNUM *p, int nchecks, BN_CTX *ctx,
+                            int do_trial_division, BN_GENCB *cb);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>BN_generate_prime_ex2() generates a pseudo-random prime number of at least bit length <b>bits</b> using the BN_CTX provided in <b>ctx</b>. The value of <b>ctx</b> must not be NULL.</p>
+
+<p>The returned number is probably prime with a negligible error. The maximum error rate is 2^-128. It&#39;s 2^-287 for a 512 bit prime, 2^-435 for a 1024 bit prime, 2^-648 for a 2048 bit prime, and lower than 2^-882 for primes larger than 2048 bit.</p>
+
+<p>If <b>add</b> is <b>NULL</b> the returned prime number will have exact bit length <b>bits</b> with the top most two bits set.</p>
+
+<p>If <b>ret</b> is not <b>NULL</b>, it will be used to store the number.</p>
+
+<p>If <b>cb</b> is not <b>NULL</b>, it is used as follows:</p>
+
+<ul>
+
+<li><p><b>BN_GENCB_call(cb, 0, i)</b> is called after generating the i-th potential prime number.</p>
+
+</li>
+<li><p>While the number is being tested for primality, <b>BN_GENCB_call(cb, 1, j)</b> is called as described below.</p>
+
+</li>
+<li><p>When a prime has been found, <b>BN_GENCB_call(cb, 2, i)</b> is called.</p>
+
+</li>
+<li><p>The callers of BN_generate_prime_ex() may call <b>BN_GENCB_call(cb, i, j)</b> with other values as described in their respective man pages; see <a href="#SEE-ALSO">&quot;SEE ALSO&quot;</a>.</p>
+
+</li>
+</ul>
+
+<p>The prime may have to fulfill additional requirements for use in Diffie-Hellman key exchange:</p>
+
+<p>If <b>add</b> is not <b>NULL</b>, the prime will fulfill the condition p % <b>add</b> == <b>rem</b> (p % <b>add</b> == 1 if <b>rem</b> == <b>NULL</b>) in order to suit a given generator.</p>
+
+<p>If <b>safe</b> is true, it will be a safe prime (i.e. a prime p so that (p-1)/2 is also prime). If <b>safe</b> is true, and <b>rem</b> == <b>NULL</b> the condition will be p % <b>add</b> == 3. It is recommended that <b>add</b> is a multiple of 4.</p>
+
+<p>The random generator must be seeded prior to calling BN_generate_prime_ex(). If the automatic seeding or reseeding of the OpenSSL CSPRNG fails due to external circumstances (see <a href="../man7/RAND.html">RAND(7)</a>), the operation will fail. The random number generator configured for the OSSL_LIB_CTX associated with <b>ctx</b> will be used.</p>
+
+<p>BN_generate_prime_ex() is the same as BN_generate_prime_ex2() except that no <b>ctx</b> parameter is passed. In this case the random number generator associated with the default OSSL_LIB_CTX will be used.</p>
+
+<p>BN_check_prime(), BN_is_prime_ex(), BN_is_prime_fasttest_ex(), BN_is_prime() and BN_is_prime_fasttest() test if the number <b>p</b> is prime. The functions tests until one of the tests shows that <b>p</b> is composite, or all the tests passed. If <b>p</b> passes all these tests, it is considered a probable prime.</p>
+
+<p>The test performed on <b>p</b> are trial division by a number of small primes and rounds of the Miller-Rabin probabilistic primality test.</p>
+
+<p>The functions do at least 64 rounds of the Miller-Rabin test giving a maximum false positive rate of 2^-128. If the size of <b>p</b> is more than 2048 bits, they do at least 128 rounds giving a maximum false positive rate of 2^-256.</p>
+
+<p>If <b>nchecks</b> is larger than the minimum above (64 or 128), <b>nchecks</b> rounds of the Miller-Rabin test will be done.</p>
+
+<p>If <b>do_trial_division</b> set to <b>0</b>, the trial division will be skipped. BN_is_prime_ex() and BN_is_prime() always skip the trial division.</p>
+
+<p>BN_is_prime_ex(), BN_is_prime_fasttest_ex(), BN_is_prime() and BN_is_prime_fasttest() are deprecated.</p>
+
+<p>BN_is_prime_fasttest() and BN_is_prime() behave just like BN_is_prime_fasttest_ex() and BN_is_prime_ex() respectively, but with the old style callback.</p>
+
+<p><b>ctx</b> is a preallocated <b>BN_CTX</b> (to save the overhead of allocating and freeing the structure in a loop), or <b>NULL</b>.</p>
+
+<p>If the trial division is done, and no divisors are found and <b>cb</b> is not <b>NULL</b>, <b>BN_GENCB_call(cb, 1, -1)</b> is called.</p>
+
+<p>After each round of the Miller-Rabin probabilistic primality test, if <b>cb</b> is not <b>NULL</b>, <b>BN_GENCB_call(cb, 1, j)</b> is called with <b>j</b> the iteration (j = 0, 1, ...).</p>
+
+<p>BN_GENCB_call() calls the callback function held in the <b>BN_GENCB</b> structure and passes the ints <b>a</b> and <b>b</b> as arguments. There are two types of <b>BN_GENCB</b> structure that are supported: &quot;new&quot; style and &quot;old&quot; style. New programs should prefer the &quot;new&quot; style, whilst the &quot;old&quot; style is provided for backwards compatibility purposes.</p>
+
+<p>A <b>BN_GENCB</b> structure should be created through a call to BN_GENCB_new(), and freed through a call to BN_GENCB_free(). If the argument is NULL, nothing is done.</p>
+
+<p>For &quot;new&quot; style callbacks a BN_GENCB structure should be initialised with a call to BN_GENCB_set(), where <b>gencb</b> is a <b>BN_GENCB *</b>, <b>callback</b> is of type <b>int (*callback)(int, int, BN_GENCB *)</b> and <b>cb_arg</b> is a <b>void *</b>. &quot;Old&quot; style callbacks are the same except they are initialised with a call to BN_GENCB_set_old() and <b>callback</b> is of type <b>void (*callback)(int, int, void *)</b>.</p>
+
+<p>A callback is invoked through a call to <b>BN_GENCB_call</b>. This will check the type of the callback and will invoke <b>callback(a, b, gencb)</b> for new style callbacks or <b>callback(a, b, cb_arg)</b> for old style.</p>
+
+<p>It is possible to obtain the argument associated with a BN_GENCB structure (set via a call to BN_GENCB_set or BN_GENCB_set_old) using BN_GENCB_get_arg.</p>
+
+<p>BN_generate_prime() (deprecated) works in the same way as BN_generate_prime_ex() but expects an old-style callback function directly in the <b>callback</b> parameter, and an argument to pass to it in the <b>cb_arg</b>. BN_is_prime() and BN_is_prime_fasttest() can similarly be compared to BN_is_prime_ex() and BN_is_prime_fasttest_ex(), respectively.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>BN_generate_prime_ex() return 1 on success or 0 on error.</p>
+
+<p>BN_is_prime_ex(), BN_is_prime_fasttest_ex(), BN_is_prime(), BN_is_prime_fasttest() and BN_check_prime return 0 if the number is composite, 1 if it is prime with an error probability of less than 0.25^<b>nchecks</b>, and -1 on error.</p>
+
+<p>BN_generate_prime() returns the prime number on success, <b>NULL</b> otherwise.</p>
+
+<p>BN_GENCB_new returns a pointer to a BN_GENCB structure on success, or <b>NULL</b> otherwise.</p>
+
+<p>BN_GENCB_get_arg returns the argument previously associated with a BN_GENCB structure.</p>
+
+<p>Callback functions should return 1 on success or 0 on error.</p>
+
+<p>The error codes can be obtained by <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>.</p>
+
+<h1 id="REMOVED-FUNCTIONALITY">REMOVED FUNCTIONALITY</h1>
+
+<p>As of OpenSSL 1.1.0 it is no longer possible to create a BN_GENCB structure directly, as in:</p>
+
+<pre><code>BN_GENCB callback;</code></pre>
+
+<p>Instead applications should create a BN_GENCB structure using BN_GENCB_new:</p>
+
+<pre><code>BN_GENCB *callback;
+callback = BN_GENCB_new();
+if (!callback)
+    /* error */
+...
+BN_GENCB_free(callback);</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/DH_generate_parameters.html">DH_generate_parameters(3)</a>, <a href="../man3/DSA_generate_parameters.html">DSA_generate_parameters(3)</a>, <a href="../man3/RSA_generate_key.html">RSA_generate_key(3)</a>, <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>, <a href="../man3/RAND_bytes.html">RAND_bytes(3)</a>, <a href="../man7/RAND.html">RAND(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The BN_is_prime_ex() and BN_is_prime_fasttest_ex() functions were deprecated in OpenSSL 3.0.</p>
+
+<p>The BN_GENCB_new(), BN_GENCB_free(), and BN_GENCB_get_arg() functions were added in OpenSSL 1.1.0.</p>
+
+<p>BN_check_prime() was added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

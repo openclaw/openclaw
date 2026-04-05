@@ -1,0 +1,81 @@
+{
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "spdxVersion": "SPDX-2.3",
+  "name": "SBOM-SPDX-lame-3.100",
+  "creationInfo": {
+    "created": "2026-04-03T19:34:33Z",
+    "creators": ["Tool: https://github.com/Homebrew/brew@5.1.3"]
+  },
+  "dataLicense": "CC0-1.0",
+  "documentNamespace": "https://formulae.brew.sh/spdx/lame-3.100.json",
+  "documentDescribes": ["SPDXRef-Archive-lame-src", "SPDXRef-Compiler", "SPDXRef-Bottle-lame"],
+  "files": [],
+  "packages": [
+    {
+      "SPDXID": "SPDXRef-Archive-lame-src",
+      "name": "lame",
+      "versionInfo": "3.100",
+      "filesAnalyzed": false,
+      "licenseDeclared": "NOASSERTION",
+      "builtDate": "2017-10-13 20:31:39 UTC",
+      "licenseConcluded": "LGPL-2.0-or-later",
+      "downloadLocation": "https://downloads.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [],
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Compiler",
+      "name": "clang",
+      "versionInfo": "26.3",
+      "filesAnalyzed": false,
+      "licenseDeclared": "NOASSERTION",
+      "licenseConcluded": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "checksums": [],
+      "externalRefs": []
+    },
+    {
+      "SPDXID": "SPDXRef-Bottle-lame",
+      "name": "lame",
+      "versionInfo": "3.100",
+      "filesAnalyzed": false,
+      "licenseDeclared": "NOASSERTION",
+      "builtDate": "2017-10-13 20:31:39 UTC",
+      "licenseConcluded": "LGPL-2.0-or-later",
+      "downloadLocation": "https://ghcr.io/v2/homebrew/core/lame/blobs/sha256:59dc524bd852c6f9d5183deaf76cff3c0f8e546d96b707b4e00597f8526c8a99",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:brew/homebrew/core/lame@3.100",
+          "referenceType": "purl"
+        }
+      ],
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "59dc524bd852c6f9d5183deaf76cff3c0f8e546d96b707b4e00597f8526c8a99"
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "spdxElementId": "SPDXRef-File-lame",
+      "relationshipType": "PACKAGE_OF",
+      "relatedSpdxElement": "SPDXRef-Archive-lame-src"
+    },
+    {
+      "spdxElementId": "SPDXRef-Compiler",
+      "relationshipType": "BUILD_TOOL_OF",
+      "relatedSpdxElement": "SPDXRef-Package-lame-src"
+    }
+  ]
+}

@@ -1,0 +1,69 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_get_handshake_rtt</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_get_handshake_rtt - get round trip time for SSL Handshake</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+int SSL_get_handshake_rtt(const SSL *s, uint64_t *rtt);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_get_handshake_rtt() retrieves the round-trip time (RTT) for <i>ssl</i>.</p>
+
+<p>This metric is represented in microseconds (us) as a uint64_t data type.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>This metric is created by taking two timestamps during the handshake and providing the difference between these two times.</p>
+
+<p>When acting as the server, one timestamp is taken when the server is finished writing to the client. This is during the ServerFinished in TLS 1.3 and ServerHelloDone in TLS 1.2. The other timestamp is taken when the server is done reading the client&#39;s response. This is after the client has responded with ClientFinished.</p>
+
+<p>When acting as the client, one timestamp is taken when the client is finished writing the ClientHello and early data (if any). The other is taken when client is done reading the server&#39;s response. This is after ServerFinished in TLS 1.3 and after ServerHelloDone in TLS 1.2.</p>
+
+<p>In addition to network propagation delay and network stack overhead, this metric includes processing time on both endpoints, as this is based on TLS protocol-level messages and the TLS protocol is not designed to measure network timings. In some cases the processing time can be significant, especially when the processing includes asymmetric cryptographic operations.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>Returns 1 if the TLS handshake RTT is successfully retrieved. Returns 0 if the TLS handshake RTT cannot be determined yet. Returns -1 if, while retrieving the TLS handshake RTT, an error occurs.</p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>This function was added in OpenSSL 3.2.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2023-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

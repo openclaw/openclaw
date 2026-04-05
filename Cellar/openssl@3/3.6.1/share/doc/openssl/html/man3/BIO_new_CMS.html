@@ -1,0 +1,81 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>BIO_new_CMS</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#BUGS">BUGS</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>BIO_new_CMS - CMS streaming filter BIO</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/cms.h&gt;
+
+BIO *BIO_new_CMS(BIO *out, CMS_ContentInfo *cms);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>BIO_new_CMS() returns a streaming filter BIO chain based on <b>cms</b>. The output of the filter is written to <b>out</b>. Any data written to the chain is automatically translated to a BER format CMS structure of the appropriate type.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The chain returned by this function behaves like a standard filter BIO. It supports non blocking I/O. Content is processed and streamed on the fly and not all held in memory at once: so it is possible to encode very large structures. After all content has been written through the chain BIO_flush() must be called to finalise the structure.</p>
+
+<p>The <b>CMS_STREAM</b> flag must be included in the corresponding <b>flags</b> parameter of the <b>cms</b> creation function.</p>
+
+<p>If an application wishes to write additional data to <b>out</b> BIOs should be removed from the chain using BIO_pop() and freed with BIO_free() until <b>out</b> is reached. If no additional data needs to be written BIO_free_all() can be called to free up the whole chain.</p>
+
+<p>Any content written through the filter is used verbatim: no canonical translation is performed.</p>
+
+<p>It is possible to chain multiple BIOs to, for example, create a triple wrapped signed, enveloped, signed structure. In this case it is the applications responsibility to set the inner content type of any outer CMS_ContentInfo structures.</p>
+
+<p>Large numbers of small writes through the chain should be avoided as this will produce an output consisting of lots of OCTET STRING structures. Prepending a BIO_f_buffer() buffering BIO will prevent this.</p>
+
+<h1 id="BUGS">BUGS</h1>
+
+<p>There is currently no corresponding inverse BIO: i.e. one which can decode a CMS structure on the fly.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>BIO_new_CMS() returns a BIO chain when successful or NULL if an error occurred. The error can be obtained from ERR_get_error(3).</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>, <a href="../man3/CMS_sign.html">CMS_sign(3)</a>, <a href="../man3/CMS_encrypt.html">CMS_encrypt(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The BIO_new_CMS() function was added in OpenSSL 1.0.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2008-2016 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

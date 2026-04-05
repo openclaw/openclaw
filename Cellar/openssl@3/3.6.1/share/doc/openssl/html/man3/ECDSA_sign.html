@@ -1,0 +1,165 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>ECDSA_sign</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#CONFORMING-TO">CONFORMING TO</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>ECDSA_size, ECDSA_sign, ECDSA_do_sign, ECDSA_verify, ECDSA_do_verify, ECDSA_sign_setup, ECDSA_sign_ex, ECDSA_do_sign_ex - deprecated low-level elliptic curve digital signature algorithm (ECDSA) functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ecdsa.h&gt;</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>int ECDSA_size(const EC_KEY *eckey);
+
+int ECDSA_sign(int type, const unsigned char *dgst, int dgstlen,
+               unsigned char *sig, unsigned int *siglen, EC_KEY *eckey);
+ECDSA_SIG *ECDSA_do_sign(const unsigned char *dgst, int dgst_len,
+                         EC_KEY *eckey);
+
+int ECDSA_verify(int type, const unsigned char *dgst, int dgstlen,
+                 const unsigned char *sig, int siglen, EC_KEY *eckey);
+int ECDSA_do_verify(const unsigned char *dgst, int dgst_len,
+                    const ECDSA_SIG *sig, EC_KEY* eckey);
+
+ECDSA_SIG *ECDSA_do_sign_ex(const unsigned char *dgst, int dgstlen,
+                            const BIGNUM *kinv, const BIGNUM *rp,
+                            EC_KEY *eckey);
+int ECDSA_sign_setup(EC_KEY *eckey, BN_CTX *ctx, BIGNUM **kinv, BIGNUM **rp);
+int ECDSA_sign_ex(int type, const unsigned char *dgst, int dgstlen,
+                  unsigned char *sig, unsigned int *siglen,
+                  const BIGNUM *kinv, const BIGNUM *rp, EC_KEY *eckey);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>See <a href="../man3/ECDSA_SIG_new.html">ECDSA_SIG_new(3)</a> for a description of the <b>ECDSA_SIG</b> object.</p>
+
+<p>See <a href="../man3/i2d_ECDSA_SIG.html">i2d_ECDSA_SIG(3)</a> and <a href="../man3/d2i_ECDSA_SIG.html">d2i_ECDSA_SIG(3)</a> for information about encoding and decoding ECDSA signatures to/from DER.</p>
+
+<p>All of the functions described below are deprecated. Applications should use the higher level <b>EVP</b> interface such as <a href="../man3/EVP_DigestSignInit.html">EVP_DigestSignInit(3)</a> or <a href="../man3/EVP_DigestVerifyInit.html">EVP_DigestVerifyInit(3)</a> instead.</p>
+
+<p>ECDSA_size() returns the maximum length of a DER encoded ECDSA signature created with the private EC key <i>eckey</i>. To obtain the actual signature size use <a href="../man3/EVP_PKEY_sign.html">EVP_PKEY_sign(3)</a> with a NULL <i>sig</i> parameter.</p>
+
+<p>ECDSA_sign() computes a digital signature of the <i>dgstlen</i> bytes hash value <i>dgst</i> using the private EC key <i>eckey</i>. The DER encoded signatures is stored in <i>sig</i> and its length is returned in <i>siglen</i>. Note: <i>sig</i> must point to ECDSA_size(eckey) bytes of memory. The parameter <i>type</i> is currently ignored. ECDSA_sign() is wrapper function for ECDSA_sign_ex() with <i>kinv</i> and <i>rp</i> set to NULL.</p>
+
+<p>ECDSA_do_sign() is similar to ECDSA_sign() except the signature is returned as a newly allocated <b>ECDSA_SIG</b> structure (or NULL on error). ECDSA_do_sign() is a wrapper function for ECDSA_do_sign_ex() with <i>kinv</i> and <i>rp</i> set to NULL.</p>
+
+<p>ECDSA_verify() verifies that the signature in <i>sig</i> of size <i>siglen</i> is a valid ECDSA signature of the hash value <i>dgst</i> of size <i>dgstlen</i> using the public key <i>eckey</i>. The parameter <i>type</i> is ignored.</p>
+
+<p>ECDSA_do_verify() is similar to ECDSA_verify() except the signature is presented in the form of a pointer to an <b>ECDSA_SIG</b> structure.</p>
+
+<p>The remaining functions utilise the internal <i>kinv</i> and <i>r</i> values used during signature computation. Most applications will never need to call these and some external ECDSA ENGINE implementations may not support them at all if either <i>kinv</i> or <i>r</i> is not NULL.</p>
+
+<p>ECDSA_sign_setup() may be used to precompute parts of the signing operation. <i>eckey</i> is the private EC key and <i>ctx</i> is a pointer to <b>BN_CTX</b> structure (or NULL). The precomputed values or returned in <i>kinv</i> and <i>rp</i> and can be used in a later call to ECDSA_sign_ex() or ECDSA_do_sign_ex().</p>
+
+<p>ECDSA_sign_ex() computes a digital signature of the <i>dgstlen</i> bytes hash value <i>dgst</i> using the private EC key <i>eckey</i> and the optional pre-computed values <i>kinv</i> and <i>rp</i>. The DER encoded signature is stored in <i>sig</i> and its length is returned in <i>siglen</i>. Note: <i>sig</i> must point to ECDSA_size(eckey) bytes of memory. The parameter <i>type</i> is ignored.</p>
+
+<p>ECDSA_do_sign_ex() is similar to ECDSA_sign_ex() except the signature is returned as a newly allocated <b>ECDSA_SIG</b> structure (or NULL on error).</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>ECDSA_size() returns the maximum length signature or 0 on error.</p>
+
+<p>ECDSA_sign(), ECDSA_sign_ex() and ECDSA_sign_setup() return 1 if successful or 0 on error.</p>
+
+<p>ECDSA_do_sign() and ECDSA_do_sign_ex() return a pointer to an allocated <b>ECDSA_SIG</b> structure or NULL on error.</p>
+
+<p>ECDSA_verify() and ECDSA_do_verify() return 1 for a valid signature, 0 for an invalid signature and -1 on error. The error codes can be obtained by <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>Creating an ECDSA signature of a given SHA-256 hash value using the named curve prime256v1 (aka P-256). This example uses deprecated functionality. See <a href="#DESCRIPTION">&quot;DESCRIPTION&quot;</a>.</p>
+
+<p>First step: create an EC_KEY object (note: this part is <b>not</b> ECDSA specific)</p>
+
+<pre><code>int ret;
+ECDSA_SIG *sig;
+EC_KEY *eckey;
+
+eckey = EC_KEY_new_by_curve_name(NID_X9_62_prime256v1);
+if (eckey == NULL)
+    /* error */
+if (EC_KEY_generate_key(eckey) == 0)
+    /* error */</code></pre>
+
+<p>Second step: compute the ECDSA signature of a SHA-256 hash value using ECDSA_do_sign():</p>
+
+<pre><code>sig = ECDSA_do_sign(digest, 32, eckey);
+if (sig == NULL)
+    /* error */</code></pre>
+
+<p>or using ECDSA_sign():</p>
+
+<pre><code>unsigned char *buffer, *pp;
+int buf_len;
+
+buf_len = ECDSA_size(eckey);
+buffer = OPENSSL_malloc(buf_len);
+pp = buffer;
+if (ECDSA_sign(0, dgst, dgstlen, pp, &amp;buf_len, eckey) == 0)
+    /* error */</code></pre>
+
+<p>Third step: verify the created ECDSA signature using ECDSA_do_verify():</p>
+
+<pre><code>ret = ECDSA_do_verify(digest, 32, sig, eckey);</code></pre>
+
+<p>or using ECDSA_verify():</p>
+
+<pre><code>ret = ECDSA_verify(0, digest, 32, buffer, buf_len, eckey);</code></pre>
+
+<p>and finally evaluate the return value:</p>
+
+<pre><code>if (ret == 1)
+    /* signature ok */
+else if (ret == 0)
+    /* incorrect signature */
+else
+    /* error */</code></pre>
+
+<h1 id="CONFORMING-TO">CONFORMING TO</h1>
+
+<p>ANSI X9.62, US Federal Information Processing Standard FIPS186-2 (Digital Signature Standard, DSS)</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EC_KEY_new.html">EC_KEY_new(3)</a>, <a href="../man3/EVP_DigestSignInit.html">EVP_DigestSignInit(3)</a>, <a href="../man3/EVP_DigestVerifyInit.html">EVP_DigestVerifyInit(3)</a>, <a href="../man3/EVP_PKEY_sign.html">EVP_PKEY_sign(3)</a> <a href="../man3/i2d_ECDSA_SIG.html">i2d_ECDSA_SIG(3)</a>, <a href="../man3/d2i_ECDSA_SIG.html">d2i_ECDSA_SIG(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>All functionality described here was deprecated in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2004-2022 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

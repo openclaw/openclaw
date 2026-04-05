@@ -1,0 +1,133 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>PKCS12_key_gen_utf8_ex</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#CONFORMING-TO">CONFORMING TO</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>PKCS12_key_gen_asc, PKCS12_key_gen_asc_ex, PKCS12_key_gen_uni, PKCS12_key_gen_uni_ex, PKCS12_key_gen_utf8, PKCS12_key_gen_utf8_ex - PKCS#12 Password based key derivation</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/pkcs12.h&gt;
+
+int PKCS12_key_gen_asc(const char *pass, int passlen, unsigned char *salt,
+                       int saltlen, int id, int iter, int n,
+                       unsigned char *out, const EVP_MD *md_type);
+int PKCS12_key_gen_asc_ex(const char *pass, int passlen, unsigned char *salt,
+                          int saltlen, int id, int iter, int n,
+                          unsigned char *out, const EVP_MD *md_type,
+                          OSSL_LIB_CTX *ctx, const char *propq);
+int PKCS12_key_gen_uni(unsigned char *pass, int passlen, unsigned char *salt,
+                       int saltlen, int id, int iter, int n,
+                       unsigned char *out, const EVP_MD *md_type);
+int PKCS12_key_gen_uni_ex(unsigned char *pass, int passlen, unsigned char *salt,
+                          int saltlen, int id, int iter, int n,
+                          unsigned char *out, const EVP_MD *md_type,
+                          OSSL_LIB_CTX *ctx, const char *propq);
+int PKCS12_key_gen_utf8(const char *pass, int passlen, unsigned char *salt,
+                        int saltlen, int id, int iter, int n,
+                        unsigned char *out, const EVP_MD *md_type);
+int PKCS12_key_gen_utf8_ex(const char *pass, int passlen, unsigned char *salt,
+                           int saltlen, int id, int iter, int n,
+                           unsigned char *out, const EVP_MD *md_type,
+                           OSSL_LIB_CTX *ctx, const char *propq);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>These methods perform a key derivation according to PKCS#12 (RFC7292) with an input password <i>pass</i> of length <i>passlen</i>, a salt <i>salt</i> of length <i>saltlen</i>, an iteration count <i>iter</i> and a digest algorithm <i>md_type</i>. The ID byte <i>id</i> determines how the resulting key is intended to be used:</p>
+
+<ul>
+
+<li><p>If ID=1, then the pseudorandom bits being produced are to be used as key material for performing encryption or decryption.</p>
+
+</li>
+<li><p>If ID=2, then the pseudorandom bits being produced are to be used as an IV (Initial Value) for encryption or decryption.</p>
+
+</li>
+<li><p>If ID=3, then the pseudorandom bits being produced are to be used as an integrity key for MACing.</p>
+
+</li>
+</ul>
+
+<p>The intended format of the supplied password is determined by the method chosen:</p>
+
+<ul>
+
+<li><p>PKCS12_key_gen_asc() and PKCS12_key_gen_asc_ex() expect an ASCII-formatted password.</p>
+
+</li>
+<li><p>PKCS12_key_gen_uni() and PKCS12_key_gen_uni_ex() expect a Unicode-formatted password.</p>
+
+</li>
+<li><p>PKCS12_key_gen_utf8() and PKCS12_key_gen_utf8_ex() expect a UTF-8 encoded password.</p>
+
+</li>
+</ul>
+
+<p><i>pass</i> is the password used in the derivation of length <i>passlen</i>. <i>pass</i> is an optional parameter and can be NULL. If <i>passlen</i> is -1, then the function will calculate the length of <i>pass</i> using strlen().</p>
+
+<p><i>salt</i> is the salt used in the derivation of length <i>saltlen</i>. If the <i>salt</i> is NULL, then <i>saltlen</i> must be 0. The function will not attempt to calculate the length of the <i>salt</i> because it is not assumed to be NULL terminated.</p>
+
+<p><i>iter</i> is the iteration count and its value should be greater than or equal to 1. RFC 2898 suggests an iteration count of at least 1000. Any <i>iter</i> less than 1 is treated as a single iteration.</p>
+
+<p><i>digest</i> is the message digest function used in the derivation.</p>
+
+<p>The derived key will be written to <i>out</i>. The size of the <i>out</i> buffer is specified via <i>n</i>.</p>
+
+<p>Functions ending in _ex() allow for a library context <i>ctx</i> and property query <i>propq</i> to be used to select algorithm implementations.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>A typical application of this function is to derive keying material for an encryption algorithm from a password in the <i>pass</i>, a salt in <i>salt</i>, and an iteration count.</p>
+
+<p>Increasing the <i>iter</i> parameter slows down the algorithm which makes it harder for an attacker to perform a brute force attack using a large number of candidate passwords.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>Returns 1 on success or 0 on error.</p>
+
+<h1 id="CONFORMING-TO">CONFORMING TO</h1>
+
+<p>IETF RFC 7292 (<a href="https://tools.ietf.org/html/rfc7292">https://tools.ietf.org/html/rfc7292</a>)</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/PKCS12_create_ex.html">PKCS12_create_ex(3)</a>, <a href="../man3/PKCS12_pbe_crypt_ex.html">PKCS12_pbe_crypt_ex(3)</a>, <a href="../man7/passphrase-encoding.html">passphrase-encoding(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>PKCS12_key_gen_asc_ex(), PKCS12_key_gen_uni_ex() and PKCS12_key_gen_utf8_ex() were added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

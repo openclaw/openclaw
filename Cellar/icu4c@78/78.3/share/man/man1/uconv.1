@@ -1,0 +1,445 @@
+.\" Hey, Emacs! This is -*-nroff-*- you know...
+.\"
+.\" uconv.1: manual page for the uconv utility.
+.\"
+.\" Copyright (C) 2016 and later: Unicode, Inc. and others.
+.\" License & terms of use: http://www.unicode.org/copyright.html
+.\" Copyright (C) 2000-2013 IBM, Inc. and others.
+.\"
+.\" Manual page by Yves Arrouye <yves@realnames.com>.
+.\"
+.TH UCONV 1 "2005-jul-1" "ICU MANPAGE" "ICU 78.3 Manual"
+.SH NAME
+.B uconv
+\- convert data from one encoding to another
+.SH SYNOPSIS
+.B uconv
+[
+.BR "\-h\fP, \fB\-?\fP, \fB\-\-help"
+]
+[
+.BI "\-V\fP, \fB\-\-version"
+]
+[
+.BI "\-s\fP, \fB\-\-silent"
+]
+[
+.BI "\-v\fP, \fB\-\-verbose"
+]
+[
+.BI "\-l\fP, \fB\-\-list"
+|
+.BI "\-l\fP, \fB\-\-list\-code" " code"
+|
+.BI "\-\-default-code"
+|
+.BI "\-L\fP, \fB\-\-list\-transliterators"
+]
+[
+.BI "\-\-canon"
+]
+[
+.BI "\-x" " transliteration
+]
+[
+.BI "\-\-to\-callback" " callback"
+|
+.B "\-c"
+]
+[
+.BI "\-\-from\-callback" " callback"
+|
+.B "\-i"
+]
+[
+.BI "\-\-callback" " callback"
+]
+[
+.BI "\-\-fallback"
+|
+.BI "\-\-no\-fallback"
+]
+[
+.BI "\-b\fP, \fB\-\-block\-size" " size"
+]
+[
+.BI "\-f\fP, \fB\-\-from\-code" " encoding"
+]
+[
+.BI "\-t\fP, \fB\-\-to\-code" " encoding"
+]
+[
+.BI "\-\-add\-signature"
+]
+[
+.BI "\-\-remove\-signature"
+]
+[
+.BI "\-o\fP, \fB\-\-output" " file"
+]
+[
+.IR file .\|.\|.
+]
+.SH DESCRIPTION
+.B uconv
+converts, or transcodes, each given
+.I file
+(or its standard input if no
+.I file
+is specified) from one
+.I encoding
+to another. 
+The transcoding is done using Unicode as a pivot encoding
+(i.e. the data are first transcoded from their original encoding to
+Unicode, and then from Unicode to the destination encoding).
+.PP
+If an
+.I encoding
+is not specified or is
+.BR - ,
+the default encoding is used. Thus, calling
+.B uconv
+with no
+.I encoding
+provides an easy way to validate and sanitize data files for
+further consumption by tools requiring data in the default encoding.
+.PP
+When calling
+.BR uconv ,
+it is possible to specify callbacks that are used to handle invalid
+characters in the input, or characters that cannot be transcoded to
+the destination encoding. Some encodings, for example, offer a default
+substitution character that can be used to represent the occurrence of
+such characters in the input. Other callbacks offer a useful visual
+representation of the invalid data.
+.PP
+.B uconv
+can also run the specified
+.IR transliteration
+on the transcoded data,
+in which case transliteration will happen as an intermediate step,
+after the data have been transcoded to Unicode.
+The
+.I transliteration
+can be either a list of semicolon-separated transliterator names,
+or an arbitrarily complex set of rules in the ICU transliteration
+rules format.
+.PP
+For transcoding purposes,
+.B uconv
+options are compatible with those of
+.BR iconv (1),
+making it easy to replace it in scripts. It is not necessarily the case,
+however, that the encoding names used by
+.B uconv
+and ICU are the same as the ones used by
+.BR iconv (1).
+Also, options that provide informational data, such as the
+.B \-l\fP, \fB\-\-list
+one offered by some 
+.BR iconv (1)
+variants such as GNU's, produce data in a slightly different and
+easier to parse format.
+.SH OPTIONS
+.TP
+.BR "\-h\fP, \fB\-?\fP, \fB\-\-help"
+Print help about usage and exit.
+.TP
+.BR "\-V\fP, \fB\-\-version"
+Print the version of
+.B uconv
+and exit.
+.TP
+.BI "\-s\fP, \fB\-\-silent"
+Suppress messages during execution.
+.TP
+.BI "\-v\fP, \fB\-\-verbose"
+Display extra informative messages during execution.
+.TP
+.BI "\-l\fP, \fB\-\-list"
+List all the available encodings and exit.
+.TP
+.BI "\-l\fP, \fB\-\-list\-code" " code"
+List only the
+.I code
+encoding and exit. If
+.I code
+is not a proper encoding, exit with an error.
+.TP
+.BI "\-\-default-code"
+List only the name of the default encoding and exit.
+.TP
+.BI "\-L\fP, \fB\-\-list\-transliterators"
+List all the available transliterators and exit.
+.TP
+.BI "\--canon"
+If used with
+.BI "\-l\fP, \fB\-\-list"
+or
+.BR "\-\-default-code" ,
+the list of encodings is produced in a format compatible with
+.BR convrtrs.txt (5).
+If used with
+.BR "\-L\fP, \fB\-\-list\-transliterators" ,
+print only one transliterator name per line.
+.TP
+.BI "\-x" " transliteration"
+Run the given
+.IR transliteration
+on the transcoded Unicode data,
+and use the transliterated data as input for the transcoding to
+the destination encoding.
+.TP
+.BI "\-\-to\-callback" " callback"
+Use
+.I callback
+to handle characters that cannot be transcoded to the destination
+encoding. See section
+.B CALLBACKS
+for details on valid callbacks.
+.TP
+.B "\-c"
+Omit invalid characters from the output.
+Same as
+.BR "\-\-to\-callback skip" .
+.TP
+.BI "\-\-from\-callback" " callback"
+Use
+.I callback
+to handle characters that cannot be transcoded from the original
+encoding. See section
+.B CALLBACKS
+for details on valid callbacks.
+.TP
+.B "\-i"
+Ignore invalid sequences in the input.
+Same as
+.BR "\-\-from\-callback skip" .
+.TP
+.BI "\-\-callback" " callback"
+Use
+.I callback
+to handle both characters that cannot be transcoded from the original
+encoding and characters that cannot be transcoded to the destination
+encoding. See section
+.B CALLBACKS
+for details on valid callbacks.
+.TP
+.BI "\-\-fallback"
+Use the fallback mapping when transcoding from
+Unicode to the destination encoding.
+.TP
+.BI "\-\-no\-fallback"
+Do not use the fallback mapping when transcoding from Unicode to the
+destination encoding.
+This is the default.
+.TP
+.BI "\-b\fP, \fB\-\-block\-size" " size"
+Read input in blocks of
+.I size
+bytes at a time. The default block size is
+4096.
+.TP
+.BI "\-f\fP, \fB\-\-from\-code" " encoding"
+Set the original encoding of the data to 
+.IR encoding .
+.TP
+.BI "\-t\fP, \fB\-\-to\-code" " encoding"
+Transcode the data to
+.IR encoding .
+.TP
+.BI "\-\-add\-signature"
+Add a U+FEFF Unicode signature character (BOM) if the output charset
+supports it and does not add one anyway.
+.TP
+.BI "\-\-remove\-signature"
+Remove a U+FEFF Unicode signature character (BOM).
+.TP
+.BI "\-o\fP, \fB\-\-output" " file"
+Write the transcoded data to
+.IR file .
+.SH CALLBACKS
+.B uconv
+supports specifying callbacks to handle invalid data. Callbacks can be
+set for both directions of transcoding: from the original encoding to
+Unicode, with the
+.BR "\-\-from\-callback"
+option, and from Unicode to the destination encoding, with the
+.BR "\-\-to\-callback"
+option.
+.PP
+The following is a list of valid
+.I callback
+names, along with a description of their behavior. The list of
+callbacks actually supported by
+.B uconv
+is displayed when it is called with
+.BR "\-h\fP, \fB\-\-help" .
+.PP
+.TP \w'\fBescape-unicode'u+3n
+.B substitute
+Write the encoding's substitute sequence, or the Unicode
+replacement character
+.B U+FFFD
+when transcoding to Unicode.
+.TP
+.B skip
+Ignore the invalid data.
+.TP
+.B stop
+Stop with an error when encountering invalid data.
+This is the default callback.
+.TP
+.B escape
+Same as
+.BR escape-icu .
+.TP
+.B escape-icu
+Replace the missing characters with a string of the format
+.BR %U\fIhhhh\fP
+for plane 0 characters, and
+.BR %U\fIhhhh\fP%U\fIhhhh\fP
+for planes 1 and above characters,
+where
+.I hhhh
+is the hexadecimal value of one of the UTF-16 code units representing the
+character. Characters from planes 1 and above are written as a pair of
+UTF-16 surrogate code units.
+.TP
+.B escape-java
+Replace the missing characters with a string of the format
+.BR \eu\fIhhhh\fP
+for plane 0 characters, and
+.BR \eu\fIhhhh\fP\eu\fIhhhh\fP
+for planes 1 and above characters,
+where
+.I hhhh
+is the hexadecimal value of one of the UTF-16 code units representing the
+character. Characters from planes 1 and above are written as a pair of
+UTF-16 surrogate code units.
+.TP
+.B escape-c
+Replace the missing characters with a string of the format
+.BR \eu\fIhhhh\fP
+for plane 0 characters, and
+.BR \eU\fIhhhhhhhh\fP
+for planes 1 and above characters,
+where
+.I hhhh
+and
+.I hhhhhhhh
+are the hexadecimal values of the Unicode codepoint.
+.TP
+.B escape-xml
+Same as
+.BR escape-xml-hex .
+.TP
+.B escape-xml-hex
+Replace the missing characters with a string of the format
+.BR &#x\fIhhhh\fP; ,
+where
+.I hhhh
+is the hexadecimal value of the Unicode codepoint.
+.TP
+.B escape-xml-dec
+Replace the missing characters with a string of the format
+.BR &#\fInnnn\fP; ,
+where
+.I nnnn
+is the decimal value of the Unicode codepoint.
+.TP
+.B escape-unicode
+Replace the missing characters with a string of the format
+.BR {U+\fIhhhh\fP} ,
+where
+.I hhhh
+is the hexadecimal value of the Unicode codepoint.
+That hexadecimal string is of variable length and can use from 4 to
+6 digits.
+This is the format universally used to denote a Unicode codepoint in
+the literature, delimited by curly braces for easy recognition of those
+substitutions in the output.
+.SH EXAMPLES
+Convert data from a given
+.I encoding
+to the platform encoding:
+
+.RS 4
+.B \fR$ \fPuconv \-f \fIencoding\fP
+.RE
+.PP
+Check if a
+.I file
+contains valid data for a given
+.IR encoding :
+
+.RS 4
+.B \fR$ \fPuconv \-f \fIencoding\fP \-c \fIfile\fP >/dev/null
+.RE
+.PP
+Convert a UTF-8
+.I file
+to a given
+.I encoding
+and ensure that the resulting text is good for any version of HTML:
+
+.RS 4
+.B \fR$ \fPuconv \-f utf-8 \-t \fIencoding\fP \e
+.br
+.B "    \-\-callback escape-xml-dec \fIfile\fP"
+.RE
+.PP
+Display the names of the Unicode code points in a UTF-file:
+
+.RS 4
+.B \fR$ \fPuconv \-f utf-8 \-x any-name \fIfile\fP
+.RE
+.PP
+Print the name of a Unicode code point whose value is known (\fBU+30AB\fP
+in this example):
+
+.RS 4
+.B \fR$ \fPecho '\eu30ab' | uconv \-x 'hex-any; any-name'; echo
+.br
+{KATAKANA LETTER KA}{LINE FEED}
+.br
+$ 
+.RE
+
+(The names are delimited by curly braces.
+Also, the name of the line terminator is also displayed.)
+.PP
+Normalize UTF-8 data using Unicode NFKC, remove all control characters,
+and map Katakana to Hiragana:
+
+.RS 4
+.B \fR$ \fPuconv \-f utf-8 \-t utf-8 \e
+.br
+.B "      \-x '::nfkc; [:Cc:] >; ::katakana-hiragana;'"
+.SH CAVEATS AND BUGS
+.B uconv
+does report errors as occurring at the first invalid byte
+encountered. This may be confusing to users of GNU
+.BR iconv (1),
+which reports errors as occurring at the first byte of an invalid
+sequence. For multi-byte character sets or encodings, this means that
+.BR uconv
+error positions may be at a later offset in the input stream than
+would be the case with GNU
+.BR iconv (1).
+.PP
+The reporting of error positions when a transliterator is used may be
+inaccurate or unavailable, in which case
+.BR uconv
+will report the offset in the output stream at which the error
+occurred.
+.SH AUTHORS
+Jonas Utterstroem
+.br
+Yves Arrouye
+.SH VERSION
+78.3
+.SH COPYRIGHT
+Copyright (C) 2000-2005 IBM, Inc. and others.
+.SH SEE ALSO
+.BR iconv (1)

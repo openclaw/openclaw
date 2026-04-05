@@ -1,0 +1,86 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SMIME_read_ASN1</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#BUGS">BUGS</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SMIME_read_ASN1_ex, SMIME_read_ASN1 - parse S/MIME message</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/asn1.h&gt;
+
+ASN1_VALUE *SMIME_read_ASN1_ex(BIO *in, int flags, BIO **bcont,
+                               const ASN1_ITEM *it, ASN1_VALUE **x,
+                               OSSL_LIB_CTX *libctx, const char *propq);
+ASN1_VALUE *SMIME_read_ASN1(BIO *in, BIO **bcont, const ASN1_ITEM *it);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SMIME_read_ASN1_ex() parses a message in S/MIME format.</p>
+
+<p><i>in</i> is a BIO to read the message from. If the <i>flags</i> argument contains <b>CMS_BINARY</b> then the input is assumed to be in binary format and is not translated to canonical form. If in addition <b>SMIME_ASCIICRLF</b> is set then the binary input is assumed to be followed by <b>CR</b> and <b>LF</b> characters, else only by an <b>LF</b> character. <i>x</i> can be used to optionally supply a previously created <i>it</i> ASN1_VALUE object (such as CMS_ContentInfo or PKCS7), it can be set to NULL. Valid values that can be used by ASN.1 structure <i>it</i> are ASN1_ITEM_rptr(PKCS7) or ASN1_ITEM_rptr(CMS_ContentInfo). Any algorithm fetches that occur during the operation will use the <b>OSSL_LIB_CTX</b> supplied in the <i>libctx</i> parameter, and use the property query string <i>propq</i> See <a href="../man7/crypto.html">&quot;ALGORITHM FETCHING&quot; in crypto(7)</a> for further details about algorithm fetching.</p>
+
+<p>If cleartext signing is used then the content is saved in a memory bio which is written to <i>*bcont</i>, otherwise <i>*bcont</i> is set to NULL.</p>
+
+<p>The parsed ASN1_VALUE structure is returned or NULL if an error occurred.</p>
+
+<p>SMIME_read_ASN1() is similar to SMIME_read_ASN1_ex() but sets the value of <i>x</i> to NULL and the value of <i>flags</i> to 0.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The higher level functions <a href="../man3/SMIME_read_CMS_ex.html">SMIME_read_CMS_ex(3)</a> and <a href="../man3/SMIME_read_PKCS7_ex.html">SMIME_read_PKCS7_ex(3)</a> should be used instead of SMIME_read_ASN1_ex().</p>
+
+<p>To support future functionality if <i>bcont</i> is not NULL <i>*bcont</i> should be initialized to NULL.</p>
+
+<h1 id="BUGS">BUGS</h1>
+
+<p>The MIME parser used by SMIME_read_ASN1_ex() is somewhat primitive. While it will handle most S/MIME messages more complex compound formats may not work.</p>
+
+<p>The use of a memory BIO to hold the signed content limits the size of message which can be processed due to memory restraints: a streaming single pass option should be available.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SMIME_read_ASN1_ex() and SMIME_read_ASN1() return a valid <b>ASN1_VALUE</b> structure or <b>NULL</b> if an error occurred. The error can be obtained from ERR_get_error(3).</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>, <a href="../man3/SMIME_read_CMS_ex.html">SMIME_read_CMS_ex(3)</a>, <a href="../man3/SMIME_read_PKCS7_ex.html">SMIME_read_PKCS7_ex(3)</a>, <a href="../man3/SMIME_write_ASN1.html">SMIME_write_ASN1(3)</a>, <a href="../man3/SMIME_write_ASN1_ex.html">SMIME_write_ASN1_ex(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The function SMIME_read_ASN1_ex() was added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2020-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

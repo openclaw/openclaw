@@ -1,0 +1,86 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SRP_VBASE_new</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SRP_VBASE_new, SRP_VBASE_free, SRP_VBASE_init, SRP_VBASE_add0_user, SRP_VBASE_get1_by_user, SRP_VBASE_get_by_user - Functions to create and manage a stack of SRP user verifier information</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/srp.h&gt;</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>SRP_VBASE *SRP_VBASE_new(char *seed_key);
+void SRP_VBASE_free(SRP_VBASE *vb);
+
+int SRP_VBASE_init(SRP_VBASE *vb, char *verifier_file);
+
+int SRP_VBASE_add0_user(SRP_VBASE *vb, SRP_user_pwd *user_pwd);
+SRP_user_pwd *SRP_VBASE_get1_by_user(SRP_VBASE *vb, char *username);
+SRP_user_pwd *SRP_VBASE_get_by_user(SRP_VBASE *vb, char *username);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>All of the functions described on this page are deprecated. There are no available replacement functions at this time.</p>
+
+<p>The SRP_VBASE_new() function allocates a structure to store server side SRP verifier information. If <b>seed_key</b> is not NULL a copy is stored and used to generate dummy parameters for users that are not found by SRP_VBASE_get1_by_user(). This allows the server to hide the fact that it doesn&#39;t have a verifier for a particular username, as described in section 2.5.1.3 &#39;Unknown SRP&#39; of RFC 5054. The seed string should contain random NUL terminated binary data (therefore the random data should not contain NUL bytes!).</p>
+
+<p>The SRP_VBASE_free() function frees up the <b>vb</b> structure. If <b>vb</b> is NULL, nothing is done.</p>
+
+<p>The SRP_VBASE_init() function parses the information in a verifier file and populates the <b>vb</b> structure. The verifier file is a text file containing multiple entries, whose format is: flag base64(verifier) base64(salt) username gNid userinfo(optional) where the flag can be &#39;V&#39; (valid) or &#39;R&#39; (revoked). Note that the base64 encoding used here is non-standard so it is recommended to use <a href="../man1/openssl-srp.html">openssl-srp(1)</a> to generate this file.</p>
+
+<p>The SRP_VBASE_add0_user() function adds the <b>user_pwd</b> verifier information to the <b>vb</b> structure. See <a href="../man3/SRP_user_pwd_new.html">SRP_user_pwd_new(3)</a> to create and populate this record. The library takes ownership of <b>user_pwd</b>, it should not be freed by the caller.</p>
+
+<p>The SRP_VBASE_get1_by_user() function returns the password info for the user whose username matches <b>username</b>. It replaces the deprecated SRP_VBASE_get_by_user(). If no matching user is found but a seed_key and default gN parameters have been set, dummy authentication information is generated from the seed_key, allowing the server to hide the fact that it doesn&#39;t have a verifier for a particular username. When using SRP as a TLS authentication mechanism, this will cause the handshake to proceed normally but the first client will be rejected with a &quot;bad_record_mac&quot; alert, as if the password was incorrect. If no matching user is found and the seed_key is not set, NULL is returned. Ownership of the returned pointer is released to the caller, it must be freed with SRP_user_pwd_free().</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SRP_VBASE_init() returns <b>SRP_NO_ERROR</b> (0) on success and a positive value on failure. The error codes are <b>SRP_ERR_OPEN_FILE</b> if the file could not be opened, <b>SRP_ERR_VBASE_INCOMPLETE_FILE</b> if the file could not be parsed, <b>SRP_ERR_MEMORY</b> on memory allocation failure and <b>SRP_ERR_VBASE_BN_LIB</b> for invalid decoded parameter values.</p>
+
+<p>SRP_VBASE_add0_user() returns 1 on success and 0 on failure.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man1/openssl-srp.html">openssl-srp(1)</a>, <a href="../man3/SRP_create_verifier.html">SRP_create_verifier(3)</a>, <a href="../man3/SRP_user_pwd_new.html">SRP_user_pwd_new(3)</a>, <a href="../man3/SSL_CTX_set_srp_password.html">SSL_CTX_set_srp_password(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The SRP_VBASE_add0_user() function was added in OpenSSL 3.0.</p>
+
+<p>All other functions were added in OpenSSL 1.0.1.</p>
+
+<p>All of these functions were deprecated in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2018-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

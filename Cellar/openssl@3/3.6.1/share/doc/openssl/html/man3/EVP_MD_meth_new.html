@@ -1,0 +1,169 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_MD_meth_new</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_MD_meth_new, EVP_MD_meth_dup, EVP_MD_meth_free, EVP_MD_meth_set_input_blocksize, EVP_MD_meth_set_result_size, EVP_MD_meth_set_app_datasize, EVP_MD_meth_set_flags, EVP_MD_meth_set_init, EVP_MD_meth_set_update, EVP_MD_meth_set_final, EVP_MD_meth_set_copy, EVP_MD_meth_set_cleanup, EVP_MD_meth_set_ctrl, EVP_MD_meth_get_input_blocksize, EVP_MD_meth_get_result_size, EVP_MD_meth_get_app_datasize, EVP_MD_meth_get_flags, EVP_MD_meth_get_init, EVP_MD_meth_get_update, EVP_MD_meth_get_final, EVP_MD_meth_get_copy, EVP_MD_meth_get_cleanup, EVP_MD_meth_get_ctrl - Routines to build up legacy EVP_MD methods</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/evp.h&gt;</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>EVP_MD *EVP_MD_meth_new(int md_type, int pkey_type);
+void EVP_MD_meth_free(EVP_MD *md);
+EVP_MD *EVP_MD_meth_dup(const EVP_MD *md);
+
+int EVP_MD_meth_set_input_blocksize(EVP_MD *md, int blocksize);
+int EVP_MD_meth_set_result_size(EVP_MD *md, int resultsize);
+int EVP_MD_meth_set_app_datasize(EVP_MD *md, int datasize);
+int EVP_MD_meth_set_flags(EVP_MD *md, unsigned long flags);
+int EVP_MD_meth_set_init(EVP_MD *md, int (*init)(EVP_MD_CTX *ctx));
+int EVP_MD_meth_set_update(EVP_MD *md, int (*update)(EVP_MD_CTX *ctx,
+                                                     const void *data,
+                                                     size_t count));
+int EVP_MD_meth_set_final(EVP_MD *md, int (*final)(EVP_MD_CTX *ctx,
+                                                   unsigned char *md));
+int EVP_MD_meth_set_copy(EVP_MD *md, int (*copy)(EVP_MD_CTX *to,
+                                                 const EVP_MD_CTX *from));
+int EVP_MD_meth_set_cleanup(EVP_MD *md, int (*cleanup)(EVP_MD_CTX *ctx));
+int EVP_MD_meth_set_ctrl(EVP_MD *md, int (*ctrl)(EVP_MD_CTX *ctx, int cmd,
+                                                 int p1, void *p2));
+
+int EVP_MD_meth_get_input_blocksize(const EVP_MD *md);
+int EVP_MD_meth_get_result_size(const EVP_MD *md);
+int EVP_MD_meth_get_app_datasize(const EVP_MD *md);
+unsigned long EVP_MD_meth_get_flags(const EVP_MD *md);
+int (*EVP_MD_meth_get_init(const EVP_MD *md))(EVP_MD_CTX *ctx);
+int (*EVP_MD_meth_get_update(const EVP_MD *md))(EVP_MD_CTX *ctx,
+                                                const void *data,
+                                                size_t count);
+int (*EVP_MD_meth_get_final(const EVP_MD *md))(EVP_MD_CTX *ctx,
+                                               unsigned char *md);
+int (*EVP_MD_meth_get_copy(const EVP_MD *md))(EVP_MD_CTX *to,
+                                              const EVP_MD_CTX *from);
+int (*EVP_MD_meth_get_cleanup(const EVP_MD *md))(EVP_MD_CTX *ctx);
+int (*EVP_MD_meth_get_ctrl(const EVP_MD *md))(EVP_MD_CTX *ctx, int cmd,
+                                              int p1, void *p2);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>All of the functions described on this page are deprecated. Applications should instead use the OSSL_PROVIDER APIs.</p>
+
+<p>The <b>EVP_MD</b> type is a structure for digest method implementation. It can also have associated public/private key signing and verifying routines.</p>
+
+<p>EVP_MD_meth_new() creates a new <b>EVP_MD</b> structure. These <b>EVP_MD</b> structures are reference counted.</p>
+
+<p>EVP_MD_meth_dup() creates a copy of <b>md</b>.</p>
+
+<p>EVP_MD_meth_free() decrements the reference count for the <b>EVP_MD</b> structure. If the reference count drops to 0 then the structure is freed. If the argument is NULL, nothing is done.</p>
+
+<p>EVP_MD_meth_set_input_blocksize() sets the internal input block size for the method <b>md</b> to <b>blocksize</b> bytes.</p>
+
+<p>EVP_MD_meth_set_result_size() sets the size of the result that the digest method in <b>md</b> is expected to produce to <b>resultsize</b> bytes.</p>
+
+<p>The digest method may have its own private data, which OpenSSL will allocate for it. EVP_MD_meth_set_app_datasize() should be used to set the size for it to <b>datasize</b>.</p>
+
+<p>EVP_MD_meth_set_flags() sets the flags to describe optional behaviours in the particular <b>md</b>. Several flags can be or&#39;d together. The available flags are:</p>
+
+<dl>
+
+<dt id="EVP_MD_FLAG_ONESHOT">EVP_MD_FLAG_ONESHOT</dt>
+<dd>
+
+<p>This digest method can only handle one block of input.</p>
+
+</dd>
+<dt id="EVP_MD_FLAG_XOF">EVP_MD_FLAG_XOF</dt>
+<dd>
+
+<p>This digest method is an extensible-output function (XOF) and supports the <b>EVP_MD_CTRL_XOF_LEN</b> control.</p>
+
+</dd>
+<dt id="EVP_MD_FLAG_DIGALGID_NULL">EVP_MD_FLAG_DIGALGID_NULL</dt>
+<dd>
+
+<p>When setting up a DigestAlgorithmIdentifier, this flag will have the parameter set to NULL by default. Use this for PKCS#1. <i>Note: if combined with EVP_MD_FLAG_DIGALGID_ABSENT, the latter will override.</i></p>
+
+</dd>
+<dt id="EVP_MD_FLAG_DIGALGID_ABSENT">EVP_MD_FLAG_DIGALGID_ABSENT</dt>
+<dd>
+
+<p>When setting up a DigestAlgorithmIdentifier, this flag will have the parameter be left absent by default. <i>Note: if combined with EVP_MD_FLAG_DIGALGID_NULL, the latter will be overridden.</i></p>
+
+</dd>
+<dt id="EVP_MD_FLAG_DIGALGID_CUSTOM">EVP_MD_FLAG_DIGALGID_CUSTOM</dt>
+<dd>
+
+<p>Custom DigestAlgorithmIdentifier handling via ctrl, with <b>EVP_MD_FLAG_DIGALGID_ABSENT</b> as default. <i>Note: if combined with EVP_MD_FLAG_DIGALGID_NULL, the latter will be overridden.</i> Currently unused.</p>
+
+</dd>
+<dt id="EVP_MD_FLAG_FIPS">EVP_MD_FLAG_FIPS</dt>
+<dd>
+
+<p>This digest method is suitable for use in FIPS mode. Currently unused.</p>
+
+</dd>
+</dl>
+
+<p>EVP_MD_meth_set_init() sets the digest init function for <b>md</b>. The digest init function is called by EVP_Digest(), EVP_DigestInit(), EVP_DigestInit_ex(), EVP_SignInit, EVP_SignInit_ex(), EVP_VerifyInit() and EVP_VerifyInit_ex().</p>
+
+<p>EVP_MD_meth_set_update() sets the digest update function for <b>md</b>. The digest update function is called by EVP_Digest(), EVP_DigestUpdate() and EVP_SignUpdate().</p>
+
+<p>EVP_MD_meth_set_final() sets the digest final function for <b>md</b>. The digest final function is called by EVP_Digest(), EVP_DigestFinal(), EVP_DigestFinal_ex(), EVP_SignFinal() and EVP_VerifyFinal().</p>
+
+<p>EVP_MD_meth_set_copy() sets the function for <b>md</b> to do extra computations after the method&#39;s private data structure has been copied from one <b>EVP_MD_CTX</b> to another. If all that&#39;s needed is to copy the data, there is no need for this copy function. Note that the copy function is passed two <b>EVP_MD_CTX *</b>, the private data structure is then available with EVP_MD_CTX_get0_md_data(). This copy function is called by EVP_MD_CTX_copy() and EVP_MD_CTX_copy_ex().</p>
+
+<p>EVP_MD_meth_set_cleanup() sets the function for <b>md</b> to do extra cleanup before the method&#39;s private data structure is cleaned out and freed. Note that the cleanup function is passed a <b>EVP_MD_CTX *</b>, the private data structure is then available with EVP_MD_CTX_get0_md_data(). This cleanup function is called by EVP_MD_CTX_reset() and EVP_MD_CTX_free().</p>
+
+<p>EVP_MD_meth_set_ctrl() sets the control function for <b>md</b>. See <a href="../man3/EVP_MD_CTX_ctrl.html">EVP_MD_CTX_ctrl(3)</a> for the available controls.</p>
+
+<p>EVP_MD_meth_get_input_blocksize(), EVP_MD_meth_get_result_size(), EVP_MD_meth_get_app_datasize(), EVP_MD_meth_get_flags(), EVP_MD_meth_get_init(), EVP_MD_meth_get_update(), EVP_MD_meth_get_final(), EVP_MD_meth_get_copy(), EVP_MD_meth_get_cleanup() and EVP_MD_meth_get_ctrl() are all used to retrieve the method data given with the EVP_MD_meth_set_*() functions above.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>EVP_MD_meth_new() and EVP_MD_meth_dup() return a pointer to a newly created <b>EVP_MD</b>, or NULL on failure. All EVP_MD_meth_set_*() functions return 1. EVP_MD_get_input_blocksize(), EVP_MD_meth_get_result_size(), EVP_MD_meth_get_app_datasize() and EVP_MD_meth_get_flags() return the indicated sizes or flags. All other EVP_CIPHER_meth_get_*() functions return pointers to their respective <b>md</b> function.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_DigestInit.html">EVP_DigestInit(3)</a>, <a href="../man3/EVP_SignInit.html">EVP_SignInit(3)</a>, <a href="../man3/EVP_VerifyInit.html">EVP_VerifyInit(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>All of these functions were deprecated in OpenSSL 3.0.</p>
+
+<p>The <b>EVP_MD</b> structure was openly available in OpenSSL before version 1.1. The functions described here were added in OpenSSL 1.1. The <b>EVP_MD</b> structure created with these functions became reference counted in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2015-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

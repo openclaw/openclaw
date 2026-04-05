@@ -1,0 +1,161 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_new_listener</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#CLIENT-ONLY-USAGE">CLIENT-ONLY USAGE</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_new_listener, SSL_new_listener_from, SSL_is_listener, SSL_get0_listener, SSL_listen, SSL_accept_connection, SSL_get_accept_connection_queue_len, SSL_new_from_listener, SSL_ACCEPT_CONNECTION_NO_BLOCK - SSL object interface for abstracted connection acceptance</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+SSL *SSL_new_listener(SSL_CTX *ctx, uint64_t flags);
+SSL *SSL_new_listener_from(SSL *ssl, uint64_t flags);
+
+int SSL_is_listener(SSL *ssl);
+SSL *SSL_get0_listener(SSL *ssl);
+
+int SSL_listen(SSL *ssl);
+
+#define SSL_ACCEPT_CONNECTION_NO_BLOCK
+SSL *SSL_accept_connection(SSL *ssl, uint64_t flags);
+
+size_t SSL_get_accept_connection_queue_len(SSL *ssl);
+
+SSL *SSL_new_from_listener(SSL *ssl, uint64_t flags);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The SSL_new_listener() function creates a listener SSL object. Listener SSL objects are specialised to only accept network connections in a protocol- agnostic manner. They cannot be used, for example, for sending or receiving data using <a href="../man3/SSL_write_ex.html">SSL_write_ex(3)</a> or <a href="../man3/SSL_read_ex.html">SSL_read_ex(3)</a>. In general, only those functions expressly documented as being supported on a listener SSL object are available.</p>
+
+<p>The SSL_new_listener_from() function creates a listener SSL object which is subordinate to a QUIC domain SSL object <i>ssl</i>. See <a href="../man3/SSL_new_domain.html">SSL_new_domain(3)</a> and <a href="../man7/openssl-quic-concurrency.html">openssl-quic-concurrency(7)</a> for details on QUIC domain SSL objects.</p>
+
+<p>A listener SSL object supports the following operations:</p>
+
+<ul>
+
+<li><p>Standard reference counting and free operations, such as <a href="../man3/SSL_up_ref.html">SSL_up_ref(3)</a> and <a href="../man3/SSL_free.html">SSL_free(3)</a>;</p>
+
+</li>
+<li><p>Network BIO configuration operations, such as <a href="../man3/SSL_set_bio.html">SSL_set_bio(3)</a>;</p>
+
+</li>
+<li><p>Event processing and polling enablement APIs such as <a href="../man3/SSL_handle_events.html">SSL_handle_events(3)</a>, <a href="../man3/SSL_get_event_timeout.html">SSL_get_event_timeout(3)</a>, <a href="../man3/SSL_get_rpoll_descriptor.html">SSL_get_rpoll_descriptor(3)</a>, <a href="../man3/SSL_get_wpoll_descriptor.html">SSL_get_wpoll_descriptor(3)</a>, <a href="../man3/SSL_net_read_desired.html">SSL_net_read_desired(3)</a> and <a href="../man3/SSL_net_write_desired.html">SSL_net_write_desired(3)</a>;</p>
+
+</li>
+<li><p>Certain configurable parameters described in <a href="../man3/SSL_get_value_uint.html">SSL_get_value_uint(3)</a> (see <a href="../man3/SSL_get_value_uint.html">SSL_get_value_uint(3)</a> for details);</p>
+
+</li>
+<li><p>Accepting network connections using the functions documented in this manual page, such as SSL_accept_connection().</p>
+
+</li>
+</ul>
+
+<p>The basic workflow of using a listener object is as follows:</p>
+
+<ul>
+
+<li><p>Create a new listener object using SSL_new_listener() using a <b>SSL_CTX</b> which uses a supported <b>SSL_METHOD</b> (such as <a href="../man3/OSSL_QUIC_server_method.html">OSSL_QUIC_server_method(3)</a>);</p>
+
+</li>
+<li><p>Configure appropriate network BIOs using <a href="../man3/SSL_set_bio.html">SSL_set_bio(3)</a> on the listener SSL object;</p>
+
+</li>
+<li><p>Configure the blocking mode using <a href="../man3/SSL_set_blocking_mode.html">SSL_set_blocking_mode(3)</a>;</p>
+
+</li>
+<li><p>Accept connections in a loop by calling SSL_accept_connection(). Each returned SSL object is a valid connection which can be used in a normal manner.</p>
+
+</li>
+</ul>
+
+<p>The SSL_is_listener() function returns 1 if and only if a SSL object is a listener SSL object.</p>
+
+<p>The SSL_get0_listener() function returns a listener object which is related to the given SSL object, if there is one. For a listener object, this is the same object (the function returns its argument). For a connection object which was created by a listener object, that listener object is returned. If the <i>ssl</i> argument is an SSL object which is not a listener object and which is not descended from a listener object (e.g. a connection obtained using SSL_accept_connection()) or indirectly from a listener object (e.g. a QUIC stream SSL object obtained using SSL_accept_stream() called on a connection obtained using SSL_accept_connection()) the return value is NULL. See NOTES below for caveats related to pending SSL connections on a QUIC listener&#39;s accept queue.</p>
+
+<p>The SSL_listen() function begins monitoring the listener <i>ssl</i> for incoming connections. Appropriate BIOs must have been configured before calling SSL_listen(), along with any other needed configuration for the listener SSL object. It is typically not necessary to call SSL_listen() because it will be called automatically on the first call to SSL_accept_connection(). However, SSL_listen() may be called explicitly if it is desired to control precisely when the listening process begins, or to ensure that no errors occur when starting to listen for connections. After a call to SSL_listen() (or SSL_accept_connection()) succeeds. The SSL_listen() function is idempotent, subsequent calls on the same <i>ssl</i> object are no-ops. This call is supported only on listener SSL objects.</p>
+
+<p>The SSL_accept_connection() call is supported only on a listener SSL object and accepts a new incoming connection. A new SSL object representing the accepted connection is created and returned on success. If no incoming connection is available and the listener SSL object is configured in nonblocking mode, NULL is returned.</p>
+
+<p>The new SSL object returned from SSL_accept_connection() may or may not have completed its handshake at the point it is returned. Optionally, you may use the function <a href="../man3/SSL_is_init_finished.html">SSL_is_init_finished(3)</a> to determine this. You may call the functions <a href="../man3/SSL_accept.html">SSL_accept(3)</a>, <a href="../man3/SSL_do_handshake.html">SSL_do_handshake(3)</a> or <a href="../man3/SSL_handle_events.html">SSL_handle_events(3)</a> to progress the state of the SSL object towards handshake completion. Other &quot;I/O&quot; functions may also implicitly progress the state of the handshake such as <a href="../man3/SSL_poll.html">SSL_poll(3)</a>, <a href="../man3/SSL_read.html">SSL_read(3)</a> and <a href="../man3/SSL_write.html">SSL_write(3)</a>.</p>
+
+<p>The <b>SSL_ACCEPT_CONNECTION_NO_BLOCK</b> flag may be specified to SSL_accept_connection(). If specified, the call does not block even if the listener SSL object is configured in blocking mode.</p>
+
+<p>The SSL_get_accept_connection_queue_len() call returns the number of pending connections on the <i>ssl</i> listener&#39;s queue. SSL_accept_connection() returns the next pending connection, removing it from the queue. The returned connection count is a point-in-time value, the actual number of connections that will ultimately be returned may be different.</p>
+
+<p>Currently, listener SSL objects are only supported for QUIC server usage via <a href="../man3/OSSL_QUIC_server_method.html">OSSL_QUIC_server_method(3)</a>, or QUIC client-only usage via <a href="../man3/OSSL_QUIC_client_method.html">OSSL_QUIC_client_method(3)</a> or <a href="../man3/OSSL_QUIC_client_thread_method.html">OSSL_QUIC_client_thread_method(3)</a> (see <a href="#CLIENT-ONLY-USAGE">&quot;CLIENT-ONLY USAGE&quot;</a>). It is expected that the listener interface, which provides an abstracted API for connection acceptance, will be expanded to support other protocols, such as TLS over TCP, plain TCP or DTLS in future.</p>
+
+<p>SSL_listen() and SSL_accept_connection() are &quot;I/O&quot; functions, meaning that they update the value returned by <a href="../man3/SSL_get_error.html">SSL_get_error(3)</a> if they fail.</p>
+
+<h1 id="CLIENT-ONLY-USAGE">CLIENT-ONLY USAGE</h1>
+
+<p>It is also possible to use the listener interface without accepting any connections and without listening for connections. This can be useful in circumstances where it is desirable for multiple connections to share the same underlying network resources. For example, multiple outgoing QUIC client connections could be made to use the same underlying UDP socket.</p>
+
+<p>To disable client address validation on a listener SSL object, the flag <b>SSL_LISTENER_FLAG_NO_VALIDATE</b> may be passed in the flags field of both SSL_new_listener() and SSL_new_listener_from(). Note that this flag only impacts the sending of retry frames for server address validation. Tokens may still be communicated from the server via NEW_TOKEN frames, which will still be validated on receipt in future connections. Note that this setting is not recommended and may be dangerous in untrusted environments. Not performing address validation exposes the server to malicious clients that may open large numbers of connections and never transact data on them (roughly equivalent to a TCP syn flood attack), which address validation mitigates.</p>
+
+<p>The SSL_new_from_listener() function creates a client connection under a given listener SSL object. For QUIC, it is also possible to use SSL_new_from_listener(), leading to a UDP network endpoint which has both incoming and outgoing connections.</p>
+
+<p>The <i>flags</i> argument of SSL_new_from_listener() is reserved and must be set to 0.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_new_listener() and SSL_new_listener_from() return a new listener SSL object or NULL on failure.</p>
+
+<p>SSL_is_listener() returns 1 if its <i>ssl</i> argument is a listener object, 0 otherwise.</p>
+
+<p>SSL_get0_listener() returns an SSL object pointer (potentially to the same object on which it is called) or NULL.</p>
+
+<p>SSL_listen() returns 1 on success or 0 on failure.</p>
+
+<p>SSL_accept_connection() returns a pointer to a new SSL object on success or NULL on failure. On success, the caller assumes ownership of the reference.</p>
+
+<p>SSL_get_accept_connection_queue_len() returns a nonnegative value, or 0 if the queue is empty, or called on an unsupported SSL object type.</p>
+
+<p>SSL_new_from_listener() returns a pointer to a new SSL object on success or NULL on failure. On success, the caller assumes ownership of the reference.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>SSL_get0_listener() behaves somewhat differently in SSL callbacks for QUIC connections. As QUIC connections begin TLS handshake operations prior to them being accepted via SSL_accept_connection(), an application may receive callbacks for such pending connection prior to acceptance via SSL_accept_connection(). As listener association takes place during the accept process, prior to being returned from SSL_accept_connection(), calls to SSL_get0_listener() made from such SSL callbacks will return NULL. This can be used as an indicator within the callback that the referenced SSL object has not yet been accepted.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/OSSL_QUIC_server_method.html">OSSL_QUIC_server_method(3)</a>, <a href="../man3/SSL_free.html">SSL_free(3)</a>, <a href="../man3/SSL_set_bio.html">SSL_set_bio(3)</a>, <a href="../man3/SSL_handle_events.html">SSL_handle_events(3)</a>, <a href="../man3/SSL_get_rpoll_descriptor.html">SSL_get_rpoll_descriptor(3)</a>, <a href="../man3/SSL_set_blocking_mode.html">SSL_set_blocking_mode(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>These functions were added in OpenSSL 3.5.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2024-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

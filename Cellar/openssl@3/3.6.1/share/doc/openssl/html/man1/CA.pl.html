@@ -1,0 +1,175 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>CA.pl</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#OPTIONS">OPTIONS</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#ENVIRONMENT">ENVIRONMENT</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>CA.pl - friendlier interface for OpenSSL certificate programs</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<p><b>CA.pl</b> <b>-?</b> | <b>-h</b> | <b>-help</b></p>
+
+<p><b>CA.pl</b> <b>-newcert</b> | <b>-newreq</b> | <b>-newreq-nodes</b> | <b>-xsign</b> | <b>-sign</b> | <b>-signCA</b> | <b>-signcert</b> | <b>-crl</b> | <b>-newca</b> [<b>-extra-<i>cmd</i></b> <i>parameter</i>]</p>
+
+<p><b>CA.pl</b> <b>-pkcs12</b> [<i>certname</i>]</p>
+
+<p><b>CA.pl</b> <b>-verify</b> <i>certfile</i> ...</p>
+
+<p><b>CA.pl</b> <b>-revoke</b> <i>certfile</i> [<i>reason</i>]</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The <b>CA.pl</b> script is a perl script that supplies the relevant command line arguments to the <a href="../man1/openssl.html">openssl(1)</a> command for some common certificate operations. It is intended to simplify the process of certificate creation and management by the use of some simple options.</p>
+
+<p>The script is intended as a simple front end for the <a href="../man1/openssl.html">openssl(1)</a> program for use by a beginner. Its behaviour isn&#39;t always what is wanted. For more control over the behaviour of the certificate commands call the <a href="../man1/openssl.html">openssl(1)</a> command directly.</p>
+
+<p>Most of the filenames mentioned below can be modified by editing the <b>CA.pl</b> script.</p>
+
+<p>Under some environments it may not be possible to run the <b>CA.pl</b> script directly (for example Win32) and the default configuration file location may be wrong. In this case the command:</p>
+
+<pre><code>perl -S CA.pl</code></pre>
+
+<p>can be used and the <b>OPENSSL_CONF</b> environment variable can be set to point to the correct path of the configuration file.</p>
+
+<h1 id="OPTIONS">OPTIONS</h1>
+
+<dl>
+
+<dt id="h--help"><b>-?</b>, <b>-h</b>, <b>-help</b></dt>
+<dd>
+
+<p>Prints a usage message.</p>
+
+</dd>
+<dt id="newcert"><b>-newcert</b></dt>
+<dd>
+
+<p>Creates a new self signed certificate. The private key is written to the file <i>newkey.pem</i> and the request written to the file <i>newreq.pem</i>. Invokes <a href="../man1/openssl-req.html">openssl-req(1)</a>.</p>
+
+</dd>
+<dt id="newreq"><b>-newreq</b></dt>
+<dd>
+
+<p>Creates a new certificate request. The private key is written to the file <i>newkey.pem</i> and the request written to the file <i>newreq.pem</i>. Executes <a href="../man1/openssl-req.html">openssl-req(1)</a> under the hood.</p>
+
+</dd>
+<dt id="newreq-nodes"><b>-newreq-nodes</b></dt>
+<dd>
+
+<p>Is like <b>-newreq</b> except that the private key will not be encrypted. Uses <a href="../man1/openssl-req.html">openssl-req(1)</a>.</p>
+
+</dd>
+<dt id="newca"><b>-newca</b></dt>
+<dd>
+
+<p>Creates a new CA hierarchy for use with the <b>ca</b> program (or the <b>-signcert</b> and <b>-xsign</b> options). The user is prompted to enter the filename of the CA certificates (which should also contain the private key) or by hitting ENTER details of the CA will be prompted for. The relevant files and directories are created in a directory called <i>demoCA</i> in the current directory. Uses <a href="../man1/openssl-req.html">openssl-req(1)</a> and <a href="../man1/openssl-ca.html">openssl-ca(1)</a>.</p>
+
+<p>If the <i>demoCA</i> directory already exists then the <b>-newca</b> command will not overwrite it and will do nothing. This can happen if a previous call using the <b>-newca</b> option terminated abnormally. To get the correct behaviour delete the directory if it already exists.</p>
+
+</dd>
+<dt id="pkcs12"><b>-pkcs12</b></dt>
+<dd>
+
+<p>Create a PKCS#12 file containing the user certificate, private key and CA certificate. It expects the user certificate and private key to be in the file <i>newcert.pem</i> and the CA certificate to be in the file <i>demoCA/cacert.pem</i>, it creates a file <i>newcert.p12</i>. This command can thus be called after the <b>-sign</b> option. The PKCS#12 file can be imported directly into a browser. If there is an additional argument on the command line it will be used as the &quot;friendly name&quot; for the certificate (which is typically displayed in the browser list box), otherwise the name &quot;My Certificate&quot; is used. Delegates work to <a href="../man1/openssl-pkcs12.html">openssl-pkcs12(1)</a>.</p>
+
+</dd>
+<dt id="sign--signcert--xsign"><b>-sign</b>, <b>-signcert</b>, <b>-xsign</b></dt>
+<dd>
+
+<p>Calls the <a href="../man1/openssl-ca.html">openssl-ca(1)</a> command to sign a certificate request. It expects the request to be in the file <i>newreq.pem</i>. The new certificate is written to the file <i>newcert.pem</i> except in the case of the <b>-xsign</b> option when it is written to standard output.</p>
+
+</dd>
+<dt id="signCA"><b>-signCA</b></dt>
+<dd>
+
+<p>This option is the same as the <b>-sign</b> option except it uses the configuration file section <b>v3_ca</b> and so makes the signed request a valid CA certificate. This is useful when creating intermediate CA from a root CA. Extra params are passed to <a href="../man1/openssl-ca.html">openssl-ca(1)</a>.</p>
+
+</dd>
+<dt id="signcert"><b>-signcert</b></dt>
+<dd>
+
+<p>This option is the same as <b>-sign</b> except it expects a self signed certificate to be present in the file <i>newreq.pem</i>. Extra params are passed to <a href="../man1/openssl-x509.html">openssl-x509(1)</a> and <a href="../man1/openssl-ca.html">openssl-ca(1)</a>.</p>
+
+</dd>
+<dt id="crl"><b>-crl</b></dt>
+<dd>
+
+<p>Generate a CRL. Executes <a href="../man1/openssl-ca.html">openssl-ca(1)</a>.</p>
+
+</dd>
+<dt id="revoke-certfile-reason"><b>-revoke</b> <i>certfile</i> [<i>reason</i>]</dt>
+<dd>
+
+<p>Revoke the certificate contained in the specified <b>certfile</b>. An optional reason may be specified, and must be one of: <b>unspecified</b>, <b>keyCompromise</b>, <b>CACompromise</b>, <b>affiliationChanged</b>, <b>superseded</b>, <b>cessationOfOperation</b>, <b>certificateHold</b>, or <b>removeFromCRL</b>. Leverages <a href="../man1/openssl-ca.html">openssl-ca(1)</a>.</p>
+
+</dd>
+<dt id="verify"><b>-verify</b></dt>
+<dd>
+
+<p>Verifies certificates against the CA certificate for <i>demoCA</i>. If no certificates are specified on the command line it tries to verify the file <i>newcert.pem</i>. Invokes <a href="../man1/openssl-verify.html">openssl-verify(1)</a>.</p>
+
+</dd>
+<dt id="extra-cmd-parameter"><b>-extra-<i>cmd</i></b> <i>parameter</i></dt>
+<dd>
+
+<p>For each option <b>extra-<i>cmd</i></b>, pass <i>parameter</i> to the <a href="../man1/openssl.html">openssl(1)</a> sub-command with the same name as <i>cmd</i>, if that sub-command is invoked. For example, if <a href="../man1/openssl-req.html">openssl-req(1)</a> is invoked, the <i>parameter</i> given with <b>-extra-req</b> will be passed to it. For multi-word parameters, either repeat the option or quote the <i>parameters</i> so it looks like one word to your shell. See the individual command documentation for more information.</p>
+
+</dd>
+</dl>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>Create a CA hierarchy:</p>
+
+<pre><code>CA.pl -newca</code></pre>
+
+<p>Complete certificate creation example: create a CA, create a request, sign the request and finally create a PKCS#12 file containing it.</p>
+
+<pre><code>CA.pl -newca
+CA.pl -newreq
+CA.pl -sign
+CA.pl -pkcs12 &quot;My Test Certificate&quot;</code></pre>
+
+<h1 id="ENVIRONMENT">ENVIRONMENT</h1>
+
+<p>The environment variable <b>OPENSSL</b> may be used to specify the name of the OpenSSL program. It can be a full pathname, or a relative one.</p>
+
+<p>The environment variable <b>OPENSSL_CONFIG</b> may be used to specify a configuration option and value to the <b>req</b> and <b>ca</b> commands invoked by this script. It&#39;s value should be the option and pathname, as in <code>-config /path/to/conf-file</code>.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man1/openssl.html">openssl(1)</a>, <a href="../man1/openssl-x509.html">openssl-x509(1)</a>, <a href="../man1/openssl-ca.html">openssl-ca(1)</a>, <a href="../man1/openssl-req.html">openssl-req(1)</a>, <a href="../man1/openssl-pkcs12.html">openssl-pkcs12(1)</a>, <a href="../man5/config.html">config(5)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,96 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>X509_EXTENSION_set_object</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>X509_EXTENSION_set_object, X509_EXTENSION_set_critical, X509_EXTENSION_set_data, X509_EXTENSION_create_by_NID, X509_EXTENSION_create_by_OBJ, X509_EXTENSION_get_object, X509_EXTENSION_get_critical, X509_EXTENSION_get_data - extension utility functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>int X509_EXTENSION_set_object(X509_EXTENSION *ex, const ASN1_OBJECT *obj);
+int X509_EXTENSION_set_critical(X509_EXTENSION *ex, int crit);
+int X509_EXTENSION_set_data(X509_EXTENSION *ex, ASN1_OCTET_STRING *data);
+
+X509_EXTENSION *X509_EXTENSION_create_by_NID(X509_EXTENSION **ex,
+                                             int nid, int crit,
+                                             ASN1_OCTET_STRING *data);
+X509_EXTENSION *X509_EXTENSION_create_by_OBJ(X509_EXTENSION **ex,
+                                             const ASN1_OBJECT *obj, int crit,
+                                             ASN1_OCTET_STRING *data);
+
+ASN1_OBJECT *X509_EXTENSION_get_object(X509_EXTENSION *ex);
+int X509_EXTENSION_get_critical(const X509_EXTENSION *ex);
+ASN1_OCTET_STRING *X509_EXTENSION_get_data(X509_EXTENSION *ne);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>X509_EXTENSION_set_object() sets the extension type of <b>ex</b> to <b>obj</b>. The <b>obj</b> pointer is duplicated internally so <b>obj</b> should be freed up after use.</p>
+
+<p>X509_EXTENSION_set_critical() sets the criticality of <b>ex</b> to <b>crit</b>. If <b>crit</b> is zero the extension in non-critical otherwise it is critical.</p>
+
+<p>X509_EXTENSION_set_data() sets the data in extension <b>ex</b> to <b>data</b>. The <b>data</b> pointer is duplicated internally.</p>
+
+<p>X509_EXTENSION_create_by_NID() creates an extension of type <b>nid</b>, criticality <b>crit</b> using data <b>data</b>. The created extension is returned and written to <b>*ex</b> reusing or allocating a new extension if necessary so <b>*ex</b> should either be <b>NULL</b> or a valid <b>X509_EXTENSION</b> structure it must <b>not</b> be an uninitialised pointer.</p>
+
+<p>X509_EXTENSION_create_by_OBJ() is identical to X509_EXTENSION_create_by_NID() except it creates and extension using <b>obj</b> instead of a NID.</p>
+
+<p>X509_EXTENSION_get_object() returns the extension type of <b>ex</b> as an <b>ASN1_OBJECT</b> pointer. The returned pointer is an internal value which must not be freed up.</p>
+
+<p>X509_EXTENSION_get_critical() returns the criticality of extension <b>ex</b> it returns <b>1</b> for critical and <b>0</b> for non-critical.</p>
+
+<p>X509_EXTENSION_get_data() returns the data of extension <b>ex</b>. The returned pointer is an internal value which must not be freed up.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>These functions manipulate the contents of an extension directly. Most applications will want to parse or encode and add an extension: they should use the extension encode and decode functions instead such as X509_add1_ext_i2d() and X509_get_ext_d2i().</p>
+
+<p>The <b>data</b> associated with an extension is the extension encoding in an <b>ASN1_OCTET_STRING</b> structure.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>X509_EXTENSION_set_object() X509_EXTENSION_set_critical() and X509_EXTENSION_set_data() return <b>1</b> for success and <b>0</b> for failure.</p>
+
+<p>X509_EXTENSION_create_by_NID() and X509_EXTENSION_create_by_OBJ() return an <b>X509_EXTENSION</b> pointer or <b>NULL</b> if an error occurs.</p>
+
+<p>X509_EXTENSION_get_object() returns an <b>ASN1_OBJECT</b> pointer.</p>
+
+<p>X509_EXTENSION_get_critical() returns <b>0</b> for non-critical and <b>1</b> for critical.</p>
+
+<p>X509_EXTENSION_get_data() returns an <b>ASN1_OCTET_STRING</b> pointer.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/X509V3_get_d2i.html">X509V3_get_d2i(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2015-2016 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

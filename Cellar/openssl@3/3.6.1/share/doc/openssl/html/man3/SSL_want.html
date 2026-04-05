@@ -1,0 +1,139 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_want</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#QUIC-SPECIFIC-CONSIDERATIONS">QUIC-SPECIFIC CONSIDERATIONS</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_want, SSL_want_nothing, SSL_want_read, SSL_want_write, SSL_want_x509_lookup, SSL_want_retry_verify, SSL_want_async, SSL_want_async_job, SSL_want_client_hello_cb - obtain state information TLS/SSL I/O operation</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+int SSL_want(const SSL *ssl);
+int SSL_want_nothing(const SSL *ssl);
+int SSL_want_read(const SSL *ssl);
+int SSL_want_write(const SSL *ssl);
+int SSL_want_x509_lookup(const SSL *ssl);
+int SSL_want_retry_verify(const SSL *ssl);
+int SSL_want_async(const SSL *ssl);
+int SSL_want_async_job(const SSL *ssl);
+int SSL_want_client_hello_cb(const SSL *ssl);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_want() returns state information for the SSL object <b>ssl</b>. <b>ssl</b> <b>MUST NOT</b> be NULL.</p>
+
+<p>The other SSL_want_*() calls are shortcuts for the possible states returned by SSL_want().</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>SSL_want() examines the internal state information of the SSL object. Its return values are similar to that of <a href="../man3/SSL_get_error.html">SSL_get_error(3)</a>. Unlike <a href="../man3/SSL_get_error.html">SSL_get_error(3)</a>, which also evaluates the error queue, the results are obtained by examining an internal state flag only. The information must therefore only be used for normal operation under nonblocking I/O. Error conditions are not handled and must be treated using <a href="../man3/SSL_get_error.html">SSL_get_error(3)</a>.</p>
+
+<p>The result returned by SSL_want() should always be consistent with the result of <a href="../man3/SSL_get_error.html">SSL_get_error(3)</a>.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>The following return values can currently occur for SSL_want():</p>
+
+<dl>
+
+<dt id="SSL_NOTHING">SSL_NOTHING</dt>
+<dd>
+
+<p>There is no data to be written or to be read.</p>
+
+</dd>
+<dt id="SSL_WRITING">SSL_WRITING</dt>
+<dd>
+
+<p>There are data in the SSL buffer that must be written to the underlying <b>BIO</b> layer in order to complete the actual SSL_*() operation. A call to <a href="../man3/SSL_get_error.html">SSL_get_error(3)</a> should return <b>SSL_ERROR_WANT_WRITE</b>.</p>
+
+</dd>
+<dt id="SSL_READING">SSL_READING</dt>
+<dd>
+
+<p>More data must be read from the underlying <b>BIO</b> layer in order to complete the actual SSL_*() operation. A call to <a href="../man3/SSL_get_error.html">SSL_get_error(3)</a> should return <b>SSL_ERROR_WANT_READ</b>.</p>
+
+</dd>
+<dt id="SSL_X509_LOOKUP">SSL_X509_LOOKUP</dt>
+<dd>
+
+<p>The operation did not complete because an application callback set by SSL_CTX_set_client_cert_cb() has asked to be called again. A call to <a href="../man3/SSL_get_error.html">SSL_get_error(3)</a> should return <b>SSL_ERROR_WANT_X509_LOOKUP</b>.</p>
+
+</dd>
+<dt id="SSL_RETRY_VERIFY">SSL_RETRY_VERIFY</dt>
+<dd>
+
+<p>The operation did not complete because a certificate verification callback has asked to be called again via <a href="../man3/SSL_set_retry_verify.html">SSL_set_retry_verify(3)</a>. A call to <a href="../man3/SSL_get_error.html">SSL_get_error(3)</a> should return <b>SSL_ERROR_WANT_RETRY_VERIFY</b>.</p>
+
+</dd>
+<dt id="SSL_ASYNC_PAUSED">SSL_ASYNC_PAUSED</dt>
+<dd>
+
+<p>An asynchronous operation partially completed and was then paused. See <a href="../man3/SSL_get_all_async_fds.html">SSL_get_all_async_fds(3)</a>. A call to <a href="../man3/SSL_get_error.html">SSL_get_error(3)</a> should return <b>SSL_ERROR_WANT_ASYNC</b>.</p>
+
+</dd>
+<dt id="SSL_ASYNC_NO_JOBS">SSL_ASYNC_NO_JOBS</dt>
+<dd>
+
+<p>The asynchronous job could not be started because there were no async jobs available in the pool (see ASYNC_init_thread(3)). A call to <a href="../man3/SSL_get_error.html">SSL_get_error(3)</a> should return <b>SSL_ERROR_WANT_ASYNC_JOB</b>.</p>
+
+</dd>
+<dt id="SSL_CLIENT_HELLO_CB">SSL_CLIENT_HELLO_CB</dt>
+<dd>
+
+<p>The operation did not complete because an application callback set by SSL_CTX_set_client_hello_cb() has asked to be called again. A call to <a href="../man3/SSL_get_error.html">SSL_get_error(3)</a> should return <b>SSL_ERROR_WANT_CLIENT_HELLO_CB</b>.</p>
+
+</dd>
+</dl>
+
+<p>SSL_want_nothing(), SSL_want_read(), SSL_want_write(), SSL_want_x509_lookup(), SSL_want_retry_verify(), SSL_want_async(), SSL_want_async_job(), and SSL_want_client_hello_cb() return 1 when the corresponding condition is true or 0 otherwise.</p>
+
+<h1 id="QUIC-SPECIFIC-CONSIDERATIONS">QUIC-SPECIFIC CONSIDERATIONS</h1>
+
+<p>For QUIC, these functions relate only to the TLS handshake layer.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a>, <a href="../man3/SSL_get_error.html">SSL_get_error(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The SSL_want_client_hello_cb() function and the SSL_CLIENT_HELLO_CB return value were added in OpenSSL 1.1.1.</p>
+
+<p>SSL_want_retry_verify() was added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2001-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

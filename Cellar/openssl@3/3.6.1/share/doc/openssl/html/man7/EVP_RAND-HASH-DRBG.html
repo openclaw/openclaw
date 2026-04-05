@@ -1,0 +1,196 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_RAND-HASH-DRBG</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Identity">Identity</a></li>
+      <li><a href="#Supported-parameters">Supported parameters</a></li>
+    </ul>
+  </li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#CONFORMING-TO">CONFORMING TO</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_RAND-HASH-DRBG - The HASH DRBG EVP_RAND implementation</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>Support for the hash deterministic random bit generator through the <b>EVP_RAND</b> API.</p>
+
+<h2 id="Identity">Identity</h2>
+
+<p>&quot;HASH-DRBG&quot; is the name for this implementation; it can be used with the EVP_RAND_fetch() function.</p>
+
+<h2 id="Supported-parameters">Supported parameters</h2>
+
+<p>The supported parameters are:</p>
+
+<dl>
+
+<dt id="state-OSSL_RAND_PARAM_STATE-integer">&quot;state&quot; (<b>OSSL_RAND_PARAM_STATE</b>) &lt;integer&gt;</dt>
+<dd>
+
+</dd>
+<dt id="strength-OSSL_RAND_PARAM_STRENGTH-unsigned-integer">&quot;strength&quot; (<b>OSSL_RAND_PARAM_STRENGTH</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+</dd>
+<dt id="max_request-OSSL_RAND_PARAM_MAX_REQUEST-unsigned-integer">&quot;max_request&quot; (<b>OSSL_RAND_PARAM_MAX_REQUEST</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+</dd>
+<dt id="reseed_requests-OSSL_DRBG_PARAM_RESEED_REQUESTS-unsigned-integer">&quot;reseed_requests&quot; (<b>OSSL_DRBG_PARAM_RESEED_REQUESTS</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+</dd>
+<dt id="reseed_time_interval-OSSL_DRBG_PARAM_RESEED_TIME_INTERVAL-integer">&quot;reseed_time_interval&quot; (<b>OSSL_DRBG_PARAM_RESEED_TIME_INTERVAL</b>) &lt;integer&gt;</dt>
+<dd>
+
+</dd>
+<dt id="min_entropylen-OSSL_DRBG_PARAM_MIN_ENTROPYLEN-unsigned-integer">&quot;min_entropylen&quot; (<b>OSSL_DRBG_PARAM_MIN_ENTROPYLEN</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+</dd>
+<dt id="max_entropylen-OSSL_DRBG_PARAM_MAX_ENTROPYLEN-unsigned-integer">&quot;max_entropylen&quot; (<b>OSSL_DRBG_PARAM_MAX_ENTROPYLEN</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+</dd>
+<dt id="min_noncelen-OSSL_DRBG_PARAM_MIN_NONCELEN-unsigned-integer">&quot;min_noncelen&quot; (<b>OSSL_DRBG_PARAM_MIN_NONCELEN</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+</dd>
+<dt id="max_noncelen-OSSL_DRBG_PARAM_MAX_NONCELEN-unsigned-integer">&quot;max_noncelen&quot; (<b>OSSL_DRBG_PARAM_MAX_NONCELEN</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+</dd>
+<dt id="max_perslen-OSSL_DRBG_PARAM_MAX_PERSLEN-unsigned-integer">&quot;max_perslen&quot; (<b>OSSL_DRBG_PARAM_MAX_PERSLEN</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+</dd>
+<dt id="max_adinlen-OSSL_DRBG_PARAM_MAX_ADINLEN-unsigned-integer">&quot;max_adinlen&quot; (<b>OSSL_DRBG_PARAM_MAX_ADINLEN</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+</dd>
+<dt id="reseed_counter-OSSL_DRBG_PARAM_RESEED_COUNTER-unsigned-integer">&quot;reseed_counter&quot; (<b>OSSL_DRBG_PARAM_RESEED_COUNTER</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+</dd>
+<dt id="properties-OSSL_DRBG_PARAM_PROPERTIES-UTF8-string">&quot;properties&quot; (<b>OSSL_DRBG_PARAM_PROPERTIES</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+</dd>
+<dt id="digest-OSSL_DRBG_PARAM_DIGEST-UTF8-string">&quot;digest&quot; (<b>OSSL_DRBG_PARAM_DIGEST</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+<p>These parameters work as described in <a href="../man3/EVP_RAND.html">&quot;PARAMETERS&quot; in EVP_RAND(3)</a>.</p>
+
+</dd>
+<dt id="fips-indicator-OSSL_DRBG_PARAM_FIPS_APPROVED_INDICATOR-integer">&quot;fips-indicator&quot; (<b>OSSL_DRBG_PARAM_FIPS_APPROVED_INDICATOR</b>) &lt;integer&gt;</dt>
+<dd>
+
+</dd>
+<dt id="digest-check-OSSL_DRBG_PARAM_FIPS_DIGEST_CHECK-integer">&quot;digest-check&quot; (<b>OSSL_DRBG_PARAM_FIPS_DIGEST_CHECK</b>) &lt;integer&gt;</dt>
+<dd>
+
+<p>These parameters work as described in <a href="../man7/provider-rand.html">&quot;PARAMETERS&quot; in provider-rand(7)</a>.</p>
+
+</dd>
+</dl>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>When the FIPS provider is installed using the <b>-no_drbg_truncated_digests</b> option to fipsinstall, only these digests are permitted (as per <a href="https://csrc.nist.gov/CSRC/media/Projects/cryptographic-module-validation-program/documents/fips%20140-3/FIPS%20140-3%20IG.pdf">FIPS 140-3 IG D.R</a>):</p>
+
+<p>The default HASH-DRBG implementation attempts to fetch the required internal algorithms from the provider they are built into (eg the default provider) regardless of the properties provided. Should the provider not implement the required algorithms then properties will be used to find a different implementation.</p>
+
+<dl>
+
+<dt id="SHA-1">SHA-1</dt>
+<dd>
+
+</dd>
+<dt id="SHA2-256">SHA2-256</dt>
+<dd>
+
+</dd>
+<dt id="SHA2-512">SHA2-512</dt>
+<dd>
+
+</dd>
+<dt id="SHA3-256">SHA3-256</dt>
+<dd>
+
+</dd>
+<dt id="SHA3-512">SHA3-512</dt>
+<dd>
+
+</dd>
+</dl>
+
+<p>A context for HASH DRBG can be obtained by calling:</p>
+
+<pre><code>EVP_RAND *rand = EVP_RAND_fetch(NULL, &quot;HASH-DRBG&quot;, NULL);
+EVP_RAND_CTX *rctx = EVP_RAND_CTX_new(rand, NULL);</code></pre>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<pre><code>EVP_RAND *rand;
+EVP_RAND_CTX *rctx;
+unsigned char bytes[100];
+OSSL_PARAM params[2], *p = params;
+unsigned int strength = 128;
+
+rand = EVP_RAND_fetch(NULL, &quot;HASH-DRBG&quot;, NULL);
+rctx = EVP_RAND_CTX_new(rand, NULL);
+EVP_RAND_free(rand);
+
+*p++ = OSSL_PARAM_construct_utf8_string(OSSL_DRBG_PARAM_DIGEST, SN_sha512, 0);
+*p = OSSL_PARAM_construct_end();
+EVP_RAND_instantiate(rctx, strength, 0, NULL, 0, params);
+
+EVP_RAND_generate(rctx, bytes, sizeof(bytes), strength, 0, NULL, 0);
+
+EVP_RAND_CTX_free(rctx);</code></pre>
+
+<h1 id="CONFORMING-TO">CONFORMING TO</h1>
+
+<p>NIST SP 800-90A and SP 800-90B</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_RAND.html">EVP_RAND(3)</a>, <a href="../man3/EVP_RAND.html">&quot;PARAMETERS&quot; in EVP_RAND(3)</a>, <a href="../man1/openssl-fipsinstall.html">openssl-fipsinstall(1)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>OpenSSL 3.1.1 introduced the <b>-no_drbg_truncated_digests</b> option to fipsinstall which restricts the permitted digests when using the FIPS provider in a complaint manner. For details refer to <a href="https://csrc.nist.gov/CSRC/media/Projects/cryptographic-module-validation-program/documents/fips%20140-3/FIPS%20140-3%20IG.pdf">FIPS 140-3 IG D.R</a>.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2020-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

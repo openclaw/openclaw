@@ -1,0 +1,134 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_CTX_set_session_cache_mode</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_CTX_set_session_cache_mode, SSL_CTX_get_session_cache_mode - enable/disable session caching</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+long SSL_CTX_set_session_cache_mode(SSL_CTX ctx, long mode);
+long SSL_CTX_get_session_cache_mode(SSL_CTX ctx);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_CTX_set_session_cache_mode() enables/disables session caching by setting the operational mode for <b>ctx</b> to &lt;mode&gt;.</p>
+
+<p>SSL_CTX_get_session_cache_mode() returns the currently used cache mode.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The OpenSSL library can store/retrieve SSL/TLS sessions for later reuse. The sessions can be held in memory for each <b>ctx</b>, if more than one SSL_CTX object is being maintained, the sessions are unique for each SSL_CTX object.</p>
+
+<p>In order to reuse a session, a client must send the session&#39;s id to the server. It can only send exactly one id. The server then either agrees to reuse the session or it starts a full handshake (to create a new session).</p>
+
+<p>A server will look up the session in its internal session storage. If the session is not found in internal storage or lookups for the internal storage have been deactivated (SSL_SESS_CACHE_NO_INTERNAL_LOOKUP), the server will try the external storage if available.</p>
+
+<p>Since a client may try to reuse a session intended for use in a different context, the session id context must be set by the server (see <a href="../man3/SSL_CTX_set_session_id_context.html">SSL_CTX_set_session_id_context(3)</a>).</p>
+
+<p>The following session cache modes and modifiers are available:</p>
+
+<dl>
+
+<dt id="SSL_SESS_CACHE_OFF">SSL_SESS_CACHE_OFF</dt>
+<dd>
+
+<p>No session caching for client or server takes place.</p>
+
+</dd>
+<dt id="SSL_SESS_CACHE_CLIENT">SSL_SESS_CACHE_CLIENT</dt>
+<dd>
+
+<p>Client sessions are added to the session cache. As there is no reliable way for the OpenSSL library to know whether a session should be reused or which session to choose (due to the abstract BIO layer the SSL engine does not have details about the connection), the application must select the session to be reused by using the <a href="../man3/SSL_set_session.html">SSL_set_session(3)</a> function. This option is not activated by default.</p>
+
+</dd>
+<dt id="SSL_SESS_CACHE_SERVER">SSL_SESS_CACHE_SERVER</dt>
+<dd>
+
+<p>Server sessions are added to the session cache. When a client proposes a session to be reused, the server looks for the corresponding session in (first) the internal session cache (unless SSL_SESS_CACHE_NO_INTERNAL_LOOKUP is set), then (second) in the external cache if available. If the session is found, the server will try to reuse the session. This is the default.</p>
+
+</dd>
+<dt id="SSL_SESS_CACHE_BOTH">SSL_SESS_CACHE_BOTH</dt>
+<dd>
+
+<p>Enable both SSL_SESS_CACHE_CLIENT and SSL_SESS_CACHE_SERVER at the same time.</p>
+
+</dd>
+<dt id="SSL_SESS_CACHE_NO_AUTO_CLEAR">SSL_SESS_CACHE_NO_AUTO_CLEAR</dt>
+<dd>
+
+<p>Normally the session cache is checked for expired sessions every 255 connections using the <a href="../man3/SSL_CTX_flush_sessions.html">SSL_CTX_flush_sessions(3)</a> function. Since this may lead to a delay which cannot be controlled, the automatic flushing may be disabled and <a href="../man3/SSL_CTX_flush_sessions.html">SSL_CTX_flush_sessions(3)</a> can be called explicitly by the application.</p>
+
+</dd>
+<dt id="SSL_SESS_CACHE_NO_INTERNAL_LOOKUP">SSL_SESS_CACHE_NO_INTERNAL_LOOKUP</dt>
+<dd>
+
+<p>By setting this flag, session-resume operations in an SSL/TLS server will not automatically look up sessions in the internal cache, even if sessions are automatically stored there. If external session caching callbacks are in use, this flag guarantees that all lookups are directed to the external cache. As automatic lookup only applies for SSL/TLS servers, the flag has no effect on clients.</p>
+
+</dd>
+<dt id="SSL_SESS_CACHE_NO_INTERNAL_STORE">SSL_SESS_CACHE_NO_INTERNAL_STORE</dt>
+<dd>
+
+<p>Depending on the presence of SSL_SESS_CACHE_CLIENT and/or SSL_SESS_CACHE_SERVER, sessions negotiated in an SSL/TLS handshake may be cached for possible reuse. Normally a new session is added to the internal cache as well as any external session caching (callback) that is configured for the SSL_CTX. This flag will prevent sessions being stored in the internal cache (though the application can add them manually using <a href="../man3/SSL_CTX_add_session.html">SSL_CTX_add_session(3)</a>). Note: in any SSL/TLS servers where external caching is configured, any successful session lookups in the external cache (i.e. for session-resume requests) would normally be copied into the local cache before processing continues - this flag prevents these additions to the internal cache as well.</p>
+
+</dd>
+<dt id="SSL_SESS_CACHE_NO_INTERNAL">SSL_SESS_CACHE_NO_INTERNAL</dt>
+<dd>
+
+<p>Enable both SSL_SESS_CACHE_NO_INTERNAL_LOOKUP and SSL_SESS_CACHE_NO_INTERNAL_STORE at the same time.</p>
+
+</dd>
+<dt id="SSL_SESS_CACHE_UPDATE_TIME">SSL_SESS_CACHE_UPDATE_TIME</dt>
+<dd>
+
+<p>Updates the timestamp of the session when it is used, increasing the lifespan of the session. The session timeout applies to last use, rather then creation time.</p>
+
+</dd>
+</dl>
+
+<p>The default mode is SSL_SESS_CACHE_SERVER.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_CTX_set_session_cache_mode() returns the previously set cache mode.</p>
+
+<p>SSL_CTX_get_session_cache_mode() returns the currently set cache mode.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a>, <a href="../man3/SSL_set_session.html">SSL_set_session(3)</a>, <a href="../man3/SSL_session_reused.html">SSL_session_reused(3)</a>, <a href="../man3/SSL_CTX_add_session.html">SSL_CTX_add_session(3)</a>, <a href="../man3/SSL_CTX_sess_number.html">SSL_CTX_sess_number(3)</a>, <a href="../man3/SSL_CTX_sess_set_cache_size.html">SSL_CTX_sess_set_cache_size(3)</a>, <a href="../man3/SSL_CTX_sess_set_get_cb.html">SSL_CTX_sess_set_get_cb(3)</a>, <a href="../man3/SSL_CTX_set_session_id_context.html">SSL_CTX_set_session_id_context(3)</a>, <a href="../man3/SSL_CTX_set_timeout.html">SSL_CTX_set_timeout(3)</a>, <a href="../man3/SSL_CTX_flush_sessions.html">SSL_CTX_flush_sessions(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2001-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

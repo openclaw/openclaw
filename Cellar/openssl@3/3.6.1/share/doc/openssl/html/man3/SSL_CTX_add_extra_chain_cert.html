@@ -1,0 +1,81 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_CTX_add_extra_chain_cert</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RESTRICTIONS">RESTRICTIONS</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_CTX_add_extra_chain_cert, SSL_CTX_get_extra_chain_certs, SSL_CTX_get_extra_chain_certs_only, SSL_CTX_clear_extra_chain_certs - add, get or clear extra chain certificates</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+long SSL_CTX_add_extra_chain_cert(SSL_CTX *ctx, X509 *x509);
+long SSL_CTX_get_extra_chain_certs(SSL_CTX *ctx, STACK_OF(X509) **sk);
+long SSL_CTX_get_extra_chain_certs_only(SSL_CTX *ctx, STACK_OF(X509) **sk);
+long SSL_CTX_clear_extra_chain_certs(SSL_CTX *ctx);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_CTX_add_extra_chain_cert() adds the certificate <b>x509</b> to the extra chain certificates associated with <b>ctx</b>. Several certificates can be added one after another.</p>
+
+<p>SSL_CTX_get_extra_chain_certs() retrieves the extra chain certificates associated with <b>ctx</b>, or the chain associated with the current certificate of <b>ctx</b> if the extra chain is empty. The returned stack should not be freed by the caller.</p>
+
+<p>SSL_CTX_get_extra_chain_certs_only() retrieves the extra chain certificates associated with <b>ctx</b>. The returned stack should not be freed by the caller.</p>
+
+<p>SSL_CTX_clear_extra_chain_certs() clears all extra chain certificates associated with <b>ctx</b>.</p>
+
+<p>These functions are implemented as macros.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>When sending a certificate chain, extra chain certificates are sent in order following the end entity certificate.</p>
+
+<p>If no chain is specified, the library will try to complete the chain from the available CA certificates in the trusted CA storage, see <a href="../man3/SSL_CTX_load_verify_locations.html">SSL_CTX_load_verify_locations(3)</a>.</p>
+
+<p>The <b>x509</b> certificate provided to SSL_CTX_add_extra_chain_cert() will be freed by the library when the <b>SSL_CTX</b> is destroyed. An application <b>should not</b> free the <b>x509</b> object.</p>
+
+<h1 id="RESTRICTIONS">RESTRICTIONS</h1>
+
+<p>Only one set of extra chain certificates can be specified per SSL_CTX structure. Different chains for different certificates (for example if both RSA and DSA certificates are specified by the same server) or different SSL structures with the same parent SSL_CTX cannot be specified using this function. For more flexibility functions such as SSL_add1_chain_cert() should be used instead.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_CTX_add_extra_chain_cert() and SSL_CTX_clear_extra_chain_certs() return 1 on success and 0 for failure. Check out the error stack to find out the reason for failure.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a>, <a href="../man3/SSL_CTX_use_certificate.html">SSL_CTX_use_certificate(3)</a>, <a href="../man3/SSL_CTX_set_client_cert_cb.html">SSL_CTX_set_client_cert_cb(3)</a>, <a href="../man3/SSL_CTX_load_verify_locations.html">SSL_CTX_load_verify_locations(3)</a> <a href="../man3/SSL_CTX_set0_chain.html">SSL_CTX_set0_chain(3)</a> <a href="../man3/SSL_CTX_set1_chain.html">SSL_CTX_set1_chain(3)</a> <a href="../man3/SSL_CTX_add0_chain_cert.html">SSL_CTX_add0_chain_cert(3)</a> <a href="../man3/SSL_CTX_add1_chain_cert.html">SSL_CTX_add1_chain_cert(3)</a> <a href="../man3/SSL_set0_chain.html">SSL_set0_chain(3)</a> <a href="../man3/SSL_set1_chain.html">SSL_set1_chain(3)</a> <a href="../man3/SSL_add0_chain_cert.html">SSL_add0_chain_cert(3)</a> <a href="../man3/SSL_add1_chain_cert.html">SSL_add1_chain_cert(3)</a> <a href="../man3/SSL_CTX_build_cert_chain.html">SSL_CTX_build_cert_chain(3)</a> <a href="../man3/SSL_build_cert_chain.html">SSL_build_cert_chain(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2018 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

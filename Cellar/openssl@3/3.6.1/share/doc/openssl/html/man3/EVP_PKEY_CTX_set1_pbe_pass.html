@@ -1,0 +1,69 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_PKEY_CTX_set1_pbe_pass</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#STRING-CTRLS">STRING CTRLS</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_PKEY_CTX_set1_pbe_pass - generic KDF support functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/kdf.h&gt;
+
+int EVP_PKEY_CTX_set1_pbe_pass(EVP_PKEY_CTX *pctx, unsigned char *pass,
+                               int passlen);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>These functions are generic support functions for all KDF algorithms.</p>
+
+<p>EVP_PKEY_CTX_set1_pbe_pass() sets the password to the <b>passlen</b> first bytes from <b>pass</b>.</p>
+
+<h1 id="STRING-CTRLS">STRING CTRLS</h1>
+
+<p>There is also support for string based control operations via <a href="../man3/EVP_PKEY_CTX_ctrl_str.html">EVP_PKEY_CTX_ctrl_str(3)</a>. The <b>password</b> can be directly specified using the <b>type</b> parameter &quot;pass&quot; or given in hex encoding using the &quot;hexpass&quot; parameter.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>All these functions return 1 for success and 0 or a negative value for failure. In particular a return value of -2 indicates the operation is not supported by the public key algorithm.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_PKEY_CTX_new.html">EVP_PKEY_CTX_new(3)</a>, <a href="../man3/EVP_PKEY_CTX_ctrl_str.html">EVP_PKEY_CTX_ctrl_str(3)</a>, <a href="../man3/EVP_PKEY_derive.html">EVP_PKEY_derive(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>EVP_PKEY_CTX_set1_pbe_pass() was converted from a macro to a function in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2018-2020 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

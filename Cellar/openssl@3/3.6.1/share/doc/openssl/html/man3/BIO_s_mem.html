@@ -1,0 +1,162 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>BIO_s_mem</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>BIO_s_secmem, BIO_s_dgram_mem, BIO_s_mem, BIO_set_mem_eof_return, BIO_get_mem_data, BIO_set_mem_buf, BIO_get_mem_ptr, BIO_new_mem_buf - memory BIO</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/bio.h&gt;
+
+const BIO_METHOD *BIO_s_mem(void);
+const BIO_METHOD *BIO_s_dgram_mem(void);
+const BIO_METHOD *BIO_s_secmem(void);
+
+BIO_set_mem_eof_return(BIO *b, int v);
+long BIO_get_mem_data(BIO *b, char **pp);
+BIO_set_mem_buf(BIO *b, BUF_MEM *bm, int c);
+BIO_get_mem_ptr(BIO *b, BUF_MEM **pp);
+
+BIO *BIO_new_mem_buf(const void *buf, int len);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>BIO_s_mem() returns the memory BIO method function.</p>
+
+<p>A memory BIO is a source/sink BIO which uses memory for its I/O. Data written to a memory BIO is stored in a BUF_MEM structure which is extended as appropriate to accommodate the stored data.</p>
+
+<p>BIO_s_secmem() is like BIO_s_mem() except that the secure heap is used for buffer storage.</p>
+
+<p>BIO_s_dgram_mem() is a memory BIO that respects datagram semantics. A single call to <a href="../man3/BIO_write.html">BIO_write(3)</a> will write a single datagram to the memory BIO. A subsequent call to <a href="../man3/BIO_read.html">BIO_read(3)</a> will read the data in that datagram. The <a href="../man3/BIO_read.html">BIO_read(3)</a> call will never return more data than was written in the original <a href="../man3/BIO_write.html">BIO_write(3)</a> call even if there were subsequent <a href="../man3/BIO_write.html">BIO_write(3)</a> calls that wrote more datagrams. Each successive call to <a href="../man3/BIO_read.html">BIO_read(3)</a> will read the next datagram. If a <a href="../man3/BIO_read.html">BIO_read(3)</a> call supplies a read buffer that is smaller than the size of the datagram, then the read buffer will be completely filled and the remaining data from the datagram will be discarded.</p>
+
+<p>It is not possible to write a zero length datagram. Calling <a href="../man3/BIO_write.html">BIO_write(3)</a> in this case will return 0 and no datagrams will be written. Calling <a href="../man3/BIO_read.html">BIO_read(3)</a> when there are no datagrams in the BIO to read will return a negative result and the &quot;retry&quot; flags will be set (i.e. calling <a href="../man3/BIO_should_retry.html">BIO_should_retry(3)</a> will return true). A datagram mem BIO will never return true from <a href="../man3/BIO_eof.html">BIO_eof(3)</a>.</p>
+
+<p>Any data written to a memory BIO can be recalled by reading from it. Unless the memory BIO is read only any data read from it is deleted from the BIO.</p>
+
+<p>Memory BIOs except BIO_s_dgram_mem() support BIO_gets() and BIO_puts().</p>
+
+<p>BIO_s_dgram_mem() supports <a href="../man3/BIO_sendmmsg.html">BIO_sendmmsg(3)</a> and <a href="../man3/BIO_recvmmsg.html">BIO_recvmmsg(3)</a> calls and calls related to <b>BIO_ADDR</b> and MTU handling similarly to the <a href="../man3/BIO_s_dgram_pair.html">BIO_s_dgram_pair(3)</a>.</p>
+
+<p>If the BIO_CLOSE flag is set when a memory BIO is freed then the underlying BUF_MEM structure is also freed.</p>
+
+<p>Calling BIO_reset() on a read write memory BIO clears any data in it if the flag BIO_FLAGS_NONCLEAR_RST is not set, otherwise it just restores the read pointer to the state it was just after the last write was performed and the data can be read again. On a read only BIO it similarly restores the BIO to its original state and the read only data can be read again.</p>
+
+<p>BIO_eof() is true if no data is in the BIO.</p>
+
+<p>BIO_ctrl_pending() returns the number of bytes currently stored.</p>
+
+<p>BIO_set_mem_eof_return() sets the behaviour of memory BIO <b>b</b> when it is empty. If the <b>v</b> is zero then an empty memory BIO will return EOF (that is it will return zero and BIO_should_retry(b) will be false. If <b>v</b> is non zero then it will return <b>v</b> when it is empty and it will set the read retry flag (that is BIO_read_retry(b) is true). To avoid ambiguity with a normal positive return value <b>v</b> should be set to a negative value, typically -1. Calling this macro will fail for datagram mem BIOs.</p>
+
+<p>BIO_get_mem_data() sets *<b>pp</b> to a pointer to the start of the memory BIOs data and returns the total amount of data available. It is implemented as a macro. Note the pointer returned by this call is informative, no transfer of ownership of this memory is implied. See notes on BIO_set_close().</p>
+
+<p>BIO_set_mem_buf() sets the internal BUF_MEM structure to <b>bm</b> and sets the close flag to <b>c</b>, that is <b>c</b> should be either BIO_CLOSE or BIO_NOCLOSE. It is a macro.</p>
+
+<p>BIO_get_mem_ptr() places the underlying BUF_MEM structure in *<b>pp</b>. It is a macro.</p>
+
+<p>BIO_new_mem_buf() creates a memory BIO using <b>len</b> bytes of data at <b>buf</b>, if <b>len</b> is -1 then the <b>buf</b> is assumed to be nul terminated and its length is determined by <b>strlen</b>. The BIO is set to a read only state and as a result cannot be written to. This is useful when some data needs to be made available from a static area of memory in the form of a BIO. The supplied data is read directly from the supplied buffer: it is <b>not</b> copied first, so the supplied area of memory must be unchanged until the BIO is freed.</p>
+
+<p>All of the five functions described above return an error with BIO_s_dgram_mem().</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>Writes to memory BIOs will always succeed if memory is available: that is their size can grow indefinitely. An exception is BIO_s_dgram_mem() when <a href="../man3/BIO_set_write_buf_size.html">BIO_set_write_buf_size(3)</a> is called on it. In such case the write buffer size will be fixed and any writes that would overflow the buffer will return an error.</p>
+
+<p>Every write after partial read (not all data in the memory buffer was read) to a read write memory BIO will have to move the unread data with an internal copy operation, if a BIO contains a lot of data and it is read in small chunks intertwined with writes the operation can be very slow. Adding a buffering BIO to the chain can speed up the process.</p>
+
+<p>Calling BIO_set_mem_buf() on a secmem or dgram BIO will give undefined results, including perhaps a program crash.</p>
+
+<p>Switching a memory BIO from read write to read only is not supported and can give undefined results including a program crash. There are two notable exceptions to the rule. The first one is to assign a static memory buffer immediately after BIO creation and set the BIO as read only.</p>
+
+<p>The other supported sequence is to start with a read write BIO then temporarily switch it to read only and call BIO_reset() on the read only BIO immediately before switching it back to read write. Before the BIO is freed it must be switched back to the read write mode.</p>
+
+<p>Calling BIO_get_mem_ptr() on read only BIO will return a BUF_MEM that contains only the remaining data to be read. If the close status of the BIO is set to BIO_NOCLOSE, before freeing the BUF_MEM the data pointer in it must be set to NULL as the data pointer does not point to an allocated memory.</p>
+
+<p>Calling BIO_reset() on a read write memory BIO with BIO_FLAGS_NONCLEAR_RST flag set can have unexpected outcome when the reads and writes to the BIO are intertwined. As documented above the BIO will be reset to the state after the last completed write operation. The effects of reads preceding that write operation cannot be undone.</p>
+
+<p>Calling BIO_get_mem_ptr() prior to a BIO_reset() call with BIO_FLAGS_NONCLEAR_RST set has the same effect as a write operation.</p>
+
+<p>Calling BIO_set_close() with BIO_NOCLOSE orphans the BUF_MEM internal to the BIO, _not_ its actual data buffer. See the examples section for the proper method for claiming ownership of the data pointer for a deferred free operation.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>BIO_s_mem(), BIO_s_dgram_mem() and BIO_s_secmem() return a valid memory <b>BIO_METHOD</b> structure.</p>
+
+<p>BIO_set_mem_eof_return(), BIO_set_mem_buf() and BIO_get_mem_ptr() return 1 on success or a value which is less than or equal to 0 if an error occurred.</p>
+
+<p>BIO_get_mem_data() returns the total number of bytes available on success, 0 if b is NULL, or a negative value in case of other errors.</p>
+
+<p>BIO_new_mem_buf() returns a valid <b>BIO</b> structure on success or NULL on error.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>Create a memory BIO and write some data to it:</p>
+
+<pre><code>BIO *mem = BIO_new(BIO_s_mem());
+
+BIO_puts(mem, &quot;Hello World\n&quot;);</code></pre>
+
+<p>Create a read only memory BIO:</p>
+
+<pre><code>char data[] = &quot;Hello World&quot;;
+BIO *mem = BIO_new_mem_buf(data, -1);</code></pre>
+
+<p>Extract the BUF_MEM structure from a memory BIO and then free up the BIO:</p>
+
+<pre><code>BUF_MEM *bptr;
+
+BIO_get_mem_ptr(mem, &amp;bptr);
+BIO_set_close(mem, BIO_NOCLOSE); /* So BIO_free() leaves BUF_MEM alone */
+BIO_free(mem);</code></pre>
+
+<p>Extract the BUF_MEM ptr, claim ownership of the internal data and free the BIO and BUF_MEM structure:</p>
+
+<pre><code>BUF_MEM *bptr;
+char *data;
+
+BIO_get_mem_data(bio, &amp;data);
+BIO_get_mem_ptr(bio, &amp;bptr);
+BIO_set_close(mem, BIO_NOCLOSE); /* So BIO_free orphans BUF_MEM */
+BIO_free(bio);
+bptr-&gt;data = NULL; /* Tell BUF_MEM to orphan data */
+BUF_MEM_free(bptr);
+...
+free(data);</code></pre>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>BIO_s_dgram_mem() was added in OpenSSL 3.2.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

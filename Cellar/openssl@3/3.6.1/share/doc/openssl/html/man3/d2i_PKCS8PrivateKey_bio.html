@@ -1,0 +1,91 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>d2i_PKCS8PrivateKey_bio</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>d2i_PKCS8PrivateKey_bio, d2i_PKCS8PrivateKey_fp, i2d_PKCS8PrivateKey_bio, i2d_PKCS8PrivateKey_fp, i2d_PKCS8PrivateKey_nid_bio, i2d_PKCS8PrivateKey_nid_fp - PKCS#8 format private key functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/pem.h&gt;
+
+EVP_PKEY *d2i_PKCS8PrivateKey_bio(BIO *bp, EVP_PKEY **x, pem_password_cb *cb, void *u);
+EVP_PKEY *d2i_PKCS8PrivateKey_fp(FILE *fp, EVP_PKEY **x, pem_password_cb *cb, void *u);
+
+int i2d_PKCS8PrivateKey_bio(BIO *bp, const EVP_PKEY *x, const EVP_CIPHER *enc,
+                            char *kstr, int klen,
+                            pem_password_cb *cb, void *u);
+
+int i2d_PKCS8PrivateKey_fp(FILE *fp, const EVP_PKEY *x, const EVP_CIPHER *enc,
+                           char *kstr, int klen,
+                           pem_password_cb *cb, void *u);
+
+int i2d_PKCS8PrivateKey_nid_bio(BIO *bp, const EVP_PKEY *x, int nid,
+                                char *kstr, int klen,
+                                pem_password_cb *cb, void *u);
+
+int i2d_PKCS8PrivateKey_nid_fp(FILE *fp, const EVP_PKEY *x, int nid,
+                               char *kstr, int klen,
+                               pem_password_cb *cb, void *u);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The PKCS#8 functions encode and decode private keys in PKCS#8 format using both PKCS#5 v1.5 and PKCS#5 v2.0 password based encryption algorithms.</p>
+
+<p>Other than the use of DER as opposed to PEM these functions are identical to the corresponding <b>PEM</b> function as described in <a href="../man3/PEM_read_PrivateKey.html">PEM_read_PrivateKey(3)</a>.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>These functions are currently the only way to store encrypted private keys using DER format.</p>
+
+<p>Currently all the functions use BIOs or FILE pointers, there are no functions which support password-protection and work directly on memory: this can be readily worked around by converting the buffers to memory BIOs, see <a href="../man3/BIO_s_mem.html">BIO_s_mem(3)</a> for details. If password-protection is not required, the <a href="../man3/i2d_PKCS8PrivateKey.html">i2d_PKCS8PrivateKey(3)</a> function encodes a private key to an unencrypted DER <b>PKCS#8</b> form.</p>
+
+<p>These functions make no assumption regarding the pass phrase received from the password callback. It will simply be treated as a byte sequence.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>d2i_PKCS8PrivateKey_bio() and d2i_PKCS8PrivateKey_fp() return a valid <b>EVP_PKEY</b> structure or NULL if an error occurred.</p>
+
+<p>i2d_PKCS8PrivateKey_bio(), i2d_PKCS8PrivateKey_fp(), i2d_PKCS8PrivateKey_nid_bio() and i2d_PKCS8PrivateKey_nid_fp() return 1 on success or 0 on error.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/i2d_PKCS8PrivateKey.html">i2d_PKCS8PrivateKey(3)</a>, <a href="../man3/PEM_read_PrivateKey.html">PEM_read_PrivateKey(3)</a>, <a href="../man7/passphrase-encoding.html">passphrase-encoding(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p><a href="../man3/i2d_PKCS8PrivateKey.html">i2d_PKCS8PrivateKey(3)</a> was added in OpenSSL 3.6.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2002-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

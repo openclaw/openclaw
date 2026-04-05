@@ -1,0 +1,68 @@
+{
+  "full_token": "quicklook-video",
+  "old_tokens": ["qlvideo"],
+  "tap": "homebrew/cask",
+  "name": ["QuickLook Video"],
+  "desc": "Thumbnails, static previews, cover art and metadata for video files",
+  "homepage": "https://github.com/Marginal/QuickLookVideo",
+  "url": "https://github.com/Marginal/QuickLookVideo/releases/download/rel-306/QLVideo_306.dmg",
+  "url_specs": {},
+  "version": "3.06",
+  "autobump": true,
+  "no_autobump_message": null,
+  "skip_livecheck": false,
+  "installed": null,
+  "installed_time": null,
+  "bundle_version": null,
+  "bundle_short_version": null,
+  "outdated": false,
+  "sha256": "e05aed1cd29698f64419d9c6ea89e91da20a11d85609912dfef2d04df9116746",
+  "artifacts": [
+    {
+      "app": ["QuickLook Video.app"]
+    },
+    {
+      "zap": [
+        {
+          "trash": [
+            "~/Library/Application Scripts/*.qlvideo",
+            "~/Library/Application Scripts/com.apple.uk.org.marginal.qlvideo.thumbnailer",
+            "~/Library/Containers/com.apple.uk.org.marginal.qlvideo.thumbnailer",
+            "~/Library/Group Containers/*.qlvideo",
+            "~/Library/Saved Application State/com.apple.uk.org.marginal.qlvideo.savedState"
+          ]
+        }
+      ]
+    }
+  ],
+  "caveats": null,
+  "caveats_rosetta": null,
+  "depends_on": {
+    "macos": {
+      ">=": ["14"]
+    }
+  },
+  "conflicts_with": null,
+  "container": null,
+  "rename": [],
+  "auto_updates": null,
+  "deprecated": false,
+  "deprecation_date": null,
+  "deprecation_reason": null,
+  "deprecation_replacement_formula": null,
+  "deprecation_replacement_cask": null,
+  "deprecate_args": null,
+  "disabled": false,
+  "disable_date": null,
+  "disable_reason": null,
+  "disable_replacement_formula": null,
+  "disable_replacement_cask": null,
+  "disable_args": null,
+  "tap_git_head": "834f7288050dac189899ff69cfbc54bff5b7a726",
+  "languages": [],
+  "ruby_source_path": "Casks/q/quicklook-video.rb",
+  "ruby_source_checksum": {
+    "sha256": "70799f1f32ea23f563d1e6cb2b2c4fe8b6a7b8a79cabaeb09c9b40a0f4c0d6c3"
+  },
+  "variations": {}
+}

@@ -1,0 +1,72 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>BN_mod_exp_mont</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>BN_mod_exp_mont, BN_mod_exp_mont_consttime, BN_mod_exp_mont_consttime_x2 - Montgomery exponentiation</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/bn.h&gt;
+
+int BN_mod_exp_mont(BIGNUM *rr, const BIGNUM *a, const BIGNUM *p,
+                    const BIGNUM *m, BN_CTX *ctx, BN_MONT_CTX *in_mont);
+
+int BN_mod_exp_mont_consttime(BIGNUM *rr, const BIGNUM *a, const BIGNUM *p,
+                              const BIGNUM *m, BN_CTX *ctx,
+                              BN_MONT_CTX *in_mont);
+
+int BN_mod_exp_mont_consttime_x2(BIGNUM *rr1, const BIGNUM *a1,
+                                 const BIGNUM *p1, const BIGNUM *m1,
+                                 BN_MONT_CTX *in_mont1, BIGNUM *rr2,
+                                 const BIGNUM *a2, const BIGNUM *p2,
+                                 const BIGNUM *m2, BN_MONT_CTX *in_mont2,
+                                 BN_CTX *ctx);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>BN_mod_exp_mont() computes <i>a</i> to the <i>p</i>-th power modulo <i>m</i> (<code>rr=a^p % m</code>) using Montgomery multiplication. <i>in_mont</i> is a Montgomery context and can be NULL. In the case <i>in_mont</i> is NULL, it will be initialized within the function, so you can save time on initialization if you provide it in advance.</p>
+
+<p>BN_mod_exp_mont_consttime() computes <i>a</i> to the <i>p</i>-th power modulo <i>m</i> (<code>rr=a^p % m</code>) using Montgomery multiplication. It is a variant of <a href="../man3/BN_mod_exp_mont.html">BN_mod_exp_mont(3)</a> that uses fixed windows and the special precomputation memory layout to limit data-dependency to a minimum to protect secret exponents. It is called automatically when <a href="../man3/BN_mod_exp_mont.html">BN_mod_exp_mont(3)</a> is called with parameters <i>a</i>, <i>p</i>, <i>m</i>, any of which have <b>BN_FLG_CONSTTIME</b> flag.</p>
+
+<p>BN_mod_exp_mont_consttime_x2() computes two independent exponentiations <i>a1</i> to the <i>p1</i>-th power modulo <i>m1</i> (<code>rr1=a1^p1 % m1</code>) and <i>a2</i> to the <i>p2</i>-th power modulo <i>m2</i> (<code>rr2=a2^p2 % m2</code>) using Montgomery multiplication. For some fixed and equal modulus sizes <i>m1</i> and <i>m2</i> it uses optimizations that allow to speedup two exponentiations. In all other cases the function reduces to two calls of <a href="../man3/BN_mod_exp_mont_consttime.html">BN_mod_exp_mont_consttime(3)</a>.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>For all functions 1 is returned for success, 0 on error. The error codes can be obtained by <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>, <a href="../man3/BN_mod_exp_mont.html">BN_mod_exp_mont(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

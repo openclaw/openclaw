@@ -1,0 +1,139 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>openssl-version</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#OPTIONS">OPTIONS</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>openssl-version - print OpenSSL version information</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<p><b>openssl version</b> [<b>-help</b>] [<b>-a</b>] [<b>-v</b>] [<b>-b</b>] [<b>-o</b>] [<b>-f</b>] [<b>-p</b>] [<b>-d</b>] [<b>-e</b>] [<b>-m</b>] [<b>-r</b>] [<b>-c</b>] [<b>-w</b>]</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>This command is used to print out version information about OpenSSL.</p>
+
+<h1 id="OPTIONS">OPTIONS</h1>
+
+<dl>
+
+<dt id="help"><b>-help</b></dt>
+<dd>
+
+<p>Print out a usage message.</p>
+
+</dd>
+<dt id="a"><b>-a</b></dt>
+<dd>
+
+<p>All information, this is the same as setting all the other flags.</p>
+
+</dd>
+<dt id="v"><b>-v</b></dt>
+<dd>
+
+<p>The current OpenSSL version.</p>
+
+</dd>
+<dt id="b"><b>-b</b></dt>
+<dd>
+
+<p>The date the current version of OpenSSL was built.</p>
+
+</dd>
+<dt id="o"><b>-o</b></dt>
+<dd>
+
+<p>Option information: various options set when the library was built.</p>
+
+</dd>
+<dt id="f"><b>-f</b></dt>
+<dd>
+
+<p>Compilation flags.</p>
+
+</dd>
+<dt id="p"><b>-p</b></dt>
+<dd>
+
+<p>Platform setting.</p>
+
+</dd>
+<dt id="d"><b>-d</b></dt>
+<dd>
+
+<p>OPENSSLDIR setting.</p>
+
+</dd>
+<dt id="e"><b>-e</b></dt>
+<dd>
+
+<p>ENGINESDIR settings.</p>
+
+</dd>
+<dt id="m"><b>-m</b></dt>
+<dd>
+
+<p>MODULESDIR settings.</p>
+
+</dd>
+<dt id="r"><b>-r</b></dt>
+<dd>
+
+<p>The random number generator source settings.</p>
+
+</dd>
+<dt id="c"><b>-c</b></dt>
+<dd>
+
+<p>The OpenSSL CPU settings info.</p>
+
+</dd>
+<dt id="w"><b>-w</b></dt>
+<dd>
+
+<p>The OpenSSL <b>OSSL_WINCTX</b> build time variable, if set. Used for computing Windows registry key names. This option is unavailable on non-Windows platforms.</p>
+
+</dd>
+</dl>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>In OpenSSL versions prior to 3.4, OpenSSL had a limitation regarding the <b>OPENSSLDIR</b>, <b>MODULESDIR</b> and <b>ENGINESDIR</b> build time macros. These macros were defined at build time, and represented filesystem paths. This is common practice on unix like systems, as there was an expectation that a given build would be installed to a pre-determined location. On Windows however, there is no such expectation, as libraries can be installed to arbitrary locations. <b>OSSL_WINCTX</b> was introduced as a new build time variable to define a set of registry keys identified by the name openssl-&lt;version&gt;-&lt;ctx&gt;, in which the &lt;version&gt; value is derived from the version string in the openssl source, and the &lt;ctx&gt; extension is derived from the <b>OSSL_WINCTX</b> variable. The values of <b>OPENSSLDIR</b>, <b>ENGINESDIR</b> and <b>MODULESDIR</b> can be set to various paths underneath this key to break the requirement to predict the installation path at build time.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The output of <code>openssl version -a</code> would typically be used when sending in a bug report.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,83 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OSSL_ESS_check_signing_certs</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OSSL_ESS_signing_cert_new_init, OSSL_ESS_signing_cert_v2_new_init, OSSL_ESS_check_signing_certs - Enhanced Security Services (ESS) functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ess.h&gt;
+
+ESS_SIGNING_CERT *OSSL_ESS_signing_cert_new_init(const X509 *signcert,
+                                                 const STACK_OF(X509) *certs,
+                                                 int set_issuer_serial);
+ESS_SIGNING_CERT_V2 *OSSL_ESS_signing_cert_v2_new_init(const EVP_MD *hash_alg,
+                                                       const X509 *signcert,
+                                                       const
+                                                       STACK_OF(X509) *certs,
+                                                       int set_issuer_serial);
+int OSSL_ESS_check_signing_certs(const ESS_SIGNING_CERT *ss,
+                                 const ESS_SIGNING_CERT_V2 *ssv2,
+                                 const STACK_OF(X509) *chain,
+                                 int require_signing_cert);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>OSSL_ESS_signing_cert_new_init() generates a new <b>ESS_SIGNING_CERT</b> structure referencing the given <i>signcert</i> and any given further <i>certs</i> using their SHA-1 fingerprints. If <i>set_issuer_serial</i> is nonzero then also the issuer and serial number of <i>signcert</i> are included in the <b>ESS_CERT_ID</b> as the <b>issuerSerial</b> field. For all members of <i>certs</i> the <b>issuerSerial</b> field is always included.</p>
+
+<p>OSSL_ESS_signing_cert_v2_new_init() is the same as OSSL_ESS_signing_cert_new_init() except that it uses the given <i>hash_alg</i> and generates a <b>ESS_SIGNING_CERT_V2</b> structure with <b>ESS_CERT_ID_V2</b> elements.</p>
+
+<p>OSSL_ESS_check_signing_certs() checks if the validation chain <i>chain</i> contains the certificates required by the identifiers given in <i>ss</i> and/or <i>ssv2</i>. If <i>require_signing_cert</i> is nonzero, <i>ss</i> or <i>ssv2</i> must not be NULL. If both <i>ss</i> and <i>ssv2</i> are not NULL, they are evaluated independently. The list of certificate identifiers in <i>ss</i> is of type <b>ESS_CERT_ID</b>, while the list contained in <i>ssv2</i> is of type <b>ESS_CERT_ID_V2</b>. As far as these lists are present, they must be nonempty. The certificate identified by their first entry must be the first element of <i>chain</i>, i.e. the signer certificate. Any further certificates referenced in the list must also be found in <i>chain</i>. The matching is done using the given certificate hash algorithm and value. In addition to the checks required by RFCs 2624 and 5035, if the <b>issuerSerial</b> field is included in an <b>ESSCertID</b> or <b>ESSCertIDv2</b> it must match the certificate issuer and serial number attributes.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>ESS has been defined in RFC 2634, which has been updated in RFC 5035 (ESS version 2) to support hash algorithms other than SHA-1. This is used for TSP (RFC 3161) and CAdES-BES (informational RFC 5126).</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>OSSL_ESS_signing_cert_new_init() and OSSL_ESS_signing_cert_v2_new_init() return a pointer to the new structure or NULL on malloc failure.</p>
+
+<p>OSSL_ESS_check_signing_certs() returns 1 on success, 0 if a required certificate cannot be found, -1 on other error.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/TS_VERIFY_CTX_set_certs.html">TS_VERIFY_CTX_set_certs(3)</a>, <a href="../man3/CMS_verify.html">CMS_verify(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>OSSL_ESS_signing_cert_new_init(), OSSL_ESS_signing_cert_v2_new_init(), and OSSL_ESS_check_signing_certs() were added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2021-2022 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

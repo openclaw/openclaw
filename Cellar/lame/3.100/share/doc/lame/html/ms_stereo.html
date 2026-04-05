@@ -1,0 +1,126 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+        "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+ <head>
+  <meta name="generator" content="PSPad editor, www.pspad.com" />
+  <meta http-equiv="content-type" content="text/html; charset=UTF-8" />
+  <link rel="stylesheet" type="text/css" href="styles/lame.css" />
+	<title>LAME MP3 Encoder :: Mid/Side Stereo</title>
+ </head>
+ <body>
+<div id="menu">
+	<ul>
+		<li><a href="index.html">Index page</a></li>
+		<li><a href="about.html">About LAME</a></li>
+		<li><a style="border: 0" href="introduction.html">Intro to encoding</a>
+    <div id="submenu">
+    	<ul>
+    		<li><a href="cbr.html">CBR </a></li>
+    		<li><a href="abr.html">ABR </a></li>
+        <li><a href="vbr.html">VBR </a></li>
+        <li><a style="border: 0" href="ms_stereo.html">M/S Stereo</a></li>
+    	</ul>
+    </div>
+    </li>
+		<li><a href="usage.html">Usage of LAME</a></li>
+		<li><a href="history.html">Version history</a></li>
+		<li><a href="contributors.html">Coders of LAME</a></li>
+		<li><a href="contact.html">Contact LAME</a></li>
+		<li><a style="border: 0" href="links.html">LAME links</a></li>
+	</ul>
+</div>
+<div id="container">
+<div id="content">
+
+<div align="center">
+	<img src="images/logo.gif" width="358" height="231" alt="LAME Official Logo" />
+	<h2 class="hilight">LAME - Mid/Side Stereo</h2>
+</div>
+
+<p>
+During years, what is called Joint-stereo has been misunderstood.<br/>
+Joint stereo in MP3 is a mechanism to selectively choose between three modes
+of storing stereo information. These three modes are <a href="#ms">Simple Stereo
+</a>, <a href="#mj">Mid-Side Stereo</a>, and <a href="#mi">Intensity-Stereo.</a>
+</p>
+<p>
+In <a name="ms">Simple Stereo</a>, the encoder analyzes the left and the right channels
+independently and stores the information as-is, without further checking the
+similarities in the signal<a href="#note1"><sup>1</sup></a>
+</p>
+<p>
+In <a name="mj">Mid-Side Stereo</a>, the encoder analyzes the left, right<a href="#note2"><sup>2
+</sup></a>, mid (l+r) and side (l-r) channels. It then gives more bits to the
+mid than the side channel (as usually the side channel is less complex) and then
+stores just the mid and side channels into the resulting MP3.<br/>
+This way, the mid channel can be encoded as if the frame was bigger, and as such
+have more quality with the same bitrate.<br/>
+Note: Mid/side in MP3 is switched frame-by-frame. In AAC, it can be switched
+band by band.
+</p>
+<p>
+<a name="mi">Intensity-Stereo</a> (not supported in LAME) uses a technique known as joint
+frequency encoding, which is based on the principle of sound localization.<br/>
+Human hearing is predominantly less acute at perceiving the direction of certain
+audio frequencies. By exploiting this 'limitation', intensity stereo coding can
+reduce the data rate of an audio stream with little or no perceived change in
+apparent quality.<br/>
+It works by merging the upper spectrum into just one channel (thus reducing
+overall differences between channels) and transmiting a little side information
+about how to pan certain frequency regions.<br/>
+This type of coding does not perfectly reconstruct the original audio because
+of the loss of information and can cause unwanted artifacts. However, for very
+low bitrates this tool usually provides a gain of perceived quality.
+<a href="#note3"><sup>3</sup></a>
+</p>
+
+<p>
+	The LAME mid/side switching criterion, and mid/side masking thresholds are
+	taken from <cite>Johnston and Ferreira, <u>Sum-Difference Stereo Transform
+	Coding,</u> Proc. IEEE ICASSP (1992) p 569-571.</cite>
+</p>
+
+<p>
+	The MPEG AAC standard claims to use mid/side encoding based on this paper.
+</p>
+
+<div id="notes">
+<ol>
+<li><a name="note1"></a>This is not the same than dual-mono. Dual-mono should be
+used where the left and right channels of the input file contain two different
+streams, where you should choose one (as in two different languages)</li>
+<li><a name="note2"></a>If one channel has much less noise masking in a certain
+band than the other, it could happen than the noise spread (by mid/side stereo)
+may no longer be masked for that channel. If both channels have the same
+masking, then the noise spread between both channels will be equally well masked.
+<br/>
+To prevent this from happening, there is an analysis done on the left and right
+channel to determine the noise masking thresholds and properly mask the noise.</li>
+<li><a name="note3"></a>Quote from wikipedia <a
+href="http://en.wikipedia.org/wiki/Joint_stereo">Joint_stereo</a>.</li>
+</ol>
+</div>
+
+</div>
+<div id="footer">
+
+<a href="http://sourceforge.net/projects/lame"><img src="http://sflogo.sourceforge.net/sflogo.php?group_id=290&amp;type=12"
+ alt="Get LAME (Lame Aint an MP3 Encoder) at SourceForge.net. Fast, secure and Free Open Source software downloads"
+ border="0" height="30" width="120" /></a>
+
+<a href="http://validator.w3.org/#validate_by_upload"><img src="images/valid-xhtml10.png"
+ alt="Valid XHTML 1.0 Transitional" border="0" height="31" width="88" /></a>
+
+<a href="http://jigsaw.w3.org/css-validator/"><img src="images/valid-css.png"
+ alt="Valid CSS!" border="0" height="31" width="88" /></a>
+
+<p>HTML markup and design by <a
+href="http://www.rjamorim.com" target="_blank">Roberto Amorim</a> and <a
+href="http://www.maresweb.de" target="_blank">Sebastian Mares</a>. Logo by <a 
+href="http://www.brightercreative.co.uk">Sam Fisher</a>.</p>
+
+</div>
+</div>
+
+</body>
+</html>

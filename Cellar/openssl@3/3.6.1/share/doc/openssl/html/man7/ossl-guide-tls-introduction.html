@@ -1,0 +1,163 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>ossl-guide-tls-introduction</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#INTRODUCTION">INTRODUCTION</a></li>
+  <li><a href="#WHAT-IS-TLS">WHAT IS TLS?</a></li>
+  <li><a href="#SSL-AND-TLS-VERSIONS">SSL AND TLS VERSIONS</a></li>
+  <li><a href="#CERTIFICATES">CERTIFICATES</a></li>
+  <li><a href="#TRUSTED-CERTIFICATE-STORE">TRUSTED CERTIFICATE STORE</a></li>
+  <li><a href="#IMPORTANT-OBJECTS-FOR-AN-OPENSSL-TLS-APPLICATION">IMPORTANT OBJECTS FOR AN OPENSSL TLS APPLICATION</a></li>
+  <li><a href="#PHASES-OF-A-TLS-CONNECTION">PHASES OF A TLS CONNECTION</a></li>
+  <li><a href="#FURTHER-READING">FURTHER READING</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>ossl-guide-tls-introduction - OpenSSL Guide: An introduction to SSL/TLS in OpenSSL</p>
+
+<h1 id="INTRODUCTION">INTRODUCTION</h1>
+
+<p>This page will provide an introduction to some basic SSL/TLS concepts and background and how it is used within OpenSSL. It assumes that you have a basic understanding of TCP/IP and sockets.</p>
+
+<h1 id="WHAT-IS-TLS">WHAT IS TLS?</h1>
+
+<p>TLS stands for Transport Layer Security. TLS allows applications to securely communicate with each other across a network such that the confidentiality of the information exchanged is protected (i.e. it prevents eavesdroppers from listening in to the communication). Additionally it protects the integrity of the information exchanged to prevent an attacker from changing it. Finally it provides authentication so that one or both parties can be sure that they are talking to who they think they are talking to and not some imposter.</p>
+
+<p>Sometimes TLS is referred to by its predecessor&#39;s name SSL (Secure Sockets Layer). OpenSSL dates from a time when the SSL name was still in common use and hence many of the functions and names used by OpenSSL contain the &quot;SSL&quot; abbreviation. Nonetheless OpenSSL contains a fully fledged TLS implementation.</p>
+
+<p>TLS is based on a client/server model. The application that initiates a communication is known as the client. The application that responds to a remotely initiated communication is the server. The term &quot;endpoint&quot; refers to either of the client or the server in a communication. The term &quot;peer&quot; refers to the endpoint at the other side of the communication that we are currently referring to. So if we are currently talking about the client then the peer would be the server.</p>
+
+<p>TLS is a standardised protocol and there are numerous different implementations of it. Due to the standards an OpenSSL client or server is able to communicate seamlessly with an application using some different implementation of TLS. TLS (and its predecessor SSL) have been around for a significant period of time and the protocol has undergone various changes over the years. Consequently there are different versions of the protocol available. TLS includes the ability to perform version negotiation so that the highest protocol version that the client and server share in common is used.</p>
+
+<p>TLS acts as a security layer over some lower level transport protocol. Typically the transport layer will be TCP.</p>
+
+<h1 id="SSL-AND-TLS-VERSIONS">SSL AND TLS VERSIONS</h1>
+
+<p>SSL was initially developed by Netscape Communications and its first publicly released version was SSLv2 in 1995. Note that SSLv1 was never publicly released. SSLv3 came along quickly afterwards in 1996. Subsequently development of the protocol moved to the IETF which released the first version of TLS (TLSv1.0) in 1999 as RFC2246. TLSv1.1 was released in 2006 as RFC4346 and TLSv1.2 came along in 2008 as RFC5246. The most recent version of the standard is TLSv1.3 which was released in 2018 as RFC8446.</p>
+
+<p>Today TLSv1.3 and TLSv1.2 are the most commonly deployed versions of the protocol. The IETF have formally deprecated TLSv1.1 and TLSv1.0, so anything below TLSv1.2 should be avoided since the older protocol versions are susceptible to security problems.</p>
+
+<p>OpenSSL does not support SSLv2 (it was removed in OpenSSL 1.1.0). Support for SSLv3 is available as a compile time option - but it is not built by default. Support for TLSv1.0, TLSv1.1, TLSv1.2 and TLSv1.3 are all available by default in a standard build of OpenSSL. However special run-time configuration is required in order to make TLSv1.0 and TLSv1.1 work successfully.</p>
+
+<p>OpenSSL will always try to negotiate the highest protocol version that it has been configured to support. In most cases this will mean either TLSv1.3 or TLSv1.2 is chosen.</p>
+
+<h1 id="CERTIFICATES">CERTIFICATES</h1>
+
+<p>In order for a client to establish a connection to a server it must authenticate the identity of that server, i.e. it needs to confirm that the server is really the server that it claims to be and not some imposter. In order to do this the server will send to the client a digital certificate (also commonly referred to as an X.509 certificate). The certificate contains various information about the server including its full DNS hostname. Also within the certificate is the server&#39;s public key. The server operator will have a private key which is linked to the public key and must not be published.</p>
+
+<p>Along with the certificate the server will also send to the client proof that it knows the private key associated with the public key in the certificate. It does this by digitally signing a message to the client using that private key. The client can verify the signature using the public key from the certificate. If the signature verifies successfully then the client knows that the server is in possession of the correct private key.</p>
+
+<p>The certificate that the server sends will also be signed by a Certificate Authority. The Certificate Authority (commonly known as a CA) is a third party organisation that is responsible for verifying the information in the server&#39;s certificate (including its DNS hostname). The CA should only sign the certificate if it has been able to confirm that the server operator does indeed have control of the server associated with its DNS hostname and that the server operator has control of the private key.</p>
+
+<p>In this way, if the client trusts the CA that has signed the server&#39;s certificate and it can verify that the server has the right private key then it can trust that the server truly does represent the DNS hostname given in the certificate. The client must also verify that the hostname given in the certificate matches the hostname that it originally sent the request to.</p>
+
+<p>Once all of these checks have been done the client has successfully verified the identify of the server. OpenSSL can perform all of these checks automatically but it must be provided with certain information in order to do so, i.e. the set of CAs that the client trusts as well as the DNS hostname for the server that this client is trying to connect to.</p>
+
+<p>Note that it is common for certificates to be built up into a chain. For example a server&#39;s certificate may be signed by a key owned by a an intermediate CA. That intermediate CA also has a certificate containing its public key which is in turn signed by a key owned by a root CA. The client may only trust the root CA, but if the server sends both its own certificate and the certificate for the intermediate CA then the client can still successfully verify the identity of the server. There is a chain of trust between the root CA and the server.</p>
+
+<p>By default it is only the client that authenticates the server using this method. However it is also possible to set things up such that the server additionally authenticates the client. This is known as &quot;client authentication&quot;. In this approach the client will still authenticate the server in the same way, but the server will request a certificate from the client. The client sends the server its certificate and the server authenticates it in the same way that the client does.</p>
+
+<h1 id="TRUSTED-CERTIFICATE-STORE">TRUSTED CERTIFICATE STORE</h1>
+
+<p>The system described above only works if a chain of trust can be built between the set of CAs that the endpoint trusts and the certificate that the peer is using. The endpoint must therefore have a set of certificates for CAs that it trusts before any communication can take place. OpenSSL itself does not provide such a set of certificates. Therefore you will need to make sure you have them before you start if you are going to be verifying certificates (i.e. always if the endpoint is a client, and only if client authentication is in use for a server).</p>
+
+<p>Fortunately other organisations do maintain such a set of certificates. If you have obtained your copy of OpenSSL from an Operating System (OS) vendor (e.g. a Linux distribution) then normally the set of CA certificates will also be distributed with that copy.</p>
+
+<p>You can check this by running the OpenSSL command line application like this:</p>
+
+<pre><code>openssl version -d</code></pre>
+
+<p>This will display a value for <b>OPENSSLDIR</b>. Look in the <b>certs</b> sub directory of <b>OPENSSLDIR</b> and check its contents. For example if <b>OPENSSLDIR</b> is &quot;/usr/local/ssl&quot;, then check the contents of the &quot;/usr/local/ssl/certs&quot; directory.</p>
+
+<p>You are expecting to see a list of files, typically with the suffix &quot;.pem&quot; or &quot;.0&quot;. If they exist then you already have a suitable trusted certificate store.</p>
+
+<p>If you are running your version of OpenSSL on Windows then OpenSSL (from version 3.2 onwards) will use the default Windows set of trusted CAs.</p>
+
+<p>If you have built your version of OpenSSL from source, or obtained it from some other location and it does not have a set of trusted CA certificates then you will have to obtain them yourself. One such source is the Curl project. See the page <a href="https://curl.se/docs/caextract.html">https://curl.se/docs/caextract.html</a> where you can download trusted certificates in a single file. Rename the file to &quot;cert.pem&quot; and store it directly in <b>OPENSSLDIR</b>. For example if <b>OPENSSLDIR</b> is &quot;/usr/local/ssl&quot;, then save it as &quot;/usr/local/ssl/cert.pem&quot;.</p>
+
+<p>You can also use environment variables to override the default location that OpenSSL will look for its trusted certificate store. Set the <b>SSL_CERT_PATH</b> environment variable to give the directory where OpenSSL should looks for its certificates or the <b>SSL_CERT_FILE</b> environment variable to give the name of a single file containing all of the certificates. See <a href="../man7/openssl-env.html">openssl-env(7)</a> for further details about OpenSSL environment variables. For example you could use this capability to have multiple versions of OpenSSL all installed on the same system using different values for <b>OPENSSLDIR</b> but all using the same trusted certificate store.</p>
+
+<p>You can test that your trusted certificate store is setup correctly by using it via the OpenSSL command line. Use the following command to connect to a TLS server:</p>
+
+<pre><code>openssl s_client www.openssl.org:443</code></pre>
+
+<p>Once the command has connected type the letter &quot;Q&quot; followed by &quot;&lt;enter&gt;&quot; to exit the session. This will print a lot of information on the screen about the connection. Look for a block of text like this:</p>
+
+<pre><code>SSL handshake has read 4584 bytes and written 403 bytes
+Verification: OK</code></pre>
+
+<p>Hopefully if everything has worked then the &quot;Verification&quot; line will say &quot;OK&quot;. If its not working as expected then you might see output like this instead:</p>
+
+<pre><code>SSL handshake has read 4584 bytes and written 403 bytes
+Verification error: unable to get local issuer certificate</code></pre>
+
+<p>The &quot;unable to get local issuer certificate&quot; error means that OpenSSL has been unable to find a trusted CA for the chain of certificates provided by the server in its trusted certificate store. Check your trusted certificate store configuration again.</p>
+
+<p>Note that s_client is a testing tool and will still allow you to connect to the TLS server regardless of the verification error. Most applications should not do this and should abort the connection in the event of a verification error.</p>
+
+<h1 id="IMPORTANT-OBJECTS-FOR-AN-OPENSSL-TLS-APPLICATION">IMPORTANT OBJECTS FOR AN OPENSSL TLS APPLICATION</h1>
+
+<p>A TLS connection is represented by the <b>SSL</b> object in an OpenSSL based application. Once a connection with a remote peer has been established an endpoint can &quot;write&quot; data to the <b>SSL</b> object to send data to the peer, or &quot;read&quot; data from it to receive data from the server.</p>
+
+<p>A new <b>SSL</b> object is created from an <b>SSL_CTX</b> object. Think of an <b>SSL_CTX</b> as a &quot;factory&quot; for creating <b>SSL</b> objects. You can create a single <b>SSL_CTX</b> object and then create multiple connections (i.e. <b>SSL</b> objects) from it. Typically you can set up common configuration options on the <b>SSL_CTX</b> so that all the <b>SSL</b> object created from it inherit the same configuration options.</p>
+
+<p>Note that internally to OpenSSL various items that are shared between multiple <b>SSL</b> objects are cached in the <b>SSL_CTX</b> for performance reasons. Therefore it is considered best practice to create one <b>SSL_CTX</b> for use by multiple <b>SSL</b> objects instead of having one <b>SSL_CTX</b> for each <b>SSL</b> object that you create.</p>
+
+<p>Each <b>SSL</b> object is also associated with two <b>BIO</b> objects. A <b>BIO</b> object is used for sending or receiving data from the underlying transport layer. For example you might create a <b>BIO</b> to represent a TCP socket. The <b>SSL</b> object uses one <b>BIO</b> for reading data and one <b>BIO</b> for writing data. In most cases you would use the same <b>BIO</b> for each direction but there could be some circumstances where you want them to be different.</p>
+
+<p>It is up to the application programmer to create the <b>BIO</b> objects that are needed and supply them to the <b>SSL</b> object. See <a href="../man7/ossl-guide-tls-client-block.html">ossl-guide-tls-client-block(7)</a> and <a href="../man7/ossl-guide-tls-server-block.html">ossl-guide-tls-server-block(7)</a> for usage examples.</p>
+
+<p>Finally, an endpoint can establish a &quot;session&quot; with its peer. The session holds various TLS parameters about the connection between the client and the server. The session details can then be reused in a subsequent connection attempt to speed up the process of connecting. This is known as &quot;resumption&quot;. Sessions are represented in OpenSSL by the <b>SSL_SESSION</b> object. In TLSv1.2 there is always exactly one session per connection. In TLSv1.3 there can be any number per connection including none.</p>
+
+<h1 id="PHASES-OF-A-TLS-CONNECTION">PHASES OF A TLS CONNECTION</h1>
+
+<p>A TLS connection starts with an initial &quot;set up&quot; phase. The endpoint creates the <b>SSL_CTX</b> (if one has not already been created) and configures it.</p>
+
+<p>A client then creates an <b>SSL</b> object to represent the new TLS connection. Any connection specific configuration parameters are then applied and the underlying socket is created and associated with the <b>SSL</b> via <b>BIO</b> objects.</p>
+
+<p>A server will create a socket for listening for incoming connection attempts from clients. Once a connection attempt is made the server will create an <b>SSL</b> object in the same way as for a client and associate it with a <b>BIO</b> for the newly created incoming socket.</p>
+
+<p>After set up is complete the TLS &quot;handshake&quot; phase begins. A TLS handshake consists of the client and server exchanging a series of TLS handshake messages to establish the connection. The client starts by sending a &quot;ClientHello&quot; handshake message and the server responds with a &quot;ServerHello&quot;. The handshake is complete once an endpoint has sent its last message (known as the &quot;Finished&quot; message) and received a Finished message from its peer. Note that this might occur at slightly different times for each peer. For example in TLSv1.3 the server always sends its Finished message before the client. The client later responds with its Finished message. At this point the client has completed the handshake because it has both sent and received a Finished message. The server has sent its Finished message but the Finished message from the client may still be in-flight, so the server is still in the handshake phase. It is even possible that the server will fail to complete the handshake (if it considers there is some problem with the messages sent from the client), even though the client may have already progressed to sending application data. In TLSv1.2 this can happen the other way around, i.e. the server finishes first and the client finishes second.</p>
+
+<p>Once the handshake is complete the application data transfer phase begins. Strictly speaking there are some situations where the client can start sending application data even earlier (using the TLSv1.3 &quot;early data&quot; capability) - but we&#39;re going to skip over that for this basic introduction.</p>
+
+<p>During application data transfer the client and server can read and write data to the connection freely. The details of this are typically left to some higher level application protocol (for example HTTP). Not all information exchanged during this phase is application data. Some protocol level messages may still be exchanged - so it is not necessarily the case that, just because the underlying socket is &quot;readable&quot;, that application data will be available to read.</p>
+
+<p>When the connection is no longer required then it should be shutdown. A shutdown may be initiated by either the client or the server via a message known as a &quot;close_notify&quot; alert. The client or server that receives a close_notify may respond with one and then the connection is fully closed and application data can no longer be sent or received.</p>
+
+<p>Once shutdown is complete a TLS application must clean up by freeing the SSL object.</p>
+
+<h1 id="FURTHER-READING">FURTHER READING</h1>
+
+<p>See <a href="../man7/ossl-guide-tls-client-block.html">ossl-guide-tls-client-block(7)</a> for an example of how to apply these concepts in order to write a simple TLS client based on a blocking socket. See <a href="../man7/ossl-guide-tls-server-block.html">ossl-guide-tls-server-block(7)</a> for an example of how to apply these concepts in order to write a simple TLS server handling one client at a time over a blocking socket. See <a href="../man7/ossl-guide-quic-introduction.html">ossl-guide-quic-introduction(7)</a> for an introduction to QUIC in OpenSSL.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ossl-guide-introduction.html">ossl-guide-introduction(7)</a>, <a href="../man7/ossl-guide-libraries-introduction.html">ossl-guide-libraries-introduction(7)</a>, <a href="../man7/ossl-guide-libssl-introduction.html">ossl-guide-libssl-introduction(7)</a>, <a href="../man7/ossl-guide-tls-client-block.html">ossl-guide-tls-client-block(7)</a>, <a href="../man7/ossl-guide-tls-server-block.html">ossl-guide-tls-server-block(7)</a>, <a href="../man7/ossl-guide-quic-introduction.html">ossl-guide-quic-introduction(7)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2023-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

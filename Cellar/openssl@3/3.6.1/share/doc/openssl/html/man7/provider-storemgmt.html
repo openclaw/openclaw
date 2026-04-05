@@ -1,0 +1,205 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>provider-storemgmt</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Functions">Functions</a></li>
+      <li><a href="#Load-Parameters">Load Parameters</a></li>
+    </ul>
+  </li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>provider-storemgmt - The OSSL_STORE library &lt;-&gt; provider functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/core_dispatch.h&gt;
+
+/*
+ * None of these are actual functions, but are displayed like this for
+ * the function signatures for functions that are offered as function
+ * pointers in OSSL_DISPATCH arrays.
+ */
+
+void *OSSL_FUNC_store_open(void *provctx, const char *uri);
+void *OSSL_FUNC_store_attach(void *provctx, OSSL_CORE_BIO *bio);
+const OSSL_PARAM *store_settable_ctx_params(void *provctx);
+int OSSL_FUNC_store_set_ctx_params(void *loaderctx, const OSSL_PARAM[]);
+int OSSL_FUNC_store_load(void *loaderctx,
+                         OSSL_CALLBACK *object_cb, void *object_cbarg,
+                         OSSL_PASSPHRASE_CALLBACK *pw_cb, void *pw_cbarg);
+int OSSL_FUNC_store_eof(void *loaderctx);
+int OSSL_FUNC_store_close(void *loaderctx);
+
+int OSSL_FUNC_store_export_object
+    (void *loaderctx, const void *objref, size_t objref_sz,
+     OSSL_CALLBACK *export_cb, void *export_cbarg);
+void *OSSL_FUNC_store_open_ex(void *provctx, const char *uri,
+                              const OSSL_PARAM params[],
+                              OSSL_PASSPHRASE_CALLBACK *pw_cb,
+                              void *pw_cbarg);
+
+int OSSL_FUNC_store_delete(void *provctx, const char *uri,
+                   const OSSL_PARAM params[],
+                   OSSL_PASSPHRASE_CALLBACK *pw_cb, void *pw_cbarg);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The STORE operation is the provider side of the <a href="../man7/ossl_store.html">ossl_store(7)</a> API.</p>
+
+<p>The primary responsibility of the STORE operation is to load all sorts of objects from a container indicated by URI. These objects are given to the OpenSSL library in provider-native object abstraction form (see <a href="../man7/provider-object.html">provider-object(7)</a>). The OpenSSL library is then responsible for passing on that abstraction to suitable provided functions.</p>
+
+<p>Examples of functions that the OpenSSL library can pass the abstraction to include OSSL_FUNC_keymgmt_load() (<a href="../man7/provider-keymgmt.html">provider-keymgmt(7)</a>), OSSL_FUNC_store_export_object() (which exports the object in parameterized form).</p>
+
+<p>All &quot;functions&quot; mentioned here are passed as function pointers between <i>libcrypto</i> and the provider in <a href="../man3/OSSL_DISPATCH.html">OSSL_DISPATCH(3)</a> arrays via <a href="../man3/OSSL_ALGORITHM.html">OSSL_ALGORITHM(3)</a> arrays that are returned by the provider&#39;s provider_query_operation() function (see <a href="../man7/provider-base.html">&quot;Provider Functions&quot; in provider-base(7)</a>).</p>
+
+<p>All these &quot;functions&quot; have a corresponding function type definition named <b>OSSL_FUNC_{name}_fn</b>, and a helper function to retrieve the function pointer from a <a href="../man3/OSSL_DISPATCH.html">OSSL_DISPATCH(3)</a> element named <b>OSSL_get_{name}</b>. For example, the &quot;function&quot; OSSL_FUNC_store_attach() has these:</p>
+
+<pre><code>typedef void *(OSSL_FUNC_store_attach_fn)(void *provctx,
+                                          OSSL_CORE_BIO * bio);
+static ossl_inline OSSL_FUNC_store_attach_fn
+    OSSL_FUNC_store_attach(const OSSL_DISPATCH *opf);</code></pre>
+
+<p><a href="../man3/OSSL_DISPATCH.html">OSSL_DISPATCH(3)</a> arrays are indexed by numbers that are provided as macros in <a href="../man7/openssl-core_dispatch.h.html">openssl-core_dispatch.h(7)</a>, as follows:</p>
+
+<pre><code>OSSL_FUNC_store_open                 OSSL_FUNC_STORE_OPEN
+OSSL_FUNC_store_attach               OSSL_FUNC_STORE_ATTACH
+OSSL_FUNC_store_settable_ctx_params  OSSL_FUNC_STORE_SETTABLE_CTX_PARAMS
+OSSL_FUNC_store_set_ctx_params       OSSL_FUNC_STORE_SET_CTX_PARAMS
+OSSL_FUNC_store_load                 OSSL_FUNC_STORE_LOAD
+OSSL_FUNC_store_eof                  OSSL_FUNC_STORE_EOF
+OSSL_FUNC_store_close                OSSL_FUNC_STORE_CLOSE
+OSSL_FUNC_store_export_object        OSSL_FUNC_STORE_EXPORT_OBJECT
+OSSL_FUNC_store_delete               OSSL_FUNC_STORE_DELETE
+OSSL_FUNC_store_open_ex              OSSL_FUNC_STORE_OPEN_EX</code></pre>
+
+<h2 id="Functions">Functions</h2>
+
+<p>OSSL_FUNC_store_open() should create a provider side context with data based on the input <i>uri</i>. The implementation is entirely responsible for the interpretation of the URI.</p>
+
+<p>OSSL_FUNC_store_attach() should create a provider side context with the core <b>BIO</b> <i>bio</i> attached. This is an alternative to using a URI to find storage, supporting <a href="../man3/OSSL_STORE_attach.html">OSSL_STORE_attach(3)</a>.</p>
+
+<p>OSSL_FUNC_store_settable_ctx_params() should return a constant array of descriptor <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a>, for parameters that OSSL_FUNC_store_set_ctx_params() can handle.</p>
+
+<p>OSSL_FUNC_store_set_ctx_params() should set additional parameters, such as what kind of data to expect, search criteria, and so on. More on those below, in <a href="#Load-Parameters">&quot;Load Parameters&quot;</a>. Whether unrecognised parameters are an error or simply ignored is at the implementation&#39;s discretion. Passing NULL for <i>params</i> should return true.</p>
+
+<p>OSSL_FUNC_store_load() loads the next object from the URI opened by OSSL_FUNC_store_open(), creates an object abstraction for it (see <a href="../man7/provider-object.html">provider-object(7)</a>), and calls <i>object_cb</i> with it as well as <i>object_cbarg</i>. <i>object_cb</i> will then interpret the object abstraction and do what it can to wrap it or decode it into an OpenSSL structure. In case a passphrase needs to be prompted to unlock an object, <i>pw_cb</i> should be called.</p>
+
+<p>OSSL_FUNC_store_eof() indicates if the end of the set of objects from the URI has been reached. When that happens, there&#39;s no point trying to do any further loading.</p>
+
+<p>OSSL_FUNC_store_close() frees the provider side context <i>ctx</i>.</p>
+
+<p>When a provider-native object is created by a store manager it would be unsuitable for direct use with a foreign provider. The export function allows for exporting the object to that foreign provider if the foreign provider supports the type of the object and provides an import function.</p>
+
+<p>OSSL_FUNC_store_export_object() should export the object of size <i>objref_sz</i> referenced by <i>objref</i> as an <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> array and pass that to the <i>export_cb</i> as well as the given <i>export_cbarg</i>.</p>
+
+<p>OSSL_FUNC_store_delete() deletes the object identified by the <i>uri</i>. The implementation is entirely responsible for the interpretation of the URI. In case a passphrase needs to be prompted to remove an object, <i>pw_cb</i> should be called.</p>
+
+<p>OSSL_FUNC_store_open_ex() is an extended variant of OSSL_FUNC_store_open(). If the provider does not implement this function the code internally falls back to use the original OSSL_FUNC_store_open(). This variant additionally accepts an <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> object and a <i>pw_cb</i> callback that can be used to request a passphrase in cases where the whole store needs to be unlocked before performing any load operation.</p>
+
+<h2 id="Load-Parameters">Load Parameters</h2>
+
+<dl>
+
+<dt id="expect-OSSL_STORE_PARAM_EXPECT-integer">&quot;expect&quot; (<b>OSSL_STORE_PARAM_EXPECT</b>) &lt;integer&gt;</dt>
+<dd>
+
+<p>Is a hint of what type of data the OpenSSL library expects to get. This is only useful for optimization, as the library will check that the object types match the expectation too.</p>
+
+<p>The number that can be given through this parameter is found in <i>&lt;openssl/store.h&gt;</i>, with the macros having names starting with <code>OSSL_STORE_INFO_</code>. These are further described in <a href="../man3/OSSL_STORE_INFO.html">&quot;SUPPORTED OBJECTS&quot; in OSSL_STORE_INFO(3)</a>.</p>
+
+</dd>
+<dt id="subject-OSSL_STORE_PARAM_SUBJECT-octet-string">&quot;subject&quot; (<b>OSSL_STORE_PARAM_SUBJECT</b>) &lt;octet string&gt;</dt>
+<dd>
+
+<p>Indicates that the caller wants to search for an object with the given subject associated. This can be used to select specific certificates by subject.</p>
+
+<p>The contents of the octet string is expected to be in DER form.</p>
+
+</dd>
+<dt id="issuer-OSSL_STORE_PARAM_ISSUER-octet-string">&quot;issuer&quot; (<b>OSSL_STORE_PARAM_ISSUER</b>) &lt;octet string&gt;</dt>
+<dd>
+
+<p>Indicates that the caller wants to search for an object with the given issuer associated. This can be used to select specific certificates by issuer.</p>
+
+<p>The contents of the octet string is expected to be in DER form.</p>
+
+</dd>
+<dt id="serial-OSSL_STORE_PARAM_SERIAL-integer">&quot;serial&quot; (<b>OSSL_STORE_PARAM_SERIAL</b>) &lt;integer&gt;</dt>
+<dd>
+
+<p>Indicates that the caller wants to search for an object with the given serial number associated.</p>
+
+</dd>
+<dt id="digest-OSSL_STORE_PARAM_DIGEST-UTF8-string">&quot;digest&quot; (<b>OSSL_STORE_PARAM_DIGEST</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+</dd>
+<dt id="fingerprint-OSSL_STORE_PARAM_FINGERPRINT-octet-string">&quot;fingerprint&quot; (<b>OSSL_STORE_PARAM_FINGERPRINT</b>) &lt;octet string&gt;</dt>
+<dd>
+
+<p>Indicates that the caller wants to search for an object with the given fingerprint, computed with the given digest.</p>
+
+</dd>
+<dt id="alias-OSSL_STORE_PARAM_ALIAS-UTF8-string">&quot;alias&quot; (<b>OSSL_STORE_PARAM_ALIAS</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+<p>Indicates that the caller wants to search for an object with the given alias (some call it a &quot;friendly name&quot;).</p>
+
+</dd>
+<dt id="properties-OSSL_STORE_PARAM_PROPERTIES-utf8-string">&quot;properties&quot; (<b>OSSL_STORE_PARAM_PROPERTIES</b>) &lt;utf8 string&gt;</dt>
+<dd>
+
+<p>Property string to use when querying for algorithms such as the <b>OSSL_DECODER</b> decoder implementations.</p>
+
+</dd>
+<dt id="input-type-OSSL_STORE_PARAM_INPUT_TYPE-utf8-string">&quot;input-type&quot; (<b>OSSL_STORE_PARAM_INPUT_TYPE</b>) &lt;utf8 string&gt;</dt>
+<dd>
+
+<p>Type of the input format as a hint to use when decoding the objects in the store.</p>
+
+</dd>
+</dl>
+
+<p>Several of these search criteria may be combined. For example, to search for a certificate by issuer+serial, both the &quot;issuer&quot; and the &quot;serial&quot; parameters will be given.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/provider.html">provider(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The STORE interface was introduced in OpenSSL 3.0.</p>
+
+<p>OSSL_FUNC_store_delete() callback was added in OpenSSL 3.2</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2020-2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

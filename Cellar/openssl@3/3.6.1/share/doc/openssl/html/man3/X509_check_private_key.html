@@ -1,0 +1,67 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>X509_check_private_key</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#BUGS">BUGS</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>X509_check_private_key, X509_REQ_check_private_key - check the consistency of a private key with the public key in an X509 certificate or certificate request</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/x509.h&gt;
+
+int X509_check_private_key(const X509 *cert, EVP_PKEY *pkey);
+
+int X509_REQ_check_private_key(X509_REQ *req, EVP_PKEY *pkey);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>X509_check_private_key() function checks the consistency of private key <i>pkey</i> with the public key in <i>cert</i>.</p>
+
+<p>X509_REQ_check_private_key() is equivalent to X509_check_private_key() except that <i>req</i> represents a certificate request of structure <b>X509_REQ</b>.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>X509_check_private_key() and X509_REQ_check_private_key() return 1 if the keys match each other, and 0 if not.</p>
+
+<p>If the key is invalid or an error occurred, the reason code can be obtained using <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>.</p>
+
+<h1 id="BUGS">BUGS</h1>
+
+<p>The X509_check_private_key() and X509_REQ_check_private_key() functions do not check if <i>pkey</i> itself is indeed a private key or not. They merely compare the public materials (e.g., exponent and modulus of an RSA key) and/or key parameters (e.g. EC params of an EC key) of a key pair. So they also return success if <i>pkey</i> is a matching public key.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ERR_get_error.html">ERR_get_error(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2017-2018 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

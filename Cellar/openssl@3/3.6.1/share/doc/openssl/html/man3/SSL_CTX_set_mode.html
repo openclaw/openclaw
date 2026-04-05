@@ -1,0 +1,138 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_CTX_set_mode</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_CTX_set_mode, SSL_CTX_clear_mode, SSL_set_mode, SSL_clear_mode, SSL_CTX_get_mode, SSL_get_mode - manipulate SSL engine mode</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+long SSL_CTX_set_mode(SSL_CTX *ctx, long mode);
+long SSL_CTX_clear_mode(SSL_CTX *ctx, long mode);
+long SSL_set_mode(SSL *ssl, long mode);
+long SSL_clear_mode(SSL *ssl, long mode);
+
+long SSL_CTX_get_mode(SSL_CTX *ctx);
+long SSL_get_mode(SSL *ssl);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_CTX_set_mode() adds the mode set via bit-mask in <b>mode</b> to <b>ctx</b>. Options already set before are not cleared. SSL_CTX_clear_mode() removes the mode set via bit-mask in <b>mode</b> from <b>ctx</b>.</p>
+
+<p>SSL_set_mode() adds the mode set via bit-mask in <b>mode</b> to <b>ssl</b>. Options already set before are not cleared. SSL_clear_mode() removes the mode set via bit-mask in <b>mode</b> from <b>ssl</b>.</p>
+
+<p>SSL_CTX_get_mode() returns the mode set for <b>ctx</b>.</p>
+
+<p>SSL_get_mode() returns the mode set for <b>ssl</b>.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The following mode changes are available:</p>
+
+<dl>
+
+<dt id="SSL_MODE_ENABLE_PARTIAL_WRITE">SSL_MODE_ENABLE_PARTIAL_WRITE</dt>
+<dd>
+
+<p>Allow SSL_write_ex(..., n, &amp;r) to return with 0 &lt; r &lt; n (i.e. report success when just a single record has been written). This works in a similar way for SSL_write(). When not set (the default), SSL_write_ex() or SSL_write() will only report success once the complete chunk was written. Once SSL_write_ex() or SSL_write() returns successful, <b>r</b> bytes have been written and the next call to SSL_write_ex() or SSL_write() must only send the n-r bytes left, imitating the behaviour of write().</p>
+
+<p>This mode cannot be enabled while in the middle of an incomplete write operation.</p>
+
+</dd>
+<dt id="SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER">SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER</dt>
+<dd>
+
+<p>Make it possible to retry SSL_write_ex() or SSL_write() with changed buffer location (the buffer contents must stay the same). This is not the default to avoid the misconception that nonblocking SSL_write() behaves like nonblocking write().</p>
+
+</dd>
+<dt id="SSL_MODE_AUTO_RETRY">SSL_MODE_AUTO_RETRY</dt>
+<dd>
+
+<p>During normal operations, non-application data records might need to be sent or received that the application is not aware of. If a non-application data record was processed, <a href="../man3/SSL_read_ex.html">SSL_read_ex(3)</a> and <a href="../man3/SSL_read.html">SSL_read(3)</a> can return with a failure and indicate the need to retry with <b>SSL_ERROR_WANT_READ</b>. If such a non-application data record was processed, the flag <b>SSL_MODE_AUTO_RETRY</b> causes it to try to process the next record instead of returning.</p>
+
+<p>In a nonblocking environment applications must be prepared to handle incomplete read/write operations. Setting <b>SSL_MODE_AUTO_RETRY</b> for a nonblocking <b>BIO</b> will process non-application data records until either no more data is available or an application data record has been processed.</p>
+
+<p>In a blocking environment, applications are not always prepared to deal with the functions returning intermediate reports such as retry requests, and setting the <b>SSL_MODE_AUTO_RETRY</b> flag will cause the functions to only return after successfully processing an application data record or a failure.</p>
+
+<p>Turning off <b>SSL_MODE_AUTO_RETRY</b> can be useful with blocking <b>BIO</b>s in case they are used in combination with something like select() or poll(). Otherwise the call to SSL_read() or SSL_read_ex() might hang when a non-application record was sent and no application data was sent.</p>
+
+</dd>
+<dt id="SSL_MODE_RELEASE_BUFFERS">SSL_MODE_RELEASE_BUFFERS</dt>
+<dd>
+
+<p>When we no longer need a read buffer or a write buffer for a given SSL, then release the memory we were using to hold it. Using this flag can save around 34k per idle SSL connection. This flag has no effect on SSL v2 connections, or on DTLS connections.</p>
+
+</dd>
+<dt id="SSL_MODE_SEND_FALLBACK_SCSV">SSL_MODE_SEND_FALLBACK_SCSV</dt>
+<dd>
+
+<p>Send TLS_FALLBACK_SCSV in the ClientHello. To be set only by applications that reconnect with a downgraded protocol version; see draft-ietf-tls-downgrade-scsv-00 for details.</p>
+
+<p>DO NOT ENABLE THIS if your application attempts a normal handshake. Only use this in explicit fallback retries, following the guidance in draft-ietf-tls-downgrade-scsv-00.</p>
+
+</dd>
+<dt id="SSL_MODE_ASYNC">SSL_MODE_ASYNC</dt>
+<dd>
+
+<p>Enable asynchronous processing. TLS I/O operations may indicate a retry with SSL_ERROR_WANT_ASYNC with this mode set if an asynchronous capable engine is used to perform cryptographic operations. See <a href="../man3/SSL_get_error.html">SSL_get_error(3)</a>.</p>
+
+</dd>
+<dt id="SSL_MODE_DTLS_SCTP_LABEL_LENGTH_BUG">SSL_MODE_DTLS_SCTP_LABEL_LENGTH_BUG</dt>
+<dd>
+
+<p>Older versions of OpenSSL had a bug in the computation of the label length used for computing the endpoint-pair shared secret. The bug was that the terminating zero was included in the length of the label. Setting this option enables this behaviour to allow interoperability with such broken implementations. Please note that setting this option breaks interoperability with correct implementations. This option only applies to DTLS over SCTP.</p>
+
+</dd>
+</dl>
+
+<p>All modes are off by default except for SSL_MODE_AUTO_RETRY which is on by default since 1.1.1.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_CTX_set_mode() and SSL_set_mode() return the new mode bit-mask after adding <b>mode</b>.</p>
+
+<p>SSL_CTX_get_mode() and SSL_get_mode() return the current bit-mask.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a>, <a href="../man3/SSL_read_ex.html">SSL_read_ex(3)</a>, <a href="../man3/SSL_read.html">SSL_read(3)</a>, <a href="../man3/SSL_write_ex.html">SSL_write_ex(3)</a> or <a href="../man3/SSL_write.html">SSL_write(3)</a>, <a href="../man3/SSL_get_error.html">SSL_get_error(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>SSL_MODE_ASYNC was added in OpenSSL 1.1.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2001-2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

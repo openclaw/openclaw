@@ -1,0 +1,337 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_PKEY-DH</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#DH-and-DHX-domain-parameters">DH and DHX domain parameters</a></li>
+      <li><a href="#DH-and-DHX-additional-parameters">DH and DHX additional parameters</a></li>
+      <li><a href="#DH-additional-domain-parameters">DH additional domain parameters</a></li>
+      <li><a href="#DH-and-DHX-domain-parameter-key-generation-parameters">DH and DHX domain parameter / key generation parameters</a></li>
+      <li><a href="#DH-and-DHX-key-validation">DH and DHX key validation</a></li>
+    </ul>
+  </li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#CONFORMING-TO">CONFORMING TO</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_PKEY-DH, EVP_PKEY-DHX, EVP_KEYMGMT-DH, EVP_KEYMGMT-DHX - EVP_PKEY DH and DHX keytype and algorithm support</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>For finite field Diffie-Hellman key agreement, two classes of domain parameters can be used: &quot;safe&quot; domain parameters that are associated with approved named safe-prime groups, and a class of &quot;FIPS186-type&quot; domain parameters. FIPS186-type domain parameters should only be used for backward compatibility with existing applications that cannot be upgraded to use the approved safe-prime groups.</p>
+
+<p>See <a href="../man7/EVP_PKEY-FFC.html">EVP_PKEY-FFC(7)</a> for more information about FFC keys.</p>
+
+<p>The <b>DH</b> key type uses PKCS#3 format which saves <i>p</i> and <i>g</i>, but not the <i>q</i> value. The <b>DHX</b> key type uses X9.42 format which saves the value of <i>q</i> and this must be used for FIPS186-4. If key validation is required, users should be aware of the nuances associated with FIPS186-4 style parameters as discussed in <a href="#DH-and-DHX-key-validation">&quot;DH and DHX key validation&quot;</a>.</p>
+
+<h2 id="DH-and-DHX-domain-parameters">DH and DHX domain parameters</h2>
+
+<p>In addition to the common FFC parameters that all FFC keytypes should support (see <a href="../man7/EVP_PKEY-FFC.html">&quot;FFC parameters&quot; in EVP_PKEY-FFC(7)</a>) the <b>DHX</b> and <b>DH</b> keytype implementations support the following:</p>
+
+<dl>
+
+<dt id="group-OSSL_PKEY_PARAM_GROUP_NAME-UTF8-string">&quot;group&quot; (<b>OSSL_PKEY_PARAM_GROUP_NAME</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+<p>Sets or gets a string that associates a <b>DH</b> or <b>DHX</b> named safe prime group with known values for <i>p</i>, <i>q</i> and <i>g</i>.</p>
+
+<p>The following values can be used by the OpenSSL&#39;s default and FIPS providers: &quot;ffdhe2048&quot;, &quot;ffdhe3072&quot;, &quot;ffdhe4096&quot;, &quot;ffdhe6144&quot;, &quot;ffdhe8192&quot;, &quot;modp_2048&quot;, &quot;modp_3072&quot;, &quot;modp_4096&quot;, &quot;modp_6144&quot;, &quot;modp_8192&quot;.</p>
+
+<p>The following additional values can also be used by OpenSSL&#39;s default provider: &quot;modp_1536&quot;, &quot;dh_1024_160&quot;, &quot;dh_2048_224&quot;, &quot;dh_2048_256&quot;.</p>
+
+<p>DH/DHX named groups can be easily validated since the parameters are well known. For protocols that only transfer <i>p</i> and <i>g</i> the value of <i>q</i> can also be retrieved.</p>
+
+</dd>
+</dl>
+
+<h2 id="DH-and-DHX-additional-parameters">DH and DHX additional parameters</h2>
+
+<dl>
+
+<dt id="encoded-pub-key-OSSL_PKEY_PARAM_ENCODED_PUBLIC_KEY-octet-string">&quot;encoded-pub-key&quot; (<b>OSSL_PKEY_PARAM_ENCODED_PUBLIC_KEY</b>) &lt;octet string&gt;</dt>
+<dd>
+
+<p>Used for getting and setting the encoding of the DH public key used in a key exchange message for the TLS protocol. See EVP_PKEY_set1_encoded_public_key() and EVP_PKEY_get1_encoded_public_key().</p>
+
+</dd>
+</dl>
+
+<h2 id="DH-additional-domain-parameters">DH additional domain parameters</h2>
+
+<dl>
+
+<dt id="safeprime-generator-OSSL_PKEY_PARAM_DH_GENERATOR-integer">&quot;safeprime-generator&quot; (<b>OSSL_PKEY_PARAM_DH_GENERATOR</b>) &lt;integer&gt;</dt>
+<dd>
+
+<p>Used for DH generation of safe primes using the old safe prime generator code. The default value is 2. It is recommended to use a named safe prime group instead, if domain parameter validation is required.</p>
+
+<p>Randomly generated safe primes are not allowed by FIPS, so setting this value for the OpenSSL FIPS provider will instead choose a named safe prime group based on the size of <i>p</i>.</p>
+
+</dd>
+</dl>
+
+<h2 id="DH-and-DHX-domain-parameter-key-generation-parameters">DH and DHX domain parameter / key generation parameters</h2>
+
+<p>In addition to the common FFC key generation parameters that all FFC key types should support (see <a href="../man7/EVP_PKEY-FFC.html">&quot;FFC key generation parameters&quot; in EVP_PKEY-FFC(7)</a>) the <b>DH</b> and <b>DHX</b> keytype implementation supports the following:</p>
+
+<dl>
+
+<dt id="type-OSSL_PKEY_PARAM_FFC_TYPE-UTF8-string">&quot;type&quot; (<b>OSSL_PKEY_PARAM_FFC_TYPE</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+<p>Sets the type of parameter generation. For <b>DH</b> valid values are:</p>
+
+<dl>
+
+<dt id="fips186_4">&quot;fips186_4&quot;</dt>
+<dd>
+
+</dd>
+<dt id="default">&quot;default&quot;</dt>
+<dd>
+
+</dd>
+<dt id="fips186_2">&quot;fips186_2&quot;</dt>
+<dd>
+
+<p>These are described in <a href="../man7/EVP_PKEY-FFC.html">&quot;FFC key generation parameters&quot; in EVP_PKEY-FFC(7)</a></p>
+
+</dd>
+<dt id="group">&quot;group&quot;</dt>
+<dd>
+
+<p>This specifies that a named safe prime name will be chosen using the &quot;pbits&quot; type.</p>
+
+</dd>
+<dt id="generator">&quot;generator&quot;</dt>
+<dd>
+
+<p>A safe prime generator. See the &quot;safeprime-generator&quot; type above. This is only valid for <b>DH</b> keys.</p>
+
+</dd>
+</dl>
+
+</dd>
+<dt id="pbits-OSSL_PKEY_PARAM_FFC_PBITS-unsigned-integer">&quot;pbits&quot; (<b>OSSL_PKEY_PARAM_FFC_PBITS</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+<p>Sets the size (in bits) of the prime &#39;p&#39;.</p>
+
+<p>For &quot;fips186_4&quot; this must be 2048. For &quot;fips186_2&quot; this must be 1024. For &quot;group&quot; this can be any one of 2048, 3072, 4096, 6144 or 8192.</p>
+
+</dd>
+<dt id="priv_len-OSSL_PKEY_PARAM_DH_PRIV_LEN-integer">&quot;priv_len&quot; (<b>OSSL_PKEY_PARAM_DH_PRIV_LEN</b>) &lt;integer&gt;</dt>
+<dd>
+
+<p>An optional value to set the maximum length of the generated private key. The default value used if this is not set is the maximum value of BN_num_bits(<i>q</i>)). The minimum value that this can be set to is 2 * s. Where s is the security strength of the key which has values of 112, 128, 152, 176 and 200 for key sizes of 2048, 3072, 4096, 6144 and 8192.</p>
+
+</dd>
+</dl>
+
+<h2 id="DH-and-DHX-key-validation">DH and DHX key validation</h2>
+
+<p>For keys that are not a named group the FIPS186-4 standard specifies that the values used for FFC parameter generation are also required for parameter validation. This means that optional FFC domain parameter values for <i>seed</i>, <i>pcounter</i> and <i>gindex</i> or <i>hindex</i> may need to be stored for validation purposes. For <b>DHX</b> the <i>seed</i> and <i>pcounter</i> can be stored in ASN1 data (but the <i>gindex</i> or <i>hindex</i> cannot be stored). It is recommended to use a <b>DH</b> parameters with named safe prime group instead.</p>
+
+<p>With the OpenSSL FIPS provider, <a href="../man3/EVP_PKEY_param_check.html">EVP_PKEY_param_check(3)</a> and <a href="../man3/EVP_PKEY_param_check_quick.html">EVP_PKEY_param_check_quick(3)</a> behave in the following way: the parameters are tested if they are either an approved safe prime group OR that the FFC parameters conform to FIPS186-4 as defined in SP800-56Ar3 <i>Assurances of Domain-Parameter Validity</i>.</p>
+
+<p>The OpenSSL default provider uses simpler checks that allows there to be no <i>q</i> value for backwards compatibility, however the <a href="../man3/EVP_PKEY_param_check.html">EVP_PKEY_param_check(3)</a> will test the <i>p</i> value for being a prime (and a safe prime if <i>q</i> is missing) which can take significant time. The <a href="../man3/EVP_PKEY_param_check_quick.html">EVP_PKEY_param_check_quick(3)</a> avoids the prime tests.</p>
+
+<p><a href="../man3/EVP_PKEY_public_check.html">EVP_PKEY_public_check(3)</a> conforms to SP800-56Ar3 <i>FFC Full Public-Key Validation</i>.</p>
+
+<p><a href="../man3/EVP_PKEY_public_check_quick.html">EVP_PKEY_public_check_quick(3)</a> conforms to SP800-56Ar3 <i>FFC Partial Public-Key Validation</i> when the key is an approved named safe prime group, otherwise it is the same as <a href="../man3/EVP_PKEY_public_check.html">EVP_PKEY_public_check(3)</a>.</p>
+
+<p><a href="../man3/EVP_PKEY_private_check.html">EVP_PKEY_private_check(3)</a> tests that the private key is in the correct range according to SP800-56Ar3. The OpenSSL FIPS provider requires the value of <i>q</i> to be set (note that this is implicitly set for named safe prime groups). For backwards compatibility the OpenSSL default provider only requires <i>p</i> to be set.</p>
+
+<p><a href="../man3/EVP_PKEY_pairwise_check.html">EVP_PKEY_pairwise_check(3)</a> conforms to SP800-56Ar3 <i>Owner Assurance of Pair-wise Consistency</i>.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>An <b>EVP_PKEY</b> context can be obtained by calling:</p>
+
+<pre><code>EVP_PKEY_CTX *pctx = EVP_PKEY_CTX_new_from_name(NULL, &quot;DH&quot;, NULL);</code></pre>
+
+<p>A <b>DH</b> key can be generated with a named safe prime group by calling:</p>
+
+<pre><code>int priv_len = 2 * 112;
+OSSL_PARAM params[3];
+EVP_PKEY *pkey = NULL;
+EVP_PKEY_CTX *pctx = EVP_PKEY_CTX_new_from_name(NULL, &quot;DH&quot;, NULL);
+
+params[0] = OSSL_PARAM_construct_utf8_string(&quot;group&quot;, &quot;ffdhe2048&quot;, 0);
+/* &quot;priv_len&quot; is optional */
+params[1] = OSSL_PARAM_construct_int(&quot;priv_len&quot;, &amp;priv_len);
+params[2] = OSSL_PARAM_construct_end();
+
+EVP_PKEY_keygen_init(pctx);
+EVP_PKEY_CTX_set_params(pctx, params);
+EVP_PKEY_generate(pctx, &amp;pkey);
+...
+EVP_PKEY_free(pkey);
+EVP_PKEY_CTX_free(pctx);</code></pre>
+
+<p><b>DHX</b> domain parameters can be generated according to <b>FIPS186-4</b> by calling:</p>
+
+<pre><code>int gindex = 2;
+unsigned int pbits = 2048;
+unsigned int qbits = 256;
+OSSL_PARAM params[6];
+EVP_PKEY *param_key = NULL;
+EVP_PKEY_CTX *pctx = NULL;
+
+pctx = EVP_PKEY_CTX_new_from_name(NULL, &quot;DHX&quot;, NULL);
+EVP_PKEY_paramgen_init(pctx);
+
+params[0] = OSSL_PARAM_construct_uint(&quot;pbits&quot;, &amp;pbits);
+params[1] = OSSL_PARAM_construct_uint(&quot;qbits&quot;, &amp;qbits);
+params[2] = OSSL_PARAM_construct_int(&quot;gindex&quot;, &amp;gindex);
+params[3] = OSSL_PARAM_construct_utf8_string(&quot;type&quot;, &quot;fips186_4&quot;, 0);
+params[4] = OSSL_PARAM_construct_utf8_string(&quot;digest&quot;, &quot;SHA256&quot;, 0);
+params[5] = OSSL_PARAM_construct_end();
+EVP_PKEY_CTX_set_params(pctx, params);
+
+EVP_PKEY_generate(pctx, &amp;param_key);
+
+EVP_PKEY_print_params(bio_out, param_key, 0, NULL);
+...
+EVP_PKEY_free(param_key);
+EVP_PKEY_CTX_free(pctx);</code></pre>
+
+<p>A <b>DH</b> key can be generated using domain parameters by calling:</p>
+
+<pre><code>EVP_PKEY *key = NULL;
+EVP_PKEY_CTX *gctx = EVP_PKEY_CTX_new_from_pkey(NULL, param_key, NULL);
+
+EVP_PKEY_keygen_init(gctx);
+EVP_PKEY_generate(gctx, &amp;key);
+EVP_PKEY_print_private(bio_out, key, 0, NULL);
+...
+EVP_PKEY_free(key);
+EVP_PKEY_CTX_free(gctx);</code></pre>
+
+<p>To validate <b>FIPS186-4</b> <b>DHX</b> domain parameters decoded from <b>PEM</b> or <b>DER</b> data, additional values used during generation may be required to be set into the key.</p>
+
+<p>EVP_PKEY_todata(), OSSL_PARAM_merge(), and EVP_PKEY_fromdata() are useful to add these parameters to the original key or domain parameters before the actual validation. In production code the return values should be checked.</p>
+
+<pre><code>EVP_PKEY *received_domp = ...; /* parameters received and decoded */
+unsigned char *seed = ...;     /* and additional parameters received */
+size_t seedlen = ...;          /* by other means, required */
+int gindex = ...;              /* for the validation */
+int pcounter = ...;
+int hindex = ...;
+OSSL_PARAM extra_params[4];
+OSSL_PARAM *domain_params = NULL;
+OSSL_PARAM *merged_params = NULL;
+EVP_PKEY_CTX *ctx = NULL, *validate_ctx = NULL;
+EVP_PKEY *complete_domp = NULL;
+
+EVP_PKEY_todata(received_domp, OSSL_KEYMGMT_SELECT_DOMAIN_PARAMETERS,
+                &amp;domain_params);
+extra_params[0] = OSSL_PARAM_construct_octet_string(&quot;seed&quot;, seed, seedlen);
+/*
+ * NOTE: For unverifiable g use &quot;hindex&quot; instead of &quot;gindex&quot;
+ * extra_params[1] = OSSL_PARAM_construct_int(&quot;hindex&quot;, &amp;hindex);
+ */
+extra_params[1] = OSSL_PARAM_construct_int(&quot;gindex&quot;, &amp;gindex);
+extra_params[2] = OSSL_PARAM_construct_int(&quot;pcounter&quot;, &amp;pcounter);
+extra_params[3] = OSSL_PARAM_construct_end();
+merged_params = OSSL_PARAM_merge(domain_params, extra_params);
+
+ctx = EVP_PKEY_CTX_new_from_name(NULL, &quot;DHX&quot;, NULL);
+EVP_PKEY_fromdata_init(ctx);
+EVP_PKEY_fromdata(ctx, &amp;complete_domp, OSSL_KEYMGMT_SELECT_ALL,
+                  merged_params);
+
+validate_ctx = EVP_PKEY_CTX_new_from_pkey(NULL, complete_domp, NULL);
+if (EVP_PKEY_param_check(validate_ctx) &gt; 0)
+    /* validation_passed(); */
+else
+    /* validation_failed(); */
+
+OSSL_PARAM_free(domain_params);
+OSSL_PARAM_free(merged_params);
+EVP_PKEY_CTX_free(ctx);
+EVP_PKEY_CTX_free(validate_ctx);
+EVP_PKEY_free(complete_domp);</code></pre>
+
+<h1 id="CONFORMING-TO">CONFORMING TO</h1>
+
+<dl>
+
+<dt id="RFC-7919-TLS-ffdhe-named-safe-prime-groups">RFC 7919 (TLS ffdhe named safe prime groups)</dt>
+<dd>
+
+</dd>
+<dt id="RFC-3526-IKE-modp-named-safe-prime-groups">RFC 3526 (IKE modp named safe prime groups)</dt>
+<dd>
+
+</dd>
+<dt id="RFC-5114-Additional-DH-named-groups-for-dh_1024_160-dh_2048_224-and-dh_2048_256">RFC 5114 (Additional DH named groups for dh_1024_160&quot;, &quot;dh_2048_224&quot; and &quot;dh_2048_256&quot;).</dt>
+<dd>
+
+</dd>
+</dl>
+
+<p>The following sections of SP800-56Ar3:</p>
+
+<dl>
+
+<dt id="FFC-Domain-Parameter-Selection-Generation">5.5.1.1 FFC Domain Parameter Selection/Generation</dt>
+<dd>
+
+</dd>
+<dt id="Appendix-D:-FFC-Safe-prime-Groups">Appendix D: FFC Safe-prime Groups</dt>
+<dd>
+
+</dd>
+</dl>
+
+<p>The following sections of FIPS186-4:</p>
+
+<dl>
+
+<dt id="A.1.1.2-Generation-of-Probable-Primes-p-and-q-Using-an-Approved-Hash-Function">A.1.1.2 Generation of Probable Primes p and q Using an Approved Hash Function.</dt>
+<dd>
+
+</dd>
+<dt id="A.2.3-Generation-of-canonical-generator-g">A.2.3 Generation of canonical generator g.</dt>
+<dd>
+
+</dd>
+<dt id="A.2.1-Unverifiable-Generation-of-the-Generator-g">A.2.1 Unverifiable Generation of the Generator g.</dt>
+<dd>
+
+</dd>
+</dl>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/EVP_PKEY-FFC.html">EVP_PKEY-FFC(7)</a>, <a href="../man7/EVP_KEYEXCH-DH.html">EVP_KEYEXCH-DH(7)</a> <a href="../man3/EVP_PKEY.html">EVP_PKEY(3)</a>, <a href="../man7/provider-keymgmt.html">provider-keymgmt(7)</a>, <a href="../man3/EVP_KEYMGMT.html">EVP_KEYMGMT(3)</a>, <a href="../man7/OSSL_PROVIDER-default.html">OSSL_PROVIDER-default(7)</a>, <a href="../man7/OSSL_PROVIDER-FIPS.html">OSSL_PROVIDER-FIPS(7)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2020-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

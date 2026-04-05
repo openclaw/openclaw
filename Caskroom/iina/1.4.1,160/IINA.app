@@ -1,0 +1,1 @@
+/Applications/IINA.app

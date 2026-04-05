@@ -1,0 +1,150 @@
+
+History of LZMA Utils and XZ Utils
+==================================
+
+Tukaani distribution
+
+    In 2005, there was a small group working on the Tukaani distribution,
+    which was a Slackware fork. One of the project's goals was to fit the
+    distro on a single 700 MiB ISO-9660 image. Using LZMA instead of gzip
+    helped a lot. Roughly speaking, one could fit data that took 1000 MiB
+    in gzipped form into 700 MiB with LZMA. Naturally, the compression
+    ratio varied across packages, but this was what we got on average.
+
+    Slackware packages have traditionally had .tgz as the filename suffix,
+    which is an abbreviation of .tar.gz. A logical naming for LZMA
+    compressed packages was .tlz, being an abbreviation of .tar.lzma.
+
+    At the end of the year 2007, there was no distribution under the
+    Tukaani project anymore, but development of LZMA Utils was kept going.
+    Still, there were .tlz packages around, because at least Vector Linux
+    (a Slackware based distribution) used LZMA for its packages.
+
+    First versions of the modified pkgtools used the LZMA_Alone tool from
+    Igor Pavlov's LZMA SDK as is. It was fine, because users wouldn't need
+    to interact with LZMA_Alone directly. But people soon wanted to use
+    LZMA for other files too, and the interface of LZMA_Alone wasn't
+    comfortable for those used to gzip and bzip2.
+
+
+First steps of LZMA Utils
+
+    The first version of LZMA Utils (4.22.0) included a shell script called
+    lzmash. It was a wrapper that had a gzip-like command-line interface. It
+    used the LZMA_Alone tool from LZMA SDK to do all the real work. zgrep,
+    zdiff, and related scripts from gzip were adapted to work with LZMA and
+    were part of the first LZMA Utils release too.
+
+    LZMA Utils 4.22.0 included also lzmadec, which was a small (less than
+    10 KiB) decoder-only command-line tool. It was written on top of the
+    decoder-only C code found from the LZMA SDK. lzmadec was convenient in
+    situations where LZMA_Alone (a few hundred KiB) would be too big.
+
+    lzmash and lzmadec were written by Lasse Collin.
+
+
+Second generation
+
+    The lzmash script was an ugly and not very secure hack. The last
+    version of LZMA Utils to use lzmash was 4.27.1.
+
+    LZMA Utils 4.32.0beta1 introduced a new lzma command-line tool written
+    by Ville Koskinen. It was written in C++, and used the encoder and
+    decoder from C++ LZMA SDK with some little modifications. This tool
+    replaced both the lzmash script and the LZMA_Alone command-line tool
+    in LZMA Utils.
+
+    Introducing this new tool caused some temporary incompatibilities,
+    because the LZMA_Alone executable was simply named lzma like the new
+    command-line tool, but they had a completely different command-line
+    interface. The file format was still the same.
+
+    Lasse wrote liblzmadec, which was a small decoder-only library based
+    on the C code found from LZMA SDK. liblzmadec had an API similar to
+    zlib, although there were some significant differences, which made it
+    non-trivial to use it in some applications designed for zlib and
+    libbzip2.
+
+    The lzmadec command-line tool was converted to use liblzmadec.
+
+    Alexandre Sauvé helped converting the build system to use GNU
+    Autotools. This made it easier to test for certain less portable
+    features needed by the new command-line tool.
+
+    Since the new command-line tool never got completely finished (for
+    example, it didn't support the LZMA_OPT environment variable), the
+    intent was to not call 4.32.x stable. Similarly, liblzmadec wasn't
+    polished, but appeared to work well enough, so some people started
+    using it too.
+
+    Because the development of the third generation of LZMA Utils was
+    delayed considerably (3-4 years), the 4.32.x branch had to be kept
+    maintained. It got some bug fixes now and then, and finally it was
+    decided to call it stable, although most of the missing features were
+    never added.
+
+
+File format problems
+
+    The file format used by LZMA_Alone was primitive. It was designed with
+    embedded systems in mind, and thus provided only a minimal set of
+    features. The two biggest problems for non-embedded use were the lack
+    of magic bytes and an integrity check.
+
+    Igor and Lasse started developing a new file format with some help
+    from Ville Koskinen. Also Mark Adler, Mikko Pouru, H. Peter Anvin,
+    and Lars Wirzenius helped with some minor things at some point of the
+    development. Designing the new format took quite a long time (actually,
+    too long a time would be a more appropriate expression). It was mostly
+    because Lasse was quite slow at getting things done due to personal
+    reasons.
+
+    Originally the new format was supposed to use the same .lzma suffix
+    that was already used by the old file format. Switching to the new
+    format wouldn't have caused much trouble when the old format wasn't
+    used by many people. But since the development of the new format took
+    such a long time, the old format got quite popular, and it was decided
+    that the new file format must use a different suffix.
+
+    It was decided to use .xz as the suffix of the new file format. The
+    first stable .xz file format specification was finally released in
+    December 2008. In addition to fixing the most obvious problems of
+    the old .lzma format, the .xz format added some new features like
+    support for multiple filters (compression algorithms), filter chaining
+    (like piping on the command line), and limited random-access reading.
+
+    Currently the primary compression algorithm used in .xz is LZMA2.
+    It is an extension on top of the original LZMA to fix some practical
+    problems: LZMA2 adds support for flushing the encoder, uncompressed
+    chunks, eases stateful decoder implementations, and improves support
+    for multithreading. Since LZMA2 is better than the original LZMA, the
+    original LZMA is not supported in .xz.
+
+
+Transition to XZ Utils
+
+    The early versions of XZ Utils were called LZMA Utils. The first
+    releases were 4.42.0alphas. They dropped the rest of the C++ LZMA SDK.
+    The code was still directly based on LZMA SDK but ported to C and
+    converted from a callback API to a stateful API. Later, Igor Pavlov
+    made a C version of the LZMA encoder too; these ports from C++ to C
+    were independent in LZMA SDK and LZMA Utils.
+
+    The core of the new LZMA Utils was liblzma, a compression library with
+    a zlib-like API. liblzma supported both the old and new file format.
+    The gzip-like lzma command-line tool was rewritten to use liblzma.
+
+    The new LZMA Utils code base was renamed to XZ Utils when the name
+    of the new file format had been decided. The liblzma compression
+    library retained its name though, because changing it would have
+    caused unnecessary breakage in applications already using the early
+    liblzma snapshots.
+
+    The xz command-line tool can emulate the gzip-like lzma tool by
+    creating appropriate symlinks (e.g. lzma -> xz). Thus, practically
+    all scripts using the lzma tool from LZMA Utils will work as is with
+    XZ Utils (and will keep using the old .lzma format). Still, the .lzma
+    format is more or less deprecated. XZ Utils will keep supporting it,
+    but new applications should use the .xz format, and migrating old
+    applications to .xz is often a good idea too.
+

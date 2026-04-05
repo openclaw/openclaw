@@ -1,0 +1,108 @@
+.\" Hey, Emacs! This is -*-nroff-*- you know...
+.\"
+.\" genccode.8: manual page for the gennames utility
+.\"
+.\" Copyright (C) 2016 and later: Unicode, Inc. and others.
+.\" License & terms of use: http://www.unicode.org/copyright.html
+.\" Copyright (C) 2003-2004 IBM, Inc. and others.
+.\"
+.TH GENCCODE 8 "11 March 2004" "ICU MANPAGE" "ICU 78.3 Manual"
+.SH NAME
+.B genccode
+\- generate C or platform specific assembly code from an ICU data file.
+.SH SYNOPSIS
+.B genccode
+[
+.BR "\-h\fP, \fB\-?\fP, \fB\-\-help"
+]
+[
+.BI "\-a\fP, \fB\-\-assembly" " name"
+]
+[
+.BI "\-d\fP, \fB\-\-destdir" " destination"
+]
+[
+.BI "\-n\fP, \fB\-\-name" " name"
+]
+[
+.BI "\-e\fP, \fB\-\-entrypoint" " name"
+]
+[
+.BI "\-f\fP, \fB\-\-filename" " name"
+]
+[
+.IR filename " .\|.\|."
+]
+.SH DESCRIPTION
+.B genccode
+reads each of the supplied
+.I filename
+and writes out a C file containing a compilable definition of the data in
+the data file.
+The C file name is made by taking the base name of the data
+.IR filename ,
+replacing dots by underscores, and adding a
+.I .c
+file extension.
+.PP
+If the \fB-a\fP option is used, platform specific assembly
+code is generated instead of C code.
+Most C compilers will accept both C and assembly files.
+Instead of writing a filename with a
+.I .c
+file extension, a filename with a
+.I .s
+will be written instead.
+.PP
+If
+.B genccode
+is called with no
+.I filename
+it terminates gracefully.
+.SH OPTIONS
+.TP
+.BR "\-h\fP, \fB\-?\fP, \fB\-\-help"
+Print help about usage and exit.
+.TP
+.BI "\-a\fP, \fB\-\-assembly" " name"
+Output assembly code instead of C code.
+Use \fB-h\fP to see the list of available types of assembly to generate and
+to specify for this option.
+.TP
+.BI "\-d\fP, \fB\-\-destdir" " destination"
+Set the destination directory to
+.IR destination .
+The default destination directory is the current directory.
+.TP
+.BI "\-n\fP, \fB\-\-name" " name"
+Set the data name to
+.I name
+instead of the default. This name is also used as the base name of the
+output. The default name is made of the
+.I icudt
+prefix, followed by a two-digit version number corresponding to
+the current version of the ICU release, and a single letter indicating
+the endianness of the data (the letter
+.I b
+indicated big endian data, and the letter
+.I l
+indicates little endian ones).
+.TP
+.BI "\-f\fP, \fB\-\-filename" " name"
+Normally, an ICU data file such as mydata.icu will be turned into mydata_icu.c and mydata_icu.o.
+However, if this parameter was set to "somedata", the output files will be somedata.o and 
+somedata.c, respectively.
+.TP
+.BI "\-e\fP, \fB\-\-entrypoint" " name"
+Set the data entry point (used for linking against the data in a
+shared library form) to
+.IR name .
+The default entry point name is made of the data (set by the
+.BI "\-n\fP, \fB\-\-name"
+option) followed by an underscore and the type of the data (set by the
+.BI "\-t\fP, \fB\-\-type"
+option).
+.SH VERSION
+78.3
+.SH COPYRIGHT
+Copyright (C) 2000-2004 IBM, Inc. and others.

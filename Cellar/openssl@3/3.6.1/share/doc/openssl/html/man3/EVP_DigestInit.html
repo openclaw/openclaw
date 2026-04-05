@@ -1,0 +1,786 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_DigestInit</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#PARAMETERS">PARAMETERS</a></li>
+  <li><a href="#CONTROLS">CONTROLS</a></li>
+  <li><a href="#FLAGS">FLAGS</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_MD_fetch, EVP_MD_up_ref, EVP_MD_free, EVP_MD_get_params, EVP_MD_gettable_params, EVP_MD_CTX_new, EVP_MD_CTX_reset, EVP_MD_CTX_free, EVP_MD_CTX_dup, EVP_MD_CTX_copy, EVP_MD_CTX_copy_ex, EVP_MD_CTX_ctrl, EVP_MD_CTX_set_params, EVP_MD_CTX_get_params, EVP_MD_settable_ctx_params, EVP_MD_gettable_ctx_params, EVP_MD_CTX_settable_params, EVP_MD_CTX_gettable_params, EVP_MD_CTX_set_flags, EVP_MD_CTX_clear_flags, EVP_MD_CTX_test_flags, EVP_Q_digest, EVP_Digest, EVP_DigestInit_ex2, EVP_DigestInit_ex, EVP_DigestInit, EVP_DigestUpdate, EVP_DigestFinal_ex, EVP_DigestFinalXOF, EVP_DigestFinal, EVP_DigestSqueeze, EVP_MD_is_a, EVP_MD_get0_name, EVP_MD_get0_description, EVP_MD_names_do_all, EVP_MD_get0_provider, EVP_MD_get_type, EVP_MD_get_pkey_type, EVP_MD_get_size, EVP_MD_get_block_size, EVP_MD_get_flags, EVP_MD_CTX_get0_name, EVP_MD_CTX_md, EVP_MD_CTX_get0_md, EVP_MD_CTX_get1_md, EVP_MD_CTX_get_type, EVP_MD_CTX_get_size_ex, EVP_MD_CTX_get_block_size, EVP_MD_CTX_get0_md_data, EVP_MD_CTX_update_fn, EVP_MD_CTX_set_update_fn, EVP_md_null, EVP_get_digestbyname, EVP_get_digestbynid, EVP_get_digestbyobj, EVP_MD_CTX_get_pkey_ctx, EVP_MD_CTX_set_pkey_ctx, EVP_MD_do_all_provided, EVP_MD_type, EVP_MD_nid, EVP_MD_name, EVP_MD_pkey_type, EVP_MD_size, EVP_MD_block_size, EVP_MD_flags, EVP_MD_xof, EVP_MD_CTX_size, EVP_MD_CTX_get_size, EVP_MD_CTX_block_size, EVP_MD_CTX_type, EVP_MD_CTX_pkey_ctx, EVP_MD_CTX_md_data - EVP digest routines</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+
+EVP_MD *EVP_MD_fetch(OSSL_LIB_CTX *ctx, const char *algorithm,
+                     const char *properties);
+int EVP_MD_up_ref(EVP_MD *md);
+void EVP_MD_free(EVP_MD *md);
+int EVP_MD_get_params(const EVP_MD *digest, OSSL_PARAM params[]);
+const OSSL_PARAM *EVP_MD_gettable_params(const EVP_MD *digest);
+EVP_MD_CTX *EVP_MD_CTX_new(void);
+int EVP_MD_CTX_reset(EVP_MD_CTX *ctx);
+void EVP_MD_CTX_free(EVP_MD_CTX *ctx);
+void EVP_MD_CTX_ctrl(EVP_MD_CTX *ctx, int cmd, int p1, void* p2);
+int EVP_MD_CTX_get_params(EVP_MD_CTX *ctx, OSSL_PARAM params[]);
+int EVP_MD_CTX_set_params(EVP_MD_CTX *ctx, const OSSL_PARAM params[]);
+const OSSL_PARAM *EVP_MD_settable_ctx_params(const EVP_MD *md);
+const OSSL_PARAM *EVP_MD_gettable_ctx_params(const EVP_MD *md);
+const OSSL_PARAM *EVP_MD_CTX_settable_params(EVP_MD_CTX *ctx);
+const OSSL_PARAM *EVP_MD_CTX_gettable_params(EVP_MD_CTX *ctx);
+void EVP_MD_CTX_set_flags(EVP_MD_CTX *ctx, int flags);
+void EVP_MD_CTX_clear_flags(EVP_MD_CTX *ctx, int flags);
+int EVP_MD_CTX_test_flags(const EVP_MD_CTX *ctx, int flags);
+
+int EVP_Q_digest(OSSL_LIB_CTX *libctx, const char *name, const char *propq,
+                 const void *data, size_t datalen,
+                 unsigned char *md, size_t *mdlen);
+int EVP_Digest(const void *data, size_t count, unsigned char *md,
+               unsigned int *size, const EVP_MD *type, ENGINE *impl);
+int EVP_DigestInit_ex2(EVP_MD_CTX *ctx, const EVP_MD *type,
+                       const OSSL_PARAM params[]);
+int EVP_DigestInit_ex(EVP_MD_CTX *ctx, const EVP_MD *type, ENGINE *impl);
+int EVP_DigestUpdate(EVP_MD_CTX *ctx, const void *d, size_t cnt);
+int EVP_DigestFinal_ex(EVP_MD_CTX *ctx, unsigned char *md, unsigned int *s);
+int EVP_DigestFinalXOF(EVP_MD_CTX *ctx, unsigned char *out, size_t outlen);
+int EVP_DigestSqueeze(EVP_MD_CTX *ctx, unsigned char *out, size_t outlen);
+
+EVP_MD_CTX *EVP_MD_CTX_dup(const EVP_MD_CTX *in);
+int EVP_MD_CTX_copy_ex(EVP_MD_CTX *out, const EVP_MD_CTX *in);
+
+int EVP_DigestInit(EVP_MD_CTX *ctx, const EVP_MD *type);
+int EVP_DigestFinal(EVP_MD_CTX *ctx, unsigned char *md, unsigned int *s);
+
+int EVP_MD_CTX_copy(EVP_MD_CTX *out, EVP_MD_CTX *in);
+
+const char *EVP_MD_get0_name(const EVP_MD *md);
+const char *EVP_MD_get0_description(const EVP_MD *md);
+int EVP_MD_is_a(const EVP_MD *md, const char *name);
+int EVP_MD_names_do_all(const EVP_MD *md,
+                        void (*fn)(const char *name, void *data),
+                        void *data);
+const OSSL_PROVIDER *EVP_MD_get0_provider(const EVP_MD *md);
+int EVP_MD_get_type(const EVP_MD *md);
+int EVP_MD_get_pkey_type(const EVP_MD *md);
+int EVP_MD_get_size(const EVP_MD *md);
+int EVP_MD_get_block_size(const EVP_MD *md);
+unsigned long EVP_MD_get_flags(const EVP_MD *md);
+int EVP_MD_xof(const EVP_MD *md);
+
+const EVP_MD *EVP_MD_CTX_get0_md(const EVP_MD_CTX *ctx);
+EVP_MD *EVP_MD_CTX_get1_md(EVP_MD_CTX *ctx);
+const char *EVP_MD_CTX_get0_name(const EVP_MD_CTX *ctx);
+int EVP_MD_CTX_get_size_ex(const EVP_MD_CTX *ctx);
+int EVP_MD_CTX_get_block_size(const EVP_MD_CTX *ctx);
+int EVP_MD_CTX_get_type(const EVP_MD_CTX *ctx);
+void *EVP_MD_CTX_get0_md_data(const EVP_MD_CTX *ctx);
+
+const EVP_MD *EVP_md_null(void);
+
+const EVP_MD *EVP_get_digestbyname(const char *name);
+const EVP_MD *EVP_get_digestbynid(int type);
+const EVP_MD *EVP_get_digestbyobj(const ASN1_OBJECT *o);
+
+EVP_PKEY_CTX *EVP_MD_CTX_get_pkey_ctx(const EVP_MD_CTX *ctx);
+void EVP_MD_CTX_set_pkey_ctx(EVP_MD_CTX *ctx, EVP_PKEY_CTX *pctx);
+
+void EVP_MD_do_all_provided(OSSL_LIB_CTX *libctx,
+                            void (*fn)(EVP_MD *mac, void *arg),
+                            void *arg);
+
+#define EVP_MD_type EVP_MD_get_type
+#define EVP_MD_nid EVP_MD_get_type
+#define EVP_MD_name EVP_MD_get0_name
+#define EVP_MD_pkey_type EVP_MD_get_pkey_type
+#define EVP_MD_size EVP_MD_get_size
+#define EVP_MD_block_size EVP_MD_get_block_size
+#define EVP_MD_flags EVP_MD_get_flags
+#define EVP_MD_CTX_get_size EVP_MD_CTX_get_size_ex
+#define EVP_MD_CTX_size EVP_MD_CTX_get_size_ex
+#define EVP_MD_CTX_block_size EVP_MD_CTX_get_block_size
+#define EVP_MD_CTX_type EVP_MD_CTX_get_type
+#define EVP_MD_CTX_pkey_ctx EVP_MD_CTX_get_pkey_ctx
+#define EVP_MD_CTX_md_data EVP_MD_CTX_get0_md_data</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>const EVP_MD *EVP_MD_CTX_md(const EVP_MD_CTX *ctx);
+
+int (*EVP_MD_CTX_update_fn(EVP_MD_CTX *ctx))(EVP_MD_CTX *ctx,
+                                             const void *data, size_t count);
+
+void EVP_MD_CTX_set_update_fn(EVP_MD_CTX *ctx,
+                              int (*update)(EVP_MD_CTX *ctx,
+                                            const void *data, size_t count));</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The EVP digest routines are a high-level interface to message digests, and Extendable Output Functions (XOF).</p>
+
+<p>The <b>EVP_MD</b> type is a structure for digest method implementation.</p>
+
+<p>Each Message digest algorithm (such as SHA256) produces a fixed size output length which is returned when EVP_DigestFinal_ex() is called. Extendable Output Functions (XOF) such as SHAKE256 have a variable sized output length <i>outlen</i> which can be used with either EVP_DigestFinalXOF() or EVP_DigestSqueeze(). EVP_DigestFinal_ex() may also be used for an XOF, but the &quot;xoflen&quot; must be set beforehand (See <a href="#PARAMETERS">&quot;PARAMETERS&quot;</a>). Note that EVP_MD_get_size() and EVP_MD_CTX_get_size_ex() behave differently for an XOF.</p>
+
+<dl>
+
+<dt id="EVP_MD_fetch">EVP_MD_fetch()</dt>
+<dd>
+
+<p>Fetches the digest implementation for the given <i>algorithm</i> from any provider offering it, within the criteria given by the <i>properties</i>. See <a href="../man7/crypto.html">&quot;ALGORITHM FETCHING&quot; in crypto(7)</a> for further information.</p>
+
+<p>The returned value must eventually be freed with EVP_MD_free().</p>
+
+<p>Fetched <b>EVP_MD</b> structures are reference counted.</p>
+
+</dd>
+<dt id="EVP_MD_up_ref">EVP_MD_up_ref()</dt>
+<dd>
+
+<p>Increments the reference count for an <b>EVP_MD</b> structure.</p>
+
+</dd>
+<dt id="EVP_MD_free">EVP_MD_free()</dt>
+<dd>
+
+<p>Decrements the reference count for the fetched <b>EVP_MD</b> structure. If the reference count drops to 0 then the structure is freed. If the argument is NULL, nothing is done.</p>
+
+</dd>
+<dt id="EVP_MD_CTX_new">EVP_MD_CTX_new()</dt>
+<dd>
+
+<p>Allocates and returns a digest context.</p>
+
+</dd>
+<dt id="EVP_MD_CTX_reset">EVP_MD_CTX_reset()</dt>
+<dd>
+
+<p>Resets the digest context <i>ctx</i>. This can be used to reuse an already existing context.</p>
+
+</dd>
+<dt id="EVP_MD_CTX_free">EVP_MD_CTX_free()</dt>
+<dd>
+
+<p>Cleans up digest context <i>ctx</i> and frees up the space allocated to it. If the argument is NULL, nothing is done.</p>
+
+</dd>
+<dt id="EVP_MD_CTX_ctrl">EVP_MD_CTX_ctrl()</dt>
+<dd>
+
+<p><i>This is a legacy method. EVP_MD_CTX_set_params() and EVP_MD_CTX_get_params() is the mechanism that should be used to set and get parameters that are used by providers.</i></p>
+
+<p>Performs digest-specific control actions on context <i>ctx</i>. The control command is indicated in <i>cmd</i> and any additional arguments in <i>p1</i> and <i>p2</i>. EVP_MD_CTX_ctrl() must be called after EVP_DigestInit_ex2(). Other restrictions may apply depending on the control type and digest implementation.</p>
+
+<p>If this function happens to be used with a fetched <b>EVP_MD</b>, it will translate the controls that are known to OpenSSL into <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> parameters with keys defined by OpenSSL and call EVP_MD_CTX_get_params() or EVP_MD_CTX_set_params() as is appropriate for each control command.</p>
+
+<p>See <a href="#CONTROLS">&quot;CONTROLS&quot;</a> below for more information, including what translations are being done.</p>
+
+</dd>
+<dt id="EVP_MD_get_params">EVP_MD_get_params()</dt>
+<dd>
+
+<p>Retrieves the requested list of <i>params</i> from a MD <i>md</i>. See <a href="#PARAMETERS">&quot;PARAMETERS&quot;</a> below for more information.</p>
+
+</dd>
+<dt id="EVP_MD_CTX_get_params">EVP_MD_CTX_get_params()</dt>
+<dd>
+
+<p>Retrieves the requested list of <i>params</i> from a MD context <i>ctx</i>. See <a href="#PARAMETERS">&quot;PARAMETERS&quot;</a> below for more information.</p>
+
+</dd>
+<dt id="EVP_MD_CTX_set_params">EVP_MD_CTX_set_params()</dt>
+<dd>
+
+<p>Sets the list of <i>params</i> into a MD context <i>ctx</i>. See <a href="#PARAMETERS">&quot;PARAMETERS&quot;</a> below for more information.</p>
+
+</dd>
+<dt id="EVP_MD_gettable_params">EVP_MD_gettable_params()</dt>
+<dd>
+
+<p>Get a constant <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> array that describes the retrievable parameters that can be used with EVP_MD_get_params().</p>
+
+</dd>
+<dt id="EVP_MD_gettable_ctx_params-EVP_MD_CTX_gettable_params">EVP_MD_gettable_ctx_params(), EVP_MD_CTX_gettable_params()</dt>
+<dd>
+
+<p>Get a constant <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> array that describes the retrievable parameters that can be used with EVP_MD_CTX_get_params(). EVP_MD_gettable_ctx_params() returns the parameters that can be retrieved from the algorithm, whereas EVP_MD_CTX_gettable_params() returns the parameters that can be retrieved in the context&#39;s current state.</p>
+
+</dd>
+<dt id="EVP_MD_settable_ctx_params-EVP_MD_CTX_settable_params">EVP_MD_settable_ctx_params(), EVP_MD_CTX_settable_params()</dt>
+<dd>
+
+<p>Get a constant <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> array that describes the settable parameters that can be used with EVP_MD_CTX_set_params(). EVP_MD_settable_ctx_params() returns the parameters that can be set from the algorithm, whereas EVP_MD_CTX_settable_params() returns the parameters that can be set in the context&#39;s current state.</p>
+
+</dd>
+<dt id="EVP_MD_CTX_set_flags-EVP_MD_CTX_clear_flags-EVP_MD_CTX_test_flags">EVP_MD_CTX_set_flags(), EVP_MD_CTX_clear_flags(), EVP_MD_CTX_test_flags()</dt>
+<dd>
+
+<p>Sets, clears and tests <i>ctx</i> flags. See <a href="#FLAGS">&quot;FLAGS&quot;</a> below for more information.</p>
+
+</dd>
+<dt id="EVP_Q_digest-is-a-quick-one-shot-digest-function">EVP_Q_digest() is a quick one-shot digest function.</dt>
+<dd>
+
+<p>It hashes <i>datalen</i> bytes of data at <i>data</i> using the digest algorithm <i>name</i>, which is fetched using the optional <i>libctx</i> and <i>propq</i> parameters. The digest value is placed in <i>md</i> and its length is written at <i>mdlen</i> if the pointer is not NULL. At most <b>EVP_MAX_MD_SIZE</b> bytes will be written.</p>
+
+</dd>
+<dt id="EVP_Digest">EVP_Digest()</dt>
+<dd>
+
+<p>A wrapper around the Digest Init_ex, Update and Final_ex functions. Hashes <i>count</i> bytes of data at <i>data</i> using a digest <i>type</i> from ENGINE <i>impl</i>. The digest value is placed in <i>md</i> and its length is written at <i>size</i> if the pointer is not NULL. At most <b>EVP_MAX_MD_SIZE</b> bytes will be written. If <i>impl</i> is NULL the default implementation of digest <i>type</i> is used.</p>
+
+</dd>
+<dt id="EVP_DigestInit_ex2">EVP_DigestInit_ex2()</dt>
+<dd>
+
+<p>Sets up digest context <i>ctx</i> to use a digest <i>type</i>. <i>type</i> is typically supplied by a function such as EVP_sha1(), or a value explicitly fetched with EVP_MD_fetch(). <i>ctx</i> <b>MUST NOT</b> be NULL.</p>
+
+<p>The parameters <b>params</b> are set on the context after initialisation.</p>
+
+<p>The <i>type</i> parameter can be NULL if <i>ctx</i> has been already initialized with another EVP_DigestInit_ex() call and has not been reset with EVP_MD_CTX_reset().</p>
+
+</dd>
+<dt id="EVP_DigestInit_ex">EVP_DigestInit_ex()</dt>
+<dd>
+
+<p>Sets up digest context <i>ctx</i> to use a digest <i>type</i>. <i>type</i> is typically supplied by a function such as EVP_sha1(), or a value explicitly fetched with EVP_MD_fetch().</p>
+
+<p>If <i>impl</i> is non-NULL, its implementation of the digest <i>type</i> is used if there is one, and if not, the default implementation is used.</p>
+
+<p>The <i>type</i> parameter can be NULL if <i>ctx</i> has been already initialized with another EVP_DigestInit_ex() call and has not been reset with EVP_MD_CTX_reset().</p>
+
+</dd>
+<dt id="EVP_DigestUpdate">EVP_DigestUpdate()</dt>
+<dd>
+
+<p>Hashes <i>cnt</i> bytes of data at <i>d</i> into the digest context <i>ctx</i>. This function can be called several times on the same <i>ctx</i> to hash additional data.</p>
+
+</dd>
+<dt id="EVP_DigestFinal_ex">EVP_DigestFinal_ex()</dt>
+<dd>
+
+<p>Retrieves the digest value from <i>ctx</i> and places it in <i>md</i>. If the <i>s</i> parameter is not NULL then the number of bytes of data written (i.e. the length of the digest) will be written to the integer at <i>s</i>, at most <b>EVP_MAX_MD_SIZE</b> bytes will be written unless the digest implementation allows changing the digest size and it is set to a larger value by the application. After calling EVP_DigestFinal_ex() no additional calls to EVP_DigestUpdate() can be made, but EVP_DigestInit_ex2() can be called to initialize a new digest operation. <i>ctx</i> <b>MUST NOT</b> be NULL.</p>
+
+</dd>
+<dt id="EVP_DigestFinalXOF">EVP_DigestFinalXOF()</dt>
+<dd>
+
+<p>Interfaces to extendable-output functions, XOFs, such as SHAKE128 and SHAKE256. It retrieves the digest value from <i>ctx</i> and places it in <i>outlen</i>-sized <i>out</i>. After calling this function no additional calls to EVP_DigestUpdate() can be made, but EVP_DigestInit_ex2() can be called to initialize a new operation. EVP_DigestFinalXOF() may only be called once</p>
+
+</dd>
+<dt id="EVP_DigestSqueeze">EVP_DigestSqueeze()</dt>
+<dd>
+
+<p>Similar to EVP_DigestFinalXOF() but allows multiple calls to be made to squeeze variable length output data. EVP_DigestFinalXOF() should not be called after this.</p>
+
+</dd>
+<dt id="EVP_MD_CTX_dup">EVP_MD_CTX_dup()</dt>
+<dd>
+
+<p>Can be used to duplicate the message digest state from <i>in</i>. This is useful to avoid multiple EVP_MD_fetch() calls or if large amounts of data are to be hashed which only differ in the last few bytes.</p>
+
+</dd>
+<dt id="EVP_MD_CTX_copy_ex">EVP_MD_CTX_copy_ex()</dt>
+<dd>
+
+<p>Can be used to copy the message digest state from <i>in</i> to <i>out</i>. This is useful if large amounts of data are to be hashed which only differ in the last few bytes.</p>
+
+</dd>
+<dt id="EVP_DigestInit">EVP_DigestInit()</dt>
+<dd>
+
+<p>Behaves in the same way as EVP_DigestInit_ex2() except it doesn&#39;t set any parameters and calls EVP_MD_CTX_reset() so it cannot be used with an <i>type</i> of NULL.</p>
+
+</dd>
+<dt id="EVP_DigestFinal">EVP_DigestFinal()</dt>
+<dd>
+
+<p>Similar to EVP_DigestFinal_ex() except after computing the digest the digest context <i>ctx</i> is automatically cleaned up with EVP_MD_CTX_reset().</p>
+
+</dd>
+<dt id="EVP_MD_CTX_copy">EVP_MD_CTX_copy()</dt>
+<dd>
+
+<p>Similar to EVP_MD_CTX_copy_ex() except the destination <i>out</i> does not have to be initialized.</p>
+
+</dd>
+<dt id="EVP_MD_is_a">EVP_MD_is_a()</dt>
+<dd>
+
+<p>Returns 1 if <i>md</i> is an implementation of an algorithm that&#39;s identifiable with <i>name</i>, otherwise 0.</p>
+
+<p>If <i>md</i> is a legacy digest (it&#39;s the return value from the likes of EVP_sha256() rather than the result of an EVP_MD_fetch()), only cipher names registered with the default library context (see <a href="../man3/OSSL_LIB_CTX.html">OSSL_LIB_CTX(3)</a>) will be considered.</p>
+
+</dd>
+<dt id="EVP_MD_xof">EVP_MD_xof()</dt>
+<dd>
+
+<p>Returns 1 if <i>md</i> is an Extendable-output Function (XOF) otherwise it returns 0. SHAKE128 and SHAKE256 are XOF functions. It returns 0 for BLAKE2B algorithms.</p>
+
+</dd>
+<dt id="EVP_MD_get0_name-EVP_MD_CTX_get0_name">EVP_MD_get0_name(), EVP_MD_CTX_get0_name()</dt>
+<dd>
+
+<p>Return the name of the given message digest. For fetched message digests with multiple names, only one of them is returned; it&#39;s recommended to use EVP_MD_names_do_all() instead.</p>
+
+</dd>
+<dt id="EVP_MD_names_do_all">EVP_MD_names_do_all()</dt>
+<dd>
+
+<p>Traverses all names for the <i>md</i>, and calls <i>fn</i> with each name and <i>data</i>. This is only useful with fetched <b>EVP_MD</b>s.</p>
+
+</dd>
+<dt id="EVP_MD_get0_description">EVP_MD_get0_description()</dt>
+<dd>
+
+<p>Returns a description of the digest, meant for display and human consumption. The description is at the discretion of the digest implementation.</p>
+
+</dd>
+<dt id="EVP_MD_get0_provider">EVP_MD_get0_provider()</dt>
+<dd>
+
+<p>Returns an <b>OSSL_PROVIDER</b> pointer to the provider that implements the given <b>EVP_MD</b>.</p>
+
+</dd>
+<dt id="EVP_MD_get_size">EVP_MD_get_size()</dt>
+<dd>
+
+<p>Return the size of the message digest when passed an <b>EVP_MD</b>, i.e. the size of the hash. A negative value or 0 can occur for invalid size. For an XOF with no default size this returns 0.</p>
+
+</dd>
+<dt id="EVP_MD_CTX_get_size_ex-EVP_MD_CTX_get_size">EVP_MD_CTX_get_size_ex(), EVP_MD_CTX_get_size()</dt>
+<dd>
+
+<p>For a normal digest this is the same as EVP_MD_get_size(). For an XOF this returns the &quot;xoflen&quot; if it has been set, otherwise it returns 0.</p>
+
+</dd>
+<dt id="EVP_MD_get_block_size-EVP_MD_CTX_get_block_size">EVP_MD_get_block_size(), EVP_MD_CTX_get_block_size()</dt>
+<dd>
+
+<p>Return the block size of the message digest when passed an <b>EVP_MD</b> or an <b>EVP_MD_CTX</b> structure.</p>
+
+</dd>
+<dt id="EVP_MD_get_type-EVP_MD_CTX_get_type">EVP_MD_get_type(), EVP_MD_CTX_get_type()</dt>
+<dd>
+
+<p>Return the NID of the OBJECT IDENTIFIER representing the given message digest when passed an <b>EVP_MD</b> structure. For example, <code>EVP_MD_get_type(EVP_sha1())</code> returns <b>NID_sha1</b>. This function is normally used when setting ASN1 OIDs.</p>
+
+</dd>
+<dt id="EVP_MD_CTX_get0_md_data">EVP_MD_CTX_get0_md_data()</dt>
+<dd>
+
+<p>Return the digest method private data for the passed <b>EVP_MD_CTX</b>. The space is allocated by OpenSSL and has the size originally set with EVP_MD_meth_set_app_datasize().</p>
+
+</dd>
+<dt id="EVP_MD_CTX_get0_md-EVP_MD_CTX_get1_md">EVP_MD_CTX_get0_md(), EVP_MD_CTX_get1_md()</dt>
+<dd>
+
+<p>EVP_MD_CTX_get0_md() returns the <b>EVP_MD</b> structure corresponding to the passed <b>EVP_MD_CTX</b>. This will be the same <b>EVP_MD</b> object originally passed to EVP_DigestInit_ex2() (or other similar function) when the EVP_MD_CTX was first initialised. Note that where explicit fetch is in use (see <a href="../man3/EVP_MD_fetch.html">EVP_MD_fetch(3)</a>) the value returned from this function will not have its reference count incremented and therefore it should not be used after the EVP_MD_CTX is freed. EVP_MD_CTX_get1_md() is the same except the ownership is passed to the caller and is from the passed <b>EVP_MD_CTX</b>.</p>
+
+</dd>
+<dt id="EVP_MD_CTX_set_update_fn">EVP_MD_CTX_set_update_fn()</dt>
+<dd>
+
+<p>Sets the update function for <i>ctx</i> to <i>update</i>. This is the function that is called by EVP_DigestUpdate(). If not set, the update function from the <b>EVP_MD</b> type specified at initialization is used.</p>
+
+</dd>
+<dt id="EVP_MD_CTX_update_fn">EVP_MD_CTX_update_fn()</dt>
+<dd>
+
+<p>Returns the update function for <i>ctx</i>.</p>
+
+</dd>
+<dt id="EVP_MD_get_flags">EVP_MD_get_flags()</dt>
+<dd>
+
+<p>Returns the <i>md</i> flags. Note that these are different from the <b>EVP_MD_CTX</b> ones. See <a href="../man3/EVP_MD_meth_set_flags.html">EVP_MD_meth_set_flags(3)</a> for more information.</p>
+
+</dd>
+<dt id="EVP_MD_get_pkey_type">EVP_MD_get_pkey_type()</dt>
+<dd>
+
+<p>Returns the NID of the public key signing algorithm associated with this digest. For example EVP_sha1() is associated with RSA so this will return <b>NID_sha1WithRSAEncryption</b>. Since digests and signature algorithms are no longer linked this function is only retained for compatibility reasons.</p>
+
+</dd>
+<dt id="EVP_md_null">EVP_md_null()</dt>
+<dd>
+
+<p>A &quot;null&quot; message digest that does nothing: i.e. the hash it returns is of zero length.</p>
+
+</dd>
+<dt id="EVP_get_digestbyname-EVP_get_digestbynid-EVP_get_digestbyobj">EVP_get_digestbyname(), EVP_get_digestbynid(), EVP_get_digestbyobj()</dt>
+<dd>
+
+<p>Returns an <b>EVP_MD</b> structure when passed a digest name, a digest <b>NID</b> or an <b>ASN1_OBJECT</b> structure respectively.</p>
+
+<p>The EVP_get_digestbyname() function is present for backwards compatibility with OpenSSL prior to version 3 and is different to the EVP_MD_fetch() function since it does not attempt to &quot;fetch&quot; an implementation of the cipher. Additionally, it only knows about digests that are built-in to OpenSSL and have an associated NID. Similarly EVP_get_digestbynid() and EVP_get_digestbyobj() also return objects without an associated implementation.</p>
+
+<p>When the digest objects returned by these functions are used (such as in a call to EVP_DigestInit_ex()) an implementation of the digest will be implicitly fetched from the loaded providers. This fetch could fail if no suitable implementation is available. Use EVP_MD_fetch() instead to explicitly fetch the algorithm and an associated implementation from a provider.</p>
+
+<p>See <a href="../man7/crypto.html">&quot;ALGORITHM FETCHING&quot; in crypto(7)</a> for more information about fetching.</p>
+
+<p>The digest objects returned from these functions do not need to be freed with EVP_MD_free().</p>
+
+</dd>
+<dt id="EVP_MD_CTX_get_pkey_ctx">EVP_MD_CTX_get_pkey_ctx()</dt>
+<dd>
+
+<p>Returns the <b>EVP_PKEY_CTX</b> assigned to <i>ctx</i>. The returned pointer should not be freed by the caller.</p>
+
+</dd>
+<dt id="EVP_MD_CTX_set_pkey_ctx">EVP_MD_CTX_set_pkey_ctx()</dt>
+<dd>
+
+<p>Assigns an <b>EVP_PKEY_CTX</b> to <b>EVP_MD_CTX</b>. This is usually used to provide a customized <b>EVP_PKEY_CTX</b> to <a href="../man3/EVP_DigestSignInit.html">EVP_DigestSignInit(3)</a> or <a href="../man3/EVP_DigestVerifyInit.html">EVP_DigestVerifyInit(3)</a>. The <i>pctx</i> passed to this function should be freed by the caller. A NULL <i>pctx</i> pointer is also allowed to clear the <b>EVP_PKEY_CTX</b> assigned to <i>ctx</i>. In such case, freeing the cleared <b>EVP_PKEY_CTX</b> or not depends on how the <b>EVP_PKEY_CTX</b> is created.</p>
+
+</dd>
+<dt id="EVP_MD_do_all_provided">EVP_MD_do_all_provided()</dt>
+<dd>
+
+<p>Traverses all messages digests implemented by all activated providers in the given library context <i>libctx</i>, and for each of the implementations, calls the given function <i>fn</i> with the implementation method and the given <i>arg</i> as argument.</p>
+
+</dd>
+</dl>
+
+<h1 id="PARAMETERS">PARAMETERS</h1>
+
+<p>See <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> for information about passing parameters.</p>
+
+<p>EVP_MD_CTX_set_params() and EVP_MD_CTX_get_params() can be used with the following OSSL_PARAM keys:</p>
+
+<dl>
+
+<dt id="xoflen-OSSL_DIGEST_PARAM_XOFLEN-unsigned-integer">&quot;xoflen&quot; (<b>OSSL_DIGEST_PARAM_XOFLEN</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+<p>Sets or gets the digest length for extendable output functions. The value should not exceed what can be given using a <b>size_t</b>. It may be used by SHAKE-128 and SHAKE-256 to set the output length used by EVP_DigestFinal_ex() and EVP_DigestFinal().</p>
+
+</dd>
+<dt id="size-OSSL_DIGEST_PARAM_SIZE-unsigned-integer">&quot;size&quot; (<b>OSSL_DIGEST_PARAM_SIZE</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+<p>Sets or gets a fixed digest length. The value should not exceed what can be given using a <b>size_t</b>. It may be used by BLAKE2B-512 to set the output length used by EVP_DigestFinal_ex() and EVP_DigestFinal().</p>
+
+</dd>
+</dl>
+
+<p>EVP_MD_CTX_set_params() can be used with the following OSSL_PARAM keys:</p>
+
+<dl>
+
+<dt id="pad-type-OSSL_DIGEST_PARAM_PAD_TYPE-unsigned-integer">&quot;pad-type&quot; (<b>OSSL_DIGEST_PARAM_PAD_TYPE</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+<p>Sets the padding type. It is used by the MDC2 algorithm.</p>
+
+</dd>
+</dl>
+
+<p>EVP_MD_CTX_get_params() can be used with the following OSSL_PARAM keys:</p>
+
+<dl>
+
+<dt id="micalg-OSSL_DIGEST_PARAM_MICALG-UTF8-string">&quot;micalg&quot; (<b>OSSL_DIGEST_PARAM_MICALG</b>) &lt;UTF8 string&gt;.</dt>
+<dd>
+
+<p>Gets the digest Message Integrity Check algorithm string. This is used when creating S/MIME multipart/signed messages, as specified in RFC 3851. It may be used by external engines or providers.</p>
+
+</dd>
+</dl>
+
+<h1 id="CONTROLS">CONTROLS</h1>
+
+<p>EVP_MD_CTX_ctrl() can be used to send the following standard controls:</p>
+
+<dl>
+
+<dt id="EVP_MD_CTRL_MICALG">EVP_MD_CTRL_MICALG</dt>
+<dd>
+
+<p>Gets the digest Message Integrity Check algorithm string. This is used when creating S/MIME multipart/signed messages, as specified in RFC 3851. The string value is written to <i>p2</i>.</p>
+
+<p>When used with a fetched <b>EVP_MD</b>, EVP_MD_CTX_get_params() gets called with an <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> item with the key &quot;micalg&quot; (<b>OSSL_DIGEST_PARAM_MICALG</b>).</p>
+
+</dd>
+<dt id="EVP_MD_CTRL_XOF_LEN">EVP_MD_CTRL_XOF_LEN</dt>
+<dd>
+
+<p>This control sets the digest length for extendable output functions to <i>p1</i>. Sending this control directly should not be necessary, the use of EVP_DigestFinalXOF() is preferred. Currently used by SHAKE algorithms.</p>
+
+<p>When used with a fetched <b>EVP_MD</b>, EVP_MD_CTX_get_params() gets called with an <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> item with the key &quot;xoflen&quot; (<b>OSSL_DIGEST_PARAM_XOFLEN</b>).</p>
+
+</dd>
+</dl>
+
+<h1 id="FLAGS">FLAGS</h1>
+
+<p>EVP_MD_CTX_set_flags(), EVP_MD_CTX_clear_flags() and EVP_MD_CTX_test_flags() can be used the manipulate and test these <b>EVP_MD_CTX</b> flags:</p>
+
+<dl>
+
+<dt id="EVP_MD_CTX_FLAG_ONESHOT">EVP_MD_CTX_FLAG_ONESHOT</dt>
+<dd>
+
+<p>This flag instructs the digest to optimize for one update only, if possible.</p>
+
+</dd>
+<dt id="EVP_MD_CTX_FLAG_CLEANED">EVP_MD_CTX_FLAG_CLEANED</dt>
+<dd>
+
+<p>This flag is for internal use only and <i>must not</i> be used in user code.</p>
+
+</dd>
+<dt id="EVP_MD_CTX_FLAG_REUSE">EVP_MD_CTX_FLAG_REUSE</dt>
+<dd>
+
+<p>This flag is for internal use only and <i>must not</i> be used in user code.</p>
+
+</dd>
+<dt id="EVP_MD_CTX_FLAG_NO_INIT">EVP_MD_CTX_FLAG_NO_INIT</dt>
+<dd>
+
+<p>This flag instructs EVP_DigestInit() and similar not to initialise the implementation specific data.</p>
+
+</dd>
+<dt id="EVP_MD_CTX_FLAG_FINALISE">EVP_MD_CTX_FLAG_FINALISE</dt>
+<dd>
+
+<p>Some functions such as EVP_DigestSign only finalise copies of internal contexts so additional data can be included after the finalisation call. This is inefficient if this functionality is not required, and can be disabled with this flag.</p>
+
+</dd>
+</dl>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<dl>
+
+<dt id="EVP_MD_fetch1">EVP_MD_fetch()</dt>
+<dd>
+
+<p>Returns a pointer to a <b>EVP_MD</b> for success or NULL for failure.</p>
+
+</dd>
+<dt id="EVP_MD_up_ref1">EVP_MD_up_ref()</dt>
+<dd>
+
+<p>Returns 1 for success or 0 for failure.</p>
+
+</dd>
+<dt id="EVP_Q_digest-EVP_Digest-EVP_DigestInit_ex2-EVP_DigestInit_ex-EVP_DigestInit-EVP_DigestUpdate-EVP_DigestFinal_ex-EVP_DigestFinalXOF-and-EVP_DigestFinal">EVP_Q_digest(), EVP_Digest(), EVP_DigestInit_ex2(), EVP_DigestInit_ex(), EVP_DigestInit(), EVP_DigestUpdate(), EVP_DigestFinal_ex(), EVP_DigestFinalXOF(), and EVP_DigestFinal()</dt>
+<dd>
+
+<p>return 1 for success and 0 for failure.</p>
+
+</dd>
+<dt id="EVP_MD_CTX_ctrl1">EVP_MD_CTX_ctrl()</dt>
+<dd>
+
+<p>Returns 1 if successful or 0 for failure.</p>
+
+</dd>
+<dt id="EVP_MD_CTX_set_params-EVP_MD_CTX_get_params">EVP_MD_CTX_set_params(), EVP_MD_CTX_get_params()</dt>
+<dd>
+
+<p>Returns 1 if successful or 0 for failure.</p>
+
+</dd>
+<dt id="EVP_MD_CTX_settable_params-EVP_MD_CTX_gettable_params">EVP_MD_CTX_settable_params(), EVP_MD_CTX_gettable_params()</dt>
+<dd>
+
+<p>Return an array of constant <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a>s, or NULL if there is none to get.</p>
+
+</dd>
+<dt id="EVP_MD_CTX_dup1">EVP_MD_CTX_dup()</dt>
+<dd>
+
+<p>Returns a new EVP_MD_CTX if successful or NULL on failure.</p>
+
+</dd>
+<dt id="EVP_MD_CTX_copy_ex1">EVP_MD_CTX_copy_ex()</dt>
+<dd>
+
+<p>Returns 1 if successful or 0 for failure.</p>
+
+</dd>
+<dt id="EVP_MD_get_type-EVP_MD_get_pkey_type">EVP_MD_get_type(), EVP_MD_get_pkey_type()</dt>
+<dd>
+
+<p>Returns the NID of the corresponding OBJECT IDENTIFIER or NID_undef if none exists.</p>
+
+</dd>
+<dt id="EVP_MD_get_size-EVP_MD_get_block_size-EVP_MD_CTX_get_size-EVP_MD_CTX_get_block_size">EVP_MD_get_size(), EVP_MD_get_block_size(), EVP_MD_CTX_get_size(), EVP_MD_CTX_get_block_size()</dt>
+<dd>
+
+<p>Returns the digest or block size in bytes or -1 for failure.</p>
+
+</dd>
+<dt id="EVP_md_null1">EVP_md_null()</dt>
+<dd>
+
+<p>Returns a pointer to the <b>EVP_MD</b> structure of the &quot;null&quot; message digest.</p>
+
+</dd>
+<dt id="EVP_get_digestbyname-EVP_get_digestbynid-EVP_get_digestbyobj1">EVP_get_digestbyname(), EVP_get_digestbynid(), EVP_get_digestbyobj()</dt>
+<dd>
+
+<p>Returns either an <b>EVP_MD</b> structure or NULL if an error occurs.</p>
+
+</dd>
+<dt id="EVP_MD_CTX_set_pkey_ctx1">EVP_MD_CTX_set_pkey_ctx()</dt>
+<dd>
+
+<p>This function has no return value.</p>
+
+</dd>
+<dt id="EVP_MD_names_do_all1">EVP_MD_names_do_all()</dt>
+<dd>
+
+<p>Returns 1 if the callback was called for all names. A return value of 0 means that the callback was not called for any names.</p>
+
+</dd>
+</dl>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The <b>EVP</b> interface to message digests should almost always be used in preference to the low-level interfaces. This is because the code then becomes transparent to the digest used and much more flexible.</p>
+
+<p>New applications should use the SHA-2 (such as <a href="../man3/EVP_sha256.html">EVP_sha256(3)</a>) or the SHA-3 digest algorithms (such as <a href="../man3/EVP_sha3_512.html">EVP_sha3_512(3)</a>). The other digest algorithms are still in common use.</p>
+
+<p>For most applications the <i>impl</i> parameter to EVP_DigestInit_ex() will be set to NULL to use the default digest implementation.</p>
+
+<p>Ignoring failure returns of EVP_DigestInit_ex(), EVP_DigestInit_ex2(), or EVP_DigestInit() can lead to undefined behavior on subsequent calls updating or finalizing the <b>EVP_MD_CTX</b> such as the EVP_DigestUpdate() or EVP_DigestFinal() functions. The only valid calls on the <b>EVP_MD_CTX</b> when initialization fails are calls that attempt another initialization of the context or release the context.</p>
+
+<p>The functions EVP_DigestInit(), EVP_DigestFinal() and EVP_MD_CTX_copy() are obsolete but are retained to maintain compatibility with existing code. New applications should use EVP_DigestInit_ex(), EVP_DigestFinal_ex() and EVP_MD_CTX_copy_ex() because they can efficiently reuse a digest context instead of initializing and cleaning it up on each call and allow non default implementations of digests to be specified.</p>
+
+<p>If digest contexts are not cleaned up after use, memory leaks will occur.</p>
+
+<p>EVP_MD_CTX_get0_name(), EVP_MD_CTX_get_size(), EVP_MD_CTX_get_block_size(), EVP_MD_CTX_get_type(), EVP_get_digestbynid() and EVP_get_digestbyobj() are defined as macros.</p>
+
+<p>EVP_MD_CTX_ctrl() sends commands to message digests for additional configuration or control.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>This example digests the data &quot;Test Message\n&quot; and &quot;Hello World\n&quot;, using the digest name passed on the command line.</p>
+
+<pre><code>#include &lt;stdio.h&gt;
+#include &lt;string.h&gt;
+#include &lt;openssl/evp.h&gt;
+
+int main(int argc, char *argv[])
+{
+    EVP_MD_CTX *mdctx;
+    const EVP_MD *md;
+    char mess1[] = &quot;Test Message\n&quot;;
+    char mess2[] = &quot;Hello World\n&quot;;
+    unsigned char md_value[EVP_MAX_MD_SIZE];
+    unsigned int md_len, i;
+
+    if (argv[1] == NULL) {
+        printf(&quot;Usage: mdtest digestname\n&quot;);
+        exit(1);
+    }
+
+    md = EVP_get_digestbyname(argv[1]);
+    if (md == NULL) {
+        printf(&quot;Unknown message digest %s\n&quot;, argv[1]);
+        exit(1);
+    }
+
+    mdctx = EVP_MD_CTX_new();
+    if (mdctx == NULL) {
+       printf(&quot;Message digest create failed.\n&quot;);
+       exit(1);
+    }
+    if (!EVP_DigestInit_ex2(mdctx, md, NULL)) {
+        printf(&quot;Message digest initialization failed.\n&quot;);
+        EVP_MD_CTX_free(mdctx);
+        exit(1);
+    }
+    if (!EVP_DigestUpdate(mdctx, mess1, strlen(mess1))) {
+        printf(&quot;Message digest update failed.\n&quot;);
+        EVP_MD_CTX_free(mdctx);
+        exit(1);
+    }
+    if (!EVP_DigestUpdate(mdctx, mess2, strlen(mess2))) {
+        printf(&quot;Message digest update failed.\n&quot;);
+        EVP_MD_CTX_free(mdctx);
+        exit(1);
+    }
+    if (!EVP_DigestFinal_ex(mdctx, md_value, &amp;md_len)) {
+        printf(&quot;Message digest finalization failed.\n&quot;);
+        EVP_MD_CTX_free(mdctx);
+        exit(1);
+    }
+    EVP_MD_CTX_free(mdctx);
+
+    printf(&quot;Digest is: &quot;);
+    for (i = 0; i &lt; md_len; i++)
+        printf(&quot;%02x&quot;, md_value[i]);
+    printf(&quot;\n&quot;);
+
+    exit(0);
+}</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_MD_meth_new.html">EVP_MD_meth_new(3)</a>, <a href="../man1/openssl-dgst.html">openssl-dgst(1)</a>, <a href="../man7/evp.html">evp(7)</a>, <a href="../man3/OSSL_PROVIDER.html">OSSL_PROVIDER(3)</a>, <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a>, <a href="../man7/property.html">property(7)</a>, <a href="../man7/crypto.html">&quot;ALGORITHM FETCHING&quot; in crypto(7)</a>, <a href="../man7/provider-digest.html">provider-digest(7)</a>, <a href="../man7/life_cycle-digest.html">life_cycle-digest(7)</a></p>
+
+<p>The full list of digest algorithms are provided below.</p>
+
+<p><a href="../man3/EVP_blake2b512.html">EVP_blake2b512(3)</a>, <a href="../man3/EVP_md2.html">EVP_md2(3)</a>, <a href="../man3/EVP_md4.html">EVP_md4(3)</a>, <a href="../man3/EVP_md5.html">EVP_md5(3)</a>, <a href="../man3/EVP_mdc2.html">EVP_mdc2(3)</a>, <a href="../man3/EVP_ripemd160.html">EVP_ripemd160(3)</a>, <a href="../man3/EVP_sha1.html">EVP_sha1(3)</a>, <a href="../man3/EVP_sha224.html">EVP_sha224(3)</a>, <a href="../man3/EVP_sha3_224.html">EVP_sha3_224(3)</a>, <a href="../man3/EVP_sm3.html">EVP_sm3(3)</a>, <a href="../man3/EVP_whirlpool.html">EVP_whirlpool(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The EVP_MD_CTX_create() and EVP_MD_CTX_destroy() functions were renamed to EVP_MD_CTX_new() and EVP_MD_CTX_free() in OpenSSL 1.1.0, respectively.</p>
+
+<p>The link between digests and signing algorithms was fixed in OpenSSL 1.0 and later, so now EVP_sha1() can be used with RSA and DSA.</p>
+
+<p>The EVP_dss1() function was removed in OpenSSL 1.1.0.</p>
+
+<p>The EVP_MD_CTX_set_pkey_ctx() function was added in OpenSSL 1.1.1.</p>
+
+<p>The EVP_Q_digest(), EVP_DigestInit_ex2(), EVP_MD_fetch(), EVP_MD_free(), EVP_MD_up_ref(), EVP_MD_get_params(), EVP_MD_CTX_set_params(), EVP_MD_CTX_get_params(), EVP_MD_gettable_params(), EVP_MD_gettable_ctx_params(), EVP_MD_settable_ctx_params(), EVP_MD_CTX_settable_params() and EVP_MD_CTX_gettable_params() functions were added in OpenSSL 3.0.</p>
+
+<p>The EVP_MD_type(), EVP_MD_nid(), EVP_MD_name(), EVP_MD_pkey_type(), EVP_MD_size(), EVP_MD_block_size(), EVP_MD_flags(), EVP_MD_CTX_size(), EVP_MD_CTX_block_size(), EVP_MD_CTX_type(), and EVP_MD_CTX_md_data() functions were renamed to include <code>get</code> or <code>get0</code> in their names in OpenSSL 3.0, respectively. The old names are kept as non-deprecated alias macros.</p>
+
+<p>The EVP_MD_CTX_md() function was deprecated in OpenSSL 3.0; use EVP_MD_CTX_get0_md() instead. EVP_MD_CTX_update_fn() and EVP_MD_CTX_set_update_fn() were deprecated in OpenSSL 3.0.</p>
+
+<p>The EVP_MD_CTX_dup() function was added in OpenSSL 3.1.</p>
+
+<p>The EVP_DigestSqueeze() function was added in OpenSSL 3.3.</p>
+
+<p>The EVP_MD_CTX_get_size_ex() and EVP_xof() functions were added in OpenSSL 3.4. The macros EVP_MD_CTX_get_size() and EVP_MD_CTX_size were changed in OpenSSL 3.4 to be aliases for EVP_MD_CTX_get_size_ex(), previously they were aliases for EVP_MD_get_size which returned a constant value. This is required for XOF digests since they do not have a fixed size.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

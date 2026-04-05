@@ -1,0 +1,99 @@
+# Contributors to x264
+#
+# The format of this file was inspired by the Linux kernel CREDITS file.
+# Authors are listed alphabetically.
+#
+# The fields are: name (N), email (E), web-address (W), CVS account login (C),
+# PGP key ID and fingerprint (P), description (D), and snail-mail address (S).
+
+N: Alex Izvorski
+E: aizvorski AT gmail DOT com
+D: x86 asm (sse2)
+
+N: Alex Wright
+E: alexw0885 AT gmail DOT com
+D: Motion estimation (subpel and mixed refs)
+D: B-RDO
+
+N: bobololo
+D: Avisynth input
+D: MP4 muxing
+
+N: Christian Heine
+E: sennindemokrit AT gmx DOT net
+D: x86 asm
+
+N: David Wolstencroft
+D: Altivec optimizations
+
+N: Eric Petit
+E: eric.petit AT lapsus DOT org
+C: titer
+D: Altivec asm
+D: BeOS and MacOS X ports.
+S: France
+
+N: Fiona Glaser
+E: fiona AT x264 DOT com
+D: Maintainer
+D: All areas of encoder analysis and algorithms
+D: Motion estimation, rate control, macroblock & frame decisions, RDO, etc
+D: x86 asm
+S: USA
+
+N: Gabriel Bouvigne
+E: bouvigne AT mp3-tech DOT org
+D: 2pass VBV
+
+N: Guillaume Poirier
+E: gpoirier CHEZ mplayerhq POINT hu
+D: Altivec optimizations
+S: Brittany, France
+
+N: Henrik Gramner
+E: henrik AT gramner DOT com
+D: 4:2:2 chroma subsampling, x86 asm, Windows improvements, bugfixes
+S: Sweden
+
+N: Laurent Aimar
+E: fenrir AT videolan DOT org
+C: fenrir
+D: Initial import, former maintainer
+D: x86 asm (mmx/mmx2)
+S: France
+
+N: Loren Merritt
+E: pengvado AT akuvian DOT org
+C: pengvado
+D: Maintainer
+D: All areas of encoder analysis and algorithms
+D: Motion estimation, rate control, macroblock & frame decisions, RDO, etc
+D: Multithreading
+D: x86 asm
+S: USA
+
+N: Mans Rullgard
+E: mru AT mansr DOT com
+C: mru
+D: Rate control
+S: Southampton, UK
+
+N: Michael Niedermayer
+E: michaelni AT gmx DOT at
+D: Rate control
+
+N: Mike Matsnev
+E: mike AT po DOT cs DOT msu DOT su
+D: Matroska muxing
+
+N: Min Chen
+E: chenm001 AT 163 DOT com
+C: chenm001
+D: Win32/VC 6.0 port
+D: gcc asm to nasm conversion
+S: China
+
+N: Radek Czyz
+E: radoslaw AT syskin DOT cjb DOT net
+D: Cached motion compensation
+

@@ -1,0 +1,62 @@
+.\"
+.\" Copyright 2024 by the c-ares project and its contributors
+.\" SPDX-License-Identifier: MIT
+.\"
+.TH ARES_SET_SERVER_STATE_CALLBACK 3 "26 Apr 2024"
+.SH NAME
+ares_set_server_state_callback \- Function for setting a server state callback
+.SH SYNOPSIS
+.nf
+#include <ares.h>
+
+typedef void (*ares_server_state_callback)(const char *\fIserver_string\fP,
+                                           ares_bool_t \fIsuccess\fP,
+                                           int \fIflags\fP,
+                                           void *\fIdata\fP);
+
+void ares_set_server_state_callback(ares_channel_t *\fIchannel\fP,
+                                    ares_server_state_callback \fIcallback\fP,
+                                    void *\fIuser_data\fP);
+.fi
+
+.SH DESCRIPTION
+The \fBares_set_server_state_callback(3)\fP function sets a callback function
+\fIcallback\fP in the given ares channel handle \fIchannel\fP that is invoked
+whenever a query on the channel completes. This includes both successful and
+unsuccessful queries (including hard errors and timeouts). The callback
+function is invoked with a number of parameters describing the query, as
+follows.
+
+The \fIserver_string\fP parameter indicates the DNS server that was used for
+the query, given as a string with the same format returned by
+\fBares_get_servers_csv(3)\fP.
+
+The \fIsuccess\fP parameter indicates whether the query succeeded or not. It is
+set to \fBARES_TRUE\fP on success and \fBARES_FALSE\fP on failure.
+
+The \fIflags\fP parameter is a bitmask of flags describing various aspects of
+the query (for example whether the query used UDP or TCP). These are described
+below.
+
+The \fIdata\fP parameter is a reference to the custom user data \fIuser_data\fP
+that was passed to \fBares_set_server_state_callback(3)\fP when setting the
+server state callback.
+
+The server state callback can be used by applications to monitor the state of
+the DNS servers used by an ares channel. For example, it can be used to track
+metrics about the numbers and types of queries sent to each server or to
+detect when a server is uncontactable or unhealthy.
+
+.SH FLAGS
+.TP 5
+.B ARES_SERV_STATE_UDP
+Indicates that the query was tried over UDP.
+.TP 5
+.B ARES_SERV_STATE_TCP
+Indicates that the query was tried over TCP.
+
+.SH AVAILABILITY
+This function was first introduced in c-ares version 1.29.0.
+
+.SH SEE ALSO
+.BR ares_get_servers_csv (3)

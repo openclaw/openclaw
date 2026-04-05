@@ -1,0 +1,83 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>BIO_find_type</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>BIO_find_type, BIO_next, BIO_method_type - BIO chain traversal</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/bio.h&gt;
+
+BIO *BIO_find_type(BIO *b, int bio_type);
+BIO *BIO_next(BIO *b);
+int BIO_method_type(const BIO *b);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The BIO_find_type() searches for a <b>BIO</b> of a given type in a chain, starting at <b>BIO</b> <i>b</i>. If <i>type</i> is a specific type (such as <b>BIO_TYPE_MEM</b>) then a search is made for a <b>BIO</b> of that type. If <i>type</i> is a general type (such as <b>BIO_TYPE_SOURCE_SINK</b>) then the next matching <b>BIO</b> of the given general type is searched for. BIO_find_type() returns the next matching <b>BIO</b> or NULL if none is found. If <i>type</i> is <b>BIO_TYPE_NONE</b> it will not find a match.</p>
+
+<p>The following general types are defined: <b>BIO_TYPE_DESCRIPTOR</b>, <b>BIO_TYPE_FILTER</b>, and <b>BIO_TYPE_SOURCE_SINK</b>.</p>
+
+<p>For a list of the specific types, see the <i>&lt;openssl/bio.h&gt;</i> header file.</p>
+
+<p>BIO_next() returns the next BIO in a chain. It can be used to traverse all BIOs in a chain or used in conjunction with BIO_find_type() to find all BIOs of a certain type.</p>
+
+<p>BIO_method_type() returns the type of a BIO.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>BIO_find_type() returns a matching BIO or NULL for no match.</p>
+
+<p>BIO_next() returns the next BIO in a chain.</p>
+
+<p>BIO_method_type() returns the type of the BIO <i>b</i>.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>Traverse a chain looking for digest BIOs:</p>
+
+<pre><code>BIO *btmp;
+
+btmp = in_bio; /* in_bio is chain to search through */
+do {
+    btmp = BIO_find_type(btmp, BIO_TYPE_MD);
+    if (btmp == NULL)
+        break; /* Not found */
+    /* btmp is a digest BIO, do something with it ...*/
+    ...
+
+    btmp = BIO_next(btmp);
+} while (btmp);</code></pre>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

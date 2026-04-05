@@ -1,0 +1,485 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>openssl-smime</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#OPTIONS">OPTIONS</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#EXIT-CODES">EXIT CODES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#BUGS">BUGS</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>openssl-smime - S/MIME command</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<p><b>openssl</b> <b>smime</b> [<b>-help</b>] [<b>-encrypt</b>] [<b>-decrypt</b>] [<b>-sign</b>] [<b>-resign</b>] [<b>-verify</b>] [<b>-pk7out</b>] [<b>-binary</b>] [<b>-crlfeol</b>] [<b>-<i>cipher</i></b>] [<b>-in</b> <i>file</i>] [<b>-certfile</b> <i>file</i>] [<b>-signer</b> <i>file</i>] [<b>-nointern</b>] [<b>-noverify</b>] [<b>-nochain</b>] [<b>-nosigs</b>] [<b>-nocerts</b>] [<b>-noattr</b>] [<b>-nodetach</b>] [<b>-nosmimecap</b>] [<b>-recip</b> <i> file</i>] [<b>-inform</b> <b>DER</b>|<b>PEM</b>|<b>SMIME</b>] [<b>-outform</b> <b>DER</b>|<b>PEM</b>|<b>SMIME</b>] [<b>-keyform</b> <b>DER</b>|<b>PEM</b>|<b>P12</b>|<b>ENGINE</b>] [<b>-passin</b> <i>arg</i>] [<b>-inkey</b> <i>filename</i>|<i>uri</i>] [<b>-out</b> <i>file</i>] [<b>-content</b> <i>file</i>] [<b>-to</b> <i>addr</i>] [<b>-from</b> <i>ad</i>] [<b>-subject</b> <i>s</i>] [<b>-text</b>] [<b>-indef</b>] [<b>-noindef</b>] [<b>-stream</b>] [<b>-md</b> <i>digest</i>] [<b>-CAfile</b> <i>file</i>] [<b>-no-CAfile</b>] [<b>-CApath</b> <i>dir</i>] [<b>-no-CApath</b>] [<b>-CAstore</b> <i>uri</i>] [<b>-no-CAstore</b>] [<b>-engine</b> <i>id</i>] [<b>-rand</b> <i>files</i>] [<b>-writerand</b> <i>file</i>] [<b>-allow_proxy_certs</b>] [<b>-attime</b> <i>timestamp</i>] [<b>-no_check_time</b>] [<b>-check_ss_sig</b>] [<b>-crl_check</b>] [<b>-crl_check_all</b>] [<b>-explicit_policy</b>] [<b>-extended_crl</b>] [<b>-ignore_critical</b>] [<b>-inhibit_any</b>] [<b>-inhibit_map</b>] [<b>-partial_chain</b>] [<b>-policy</b> <i>arg</i>] [<b>-policy_check</b>] [<b>-policy_print</b>] [<b>-purpose</b> <i>purpose</i>] [<b>-suiteB_128</b>] [<b>-suiteB_128_only</b>] [<b>-suiteB_192</b>] [<b>-trusted_first</b>] [<b>-no_alt_chains</b>] [<b>-use_deltas</b>] [<b>-auth_level</b> <i>num</i>] [<b>-verify_depth</b> <i>num</i>] [<b>-verify_email</b> <i>email</i>] [<b>-verify_hostname</b> <i>hostname</i>] [<b>-verify_ip</b> <i>ip</i>] [<b>-verify_name</b> <i>name</i>] [<b>-x509_strict</b>] [<b>-issuer_checks</b>] [<b>-provider</b> <i>name</i>] [<b>-provider-path</b> <i>path</i>] [<b>-provparam</b> <i>[name:]key=value</i>] [<b>-propquery</b> <i>propq</i>] [<b>-config</b> <i>configfile</i>] <i>recipcert</i> ...</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>This command handles S/MIME mail. It can encrypt, decrypt, sign and verify S/MIME messages.</p>
+
+<h1 id="OPTIONS">OPTIONS</h1>
+
+<p>There are six operation options that set the type of operation to be performed: <b>-encrypt</b>, <b>-decrypt</b>, <b>-sign</b>, <b>-resign</b>, <b>-verify</b>, and <b>-pk7out</b>. These are mutually exclusive. The meaning of the other options varies according to the operation type.</p>
+
+<dl>
+
+<dt id="help"><b>-help</b></dt>
+<dd>
+
+<p>Print out a usage message.</p>
+
+</dd>
+<dt id="encrypt"><b>-encrypt</b></dt>
+<dd>
+
+<p>Encrypt mail for the given recipient certificates. Input file is the message to be encrypted. The output file is the encrypted mail in MIME format.</p>
+
+<p>Note that no revocation check is done for the recipient cert, so if that key has been compromised, others may be able to decrypt the text.</p>
+
+</dd>
+<dt id="decrypt"><b>-decrypt</b></dt>
+<dd>
+
+<p>Decrypt mail using the supplied certificate and private key. Expects an encrypted mail message in MIME format for the input file. The decrypted mail is written to the output file.</p>
+
+</dd>
+<dt id="sign"><b>-sign</b></dt>
+<dd>
+
+<p>Sign mail using the supplied certificate and private key. Input file is the message to be signed. The signed message in MIME format is written to the output file.</p>
+
+</dd>
+<dt id="resign"><b>-resign</b></dt>
+<dd>
+
+<p>Resign a message: take an existing message and one or more new signers.</p>
+
+</dd>
+<dt id="verify"><b>-verify</b></dt>
+<dd>
+
+<p>Verify signed mail. Expects a signed mail message on input and outputs the signed data. Both clear text and opaque signing is supported.</p>
+
+</dd>
+<dt id="pk7out"><b>-pk7out</b></dt>
+<dd>
+
+<p>Takes an input message and writes out a PEM encoded PKCS#7 structure.</p>
+
+</dd>
+<dt id="in-filename"><b>-in</b> <i>filename</i></dt>
+<dd>
+
+<p>The input message to be encrypted or signed or the MIME message to be decrypted or verified.</p>
+
+</dd>
+<dt id="out-filename"><b>-out</b> <i>filename</i></dt>
+<dd>
+
+<p>The message text that has been decrypted or verified or the output MIME format message that has been signed or verified.</p>
+
+</dd>
+<dt id="inform-DER-PEM-SMIME"><b>-inform</b> <b>DER</b>|<b>PEM</b>|<b>SMIME</b></dt>
+<dd>
+
+<p>The input format of the PKCS#7 (S/MIME) structure (if one is being read); the default is <b>SMIME</b>. See <a href="../man1/openssl-format-options.html">openssl-format-options(1)</a> for details.</p>
+
+</dd>
+<dt id="outform-DER-PEM-SMIME"><b>-outform</b> <b>DER</b>|<b>PEM</b>|<b>SMIME</b></dt>
+<dd>
+
+<p>The output format of the PKCS#7 (S/MIME) structure (if one is being written); the default is <b>SMIME</b>. See <a href="../man1/openssl-format-options.html">openssl-format-options(1)</a> for details.</p>
+
+</dd>
+<dt id="keyform-DER-PEM-P12-ENGINE"><b>-keyform</b> <b>DER</b>|<b>PEM</b>|<b>P12</b>|<b>ENGINE</b></dt>
+<dd>
+
+<p>The key format; unspecified by default. See <a href="../man1/openssl-format-options.html">openssl-format-options(1)</a> for details.</p>
+
+</dd>
+<dt id="stream--indef"><b>-stream</b>, <b>-indef</b></dt>
+<dd>
+
+<p>The <b>-stream</b> and <b>-indef</b> options are equivalent and enable streaming I/O for encoding operations. This permits single pass processing of data without the need to hold the entire contents in memory, potentially supporting very large files. Streaming is automatically set for S/MIME signing with detached data if the output format is <b>SMIME</b> it is currently off by default for all other operations.</p>
+
+</dd>
+<dt id="noindef"><b>-noindef</b></dt>
+<dd>
+
+<p>Disable streaming I/O where it would produce and indefinite length constructed encoding. This option currently has no effect. In future streaming will be enabled by default on all relevant operations and this option will disable it.</p>
+
+</dd>
+<dt id="content-filename"><b>-content</b> <i>filename</i></dt>
+<dd>
+
+<p>This specifies a file containing the detached content, this is only useful with the <b>-verify</b> command. This is only usable if the PKCS#7 structure is using the detached signature form where the content is not included. This option will override any content if the input format is S/MIME and it uses the multipart/signed MIME content type.</p>
+
+</dd>
+<dt id="text"><b>-text</b></dt>
+<dd>
+
+<p>This option adds plain text (text/plain) MIME headers to the supplied message if encrypting or signing. If decrypting or verifying it strips off text headers: if the decrypted or verified message is not of MIME type text/plain then an error occurs.</p>
+
+</dd>
+<dt id="md-digest"><b>-md</b> <i>digest</i></dt>
+<dd>
+
+<p>Digest algorithm to use when signing or resigning. If not present then the default digest algorithm for the signing key will be used (usually SHA1).</p>
+
+</dd>
+<dt id="cipher"><b>-<i>cipher</i></b></dt>
+<dd>
+
+<p>The encryption algorithm to use. For example, DES (56 bits) - <b>-des</b>, triple DES (168 bits) - <b>-des3</b>, or AES (256 bits) - <b>-aes256</b>. Any standard algorithm name (as used by the EVP_get_cipherbyname() function) can also be used, preceded by a dash, for example <b>-aes-128-cbc</b>. See <a href="../man1/openssl-enc.html">openssl-enc(1)</a> for a list of ciphers supported by your version of OpenSSL.</p>
+
+<p>If not specified, AES-256-CBC is used as the default. Only used with <b>-encrypt</b>.</p>
+
+</dd>
+<dt id="nointern"><b>-nointern</b></dt>
+<dd>
+
+<p>When verifying a message normally certificates (if any) included in the message are searched for the signing certificate. With this option only the certificates specified in the <b>-certfile</b> option are used. The supplied certificates can still be used as untrusted CAs however.</p>
+
+</dd>
+<dt id="noverify"><b>-noverify</b></dt>
+<dd>
+
+<p>Do not verify the signers certificate of a signed message.</p>
+
+</dd>
+<dt id="nochain"><b>-nochain</b></dt>
+<dd>
+
+<p>Do not do chain verification of signers certificates; that is, do not use the certificates in the signed message as untrusted CAs.</p>
+
+</dd>
+<dt id="nosigs"><b>-nosigs</b></dt>
+<dd>
+
+<p>Don&#39;t try to verify the signatures on the message.</p>
+
+</dd>
+<dt id="nocerts"><b>-nocerts</b></dt>
+<dd>
+
+<p>When signing a message, the signer&#39;s certificate is normally included. With this option it is excluded. This will reduce the size of the signed message, but the verifier must have a copy of the signers certificate available locally (passed using the <b>-certfile</b> option for example).</p>
+
+</dd>
+<dt id="noattr"><b>-noattr</b></dt>
+<dd>
+
+<p>Normally, when a message is signed, a set of attributes are included which include the signing time and supported symmetric algorithms. With this option they are not included.</p>
+
+</dd>
+<dt id="nodetach"><b>-nodetach</b></dt>
+<dd>
+
+<p>When signing a message use opaque signing. This form is more resistant to translation by mail relays but it cannot be read by mail agents that do not support S/MIME. Without this option cleartext signing with the MIME type multipart/signed is used.</p>
+
+</dd>
+<dt id="nosmimecap"><b>-nosmimecap</b></dt>
+<dd>
+
+<p>When signing a message, do not include the <b>SMIMECapabilities</b> attribute.</p>
+
+</dd>
+<dt id="binary"><b>-binary</b></dt>
+<dd>
+
+<p>Normally the input message is converted to &quot;canonical&quot; format which is effectively using CR and LF as end of line: as required by the S/MIME specification. When this option is present no translation occurs. This is useful when handling binary data which may not be in MIME format.</p>
+
+</dd>
+<dt id="crlfeol"><b>-crlfeol</b></dt>
+<dd>
+
+<p>Normally the output file uses a single <b>LF</b> as end of line. When this option is present <b>CRLF</b> is used instead.</p>
+
+</dd>
+<dt id="certfile-file"><b>-certfile</b> <i>file</i></dt>
+<dd>
+
+<p>Allows additional certificates to be specified. When signing these will be included with the message. When verifying, these will be searched for signer certificates and will be used for chain building.</p>
+
+<p>The input can be in PEM, DER, or PKCS#12 format.</p>
+
+</dd>
+<dt id="signer-file"><b>-signer</b> <i>file</i></dt>
+<dd>
+
+<p>A signing certificate when signing or resigning a message, this option can be used multiple times if more than one signer is required. If a message is being verified then the signers certificates will be written to this file if the verification was successful.</p>
+
+</dd>
+<dt id="recip-file"><b>-recip</b> <i>file</i></dt>
+<dd>
+
+<p>The recipients certificate when decrypting a message. This certificate must match one of the recipients of the message or an error occurs.</p>
+
+</dd>
+<dt id="inkey-filename-uri"><b>-inkey</b> <i>filename</i>|<i>uri</i></dt>
+<dd>
+
+<p>The private key to use when signing or decrypting. This must match the corresponding certificate. If this option is not specified then the private key must be included in the certificate file specified with the <b>-recip</b> or <b>-signer</b> file. When signing this option can be used multiple times to specify successive keys.</p>
+
+</dd>
+<dt id="passin-arg"><b>-passin</b> <i>arg</i></dt>
+<dd>
+
+<p>The private key password source. For more information about the format of <i>arg</i> see <a href="../man1/openssl-passphrase-options.html">openssl-passphrase-options(1)</a>.</p>
+
+</dd>
+<dt id="to--from--subject"><b>-to</b>, <b>-from</b>, <b>-subject</b></dt>
+<dd>
+
+<p>The relevant mail headers. These are included outside the signed portion of a message so they may be included manually. If signing then many S/MIME mail clients check the signers certificate&#39;s email address matches that specified in the From: address.</p>
+
+</dd>
+<dt id="allow_proxy_certs--attime--no_check_time--check_ss_sig--crl_check--crl_check_all--explicit_policy--extended_crl--ignore_critical--inhibit_any--inhibit_map--no_alt_chains--partial_chain--policy--policy_check--policy_print--purpose--suiteB_128--suiteB_128_only--suiteB_192--trusted_first--use_deltas--auth_level--verify_depth--verify_email--verify_hostname--verify_ip--verify_name--x509_strict--issuer_checks"><b>-allow_proxy_certs</b>, <b>-attime</b>, <b>-no_check_time</b>, <b>-check_ss_sig</b>, <b>-crl_check</b>, <b>-crl_check_all</b>, <b>-explicit_policy</b>, <b>-extended_crl</b>, <b>-ignore_critical</b>, <b>-inhibit_any</b>, <b>-inhibit_map</b>, <b>-no_alt_chains</b>, <b>-partial_chain</b>, <b>-policy</b>, <b>-policy_check</b>, <b>-policy_print</b>, <b>-purpose</b>, <b>-suiteB_128</b>, <b>-suiteB_128_only</b>, <b>-suiteB_192</b>, <b>-trusted_first</b>, <b>-use_deltas</b>, <b>-auth_level</b>, <b>-verify_depth</b>, <b>-verify_email</b>, <b>-verify_hostname</b>, <b>-verify_ip</b>, <b>-verify_name</b>, <b>-x509_strict</b> <b>-issuer_checks</b></dt>
+<dd>
+
+<p>Set various options of certificate chain verification. See <a href="../man1/openssl-verification-options.html">&quot;Verification Options&quot; in openssl-verification-options(1)</a> for details.</p>
+
+<p>Any verification errors cause the command to exit.</p>
+
+</dd>
+<dt id="CAfile-file--no-CAfile--CApath-dir--no-CApath--CAstore-uri--no-CAstore"><b>-CAfile</b> <i>file</i>, <b>-no-CAfile</b>, <b>-CApath</b> <i>dir</i>, <b>-no-CApath</b>, <b>-CAstore</b> <i>uri</i>, <b>-no-CAstore</b></dt>
+<dd>
+
+<p>See <a href="../man1/openssl-verification-options.html">&quot;Trusted Certificate Options&quot; in openssl-verification-options(1)</a> for details.</p>
+
+</dd>
+<dt id="engine-id"><b>-engine</b> <i>id</i></dt>
+<dd>
+
+<p>See <a href="../man1/openssl.html">&quot;Engine Options&quot; in openssl(1)</a>. This option is deprecated.</p>
+
+</dd>
+<dt id="rand-files--writerand-file"><b>-rand</b> <i>files</i>, <b>-writerand</b> <i>file</i></dt>
+<dd>
+
+<p>See <a href="../man1/openssl.html">&quot;Random State Options&quot; in openssl(1)</a> for details.</p>
+
+</dd>
+<dt id="provider-name"><b>-provider</b> <i>name</i></dt>
+<dd>
+
+</dd>
+<dt id="provider-path-path"><b>-provider-path</b> <i>path</i></dt>
+<dd>
+
+</dd>
+<dt id="provparam-name:-key-value"><b>-provparam</b> <i>[name:]key=value</i></dt>
+<dd>
+
+</dd>
+<dt id="propquery-propq"><b>-propquery</b> <i>propq</i></dt>
+<dd>
+
+<p>See <a href="../man1/openssl.html">&quot;Provider Options&quot; in openssl(1)</a>, <a href="../man7/provider.html">provider(7)</a>, and <a href="../man7/property.html">property(7)</a>.</p>
+
+</dd>
+<dt id="config-configfile"><b>-config</b> <i>configfile</i></dt>
+<dd>
+
+<p>See <a href="../man1/openssl.html">&quot;Configuration Option&quot; in openssl(1)</a>.</p>
+
+</dd>
+<dt id="recipcert"><i>recipcert</i> ...</dt>
+<dd>
+
+<p>One or more certificates of message recipients, used when encrypting a message.</p>
+
+</dd>
+</dl>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The MIME message must be sent without any blank lines between the headers and the output. Some mail programs will automatically add a blank line. Piping the mail directly to sendmail is one way to achieve the correct format.</p>
+
+<p>The supplied message to be signed or encrypted must include the necessary MIME headers or many S/MIME clients won&#39;t display it properly (if at all). You can use the <b>-text</b> option to automatically add plain text headers.</p>
+
+<p>A &quot;signed and encrypted&quot; message is one where a signed message is then encrypted. This can be produced by encrypting an already signed message: see the examples section.</p>
+
+<p>This version of the program only allows one signer per message but it will verify multiple signers on received messages. Some S/MIME clients choke if a message contains multiple signers. It is possible to sign messages &quot;in parallel&quot; by signing an already signed message.</p>
+
+<p>The options <b>-encrypt</b> and <b>-decrypt</b> reflect common usage in S/MIME clients. Strictly speaking these process PKCS#7 enveloped data: PKCS#7 encrypted data is used for other purposes.</p>
+
+<p>The <b>-resign</b> option uses an existing message digest when adding a new signer. This means that attributes must be present in at least one existing signer using the same message digest or this operation will fail.</p>
+
+<p>The <b>-stream</b> and <b>-indef</b> options enable streaming I/O support. As a result the encoding is BER using indefinite length constructed encoding and no longer DER. Streaming is supported for the <b>-encrypt</b> operation and the <b>-sign</b> operation if the content is not detached.</p>
+
+<p>Streaming is always used for the <b>-sign</b> operation with detached data but since the content is no longer part of the PKCS#7 structure the encoding remains DER.</p>
+
+<h1 id="EXIT-CODES">EXIT CODES</h1>
+
+<dl>
+
+<dt id="pod0">0</dt>
+<dd>
+
+<p>The operation was completely successfully.</p>
+
+</dd>
+<dt id="pod1">1</dt>
+<dd>
+
+<p>An error occurred parsing the command options.</p>
+
+</dd>
+<dt id="pod2">2</dt>
+<dd>
+
+<p>One of the input files could not be read.</p>
+
+</dd>
+<dt id="pod3">3</dt>
+<dd>
+
+<p>An error occurred creating the PKCS#7 file or when reading the MIME message.</p>
+
+</dd>
+<dt id="pod4">4</dt>
+<dd>
+
+<p>An error occurred decrypting or verifying the message.</p>
+
+</dd>
+<dt id="pod5">5</dt>
+<dd>
+
+<p>The message was verified correctly but an error occurred writing out the signers certificates.</p>
+
+</dd>
+</dl>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>Create a cleartext signed message:</p>
+
+<pre><code>openssl smime -sign -in message.txt -text -out mail.msg \
+       -signer mycert.pem</code></pre>
+
+<p>Create an opaque signed message:</p>
+
+<pre><code>openssl smime -sign -in message.txt -text -out mail.msg -nodetach \
+       -signer mycert.pem</code></pre>
+
+<p>Create a signed message, include some additional certificates and read the private key from another file:</p>
+
+<pre><code>openssl smime -sign -in in.txt -text -out mail.msg \
+       -signer mycert.pem -inkey mykey.pem -certfile mycerts.pem</code></pre>
+
+<p>Create a signed message with two signers:</p>
+
+<pre><code>openssl smime -sign -in message.txt -text -out mail.msg \
+       -signer mycert.pem -signer othercert.pem</code></pre>
+
+<p>Send a signed message under Unix directly to sendmail, including headers:</p>
+
+<pre><code>openssl smime -sign -in in.txt -text -signer mycert.pem \
+       -from steve@openssl.org -to someone@somewhere \
+       -subject &quot;Signed message&quot; | sendmail someone@somewhere</code></pre>
+
+<p>Verify a message and extract the signer&#39;s certificate if successful:</p>
+
+<pre><code>openssl smime -verify -in mail.msg -signer user.pem -out signedtext.txt</code></pre>
+
+<p>Send encrypted mail using triple DES:</p>
+
+<pre><code>openssl smime -encrypt -in in.txt -out mail.msg -from steve@openssl.org \
+       -to someone@somewhere -subject &quot;Encrypted message&quot; \
+       -des3 user.pem</code></pre>
+
+<p>Sign and encrypt mail:</p>
+
+<pre><code>openssl smime -sign -in ml.txt -signer my.pem -text \
+       | openssl smime -encrypt -out mail.msg \
+       -from steve@openssl.org -to someone@somewhere \
+       -subject &quot;Signed and Encrypted message&quot; -des3 user.pem</code></pre>
+
+<p>Note: the encryption command does not include the <b>-text</b> option because the message being encrypted already has MIME headers.</p>
+
+<p>Decrypt mail:</p>
+
+<pre><code>openssl smime -decrypt -in mail.msg -recip mycert.pem -inkey key.pem</code></pre>
+
+<p>The output from Netscape form signing is a PKCS#7 structure with the detached signature format. You can use this program to verify the signature by line wrapping the base64 encoded structure and surrounding it with:</p>
+
+<pre><code>-----BEGIN PKCS7-----
+-----END PKCS7-----</code></pre>
+
+<p>and using the command:</p>
+
+<pre><code>openssl smime -verify -inform PEM -in signature.pem -content content.txt</code></pre>
+
+<p>Alternatively you can base64 decode the signature and use:</p>
+
+<pre><code>openssl smime -verify -inform DER -in signature.der -content content.txt</code></pre>
+
+<p>Create an encrypted message using 128 bit Camellia:</p>
+
+<pre><code>openssl smime -encrypt -in plain.txt -camellia128 -out mail.msg cert.pem</code></pre>
+
+<p>Add a signer to an existing message:</p>
+
+<pre><code>openssl smime -resign -in mail.msg -signer newsign.pem -out mail2.msg</code></pre>
+
+<h1 id="BUGS">BUGS</h1>
+
+<p>The MIME parser isn&#39;t very clever: it seems to handle most messages that I&#39;ve thrown at it but it may choke on others.</p>
+
+<p>The code currently will only write out the signer&#39;s certificate to a file: if the signer has a separate encryption certificate this must be manually extracted. There should be some heuristic that determines the correct encryption certificate.</p>
+
+<p>Ideally a database should be maintained of a certificates for each email address.</p>
+
+<p>The code doesn&#39;t currently take note of the permitted symmetric encryption algorithms as supplied in the SMIMECapabilities signed attribute. This means the user has to manually include the correct encryption algorithm. It should store the list of permitted ciphers in a database and only use those.</p>
+
+<p>No revocation checking is done on the signer&#39;s certificate.</p>
+
+<p>The current code can only handle S/MIME v2 messages, the more complex S/MIME v3 structures may cause parsing errors.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ossl_store-file.html">ossl_store-file(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The default encryption cipher was changed from 3DES to AES-256 in OpenSSL 3.5.</p>
+
+<p>The use of multiple <b>-signer</b> options and the <b>-resign</b> command were first added in OpenSSL 1.0.0</p>
+
+<p>The -no_alt_chains option was added in OpenSSL 1.1.0.</p>
+
+<p>The <b>-engine</b> option was deprecated in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

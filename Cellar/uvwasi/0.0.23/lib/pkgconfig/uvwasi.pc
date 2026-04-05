@@ -1,0 +1,14 @@
+prefix=/opt/homebrew/Cellar/uvwasi/0.0.23
+exec_prefix=${prefix}
+libdir=/opt/homebrew/Cellar/uvwasi/0.0.23/lib
+includedir=/opt/homebrew/Cellar/uvwasi/0.0.23/include
+bindir=/opt/homebrew/Cellar/uvwasi/0.0.23/bin
+libuv_includedir=/opt/homebrew/include
+
+Name: uvwasi
+Description: WASI syscall API built atop libuv
+Version: 0.0.23
+
+Libs: -L${libdir}
+Libs.private: -l/opt/homebrew/lib/libuv.dylib
+Cflags: -I${includedir} -I${libuv_includedir} -fvisibility=hidden;--std=gnu89;-Wall;-Wsign-compare;-Wextra;-Wstrict-prototypes;-Wno-unused-parameter

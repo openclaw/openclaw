@@ -1,0 +1,65 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>CMS_sign_receipt</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>CMS_sign_receipt - create a CMS signed receipt</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/cms.h&gt;
+
+CMS_ContentInfo *CMS_sign_receipt(CMS_SignerInfo *si, X509 *signcert,
+                                  EVP_PKEY *pkey, STACK_OF(X509) *certs,
+                                  unsigned int flags);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>CMS_sign_receipt() creates and returns a CMS signed receipt structure. <b>si</b> is the <b>CMS_SignerInfo</b> structure containing the signed receipt request. <b>signcert</b> is the certificate to sign with, <b>pkey</b> is the corresponding private key. <b>certs</b> is an optional additional set of certificates to include in the CMS structure (for example any intermediate CAs in the chain).</p>
+
+<p><b>flags</b> is an optional set of flags.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>This functions behaves in a similar way to CMS_sign() except the flag values <b>CMS_DETACHED</b>, <b>CMS_BINARY</b>, <b>CMS_NOATTR</b>, <b>CMS_TEXT</b> and <b>CMS_STREAM</b> are not supported since they do not make sense in the context of signed receipts.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>CMS_sign_receipt() returns either a valid CMS_ContentInfo structure or NULL if an error occurred. The error can be obtained from ERR_get_error(3).</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>, <a href="../man3/CMS_verify_receipt.html">CMS_verify_receipt(3)</a>, <a href="../man3/CMS_sign.html">CMS_sign(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2008-2016 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,60 @@
+.\"
+.\" Copyright 1998 by the Massachusetts Institute of Technology.
+.\" SPDX-License-Identifier: MIT
+.\"
+.TH ARES_SAVE_OPTIONS 3 "5 March 2010"
+.SH NAME
+ares_save_options \- Save configuration values obtained from initialized ares_channel
+.SH SYNOPSIS
+.nf
+#include <ares.h>
+
+int ares_save_options(const ares_channel_t *\fIchannel\fP,
+                      struct ares_options *\fIoptions\fP, int *\fIoptmask\fP)
+.fi
+.SH DESCRIPTION
+The \fBares_save_options(3)\fP function saves the channel data identified by
+.IR channel ,
+into the options struct identified by
+.IR options ,
+and saves the mask of options which are set to the integer
+pointer (passed by reference) identified by
+.IR optmask .
+
+The resultant options and optmask are then able to be
+passed directly to ares_init_options.  When the options
+are no longer needed, ares_destroy_options should be called
+to free any associated memory.
+.SH RETURN VALUES
+.B ares_save_options(3)
+can return any of the following values:
+.TP 15
+.B ARES_SUCCESS
+The channel data was successfully stored
+.TP 15
+.B ARES_ENOMEM
+The memory was exhausted
+.TP 15
+.B ARES_ENODATA
+The channel data identified by
+.IR channel
+were invalid.
+.SH NOTE
+Since c-ares 1.6.0 the ares_options struct has been "locked" meaning that it
+won't be extended to cover new functions. This function will remain
+functioning, but it can only return config data that can be represented in
+this config struct, which may no longer be the complete set of config
+options. \fBares_dup(3)\fP will not have that restriction.
+
+The ares_options struct can not handle potential IPv6 name servers the
+ares channel might be configured to use. The \fBares_save_options(3)\fP function
+will only return IPv4 servers, if any. In order to retrieve all name servers
+an ares channel might be using, the \fBares_get_servers(3)\fP function must be
+used instead.
+.SH SEE ALSO
+.BR ares_destroy_options (3),
+.BR ares_init_options (3),
+.BR ares_get_servers (3),
+.BR ares_dup (3)
+.SH AVAILABILITY
+ares_save_options(3) was added in c-ares 1.4.0

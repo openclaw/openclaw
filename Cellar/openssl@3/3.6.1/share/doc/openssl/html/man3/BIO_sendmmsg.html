@@ -1,0 +1,168 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>BIO_sendmmsg</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>BIO_sendmmsg, BIO_recvmmsg, BIO_dgram_set_local_addr_enable, BIO_dgram_get_local_addr_enable, BIO_dgram_get_local_addr_cap, BIO_err_is_non_fatal - send and receive multiple datagrams in a single call</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/bio.h&gt;
+
+typedef struct bio_msg_st {
+    void *data;
+    size_t data_len;
+    BIO_ADDR *peer, *local;
+    uint64_t flags;
+} BIO_MSG;
+
+int BIO_sendmmsg(BIO *b, BIO_MSG *msg,
+                 size_t stride, size_t num_msg, uint64_t flags,
+                 size_t *msgs_processed);
+int BIO_recvmmsg(BIO *b, BIO_MSG *msg,
+                 size_t stride, size_t num_msg, uint64_t flags,
+                 size_t *msgs_processed);
+
+int BIO_dgram_set_local_addr_enable(BIO *b, int enable);
+int BIO_dgram_get_local_addr_enable(BIO *b, int *enable);
+int BIO_dgram_get_local_addr_cap(BIO *b);
+int BIO_err_is_non_fatal(unsigned int errcode);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>BIO_sendmmsg() and BIO_recvmmsg() functions can be used to send and receive multiple messages in a single call to a BIO. They are analogous to sendmmsg(2) and recvmmsg(2) on operating systems which provide those functions.</p>
+
+<p>The <b>BIO_MSG</b> structure provides a subset of the functionality of the <b>struct msghdr</b> structure defined by POSIX. These functions accept an array of <b>BIO_MSG</b> structures. On any particular invocation, these functions may process all of the passed structures, some of them, or none of them. This is indicated by the value stored in <i>*msgs_processed</i>, which expresses the number of messages processed.</p>
+
+<p>The caller should set the <i>data</i> member of a <b>BIO_MSG</b> to a buffer containing the data to send, or to be filled with a received message. <i>data_len</i> should be set to the size of the buffer in bytes. If the given <b>BIO_MSG</b> is processed (in other words, if the integer returned by the function is greater than or equal to that <b>BIO_MSG</b>&#39;s array index), <i>data_len</i> will be modified to specify the actual amount of data sent or received.</p>
+
+<p>The <i>flags</i> field of a <b>BIO_MSG</b> provides input per-message flags to the invocation. If the invocation processes that <b>BIO_MSG</b>, the <i>flags</i> field is written with output per-message flags, or zero if no such flags are applicable.</p>
+
+<p>Currently, no input or output per-message flags are defined and this field should be set to zero before calling BIO_sendmmsg() or BIO_recvmmsg().</p>
+
+<p>The <i>flags</i> argument to BIO_sendmmsg() and BIO_recvmmsg() provides global flags which affect the entire invocation. No global flags are currently defined and this argument should be set to zero.</p>
+
+<p>When these functions are used to send and receive datagrams, the <i>peer</i> field of a <b>BIO_MSG</b> allows the destination address of sent datagrams to be specified on a per-datagram basis, and the source address of received datagrams to be determined. The <i>peer</i> field should be set to point to a <b>BIO_ADDR</b>, which will be read by BIO_sendmmsg() and used as the destination address for sent datagrams, and written by BIO_recvmmsg() with the source address of received datagrams.</p>
+
+<p>Similarly, the <i>local</i> field of a <b>BIO_MSG</b> allows the source address of sent datagrams to be specified on a per-datagram basis, and the destination address of received datagrams to be determined. Unlike <i>peer</i>, support for <i>local</i> must be explicitly enabled on a <b>BIO</b> before it can be used; see BIO_dgram_set_local_addr_enable(). If <i>local</i> is non-NULL in a <b>BIO_MSG</b> and support for <i>local</i> has not been enabled, processing of that <b>BIO_MSG</b> fails.</p>
+
+<p><i>peer</i> and <i>local</i> should be set to NULL if they are not required. Support for <i>local</i> may not be available on all platforms; on these platforms, these functions always fail if <i>local</i> is non-NULL.</p>
+
+<p>If <i>local</i> is specified and local address support is enabled, but the operating system does not report a local address for a specific received message, the <b>BIO_ADDR</b> it points to will be cleared (address family set to <code>AF_UNSPEC</code>). This is known to happen on Windows when a packet is received which was sent by the local system, regardless of whether the packet&#39;s destination address was the loopback address or the IP address of a local non-loopback interface. This is also known to happen on macOS in some circumstances, such as for packets sent before local address support was enabled for a receiving socket. These are OS-specific limitations. As such, users of this API using local address support should expect to sometimes receive a cleared local <b>BIO_ADDR</b> instead of the correct value.</p>
+
+<p>The <i>stride</i> argument must be set to <code>sizeof(BIO_MSG)</code>. This argument facilitates backwards compatibility if fields are added to <b>BIO_MSG</b>. Callers must zero-initialize <b>BIO_MSG</b>.</p>
+
+<p><i>num_msg</i> should be sent to the maximum number of messages to send or receive, which is also the length of the array pointed to by <i>msg</i>.</p>
+
+<p><i>msgs_processed</i> must be non-NULL and points to an integer written with the number of messages successfully processed; see the RETURN VALUES section for further discussion.</p>
+
+<p>Unlike most BIO functions, these functions explicitly support multi-threaded use. Multiple concurrent writers and multiple concurrent readers of the same BIO are permitted in any combination. As such, these functions do not clear, set, or otherwise modify BIO retry flags. The return value must be used to determine whether an operation should be retried; see below.</p>
+
+<p>The support for concurrent use extends to BIO_sendmmsg() and BIO_recvmmsg() only, and no other function may be called on a given BIO while any call to BIO_sendmmsg() or BIO_recvmmsg() is in progress, or vice versa.</p>
+
+<p>BIO_dgram_set_local_addr_enable() and BIO_dgram_get_local_addr_enable() control whether local address support is enabled. To enable local address support, call BIO_dgram_set_local_addr_enable() with an argument of 1. The call will fail if local address support is not available for the platform. BIO_dgram_get_local_addr_enable() retrieves the value set by BIO_dgram_set_local_addr_enable().</p>
+
+<p>BIO_dgram_get_local_addr_cap() determines if the <b>BIO</b> is capable of supporting local addresses.</p>
+
+<p>BIO_err_is_non_fatal() determines if a packed error code represents an error which is transient in nature.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>Some implementations of the BIO_sendmmsg() and BIO_recvmmsg() BIO methods might always process at most one message at a time, for example when OS-level functionality to transmit or receive multiple messages at a time is not available.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>On success, the functions BIO_sendmmsg() and BIO_recvmmsg() return 1 and write the number of messages successfully processed (which need not be nonzero) to <i>msgs_processed</i>. Where a positive value n is written to <i>msgs_processed</i>, all entries in the <b>BIO_MSG</b> array from 0 through n-1 inclusive have their <i>data_len</i> and <i>flags</i> fields updated with the results of the operation on that message. If the call was to BIO_recvmmsg() and the <i>peer</i> or <i>local</i> fields of that message are non-NULL, the <b>BIO_ADDR</b> structures they point to are written with the relevant address.</p>
+
+<p>On failure, the functions BIO_sendmmsg() and BIO_recvmmsg() return 0 and write zero to <i>msgs_processed</i>. Thus <i>msgs_processed</i> is always written regardless of the outcome of the function call.</p>
+
+<p>If BIO_sendmmsg() and BIO_recvmmsg() fail, they always raise an <b>ERR_LIB_BIO</b> error using <a href="../man3/ERR_raise.html">ERR_raise(3)</a>. Any error may be raised, but the following in particular may be noted:</p>
+
+<dl>
+
+<dt id="BIO_R_LOCAL_ADDR_NOT_AVAILABLE"><b>BIO_R_LOCAL_ADDR_NOT_AVAILABLE</b></dt>
+<dd>
+
+<p>The <i>local</i> field was set to a non-NULL value, but local address support is not available or not enabled on the BIO.</p>
+
+</dd>
+<dt id="BIO_R_PEER_ADDR_NOT_AVAILABLE"><b>BIO_R_PEER_ADDR_NOT_AVAILABLE</b></dt>
+<dd>
+
+<p>The <i>peer</i> field was set to a non-NULL value, but peer address support is not available on the BIO.</p>
+
+</dd>
+<dt id="BIO_R_UNSUPPORTED_METHOD"><b>BIO_R_UNSUPPORTED_METHOD</b></dt>
+<dd>
+
+<p>The BIO_sendmmsg() or BIO_recvmmsg() method is not supported on the BIO.</p>
+
+</dd>
+<dt id="BIO_R_NON_FATAL"><b>BIO_R_NON_FATAL</b></dt>
+<dd>
+
+<p>The call failed due to a transient, non-fatal error (for example, because the BIO is in nonblocking mode and the call would otherwise have blocked).</p>
+
+<p>Implementations of this interface which do not make system calls and thereby pass through system error codes using <b>ERR_LIB_SYS</b> (for example, memory-based implementations) should issue this reason code to indicate a transient failure. However, users of this interface should not test for this reason code directly, as there are multiple possible packed error codes representing a transient failure; use BIO_err_is_non_fatal() instead (discussed below).</p>
+
+</dd>
+<dt id="Socket-errors">Socket errors</dt>
+<dd>
+
+<p>OS-level socket errors are reported using an error with library code <b>ERR_LIB_SYS</b>; for a packed error code <b>errcode</b> where <code>ERR_SYSTEM_ERROR(errcode) == 1</code>, the OS-level socket error code can be retrieved using <code>ERR_GET_REASON(errcode)</code>. The packed error code can be retrieved by calling <a href="../man3/ERR_peek_last_error.html">ERR_peek_last_error(3)</a> after the call to BIO_sendmmsg() or BIO_recvmmsg() returns 0.</p>
+
+</dd>
+<dt id="Non-fatal-errors">Non-fatal errors</dt>
+<dd>
+
+<p>Whether an error is transient can be determined by passing the packed error code to BIO_err_is_non_fatal(). Callers should do this instead of testing the reason code directly, as there are many possible error codes which can indicate a transient error, many of which are system specific.</p>
+
+</dd>
+</dl>
+
+<p>Third parties implementing custom BIOs supporting the BIO_sendmmsg() or BIO_recvmmsg() methods should note that it is a required part of the API contract that an error is always raised when either of these functions return 0.</p>
+
+<p>BIO_dgram_set_local_addr_enable() returns 1 if local address support was successfully enabled or disabled and 0 otherwise.</p>
+
+<p>BIO_dgram_get_local_addr_enable() returns 1 if the local address support enable flag was successfully retrieved.</p>
+
+<p>BIO_dgram_get_local_addr_cap() returns 1 if the <b>BIO</b> can support local addresses.</p>
+
+<p>BIO_err_is_non_fatal() returns 1 if the passed packed error code represents an error which is transient in nature.</p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>These functions were added in OpenSSL 3.2.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,91 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_CTX_set_tmp_dh_callback</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_CTX_set_dh_auto, SSL_set_dh_auto, SSL_CTX_set0_tmp_dh_pkey, SSL_set0_tmp_dh_pkey, SSL_CTX_set_tmp_dh_callback, SSL_CTX_set_tmp_dh, SSL_set_tmp_dh_callback, SSL_set_tmp_dh - handle DH keys for ephemeral key exchange</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+long SSL_CTX_set_dh_auto(SSL_CTX *ctx, int onoff);
+long SSL_set_dh_auto(SSL *s, int onoff);
+int SSL_CTX_set0_tmp_dh_pkey(SSL_CTX *ctx, EVP_PKEY *dhpkey);
+int SSL_set0_tmp_dh_pkey(SSL *s, EVP_PKEY *dhpkey);</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>void SSL_CTX_set_tmp_dh_callback(SSL_CTX *ctx,
+                                 DH *(*tmp_dh_callback)(SSL *ssl, int is_export,
+                                                        int keylength));
+long SSL_CTX_set_tmp_dh(SSL_CTX *ctx, DH *dh);
+
+void SSL_set_tmp_dh_callback(SSL *ctx,
+                             DH *(*tmp_dh_callback)(SSL *ssl, int is_export,
+                                                    int keylength));
+long SSL_set_tmp_dh(SSL *ssl, DH *dh);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The functions described on this page are relevant for servers only.</p>
+
+<p>Some ciphersuites may use ephemeral Diffie-Hellman (DH) key exchange. In these cases, the session data is negotiated using the ephemeral/temporary DH key and the key supplied and certified by the certificate chain is only used for signing. Anonymous ciphers (without a permanent server key) also use ephemeral DH keys.</p>
+
+<p>Using ephemeral DH key exchange yields forward secrecy as the connection can only be decrypted when the DH key is known. By generating a temporary DH key inside the server application that is lost when the application is left, it becomes impossible for an attacker to decrypt past sessions, even if they get hold of the normal (certified) key, as this key was only used for signing.</p>
+
+<p>In order to perform a DH key exchange the server must use a DH group (DH parameters) and generate a DH key. The server will always generate a new DH key during the negotiation.</p>
+
+<p>As generating DH parameters is extremely time consuming, an application should not generate the parameters on the fly. DH parameters can be reused, as the actual key is newly generated during the negotiation.</p>
+
+<p>Typically applications should use well known DH parameters that have built-in support in OpenSSL. The macros SSL_CTX_set_dh_auto() and SSL_set_dh_auto() configure OpenSSL to use the default built-in DH parameters for the <b>SSL_CTX</b> and <b>SSL</b> objects respectively. Passing a value of 2 or 1 in the <i>onoff</i> parameter switches it on. If the <i>onoff</i> parameter is set to 2, it will force the DH key size to 1024 if the <b>SSL_CTX</b> or <b>SSL</b> security level <a href="../man3/SSL_CTX_set_security_level.html">SSL_CTX_set_security_level(3)</a> is 0 or 1. Passing a value of 0 switches it off. The default setting is off.</p>
+
+<p>If &quot;auto&quot; DH parameters are switched on then the parameters will be selected to be consistent with the size of the key associated with the server&#39;s certificate. If there is no certificate (e.g. for PSK ciphersuites), then it it will be consistent with the size of the negotiated symmetric cipher key.</p>
+
+<p>Applications may supply their own DH parameters instead of using the built-in values. This approach is discouraged and applications should in preference use the built-in parameter support described above. Applications wishing to supply their own DH parameters should call SSL_CTX_set0_tmp_dh_pkey() or SSL_set0_tmp_dh_pkey() to supply the parameters for the <b>SSL_CTX</b> or <b>SSL</b> respectively. The parameters should be supplied in the <i>dhpkey</i> argument as an <b>EVP_PKEY</b> containing DH parameters. Ownership of the <i>dhpkey</i> value is passed to the <b>SSL_CTX</b> or <b>SSL</b> object as a result of this call, and so the caller should not free it if the function call is successful.</p>
+
+<p>The deprecated macros SSL_CTX_set_tmp_dh() and SSL_set_tmp_dh() do the same thing as SSL_CTX_set0_tmp_dh_pkey() and SSL_set0_tmp_dh_pkey() except that the DH parameters are supplied in a <b>DH</b> object instead in the <i>dh</i> argument, and ownership of the <b>DH</b> object is retained by the application. Applications should use &quot;auto&quot; parameters instead, or call SSL_CTX_set0_tmp_dh_pkey() or SSL_set0_tmp_dh_pkey() as appropriate.</p>
+
+<p>An application may instead specify the DH parameters via a callback function using the functions SSL_CTX_set_tmp_dh_callback() or SSL_set_tmp_dh_callback() to set the callback for the <b>SSL_CTX</b> or <b>SSL</b> object respectively. These functions are deprecated. Applications should instead use &quot;auto&quot; parameters, or specify the parameters via SSL_CTX_set0_tmp_dh_pkey() or SSL_set0_tmp_dh_pkey() as appropriate.</p>
+
+<p>The callback will be invoked during a connection when DH parameters are required. The <b>SSL</b> object for the current connection is supplied as an argument. Previous versions of OpenSSL used the <b>is_export</b> and <b>keylength</b> arguments to control parameter generation for export and non-export cipher suites. Modern OpenSSL does not support export ciphersuites and so these arguments are unused and can be ignored by the callback. The callback should return the parameters to be used in a DH object. Ownership of the DH object is retained by the application and should later be freed.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>All of these functions/macros return 1 for success or 0 on error.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a>, <a href="../man3/SSL_CTX_set_cipher_list.html">SSL_CTX_set_cipher_list(3)</a>, <a href="../man3/SSL_CTX_set_options.html">SSL_CTX_set_options(3)</a>, <a href="../man1/openssl-ciphers.html">openssl-ciphers(1)</a>, <a href="../man1/openssl-dhparam.html">openssl-dhparam(1)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2001-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

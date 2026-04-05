@@ -1,0 +1,115 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OCSP_response_status</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OCSP_response_status, OCSP_response_get1_basic, OCSP_response_create, OCSP_RESPONSE_free, OCSP_RESPID_set_by_name, OCSP_RESPID_set_by_key_ex, OCSP_RESPID_set_by_key, OCSP_RESPID_match_ex, OCSP_RESPID_match, OCSP_basic_sign, OCSP_basic_sign_ctx - OCSP response functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ocsp.h&gt;
+
+int OCSP_response_status(OCSP_RESPONSE *resp);
+OCSP_BASICRESP *OCSP_response_get1_basic(OCSP_RESPONSE *resp);
+OCSP_RESPONSE *OCSP_response_create(int status, OCSP_BASICRESP *bs);
+void OCSP_RESPONSE_free(OCSP_RESPONSE *resp);
+
+int OCSP_RESPID_set_by_name(OCSP_RESPID *respid, X509 *cert);
+int OCSP_RESPID_set_by_key_ex(OCSP_RESPID *respid, X509 *cert,
+                              OSSL_LIB_CTX *libctx, const char *propq);
+int OCSP_RESPID_set_by_key(OCSP_RESPID *respid, X509 *cert);
+int OCSP_RESPID_match_ex(OCSP_RESPID *respid, X509 *cert, OSSL_LIB_CTX *libctx,
+                         const char *propq);
+int OCSP_RESPID_match(OCSP_RESPID *respid, X509 *cert);
+
+int OCSP_basic_sign(OCSP_BASICRESP *brsp, X509 *signer, EVP_PKEY *key,
+                    const EVP_MD *dgst, STACK_OF(X509) *certs,
+                    unsigned long flags);
+int OCSP_basic_sign_ctx(OCSP_BASICRESP *brsp, X509 *signer, EVP_MD_CTX *ctx,
+                        STACK_OF(X509) *certs, unsigned long flags);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>OCSP_response_status() returns the OCSP response status of <i>resp</i>. It returns one of the values: <i>OCSP_RESPONSE_STATUS_SUCCESSFUL</i>, <i>OCSP_RESPONSE_STATUS_MALFORMEDREQUEST</i>, <i>OCSP_RESPONSE_STATUS_INTERNALERROR</i>, <i>OCSP_RESPONSE_STATUS_TRYLATER</i> <i>OCSP_RESPONSE_STATUS_SIGREQUIRED</i>, or <i>OCSP_RESPONSE_STATUS_UNAUTHORIZED</i>.</p>
+
+<p>OCSP_response_get1_basic() decodes and returns the <i>OCSP_BASICRESP</i> structure contained in <i>resp</i>.</p>
+
+<p>OCSP_response_create() creates and returns an <i>OCSP_RESPONSE</i> structure for <i>status</i> and optionally including basic response <i>bs</i>.</p>
+
+<p>OCSP_RESPONSE_free() frees up OCSP response <i>resp</i>. If the argument is NULL, nothing is done.</p>
+
+<p>OCSP_RESPID_set_by_name() sets the name of the OCSP_RESPID to be the same as the subject name in the supplied X509 certificate <i>cert</i> for the OCSP responder.</p>
+
+<p>OCSP_RESPID_set_by_key_ex() sets the key of the OCSP_RESPID to be the same as the key in the supplied X509 certificate <i>cert</i> for the OCSP responder. The key is stored as a SHA1 hash. To calculate the hash the SHA1 algorithm is fetched using the library ctx <i>libctx</i> and the property query string <i>propq</i> (see <a href="../man7/crypto.html">&quot;ALGORITHM FETCHING&quot; in crypto(7)</a> for further information).</p>
+
+<p>OCSP_RESPID_set_by_key() does the same as OCSP_RESPID_set_by_key_ex() except that the default library context is used with an empty property query string.</p>
+
+<p>Note that an OCSP_RESPID can only have one of the name, or the key set. Calling OCSP_RESPID_set_by_name() or OCSP_RESPID_set_by_key() will clear any existing setting.</p>
+
+<p>OCSP_RESPID_match_ex() tests whether the OCSP_RESPID given in <i>respid</i> matches with the X509 certificate <i>cert</i> based on the SHA1 hash. To calculate the hash the SHA1 algorithm is fetched using the library ctx <i>libctx</i> and the property query string <i>propq</i> (see <a href="../man7/crypto.html">&quot;ALGORITHM FETCHING&quot; in crypto(7)</a> for further information).</p>
+
+<p>OCSP_RESPID_match() does the same as OCSP_RESPID_match_ex() except that the default library context is used with an empty property query string.</p>
+
+<p>OCSP_basic_sign() signs OCSP response <i>brsp</i> using certificate <i>signer</i>, private key <i>key</i>, digest <i>dgst</i> and additional certificates <i>certs</i>. If the <i>flags</i> option <i>OCSP_NOCERTS</i> is set then no certificates will be included in the response. If the <i>flags</i> option <i>OCSP_RESPID_KEY</i> is set then the responder is identified by key ID rather than by name. OCSP_basic_sign_ctx() also signs OCSP response <i>brsp</i> but uses the parameters contained in digest context <i>ctx</i>.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>OCSP_RESPONSE_status() returns a status value.</p>
+
+<p>OCSP_response_get1_basic() returns an <i>OCSP_BASICRESP</i> structure pointer or <i>NULL</i> if an error occurred.</p>
+
+<p>OCSP_response_create() returns an <i>OCSP_RESPONSE</i> structure pointer or <i>NULL</i> if an error occurred.</p>
+
+<p>OCSP_RESPONSE_free() does not return a value.</p>
+
+<p>OCSP_RESPID_set_by_name(), OCSP_RESPID_set_by_key(), OCSP_basic_sign(), and OCSP_basic_sign_ctx() return 1 on success or 0 on failure.</p>
+
+<p>OCSP_RESPID_match() returns 1 if the OCSP_RESPID and the X509 certificate match or 0 otherwise.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>OCSP_response_get1_basic() is only called if the status of a response is <i>OCSP_RESPONSE_STATUS_SUCCESSFUL</i>.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/crypto.html">crypto(7)</a> <a href="../man3/OCSP_cert_to_id.html">OCSP_cert_to_id(3)</a> <a href="../man3/OCSP_request_add1_nonce.html">OCSP_request_add1_nonce(3)</a> <a href="../man3/OCSP_REQUEST_new.html">OCSP_REQUEST_new(3)</a> <a href="../man3/OCSP_resp_find_status.html">OCSP_resp_find_status(3)</a> <a href="../man3/OCSP_sendreq_new.html">OCSP_sendreq_new(3)</a> <a href="../man3/OCSP_RESPID_new.html">OCSP_RESPID_new(3)</a> <a href="../man3/OCSP_RESPID_free.html">OCSP_RESPID_free(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The OCSP_RESPID_set_by_name(), OCSP_RESPID_set_by_key() and OCSP_RESPID_match() functions were added in OpenSSL 1.1.0a.</p>
+
+<p>The OCSP_basic_sign_ctx() function was added in OpenSSL 1.1.1.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2015-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

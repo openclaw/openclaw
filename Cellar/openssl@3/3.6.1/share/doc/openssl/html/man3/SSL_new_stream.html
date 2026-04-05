@@ -1,0 +1,86 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_new_stream</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_new_stream, SSL_STREAM_FLAG_UNI, SSL_STREAM_FLAG_NO_BLOCK, SSL_STREAM_FLAG_ADVANCE - create a new locally-initiated QUIC stream</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+#define SSL_STREAM_FLAG_UNI          (1U &lt;&lt; 0)
+#define SSL_STREAM_FLAG_NO_BLOCK     (1U &lt;&lt; 1)
+#define SSL_STREAM_FLAG_ADVANCE      (1U &lt;&lt; 2)
+SSL *SSL_new_stream(SSL *ssl, uint64_t flags);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The SSL_new_stream() function, when passed a QUIC connection SSL object, creates a new locally-initiated bidirectional or unidirectional QUIC stream and returns the newly created QUIC stream SSL object.</p>
+
+<p>If the <b>SSL_STREAM_FLAG_UNI</b> flag is passed, a unidirectional stream is created; else a bidirectional stream is created.</p>
+
+<p>To retrieve the stream ID of the newly created stream, use <a href="../man3/SSL_get_stream_id.html">SSL_get_stream_id(3)</a>.</p>
+
+<p>It is the caller&#39;s responsibility to free the QUIC stream SSL object using <a href="../man3/SSL_free.html">SSL_free(3)</a>. The lifetime of the QUIC connection SSL object must exceed that of the QUIC stream SSL object; in other words, the QUIC stream SSL object must be freed first.</p>
+
+<p>Once a stream has been created using SSL_new_stream(), it may be used in the normal way using <a href="../man3/SSL_read.html">SSL_read(3)</a> and <a href="../man3/SSL_write.html">SSL_write(3)</a>.</p>
+
+<p>This function can only be used to create stream objects for locally-initiated streams. To accept incoming streams initiated by a peer, use <a href="../man3/SSL_accept_stream.html">SSL_accept_stream(3)</a>.</p>
+
+<p>Calling SSL_new_stream() if there is no default stream already present inhibits the future creation of a default stream. See <a href="../man7/openssl-quic.html">openssl-quic(7)</a>.</p>
+
+<p>The creation of new streams is subject to flow control by the QUIC protocol. If it is currently not possible to create a new locally initiated stream of the specified type, a call to SSL_new_stream() will either block (if the connection is configured in blocking mode) until a new stream can be created, or otherwise return NULL.</p>
+
+<p>This function operates in blocking mode if the QUIC connection SSL object is configured in blocking mode (see <a href="../man3/SSL_set_blocking_mode.html">SSL_set_blocking_mode(3)</a>). It may also be used in nonblocking mode on a connection configured in blocking mode by passing the flag <b>SSL_STREAM_FLAG_NO_BLOCK</b>.</p>
+
+<p>The flag <b>SSL_STREAM_FLAG_ADVANCE</b> may be used to create a QUIC stream SSL object even if a new QUIC stream cannot yet be opened due to flow control. The caller may begin to use the new stream and fill the write buffer of the stream by calling <a href="../man3/SSL_write.html">SSL_write(3)</a>. However, no actual stream data (or QUIC frames regarding the stream) will be sent until QUIC flow control allows it. Any queued data will be sent as soon as a peer permits it. There is no guarantee the stream will be eventually created; for example, the connection could fail, or a peer might simply decide never to increase the number of allowed streams for the remainder of the connection lifetime.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_new_stream() returns a new stream object, or NULL on error.</p>
+
+<p>This function fails if called on a QUIC stream SSL object or on a non-QUIC SSL object.</p>
+
+<p>SSL_new_stream() may also fail if the underlying connection has reached the maximum stream count, based on the <b>max_streams_bidi</b> or <b>max_streams_uni</b> transport parameter values negotiated with the peer. In this event the NULL return will be accompanied by an error on the error stack (obtainable via ERR_get_error()), which will contain a reason code of <b>SSL_R_STREAM_COUNT_LIMITED</b>. When this error is encountered, the operation may be retried. It is recommended that, prior to retry, the error stack be cleared via a call to ERR_clear_error(), and that the TLS state machine be activated via a call to SSL_handle_events() to process any potential updates from the server allowing additional streams to be created.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/SSL_accept_stream.html">SSL_accept_stream(3)</a>, <a href="../man3/SSL_free.html">SSL_free(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>SSL_new_stream() was added in OpenSSL 3.2.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2002-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,87 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_set_fd</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_set_fd, SSL_set_rfd, SSL_set_wfd - connect the SSL object with a file descriptor</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+int SSL_set_fd(SSL *ssl, int fd);
+int SSL_set_rfd(SSL *ssl, int fd);
+int SSL_set_wfd(SSL *ssl, int fd);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_set_fd() sets the file descriptor <b>fd</b> as the input/output facility for the TLS/SSL (encrypted) side of <b>ssl</b>. <b>fd</b> will typically be the socket file descriptor of a network connection.</p>
+
+<p>When performing the operation, a <b>socket BIO</b> is automatically created to interface between the <b>ssl</b> and <b>fd</b>. The BIO and hence the SSL engine inherit the behaviour of <b>fd</b>. If <b>fd</b> is nonblocking, the <b>ssl</b> will also have nonblocking behaviour.</p>
+
+<p>When used on a QUIC connection SSL object, a <b>datagram BIO</b> is automatically created instead of a <b>socket BIO</b>. These functions fail if called on a QUIC stream SSL object.</p>
+
+<p>If there was already a BIO connected to <b>ssl</b>, BIO_free() will be called (for both the reading and writing side, if different).</p>
+
+<p>SSL_set_rfd() and SSL_set_wfd() perform the respective action, but only for the read channel or the write channel, which can be set independently.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>The following return values can occur:</p>
+
+<dl>
+
+<dt id="pod0">0</dt>
+<dd>
+
+<p>The operation failed. Check the error stack to find out why.</p>
+
+</dd>
+<dt id="pod1">1</dt>
+<dd>
+
+<p>The operation succeeded.</p>
+
+</dd>
+</dl>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>On Windows, a socket handle is a 64-bit data type (UINT_PTR), which leads to a compiler warning (conversion from &#39;SOCKET&#39; to &#39;int&#39;, possible loss of data) when passing the socket handle to SSL_set_*fd(). For the time being, this warning can safely be ignored, because although the Microsoft documentation claims that the upper limit is INVALID_SOCKET-1 (2^64 - 2), in practice the current socket() implementation returns an index into the kernel handle table, the size of which is limited to 2^24.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/SSL_get_fd.html">SSL_get_fd(3)</a>, <a href="../man3/SSL_set_bio.html">SSL_set_bio(3)</a>, <a href="../man3/SSL_connect.html">SSL_connect(3)</a>, <a href="../man3/SSL_accept.html">SSL_accept(3)</a>, <a href="../man3/SSL_shutdown.html">SSL_shutdown(3)</a>, <a href="../man7/ssl.html">ssl(7)</a> , <a href="../man7/bio.html">bio(7)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,67 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>X509V3_set_ctx</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>X509V3_set_ctx, X509V3_set_issuer_pkey - X.509 v3 extension generation utilities</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/x509v3.h&gt;
+
+void X509V3_set_ctx(X509V3_CTX *ctx, X509 *issuer, X509 *subject,
+                    X509_REQ *req, X509_CRL *crl, int flags);
+int X509V3_set_issuer_pkey(X509V3_CTX *ctx, EVP_PKEY *pkey);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>X509V3_set_ctx() fills in the basic fields of <i>ctx</i> of type <b>X509V3_CTX</b>, providing details potentially needed by functions producing X509 v3 extensions. These may make use of fields of the certificate <i>subject</i>, the certification request <i>req</i>, or the certificate revocation list <i>crl</i>. At most one of these three parameters can be non-NULL. When constructing the subject key identifier of a certificate by computing a hash value of its public key, the public key is taken from <i>subject</i> or <i>req</i>. Similarly, when constructing subject alternative names from any email addresses contained in a subject DN, the subject DN is taken from <i>subject</i> or <i>req</i>. If <i>subject</i> or <i>crl</i> is provided, <i>issuer</i> should point to its issuer, for instance as a reference for generating the authority key identifier extension. <i>issuer</i> may be the same pointer value as <i>subject</i> (which usually is an indication that the <i>subject</i> certificate is self-issued or even self-signed). In this case the fallback source for generating the authority key identifier extension will be taken from any value provided using X509V3_set_issuer_pkey(). <i>flags</i> may be 0 or contain <b>X509V3_CTX_TEST</b>, which means that just the syntax of extension definitions is to be checked without actually producing any extension, or <b>X509V3_CTX_REPLACE</b>, which means that each X.509v3 extension added as defined in some configuration section shall replace any already existing extension with the same OID.</p>
+
+<p>X509V3_set_issuer_pkey() explicitly sets the issuer private key of the subject certificate that has been provided in <i>ctx</i>. This should be done in case the <i>issuer</i> and <i>subject</i> arguments to X509V3_set_ctx() have the same pointer value to provide fallback data for the authority key identifier extension.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>X509V3_set_issuer_pkey() returns 1 on success and 0 on error.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/X509_add_ext.html">X509_add_ext(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>X509V3_set_issuer_pkey() was added in OpenSSL 3.0.</p>
+
+<p>CTX_TEST was deprecated in OpenSSL 3.0; use X509V3_CTX_TEST instead.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2015-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,83 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>DH_generate_key</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>DH_generate_key, DH_compute_key, DH_compute_key_padded - perform Diffie-Hellman key exchange</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/dh.h&gt;</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>int DH_generate_key(DH *dh);
+
+int DH_compute_key(unsigned char *key, const BIGNUM *pub_key, DH *dh);
+
+int DH_compute_key_padded(unsigned char *key, const BIGNUM *pub_key, DH *dh);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>All of the functions described on this page are deprecated. Applications should instead use <a href="../man3/EVP_PKEY_derive_init.html">EVP_PKEY_derive_init(3)</a> and <a href="../man3/EVP_PKEY_derive.html">EVP_PKEY_derive(3)</a>.</p>
+
+<p>DH_generate_key() performs the first step of a Diffie-Hellman key exchange by generating private and public DH values. By calling DH_compute_key() or DH_compute_key_padded(), these are combined with the other party&#39;s public value to compute the shared key.</p>
+
+<p>DH_generate_key() expects <b>dh</b> to contain the shared parameters <b>dh-&gt;p</b> and <b>dh-&gt;g</b>. It generates a random private DH value unless <b>dh-&gt;priv_key</b> is already set, and computes the corresponding public value <b>dh-&gt;pub_key</b>, which can then be published.</p>
+
+<p>DH_compute_key() computes the shared secret from the private DH value in <b>dh</b> and the other party&#39;s public value in <b>pub_key</b> and stores it in <b>key</b>. <b>key</b> must point to <b>DH_size(dh)</b> bytes of memory. The padding style is RFC 5246 (8.1.2) that strips leading zero bytes. It is not constant time due to the leading zero bytes being stripped. The return value should be considered public.</p>
+
+<p>DH_compute_key_padded() is similar but stores a fixed number of bytes. The padding style is NIST SP 800-56A (C.1) that retains leading zero bytes. It is constant time due to the leading zero bytes being retained. The return value should be considered public.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>DH_generate_key() returns 1 on success, 0 otherwise.</p>
+
+<p>DH_compute_key() returns the size of the shared secret on success, -1 on error.</p>
+
+<p>DH_compute_key_padded() returns <b>DH_size(dh)</b> on success, -1 on error.</p>
+
+<p>The error codes can be obtained by <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_PKEY_derive.html">EVP_PKEY_derive(3)</a>, <a href="../man3/DH_new.html">DH_new(3)</a>, <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>, <a href="../man3/RAND_bytes.html">RAND_bytes(3)</a>, <a href="../man3/DH_size.html">DH_size(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>DH_compute_key_padded() was added in OpenSSL 1.0.2.</p>
+
+<p>All of these functions were deprecated in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

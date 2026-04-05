@@ -1,0 +1,90 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OSSL_DISPATCH</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#OSSL_DISPATCH-fields">OSSL_DISPATCH fields</a></li>
+    </ul>
+  </li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OSSL_DISPATCH, OSSL_DISPATCH_END - OpenSSL Core type to define a dispatchable function table</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/core.h&gt;
+
+typedef struct ossl_dispatch_st OSSL_DISPATCH;
+struct ossl_dispatch_st {
+    int function_id;
+    void (*function)(void);
+};
+
+#define OSSL_DISPATCH_END</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>This type is a tuple of function identity and function pointer. Arrays of this type are passed between the OpenSSL libraries and the providers to describe what functionality one side provides to the other.</p>
+
+<p>Arrays of this type must be terminated with the OSSL_DISPATCH_END macro.</p>
+
+<h2 id="OSSL_DISPATCH-fields"><b>OSSL_DISPATCH</b> fields</h2>
+
+<dl>
+
+<dt id="function_id"><i>function_id</i></dt>
+<dd>
+
+<p>OpenSSL defined function identity of the implemented function.</p>
+
+</dd>
+<dt id="function"><i>function</i></dt>
+<dd>
+
+<p>Pointer to the implemented function itself. Despite the generic definition of this field, the implemented function it points to must have a function signature that corresponds to the <i>function_id</i></p>
+
+</dd>
+</dl>
+
+<p>Available function identities and corresponding function signatures are defined in <a href="../man7/openssl-core_dispatch.h.html">openssl-core_dispatch.h(7)</a>. Furthermore, the chosen function identities and associated function signature must be chosen specifically for the operation that it&#39;s intended for, as determined by the intended <a href="../man3/OSSL_ALGORITHM.html">OSSL_ALGORITHM(3)</a> array.</p>
+
+<p>Any function identity not recognised by the recipient of this type will be ignored. This ensures that providers built with one OpenSSL version in mind will work together with any other OpenSSL version that supports this mechanism.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/crypto.html">crypto(7)</a>, <a href="../man7/openssl-core_dispatch.h.html">openssl-core_dispatch.h(7)</a>, <a href="../man3/OSSL_ALGORITHM.html">OSSL_ALGORITHM(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p><b>OSSL_DISPATCH</b> was added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2022-2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

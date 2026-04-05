@@ -1,0 +1,76 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>CMS_EncryptedData_decrypt</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>CMS_EncryptedData_decrypt, CMS_EnvelopedData_decrypt - Decrypt CMS EncryptedData or EnvelopedData</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/cms.h&gt;
+
+int CMS_EncryptedData_decrypt(CMS_ContentInfo *cms,
+                              const unsigned char *key, size_t keylen,
+                              BIO *dcont, BIO *out, unsigned int flags);
+
+BIO *CMS_EnvelopedData_decrypt(CMS_EnvelopedData *env, BIO *detached_data,
+                               EVP_PKEY *pkey, X509 *cert,
+                               ASN1_OCTET_STRING *secret, unsigned int flags,
+                               OSSL_LIB_CTX *libctx, const char *propq);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>CMS_EncryptedData_decrypt() decrypts a <i>cms</i> EncryptedData object using the symmetric <i>key</i> of size <i>keylen</i> bytes. AEAD cipher algorithms are not supported. <i>out</i> is a BIO to write the content to and <i>flags</i> is an optional set of flags. <i>dcont</i> is used in the rare case where the encrypted content is detached. It will normally be set to NULL.</p>
+
+<p>The following flags can be passed in the <i>flags</i> parameter.</p>
+
+<p>If the <b>CMS_TEXT</b> flag is set MIME headers for type <code>text/plain</code> are deleted from the content. If the content is not of type <code>text/plain</code> then an error is returned.</p>
+
+<p>CMS_EnvelopedData_decrypt() decrypts, similarly to CMS_decrypt(3), a CMS EnvelopedData object <i>env</i> using the symmetric key <i>secret</i> if it is not NULL, otherwise the private key of the recipient <i>pkey</i>. If <i>pkey</i> is given, it is recommended to provide also the associated certificate in <i>cert</i> - see <a href="../man3/CMS_decrypt.html">CMS_decrypt(3)</a> and the NOTES on <i>cert</i> there. The optional parameters <i>flags</i> and <i>dcont</i> are used as described above. The optional parameters library context <i>libctx</i> and property query <i>propq</i> are used when retrieving algorithms from providers.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>CMS_EncryptedData_decrypt() returns 0 if an error occurred otherwise returns 1.</p>
+
+<p>CMS_EnvelopedData_decrypt() returns NULL if an error occurred, otherwise a BIO containing the decypted content.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>, <a href="../man3/CMS_EncryptedData_encrypt.html">CMS_EncryptedData_encrypt(3)</a>, <a href="../man3/CMS_decrypt.html">CMS_decrypt(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>CMS_EnvelopedData_decrypt() was added in OpenSSL 3.2.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2020 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

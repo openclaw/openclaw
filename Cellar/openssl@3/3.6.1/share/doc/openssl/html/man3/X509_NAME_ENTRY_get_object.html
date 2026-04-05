@@ -1,0 +1,94 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>X509_NAME_ENTRY_get_object</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>X509_NAME_ENTRY_get_object, X509_NAME_ENTRY_get_data, X509_NAME_ENTRY_set_object, X509_NAME_ENTRY_set_data, X509_NAME_ENTRY_create_by_txt, X509_NAME_ENTRY_create_by_NID, X509_NAME_ENTRY_create_by_OBJ - X509_NAME_ENTRY utility functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/x509.h&gt;
+
+ASN1_OBJECT *X509_NAME_ENTRY_get_object(const X509_NAME_ENTRY *ne);
+ASN1_STRING *X509_NAME_ENTRY_get_data(const X509_NAME_ENTRY *ne);
+
+int X509_NAME_ENTRY_set_object(X509_NAME_ENTRY *ne, const ASN1_OBJECT *obj);
+int X509_NAME_ENTRY_set_data(X509_NAME_ENTRY *ne, int type,
+                             const unsigned char *bytes, int len);
+
+X509_NAME_ENTRY *X509_NAME_ENTRY_create_by_txt(X509_NAME_ENTRY **ne, const char *field,
+                                               int type, const unsigned char *bytes,
+                                               int len);
+X509_NAME_ENTRY *X509_NAME_ENTRY_create_by_NID(X509_NAME_ENTRY **ne, int nid,
+                                               int type, const unsigned char *bytes,
+                                               int len);
+X509_NAME_ENTRY *X509_NAME_ENTRY_create_by_OBJ(X509_NAME_ENTRY **ne,
+                                               const ASN1_OBJECT *obj, int type,
+                                               const unsigned char *bytes, int len);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>X509_NAME_ENTRY_get_object() retrieves the field name of <b>ne</b> in and <b>ASN1_OBJECT</b> structure.</p>
+
+<p>X509_NAME_ENTRY_get_data() retrieves the field value of <b>ne</b> in and <b>ASN1_STRING</b> structure.</p>
+
+<p>X509_NAME_ENTRY_set_object() sets the field name of <b>ne</b> to <b>obj</b>.</p>
+
+<p>X509_NAME_ENTRY_set_data() sets the field value of <b>ne</b> to string type <b>type</b> and value determined by <b>bytes</b> and <b>len</b>.</p>
+
+<p>X509_NAME_ENTRY_create_by_txt(), X509_NAME_ENTRY_create_by_NID() and X509_NAME_ENTRY_create_by_OBJ() create and return an <b>X509_NAME_ENTRY</b> structure.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>X509_NAME_ENTRY_get_object() and X509_NAME_ENTRY_get_data() can be used to examine an <b>X509_NAME_ENTRY</b> function as returned by X509_NAME_get_entry() for example.</p>
+
+<p>X509_NAME_ENTRY_create_by_txt(), X509_NAME_ENTRY_create_by_OBJ(), X509_NAME_ENTRY_create_by_NID() and X509_NAME_ENTRY_set_data() are seldom used in practice because <b>X509_NAME_ENTRY</b> structures are almost always part of <b>X509_NAME</b> structures and the corresponding <b>X509_NAME</b> functions are typically used to create and add new entries in a single operation.</p>
+
+<p>The arguments of these functions support similar options to the similarly named ones of the corresponding <b>X509_NAME</b> functions such as X509_NAME_add_entry_by_txt(). So for example <b>type</b> can be set to <b>MBSTRING_ASC</b> but in the case of X509_set_data() the field name must be set first so the relevant field information can be looked up internally.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>X509_NAME_ENTRY_get_object() returns a valid <b>ASN1_OBJECT</b> structure if it is set or NULL if an error occurred.</p>
+
+<p>X509_NAME_ENTRY_get_data() returns a valid <b>ASN1_STRING</b> structure if it is set or NULL if an error occurred.</p>
+
+<p>X509_NAME_ENTRY_set_object() and X509_NAME_ENTRY_set_data() return 1 on success or 0 on error.</p>
+
+<p>X509_NAME_ENTRY_create_by_txt(), X509_NAME_ENTRY_create_by_NID() and X509_NAME_ENTRY_create_by_OBJ() return a valid <b>X509_NAME_ENTRY</b> on success or NULL if an error occurred.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>, <a href="../man3/d2i_X509_NAME.html">d2i_X509_NAME(3)</a>, <a href="../man3/OBJ_nid2obj.html">OBJ_nid2obj(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2002-2018 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

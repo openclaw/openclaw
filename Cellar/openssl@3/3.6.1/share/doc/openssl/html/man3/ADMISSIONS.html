@@ -1,0 +1,120 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>ADMISSIONS</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>ADMISSIONS, ADMISSIONS_get0_admissionAuthority, ADMISSIONS_get0_namingAuthority, ADMISSIONS_get0_professionInfos, ADMISSIONS_set0_admissionAuthority, ADMISSIONS_set0_namingAuthority, ADMISSIONS_set0_professionInfos, ADMISSION_SYNTAX, ADMISSION_SYNTAX_get0_admissionAuthority, ADMISSION_SYNTAX_get0_contentsOfAdmissions, ADMISSION_SYNTAX_set0_admissionAuthority, ADMISSION_SYNTAX_set0_contentsOfAdmissions, NAMING_AUTHORITY, NAMING_AUTHORITY_get0_authorityId, NAMING_AUTHORITY_get0_authorityURL, NAMING_AUTHORITY_get0_authorityText, NAMING_AUTHORITY_set0_authorityId, NAMING_AUTHORITY_set0_authorityURL, NAMING_AUTHORITY_set0_authorityText, PROFESSION_INFO, PROFESSION_INFOS, PROFESSION_INFO_get0_addProfessionInfo, PROFESSION_INFO_get0_namingAuthority, PROFESSION_INFO_get0_professionItems, PROFESSION_INFO_get0_professionOIDs, PROFESSION_INFO_get0_registrationNumber, PROFESSION_INFO_set0_addProfessionInfo, PROFESSION_INFO_set0_namingAuthority, PROFESSION_INFO_set0_professionItems, PROFESSION_INFO_set0_professionOIDs, PROFESSION_INFO_set0_registrationNumber - Accessors and settors for ADMISSION_SYNTAX</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>typedef struct NamingAuthority_st NAMING_AUTHORITY;
+typedef struct ProfessionInfo_st PROFESSION_INFO;
+typedef STACK_OF(PROFESSION_INFO) PROFESSION_INFOS;
+typedef struct Admissions_st ADMISSIONS;
+typedef struct AdmissionSyntax_st ADMISSION_SYNTAX;
+
+const ASN1_OBJECT *NAMING_AUTHORITY_get0_authorityId(
+    const NAMING_AUTHORITY *n);
+void NAMING_AUTHORITY_set0_authorityId(NAMING_AUTHORITY *n,
+    ASN1_OBJECT* namingAuthorityId);
+const ASN1_IA5STRING *NAMING_AUTHORITY_get0_authorityURL(
+    const NAMING_AUTHORITY *n);
+void NAMING_AUTHORITY_set0_authorityURL(NAMING_AUTHORITY *n,
+    ASN1_IA5STRING* namingAuthorityUrl);
+const ASN1_STRING *NAMING_AUTHORITY_get0_authorityText(
+    const NAMING_AUTHORITY *n);
+void NAMING_AUTHORITY_set0_authorityText(NAMING_AUTHORITY *n,
+    ASN1_STRING* namingAuthorityText);
+
+const GENERAL_NAME *ADMISSION_SYNTAX_get0_admissionAuthority(
+    const ADMISSION_SYNTAX *as);
+void ADMISSION_SYNTAX_set0_admissionAuthority(
+    ADMISSION_SYNTAX *as, GENERAL_NAME *aa);
+const STACK_OF(ADMISSIONS) *ADMISSION_SYNTAX_get0_contentsOfAdmissions(
+    const ADMISSION_SYNTAX *as);
+void ADMISSION_SYNTAX_set0_contentsOfAdmissions(
+    ADMISSION_SYNTAX *as, STACK_OF(ADMISSIONS) *a);
+
+const GENERAL_NAME *ADMISSIONS_get0_admissionAuthority(const ADMISSIONS *a);
+void ADMISSIONS_set0_admissionAuthority(ADMISSIONS *a, GENERAL_NAME *aa);
+const NAMING_AUTHORITY *ADMISSIONS_get0_namingAuthority(const ADMISSIONS *a);
+void ADMISSIONS_set0_namingAuthority(ADMISSIONS *a, NAMING_AUTHORITY *na);
+const PROFESSION_INFOS *ADMISSIONS_get0_professionInfos(const ADMISSIONS *a);
+void ADMISSIONS_set0_professionInfos(ADMISSIONS *a, PROFESSION_INFOS *pi);
+
+const ASN1_OCTET_STRING *PROFESSION_INFO_get0_addProfessionInfo(
+    const PROFESSION_INFO *pi);
+void PROFESSION_INFO_set0_addProfessionInfo(
+    PROFESSION_INFO *pi, ASN1_OCTET_STRING *aos);
+const NAMING_AUTHORITY *PROFESSION_INFO_get0_namingAuthority(
+    const PROFESSION_INFO *pi);
+void PROFESSION_INFO_set0_namingAuthority(
+    PROFESSION_INFO *pi, NAMING_AUTHORITY *na);
+const STACK_OF(ASN1_STRING) *PROFESSION_INFO_get0_professionItems(
+    const PROFESSION_INFO *pi);
+void PROFESSION_INFO_set0_professionItems(
+    PROFESSION_INFO *pi, STACK_OF(ASN1_STRING) *as);
+const STACK_OF(ASN1_OBJECT) *PROFESSION_INFO_get0_professionOIDs(
+    const PROFESSION_INFO *pi);
+void PROFESSION_INFO_set0_professionOIDs(
+    PROFESSION_INFO *pi, STACK_OF(ASN1_OBJECT) *po);
+const ASN1_PRINTABLESTRING *PROFESSION_INFO_get0_registrationNumber(
+    const PROFESSION_INFO *pi);
+void PROFESSION_INFO_set0_registrationNumber(
+    PROFESSION_INFO *pi, ASN1_PRINTABLESTRING *rn);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The <b>PROFESSION_INFOS</b>, <b>ADMISSION_SYNTAX</b>, <b>ADMISSIONS</b>, and <b>PROFESSION_INFO</b> types are opaque structures representing the analogous types defined in the Common PKI Specification published by <a href="https://www.t7ev.org">https://www.t7ev.org</a>. Knowledge of those structures and their semantics is assumed.</p>
+
+<p>The conventional routines to convert between DER and the local format are described in <a href="../man3/d2i_X509.html">d2i_X509(3)</a>. The conventional routines to allocate and free the types are defined in <a href="../man3/X509_dup.html">X509_dup(3)</a>.</p>
+
+<p>The <b>PROFESSION_INFOS</b> type is a stack of <b>PROFESSION_INFO</b>; see <a href="../man3/DEFINE_STACK_OF.html">DEFINE_STACK_OF(3)</a> for details.</p>
+
+<p>The <b>NAMING_AUTHORITY</b> type has an authority ID and URL, and text fields. The NAMING_AUTHORITY_get0_authorityId(), NAMING_AUTHORITY_get0_get0_authorityURL(), and NAMING_AUTHORITY_get0_get0_authorityText(), functions return pointers to those values within the object. The NAMING_AUTHORITY_set0_authorityId(), NAMING_AUTHORITY_set0_get0_authorityURL(), and NAMING_AUTHORITY_set0_get0_authorityText(), functions free any existing value and set the pointer to the specified value.</p>
+
+<p>The <b>ADMISSION_SYNTAX</b> type has an authority name and a stack of <b>ADMISSION</b> objects. The ADMISSION_SYNTAX_get0_admissionAuthority() and ADMISSION_SYNTAX_get0_contentsOfAdmissions() functions return pointers to those values within the object. The ADMISSION_SYNTAX_set0_admissionAuthority() and ADMISSION_SYNTAX_set0_contentsOfAdmissions() functions free any existing value and set the pointer to the specified value.</p>
+
+<p>The <b>ADMISSION</b> type has an authority name, authority object, and a stack of <b>PROFESSION_INFO</b> items. The ADMISSIONS_get0_admissionAuthority(), ADMISSIONS_get0_namingAuthority(), and ADMISSIONS_get0_professionInfos() functions return pointers to those values within the object. The ADMISSIONS_set0_admissionAuthority(), ADMISSIONS_set0_namingAuthority(), and ADMISSIONS_set0_professionInfos() functions free any existing value and set the pointer to the specified value.</p>
+
+<p>The <b>PROFESSION_INFO</b> type has a name authority, stacks of profession Items and OIDs, a registration number, and additional profession info. The functions PROFESSION_INFO_get0_addProfessionInfo(), PROFESSION_INFO_get0_namingAuthority(), PROFESSION_INFO_get0_professionItems(), PROFESSION_INFO_get0_professionOIDs(), and PROFESSION_INFO_get0_registrationNumber() functions return pointers to those values within the object. The PROFESSION_INFO_set0_addProfessionInfo(), PROFESSION_INFO_set0_namingAuthority(), PROFESSION_INFO_set0_professionItems(), PROFESSION_INFO_set0_professionOIDs(), and PROFESSION_INFO_set0_registrationNumber() functions free any existing value and set the pointer to the specified value.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>Described above. Note that all of the <i>get0</i> functions return a pointer to the internal data structure and must not be freed.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/X509_dup.html">X509_dup(3)</a>, <a href="../man3/d2i_X509.html">d2i_X509(3)</a>,</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2017-2018 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

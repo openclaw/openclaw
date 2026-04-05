@@ -1,0 +1,96 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_CTX_set1_verify_cert_store</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_CTX_set0_verify_cert_store, SSL_CTX_set1_verify_cert_store, SSL_CTX_set0_chain_cert_store, SSL_CTX_set1_chain_cert_store, SSL_set0_verify_cert_store, SSL_set1_verify_cert_store, SSL_set0_chain_cert_store, SSL_set1_chain_cert_store, SSL_CTX_get0_verify_cert_store, SSL_CTX_get0_chain_cert_store, SSL_get0_verify_cert_store, SSL_get0_chain_cert_store - set certificate verification or chain store</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+int SSL_CTX_set0_verify_cert_store(SSL_CTX *ctx, X509_STORE *st);
+int SSL_CTX_set1_verify_cert_store(SSL_CTX *ctx, X509_STORE *st);
+int SSL_CTX_set0_chain_cert_store(SSL_CTX *ctx, X509_STORE *st);
+int SSL_CTX_set1_chain_cert_store(SSL_CTX *ctx, X509_STORE *st);
+int SSL_CTX_get0_verify_cert_store(SSL_CTX *ctx, X509_STORE **st);
+int SSL_CTX_get0_chain_cert_store(SSL_CTX *ctx, X509_STORE **st);
+
+int SSL_set0_verify_cert_store(SSL *ctx, X509_STORE *st);
+int SSL_set1_verify_cert_store(SSL *ctx, X509_STORE *st);
+int SSL_set0_chain_cert_store(SSL *ctx, X509_STORE *st);
+int SSL_set1_chain_cert_store(SSL *ctx, X509_STORE *st);
+int SSL_get0_verify_cert_store(SSL *ctx, X509_STORE **st);
+int SSL_get0_chain_cert_store(SSL *ctx, X509_STORE **st);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_CTX_set0_verify_cert_store() and SSL_CTX_set1_verify_cert_store() set the certificate store used for certificate verification to <b>st</b>.</p>
+
+<p>SSL_CTX_set0_chain_cert_store() and SSL_CTX_set1_chain_cert_store() set the certificate store used for certificate chain building to <b>st</b>.</p>
+
+<p>SSL_set0_verify_cert_store(), SSL_set1_verify_cert_store(), SSL_set0_chain_cert_store() and SSL_set1_chain_cert_store() are similar except they apply to SSL structure <b>ssl</b>.</p>
+
+<p>SSL_CTX_get0_verify_chain_store(), SSL_get0_verify_chain_store(), SSL_CTX_get0_chain_cert_store() and SSL_get0_chain_cert_store() retrieve the objects previously set via the above calls. A pointer to the object (or NULL if no such object has been set) is written to <b>*st</b>.</p>
+
+<p>All these functions are implemented as macros. Those containing a <b>1</b> increment the reference count of the supplied store so it must be freed at some point after the operation. Those containing a <b>0</b> do not increment reference counts and the supplied store <b>MUST NOT</b> be freed after the operation.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The stores pointers associated with an SSL_CTX structure are copied to any SSL structures when SSL_new() is called. As a result SSL structures will not be affected if the parent SSL_CTX store pointer is set to a new value.</p>
+
+<p>The verification store is used to verify the certificate chain sent by the peer: that is an SSL/TLS client will use the verification store to verify the server&#39;s certificate chain and an SSL/TLS server will use it to verify any client certificate chain.</p>
+
+<p>The chain store is used to build the certificate chain. Details of the chain building and checking process are described in <a href="../man1/openssl-verification-options.html">&quot;Certification Path Building&quot; in openssl-verification-options(1)</a> and <a href="../man1/openssl-verification-options.html">&quot;Certification Path Validation&quot; in openssl-verification-options(1)</a>.</p>
+
+<p>If the mode <b>SSL_MODE_NO_AUTO_CHAIN</b> is set or a certificate chain is configured already (for example using the functions such as <a href="../man3/SSL_CTX_add1_chain_cert.html">SSL_CTX_add1_chain_cert(3)</a> or <a href="../man3/SSL_CTX_add_extra_chain_cert.html">SSL_CTX_add_extra_chain_cert(3)</a>) then automatic chain building is disabled.</p>
+
+<p>If the mode <b>SSL_MODE_NO_AUTO_CHAIN</b> is set then automatic chain building is disabled.</p>
+
+<p>If the chain or the verification store is not set then the store associated with the parent SSL_CTX is used instead to retain compatibility with previous versions of OpenSSL.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>All these functions return 1 for success and 0 for failure.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a>, <a href="../man3/SSL_CTX_add_extra_chain_cert.html">SSL_CTX_add_extra_chain_cert(3)</a> <a href="../man3/SSL_CTX_set0_chain.html">SSL_CTX_set0_chain(3)</a> <a href="../man3/SSL_CTX_set1_chain.html">SSL_CTX_set1_chain(3)</a> <a href="../man3/SSL_CTX_add0_chain_cert.html">SSL_CTX_add0_chain_cert(3)</a> <a href="../man3/SSL_CTX_add1_chain_cert.html">SSL_CTX_add1_chain_cert(3)</a> <a href="../man3/SSL_set0_chain.html">SSL_set0_chain(3)</a> <a href="../man3/SSL_set1_chain.html">SSL_set1_chain(3)</a> <a href="../man3/SSL_add0_chain_cert.html">SSL_add0_chain_cert(3)</a> <a href="../man3/SSL_add1_chain_cert.html">SSL_add1_chain_cert(3)</a> <a href="../man3/SSL_CTX_build_cert_chain.html">SSL_CTX_build_cert_chain(3)</a> <a href="../man3/SSL_build_cert_chain.html">SSL_build_cert_chain(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>These functions were added in OpenSSL 1.0.2.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2013-2022 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

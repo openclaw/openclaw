@@ -1,0 +1,102 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_CTX_config</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_CTX_config, SSL_config - configure SSL_CTX or SSL structure</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+int SSL_CTX_config(SSL_CTX *ctx, const char *name);
+int SSL_config(SSL *s, const char *name);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The functions SSL_CTX_config() and SSL_config() configure an <b>SSL_CTX</b> or <b>SSL</b> structure using the configuration <b>name</b>.</p>
+
+<p>By calling SSL_CTX_config() or SSL_config() an application can perform many complex tasks based on the contents of the configuration file: greatly simplifying application configuration code. A degree of future proofing can also be achieved: an application can support configuration features in newer versions of OpenSSL automatically.</p>
+
+<p>A configuration file must have been previously loaded, for example using CONF_modules_load_file(). See <a href="../man5/config.html">config(5)</a> for details of the configuration file syntax.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_CTX_config() and SSL_config() return 1 for success or 0 if an error occurred.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>If the file &quot;config.cnf&quot; contains the following:</p>
+
+<pre><code>testapp = test_sect
+
+[test_sect]
+# list of configuration modules
+
+ssl_conf = ssl_sect
+
+[ssl_sect]
+server = server_section
+
+[server_section]
+RSA.Certificate = server-rsa.pem
+ECDSA.Certificate = server-ecdsa.pem
+Ciphers = ALL:!RC4</code></pre>
+
+<p>An application could call:</p>
+
+<pre><code>if (CONF_modules_load_file(&quot;config.cnf&quot;, &quot;testapp&quot;, 0) &lt;= 0) {
+    fprintf(stderr, &quot;Error processing config file\n&quot;);
+    goto err;
+}
+
+ctx = SSL_CTX_new(TLS_server_method());
+
+if (SSL_CTX_config(ctx, &quot;server&quot;) == 0) {
+    fprintf(stderr, &quot;Error configuring server.\n&quot;);
+    goto err;
+}</code></pre>
+
+<p>In this example two certificates and the cipher list are configured without the need for any additional application code.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a>, <a href="../man5/config.html">config(5)</a>, <a href="../man3/SSL_CONF_cmd.html">SSL_CONF_cmd(3)</a>, <a href="../man3/CONF_modules_load_file.html">CONF_modules_load_file(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The SSL_CTX_config() and SSL_config() functions were added in OpenSSL 1.1.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2015-2020 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,273 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_SIGNATURE-RSA</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Algorithm-Names">Algorithm Names</a></li>
+      <li><a href="#Signature-Parameters">Signature Parameters</a></li>
+    </ul>
+  </li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_SIGNATURE-RSA - The EVP_PKEY RSA signature implementation</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>Support for computing RSA signatures. See <a href="../man7/EVP_PKEY-RSA.html">EVP_PKEY-RSA(7)</a> for information related to RSA keys.</p>
+
+<h2 id="Algorithm-Names">Algorithm Names</h2>
+
+<p>In this list, names are grouped together to signify that they are the same algorithm having multiple names. This also includes the OID in canonical decimal form (which means that they are possible to fetch if the caller has a mere OID which came out in this form after a call to <a href="../man3/OBJ_obj2txt.html">OBJ_obj2txt(3)</a>).</p>
+
+<dl>
+
+<dt id="RSA-rsaEncryption-1.2.840.113549.1.1.1">&quot;RSA&quot;, &quot;rsaEncryption&quot;, &quot;1.2.840.113549.1.1.1&quot;</dt>
+<dd>
+
+<p>The base signature algorithm, supported explicitly fetched with <a href="../man3/EVP_PKEY_sign_init_ex2.html">EVP_PKEY_sign_init_ex2(3)</a>, and implicitly fetched (through <a href="../man7/EVP_PKEY-RSA.html">RSA keys</a>) with <a href="../man3/EVP_DigestSignInit.html">EVP_DigestSignInit(3)</a> and <a href="../man3/EVP_DigestVerifyInit.html">EVP_DigestVerifyInit(3)</a>.</p>
+
+<p>It can&#39;t be used with <a href="../man3/EVP_PKEY_sign_message_init.html">EVP_PKEY_sign_message_init(3)</a></p>
+
+</dd>
+<dt id="RSA-RIPEMD160-ripemd160WithRSA-1.3.36.3.3.1.2">&quot;RSA-RIPEMD160&quot;, &quot;ripemd160WithRSA&quot;, &quot;1.3.36.3.3.1.2&quot;</dt>
+<dd>
+
+</dd>
+<dt id="RSA-SHA2-256-RSA-SHA256-sha256WithRSAEncryption-1.2.840.113549.1.1.11">&quot;RSA-SHA2-256&quot;, &quot;RSA-SHA256&quot;, &quot;sha256WithRSAEncryption&quot;, &quot;1.2.840.113549.1.1.11&quot;</dt>
+<dd>
+
+</dd>
+<dt id="RSA-SHA2-384-RSA-SHA384-sha384WithRSAEncryption-1.2.840.113549.1.1.12">&quot;RSA-SHA2-384&quot;, &quot;RSA-SHA384&quot;, &quot;sha384WithRSAEncryption&quot;, &quot;1.2.840.113549.1.1.12&quot;</dt>
+<dd>
+
+</dd>
+<dt id="RSA-SHA2-512-RSA-SHA512-sha512WithRSAEncryption-1.2.840.113549.1.1.13">&quot;RSA-SHA2-512&quot;, &quot;RSA-SHA512&quot;, &quot;sha512WithRSAEncryption&quot;, &quot;1.2.840.113549.1.1.13&quot;</dt>
+<dd>
+
+</dd>
+<dt id="RSA-SHA2-224-RSA-SHA224-sha224WithRSAEncryption-1.2.840.113549.1.1.14">&quot;RSA-SHA2-224&quot;, &quot;RSA-SHA224&quot;, &quot;sha224WithRSAEncryption&quot;, &quot;1.2.840.113549.1.1.14&quot;</dt>
+<dd>
+
+</dd>
+<dt id="RSA-SHA2-512-224-RSA-SHA512-224-sha512-224WithRSAEncryption-1.2.840.113549.1.1.15">&quot;RSA-SHA2-512/224&quot;, &quot;RSA-SHA512-224&quot;, &quot;sha512-224WithRSAEncryption&quot;, &quot;1.2.840.113549.1.1.15&quot;</dt>
+<dd>
+
+</dd>
+<dt id="RSA-SHA2-512-256-RSA-SHA512-256-sha512-256WithRSAEncryption-1.2.840.113549.1.1.16">&quot;RSA-SHA2-512/256&quot;, &quot;RSA-SHA512-256&quot;, &quot;sha512-256WithRSAEncryption&quot;, &quot;1.2.840.113549.1.1.16&quot;</dt>
+<dd>
+
+</dd>
+<dt id="RSA-SHA3-224-id-rsassa-pkcs1-v1_5-with-sha3-224-2.16.840.1.101.3.4.3.13">&quot;RSA-SHA3-224&quot;, &quot;id-rsassa-pkcs1-v1_5-with-sha3-224&quot;, &quot;2.16.840.1.101.3.4.3.13&quot;</dt>
+<dd>
+
+</dd>
+<dt id="RSA-SHA3-256-id-rsassa-pkcs1-v1_5-with-sha3-256-2.16.840.1.101.3.4.3.14">&quot;RSA-SHA3-256&quot;, &quot;id-rsassa-pkcs1-v1_5-with-sha3-256&quot;, &quot;2.16.840.1.101.3.4.3.14&quot;</dt>
+<dd>
+
+</dd>
+<dt id="RSA-SHA3-384-id-rsassa-pkcs1-v1_5-with-sha3-384-2.16.840.1.101.3.4.3.15">&quot;RSA-SHA3-384&quot;, &quot;id-rsassa-pkcs1-v1_5-with-sha3-384&quot;, &quot;2.16.840.1.101.3.4.3.15&quot;</dt>
+<dd>
+
+</dd>
+<dt id="RSA-SHA3-512-id-rsassa-pkcs1-v1_5-with-sha3-512-2.16.840.1.101.3.4.3.16">&quot;RSA-SHA3-512&quot;, &quot;id-rsassa-pkcs1-v1_5-with-sha3-512&quot;, &quot;2.16.840.1.101.3.4.3.16&quot;</dt>
+<dd>
+
+</dd>
+<dt id="RSA-SM3-sm3WithRSAEncryption-1.2.156.10197.1.504">&quot;RSA-SM3&quot;, &quot;sm3WithRSAEncryption&quot;, &quot;1.2.156.10197.1.504&quot;</dt>
+<dd>
+
+<p>PKCS#1 v1.5 RSA signature schemes with diverse message digest algorithms. They are all supported explicitly fetched with <a href="../man3/EVP_PKEY_sign_init_ex2.html">EVP_PKEY_sign_init_ex2(3)</a> and <a href="../man3/EVP_PKEY_sign_message_init.html">EVP_PKEY_sign_message_init(3)</a>. They are all pre-set to use the pad mode &quot;pkcs1&quot;. This cannot be changed.</p>
+
+</dd>
+</dl>
+
+<h2 id="Signature-Parameters">Signature Parameters</h2>
+
+<p>The following signature parameters can be set using EVP_PKEY_CTX_set_params(). This may be called after EVP_PKEY_sign_init() or EVP_PKEY_verify_init(), and before calling EVP_PKEY_sign() or EVP_PKEY_verify(). They may also be set using EVP_PKEY_sign_init_ex() or EVP_PKEY_verify_init_ex().</p>
+
+<dl>
+
+<dt id="digest-OSSL_SIGNATURE_PARAM_DIGEST-UTF8-string">&quot;digest&quot; (<b>OSSL_SIGNATURE_PARAM_DIGEST</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+</dd>
+<dt id="properties-OSSL_SIGNATURE_PARAM_PROPERTIES-UTF8-string">&quot;properties&quot; (<b>OSSL_SIGNATURE_PARAM_PROPERTIES</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+<p>These are not supported with the RSA signature schemes that already include a message digest algorithm, See <a href="#Algorithm-Names">&quot;Algorithm Names&quot;</a> above.</p>
+
+<p>These common parameters are described in <a href="../man7/provider-signature.html">provider-signature(7)</a>.</p>
+
+</dd>
+<dt id="pad-mode-OSSL_SIGNATURE_PARAM_PAD_MODE-UTF8-string">&quot;pad-mode&quot; (<b>OSSL_SIGNATURE_PARAM_PAD_MODE</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+<p>The type of padding to be used. Its value can be one of the following:</p>
+
+<dl>
+
+<dt id="none-OSSL_PKEY_RSA_PAD_MODE_NONE">&quot;none&quot; (<b>OSSL_PKEY_RSA_PAD_MODE_NONE</b>)</dt>
+<dd>
+
+</dd>
+<dt id="pkcs1-OSSL_PKEY_RSA_PAD_MODE_PKCSV15">&quot;pkcs1&quot; (<b>OSSL_PKEY_RSA_PAD_MODE_PKCSV15</b>)</dt>
+<dd>
+
+</dd>
+<dt id="x931-OSSL_PKEY_RSA_PAD_MODE_X931">&quot;x931&quot; (<b>OSSL_PKEY_RSA_PAD_MODE_X931</b>)</dt>
+<dd>
+
+<p>This padding mode is no longer supported by the FIPS provider for signature generation, but may be used for signature verification for legacy use cases. (This is a FIPS 140-3 requirement)</p>
+
+</dd>
+<dt id="pss-OSSL_PKEY_RSA_PAD_MODE_PSS">&quot;pss&quot; (<b>OSSL_PKEY_RSA_PAD_MODE_PSS</b>)</dt>
+<dd>
+
+</dd>
+</dl>
+
+</dd>
+<dt id="mgf1-digest-OSSL_SIGNATURE_PARAM_MGF1_DIGEST-UTF8-string">&quot;mgf1-digest&quot; (<b>OSSL_SIGNATURE_PARAM_MGF1_DIGEST</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+<p>The digest algorithm name to use for the maskGenAlgorithm used by &quot;pss&quot; mode.</p>
+
+</dd>
+<dt id="mgf1-properties-OSSL_SIGNATURE_PARAM_MGF1_PROPERTIES-UTF8-string">&quot;mgf1-properties&quot; (<b>OSSL_SIGNATURE_PARAM_MGF1_PROPERTIES</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+<p>Sets the name of the property query associated with the &quot;mgf1-digest&quot; algorithm. NULL is used if this optional value is not set.</p>
+
+</dd>
+<dt id="saltlen-OSSL_SIGNATURE_PARAM_PSS_SALTLEN-integer-or-UTF8-string">&quot;saltlen&quot; (<b>OSSL_SIGNATURE_PARAM_PSS_SALTLEN</b>) &lt;integer&gt; or &lt;UTF8 string&gt;</dt>
+<dd>
+
+<p>The &quot;pss&quot; mode minimum salt length. The value can either be an integer, a string value representing a number or one of the following string values:</p>
+
+<dl>
+
+<dt id="digest-OSSL_PKEY_RSA_PSS_SALT_LEN_DIGEST">&quot;digest&quot; (<b>OSSL_PKEY_RSA_PSS_SALT_LEN_DIGEST</b>)</dt>
+<dd>
+
+<p>Use the same length as the digest size.</p>
+
+</dd>
+<dt id="max-OSSL_PKEY_RSA_PSS_SALT_LEN_MAX">&quot;max&quot; (<b>OSSL_PKEY_RSA_PSS_SALT_LEN_MAX</b>)</dt>
+<dd>
+
+<p>Use the maximum salt length.</p>
+
+</dd>
+<dt id="auto-OSSL_PKEY_RSA_PSS_SALT_LEN_AUTO">&quot;auto&quot; (<b>OSSL_PKEY_RSA_PSS_SALT_LEN_AUTO</b>)</dt>
+<dd>
+
+<p>Auto detect the salt length.</p>
+
+</dd>
+<dt id="auto-digestmax-OSSL_PKEY_RSA_PSS_SALT_LEN_AUTO_DIGEST_MAX">&quot;auto-digestmax&quot; (<b>OSSL_PKEY_RSA_PSS_SALT_LEN_AUTO_DIGEST_MAX</b>)</dt>
+<dd>
+
+<p>Auto detect the salt length when verifying. Maximize the salt length up to the digest size when signing to comply with FIPS 186-4 section 5.5.</p>
+
+</dd>
+</dl>
+
+</dd>
+</dl>
+
+<p>The OpenSSL FIPS provider also supports the following parameters:</p>
+
+<dl>
+
+<dt id="key-check-OSSL_SIGNATURE_PARAM_FIPS_KEY_CHECK-integer">&quot;key-check&quot; (<b>OSSL_SIGNATURE_PARAM_FIPS_KEY_CHECK</b>) &lt;integer&gt;</dt>
+<dd>
+
+</dd>
+<dt id="digest-check-OSSL_SIGNATURE_PARAM_FIPS_DIGEST_CHECK-integer">&quot;digest-check&quot; (<b>OSSL_SIGNATURE_PARAM_FIPS_DIGEST_CHECK</b>) &lt;integer&gt;</dt>
+<dd>
+
+</dd>
+<dt id="sign-x931-pad-check-OSSL_SIGNATURE_PARAM_FIPS_SIGN_X931_PAD_CHECK-integer">&quot;sign-x931-pad-check&quot; (<b>OSSL_SIGNATURE_PARAM_FIPS_SIGN_X931_PAD_CHECK</b>) &lt;integer&gt;</dt>
+<dd>
+
+<p>These parameters are described in <a href="../man7/provider-signature.html">provider-signature(7)</a>.</p>
+
+</dd>
+<dt id="rsa-pss-saltlen-check-OSSL_SIGNATURE_PARAM_FIPS_RSA_PSS_SALTLEN_CHECK-integer">&quot;rsa-pss-saltlen-check&quot; (<b>OSSL_SIGNATURE_PARAM_FIPS_RSA_PSS_SALTLEN_CHECK</b>) &lt;integer&gt;</dt>
+<dd>
+
+<p>The default value of 1 causes an error during signature generation or verification if salt length (<b>OSSL_SIGNATURE_PARAM_PSS_SALTLEN</b>) is not between zero and the output block size of the digest function (inclusive). Setting this to zero will ignore the error and set the approved &quot;fips-indicator&quot; to 0. This option breaks FIPS compliance if it causes the approved &quot;fips-indicator&quot; to return 0.</p>
+
+</dd>
+</dl>
+
+<p>The following signature parameters can be retrieved using EVP_PKEY_CTX_get_params().</p>
+
+<dl>
+
+<dt id="algorithm-id-OSSL_SIGNATURE_PARAM_ALGORITHM_ID-octet-string">&quot;algorithm-id&quot; (<b>OSSL_SIGNATURE_PARAM_ALGORITHM_ID</b>) &lt;octet string&gt;</dt>
+<dd>
+
+</dd>
+<dt id="fips-indicator-OSSL_SIGNATURE_PARAM_FIPS_APPROVED_INDICATOR-integer">&quot;fips-indicator&quot; (<b>OSSL_SIGNATURE_PARAM_FIPS_APPROVED_INDICATOR</b>) &lt;integer&gt;</dt>
+<dd>
+
+</dd>
+<dt id="verify-message-OSSL_SIGNATURE_PARAM_FIPS_VERIFY_MESSAGE-integer">&quot;verify-message&quot; (<b>OSSL_SIGNATURE_PARAM_FIPS_VERIFY_MESSAGE</b> &lt;integer&gt;</dt>
+<dd>
+
+<p>These common parameter are described in <a href="../man7/provider-signature.html">provider-signature(7)</a>.</p>
+
+</dd>
+<dt id="digest-OSSL_SIGNATURE_PARAM_DIGEST-UTF8-string1">&quot;digest&quot; (<b>OSSL_SIGNATURE_PARAM_DIGEST</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+</dd>
+<dt id="pad-mode-OSSL_SIGNATURE_PARAM_PAD_MODE-UTF8-string1">&quot;pad-mode&quot; (<b>OSSL_SIGNATURE_PARAM_PAD_MODE</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+</dd>
+<dt id="mgf1-digest-OSSL_SIGNATURE_PARAM_MGF1_DIGEST-UTF8-string1">&quot;mgf1-digest&quot; (<b>OSSL_SIGNATURE_PARAM_MGF1_DIGEST</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+</dd>
+<dt id="saltlen-OSSL_SIGNATURE_PARAM_PSS_SALTLEN-integer-or-UTF8-string1">&quot;saltlen&quot; (<b>OSSL_SIGNATURE_PARAM_PSS_SALTLEN</b>) &lt;integer&gt; or &lt;UTF8 string&gt;</dt>
+<dd>
+
+<p>These parameters are as described above.</p>
+
+</dd>
+</dl>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_PKEY_CTX_set_params.html">EVP_PKEY_CTX_set_params(3)</a>, <a href="../man3/EVP_PKEY_sign.html">EVP_PKEY_sign(3)</a>, <a href="../man3/EVP_PKEY_verify.html">EVP_PKEY_verify(3)</a>, <a href="../man7/provider-signature.html">provider-signature(7)</a>,</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2020-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

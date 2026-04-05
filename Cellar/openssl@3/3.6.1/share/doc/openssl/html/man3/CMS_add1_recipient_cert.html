@@ -1,0 +1,88 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>CMS_add1_recipient_cert</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>CMS_add1_recipient, CMS_add1_recipient_cert, CMS_add0_recipient_key - add recipients to a CMS enveloped data structure</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/cms.h&gt;
+
+CMS_RecipientInfo *CMS_add1_recipient(CMS_ContentInfo *cms, X509 *recip,
+                                      EVP_PKEY *originatorPrivKey,
+                                      X509 *originator, unsigned int flags);
+
+CMS_RecipientInfo *CMS_add1_recipient_cert(CMS_ContentInfo *cms,
+                                           X509 *recip, unsigned int flags);
+
+CMS_RecipientInfo *CMS_add0_recipient_key(CMS_ContentInfo *cms, int nid,
+                                          unsigned char *key, size_t keylen,
+                                          unsigned char *id, size_t idlen,
+                                          ASN1_GENERALIZEDTIME *date,
+                                          ASN1_OBJECT *otherTypeId,
+                                          ASN1_TYPE *otherType);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>CMS_add1_recipient() adds recipient <b>recip</b> and provides the originator pkey <b>originatorPrivKey</b> and originator certificate <b>originator</b> to CMS_ContentInfo. The originator-related fields are relevant only in case when the keyAgreement method of providing of the shared key is in use.</p>
+
+<p>CMS_add1_recipient_cert() adds recipient <b>recip</b> to CMS_ContentInfo enveloped data structure <b>cms</b> as a KeyTransRecipientInfo or KEMRecipientInfo structure, or as a KeyAgreeRecipientInfo structure with an ephemeral key.</p>
+
+<p>CMS_add0_recipient_key() adds symmetric key <b>key</b> of length <b>keylen</b> using wrapping algorithm <b>nid</b>, identifier <b>id</b> of length <b>idlen</b> and optional values <b>date</b>, <b>otherTypeId</b> and <b>otherType</b> to CMS_ContentInfo enveloped data structure <b>cms</b> as a KEKRecipientInfo structure.</p>
+
+<p>The CMS_ContentInfo structure should be obtained from an initial call to CMS_encrypt() with the flag <b>CMS_PARTIAL</b> set.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The main purpose of this function is to provide finer control over a CMS enveloped data structure where the simpler CMS_encrypt() function defaults are not appropriate. For example if one or more KEKRecipientInfo structures need to be added. New attributes can also be added using the returned CMS_RecipientInfo structure and the CMS attribute utility functions.</p>
+
+<p>OpenSSL will by default identify recipient certificates using issuer name and serial number. If <b>CMS_USE_KEYID</b> is set it will use the subject key identifier value instead. An error occurs if all recipient certificates do not have a subject key identifier extension.</p>
+
+<p>Currently only AES based key wrapping algorithms are supported for <b>nid</b>, specifically: NID_id_aes128_wrap, NID_id_aes192_wrap and NID_id_aes256_wrap. If <b>nid</b> is set to <b>NID_undef</b> then an AES wrap algorithm will be used consistent with <b>keylen</b>.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>CMS_add1_recipient_cert() and CMS_add0_recipient_key() return an internal pointer to the CMS_RecipientInfo structure just added or NULL if an error occurs.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>, <a href="../man3/CMS_decrypt.html">CMS_decrypt(3)</a>, <a href="../man3/CMS_final.html">CMS_final(3)</a>,</p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p><b>CMS_add1_recipient_cert</b> and <b>CMS_add0_recipient_key</b> were added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2008-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

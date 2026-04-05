@@ -1,0 +1,170 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_SIGNATURE-DSA</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Algorithm-Names">Algorithm Names</a></li>
+      <li><a href="#Signature-Parameters">Signature Parameters</a></li>
+    </ul>
+  </li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_SIGNATURE-DSA - The <b>EVP_PKEY</b> DSA signature implementation</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>Support for computing DSA signatures. The signature produced with <a href="../man3/EVP_PKEY_sign.html">EVP_PKEY_sign(3)</a> is DER encoded ASN.1 in the form described in RFC 3279, section 2.2.2. See <a href="../man7/EVP_PKEY-DSA.html">EVP_PKEY-DSA(7)</a> for information related to DSA keys.</p>
+
+<p>As part of FIPS 140-3 DSA is not longer FIPS approved for key generation and signature validation, but is still allowed for signature verification.</p>
+
+<h2 id="Algorithm-Names">Algorithm Names</h2>
+
+<p>In this list, names are grouped together to signify that they are the same algorithm having multiple names. This also includes the OID in canonical decimal form (which means that they are possible to fetch if the caller has a mere OID which came out in this form after a call to <a href="../man3/OBJ_obj2txt.html">OBJ_obj2txt(3)</a>).</p>
+
+<dl>
+
+<dt id="DSA-dsaEncryption-1.2.840.10040.4.1">&quot;DSA&quot;, &quot;dsaEncryption&quot;, &quot;1.2.840.10040.4.1&quot;</dt>
+<dd>
+
+<p>The base signature algorithm, supported explicitly fetched with <a href="../man3/EVP_PKEY_sign_init_ex2.html">EVP_PKEY_sign_init_ex2(3)</a>, and implicitly fetched (through <a href="../man7/EVP_PKEY-EC.html">EC keys</a>) with <a href="../man3/EVP_DigestSignInit.html">EVP_DigestSignInit(3)</a> and <a href="../man3/EVP_DigestVerifyInit.html">EVP_DigestVerifyInit(3)</a>.</p>
+
+<p>It can&#39;t be used with <a href="../man3/EVP_PKEY_sign_message_init.html">EVP_PKEY_sign_message_init(3)</a></p>
+
+</dd>
+<dt id="DSA-SHA1-DSA-SHA-1-dsaWithSHA1-1.2.840.10040.4.3">&quot;DSA-SHA1&quot;, &quot;DSA-SHA-1&quot;, &quot;dsaWithSHA1&quot;, &quot;1.2.840.10040.4.3&quot;</dt>
+<dd>
+
+</dd>
+<dt id="DSA-SHA2-224-DSA-SHA224-dsa_with_SHA224-2.16.840.1.101.3.4.3.1">&quot;DSA-SHA2-224&quot;, &quot;DSA-SHA224&quot;, &quot;dsa_with_SHA224&quot;, &quot;2.16.840.1.101.3.4.3.1&quot;</dt>
+<dd>
+
+</dd>
+<dt id="DSA-SHA2-256-DSA-SHA256-dsa_with_SHA256-2.16.840.1.101.3.4.3.2">&quot;DSA-SHA2-256&quot;, &quot;DSA-SHA256&quot;, &quot;dsa_with_SHA256&quot;, &quot;2.16.840.1.101.3.4.3.2&quot;</dt>
+<dd>
+
+</dd>
+<dt id="DSA-SHA2-384-DSA-SHA384-dsa_with_SHA384-id-dsa-with-sha384-1.2.840.1.101.3.4.3.3">&quot;DSA-SHA2-384&quot;, &quot;DSA-SHA384&quot;, &quot;dsa_with_SHA384&quot;, &quot;id-dsa-with-sha384&quot;, &quot;1.2.840.1.101.3.4.3.3&quot;</dt>
+<dd>
+
+</dd>
+<dt id="DSA-SHA2-512-DSA-SHA512-dsa_with_SHA512-id-dsa-with-sha512-1.2.840.1.101.3.4.3.4">&quot;DSA-SHA2-512&quot;, &quot;DSA-SHA512&quot;, &quot;dsa_with_SHA512&quot;, &quot;id-dsa-with-sha512&quot;, &quot;1.2.840.1.101.3.4.3.4&quot;</dt>
+<dd>
+
+</dd>
+<dt id="DSA-SHA3-224-dsa_with_SHA3-224-id-dsa-with-sha3-224-2.16.840.1.101.3.4.3.5">&quot;DSA-SHA3-224&quot;, &quot;dsa_with_SHA3-224&quot;, &quot;id-dsa-with-sha3-224&quot;, &quot;2.16.840.1.101.3.4.3.5&quot;</dt>
+<dd>
+
+</dd>
+<dt id="DSA-SHA3-256-dsa_with_SHA3-256-id-dsa-with-sha3-256-2.16.840.1.101.3.4.3.6">&quot;DSA-SHA3-256&quot;, &quot;dsa_with_SHA3-256&quot;, &quot;id-dsa-with-sha3-256&quot;, &quot;2.16.840.1.101.3.4.3.6&quot;</dt>
+<dd>
+
+</dd>
+<dt id="DSA-SHA3-384-dsa_with_SHA3-384-id-dsa-with-sha3-384-2.16.840.1.101.3.4.3.7">&quot;DSA-SHA3-384&quot;, &quot;dsa_with_SHA3-384&quot;, &quot;id-dsa-with-sha3-384&quot;, &quot;2.16.840.1.101.3.4.3.7&quot;</dt>
+<dd>
+
+</dd>
+<dt id="DSA-SHA3-512-dsa_with_SHA3-512-id-dsa-with-sha3-512-2.16.840.1.101.3.4.3.8">&quot;DSA-SHA3-512&quot;, &quot;dsa_with_SHA3-512&quot;, &quot;id-dsa-with-sha3-512&quot;, &quot;2.16.840.1.101.3.4.3.8&quot;</dt>
+<dd>
+
+<p>DSA signature schemes with diverse message digest algorithms. They are all supported explicitly fetched with <a href="../man3/EVP_PKEY_sign_init_ex2.html">EVP_PKEY_sign_init_ex2(3)</a> and <a href="../man3/EVP_PKEY_sign_message_init.html">EVP_PKEY_sign_message_init(3)</a>.</p>
+
+</dd>
+</dl>
+
+<h2 id="Signature-Parameters">Signature Parameters</h2>
+
+<p>The following signature parameters can be set using EVP_PKEY_CTX_set_params(). This may be called after EVP_PKEY_sign_init() or EVP_PKEY_verify_init(), and before calling EVP_PKEY_sign() or EVP_PKEY_verify(). They may also be set using EVP_PKEY_sign_init_ex() or EVP_PKEY_verify_init_ex().</p>
+
+<dl>
+
+<dt id="digest-OSSL_SIGNATURE_PARAM_DIGEST-UTF8-string">&quot;digest&quot; (<b>OSSL_SIGNATURE_PARAM_DIGEST</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+</dd>
+<dt id="properties-OSSL_SIGNATURE_PARAM_PROPERTIES-UTF8-string">&quot;properties&quot; (<b>OSSL_SIGNATURE_PARAM_PROPERTIES</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+<p>These two are not supported with the DSA signature schemes that already include a message digest algorithm, See <a href="#Algorithm-Names">&quot;Algorithm Names&quot;</a> above.</p>
+
+</dd>
+<dt id="nonce-type-OSSL_SIGNATURE_PARAM_NONCE_TYPE-unsigned-integer">&quot;nonce-type&quot; (<b>OSSL_SIGNATURE_PARAM_NONCE_TYPE</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+</dd>
+<dt id="key-check-OSSL_SIGNATURE_PARAM_FIPS_KEY_CHECK-integer">&quot;key-check&quot; (<b>OSSL_SIGNATURE_PARAM_FIPS_KEY_CHECK</b>) &lt;integer&gt;</dt>
+<dd>
+
+</dd>
+<dt id="digest-check-OSSL_SIGNATURE_PARAM_FIPS_DIGEST_CHECK-integer">&quot;digest-check&quot; (<b>OSSL_SIGNATURE_PARAM_FIPS_DIGEST_CHECK</b>) &lt;integer&gt;</dt>
+<dd>
+
+</dd>
+<dt id="sign-check-OSSL_SIGNATURE_PARAM_FIPS_SIGN_CHECK-int">&quot;sign-check&quot; (<b>OSSL_SIGNATURE_PARAM_FIPS_SIGN_CHECK</b>) &lt;int&gt;</dt>
+<dd>
+
+<p>The settable parameters are described in <a href="../man7/provider-signature.html">provider-signature(7)</a>.</p>
+
+</dd>
+</dl>
+
+<p>The following signature parameters can be retrieved using EVP_PKEY_CTX_get_params().</p>
+
+<dl>
+
+<dt id="algorithm-id-OSSL_SIGNATURE_PARAM_ALGORITHM_ID-octet-string">&quot;algorithm-id&quot; (<b>OSSL_SIGNATURE_PARAM_ALGORITHM_ID</b>) &lt;octet string&gt;</dt>
+<dd>
+
+</dd>
+<dt id="digest-OSSL_SIGNATURE_PARAM_DIGEST-UTF8-string1">&quot;digest&quot; (<b>OSSL_SIGNATURE_PARAM_DIGEST</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+</dd>
+<dt id="nonce-type-OSSL_SIGNATURE_PARAM_NONCE_TYPE-unsigned-integer1">&quot;nonce-type&quot; (<b>OSSL_SIGNATURE_PARAM_NONCE_TYPE</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+</dd>
+<dt id="fips-indicator-OSSL_SIGNATURE_PARAM_FIPS_APPROVED_INDICATOR-integer">&quot;fips-indicator&quot; (<b>OSSL_SIGNATURE_PARAM_FIPS_APPROVED_INDICATOR</b>) &lt;integer&gt;</dt>
+<dd>
+
+<p>The gettable parameters are described in <a href="../man7/provider-signature.html">provider-signature(7)</a>.</p>
+
+</dd>
+</dl>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_PKEY_CTX_set_params.html">EVP_PKEY_CTX_set_params(3)</a>, <a href="../man3/EVP_PKEY_sign.html">EVP_PKEY_sign(3)</a>, <a href="../man3/EVP_PKEY_verify.html">EVP_PKEY_verify(3)</a>, <a href="../man7/provider-signature.html">provider-signature(7)</a>,</p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>DSA Key generation and signature generation are no longer FIPS approved in OpenSSL 3.4. See <a href="../man7/fips_module.html">&quot;FIPS indicators&quot; in fips_module(7)</a> for more information.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2020-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

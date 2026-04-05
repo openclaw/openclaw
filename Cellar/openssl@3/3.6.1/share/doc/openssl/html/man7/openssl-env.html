@@ -1,0 +1,384 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>openssl-env</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>openssl-env - OpenSSL environment variables</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The OpenSSL libraries and commands use environment variables to override compiled-in defaults for various aspects of their behaviour. To avoid security risks, the environment is not consulted for security-sensitive environment variables when the executable is set-user-ID or set-group-ID.</p>
+
+<dl>
+
+<dt id="CTLOG_FILE"><b>CTLOG_FILE</b></dt>
+<dd>
+
+<p>Specifies the path to a certificate transparency log list. See <a href="../man3/CTLOG_STORE_new.html">CTLOG_STORE_new(3)</a>.</p>
+
+<p>This variable is considered a security-sensitive environment variable.</p>
+
+</dd>
+<dt id="HOME-SYSTEMROOT-USERPROFILE"><b>HOME</b>, <b>SYSTEMROOT</b>, <b>USERPROFILE</b></dt>
+<dd>
+
+<p>Path which <a href="../man3/RAND_file_name.html">RAND_file_name(3)</a> uses as a directory for the random seed file name when the <b>RANDFILE</b> environment variable is not set. <b>HOME</b> is the only variable that is considered on Unix-like systems; <b>USERPROFILE</b> and <b>SYSTEMROOT</b> are used as fallbacks on Windows platforms.</p>
+
+<p><b>HOME</b> variable is considered a security-sensitive environment variable.</p>
+
+</dd>
+<dt id="HTTPS_PROXY-HTTP_PROXY-NO_PROXY-https_proxy-http_proxy-no_proxy"><b>HTTPS_PROXY</b>, <b>HTTP_PROXY</b>, <b>NO_PROXY</b>, <b>https_proxy</b>, <b>http_proxy</b>, <b>no_proxy</b></dt>
+<dd>
+
+<p>Specify a proxy hostname. See <a href="../man3/OSSL_HTTP_parse_url.html">OSSL_HTTP_parse_url(3)</a>.</p>
+
+<p>These variables are considered security-sensitive environment variables.</p>
+
+</dd>
+<dt id="LEGACY_GOST_PKCS12"><b>LEGACY_GOST_PKCS12</b></dt>
+<dd>
+
+<p>Affects the way MAC is generated in PKCS#12 containers for GOST algorithms. See <a href="../man3/PKCS12_gen_mac.html">PKCS12_gen_mac(3)</a>.</p>
+
+<p>This variable is considered a security-sensitive environment variable.</p>
+
+</dd>
+<dt id="OPENSSL"><b>OPENSSL</b></dt>
+<dd>
+
+<p>Specifies the path to the <b>openssl</b> executable. Used by the <b>rehash</b> script (see <a href="../man1/openssl-rehash.html">&quot;Script Configuration&quot; in openssl-rehash(1)</a>) and by the <b>CA.pl</b> script (see <a href="../man1/CA.pl.html">&quot;NOTES&quot; in CA.pl(1)</a></p>
+
+<p>This variable is not considered security-sensitive.</p>
+
+</dd>
+<dt id="OPENSSL_CONF-OPENSSL_CONF_INCLUDE"><b>OPENSSL_CONF</b>, <b>OPENSSL_CONF_INCLUDE</b></dt>
+<dd>
+
+<p>Specifies the path to a configuration file and the directory for included files. See <a href="../man5/config.html">config(5)</a>.</p>
+
+<p>These variables are considered security-sensitive environment variables.</p>
+
+</dd>
+<dt id="OPENSSL_CONFIG"><b>OPENSSL_CONFIG</b></dt>
+<dd>
+
+<p>Specifies a configuration option and filename for the <b>req</b> and <b>ca</b> commands invoked by the <b>CA.pl</b> script. See <a href="../man1/CA.pl.html">CA.pl(1)</a>.</p>
+
+<p>This variable is not considered security-sensitive.</p>
+
+</dd>
+<dt id="OPENSSL_DEBUG_DECC_INIT"><b>OPENSSL_DEBUG_DECC_INIT</b></dt>
+<dd>
+
+<p>On VMS only: if this variable is set, enables verbose output of parsing of <code>DECC$*</code> logical names, that contain C RTL features, during library initialisation (<code>LIB$INITIALIZE</code>). If the value of the variable is more than 1, outputs information about every processed feature.</p>
+
+<p>This variable is not considered security-sensitive.</p>
+
+</dd>
+<dt id="OPENSSL_ENGINES"><b>OPENSSL_ENGINES</b></dt>
+<dd>
+
+<p>Specifies the directory from which dynamic engines are loaded. See <a href="../man1/openssl-engine.html">openssl-engine(1)</a>.</p>
+
+<p>This variable is considered a security-sensitive environment variable.</p>
+
+</dd>
+<dt id="OPENSSL_MALLOC_FAILURES-OPENSSL_MALLOC_FD-OPENSSL_MALLOC_SEED"><b>OPENSSL_MALLOC_FAILURES</b>, <b>OPENSSL_MALLOC_FD</b>, <b>OPENSSL_MALLOC_SEED</b></dt>
+<dd>
+
+<p>If built with debugging, this allows memory allocation to fail. See <a href="../man3/OPENSSL_malloc.html">OPENSSL_malloc(3)</a>.</p>
+
+<p>These variables are not considered security-sensitive.</p>
+
+</dd>
+<dt id="OPENSSL_MODULES"><b>OPENSSL_MODULES</b></dt>
+<dd>
+
+<p>Specifies the directory from which cryptographic providers are loaded. Equivalently, the generic <b>-provider-path</b> command-line option may be used.</p>
+
+<p>This variable is considered a security-sensitive environment variable.</p>
+
+</dd>
+<dt id="OPENSSL_SEC_MEM"><b>OPENSSL_SEC_MEM</b></dt>
+<dd>
+
+<p>Initializes the secure memory at the beginning of the application which makes the secure memory calls not to fall back to regular memory calls. The value indicates the <b>size</b> parameter in bytes. The value can be expressed in binary, octal, decimal and hexadecimal. For formatting see <b>strtol(3)</b>. For further restrictions see <a href="../man3/CRYPTO_secure_malloc_init.html">CRYPTO_secure_malloc_init(3)</a>.</p>
+
+<p>This variable is not considered security-sensitive.</p>
+
+</dd>
+<dt id="OPENSSL_SEC_MEM_MINSIZE"><b>OPENSSL_SEC_MEM_MINSIZE</b></dt>
+<dd>
+
+<p>An optional variable used with <b>OPENSSL_SEC_MEM</b>. The value indicates <b>minsize</b> parameter in bytes. The same formatting applies as above. Default is 0. For more info see <a href="../man3/CRYPTO_secure_malloc_init.html">CRYPTO_secure_malloc_init(3)</a>.</p>
+
+<p>This variable is not considered security-sensitive.</p>
+
+</dd>
+<dt id="OPENSSL_TEST_LIBCTX"><b>OPENSSL_TEST_LIBCTX</b></dt>
+<dd>
+
+<p>This test-only environment variable, that is recognised by the <a href="../man1/openssl.html">openssl(1)</a> command, when is set to &quot;1&quot;, leads to creation of a nondefault library context by the command, for which the <b>-config</b> option then takes effect.</p>
+
+<p>This variable is not considered security-sensitive.</p>
+
+</dd>
+<dt id="OPENSSL_TRACE"><b>OPENSSL_TRACE</b></dt>
+<dd>
+
+<p>By default the OpenSSL trace feature is disabled statically. To enable it, OpenSSL must be built with tracing support, which may be configured like this: <code>./config enable-trace</code></p>
+
+<p>Unless OpenSSL tracing support is generally disabled, enable trace output of specific parts of OpenSSL libraries, by name. This output usually makes sense only if you know OpenSSL internals well.</p>
+
+<p>The value of this environment variable is a comma-separated list of names, with the following available:</p>
+
+<dl>
+
+<dt id="ALL"><b>ALL</b></dt>
+<dd>
+
+<p>Traces everything.</p>
+
+</dd>
+<dt id="BN_CTX"><b>BN_CTX</b></dt>
+<dd>
+
+<p>Traces BIGNUM context operations.</p>
+
+</dd>
+<dt id="CMP"><b>CMP</b></dt>
+<dd>
+
+<p>Traces CMP client and server activity.</p>
+
+</dd>
+<dt id="CONF"><b>CONF</b></dt>
+<dd>
+
+<p>Show details about provider and engine configuration.</p>
+
+</dd>
+<dt id="DECODER"><b>DECODER</b></dt>
+<dd>
+
+<p>Traces decoder operations.</p>
+
+</dd>
+<dt id="ENCODER"><b>ENCODER</b></dt>
+<dd>
+
+<p>Traces encoder operations.</p>
+
+</dd>
+<dt id="ENGINE_REF_COUNT"><b>ENGINE_REF_COUNT</b></dt>
+<dd>
+
+<p>Reference counts in the ENGINE structure will be monitored with a line of generated for each change.</p>
+
+</dd>
+<dt id="ENGINE_TABLE"><b>ENGINE_TABLE</b></dt>
+<dd>
+
+<p>The function that is used by RSA, DSA (etc) code to select registered ENGINEs, cache defaults and functional references (etc), will generate debugging summaries.</p>
+
+</dd>
+<dt id="HTTP"><b>HTTP</b></dt>
+<dd>
+
+<p>Traces the HTTP client and server, such as messages being sent and received.</p>
+
+</dd>
+<dt id="INIT"><b>INIT</b></dt>
+<dd>
+
+<p>Traces OpenSSL library initialization and cleanup.</p>
+
+</dd>
+<dt id="PKCS12_DECRYPT"><b>PKCS12_DECRYPT</b></dt>
+<dd>
+
+<p>Traces PKCS#12 decryption.</p>
+
+</dd>
+<dt id="PKCS12_KEYGEN"><b>PKCS12_KEYGEN</b></dt>
+<dd>
+
+<p>Traces PKCS#12 key generation.</p>
+
+</dd>
+<dt id="PKCS5V2"><b>PKCS5V2</b></dt>
+<dd>
+
+<p>Traces PKCS#5 v2 key generation.</p>
+
+</dd>
+<dt id="PROVIDER"><b>PROVIDER</b></dt>
+<dd>
+
+<p>Traces various operations that are performed on OpenSSL providers during their handling by the library (see <a href="../man7/provider.html">provider(7)</a>), such as initialisation, tear down, parameter and capability retrieval, self-test, and so on.</p>
+
+</dd>
+<dt id="QUERY"><b>QUERY</b></dt>
+<dd>
+
+<p>Traces operation related to addition, removal, and fetching of methods in the so-called method store, that holds pointers to functions provided by various providers.</p>
+
+</dd>
+<dt id="REF_COUNT"><b>REF_COUNT</b></dt>
+<dd>
+
+<p>Traces reference count changes in various structures, including <code>BIO</code>, <code>DH</code>, <code>DSA</code>, <code>EC_KEY</code>, <code>ECX_KEY</code>, <code>EVP_PKEY</code>, <code>EVP_SKEY</code>, <code>RSA</code>, <code>SSL</code>, <code>SSL_CTX</code>, <code>SSL_SESSION</code>, <code>X509_CRL</code>, <code>X509_STORE</code>, <code>X509</code>, and some others.</p>
+
+</dd>
+<dt id="STORE"><b>STORE</b></dt>
+<dd>
+
+<p>Traces STORE operations.</p>
+
+</dd>
+<dt id="TLS"><b>TLS</b></dt>
+<dd>
+
+<p>Traces the TLS/SSL protocol.</p>
+
+</dd>
+<dt id="TLS_CIPHER"><b>TLS_CIPHER</b></dt>
+<dd>
+
+<p>Traces the ciphers used by the TLS/SSL protocol.</p>
+
+</dd>
+<dt id="TRACE"><b>TRACE</b></dt>
+<dd>
+
+<p>Traces the OpenSSL trace API itself.</p>
+
+</dd>
+<dt id="X509V3_POLICY"><b>X509V3_POLICY</b></dt>
+<dd>
+
+<p>Generates the complete policy tree at various points during X.509 v3 policy evaluation.</p>
+
+</dd>
+</dl>
+
+<p>This variable is not considered security-sensitive.</p>
+
+</dd>
+<dt id="OPENSSL_WIN32_UTF8"><b>OPENSSL_WIN32_UTF8</b></dt>
+<dd>
+
+<p>If set, then <a href="../man3/UI_OpenSSL.html">UI_OpenSSL(3)</a> returns UTF-8 encoded strings, rather than ones encoded in the current code page, and the <a href="../man1/openssl.html">openssl(1)</a> program also transcodes the command-line parameters from the current code page to UTF-8. This environment variable is only checked on Microsoft Windows platforms.</p>
+
+</dd>
+<dt id="OPENSSL_armcap-OPENSSL_ia32cap-OPENSSL_ppccap-OPENSSL_riscvcap-OPENSSL_s390xcap-OPENSSL_sparcv9cap"><b>OPENSSL_armcap</b>, <b>OPENSSL_ia32cap</b>, <b>OPENSSL_ppccap</b>, <b>OPENSSL_riscvcap</b>, <b>OPENSSL_s390xcap</b>, <b>OPENSSL_sparcv9cap</b></dt>
+<dd>
+
+<p>OpenSSL supports a number of different algorithm implementations for various machines and, by default, it determines which to use based on the processor capabilities and run time feature enquiry. These environment variables can be used to exert more control over this selection process. See <a href="../man3/OPENSSL_ia32cap.html">OPENSSL_ia32cap(3)</a>, <a href="../man3/OPENSSL_ppccap.html">OPENSSL_ppccap(3)</a>, <a href="../man3/OPENSSL_riscvcap.html">OPENSSL_riscvcap(3)</a>, and <a href="../man3/OPENSSL_s390xcap.html">OPENSSL_s390xcap(3)</a>.</p>
+
+<p>These variables are not considered security-sensitive.</p>
+
+</dd>
+<dt id="OSSL_QFILTER"><b>OSSL_QFILTER</b></dt>
+<dd>
+
+<p>Used to set a QUIC qlog filter specification. See <a href="../man7/openssl-qlog.html">openssl-qlog(7)</a>.</p>
+
+<p>This variable is considered a security-sensitive environment variable.</p>
+
+</dd>
+<dt id="QLOGDIR"><b>QLOGDIR</b></dt>
+<dd>
+
+<p>Specifies a QUIC qlog output directory. See <a href="../man7/openssl-qlog.html">openssl-qlog(7)</a>.</p>
+
+<p>This variable is considered a security-sensitive environment variable.</p>
+
+</dd>
+<dt id="RANDFILE"><b>RANDFILE</b></dt>
+<dd>
+
+<p>The state file for the random number generator. This should not be needed in normal use. See <a href="../man3/RAND_load_file.html">RAND_load_file(3)</a>.</p>
+
+<p>This variable is considered a security-sensitive environment variable.</p>
+
+</dd>
+<dt id="SSLKEYLOGFILE"><b>SSLKEYLOGFILE</b></dt>
+<dd>
+
+<p>Used to produce the standard format output file for SSL key logging. Optionally set this variable to a filename to log all secrets produced by SSL connections. Note, use of the environment variable is predicated on configuring OpenSSL at build time with the enable-sslkeylog feature. The file format standard can be found at <a href="https://datatracker.ietf.org/doc/draft-ietf-tls-keylogfile/">https://datatracker.ietf.org/doc/draft-ietf-tls-keylogfile/</a>. Note: the use of <b>SSLKEYLOGFILE</b> poses an explicit security risk. By recording the exchanged keys during an SSL session, it allows any available party with read access to the file to decrypt application traffic sent over that session. Use of this feature should be restricted to test and debug environments only.</p>
+
+<p>This variable is considered a security-sensitive environment variable.</p>
+
+</dd>
+<dt id="SSL_CERT_DIR-SSL_CERT_FILE"><b>SSL_CERT_DIR</b>, <b>SSL_CERT_FILE</b></dt>
+<dd>
+
+<p>Specify the default directory or file containing CA certificates. See <a href="../man3/SSL_CTX_load_verify_locations.html">SSL_CTX_load_verify_locations(3)</a>.</p>
+
+<p>These variables are considered security-sensitive environment variables, except in <a href="../man1/openssl-rehash.html">openssl-rehash(1)</a>, where <b>SSL_CERT_DIR</b> is not considered security-sensitive.</p>
+
+</dd>
+<dt id="SSL_CIPHER"><b>SSL_CIPHER</b></dt>
+<dd>
+
+<p>Used by <a href="../man1/openssl-s_time.html">openssl-s_time(1)</a> in case <b>-cipher</b> option (that allows modifying TLSv1.2 and below cipher list sent by the client) is not provided, for specification of the aforementioned ciphers.</p>
+
+<p>This variable is not considered security-sensitive.</p>
+
+</dd>
+<dt id="TSGET"><b>TSGET</b></dt>
+<dd>
+
+<p>Additional arguments for the <a href="../man1/tsget.html">tsget(1)</a> command.</p>
+
+<p>This variable is not considered security-sensitive.</p>
+
+</dd>
+</dl>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>This section contains environment variables that are no longer considered by the OpenSSL libraries and commands.</p>
+
+<dl>
+
+<dt id="HARNESS_OSSL_PREFIX"><b>HARNESS_OSSL_PREFIX</b></dt>
+<dd>
+
+<p>This environment variable, existed in OpenSSL versions from 1.1.1 up to 3.5, allowed specification of a prefix prepended to each line sent to the <i>stdout</i> by <a href="../man1/openssl.html">openssl(1)</a>, used by the test harness to avoid commingling the command under test output with the output for the TAP consumer.</p>
+
+<p>This variable was not considered security-sensitive.</p>
+
+</dd>
+</dl>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2019-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,80 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>PEM_read_bio_ex</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>PEM_read_bio_ex, PEM_FLAG_SECURE, PEM_FLAG_EAY_COMPATIBLE, PEM_FLAG_ONLY_B64 - read PEM format files with custom processing</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/pem.h&gt;
+
+#define PEM_FLAG_SECURE             0x1
+#define PEM_FLAG_EAY_COMPATIBLE     0x2
+#define PEM_FLAG_ONLY_B64           0x4
+int PEM_read_bio_ex(BIO *in, char **name, char **header,
+                    unsigned char **data, long *len, unsigned int flags);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>PEM_read_bio_ex() reads in PEM formatted data from an input BIO, outputting the name of the type of contained data, the header information regarding the possibly encrypted data, and the binary data payload (after base64 decoding). It should generally only be used to implement PEM_read_bio_-family functions for specific data types or other usage, but is exposed to allow greater flexibility over how processing is performed, if needed.</p>
+
+<p>If PEM_FLAG_SECURE is set, the intermediate buffers used to read in lines of input are allocated from the secure heap.</p>
+
+<p>If PEM_FLAG_EAY_COMPATIBLE is set, a simple algorithm is used to remove whitespace and control characters from the end of each line, so as to be compatible with the historical behavior of PEM_read_bio().</p>
+
+<p>If PEM_FLAG_ONLY_B64 is set, all characters are required to be valid base64 characters (or newlines); non-base64 characters are treated as end of input.</p>
+
+<p>If neither PEM_FLAG_EAY_COMPATIBLE or PEM_FLAG_ONLY_B64 is set, control characters are ignored.</p>
+
+<p>If both PEM_FLAG_EAY_COMPATIBLE and PEM_FLAG_ONLY_B64 are set, an error is returned; these options are not compatible with each other.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The caller must release the storage allocated for *name, *header, and *data. If PEM_FLAG_SECURE was set, use OPENSSL_secure_free(); otherwise, OPENSSL_free() is used.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>PEM_read_bio_ex() returns 1 for success or 0 for failure.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/PEM_bytes_read_bio.html">PEM_bytes_read_bio(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The PEM_read_bio_ex() function was added in OpenSSL 1.1.1.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2017 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,91 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>DH_set_method</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>DH_set_default_method, DH_get_default_method, DH_set_method, DH_new_method, DH_OpenSSL - select DH method</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/dh.h&gt;</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>void DH_set_default_method(const DH_METHOD *meth);
+
+const DH_METHOD *DH_get_default_method(void);
+
+int DH_set_method(DH *dh, const DH_METHOD *meth);
+
+DH *DH_new_method(ENGINE *engine);
+
+const DH_METHOD *DH_OpenSSL(void);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>All of the functions described on this page are deprecated. Applications should instead use the provider APIs.</p>
+
+<p>A <b>DH_METHOD</b> specifies the functions that OpenSSL uses for Diffie-Hellman operations. By modifying the method, alternative implementations such as hardware accelerators may be used. IMPORTANT: See the NOTES section for important information about how these DH API functions are affected by the use of <b>ENGINE</b> API calls.</p>
+
+<p>Initially, the default DH_METHOD is the OpenSSL internal implementation, as returned by DH_OpenSSL().</p>
+
+<p>DH_set_default_method() makes <b>meth</b> the default method for all DH structures created later. <b>NB</b>: This is true only whilst no ENGINE has been set as a default for DH, so this function is no longer recommended. This function is not thread-safe and should not be called at the same time as other OpenSSL functions.</p>
+
+<p>DH_get_default_method() returns a pointer to the current default DH_METHOD. However, the meaningfulness of this result is dependent on whether the ENGINE API is being used, so this function is no longer recommended.</p>
+
+<p>DH_set_method() selects <b>meth</b> to perform all operations using the key <b>dh</b>. This will replace the DH_METHOD used by the DH key and if the previous method was supplied by an ENGINE, the handle to that ENGINE will be released during the change. It is possible to have DH keys that only work with certain DH_METHOD implementations (e.g. from an ENGINE module that supports embedded hardware-protected keys), and in such cases attempting to change the DH_METHOD for the key can have unexpected results.</p>
+
+<p>DH_new_method() allocates and initializes a DH structure so that <b>engine</b> will be used for the DH operations. If <b>engine</b> is NULL, the default ENGINE for DH operations is used, and if no default ENGINE is set, the DH_METHOD controlled by DH_set_default_method() is used.</p>
+
+<p>A new DH_METHOD object may be constructed using DH_meth_new() (see <a href="../man3/DH_meth_new.html">DH_meth_new(3)</a>).</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>DH_OpenSSL() and DH_get_default_method() return pointers to the respective <b>DH_METHOD</b>s.</p>
+
+<p>DH_set_default_method() returns no value.</p>
+
+<p>DH_set_method() returns nonzero if the provided <b>meth</b> was successfully set as the method for <b>dh</b> (including unloading the ENGINE handle if the previous method was supplied by an ENGINE).</p>
+
+<p>DH_new_method() returns NULL and sets an error code that can be obtained by <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a> if the allocation fails. Otherwise it returns a pointer to the newly allocated structure.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/DH_new.html">DH_new(3)</a>, <a href="../man3/DH_new.html">DH_new(3)</a>, <a href="../man3/DH_meth_new.html">DH_meth_new(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>All of these functions were deprecated in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2020 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

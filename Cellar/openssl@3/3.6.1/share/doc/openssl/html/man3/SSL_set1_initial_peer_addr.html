@@ -1,0 +1,67 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_set1_initial_peer_addr</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_set1_initial_peer_addr - set the initial peer address for a QUIC connection</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+int SSL_set1_initial_peer_addr(SSL *s, const BIO_ADDR *addr);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_set1_initial_peer_addr() sets the initial destination peer address to be used for the purposes of establishing a QUIC connection in client mode. This function can be used only on a QUIC connection SSL object, and can be used only before a connection attempt is first made. <i>addr</i> must point to a <b>BIO_ADDR</b> representing a UDP destination address of the server to connect to.</p>
+
+<p>Where a QUIC connection object is provided with a write BIO which supports the <b>BIO_CTRL_DGRAM_GET_PEER</b> control (for example, <b>BIO_s_dgram</b>), the initial destination peer address can be detected automatically; if <b>BIO_CTRL_DGRAM_GET_PEER</b> returns a valid (non-<b>AF_UNSPEC</b>) peer address and no valid peer address has yet been set, this will be set automatically as the initial peer address. This behaviour can be overridden by calling SSL_set1_initial_peer_addr() with a valid peer address explicitly.</p>
+
+<p>The destination address used by QUIC may change over time in response to connection events, such as connection migration (where supported). SSL_set1_initial_peer_addr() configures the destination address used for initial connection establishment, and does not confer any guarantee about the destination address being used for communication at any later time in the connection lifecycle.</p>
+
+<p>This function makes a copy of the address passed by the caller; the <b>BIO_ADDR</b> structure pointed to by <i>addr</i> may be freed by the caller after this function returns.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>Returns 1 on success and 0 on failure.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/BIO_ADDR.html">BIO_ADDR(3)</a>, <a href="../man7/ssl.html">ssl(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The SSL_set1_initial_peer_addr() function was added in OpenSSL 3.2.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2022-2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

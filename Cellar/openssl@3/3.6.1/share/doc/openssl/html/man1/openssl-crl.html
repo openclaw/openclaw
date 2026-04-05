@@ -1,0 +1,229 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>openssl-crl</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#OPTIONS">OPTIONS</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#BUGS">BUGS</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>openssl-crl - CRL command</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<p><b>openssl</b> <b>crl</b> [<b>-help</b>] [<b>-inform</b> <b>DER</b>|<b>PEM</b>] [<b>-outform</b> <b>DER</b>|<b>PEM</b>] [<b>-key</b> <i>filename</i>] [<b>-keyform</b> <b>DER</b>|<b>PEM</b>|<b>P12</b>] [<b>-dateopt</b>] [<b>-text</b>] [<b>-in</b> <i>filename</i>] [<b>-out</b> <i>filename</i>] [<b>-gendelta</b> <i>filename</i>] [<b>-badsig</b>] [<b>-verify</b>] [<b>-noout</b>] [<b>-hash</b>] [<b>-hash_old</b>] [<b>-fingerprint</b>] [<b>-crlnumber</b>] [<b>-issuer</b>] [<b>-lastupdate</b>] [<b>-nextupdate</b>] [<b>-nameopt</b> <i>option</i>] [<b>-CAfile</b> <i>file</i>] [<b>-no-CAfile</b>] [<b>-CApath</b> <i>dir</i>] [<b>-no-CApath</b>] [<b>-CAstore</b> <i>uri</i>] [<b>-no-CAstore</b>] [<b>-provider</b> <i>name</i>] [<b>-provider-path</b> <i>path</i>] [<b>-provparam</b> <i>[name:]key=value</i>] [<b>-propquery</b> <i>propq</i>]</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>This command processes CRL files in DER or PEM format.</p>
+
+<h1 id="OPTIONS">OPTIONS</h1>
+
+<dl>
+
+<dt id="help"><b>-help</b></dt>
+<dd>
+
+<p>Print out a usage message.</p>
+
+</dd>
+<dt id="inform-DER-PEM"><b>-inform</b> <b>DER</b>|<b>PEM</b></dt>
+<dd>
+
+<p>The CRL input format; unspecified by default. See <a href="../man1/openssl-format-options.html">openssl-format-options(1)</a> for details.</p>
+
+</dd>
+<dt id="outform-DER-PEM"><b>-outform</b> <b>DER</b>|<b>PEM</b></dt>
+<dd>
+
+<p>The CRL output format; the default is <b>PEM</b>. See <a href="../man1/openssl-format-options.html">openssl-format-options(1)</a> for details.</p>
+
+</dd>
+<dt id="key-filename"><b>-key</b> <i>filename</i></dt>
+<dd>
+
+<p>The private key to be used to sign the CRL.</p>
+
+</dd>
+<dt id="keyform-DER-PEM-P12"><b>-keyform</b> <b>DER</b>|<b>PEM</b>|<b>P12</b></dt>
+<dd>
+
+<p>The format of the private key file; unspecified by default. See <a href="../man1/openssl-format-options.html">openssl-format-options(1)</a> for details.</p>
+
+</dd>
+<dt id="in-filename"><b>-in</b> <i>filename</i></dt>
+<dd>
+
+<p>This specifies the input filename to read from or standard input if this option is not specified.</p>
+
+</dd>
+<dt id="out-filename"><b>-out</b> <i>filename</i></dt>
+<dd>
+
+<p>Specifies the output filename to write to or standard output by default.</p>
+
+</dd>
+<dt id="gendelta-filename"><b>-gendelta</b> <i>filename</i></dt>
+<dd>
+
+<p>Output a comparison of the main CRL and the one specified here.</p>
+
+</dd>
+<dt id="badsig"><b>-badsig</b></dt>
+<dd>
+
+<p>Corrupt the signature before writing it; this can be useful for testing.</p>
+
+</dd>
+<dt id="dateopt"><b>-dateopt</b></dt>
+<dd>
+
+<p>Specify the date output format. Values are: rfc_822 and iso_8601. Defaults to rfc_822.</p>
+
+</dd>
+<dt id="text"><b>-text</b></dt>
+<dd>
+
+<p>Print out the CRL in text form.</p>
+
+</dd>
+<dt id="verify"><b>-verify</b></dt>
+<dd>
+
+<p>Verify the signature in the CRL. If the verification fails, the program will immediately exit, i.e. further option processing (e.g. <b>-gendelta</b>) is skipped.</p>
+
+<p>This option is implicitly enabled if any of <b>-CApath</b>, <b>-CAfile</b> or <b>-CAstore</b> is specified.</p>
+
+</dd>
+<dt id="noout"><b>-noout</b></dt>
+<dd>
+
+<p>Don&#39;t output the encoded version of the CRL.</p>
+
+</dd>
+<dt id="fingerprint"><b>-fingerprint</b></dt>
+<dd>
+
+<p>Output the fingerprint of the CRL.</p>
+
+</dd>
+<dt id="crlnumber"><b>-crlnumber</b></dt>
+<dd>
+
+<p>Output the number of the CRL.</p>
+
+</dd>
+<dt id="hash"><b>-hash</b></dt>
+<dd>
+
+<p>Output a hash of the issuer name. This can be use to lookup CRLs in a directory by issuer name.</p>
+
+</dd>
+<dt id="hash_old"><b>-hash_old</b></dt>
+<dd>
+
+<p>Outputs the &quot;hash&quot; of the CRL issuer name using the older algorithm as used by OpenSSL before version 1.0.0.</p>
+
+</dd>
+<dt id="issuer"><b>-issuer</b></dt>
+<dd>
+
+<p>Output the issuer name.</p>
+
+</dd>
+<dt id="lastupdate"><b>-lastupdate</b></dt>
+<dd>
+
+<p>Output the lastUpdate field.</p>
+
+</dd>
+<dt id="nextupdate"><b>-nextupdate</b></dt>
+<dd>
+
+<p>Output the nextUpdate field.</p>
+
+</dd>
+<dt id="nameopt-option"><b>-nameopt</b> <i>option</i></dt>
+<dd>
+
+<p>This specifies how the subject or issuer names are displayed. See <a href="../man1/openssl-namedisplay-options.html">openssl-namedisplay-options(1)</a> for details.</p>
+
+</dd>
+<dt id="CAfile-file--no-CAfile--CApath-dir--no-CApath--CAstore-uri--no-CAstore"><b>-CAfile</b> <i>file</i>, <b>-no-CAfile</b>, <b>-CApath</b> <i>dir</i>, <b>-no-CApath</b>, <b>-CAstore</b> <i>uri</i>, <b>-no-CAstore</b></dt>
+<dd>
+
+<p>See <a href="../man1/openssl-verification-options.html">&quot;Trusted Certificate Options&quot; in openssl-verification-options(1)</a> for details.</p>
+
+</dd>
+<dt id="provider-name"><b>-provider</b> <i>name</i></dt>
+<dd>
+
+</dd>
+<dt id="provider-path-path"><b>-provider-path</b> <i>path</i></dt>
+<dd>
+
+</dd>
+<dt id="provparam-name:-key-value"><b>-provparam</b> <i>[name:]key=value</i></dt>
+<dd>
+
+</dd>
+<dt id="propquery-propq"><b>-propquery</b> <i>propq</i></dt>
+<dd>
+
+<p>See <a href="../man1/openssl.html">&quot;Provider Options&quot; in openssl(1)</a>, <a href="../man7/provider.html">provider(7)</a>, and <a href="../man7/property.html">property(7)</a>.</p>
+
+</dd>
+</dl>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>Convert a CRL file from PEM to DER:</p>
+
+<pre><code>openssl crl -in crl.pem -outform DER -out crl.der</code></pre>
+
+<p>Output the text form of a DER encoded certificate:</p>
+
+<pre><code>openssl crl -in crl.der -text -noout</code></pre>
+
+<h1 id="BUGS">BUGS</h1>
+
+<p>Ideally it should be possible to create a CRL using appropriate options and files too.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man1/openssl.html">openssl(1)</a>, <a href="../man1/openssl-crl2pkcs7.html">openssl-crl2pkcs7(1)</a>, <a href="../man1/openssl-ca.html">openssl-ca(1)</a>, <a href="../man1/openssl-x509.html">openssl-x509(1)</a>, <a href="../man7/ossl_store-file.html">ossl_store-file(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>Since OpenSSL 3.3, the <b>-verify</b> option will exit with 1 on failure.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

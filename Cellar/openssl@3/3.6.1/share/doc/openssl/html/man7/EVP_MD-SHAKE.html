@@ -1,0 +1,121 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_MD-SHAKE</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Identities">Identities</a></li>
+      <li><a href="#Parameters">Parameters</a></li>
+    </ul>
+  </li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_MD-SHAKE, EVP_MD-KECCAK-KMAC - The SHAKE / KECCAK family EVP_MD implementations</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>Support for computing SHAKE or KECCAK-KMAC digests through the <b>EVP_MD</b> API.</p>
+
+<p>KECCAK-KMAC is an Extendable Output Function (XOF), with a definition similar to SHAKE, used by the KMAC EVP_MAC implementation (see <a href="../man7/EVP_MAC-KMAC.html">EVP_MAC-KMAC(7)</a>).</p>
+
+<h2 id="Identities">Identities</h2>
+
+<p>This implementation is available in the FIPS provider as well as the default provider, and includes the following varieties:</p>
+
+<dl>
+
+<dt id="KECCAK-KMAC-128">KECCAK-KMAC-128</dt>
+<dd>
+
+<p>Known names are &quot;KECCAK-KMAC-128&quot; and &quot;KECCAK-KMAC128&quot;. This is used by <a href="../man7/EVP_MAC-KMAC128.html">EVP_MAC-KMAC128(7)</a>. Using the notation from NIST FIPS 202 (Section 6.2), we have <span style="white-space: nowrap;">KECCAK-KMAC-128(M, d)</span> = <span style="white-space: nowrap;">KECCAK[256](M || 00, d)</span> (see the description of KMAC128 in Appendix A of NIST SP 800-185).</p>
+
+</dd>
+<dt id="KECCAK-KMAC-256">KECCAK-KMAC-256</dt>
+<dd>
+
+<p>Known names are &quot;KECCAK-KMAC-256&quot; and &quot;KECCAK-KMAC256&quot;. This is used by <a href="../man7/EVP_MAC-KMAC256.html">EVP_MAC-KMAC256(7)</a>. Using the notation from NIST FIPS 202 (Section 6.2), we have <span style="white-space: nowrap;">KECCAK-KMAC-256(M, d)</span> = <span style="white-space: nowrap;">KECCAK[512](M || 00, d)</span> (see the description of KMAC256 in Appendix A of NIST SP 800-185).</p>
+
+</dd>
+<dt id="SHAKE-128">SHAKE-128</dt>
+<dd>
+
+<p>Known names are &quot;SHAKE-128&quot; and &quot;SHAKE128&quot;.</p>
+
+</dd>
+<dt id="SHAKE-256">SHAKE-256</dt>
+<dd>
+
+<p>Known names are &quot;SHAKE-256&quot; and &quot;SHAKE256&quot;.</p>
+
+</dd>
+</dl>
+
+<h2 id="Parameters">Parameters</h2>
+
+<p>This implementation supports the following <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> entries:</p>
+
+<dl>
+
+<dt id="xoflen-OSSL_DIGEST_PARAM_XOFLEN-unsigned-integer">&quot;xoflen&quot; (<b>OSSL_DIGEST_PARAM_XOFLEN</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+<p>Sets or Gets the digest length for extendable output functions. The length of the &quot;xoflen&quot; parameter should not exceed that of a <b>size_t</b>.</p>
+
+<p>The SHAKE-128 and SHAKE-256 implementations do not have any default digest length.</p>
+
+<p>This parameter must be set before calling either EVP_DigestFinal_ex() or EVP_DigestFinal(), since these functions were not designed to handle variable length output. It is recommended to either use EVP_DigestSqueeze() or EVP_DigestFinalXOF() instead.</p>
+
+</dd>
+<dt id="size-OSSL_DIGEST_PARAM_SIZE-unsigned-integer">&quot;size&quot; (<b>OSSL_DIGEST_PARAM_SIZE</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+<p>An alias of &quot;xoflen&quot;.</p>
+
+</dd>
+</dl>
+
+<p>See <a href="../man3/EVP_DigestInit.html">&quot;PARAMETERS&quot; in EVP_DigestInit(3)</a> for further information related to parameters</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>For SHAKE-128, to ensure the maximum security strength of 128 bits, the output length passed to EVP_DigestFinalXOF() should be at least 32.</p>
+
+<p>For SHAKE-256, to ensure the maximum security strength of 256 bits, the output length passed to EVP_DigestFinalXOF() should be at least 64.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_MD_CTX_set_params.html">EVP_MD_CTX_set_params(3)</a>, <a href="../man7/provider-digest.html">provider-digest(7)</a>, <a href="../man7/OSSL_PROVIDER-default.html">OSSL_PROVIDER-default(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>Since OpenSSL 3.4 the SHAKE-128 and SHAKE-256 implementations have no default digest length.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2020-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

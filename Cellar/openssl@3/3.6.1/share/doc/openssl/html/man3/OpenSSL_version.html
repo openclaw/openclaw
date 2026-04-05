@@ -1,0 +1,277 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OpenSSL_version</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Macros">Macros</a></li>
+      <li><a href="#Functions">Functions</a></li>
+    </ul>
+  </li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#BUGS">BUGS</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OPENSSL_VERSION_MAJOR, OPENSSL_VERSION_MINOR, OPENSSL_VERSION_PATCH, OPENSSL_VERSION_PRE_RELEASE, OPENSSL_VERSION_BUILD_METADATA, OPENSSL_VERSION_TEXT, OPENSSL_VERSION_PREREQ, OPENSSL_version_major, OPENSSL_version_minor, OPENSSL_version_patch, OPENSSL_version_pre_release, OPENSSL_version_build_metadata, OpenSSL_version, OPENSSL_VERSION_NUMBER, OpenSSL_version_num, OPENSSL_info - get OpenSSL version number and other information</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/opensslv.h&gt;
+
+#define OPENSSL_VERSION_MAJOR  x
+#define OPENSSL_VERSION_MINOR  y
+#define OPENSSL_VERSION_PATCH  z
+
+/* The definitions here are typical release values */
+#define OPENSSL_VERSION_PRE_RELEASE &quot;&quot;
+#define OPENSSL_VERSION_BUILD_METADATA &quot;&quot;
+
+#define OPENSSL_VERSION_TEXT &quot;OpenSSL x.y.z xx XXX xxxx&quot;
+
+#define OPENSSL_VERSION_PREREQ(maj,min)
+
+#include &lt;openssl/crypto.h&gt;
+
+unsigned int OPENSSL_version_major(void);
+unsigned int OPENSSL_version_minor(void);
+unsigned int OPENSSL_version_patch(void);
+const char *OPENSSL_version_pre_release(void);
+const char *OPENSSL_version_build_metadata(void);
+
+const char *OpenSSL_version(int t);
+
+const char *OPENSSL_info(int t);
+
+/* from openssl/opensslv.h */
+#define OPENSSL_VERSION_NUMBER 0xnnnnnnnnL
+
+/* from openssl/crypto.h */
+unsigned long OpenSSL_version_num();</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<h2 id="Macros">Macros</h2>
+
+<p>The three macros <b>OPENSSL_VERSION_MAJOR</b>, <b>OPENSSL_VERSION_MINOR</b> and <b>OPENSSL_VERSION_PATCH</b> represent the three parts of a version identifier, <b><i>MAJOR</i>.<i>MINOR</i>.<i>PATCH</i></b>.</p>
+
+<p>The macro <b>OPENSSL_VERSION_PRE_RELEASE</b> is an added bit of text that indicates that this is a pre-release version, such as <code>&quot;-dev&quot;</code> for an ongoing development snapshot or <code>&quot;-alpha3&quot;</code> for an alpha release. The value must be a string.</p>
+
+<p>The macro <b>OPENSSL_VERSION_BUILD_METADATA</b> is extra information, reserved for other parties, such as <code>&quot;+fips&quot;</code>, or <code>&quot;+vendor.1&quot;</code>). The OpenSSL project will not touch this macro (will leave it an empty string). The value must be a string.</p>
+
+<p><b>OPENSSL_VERSION_STR</b> is a convenience macro to get the short version identifier string, <code>&quot;<i>MAJOR</i>.<i>MINOR</i>.<i>PATCH</i>&quot;</code>.</p>
+
+<p><b>OPENSSL_FULL_VERSION_STR</b> is a convenience macro to get the longer version identifier string, which combines <b>OPENSSL_VERSION_STR</b>, <b>OPENSSL_VERSION_PRE_RELEASE</b> and <b>OPENSSL_VERSION_BUILD_METADATA</b>.</p>
+
+<p><b>OPENSSL_VERSION_TEXT</b> is a convenience macro to get a full descriptive version text, which includes <b>OPENSSL_FULL_VERSION_STR</b> and the release date.</p>
+
+<p><b>OPENSSL_VERSION_PREREQ</b> is a useful macro for checking whether the OpenSSL version for the headers in use is at least at the given pre-requisite major (<b>maj</b>) and minor (<b>min</b>) number or not. It will evaluate to true if the header version number (<b>OPENSSL_VERSION_MAJOR</b>.<b>OPENSSL_VERSION_MINOR</b>) is greater than or equal to <b>maj</b>.<b>min</b>.</p>
+
+<p><b>OPENSSL_VERSION_NUMBER</b> is a combination of the major, minor and patch version into a single integer 0xMNN00PP0L, where:</p>
+
+<dl>
+
+<dt id="M">M</dt>
+<dd>
+
+<p>is the number from <b>OPENSSL_VERSION_MAJOR</b>, in hexadecimal notation</p>
+
+</dd>
+<dt id="NN">NN</dt>
+<dd>
+
+<p>is the number from <b>OPENSSL_VERSION_MINOR</b>, in hexadecimal notation</p>
+
+</dd>
+<dt id="PP">PP</dt>
+<dd>
+
+<p>is the number from <b>OPENSSL_VERSION_PATCH</b>, in hexadecimal notation</p>
+
+</dd>
+</dl>
+
+<h2 id="Functions">Functions</h2>
+
+<p>OPENSSL_version_major(), OPENSSL_version_minor(), OPENSSL_version_patch(), OPENSSL_version_pre_release(), and OPENSSL_version_build_metadata() return the values of the macros above for the build of the library, respectively.</p>
+
+<p>OpenSSL_version() returns different strings depending on <i>t</i>:</p>
+
+<dl>
+
+<dt id="OPENSSL_VERSION">OPENSSL_VERSION</dt>
+<dd>
+
+<p>The value of <b>OPENSSL_VERSION_TEXT</b></p>
+
+</dd>
+<dt id="OPENSSL_VERSION_STRING">OPENSSL_VERSION_STRING</dt>
+<dd>
+
+<p>The value of <b>OPENSSL_VERSION_STR</b></p>
+
+</dd>
+<dt id="OPENSSL_FULL_VERSION_STRING">OPENSSL_FULL_VERSION_STRING</dt>
+<dd>
+
+<p>The value of <b>OPENSSL_FULL_VERSION_STR</b></p>
+
+</dd>
+<dt id="OPENSSL_CFLAGS">OPENSSL_CFLAGS</dt>
+<dd>
+
+<p>The compiler flags set for the compilation process in the form <code>compiler: ...</code> if available, or <code>compiler: information not available</code> otherwise.</p>
+
+</dd>
+<dt id="OPENSSL_BUILT_ON">OPENSSL_BUILT_ON</dt>
+<dd>
+
+<p>The date of the build process in the form <code>built on: ...</code> if available or <code>built on: date not available</code> otherwise. The date would not be available in a reproducible build, for example.</p>
+
+</dd>
+<dt id="OPENSSL_PLATFORM">OPENSSL_PLATFORM</dt>
+<dd>
+
+<p>The &quot;Configure&quot; target of the library build in the form <code>platform: ...</code> if available, or <code>platform: information not available</code> otherwise.</p>
+
+</dd>
+<dt id="OPENSSL_DIR">OPENSSL_DIR</dt>
+<dd>
+
+<p>The <b>OPENSSLDIR</b> setting of the library build in the form <code>OPENSSLDIR: &quot;...&quot;</code> if available, or <code>OPENSSLDIR: N/A</code> otherwise.</p>
+
+</dd>
+<dt id="OPENSSL_ENGINES_DIR">OPENSSL_ENGINES_DIR</dt>
+<dd>
+
+<p>The <b>ENGINESDIR</b> setting of the library build in the form <code>ENGINESDIR: &quot;...&quot;</code> if available, or <code>ENGINESDIR: N/A</code> otherwise. This option is deprecated in OpenSSL 3.0.</p>
+
+</dd>
+<dt id="OPENSSL_MODULES_DIR">OPENSSL_MODULES_DIR</dt>
+<dd>
+
+<p>The <b>MODULESDIR</b> setting of the library build in the form <code>MODULESDIR: &quot;...&quot;</code> if available, or <code>MODULESDIR: N/A</code> otherwise.</p>
+
+</dd>
+<dt id="OPENSSL_CPU_INFO">OPENSSL_CPU_INFO</dt>
+<dd>
+
+<p>The current OpenSSL cpu settings. This is the current setting of the cpu capability flags. It is usually automatically configured but may be set via an environment variable. The value has the same syntax as the environment variable. For x86 the string looks like <code>CPUINFO: OPENSSL_ia32cap=0x123:0x456</code> or <code>CPUINFO: N/A</code> if not available.</p>
+
+</dd>
+<dt id="OPENSSL_WINCTX">OPENSSL_WINCTX</dt>
+<dd>
+
+<p>The Windows install context. The Windows install context is used to compute the OpenSSL registry key name on Windows. The full registry key is <code>SOFTWARE\WOW6432Node\OpenSSL-{major}.{minor}-{context}</code>, where <code>{major}</code>, <code>{minor}</code> and <code>{context}</code> are OpenSSL&#39;s major version number, minor version number and the Windows install context, respectively.</p>
+
+</dd>
+</dl>
+
+<p>For an unknown <i>t</i>, the text <code>not available</code> is returned.</p>
+
+<p>OPENSSL_info() also returns different strings depending on <i>t</i>:</p>
+
+<dl>
+
+<dt id="OPENSSL_INFO_CONFIG_DIR">OPENSSL_INFO_CONFIG_DIR</dt>
+<dd>
+
+<p>The configured <code>OPENSSLDIR</code>, which is the default location for OpenSSL configuration files.</p>
+
+</dd>
+<dt id="OPENSSL_INFO_ENGINES_DIR">OPENSSL_INFO_ENGINES_DIR</dt>
+<dd>
+
+<p>The configured <code>ENGINESDIR</code>, which is the default location for OpenSSL engines.</p>
+
+</dd>
+<dt id="OPENSSL_INFO_MODULES_DIR">OPENSSL_INFO_MODULES_DIR</dt>
+<dd>
+
+<p>The configured <code>MODULESDIR</code>, which is the default location for dynamically loadable OpenSSL modules other than engines.</p>
+
+</dd>
+<dt id="OPENSSL_INFO_DSO_EXTENSION">OPENSSL_INFO_DSO_EXTENSION</dt>
+<dd>
+
+<p>The configured dynamically loadable module extension.</p>
+
+</dd>
+<dt id="OPENSSL_INFO_DIR_FILENAME_SEPARATOR">OPENSSL_INFO_DIR_FILENAME_SEPARATOR</dt>
+<dd>
+
+<p>The separator between a directory specification and a filename. Note that on some operating systems, this is not the same as the separator between directory elements.</p>
+
+</dd>
+<dt id="OPENSSL_INFO_LIST_SEPARATOR">OPENSSL_INFO_LIST_SEPARATOR</dt>
+<dd>
+
+<p>The OpenSSL list separator. This is typically used in strings that are lists of items, such as the value of the environment variable <code>$PATH</code> on Unix (where the separator is <code>:</code>) or <code>%PATH%</code> on Windows (where the separator is <code>;</code>).</p>
+
+</dd>
+<dt id="OPENSSL_INFO_CPU_SETTINGS">OPENSSL_INFO_CPU_SETTINGS</dt>
+<dd>
+
+<p>The current OpenSSL cpu settings. This is the current setting of the cpu capability flags. It is usually automatically configured but may be set via an environment variable. The value has the same syntax as the environment variable. For x86 the string looks like <code>OPENSSL_ia32cap=0x123:0x456</code>.</p>
+
+</dd>
+<dt id="OPENSSL_INFO_WINDOWS_CONTEXT">OPENSSL_INFO_WINDOWS_CONTEXT</dt>
+<dd>
+
+<p>The Windows install context. The Windows install context is used to compute the OpenSSL registry key name on Windows. The full registry key is <code>SOFTWARE\WOW6432Node\OpenSSL-{major}.{minor}-{context}</code>, where <code>{major}</code>, <code>{minor}</code> and <code>{context}</code> are OpenSSL&#39;s major version number, minor version number and the Windows install context, respectively.</p>
+
+</dd>
+</dl>
+
+<p>For an unknown <i>t</i>, NULL is returned.</p>
+
+<p>OpenSSL_version_num() returns the value of <b>OPENSSL_VERSION_NUMBER</b>.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>OPENSSL_version_major(), OPENSSL_version_minor() and OPENSSL_version_patch() return the version number parts as integers.</p>
+
+<p>OPENSSL_version_pre_release() and OPENSSL_version_build_metadata() return the values of <b>OPENSSL_VERSION_PRE_RELEASE</b> and <b>OPENSSL_VERSION_BUILD_METADATA</b> respectively as constant strings. For any of them that is undefined, the empty string is returned.</p>
+
+<p>OpenSSL_version() returns constant strings.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/crypto.html">crypto(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The macros and functions described here were added in OpenSSL 3.0, except for OPENSSL_VERSION_NUMBER and OpenSSL_version_num().</p>
+
+<h1 id="BUGS">BUGS</h1>
+
+<p>There was a discrepancy between this manual and commentary + code in <i>&lt;openssl/opensslv.h&gt;</i>, where the latter suggested that the four least significant bits of <b>OPENSSL_VERSION_NUMBER</b> could be <code>0x0f</code> in released OpenSSL versions.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2018-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,66 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>BIO_printf</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>BIO_printf, BIO_vprintf, BIO_snprintf, BIO_vsnprintf - formatted output to a BIO</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/bio.h&gt;
+
+int BIO_printf(BIO *bio, const char *format, ...);
+int BIO_vprintf(BIO *bio, const char *format, va_list args);
+
+int BIO_snprintf(char *buf, size_t n, const char *format, ...);
+int BIO_vsnprintf(char *buf, size_t n, const char *format, va_list args);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>BIO_printf() is similar to the standard C printf() function, except that the output is sent to the specified BIO, <i>bio</i>, rather than standard output. All common format specifiers are supported.</p>
+
+<p>BIO_vprintf() is similar to the vprintf() function found on many platforms, the output is sent to the specified BIO, <i>bio</i>, rather than standard output. All common format specifiers are supported. The argument list <i>args</i> is a stdarg argument list.</p>
+
+<p>BIO_snprintf() is for platforms that do not have the common snprintf() function. It is like sprintf() except that the size parameter, <i>n</i>, specifies the size of the output buffer.</p>
+
+<p>BIO_vsnprintf() is to BIO_snprintf() as BIO_vprintf() is to BIO_printf().</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>All functions return the number of bytes written, or -1 on error. For BIO_snprintf() and BIO_vsnprintf() this includes when the output buffer is too small.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>Except when <i>n</i> is 0, both BIO_snprintf() and BIO_vsnprintf() always terminate their output with <code>&#39;\0&#39;</code>. This includes cases where -1 is returned, such as when there is insufficient space to output the whole string.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2017-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

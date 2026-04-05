@@ -1,0 +1,87 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OPENSSL_init_ssl</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OPENSSL_init_ssl - OpenSSL (libssl and libcrypto) initialisation</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+int OPENSSL_init_ssl(uint64_t opts, const OPENSSL_INIT_SETTINGS *settings);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>During normal operation OpenSSL (libssl and libcrypto) will allocate various resources at start up that must, subsequently, be freed on close down of the library. Additionally some resources are allocated on a per thread basis (if the application is multi-threaded), and these resources must be freed prior to the thread closing.</p>
+
+<p>As of version 1.1.0 OpenSSL will automatically allocate all resources that it needs so no explicit initialisation is required. Similarly it will also automatically deinitialise as required.</p>
+
+<p>However, there may be situations when explicit initialisation is desirable or needed, for example when some nondefault initialisation is required. The function OPENSSL_init_ssl() can be used for this purpose. Calling this function will explicitly initialise BOTH libcrypto and libssl. To explicitly initialise ONLY libcrypto see the <a href="../man3/OPENSSL_init_crypto.html">OPENSSL_init_crypto(3)</a> function.</p>
+
+<p>Numerous internal OpenSSL functions call OPENSSL_init_ssl(). Therefore, in order to perform nondefault initialisation, OPENSSL_init_ssl() MUST be called by application code prior to any other OpenSSL function calls.</p>
+
+<p>The <b>opts</b> parameter specifies which aspects of libssl and libcrypto should be initialised. Valid options for libcrypto are described on the <a href="../man3/OPENSSL_init_crypto.html">OPENSSL_init_crypto(3)</a> page. In addition to any libcrypto specific option the following libssl options can also be used:</p>
+
+<dl>
+
+<dt id="OPENSSL_INIT_NO_LOAD_SSL_STRINGS">OPENSSL_INIT_NO_LOAD_SSL_STRINGS</dt>
+<dd>
+
+<p>Suppress automatic loading of the libssl error strings. This option is not a default option. Once selected subsequent calls to OPENSSL_init_ssl() with the option <b>OPENSSL_INIT_LOAD_SSL_STRINGS</b> will be ignored.</p>
+
+</dd>
+<dt id="OPENSSL_INIT_LOAD_SSL_STRINGS">OPENSSL_INIT_LOAD_SSL_STRINGS</dt>
+<dd>
+
+<p>Automatic loading of the libssl error strings. This option is a default option. Once selected subsequent calls to OPENSSL_init_ssl() with the option <b>OPENSSL_INIT_LOAD_SSL_STRINGS</b> will be ignored.</p>
+
+</dd>
+</dl>
+
+<p>OPENSSL_init_ssl() takes a <b>settings</b> parameter which can be used to set parameter values. See <a href="../man3/OPENSSL_init_crypto.html">OPENSSL_init_crypto(3)</a> for details.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>The function OPENSSL_init_ssl() returns 1 on success or 0 on error.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/OPENSSL_init_crypto.html">OPENSSL_init_crypto(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The OPENSSL_init_ssl() function was added in OpenSSL 1.1.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2016-2020 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

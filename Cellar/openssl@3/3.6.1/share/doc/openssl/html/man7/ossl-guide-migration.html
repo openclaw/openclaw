@@ -1,0 +1,1755 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>ossl-guide-migration</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#OPENSSL-3.6">OPENSSL 3.6</a>
+    <ul>
+      <li><a href="#Main-Changes-from-OpenSSL-3.5">Main Changes from OpenSSL 3.5</a></li>
+    </ul>
+  </li>
+  <li><a href="#OPENSSL-3.1">OPENSSL 3.1</a>
+    <ul>
+      <li><a href="#Main-Changes-from-OpenSSL-3.0">Main Changes from OpenSSL 3.0</a></li>
+    </ul>
+  </li>
+  <li><a href="#OPENSSL-3.0">OPENSSL 3.0</a>
+    <ul>
+      <li><a href="#Main-Changes-from-OpenSSL-1.1.1">Main Changes from OpenSSL 1.1.1</a>
+        <ul>
+          <li><a href="#Major-Release">Major Release</a></li>
+          <li><a href="#License-Change">License Change</a></li>
+          <li><a href="#Providers-and-FIPS-support">Providers and FIPS support</a></li>
+          <li><a href="#Low-Level-APIs">Low Level APIs</a></li>
+          <li><a href="#Legacy-Algorithms">Legacy Algorithms</a></li>
+          <li><a href="#Engines-and-METHOD-APIs">Engines and &quot;METHOD&quot; APIs</a></li>
+          <li><a href="#Support-of-legacy-engines">Support of legacy engines</a></li>
+          <li><a href="#Versioning-Scheme">Versioning Scheme</a></li>
+          <li><a href="#Other-major-new-features">Other major new features</a>
+            <ul>
+              <li><a href="#Certificate-Management-Protocol-CMP-RFC-9810">Certificate Management Protocol (CMP, RFC 9810)</a></li>
+              <li><a href="#HTTP-S-client">HTTP(S) client</a></li>
+              <li><a href="#Key-Derivation-Function-API-EVP_KDF">Key Derivation Function API (EVP_KDF)</a></li>
+              <li><a href="#Message-Authentication-Code-API-EVP_MAC">Message Authentication Code API (EVP_MAC)</a></li>
+              <li><a href="#Algorithm-Fetching">Algorithm Fetching</a></li>
+              <li><a href="#Support-for-Linux-Kernel-TLS">Support for Linux Kernel TLS</a></li>
+              <li><a href="#New-Algorithms">New Algorithms</a></li>
+              <li><a href="#CMS-and-PKCS-7-updates">CMS and PKCS#7 updates</a></li>
+              <li><a href="#PKCS-12-API-updates">PKCS#12 API updates</a></li>
+              <li><a href="#PKCS-12-KDF-versus-FIPS">PKCS#12 KDF versus FIPS</a></li>
+              <li><a href="#Windows-thread-synchronization-changes">Windows thread synchronization changes</a></li>
+              <li><a href="#Trace-API">Trace API</a></li>
+              <li><a href="#Key-validation-updates">Key validation updates</a></li>
+            </ul>
+          </li>
+          <li><a href="#Other-notable-deprecations-and-changes">Other notable deprecations and changes</a>
+            <ul>
+              <li><a href="#The-function-code-part-of-an-OpenSSL-error-code-is-no-longer-relevant">The function code part of an OpenSSL error code is no longer relevant</a></li>
+              <li><a href="#STACK-and-HASH-macros-have-been-cleaned-up">STACK and HASH macros have been cleaned up</a></li>
+              <li><a href="#The-RAND_DRBG-subsystem-has-been-removed">The RAND_DRBG subsystem has been removed</a></li>
+              <li><a href="#Removed-FIPS_mode-and-FIPS_mode_set">Removed FIPS_mode() and FIPS_mode_set()</a></li>
+              <li><a href="#Key-generation-is-slower">Key generation is slower</a></li>
+              <li><a href="#Change-PBKDF2-to-conform-to-SP800-132-instead-of-the-older-PKCS5-RFC2898">Change PBKDF2 to conform to SP800-132 instead of the older PKCS5 RFC2898</a></li>
+              <li><a href="#Enforce-a-minimum-DH-modulus-size-of-512-bits">Enforce a minimum DH modulus size of 512 bits</a></li>
+              <li><a href="#SM2-key-changes">SM2 key changes</a></li>
+              <li><a href="#EVP_PKEY_set_alias_type-method-has-been-removed">EVP_PKEY_set_alias_type() method has been removed</a></li>
+              <li><a href="#Functions-that-return-an-internal-key-should-be-treated-as-read-only">Functions that return an internal key should be treated as read only</a></li>
+              <li><a href="#The-public-key-check-has-moved-from-EVP_PKEY_derive-to-EVP_PKEY_derive_set_peer">The public key check has moved from EVP_PKEY_derive() to EVP_PKEY_derive_set_peer()</a></li>
+              <li><a href="#The-print-format-has-cosmetic-changes-for-some-functions">The print format has cosmetic changes for some functions</a></li>
+              <li><a href="#Interactive-mode-from-the-openssl-program-has-been-removed">Interactive mode from the openssl program has been removed</a></li>
+              <li><a href="#The-error-return-values-from-some-control-calls-ctrl-have-changed">The error return values from some control calls (ctrl) have changed</a></li>
+              <li><a href="#DH-and-DHX-key-types-have-different-settable-parameters">DH and DHX key types have different settable parameters</a></li>
+              <li><a href="#EVP_CIPHER_CTX_set_flags-ordering-change">EVP_CIPHER_CTX_set_flags() ordering change</a></li>
+              <li><a href="#Validation-of-operation-context-parameters">Validation of operation context parameters</a></li>
+              <li><a href="#Removal-of-function-code-from-the-error-codes">Removal of function code from the error codes</a></li>
+              <li><a href="#ChaCha20-Poly1305-cipher-does-not-allow-a-truncated-IV-length-to-be-used">ChaCha20-Poly1305 cipher does not allow a truncated IV length to be used</a></li>
+            </ul>
+          </li>
+        </ul>
+      </li>
+      <li><a href="#Installation-and-Compilation">Installation and Compilation</a></li>
+      <li><a href="#Upgrading-from-OpenSSL-1.1.1">Upgrading from OpenSSL 1.1.1</a>
+        <ul>
+          <li><a href="#Error-code-changes">Error code changes</a></li>
+        </ul>
+      </li>
+      <li><a href="#Upgrading-from-OpenSSL-1.0.2">Upgrading from OpenSSL 1.0.2</a>
+        <ul>
+          <li><a href="#Upgrading-from-the-OpenSSL-2.0-FIPS-Object-Module">Upgrading from the OpenSSL 2.0 FIPS Object Module</a></li>
+        </ul>
+      </li>
+      <li><a href="#Completing-the-installation-of-the-FIPS-Module">Completing the installation of the FIPS Module</a></li>
+      <li><a href="#Programming">Programming</a>
+        <ul>
+          <li><a href="#Library-Context">Library Context</a>
+            <ul>
+              <li><a href="#Using-a-Library-Context---Old-functions-that-should-be-changed">Using a Library Context - Old functions that should be changed</a></li>
+              <li><a href="#New-functions-that-use-a-Library-context">New functions that use a Library context</a></li>
+            </ul>
+          </li>
+          <li><a href="#Providers">Providers</a></li>
+          <li><a href="#Fetching-algorithms-and-property-queries">Fetching algorithms and property queries</a></li>
+          <li><a href="#Mapping-EVP-controls-and-flags-to-provider-OSSL_PARAM-3-parameters">Mapping EVP controls and flags to provider OSSL_PARAM(3) parameters</a></li>
+          <li><a href="#Deprecation-of-Low-Level-Functions">Deprecation of Low Level Functions</a>
+            <ul>
+              <li><a href="#Providers-are-a-replacement-for-engines-and-low-level-method-overrides">Providers are a replacement for engines and low-level method overrides</a></li>
+              <li><a href="#Deprecated-i2d-and-d2i-functions-for-low-level-key-types">Deprecated i2d and d2i functions for low-level key types</a></li>
+              <li><a href="#Deprecated-low-level-key-object-getters-and-setters">Deprecated low-level key object getters and setters</a></li>
+              <li><a href="#Deprecated-low-level-key-parameter-getters">Deprecated low-level key parameter getters</a></li>
+              <li><a href="#Deprecated-low-level-key-parameter-setters">Deprecated low-level key parameter setters</a></li>
+              <li><a href="#Deprecated-low-level-object-creation">Deprecated low-level object creation</a></li>
+              <li><a href="#Deprecated-low-level-encryption-functions">Deprecated low-level encryption functions</a></li>
+              <li><a href="#Deprecated-low-level-digest-functions">Deprecated low-level digest functions</a></li>
+              <li><a href="#Deprecated-low-level-signing-functions">Deprecated low-level signing functions</a></li>
+              <li><a href="#Deprecated-low-level-MAC-functions">Deprecated low-level MAC functions</a></li>
+              <li><a href="#Deprecated-low-level-validation-functions">Deprecated low-level validation functions</a></li>
+              <li><a href="#Deprecated-low-level-key-exchange-functions">Deprecated low-level key exchange functions</a></li>
+              <li><a href="#Deprecated-low-level-key-generation-functions">Deprecated low-level key generation functions</a></li>
+              <li><a href="#Deprecated-low-level-key-reading-and-writing-functions">Deprecated low-level key reading and writing functions</a></li>
+              <li><a href="#Deprecated-low-level-key-printing-functions">Deprecated low-level key printing functions</a></li>
+            </ul>
+          </li>
+          <li><a href="#Deprecated-function-mappings">Deprecated function mappings</a></li>
+          <li><a href="#NID-handling-for-provided-keys-and-algorithms">NID handling for provided keys and algorithms</a></li>
+        </ul>
+      </li>
+      <li><a href="#Using-the-FIPS-Module-in-applications">Using the FIPS Module in applications</a></li>
+      <li><a href="#OpenSSL-command-line-application-changes">OpenSSL command line application changes</a>
+        <ul>
+          <li><a href="#New-applications">New applications</a></li>
+          <li><a href="#Added-options">Added options</a></li>
+          <li><a href="#Removed-options">Removed options</a></li>
+          <li><a href="#Other-Changes">Other Changes</a></li>
+          <li><a href="#Default-settings">Default settings</a></li>
+          <li><a href="#Deprecated-apps">Deprecated apps</a></li>
+        </ul>
+      </li>
+      <li><a href="#TLS-Changes">TLS Changes</a></li>
+    </ul>
+  </li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>ossl-guide-migration, migration_guide - OpenSSL Guide: Migrating from older OpenSSL versions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<p>See the individual manual pages for details.</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>This guide details the changes required to migrate to new versions of OpenSSL. Currently this covers OpenSSL 3.0 &amp; 3.1. For earlier versions refer to <a href="https://github.com/openssl/openssl/blob/master/CHANGES.md">https://github.com/openssl/openssl/blob/master/CHANGES.md</a>. For an overview of some of the key concepts introduced in OpenSSL 3.0 see <a href="../man7/crypto.html">crypto(7)</a>.</p>
+
+<h1 id="OPENSSL-3.6">OPENSSL 3.6</h1>
+
+<h2 id="Main-Changes-from-OpenSSL-3.5">Main Changes from OpenSSL 3.5</h2>
+
+<p>The functions EVP_PKEY_asn1_*() and <a href="../man3/EVP_PKEY_get0_asn1.html">EVP_PKEY_get0_asn1(3)</a> were deprecated in favour of the provider API. EVP_PKEY_assign_[DSA|SIPHASH]() were also deprecated. Please use the new high level and provider API.</p>
+
+<h1 id="OPENSSL-3.1">OPENSSL 3.1</h1>
+
+<h2 id="Main-Changes-from-OpenSSL-3.0">Main Changes from OpenSSL 3.0</h2>
+
+<p>The FIPS provider in OpenSSL 3.1 includes some non-FIPS validated algorithms, consequently the property query <code>fips=yes</code> is mandatory for applications that want to operate in a FIPS approved manner. The algorithms are:</p>
+
+<dl>
+
+<dt id="Triple-DES-ECB">Triple DES ECB</dt>
+<dd>
+
+</dd>
+<dt id="Triple-DES-CBC">Triple DES CBC</dt>
+<dd>
+
+</dd>
+<dt id="EdDSA">EdDSA</dt>
+<dd>
+
+</dd>
+</dl>
+
+<p>There are no other changes requiring additional migration measures since OpenSSL 3.0.</p>
+
+<h1 id="OPENSSL-3.0">OPENSSL 3.0</h1>
+
+<h2 id="Main-Changes-from-OpenSSL-1.1.1">Main Changes from OpenSSL 1.1.1</h2>
+
+<h3 id="Major-Release">Major Release</h3>
+
+<p>OpenSSL 3.0 is a major release and consequently any application that currently uses an older version of OpenSSL will at the very least need to be recompiled in order to work with the new version. It is the intention that the large majority of applications will work unchanged with OpenSSL 3.0 if those applications previously worked with OpenSSL 1.1.1. However this is not guaranteed and some changes may be required in some cases. Changes may also be required if applications need to take advantage of some of the new features available in OpenSSL 3.0 such as the availability of the FIPS module.</p>
+
+<h3 id="License-Change">License Change</h3>
+
+<p>In previous versions, OpenSSL was licensed under the <a href="https://www.openssl.org/source/license-openssl-ssleay.txt">dual OpenSSL and SSLeay licenses</a> (both licenses apply). From OpenSSL 3.0 this is replaced by the <a href="https://www.openssl.org/source/apache-license-2.0.txt">Apache License v2</a>.</p>
+
+<h3 id="Providers-and-FIPS-support">Providers and FIPS support</h3>
+
+<p>One of the key changes from OpenSSL 1.1.1 is the introduction of the Provider concept. Providers collect together and make available algorithm implementations. With OpenSSL 3.0 it is possible to specify, either programmatically or via a config file, which providers you want to use for any given application. OpenSSL 3.0 comes with 5 different providers as standard. Over time third parties may distribute additional providers that can be plugged into OpenSSL. All algorithm implementations available via providers are accessed through the &quot;high level&quot; APIs (for example those functions prefixed with <code>EVP</code>). They cannot be accessed using the <a href="#Low-Level-APIs">&quot;Low Level APIs&quot;</a>.</p>
+
+<p>One of the standard providers available is the FIPS provider. This makes available FIPS validated cryptographic algorithms. The FIPS provider is disabled by default and needs to be enabled explicitly at configuration time using the <code>enable-fips</code> option. If it is enabled, the FIPS provider gets built and installed in addition to the other standard providers. No separate installation procedure is necessary. There is however a dedicated <code>install_fips</code> make target, which serves the special purpose of installing only the FIPS provider into an existing OpenSSL installation.</p>
+
+<p>Not all algorithms may be available for the application at a particular moment. If the application code uses any digest or cipher algorithm via the EVP interface, the application should verify the result of the <a href="../man3/EVP_EncryptInit.html">EVP_EncryptInit(3)</a>, <a href="../man3/EVP_EncryptInit_ex.html">EVP_EncryptInit_ex(3)</a>, and <a href="../man3/EVP_DigestInit.html">EVP_DigestInit(3)</a> functions. In case when the requested algorithm is not available, these functions will fail.</p>
+
+<p>See also <a href="#Legacy-Algorithms">&quot;Legacy Algorithms&quot;</a> for information on the legacy provider.</p>
+
+<p>See also <a href="#Completing-the-installation-of-the-FIPS-Module">&quot;Completing the installation of the FIPS Module&quot;</a> and <a href="#Using-the-FIPS-Module-in-applications">&quot;Using the FIPS Module in applications&quot;</a>.</p>
+
+<h3 id="Low-Level-APIs">Low Level APIs</h3>
+
+<p>OpenSSL has historically provided two sets of APIs for invoking cryptographic algorithms: the &quot;high level&quot; APIs (such as the <code>EVP</code> APIs) and the &quot;low level&quot; APIs. The high level APIs are typically designed to work across all algorithm types. The &quot;low level&quot; APIs are targeted at a specific algorithm implementation. For example, the EVP APIs provide the functions <a href="../man3/EVP_EncryptInit_ex.html">EVP_EncryptInit_ex(3)</a>, <a href="../man3/EVP_EncryptUpdate.html">EVP_EncryptUpdate(3)</a> and <a href="../man3/EVP_EncryptFinal.html">EVP_EncryptFinal(3)</a> to perform symmetric encryption. Those functions can be used with the algorithms AES, CHACHA, 3DES etc. On the other hand, to do AES encryption using the low level APIs you would have to call AES specific functions such as <a href="../man3/AES_set_encrypt_key.html">AES_set_encrypt_key(3)</a>, <a href="../man3/AES_encrypt.html">AES_encrypt(3)</a>, and so on. The functions for 3DES are different. Use of the low level APIs has been informally discouraged by the OpenSSL development team for a long time. However in OpenSSL 3.0 this is made more formal. All such low level APIs have been deprecated. You may still use them in your applications, but you may start to see deprecation warnings during compilation (dependent on compiler support for this). Deprecated APIs may be removed from future versions of OpenSSL so you are strongly encouraged to update your code to use the high level APIs instead.</p>
+
+<p>This is described in more detail in <a href="#Deprecation-of-Low-Level-Functions">&quot;Deprecation of Low Level Functions&quot;</a></p>
+
+<h3 id="Legacy-Algorithms">Legacy Algorithms</h3>
+
+<p>Some cryptographic algorithms such as <b>MD2</b> and <b>DES</b> that were available via the EVP APIs are now considered legacy and their use is strongly discouraged. These legacy EVP algorithms are still available in OpenSSL 3.0 but not by default. If you want to use them then you must load the legacy provider. This can be as simple as a config file change, or can be done programmatically. See <a href="../man7/OSSL_PROVIDER-legacy.html">OSSL_PROVIDER-legacy(7)</a> for a complete list of algorithms. Applications using the EVP APIs to access these algorithms should instead use more modern algorithms. If that is not possible then these applications should ensure that the legacy provider has been loaded. This can be achieved either programmatically or via configuration. See <a href="../man7/crypto.html">crypto(7)</a> man page for more information about providers.</p>
+
+<h3 id="Engines-and-METHOD-APIs">Engines and &quot;METHOD&quot; APIs</h3>
+
+<p>The refactoring to support Providers conflicts internally with the APIs used to support engines, including the ENGINE API and any function that creates or modifies custom &quot;METHODS&quot; (for example <a href="../man3/EVP_MD_meth_new.html">EVP_MD_meth_new(3)</a>, <a href="../man3/EVP_CIPHER_meth_new.html">EVP_CIPHER_meth_new(3)</a>, <a href="../man3/EVP_PKEY_meth_new.html">EVP_PKEY_meth_new(3)</a>, <a href="../man3/RSA_meth_new.html">RSA_meth_new(3)</a>, <a href="../man3/EC_KEY_METHOD_new.html">EC_KEY_METHOD_new(3)</a>, etc.). These functions are being deprecated in OpenSSL 3.0, and users of these APIs should know that their use can likely bypass provider selection and configuration, with unintended consequences. This is particularly relevant for applications written to use the OpenSSL 3.0 FIPS module, as detailed below. Authors and maintainers of external engines are strongly encouraged to refactor their code transforming engines into providers using the new Provider API and avoiding deprecated methods.</p>
+
+<h3 id="Support-of-legacy-engines">Support of legacy engines</h3>
+
+<p>If openssl is not built without engine support or deprecated API support, engines will still work. However, their applicability will be limited.</p>
+
+<p>New algorithms provided via engines will still work.</p>
+
+<p>Engine-backed keys can be loaded via custom <b>OSSL_STORE</b> implementation. In this case the <b>EVP_PKEY</b> objects created via <a href="../man3/ENGINE_load_private_key.html">ENGINE_load_private_key(3)</a> will be considered legacy and will continue to work.</p>
+
+<p>To ensure the future compatibility, the engines should be turned to providers. To prefer the provider-based hardware offload, you can specify the default properties to prefer your provider.</p>
+
+<p>Setting engine-based or application-based default low-level crypto method such as <b>RSA_METHOD</b> or <b>EC_KEY_METHOD</b> is still possible and keys inside the default provider will use the engine-based implementation for the crypto operations. However <b>EVP_PKEY</b>s created by decoding by using <b>OSSL_DECODER</b>, <b>PEM_</b> or <b>d2i_</b> APIs will be provider-based. To create a fully legacy <b>EVP_PKEY</b>s <a href="../man3/EVP_PKEY_set1_RSA.html">EVP_PKEY_set1_RSA(3)</a>, <a href="../man3/EVP_PKEY_set1_EC_KEY.html">EVP_PKEY_set1_EC_KEY(3)</a> or similar functions must be used.</p>
+
+<h3 id="Versioning-Scheme">Versioning Scheme</h3>
+
+<p>The OpenSSL versioning scheme has changed with the OpenSSL 3.0 release. The new versioning scheme has this format:</p>
+
+<p>MAJOR.MINOR.PATCH</p>
+
+<p>For OpenSSL 1.1.1 and below, different patch levels were indicated by a letter at the end of the release version number. This will no longer be used and instead the patch level is indicated by the final number in the version. A change in the second (MINOR) number indicates that new features may have been added. OpenSSL versions with the same major number are API and ABI compatible. If the major number changes then API and ABI compatibility is not guaranteed.</p>
+
+<p>For more information, see <a href="../man3/OpenSSL_version.html">OpenSSL_version(3)</a>.</p>
+
+<h3 id="Other-major-new-features">Other major new features</h3>
+
+<h4 id="Certificate-Management-Protocol-CMP-RFC-9810">Certificate Management Protocol (CMP, RFC 9810)</h4>
+
+<p>This also covers CRMF (RFC 4211) and HTTP transfer (RFC 9811) See <a href="../man1/openssl-cmp.html">openssl-cmp(1)</a> and <a href="../man3/OSSL_CMP_exec_certreq.html">OSSL_CMP_exec_certreq(3)</a> as starting points.</p>
+
+<h4 id="HTTP-S-client">HTTP(S) client</h4>
+
+<p>A proper HTTP(S) client that supports GET and POST, redirection, plain and ASN.1-encoded contents, proxies, and timeouts.</p>
+
+<h4 id="Key-Derivation-Function-API-EVP_KDF">Key Derivation Function API (EVP_KDF)</h4>
+
+<p>This simplifies the process of adding new KDF and PRF implementations.</p>
+
+<p>Previously KDF algorithms had been shoe-horned into using the EVP_PKEY object which was not a logical mapping. Existing applications that use KDF algorithms using EVP_PKEY (scrypt, TLS1 PRF and HKDF) may be slower as they use an EVP_KDF bridge internally. All new applications should use the new <a href="../man3/EVP_KDF.html">EVP_KDF(3)</a> interface. See also <a href="../man7/OSSL_PROVIDER-default.html">&quot;Key Derivation Function (KDF)&quot; in OSSL_PROVIDER-default(7)</a> and <a href="../man7/OSSL_PROVIDER-FIPS.html">&quot;Key Derivation Function (KDF)&quot; in OSSL_PROVIDER-FIPS(7)</a>.</p>
+
+<h4 id="Message-Authentication-Code-API-EVP_MAC">Message Authentication Code API (EVP_MAC)</h4>
+
+<p>This simplifies the process of adding MAC implementations.</p>
+
+<p>This includes a generic EVP_PKEY to EVP_MAC bridge, to facilitate the continued use of MACs through raw private keys in functionality such as <a href="../man3/EVP_DigestSign.html">EVP_DigestSign(3)</a> and <a href="../man3/EVP_DigestVerify.html">EVP_DigestVerify(3)</a>.</p>
+
+<p>All new applications should use the new <a href="../man3/EVP_MAC.html">EVP_MAC(3)</a> interface. See also <a href="../man7/OSSL_PROVIDER-default.html">&quot;Message Authentication Code (MAC)&quot; in OSSL_PROVIDER-default(7)</a> and <a href="../man7/OSSL_PROVIDER-FIPS.html">&quot;Message Authentication Code (MAC)&quot; in OSSL_PROVIDER-FIPS(7)</a>.</p>
+
+<h4 id="Algorithm-Fetching">Algorithm Fetching</h4>
+
+<p>Using calls to convenience functions such as EVP_sha256() and EVP_aes_256_gcm() may incur a performance penalty when using providers. Retrieving algorithms from providers involves searching for an algorithm by name. This is much slower than directly accessing a method table. It is recommended to prefetch algorithms if an algorithm is used many times. See <a href="../man7/crypto.html">&quot;Performance&quot; in crypto(7)</a>, <a href="../man7/crypto.html">&quot;Explicit fetching&quot; in crypto(7)</a> and <a href="../man7/crypto.html">&quot;Implicit fetching&quot; in crypto(7)</a>.</p>
+
+<h4 id="Support-for-Linux-Kernel-TLS">Support for Linux Kernel TLS</h4>
+
+<p>In order to use KTLS, support for it must be compiled in using the <code>enable-ktls</code> configuration option. It must also be enabled at run time using the <b>SSL_OP_ENABLE_KTLS</b> option.</p>
+
+<h4 id="New-Algorithms">New Algorithms</h4>
+
+<ul>
+
+<li><p>KDF algorithms &quot;SINGLE STEP&quot; and &quot;SSH&quot;</p>
+
+<p>See <a href="../man7/EVP_KDF-SS.html">EVP_KDF-SS(7)</a> and <a href="../man7/EVP_KDF-SSHKDF.html">EVP_KDF-SSHKDF(7)</a></p>
+
+</li>
+<li><p>MAC Algorithms &quot;GMAC&quot; and &quot;KMAC&quot;</p>
+
+<p>See <a href="../man7/EVP_MAC-GMAC.html">EVP_MAC-GMAC(7)</a> and <a href="../man7/EVP_MAC-KMAC.html">EVP_MAC-KMAC(7)</a>.</p>
+
+</li>
+<li><p>KEM Algorithm &quot;RSASVE&quot;</p>
+
+<p>See <a href="../man7/EVP_KEM-RSA.html">EVP_KEM-RSA(7)</a>.</p>
+
+</li>
+<li><p>Cipher Algorithm &quot;AES-SIV&quot;</p>
+
+<p>See <a href="../man3/EVP_EncryptInit.html">&quot;SIV Mode&quot; in EVP_EncryptInit(3)</a>.</p>
+
+</li>
+<li><p>AES Key Wrap inverse ciphers supported by EVP layer.</p>
+
+<p>The inverse ciphers use AES decryption for wrapping, and AES encryption for unwrapping. The algorithms are: &quot;AES-128-WRAP-INV&quot;, &quot;AES-192-WRAP-INV&quot;, &quot;AES-256-WRAP-INV&quot;, &quot;AES-128-WRAP-PAD-INV&quot;, &quot;AES-192-WRAP-PAD-INV&quot; and &quot;AES-256-WRAP-PAD-INV&quot;.</p>
+
+</li>
+<li><p>CTS ciphers added to EVP layer.</p>
+
+<p>The algorithms are &quot;AES-128-CBC-CTS&quot;, &quot;AES-192-CBC-CTS&quot;, &quot;AES-256-CBC-CTS&quot;, &quot;CAMELLIA-128-CBC-CTS&quot;, &quot;CAMELLIA-192-CBC-CTS&quot; and &quot;CAMELLIA-256-CBC-CTS&quot;. CS1, CS2 and CS3 variants are supported.</p>
+
+</li>
+</ul>
+
+<h4 id="CMS-and-PKCS-7-updates">CMS and PKCS#7 updates</h4>
+
+<ul>
+
+<li><p>Added CAdES-BES signature verification support.</p>
+
+</li>
+<li><p>Added CAdES-BES signature scheme and attributes support (RFC 5126) to CMS API.</p>
+
+</li>
+<li><p>Added AuthEnvelopedData content type structure (RFC 5083) using AES_GCM</p>
+
+<p>This uses the AES-GCM parameter (RFC 5084) for the Cryptographic Message Syntax. Its purpose is to support encryption and decryption of a digital envelope that is both authenticated and encrypted using AES GCM mode.</p>
+
+</li>
+<li><p><a href="../man3/PKCS7_get_octet_string.html">PKCS7_get_octet_string(3)</a> and <a href="../man3/PKCS7_type_is_other.html">PKCS7_type_is_other(3)</a> were made public.</p>
+
+</li>
+</ul>
+
+<h4 id="PKCS-12-API-updates">PKCS#12 API updates</h4>
+
+<p>The default algorithms for pkcs12 creation with the PKCS12_create() function were changed to more modern PBKDF2 and AES based algorithms. The default MAC iteration count was changed to PKCS12_DEFAULT_ITER to make it equal with the password-based encryption iteration count. The default digest algorithm for the MAC computation was changed to SHA-256. The pkcs12 application now supports -legacy option that restores the previous default algorithms to support interoperability with legacy systems.</p>
+
+<p>Added enhanced PKCS#12 APIs which accept a library context <b>OSSL_LIB_CTX</b> and (where relevant) a property query. Other APIs which handle PKCS#7 and PKCS#8 objects have also been enhanced where required. This includes:</p>
+
+<p><a href="../man3/PKCS12_add_key_ex.html">PKCS12_add_key_ex(3)</a>, <a href="../man3/PKCS12_add_safe_ex.html">PKCS12_add_safe_ex(3)</a>, <a href="../man3/PKCS12_add_safes_ex.html">PKCS12_add_safes_ex(3)</a>, <a href="../man3/PKCS12_create_ex.html">PKCS12_create_ex(3)</a>, <a href="../man3/PKCS12_decrypt_skey_ex.html">PKCS12_decrypt_skey_ex(3)</a>, <a href="../man3/PKCS12_init_ex.html">PKCS12_init_ex(3)</a>, <a href="../man3/PKCS12_item_decrypt_d2i_ex.html">PKCS12_item_decrypt_d2i_ex(3)</a>, <a href="../man3/PKCS12_item_i2d_encrypt_ex.html">PKCS12_item_i2d_encrypt_ex(3)</a>, <a href="../man3/PKCS12_key_gen_asc_ex.html">PKCS12_key_gen_asc_ex(3)</a>, <a href="../man3/PKCS12_key_gen_uni_ex.html">PKCS12_key_gen_uni_ex(3)</a>, <a href="../man3/PKCS12_key_gen_utf8_ex.html">PKCS12_key_gen_utf8_ex(3)</a>, <a href="../man3/PKCS12_pack_p7encdata_ex.html">PKCS12_pack_p7encdata_ex(3)</a>, <a href="../man3/PKCS12_pbe_crypt_ex.html">PKCS12_pbe_crypt_ex(3)</a>, <a href="../man3/PKCS12_PBE_keyivgen_ex.html">PKCS12_PBE_keyivgen_ex(3)</a>, <a href="../man3/PKCS12_SAFEBAG_create_pkcs8_encrypt_ex.html">PKCS12_SAFEBAG_create_pkcs8_encrypt_ex(3)</a>, <a href="../man3/PKCS5_pbe2_set_iv_ex.html">PKCS5_pbe2_set_iv_ex(3)</a>, <a href="../man3/PKCS5_pbe_set0_algor_ex.html">PKCS5_pbe_set0_algor_ex(3)</a>, <a href="../man3/PKCS5_pbe_set_ex.html">PKCS5_pbe_set_ex(3)</a>, <a href="../man3/PKCS5_pbkdf2_set_ex.html">PKCS5_pbkdf2_set_ex(3)</a>, <a href="../man3/PKCS5_v2_PBE_keyivgen_ex.html">PKCS5_v2_PBE_keyivgen_ex(3)</a>, <a href="../man3/PKCS5_v2_scrypt_keyivgen_ex.html">PKCS5_v2_scrypt_keyivgen_ex(3)</a>, <a href="../man3/PKCS8_decrypt_ex.html">PKCS8_decrypt_ex(3)</a>, <a href="../man3/PKCS8_encrypt_ex.html">PKCS8_encrypt_ex(3)</a>, <a href="../man3/PKCS8_set0_pbe_ex.html">PKCS8_set0_pbe_ex(3)</a>.</p>
+
+<p>As part of this change the EVP_PBE_xxx APIs can also accept a library context and property query and will call an extended version of the key/IV derivation function which supports these parameters. This includes <a href="../man3/EVP_PBE_CipherInit_ex.html">EVP_PBE_CipherInit_ex(3)</a>, <a href="../man3/EVP_PBE_find_ex.html">EVP_PBE_find_ex(3)</a> and <a href="../man3/EVP_PBE_scrypt_ex.html">EVP_PBE_scrypt_ex(3)</a>.</p>
+
+<h4 id="PKCS-12-KDF-versus-FIPS">PKCS#12 KDF versus FIPS</h4>
+
+<p>Unlike in 1.x.y, the PKCS12KDF algorithm used when a PKCS#12 structure is created with a MAC that does not work with the FIPS provider as the PKCS12KDF is not a FIPS approvable mechanism.</p>
+
+<p>See <a href="../man7/EVP_KDF-PKCS12KDF.html">EVP_KDF-PKCS12KDF(7)</a>, <a href="../man3/PKCS12_create.html">PKCS12_create(3)</a>, <a href="../man1/openssl-pkcs12.html">openssl-pkcs12(1)</a>, <a href="../man7/OSSL_PROVIDER-FIPS.html">OSSL_PROVIDER-FIPS(7)</a>.</p>
+
+<h4 id="Windows-thread-synchronization-changes">Windows thread synchronization changes</h4>
+
+<p>Windows thread synchronization uses read/write primitives (SRWLock) when supported by the OS, otherwise CriticalSection continues to be used.</p>
+
+<h4 id="Trace-API">Trace API</h4>
+
+<p>A new generic trace API has been added which provides support for enabling instrumentation through trace output. This feature is mainly intended as an aid for developers and is disabled by default. To utilize it, OpenSSL needs to be configured with the <code>enable-trace</code> option.</p>
+
+<p>If the tracing API is enabled, the application can activate trace output by registering BIOs as trace channels for a number of tracing and debugging categories. See <a href="../man3/OSSL_trace_enabled.html">OSSL_trace_enabled(3)</a>.</p>
+
+<h4 id="Key-validation-updates">Key validation updates</h4>
+
+<p><a href="../man3/EVP_PKEY_public_check.html">EVP_PKEY_public_check(3)</a> and <a href="../man3/EVP_PKEY_param_check.html">EVP_PKEY_param_check(3)</a> now work for more key types. This includes RSA, DSA, ED25519, X25519, ED448 and X448. Previously (in 1.1.1) they would return -2. For key types that do not have parameters <a href="../man3/EVP_PKEY_param_check.html">EVP_PKEY_param_check(3)</a> will always return 1.</p>
+
+<h3 id="Other-notable-deprecations-and-changes">Other notable deprecations and changes</h3>
+
+<h4 id="The-function-code-part-of-an-OpenSSL-error-code-is-no-longer-relevant">The function code part of an OpenSSL error code is no longer relevant</h4>
+
+<p>This code is now always set to zero. Related functions are deprecated.</p>
+
+<h4 id="STACK-and-HASH-macros-have-been-cleaned-up">STACK and HASH macros have been cleaned up</h4>
+
+<p>The type-safe wrappers are declared everywhere and implemented once. See <a href="../man3/DEFINE_STACK_OF.html">DEFINE_STACK_OF(3)</a> and <a href="../man3/DEFINE_LHASH_OF_EX.html">DEFINE_LHASH_OF_EX(3)</a>.</p>
+
+<h4 id="The-RAND_DRBG-subsystem-has-been-removed">The RAND_DRBG subsystem has been removed</h4>
+
+<p>The new <a href="../man3/EVP_RAND.html">EVP_RAND(3)</a> is a partial replacement: the DRBG callback framework is absent. The RAND_DRBG API did not fit well into the new provider concept as implemented by EVP_RAND and EVP_RAND_CTX.</p>
+
+<h4 id="Removed-FIPS_mode-and-FIPS_mode_set">Removed FIPS_mode() and FIPS_mode_set()</h4>
+
+<p>These functions are legacy APIs that are not applicable to the new provider model. Applications should instead use <a href="../man3/EVP_default_properties_is_fips_enabled.html">EVP_default_properties_is_fips_enabled(3)</a> and <a href="../man3/EVP_default_properties_enable_fips.html">EVP_default_properties_enable_fips(3)</a>.</p>
+
+<h4 id="Key-generation-is-slower">Key generation is slower</h4>
+
+<p>The Miller-Rabin test now uses 64 rounds, which is used for all prime generation, including RSA key generation. This affects the time for larger keys sizes.</p>
+
+<p>The default key generation method for the regular 2-prime RSA keys was changed to the FIPS186-4 B.3.6 method (Generation of Probable Primes with Conditions Based on Auxiliary Probable Primes). This method is slower than the original method.</p>
+
+<h4 id="Change-PBKDF2-to-conform-to-SP800-132-instead-of-the-older-PKCS5-RFC2898">Change PBKDF2 to conform to SP800-132 instead of the older PKCS5 RFC2898</h4>
+
+<p>This checks that the salt length is at least 128 bits, the derived key length is at least 112 bits, and that the iteration count is at least 1000. For backwards compatibility these checks are disabled by default in the default provider, but are enabled by default in the FIPS provider.</p>
+
+<p>To enable or disable the checks see <b>OSSL_KDF_PARAM_PKCS5</b> in <a href="../man7/EVP_KDF-PBKDF2.html">EVP_KDF-PBKDF2(7)</a>. The parameter can be set using <a href="../man3/EVP_KDF_derive.html">EVP_KDF_derive(3)</a>.</p>
+
+<h4 id="Enforce-a-minimum-DH-modulus-size-of-512-bits">Enforce a minimum DH modulus size of 512 bits</h4>
+
+<p>Smaller sizes now result in an error.</p>
+
+<h4 id="SM2-key-changes">SM2 key changes</h4>
+
+<p>EC EVP_PKEYs with the SM2 curve have been reworked to automatically become EVP_PKEY_SM2 rather than EVP_PKEY_EC.</p>
+
+<p>Unlike in previous OpenSSL versions, this means that applications cannot call <b>EVP_PKEY_set_alias_type(pkey, EVP_PKEY_SM2)</b> to get SM2 computations.</p>
+
+<p>Parameter and key generation is also reworked to make it possible to generate EVP_PKEY_SM2 parameters and keys. Applications must now generate SM2 keys directly and must not create an EVP_PKEY_EC key first. It is no longer possible to import an SM2 key with domain parameters other than the SM2 elliptic curve ones.</p>
+
+<p>Validation of SM2 keys has been separated from the validation of regular EC keys, allowing to improve the SM2 validation process to reject loaded private keys that are not conforming to the SM2 ISO standard. In particular, a private scalar <i>k</i> outside the range <i>1 &lt;= k &lt; n-1</i> is now correctly rejected.</p>
+
+<h4 id="EVP_PKEY_set_alias_type-method-has-been-removed">EVP_PKEY_set_alias_type() method has been removed</h4>
+
+<p>This function made a <b>EVP_PKEY</b> object mutable after it had been set up. In OpenSSL 3.0 it was decided that a provided key should not be able to change its type, so this function has been removed.</p>
+
+<h4 id="Functions-that-return-an-internal-key-should-be-treated-as-read-only">Functions that return an internal key should be treated as read only</h4>
+
+<p>Functions such as <a href="../man3/EVP_PKEY_get0_RSA.html">EVP_PKEY_get0_RSA(3)</a> behave slightly differently in OpenSSL 3.0. Previously they returned a pointer to the low-level key used internally by libcrypto. From OpenSSL 3.0 this key may now be held in a provider. Calling these functions will only return a handle on the internal key where the EVP_PKEY was constructed using this key in the first place, for example using a function or macro such as <a href="../man3/EVP_PKEY_assign_RSA.html">EVP_PKEY_assign_RSA(3)</a>, <a href="../man3/EVP_PKEY_set1_RSA.html">EVP_PKEY_set1_RSA(3)</a>, etc. Where the EVP_PKEY holds a provider managed key, then these functions now return a cached copy of the key. Changes to the internal provider key that take place after the first time the cached key is accessed will not be reflected back in the cached copy. Similarly any changes made to the cached copy by application code will not be reflected back in the internal provider key.</p>
+
+<p>For the above reasons the keys returned from these functions should typically be treated as read-only. To emphasise this the value returned from <a href="../man3/EVP_PKEY_get0_RSA.html">EVP_PKEY_get0_RSA(3)</a>, <a href="../man3/EVP_PKEY_get0_DSA.html">EVP_PKEY_get0_DSA(3)</a>, <a href="../man3/EVP_PKEY_get0_EC_KEY.html">EVP_PKEY_get0_EC_KEY(3)</a> and <a href="../man3/EVP_PKEY_get0_DH.html">EVP_PKEY_get0_DH(3)</a> have been made const. This may break some existing code. Applications broken by this change should be modified. The preferred solution is to refactor the code to avoid the use of these deprecated functions. Failing this the code should be modified to use a const pointer instead. The <a href="../man3/EVP_PKEY_get1_RSA.html">EVP_PKEY_get1_RSA(3)</a>, <a href="../man3/EVP_PKEY_get1_DSA.html">EVP_PKEY_get1_DSA(3)</a>, <a href="../man3/EVP_PKEY_get1_EC_KEY.html">EVP_PKEY_get1_EC_KEY(3)</a> and <a href="../man3/EVP_PKEY_get1_DH.html">EVP_PKEY_get1_DH(3)</a> functions continue to return a non-const pointer to enable them to be &quot;freed&quot;. However they should also be treated as read-only.</p>
+
+<h4 id="The-public-key-check-has-moved-from-EVP_PKEY_derive-to-EVP_PKEY_derive_set_peer">The public key check has moved from EVP_PKEY_derive() to EVP_PKEY_derive_set_peer()</h4>
+
+<p>This may mean result in an error in <a href="../man3/EVP_PKEY_derive_set_peer.html">EVP_PKEY_derive_set_peer(3)</a> rather than during <a href="../man3/EVP_PKEY_derive.html">EVP_PKEY_derive(3)</a>. To disable this check use EVP_PKEY_derive_set_peer_ex(dh, peer, 0).</p>
+
+<h4 id="The-print-format-has-cosmetic-changes-for-some-functions">The print format has cosmetic changes for some functions</h4>
+
+<p>The output from numerous &quot;printing&quot; functions such as <a href="../man3/X509_signature_print.html">X509_signature_print(3)</a>, <a href="../man3/X509_print_ex.html">X509_print_ex(3)</a>, <a href="../man3/X509_CRL_print_ex.html">X509_CRL_print_ex(3)</a>, and other similar functions has been amended such that there may be cosmetic differences between the output observed in 1.1.1 and 3.0. This also applies to the <b>-text</b> output from the <b>openssl x509</b> and <b>openssl crl</b> applications.</p>
+
+<h4 id="Interactive-mode-from-the-openssl-program-has-been-removed">Interactive mode from the <b>openssl</b> program has been removed</h4>
+
+<p>From now on, running it without arguments is equivalent to <b>openssl help</b>.</p>
+
+<h4 id="The-error-return-values-from-some-control-calls-ctrl-have-changed">The error return values from some control calls (ctrl) have changed</h4>
+
+<p>One significant change is that controls which used to return -2 for invalid inputs, now return -1 indicating a generic error condition instead.</p>
+
+<h4 id="DH-and-DHX-key-types-have-different-settable-parameters">DH and DHX key types have different settable parameters</h4>
+
+<p>Previously (in 1.1.1) these conflicting parameters were allowed, but will now result in errors. See <a href="../man7/EVP_PKEY-DH.html">EVP_PKEY-DH(7)</a> for further details. This affects the behaviour of <a href="../man1/openssl-genpkey.html">openssl-genpkey(1)</a> for DH parameter generation.</p>
+
+<h4 id="EVP_CIPHER_CTX_set_flags-ordering-change">EVP_CIPHER_CTX_set_flags() ordering change</h4>
+
+<p>If using a cipher from a provider the <b>EVP_CIPH_FLAG_LENGTH_BITS</b> flag can only be set <b>after</b> the cipher has been assigned to the cipher context. See <a href="../man3/EVP_EncryptInit.html">&quot;FLAGS&quot; in EVP_EncryptInit(3)</a> for more information.</p>
+
+<h4 id="Validation-of-operation-context-parameters">Validation of operation context parameters</h4>
+
+<p>Due to move of the implementation of cryptographic operations to the providers, validation of various operation parameters can be postponed until the actual operation is executed where previously it happened immediately when an operation parameter was set.</p>
+
+<p>For example when setting an unsupported curve with EVP_PKEY_CTX_set_ec_paramgen_curve_nid() this function call will not fail but later keygen operations with the EVP_PKEY_CTX will fail.</p>
+
+<h4 id="Removal-of-function-code-from-the-error-codes">Removal of function code from the error codes</h4>
+
+<p>The function code part of the error code is now always set to 0. For that reason the ERR_GET_FUNC() macro was removed. Applications must resolve the error codes only using the library number and the reason code.</p>
+
+<h4 id="ChaCha20-Poly1305-cipher-does-not-allow-a-truncated-IV-length-to-be-used">ChaCha20-Poly1305 cipher does not allow a truncated IV length to be used</h4>
+
+<p>In OpenSSL 3.0 setting the IV length to any value other than 12 will result in an error. Prior to OpenSSL 3.0 the ivlen could be smaller that the required 12 byte length, using EVP_CIPHER_CTX_ctrl(ctx, EVP_CRTL_AEAD_SET_IVLEN, ivlen, NULL). This resulted in an IV that had leading zero padding.</p>
+
+<h2 id="Installation-and-Compilation">Installation and Compilation</h2>
+
+<p>Please refer to the INSTALL.md file in the top of the distribution for instructions on how to build and install OpenSSL 3.0. Please also refer to the various platform specific NOTES files for your specific platform.</p>
+
+<h2 id="Upgrading-from-OpenSSL-1.1.1">Upgrading from OpenSSL 1.1.1</h2>
+
+<p>Upgrading to OpenSSL 3.0 from OpenSSL 1.1.1 should be relatively straight forward in most cases. The most likely area where you will encounter problems is if you have used low level APIs in your code (as discussed above). In that case you are likely to start seeing deprecation warnings when compiling your application. If this happens you have 3 options:</p>
+
+<ol>
+
+<li><p>Ignore the warnings. They are just warnings. The deprecated functions are still present and you may still use them. However be aware that they may be removed from a future version of OpenSSL.</p>
+
+</li>
+<li><p>Suppress the warnings. Refer to your compiler documentation on how to do this.</p>
+
+</li>
+<li><p>Remove your usage of the low level APIs. In this case you will need to rewrite your code to use the high level APIs instead</p>
+
+</li>
+</ol>
+
+<h3 id="Error-code-changes">Error code changes</h3>
+
+<p>As OpenSSL 3.0 provides a brand new Encoder/Decoder mechanism for working with widely used file formats, application code that checks for particular error reason codes on key loading failures might need an update.</p>
+
+<p>Password-protected keys may deserve special attention. If only some errors are treated as an indicator that the user should be asked about the password again, it&#39;s worth testing these scenarios and processing the newly relevant codes.</p>
+
+<p>There may be more cases to treat specially, depending on the calling application code.</p>
+
+<h2 id="Upgrading-from-OpenSSL-1.0.2">Upgrading from OpenSSL 1.0.2</h2>
+
+<p>Upgrading to OpenSSL 3.0 from OpenSSL 1.0.2 is likely to be significantly more difficult. In addition to the issues discussed above in the section about <a href="#Upgrading-from-OpenSSL-1.1.1">&quot;Upgrading from OpenSSL 1.1.1&quot;</a>, the main things to be aware of are:</p>
+
+<ol>
+
+<li><p>The build and installation procedure has changed significantly.</p>
+
+<p>Check the file INSTALL.md in the top of the installation for instructions on how to build and install OpenSSL for your platform. Also read the various NOTES files in the same directory, as applicable for your platform.</p>
+
+</li>
+<li><p>Many structures have been made opaque in OpenSSL 3.0.</p>
+
+<p>The structure definitions have been removed from the public header files and moved to internal header files. In practice this means that you can no longer stack allocate some structures. Instead they must be heap allocated through some function call (typically those function names have a <code>_new</code> suffix to them). Additionally you must use &quot;setter&quot; or &quot;getter&quot; functions to access the fields within those structures.</p>
+
+<p>For example code that previously looked like this:</p>
+
+<pre><code>EVP_MD_CTX md_ctx;
+
+/* This line will now generate compiler errors */
+EVP_MD_CTX_init(&amp;md_ctx);</code></pre>
+
+<p>The code needs to be amended to look like this:</p>
+
+<pre><code>EVP_MD_CTX *md_ctx;
+
+md_ctx = EVP_MD_CTX_new();
+...
+...
+EVP_MD_CTX_free(md_ctx);</code></pre>
+
+</li>
+<li><p>Support for TLSv1.3 has been added.</p>
+
+<p>This has a number of implications for SSL/TLS applications. See the <a href="https://github.com/openssl/openssl/wiki/TLS1.3">TLS1.3 page</a> for further details.</p>
+
+</li>
+</ol>
+
+<p>More details about the breaking changes between OpenSSL versions 1.0.2 and 1.1.0 can be found on the <a href="https://github.com/openssl/openssl/wiki/OpenSSL_1.1.0_Changes">OpenSSL 1.1.0 Changes page</a>.</p>
+
+<h3 id="Upgrading-from-the-OpenSSL-2.0-FIPS-Object-Module">Upgrading from the OpenSSL 2.0 FIPS Object Module</h3>
+
+<p>The OpenSSL 2.0 FIPS Object Module was a separate download that had to be built separately and then integrated into your main OpenSSL 1.0.2 build. In OpenSSL 3.0 the FIPS support is fully integrated into the mainline version of OpenSSL and is no longer a separate download. For further information see <a href="#Completing-the-installation-of-the-FIPS-Module">&quot;Completing the installation of the FIPS Module&quot;</a>.</p>
+
+<p>The function calls FIPS_mode() and FIPS_mode_set() have been removed from OpenSSL 3.0. You should rewrite your application to not use them. See <a href="../man7/fips_module.html">fips_module(7)</a> and <a href="../man7/OSSL_PROVIDER-FIPS.html">OSSL_PROVIDER-FIPS(7)</a> for details.</p>
+
+<h2 id="Completing-the-installation-of-the-FIPS-Module">Completing the installation of the FIPS Module</h2>
+
+<p>The FIPS Module will be built and installed automatically if FIPS support has been configured. The current documentation can be found in the <a href="https://github.com/openssl/openssl/blob/master/README-FIPS.md">README-FIPS</a> file.</p>
+
+<h2 id="Programming">Programming</h2>
+
+<p>Applications written to work with OpenSSL 1.1.1 will mostly just work with OpenSSL 3.0. However changes will be required if you want to take advantage of some of the new features that OpenSSL 3.0 makes available. In order to do that you need to understand some new concepts introduced in OpenSSL 3.0. Read <a href="../man7/crypto.html">&quot;Library contexts&quot; in crypto(7)</a> for further information.</p>
+
+<h3 id="Library-Context">Library Context</h3>
+
+<p>A library context allows different components of a complex application to each use a different library context and have different providers loaded with different configuration settings. See <a href="../man7/crypto.html">&quot;Library contexts&quot; in crypto(7)</a> for further info.</p>
+
+<p>If the user creates an <b>OSSL_LIB_CTX</b> via <a href="../man3/OSSL_LIB_CTX_new.html">OSSL_LIB_CTX_new(3)</a> then many functions may need to be changed to pass additional parameters to handle the library context.</p>
+
+<h4 id="Using-a-Library-Context---Old-functions-that-should-be-changed">Using a Library Context - Old functions that should be changed</h4>
+
+<p>If a library context is needed then all EVP_* digest functions that return a <b>const EVP_MD *</b> such as EVP_sha256() should be replaced with a call to <a href="../man3/EVP_MD_fetch.html">EVP_MD_fetch(3)</a>. See <a href="../man7/crypto.html">&quot;ALGORITHM FETCHING&quot; in crypto(7)</a>.</p>
+
+<p>If a library context is needed then all EVP_* cipher functions that return a <b>const EVP_CIPHER *</b> such as EVP_aes_128_cbc() should be replaced vith a call to <a href="../man3/EVP_CIPHER_fetch.html">EVP_CIPHER_fetch(3)</a>. See <a href="../man7/crypto.html">&quot;ALGORITHM FETCHING&quot; in crypto(7)</a>.</p>
+
+<p>Some functions can be passed an object that has already been set up with a library context such as <a href="../man3/d2i_X509.html">d2i_X509(3)</a>, <a href="../man3/d2i_X509_CRL.html">d2i_X509_CRL(3)</a>, <a href="../man3/d2i_X509_REQ.html">d2i_X509_REQ(3)</a> and <a href="../man3/d2i_X509_PUBKEY.html">d2i_X509_PUBKEY(3)</a>. If NULL is passed instead then the created object will be set up with the default library context. Use <a href="../man3/X509_new_ex.html">X509_new_ex(3)</a>, <a href="../man3/X509_CRL_new_ex.html">X509_CRL_new_ex(3)</a>, <a href="../man3/X509_REQ_new_ex.html">X509_REQ_new_ex(3)</a> and <a href="../man3/X509_PUBKEY_new_ex.html">X509_PUBKEY_new_ex(3)</a> if a library context is required.</p>
+
+<p>All functions listed below with a <i>NAME</i> have a replacement function <i>NAME_ex</i> that takes <b>OSSL_LIB_CTX</b> as an additional argument. Functions that have other mappings are listed along with the respective name.</p>
+
+<ul>
+
+<li><p><a href="../man3/ASN1_item_new.html">ASN1_item_new(3)</a>, <a href="../man3/ASN1_item_d2i.html">ASN1_item_d2i(3)</a>, <a href="../man3/ASN1_item_d2i_fp.html">ASN1_item_d2i_fp(3)</a>, <a href="../man3/ASN1_item_d2i_bio.html">ASN1_item_d2i_bio(3)</a>, <a href="../man3/ASN1_item_sign.html">ASN1_item_sign(3)</a> and <a href="../man3/ASN1_item_verify.html">ASN1_item_verify(3)</a></p>
+
+</li>
+<li><p><a href="../man3/BIO_new.html">BIO_new(3)</a></p>
+
+</li>
+<li><p>b2i_RSA_PVK_bio() and i2b_PVK_bio()</p>
+
+</li>
+<li><p><a href="../man3/BN_CTX_new.html">BN_CTX_new(3)</a> and <a href="../man3/BN_CTX_secure_new.html">BN_CTX_secure_new(3)</a></p>
+
+</li>
+<li><p><a href="../man3/CMS_AuthEnvelopedData_create.html">CMS_AuthEnvelopedData_create(3)</a>, <a href="../man3/CMS_ContentInfo_new.html">CMS_ContentInfo_new(3)</a>, <a href="../man3/CMS_data_create.html">CMS_data_create(3)</a>, <a href="../man3/CMS_digest_create.html">CMS_digest_create(3)</a>, <a href="../man3/CMS_EncryptedData_encrypt.html">CMS_EncryptedData_encrypt(3)</a>, <a href="../man3/CMS_encrypt.html">CMS_encrypt(3)</a>, <a href="../man3/CMS_EnvelopedData_create.html">CMS_EnvelopedData_create(3)</a>, <a href="../man3/CMS_ReceiptRequest_create0.html">CMS_ReceiptRequest_create0(3)</a> and <a href="../man3/CMS_sign.html">CMS_sign(3)</a></p>
+
+</li>
+<li><p><a href="../man3/CONF_modules_load_file.html">CONF_modules_load_file(3)</a></p>
+
+</li>
+<li><p><a href="../man3/CTLOG_new.html">CTLOG_new(3)</a>, <a href="../man3/CTLOG_new_from_base64.html">CTLOG_new_from_base64(3)</a> and <a href="../man3/CTLOG_STORE_new.html">CTLOG_STORE_new(3)</a></p>
+
+</li>
+<li><p><a href="../man3/CT_POLICY_EVAL_CTX_new.html">CT_POLICY_EVAL_CTX_new(3)</a></p>
+
+</li>
+<li><p><a href="../man3/d2i_AutoPrivateKey.html">d2i_AutoPrivateKey(3)</a>, <a href="../man3/d2i_PrivateKey.html">d2i_PrivateKey(3)</a> and <a href="../man3/d2i_PUBKEY.html">d2i_PUBKEY(3)</a></p>
+
+</li>
+<li><p><a href="../man3/d2i_PrivateKey_bio.html">d2i_PrivateKey_bio(3)</a> and <a href="../man3/d2i_PrivateKey_fp.html">d2i_PrivateKey_fp(3)</a></p>
+
+<p>Use <a href="../man3/d2i_PrivateKey_ex_bio.html">d2i_PrivateKey_ex_bio(3)</a> and <a href="../man3/d2i_PrivateKey_ex_fp.html">d2i_PrivateKey_ex_fp(3)</a></p>
+
+</li>
+<li><p><a href="../man3/EC_GROUP_new.html">EC_GROUP_new(3)</a></p>
+
+<p>Use <a href="../man3/EC_GROUP_new_by_curve_name_ex.html">EC_GROUP_new_by_curve_name_ex(3)</a> or <a href="../man3/EC_GROUP_new_from_params.html">EC_GROUP_new_from_params(3)</a>.</p>
+
+</li>
+<li><p><a href="../man3/EVP_DigestSignInit.html">EVP_DigestSignInit(3)</a> and <a href="../man3/EVP_DigestVerifyInit.html">EVP_DigestVerifyInit(3)</a></p>
+
+</li>
+<li><p><a href="../man3/EVP_PBE_CipherInit.html">EVP_PBE_CipherInit(3)</a>, <a href="../man3/EVP_PBE_find.html">EVP_PBE_find(3)</a> and <a href="../man3/EVP_PBE_scrypt.html">EVP_PBE_scrypt(3)</a></p>
+
+</li>
+<li><p><a href="../man3/PKCS5_PBE_keyivgen.html">PKCS5_PBE_keyivgen(3)</a></p>
+
+</li>
+<li><p><a href="../man3/EVP_PKCS82PKEY.html">EVP_PKCS82PKEY(3)</a></p>
+
+</li>
+<li><p><a href="../man3/EVP_PKEY_CTX_new_id.html">EVP_PKEY_CTX_new_id(3)</a></p>
+
+<p>Use <a href="../man3/EVP_PKEY_CTX_new_from_name.html">EVP_PKEY_CTX_new_from_name(3)</a></p>
+
+</li>
+<li><p><a href="../man3/EVP_PKEY_derive_set_peer.html">EVP_PKEY_derive_set_peer(3)</a>, <a href="../man3/EVP_PKEY_new_raw_private_key.html">EVP_PKEY_new_raw_private_key(3)</a> and <a href="../man3/EVP_PKEY_new_raw_public_key.html">EVP_PKEY_new_raw_public_key(3)</a></p>
+
+</li>
+<li><p><a href="../man3/EVP_SignFinal.html">EVP_SignFinal(3)</a> and <a href="../man3/EVP_VerifyFinal.html">EVP_VerifyFinal(3)</a></p>
+
+</li>
+<li><p><a href="../man3/NCONF_new.html">NCONF_new(3)</a></p>
+
+</li>
+<li><p><a href="../man3/OCSP_RESPID_match.html">OCSP_RESPID_match(3)</a> and <a href="../man3/OCSP_RESPID_set_by_key.html">OCSP_RESPID_set_by_key(3)</a></p>
+
+</li>
+<li><p><a href="../man3/OPENSSL_thread_stop.html">OPENSSL_thread_stop(3)</a></p>
+
+</li>
+<li><p><a href="../man3/OSSL_STORE_open.html">OSSL_STORE_open(3)</a></p>
+
+</li>
+<li><p><a href="../man3/PEM_read_bio_Parameters.html">PEM_read_bio_Parameters(3)</a>, <a href="../man3/PEM_read_bio_PrivateKey.html">PEM_read_bio_PrivateKey(3)</a>, <a href="../man3/PEM_read_bio_PUBKEY.html">PEM_read_bio_PUBKEY(3)</a>, <a href="../man3/PEM_read_PrivateKey.html">PEM_read_PrivateKey(3)</a> and <a href="../man3/PEM_read_PUBKEY.html">PEM_read_PUBKEY(3)</a></p>
+
+</li>
+<li><p><a href="../man3/PEM_write_bio_PrivateKey.html">PEM_write_bio_PrivateKey(3)</a>, <a href="../man3/PEM_write_bio_PUBKEY.html">PEM_write_bio_PUBKEY(3)</a>, <a href="../man3/PEM_write_PrivateKey.html">PEM_write_PrivateKey(3)</a> and <a href="../man3/PEM_write_PUBKEY.html">PEM_write_PUBKEY(3)</a></p>
+
+</li>
+<li><p><a href="../man3/PEM_X509_INFO_read_bio.html">PEM_X509_INFO_read_bio(3)</a> and <a href="../man3/PEM_X509_INFO_read.html">PEM_X509_INFO_read(3)</a></p>
+
+</li>
+<li><p><a href="../man3/PKCS12_add_key.html">PKCS12_add_key(3)</a>, <a href="../man3/PKCS12_add_safe.html">PKCS12_add_safe(3)</a>, <a href="../man3/PKCS12_add_safes.html">PKCS12_add_safes(3)</a>, <a href="../man3/PKCS12_create.html">PKCS12_create(3)</a>, <a href="../man3/PKCS12_decrypt_skey.html">PKCS12_decrypt_skey(3)</a>, <a href="../man3/PKCS12_init.html">PKCS12_init(3)</a>, <a href="../man3/PKCS12_item_decrypt_d2i.html">PKCS12_item_decrypt_d2i(3)</a>, <a href="../man3/PKCS12_item_i2d_encrypt.html">PKCS12_item_i2d_encrypt(3)</a>, <a href="../man3/PKCS12_key_gen_asc.html">PKCS12_key_gen_asc(3)</a>, <a href="../man3/PKCS12_key_gen_uni.html">PKCS12_key_gen_uni(3)</a>, <a href="../man3/PKCS12_key_gen_utf8.html">PKCS12_key_gen_utf8(3)</a>, <a href="../man3/PKCS12_pack_p7encdata.html">PKCS12_pack_p7encdata(3)</a>, <a href="../man3/PKCS12_pbe_crypt.html">PKCS12_pbe_crypt(3)</a>, <a href="../man3/PKCS12_PBE_keyivgen.html">PKCS12_PBE_keyivgen(3)</a>, <a href="../man3/PKCS12_SAFEBAG_create_pkcs8_encrypt.html">PKCS12_SAFEBAG_create_pkcs8_encrypt(3)</a></p>
+
+</li>
+<li><p><a href="../man3/PKCS5_pbe_set0_algor.html">PKCS5_pbe_set0_algor(3)</a>, <a href="../man3/PKCS5_pbe_set.html">PKCS5_pbe_set(3)</a>, <a href="../man3/PKCS5_pbe2_set_iv.html">PKCS5_pbe2_set_iv(3)</a>, <a href="../man3/PKCS5_pbkdf2_set.html">PKCS5_pbkdf2_set(3)</a> and <a href="../man3/PKCS5_v2_scrypt_keyivgen.html">PKCS5_v2_scrypt_keyivgen(3)</a></p>
+
+</li>
+<li><p><a href="../man3/PKCS7_encrypt.html">PKCS7_encrypt(3)</a>, <a href="../man3/PKCS7_new.html">PKCS7_new(3)</a> and <a href="../man3/PKCS7_sign.html">PKCS7_sign(3)</a></p>
+
+</li>
+<li><p><a href="../man3/PKCS8_decrypt.html">PKCS8_decrypt(3)</a>, <a href="../man3/PKCS8_encrypt.html">PKCS8_encrypt(3)</a> and <a href="../man3/PKCS8_set0_pbe.html">PKCS8_set0_pbe(3)</a></p>
+
+</li>
+<li><p><a href="../man3/RAND_bytes.html">RAND_bytes(3)</a> and <a href="../man3/RAND_priv_bytes.html">RAND_priv_bytes(3)</a></p>
+
+</li>
+<li><p><a href="../man3/SMIME_write_ASN1.html">SMIME_write_ASN1(3)</a></p>
+
+</li>
+<li><p><a href="../man3/SSL_load_client_CA_file.html">SSL_load_client_CA_file(3)</a></p>
+
+</li>
+<li><p><a href="../man3/SSL_CTX_new.html">SSL_CTX_new(3)</a></p>
+
+</li>
+<li><p><a href="../man3/TS_RESP_CTX_new.html">TS_RESP_CTX_new(3)</a></p>
+
+</li>
+<li><p><a href="../man3/X509_CRL_new.html">X509_CRL_new(3)</a></p>
+
+</li>
+<li><p><a href="../man3/X509_load_cert_crl_file.html">X509_load_cert_crl_file(3)</a> and <a href="../man3/X509_load_cert_file.html">X509_load_cert_file(3)</a></p>
+
+</li>
+<li><p><a href="../man3/X509_LOOKUP_by_subject.html">X509_LOOKUP_by_subject(3)</a> and <a href="../man3/X509_LOOKUP_ctrl.html">X509_LOOKUP_ctrl(3)</a></p>
+
+</li>
+<li><p><a href="../man3/X509_NAME_hash.html">X509_NAME_hash(3)</a></p>
+
+</li>
+<li><p><a href="../man3/X509_new.html">X509_new(3)</a></p>
+
+</li>
+<li><p><a href="../man3/X509_REQ_new.html">X509_REQ_new(3)</a> and <a href="../man3/X509_REQ_verify.html">X509_REQ_verify(3)</a></p>
+
+</li>
+<li><p><a href="../man3/X509_STORE_CTX_new.html">X509_STORE_CTX_new(3)</a>, <a href="../man3/X509_STORE_set_default_paths.html">X509_STORE_set_default_paths(3)</a>, <a href="../man3/X509_STORE_load_file.html">X509_STORE_load_file(3)</a>, <a href="../man3/X509_STORE_load_locations.html">X509_STORE_load_locations(3)</a> and <a href="../man3/X509_STORE_load_store.html">X509_STORE_load_store(3)</a></p>
+
+</li>
+</ul>
+
+<h4 id="New-functions-that-use-a-Library-context">New functions that use a Library context</h4>
+
+<p>The following functions can be passed a library context if required. Passing NULL will use the default library context.</p>
+
+<ul>
+
+<li><p><a href="../man3/BIO_new_from_core_bio.html">BIO_new_from_core_bio(3)</a></p>
+
+</li>
+<li><p><a href="../man3/EVP_ASYM_CIPHER_fetch.html">EVP_ASYM_CIPHER_fetch(3)</a> and <a href="../man3/EVP_ASYM_CIPHER_do_all_provided.html">EVP_ASYM_CIPHER_do_all_provided(3)</a></p>
+
+</li>
+<li><p><a href="../man3/EVP_CIPHER_fetch.html">EVP_CIPHER_fetch(3)</a> and <a href="../man3/EVP_CIPHER_do_all_provided.html">EVP_CIPHER_do_all_provided(3)</a></p>
+
+</li>
+<li><p><a href="../man3/EVP_default_properties_enable_fips.html">EVP_default_properties_enable_fips(3)</a> and <a href="../man3/EVP_default_properties_is_fips_enabled.html">EVP_default_properties_is_fips_enabled(3)</a></p>
+
+</li>
+<li><p><a href="../man3/EVP_KDF_fetch.html">EVP_KDF_fetch(3)</a> and <a href="../man3/EVP_KDF_do_all_provided.html">EVP_KDF_do_all_provided(3)</a></p>
+
+</li>
+<li><p><a href="../man3/EVP_KEM_fetch.html">EVP_KEM_fetch(3)</a> and <a href="../man3/EVP_KEM_do_all_provided.html">EVP_KEM_do_all_provided(3)</a></p>
+
+</li>
+<li><p><a href="../man3/EVP_KEYEXCH_fetch.html">EVP_KEYEXCH_fetch(3)</a> and <a href="../man3/EVP_KEYEXCH_do_all_provided.html">EVP_KEYEXCH_do_all_provided(3)</a></p>
+
+</li>
+<li><p><a href="../man3/EVP_KEYMGMT_fetch.html">EVP_KEYMGMT_fetch(3)</a> and <a href="../man3/EVP_KEYMGMT_do_all_provided.html">EVP_KEYMGMT_do_all_provided(3)</a></p>
+
+</li>
+<li><p><a href="../man3/EVP_MAC_fetch.html">EVP_MAC_fetch(3)</a> and <a href="../man3/EVP_MAC_do_all_provided.html">EVP_MAC_do_all_provided(3)</a></p>
+
+</li>
+<li><p><a href="../man3/EVP_MD_fetch.html">EVP_MD_fetch(3)</a> and <a href="../man3/EVP_MD_do_all_provided.html">EVP_MD_do_all_provided(3)</a></p>
+
+</li>
+<li><p><a href="../man3/EVP_PKEY_CTX_new_from_pkey.html">EVP_PKEY_CTX_new_from_pkey(3)</a></p>
+
+</li>
+<li><p><a href="../man3/EVP_PKEY_Q_keygen.html">EVP_PKEY_Q_keygen(3)</a></p>
+
+</li>
+<li><p><a href="../man3/EVP_Q_mac.html">EVP_Q_mac(3)</a> and <a href="../man3/EVP_Q_digest.html">EVP_Q_digest(3)</a></p>
+
+</li>
+<li><p><a href="../man3/EVP_RAND.html">EVP_RAND(3)</a> and <a href="../man3/EVP_RAND_do_all_provided.html">EVP_RAND_do_all_provided(3)</a></p>
+
+</li>
+<li><p><a href="../man3/EVP_set_default_properties.html">EVP_set_default_properties(3)</a></p>
+
+</li>
+<li><p><a href="../man3/EVP_SIGNATURE_fetch.html">EVP_SIGNATURE_fetch(3)</a> and <a href="../man3/EVP_SIGNATURE_do_all_provided.html">EVP_SIGNATURE_do_all_provided(3)</a></p>
+
+</li>
+<li><p><a href="../man3/OSSL_CMP_CTX_new.html">OSSL_CMP_CTX_new(3)</a> and <a href="../man3/OSSL_CMP_SRV_CTX_new.html">OSSL_CMP_SRV_CTX_new(3)</a></p>
+
+</li>
+<li><p><a href="../man3/OSSL_CRMF_ENCRYPTEDVALUE_get1_encCert.html">OSSL_CRMF_ENCRYPTEDVALUE_get1_encCert(3)</a></p>
+
+</li>
+<li><p><a href="../man3/OSSL_CRMF_MSG_create_popo.html">OSSL_CRMF_MSG_create_popo(3)</a> and <a href="../man3/OSSL_CRMF_MSGS_verify_popo.html">OSSL_CRMF_MSGS_verify_popo(3)</a></p>
+
+</li>
+<li><p><a href="../man3/OSSL_CRMF_pbm_new.html">OSSL_CRMF_pbm_new(3)</a> and <a href="../man3/OSSL_CRMF_pbmp_new.html">OSSL_CRMF_pbmp_new(3)</a></p>
+
+</li>
+<li><p><a href="../man3/OSSL_DECODER_CTX_add_extra.html">OSSL_DECODER_CTX_add_extra(3)</a> and <a href="../man3/OSSL_DECODER_CTX_new_for_pkey.html">OSSL_DECODER_CTX_new_for_pkey(3)</a></p>
+
+</li>
+<li><p><a href="../man3/OSSL_DECODER_fetch.html">OSSL_DECODER_fetch(3)</a> and <a href="../man3/OSSL_DECODER_do_all_provided.html">OSSL_DECODER_do_all_provided(3)</a></p>
+
+</li>
+<li><p><a href="../man3/OSSL_ENCODER_CTX_add_extra.html">OSSL_ENCODER_CTX_add_extra(3)</a></p>
+
+</li>
+<li><p><a href="../man3/OSSL_ENCODER_fetch.html">OSSL_ENCODER_fetch(3)</a> and <a href="../man3/OSSL_ENCODER_do_all_provided.html">OSSL_ENCODER_do_all_provided(3)</a></p>
+
+</li>
+<li><p><a href="../man3/OSSL_LIB_CTX_free.html">OSSL_LIB_CTX_free(3)</a>, <a href="../man3/OSSL_LIB_CTX_load_config.html">OSSL_LIB_CTX_load_config(3)</a> and <a href="../man3/OSSL_LIB_CTX_set0_default.html">OSSL_LIB_CTX_set0_default(3)</a></p>
+
+</li>
+<li><p><a href="../man3/OSSL_PROVIDER_add_builtin.html">OSSL_PROVIDER_add_builtin(3)</a>, <a href="../man3/OSSL_PROVIDER_available.html">OSSL_PROVIDER_available(3)</a>, <a href="../man3/OSSL_PROVIDER_do_all.html">OSSL_PROVIDER_do_all(3)</a>, <a href="../man3/OSSL_PROVIDER_load.html">OSSL_PROVIDER_load(3)</a>, <a href="../man3/OSSL_PROVIDER_set_default_search_path.html">OSSL_PROVIDER_set_default_search_path(3)</a> and <a href="../man3/OSSL_PROVIDER_try_load.html">OSSL_PROVIDER_try_load(3)</a></p>
+
+</li>
+<li><p><a href="../man3/OSSL_SELF_TEST_get_callback.html">OSSL_SELF_TEST_get_callback(3)</a> and <a href="../man3/OSSL_SELF_TEST_set_callback.html">OSSL_SELF_TEST_set_callback(3)</a></p>
+
+</li>
+<li><p><a href="../man3/OSSL_STORE_attach.html">OSSL_STORE_attach(3)</a></p>
+
+</li>
+<li><p><a href="../man3/OSSL_STORE_LOADER_fetch.html">OSSL_STORE_LOADER_fetch(3)</a> and <a href="../man3/OSSL_STORE_LOADER_do_all_provided.html">OSSL_STORE_LOADER_do_all_provided(3)</a></p>
+
+</li>
+<li><p><a href="../man3/RAND_get0_primary.html">RAND_get0_primary(3)</a>, <a href="../man3/RAND_get0_private.html">RAND_get0_private(3)</a>, <a href="../man3/RAND_get0_public.html">RAND_get0_public(3)</a>, <a href="../man3/RAND_set_DRBG_type.html">RAND_set_DRBG_type(3)</a> and <a href="../man3/RAND_set_seed_source_type.html">RAND_set_seed_source_type(3)</a></p>
+
+</li>
+</ul>
+
+<h3 id="Providers">Providers</h3>
+
+<p>Providers are described in detail here <a href="../man7/crypto.html">&quot;Providers&quot; in crypto(7)</a>. See also <a href="../man7/crypto.html">&quot;OPENSSL PROVIDERS&quot; in crypto(7)</a>.</p>
+
+<h3 id="Fetching-algorithms-and-property-queries">Fetching algorithms and property queries</h3>
+
+<p>Implicit and Explicit Fetching is described in detail here <a href="../man7/crypto.html">&quot;ALGORITHM FETCHING&quot; in crypto(7)</a>.</p>
+
+<h3 id="Mapping-EVP-controls-and-flags-to-provider-OSSL_PARAM-3-parameters">Mapping EVP controls and flags to provider <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> parameters</h3>
+
+<p>The existing functions for controls (such as <a href="../man3/EVP_CIPHER_CTX_ctrl.html">EVP_CIPHER_CTX_ctrl(3)</a>) and manipulating flags (such as <a href="../man3/EVP_MD_CTX_set_flags.html">EVP_MD_CTX_set_flags(3)</a>)internally use <b>OSSL_PARAMS</b> to pass information to/from provider objects. See <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> for additional information related to parameters.</p>
+
+<p>For ciphers see <a href="../man3/EVP_EncryptInit.html">&quot;CONTROLS&quot; in EVP_EncryptInit(3)</a>, <a href="../man3/EVP_EncryptInit.html">&quot;FLAGS&quot; in EVP_EncryptInit(3)</a> and <a href="../man3/EVP_EncryptInit.html">&quot;PARAMETERS&quot; in EVP_EncryptInit(3)</a>.</p>
+
+<p>For digests see <a href="../man3/EVP_DigestInit.html">&quot;CONTROLS&quot; in EVP_DigestInit(3)</a>, <a href="../man3/EVP_DigestInit.html">&quot;FLAGS&quot; in EVP_DigestInit(3)</a> and <a href="../man3/EVP_DigestInit.html">&quot;PARAMETERS&quot; in EVP_DigestInit(3)</a>.</p>
+
+<h3 id="Deprecation-of-Low-Level-Functions">Deprecation of Low Level Functions</h3>
+
+<p>A significant number of APIs have been deprecated in OpenSSL 3.0. This section describes some common categories of deprecations. See <a href="#Deprecated-function-mappings">&quot;Deprecated function mappings&quot;</a> for the list of deprecated functions that refer to these categories.</p>
+
+<h4 id="Providers-are-a-replacement-for-engines-and-low-level-method-overrides">Providers are a replacement for engines and low-level method overrides</h4>
+
+<p>Any accessor that uses an ENGINE is deprecated (such as EVP_PKEY_set1_engine()). Applications using engines should instead use providers.</p>
+
+<p>Before providers were added algorithms were overridden by changing the methods used by algorithms. All these methods such as RSA_new_method() and RSA_meth_new() are now deprecated and can be replaced by using providers instead.</p>
+
+<h4 id="Deprecated-i2d-and-d2i-functions-for-low-level-key-types">Deprecated i2d and d2i functions for low-level key types</h4>
+
+<p>Any i2d and d2i functions such as d2i_DHparams() that take a low-level key type have been deprecated. Applications should instead use the <a href="../man3/OSSL_DECODER.html">OSSL_DECODER(3)</a> and <a href="../man3/OSSL_ENCODER.html">OSSL_ENCODER(3)</a> APIs to read and write files. See <a href="../man3/d2i_RSAPrivateKey.html">&quot;Migration&quot; in d2i_RSAPrivateKey(3)</a> for further details.</p>
+
+<h4 id="Deprecated-low-level-key-object-getters-and-setters">Deprecated low-level key object getters and setters</h4>
+
+<p>Applications that set or get low-level key objects (such as EVP_PKEY_set1_DH() or EVP_PKEY_get0()) should instead use the OSSL_ENCODER (See <a href="../man3/OSSL_ENCODER_to_bio.html">OSSL_ENCODER_to_bio(3)</a>) or OSSL_DECODER (See <a href="../man3/OSSL_DECODER_from_bio.html">OSSL_DECODER_from_bio(3)</a>) APIs, or alternatively use <a href="../man3/EVP_PKEY_fromdata.html">EVP_PKEY_fromdata(3)</a> or <a href="../man3/EVP_PKEY_todata.html">EVP_PKEY_todata(3)</a>.</p>
+
+<h4 id="Deprecated-low-level-key-parameter-getters">Deprecated low-level key parameter getters</h4>
+
+<p>Functions that access low-level objects directly such as <a href="../man3/RSA_get0_n.html">RSA_get0_n(3)</a> are now deprecated. Applications should use one of: <a href="../man3/EVP_PKEY_get_bn_param.html">EVP_PKEY_get_bn_param(3)</a>, <a href="../man3/EVP_PKEY_get_int_param.html">EVP_PKEY_get_int_param(3)</a>, <a href="../man3/EVP_PKEY_get_size_t_param.html">EVP_PKEY_get_size_t_param(3)</a>, <a href="../man3/EVP_PKEY_get_utf8_string_param.html">EVP_PKEY_get_utf8_string_param(3)</a>, <a href="../man3/EVP_PKEY_get_octet_string_param.html">EVP_PKEY_get_octet_string_param(3)</a>, or <a href="../man3/EVP_PKEY_get_params.html">EVP_PKEY_get_params(3)</a>, to access fields from an EVP_PKEY. Gettable parameters are listed in: <a href="../man7/EVP_PKEY-RSA.html">&quot;Common RSA parameters&quot; in EVP_PKEY-RSA(7)</a>, <a href="../man7/EVP_PKEY-EC.html">&quot;Common EC parameters&quot; in EVP_PKEY-EC(7)</a>, <a href="../man7/EVP_PKEY-DSA.html">&quot;DSA parameters&quot; in EVP_PKEY-DSA(7)</a>, <a href="../man7/EVP_PKEY-DH.html">&quot;DH parameters&quot; in EVP_PKEY-DH(7)</a>, <a href="../man7/EVP_PKEY-FFC.html">&quot;FFC parameters&quot; in EVP_PKEY-FFC(7)</a>, <a href="../man7/EVP_PKEY-X25519.html">&quot;Common X25519, X448, ED25519 and ED448 parameters&quot; in EVP_PKEY-X25519(7)</a>, <a href="../man7/EVP_PKEY-ML-DSA.html">&quot;Common parameters&quot; in EVP_PKEY-ML-DSA(7)</a>, and <a href="../man7/EVP_PKEY-ML-KEM.html">&quot;Common parameters&quot; in EVP_PKEY-ML-KEM(7)</a>. Applications may also use <a href="../man3/EVP_PKEY_todata.html">EVP_PKEY_todata(3)</a> to return all fields.</p>
+
+<h4 id="Deprecated-low-level-key-parameter-setters">Deprecated low-level key parameter setters</h4>
+
+<p>Functions that access low-level objects directly such as <a href="../man3/RSA_set0_crt_params.html">RSA_set0_crt_params(3)</a> are now deprecated. Applications should use <a href="../man3/EVP_PKEY_fromdata.html">EVP_PKEY_fromdata(3)</a> to create new keys from user provided key data. Keys should be immutable once they are created, so if required the user may use <a href="../man3/EVP_PKEY_todata.html">EVP_PKEY_todata(3)</a>, <a href="../man3/OSSL_PARAM_merge.html">OSSL_PARAM_merge(3)</a>, and <a href="../man3/EVP_PKEY_fromdata.html">EVP_PKEY_fromdata(3)</a> to create a modified key. See <a href="../man7/EVP_PKEY-DH.html">&quot;Examples&quot; in EVP_PKEY-DH(7)</a> for more information. See <a href="#Deprecated-low-level-key-generation-functions">&quot;Deprecated low-level key generation functions&quot;</a> for information on generating a key using parameters.</p>
+
+<h4 id="Deprecated-low-level-object-creation">Deprecated low-level object creation</h4>
+
+<p>Low-level objects were created using methods such as <a href="../man3/RSA_new.html">RSA_new(3)</a>, <a href="../man3/RSA_up_ref.html">RSA_up_ref(3)</a> and <a href="../man3/RSA_free.html">RSA_free(3)</a>. Applications should instead use the high-level EVP_PKEY APIs, e.g. <a href="../man3/EVP_PKEY_new.html">EVP_PKEY_new(3)</a>, <a href="../man3/EVP_PKEY_up_ref.html">EVP_PKEY_up_ref(3)</a> and <a href="../man3/EVP_PKEY_free.html">EVP_PKEY_free(3)</a>. See also <a href="../man3/EVP_PKEY_CTX_new_from_name.html">EVP_PKEY_CTX_new_from_name(3)</a> and <a href="../man3/EVP_PKEY_CTX_new_from_pkey.html">EVP_PKEY_CTX_new_from_pkey(3)</a>.</p>
+
+<p>EVP_PKEYs may be created in a variety of ways: See also <a href="#Deprecated-low-level-key-generation-functions">&quot;Deprecated low-level key generation functions&quot;</a>, <a href="#Deprecated-low-level-key-reading-and-writing-functions">&quot;Deprecated low-level key reading and writing functions&quot;</a> and <a href="#Deprecated-low-level-key-parameter-setters">&quot;Deprecated low-level key parameter setters&quot;</a>.</p>
+
+<h4 id="Deprecated-low-level-encryption-functions">Deprecated low-level encryption functions</h4>
+
+<p>Low-level encryption functions such as <a href="../man3/AES_encrypt.html">AES_encrypt(3)</a> and <a href="../man3/AES_decrypt.html">AES_decrypt(3)</a> have been informally discouraged from use for a long time. Applications should instead use the high level EVP APIs <a href="../man3/EVP_EncryptInit_ex.html">EVP_EncryptInit_ex(3)</a>, <a href="../man3/EVP_EncryptUpdate.html">EVP_EncryptUpdate(3)</a>, and <a href="../man3/EVP_EncryptFinal_ex.html">EVP_EncryptFinal_ex(3)</a> or <a href="../man3/EVP_DecryptInit_ex.html">EVP_DecryptInit_ex(3)</a>, <a href="../man3/EVP_DecryptUpdate.html">EVP_DecryptUpdate(3)</a> and <a href="../man3/EVP_DecryptFinal_ex.html">EVP_DecryptFinal_ex(3)</a>.</p>
+
+<h4 id="Deprecated-low-level-digest-functions">Deprecated low-level digest functions</h4>
+
+<p>Use of low-level digest functions such as <a href="../man3/SHA1_Init.html">SHA1_Init(3)</a> have been informally discouraged from use for a long time. Applications should instead use the high level EVP APIs <a href="../man3/EVP_DigestInit_ex.html">EVP_DigestInit_ex(3)</a>, <a href="../man3/EVP_DigestUpdate.html">EVP_DigestUpdate(3)</a> and <a href="../man3/EVP_DigestFinal_ex.html">EVP_DigestFinal_ex(3)</a>, or the quick one-shot <a href="../man3/EVP_Q_digest.html">EVP_Q_digest(3)</a>.</p>
+
+<p>Note that the functions <a href="../man3/SHA1.html">SHA1(3)</a>, <a href="../man3/SHA224.html">SHA224(3)</a>, <a href="../man3/SHA256.html">SHA256(3)</a>, <a href="../man3/SHA384.html">SHA384(3)</a> and <a href="../man3/SHA512.html">SHA512(3)</a> have changed to macros that use <a href="../man3/EVP_Q_digest.html">EVP_Q_digest(3)</a>.</p>
+
+<h4 id="Deprecated-low-level-signing-functions">Deprecated low-level signing functions</h4>
+
+<p>Use of low-level signing functions such as <a href="../man3/DSA_sign.html">DSA_sign(3)</a> have been informally discouraged for a long time. Instead applications should use <a href="../man3/EVP_DigestSign.html">EVP_DigestSign(3)</a> and <a href="../man3/EVP_DigestVerify.html">EVP_DigestVerify(3)</a>. See also <a href="../man7/EVP_SIGNATURE-RSA.html">EVP_SIGNATURE-RSA(7)</a>, <a href="../man7/EVP_SIGNATURE-DSA.html">EVP_SIGNATURE-DSA(7)</a>, <a href="../man7/EVP_SIGNATURE-ECDSA.html">EVP_SIGNATURE-ECDSA(7)</a> and <a href="../man7/EVP_SIGNATURE-ED25519.html">EVP_SIGNATURE-ED25519(7)</a>.</p>
+
+<h4 id="Deprecated-low-level-MAC-functions">Deprecated low-level MAC functions</h4>
+
+<p>Low-level mac functions such as <a href="../man3/CMAC_Init.html">CMAC_Init(3)</a> are deprecated. Applications should instead use the new <a href="../man3/EVP_MAC.html">EVP_MAC(3)</a> interface, using <a href="../man3/EVP_MAC_CTX_new.html">EVP_MAC_CTX_new(3)</a>, <a href="../man3/EVP_MAC_CTX_free.html">EVP_MAC_CTX_free(3)</a>, <a href="../man3/EVP_MAC_init.html">EVP_MAC_init(3)</a>, <a href="../man3/EVP_MAC_update.html">EVP_MAC_update(3)</a> and <a href="../man3/EVP_MAC_final.html">EVP_MAC_final(3)</a> or the single-shot MAC function <a href="../man3/EVP_Q_mac.html">EVP_Q_mac(3)</a>. See <a href="../man3/EVP_MAC.html">EVP_MAC(3)</a>, <a href="../man7/EVP_MAC-HMAC.html">EVP_MAC-HMAC(7)</a>, <a href="../man7/EVP_MAC-CMAC.html">EVP_MAC-CMAC(7)</a>, <a href="../man7/EVP_MAC-GMAC.html">EVP_MAC-GMAC(7)</a>, <a href="../man7/EVP_MAC-KMAC.html">EVP_MAC-KMAC(7)</a>, <a href="../man7/EVP_MAC-BLAKE2.html">EVP_MAC-BLAKE2(7)</a>, <a href="../man7/EVP_MAC-Poly1305.html">EVP_MAC-Poly1305(7)</a> and <a href="../man7/EVP_MAC-Siphash.html">EVP_MAC-Siphash(7)</a> for additional information.</p>
+
+<p>Note that the one-shot method HMAC() is still available for compatibility purposes, but this can also be replaced by using EVP_Q_MAC if a library context is required.</p>
+
+<h4 id="Deprecated-low-level-validation-functions">Deprecated low-level validation functions</h4>
+
+<p>Low-level validation functions such as <a href="../man3/DH_check.html">DH_check(3)</a> have been informally discouraged from use for a long time. Applications should instead use the high-level EVP_PKEY APIs such as <a href="../man3/EVP_PKEY_check.html">EVP_PKEY_check(3)</a>, <a href="../man3/EVP_PKEY_param_check.html">EVP_PKEY_param_check(3)</a>, <a href="../man3/EVP_PKEY_param_check_quick.html">EVP_PKEY_param_check_quick(3)</a>, <a href="../man3/EVP_PKEY_public_check.html">EVP_PKEY_public_check(3)</a>, <a href="../man3/EVP_PKEY_public_check_quick.html">EVP_PKEY_public_check_quick(3)</a>, <a href="../man3/EVP_PKEY_private_check.html">EVP_PKEY_private_check(3)</a>, and <a href="../man3/EVP_PKEY_pairwise_check.html">EVP_PKEY_pairwise_check(3)</a>.</p>
+
+<h4 id="Deprecated-low-level-key-exchange-functions">Deprecated low-level key exchange functions</h4>
+
+<p>Many low-level functions have been informally discouraged from use for a long time. Applications should instead use <a href="../man3/EVP_PKEY_derive.html">EVP_PKEY_derive(3)</a>. See <a href="../man7/EVP_KEYEXCH-DH.html">EVP_KEYEXCH-DH(7)</a>, <a href="../man7/EVP_KEYEXCH-ECDH.html">EVP_KEYEXCH-ECDH(7)</a> and <a href="../man7/EVP_KEYEXCH-X25519.html">EVP_KEYEXCH-X25519(7)</a>.</p>
+
+<h4 id="Deprecated-low-level-key-generation-functions">Deprecated low-level key generation functions</h4>
+
+<p>Many low-level functions have been informally discouraged from use for a long time. Applications should instead use <a href="../man3/EVP_PKEY_keygen_init.html">EVP_PKEY_keygen_init(3)</a> and <a href="../man3/EVP_PKEY_generate.html">EVP_PKEY_generate(3)</a> as described in <a href="../man7/EVP_PKEY-DSA.html">EVP_PKEY-DSA(7)</a>, <a href="../man7/EVP_PKEY-DH.html">EVP_PKEY-DH(7)</a>, <a href="../man7/EVP_PKEY-RSA.html">EVP_PKEY-RSA(7)</a>, <a href="../man7/EVP_PKEY-EC.html">EVP_PKEY-EC(7)</a> and <a href="../man7/EVP_PKEY-X25519.html">EVP_PKEY-X25519(7)</a>. The &#39;quick&#39; one-shot function <a href="../man3/EVP_PKEY_Q_keygen.html">EVP_PKEY_Q_keygen(3)</a> and macros for the most common cases: &lt;EVP_RSA_gen(3)&gt; and <a href="../man3/EVP_EC_gen.html">EVP_EC_gen(3)</a> may also be used.</p>
+
+<h4 id="Deprecated-low-level-key-reading-and-writing-functions">Deprecated low-level key reading and writing functions</h4>
+
+<p>Use of low-level objects (such as DSA) has been informally discouraged from use for a long time. Functions to read and write these low-level objects (such as PEM_read_DSA_PUBKEY()) should be replaced. Applications should instead use <a href="../man3/OSSL_ENCODER_to_bio.html">OSSL_ENCODER_to_bio(3)</a> and <a href="../man3/OSSL_DECODER_from_bio.html">OSSL_DECODER_from_bio(3)</a>.</p>
+
+<h4 id="Deprecated-low-level-key-printing-functions">Deprecated low-level key printing functions</h4>
+
+<p>Use of low-level objects (such as DSA) has been informally discouraged from use for a long time. Functions to print these low-level objects such as DSA_print() should be replaced with the equivalent EVP_PKEY functions. Application should use one of <a href="../man3/EVP_PKEY_print_public.html">EVP_PKEY_print_public(3)</a>, <a href="../man3/EVP_PKEY_print_private.html">EVP_PKEY_print_private(3)</a>, <a href="../man3/EVP_PKEY_print_params.html">EVP_PKEY_print_params(3)</a>, <a href="../man3/EVP_PKEY_print_public_fp.html">EVP_PKEY_print_public_fp(3)</a>, <a href="../man3/EVP_PKEY_print_private_fp.html">EVP_PKEY_print_private_fp(3)</a> or <a href="../man3/EVP_PKEY_print_params_fp.html">EVP_PKEY_print_params_fp(3)</a>. Note that internally these use <a href="../man3/OSSL_ENCODER_to_bio.html">OSSL_ENCODER_to_bio(3)</a> and <a href="../man3/OSSL_DECODER_from_bio.html">OSSL_DECODER_from_bio(3)</a>.</p>
+
+<h3 id="Deprecated-function-mappings">Deprecated function mappings</h3>
+
+<p>The following functions have been deprecated in 3.0.</p>
+
+<ul>
+
+<li><p>AES_bi_ige_encrypt() and AES_ige_encrypt()</p>
+
+<p>There is no replacement for the IGE functions. New code should not use these modes. These undocumented functions were never integrated into the EVP layer. They implemented the AES Infinite Garble Extension (IGE) mode and AES Bi-directional IGE mode. These modes were never formally standardised and usage of these functions is believed to be very small. In particular AES_bi_ige_encrypt() has a known bug. It accepts 2 AES keys, but only one is ever used. The security implications are believed to be minimal, but this issue was never fixed for backwards compatibility reasons.</p>
+
+</li>
+<li><p>AES_encrypt(), AES_decrypt(), AES_set_encrypt_key(), AES_set_decrypt_key(), AES_cbc_encrypt(), AES_cfb128_encrypt(), AES_cfb1_encrypt(), AES_cfb8_encrypt(), AES_ecb_encrypt(), AES_ofb128_encrypt()</p>
+
+</li>
+<li><p>AES_unwrap_key(), AES_wrap_key()</p>
+
+<p>See <a href="#Deprecated-low-level-encryption-functions">&quot;Deprecated low-level encryption functions&quot;</a></p>
+
+</li>
+<li><p>AES_options()</p>
+
+<p>There is no replacement. It returned a string indicating if the AES code was unrolled.</p>
+
+</li>
+<li><p>ASN1_digest(), ASN1_sign(), ASN1_verify()</p>
+
+<p>There are no replacements. These old functions are not used, and could be disabled with the macro NO_ASN1_OLD since OpenSSL 0.9.7.</p>
+
+</li>
+<li><p>ASN1_STRING_length_set()</p>
+
+<p>Use <a href="../man3/ASN1_STRING_set.html">ASN1_STRING_set(3)</a> or <a href="../man3/ASN1_STRING_set0.html">ASN1_STRING_set0(3)</a> instead. This was a potentially unsafe function that could change the bounds of a previously passed in pointer.</p>
+
+</li>
+<li><p>BF_encrypt(), BF_decrypt(), BF_set_key(), BF_cbc_encrypt(), BF_cfb64_encrypt(), BF_ecb_encrypt(), BF_ofb64_encrypt()</p>
+
+<p>See <a href="#Deprecated-low-level-encryption-functions">&quot;Deprecated low-level encryption functions&quot;</a>. The Blowfish algorithm has been moved to the <a href="#Legacy-Algorithms">Legacy Provider</a>.</p>
+
+</li>
+<li><p>BF_options()</p>
+
+<p>There is no replacement. This option returned a constant string.</p>
+
+</li>
+<li><p>BIO_get_callback(), BIO_set_callback(), BIO_debug_callback()</p>
+
+<p>Use the respective non-deprecated _ex() functions.</p>
+
+</li>
+<li><p>BN_is_prime_ex(), BN_is_prime_fasttest_ex()</p>
+
+<p>Use <a href="../man3/BN_check_prime.html">BN_check_prime(3)</a> which avoids possible misuse and always uses at least 64 rounds of the Miller-Rabin primality test.</p>
+
+</li>
+<li><p>BN_pseudo_rand(), BN_pseudo_rand_range()</p>
+
+<p>Use <a href="../man3/BN_rand.html">BN_rand(3)</a> and <a href="../man3/BN_rand_range.html">BN_rand_range(3)</a>.</p>
+
+</li>
+<li><p>BN_X931_derive_prime_ex(), BN_X931_generate_prime_ex(), BN_X931_generate_Xpq()</p>
+
+<p>There are no replacements for these low-level functions. They were used internally by RSA_X931_derive_ex() and RSA_X931_generate_key_ex() which are also deprecated. Use <a href="../man3/EVP_PKEY_keygen.html">EVP_PKEY_keygen(3)</a> instead.</p>
+
+</li>
+<li><p>Camellia_encrypt(), Camellia_decrypt(), Camellia_set_key(), Camellia_cbc_encrypt(), Camellia_cfb128_encrypt(), Camellia_cfb1_encrypt(), Camellia_cfb8_encrypt(), Camellia_ctr128_encrypt(), Camellia_ecb_encrypt(), Camellia_ofb128_encrypt()</p>
+
+<p>See <a href="#Deprecated-low-level-encryption-functions">&quot;Deprecated low-level encryption functions&quot;</a>.</p>
+
+</li>
+<li><p>CAST_encrypt(), CAST_decrypt(), CAST_set_key(), CAST_cbc_encrypt(), CAST_cfb64_encrypt(), CAST_ecb_encrypt(), CAST_ofb64_encrypt()</p>
+
+<p>See <a href="#Deprecated-low-level-encryption-functions">&quot;Deprecated low-level encryption functions&quot;</a>. The CAST algorithm has been moved to the <a href="#Legacy-Algorithms">Legacy Provider</a>.</p>
+
+</li>
+<li><p>CMAC_CTX_new(), CMAC_CTX_cleanup(), CMAC_CTX_copy(), CMAC_CTX_free(), CMAC_CTX_get0_cipher_ctx()</p>
+
+<p>See <a href="#Deprecated-low-level-MAC-functions">&quot;Deprecated low-level MAC functions&quot;</a>.</p>
+
+</li>
+<li><p>CMAC_Init(), CMAC_Update(), CMAC_Final(), CMAC_resume()</p>
+
+<p>See <a href="#Deprecated-low-level-MAC-functions">&quot;Deprecated low-level MAC functions&quot;</a>.</p>
+
+</li>
+<li><p>CRYPTO_mem_ctrl(), CRYPTO_mem_debug_free(), CRYPTO_mem_debug_malloc(), CRYPTO_mem_debug_pop(), CRYPTO_mem_debug_push(), CRYPTO_mem_debug_realloc(), CRYPTO_mem_leaks(), CRYPTO_mem_leaks_cb(), CRYPTO_mem_leaks_fp(), CRYPTO_set_mem_debug()</p>
+
+<p>Memory-leak checking has been deprecated in favor of more modern development tools, such as compiler memory and leak sanitizers or Valgrind.</p>
+
+</li>
+<li><p>CRYPTO_cts128_encrypt_block(), CRYPTO_cts128_encrypt(), CRYPTO_cts128_decrypt_block(), CRYPTO_cts128_decrypt(), CRYPTO_nistcts128_encrypt_block(), CRYPTO_nistcts128_encrypt(), CRYPTO_nistcts128_decrypt_block(), CRYPTO_nistcts128_decrypt()</p>
+
+<p>Use the higher level functions EVP_CipherInit_ex2(), EVP_CipherUpdate() and EVP_CipherFinal_ex() instead. See the &quot;cts_mode&quot; parameter in <a href="../man3/EVP_EncryptInit.html">&quot;Gettable and Settable EVP_CIPHER_CTX parameters&quot; in EVP_EncryptInit(3)</a>. See <a href="../man3/EVP_EncryptInit.html">&quot;EXAMPLES&quot; in EVP_EncryptInit(3)</a> for a AES-256-CBC-CTS example.</p>
+
+</li>
+<li><p>d2i_DHparams(), d2i_DHxparams(), d2i_DSAparams(), d2i_DSAPrivateKey(), d2i_DSAPrivateKey_bio(), d2i_DSAPrivateKey_fp(), d2i_DSA_PUBKEY(), d2i_DSA_PUBKEY_bio(), d2i_DSA_PUBKEY_fp(), d2i_DSAPublicKey(), d2i_ECParameters(), d2i_ECPrivateKey(), d2i_ECPrivateKey_bio(), d2i_ECPrivateKey_fp(), d2i_EC_PUBKEY(), d2i_EC_PUBKEY_bio(), d2i_EC_PUBKEY_fp(), d2i_RSAPrivateKey(), d2i_RSAPrivateKey_bio(), d2i_RSAPrivateKey_fp(), d2i_RSA_PUBKEY(), d2i_RSA_PUBKEY_bio(), d2i_RSA_PUBKEY_fp(), d2i_RSAPublicKey(), d2i_RSAPublicKey_bio(), d2i_RSAPublicKey_fp()</p>
+
+<p>See <a href="#Deprecated-i2d-and-d2i-functions-for-low-level-key-types">&quot;Deprecated i2d and d2i functions for low-level key types&quot;</a></p>
+
+</li>
+<li><p>o2i_ECPublicKey()</p>
+
+<p>Use <a href="../man3/EVP_PKEY_set1_encoded_public_key.html">EVP_PKEY_set1_encoded_public_key(3)</a>. See <a href="#Deprecated-low-level-key-parameter-setters">&quot;Deprecated low-level key parameter setters&quot;</a></p>
+
+</li>
+<li><p>DES_crypt(), DES_fcrypt(), DES_encrypt1(), DES_encrypt2(), DES_encrypt3(), DES_decrypt3(), DES_ede3_cbc_encrypt(), DES_ede3_cfb64_encrypt(), DES_ede3_cfb_encrypt(),DES_ede3_ofb64_encrypt(), DES_ecb_encrypt(), DES_ecb3_encrypt(), DES_ofb64_encrypt(), DES_ofb_encrypt(), DES_cfb64_encrypt DES_cfb_encrypt(), DES_cbc_encrypt(), DES_ncbc_encrypt(), DES_pcbc_encrypt(), DES_xcbc_encrypt(), DES_cbc_cksum(), DES_quad_cksum(), DES_check_key_parity(), DES_is_weak_key(), DES_key_sched(), DES_options(), DES_random_key(), DES_set_key(), DES_set_key_checked(), DES_set_key_unchecked(), DES_set_odd_parity(), DES_string_to_2keys(), DES_string_to_key()</p>
+
+<p>See <a href="#Deprecated-low-level-encryption-functions">&quot;Deprecated low-level encryption functions&quot;</a>. Algorithms for &quot;DESX-CBC&quot;, &quot;DES-ECB&quot;, &quot;DES-CBC&quot;, &quot;DES-OFB&quot;, &quot;DES-CFB&quot;, &quot;DES-CFB1&quot; and &quot;DES-CFB8&quot; have been moved to the <a href="#Legacy-Algorithms">Legacy Provider</a>.</p>
+
+</li>
+<li><p>DH_bits(), DH_security_bits(), DH_size()</p>
+
+<p>Use <a href="../man3/EVP_PKEY_get_bits.html">EVP_PKEY_get_bits(3)</a>, <a href="../man3/EVP_PKEY_get_security_bits.html">EVP_PKEY_get_security_bits(3)</a> and <a href="../man3/EVP_PKEY_get_size.html">EVP_PKEY_get_size(3)</a>.</p>
+
+</li>
+<li><p>DH_check(), DH_check_ex(), DH_check_params(), DH_check_params_ex(), DH_check_pub_key(), DH_check_pub_key_ex()</p>
+
+<p>See <a href="#Deprecated-low-level-validation-functions">&quot;Deprecated low-level validation functions&quot;</a></p>
+
+</li>
+<li><p>DH_clear_flags(), DH_test_flags(), DH_set_flags()</p>
+
+<p>The <b>DH_FLAG_CACHE_MONT_P</b> flag has been deprecated without replacement. The <b>DH_FLAG_TYPE_DH</b> and <b>DH_FLAG_TYPE_DHX</b> have been deprecated. Use EVP_PKEY_is_a() to determine the type of a key. There is no replacement for setting these flags.</p>
+
+</li>
+<li><p>DH_compute_key() DH_compute_key_padded()</p>
+
+<p>See <a href="#Deprecated-low-level-key-exchange-functions">&quot;Deprecated low-level key exchange functions&quot;</a>.</p>
+
+</li>
+<li><p>DH_new(), DH_new_by_nid(), DH_free(), DH_up_ref()</p>
+
+<p>See <a href="#Deprecated-low-level-object-creation">&quot;Deprecated low-level object creation&quot;</a></p>
+
+</li>
+<li><p>DH_generate_key(), DH_generate_parameters_ex()</p>
+
+<p>See <a href="#Deprecated-low-level-key-generation-functions">&quot;Deprecated low-level key generation functions&quot;</a>.</p>
+
+</li>
+<li><p>DH_get0_pqg(), DH_get0_p(), DH_get0_q(), DH_get0_g(), DH_get0_key(), DH_get0_priv_key(), DH_get0_pub_key(), DH_get_length(), DH_get_nid()</p>
+
+<p>See <a href="#Deprecated-low-level-key-parameter-getters">&quot;Deprecated low-level key parameter getters&quot;</a></p>
+
+</li>
+<li><p>DH_get_1024_160(), DH_get_2048_224(), DH_get_2048_256()</p>
+
+<p>Applications should instead set the <b>OSSL_PKEY_PARAM_GROUP_NAME</b> as specified in <a href="../man7/EVP_PKEY-DH.html">&quot;DH parameters&quot; in EVP_PKEY-DH(7)</a>) to one of &quot;dh_1024_160&quot;, &quot;dh_2048_224&quot; or &quot;dh_2048_256&quot; when generating a DH key.</p>
+
+</li>
+<li><p>DH_KDF_X9_42()</p>
+
+<p>Applications should use <a href="../man3/EVP_PKEY_CTX_set_dh_kdf_type.html">EVP_PKEY_CTX_set_dh_kdf_type(3)</a> instead.</p>
+
+</li>
+<li><p>DH_get_default_method(), DH_get0_engine(), DH_meth_*(), DH_new_method(), DH_OpenSSL(), DH_get_ex_data(), DH_set_default_method(), DH_set_method(), DH_set_ex_data()</p>
+
+<p>See <a href="#Providers-are-a-replacement-for-engines-and-low-level-method-overrides">&quot;Providers are a replacement for engines and low-level method overrides&quot;</a></p>
+
+</li>
+<li><p>DHparams_print(), DHparams_print_fp()</p>
+
+<p>See <a href="#Deprecated-low-level-key-printing-functions">&quot;Deprecated low-level key printing functions&quot;</a></p>
+
+</li>
+<li><p>DH_set0_key(), DH_set0_pqg(), DH_set_length()</p>
+
+<p>See <a href="#Deprecated-low-level-key-parameter-setters">&quot;Deprecated low-level key parameter setters&quot;</a></p>
+
+</li>
+<li><p>DSA_bits(), DSA_security_bits(), DSA_size()</p>
+
+<p>Use <a href="../man3/EVP_PKEY_get_bits.html">EVP_PKEY_get_bits(3)</a>, <a href="../man3/EVP_PKEY_get_security_bits.html">EVP_PKEY_get_security_bits(3)</a> and <a href="../man3/EVP_PKEY_get_size.html">EVP_PKEY_get_size(3)</a>.</p>
+
+</li>
+<li><p>DHparams_dup(), DSA_dup_DH()</p>
+
+<p>There is no direct replacement. Applications may use <a href="../man3/EVP_PKEY_copy_parameters.html">EVP_PKEY_copy_parameters(3)</a> and <a href="../man3/EVP_PKEY_dup.html">EVP_PKEY_dup(3)</a> instead.</p>
+
+</li>
+<li><p>DSA_generate_key(), DSA_generate_parameters_ex()</p>
+
+<p>See <a href="#Deprecated-low-level-key-generation-functions">&quot;Deprecated low-level key generation functions&quot;</a>.</p>
+
+</li>
+<li><p>DSA_get0_engine(), DSA_get_default_method(), DSA_get_ex_data(), DSA_get_method(), DSA_meth_*(), DSA_new_method(), DSA_OpenSSL(), DSA_set_default_method(), DSA_set_ex_data(), DSA_set_method()</p>
+
+<p>See <a href="#Providers-are-a-replacement-for-engines-and-low-level-method-overrides">&quot;Providers are a replacement for engines and low-level method overrides&quot;</a>.</p>
+
+</li>
+<li><p>DSA_get0_p(), DSA_get0_q(), DSA_get0_g(), DSA_get0_pqg(), DSA_get0_key(), DSA_get0_priv_key(), DSA_get0_pub_key()</p>
+
+<p>See <a href="#Deprecated-low-level-key-parameter-getters">&quot;Deprecated low-level key parameter getters&quot;</a>.</p>
+
+</li>
+<li><p>DSA_new(), DSA_free(), DSA_up_ref()</p>
+
+<p>See <a href="#Deprecated-low-level-object-creation">&quot;Deprecated low-level object creation&quot;</a></p>
+
+</li>
+<li><p>DSAparams_dup()</p>
+
+<p>There is no direct replacement. Applications may use <a href="../man3/EVP_PKEY_copy_parameters.html">EVP_PKEY_copy_parameters(3)</a> and <a href="../man3/EVP_PKEY_dup.html">EVP_PKEY_dup(3)</a> instead.</p>
+
+</li>
+<li><p>DSAparams_print(), DSAparams_print_fp(), DSA_print(), DSA_print_fp()</p>
+
+<p>See <a href="#Deprecated-low-level-key-printing-functions">&quot;Deprecated low-level key printing functions&quot;</a></p>
+
+</li>
+<li><p>DSA_set0_key(), DSA_set0_pqg()</p>
+
+<p>See <a href="#Deprecated-low-level-key-parameter-setters">&quot;Deprecated low-level key parameter setters&quot;</a></p>
+
+</li>
+<li><p>DSA_set_flags(), DSA_clear_flags(), DSA_test_flags()</p>
+
+<p>The <b>DSA_FLAG_CACHE_MONT_P</b> flag has been deprecated without replacement.</p>
+
+</li>
+<li><p>DSA_sign(), DSA_do_sign(), DSA_sign_setup(), DSA_verify(), DSA_do_verify()</p>
+
+<p>See <a href="#Deprecated-low-level-signing-functions">&quot;Deprecated low-level signing functions&quot;</a>.</p>
+
+</li>
+<li><p>ECDH_compute_key()</p>
+
+<p>See <a href="#Deprecated-low-level-key-exchange-functions">&quot;Deprecated low-level key exchange functions&quot;</a>.</p>
+
+</li>
+<li><p>ECDH_KDF_X9_62()</p>
+
+<p>Applications may either set this using the helper function <a href="../man3/EVP_PKEY_CTX_set_ecdh_kdf_type.html">EVP_PKEY_CTX_set_ecdh_kdf_type(3)</a> or by setting an <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> using the &quot;kdf-type&quot; as shown in <a href="../man7/EVP_KEYEXCH-ECDH.html">&quot;EXAMPLES&quot; in EVP_KEYEXCH-ECDH(7)</a></p>
+
+</li>
+<li><p>ECDSA_sign(), ECDSA_sign_ex(), ECDSA_sign_setup(), ECDSA_do_sign(), ECDSA_do_sign_ex(), ECDSA_verify(), ECDSA_do_verify()</p>
+
+<p>See <a href="#Deprecated-low-level-signing-functions">&quot;Deprecated low-level signing functions&quot;</a>.</p>
+
+</li>
+<li><p>ECDSA_size()</p>
+
+<p>Applications should use <a href="../man3/EVP_PKEY_get_size.html">EVP_PKEY_get_size(3)</a>.</p>
+
+</li>
+<li><p>EC_GF2m_simple_method(), EC_GFp_mont_method(), EC_GFp_nist_method(), EC_GFp_nistp224_method(), EC_GFp_nistp256_method(), EC_GFp_nistp521_method(), EC_GFp_simple_method()</p>
+
+<p>There are no replacements for these functions. Applications should rely on the library automatically assigning a suitable method internally when an EC_GROUP is constructed.</p>
+
+</li>
+<li><p>EC_GROUP_clear_free()</p>
+
+<p>Use <a href="../man3/EC_GROUP_free.html">EC_GROUP_free(3)</a> instead.</p>
+
+</li>
+<li><p>EC_GROUP_get_curve_GF2m(), EC_GROUP_get_curve_GFp(), EC_GROUP_set_curve_GF2m(), EC_GROUP_set_curve_GFp()</p>
+
+<p>Applications should use <a href="../man3/EC_GROUP_get_curve.html">EC_GROUP_get_curve(3)</a> and <a href="../man3/EC_GROUP_set_curve.html">EC_GROUP_set_curve(3)</a>.</p>
+
+</li>
+<li><p>EC_GROUP_have_precompute_mult(), EC_GROUP_precompute_mult(), EC_KEY_precompute_mult()</p>
+
+<p>These functions are not widely used. Applications should instead switch to named curves which OpenSSL has hardcoded lookup tables for.</p>
+
+</li>
+<li><p>EC_GROUP_new(), EC_GROUP_method_of(), EC_POINT_method_of()</p>
+
+<p>EC_METHOD is now an internal-only concept and a suitable EC_METHOD is assigned internally without application intervention. Users of EC_GROUP_new() should switch to a different suitable constructor.</p>
+
+</li>
+<li><p>EC_KEY_can_sign()</p>
+
+<p>Applications should use <a href="../man3/EVP_PKEY_can_sign.html">EVP_PKEY_can_sign(3)</a> instead.</p>
+
+</li>
+<li><p>EC_KEY_check_key()</p>
+
+<p>See <a href="#Deprecated-low-level-validation-functions">&quot;Deprecated low-level validation functions&quot;</a></p>
+
+</li>
+<li><p>EC_KEY_set_flags(), EC_KEY_get_flags(), EC_KEY_clear_flags()</p>
+
+<p>See <a href="../man7/EVP_PKEY-EC.html">&quot;Common EC parameters&quot; in EVP_PKEY-EC(7)</a> which handles flags as separate parameters for <b>OSSL_PKEY_PARAM_EC_POINT_CONVERSION_FORMAT</b>, <b>OSSL_PKEY_PARAM_EC_GROUP_CHECK_TYPE</b>, <b>OSSL_PKEY_PARAM_EC_ENCODING</b>, <b>OSSL_PKEY_PARAM_USE_COFACTOR_ECDH</b> and <b>OSSL_PKEY_PARAM_EC_INCLUDE_PUBLIC</b>. See also <a href="../man7/EVP_PKEY-EC.html">&quot;EXAMPLES&quot; in EVP_PKEY-EC(7)</a></p>
+
+</li>
+<li><p>EC_KEY_dup(), EC_KEY_copy()</p>
+
+<p>There is no direct replacement. Applications may use <a href="../man3/EVP_PKEY_copy_parameters.html">EVP_PKEY_copy_parameters(3)</a> and <a href="../man3/EVP_PKEY_dup.html">EVP_PKEY_dup(3)</a> instead.</p>
+
+</li>
+<li><p>EC_KEY_decoded_from_explicit_params()</p>
+
+<p>There is no replacement.</p>
+
+</li>
+<li><p>EC_KEY_generate_key()</p>
+
+<p>See <a href="#Deprecated-low-level-key-generation-functions">&quot;Deprecated low-level key generation functions&quot;</a>.</p>
+
+</li>
+<li><p>EC_KEY_get0_group(), EC_KEY_get0_private_key(), EC_KEY_get0_public_key(), EC_KEY_get_conv_form(), EC_KEY_get_enc_flags()</p>
+
+<p>See <a href="#Deprecated-low-level-key-parameter-getters">&quot;Deprecated low-level key parameter getters&quot;</a>.</p>
+
+</li>
+<li><p>EC_KEY_get0_engine(), EC_KEY_get_default_method(), EC_KEY_get_method(), EC_KEY_new_method(), EC_KEY_get_ex_data(), EC_KEY_OpenSSL(), EC_KEY_set_ex_data(), EC_KEY_set_default_method(), EC_KEY_METHOD_*(), EC_KEY_set_method()</p>
+
+<p>See <a href="#Providers-are-a-replacement-for-engines-and-low-level-method-overrides">&quot;Providers are a replacement for engines and low-level method overrides&quot;</a></p>
+
+</li>
+<li><p>EC_METHOD_get_field_type()</p>
+
+<p>Use <a href="../man3/EC_GROUP_get_field_type.html">EC_GROUP_get_field_type(3)</a> instead. See <a href="#Providers-are-a-replacement-for-engines-and-low-level-method-overrides">&quot;Providers are a replacement for engines and low-level method overrides&quot;</a></p>
+
+</li>
+<li><p>EC_KEY_key2buf(), EC_KEY_oct2key(), EC_KEY_oct2priv(), EC_KEY_priv2buf(), EC_KEY_priv2oct()</p>
+
+<p>There are no replacements for these.</p>
+
+</li>
+<li><p>EC_KEY_new(), EC_KEY_new_by_curve_name(), EC_KEY_free(), EC_KEY_up_ref()</p>
+
+<p>See <a href="#Deprecated-low-level-object-creation">&quot;Deprecated low-level object creation&quot;</a></p>
+
+</li>
+<li><p>EC_KEY_print(), EC_KEY_print_fp()</p>
+
+<p>See <a href="#Deprecated-low-level-key-printing-functions">&quot;Deprecated low-level key printing functions&quot;</a></p>
+
+</li>
+<li><p>EC_KEY_set_asn1_flag(), EC_KEY_set_conv_form(), EC_KEY_set_enc_flags()</p>
+
+<p>See <a href="#Deprecated-low-level-key-parameter-setters">&quot;Deprecated low-level key parameter setters&quot;</a>.</p>
+
+</li>
+<li><p>EC_KEY_set_group(), EC_KEY_set_private_key(), EC_KEY_set_public_key(), EC_KEY_set_public_key_affine_coordinates()</p>
+
+<p>See <a href="#Deprecated-low-level-key-parameter-setters">&quot;Deprecated low-level key parameter setters&quot;</a>.</p>
+
+</li>
+<li><p>ECParameters_print(), ECParameters_print_fp(), ECPKParameters_print(), ECPKParameters_print_fp()</p>
+
+<p>See <a href="#Deprecated-low-level-key-printing-functions">&quot;Deprecated low-level key printing functions&quot;</a></p>
+
+</li>
+<li><p>EC_POINT_bn2point(), EC_POINT_point2bn()</p>
+
+<p>These functions were not particularly useful, since EC point serialization formats are not individual big-endian integers.</p>
+
+</li>
+<li><p>EC_POINT_get_affine_coordinates_GF2m(), EC_POINT_get_affine_coordinates_GFp(), EC_POINT_set_affine_coordinates_GF2m(), EC_POINT_set_affine_coordinates_GFp()</p>
+
+<p>Applications should use <a href="../man3/EC_POINT_get_affine_coordinates.html">EC_POINT_get_affine_coordinates(3)</a> and <a href="../man3/EC_POINT_set_affine_coordinates.html">EC_POINT_set_affine_coordinates(3)</a> instead.</p>
+
+</li>
+<li><p>EC_POINT_get_Jprojective_coordinates_GFp(), EC_POINT_set_Jprojective_coordinates_GFp()</p>
+
+<p>These functions are not widely used. Applications should instead use the <a href="../man3/EC_POINT_set_affine_coordinates.html">EC_POINT_set_affine_coordinates(3)</a> and <a href="../man3/EC_POINT_get_affine_coordinates.html">EC_POINT_get_affine_coordinates(3)</a> functions.</p>
+
+</li>
+<li><p>EC_POINT_make_affine(), EC_POINTs_make_affine()</p>
+
+<p>There is no replacement. These functions were not widely used, and OpenSSL automatically performs this conversion when needed.</p>
+
+</li>
+<li><p>EC_POINT_set_compressed_coordinates_GF2m(), EC_POINT_set_compressed_coordinates_GFp()</p>
+
+<p>Applications should use <a href="../man3/EC_POINT_set_compressed_coordinates.html">EC_POINT_set_compressed_coordinates(3)</a> instead.</p>
+
+</li>
+<li><p>EC_POINTs_mul()</p>
+
+<p>This function is not widely used. Applications should instead use the <a href="../man3/EC_POINT_mul.html">EC_POINT_mul(3)</a> function.</p>
+
+</li>
+<li><p><b>ENGINE_*()</b></p>
+
+<p>All engine functions are deprecated. An engine should be rewritten as a provider. See <a href="#Providers-are-a-replacement-for-engines-and-low-level-method-overrides">&quot;Providers are a replacement for engines and low-level method overrides&quot;</a>.</p>
+
+</li>
+<li><p><b>ERR_load_*()</b>, ERR_func_error_string(), ERR_get_error_line(), ERR_get_error_line_data(), ERR_get_state()</p>
+
+<p>OpenSSL now loads error strings automatically so these functions are not needed.</p>
+
+</li>
+<li><p>ERR_peek_error_line_data(), ERR_peek_last_error_line_data()</p>
+
+<p>The new functions are <a href="../man3/ERR_peek_error_func.html">ERR_peek_error_func(3)</a>, <a href="../man3/ERR_peek_last_error_func.html">ERR_peek_last_error_func(3)</a>, <a href="../man3/ERR_peek_error_data.html">ERR_peek_error_data(3)</a>, <a href="../man3/ERR_peek_last_error_data.html">ERR_peek_last_error_data(3)</a>, <a href="../man3/ERR_get_error_all.html">ERR_get_error_all(3)</a>, <a href="../man3/ERR_peek_error_all.html">ERR_peek_error_all(3)</a> and <a href="../man3/ERR_peek_last_error_all.html">ERR_peek_last_error_all(3)</a>. Applications should use <a href="../man3/ERR_get_error_all.html">ERR_get_error_all(3)</a>, or pick information with ERR_peek functions and finish off with getting the error code by using <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>.</p>
+
+</li>
+<li><p>EVP_CIPHER_CTX_iv(), EVP_CIPHER_CTX_iv_noconst(), EVP_CIPHER_CTX_original_iv()</p>
+
+<p>Applications should instead use <a href="../man3/EVP_CIPHER_CTX_get_updated_iv.html">EVP_CIPHER_CTX_get_updated_iv(3)</a>, <a href="../man3/EVP_CIPHER_CTX_get_updated_iv.html">EVP_CIPHER_CTX_get_updated_iv(3)</a> and <a href="../man3/EVP_CIPHER_CTX_get_original_iv.html">EVP_CIPHER_CTX_get_original_iv(3)</a> respectively. See <a href="../man3/EVP_CIPHER_CTX_get_original_iv.html">EVP_CIPHER_CTX_get_original_iv(3)</a> for further information.</p>
+
+</li>
+<li><p><b>EVP_CIPHER_meth_*()</b>, EVP_MD_CTX_set_update_fn(), EVP_MD_CTX_update_fn(), <b>EVP_MD_meth_*()</b></p>
+
+<p>See <a href="#Providers-are-a-replacement-for-engines-and-low-level-method-overrides">&quot;Providers are a replacement for engines and low-level method overrides&quot;</a>.</p>
+
+</li>
+<li><p>EVP_PKEY_CTRL_PKCS7_ENCRYPT(), EVP_PKEY_CTRL_PKCS7_DECRYPT(), EVP_PKEY_CTRL_PKCS7_SIGN(), EVP_PKEY_CTRL_CMS_ENCRYPT(), EVP_PKEY_CTRL_CMS_DECRYPT(), and EVP_PKEY_CTRL_CMS_SIGN()</p>
+
+<p>These control operations are not invoked by the OpenSSL library anymore and are replaced by direct checks of the key operation against the key type when the operation is initialized.</p>
+
+</li>
+<li><p>EVP_PKEY_CTX_get0_dh_kdf_ukm(), EVP_PKEY_CTX_get0_ecdh_kdf_ukm()</p>
+
+<p>See the &quot;kdf-ukm&quot; item in <a href="../man7/EVP_KEYEXCH-DH.html">&quot;DH key exchange parameters&quot; in EVP_KEYEXCH-DH(7)</a> and <a href="../man7/EVP_KEYEXCH-ECDH.html">&quot;ECDH Key Exchange parameters&quot; in EVP_KEYEXCH-ECDH(7)</a>. These functions are obsolete and should not be required.</p>
+
+</li>
+<li><p>EVP_PKEY_CTX_set_rsa_keygen_pubexp()</p>
+
+<p>Applications should use <a href="../man3/EVP_PKEY_CTX_set1_rsa_keygen_pubexp.html">EVP_PKEY_CTX_set1_rsa_keygen_pubexp(3)</a> instead.</p>
+
+</li>
+<li><p>EVP_PKEY_cmp(), EVP_PKEY_cmp_parameters()</p>
+
+<p>Applications should use <a href="../man3/EVP_PKEY_eq.html">EVP_PKEY_eq(3)</a> and <a href="../man3/EVP_PKEY_parameters_eq.html">EVP_PKEY_parameters_eq(3)</a> instead. See <a href="../man3/EVP_PKEY_copy_parameters.html">EVP_PKEY_copy_parameters(3)</a> for further details.</p>
+
+</li>
+<li><p>EVP_PKEY_encrypt_old(), EVP_PKEY_decrypt_old(),</p>
+
+<p>Applications should use <a href="../man3/EVP_PKEY_encrypt_init.html">EVP_PKEY_encrypt_init(3)</a> and <a href="../man3/EVP_PKEY_encrypt.html">EVP_PKEY_encrypt(3)</a> or <a href="../man3/EVP_PKEY_decrypt_init.html">EVP_PKEY_decrypt_init(3)</a> and <a href="../man3/EVP_PKEY_decrypt.html">EVP_PKEY_decrypt(3)</a> instead.</p>
+
+</li>
+<li><p>EVP_PKEY_get0()</p>
+
+<p>This function returns NULL if the key comes from a provider.</p>
+
+</li>
+<li><p>EVP_PKEY_get0_DH(), EVP_PKEY_get0_DSA(), EVP_PKEY_get0_EC_KEY(), EVP_PKEY_get0_RSA(), EVP_PKEY_get1_DH(), EVP_PKEY_get1_DSA(), EVP_PKEY_get1_EC_KEY and EVP_PKEY_get1_RSA(), EVP_PKEY_get0_hmac(), EVP_PKEY_get0_poly1305(), EVP_PKEY_get0_siphash()</p>
+
+<p>See <a href="#Functions-that-return-an-internal-key-should-be-treated-as-read-only">&quot;Functions that return an internal key should be treated as read only&quot;</a>.</p>
+
+</li>
+<li><p><b>EVP_PKEY_meth_*()</b></p>
+
+<p>See <a href="#Providers-are-a-replacement-for-engines-and-low-level-method-overrides">&quot;Providers are a replacement for engines and low-level method overrides&quot;</a>.</p>
+
+</li>
+<li><p>EVP_PKEY_new_CMAC_key()</p>
+
+<p>See <a href="#Deprecated-low-level-MAC-functions">&quot;Deprecated low-level MAC functions&quot;</a>.</p>
+
+</li>
+<li><p>EVP_PKEY_assign(), EVP_PKEY_set1_DH(), EVP_PKEY_set1_DSA(), EVP_PKEY_set1_EC_KEY(), EVP_PKEY_set1_RSA()</p>
+
+<p>See <a href="#Deprecated-low-level-key-object-getters-and-setters">&quot;Deprecated low-level key object getters and setters&quot;</a></p>
+
+</li>
+<li><p>EVP_PKEY_set1_tls_encodedpoint() EVP_PKEY_get1_tls_encodedpoint()</p>
+
+<p>These functions were previously used by libssl to set or get an encoded public key into/from an EVP_PKEY object. With OpenSSL 3.0 these are replaced by the more generic functions <a href="../man3/EVP_PKEY_set1_encoded_public_key.html">EVP_PKEY_set1_encoded_public_key(3)</a> and <a href="../man3/EVP_PKEY_get1_encoded_public_key.html">EVP_PKEY_get1_encoded_public_key(3)</a>. The old versions have been converted to deprecated macros that just call the new functions.</p>
+
+</li>
+<li><p>EVP_PKEY_set1_engine(), EVP_PKEY_get0_engine()</p>
+
+<p>See <a href="#Providers-are-a-replacement-for-engines-and-low-level-method-overrides">&quot;Providers are a replacement for engines and low-level method overrides&quot;</a>.</p>
+
+</li>
+<li><p>EVP_PKEY_set_alias_type()</p>
+
+<p>This function has been removed. There is no replacement. See <a href="#EVP_PKEY_set_alias_type-method-has-been-removed">&quot;EVP_PKEY_set_alias_type() method has been removed&quot;</a></p>
+
+</li>
+<li><p>HMAC_Init_ex(), HMAC_Update(), HMAC_Final(), HMAC_size()</p>
+
+<p>See <a href="#Deprecated-low-level-MAC-functions">&quot;Deprecated low-level MAC functions&quot;</a>.</p>
+
+</li>
+<li><p>HMAC_CTX_new(), HMAC_CTX_free(), HMAC_CTX_copy(), HMAC_CTX_reset(), HMAC_CTX_set_flags(), HMAC_CTX_get_md()</p>
+
+<p>See <a href="#Deprecated-low-level-MAC-functions">&quot;Deprecated low-level MAC functions&quot;</a>.</p>
+
+</li>
+<li><p>i2d_DHparams(), i2d_DHxparams()</p>
+
+<p>See <a href="#Deprecated-low-level-key-reading-and-writing-functions">&quot;Deprecated low-level key reading and writing functions&quot;</a> and <a href="../man3/d2i_RSAPrivateKey.html">&quot;Migration&quot; in d2i_RSAPrivateKey(3)</a></p>
+
+</li>
+<li><p>i2d_DSAparams(), i2d_DSAPrivateKey(), i2d_DSAPrivateKey_bio(), i2d_DSAPrivateKey_fp(), i2d_DSA_PUBKEY(), i2d_DSA_PUBKEY_bio(), i2d_DSA_PUBKEY_fp(), i2d_DSAPublicKey()</p>
+
+<p>See <a href="#Deprecated-low-level-key-reading-and-writing-functions">&quot;Deprecated low-level key reading and writing functions&quot;</a> and <a href="../man3/d2i_RSAPrivateKey.html">&quot;Migration&quot; in d2i_RSAPrivateKey(3)</a></p>
+
+</li>
+<li><p>i2d_ECParameters(), i2d_ECPrivateKey(), i2d_ECPrivateKey_bio(), i2d_ECPrivateKey_fp(), i2d_EC_PUBKEY(), i2d_EC_PUBKEY_bio(), i2d_EC_PUBKEY_fp()</p>
+
+<p>See <a href="#Deprecated-low-level-key-reading-and-writing-functions">&quot;Deprecated low-level key reading and writing functions&quot;</a> and <a href="../man3/d2i_RSAPrivateKey.html">&quot;Migration&quot; in d2i_RSAPrivateKey(3)</a></p>
+
+</li>
+<li><p>i2o_ECPublicKey()</p>
+
+<p>Use <a href="../man3/EVP_PKEY_get1_encoded_public_key.html">EVP_PKEY_get1_encoded_public_key(3)</a>. See <a href="#Deprecated-low-level-key-parameter-getters">&quot;Deprecated low-level key parameter getters&quot;</a></p>
+
+</li>
+<li><p>i2d_RSAPrivateKey(), i2d_RSAPrivateKey_bio(), i2d_RSAPrivateKey_fp(), i2d_RSA_PUBKEY(), i2d_RSA_PUBKEY_bio(), i2d_RSA_PUBKEY_fp(), i2d_RSAPublicKey(), i2d_RSAPublicKey_bio(), i2d_RSAPublicKey_fp()</p>
+
+<p>See <a href="#Deprecated-low-level-key-reading-and-writing-functions">&quot;Deprecated low-level key reading and writing functions&quot;</a> and <a href="../man3/d2i_RSAPrivateKey.html">&quot;Migration&quot; in d2i_RSAPrivateKey(3)</a></p>
+
+</li>
+<li><p>IDEA_encrypt(), IDEA_set_decrypt_key(), IDEA_set_encrypt_key(), IDEA_cbc_encrypt(), IDEA_cfb64_encrypt(), IDEA_ecb_encrypt(), IDEA_ofb64_encrypt()</p>
+
+<p>See <a href="#Deprecated-low-level-encryption-functions">&quot;Deprecated low-level encryption functions&quot;</a>. IDEA has been moved to the <a href="#Legacy-Algorithms">Legacy Provider</a>.</p>
+
+</li>
+<li><p>IDEA_options()</p>
+
+<p>There is no replacement. This function returned a constant string.</p>
+
+</li>
+<li><p>MD2(), MD2_Init(), MD2_Update(), MD2_Final()</p>
+
+<p>See <a href="#Deprecated-low-level-encryption-functions">&quot;Deprecated low-level encryption functions&quot;</a>. MD2 has been moved to the <a href="#Legacy-Algorithms">Legacy Provider</a>.</p>
+
+</li>
+<li><p>MD2_options()</p>
+
+<p>There is no replacement. This function returned a constant string.</p>
+
+</li>
+<li><p>MD4(), MD4_Init(), MD4_Update(), MD4_Final(), MD4_Transform()</p>
+
+<p>See <a href="#Deprecated-low-level-encryption-functions">&quot;Deprecated low-level encryption functions&quot;</a>. MD4 has been moved to the <a href="#Legacy-Algorithms">Legacy Provider</a>.</p>
+
+</li>
+<li><p>MDC2(), MDC2_Init(), MDC2_Update(), MDC2_Final()</p>
+
+<p>See <a href="#Deprecated-low-level-encryption-functions">&quot;Deprecated low-level encryption functions&quot;</a>. MDC2 has been moved to the <a href="#Legacy-Algorithms">Legacy Provider</a>.</p>
+
+</li>
+<li><p>MD5(), MD5_Init(), MD5_Update(), MD5_Final(), MD5_Transform()</p>
+
+<p>See <a href="#Deprecated-low-level-encryption-functions">&quot;Deprecated low-level encryption functions&quot;</a>.</p>
+
+</li>
+<li><p>NCONF_WIN32()</p>
+
+<p>This undocumented function has no replacement. See <a href="../man5/config.html">&quot;HISTORY&quot; in config(5)</a> for more details.</p>
+
+</li>
+<li><p>OCSP_parse_url()</p>
+
+<p>Use <a href="../man3/OSSL_HTTP_parse_url.html">OSSL_HTTP_parse_url(3)</a> instead.</p>
+
+</li>
+<li><p><b>OCSP_REQ_CTX</b> type and <b>OCSP_REQ_CTX_*()</b> functions</p>
+
+<p>These methods were used to collect all necessary data to form a HTTP request, and to perform the HTTP transfer with that request. With OpenSSL 3.0, the type is <b>OSSL_HTTP_REQ_CTX</b>, and the deprecated functions are replaced with <b>OSSL_HTTP_REQ_CTX_*()</b>. See <a href="../man3/OSSL_HTTP_REQ_CTX.html">OSSL_HTTP_REQ_CTX(3)</a> for additional details.</p>
+
+</li>
+<li><p>OPENSSL_fork_child(), OPENSSL_fork_parent(), OPENSSL_fork_prepare()</p>
+
+<p>There is no replacement for these functions. These pthread fork support methods were unused by OpenSSL.</p>
+
+</li>
+<li><p>OSSL_STORE_ctrl(), OSSL_STORE_do_all_loaders(), OSSL_STORE_LOADER_get0_engine(), OSSL_STORE_LOADER_get0_scheme(), OSSL_STORE_LOADER_new(), OSSL_STORE_LOADER_set_attach(), OSSL_STORE_LOADER_set_close(), OSSL_STORE_LOADER_set_ctrl(), OSSL_STORE_LOADER_set_eof(), OSSL_STORE_LOADER_set_error(), OSSL_STORE_LOADER_set_expect(), OSSL_STORE_LOADER_set_find(), OSSL_STORE_LOADER_set_load(), OSSL_STORE_LOADER_set_open(), OSSL_STORE_LOADER_set_open_ex(), OSSL_STORE_register_loader(), OSSL_STORE_unregister_loader(), OSSL_STORE_vctrl()</p>
+
+<p>These functions helped applications and engines create loaders for schemes they supported. These are all deprecated and discouraged in favour of provider implementations, see <a href="../man7/provider-storemgmt.html">provider-storemgmt(7)</a>.</p>
+
+</li>
+<li><p>PEM_read_DHparams(), PEM_read_bio_DHparams(), PEM_read_DSAparams(), PEM_read_bio_DSAparams(), PEM_read_DSAPrivateKey(), PEM_read_DSA_PUBKEY(), PEM_read_bio_DSAPrivateKey and PEM_read_bio_DSA_PUBKEY(), PEM_read_ECPKParameters(), PEM_read_ECPrivateKey(), PEM_read_EC_PUBKEY(), PEM_read_bio_ECPKParameters(), PEM_read_bio_ECPrivateKey(), PEM_read_bio_EC_PUBKEY(), PEM_read_RSAPrivateKey(), PEM_read_RSA_PUBKEY(), PEM_read_RSAPublicKey(), PEM_read_bio_RSAPrivateKey(), PEM_read_bio_RSA_PUBKEY(), PEM_read_bio_RSAPublicKey(), PEM_write_bio_DHparams(), PEM_write_bio_DHxparams(), PEM_write_DHparams(), PEM_write_DHxparams(), PEM_write_DSAparams(), PEM_write_DSAPrivateKey(), PEM_write_DSA_PUBKEY(), PEM_write_bio_DSAparams(), PEM_write_bio_DSAPrivateKey(), PEM_write_bio_DSA_PUBKEY(), PEM_write_ECPKParameters(), PEM_write_ECPrivateKey(), PEM_write_EC_PUBKEY(), PEM_write_bio_ECPKParameters(), PEM_write_bio_ECPrivateKey(), PEM_write_bio_EC_PUBKEY(), PEM_write_RSAPrivateKey(), PEM_write_RSA_PUBKEY(), PEM_write_RSAPublicKey(), PEM_write_bio_RSAPrivateKey(), PEM_write_bio_RSA_PUBKEY(), PEM_write_bio_RSAPublicKey(),</p>
+
+<p>See <a href="#Deprecated-low-level-key-reading-and-writing-functions">&quot;Deprecated low-level key reading and writing functions&quot;</a></p>
+
+</li>
+<li><p>PKCS1_MGF1()</p>
+
+<p>See <a href="#Deprecated-low-level-encryption-functions">&quot;Deprecated low-level encryption functions&quot;</a>.</p>
+
+</li>
+<li><p>RAND_get_rand_method(), RAND_set_rand_method(), RAND_OpenSSL(), RAND_set_rand_engine()</p>
+
+<p>Applications should instead use <a href="../man3/RAND_set_DRBG_type.html">RAND_set_DRBG_type(3)</a>, <a href="../man3/EVP_RAND.html">EVP_RAND(3)</a> and <a href="../man7/EVP_RAND.html">EVP_RAND(7)</a>. See <a href="../man3/RAND_set_rand_method.html">RAND_set_rand_method(3)</a> for more details.</p>
+
+</li>
+<li><p>RC2_encrypt(), RC2_decrypt(), RC2_set_key(), RC2_cbc_encrypt(), RC2_cfb64_encrypt(), RC2_ecb_encrypt(), RC2_ofb64_encrypt(), RC4(), RC4_set_key(), RC4_options(), RC5_32_encrypt(), RC5_32_set_key(), RC5_32_decrypt(), RC5_32_cbc_encrypt(), RC5_32_cfb64_encrypt(), RC5_32_ecb_encrypt(), RC5_32_ofb64_encrypt()</p>
+
+<p>See <a href="#Deprecated-low-level-encryption-functions">&quot;Deprecated low-level encryption functions&quot;</a>. The Algorithms &quot;RC2&quot;, &quot;RC4&quot; and &quot;RC5&quot; have been moved to the <a href="#Legacy-Algorithms">Legacy Provider</a>.</p>
+
+</li>
+<li><p>RIPEMD160(), RIPEMD160_Init(), RIPEMD160_Update(), RIPEMD160_Final(), RIPEMD160_Transform()</p>
+
+<p>See <a href="#Deprecated-low-level-digest-functions">&quot;Deprecated low-level digest functions&quot;</a>. The RIPE algorithm has been moved to the <a href="#Legacy-Algorithms">Legacy Provider</a>.</p>
+
+</li>
+<li><p>RSA_bits(), RSA_security_bits(), RSA_size()</p>
+
+<p>Use <a href="../man3/EVP_PKEY_get_bits.html">EVP_PKEY_get_bits(3)</a>, <a href="../man3/EVP_PKEY_get_security_bits.html">EVP_PKEY_get_security_bits(3)</a> and <a href="../man3/EVP_PKEY_get_size.html">EVP_PKEY_get_size(3)</a>.</p>
+
+</li>
+<li><p>RSA_check_key(), RSA_check_key_ex()</p>
+
+<p>See <a href="#Deprecated-low-level-validation-functions">&quot;Deprecated low-level validation functions&quot;</a></p>
+
+</li>
+<li><p>RSA_clear_flags(), RSA_flags(), RSA_set_flags(), RSA_test_flags(), RSA_setup_blinding(), RSA_blinding_off(), RSA_blinding_on()</p>
+
+<p>All of these RSA flags have been deprecated without replacement:</p>
+
+<p><b>RSA_FLAG_BLINDING</b>, <b>RSA_FLAG_CACHE_PRIVATE</b>, <b>RSA_FLAG_CACHE_PUBLIC</b>, <b>RSA_FLAG_EXT_PKEY</b>, <b>RSA_FLAG_NO_BLINDING</b>, <b>RSA_FLAG_THREAD_SAFE</b> <b>RSA_METHOD_FLAG_NO_CHECK</b></p>
+
+</li>
+<li><p>RSA_generate_key_ex(), RSA_generate_multi_prime_key()</p>
+
+<p>See <a href="#Deprecated-low-level-key-generation-functions">&quot;Deprecated low-level key generation functions&quot;</a>.</p>
+
+</li>
+<li><p>RSA_get0_engine()</p>
+
+<p>See <a href="#Providers-are-a-replacement-for-engines-and-low-level-method-overrides">&quot;Providers are a replacement for engines and low-level method overrides&quot;</a></p>
+
+</li>
+<li><p>RSA_get0_crt_params(), RSA_get0_d(), RSA_get0_dmp1(), RSA_get0_dmq1(), RSA_get0_e(), RSA_get0_factors(), RSA_get0_iqmp(), RSA_get0_key(), RSA_get0_multi_prime_crt_params(), RSA_get0_multi_prime_factors(), RSA_get0_n(), RSA_get0_p(), RSA_get0_pss_params(), RSA_get0_q(), RSA_get_multi_prime_extra_count()</p>
+
+<p>See <a href="#Deprecated-low-level-key-parameter-getters">&quot;Deprecated low-level key parameter getters&quot;</a></p>
+
+</li>
+<li><p>RSA_new(), RSA_free(), RSA_up_ref()</p>
+
+<p>See <a href="#Deprecated-low-level-object-creation">&quot;Deprecated low-level object creation&quot;</a>.</p>
+
+</li>
+<li><p>RSA_get_default_method(), RSA_get_ex_data and RSA_get_method()</p>
+
+<p>See <a href="#Providers-are-a-replacement-for-engines-and-low-level-method-overrides">&quot;Providers are a replacement for engines and low-level method overrides&quot;</a>.</p>
+
+</li>
+<li><p>RSA_get_version()</p>
+
+<p>There is no replacement.</p>
+
+</li>
+<li><p><b>RSA_meth_*()</b>, RSA_new_method(), RSA_null_method and RSA_PKCS1_OpenSSL()</p>
+
+<p>See <a href="#Providers-are-a-replacement-for-engines-and-low-level-method-overrides">&quot;Providers are a replacement for engines and low-level method overrides&quot;</a>.</p>
+
+</li>
+<li><p><b>RSA_padding_add_*()</b>, <b>RSA_padding_check_*()</b></p>
+
+<p>See <a href="#Deprecated-low-level-signing-functions">&quot;Deprecated low-level signing functions&quot;</a> and <a href="#Deprecated-low-level-encryption-functions">&quot;Deprecated low-level encryption functions&quot;</a>.</p>
+
+</li>
+<li><p>RSA_print(), RSA_print_fp()</p>
+
+<p>See <a href="#Deprecated-low-level-key-printing-functions">&quot;Deprecated low-level key printing functions&quot;</a></p>
+
+</li>
+<li><p>RSA_public_encrypt(), RSA_private_decrypt()</p>
+
+<p>See <a href="#Deprecated-low-level-encryption-functions">&quot;Deprecated low-level encryption functions&quot;</a></p>
+
+</li>
+<li><p>RSA_private_encrypt(), RSA_public_decrypt()</p>
+
+<p>This is equivalent to doing sign and verify recover operations (with a padding mode of none). See <a href="#Deprecated-low-level-signing-functions">&quot;Deprecated low-level signing functions&quot;</a>.</p>
+
+</li>
+<li><p>RSAPrivateKey_dup(), RSAPublicKey_dup()</p>
+
+<p>There is no direct replacement. Applications may use <a href="../man3/EVP_PKEY_dup.html">EVP_PKEY_dup(3)</a>.</p>
+
+</li>
+<li><p>RSAPublicKey_it(), RSAPrivateKey_it()</p>
+
+<p>See <a href="#Deprecated-low-level-key-reading-and-writing-functions">&quot;Deprecated low-level key reading and writing functions&quot;</a></p>
+
+</li>
+<li><p>RSA_set0_crt_params(), RSA_set0_factors(), RSA_set0_key(), RSA_set0_multi_prime_params()</p>
+
+<p>See <a href="#Deprecated-low-level-key-parameter-setters">&quot;Deprecated low-level key parameter setters&quot;</a>.</p>
+
+</li>
+<li><p>RSA_set_default_method(), RSA_set_method(), RSA_set_ex_data()</p>
+
+<p>See <a href="#Providers-are-a-replacement-for-engines-and-low-level-method-overrides">&quot;Providers are a replacement for engines and low-level method overrides&quot;</a></p>
+
+</li>
+<li><p>RSA_sign(), RSA_sign_ASN1_OCTET_STRING(), RSA_verify(), RSA_verify_ASN1_OCTET_STRING(), RSA_verify_PKCS1_PSS(), RSA_verify_PKCS1_PSS_mgf1()</p>
+
+<p>See <a href="#Deprecated-low-level-signing-functions">&quot;Deprecated low-level signing functions&quot;</a>.</p>
+
+</li>
+<li><p>RSA_X931_derive_ex(), RSA_X931_generate_key_ex(), RSA_X931_hash_id()</p>
+
+<p>There are no replacements for these functions. X931 padding can be set using <a href="../man7/EVP_SIGNATURE-RSA.html">&quot;Signature Parameters&quot; in EVP_SIGNATURE-RSA(7)</a>. See <b>OSSL_SIGNATURE_PARAM_PAD_MODE</b>.</p>
+
+</li>
+<li><p>SEED_encrypt(), SEED_decrypt(), SEED_set_key(), SEED_cbc_encrypt(), SEED_cfb128_encrypt(), SEED_ecb_encrypt(), SEED_ofb128_encrypt()</p>
+
+<p>See <a href="#Deprecated-low-level-encryption-functions">&quot;Deprecated low-level encryption functions&quot;</a>. The SEED algorithm has been moved to the <a href="#Legacy-Algorithms">Legacy Provider</a>.</p>
+
+</li>
+<li><p>SHA1_Init(), SHA1_Update(), SHA1_Final(), SHA1_Transform(), SHA224_Init(), SHA224_Update(), SHA224_Final(), SHA256_Init(), SHA256_Update(), SHA256_Final(), SHA256_Transform(), SHA384_Init(), SHA384_Update(), SHA384_Final(), SHA512_Init(), SHA512_Update(), SHA512_Final(), SHA512_Transform()</p>
+
+<p>See <a href="#Deprecated-low-level-digest-functions">&quot;Deprecated low-level digest functions&quot;</a>.</p>
+
+</li>
+<li><p>SRP_Calc_A(), SRP_Calc_B(), SRP_Calc_client_key(), SRP_Calc_server_key(), SRP_Calc_u(), SRP_Calc_x(), SRP_check_known_gN_param(), SRP_create_verifier(), SRP_create_verifier_BN(), SRP_get_default_gN(), SRP_user_pwd_free(), SRP_user_pwd_new(), SRP_user_pwd_set0_sv(), SRP_user_pwd_set1_ids(), SRP_user_pwd_set_gN(), SRP_VBASE_add0_user(), SRP_VBASE_free(), SRP_VBASE_get1_by_user(), SRP_VBASE_init(), SRP_VBASE_new(), SRP_Verify_A_mod_N(), SRP_Verify_B_mod_N()</p>
+
+<p>There are no replacements for the SRP functions.</p>
+
+</li>
+<li><p>SSL_CTX_set_tmp_dh_callback(), SSL_set_tmp_dh_callback(), SSL_CTX_set_tmp_dh(), SSL_set_tmp_dh()</p>
+
+<p>These are used to set the Diffie-Hellman (DH) parameters that are to be used by servers requiring ephemeral DH keys. Instead applications should consider using the built-in DH parameters that are available by calling <a href="../man3/SSL_CTX_set_dh_auto.html">SSL_CTX_set_dh_auto(3)</a> or <a href="../man3/SSL_set_dh_auto.html">SSL_set_dh_auto(3)</a>. If custom parameters are necessary then applications can use the alternative functions <a href="../man3/SSL_CTX_set0_tmp_dh_pkey.html">SSL_CTX_set0_tmp_dh_pkey(3)</a> and <a href="../man3/SSL_set0_tmp_dh_pkey.html">SSL_set0_tmp_dh_pkey(3)</a>. There is no direct replacement for the &quot;callback&quot; functions. The callback was originally useful in order to have different parameters for export and non-export ciphersuites. Export ciphersuites are no longer supported by OpenSSL. Use of the callback functions should be replaced by one of the other methods described above.</p>
+
+</li>
+<li><p>SSL_CTX_set_tlsext_ticket_key_cb()</p>
+
+<p>Use the new <a href="../man3/SSL_CTX_set_tlsext_ticket_key_evp_cb.html">SSL_CTX_set_tlsext_ticket_key_evp_cb(3)</a> function instead.</p>
+
+</li>
+<li><p>WHIRLPOOL(), WHIRLPOOL_Init(), WHIRLPOOL_Update(), WHIRLPOOL_Final(), WHIRLPOOL_BitUpdate()</p>
+
+<p>See <a href="#Deprecated-low-level-digest-functions">&quot;Deprecated low-level digest functions&quot;</a>. The Whirlpool algorithm has been moved to the <a href="#Legacy-Algorithms">Legacy Provider</a>.</p>
+
+</li>
+<li><p>X509_certificate_type()</p>
+
+<p>This was an undocumented function. Applications can use <a href="../man3/X509_get0_pubkey.html">X509_get0_pubkey(3)</a> and <a href="../man3/X509_get0_signature.html">X509_get0_signature(3)</a> instead.</p>
+
+</li>
+<li><p>X509_http_nbio(), X509_CRL_http_nbio()</p>
+
+<p>Use <a href="../man3/X509_load_http.html">X509_load_http(3)</a> and <a href="../man3/X509_CRL_load_http.html">X509_CRL_load_http(3)</a> instead.</p>
+
+</li>
+</ul>
+
+<h3 id="NID-handling-for-provided-keys-and-algorithms">NID handling for provided keys and algorithms</h3>
+
+<p>The following functions for NID (numeric id) handling have changed semantics.</p>
+
+<ul>
+
+<li><p>EVP_PKEY_id(), EVP_PKEY_get_id()</p>
+
+<p>This function was previously used to reliably return the NID of an EVP_PKEY object, e.g., to look up the name of the algorithm of such EVP_PKEY by calling <a href="../man3/OBJ_nid2sn.html">OBJ_nid2sn(3)</a>. With the introduction of <a href="../man7/provider.html">provider(7)</a>s EVP_PKEY_id() or its new equivalent <a href="../man3/EVP_PKEY_get_id.html">EVP_PKEY_get_id(3)</a> might now also return the value -1 (<b>EVP_PKEY_KEYMGMT</b>) indicating the use of a provider to implement the EVP_PKEY object. Therefore, the use of <a href="../man3/EVP_PKEY_get0_type_name.html">EVP_PKEY_get0_type_name(3)</a> is recommended for retrieving the name of the EVP_PKEY algorithm.</p>
+
+</li>
+</ul>
+
+<h2 id="Using-the-FIPS-Module-in-applications">Using the FIPS Module in applications</h2>
+
+<p>See <a href="../man7/fips_module.html">fips_module(7)</a> and <a href="../man7/OSSL_PROVIDER-FIPS.html">OSSL_PROVIDER-FIPS(7)</a> for details.</p>
+
+<h2 id="OpenSSL-command-line-application-changes">OpenSSL command line application changes</h2>
+
+<h3 id="New-applications">New applications</h3>
+
+<p><a href="../man1/openssl-kdf.html"><b>openssl kdf</b></a> uses the new <a href="../man3/EVP_KDF.html">EVP_KDF(3)</a> API. <a href="../man1/openssl-mac.html"><b>openssl kdf</b></a> uses the new <a href="../man3/EVP_MAC.html">EVP_MAC(3)</a> API.</p>
+
+<h3 id="Added-options">Added options</h3>
+
+<p><b>-provider_path</b> and <b>-provider</b> are available to all apps and can be used multiple times to load any providers, such as the &#39;legacy&#39; provider or third party providers. If used then the &#39;default&#39; provider would also need to be specified if required. The <b>-provider_path</b> must be specified before the <b>-provider</b> option.</p>
+
+<p>The <b>list</b> app has many new options. See <a href="../man1/openssl-list.html">openssl-list(1)</a> for more information.</p>
+
+<p><b>-crl_lastupdate</b> and <b>-crl_nextupdate</b> used by <b>openssl ca</b> allows explicit setting of fields in the generated CRL.</p>
+
+<h3 id="Removed-options">Removed options</h3>
+
+<p>Interactive mode is not longer available.</p>
+
+<p>The <b>-crypt</b> option used by <b>openssl passwd</b>. The <b>-c</b> option used by <b>openssl x509</b>, <b>openssl dhparam</b>, <b>openssl dsaparam</b>, and <b>openssl ecparam</b>.</p>
+
+<h3 id="Other-Changes">Other Changes</h3>
+
+<p>The output of Command line applications may have minor changes. These are primarily changes in capitalisation and white space. However, in some cases, there are additional differences. For example, the DH parameters output from <b>openssl dhparam</b> now lists &#39;P&#39;, &#39;Q&#39;, &#39;G&#39; and &#39;pcounter&#39; instead of &#39;prime&#39;, &#39;generator&#39;, &#39;subgroup order&#39; and &#39;counter&#39; respectively.</p>
+
+<p>The <b>openssl</b> commands that read keys, certificates, and CRLs now automatically detect the PEM or DER format of the input files so it is not necessary to explicitly specify the input format anymore. However if the input format option is used the specified format will be required.</p>
+
+<p><b>openssl speed</b> no longer uses low-level API calls. This implies some of the performance numbers might not be comparable with the previous releases due to higher overhead. This applies particularly to measuring performance on smaller data chunks.</p>
+
+<p><b>openssl dhparam</b>, <b>openssl dsa</b>, <b>openssl gendsa</b>, <b>openssl dsaparam</b>, <b>openssl genrsa</b> and <b>openssl rsa</b> have been modified to use PKEY APIs. <b>openssl genrsa</b> and <b>openssl rsa</b> now write PKCS #8 keys by default.</p>
+
+<h3 id="Default-settings">Default settings</h3>
+
+<p>&quot;SHA256&quot; is now the default digest for TS query used by <b>openssl ts</b>.</p>
+
+<h3 id="Deprecated-apps">Deprecated apps</h3>
+
+<p><b>openssl rsautl</b> is deprecated, use <b>openssl pkeyutl</b> instead. <b>openssl dhparam</b>, <b>openssl dsa</b>, <b>openssl gendsa</b>, <b>openssl dsaparam</b>, <b>openssl genrsa</b>, <b>openssl rsa</b>, <b>openssl genrsa</b> and <b>openssl rsa</b> are now in maintenance mode and no new features will be added to them.</p>
+
+<h2 id="TLS-Changes">TLS Changes</h2>
+
+<ul>
+
+<li><p>TLS 1.3 FFDHE key exchange support added</p>
+
+<p>This uses DH safe prime named groups.</p>
+
+</li>
+<li><p>Support for fully &quot;pluggable&quot; TLSv1.3 groups.</p>
+
+<p>This means that providers may supply their own group implementations (using either the &quot;key exchange&quot; or the &quot;key encapsulation&quot; methods) which will automatically be detected and used by libssl.</p>
+
+</li>
+<li><p>SSL and SSL_CTX options are now 64 bit instead of 32 bit.</p>
+
+<p>The signatures of the functions to get and set options on SSL and SSL_CTX objects changed from &quot;unsigned long&quot; to &quot;uint64_t&quot; type.</p>
+
+<p>This may require source code changes. For example it is no longer possible to use the <b>SSL_OP_</b> macro values in preprocessor <code>#if</code> conditions. However it is still possible to test whether these macros are defined or not.</p>
+
+<p>See <a href="../man3/SSL_CTX_get_options.html">SSL_CTX_get_options(3)</a>, <a href="../man3/SSL_CTX_set_options.html">SSL_CTX_set_options(3)</a>, <a href="../man3/SSL_get_options.html">SSL_get_options(3)</a> and <a href="../man3/SSL_set_options.html">SSL_set_options(3)</a>.</p>
+
+</li>
+<li><p>SSL_set1_host() and SSL_add1_host() Changes</p>
+
+<p>These functions now take IP literal addresses as well as actual hostnames.</p>
+
+</li>
+<li><p>Added SSL option SSL_OP_CLEANSE_PLAINTEXT</p>
+
+<p>If the option is set, openssl cleanses (zeroizes) plaintext bytes from internal buffers after delivering them to the application. Note, the application is still responsible for cleansing other copies (e.g.: data received by <a href="../man3/SSL_read.html">SSL_read(3)</a>).</p>
+
+</li>
+<li><p>Client-initiated renegotiation is disabled by default.</p>
+
+<p>To allow it, use the <b>-client_renegotiation</b> option, the <b>SSL_OP_ALLOW_CLIENT_RENEGOTIATION</b> flag, or the <code>ClientRenegotiation</code> config parameter as appropriate.</p>
+
+</li>
+<li><p>Secure renegotiation is now required by default for TLS connections</p>
+
+<p>Support for RFC 5746 secure renegotiation is now required by default for SSL or TLS connections to succeed. Applications that require the ability to connect to legacy peers will need to explicitly set SSL_OP_LEGACY_SERVER_CONNECT. Accordingly, SSL_OP_LEGACY_SERVER_CONNECT is no longer set as part of SSL_OP_ALL.</p>
+
+</li>
+<li><p>Combining the Configure options no-ec and no-dh no longer disables TLSv1.3</p>
+
+<p>Typically if OpenSSL has no EC or DH algorithms then it cannot support connections with TLSv1.3. However OpenSSL now supports &quot;pluggable&quot; groups through providers. Therefore third party providers may supply group implementations even where there are no built-in ones. Attempting to create TLS connections in such a build without also disabling TLSv1.3 at run time or using third party provider groups may result in handshake failures. TLSv1.3 can be disabled at compile time using the &quot;no-tls1_3&quot; Configure option.</p>
+
+</li>
+<li><p>SSL_CTX_set_ciphersuites() and SSL_set_ciphersuites() changes.</p>
+
+<p>The methods now ignore unknown ciphers.</p>
+
+</li>
+<li><p>Security callback change.</p>
+
+<p>The security callback, which can be customised by application code, supports the security operation SSL_SECOP_TMP_DH. This is defined to take an EVP_PKEY in the &quot;other&quot; parameter. In most places this is what is passed. All these places occur server side. However there was one client side call of this security operation and it passed a DH object instead. This is incorrect according to the definition of SSL_SECOP_TMP_DH, and is inconsistent with all of the other locations. Therefore this client side call has been changed to pass an EVP_PKEY instead.</p>
+
+</li>
+<li><p>New SSL option SSL_OP_IGNORE_UNEXPECTED_EOF</p>
+
+<p>The SSL option SSL_OP_IGNORE_UNEXPECTED_EOF is introduced. If that option is set, an unexpected EOF is ignored, it pretends a close notify was received instead and so the returned error becomes SSL_ERROR_ZERO_RETURN.</p>
+
+</li>
+<li><p>The security strength of SHA1 and MD5 based signatures in TLS has been reduced.</p>
+
+<p>This results in SSL 3, TLS 1.0, TLS 1.1 and DTLS 1.0 no longer working at the default security level of 1 and instead requires security level 0. The security level can be changed either using the cipher string with <code>@SECLEVEL</code>, or calling <a href="../man3/SSL_CTX_set_security_level.html">SSL_CTX_set_security_level(3)</a>. This also means that where the signature algorithms extension is missing from a ClientHello then the handshake will fail in TLS 1.2 at security level 1. This is because, although this extension is optional, failing to provide one means that OpenSSL will fallback to a default set of signature algorithms. This default set requires the availability of SHA1.</p>
+
+</li>
+<li><p>X509 certificates signed using SHA1 are no longer allowed at security level 1 and above.</p>
+
+<p>In TLS/SSL the default security level is 1. It can be set either using the cipher string with <code>@SECLEVEL</code>, or calling <a href="../man3/SSL_CTX_set_security_level.html">SSL_CTX_set_security_level(3)</a>. If the leaf certificate is signed with SHA-1, a call to <a href="../man3/SSL_CTX_use_certificate.html">SSL_CTX_use_certificate(3)</a> will fail if the security level is not lowered first. Outside TLS/SSL, the default security level is -1 (effectively 0). It can be set using <a href="../man3/X509_VERIFY_PARAM_set_auth_level.html">X509_VERIFY_PARAM_set_auth_level(3)</a> or using the <b>-auth_level</b> options of the commands.</p>
+
+</li>
+</ul>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/fips_module.html">fips_module(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The migration guide was created for OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2021-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

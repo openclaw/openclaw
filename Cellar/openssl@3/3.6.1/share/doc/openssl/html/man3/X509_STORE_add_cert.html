@@ -1,0 +1,119 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>X509_STORE_add_cert</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>X509_STORE, X509_STORE_add_cert, X509_STORE_add_crl, X509_STORE_set_depth, X509_STORE_set_flags, X509_STORE_set_purpose, X509_STORE_set_trust, X509_STORE_add_lookup, X509_STORE_load_file_ex, X509_STORE_load_file, X509_STORE_load_path, X509_STORE_load_store_ex, X509_STORE_load_store, X509_STORE_set_default_paths_ex, X509_STORE_set_default_paths, X509_STORE_load_locations_ex, X509_STORE_load_locations - X509_STORE manipulation</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/x509_vfy.h&gt;
+
+typedef x509_store_st X509_STORE;
+
+int X509_STORE_add_cert(X509_STORE *xs, X509 *x);
+int X509_STORE_add_crl(X509_STORE *xs, X509_CRL *x);
+int X509_STORE_set_depth(X509_STORE *store, int depth);
+int X509_STORE_set_flags(X509_STORE *xs, unsigned long flags);
+int X509_STORE_set_purpose(X509_STORE *xs, int purpose);
+int X509_STORE_set_trust(X509_STORE *xs, int trust);
+
+X509_LOOKUP *X509_STORE_add_lookup(X509_STORE *store,
+                                   X509_LOOKUP_METHOD *meth);
+
+int X509_STORE_set_default_paths_ex(X509_STORE *xs, OSSL_LIB_CTX *libctx,
+                                    const char *propq);
+int X509_STORE_set_default_paths(X509_STORE *xs);
+int X509_STORE_load_file_ex(X509_STORE *xs, const char *file,
+                            OSSL_LIB_CTX *libctx, const char *propq);
+int X509_STORE_load_file(X509_STORE *xs, const char *file);
+int X509_STORE_load_path(X509_STORE *xs, const char *dir);
+int X509_STORE_load_store_ex(X509_STORE *xs, const char *uri,
+                             OSSL_LIB_CTX *libctx, const char *propq);
+int X509_STORE_load_store(X509_STORE *xs, const char *uri);
+int X509_STORE_load_locations_ex(X509_STORE *xs, const char *file,
+                                 const char *dir, OSSL_LIB_CTX *libctx,
+                                 const char *propq);
+int X509_STORE_load_locations(X509_STORE *xs,
+                              const char *file, const char *dir);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The <b>X509_STORE</b> structure is intended to be a consolidated mechanism for holding information about X.509 certificates and CRLs, and constructing and validating chains of certificates terminating in trusted roots. It admits multiple lookup mechanisms and efficient scaling performance with large numbers of certificates, and a great deal of flexibility in how validation and policy checks are performed.</p>
+
+<p>Details of the chain building and checking process are described in <a href="../man1/openssl-verification-options.html">&quot;Certification Path Building&quot; in openssl-verification-options(1)</a> and <a href="../man1/openssl-verification-options.html">&quot;Certification Path Validation&quot; in openssl-verification-options(1)</a>.</p>
+
+<p><a href="../man3/X509_STORE_new.html">X509_STORE_new(3)</a> creates an empty <b>X509_STORE</b> structure, which contains no information about trusted certificates or where such certificates are located on disk, and is generally not usable. Normally, trusted certificates will be added to the <b>X509_STORE</b> to prepare it for use, via mechanisms such as X509_STORE_add_lookup() and X509_LOOKUP_file(), or PEM_read_bio_X509_AUX() and X509_STORE_add_cert(). CRLs can also be added, and many behaviors configured as desired.</p>
+
+<p>Once the <b>X509_STORE</b> is suitably configured, X509_STORE_CTX_new() is used to instantiate a single-use <b>X509_STORE_CTX</b> for each chain-building and verification operation. That process includes providing the end-entity certificate to be verified and an additional set of untrusted certificates that may be used in chain-building. As such, it is expected that the certificates included in the <b>X509_STORE</b> are certificates that represent trusted entities such as root certificate authorities (CAs). OpenSSL represents these trusted certificates internally as <b>X509</b> objects with an associated <b>X509_CERT_AUX</b>, as are produced by PEM_read_bio_X509_AUX() and similar routines that refer to X509_AUX. The public interfaces that operate on such trusted certificates still operate on pointers to <b>X509</b> objects, though.</p>
+
+<p>X509_STORE_add_cert() and X509_STORE_add_crl() add the respective object to the <b>X509_STORE</b>&#39;s local storage. Untrusted objects should not be added in this way. The added object&#39;s reference count is incremented by one, hence the caller retains ownership of the object and needs to free it when it is no longer needed.</p>
+
+<p>X509_STORE_set_depth(), X509_STORE_set_flags(), X509_STORE_set_purpose(), X509_STORE_set_trust(), and X509_STORE_set1_param() set the default values for the corresponding values used in certificate chain validation. Their behavior is documented in the corresponding <b>X509_VERIFY_PARAM</b> manual pages, e.g., <a href="../man3/X509_VERIFY_PARAM_set_depth.html">X509_VERIFY_PARAM_set_depth(3)</a>. The <b>X509_STORE</b> <b>MUST NOT</b> be NULL.</p>
+
+<p>X509_STORE_add_lookup() finds or creates a <a href="../man3/X509_LOOKUP.html">X509_LOOKUP(3)</a> with the <a href="../man3/X509_LOOKUP_METHOD.html">X509_LOOKUP_METHOD(3)</a> <i>meth</i> and adds it to the <b>X509_STORE</b> <i>store</i>. This also associates the <b>X509_STORE</b> with the lookup, so <b>X509_LOOKUP</b> functions can look up objects in that store.</p>
+
+<p>X509_STORE_load_file_ex() loads trusted certificate(s) into an <b>X509_STORE</b> from a given file. The library context <i>libctx</i> and property query <i>propq</i> are used when fetching algorithms from providers.</p>
+
+<p>X509_STORE_load_file() is similar to X509_STORE_load_file_ex() but uses NULL for the library context <i>libctx</i> and property query <i>propq</i>.</p>
+
+<p>X509_STORE_load_path() loads trusted certificate(s) into an <b>X509_STORE</b> from a given directory path. The certificates in the directory must be in hashed form, as documented in <a href="../man3/X509_LOOKUP_hash_dir.html">X509_LOOKUP_hash_dir(3)</a>.</p>
+
+<p>X509_STORE_load_store_ex() loads trusted certificate(s) into an <b>X509_STORE</b> from a store at a given URI. The library context <i>libctx</i> and property query <i>propq</i> are used when fetching algorithms from providers.</p>
+
+<p>X509_STORE_load_store() is similar to X509_STORE_load_store_ex() but uses NULL for the library context <i>libctx</i> and property query <i>propq</i>.</p>
+
+<p>X509_STORE_load_locations_ex() combines X509_STORE_load_file_ex() and X509_STORE_load_path() for a given file and/or directory path. It is permitted to specify just a file, just a directory, or both paths.</p>
+
+<p>X509_STORE_load_locations() is similar to X509_STORE_load_locations_ex() but uses NULL for the library context <i>libctx</i> and property query <i>propq</i>.</p>
+
+<p>X509_STORE_set_default_paths_ex() is somewhat misnamed, in that it does not set what default paths should be used for loading certificates. Instead, it loads certificates into the <b>X509_STORE</b> from the hardcoded default paths. The library context <i>libctx</i> and property query <i>propq</i> are used when fetching algorithms from providers.</p>
+
+<p>X509_STORE_set_default_paths() is similar to X509_STORE_set_default_paths_ex() but uses NULL for the library context <i>libctx</i> and property query <i>propq</i>.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>X509_STORE_add_cert(), X509_STORE_add_crl(), X509_STORE_set_depth(), X509_STORE_set_flags(), X509_STORE_set_purpose(), X509_STORE_set_trust(), X509_STORE_load_file_ex(), X509_STORE_load_file(), X509_STORE_load_path(), X509_STORE_load_store_ex(), X509_STORE_load_store(), X509_STORE_load_locations_ex(), X509_STORE_load_locations(), X509_STORE_set_default_paths_ex() and X509_STORE_set_default_paths() return 1 on success or 0 on failure.</p>
+
+<p>X509_STORE_add_lookup() returns the found or created <a href="../man3/X509_LOOKUP.html">X509_LOOKUP(3)</a>, or NULL on error.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/X509_LOOKUP_hash_dir.html">X509_LOOKUP_hash_dir(3)</a>. <a href="../man3/X509_VERIFY_PARAM_set_depth.html">X509_VERIFY_PARAM_set_depth(3)</a>. <a href="../man3/X509_STORE_new.html">X509_STORE_new(3)</a>, <a href="../man3/X509_STORE_get0_param.html">X509_STORE_get0_param(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The functions X509_STORE_set_default_paths_ex(), X509_STORE_load_file_ex(), X509_STORE_load_store_ex() and X509_STORE_load_locations_ex() were added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2017-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,69 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>DSA_SIG_new</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>DSA_SIG_get0, DSA_SIG_set0, DSA_SIG_new, DSA_SIG_free - allocate and free DSA signature objects</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/dsa.h&gt;
+
+DSA_SIG *DSA_SIG_new(void);
+void DSA_SIG_free(DSA_SIG *a);
+void DSA_SIG_get0(const DSA_SIG *sig, const BIGNUM **pr, const BIGNUM **ps);
+int DSA_SIG_set0(DSA_SIG *sig, BIGNUM *r, BIGNUM *s);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>DSA_SIG_new() allocates an empty <b>DSA_SIG</b> structure.</p>
+
+<p>DSA_SIG_free() frees the <b>DSA_SIG</b> structure and its components. The values are erased before the memory is returned to the system. If the argument is NULL, nothing is done.</p>
+
+<p>DSA_SIG_get0() returns internal pointers to the <b>r</b> and <b>s</b> values contained in <b>sig</b>.</p>
+
+<p>The <b>r</b> and <b>s</b> values can be set by calling DSA_SIG_set0() and passing the new values for <b>r</b> and <b>s</b> as parameters to the function. Calling this function transfers the memory management of the values to the DSA_SIG object, and therefore the values that have been passed in should not be freed directly after this function has been called.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>If the allocation fails, DSA_SIG_new() returns <b>NULL</b> and sets an error code that can be obtained by <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>. Otherwise it returns a pointer to the newly allocated structure.</p>
+
+<p>DSA_SIG_free() returns no value.</p>
+
+<p>DSA_SIG_set0() returns 1 on success or 0 on failure.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_PKEY_new.html">EVP_PKEY_new(3)</a>, <a href="../man3/EVP_PKEY_free.html">EVP_PKEY_free(3)</a>, <a href="../man3/EVP_PKEY_get_bn_param.html">EVP_PKEY_get_bn_param(3)</a>, <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

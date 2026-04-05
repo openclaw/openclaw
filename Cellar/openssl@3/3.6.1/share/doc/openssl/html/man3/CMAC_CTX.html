@@ -1,0 +1,119 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>CMAC_CTX</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>CMAC_CTX, CMAC_CTX_new, CMAC_CTX_cleanup, CMAC_CTX_free, CMAC_CTX_get0_cipher_ctx, CMAC_CTX_copy, CMAC_Init, CMAC_Update, CMAC_Final, CMAC_resume - create cipher-based message authentication codes</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/cmac.h&gt;</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be disabled entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>.</p>
+
+<pre><code>typedef struct CMAC_CTX_st CMAC_CTX;
+
+CMAC_CTX *CMAC_CTX_new(void);
+void CMAC_CTX_cleanup(CMAC_CTX *ctx);
+void CMAC_CTX_free(CMAC_CTX *ctx);
+EVP_CIPHER_CTX *CMAC_CTX_get0_cipher_ctx(CMAC_CTX *ctx);
+int CMAC_CTX_copy(CMAC_CTX *out, const CMAC_CTX *in);
+int CMAC_Init(CMAC_CTX *ctx, const void *key, size_t keylen,
+              const EVP_CIPHER *cipher, ENGINE *impl);
+int CMAC_Update(CMAC_CTX *ctx, const void *data, size_t dlen);
+int CMAC_Final(CMAC_CTX *ctx, unsigned char *out, size_t *poutlen);
+int CMAC_resume(CMAC_CTX *ctx);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The low-level MAC functions documented on this page are deprecated. Applications should use the new <a href="../man3/EVP_MAC.html">EVP_MAC(3)</a> interface. Specifically, utilize the following functions for MAC operations:</p>
+
+<dl>
+
+<dt id="EVP_MAC_CTX_new-3-to-create-a-new-MAC-context"><a href="../man3/EVP_MAC_CTX_new.html">EVP_MAC_CTX_new(3)</a> to create a new MAC context.</dt>
+<dd>
+
+</dd>
+<dt id="EVP_MAC_CTX_free-3-to-free-the-MAC-context"><a href="../man3/EVP_MAC_CTX_free.html">EVP_MAC_CTX_free(3)</a> to free the MAC context.</dt>
+<dd>
+
+</dd>
+<dt id="EVP_MAC_init-3-to-initialize-the-MAC-context"><a href="../man3/EVP_MAC_init.html">EVP_MAC_init(3)</a> to initialize the MAC context.</dt>
+<dd>
+
+</dd>
+<dt id="EVP_MAC_update-3-to-update-the-MAC-with-data"><a href="../man3/EVP_MAC_update.html">EVP_MAC_update(3)</a> to update the MAC with data.</dt>
+<dd>
+
+</dd>
+<dt id="EVP_MAC_final-3-to-finalize-the-MAC-and-retrieve-the-output"><a href="../man3/EVP_MAC_final.html">EVP_MAC_final(3)</a> to finalize the MAC and retrieve the output.</dt>
+<dd>
+
+</dd>
+</dl>
+
+<p>Alternatively, for a single-step MAC computation, use the <a href="../man3/EVP_Q_mac.html">EVP_Q_mac(3)</a> function.</p>
+
+<p>The <b>CMAC_CTX</b> type is a structure used for the provision of CMAC (Cipher-based Message Authentication Code) operations.</p>
+
+<p>CMAC_CTX_new() creates a new <b>CMAC_CTX</b> structure and returns a pointer to it.</p>
+
+<p>CMAC_CTX_cleanup() resets the <b>CMAC_CTX</b> structure, clearing any internal data but not freeing the structure itself.</p>
+
+<p>CMAC_CTX_free() frees the <b>CMAC_CTX</b> structure and any associated resources. If the argument is NULL, no action is taken.</p>
+
+<p>CMAC_CTX_get0_cipher_ctx() returns a pointer to the internal <b>EVP_CIPHER_CTX</b> structure within the <b>CMAC_CTX</b>.</p>
+
+<p>CMAC_CTX_copy() copies the state from one <b>CMAC_CTX</b> structure to another.</p>
+
+<p>CMAC_Init() initializes the <b>CMAC_CTX</b> structure for a new CMAC calculation with the specified key, key length, and cipher type. Optionally, an <b>ENGINE</b> can be provided.</p>
+
+<p>CMAC_Update() processes data to be included in the CMAC calculation. This function can be called multiple times to update the context with additional data.</p>
+
+<p>CMAC_Final() finalizes the CMAC calculation and retrieves the resulting MAC value. The output is stored in the provided buffer, and the length is stored in the variable pointed to by <i>poutlen</i>. To determine the required buffer size, call with <i>out</i> set to NULL, which stores only the length in <i>poutlen</i>. Allocate a buffer of this size and call CMAC_Final() again with the allocated buffer to retrieve the MAC.</p>
+
+<p>CMAC_resume() resumes a previously finalized CMAC calculation, allowing additional data to be processed and a new MAC to be generated.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>CMAC_CTX_new() returns a pointer to a new <b>CMAC_CTX</b> structure or NULL if an error occurs.</p>
+
+<p>CMAC_CTX_get0_cipher_ctx() returns a pointer to the internal <b>EVP_CIPHER_CTX</b> structure, or NULL if an error occurs.</p>
+
+<p>CMAC_CTX_copy(), CMAC_Init(), CMAC_Update(), CMAC_Final() and CMAC_resume() return 1 for success or 0 if an error occurs.</p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>All functions described here were deprecated in OpenSSL 3.0. For replacements, see <a href="../man3/EVP_MAC_CTX_new.html">EVP_MAC_CTX_new(3)</a>, <a href="../man3/EVP_MAC_CTX_free.html">EVP_MAC_CTX_free(3)</a>, <a href="../man3/EVP_MAC_init.html">EVP_MAC_init(3)</a>, <a href="../man3/EVP_MAC_update.html">EVP_MAC_update(3)</a>, and <a href="../man3/EVP_MAC_final.html">EVP_MAC_final(3)</a>.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

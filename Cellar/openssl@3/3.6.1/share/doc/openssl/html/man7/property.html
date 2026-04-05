@@ -1,0 +1,134 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>property</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Property-Names">Property Names</a></li>
+      <li><a href="#Properties">Properties</a></li>
+      <li><a href="#Implementations">Implementations</a></li>
+      <li><a href="#Queries">Queries</a></li>
+      <li><a href="#Lookups">Lookups</a></li>
+      <li><a href="#Shortcut">Shortcut</a></li>
+      <li><a href="#Global-and-Local">Global and Local</a></li>
+    </ul>
+  </li>
+  <li><a href="#SYNTAX">SYNTAX</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>property - Properties, a selection mechanism for algorithm implementations</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>As of OpenSSL 3.0, a new method has been introduced to decide which of multiple implementations of an algorithm will be used. The method is centered around the concept of properties. Each implementation defines a number of properties and when an algorithm is being selected, filters based on these properties can be used to choose the most appropriate implementation of the algorithm.</p>
+
+<p>Properties are like variables, they are referenced by name and have a value assigned.</p>
+
+<h2 id="Property-Names">Property Names</h2>
+
+<p>Property names fall into two categories: those reserved by the OpenSSL project and user defined names. A <i>reserved</i> property name consists of a single C-style identifier (except for leading underscores not being permitted), which begins with a letter and can be followed by any number of letters, numbers and underscores. Property names are case-insensitive, but OpenSSL will only use lowercase letters.</p>
+
+<p>A <i>user defined</i> property name is similar, but it <b>must</b> consist of two or more C-style identifiers, separated by periods. The last identifier in the name can be considered the &#39;true&#39; property name, which is prefixed by some sort of &#39;namespace&#39;. Providers for example could include their name in the prefix and use property names like</p>
+
+<pre><code>&lt;provider_name&gt;.&lt;property_name&gt;
+&lt;provider_name&gt;.&lt;algorithm_name&gt;.&lt;property_name&gt;</code></pre>
+
+<h2 id="Properties">Properties</h2>
+
+<p>A <i>property</i> is a <i>name=value</i> pair. A <i>property definition</i> is a sequence of comma separated properties. There can be any number of properties in a definition, however each name must be unique. For example: &quot;&quot; defines an empty property definition (i.e., no restriction); &quot;my.foo=bar&quot; defines a property named <i>my.foo</i> which has a string value <i>bar</i> and &quot;iteration.count=3&quot; defines a property named <i>iteration.count</i> which has a numeric value of <i>3</i>. The full syntax for property definitions appears below.</p>
+
+<h2 id="Implementations">Implementations</h2>
+
+<p>Each implementation of an algorithm can define any number of properties. For example, the default provider defines the property <i>provider=default</i> for all of its algorithms. Likewise, OpenSSL&#39;s FIPS provider defines <i>provider=fips</i> and the legacy provider defines <i>provider=legacy</i> for all of their algorithms.</p>
+
+<h2 id="Queries">Queries</h2>
+
+<p>A <i>property query clause</i> is a single conditional test. For example, &quot;fips=yes&quot;, &quot;provider!=default&quot; or &quot;?iteration.count=3&quot;. The first two represent mandatory clauses, such clauses <b>must</b> match for any algorithm to even be under consideration. The third clause represents an optional clause. Matching such clauses is not a requirement, but any additional optional match counts in favor of the algorithm. More details about that in the <b>Lookups</b> section. A <i>property query</i> is a sequence of comma separated property query clauses. It is an error if a property name appears in more than one query clause. The full syntax for property queries appears below, but the available syntactic features are:</p>
+
+<ul>
+
+<li><p><b>=</b> is an infix operator providing an equality test.</p>
+
+</li>
+<li><p><b>!=</b> is an infix operator providing an inequality test.</p>
+
+</li>
+<li><p><b>?</b> is a prefix operator that means that the following clause is optional but preferred.</p>
+
+</li>
+<li><p><b>-</b> is a prefix operator that means any global query clause involving the following property name should be ignored.</p>
+
+</li>
+<li><p><b>&quot;...&quot;</b> is a quoted string. The quotes are not included in the body of the string.</p>
+
+</li>
+<li><p><b>&#39;...&#39;</b> is a quoted string. The quotes are not included in the body of the string.</p>
+
+</li>
+</ul>
+
+<h2 id="Lookups">Lookups</h2>
+
+<p>When an algorithm is looked up, a property query is used to determine the best matching algorithm. All mandatory query clauses <b>must</b> be present and the implementation that additionally has the largest number of matching optional query clauses will be used. If there is more than one such optimal candidate, the result will be chosen from amongst those in an indeterminate way. Ordering of optional clauses is not significant.</p>
+
+<h2 id="Shortcut">Shortcut</h2>
+
+<p>In order to permit a more concise expression of boolean properties, there is one short cut: a property name alone (e.g. &quot;my.property&quot;) is exactly equivalent to &quot;my.property=yes&quot; in both definitions and queries.</p>
+
+<h2 id="Global-and-Local">Global and Local</h2>
+
+<p>Two levels of property query are supported. A context based property query that applies to all fetch operations and a local property query. Where both the context and local queries include a clause with the same name, the local clause overrides the context clause.</p>
+
+<p>It is possible for a local property query to remove a clause in the context property query by preceding the property name with a &#39;-&#39;. For example, a context property query that contains &quot;fips=yes&quot; would normally result in implementations that have &quot;fips=yes&quot;.</p>
+
+<p>However, if the setting of the &quot;fips&quot; property is irrelevant to the operations being performed, the local property query can include the clause &quot;-fips&quot;. Note that the local property query could not use &quot;fips=no&quot; because that would disallow any implementations with &quot;fips=yes&quot; rather than not caring about the setting.</p>
+
+<h1 id="SYNTAX">SYNTAX</h1>
+
+<p>The lexical syntax in EBNF is given by:</p>
+
+<pre><code>Definition     ::= PropertyName ( &#39;=&#39; Value )?
+                       ( &#39;,&#39; PropertyName ( &#39;=&#39; Value )? )*
+Query          ::= PropertyQuery ( &#39;,&#39; PropertyQuery )*
+PropertyQuery  ::= &#39;-&#39; PropertyName
+                 | &#39;?&#39;? ( PropertyName (( &#39;=&#39; | &#39;!=&#39; ) Value)?)
+Value          ::= NumberLiteral | StringLiteral
+StringLiteral  ::= QuotedString | UnquotedString
+QuotedString   ::= &#39;&quot;&#39; [^&quot;]* &#39;&quot;&#39; | &quot;&#39;&quot; [^&#39;]* &quot;&#39;&quot;
+UnquotedString ::= [A-Za-z] [^{space},]+
+NumberLiteral  ::= &#39;0&#39; ( [0-7]* | &#39;x&#39; [0-9A-Fa-f]+ ) | &#39;-&#39;? [1-9] [0-9]+
+PropertyName   ::= [A-Za-z] [A-Za-z0-9_]* ( &#39;.&#39; [A-Za-z] [A-Za-z0-9_]* )*</code></pre>
+
+<p>The flavour of EBNF being used is defined by: <a href="https://www.w3.org/TR/2010/REC-xquery-20101214/#EBNFNotation">https://www.w3.org/TR/2010/REC-xquery-20101214/#EBNFNotation</a>.</p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>Properties were added in OpenSSL 3.0</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2019-2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

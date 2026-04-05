@@ -1,0 +1,242 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>ossl-guide-quic-server-block</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SIMPLE-BLOCKING-QUIC-SERVER-EXAMPLE">SIMPLE BLOCKING QUIC SERVER EXAMPLE</a>
+    <ul>
+      <li><a href="#Creating-the-SSL_CTX-and-SSL-objects">Creating the SSL_CTX and SSL objects</a></li>
+      <li><a href="#Server-loop">Server loop</a></li>
+      <li><a href="#Final-clean-up">Final clean up</a></li>
+    </ul>
+  </li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>ossl-guide-quic-server-block - OpenSSL Guide: Writing a simple blocking QUIC server</p>
+
+<h1 id="SIMPLE-BLOCKING-QUIC-SERVER-EXAMPLE">SIMPLE BLOCKING QUIC SERVER EXAMPLE</h1>
+
+<p>This page will present various source code samples demonstrating how to write a simple, non-concurrent, QUIC &quot;echo&quot; server application which accepts one client connection at a time, echoing input from the client back to the same client. Once the current client disconnects, the next client connection is accepted.</p>
+
+<p>The server only accepts HTTP/1.0 requests, which is non-standard and will not be supported by real world servers. This is for demonstration purposes only.</p>
+
+<p>Both the accepting socket and client connections are &quot;blocking&quot;. A more typical server might use nonblocking sockets with an event loop and callbacks for I/O events.</p>
+
+<p>The complete source code for this example blocking QUIC server is available in the <b>demos/guide</b> directory of the OpenSSL source distribution in the file <b>quic-server-block.c</b>. It is also available online at <a href="https://github.com/openssl/openssl/blob/master/demos/guide/quic-server-block.c">https://github.com/openssl/openssl/blob/master/demos/guide/quic-server-block.c</a>.</p>
+
+<p>We assume that you already have OpenSSL installed on your system; that you already have some fundamental understanding of OpenSSL concepts and QUIC (see <a href="../man7/ossl-guide-libraries-introduction.html">ossl-guide-libraries-introduction(7)</a> and <a href="../man7/ossl-guide-quic-introduction.html">ossl-guide-quic-introduction(7)</a>); and that you know how to write and build C code and link it against the libcrypto and libssl libraries that are provided by OpenSSL. It also assumes that you have a basic understanding of UDP/IP and sockets.</p>
+
+<h2 id="Creating-the-SSL_CTX-and-SSL-objects">Creating the SSL_CTX and SSL objects</h2>
+
+<p>The first step is to create an <b>SSL_CTX</b> object for our server. We use the <a href="../man3/SSL_CTX_new.html">SSL_CTX_new(3)</a> function for this purpose. We pass as an argument the return value of the function <a href="../man3/OSSL_QUIC_server_method.html">OSSL_QUIC_server_method(3)</a>. You should use this method whenever you are writing a QUIC server.</p>
+
+<pre><code>/*
+ * An SSL_CTX holds shared configuration information for multiple
+ * subsequent per-client SSL connections. We specifically load a QUIC
+ * server method here.
+ */
+ctx = SSL_CTX_new(OSSL_QUIC_server_method());
+if (ctx == NULL)
+    goto err;</code></pre>
+
+<p>Servers need a private key and certificate. Intermediate issuer CA certificates are often required, and both the server (end-entity or EE) certificate and the issuer (&quot;chain&quot;) certificates are most easily configured in a single &quot;chain file&quot;. Below we load such a chain file (the EE certificate must appear first), and then load the corresponding private key, checking that it matches the server certificate. No checks are performed to check the integrity of the chain (CA signatures or certificate expiration dates, for example), but we do verify the consistency of the private key with the corresponding certificate.</p>
+
+<pre><code>/*
+ * Load the server&#39;s certificate *chain* file (PEM format), which includes
+ * not only the leaf (end-entity) server certificate, but also any
+ * intermediate issuer-CA certificates.  The leaf certificate must be the
+ * first certificate in the file.
+ *
+ * In advanced use-cases this can be called multiple times, once per public
+ * key algorithm for which the server has a corresponding certificate.
+ * However, the corresponding private key (see below) must be loaded first,
+ * *before* moving on to the next chain file.
+ */
+if (SSL_CTX_use_certificate_chain_file(ctx, cert_path) &lt;= 0) {
+    fprintf(stderr, &quot;couldn&#39;t load certificate file: %s\n&quot;, cert_path);
+    goto err;
+}
+
+/*
+ * Load the corresponding private key, this also checks that the private
+ * key matches the just loaded end-entity certificate.  It does not check
+ * whether the certificate chain is valid, the certificates could be
+ * expired, or may otherwise fail to form a chain that a client can
+ * validate.
+ */
+if (SSL_CTX_use_PrivateKey_file(ctx, key_path, SSL_FILETYPE_PEM) &lt;= 0) {
+    fprintf(stderr, &quot;couldn&#39;t load key file: %s\n&quot;, key_path);
+    goto err;
+}</code></pre>
+
+<p>Most servers, including this one, do not solicit client certificates. We therefore do not need a &quot;trust store&quot; and allow the handshake to complete even when the client does not present a certificate. Note: Even if a client did present a trusted certificate, for it to be useful, the server application would still need custom code to use the verified identity to grant nondefault access to that particular client. Some servers grant access to all clients with certificates from a private CA, this then requires processing of certificate revocation lists to deauthorise a client. It is often simpler and more secure to instead keep a list of authorised public keys.</p>
+
+<p>Though this is the default setting, we explicitly call the <a href="../man3/SSL_CTX_set_verify.html">SSL_CTX_set_verify(3)</a> function and pass the <b>SSL_VERIFY_NONE</b> value to it. The final argument to this function is a callback that you can optionally supply to override the default handling for certificate verification. Most applications do not need to do this so this can safely be set to NULL to get the default handling.</p>
+
+<pre><code>/*
+ * Clients rarely employ certificate-based authentication, and so we don&#39;t
+ * require &quot;mutual&quot; TLS authentication (indeed there&#39;s no way to know
+ * whether or how the client authenticated the server, so the term &quot;mutual&quot;
+ * is potentially misleading).
+ *
+ * Since we&#39;re not soliciting or processing client certificates, we don&#39;t
+ * need to configure a trusted-certificate store, so no call to
+ * SSL_CTX_set_default_verify_paths() is needed.  The server&#39;s own
+ * certificate chain is assumed valid.
+ */
+SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, NULL);</code></pre>
+
+<p>QUIC also dictates using Application-Layer Protocol Negotiation (ALPN) to select an application protocol. We use <a href="../man3/SSL_CTX_set_alpn_select_cb.html">SSL_CTX_set_alpn_select_cb(3)</a> for this purpose. We can pass a callback which will be called for each connection to select an ALPN the server considers acceptable.</p>
+
+<pre><code>/* Setup ALPN negotiation callback to decide which ALPN is accepted. */
+SSL_CTX_set_alpn_select_cb(ctx, select_alpn, NULL);</code></pre>
+
+<p>In this case, we only accept &quot;http/1.0&quot; and &quot;hq-interop&quot;.</p>
+
+<pre><code>/*
+* ALPN strings for TLS handshake. Only &#39;http/1.0&#39; and &#39;hq-interop&#39;
+* are accepted.
+*/
+static const unsigned char alpn_ossltest[] = {
+    8,  &#39;h&#39;, &#39;t&#39;, &#39;t&#39;, &#39;p&#39;, &#39;/&#39;, &#39;1&#39;, &#39;.&#39;, &#39;0&#39;,
+    10, &#39;h&#39;, &#39;q&#39;, &#39;-&#39;, &#39;i&#39;, &#39;n&#39;, &#39;t&#39;, &#39;e&#39;, &#39;r&#39;, &#39;o&#39;, &#39;p&#39;,
+};
+
+static int select_alpn(SSL *ssl, const unsigned char **out,
+                       unsigned char *out_len, const unsigned char *in,
+                       unsigned int in_len, void *arg)
+{
+    if (SSL_select_next_proto((unsigned char **)out, out_len, alpn_ossltest,
+                              sizeof(alpn_ossltest), in,
+                              in_len) == OPENSSL_NPN_NEGOTIATED)
+        return SSL_TLSEXT_ERR_OK;
+    return SSL_TLSEXT_ERR_ALERT_FATAL;
+}</code></pre>
+
+<p>That is all the setup that we need to do for the <b>SSL_CTX</b>. Next, we create a UDP socket and bind to it on localhost.</p>
+
+<pre><code>/* Retrieve the file descriptor for a new UDP socket */
+if ((fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) &lt; 0) {
+    fprintf(stderr, &quot;cannot create socket&quot;);
+    goto err;
+}
+
+sa.sin_family = AF_INET;
+sa.sin_port = htons(port);
+
+/* Bind to the new UDP socket on localhost */
+if (bind(fd, (const struct sockaddr *)&amp;sa, sizeof(sa)) &lt; 0) {
+    fprintf(stderr, &quot;cannot bind to %u\n&quot;, port);
+    BIO_closesocket(fd);
+    goto err;
+}</code></pre>
+
+<p>To run the QUIC server, we create an <b>SSL_LISTENER</b> to listen for incoming connections. We provide it with the bound UDP port to then explicitly begin listening for new connections.</p>
+
+<pre><code>/*
+ * Create a new QUIC listener. Listeners, and other QUIC objects, default
+ * to operating in blocking mode. The configured behaviour is inherited by
+ * child objects.
+ */
+if ((listener = SSL_new_listener(ctx, 0)) == NULL) {
+    goto err;
+}
+
+/* Provide the listener with our UDP socket. */
+if (!SSL_set_fd(listener, fd))
+    goto err;
+
+/* Begin listening. */
+if (!SSL_listen(listener))
+    goto err;</code></pre>
+
+<h2 id="Server-loop">Server loop</h2>
+
+<p>The server now enters a &quot;forever&quot; loop, handling one client connection at a time. Before each connection, we clear the OpenSSL error stack so that any error reports are related to just the new connection.</p>
+
+<pre><code>/* Pristine error stack for each new connection */
+ERR_clear_error();</code></pre>
+
+<p>At this point, the server blocks to accept the next client. <a href="../man3/SSL_accept_connection.html">SSL_accept_connection(3)</a> will return an accepted connection within a fresh SSL, in which the handshake will have already occurred.</p>
+
+<pre><code>/* Block while waiting for a client connection */
+conn = SSL_accept_connection(listener, 0);
+if (conn == NULL) {
+    fprintf(stderr, &quot;error while accepting connection\n&quot;);
+    goto err;
+}</code></pre>
+
+<p>With the handshake complete, the server echoes client input back to the client in a loop.</p>
+
+<pre><code>while (SSL_read_ex(conn, buf, sizeof(buf), &amp;nread) &gt; 0) {
+    if (SSL_write_ex(conn, buf, nread, &amp;nwritten) &gt; 0 &amp;&amp;
+        nwritten == nread) {
+        continue;
+    }
+    fprintf(stderr, &quot;Error echoing client input&quot;);
+    break;
+}</code></pre>
+
+<p>Once the client closes its connection, we signal the end of the stream by using <a href="../man3/SSL_stream_conclude.html">SSL_stream_conclude(3)</a>. This will send a final Finished packet to the client.</p>
+
+<pre><code>/* Signal the end of the stream. */
+if (SSL_stream_conclude(conn, 0) != 1) {
+    fprintf(stderr, &quot;Unable to conclude stream\n&quot;);
+    SSL_free(conn);
+    goto err;
+}</code></pre>
+
+<p>We then shut down the connection with <a href="../man3/SSL_shutdown_ex.html">SSL_shutdown_ex(3)</a>, which may need to be called multiple times to ensure the connection is shutdown completely.</p>
+
+<pre><code>while (SSL_shutdown_ex(conn, 0, &amp;shutdown_args,
+                       sizeof(SSL_SHUTDOWN_EX_ARGS)) != 1) {
+    fprintf(stderr, &quot;Re-attempting SSL shutdown\n&quot;);
+}</code></pre>
+
+<p>Finally, we free the SSL connection, and the server is now ready to accept the next client connection.</p>
+
+<pre><code>SSL_free(conn);</code></pre>
+
+<h2 id="Final-clean-up">Final clean up</h2>
+
+<p>If the server somehow manages to break out of the infinite loop and be ready to exit, it would deallocate the constructed <b>SSL</b>.</p>
+
+<pre><code>SSL_free(listener);</code></pre>
+
+<p>And in the main function, it would deallocate the constructed <b>SSL_CTX</b>.</p>
+
+<pre><code>SSL_CTX_free(ctx);
+BIO_closesocket(fd);
+res = EXIT_SUCCESS;
+return res;</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ossl-guide-introduction.html">ossl-guide-introduction(7)</a>, <a href="../man7/ossl-guide-libraries-introduction.html">ossl-guide-libraries-introduction(7)</a>, <a href="../man7/ossl-guide-libssl-introduction.html">ossl-guide-libssl-introduction(7)</a>, <a href="../man7/ossl-guide-quic-introduction.html">ossl-guide-quic-introduction(7)</a>, <a href="../man7/ossl-guide-quic-client-non-block.html">ossl-guide-quic-client-non-block(7)</a>, <a href="../man7/ossl-guide-quic-client-block.html">ossl-guide-quic-client-block(7)</a>, <a href="../man7/ossl-guide-tls-server-block.html">ossl-guide-tls-server-block(7)</a>, <a href="../man7/ossl-guide-quic-server-non-block.html">ossl-guide-quic-server-non-block(7)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2024-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

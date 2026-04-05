@@ -1,0 +1,110 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>PEM_read_CMS</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>DECLARE_PEM_rw, PEM_read_CMS, PEM_read_bio_CMS, PEM_write_CMS, PEM_write_bio_CMS, PEM_write_DHxparams, PEM_write_bio_DHxparams, PEM_read_ECPKParameters, PEM_read_bio_ECPKParameters, PEM_write_ECPKParameters, PEM_write_bio_ECPKParameters, PEM_read_ECPrivateKey, PEM_write_ECPrivateKey, PEM_write_bio_ECPrivateKey, PEM_read_EC_PUBKEY, PEM_read_bio_EC_PUBKEY, PEM_write_EC_PUBKEY, PEM_write_bio_EC_PUBKEY, PEM_read_NETSCAPE_CERT_SEQUENCE, PEM_read_bio_NETSCAPE_CERT_SEQUENCE, PEM_write_NETSCAPE_CERT_SEQUENCE, PEM_write_bio_NETSCAPE_CERT_SEQUENCE, PEM_read_PKCS8, PEM_read_bio_PKCS8, PEM_write_PKCS8, PEM_write_bio_PKCS8, PEM_write_PKCS8_PRIV_KEY_INFO, PEM_read_bio_PKCS8_PRIV_KEY_INFO, PEM_read_PKCS8_PRIV_KEY_INFO, PEM_write_bio_PKCS8_PRIV_KEY_INFO, PEM_read_SSL_SESSION, PEM_read_bio_SSL_SESSION, PEM_write_SSL_SESSION, PEM_write_bio_SSL_SESSION, PEM_read_X509_PUBKEY, PEM_read_bio_X509_PUBKEY, PEM_write_X509_PUBKEY, PEM_write_bio_X509_PUBKEY - PEM object encoding routines</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/pem.h&gt;
+
+DECLARE_PEM_rw(name, TYPE)
+
+TYPE *PEM_read_TYPE(FILE *fp, TYPE **a, pem_password_cb *cb, void *u);
+TYPE *PEM_read_bio_TYPE(BIO *bp, TYPE **a, pem_password_cb *cb, void *u);
+int PEM_write_TYPE(FILE *fp, const TYPE *a);
+int PEM_write_bio_TYPE(BIO *bp, const TYPE *a);</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>#include &lt;openssl/pem.h&gt;
+
+int PEM_write_DHxparams(FILE *out, const DH *dh);
+int PEM_write_bio_DHxparams(BIO *out, const DH *dh);
+EC_GROUP *PEM_read_ECPKParameters(FILE *fp, EC_GROUP **x, pem_password_cb *cb, void *u);
+EC_GROUP *PEM_read_bio_ECPKParameters(BIO *bp, EC_GROUP **x, pem_password_cb *cb, void *u);
+int PEM_write_ECPKParameters(FILE *out, const EC_GROUP *x);
+int PEM_write_bio_ECPKParameters(BIO *out, const EC_GROUP *x),
+
+EC_KEY *PEM_read_EC_PUBKEY(FILE *fp, EC_KEY **x, pem_password_cb *cb, void *u);
+EC_KEY *PEM_read_bio_EC_PUBKEY(BIO *bp, EC_KEY **x, pem_password_cb *cb, void *u);
+int PEM_write_EC_PUBKEY(FILE *out, const EC_KEY *x);
+int PEM_write_bio_EC_PUBKEY(BIO *out, const EC_KEY *x);
+
+EC_KEY *PEM_read_ECPrivateKey(FILE *out, EC_KEY **x, pem_password_cb *cb, void *u);
+EC_KEY *PEM_read_bio_ECPrivateKey(BIO *out, EC_KEY **x, pem_password_cb *cb, void *u);
+int PEM_write_ECPrivateKey(FILE *out, const EC_KEY *x, const EVP_CIPHER *enc,
+                           const unsigned char *kstr, int klen,
+                           pem_password_cb *cb, void *u);
+int PEM_write_bio_ECPrivateKey(BIO *out, const EC_KEY *x, const EVP_CIPHER *enc,
+                               const unsigned char *kstr, int klen,
+                               pem_password_cb *cb, void *u);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>To replace the deprecated functions listed above, applications should use the <b>EVP_PKEY</b> type and OSSL_DECODER_from_bio() and OSSL_ENCODER_to_bio() to read and write PEM data containing key parameters or private and public keys.</p>
+
+<p>In the description below, <b><i>TYPE</i></b> is used as a placeholder for any of the OpenSSL datatypes, such as <b>X509</b>. The macro <b>DECLARE_PEM_rw</b> expands to the set of declarations shown in the next four lines of the synopsis.</p>
+
+<p>These routines convert between local instances of ASN1 datatypes and the PEM encoding. For more information on the templates, see <a href="../man3/ASN1_ITEM.html">ASN1_ITEM(3)</a>. For more information on the lower-level routines used by the functions here, see <a href="../man3/PEM_read.html">PEM_read(3)</a>.</p>
+
+<p><b>PEM_read_<i>TYPE</i></b>() reads a PEM-encoded object of <b><i>TYPE</i></b> from the file <i>fp</i> and returns it. The <i>cb</i> and <i>u</i> parameters are as described in <a href="../man3/pem_password_cb.html">pem_password_cb(3)</a>.</p>
+
+<p><b>PEM_read_bio_<i>TYPE</i></b>() is similar to <b>PEM_read_<i>TYPE</i></b>() but reads from the BIO <i>bp</i>.</p>
+
+<p><b>PEM_write_<i>TYPE</i></b>() writes the PEM encoding of the object <i>a</i> to the file <i>fp</i>.</p>
+
+<p><b>PEM_write_bio_<i>TYPE</i></b>() similarly writes to the BIO <i>bp</i>.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>These functions make no assumption regarding the pass phrase received from the password callback. It will simply be treated as a byte sequence.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p><b>PEM_read_<i>TYPE</i></b>() and <b>PEM_read_bio_<i>TYPE</i></b>() return a pointer to an allocated object, which should be released by calling <b><i>TYPE</i>_free</b>(), or NULL on error.</p>
+
+<p><b>PEM_write_<i>TYPE</i></b>() and <b>PEM_write_bio_<i>TYPE</i></b>() return 1 for success or 0 for failure.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/PEM_read.html">PEM_read(3)</a>, <a href="../man7/passphrase-encoding.html">passphrase-encoding(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The functions PEM_write_DHxparams(), PEM_write_bio_DHxparams(), PEM_read_ECPKParameters(), PEM_read_bio_ECPKParameters(), PEM_write_ECPKParameters(), PEM_write_bio_ECPKParameters(), PEM_read_EC_PUBKEY(), PEM_read_bio_EC_PUBKEY(), PEM_write_EC_PUBKEY(), PEM_write_bio_EC_PUBKEY(), PEM_read_ECPrivateKey(), PEM_read_bio_ECPrivateKey(), PEM_write_ECPrivateKey() and PEM_write_bio_ECPrivateKey() were deprecated in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 1998-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

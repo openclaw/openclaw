@@ -1,0 +1,595 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>X509_STORE_CTX_get_error</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#ERROR-CODES">ERROR CODES</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#BUGS">BUGS</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>X509_STORE_CTX_get_error, X509_STORE_CTX_set_error, X509_STORE_CTX_get_error_depth, X509_STORE_CTX_set_error_depth, X509_STORE_CTX_get_current_cert, X509_STORE_CTX_set_current_cert, X509_STORE_CTX_get0_cert, X509_STORE_CTX_get1_chain, X509_verify_cert_error_string - get or set certificate verification status information</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/x509.h&gt;
+
+int   X509_STORE_CTX_get_error(const X509_STORE_CTX *ctx);
+void  X509_STORE_CTX_set_error(X509_STORE_CTX *ctx, int s);
+int   X509_STORE_CTX_get_error_depth(const X509_STORE_CTX *ctx);
+void  X509_STORE_CTX_set_error_depth(X509_STORE_CTX *ctx, int depth);
+X509 *X509_STORE_CTX_get_current_cert(const X509_STORE_CTX *ctx);
+void  X509_STORE_CTX_set_current_cert(X509_STORE_CTX *ctx, X509 *x);
+X509 *X509_STORE_CTX_get0_cert(const X509_STORE_CTX *ctx);
+
+STACK_OF(X509) *X509_STORE_CTX_get1_chain(const X509_STORE_CTX *ctx);
+
+const char *X509_verify_cert_error_string(long n);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>These functions are typically called after certificate or chain verification using <a href="../man3/X509_verify_cert.html">X509_verify_cert(3)</a> or <a href="../man3/X509_STORE_CTX_verify.html">X509_STORE_CTX_verify(3)</a> has indicated an error or in a verification callback to determine the nature of an error.</p>
+
+<p>X509_STORE_CTX_get_error() returns the error code of <i>ctx</i>. <i>ctx</i> <b>MUST NOT</b> be NULL. See the <a href="#ERROR-CODES">&quot;ERROR CODES&quot;</a> section for a full description of all error codes. It may return a code != X509_V_OK even if X509_verify_cert() did not indicate an error, likely because a verification callback function has waived the error.</p>
+
+<p>X509_STORE_CTX_set_error() sets the error code of <i>ctx</i> to <i>s</i>. For example it might be used in a verification callback to set an error based on additional checks. <i>ctx</i> <b>MUST NOT</b> be NULL.</p>
+
+<p>X509_STORE_CTX_get_error_depth() returns the <i>depth</i> of the error. This is a nonnegative integer representing where in the certificate chain the error occurred. If it is zero it occurred in the end entity certificate, one if it is the certificate which signed the end entity certificate and so on. <i>ctx</i> <b>MUST NOT</b> be NULL.</p>
+
+<p>X509_STORE_CTX_set_error_depth() sets the error <i>depth</i>. This can be used in combination with X509_STORE_CTX_set_error() to set the depth at which an error condition was detected.</p>
+
+<p>X509_STORE_CTX_get_current_cert() returns the current certificate in <i>ctx</i>. If an error occurred, the current certificate will be the one that is most closely related to the error, or possibly NULL if no such certificate is relevant.</p>
+
+<p>X509_STORE_CTX_set_current_cert() sets the certificate <i>x</i> in <i>ctx</i> which caused the error. This value is not intended to remain valid for very long, and remains owned by the caller. It may be examined by a verification callback invoked to handle each error encountered during chain verification and is no longer required after such a callback. If a callback wishes the save the certificate for use after it returns, it needs to increment its reference count via <a href="../man3/X509_up_ref.html">X509_up_ref(3)</a>. Once such a <i>saved</i> certificate is no longer needed it can be freed with <a href="../man3/X509_free.html">X509_free(3)</a>.</p>
+
+<p>X509_STORE_CTX_get0_cert() retrieves an internal pointer to the certificate being verified by the <i>ctx</i>. It may be NULL if a raw public key is being verified.</p>
+
+<p>X509_STORE_CTX_get1_chain() returns a complete validate chain if a previous verification is successful. Otherwise the returned chain may be incomplete or invalid. The returned chain persists after the <i>ctx</i> structure is freed. When it is no longer needed it should be free up using:</p>
+
+<pre><code>OSSL_STACK_OF_X509_free(chain);</code></pre>
+
+<p>X509_verify_cert_error_string() returns a human readable error string for verification error <i>n</i>.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>X509_STORE_CTX_get_error() returns <b>X509_V_OK</b> or an error code.</p>
+
+<p>X509_STORE_CTX_get_error_depth() returns a nonnegative error depth.</p>
+
+<p>X509_STORE_CTX_get_current_cert() returns the certificate which caused the error or NULL if no certificate is relevant to the error.</p>
+
+<p>X509_verify_cert_error_string() returns a human readable error string for verification error <i>n</i>.</p>
+
+<h1 id="ERROR-CODES">ERROR CODES</h1>
+
+<p>A list of error codes and messages is shown below. Some of the error codes are defined but currently never returned: these are described as &quot;unused&quot;.</p>
+
+<dl>
+
+<dt id="X509_V_OK:-ok"><b>X509_V_OK: ok</b></dt>
+<dd>
+
+<p>The operation was successful.</p>
+
+</dd>
+<dt id="X509_V_ERR_UNSPECIFIED:-unspecified-certificate-verification-error"><b>X509_V_ERR_UNSPECIFIED: unspecified certificate verification error</b></dt>
+<dd>
+
+<p>Unspecified error; should not happen.</p>
+
+</dd>
+<dt id="X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT:-unable-to-get-issuer-certificate"><b>X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT: unable to get issuer certificate</b></dt>
+<dd>
+
+<p>The issuer certificate of a locally looked up certificate could not be found. This normally means the list of trusted certificates is not complete. To allow any certificate (not only a self-signed one) in the trust store to terminate the chain the <b>X509_V_FLAG_PARTIAL_CHAIN</b> flag may be set.</p>
+
+</dd>
+<dt id="X509_V_ERR_UNABLE_TO_GET_CRL:-unable-to-get-certificate-CRL"><b>X509_V_ERR_UNABLE_TO_GET_CRL: unable to get certificate CRL</b></dt>
+<dd>
+
+<p>The CRL of a certificate could not be found.</p>
+
+</dd>
+<dt id="X509_V_ERR_UNABLE_TO_DECRYPT_CERT_SIGNATURE:-unable-to-decrypt-certificates-signature"><b>X509_V_ERR_UNABLE_TO_DECRYPT_CERT_SIGNATURE: unable to decrypt certificate&#39;s signature</b></dt>
+<dd>
+
+<p>The certificate signature could not be decrypted. This means that the actual signature value could not be determined rather than it not matching the expected value, this is only meaningful for RSA keys.</p>
+
+</dd>
+<dt id="X509_V_ERR_UNABLE_TO_DECRYPT_CRL_SIGNATURE:-unable-to-decrypt-CRLs-signature"><b>X509_V_ERR_UNABLE_TO_DECRYPT_CRL_SIGNATURE: unable to decrypt CRL&#39;s signature</b></dt>
+<dd>
+
+<p>The CRL signature could not be decrypted: this means that the actual signature value could not be determined rather than it not matching the expected value. Unused.</p>
+
+</dd>
+<dt id="X509_V_ERR_UNABLE_TO_DECODE_ISSUER_PUBLIC_KEY:-unable-to-decode-issuer-public-key"><b>X509_V_ERR_UNABLE_TO_DECODE_ISSUER_PUBLIC_KEY: unable to decode issuer public key</b></dt>
+<dd>
+
+<p>The public key in the certificate <code>SubjectPublicKeyInfo</code> field could not be read.</p>
+
+</dd>
+<dt id="X509_V_ERR_CERT_SIGNATURE_FAILURE:-certificate-signature-failure"><b>X509_V_ERR_CERT_SIGNATURE_FAILURE: certificate signature failure</b></dt>
+<dd>
+
+<p>The signature of the certificate is invalid.</p>
+
+</dd>
+<dt id="X509_V_ERR_CRL_SIGNATURE_FAILURE:-CRL-signature-failure"><b>X509_V_ERR_CRL_SIGNATURE_FAILURE: CRL signature failure</b></dt>
+<dd>
+
+<p>The signature of the CRL is invalid.</p>
+
+</dd>
+<dt id="X509_V_ERR_CERT_NOT_YET_VALID:-certificate-is-not-yet-valid"><b>X509_V_ERR_CERT_NOT_YET_VALID: certificate is not yet valid</b></dt>
+<dd>
+
+<p>The certificate is not yet valid: the <code>notBefore</code> date is after the current time.</p>
+
+</dd>
+<dt id="X509_V_ERR_CERT_HAS_EXPIRED:-certificate-has-expired"><b>X509_V_ERR_CERT_HAS_EXPIRED: certificate has expired</b></dt>
+<dd>
+
+<p>The certificate has expired: that is the <code>notAfter</code> date is before the current time.</p>
+
+</dd>
+<dt id="X509_V_ERR_CRL_NOT_YET_VALID:-CRL-is-not-yet-valid"><b>X509_V_ERR_CRL_NOT_YET_VALID: CRL is not yet valid</b></dt>
+<dd>
+
+<p>The CRL is not yet valid.</p>
+
+</dd>
+<dt id="X509_V_ERR_CRL_HAS_EXPIRED:-CRL-has-expired"><b>X509_V_ERR_CRL_HAS_EXPIRED: CRL has expired</b></dt>
+<dd>
+
+<p>The CRL has expired.</p>
+
+</dd>
+<dt id="X509_V_ERR_ERROR_IN_CERT_NOT_BEFORE_FIELD:-format-error-in-certificates-notBefore-field"><b>X509_V_ERR_ERROR_IN_CERT_NOT_BEFORE_FIELD: format error in certificate&#39;s notBefore field</b></dt>
+<dd>
+
+<p>The certificate <code>notBefore</code> field contains an invalid time.</p>
+
+</dd>
+<dt id="X509_V_ERR_ERROR_IN_CERT_NOT_AFTER_FIELD:-format-error-in-certificates-notAfter-field"><b>X509_V_ERR_ERROR_IN_CERT_NOT_AFTER_FIELD: format error in certificate&#39;s notAfter field</b></dt>
+<dd>
+
+<p>The certificate <code>notAfter</code> field contains an invalid time.</p>
+
+</dd>
+<dt id="X509_V_ERR_ERROR_IN_CRL_LAST_UPDATE_FIELD:-format-error-in-CRLs-lastUpdate-field"><b>X509_V_ERR_ERROR_IN_CRL_LAST_UPDATE_FIELD: format error in CRL&#39;s lastUpdate field</b></dt>
+<dd>
+
+<p>The CRL <b>lastUpdate</b> field contains an invalid time.</p>
+
+</dd>
+<dt id="X509_V_ERR_ERROR_IN_CRL_NEXT_UPDATE_FIELD:-format-error-in-CRLs-nextUpdate-field"><b>X509_V_ERR_ERROR_IN_CRL_NEXT_UPDATE_FIELD: format error in CRL&#39;s nextUpdate field</b></dt>
+<dd>
+
+<p>The CRL <code>nextUpdate</code> field contains an invalid time.</p>
+
+</dd>
+<dt id="X509_V_ERR_OUT_OF_MEM:-out-of-memory"><b>X509_V_ERR_OUT_OF_MEM: out of memory</b></dt>
+<dd>
+
+<p>An error occurred trying to allocate memory.</p>
+
+</dd>
+<dt id="X509_V_ERR_DEPTH_ZERO_SELF_SIGNED_CERT:-self-signed-certificate"><b>X509_V_ERR_DEPTH_ZERO_SELF_SIGNED_CERT: self-signed certificate</b></dt>
+<dd>
+
+<p>The passed certificate is self-signed and the same certificate cannot be found in the list of trusted certificates.</p>
+
+</dd>
+<dt id="X509_V_ERR_SELF_SIGNED_CERT_IN_CHAIN:-self-signed-certificate-in-certificate-chain"><b>X509_V_ERR_SELF_SIGNED_CERT_IN_CHAIN: self-signed certificate in certificate chain</b></dt>
+<dd>
+
+<p>The certificate chain could be built up using the untrusted certificates but no suitable trust anchor (which typically is a self-signed root certificate) could be found in the trust store.</p>
+
+</dd>
+<dt id="X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY:-unable-to-get-local-issuer-certificate"><b>X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY: unable to get local issuer certificate</b></dt>
+<dd>
+
+<p>The issuer certificate could not be found: this occurs if the issuer certificate of an untrusted certificate cannot be found.</p>
+
+</dd>
+<dt id="X509_V_ERR_UNABLE_TO_VERIFY_LEAF_SIGNATURE:-unable-to-verify-the-first-certificate"><b>X509_V_ERR_UNABLE_TO_VERIFY_LEAF_SIGNATURE: unable to verify the first certificate</b></dt>
+<dd>
+
+<p>No signatures could be verified because the chain contains only one certificate and it is not self-signed and the <b>X509_V_FLAG_PARTIAL_CHAIN</b> flag is not set.</p>
+
+</dd>
+<dt id="X509_V_ERR_CERT_CHAIN_TOO_LONG:-certificate-chain-too-long"><b>X509_V_ERR_CERT_CHAIN_TOO_LONG: certificate chain too long</b></dt>
+<dd>
+
+<p>The certificate chain length is greater than the supplied maximum depth.</p>
+
+</dd>
+<dt id="X509_V_ERR_CERT_REVOKED:-certificate-revoked"><b>X509_V_ERR_CERT_REVOKED: certificate revoked</b></dt>
+<dd>
+
+<p>The certificate has been revoked.</p>
+
+</dd>
+<dt id="X509_V_ERR_NO_ISSUER_PUBLIC_KEY:-issuer-certificate-doesnt-have-a-public-key"><b>X509_V_ERR_NO_ISSUER_PUBLIC_KEY: issuer certificate doesn&#39;t have a public key</b></dt>
+<dd>
+
+<p>The issuer certificate does not have a public key.</p>
+
+</dd>
+<dt id="X509_V_ERR_PATH_LENGTH_EXCEEDED:-path-length-constraint-exceeded"><b>X509_V_ERR_PATH_LENGTH_EXCEEDED: path length constraint exceeded</b></dt>
+<dd>
+
+<p>The basicConstraints path-length parameter has been exceeded.</p>
+
+</dd>
+<dt id="X509_V_ERR_INVALID_PURPOSE:-unsuitable-certificate-purpose"><b>X509_V_ERR_INVALID_PURPOSE: unsuitable certificate purpose</b></dt>
+<dd>
+
+<p>The target certificate cannot be used for the specified purpose.</p>
+
+</dd>
+<dt id="X509_V_ERR_CERT_UNTRUSTED:-certificate-not-trusted"><b>X509_V_ERR_CERT_UNTRUSTED: certificate not trusted</b></dt>
+<dd>
+
+<p>The root CA is not marked as trusted for the specified purpose.</p>
+
+</dd>
+<dt id="X509_V_ERR_CERT_REJECTED:-certificate-rejected"><b>X509_V_ERR_CERT_REJECTED: certificate rejected</b></dt>
+<dd>
+
+<p>The root CA is marked to reject the specified purpose.</p>
+
+</dd>
+<dt id="X509_V_ERR_SUBJECT_ISSUER_MISMATCH:-subject-issuer-mismatch"><b>X509_V_ERR_SUBJECT_ISSUER_MISMATCH: subject issuer mismatch</b></dt>
+<dd>
+
+<p>The current candidate issuer certificate was rejected because its subject name did not match the issuer name of the current certificate.</p>
+
+</dd>
+<dt id="X509_V_ERR_AKID_SKID_MISMATCH:-authority-and-subject-key-identifier-mismatch"><b>X509_V_ERR_AKID_SKID_MISMATCH: authority and subject key identifier mismatch</b></dt>
+<dd>
+
+<p>The current candidate issuer certificate was rejected because its subject key identifier was present and did not match the authority key identifier current certificate.</p>
+
+</dd>
+<dt id="X509_V_ERR_AKID_ISSUER_SERIAL_MISMATCH:-authority-and-issuer-serial-number-mismatch"><b>X509_V_ERR_AKID_ISSUER_SERIAL_MISMATCH: authority and issuer serial number mismatch</b></dt>
+<dd>
+
+<p>The current candidate issuer certificate was rejected because its issuer name and serial number was present and did not match the authority key identifier of the current certificate.</p>
+
+</dd>
+<dt id="X509_V_ERR_KEYUSAGE_NO_CERTSIGN:-key-usage-does-not-include-certificate-signing"><b>X509_V_ERR_KEYUSAGE_NO_CERTSIGN: key usage does not include certificate signing</b></dt>
+<dd>
+
+<p>The current candidate issuer certificate was rejected because its <code>keyUsage</code> extension does not permit certificate signing.</p>
+
+</dd>
+<dt id="X509_V_ERR_UNABLE_TO_GET_CRL_ISSUER:-unable-to-get-CRL-issuer-certificate"><b>X509_V_ERR_UNABLE_TO_GET_CRL_ISSUER: unable to get CRL issuer certificate</b></dt>
+<dd>
+
+<p>Unable to get CRL issuer certificate.</p>
+
+</dd>
+<dt id="X509_V_ERR_UNHANDLED_CRITICAL_EXTENSION:-unhandled-critical-extension"><b>X509_V_ERR_UNHANDLED_CRITICAL_EXTENSION: unhandled critical extension</b></dt>
+<dd>
+
+<p>Unhandled critical extension.</p>
+
+</dd>
+<dt id="X509_V_ERR_KEYUSAGE_NO_CRL_SIGN:-key-usage-does-not-include-CRL-signing"><b>X509_V_ERR_KEYUSAGE_NO_CRL_SIGN: key usage does not include CRL signing</b></dt>
+<dd>
+
+<p>Key usage does not include CRL signing.</p>
+
+</dd>
+<dt id="X509_V_ERR_UNHANDLED_CRITICAL_CRL_EXTENSION:-unhandled-critical-CRL-extension"><b>X509_V_ERR_UNHANDLED_CRITICAL_CRL_EXTENSION: unhandled critical CRL extension</b></dt>
+<dd>
+
+<p>Unhandled critical CRL extension.</p>
+
+</dd>
+<dt id="X509_V_ERR_INVALID_NON_CA:-invalid-non-CA-certificate-has-CA-markings"><b>X509_V_ERR_INVALID_NON_CA: invalid non-CA certificate (has CA markings)</b></dt>
+<dd>
+
+<p>Invalid non-CA certificate has CA markings.</p>
+
+</dd>
+<dt id="X509_V_ERR_PROXY_PATH_LENGTH_EXCEEDED:-proxy-path-length-constraint-exceeded"><b>X509_V_ERR_PROXY_PATH_LENGTH_EXCEEDED: proxy path length constraint exceeded</b></dt>
+<dd>
+
+<p>Proxy path length constraint exceeded.</p>
+
+</dd>
+<dt id="X509_V_ERR_KEYUSAGE_NO_DIGITAL_SIGNATURE:-key-usage-does-not-include-digital-signature"><b>X509_V_ERR_KEYUSAGE_NO_DIGITAL_SIGNATURE: key usage does not include digital signature</b></dt>
+<dd>
+
+<p>Key usage does not include digital signature, and therefore cannot sign certificates.</p>
+
+</dd>
+<dt id="X509_V_ERR_PROXY_CERTIFICATES_NOT_ALLOWED:-proxy-certificates-not-allowed-please-set-the-appropriate-flag"><b>X509_V_ERR_PROXY_CERTIFICATES_NOT_ALLOWED: proxy certificates not allowed, please set the appropriate flag</b></dt>
+<dd>
+
+<p>Proxy certificates not allowed unless the <b>X509_V_FLAG_ALLOW_PROXY_CERTS</b> flag is set.</p>
+
+</dd>
+<dt id="X509_V_ERR_INVALID_EXTENSION:-invalid-or-inconsistent-certificate-extension"><b>X509_V_ERR_INVALID_EXTENSION: invalid or inconsistent certificate extension</b></dt>
+<dd>
+
+<p>A certificate extension had an invalid value (for example an incorrect encoding) or some value inconsistent with other extensions.</p>
+
+</dd>
+<dt id="X509_V_ERR_INVALID_POLICY_EXTENSION:-invalid-or-inconsistent-certificate-policy-extension"><b>X509_V_ERR_INVALID_POLICY_EXTENSION: invalid or inconsistent certificate policy extension</b></dt>
+<dd>
+
+<p>A certificate policies extension had an invalid value (for example an incorrect encoding) or some value inconsistent with other extensions. This error only occurs if policy processing is enabled.</p>
+
+</dd>
+<dt id="X509_V_ERR_NO_EXPLICIT_POLICY:-no-explicit-policy"><b>X509_V_ERR_NO_EXPLICIT_POLICY: no explicit policy</b></dt>
+<dd>
+
+<p>The verification flags were set to require and explicit policy but none was present.</p>
+
+</dd>
+<dt id="X509_V_ERR_DIFFERENT_CRL_SCOPE:-different-CRL-scope"><b>X509_V_ERR_DIFFERENT_CRL_SCOPE: different CRL scope</b></dt>
+<dd>
+
+<p>The only CRLs that could be found did not match the scope of the certificate.</p>
+
+</dd>
+<dt id="X509_V_ERR_UNSUPPORTED_EXTENSION_FEATURE:-unsupported-extension-feature"><b>X509_V_ERR_UNSUPPORTED_EXTENSION_FEATURE: unsupported extension feature</b></dt>
+<dd>
+
+<p>Some feature of a certificate extension is not supported. Unused.</p>
+
+</dd>
+<dt id="X509_V_ERR_UNNESTED_RESOURCE:-RFC-3779-resource-not-subset-of-parents-resources"><b>X509_V_ERR_UNNESTED_RESOURCE: RFC 3779 resource not subset of parent&#39;s resources</b></dt>
+<dd>
+
+<p>See RFC 3779 for details.</p>
+
+</dd>
+<dt id="X509_V_ERR_PERMITTED_VIOLATION:-permitted-subtree-violation"><b>X509_V_ERR_PERMITTED_VIOLATION: permitted subtree violation</b></dt>
+<dd>
+
+<p>A name constraint violation occurred in the permitted subtrees.</p>
+
+</dd>
+<dt id="X509_V_ERR_EXCLUDED_VIOLATION:-excluded-subtree-violation"><b>X509_V_ERR_EXCLUDED_VIOLATION: excluded subtree violation</b></dt>
+<dd>
+
+<p>A name constraint violation occurred in the excluded subtrees.</p>
+
+</dd>
+<dt id="X509_V_ERR_SUBTREE_MINMAX:-name-constraints-minimum-and-maximum-not-supported"><b>X509_V_ERR_SUBTREE_MINMAX: name constraints minimum and maximum not supported</b></dt>
+<dd>
+
+<p>A certificate name constraints extension included a minimum or maximum field: this is not supported.</p>
+
+</dd>
+<dt id="X509_V_ERR_APPLICATION_VERIFICATION:-application-verification-failure"><b>X509_V_ERR_APPLICATION_VERIFICATION: application verification failure</b></dt>
+<dd>
+
+<p>An application specific error. This will never be returned unless explicitly set by an application callback.</p>
+
+</dd>
+<dt id="X509_V_ERR_UNSUPPORTED_CONSTRAINT_TYPE:-unsupported-name-constraint-type"><b>X509_V_ERR_UNSUPPORTED_CONSTRAINT_TYPE: unsupported name constraint type</b></dt>
+<dd>
+
+<p>An unsupported name constraint type was encountered. OpenSSL currently only supports directory name, DNS name, email and URI types.</p>
+
+</dd>
+<dt id="X509_V_ERR_UNSUPPORTED_CONSTRAINT_SYNTAX:-unsupported-or-invalid-name-constraint-syntax"><b>X509_V_ERR_UNSUPPORTED_CONSTRAINT_SYNTAX: unsupported or invalid name constraint syntax</b></dt>
+<dd>
+
+<p>The format of the name constraint is not recognised: for example an email address format of a form not mentioned in RFC3280. This could be caused by a garbage extension or some new feature not currently supported.</p>
+
+</dd>
+<dt id="X509_V_ERR_UNSUPPORTED_NAME_SYNTAX:-unsupported-or-invalid-name-syntax"><b>X509_V_ERR_UNSUPPORTED_NAME_SYNTAX: unsupported or invalid name syntax</b></dt>
+<dd>
+
+<p>Unsupported or invalid name syntax.</p>
+
+</dd>
+<dt id="X509_V_ERR_CRL_PATH_VALIDATION_ERROR:-CRL-path-validation-error"><b>X509_V_ERR_CRL_PATH_VALIDATION_ERROR: CRL path validation error</b></dt>
+<dd>
+
+<p>An error occurred when attempting to verify the CRL path. This error can only happen if extended CRL checking is enabled.</p>
+
+</dd>
+<dt id="X509_V_ERR_PATH_LOOP:-path-loop"><b>X509_V_ERR_PATH_LOOP: path loop</b></dt>
+<dd>
+
+<p>Path loop.</p>
+
+</dd>
+<dt id="X509_V_ERR_HOSTNAME_MISMATCH:-hostname-mismatch"><b>X509_V_ERR_HOSTNAME_MISMATCH: hostname mismatch</b></dt>
+<dd>
+
+<p>Hostname mismatch.</p>
+
+</dd>
+<dt id="X509_V_ERR_EMAIL_MISMATCH:-email-address-mismatch"><b>X509_V_ERR_EMAIL_MISMATCH: email address mismatch</b></dt>
+<dd>
+
+<p>Email address mismatch.</p>
+
+</dd>
+<dt id="X509_V_ERR_IP_ADDRESS_MISMATCH:-IP-address-mismatch"><b>X509_V_ERR_IP_ADDRESS_MISMATCH: IP address mismatch</b></dt>
+<dd>
+
+<p>IP address mismatch.</p>
+
+</dd>
+<dt id="X509_V_ERR_DANE_NO_MATCH:-no-matching-DANE-TLSA-records"><b>X509_V_ERR_DANE_NO_MATCH: no matching DANE TLSA records</b></dt>
+<dd>
+
+<p>DANE TLSA authentication is enabled, but no TLSA records matched the certificate chain. This error is only possible in <a href="../man1/openssl-s_client.html">openssl-s_client(1)</a>.</p>
+
+</dd>
+<dt id="X509_V_ERR_EE_KEY_TOO_SMALL:-EE-certificate-key-too-weak"><b>X509_V_ERR_EE_KEY_TOO_SMALL: EE certificate key too weak</b></dt>
+<dd>
+
+<p>EE certificate key too weak.</p>
+
+</dd>
+<dt id="X509_V_ERR_CA_KEY_TOO_SMALL:-CA-certificate-key-too-weak"><b>X509_V_ERR_CA_KEY_TOO_SMALL: CA certificate key too weak</b></dt>
+<dd>
+
+<p>CA certificate key too weak.</p>
+
+</dd>
+<dt id="X509_V_ERR_CA_MD_TOO_WEAK:-CA-signature-digest-algorithm-too-weak"><b>X509_V_ERR_CA_MD_TOO_WEAK: CA signature digest algorithm too weak</b></dt>
+<dd>
+
+<p>CA signature digest algorithm too weak.</p>
+
+</dd>
+<dt id="X509_V_ERR_INVALID_CALL:-invalid-certificate-verification-context"><b>X509_V_ERR_INVALID_CALL: invalid certificate verification context</b></dt>
+<dd>
+
+<p>Invalid certificate verification context.</p>
+
+</dd>
+<dt id="X509_V_ERR_STORE_LOOKUP:-issuer-certificate-lookup-error"><b>X509_V_ERR_STORE_LOOKUP: issuer certificate lookup error</b></dt>
+<dd>
+
+<p>Issuer certificate lookup error.</p>
+
+</dd>
+<dt id="X509_V_ERR_NO_VALID_SCTS:-certificate-transparency-required-but-no-valid-SCTs-found"><b>X509_V_ERR_NO_VALID_SCTS: certificate transparency required, but no valid SCTs found</b></dt>
+<dd>
+
+<p>Certificate Transparency required, but no valid SCTs found.</p>
+
+</dd>
+<dt id="X509_V_ERR_PROXY_SUBJECT_NAME_VIOLATION:-proxy-subject-name-violation"><b>X509_V_ERR_PROXY_SUBJECT_NAME_VIOLATION: proxy subject name violation</b></dt>
+<dd>
+
+<p>Proxy subject name violation.</p>
+
+</dd>
+<dt id="X509_V_ERR_OCSP_VERIFY_NEEDED:-OCSP-verification-needed"><b>X509_V_ERR_OCSP_VERIFY_NEEDED: OCSP verification needed</b></dt>
+<dd>
+
+<p>Returned by the verify callback to indicate an OCSP verification is needed.</p>
+
+</dd>
+<dt id="X509_V_ERR_OCSP_VERIFY_FAILED:-OCSP-verification-failed"><b>X509_V_ERR_OCSP_VERIFY_FAILED: OCSP verification failed</b></dt>
+<dd>
+
+<p>Returned by the verify callback to indicate OCSP verification failed.</p>
+
+</dd>
+<dt id="X509_V_ERR_OCSP_CERT_UNKNOWN:-OCSP-unknown-cert"><b>X509_V_ERR_OCSP_CERT_UNKNOWN: OCSP unknown cert</b></dt>
+<dd>
+
+<p>Returned by the verify callback to indicate that the certificate is not recognized by the OCSP responder.</p>
+
+</dd>
+<dt id="X509_V_ERR_OCSP_RESP_INVALID:-OCSP-response-s-invalid"><b>X509_V_ERR_OCSP_RESP_INVALID: OCSP response(s) invalid</b></dt>
+<dd>
+
+<p>Returned by the verify callback to indicate that one or more OCSP responses are invalid.</p>
+
+</dd>
+<dt id="X509_V_ERR_OCSP_SIGNATURE_FAILURE:-OCSP-response-signature-failure"><b>X509_V_ERR_OCSP_SIGNATURE_FAILURE: OCSP response signature failure</b></dt>
+<dd>
+
+<p>Returned by the verify callback to indicate OCSP response signature verification failed.</p>
+
+</dd>
+<dt id="X509_V_ERR_OCSP_NOT_YET_VALID:-OCSP-response-not-yet-valid-OCSP-response-not-yet-valid-contains-a-date-in-the-future"><b>X509_V_ERR_OCSP_NOT_YET_VALID: OCSP response not yet valid</b> OCSP response not yet valid (contains a date in the future)&gt;</dt>
+<dd>
+
+<p>Returned by the verify callback to indicate that OCSP response has a <i>thisUpdate</i> date in the future.</p>
+
+</dd>
+<dt id="X509_V_ERR_OCSP_HAS_EXPIRED:-OCSP-response-has-expired"><b>X509_V_ERR_OCSP_HAS_EXPIRED: OCSP response has expired</b></dt>
+<dd>
+
+<p>Returned by the verify callback to indicate that the OCSP response has expired.</p>
+
+</dd>
+<dt id="X509_V_ERR_OCSP_NO_RESPONSE:-no-OCSP-response-available-for-certificate"><b>X509_V_ERR_OCSP_NO_RESPONSE: no OCSP response available for certificate</b></dt>
+<dd>
+
+<p>Returned by the verify callback to indicate that no OCSP response is available for the certificate.</p>
+
+</dd>
+<dt id="X509_V_ERR_UNSUPPORTED_SIGNATURE_ALGORITHM:-unsupported-signature-algorithm"><b>X509_V_ERR_UNSUPPORTED_SIGNATURE_ALGORITHM: unsupported signature algorithm</b></dt>
+<dd>
+
+<p>Cannot find certificate signature algorithm.</p>
+
+</dd>
+<dt id="X509_V_ERR_SIGNATURE_ALGORITHM_MISMATCH:-subject-signature-algorithm-and-issuer-public-key-algorithm-mismatch"><b>X509_V_ERR_SIGNATURE_ALGORITHM_MISMATCH: subject signature algorithm and issuer public key algorithm mismatch</b></dt>
+<dd>
+
+<p>The issuer&#39;s public key is not of the type required by the signature in the subject&#39;s certificate.</p>
+
+</dd>
+<dt id="X509_V_ERR_SIGNATURE_ALGORITHM_INCONSISTENCY:-cert-info-signature-and-signature-algorithm-mismatch"><b>X509_V_ERR_SIGNATURE_ALGORITHM_INCONSISTENCY: cert info signature and signature algorithm mismatch</b></dt>
+<dd>
+
+<p>The algorithm given in the certificate info is inconsistent with the one used for the certificate signature.</p>
+
+</dd>
+<dt id="X509_V_ERR_INVALID_CA:-invalid-CA-certificate"><b>X509_V_ERR_INVALID_CA: invalid CA certificate</b></dt>
+<dd>
+
+<p>A CA certificate is invalid. Either it is not a CA or its extensions are not consistent with the supplied purpose.</p>
+
+</dd>
+<dt id="X509_V_ERR_RPK_UNTRUSTED:-raw-public-key-untrusted-no-trusted-keys-configured"><b>X509_V_ERR_RPK_UNTRUSTED: raw public key untrusted, no trusted keys configured</b></dt>
+<dd>
+
+<p>No TLS records were configured to validate the raw public key, or DANE was not enabled on the connection.</p>
+
+</dd>
+</dl>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The above functions should be used instead of directly referencing the fields in the <b>X509_VERIFY_CTX</b> structure.</p>
+
+<p>In versions of OpenSSL before 1.0 the current certificate returned by X509_STORE_CTX_get_current_cert() was never NULL. Applications should check the return value before printing out any debugging information relating to the current certificate.</p>
+
+<p>If an unrecognised error code is passed to X509_verify_cert_error_string() the numerical value of the unknown code is returned in a static buffer. This is not thread safe but will never happen unless an invalid code is passed.</p>
+
+<h1 id="BUGS">BUGS</h1>
+
+<p>Previous versions of this documentation swapped the meaning of the <b>X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT</b> and <b>X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY</b> error codes.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/X509_verify_cert.html">X509_verify_cert(3)</a>, <a href="../man3/X509_STORE_CTX_verify.html">X509_STORE_CTX_verify(3)</a>, <a href="../man3/X509_up_ref.html">X509_up_ref(3)</a>, <a href="../man3/X509_free.html">X509_free(3)</a>.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2009-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

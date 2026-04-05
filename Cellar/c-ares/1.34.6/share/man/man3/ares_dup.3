@@ -1,0 +1,25 @@
+.\"
+.\" Copyright (C) 2004-2009 by Daniel Stenberg
+.\" SPDX-License-Identifier: MIT
+.\"
+.TH ARES_DUP 3 "26 May 2009"
+.SH NAME
+ares_dup \- Duplicate a resolver channel
+.SH SYNOPSIS
+.nf
+#include <ares.h>
+
+int ares_dup(ares_channel_t **\fIdest\fP, const ares_channel_t *\fIsource\fP)
+.fi
+.SH DESCRIPTION
+The \fBares_dup(3)\fP function duplicates an existing communications channel
+for name service lookups.  If it returns successfully, \fBares_dup(3)\fP will
+set the variable pointed to by \fIdest\fP to a handle used to identify the
+name service channel.  The caller should invoke \fIares_destroy(3)\fP on the
+handle when the channel is no longer needed.
+.SH SEE ALSO
+.BR ares_destroy (3),
+.BR ares_init (3),
+.BR ares_library_init (3)
+.SH AVAILABILITY
+\fIares_dup(3)\fP was added in c-ares 1.6.0

@@ -1,0 +1,511 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_CTX_set_options</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#SECURE-RENEGOTIATION">SECURE RENEGOTIATION</a>
+    <ul>
+      <li><a href="#Patched-client-and-server">Patched client and server</a></li>
+      <li><a href="#Unpatched-client-and-patched-OpenSSL-server">Unpatched client and patched OpenSSL server</a></li>
+      <li><a href="#Patched-OpenSSL-client-and-unpatched-server">Patched OpenSSL client and unpatched server</a></li>
+      <li><a href="#Applicability-of-options-to-QUIC-connections-and-streams">Applicability of options to QUIC connections and streams</a></li>
+    </ul>
+  </li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_CTX_set_options, SSL_set_options, SSL_CTX_clear_options, SSL_clear_options, SSL_CTX_get_options, SSL_get_options, SSL_get_secure_renegotiation_support - manipulate SSL options</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+uint64_t SSL_CTX_set_options(SSL_CTX *ctx, uint64_t options);
+uint64_t SSL_set_options(SSL *ssl, uint64_t options);
+
+uint64_t SSL_CTX_clear_options(SSL_CTX *ctx, uint64_t options);
+uint64_t SSL_clear_options(SSL *ssl, uint64_t options);
+
+uint64_t SSL_CTX_get_options(const SSL_CTX *ctx);
+uint64_t SSL_get_options(const SSL *ssl);
+
+long SSL_get_secure_renegotiation_support(SSL *ssl);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_CTX_set_options() adds the options set via bit-mask in <b>options</b> to <b>ctx</b>. <b>ctx</b> <b>MUST NOT</b> be NULL. Options already set before are not cleared!</p>
+
+<p>SSL_set_options() adds the options set via bit-mask in <b>options</b> to <b>ssl</b>. Options already set before are not cleared!</p>
+
+<p>SSL_CTX_clear_options() clears the options set via bit-mask in <b>options</b> to <b>ctx</b>.</p>
+
+<p>SSL_clear_options() clears the options set via bit-mask in <b>options</b> to <b>ssl</b>.</p>
+
+<p>SSL_CTX_get_options() returns the options set for <b>ctx</b>.</p>
+
+<p>SSL_get_options() returns the options set for <b>ssl</b>.</p>
+
+<p>SSL_get_secure_renegotiation_support() indicates whether the peer supports secure renegotiation. Note, this is implemented via a macro.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The behaviour of the SSL library can be changed by setting several options. The options are coded as bit-masks and can be combined by a bitwise <b>or</b> operation (|).</p>
+
+<p>SSL_CTX_set_options() and SSL_set_options() affect the (external) protocol behaviour of the SSL library. The (internal) behaviour of the API can be changed by using the similar <a href="../man3/SSL_CTX_set_mode.html">SSL_CTX_set_mode(3)</a> and SSL_set_mode() functions.</p>
+
+<p>During a handshake, the option settings of the SSL object are used. When a new SSL object is created from a context using SSL_new(), the current option setting is copied. Changes to <b>ctx</b> do not affect already created SSL objects. SSL_clear() does not affect the settings.</p>
+
+<p>The following <b>bug workaround</b> options are available:</p>
+
+<dl>
+
+<dt id="SSL_OP_CRYPTOPRO_TLSEXT_BUG">SSL_OP_CRYPTOPRO_TLSEXT_BUG</dt>
+<dd>
+
+<p>Add server-hello extension from the early version of cryptopro draft when GOST ciphersuite is negotiated. Required for interoperability with CryptoPro CSP 3.x.</p>
+
+</dd>
+<dt id="SSL_OP_DONT_INSERT_EMPTY_FRAGMENTS">SSL_OP_DONT_INSERT_EMPTY_FRAGMENTS</dt>
+<dd>
+
+<p>Disables a countermeasure against an SSL 3.0/TLS 1.0 protocol vulnerability affecting CBC ciphers, which cannot be handled by some broken SSL implementations. This option has no effect for connections using other ciphers.</p>
+
+</dd>
+<dt id="SSL_OP_SAFARI_ECDHE_ECDSA_BUG">SSL_OP_SAFARI_ECDHE_ECDSA_BUG</dt>
+<dd>
+
+<p>Don&#39;t prefer ECDHE-ECDSA ciphers when the client appears to be Safari on OS X. OS X 10.8..10.8.3 has broken support for ECDHE-ECDSA ciphers.</p>
+
+</dd>
+<dt id="SSL_OP_TLSEXT_PADDING">SSL_OP_TLSEXT_PADDING</dt>
+<dd>
+
+<p>Adds a padding extension to ensure the ClientHello size is never between 256 and 511 bytes in length. This is needed as a workaround for some implementations.</p>
+
+</dd>
+<dt id="SSL_OP_ALL">SSL_OP_ALL</dt>
+<dd>
+
+<p>All of the above bug workarounds.</p>
+
+</dd>
+</dl>
+
+<p>It is usually safe to use <b>SSL_OP_ALL</b> to enable the bug workaround options if compatibility with somewhat broken implementations is desired.</p>
+
+<p>The following <b>modifying</b> options are available:</p>
+
+<dl>
+
+<dt id="SSL_OP_ALLOW_CLIENT_RENEGOTIATION">SSL_OP_ALLOW_CLIENT_RENEGOTIATION</dt>
+<dd>
+
+<p>Client-initiated renegotiation is disabled by default. Use this option to enable it.</p>
+
+</dd>
+<dt id="SSL_OP_ALLOW_NO_DHE_KEX">SSL_OP_ALLOW_NO_DHE_KEX</dt>
+<dd>
+
+<p>In TLSv1.3 allow a non-(ec)dhe based key exchange mode on resumption. This means that there will be no forward secrecy for the resumed session.</p>
+
+</dd>
+<dt id="SSL_OP_PREFER_NO_DHE_KEX">SSL_OP_PREFER_NO_DHE_KEX</dt>
+<dd>
+
+<p>In TLSv1.3, on resumption let the server prefer a non-(ec)dhe based key exchange mode over an (ec)dhe based one. Ignored without <b>SSL_OP_ALLOW_NO_DHE_KEX</b> being set as well. Always ignored on the client.</p>
+
+</dd>
+<dt id="SSL_OP_ALLOW_UNSAFE_LEGACY_RENEGOTIATION">SSL_OP_ALLOW_UNSAFE_LEGACY_RENEGOTIATION</dt>
+<dd>
+
+<p>Allow legacy insecure renegotiation between OpenSSL and unpatched clients or servers. See the <b>SECURE RENEGOTIATION</b> section for more details.</p>
+
+</dd>
+<dt id="SSL_OP_SERVER_PREFERENCE">SSL_OP_SERVER_PREFERENCE</dt>
+<dd>
+
+<p>When choosing a cipher, signature, (TLS 1.2) curve or (TLS 1.3) group, use the server&#39;s preferences instead of the client preferences. When not set, the SSL server will always follow the clients preferences. When set, the SSL/TLS server will choose following its own preferences. Use of the old but somewhat misleading name SSL_OP_CIPHER_SERVER_PREFERENCE is still possible but discouraged.</p>
+
+</dd>
+<dt id="SSL_OP_CISCO_ANYCONNECT">SSL_OP_CISCO_ANYCONNECT</dt>
+<dd>
+
+<p>Use Cisco&#39;s version identifier of DTLS_BAD_VER when establishing a DTLSv1 connection. Only available when using the deprecated DTLSv1_client_method() API.</p>
+
+</dd>
+<dt id="SSL_OP_CLEANSE_PLAINTEXT">SSL_OP_CLEANSE_PLAINTEXT</dt>
+<dd>
+
+<p>By default TLS and QUIC SSL objects keep a copy of received plaintext application data in a static buffer until it is overwritten by the next portion of data. When enabling SSL_OP_CLEANSE_PLAINTEXT deciphered application data is cleansed by calling OPENSSL_cleanse(3) after passing data to the application. Data is also cleansed when releasing the connection (e.g. <a href="../man3/SSL_free.html">SSL_free(3)</a>).</p>
+
+<p>Since OpenSSL only cleanses internal buffers, the application is still responsible for cleansing all other buffers. Most notably, this applies to buffers passed to functions like <a href="../man3/SSL_read.html">SSL_read(3)</a>, <a href="../man3/SSL_peek.html">SSL_peek(3)</a> but also like <a href="../man3/SSL_write.html">SSL_write(3)</a>.</p>
+
+<p>TLS connections do not buffer data to be sent in plaintext. QUIC stream objects do buffer plaintext data to be sent and this option will also cause that data to be cleansed when it is discarded.</p>
+
+<p>This option can be set differently on individual QUIC stream objects and has no effect on QUIC connection objects (except where a default stream is being used).</p>
+
+</dd>
+<dt id="SSL_OP_COOKIE_EXCHANGE">SSL_OP_COOKIE_EXCHANGE</dt>
+<dd>
+
+<p>Turn on Cookie Exchange as described in RFC4347 Section 4.2.1. Only affects DTLS connections.</p>
+
+</dd>
+<dt id="SSL_OP_DISABLE_TLSEXT_CA_NAMES">SSL_OP_DISABLE_TLSEXT_CA_NAMES</dt>
+<dd>
+
+<p>Disable TLS Extension CA Names. You may want to disable it for security reasons or for compatibility with some Windows TLS implementations crashing when this extension is larger than 1024 bytes.</p>
+
+</dd>
+<dt id="SSL_OP_ENABLE_KTLS">SSL_OP_ENABLE_KTLS</dt>
+<dd>
+
+<p>Enable the use of kernel TLS. In order to benefit from kernel TLS OpenSSL must have been compiled with support for it, and it must be supported by the negotiated ciphersuites and extensions. The specific ciphersuites and extensions that are supported may vary by platform and kernel version.</p>
+
+<p>The kernel TLS data-path implements the record layer, and the encryption algorithm. The kernel will utilize the best hardware available for encryption. Using the kernel data-path should reduce the memory footprint of OpenSSL because no buffering is required. Also, the throughput should improve because data copy is avoided when user data is encrypted into kernel memory instead of the usual encrypt then copy to kernel.</p>
+
+<p>Kernel TLS might not support all the features of OpenSSL. For instance, renegotiation, and setting the maximum fragment size is not possible as of Linux 4.20.</p>
+
+<p>Note that with kernel TLS enabled some cryptographic operations are performed by the kernel directly and not via any available OpenSSL Providers. This might be undesirable if, for example, the application requires all cryptographic operations to be performed by the FIPS provider.</p>
+
+</dd>
+<dt id="SSL_OP_ENABLE_KTLS_TX_ZEROCOPY_SENDFILE">SSL_OP_ENABLE_KTLS_TX_ZEROCOPY_SENDFILE</dt>
+<dd>
+
+<p>With this option, sendfile() will use the zerocopy mode, which gives a performance boost when used with KTLS hardware offload. Note that invalid TLS records might be transmitted if the file is changed while being sent. This option has no effect if <b>SSL_OP_ENABLE_KTLS</b> is not enabled.</p>
+
+<p>This option only applies to Linux. KTLS sendfile on FreeBSD doesn&#39;t offer an option to disable zerocopy and always runs in this mode.</p>
+
+</dd>
+<dt id="SSL_OP_ENABLE_MIDDLEBOX_COMPAT">SSL_OP_ENABLE_MIDDLEBOX_COMPAT</dt>
+<dd>
+
+<p>If set then dummy Change Cipher Spec (CCS) messages are sent in TLSv1.3. This has the effect of making TLSv1.3 look more like TLSv1.2 so that middleboxes that do not understand TLSv1.3 will not drop the connection. Regardless of whether this option is set or not CCS messages received from the peer will always be ignored in TLSv1.3. This option is set by default. To switch it off use SSL_clear_options(). A future version of OpenSSL may not set this by default.</p>
+
+</dd>
+<dt id="SSL_OP_IGNORE_UNEXPECTED_EOF">SSL_OP_IGNORE_UNEXPECTED_EOF</dt>
+<dd>
+
+<p>Some TLS implementations do not send the mandatory close_notify alert on shutdown. If the application tries to wait for the close_notify alert but the peer closes the connection without sending it, an error is generated. When this option is enabled the peer does not need to send the close_notify alert and a closed connection will be treated as if the close_notify alert was received.</p>
+
+<p>You should only enable this option if the protocol running over TLS can detect a truncation attack itself, and that the application is checking for that truncation attack.</p>
+
+<p>For more information on shutting down a connection, see <a href="../man3/SSL_shutdown.html">SSL_shutdown(3)</a>.</p>
+
+</dd>
+<dt id="SSL_OP_LEGACY_SERVER_CONNECT">SSL_OP_LEGACY_SERVER_CONNECT</dt>
+<dd>
+
+<p>Allow legacy insecure renegotiation between OpenSSL and unpatched servers <b>only</b>. See the <b>SECURE RENEGOTIATION</b> section for more details.</p>
+
+</dd>
+<dt id="SSL_OP_LEGACY_EC_POINT_FORMATS">SSL_OP_LEGACY_EC_POINT_FORMATS</dt>
+<dd>
+
+<p>Enable use of the legacy point formats for elliptic curves. This option enables support for the deprecated ANSI X9.62 prime and char2 compressed point formats, in addition to the uncompressed format that is enabled by default.</p>
+
+</dd>
+<dt id="SSL_OP_NO_ANTI_REPLAY">SSL_OP_NO_ANTI_REPLAY</dt>
+<dd>
+
+<p>By default, when a server is configured for early data (i.e., max_early_data &gt; 0), OpenSSL will switch on replay protection. See <a href="../man3/SSL_read_early_data.html">SSL_read_early_data(3)</a> for a description of the replay protection feature. Anti-replay measures are required to comply with the TLSv1.3 specification. Some applications may be able to mitigate the replay risks in other ways and in such cases the built in OpenSSL functionality is not required. Those applications can turn this feature off by setting this option. This is a server-side option only. It is ignored by clients.</p>
+
+</dd>
+<dt id="SSL_OP_NO_TX_CERTIFICATE_COMPRESSION">SSL_OP_NO_TX_CERTIFICATE_COMPRESSION</dt>
+<dd>
+
+<p>Normally clients and servers will transparently attempt to negotiate the RFC8879 certificate compression option on TLSv1.3 connections.</p>
+
+<p>If this option is set, the certificate compression extension is ignored upon receipt and compressed certificates will not be sent to the peer.</p>
+
+</dd>
+<dt id="SSL_OP_NO_RX_CERTIFICATE_COMPRESSION">SSL_OP_NO_RX_CERTIFICATE_COMPRESSION</dt>
+<dd>
+
+<p>Normally clients and servers will transparently attempt to negotiate the RFC8879 certificate compression option on TLSv1.3 connections.</p>
+
+<p>If this option is set, the certificate compression extension will not be sent and compressed certificates will not be accepted from the peer.</p>
+
+</dd>
+<dt id="SSL_OP_NO_COMPRESSION">SSL_OP_NO_COMPRESSION</dt>
+<dd>
+
+<p>Do not use TLS record compression even if it is supported. This option is set by default. To switch it off use SSL_clear_options(). Note that TLS record compression is not recommended and is not available at security level 2 or above. From OpenSSL 3.2 the default security level is 2, so clearing this option will have no effect without also changing the default security level. See <a href="../man3/SSL_CTX_set_security_level.html">SSL_CTX_set_security_level(3)</a>.</p>
+
+</dd>
+<dt id="SSL_OP_NO_ENCRYPT_THEN_MAC">SSL_OP_NO_ENCRYPT_THEN_MAC</dt>
+<dd>
+
+<p>Normally clients and servers will transparently attempt to negotiate the RFC7366 Encrypt-then-MAC option on TLS and DTLS connection.</p>
+
+<p>If this option is set, Encrypt-then-MAC is disabled. Clients will not propose, and servers will not accept the extension.</p>
+
+</dd>
+<dt id="SSL_OP_NO_EXTENDED_MASTER_SECRET">SSL_OP_NO_EXTENDED_MASTER_SECRET</dt>
+<dd>
+
+<p>Normally clients and servers will transparently attempt to negotiate the RFC7627 Extended Master Secret option on TLS and DTLS connection.</p>
+
+<p>If this option is set, Extended Master Secret is disabled. Clients will not propose, and servers will not accept the extension.</p>
+
+</dd>
+<dt id="SSL_OP_NO_QUERY_MTU">SSL_OP_NO_QUERY_MTU</dt>
+<dd>
+
+<p>Do not query the MTU. Only affects DTLS connections.</p>
+
+</dd>
+<dt id="SSL_OP_NO_RENEGOTIATION">SSL_OP_NO_RENEGOTIATION</dt>
+<dd>
+
+<p>Disable all renegotiation in (D)TLSv1.2 and earlier. Do not send HelloRequest messages, and ignore renegotiation requests via ClientHello.</p>
+
+</dd>
+<dt id="SSL_OP_NO_SESSION_RESUMPTION_ON_RENEGOTIATION">SSL_OP_NO_SESSION_RESUMPTION_ON_RENEGOTIATION</dt>
+<dd>
+
+<p>When performing renegotiation as a server, always start a new session (i.e., session resumption requests are only accepted in the initial handshake). This option is not needed for clients.</p>
+
+</dd>
+<dt id="SSL_OP_NO_SSLv3-SSL_OP_NO_TLSv1-SSL_OP_NO_TLSv1_1-SSL_OP_NO_TLSv1_2-SSL_OP_NO_TLSv1_3-SSL_OP_NO_DTLSv1-SSL_OP_NO_DTLSv1_2">SSL_OP_NO_SSLv3, SSL_OP_NO_TLSv1, SSL_OP_NO_TLSv1_1, SSL_OP_NO_TLSv1_2, SSL_OP_NO_TLSv1_3, SSL_OP_NO_DTLSv1, SSL_OP_NO_DTLSv1_2</dt>
+<dd>
+
+<p>These options turn off the SSLv3, TLSv1, TLSv1.1, TLSv1.2 or TLSv1.3 protocol versions with TLS or the DTLSv1, DTLSv1.2 versions with DTLS, respectively. As of OpenSSL 1.1.0, these options are deprecated, use <a href="../man3/SSL_CTX_set_min_proto_version.html">SSL_CTX_set_min_proto_version(3)</a> and <a href="../man3/SSL_CTX_set_max_proto_version.html">SSL_CTX_set_max_proto_version(3)</a> instead.</p>
+
+</dd>
+<dt id="SSL_OP_NO_TICKET">SSL_OP_NO_TICKET</dt>
+<dd>
+
+<p>SSL/TLS supports two mechanisms for resuming sessions: session ids and stateless session tickets.</p>
+
+<p>When using session ids a copy of the session information is cached on the server and a unique id is sent to the client. When the client wishes to resume it provides the unique id so that the server can retrieve the session information from its cache.</p>
+
+<p>When using stateless session tickets the server uses a session ticket encryption key to encrypt the session information. This encrypted data is sent to the client as a &quot;ticket&quot;. When the client wishes to resume it sends the encrypted data back to the server. The server uses its key to decrypt the data and resume the session. In this way the server can operate statelessly - no session information needs to be cached locally.</p>
+
+<p>The TLSv1.3 protocol only supports tickets and does not directly support session ids. However, OpenSSL allows two modes of ticket operation in TLSv1.3: stateful and stateless. Stateless tickets work the same way as in TLSv1.2 and below. Stateful tickets mimic the session id behaviour available in TLSv1.2 and below. The session information is cached on the server and the session id is wrapped up in a ticket and sent back to the client. When the client wishes to resume, it presents a ticket in the same way as for stateless tickets. The server can then extract the session id from the ticket and retrieve the session information from its cache.</p>
+
+<p>By default OpenSSL will use stateless tickets. The SSL_OP_NO_TICKET option will cause stateless tickets to not be issued. In TLSv1.2 and below this means no ticket gets sent to the client at all. In TLSv1.3 a stateful ticket will be sent. This is a server-side option only.</p>
+
+<p>In TLSv1.3 it is possible to suppress all tickets (stateful and stateless) from being sent by calling <a href="../man3/SSL_CTX_set_num_tickets.html">SSL_CTX_set_num_tickets(3)</a> or <a href="../man3/SSL_set_num_tickets.html">SSL_set_num_tickets(3)</a>.</p>
+
+</dd>
+<dt id="SSL_OP_PRIORITIZE_CHACHA">SSL_OP_PRIORITIZE_CHACHA</dt>
+<dd>
+
+<p>When SSL_OP_SERVER_PREFERENCE is set, temporarily reprioritize ChaCha20-Poly1305 ciphers to the top of the server cipher list if a ChaCha20-Poly1305 cipher is at the top of the client cipher list. This helps those clients (e.g. mobile) use ChaCha20-Poly1305 if that cipher is anywhere in the server cipher list; but still allows other clients to use AES and other ciphers. Requires <b>SSL_OP_SERVER_PREFERENCE</b>.</p>
+
+</dd>
+<dt id="SSL_OP_TLS_ROLLBACK_BUG">SSL_OP_TLS_ROLLBACK_BUG</dt>
+<dd>
+
+<p>Disable version rollback attack detection.</p>
+
+<p>During the client key exchange, the client must send the same information about acceptable SSL/TLS protocol levels as during the first hello. Some clients violate this rule by adapting to the server&#39;s answer. (Example: the client sends an SSLv2 hello and accepts up to SSLv3.1=TLSv1, the server only understands up to SSLv3. In this case the client must still use the same SSLv3.1=TLSv1 announcement. Some clients step down to SSLv3 with respect to the server&#39;s answer and violate the version rollback protection.)</p>
+
+</dd>
+</dl>
+
+<p>The following options no longer have any effect but their identifiers are retained for compatibility purposes:</p>
+
+<dl>
+
+<dt id="SSL_OP_NETSCAPE_REUSE_CIPHER_CHANGE_BUG">SSL_OP_NETSCAPE_REUSE_CIPHER_CHANGE_BUG</dt>
+<dd>
+
+</dd>
+<dt id="SSL_OP_MICROSOFT_BIG_SSLV3_BUFFER">SSL_OP_MICROSOFT_BIG_SSLV3_BUFFER</dt>
+<dd>
+
+</dd>
+<dt id="SSL_OP_SSLEAY_080_CLIENT_DH_BUG">SSL_OP_SSLEAY_080_CLIENT_DH_BUG</dt>
+<dd>
+
+</dd>
+<dt id="SSL_OP_TLS_D5_BUG">SSL_OP_TLS_D5_BUG</dt>
+<dd>
+
+</dd>
+<dt id="SSL_OP_TLS_BLOCK_PADDING_BUG">SSL_OP_TLS_BLOCK_PADDING_BUG</dt>
+<dd>
+
+</dd>
+<dt id="SSL_OP_MSIE_SSLV2_RSA_PADDING">SSL_OP_MSIE_SSLV2_RSA_PADDING</dt>
+<dd>
+
+</dd>
+<dt id="SSL_OP_SSLREF2_REUSE_CERT_TYPE_BUG">SSL_OP_SSLREF2_REUSE_CERT_TYPE_BUG</dt>
+<dd>
+
+</dd>
+<dt id="SSL_OP_MICROSOFT_SESS_ID_BUG">SSL_OP_MICROSOFT_SESS_ID_BUG</dt>
+<dd>
+
+</dd>
+<dt id="SSL_OP_NETSCAPE_CHALLENGE_BUG">SSL_OP_NETSCAPE_CHALLENGE_BUG</dt>
+<dd>
+
+</dd>
+<dt id="SSL_OP_PKCS1_CHECK_1">SSL_OP_PKCS1_CHECK_1</dt>
+<dd>
+
+</dd>
+<dt id="SSL_OP_PKCS1_CHECK_2">SSL_OP_PKCS1_CHECK_2</dt>
+<dd>
+
+</dd>
+<dt id="SSL_OP_SINGLE_DH_USE">SSL_OP_SINGLE_DH_USE</dt>
+<dd>
+
+</dd>
+<dt id="SSL_OP_SINGLE_ECDH_USE">SSL_OP_SINGLE_ECDH_USE</dt>
+<dd>
+
+</dd>
+<dt id="SSL_OP_EPHEMERAL_RSA">SSL_OP_EPHEMERAL_RSA</dt>
+<dd>
+
+</dd>
+<dt id="SSL_OP_NETSCAPE_CA_DN_BUG">SSL_OP_NETSCAPE_CA_DN_BUG</dt>
+<dd>
+
+</dd>
+<dt id="SSL_OP_NETSCAPE_DEMO_CIPHER_CHANGE_BUG">SSL_OP_NETSCAPE_DEMO_CIPHER_CHANGE_BUG</dt>
+<dd>
+
+</dd>
+</dl>
+
+<h1 id="SECURE-RENEGOTIATION">SECURE RENEGOTIATION</h1>
+
+<p>OpenSSL always attempts to use secure renegotiation as described in RFC5746. This counters the prefix attack described in CVE-2009-3555 and elsewhere.</p>
+
+<p>This attack has far reaching consequences which application writers should be aware of. In the description below an implementation supporting secure renegotiation is referred to as <i>patched</i>. A server not supporting secure renegotiation is referred to as <i>unpatched</i>.</p>
+
+<p>The following sections describe the operations permitted by OpenSSL&#39;s secure renegotiation implementation.</p>
+
+<h2 id="Patched-client-and-server">Patched client and server</h2>
+
+<p>Connections and renegotiation are always permitted by OpenSSL implementations.</p>
+
+<h2 id="Unpatched-client-and-patched-OpenSSL-server">Unpatched client and patched OpenSSL server</h2>
+
+<p>The initial connection succeeds but client renegotiation is denied by the server with a <b>no_renegotiation</b> warning alert if TLS v1.0 is used or a fatal <b>handshake_failure</b> alert in SSL v3.0.</p>
+
+<p>If the patched OpenSSL server attempts to renegotiate a fatal <b>handshake_failure</b> alert is sent. This is because the server code may be unaware of the unpatched nature of the client.</p>
+
+<p>If the option <b>SSL_OP_ALLOW_UNSAFE_LEGACY_RENEGOTIATION</b> is set then renegotiation <b>always</b> succeeds.</p>
+
+<h2 id="Patched-OpenSSL-client-and-unpatched-server">Patched OpenSSL client and unpatched server</h2>
+
+<p>If the option <b>SSL_OP_LEGACY_SERVER_CONNECT</b> or <b>SSL_OP_ALLOW_UNSAFE_LEGACY_RENEGOTIATION</b> is set then initial connections and renegotiation between patched OpenSSL clients and unpatched servers succeeds. If neither option is set then initial connections to unpatched servers will fail.</p>
+
+<p>Setting the option <b>SSL_OP_LEGACY_SERVER_CONNECT</b> has security implications; clients that are willing to connect to servers that do not implement RFC 5746 secure renegotiation are subject to attacks such as CVE-2009-3555.</p>
+
+<p>OpenSSL client applications wishing to ensure they can connect to unpatched servers should always <b>set</b> <b>SSL_OP_LEGACY_SERVER_CONNECT</b></p>
+
+<p>OpenSSL client applications that want to ensure they can <b>not</b> connect to unpatched servers (and thus avoid any security issues) should always <b>clear</b> <b>SSL_OP_LEGACY_SERVER_CONNECT</b> using SSL_CTX_clear_options() or SSL_clear_options().</p>
+
+<p>The difference between the <b>SSL_OP_LEGACY_SERVER_CONNECT</b> and <b>SSL_OP_ALLOW_UNSAFE_LEGACY_RENEGOTIATION</b> options is that <b>SSL_OP_LEGACY_SERVER_CONNECT</b> enables initial connections and secure renegotiation between OpenSSL clients and unpatched servers <b>only</b>, while <b>SSL_OP_ALLOW_UNSAFE_LEGACY_RENEGOTIATION</b> allows initial connections and renegotiation between OpenSSL and unpatched clients or servers.</p>
+
+<h2 id="Applicability-of-options-to-QUIC-connections-and-streams">Applicability of options to QUIC connections and streams</h2>
+
+<p>These options apply to SSL objects referencing a QUIC connection:</p>
+
+<dl>
+
+<dt id="SSL_OP_ALLOW_NO_DHE_KEX1">SSL_OP_ALLOW_NO_DHE_KEX</dt>
+<dd>
+
+</dd>
+<dt id="SSL_OP_NO_TX_CERTIFICATE_COMPRESSION1">SSL_OP_NO_TX_CERTIFICATE_COMPRESSION</dt>
+<dd>
+
+</dd>
+<dt id="SSL_OP_NO_RX_CERTIFICATE_COMPRESSION1">SSL_OP_NO_RX_CERTIFICATE_COMPRESSION</dt>
+<dd>
+
+</dd>
+<dt id="SSL_OP_NO_TICKET1">SSL_OP_NO_TICKET</dt>
+<dd>
+
+</dd>
+<dt id="SSL_OP_PRIORITIZE_CHACHA1">SSL_OP_PRIORITIZE_CHACHA</dt>
+<dd>
+
+</dd>
+</dl>
+
+<p>These options apply to SSL objects referencing a QUIC stream:</p>
+
+<dl>
+
+<dt id="SSL_OP_CLEANSE_PLAINTEXT1">SSL_OP_CLEANSE_PLAINTEXT</dt>
+<dd>
+
+</dd>
+</dl>
+
+<p>Options on QUIC connections are initialized from the options set on SSL_CTX before a QUIC connection SSL object is created. Options on QUIC streams are initialised from the options configured on the QUIC connection SSL object they are created from.</p>
+
+<p>Setting options which relate to QUIC streams on a QUIC connection SSL object has no direct effect on the QUIC connection SSL object itself, but will change the options set on the default stream (if there is one) and will also determine the default options set on any future streams which are created.</p>
+
+<p>Other options not mentioned above do not have an effect and will be ignored.</p>
+
+<p>Options which relate to QUIC streams may also be set directly on QUIC stream SSL objects. Setting connection-related options on such an object has no effect.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_CTX_set_options() and SSL_set_options() return the new options bit-mask after adding <b>options</b>.</p>
+
+<p>SSL_CTX_clear_options() and SSL_clear_options() return the new options bit-mask after clearing <b>options</b>.</p>
+
+<p>SSL_CTX_get_options() and SSL_get_options() return the current bit-mask.</p>
+
+<p>SSL_get_secure_renegotiation_support() returns 1 is the peer supports secure renegotiation and 0 if it does not.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a>, <a href="../man3/SSL_new.html">SSL_new(3)</a>, <a href="../man3/SSL_clear.html">SSL_clear(3)</a>, <a href="../man3/SSL_shutdown.html">SSL_shutdown(3)</a> <a href="../man3/SSL_CTX_set_tmp_dh_callback.html">SSL_CTX_set_tmp_dh_callback(3)</a>, <a href="../man3/SSL_CTX_set_min_proto_version.html">SSL_CTX_set_min_proto_version(3)</a>, <a href="../man1/openssl-dhparam.html">openssl-dhparam(1)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The attempt to always try to use secure renegotiation was added in OpenSSL 0.9.8m.</p>
+
+<p>The <b>SSL_OP_PRIORITIZE_CHACHA</b> and <b>SSL_OP_NO_RENEGOTIATION</b> options were added in OpenSSL 1.1.1.</p>
+
+<p>The <b>SSL_OP_NO_EXTENDED_MASTER_SECRET</b> and <b>SSL_OP_IGNORE_UNEXPECTED_EOF</b> options were added in OpenSSL 3.0.</p>
+
+<p>The <b>SSL_OP_</b> constants and the corresponding parameter and return values of the affected functions were changed to <code>uint64_t</code> type in OpenSSL 3.0. For that reason it is no longer possible use the <b>SSL_OP_</b> macro values in preprocessor <code>#if</code> conditions. However it is still possible to test whether these macros are defined or not.</p>
+
+<p>As of OpenSSL 3.6, use of the <b>SSL_OP_CIPHER_SERVER_PREFERENCE</b> constant is discouraged and its semantics became available using the more aptly named <b>SSL_OP_SERVER_PREFERENCE</b> constant.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2001-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

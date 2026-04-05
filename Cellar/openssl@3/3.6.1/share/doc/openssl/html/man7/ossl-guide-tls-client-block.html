@@ -1,0 +1,465 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>ossl-guide-tls-client-block</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SIMPLE-BLOCKING-TLS-CLIENT-EXAMPLE">SIMPLE BLOCKING TLS CLIENT EXAMPLE</a>
+    <ul>
+      <li><a href="#Creating-the-SSL_CTX-and-SSL-objects">Creating the SSL_CTX and SSL objects</a></li>
+      <li><a href="#Creating-the-socket-and-BIO">Creating the socket and BIO</a></li>
+      <li><a href="#Setting-the-servers-hostname">Setting the server&#39;s hostname</a></li>
+      <li><a href="#Performing-the-handshake">Performing the handshake</a></li>
+      <li><a href="#Sending-and-receiving-data">Sending and receiving data</a></li>
+      <li><a href="#Shutting-down-the-connection">Shutting down the connection</a></li>
+      <li><a href="#Final-clean-up">Final clean up</a></li>
+    </ul>
+  </li>
+  <li><a href="#TROUBLESHOOTING">TROUBLESHOOTING</a>
+    <ul>
+      <li><a href="#Failure-to-connect-the-underlying-socket">Failure to connect the underlying socket</a></li>
+      <li><a href="#Verification-failure-of-the-server-certificate">Verification failure of the server certificate</a></li>
+    </ul>
+  </li>
+  <li><a href="#FURTHER-READING">FURTHER READING</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>ossl-guide-tls-client-block - OpenSSL Guide: Writing a simple blocking TLS client</p>
+
+<h1 id="SIMPLE-BLOCKING-TLS-CLIENT-EXAMPLE">SIMPLE BLOCKING TLS CLIENT EXAMPLE</h1>
+
+<p>This page will present various source code samples demonstrating how to write a simple TLS client application which connects to a server, sends an HTTP/1.0 request to it, and reads back the response.</p>
+
+<p>We use a blocking socket for the purposes of this example. This means that attempting to read data from a socket that has no data available on it to read will block (and the function will not return), until data becomes available. For example, this can happen if we have sent our request, but we are still waiting for the server&#39;s response. Similarly any attempts to write to a socket that is not able to write at the moment will block until writing is possible.</p>
+
+<p>This blocking behaviour simplifies the implementation of a client because you do not have to worry about what happens if data is not yet available. The application will simply wait until it is available.</p>
+
+<p>The complete source code for this example blocking TLS client is available in the <b>demos/guide</b> directory of the OpenSSL source distribution in the file <b>tls-client-block.c</b>. It is also available online at <a href="https://github.com/openssl/openssl/blob/master/demos/guide/tls-client-block.c">https://github.com/openssl/openssl/blob/master/demos/guide/tls-client-block.c</a>.</p>
+
+<p>We assume that you already have OpenSSL installed on your system; that you already have some fundamental understanding of OpenSSL concepts and TLS (see <a href="../man7/ossl-guide-libraries-introduction.html">ossl-guide-libraries-introduction(7)</a> and <a href="../man7/ossl-guide-tls-introduction.html">ossl-guide-tls-introduction(7)</a>); and that you know how to write and build C code and link it against the libcrypto and libssl libraries that are provided by OpenSSL. It also assumes that you have a basic understanding of TCP/IP and sockets.</p>
+
+<h2 id="Creating-the-SSL_CTX-and-SSL-objects">Creating the SSL_CTX and SSL objects</h2>
+
+<p>The first step is to create an <b>SSL_CTX</b> object for our client. We use the <a href="../man3/SSL_CTX_new.html">SSL_CTX_new(3)</a> function for this purpose. We could alternatively use <a href="../man3/SSL_CTX_new_ex.html">SSL_CTX_new_ex(3)</a> if we want to associate the <b>SSL_CTX</b> with a particular <b>OSSL_LIB_CTX</b> (see <a href="../man7/ossl-guide-libraries-introduction.html">ossl-guide-libraries-introduction(7)</a> to learn about <b>OSSL_LIB_CTX</b>). We pass as an argument the return value of the function <a href="../man3/TLS_client_method.html">TLS_client_method(3)</a>. You should use this method whenever you are writing a TLS client. This method will automatically use TLS version negotiation to select the highest version of the protocol that is mutually supported by both the client and the server.</p>
+
+<pre><code>/*
+ * Create an SSL_CTX which we can use to create SSL objects from. We
+ * want an SSL_CTX for creating clients so we use TLS_client_method()
+ * here.
+ */
+ctx = SSL_CTX_new(TLS_client_method());
+if (ctx == NULL) {
+    printf(&quot;Failed to create the SSL_CTX\n&quot;);
+    goto end;
+}</code></pre>
+
+<p>Since we are writing a client we must ensure that we verify the server&#39;s certificate. We do this by calling the <a href="../man3/SSL_CTX_set_verify.html">SSL_CTX_set_verify(3)</a> function and pass the <b>SSL_VERIFY_PEER</b> value to it. The final argument to this function is a callback that you can optionally supply to override the default handling for certificate verification. Most applications do not need to do this so this can safely be set to NULL to get the default handling.</p>
+
+<pre><code>/*
+ * Configure the client to abort the handshake if certificate
+ * verification fails. Virtually all clients should do this unless you
+ * really know what you are doing.
+ */
+SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);</code></pre>
+
+<p>In order for certificate verification to be successful you must have configured where the trusted certificate store to be used is located (see <a href="../man7/ossl-guide-tls-introduction.html">ossl-guide-tls-introduction(7)</a>). In most cases you just want to use the default store so we call <a href="../man3/SSL_CTX_set_default_verify_paths.html">SSL_CTX_set_default_verify_paths(3)</a>.</p>
+
+<pre><code>/* Use the default trusted certificate store */
+if (!SSL_CTX_set_default_verify_paths(ctx)) {
+    printf(&quot;Failed to set the default trusted certificate store\n&quot;);
+    goto end;
+}</code></pre>
+
+<p>We would also like to restrict the TLS versions that we are willing to accept to TLSv1.2 or above. TLS protocol versions earlier than that are generally to be avoided where possible. We can do that using <a href="../man3/SSL_CTX_set_min_proto_version.html">SSL_CTX_set_min_proto_version(3)</a>:</p>
+
+<pre><code>/*
+ * TLSv1.1 or earlier are deprecated by IETF and are generally to be
+ * avoided if possible. We require a minimum TLS version of TLSv1.2.
+ */
+if (!SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION)) {
+    printf(&quot;Failed to set the minimum TLS protocol version\n&quot;);
+    goto end;
+}</code></pre>
+
+<p>That is all the setup that we need to do for the <b>SSL_CTX</b>, so next we need to create an <b>SSL</b> object to represent the TLS connection. In a real application we might expect to be creating more than one TLS connection over time. In that case we would expect to reuse the <b>SSL_CTX</b> that we already created each time. There is no need to repeat those steps. In fact it is best not to since certain internal resources are cached in the <b>SSL_CTX</b>. You will get better performance by reusing an existing <b>SSL_CTX</b> instead of creating a new one each time.</p>
+
+<p>Creating the <b>SSL</b> object is a simple matter of calling the <b>SSL_new(3)</b> function and passing the <b>SSL_CTX</b> we created as an argument.</p>
+
+<pre><code>/* Create an SSL object to represent the TLS connection */
+ssl = SSL_new(ctx);
+if (ssl == NULL) {
+    printf(&quot;Failed to create the SSL object\n&quot;);
+    goto end;
+}</code></pre>
+
+<h2 id="Creating-the-socket-and-BIO">Creating the socket and BIO</h2>
+
+<p>TLS data is transmitted over an underlying transport layer. Normally a TCP socket. It is the application&#39;s responsibility for ensuring that the socket is created and associated with an SSL object (via a BIO).</p>
+
+<p>Socket creation for use by a client is typically a 2 step process, i.e. constructing the socket; and connecting the socket.</p>
+
+<p>How to construct a socket is platform specific - but most platforms (including Windows) provide a POSIX compatible interface via the <i>socket</i> function, e.g. to create an IPv4 TCP socket:</p>
+
+<pre><code>int sock;
+
+sock = socket(AF_INET, SOCK_STREAM, 0);
+if (sock == -1)
+    return NULL;</code></pre>
+
+<p>Once the socket is constructed it must be connected to the remote server. Again the details are platform specific but most platforms (including Windows) provide the POSIX compatible <i>connect</i> function. For example:</p>
+
+<pre><code>struct sockaddr_in serveraddr;
+struct hostent *server;
+
+server = gethostbyname(&quot;www.openssl.org&quot;);
+if (server == NULL) {
+    close(sock);
+    return NULL;
+}
+
+memset(&amp;serveraddr, 0, sizeof(serveraddr));
+serveraddr.sin_family = server-&gt;h_addrtype;
+serveraddr.sin_port = htons(443);
+memcpy(&amp;serveraddr.sin_addr.s_addr, server-&gt;h_addr, server-&gt;h_length);
+
+if (connect(sock, (struct sockaddr *)&amp;serveraddr,
+            sizeof(serveraddr)) == -1) {
+    close(sock);
+    return NULL;
+}</code></pre>
+
+<p>OpenSSL provides portable helper functions to do these tasks which also integrate into the OpenSSL error system to log error data, e.g.</p>
+
+<pre><code>int sock = -1;
+BIO_ADDRINFO *res;
+const BIO_ADDRINFO *ai = NULL;
+
+/*
+ * Lookup IP address info for the server.
+ */
+if (!BIO_lookup_ex(hostname, port, BIO_LOOKUP_CLIENT, family, SOCK_STREAM, 0,
+                   &amp;res))
+    return NULL;
+
+/*
+ * Loop through all the possible addresses for the server and find one
+ * we can connect to.
+ */
+for (ai = res; ai != NULL; ai = BIO_ADDRINFO_next(ai)) {
+    /*
+     * Create a TCP socket. We could equally use non-OpenSSL calls such
+     * as &quot;socket&quot; here for this and the subsequent connect and close
+     * functions. But for portability reasons and also so that we get
+     * errors on the OpenSSL stack in the event of a failure we use
+     * OpenSSL&#39;s versions of these functions.
+     */
+    sock = BIO_socket(BIO_ADDRINFO_family(ai), SOCK_STREAM, 0, 0);
+    if (sock == -1)
+        continue;
+
+    /* Connect the socket to the server&#39;s address */
+    if (!BIO_connect(sock, BIO_ADDRINFO_address(ai), BIO_SOCK_NODELAY)) {
+        BIO_closesocket(sock);
+        sock = -1;
+        continue;
+    }
+
+    /* We have a connected socket so break out of the loop */
+    break;
+}
+
+/* Free the address information resources we allocated earlier */
+BIO_ADDRINFO_free(res);</code></pre>
+
+<p>See <a href="../man3/BIO_lookup_ex.html">BIO_lookup_ex(3)</a>, <a href="../man3/BIO_socket.html">BIO_socket(3)</a>, <a href="../man3/BIO_connect.html">BIO_connect(3)</a>, <a href="../man3/BIO_closesocket.html">BIO_closesocket(3)</a>, <a href="../man3/BIO_ADDRINFO_next.html">BIO_ADDRINFO_next(3)</a>, <a href="../man3/BIO_ADDRINFO_address.html">BIO_ADDRINFO_address(3)</a> and <a href="../man3/BIO_ADDRINFO_free.html">BIO_ADDRINFO_free(3)</a> for further information on the functions used here. In the above example code the <b>hostname</b> and <b>port</b> variables are strings, e.g. &quot;www.example.com&quot; and &quot;443&quot;. Note also the use of the family variable, which can take the values of AF_INET or AF_INET6 based on the command line -6 option, to allow specific connections to an ipv4 or ipv6 enabled host.</p>
+
+<p>Sockets created using the methods described above will automatically be blocking sockets - which is exactly what we want for this example.</p>
+
+<p>Once the socket has been created and connected we need to associate it with a BIO object:</p>
+
+<pre><code>BIO *bio;
+
+/* Create a BIO to wrap the socket */
+bio = BIO_new(BIO_s_socket());
+if (bio == NULL) {
+    BIO_closesocket(sock);
+    return NULL;
+}
+
+/*
+ * Associate the newly created BIO with the underlying socket. By
+ * passing BIO_CLOSE here the socket will be automatically closed when
+ * the BIO is freed. Alternatively you can use BIO_NOCLOSE, in which
+ * case you must close the socket explicitly when it is no longer
+ * needed.
+ */
+BIO_set_fd(bio, sock, BIO_CLOSE);</code></pre>
+
+<p>See <a href="../man3/BIO_new.html">BIO_new(3)</a>, <a href="../man3/BIO_s_socket.html">BIO_s_socket(3)</a> and <a href="../man3/BIO_set_fd.html">BIO_set_fd(3)</a> for further information on these functions.</p>
+
+<p>Finally we associate the <b>SSL</b> object we created earlier with the <b>BIO</b> using the <a href="../man3/SSL_set_bio.html">SSL_set_bio(3)</a> function. Note that this passes ownership of the <b>BIO</b> object to the <b>SSL</b> object. Once ownership is passed the SSL object is responsible for its management and will free it automatically when the <b>SSL</b> is freed. So, once <a href="../man3/SSL_set_bio.html">SSL_set_bio(3)</a> has been been called, you should not call <a href="../man3/BIO_free.html">BIO_free(3)</a> on the <b>BIO</b>.</p>
+
+<pre><code>SSL_set_bio(ssl, bio, bio);</code></pre>
+
+<h2 id="Setting-the-servers-hostname">Setting the server&#39;s hostname</h2>
+
+<p>We have already connected our underlying socket to the server, but the client still needs to know the server&#39;s hostname. It uses this information for 2 key purposes and we need to set the hostname for each one.</p>
+
+<p>Firstly, the server&#39;s hostname is included in the initial ClientHello message sent by the client. This is known as the Server Name Indication (SNI). This is important because it is common for multiple hostnames to be fronted by a single server that handles requests for all of them. In other words a single server may have multiple hostnames associated with it and it is important to indicate which one we want to connect to. Without this information we may get a handshake failure, or we may get connected to the &quot;default&quot; server which may not be the one we were expecting.</p>
+
+<p>To set the SNI hostname data we call the <a href="../man3/SSL_set_tlsext_host_name.html">SSL_set_tlsext_host_name(3)</a> function like this:</p>
+
+<pre><code>/*
+ * Tell the server during the handshake which hostname we are attempting
+ * to connect to in case the server supports multiple hosts.
+ */
+if (!SSL_set_tlsext_host_name(ssl, hostname)) {
+    printf(&quot;Failed to set the SNI hostname\n&quot;);
+    goto end;
+}</code></pre>
+
+<p>Here the <code>hostname</code> argument is a string representing the hostname of the server, e.g. &quot;www.example.com&quot;.</p>
+
+<p>Secondly, we need to tell OpenSSL what hostname we expect to see in the certificate coming back from the server. This is almost always the same one that we asked for in the original request. This is important because, without this, we do not verify that the hostname in the certificate is what we expect it to be and any certificate is acceptable unless your application explicitly checks this itself. We do this via the <a href="../man3/SSL_set1_host.html">SSL_set1_host(3)</a> function:</p>
+
+<pre><code>/*
+ * Ensure we check during certificate verification that the server has
+ * supplied a certificate for the hostname that we were expecting.
+ * Virtually all clients should do this unless you really know what you
+ * are doing.
+ */
+if (!SSL_set1_host(ssl, hostname)) {
+    printf(&quot;Failed to set the certificate verification hostname&quot;);
+    goto end;
+}</code></pre>
+
+<p>All of the above steps must happen before we attempt to perform the handshake otherwise they will have no effect.</p>
+
+<h2 id="Performing-the-handshake">Performing the handshake</h2>
+
+<p>Before we can start sending or receiving application data over a TLS connection the TLS handshake must be performed. We can do this explicitly via the <a href="../man3/SSL_connect.html">SSL_connect(3)</a> function.</p>
+
+<pre><code>/* Do the handshake with the server */
+if (SSL_connect(ssl) &lt; 1) {
+    printf(&quot;Failed to connect to the server\n&quot;);
+    /*
+     * If the failure is due to a verification error we can get more
+     * information about it from SSL_get_verify_result().
+     */
+    if (SSL_get_verify_result(ssl) != X509_V_OK)
+        printf(&quot;Verify error: %s\n&quot;,
+            X509_verify_cert_error_string(SSL_get_verify_result(ssl)));
+    goto end;
+}</code></pre>
+
+<p>The <a href="../man3/SSL_connect.html">SSL_connect(3)</a> function can return 1, 0 or less than 0. Only a return value of 1 is considered a success. For a simple blocking client we only need to concern ourselves with whether the call was successful or not. Anything else indicates that we have failed to connect to the server.</p>
+
+<p>A common cause of failures at this stage is due to a problem verifying the server&#39;s certificate. For example if the certificate has expired, or it is not signed by a CA in our trusted certificate store. We can use the <a href="../man3/SSL_get_verify_result.html">SSL_get_verify_result(3)</a> function to find out more information about the verification failure. A return value of <b>X509_V_OK</b> indicates that the verification was successful (so the connection error must be due to some other cause). Otherwise we use the <a href="../man3/X509_verify_cert_error_string.html">X509_verify_cert_error_string(3)</a> function to get a human readable error message.</p>
+
+<h2 id="Sending-and-receiving-data">Sending and receiving data</h2>
+
+<p>Once the handshake is complete we are able to send and receive application data. Exactly what data is sent and in what order is usually controlled by some application level protocol. In this example we are using HTTP 1.0 which is a very simple request and response protocol. The client sends a request to the server. The server sends the response data and then immediately closes down the connection.</p>
+
+<p>To send data to the server we use the <a href="../man3/SSL_write_ex.html">SSL_write_ex(3)</a> function and to receive data from the server we use the <a href="../man3/SSL_read_ex.html">SSL_read_ex(3)</a> function. In HTTP 1.0 the client always writes data first. Our HTTP request will include the hostname that we are connecting to. For simplicity, we write the HTTP request in three chunks. First we write the start of the request. Secondly we write the hostname we are sending the request to. Finally we send the end of the request.</p>
+
+<pre><code>size_t written;
+const char *request_start = &quot;GET / HTTP/1.0\r\nConnection: close\r\nHost: &quot;;
+const char *request_end = &quot;\r\n\r\n&quot;;
+
+/* Write an HTTP GET request to the peer */
+if (!SSL_write_ex(ssl, request_start, strlen(request_start), &amp;written)) {
+    printf(&quot;Failed to write start of HTTP request\n&quot;);
+    goto end;
+}
+if (!SSL_write_ex(ssl, hostname, strlen(hostname), &amp;written)) {
+    printf(&quot;Failed to write hostname in HTTP request\n&quot;);
+    goto end;
+}
+if (!SSL_write_ex(ssl, request_end, strlen(request_end), &amp;written)) {
+    printf(&quot;Failed to write end of HTTP request\n&quot;);
+    goto end;
+}</code></pre>
+
+<p>The <a href="../man3/SSL_write_ex.html">SSL_write_ex(3)</a> function returns 0 if it fails and 1 if it is successful. If it is successful then we can proceed to waiting for a response from the server.</p>
+
+<pre><code>size_t readbytes;
+char buf[160];
+
+/*
+ * Get up to sizeof(buf) bytes of the response. We keep reading until the
+ * server closes the connection.
+ */
+while (SSL_read_ex(ssl, buf, sizeof(buf), &amp;readbytes)) {
+    /*
+    * OpenSSL does not guarantee that the returned data is a string or
+    * that it is NUL terminated so we use fwrite() to write the exact
+    * number of bytes that we read. The data could be non-printable or
+    * have NUL characters in the middle of it. For this simple example
+    * we&#39;re going to print it to stdout anyway.
+    */
+    fwrite(buf, 1, readbytes, stdout);
+}
+/* In case the response didn&#39;t finish with a newline we add one now */
+printf(&quot;\n&quot;);</code></pre>
+
+<p>We use the <a href="../man3/SSL_read_ex.html">SSL_read_ex(3)</a> function to read the response. We don&#39;t know exactly how much data we are going to receive back so we enter a loop reading blocks of data from the server and printing each block that we receive to the screen. The loop ends as soon as <a href="../man3/SSL_read_ex.html">SSL_read_ex(3)</a> returns 0 - meaning that it failed to read any data.</p>
+
+<p>A failure to read data could mean that there has been some error, or it could simply mean that server has sent all the data that it wants to send and has indicated that it has finished by sending a &quot;close_notify&quot; alert. This alert is a TLS protocol level message indicating that the endpoint has finished sending all of its data and it will not send any more. Both of these conditions result in a 0 return value from <a href="../man3/SSL_read_ex.html">SSL_read_ex(3)</a> and we need to use the function <a href="../man3/SSL_get_error.html">SSL_get_error(3)</a> to determine the cause of the 0 return value.</p>
+
+<pre><code>/*
+ * Check whether we finished the while loop above normally or as the
+ * result of an error. The 0 argument to SSL_get_error() is the return
+ * code we received from the SSL_read_ex() call. It must be 0 in order
+ * to get here. Normal completion is indicated by SSL_ERROR_ZERO_RETURN.
+ */
+if (SSL_get_error(ssl, 0) != SSL_ERROR_ZERO_RETURN) {
+    /*
+     * Some error occurred other than a graceful close down by the
+     * peer
+     */
+    printf (&quot;Failed reading remaining data\n&quot;);
+    goto end;
+}</code></pre>
+
+<p>If <a href="../man3/SSL_get_error.html">SSL_get_error(3)</a> returns <b>SSL_ERROR_ZERO_RETURN</b> then we know that the server has finished sending its data. Otherwise an error has occurred.</p>
+
+<h2 id="Shutting-down-the-connection">Shutting down the connection</h2>
+
+<p>Once we have finished reading data from the server then we are ready to close the connection down. We do this via the <a href="../man3/SSL_shutdown.html">SSL_shutdown(3)</a> function which has the effect of sending a TLS protocol level message (a &quot;close_notify&quot; alert) to the server saying that we have finished writing data:</p>
+
+<pre><code>/*
+ * The peer already shutdown gracefully (we know this because of the
+ * SSL_ERROR_ZERO_RETURN above). We should do the same back.
+ */
+ret = SSL_shutdown(ssl);
+if (ret &lt; 1) {
+    /*
+     * ret &lt; 0 indicates an error. ret == 0 would be unexpected here
+     * because that means &quot;we&#39;ve sent a close_notify and we&#39;re waiting
+     * for one back&quot;. But we already know we got one from the peer
+     * because of the SSL_ERROR_ZERO_RETURN above.
+     */
+    printf(&quot;Error shutting down\n&quot;);
+    goto end;
+}</code></pre>
+
+<p>The <a href="../man3/SSL_shutdown.html">SSL_shutdown(3)</a> function will either return 1, 0, or less than 0. A return value of 1 is a success, and a return value less than 0 is an error. More precisely a return value of 1 means that we have sent a &quot;close_notify&quot; alert to the server, and that we have also received one back. A return value of 0 means that we have sent a &quot;close_notify&quot; alert to the server, but we have not yet received one back. Usually in this scenario you would call <a href="../man3/SSL_shutdown.html">SSL_shutdown(3)</a> again which (with a blocking socket) would block until the &quot;close_notify&quot; is received. However in this case we already know that the server has sent us a &quot;close_notify&quot; because of the SSL_ERROR_ZERO_RETURN that we received from the call to <a href="../man3/SSL_read_ex.html">SSL_read_ex(3)</a>. So this scenario should never happen in practice. We just treat it as an error in this example.</p>
+
+<h2 id="Final-clean-up">Final clean up</h2>
+
+<p>Before the application exits we have to clean up some memory that we allocated. If we are exiting due to an error we might also want to display further information about that error if it is available to the user:</p>
+
+<pre><code>   /* Success! */
+   res = EXIT_SUCCESS;
+end:
+   /*
+    * If something bad happened then we will dump the contents of the
+    * OpenSSL error stack to stderr. There might be some useful diagnostic
+    * information there.
+    */
+   if (res == EXIT_FAILURE)
+       ERR_print_errors_fp(stderr);
+
+   /*
+    * Free the resources we allocated. We do not free the BIO object here
+    * because ownership of it was immediately transferred to the SSL object
+    * via SSL_set_bio(). The BIO will be freed when we free the SSL object.
+    */
+   SSL_free(ssl);
+   SSL_CTX_free(ctx);
+   return res;</code></pre>
+
+<p>To display errors we make use of the <a href="../man3/ERR_print_errors_fp.html">ERR_print_errors_fp(3)</a> function which simply dumps out the contents of any errors on the OpenSSL error stack to the specified location (in this case <i>stderr</i>).</p>
+
+<p>We need to free up the <b>SSL</b> object that we created for the connection via the <a href="../man3/SSL_free.html">SSL_free(3)</a> function. Also, since we are not going to be creating any more TLS connections we must also free up the <b>SSL_CTX</b> via a call to <a href="../man3/SSL_CTX_free.html">SSL_CTX_free(3)</a>.</p>
+
+<h1 id="TROUBLESHOOTING">TROUBLESHOOTING</h1>
+
+<p>There are a number of things that might go wrong when running the demo application. This section describes some common things you might encounter.</p>
+
+<h2 id="Failure-to-connect-the-underlying-socket">Failure to connect the underlying socket</h2>
+
+<p>This could occur for numerous reasons. For example if there is a problem in the network route between the client and the server; or a firewall is blocking the communication; or the server is not in DNS. Check the network configuration.</p>
+
+<h2 id="Verification-failure-of-the-server-certificate">Verification failure of the server certificate</h2>
+
+<p>A verification failure of the server certificate would result in a failure when running the <a href="../man3/SSL_connect.html">SSL_connect(3)</a> function. <a href="../man3/ERR_print_errors_fp.html">ERR_print_errors_fp(3)</a> would display an error which would look something like this:</p>
+
+<pre><code>Verify error: unable to get local issuer certificate
+40E74AF1F47F0000:error:0A000086:SSL routines:tls_post_process_server_certificate:certificate verify failed:ssl/statem/statem_clnt.c:2069:</code></pre>
+
+<p>A server certificate verification failure could be caused for a number of reasons. For example</p>
+
+<dl>
+
+<dt id="Failure-to-correctly-setup-the-trusted-certificate-store">Failure to correctly setup the trusted certificate store</dt>
+<dd>
+
+<p>See the page <a href="../man7/ossl-guide-tls-introduction.html">ossl-guide-tls-introduction(7)</a> and check that your trusted certificate store is correctly configured</p>
+
+</dd>
+<dt id="Unrecognised-CA">Unrecognised CA</dt>
+<dd>
+
+<p>If the CA used by the server&#39;s certificate is not in the trusted certificate store for the client then this will cause a verification failure during connection. Often this can occur if the server is using a self-signed certificate (i.e. a test certificate that has not been signed by a CA at all).</p>
+
+</dd>
+<dt id="Missing-intermediate-CAs">Missing intermediate CAs</dt>
+<dd>
+
+<p>This is a server misconfiguration where the client has the relevant root CA in its trust store, but the server has not supplied all of the intermediate CA certificates between that root CA and the server&#39;s own certificate. Therefore a trust chain cannot be established.</p>
+
+</dd>
+<dt id="Mismatched-hostname">Mismatched hostname</dt>
+<dd>
+
+<p>If for some reason the hostname of the server that the client is expecting does not match the hostname in the certificate then this will cause verification to fail.</p>
+
+</dd>
+<dt id="Expired-certificate">Expired certificate</dt>
+<dd>
+
+<p>The date that the server&#39;s certificate is valid to has passed.</p>
+
+</dd>
+</dl>
+
+<p>The &quot;unable to get local issuer certificate&quot; we saw in the example above means that we have been unable to find the issuer of the server&#39;s certificate (or one of its intermediate CA certificates) in our trusted certificate store (e.g. because the trusted certificate store is misconfigured, or there are missing intermediate CAs, or the issuer is simply unrecognised).</p>
+
+<h1 id="FURTHER-READING">FURTHER READING</h1>
+
+<p>See <a href="../man7/ossl-guide-tls-client-non-block.html">ossl-guide-tls-client-non-block(7)</a> to read a tutorial on how to modify the client developed on this page to support a nonblocking socket.</p>
+
+<p>See <a href="../man7/ossl-guide-tls-server-block.html">ossl-guide-tls-server-block(7)</a> for a tutorial on how to implement a simple TLS server handling one client at a time over a blocking socket.</p>
+
+<p>See <a href="../man7/ossl-guide-quic-client-block.html">ossl-guide-quic-client-block(7)</a> to read a tutorial on how to modify the client developed on this page to support QUIC instead of TLS.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ossl-guide-introduction.html">ossl-guide-introduction(7)</a>, <a href="../man7/ossl-guide-libraries-introduction.html">ossl-guide-libraries-introduction(7)</a>, <a href="../man7/ossl-guide-libssl-introduction.html">ossl-guide-libssl-introduction(7)</a>, <a href="../man7/ossl-guide-tls-introduction.html">ossl-guide-tls-introduction(7)</a>, <a href="../man7/ossl-guide-tls-client-non-block.html">ossl-guide-tls-client-non-block(7)</a>, <a href="../man7/ossl-guide-quic-client-block.html">ossl-guide-quic-client-block(7)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2023-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

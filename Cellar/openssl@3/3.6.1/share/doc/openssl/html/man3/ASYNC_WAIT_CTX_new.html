@@ -1,0 +1,153 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>ASYNC_WAIT_CTX_new</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>ASYNC_WAIT_CTX_new, ASYNC_WAIT_CTX_free, ASYNC_WAIT_CTX_set_wait_fd, ASYNC_WAIT_CTX_get_fd, ASYNC_WAIT_CTX_get_all_fds, ASYNC_WAIT_CTX_get_changed_fds, ASYNC_WAIT_CTX_clear_fd, ASYNC_WAIT_CTX_set_callback, ASYNC_WAIT_CTX_get_callback, ASYNC_WAIT_CTX_set_status, ASYNC_WAIT_CTX_get_status, ASYNC_callback_fn, ASYNC_STATUS_UNSUPPORTED, ASYNC_STATUS_ERR, ASYNC_STATUS_OK, ASYNC_STATUS_EAGAIN - functions to manage waiting for asynchronous jobs to complete</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/async.h&gt;
+
+#define ASYNC_STATUS_UNSUPPORTED    0
+#define ASYNC_STATUS_ERR            1
+#define ASYNC_STATUS_OK             2
+#define ASYNC_STATUS_EAGAIN         3
+typedef int (*ASYNC_callback_fn)(void *arg);
+ASYNC_WAIT_CTX *ASYNC_WAIT_CTX_new(void);
+void ASYNC_WAIT_CTX_free(ASYNC_WAIT_CTX *ctx);
+int ASYNC_WAIT_CTX_set_wait_fd(ASYNC_WAIT_CTX *ctx, const void *key,
+                               OSSL_ASYNC_FD fd,
+                               void *custom_data,
+                               void (*cleanup)(ASYNC_WAIT_CTX *, const void *,
+                                               OSSL_ASYNC_FD, void *));
+int ASYNC_WAIT_CTX_get_fd(ASYNC_WAIT_CTX *ctx, const void *key,
+                          OSSL_ASYNC_FD *fd, void **custom_data);
+int ASYNC_WAIT_CTX_get_all_fds(ASYNC_WAIT_CTX *ctx, OSSL_ASYNC_FD *fd,
+                               size_t *numfds);
+int ASYNC_WAIT_CTX_get_changed_fds(ASYNC_WAIT_CTX *ctx, OSSL_ASYNC_FD *addfd,
+                                   size_t *numaddfds, OSSL_ASYNC_FD *delfd,
+                                   size_t *numdelfds);
+int ASYNC_WAIT_CTX_clear_fd(ASYNC_WAIT_CTX *ctx, const void *key);
+int ASYNC_WAIT_CTX_set_callback(ASYNC_WAIT_CTX *ctx,
+                                ASYNC_callback_fn callback,
+                                void *callback_arg);
+int ASYNC_WAIT_CTX_get_callback(ASYNC_WAIT_CTX *ctx,
+                                ASYNC_callback_fn *callback,
+                                void **callback_arg);
+int ASYNC_WAIT_CTX_set_status(ASYNC_WAIT_CTX *ctx, int status);
+int ASYNC_WAIT_CTX_get_status(ASYNC_WAIT_CTX *ctx);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>For an overview of how asynchronous operations are implemented in OpenSSL see <a href="../man3/ASYNC_start_job.html">ASYNC_start_job(3)</a>. An <b>ASYNC_WAIT_CTX</b> object represents an asynchronous &quot;session&quot;, i.e. a related set of crypto operations. For example in SSL terms this would have a one-to-one correspondence with an SSL connection.</p>
+
+<p>Application code must create an <b>ASYNC_WAIT_CTX</b> using the ASYNC_WAIT_CTX_new() function prior to calling ASYNC_start_job() (see <a href="../man3/ASYNC_start_job.html">ASYNC_start_job(3)</a>). When the job is started it is associated with the <b>ASYNC_WAIT_CTX</b> for the duration of that job. An <b>ASYNC_WAIT_CTX</b> should only be used for one <b>ASYNC_JOB</b> at any one time, but can be reused after an <b>ASYNC_JOB</b> has finished for a subsequent <b>ASYNC_JOB</b>. When the session is complete (e.g. the SSL connection is closed), application code cleans up with ASYNC_WAIT_CTX_free().</p>
+
+<p><b>ASYNC_WAIT_CTX</b>s can have &quot;wait&quot; file descriptors associated with them. Calling ASYNC_WAIT_CTX_get_all_fds() and passing in a pointer to an <b>ASYNC_WAIT_CTX</b> in the <i>ctx</i> parameter will return the wait file descriptors associated with that job in <i>*fd</i>. The number of file descriptors returned will be stored in <i>*numfds</i>. It is the caller&#39;s responsibility to ensure that sufficient memory has been allocated in <i>*fd</i> to receive all the file descriptors. Calling ASYNC_WAIT_CTX_get_all_fds() with a NULL <i>fd</i> value will return no file descriptors but will still populate <i>*numfds</i>. Therefore, application code is typically expected to call this function twice: once to get the number of fds, and then again when sufficient memory has been allocated. If only one asynchronous engine is being used then normally this call will only ever return one fd. If multiple asynchronous engines are being used then more could be returned.</p>
+
+<p>The function ASYNC_WAIT_CTX_get_changed_fds() can be used to detect if any fds have changed since the last call time ASYNC_start_job() returned <b>ASYNC_PAUSE</b> (or since the <b>ASYNC_WAIT_CTX</b> was created if no <b>ASYNC_PAUSE</b> result has been received). The <i>numaddfds</i> and <i>numdelfds</i> parameters will be populated with the number of fds added or deleted respectively. <i>*addfd</i> and <i>*delfd</i> will be populated with the list of added and deleted fds respectively. Similarly to ASYNC_WAIT_CTX_get_all_fds() either of these can be NULL, but if they are not NULL then the caller is responsible for ensuring sufficient memory is allocated.</p>
+
+<p>Implementers of async aware code (e.g. engines) are encouraged to return a stable fd for the lifetime of the <b>ASYNC_WAIT_CTX</b> in order to reduce the &quot;churn&quot; of regularly changing fds - although no guarantees of this are provided to applications.</p>
+
+<p>Applications can wait for the file descriptor to be ready for &quot;read&quot; using a system function call such as select or poll (being ready for &quot;read&quot; indicates that the job should be resumed). If no file descriptor is made available then an application will have to periodically &quot;poll&quot; the job by attempting to restart it to see if it is ready to continue.</p>
+
+<p>Async aware code (e.g. engines) can get the current <b>ASYNC_WAIT_CTX</b> from the job via <a href="../man3/ASYNC_get_wait_ctx.html">ASYNC_get_wait_ctx(3)</a> and provide a file descriptor to use for waiting on by calling ASYNC_WAIT_CTX_set_wait_fd(). Typically this would be done by an engine immediately prior to calling ASYNC_pause_job() and not by end user code. An existing association with a file descriptor can be obtained using ASYNC_WAIT_CTX_get_fd() and cleared using ASYNC_WAIT_CTX_clear_fd(). Both of these functions requires a <i>key</i> value which is unique to the async aware code. This could be any unique value but a good candidate might be the <b>ENGINE *</b> for the engine. The <i>custom_data</i> parameter can be any value, and will be returned in a subsequent call to ASYNC_WAIT_CTX_get_fd(). The ASYNC_WAIT_CTX_set_wait_fd() function also expects a pointer to a &quot;cleanup&quot; routine. This can be NULL but if provided will automatically get called when the <b>ASYNC_WAIT_CTX</b> is freed, and gives the engine the opportunity to close the fd or any other resources. Note: The &quot;cleanup&quot; routine does not get called if the fd is cleared directly via a call to ASYNC_WAIT_CTX_clear_fd().</p>
+
+<p>An example of typical usage might be an async capable engine. User code would initiate cryptographic operations. The engine would initiate those operations asynchronously and then call ASYNC_WAIT_CTX_set_wait_fd() followed by ASYNC_pause_job() to return control to the user code. The user code can then perform other tasks or wait for the job to be ready by calling &quot;select&quot; or other similar function on the wait file descriptor. The engine can signal to the user code that the job should be resumed by making the wait file descriptor &quot;readable&quot;. Once resumed the engine should clear the wake signal on the wait file descriptor.</p>
+
+<p>As well as a file descriptor, user code may also be notified via a callback. The callback and data pointers are stored within the <b>ASYNC_WAIT_CTX</b> along with an additional status field that can be used for the notification of retries from an engine. This additional method can be used when the user thinks that a file descriptor is too costly in terms of CPU cycles or in some context where a file descriptor is not appropriate.</p>
+
+<p>ASYNC_WAIT_CTX_set_callback() sets the callback and the callback argument. The callback will be called to notify user code when an engine completes a cryptography operation. It is a requirement that the callback function is small and nonblocking as it will be run in the context of a polling mechanism or an interrupt.</p>
+
+<p>ASYNC_WAIT_CTX_get_callback() returns the callback set in the <b>ASYNC_WAIT_CTX</b> structure.</p>
+
+<p>ASYNC_WAIT_CTX_set_status() allows an engine to set the current engine status. The possible status values are the following:</p>
+
+<dl>
+
+<dt id="ASYNC_STATUS_UNSUPPORTED"><b>ASYNC_STATUS_UNSUPPORTED</b></dt>
+<dd>
+
+<p>The engine does not support the callback mechanism. This is the default value. The engine must call ASYNC_WAIT_CTX_set_status() to set the status to some value other than <b>ASYNC_STATUS_UNSUPPORTED</b> if it intends to enable the callback mechanism.</p>
+
+</dd>
+<dt id="ASYNC_STATUS_ERR"><b>ASYNC_STATUS_ERR</b></dt>
+<dd>
+
+<p>The engine has a fatal problem with this request. The user code should clean up this session.</p>
+
+</dd>
+<dt id="ASYNC_STATUS_OK"><b>ASYNC_STATUS_OK</b></dt>
+<dd>
+
+<p>The request has been successfully submitted.</p>
+
+</dd>
+<dt id="ASYNC_STATUS_EAGAIN"><b>ASYNC_STATUS_EAGAIN</b></dt>
+<dd>
+
+<p>The engine has some problem which will be recovered soon, such as a buffer is full, so user code should resume the job.</p>
+
+</dd>
+</dl>
+
+<p>ASYNC_WAIT_CTX_get_status() allows user code to obtain the current status value. If the status is any value other than <b>ASYNC_STATUS_OK</b> then the user code should not expect to receive a callback from the engine even if one has been set.</p>
+
+<p>An example of the usage of the callback method might be the following. User code would initiate cryptographic operations, and the engine code would dispatch this operation to hardware, and if the dispatch is successful, then the engine code would call ASYNC_pause_job() to return control to the user code. After that, user code can perform other tasks. When the hardware completes the operation, normally it is detected by a polling function or an interrupt, as the user code set a callback by calling ASYNC_WAIT_CTX_set_callback() previously, then the registered callback will be called.</p>
+
+<p>ASYNC_WAIT_CTX_free() frees up a single <b>ASYNC_WAIT_CTX</b> object. If the argument is NULL, nothing is done.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>ASYNC_WAIT_CTX_new() returns a pointer to the newly allocated <b>ASYNC_WAIT_CTX</b> or NULL on error.</p>
+
+<p>ASYNC_WAIT_CTX_set_wait_fd, ASYNC_WAIT_CTX_get_fd, ASYNC_WAIT_CTX_get_all_fds, ASYNC_WAIT_CTX_get_changed_fds, ASYNC_WAIT_CTX_clear_fd, ASYNC_WAIT_CTX_set_callback, ASYNC_WAIT_CTX_get_callback and ASYNC_WAIT_CTX_set_status all return 1 on success or 0 on error. ASYNC_WAIT_CTX_get_status() returns the engine status.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>On Windows platforms the <i>&lt;openssl/async.h&gt;</i> header is dependent on some of the types customarily made available by including <i>&lt;windows.h&gt;</i>. The application developer is likely to require control over when the latter is included, commonly as one of the first included headers. Therefore, it is defined as an application developer&#39;s responsibility to include <i>&lt;windows.h&gt;</i> prior to <i>&lt;openssl/async.h&gt;</i>.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/crypto.html">crypto(7)</a>, <a href="../man3/ASYNC_start_job.html">ASYNC_start_job(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>ASYNC_WAIT_CTX_new(), ASYNC_WAIT_CTX_free(), ASYNC_WAIT_CTX_set_wait_fd(), ASYNC_WAIT_CTX_get_fd(), ASYNC_WAIT_CTX_get_all_fds(), ASYNC_WAIT_CTX_get_changed_fds() and ASYNC_WAIT_CTX_clear_fd() were added in OpenSSL 1.1.0.</p>
+
+<p>ASYNC_WAIT_CTX_set_callback(), ASYNC_WAIT_CTX_get_callback(), ASYNC_WAIT_CTX_set_status(), and ASYNC_WAIT_CTX_get_status() were added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2016-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

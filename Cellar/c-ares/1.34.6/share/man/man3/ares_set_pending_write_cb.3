@@ -1,0 +1,62 @@
+.\"
+.\" Copyright 2024 by the c-ares project and its contributors
+.\" SPDX-License-Identifier: MIT
+.\"
+.TH ARES_SET_NOTIFY_PENDING_WRITE_CALLBACK 3 "13 Aug 2024"
+.SH NAME
+ares_set_pending_write_cb, ares_process_pending_write \- Function
+for setting a callback which is triggered when there is potential pending data
+which needs to be written.
+.SH SYNOPSIS
+.nf
+#include <ares.h>
+
+typedef void (*ares_pending_write_cb)(void *\fIdata\fP);
+
+void ares_set_pending_write_cb(
+  ares_channel_t        *\fIchannel\fP,
+  ares_pending_write_cb  \fIcallback\fP,
+  void                  *\fIuser_data\fP);
+
+void ares_process_pending_write(ares_channel_t *\fIchannel\fP);
+
+.fi
+
+.SH DESCRIPTION
+The \fBares_set_pending_write_cb(3)\fP function sets a callback
+function \fIcallback\fP in the given ares channel handle \fIchannel\fP that
+is invoked whenever there is new pending TCP data to be written.  Since TCP
+is stream based, if there are multiple queries being enqueued back to back they
+can be sent as one large buffer. Normally a \fBsend(2)\fP syscall operation
+would be triggered for each query.
+
+When setting this callback, an event will be triggered when data is buffered,
+but not written.  This event is used to wake the caller's event loop which
+should call \fBares_process_pending_write(3)\fP using the channel associated
+with the callback.  Each time the callback is triggered must result in a call
+to \fBares_process_pending_write(3)\fP from the caller's event loop otherwise
+stalls and timeouts may occur.  The callback \fBmust not\fP call
+\fBares_process_pending_write(3)\fP directly as otherwise it would invalidate
+any advantage of this use-case.
+
+This is considered an optimization, especially when using TLS-based connections
+which add additional overhead to the data stream.  Due to the asyncronous nature
+of c-ares, there is no way to identify when a caller may be finished enqueuing
+queries via any of the possible public API calls such as
+\fBares_getaddrinfo(3)\fP or \fBares_search_dnsrec(3)\fP, so this is an
+enhancement to try to group query send operations together and will rely on the
+singaling latency involved in waking the user's event loop.
+
+If no callback is set, data will be written immediately to the socket, thus
+bypassing this optimization.
+
+This option cannot be used with \fIARES_OPT_EVENT_THREAD\fP passed to
+\fBares_init_options(3)\fP since the user has no event loop.  This optimization
+is automatically enabled when using the Event Thread as it sets the callback
+for its own internal signaling.
+
+.SH AVAILABILITY
+This function was first introduced in c-ares version 1.34.0.
+
+.SH SEE ALSO
+.BR ares_init_options (3)

@@ -1,0 +1,104 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_KEYEXCH_free</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_KEYEXCH_fetch, EVP_KEYEXCH_free, EVP_KEYEXCH_up_ref, EVP_KEYEXCH_get0_provider, EVP_KEYEXCH_is_a, EVP_KEYEXCH_do_all_provided, EVP_KEYEXCH_names_do_all, EVP_KEYEXCH_get0_name, EVP_KEYEXCH_get0_description, EVP_KEYEXCH_gettable_ctx_params, EVP_KEYEXCH_settable_ctx_params - Functions to manage EVP_KEYEXCH algorithm objects</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+
+EVP_KEYEXCH *EVP_KEYEXCH_fetch(OSSL_LIB_CTX *ctx, const char *algorithm,
+                               const char *properties);
+void EVP_KEYEXCH_free(EVP_KEYEXCH *exchange);
+int EVP_KEYEXCH_up_ref(EVP_KEYEXCH *exchange);
+OSSL_PROVIDER *EVP_KEYEXCH_get0_provider(const EVP_KEYEXCH *exchange);
+int EVP_KEYEXCH_is_a(const EVP_KEYEXCH *exchange, const char *name);
+const char *EVP_KEYEXCH_get0_name(const EVP_KEYEXCH *exchange);
+void EVP_KEYEXCH_do_all_provided(OSSL_LIB_CTX *libctx,
+                                 void (*fn)(EVP_KEYEXCH *exchange, void *arg),
+                                 void *arg);
+int EVP_KEYEXCH_names_do_all(const EVP_KEYEXCH *exchange,
+                             void (*fn)(const char *name, void *data),
+                             void *data);
+const char *EVP_KEYEXCH_get0_description(const EVP_KEYEXCH *keyexch);
+const OSSL_PARAM *EVP_KEYEXCH_gettable_ctx_params(const EVP_KEYEXCH *keyexch);
+const OSSL_PARAM *EVP_KEYEXCH_settable_ctx_params(const EVP_KEYEXCH *keyexch);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>EVP_KEYEXCH_fetch() fetches the key exchange implementation for the given <i>algorithm</i> from any provider offering it, within the criteria given by the <i>properties</i>. See <a href="../man7/crypto.html">&quot;ALGORITHM FETCHING&quot; in crypto(7)</a> for further information.</p>
+
+<p>The returned value must eventually be freed with EVP_KEYEXCH_free().</p>
+
+<p>EVP_KEYEXCH_free() decrements the reference count for the <b>EVP_KEYEXCH</b> structure. Typically this structure will have been obtained from an earlier call to EVP_KEYEXCH_fetch(). If the reference count drops to 0 then the structure is freed. If the argument is NULL, nothing is done.</p>
+
+<p>EVP_KEYEXCH_up_ref() increments the reference count for an <b>EVP_KEYEXCH</b> structure.</p>
+
+<p>EVP_KEYEXCH_get0_provider() returns the provider that <i>exchange</i> was fetched from.</p>
+
+<p>EVP_KEYEXCH_is_a() checks if <i>exchange</i> is an implementation of an algorithm that&#39;s identifiable with <i>name</i>.</p>
+
+<p>EVP_KEYEXCH_get0_name() returns the algorithm name from the provided implementation for the given <i>exchange</i>. Note that the <i>exchange</i> may have multiple synonyms associated with it. In this case the first name from the algorithm definition is returned. Ownership of the returned string is retained by the <i>exchange</i> object and should not be freed by the caller.</p>
+
+<p>EVP_KEYEXCH_names_do_all() traverses all names for the <i>exchange</i>, and calls <i>fn</i> with each name and <i>data</i>.</p>
+
+<p>EVP_KEYEXCH_get0_description() returns a description of the <i>keyexch</i>, meant for display and human consumption. The description is at the discretion of the <i>keyexch</i> implementation.</p>
+
+<p>EVP_KEYEXCH_do_all_provided() traverses all key exchange implementations by all activated providers in the library context <i>libctx</i>, and for each of the implementations, calls <i>fn</i> with the implementation method and <i>data</i> as arguments.</p>
+
+<p>EVP_KEYEXCH_gettable_ctx_params() and EVP_KEYEXCH_settable_ctx_params() return a constant <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> array that describes the names and types of key parameters that can be retrieved or set by a key exchange algorithm using <a href="../man3/EVP_PKEY_CTX_get_params.html">EVP_PKEY_CTX_get_params(3)</a> and <a href="../man3/EVP_PKEY_CTX_set_params.html">EVP_PKEY_CTX_set_params(3)</a>.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>EVP_KEYEXCH_fetch() returns a pointer to a <b>EVP_KEYEXCH</b> for success or NULL for failure.</p>
+
+<p>EVP_KEYEXCH_up_ref() returns 1 for success or 0 otherwise.</p>
+
+<p>EVP_KEYEXCH_names_do_all() returns 1 if the callback was called for all names. A return value of 0 means that the callback was not called for any names.</p>
+
+<p>EVP_KEYEXCH_is_a() returns 1 of <i>exchange</i> was identifiable, otherwise 0.</p>
+
+<p>EVP_KEYEXCH_gettable_ctx_params() and EVP_KEYEXCH_settable_ctx_params() return a constant <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> array or NULL on error.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/crypto.html">&quot;ALGORITHM FETCHING&quot; in crypto(7)</a>, <a href="../man3/OSSL_PROVIDER.html">OSSL_PROVIDER(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The functions described here were added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2019-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

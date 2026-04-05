@@ -1,0 +1,69 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>BIO_socket_wait</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>BIO_socket_wait, BIO_wait, BIO_do_connect_retry - BIO connection utility functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/bio.h&gt;
+
+#ifndef OPENSSL_NO_SOCK
+int BIO_socket_wait(int fd, int for_read, time_t max_time);
+#endif
+int BIO_wait(BIO *bio, time_t max_time, unsigned int nap_milliseconds);
+int BIO_do_connect_retry(BIO *bio, int timeout, int nap_milliseconds);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>BIO_socket_wait() waits on the socket <b>fd</b> for reading if <b>for_read</b> is not 0, else for writing, at most until <b>max_time</b>. It succeeds immediately if <b>max_time</b> == 0 (which means no timeout given).</p>
+
+<p>BIO_wait() waits at most until <b>max_time</b> on the given (typically socket-based) <b>bio</b>, for reading if <b>bio</b> is supposed to read, else for writing. It is used by BIO_do_connect_retry() and can be used together <a href="../man3/BIO_read.html">BIO_read(3)</a>. It succeeds immediately if <b>max_time</b> == 0 (which means no timeout given). If sockets are not available it supports polling by succeeding after sleeping at most the given <b>nap_milliseconds</b> in order to avoid a tight busy loop. Via <b>nap_milliseconds</b> the caller determines the polling granularity.</p>
+
+<p>BIO_do_connect_retry() connects via the given <b>bio</b>. It retries BIO_do_connect() as far as needed to reach a definite outcome, i.e., connection succeeded, timeout has been reached, or an error occurred. For nonblocking and potentially even non-socket BIOs it polls every <b>nap_milliseconds</b> and sleeps in between using BIO_wait(). If <b>nap_milliseconds</b> is &lt; 0 then a default value of 100 ms is used. If the <b>timeout</b> parameter is &gt; 0 this indicates the maximum number of seconds to wait until the connection is established or a definite error occurred. A value of 0 enables waiting indefinitely (i.e, no timeout), while a value &lt; 0 means that BIO_do_connect() is tried only once. The function may, directly or indirectly, invoke ERR_clear_error().</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>BIO_socket_wait(), BIO_wait(), and BIO_do_connect_retry() return -1 on error, 0 on timeout, and 1 on success.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/BIO_do_connect.html">BIO_do_connect(3)</a>, <a href="../man3/BIO_read.html">BIO_read(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>BIO_socket_wait(), BIO_wait(), and BIO_do_connect_retry() were added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2019-2020 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

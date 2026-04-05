@@ -1,0 +1,69 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OSSL_PARAM_dup</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OSSL_PARAM_dup, OSSL_PARAM_merge, OSSL_PARAM_free - OSSL_PARAM array copy functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/params.h&gt;
+
+OSSL_PARAM *OSSL_PARAM_dup(const OSSL_PARAM *params);
+OSSL_PARAM *OSSL_PARAM_merge(const OSSL_PARAM *params, const OSSL_PARAM *params1);
+void OSSL_PARAM_free(OSSL_PARAM *params);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>Algorithm parameters can be exported/imported from/to providers using arrays of <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a>. The following utility functions allow the parameters to be duplicated and merged with other <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> to assist in this process.</p>
+
+<p>OSSL_PARAM_dup() duplicates the parameter array <i>params</i>. This function does a deep copy of the data.</p>
+
+<p>OSSL_PARAM_merge() merges the parameter arrays <i>params</i> and <i>params1</i> into a new parameter array. If <i>params</i> and <i>params1</i> contain values with the same &#39;key&#39; then the value from <i>params1</i> will replace the <i>param</i> value. This function does a shallow copy of the parameters. Either <i>params</i> or <i>params1</i> may be NULL. The behaviour of the merge is unpredictable if <i>params</i> and <i>params1</i> contain the same key, and there are multiple entries within either array that have the same key.</p>
+
+<p>OSSL_PARAM_free() frees the parameter array <i>params</i> that was created using OSSL_PARAM_dup(), OSSL_PARAM_merge() or OSSL_PARAM_BLD_to_param(). If the argument to OSSL_PARAM_free() is NULL, nothing is done.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>The functions OSSL_PARAM_dup() and OSSL_PARAM_merge() return a newly allocated <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> array, or NULL if there was an error. If both parameters are NULL then NULL is returned.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a>, <a href="../man3/OSSL_PARAM_BLD.html">OSSL_PARAM_BLD(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The functions were added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2021-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

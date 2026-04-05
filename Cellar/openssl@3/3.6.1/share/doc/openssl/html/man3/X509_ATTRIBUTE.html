@@ -1,0 +1,184 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>X509_ATTRIBUTE</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>X509_ATTRIBUTE, X509at_get_attr, X509at_get_attr_count, X509at_get_attr_by_NID, X509at_get_attr_by_OBJ, X509at_delete_attr, X509at_add1_attr, X509at_add1_attr_by_OBJ, X509at_add1_attr_by_NID, X509at_add1_attr_by_txt, X509at_get0_data_by_OBJ, X509_ATTRIBUTE_create, X509_ATTRIBUTE_create_by_NID, X509_ATTRIBUTE_create_by_OBJ, X509_ATTRIBUTE_create_by_txt, X509_ATTRIBUTE_set1_object, X509_ATTRIBUTE_set1_data, X509_ATTRIBUTE_count, X509_ATTRIBUTE_get0_data, X509_ATTRIBUTE_get0_object, X509_ATTRIBUTE_get0_type - X509 attribute functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/x509.h&gt;
+
+typedef struct x509_attributes_st X509_ATTRIBUTE;
+
+int X509at_get_attr_count(const STACK_OF(X509_ATTRIBUTE) *x);
+int X509at_get_attr_by_NID(const STACK_OF(X509_ATTRIBUTE) *x, int nid,
+                           int lastpos);
+int X509at_get_attr_by_OBJ(const STACK_OF(X509_ATTRIBUTE) *sk,
+                           const ASN1_OBJECT *obj, int lastpos);
+X509_ATTRIBUTE *X509at_get_attr(const STACK_OF(X509_ATTRIBUTE) *x, int loc);
+X509_ATTRIBUTE *X509at_delete_attr(STACK_OF(X509_ATTRIBUTE) *x, int loc);
+STACK_OF(X509_ATTRIBUTE) *X509at_add1_attr(STACK_OF(X509_ATTRIBUTE) **x,
+                                           X509_ATTRIBUTE *attr);
+STACK_OF(X509_ATTRIBUTE) *X509at_add1_attr_by_OBJ(STACK_OF(X509_ATTRIBUTE)
+                                                  **x, const ASN1_OBJECT *obj,
+                                                  int type,
+                                                  const unsigned char *bytes,
+                                                  int len);
+STACK_OF(X509_ATTRIBUTE) *X509at_add1_attr_by_NID(STACK_OF(X509_ATTRIBUTE)
+                                                  **x, int nid, int type,
+                                                  const unsigned char *bytes,
+                                                  int len);
+STACK_OF(X509_ATTRIBUTE) *X509at_add1_attr_by_txt(STACK_OF(X509_ATTRIBUTE)
+                                                  **x, const char *attrname,
+                                                  int type,
+                                                  const unsigned char *bytes,
+                                                  int len);
+void *X509at_get0_data_by_OBJ(const STACK_OF(X509_ATTRIBUTE) *x,
+                              const ASN1_OBJECT *obj, int lastpos, int type);
+X509_ATTRIBUTE *X509_ATTRIBUTE_create(int nid, int atrtype, void *value);
+X509_ATTRIBUTE *X509_ATTRIBUTE_create_by_NID(X509_ATTRIBUTE **attr, int nid,
+                                             int atrtype, const void *data,
+                                             int len);
+X509_ATTRIBUTE *X509_ATTRIBUTE_create_by_OBJ(X509_ATTRIBUTE **attr,
+                                             const ASN1_OBJECT *obj,
+                                             int atrtype, const void *data,
+                                             int len);
+X509_ATTRIBUTE *X509_ATTRIBUTE_create_by_txt(X509_ATTRIBUTE **attr,
+                                             const char *atrname, int type,
+                                             const unsigned char *bytes,
+                                             int len);
+int X509_ATTRIBUTE_set1_object(X509_ATTRIBUTE *attr, const ASN1_OBJECT *obj);
+int X509_ATTRIBUTE_set1_data(X509_ATTRIBUTE *attr, int attrtype,
+                             const void *data, int len);
+void *X509_ATTRIBUTE_get0_data(X509_ATTRIBUTE *attr, int idx, int atrtype,
+                               void *data);
+int X509_ATTRIBUTE_count(const X509_ATTRIBUTE *attr);
+ASN1_OBJECT *X509_ATTRIBUTE_get0_object(X509_ATTRIBUTE *attr);
+ASN1_TYPE *X509_ATTRIBUTE_get0_type(X509_ATTRIBUTE *attr, int idx);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p><b>X509_ATTRIBUTE</b> objects are used by many standards including X509, X509_REQ, PKCS12, PKCS8, PKCS7 and CMS.</p>
+
+<p>The <b>X509_ATTRIBUTE</b> object is used to represent the ASN.1 Attribute as defined in RFC 5280, i.e.</p>
+
+<pre><code>Attribute ::= SEQUENCE {
+  type             AttributeType,
+  values    SET OF AttributeValue }
+
+AttributeType ::= OBJECT IDENTIFIER
+AttributeValue ::= ANY -- DEFINED BY AttributeType</code></pre>
+
+<p>For example CMS defines the signing-time attribute as:</p>
+
+<pre><code>id-signingTime OBJECT IDENTIFIER ::= { iso(1) member-body(2)
+    us(840) rsadsi(113549) pkcs(1) pkcs9(9) 5 }
+
+SigningTime ::= Time
+
+Time ::= CHOICE {
+  utcTime UTCTime,
+  generalizedTime GeneralizedTime }</code></pre>
+
+<p>In OpenSSL <b>AttributeType</b> maps to an <b>ASN1_OBJECT</b> object and <b>AttributeValue</b> maps to a list of <b>ASN1_TYPE</b> objects.</p>
+
+<p>The following functions are used for <b>X509_ATTRIBUTE</b> objects.</p>
+
+<p>X509at_get_attr_by_OBJ() finds the location of the first matching object <i>obj</i> in a list of attributes <i>sk</i>. The search starts at the position after <i>lastpos</i>. If the returned value is positive then it can be used on the next call to X509at_get_attr_by_OBJ() as the value of <i>lastpos</i> in order to iterate through the remaining attributes. <i>lastpos</i> can be set to any negative value on the first call, in order to start searching from the start of the list.</p>
+
+<p>X509at_get_attr_by_NID() is similar to X509at_get_attr_by_OBJ() except that it passes the numerical identifier (NID) <i>nid</i> associated with the object. See &lt;openssl/obj_mac.h&gt; for a list of NID_*.</p>
+
+<p>X509at_get_attr() returns the <b>X509_ATTRIBUTE</b> object at index <i>loc</i> in the list of attributes <i>x</i>. <i>loc</i> should be in the range from 0 to X509at_get_attr_count() - 1.</p>
+
+<p>X509at_delete_attr() removes the <b>X509_ATTRIBUTE</b> object at index <i>loc</i> in the list of attributes <i>x</i>.</p>
+
+<p>X509at_add1_attr() pushes a copy of the passed in <b>X509_ATTRIBUTE</b> object to the list <i>x</i>. Both <i>x</i> and <i>attr</i> must be non NULL or an error will occur. If <i>*x</i> is NULL then a new list is created, otherwise it uses the passed in list. An error will occur if an existing attribute (with the same attribute type) already exists in the attribute list.</p>
+
+<p>X509at_add1_attr_by_OBJ() creates a new <b>X509_ATTRIBUTE</b> using X509_ATTRIBUTE_set1_object() and X509_ATTRIBUTE_set1_data() to assign a new <i>obj</i> with type <i>type</i> and data <i>bytes</i> of length <i>len</i> and then pushes it to the attribute list <i>x</i>. Both <i>x</i> and <i>attr</i> must be non NULL or an error will occur. If <i>*x</i> is NULL then a new attribute list is created. If <i>obj</i> already exists in the attribute list then an error occurs.</p>
+
+<p>X509at_add1_attr_by_NID() is similar to X509at_add1_attr_by_OBJ() except that it passes the numerical identifier (NID) <i>nid</i> associated with the object. See &lt;openssl/obj_mac.h&gt; for a list of NID_*.</p>
+
+<p>X509at_add1_attr_by_txt() is similar to X509at_add1_attr_by_OBJ() except that it passes a name <i>attrname</i> associated with the object. See &lt;openssl/obj_mac.h&gt; for a list of SN_* names.</p>
+
+<p>X509_ATTRIBUTE_set1_object() assigns a <b>ASN1_OBJECT</b> <i>obj</i> to the attribute <i>attr</i>. If <i>attr</i> contained an existing <b>ASN1_OBJECT</b> then it is freed. An error occurs if either <i>attr</i> or <i>obj</i> are NULL, or if the passed in <i>obj</i> cannot be duplicated.</p>
+
+<p>X509_ATTRIBUTE_set1_data() pushes a new <b>ASN1_TYPE</b> object onto the <i>attr</i> attributes list. The new object is assigned a copy of the data in <i>data</i> of size <i>len</i>. If <i>attrtype</i> has flag <i>MBSTRING_FLAG</i> set then a table lookup using the <i>attr</i> attributes NID is used to set an <b>ASN1_STRING</b> using ASN1_STRING_set_by_NID(), and the passed in <i>data</i> must be in the format required for that object type or an error will occur. If <i>len</i> is not -1 then internally ASN1_STRING_type_new() is used with the passed in <i>attrtype</i>. If <i>attrtype</i> is 0 the call does nothing except return 1.</p>
+
+<p>X509_ATTRIBUTE_create() creates a new <b>X509_ATTRIBUTE</b> using the <i>nid</i> to set the <b>ASN1_OBJECT</b> OID and the <i>atrtype</i> and <i>value</i> to set the <b>ASN1_TYPE</b>.</p>
+
+<p>X509_ATTRIBUTE_create_by_OBJ() uses X509_ATTRIBUTE_set1_object() and X509_ATTRIBUTE_set1_data() to assign a new <i>obj</i> with type <i>atrtype</i> and data <i>data</i> of length <i>len</i>. If the passed in attribute <i>attr</i> OR <i>*attr</i> is NULL then a new <b>X509_ATTRIBUTE</b> will be returned, otherwise the passed in <b>X509_ATTRIBUTE</b> is used. Note that the ASN1_OBJECT <i>obj</i> is pushed onto the attributes existing list of objects, which could be an issue if the attributes &lt;ASN1_OBJECT&gt; was different.</p>
+
+<p>X509_ATTRIBUTE_create_by_NID() is similar to X509_ATTRIBUTE_create_by_OBJ() except that it passes the numerical identifier (NID) <i>nid</i> associated with the object. See &lt;openssl/obj_mac.h&gt; for a list of NID_*.</p>
+
+<p>X509_ATTRIBUTE_create_by_txt() is similar to X509_ATTRIBUTE_create_by_OBJ() except that it passes a name <i>atrname</i> associated with the object. See &lt;openssl/obj_mac.h&gt; for a list of SN_* names.</p>
+
+<p>X509_ATTRIBUTE_count() returns the number of <b>ASN1_TYPE</b> objects in an attribute <i>attr</i>.</p>
+
+<p>X509_ATTRIBUTE_get0_type() returns the <b>ASN1_TYPE</b> object at index <i>idx</i> in the attribute list <i>attr</i>. <i>idx</i> should be in the range of 0 to X509_ATTRIBUTE_count() - 1 or an error will occur.</p>
+
+<p>X509_ATTRIBUTE_get0_data() returns the data of an <b>ASN1_TYPE</b> object at index <i>idx</i> in the attribute <i>attr</i>. <i>data</i> is unused and can be set to NULL. An error will occur if the attribute type <i>atrtype</i> does not match the type of the <b>ASN1_TYPE</b> object at index <i>idx</i> OR if <i>atrtype</i> is either <b>V_ASN1_BOOLEAN</b> or <b>V_ASN1_NULL</b> OR if the <i>idx</i> is not in the range 0 to X509_ATTRIBUTE_count() - 1.</p>
+
+<p>X509at_get0_data_by_OBJ() finds the first attribute in an attribute list <i>x</i> that matches the <i>obj</i> starting at index <i>lastpos</i> and returns the data retrieved from the found attributes first <b>ASN1_TYPE</b> object. An error will occur if the attribute type <i>type</i> does not match the type of the <b>ASN1_TYPE</b> object OR if <i>type</i> is either <b>V_ASN1_BOOLEAN</b> or <b>V_ASN1_NULL</b> OR the attribute is not found. If <i>lastpos</i> is less than -1 then an error will occur if there are multiple objects in the list <i>x</i> that match <i>obj</i>. If <i>lastpos</i> is less than -2 then an error will occur if there is more than one <b>ASN1_TYPE</b> object in the found attribute.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>X509at_get_attr_count() returns the number of attributes in the list <i>x</i> or -1 if <i>x</i> is NULL.</p>
+
+<p>X509at_get_attr_by_OBJ() returns -1 if either the list is empty OR the object is not found, otherwise it returns the location of the object in the list.</p>
+
+<p>X509at_get_attr_by_NID() is similar to X509at_get_attr_by_OBJ(), except that it returns -2 if the <i>nid</i> is not known by OpenSSL.</p>
+
+<p>X509at_get_attr() returns either an <b>X509_ATTRIBUTE</b> or NULL if there is a error.</p>
+
+<p>X509at_delete_attr() returns either the removed <b>X509_ATTRIBUTE</b> or NULL if there is a error.</p>
+
+<p>X509_ATTRIBUTE_count() returns -1 on error, otherwise it returns the number of <b>ASN1_TYPE</b> elements.</p>
+
+<p>X509_ATTRIBUTE_get0_type() returns NULL on error, otherwise it returns a <b>ASN1_TYPE</b> object.</p>
+
+<p>X509_ATTRIBUTE_get0_data() returns NULL if an error occurs, otherwise it returns the data associated with an <b>ASN1_TYPE</b> object.</p>
+
+<p>X509_ATTRIBUTE_set1_object() and X509_ATTRIBUTE_set1_data() returns 1 on success, or 0 otherwise.</p>
+
+<p>X509_ATTRIBUTE_create(), X509_ATTRIBUTE_create_by_OBJ(), X509_ATTRIBUTE_create_by_NID() and X509_ATTRIBUTE_create_by_txt() return either a <b>X509_ATTRIBUTE</b> on success, or NULL if there is a error.</p>
+
+<p>X509at_add1_attr(), X509at_add1_attr_by_OBJ(), X509at_add1_attr_by_NID() and X509at_add1_attr_by_txt() return NULL on error, otherwise they return a list of <b>X509_ATTRIBUTE</b>.</p>
+
+<p>X509at_get0_data_by_OBJ() returns the data retrieved from the found attributes first <b>ASN1_TYPE</b> object, or NULL if an error occurs.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ASN1_TYPE_get.html">ASN1_TYPE_get(3)</a>, <a href="../man3/ASN1_INTEGER_get.html">ASN1_INTEGER_get(3)</a>, <a href="../man3/ASN1_ENUMERATED_get.html">ASN1_ENUMERATED_get(3)</a>, <a href="../man3/ASN1_STRING_get0_data.html">ASN1_STRING_get0_data(3)</a>, <a href="../man3/ASN1_STRING_length.html">ASN1_STRING_length(3)</a>, <a href="../man3/ASN1_STRING_type.html">ASN1_STRING_type(3)</a>, <a href="../man3/X509_REQ_get_attr.html">X509_REQ_get_attr(3)</a>, <a href="../man3/EVP_PKEY_get_attr.html">EVP_PKEY_get_attr(3)</a>, <a href="../man3/CMS_signed_get_attr.html">CMS_signed_get_attr(3)</a>, <a href="../man3/PKCS8_pkey_get0_attrs.html">PKCS8_pkey_get0_attrs(3)</a>,</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2023-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

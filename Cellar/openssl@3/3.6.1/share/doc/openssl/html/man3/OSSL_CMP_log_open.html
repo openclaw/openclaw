@@ -1,0 +1,100 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OSSL_CMP_log_open</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OSSL_CMP_log_open, OSSL_CMP_log_close, OSSL_CMP_severity, OSSL_CMP_LOG_EMERG, OSSL_CMP_LOG_ALERT, OSSL_CMP_LOG_CRIT, OSSL_CMP_LOG_ERR, OSSL_CMP_LOG_WARNING, OSSL_CMP_LOG_NOTICE, OSSL_CMP_LOG_INFO, OSSL_CMP_LOG_DEBUG, OSSL_CMP_LOG_TRACE,</p>
+
+<p>OSSL_CMP_log_cb_t, OSSL_CMP_print_to_bio, OSSL_CMP_print_errors_cb - functions for logging and error reporting</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/cmp_util.h&gt;
+
+int  OSSL_CMP_log_open(void);
+void OSSL_CMP_log_close(void);
+
+/* severity level declarations resemble those from syslog.h */
+typedef int OSSL_CMP_severity;
+#define OSSL_CMP_LOG_EMERG   0
+#define OSSL_CMP_LOG_ALERT   1
+#define OSSL_CMP_LOG_CRIT    2
+#define OSSL_CMP_LOG_ERR     3
+#define OSSL_CMP_LOG_WARNING 4
+#define OSSL_CMP_LOG_NOTICE  5
+#define OSSL_CMP_LOG_INFO    6
+#define OSSL_CMP_LOG_DEBUG   7
+#define OSSL_CMP_LOG_TRACE   8
+
+typedef int (*OSSL_CMP_log_cb_t)(const char *component,
+                                 const char *file, int line,
+                                 OSSL_CMP_severity level, const char *msg);
+int OSSL_CMP_print_to_bio(BIO *bio, const char *component, const char *file,
+                          int line, OSSL_CMP_severity level, const char *msg);
+void OSSL_CMP_print_errors_cb(OSSL_CMP_log_cb_t log_fn);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The logging and error reporting facility described here contains convenience functions for CMP-specific logging, including a string prefix mirroring the severity levels of syslog.h, and enhancements of the error queue mechanism needed for large diagnostic messages produced by the CMP library in case of certificate validation failures.</p>
+
+<p>When an interesting activity is performed or an error occurs, some detail should be provided for user information, debugging, and auditing purposes. A CMP application can obtain this information by providing a callback function with the following type:</p>
+
+<pre><code>typedef int (*OSSL_CMP_log_cb_t)(const char *component,
+                                 const char *file, int line,
+                                 OSSL_CMP_severity level, const char *msg);</code></pre>
+
+<p>The parameters may provide some component info (which may be a module name and/or function name) or NULL, a file pathname or NULL, a line number or 0 indicating the source code location, a severity level, and a message string describing the nature of the event, terminated by &#39;\n&#39;.</p>
+
+<p>Even when an activity is successful some warnings may be useful and some degree of auditing may be required. Therefore, the logging facility supports a severity level and the callback function has a <i>level</i> parameter indicating such a level, such that error, warning, info, debug, etc. can be treated differently. The callback is activated only when the severity level is sufficient according to the current level of verbosity, which by default is <b>OSSL_CMP_LOG_INFO</b>.</p>
+
+<p>The callback function may itself do non-trivial tasks like writing to a log file or remote stream, which in turn may fail. Therefore, the function should return 1 on success and 0 on failure.</p>
+
+<p>OSSL_CMP_log_open() initializes the CMP-specific logging facility to output everything to STDOUT. It fails if the integrated tracing is disabled or STDIO is not available. It may be called during application startup. Alternatively, <a href="../man3/OSSL_CMP_CTX_set_log_cb.html">OSSL_CMP_CTX_set_log_cb(3)</a> can be used for more flexibility. As long as neither if the two is used any logging output is ignored.</p>
+
+<p>OSSL_CMP_log_close() may be called when all activities are finished to flush any pending CMP-specific log output and deallocate related resources. It may be called multiple times. It does get called at OpenSSL shutdown.</p>
+
+<p>OSSL_CMP_print_to_bio() prints the given component info, filename, line number, severity level, and log message or error queue message to the given <i>bio</i>. <i>component</i> usually is a function or module name. If it is NULL, empty, or &quot;(unknown function)&quot; then &quot;CMP&quot; is used as fallback.</p>
+
+<p>OSSL_CMP_print_errors_cb() outputs any entries in the OpenSSL error queue. It is similar to <a href="../man3/ERR_print_errors_cb.html">ERR_print_errors_cb(3)</a> but uses the CMP log callback function <i>log_fn</i> for uniformity with CMP logging if not NULL. Otherwise it prints to STDERR using <a href="../man3/OSSL_CMP_print_to_bio.html">OSSL_CMP_print_to_bio(3)</a> (unless <b>OPENSSL_NO_STDIO</b> is defined).</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>OSSL_CMP_log_close() and OSSL_CMP_print_errors_cb() do not return anything.</p>
+
+<p>All other functions return 1 on success, 0 on error.</p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The OpenSSL CMP support was added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2007-2022 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

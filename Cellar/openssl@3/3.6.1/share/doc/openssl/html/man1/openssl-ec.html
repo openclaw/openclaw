@@ -1,0 +1,216 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>openssl-ec</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#OPTIONS">OPTIONS</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>openssl-ec - EC key processing</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<p><b>openssl</b> <b>ec</b> [<b>-help</b>] [<b>-inform</b> <b>DER</b>|<b>PEM</b>|<b>P12</b>|<b>ENGINE</b>] [<b>-outform</b> <b>DER</b>|<b>PEM</b>] [<b>-in</b> <i>filename</i>|<i>uri</i>] [<b>-passin</b> <i>arg</i>] [<b>-out</b> <i>filename</i>] [<b>-passout</b> <i>arg</i>] [<b>-des</b>] [<b>-des3</b>] [<b>-idea</b>] [<b>-text</b>] [<b>-noout</b>] [<b>-param_out</b>] [<b>-pubin</b>] [<b>-pubout</b>] [<b>-conv_form</b> <i>arg</i>] [<b>-param_enc</b> <i>arg</i>] [<b>-no_public</b>] [<b>-check</b>] [<b>-engine</b> <i>id</i>] [<b>-provider</b> <i>name</i>] [<b>-provider-path</b> <i>path</i>] [<b>-provparam</b> <i>[name:]key=value</i>] [<b>-propquery</b> <i>propq</i>]</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The <a href="../man1/openssl-ec.html">openssl-ec(1)</a> command processes EC keys. They can be converted between various forms and their components printed out. <b>Note</b> OpenSSL uses the private key format specified in &#39;SEC 1: Elliptic Curve Cryptography&#39; (http://www.secg.org/). To convert an OpenSSL EC private key into the PKCS#8 private key format use the <a href="../man1/openssl-pkcs8.html">openssl-pkcs8(1)</a> command.</p>
+
+<h1 id="OPTIONS">OPTIONS</h1>
+
+<dl>
+
+<dt id="help"><b>-help</b></dt>
+<dd>
+
+<p>Print out a usage message.</p>
+
+</dd>
+<dt id="inform-DER-PEM-P12-ENGINE"><b>-inform</b> <b>DER</b>|<b>PEM</b>|<b>P12</b>|<b>ENGINE</b></dt>
+<dd>
+
+<p>The key input format; unspecified by default. See <a href="../man1/openssl-format-options.html">openssl-format-options(1)</a> for details.</p>
+
+</dd>
+<dt id="outform-DER-PEM"><b>-outform</b> <b>DER</b>|<b>PEM</b></dt>
+<dd>
+
+<p>The key output format; the default is <b>PEM</b>. See <a href="../man1/openssl-format-options.html">openssl-format-options(1)</a> for details.</p>
+
+<p>Private keys are an SEC1 private key or PKCS#8 format. Public keys are a <b>SubjectPublicKeyInfo</b> as specified in IETF RFC 3280.</p>
+
+</dd>
+<dt id="in-filename-uri"><b>-in</b> <i>filename</i>|<i>uri</i></dt>
+<dd>
+
+<p>This specifies the input to read a key from or standard input if this option is not specified. If the key is encrypted a pass phrase will be prompted for.</p>
+
+</dd>
+<dt id="out-filename"><b>-out</b> <i>filename</i></dt>
+<dd>
+
+<p>This specifies the output filename to write a key to or standard output by is not specified. If any encryption options are set then a pass phrase will be prompted for. The output filename should <b>not</b> be the same as the input filename.</p>
+
+</dd>
+<dt id="passin-arg--passout-arg"><b>-passin</b> <i>arg</i>, <b>-passout</b> <i>arg</i></dt>
+<dd>
+
+<p>The password source for the input and output file. For more information about the format of <b>arg</b> see <a href="../man1/openssl-passphrase-options.html">openssl-passphrase-options(1)</a>.</p>
+
+</dd>
+<dt id="des--des3--idea"><b>-des</b>|<b>-des3</b>|<b>-idea</b></dt>
+<dd>
+
+<p>These options encrypt the private key with the DES, triple DES, IDEA or any other cipher supported by OpenSSL before outputting it. A pass phrase is prompted for. If none of these options is specified the key is written in plain text. This means that using this command to read in an encrypted key with no encryption option can be used to remove the pass phrase from a key, or by setting the encryption options it can be use to add or change the pass phrase. These options can only be used with PEM format output files.</p>
+
+</dd>
+<dt id="text"><b>-text</b></dt>
+<dd>
+
+<p>Prints out the public, private key components and parameters.</p>
+
+</dd>
+<dt id="noout"><b>-noout</b></dt>
+<dd>
+
+<p>This option prevents output of the encoded version of the key.</p>
+
+</dd>
+<dt id="param_out"><b>-param_out</b></dt>
+<dd>
+
+<p>Print the elliptic curve parameters.</p>
+
+</dd>
+<dt id="pubin"><b>-pubin</b></dt>
+<dd>
+
+<p>By default a private key is read from the input. With this option a public key is read instead. If the input contains no public key but a private key, its public part is used.</p>
+
+</dd>
+<dt id="pubout"><b>-pubout</b></dt>
+<dd>
+
+<p>By default a private key is output. With this option a public key will be output instead. This option is automatically set if the input is a public key.</p>
+
+</dd>
+<dt id="conv_form-arg"><b>-conv_form</b> <i>arg</i></dt>
+<dd>
+
+<p>This specifies how the points on the elliptic curve are converted into octet strings. Possible values are: <b>compressed</b>, <b>uncompressed</b> (the default value) and <b>hybrid</b>. For more information regarding the point conversion forms please read the X9.62 standard. <b>Note</b> Due to patent issues the <b>compressed</b> option is disabled by default for binary curves and can be enabled by defining the preprocessor macro <b>OPENSSL_EC_BIN_PT_COMP</b> at compile time.</p>
+
+</dd>
+<dt id="param_enc-arg"><b>-param_enc</b> <i>arg</i></dt>
+<dd>
+
+<p>This specifies how the elliptic curve parameters are encoded. Possible value are: <b>named_curve</b>, i.e. the ec parameters are specified by an OID, or <b>explicit</b> where the ec parameters are explicitly given (see RFC 3279 for the definition of the EC parameters structures). The default value is <b>named_curve</b>. <b>Note</b> the <b>implicitlyCA</b> alternative, as specified in RFC 3279, is currently not implemented in OpenSSL.</p>
+
+</dd>
+<dt id="no_public"><b>-no_public</b></dt>
+<dd>
+
+<p>This option omits the public key components from the private key output.</p>
+
+</dd>
+<dt id="check"><b>-check</b></dt>
+<dd>
+
+<p>This option checks the consistency of an EC private or public key.</p>
+
+</dd>
+<dt id="engine-id"><b>-engine</b> <i>id</i></dt>
+<dd>
+
+<p>See <a href="../man1/openssl.html">&quot;Engine Options&quot; in openssl(1)</a>. This option is deprecated.</p>
+
+</dd>
+<dt id="provider-name"><b>-provider</b> <i>name</i></dt>
+<dd>
+
+</dd>
+<dt id="provider-path-path"><b>-provider-path</b> <i>path</i></dt>
+<dd>
+
+</dd>
+<dt id="provparam-name:-key-value"><b>-provparam</b> <i>[name:]key=value</i></dt>
+<dd>
+
+</dd>
+<dt id="propquery-propq"><b>-propquery</b> <i>propq</i></dt>
+<dd>
+
+<p>See <a href="../man1/openssl.html">&quot;Provider Options&quot; in openssl(1)</a>, <a href="../man7/provider.html">provider(7)</a>, and <a href="../man7/property.html">property(7)</a>.</p>
+
+</dd>
+</dl>
+
+<p>The <a href="../man1/openssl-pkey.html">openssl-pkey(1)</a> command is capable of performing all the operations this command can, as well as supporting other public key types.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>The documentation for the <a href="../man1/openssl-pkey.html">openssl-pkey(1)</a> command contains examples equivalent to the ones listed here.</p>
+
+<p>To encrypt a private key using triple DES:</p>
+
+<pre><code>openssl ec -in key.pem -des3 -out keyout.pem</code></pre>
+
+<p>To convert a private key from PEM to DER format:</p>
+
+<pre><code>openssl ec -in key.pem -outform DER -out keyout.der</code></pre>
+
+<p>To print out the components of a private key to standard output:</p>
+
+<pre><code>openssl ec -in key.pem -text -noout</code></pre>
+
+<p>To just output the public part of a private key:</p>
+
+<pre><code>openssl ec -in key.pem -pubout -out pubkey.pem</code></pre>
+
+<p>To change the parameters encoding to <b>explicit</b>:</p>
+
+<pre><code>openssl ec -in key.pem -param_enc explicit -out keyout.pem</code></pre>
+
+<p>To change the point conversion form to <b>compressed</b>:</p>
+
+<pre><code>openssl ec -in key.pem -conv_form compressed -out keyout.pem</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man1/openssl.html">openssl(1)</a>, <a href="../man1/openssl-pkey.html">openssl-pkey(1)</a>, <a href="../man1/openssl-ecparam.html">openssl-ecparam(1)</a>, <a href="../man1/openssl-dsa.html">openssl-dsa(1)</a>, <a href="../man1/openssl-rsa.html">openssl-rsa(1)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The <b>-engine</b> option was deprecated in OpenSSL 3.0.</p>
+
+<p>The <b>-conv_form</b> and <b>-no_public</b> options are no longer supported with keys loaded from an engine in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2003-2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

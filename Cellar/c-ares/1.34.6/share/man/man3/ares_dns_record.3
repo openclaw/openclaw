@@ -1,0 +1,455 @@
+.\" Copyright (C) 2023 The c-ares project and its contributors.
+.\" SPDX-License-Identifier: MIT
+.\"
+.TH ARES_DNS_RECORD 3 "12 November 2023"
+.SH NAME
+ares_dns_class_t, ares_dns_flags_t, ares_dns_opcode_t, ares_dns_parse,
+ares_dns_rcode_t, ares_dns_record_create, ares_dns_record_destroy,
+ares_dns_record_get_flags, ares_dns_record_get_id, ares_dns_record_get_opcode,
+ares_dns_record_get_rcode, ares_dns_record_query_add, ares_dns_record_query_cnt,
+ares_dns_record_query_get, ares_dns_rec_type_t, ares_dns_write \-
+DNS Record parsing, writing, creating and destroying functions.
+.SH SYNOPSIS
+.nf
+#include <ares.h>
+
+void ares_dns_record_destroy(ares_dns_record_t *dnsrec);
+
+ares_status_t ares_dns_parse(const unsigned char *buf,
+                             size_t buf_len, unsigned int flags,
+                             ares_dns_record_t **dnsrec);
+
+ares_status_t ares_dns_write(const ares_dns_record_t *dnsrec,
+                             unsigned char **buf, size_t *buf_len);
+
+ares_status_t ares_dns_record_create(ares_dns_record_t **dnsrec,
+                                     unsigned short      id,
+                                     unsigned short      flags,
+                                     ares_dns_opcode_t   opcode,
+                                     ares_dns_rcode_t    rcode);
+
+ares_dns_record_t *ares_dns_record_duplicate(const ares_dns_record_t *dnsrec);
+
+unsigned short ares_dns_record_get_id(const ares_dns_record_t *dnsrec);
+
+ares_bool_t ares_dns_record_set_id(ares_dns_record_t *dnsrec,
+                                   unsigned short id);
+
+unsigned short ares_dns_record_get_flags(const ares_dns_record_t *dnsrec);
+
+ares_dns_opcode_t ares_dns_record_get_opcode(const ares_dns_record_t *dnsrec);
+
+ares_dns_rcode_t ares_dns_record_get_rcode(const ares_dns_record_t *dnsrec);
+
+ares_status_t ares_dns_record_query_add(ares_dns_record_t  *dnsrec,
+                                        const char         *name,
+                                        ares_dns_rec_type_t qtype,
+                                        ares_dns_class_t    qclass);
+
+ares_status_t ares_dns_record_query_set_name(ares_dns_record_t  *dnsrec,
+                                             size_t              idx,
+                                             const char         *name);
+
+ares_status_t ares_dns_record_query_set_type(ares_dns_record_t  *dnsrec,
+                                             size_t              idx,
+                                             ares_dns_rec_type_t qtype);
+
+size_t ares_dns_record_query_cnt(const ares_dns_record_t *dnsrec);
+
+ares_status_t ares_dns_record_query_get(const ares_dns_record_t *dnsrec,
+                                        size_t idx, const char **name,
+                                        ares_dns_rec_type_t *qtype,
+                                        ares_dns_class_t *qclass);
+
+.fi
+.SH ENUMERATIONS
+
+.B ares_dns_rec_type_t -
+DNS Record types handled by c-ares.  Some record types may only be valid
+on requests, and some may only be valid on responses:
+.RS 4
+.B ARES_REC_TYPE_A
+- Host address
+.br
+.B ARES_REC_TYPE_NS
+- Authoritative server
+.br
+.B ARES_REC_TYPE_CNAME
+- Canonical name
+.br
+.B ARES_REC_TYPE_SOA
+- Start of authority zone
+.br
+.B ARES_REC_TYPE_PTR
+- Domain name pointer
+.br
+.B ARES_REC_TYPE_HINFO
+- Host information
+.br
+.B ARES_REC_TYPE_MX
+- Mail routing information
+.br
+.B ARES_REC_TYPE_TXT
+- Text strings
+.br
+.B ARES_REC_TYPE_SIG
+- RFC 2535. RFC 2931. SIG Record
+.br
+.B ARES_REC_TYPE_AAAA
+- RFC 3596. Ip6 Address
+.br
+.B ARES_REC_TYPE_SRV
+- RFC 2782. Server Selection
+.br
+.B ARES_REC_TYPE_NAPTR
+- RFC 3403. Naming Authority Pointer
+.br
+.B ARES_REC_TYPE_OPT
+- RFC 6891. EDNS0 option (meta-RR). Pseudo Record.
+.br
+.B ARES_REC_TYPE_TLSA
+- RFC 6698. DNS-Based Authentication of Named Entities (DANE) Transport Layer Security (TLS) Protocol: TLSA
+.br
+.B ARES_REC_TYPE_SVCB
+- RFC 9460. General Purpose Service Binding
+.br
+.B ARES_REC_TYPE_HTTPS -
+- RFC 9460. Service Binding type for use with HTTPS
+.br
+.B ARES_REC_TYPE_ANY
+- Wildcard match.  Not response RR
+.br
+.B ARES_REC_TYPE_URI
+- RFC 7553. Uniform Resource Identifier
+.br
+.B ARES_REC_TYPE_CAA
+- RFC 6844. Certification Authority Authorization
+.br
+.B ARES_REC_TYPE_RAW_RR
+- Used as an indicator that the RR record is not parsed, but provided in wire
+format
+.br
+.RE
+
+.B ares_dns_class_t -
+DNS Classes for requests and responses:
+.RS 4
+.B ARES_CLASS_IN
+- Internet
+.br
+.B ARES_CLASS_CHAOS
+- CHAOS
+.br
+.B ARES_CLASS_HESOID
+- Hesoid [Dyer 87]
+.br
+.B ARES_CLASS_NONE
+- RFC 2136
+.br
+.B ARES_CLASS_ANY
+- Any class (requests only)
+.br
+.RE
+
+.B ares_dns_opcode_t -
+DNS Header Opcodes:
+.RS 4
+.B ARES_OPCODE_QUERY
+- Standard query
+.br
+.B ARES_OPCODE_IQUERY
+- Inverse query. Obsolete
+.br
+.B ARES_OPCODE_STATUS
+- Name server status query
+.br
+.B ARES_OPCODE_NOTIFY
+- Zone change notification (RFC 1996)
+.br
+.B ARES_OPCODE_UPDATE
+- Zone update message (RFC 2136)
+.br
+.RE
+
+.B ares_dns_flags_t -
+DNS Header Flags:
+.RS 4
+.B ARES_FLAG_QR
+- QR. If set, is a response
+.br
+.B ARES_FLAG_AA
+- Authoritative Answer. If set, is authoritative
+.br
+.B ARES_FLAG_TC
+- Truncation. If set, is truncated response
+.br
+.B ARES_FLAG_RD
+- Recursion Desired. If set, recursion is desired
+.br
+.B ARES_FLAG_RA
+- Recursion Available. If set, server supports recursion
+.br
+.B ARES_FLAG_AD
+- RFC 2065. Authentic Data bit indicates in a response that the data included
+has been verified by the server providing it
+.br
+.B ARES_FLAG_CD
+- RFC 2065. Checking Disabled bit indicates in a query that non-verified data
+is acceptable to the resolver sending the query
+.br
+.RE
+
+.B ares_dns_rcode_t -
+DNS Response codes from server:
+.RS 4
+.B ARES_RCODE_NOERROR
+- Success
+.br
+.B ARES_RCODE_FORMERR
+- Format error. The name server was unable to interpret the query
+.br
+.B ARES_RCODE_SERVFAIL
+- Server Failure. The name server was unable to process this query due to a
+problem with the nameserver
+.br
+.B ARES_RCODE_NXDOMAIN
+- Name Error.  Meaningful only for responses from an authoritative name server,
+this code signifies that the domain name referenced in the query does not exist.
+.br
+.B ARES_RCODE_NOTIMP
+- Not implemented.  The name server does not support the requested kind of query
+.br
+.B ARES_RCODE_REFUSED
+- Refused. The name server refuses to perform the specified operation for policy
+reasons.
+.br
+.B ARES_RCODE_YXDOMAIN
+- RFC 2136. Some name that ought not to exist, does exist
+.br
+.B ARES_RCODE_YXRRSET
+- RFC 2136. Some RRset that ought to not exist, does exist
+.br
+.B ARES_RCODE_NXRRSET
+- RFC 2136. Some RRset that ought to exist, does not exist
+.br
+.B ARES_RCODE_NOTAUTH
+- RFC 2136. The server is not authoritative for the zone named in the Zone section.
+.br
+.B ARES_RCODE_NOTZONE
+- RFC 2136. A name used in the Prerequisite or Update Section is not within the
+zone denoted by the Zone Section.
+.br
+.B ARES_RCODE_DSOTYPEI
+- RFC 8409. DSO-TYPE Not implemented
+.br
+.B ARES_RCODE_BADSIG
+- RFC 8945. TSIG Signature Failure
+.br
+.B ARES_RCODE_BADKEY
+- RFC 8945. Key not recognized
+.br
+.B ARES_RCODE_BADTIME
+- RFC 8945. Signature out of time window
+.br
+.B ARES_RCODE_BADMODE
+- RFC 2930. Bad TKEY Mode
+.br
+.B ARES_RCODE_BADNAME
+- RFC 2930. Duplicate Key Name
+.br
+.B ARES_RCODE_BADALG
+- RFC 2930. Algorithm not supported
+.br
+.B ARES_RCODE_BADTRUNC
+- RFC 8945. Bad Truncation
+.br
+.B ARES_RCODE_BADCOOKIE
+- RFC 7973. Bad/missing Server Cookie
+.br
+.RE
+
+.B ares_dns_parse_flags_t -
+Flags for altering \fIares_dns_parse(3)\fP behaviour:
+.RS 4
+.B ARES_DNS_PARSE_AN_BASE_RAW
+- Parse Answer Section from RFC 1035 that allow name compression as RAW RR type
+.br
+.B ARES_DNS_PARSE_NS_BASE_RAW
+- Parse Authority Section from RFC 1035 that allow name compression as RAW RR type
+.br
+.B ARES_DNS_PARSE_AR_BASE_RAW
+- Parse Additional Section from RFC 1035 that allow name compression as RAW RR type
+.br
+.B ARES_DNS_PARSE_AN_EXT_RAW
+- Parse Answer Section from later RFCs (no name compression) as RAW RR type
+.br
+.B ARES_DNS_PARSE_NS_EXT_RAW
+- Parse Authority Section from later RFCs (no name compression) as RAW RR type
+.br
+.B ARES_DNS_PARSE_AR_EXT_RAW
+- Parse Additional Section from later RFCs (no name compression) as RAW RR type
+.br
+.RE
+
+.SH DESCRIPTION
+
+The \fIares_dns_record_destroy(3)\fP function destroys the memory associated
+with the dns record created by either \fIares_dns_record_create(3)\fP or
+\fIares_dns_parse(3)\fP passed in via
+.IR dnsrec .
+
+The \fIares_dns_parse(3)\fP function parses the buffer provided in
+.IR buf
+with length provided in
+.IR buf_len.
+The
+.IR flags
+parameter can be one or more \fIares_dns_parse_flags_t\fP, or zero if no
+flags are needed.  The resulting dns record data structure is stored into the
+variable pointed to by
+.IR dnsrec
+and must be destroyed using \fIares_dns_record_destroy(3)\fP.
+
+The \fIares_dns_write(3)\fP function takes a populated DNS record structure in
+.IR dnsrec
+and writes a wire-format DNS message into the variable pointed to by
+.IR buf
+and writes the length of the buffer into the variable pointed to by
+.IR buf_len.
+The buffer must be destroyed using \fIares_free_string(3)\fP.
+
+The \fIares_dns_record_create(3)\fP function creates an empty DNS record structure
+in the variable pointed to by
+.IR dnsrec.
+The
+.IR id
+parameter is the DNS message id, however if passing to \fIares_send(3)\fP this
+identifier will be overwritten, so should typically be 0. The
+.IR flags
+parameter is one or more \fIares_dns_flags_t\fP.  The opcode is passed in the
+.IR opcode
+parameter and should typically be \fIARES_OPCODE_QUERY\fP.  The response code
+is meant mostly for responses and is passed in the
+.IR rcode
+parameter and is typically \fPARES_RCODE_NOERROR\fP.
+
+The \fIares_dns_record_duplicate(3)\fP function duplicates an existing DNS
+record structure.  This may be useful if needing to save a result as retrieved
+from \fIares_send_dnsrec(3)\fP or \fIares_search_dnsrec(3)\fP.  The structure
+to be duplicated is passed in the
+.IR dnsrec
+parameter, and the duplicated copy is returned, or NULL on error such as
+out of memory.
+
+The \fIares_dns_record_get_id(3)\fP function is used to retrieve the DNS
+message id from the DNS record provided in the
+.IR dnsrec
+parameter.
+
+The \fIares_dns_record_set_id(3)\fP function is used to set the DNS
+message id in the
+.IR id
+parameter from the DNS record provided in the
+.IR dnsrec
+parameter.  This id will be overwritten when passing the record to c-ares,
+so mostly exists for external purposes.
+
+The \fIares_dns_record_get_flags(3)\fP function is used to retrieve the DNS
+message flags from the DNS record provided in the
+.IR dnsrec
+parameter.
+
+The \fIares_dns_record_get_opcode(3)\fP function is used to retrieve the DNS
+message flags from the DNS record provided in the
+.IR dnsrec
+parameter.
+
+The \fIares_dns_record_get_rcode(3)\fP function is used to retrieve the DNS
+message response code from the DNS record provided in the
+.IR dnsrec
+parameter.
+
+
+The \fIares_dns_record_query_add(3)\fP function is used to add a question to
+the DNS record provided in the
+.IR dnsrec
+parameter.  The domain name specified for the question is provided in the
+.IR name
+parameter, along with the question type in the
+.IR qtype
+parameter and the question class (typically \fIARES_CLASS_IN\fP) in the
+.IR qclass
+parameter.
+
+The \fIares_dns_record_query_set_name(3)\fP function is used to modify the
+question name in the DNS record provided in the
+.IR dnsrec
+parameter.  The index of the query, which must be less than
+\fIares_dns_record_query_cnt(3)\fP, is provided in the
+.IR idx
+parameter. The new domain name is provided in the
+.IR name
+parameter. Care should be taken as this will cause invalidation of any
+\fIname\fP pointer retrieved from \fIares_dns_Record_query_get(3)\fP.  This
+function is useful if sending multiple similar queries without re-creating
+the entire DNS query.
+
+The \fIares_dns_record_query_set_type(3)\fP function is used to modify the
+question type in the DNS record provided in the
+.IR dnsrec
+parameter.  The index of the query, which must be less than
+\fIares_dns_record_query_cnt(3)\fP, is provided in the
+.IR idx
+parameter. The new query type is provided in the
+.IR qtype
+parameter.
+
+The \fIares_dns_record_query_cnt(3)\fP function is used to retrieve the number
+of DNS questions in the DNS record provided in the
+.IR dnsrec
+parameter.
+
+The \fIares_dns_record_query_get(3)\fP function is used to retrieve the details
+of a single DNS question in the provided
+.IR dnsrec
+parameter.  The index provided in the
+.IR idx
+parameter must be less than the value returned from \fIares_dns_record_query_cnt(3)\fP.
+The DNS question name will be returned in the variable pointed to by the
+.IR name
+parameter, this may be provided as NULL if the name is not needed.  This pointer
+will be invalided by any call to \fIares_dns_record_query_set_name(3)\fP.
+The DNS question type will be returned in the variable pointed to by the
+.IR qtype
+parameter, this may be provided as NULL if the type is not needed.
+The DNS question class will be returned in the variable pointed to by the
+.IR qclass
+parameter, this may be provided as NULL if the class is not needed.
+
+
+.SH RETURN VALUES
+
+\fIares_dns_parse(3)\fP, \fIares_dns_write(3)\fP, \fIares_dns_record_create(3)\fP,
+\fIares_dns_record_query_add(3)\fP, and \fIares_dns_record_query_get(3)\fP all
+return an \fIares_status_t\fP error code.
+.B ARES_SUCCESS
+is returned on success,
+.B ARES_ENOMEM
+is returned on out of memory,
+.B ARES_EFORMERR
+is returned on misuse.
+
+\fIares_dns_record_get_id(3)\fP, \fIares_dns_record_set_id(3)\fP,
+\fIares_dns_record_get_flags(3)\fP, \fIares_dns_record_get_opcode(3)\fP,
+\fIares_dns_record_get_rcode(3)\fP, and \fIares_dns_record_query_cnt(3)\fP
+all returned their prescribed datatype values and in general can't fail except
+for misuse cases, in which a 0 may be returned, however 0 can also be a valid
+return value for most of these functions.
+
+
+.SH AVAILABILITY
+These functions were first introduced in c-ares version 1.22.0.
+.SH SEE ALSO
+.BR ares_dns_mapping (3),
+.BR ares_dns_rr (3),
+.BR ares_free_string (3)

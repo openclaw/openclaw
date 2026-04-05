@@ -1,0 +1,12 @@
+prefix=/opt/homebrew/Cellar/libuv/1.52.1
+exec_prefix=${prefix}
+libdir=/opt/homebrew/Cellar/libuv/1.52.1/lib
+includedir=/opt/homebrew/Cellar/libuv/1.52.1/include
+
+Name: libuv-static
+Version: 1.52.1
+Description: multi-platform support library with a focus on asynchronous I/O.
+URL: http://libuv.org/
+
+Libs: -L${libdir} -l:libuv.a -lpthread -lm
+Cflags: -I${includedir}

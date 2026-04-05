@@ -1,0 +1,200 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>X509_STORE_CTX_set_verify_cb</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#WARNINGS">WARNINGS</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>X509_STORE_CTX_get_cleanup, X509_STORE_CTX_get_lookup_crls, X509_STORE_CTX_get_lookup_certs, X509_STORE_CTX_get_check_policy, X509_STORE_CTX_get_cert_crl, X509_STORE_CTX_get_check_crl, X509_STORE_CTX_get_get_crl, X509_STORE_CTX_set_get_crl, X509_STORE_CTX_get_check_revocation, X509_STORE_CTX_get_check_issued, X509_STORE_CTX_get_get_issuer, X509_STORE_CTX_get_verify_cb, X509_STORE_CTX_set_verify_cb, X509_STORE_CTX_verify_cb, X509_STORE_CTX_print_verify_cb, X509_STORE_CTX_set_current_reasons - get and set X509_STORE_CTX components such as verification callback</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/x509_vfy.h&gt;
+
+typedef int (*X509_STORE_CTX_verify_cb)(int, X509_STORE_CTX *);
+int X509_STORE_CTX_print_verify_cb(int ok, X509_STORE_CTX *ctx);
+
+X509_STORE_CTX_verify_cb X509_STORE_CTX_get_verify_cb(X509_STORE_CTX *ctx);
+
+void X509_STORE_CTX_set_verify_cb(X509_STORE_CTX *ctx,
+                                  X509_STORE_CTX_verify_cb verify_cb);
+
+X509_STORE_CTX_get_issuer_fn X509_STORE_CTX_get_get_issuer(X509_STORE_CTX *ctx);
+X509_STORE_CTX_check_issued_fn X509_STORE_CTX_get_check_issued(X509_STORE_CTX *ctx);
+X509_STORE_CTX_check_revocation_fn X509_STORE_CTX_get_check_revocation(X509_STORE_CTX *ctx);
+
+X509_STORE_CTX_get_crl_fn X509_STORE_CTX_get_get_crl(X509_STORE_CTX *ctx);
+
+void X509_STORE_CTX_set_get_crl(X509_STORE_CTX *ctx,
+                                X509_STORE_CTX_get_crl_fn get_crl);
+
+X509_STORE_CTX_check_crl_fn X509_STORE_CTX_get_check_crl(X509_STORE_CTX *ctx);
+X509_STORE_CTX_cert_crl_fn X509_STORE_CTX_get_cert_crl(X509_STORE_CTX *ctx);
+X509_STORE_CTX_check_policy_fn X509_STORE_CTX_get_check_policy(X509_STORE_CTX *ctx);
+X509_STORE_CTX_lookup_certs_fn X509_STORE_CTX_get_lookup_certs(X509_STORE_CTX *ctx);
+X509_STORE_CTX_lookup_crls_fn X509_STORE_CTX_get_lookup_crls(X509_STORE_CTX *ctx);
+X509_STORE_CTX_cleanup_fn X509_STORE_CTX_get_cleanup(X509_STORE_CTX *ctx);
+void X509_STORE_CTX_set_current_reasons(X509_STORE_CTX *ctx,
+                                        unsigned int current_reasons);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>X509_STORE_CTX_set_verify_cb() sets the verification callback of <b>ctx</b> to <b>verify_cb</b> overwriting any existing callback.</p>
+
+<p>The verification callback can be used to customise the operation of certificate verification, for instance by overriding error conditions or logging errors for debugging purposes.</p>
+
+<p>However, a verification callback is <b>not</b> essential and the default operation is often sufficient.</p>
+
+<p>The <b>ok</b> parameter to the callback indicates the value the callback should return to retain the default behaviour. If it is zero then an error condition is indicated. If it is 1 then no error occurred. If the flag <b>X509_V_FLAG_NOTIFY_POLICY</b> is set then <b>ok</b> is set to 2 to indicate the policy checking is complete.</p>
+
+<p>The <b>ctx</b> parameter to the callback is the <b>X509_STORE_CTX</b> structure that is performing the verification operation. A callback can examine this structure and receive additional information about the error, for example by calling X509_STORE_CTX_get_current_cert(). Additional application data can be passed to the callback via the <b>ex_data</b> mechanism.</p>
+
+<p>X509_STORE_CTX_print_verify_cb() is a verification callback function that, when a certificate verification has failed, adds an entry to the error queue with code <b>X509_R_CERTIFICATE_VERIFICATION_FAILED</b> and with diagnostic details, including the most relevant fields of the target certificate that failed to verify and, if appropriate, of the available untrusted and trusted certificates.</p>
+
+<p>X509_STORE_CTX_get_verify_cb() returns the value of the current callback for the specific <b>ctx</b>.</p>
+
+<p>X509_STORE_CTX_get_get_issuer(), X509_STORE_CTX_get_check_issued(), X509_STORE_CTX_get_check_revocation(), X509_STORE_CTX_get_get_crl(), X509_STORE_CTX_get_check_crl(), X509_STORE_CTX_get_cert_crl(), X509_STORE_CTX_get_check_policy(), X509_STORE_CTX_get_lookup_certs(), X509_STORE_CTX_get_lookup_crls() and X509_STORE_CTX_get_cleanup() return the function pointers cached from the corresponding <b>X509_STORE</b>, please see <a href="../man3/X509_STORE_set_verify.html">X509_STORE_set_verify(3)</a> for more information.</p>
+
+<p>X509_STORE_CTX_set_get_crl() sets the function to get the crl for a given certificate <i>x</i>. When found, the crl must be assigned to <i>*crl</i>. This function must return 0 on failure and 1 on success. <i>If no function to get the issuer is provided, the internal default function will be used instead.</i></p>
+
+<p>X509_STORE_CTX_set_current_reasons() is used in conjunction with X509_STORE_CTX_get_crl_fn. The X509_STORE_CTX_get_crl_fn callback must use this method to set the reason why the certificate is invalid.</p>
+
+<h1 id="WARNINGS">WARNINGS</h1>
+
+<p>In general a verification callback should <b>NOT</b> unconditionally return 1 in all circumstances because this will allow verification to succeed no matter what the error. This effectively removes all security from the application because <b>any</b> certificate (including untrusted generated ones) will be accepted.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The verification callback can be set and inherited from the parent structure performing the operation. In some cases (such as S/MIME verification) the <b>X509_STORE_CTX</b> structure is created and destroyed internally and the only way to set a custom verification callback is by inheriting it from the associated <b>X509_STORE</b>.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>X509_STORE_CTX_set_verify_cb() does not return a value.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>Default callback operation:</p>
+
+<pre><code>int verify_callback(int ok, X509_STORE_CTX *ctx) {
+    return ok;
+}</code></pre>
+
+<p>Simple example, suppose a certificate in the chain is expired and we wish to continue after this error:</p>
+
+<pre><code>int verify_callback(int ok, X509_STORE_CTX *ctx) {
+    /* Tolerate certificate expiration */
+    if (X509_STORE_CTX_get_error(ctx) == X509_V_ERR_CERT_HAS_EXPIRED)
+        return 1;
+    /* Otherwise don&#39;t override */
+    return ok;
+}</code></pre>
+
+<p>More complex example, we don&#39;t wish to continue after <b>any</b> certificate has expired just one specific case:</p>
+
+<pre><code>int verify_callback(int ok, X509_STORE_CTX *ctx)
+{
+    int err = X509_STORE_CTX_get_error(ctx);
+    X509 *err_cert = X509_STORE_CTX_get_current_cert(ctx);
+
+    if (err == X509_V_ERR_CERT_HAS_EXPIRED) {
+        if (check_is_acceptable_expired_cert(err_cert)
+            return 1;
+    }
+    return ok;
+}</code></pre>
+
+<p>Full featured logging callback. In this case the <b>bio_err</b> is assumed to be a global logging <b>BIO</b>, an alternative would to store a BIO in <b>ctx</b> using <b>ex_data</b>.</p>
+
+<pre><code>int verify_callback(int ok, X509_STORE_CTX *ctx)
+{
+    X509 *err_cert;
+    int err, depth;
+
+    err_cert = X509_STORE_CTX_get_current_cert(ctx);
+    err = X509_STORE_CTX_get_error(ctx);
+    depth = X509_STORE_CTX_get_error_depth(ctx);
+
+    BIO_printf(bio_err, &quot;depth=%d &quot;, depth);
+    if (err_cert) {
+        X509_NAME_print_ex(bio_err, X509_get_subject_name(err_cert),
+                           0, XN_FLAG_ONELINE);
+        BIO_puts(bio_err, &quot;\n&quot;);
+    }
+    else
+        BIO_puts(bio_err, &quot;&lt;no cert&gt;\n&quot;);
+    if (!ok)
+        BIO_printf(bio_err, &quot;verify error:num=%d:%s\n&quot;, err,
+                   X509_verify_cert_error_string(err));
+    switch (err) {
+    case X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT:
+        BIO_puts(bio_err, &quot;issuer= &quot;);
+        X509_NAME_print_ex(bio_err, X509_get_issuer_name(err_cert),
+                           0, XN_FLAG_ONELINE);
+        BIO_puts(bio_err, &quot;\n&quot;);
+        break;
+    case X509_V_ERR_CERT_NOT_YET_VALID:
+    case X509_V_ERR_ERROR_IN_CERT_NOT_BEFORE_FIELD:
+        BIO_printf(bio_err, &quot;notBefore=&quot;);
+        ASN1_TIME_print(bio_err, X509_get_notBefore(err_cert));
+        BIO_printf(bio_err, &quot;\n&quot;);
+        break;
+    case X509_V_ERR_CERT_HAS_EXPIRED:
+    case X509_V_ERR_ERROR_IN_CERT_NOT_AFTER_FIELD:
+        BIO_printf(bio_err, &quot;notAfter=&quot;);
+        ASN1_TIME_print(bio_err, X509_get_notAfter(err_cert));
+        BIO_printf(bio_err, &quot;\n&quot;);
+        break;
+    case X509_V_ERR_NO_EXPLICIT_POLICY:
+        policies_print(bio_err, ctx);
+        break;
+    }
+    if (err == X509_V_OK &amp;&amp; ok == 2)
+        /* print out policies */
+
+    BIO_printf(bio_err, &quot;verify return:%d\n&quot;, ok);
+    return(ok);
+}</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/X509_STORE_CTX_get_error.html">X509_STORE_CTX_get_error(3)</a> <a href="../man3/X509_STORE_set_verify_cb_func.html">X509_STORE_set_verify_cb_func(3)</a> <a href="../man3/X509_STORE_CTX_get_ex_new_index.html">X509_STORE_CTX_get_ex_new_index(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The X509_STORE_CTX_get_get_issuer(), X509_STORE_CTX_get_check_issued(), X509_STORE_CTX_get_check_revocation(), X509_STORE_CTX_get_get_crl(), X509_STORE_CTX_get_check_crl(), X509_STORE_CTX_get_cert_crl(), X509_STORE_CTX_get_check_policy(), X509_STORE_CTX_get_lookup_certs(), X509_STORE_CTX_get_lookup_crls() and X509_STORE_CTX_get_cleanup() functions were added in OpenSSL 1.1.0.</p>
+
+<p>X509_STORE_CTX_print_verify_cb() was added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2009-2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

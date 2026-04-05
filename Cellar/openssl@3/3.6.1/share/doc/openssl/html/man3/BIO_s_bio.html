@@ -1,0 +1,157 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>BIO_s_bio</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#WARNINGS">WARNINGS</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>BIO_s_bio, BIO_make_bio_pair, BIO_destroy_bio_pair, BIO_shutdown_wr, BIO_set_write_buf_size, BIO_get_write_buf_size, BIO_new_bio_pair, BIO_get_write_guarantee, BIO_ctrl_get_write_guarantee, BIO_get_read_request, BIO_ctrl_get_read_request, BIO_ctrl_reset_read_request - BIO pair BIO</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/bio.h&gt;
+
+const BIO_METHOD *BIO_s_bio(void);
+
+int BIO_make_bio_pair(BIO *b1, BIO *b2);
+int BIO_destroy_bio_pair(BIO *b);
+int BIO_shutdown_wr(BIO *b);
+
+int BIO_set_write_buf_size(BIO *b, long size);
+size_t BIO_get_write_buf_size(BIO *b, long size);
+
+int BIO_new_bio_pair(BIO **bio1, size_t writebuf1, BIO **bio2, size_t writebuf2);
+
+int BIO_get_write_guarantee(BIO *b);
+size_t BIO_ctrl_get_write_guarantee(BIO *b);
+int BIO_get_read_request(BIO *b);
+size_t BIO_ctrl_get_read_request(BIO *b);
+int BIO_ctrl_reset_read_request(BIO *b);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>BIO_s_bio() returns the method for a BIO pair. A BIO pair is a pair of source/sink BIOs where data written to either half of the pair is buffered and can be read from the other half. Both halves must usually by handled by the same application thread since no locking is done on the internal data structures.</p>
+
+<p>Since BIO chains typically end in a source/sink BIO it is possible to make this one half of a BIO pair and have all the data processed by the chain under application control.</p>
+
+<p>One typical use of BIO pairs is to place TLS/SSL I/O under application control, this can be used when the application wishes to use a non standard transport for TLS/SSL or the normal socket routines are inappropriate.</p>
+
+<p>Calls to BIO_read_ex() will read data from the buffer or request a retry if no data is available.</p>
+
+<p>Calls to BIO_write_ex() will place data in the buffer or request a retry if the buffer is full.</p>
+
+<p>The standard calls BIO_ctrl_pending() and BIO_ctrl_wpending() can be used to determine the amount of pending data in the read or write buffer.</p>
+
+<p>BIO_reset() clears any data in the write buffer.</p>
+
+<p>BIO_make_bio_pair() joins two separate BIOs into a connected pair.</p>
+
+<p>BIO_destroy_pair() destroys the association between two connected BIOs. Freeing up any half of the pair will automatically destroy the association.</p>
+
+<p>BIO_shutdown_wr() is used to close down a BIO <b>b</b>. After this call no further writes on BIO <b>b</b> are allowed (they will return an error). Reads on the other half of the pair will return any pending data or EOF when all pending data has been read.</p>
+
+<p>BIO_set_write_buf_size() sets the write buffer size of BIO <b>b</b> to <b>size</b>. If the size is not initialized a default value is used. This is currently 17K, sufficient for a maximum size TLS record.</p>
+
+<p>BIO_get_write_buf_size() returns the size of the write buffer.</p>
+
+<p>BIO_new_bio_pair() combines the calls to BIO_new(), BIO_make_bio_pair() and BIO_set_write_buf_size() to create a connected pair of BIOs <b>bio1</b>, <b>bio2</b> with write buffer sizes <b>writebuf1</b> and <b>writebuf2</b>. If either size is zero then the default size is used. BIO_new_bio_pair() does not check whether <b>bio1</b> or <b>bio2</b> do point to some other BIO, the values are overwritten, BIO_free() is not called.</p>
+
+<p>BIO_get_write_guarantee() and BIO_ctrl_get_write_guarantee() return the maximum length of data that can be currently written to the BIO. Writes larger than this value will return a value from BIO_write_ex() less than the amount requested or if the buffer is full request a retry. BIO_ctrl_get_write_guarantee() is a function whereas BIO_get_write_guarantee() is a macro.</p>
+
+<p>BIO_get_read_request() and BIO_ctrl_get_read_request() return the amount of data requested, or the buffer size if it is less, if the last read attempt at the other half of the BIO pair failed due to an empty buffer. This can be used to determine how much data should be written to the BIO so the next read will succeed: this is most useful in TLS/SSL applications where the amount of data read is usually meaningful rather than just a buffer size. After a successful read this call will return zero. It also will return zero once new data has been written satisfying the read request or part of it. Note that BIO_get_read_request() never returns an amount larger than that returned by BIO_get_write_guarantee().</p>
+
+<p>BIO_ctrl_reset_read_request() can also be used to reset the value returned by BIO_get_read_request() to zero.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>Both halves of a BIO pair should be freed. That is even if one half is implicit freed due to a BIO_free_all() or SSL_free() call the other half needs to be freed.</p>
+
+<p>When used in bidirectional applications (such as TLS/SSL) care should be taken to flush any data in the write buffer. This can be done by calling BIO_pending() on the other half of the pair and, if any data is pending, reading it and sending it to the underlying transport. This must be done before any normal processing (such as calling select() ) due to a request and BIO_should_read() being true.</p>
+
+<p>To see why this is important consider a case where a request is sent using BIO_write_ex() and a response read with BIO_read_ex(), this can occur during an TLS/SSL handshake for example. BIO_write_ex() will succeed and place data in the write buffer. BIO_read_ex() will initially fail and BIO_should_read() will be true. If the application then waits for data to be available on the underlying transport before flushing the write buffer it will never succeed because the request was never sent!</p>
+
+<p>BIO_eof() is true if no data is in the peer BIO and the peer BIO has been shutdown.</p>
+
+<p>BIO_make_bio_pair(), BIO_destroy_bio_pair(), BIO_shutdown_wr(), BIO_set_write_buf_size(), BIO_get_write_buf_size(), BIO_get_write_guarantee(), and BIO_get_read_request() are implemented as macros.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>BIO_new_bio_pair() returns 1 on success, with the new BIOs available in <b>bio1</b> and <b>bio2</b>, or 0 on failure, with NULL pointers stored into the locations for <b>bio1</b> and <b>bio2</b>. Check the error stack for more information.</p>
+
+<p>[XXXXX: More return values need to be added here]</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>The BIO pair can be used to have full control over the network access of an application. The application can call select() on the socket as required without having to go through the SSL-interface.</p>
+
+<pre><code>BIO *internal_bio, *network_bio;
+
+...
+BIO_new_bio_pair(&amp;internal_bio, 0, &amp;network_bio, 0);
+SSL_set_bio(ssl, internal_bio, internal_bio);
+SSL_operations(); /* e.g. SSL_read and SSL_write */
+...
+
+application |   TLS-engine
+   |        |
+   +----------&gt; SSL_operations()
+            |     /\    ||
+            |     ||    \/
+            |   BIO-pair (internal_bio)
+            |   BIO-pair (network_bio)
+            |     ||     /\
+            |     \/     ||
+   +-----------&lt; BIO_operations()
+   |        |
+   |        |
+  socket
+
+ ...
+ SSL_free(ssl);                /* implicitly frees internal_bio */
+ BIO_free(network_bio);
+ ...</code></pre>
+
+<p>As the BIO pair will only buffer the data and never directly access the connection, it behaves nonblocking and will return as soon as the write buffer is full or the read buffer is drained. Then the application has to flush the write buffer and/or fill the read buffer.</p>
+
+<p>Use the BIO_ctrl_pending(), to find out whether data is buffered in the BIO and must be transferred to the network. Use BIO_ctrl_get_read_request() to find out, how many bytes must be written into the buffer before the SSL_operation() can successfully be continued.</p>
+
+<h1 id="WARNINGS">WARNINGS</h1>
+
+<p>As the data is buffered, SSL_operation() may return with an ERROR_SSL_WANT_READ condition, but there is still data in the write buffer. An application must not rely on the error value of SSL_operation() but must assure that the write buffer is always flushed first. Otherwise a deadlock may occur as the peer might be waiting for the data before being able to continue.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/SSL_set_bio.html">SSL_set_bio(3)</a>, <a href="../man7/ssl.html">ssl(7)</a>, <a href="../man7/bio.html">bio(7)</a>, <a href="../man3/BIO_should_retry.html">BIO_should_retry(3)</a>, <a href="../man3/BIO_read_ex.html">BIO_read_ex(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2020 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

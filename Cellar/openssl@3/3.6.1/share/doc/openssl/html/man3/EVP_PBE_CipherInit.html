@@ -1,0 +1,119 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_PBE_CipherInit</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#PBE-operations">PBE operations</a></li>
+      <li><a href="#PBE-algorithm-search">PBE algorithm search</a></li>
+      <li><a href="#PBE-algorithm-add">PBE algorithm add</a></li>
+    </ul>
+  </li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_PBE_CipherInit, EVP_PBE_CipherInit_ex, EVP_PBE_find, EVP_PBE_find_ex, EVP_PBE_alg_add_type, EVP_PBE_alg_add - Password based encryption routines</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+
+int EVP_PBE_CipherInit(ASN1_OBJECT *pbe_obj, const char *pass, int passlen,
+                       ASN1_TYPE *param, EVP_CIPHER_CTX *ctx, int en_de);
+int EVP_PBE_CipherInit_ex(ASN1_OBJECT *pbe_obj, const char *pass, int passlen,
+                          ASN1_TYPE *param, EVP_CIPHER_CTX *ctx, int en_de,
+                          OSSL_LIB_CTX *libctx, const char *propq);
+
+int EVP_PBE_find(int type, int pbe_nid, int *pcnid, int *pmnid,
+                 EVP_PBE_KEYGEN **pkeygen);
+int EVP_PBE_find_ex(int type, int pbe_nid, int *pcnid, int *pmnid,
+                    EVP_PBE_KEYGEN **pkeygen, EVP_PBE_KEYGEN_EX **keygen_ex);
+
+int EVP_PBE_alg_add_type(int pbe_type, int pbe_nid, int cipher_nid,
+                         int md_nid, EVP_PBE_KEYGEN *keygen);
+int EVP_PBE_alg_add(int nid, const EVP_CIPHER *cipher, const EVP_MD *md,
+                    EVP_PBE_KEYGEN *keygen);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<h2 id="PBE-operations">PBE operations</h2>
+
+<p>EVP_PBE_CipherInit() and EVP_PBE_CipherInit_ex() initialise an <b>EVP_CIPHER_CTX</b> <i>ctx</i> for encryption (<i>en_de</i>=1) or decryption (<i>en_de</i>=0) using the password <i>pass</i> of length <i>passlen</i>. The PBE algorithm type and parameters are extracted from an OID <i>pbe_obj</i> and parameters <i>param</i>.</p>
+
+<p>EVP_PBE_CipherInit_ex() also allows the application to specify a library context <i>libctx</i> and property query <i>propq</i> to select appropriate algorithm implementations.</p>
+
+<h2 id="PBE-algorithm-search">PBE algorithm search</h2>
+
+<p>EVP_PBE_find() and EVP_PBE_find_ex() search for a matching algorithm using two parameters:</p>
+
+<p>1. An algorithm type <i>type</i> which can be:</p>
+
+<ul>
+
+<li><p>EVP_PBE_TYPE_OUTER - A PBE algorithm</p>
+
+</li>
+<li><p>EVP_PBE_TYPE_PRF - A pseudo-random function</p>
+
+</li>
+<li><p>EVP_PBE_TYPE_KDF - A key derivation function</p>
+
+</li>
+</ul>
+
+<p>2. A <i>pbe_nid</i> which can represent the algorithm identifier with parameters e.g. <b>NID_pbeWithSHA1AndRC2_CBC</b> or an algorithm class e.g. <b>NID_pbes2</b>.</p>
+
+<p>They return the algorithm&#39;s cipher ID <i>pcnid</i>, digest ID <i>pmnid</i> and a key generation function for the algorithm <i>pkeygen</i>. EVP_PBE_CipherInit_ex() also returns an extended key generation function <i>keygen_ex</i> which takes a library context and property query.</p>
+
+<p>If a NULL is supplied for any of <i>pcnid</i>, <i>pmnid</i>, <i>pkeygen</i> or <i>pkeygen_ex</i> then this parameter is not returned.</p>
+
+<h2 id="PBE-algorithm-add">PBE algorithm add</h2>
+
+<p>EVP_PBE_alg_add_type() and EVP_PBE_alg_add() add an algorithm to the list of known algorithms. Their parameters have the same meaning as for EVP_PBE_find() and EVP_PBE_find_ex() functions.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The arguments <i>pbe_obj</i> and <i>param</i> to EVP_PBE_CipherInit() and EVP_PBE_CipherInit_ex() together form an <b>X509_ALGOR</b> and can often be extracted directly from this structure.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>Return value is 1 for success and 0 if an error occurred.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/PKCS5_PBE_keyivgen.html">PKCS5_PBE_keyivgen(3)</a>, <a href="../man3/PKCS12_PBE_keyivgen_ex.html">PKCS12_PBE_keyivgen_ex(3)</a>, <a href="../man3/PKCS5_v2_PBE_keyivgen_ex.html">PKCS5_v2_PBE_keyivgen_ex(3)</a>, <a href="../man3/PKCS12_pbe_crypt_ex.html">PKCS12_pbe_crypt_ex(3)</a>, <a href="../man3/PKCS12_create_ex.html">PKCS12_create_ex(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>EVP_PBE_CipherInit_ex() and EVP_PBE_find_ex() were added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

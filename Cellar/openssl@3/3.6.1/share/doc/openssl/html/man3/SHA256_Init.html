@@ -1,0 +1,110 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SHA256_Init</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#CONFORMING-TO">CONFORMING TO</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SHA1, SHA1_Init, SHA1_Update, SHA1_Final, SHA224, SHA224_Init, SHA224_Update, SHA224_Final, SHA256, SHA256_Init, SHA256_Update, SHA256_Final, SHA384, SHA384_Init, SHA384_Update, SHA384_Final, SHA512, SHA512_Init, SHA512_Update, SHA512_Final - Secure Hash Algorithm</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/sha.h&gt;
+
+unsigned char *SHA1(const unsigned char *data, size_t count, unsigned char *md_buf);
+unsigned char *SHA224(const unsigned char *data, size_t count, unsigned char *md_buf);
+unsigned char *SHA256(const unsigned char *data, size_t count, unsigned char *md_buf);
+unsigned char *SHA384(const unsigned char *data, size_t count, unsigned char *md_buf);
+unsigned char *SHA512(const unsigned char *data, size_t count, unsigned char *md_buf);</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>int SHA1_Init(SHA_CTX *c);
+int SHA1_Update(SHA_CTX *c, const void *data, size_t len);
+int SHA1_Final(unsigned char *md, SHA_CTX *c);
+
+int SHA224_Init(SHA256_CTX *c);
+int SHA224_Update(SHA256_CTX *c, const void *data, size_t len);
+int SHA224_Final(unsigned char *md, SHA256_CTX *c);
+
+int SHA256_Init(SHA256_CTX *c);
+int SHA256_Update(SHA256_CTX *c, const void *data, size_t len);
+int SHA256_Final(unsigned char *md, SHA256_CTX *c);
+
+int SHA384_Init(SHA512_CTX *c);
+int SHA384_Update(SHA512_CTX *c, const void *data, size_t len);
+int SHA384_Final(unsigned char *md, SHA512_CTX *c);
+
+int SHA512_Init(SHA512_CTX *c);
+int SHA512_Update(SHA512_CTX *c, const void *data, size_t len);
+int SHA512_Final(unsigned char *md, SHA512_CTX *c);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>All of the functions described on this page except for SHA1(), SHA224(), SHA256(), SHA384() and SHA512() are deprecated. Applications should instead use <a href="../man3/EVP_DigestInit_ex.html">EVP_DigestInit_ex(3)</a>, <a href="../man3/EVP_DigestUpdate.html">EVP_DigestUpdate(3)</a> and <a href="../man3/EVP_DigestFinal_ex.html">EVP_DigestFinal_ex(3)</a>, or the quick one-shot function <a href="../man3/EVP_Q_digest.html">EVP_Q_digest(3)</a>. SHA1(), SHA224(), SHA256(), SHA384(), and SHA256() can continue to be used. They can also be replaced by, e.g.,</p>
+
+<pre><code>(EVP_Q_digest(d, n, md, NULL, NULL, &quot;SHA256&quot;, NULL) ? md : NULL)</code></pre>
+
+<p>SHA-1 (Secure Hash Algorithm) is a cryptographic hash function with a 160 bit output.</p>
+
+<p>SHA1() computes the SHA-1 message digest of the <b>n</b> bytes at <b>d</b> and places it in <b>md</b> (which must have space for SHA_DIGEST_LENGTH == 20 bytes of output). If <b>md</b> is NULL, the digest is placed in a static array. Note: setting <b>md</b> to NULL is <b>not thread safe</b>.</p>
+
+<p>The following functions may be used if the message is not completely stored in memory:</p>
+
+<p>SHA1_Init() initializes a <b>SHA_CTX</b> structure.</p>
+
+<p>SHA1_Update() can be called repeatedly with chunks of the message to be hashed (<b>len</b> bytes at <b>data</b>).</p>
+
+<p>SHA1_Final() places the message digest in <b>md</b>, which must have space for SHA_DIGEST_LENGTH == 20 bytes of output, and erases the <b>SHA_CTX</b>.</p>
+
+<p>The SHA224, SHA256, SHA384 and SHA512 families of functions operate in the same way as for the SHA1 functions. Note that SHA224 and SHA256 use a <b>SHA256_CTX</b> object instead of <b>SHA_CTX</b>. SHA384 and SHA512 use <b>SHA512_CTX</b>. The buffer <b>md</b> must have space for the output from the SHA variant being used (defined by SHA224_DIGEST_LENGTH, SHA256_DIGEST_LENGTH, SHA384_DIGEST_LENGTH and SHA512_DIGEST_LENGTH). Also note that, as for the SHA1() function above, the SHA224(), SHA256(), SHA384() and SHA512() functions are not thread safe if <b>md</b> is NULL.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SHA1(), SHA224(), SHA256(), SHA384() and SHA512() return a pointer to the hash value.</p>
+
+<p>SHA1_Init(), SHA1_Update() and SHA1_Final() and equivalent SHA224, SHA256, SHA384 and SHA512 functions return 1 for success, 0 otherwise.</p>
+
+<h1 id="CONFORMING-TO">CONFORMING TO</h1>
+
+<p>US Federal Information Processing Standard FIPS PUB 180-4 (Secure Hash Standard), ANSI X9.30</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_Q_digest.html">EVP_Q_digest(3)</a>, <a href="../man3/EVP_DigestInit.html">EVP_DigestInit(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>All of these functions except SHA*() were deprecated in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

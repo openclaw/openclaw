@@ -1,0 +1,73 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_get_current_cipher</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_get_current_cipher, SSL_get_cipher_name, SSL_get_cipher, SSL_get_cipher_bits, SSL_get_cipher_version, SSL_get_pending_cipher - get SSL_CIPHER of a connection</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+const SSL_CIPHER *SSL_get_current_cipher(const SSL *ssl);
+const SSL_CIPHER *SSL_get_pending_cipher(const SSL *ssl);
+
+const char *SSL_get_cipher_name(const SSL *s);
+const char *SSL_get_cipher(const SSL *s);
+int SSL_get_cipher_bits(const SSL *s, int *np);
+const char *SSL_get_cipher_version(const SSL *s);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_get_current_cipher() returns a pointer to an SSL_CIPHER object containing the description of the actually used cipher of a connection established with the <b>ssl</b> object. <b>ssl</b> <b>MUST NOT</b> be NULL. See <a href="../man3/SSL_CIPHER_get_name.html">SSL_CIPHER_get_name(3)</a> for more details.</p>
+
+<p>SSL_get_cipher_name() obtains the name of the currently used cipher. SSL_get_cipher() is identical to SSL_get_cipher_name(). SSL_get_cipher_bits() is a macro to obtain the number of secret/algorithm bits used and SSL_get_cipher_version() returns the protocol name.</p>
+
+<p>SSL_get_pending_cipher() returns a pointer to an SSL_CIPHER object containing the description of the cipher (if any) that has been negotiated for future use on the connection established with the <b>ssl</b> object, but is not yet in use. This may be the case during handshake processing, when control flow can be returned to the application via any of several callback methods. The internal sequencing of handshake processing and callback invocation is not guaranteed to be stable from release to release, and at present only the callback set by SSL_CTX_set_alpn_select_cb() is guaranteed to have a non-NULL return value. Other callbacks may be added to this list over time.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_get_current_cipher() returns the cipher actually used, or NULL if no session has been established.</p>
+
+<p>SSL_get_pending_cipher() returns the cipher to be used at the next change of cipher suite, or NULL if no such cipher is known.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>SSL_get_cipher, SSL_get_cipher_bits, SSL_get_cipher_version, and SSL_get_cipher_name are implemented as macros.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a>, <a href="../man3/SSL_CIPHER_get_name.html">SSL_CIPHER_get_name(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2018 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,89 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_PKEY_CTX_set_params</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Parameters">Parameters</a></li>
+    </ul>
+  </li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_PKEY_CTX_set_params, EVP_PKEY_CTX_settable_params, EVP_PKEY_CTX_get_params, EVP_PKEY_CTX_gettable_params - provider parameter passing operations</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+
+int EVP_PKEY_CTX_set_params(EVP_PKEY_CTX *ctx, const OSSL_PARAM *params);
+const OSSL_PARAM *EVP_PKEY_CTX_settable_params(const EVP_PKEY_CTX *ctx);
+int EVP_PKEY_CTX_get_params(EVP_PKEY_CTX *ctx, OSSL_PARAM *params);
+const OSSL_PARAM *EVP_PKEY_CTX_gettable_params(const EVP_PKEY_CTX *ctx);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The EVP_PKEY_CTX_get_params() and EVP_PKEY_CTX_set_params() functions allow transfer of arbitrary key parameters to and from providers. Not all parameters may be supported by all providers. See <a href="../man3/OSSL_PROVIDER.html">OSSL_PROVIDER(3)</a> for more information on providers. The <i>params</i> field is a pointer to a list of <b>OSSL_PARAM</b> structures, terminated with a <a href="../man3/OSSL_PARAM_END.html">OSSL_PARAM_END(3)</a> struct. See <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> for information about passing parameters. These functions must only be called after the EVP_PKEY_CTX has been initialised for use in an operation. These methods replace the EVP_PKEY_CTX_ctrl() mechanism. (EVP_PKEY_CTX_ctrl now calls these methods internally to interact with providers).</p>
+
+<p>EVP_PKEY_CTX_gettable_params() and EVP_PKEY_CTX_settable_params() get a constant <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> array that describes the gettable and settable parameters for the current algorithm implementation, i.e. parameters that can be used with EVP_PKEY_CTX_get_params() and EVP_PKEY_CTX_set_params() respectively. These functions must only be called after the EVP_PKEY_CTX has been initialised for use in an operation.</p>
+
+<h2 id="Parameters">Parameters</h2>
+
+<p>Examples of EVP_PKEY parameters include the following:</p>
+
+<p><a href="../man7/provider-keymgmt.html">&quot;Common parameters&quot; in provider-keymgmt(7)</a> <a href="../man7/provider-keyexch.html">&quot;Key Exchange parameters&quot; in provider-keyexch(7)</a> <a href="../man7/provider-signature.html">&quot;Signature parameters&quot; in provider-signature(7)</a></p>
+
+<p><a href="../man7/EVP_PKEY-RSA.html">&quot;Common RSA parameters&quot; in EVP_PKEY-RSA(7)</a> <a href="../man7/EVP_PKEY-RSA.html">&quot;RSA key generation parameters&quot; in EVP_PKEY-RSA(7)</a> <a href="../man7/EVP_PKEY-FFC.html">&quot;FFC parameters&quot; in EVP_PKEY-FFC(7)</a> <a href="../man7/EVP_PKEY-FFC.html">&quot;FFC key generation parameters&quot; in EVP_PKEY-FFC(7)</a> <a href="../man7/EVP_PKEY-DSA.html">&quot;DSA parameters&quot; in EVP_PKEY-DSA(7)</a> <a href="../man7/EVP_PKEY-DSA.html">&quot;DSA key generation parameters&quot; in EVP_PKEY-DSA(7)</a> <a href="../man7/EVP_PKEY-DH.html">&quot;DH parameters&quot; in EVP_PKEY-DH(7)</a> <a href="../man7/EVP_PKEY-DH.html">&quot;DH key generation parameters&quot; in EVP_PKEY-DH(7)</a> <a href="../man7/EVP_PKEY-EC.html">&quot;Common EC parameters&quot; in EVP_PKEY-EC(7)</a> <a href="../man7/EVP_PKEY-X25519.html">&quot;Common X25519, X448, ED25519 and ED448 parameters&quot; in EVP_PKEY-X25519(7)</a> <a href="../man7/EVP_PKEY-LMS.html">&quot;Common LMS parameters&quot; in EVP_PKEY-LMS(7)</a> <a href="../man7/EVP_PKEY-ML-DSA.html">&quot;Common parameters&quot; in EVP_PKEY-ML-DSA(7)</a> <a href="../man7/EVP_PKEY-ML-KEM.html">&quot;Common parameters&quot; in EVP_PKEY-ML-KEM(7)</a></p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>EVP_PKEY_CTX_set_params() returns 1 for success or 0 otherwise. EVP_PKEY_CTX_settable_params() returns an OSSL_PARAM array on success or NULL on error. It may also return NULL if there are no settable parameters available.</p>
+
+<p>All other functions and macros described on this page return a positive value for success and 0 or a negative value for failure. In particular a return value of -2 indicates the operation is not supported by the public key algorithm.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>LMS support is disabled by default at compile-time. To enable, specify the <b>enable-lms</b> build configuration option.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_PKEY_CTX_new.html">EVP_PKEY_CTX_new(3)</a>, <a href="../man3/EVP_PKEY_encrypt.html">EVP_PKEY_encrypt(3)</a>, <a href="../man3/EVP_PKEY_decrypt.html">EVP_PKEY_decrypt(3)</a>, <a href="../man3/EVP_PKEY_sign.html">EVP_PKEY_sign(3)</a>, <a href="../man3/EVP_PKEY_verify.html">EVP_PKEY_verify(3)</a>, <a href="../man3/EVP_PKEY_verify_recover.html">EVP_PKEY_verify_recover(3)</a>, <a href="../man3/EVP_PKEY_derive.html">EVP_PKEY_derive(3)</a>, <a href="../man3/EVP_PKEY_keygen.html">EVP_PKEY_keygen(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>All functions were added in OpenSSL 3.0.</p>
+
+<p>Support for <b>ML-DSA</b>&gt; and <b>ML-KEM</b> was added in OpenSSL 3.5.</p>
+
+<p>Support for <b>LMS</b> was added in OpenSSL 3.6.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2020-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,88 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>RSA_print</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>RSA_print, RSA_print_fp, DSAparams_print, DSAparams_print_fp, DSA_print, DSA_print_fp, DHparams_print, DHparams_print_fp - print cryptographic parameters</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/rsa.h&gt;</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>int RSA_print(BIO *bp, const RSA *x, int offset);
+int RSA_print_fp(FILE *fp, const RSA *x, int offset);
+
+#include &lt;openssl/dsa.h&gt;</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>int DSAparams_print(BIO *bp, const DSA *x);
+int DSAparams_print_fp(FILE *fp, const DSA *x);
+int DSA_print(BIO *bp, const DSA *x, int offset);
+int DSA_print_fp(FILE *fp, const DSA *x, int offset);
+
+#include &lt;openssl/dh.h&gt;</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>int DHparams_print(BIO *bp, DH *x);
+int DHparams_print_fp(FILE *fp, const DH *x);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>All of the functions described on this page are deprecated. Applications should instead use <a href="../man3/EVP_PKEY_print_params.html">EVP_PKEY_print_params(3)</a> and <a href="../man3/EVP_PKEY_print_private.html">EVP_PKEY_print_private(3)</a>.</p>
+
+<p>A human-readable hexadecimal output of the components of the RSA key, DSA parameters or key or DH parameters is printed to <b>bp</b> or <b>fp</b>.</p>
+
+<p>The output lines are indented by <b>offset</b> spaces.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>DSAparams_print(), DSAparams_print_fp(), DSA_print(), and DSA_print_fp() return 1 for success and 0 or a negative value for failure.</p>
+
+<p>DHparams_print() and DHparams_print_fp() return 1 on success, 0 on error.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<pre><code>L&lt;EVP_PKEY_print_params(3)&gt;,
+L&lt;EVP_PKEY_print_private(3)&gt;,
+L&lt;BN_bn2bin(3)&gt;</code></pre>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>All of these functions were deprecated in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2020 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,82 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>RAND_set_DRBG_type</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>RAND_set_DRBG_type, RAND_set_seed_source_type - specify the global random number generator types</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/rand.h&gt;
+
+int RAND_set_DRBG_type(OSSL_LIB_CTX *ctx, const char *drbg, const char *propq,
+                       const char *cipher, const char *digest);
+int RAND_set_seed_source_type(OSSL_LIB_CTX *ctx, const char *seed,
+                              const char *propq);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>RAND_set_DRBG_type() specifies the random bit generator that will be used within the library context <i>ctx</i>. A generator of name <i>drbg</i> with properties <i>propq</i> will be fetched. It will be instantiated with either <i>cipher</i> or <i>digest</i> as its underlying cryptographic algorithm. This specifies the type that will be used for the primary, public and private random instances.</p>
+
+<p>RAND_set_seed_source_type() specifies the seed source that will be used within the library context <i>ctx</i>. The seed source of name <i>seed</i> with properties <i>propq</i> will be fetched and used to seed the primary random bit generator.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>These function return 1 on success and 0 on failure.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>These functions must be called before the random bit generators are first created in the library context. They will return an error if the call is made too late.</p>
+
+<p>The default DRBG is &quot;CTR-DRBG&quot; using the &quot;AES-256-CTR&quot; cipher.</p>
+
+<p>The default seed source can be configured when OpenSSL is compiled by setting <b>-DOPENSSL_DEFAULT_SEED_SRC=SEED-SRC</b>. If not set then &quot;SEED-SRC&quot; is used.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<pre><code>unsigned char bytes[100];
+RAND_set_seed_source_type(NULL, &quot;JITTER&quot;, NULL);
+RAND_bytes(bytes, 100);</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_RAND.html">EVP_RAND(3)</a>, <a href="../man3/RAND_get0_primary.html">RAND_get0_primary(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>These functions were added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2021-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,185 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+        "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+ <head>
+  <meta name="generator" content="PSPad editor, www.pspad.com" />
+  <meta http-equiv="content-type" content="text/html; charset=UTF-8" />
+  <link rel="stylesheet" type="text/css" href="styles/lame.css" />
+  <title>Introduction to encoding</title>
+ </head>
+ <body>
+<div id="menu">
+	<ul>
+		<li><a href="index.html">Index page</a></li>
+		<li><a href="about.html">About LAME</a></li>
+		<li><a style="border: 0" href="introduction.html">Intro to encoding</a>
+    <div id="submenu">
+    	<ul>
+    		<li><a href="cbr.html">CBR </a></li>
+    		<li><a href="abr.html">ABR </a></li>
+        <li><a href="vbr.html">VBR </a></li>
+        <li><a style="border: 0" href="ms_stereo.html">M/S Stereo</a></li>
+    	</ul>
+    </div>
+    </li>
+		<li><a href="usage.html">Usage of LAME</a></li>
+		<li><a href="history.html">Version history</a></li>
+		<li><a href="contributors.html">Coders of LAME</a></li>
+		<li><a href="contact.html">Contact LAME</a></li>
+		<li><a style="border: 0" href="links.html">LAME links</a></li>
+	</ul>
+</div>
+<div id="container">
+<div id="content">
+
+<div align="center">
+	<img src="images/logo.gif" width="358" height="231" alt="LAME Official Logo" />
+	<h2 class="hilight">Introduction to encoding</h2>
+</div>
+<h3> Introduction</h3>
+<p>
+There is a lot of confusion surrounding the terms audio compression<a href="#note1">
+<sup>1</sup></a>, audio encoding, and audio decoding. This section will give you
+an overview what audio coding (another one of these terms...) is all about.
+</p>
+<h3>The purpose of audio compression</h3>
+<p>Up to the advent of audio compression, high-quality digital audio data took
+a lot of hard disk space to store. Let us go through a short example.
+</p>
+<p>
+You want to sample 1 minute of your favourite song and store it on your harddisk.
+Because you want CD quality, you sample at 44.1 kHz, stereo, with 16 bits per sample.
+</p>
+<p>
+44100 Hz means that you have 44100 values per second coming in from your sound card
+(or input file). Multiply that by two because you have two channels. Multiply by
+another factor of two because you have two bytes per value (that's what 16 bit
+means). The song will take up 44100 <sup>samples</sup>/<sub>s</sub> · 2 channels
+· 2 <sup>bytes</sup>/<sub>sample</sub> ·
+60 <sup>s</sup>/<sub>min</sub> ~ 10 MBytes of storage space on your harddisk.
+</p>
+<p>
+In order to stream this over internet, a speed of at least 1.41<sup>Mbits</sup>/
+<sub>s</sub> is needed,
+which wasn't a common speed at all at the time MP3 was invented.  
+If you wanted to download that, given an average 56k modem connected at 44k, it
+would take 1.41Mbits · 1000 <sup>kbits</sup>/<sub>Mbit</sub> / 44 kbits ~ 32
+ times as much.
+<br/>This means 32 minutes just to download one minute of music!
+</p>
+<p>
+Digital audio coding, which - in this context - is synonymously called digital
+audio compression as well, is the art of minimizing storage space (or channel
+bandwidth) requirements for audio data. Modern perceptual audio coding techniques
+(like MPEG Layer III) exploit the properties of the human ear (the perception of
+sound) to achieve a size reduction by a factor of 11 with little or no perceptible
+loss of quality.
+</p>
+<p>
+Therefore, such schemes are the key technology for high quality low bit-rate
+applications, like soundtracks for CD-ROM games, solid-state sound memories,
+Internet audio, digital audio broadcasting systems, and the like.
+</p>
+<h3>The two parts of audio compression</h3>
+<p>
+Audio compression really consists of two parts. The first part, called encoding,
+transforms the digital audio data that resides, say, in a WAVE file, into a highly
+compressed form called bitstream. To play the bitstream on your soundcard, you
+need the second part, called decoding. Decoding takes the bitstream and re-expands
+it to a WAVE file.
+</p>
+<p>
+The program that effects the first part is called an audio encoder. LAME is such
+an encoder . The program that does the second part is called an audio decoder.
+Nowadays there are lots of players that decode MP3
+</p>
+<h3>Compression ratios, bitrate and quality</h3>
+<p>
+It has not been explicitly mentioned up to now: What you end up with after
+encoding and decoding is not the same sound file anymore: All superfluous
+information has been squeezed out, so to say. It is not the same file, but it
+ will sound the same - more or less, depending on how much compression has been
+ performed on it.
+</p>
+<p>
+Generally speaking, the lower the compression ratio achieved, the better the
+sound quality will be in the end - and vice versa.<br/>
+Table 1.1 gives you a rough estimate about the quality you can expect.
+</p>
+<p>
+Because compression ratio is a somewhat unwieldy measure, experts use the term
+bitrate when speaking of the strength of compression. Bitrate denotes the average
+number of bits that one second of audio data will take up in your compressed
+bitstream. Usually the units used will be kbps, which is kbits/s, or 1000 bits/s
+(not 1024).<br/>
+To calculate the number of bytes per second of audio data, simply divide the
+number of bits per second by eight.
+</p>
+<table align="center" cellpadding="5">
+    <caption><strong>table 1.1:</strong> bitrate versus sound quality</caption>
+    <tr> 
+      <th>Bitrate</th>
+      <th>Bandwidth</th>
+      <th>Quality comparable to</th>
+    </tr>
+    <tr> 
+      <td>16 kbps mono</td>
+      <td>5.5 khz</td>
+      <td>above shortwave radio / telephone</td>
+    </tr>
+    <tr> 
+      <td>32 kbps mono</td>
+      <td>8.5 khz</td>
+
+      <td>near AM (medium wave) radio</td>
+    </tr>
+    <tr> 
+      <td>64kbps mono, 128 kbps stereo</td>
+      <td>16 khz</td>
+      <td>FM radio</td>
+    </tr>
+    <tr> 
+      <td style="border-bottom:0px">-V 3~-V 0 (160~200 kbps) <br/>
+        (variable bitrate)</td>
+      <td style="border-bottom:0px">18~20 khz</td>
+      <td style="border-bottom:0px">perceptual transparency versus CD<a href="#transparency"><sup>2</sup>
+      </a></td>
+    </tr>
+</table>
+<div id="notes">
+<ol>
+<li><a name="note1"></a>Audio compression (also called coding)
+ means reduce the size (bytes) that the original source requires to be stored.
+ This is not the same than compressors in DSP (or audio effects). The latter
+ reduces the dynamic range of the audio so that there is less difference in
+ perceived loudness between its strong and subtle parts.
+</li>
+<li><a name="note2"></a>Lossy encoding (as opposed to lossless) cannot guarantee
+transparency all of the time. This is the value accepted as the <i>sweet spot</i>. 
+</li>
+
+</ol>
+</div>
+</div>
+<div id="footer">
+
+<a href="http://sourceforge.net/projects/lame"><img src="http://sflogo.sourceforge.net/sflogo.php?group_id=290&amp;type=12"
+ alt="Get LAME (Lame Aint an MP3 Encoder) at SourceForge.net. Fast, secure and Free Open Source software downloads"
+ border="0" height="30" width="120" /></a>
+
+<a href="http://validator.w3.org/#validate_by_upload"><img src="images/valid-xhtml10.png"
+ alt="Valid XHTML 1.0 Transitional" border="0" height="31" width="88" /></a>
+
+<a href="http://jigsaw.w3.org/css-validator/"><img src="images/valid-css.png"
+ alt="Valid CSS!" border="0" height="31" width="88" /></a>
+
+<p>HTML markup and design by <a
+href="http://www.rjamorim.com" target="_blank">Roberto Amorim</a> and <a
+href="http://www.maresweb.de" target="_blank">Sebastian Mares</a>. Logo by <a 
+href="http://www.brightercreative.co.uk">Sam Fisher</a>.</p>
+
+</div>
+</div>
+
+ </body>
+</html>

@@ -1,0 +1,286 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>ossl-guide-tls-client-non-block</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SIMPLE-NONBLOCKING-TLS-CLIENT-EXAMPLE">SIMPLE NONBLOCKING TLS CLIENT EXAMPLE</a>
+    <ul>
+      <li><a href="#Setting-the-socket-to-be-nonblocking">Setting the socket to be nonblocking</a></li>
+      <li><a href="#Performing-work-while-waiting-for-the-socket">Performing work while waiting for the socket</a></li>
+      <li><a href="#Handling-errors-from-OpenSSL-I-O-functions">Handling errors from OpenSSL I/O functions</a></li>
+      <li><a href="#Creating-the-SSL_CTX-and-SSL-objects">Creating the SSL_CTX and SSL objects</a></li>
+      <li><a href="#Performing-the-handshake">Performing the handshake</a></li>
+      <li><a href="#Sending-and-receiving-data">Sending and receiving data</a></li>
+      <li><a href="#Shutting-down-the-connection">Shutting down the connection</a></li>
+      <li><a href="#Final-clean-up">Final clean up</a></li>
+    </ul>
+  </li>
+  <li><a href="#FURTHER-READING">FURTHER READING</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>ossl-guide-tls-client-non-block - OpenSSL Guide: Writing a simple nonblocking TLS client</p>
+
+<h1 id="SIMPLE-NONBLOCKING-TLS-CLIENT-EXAMPLE">SIMPLE NONBLOCKING TLS CLIENT EXAMPLE</h1>
+
+<p>This page will build on the example developed on the <a href="../man7/ossl-guide-tls-client-block.html">ossl-guide-tls-client-block(7)</a> page which demonstrates how to write a simple blocking TLS client. On this page we will amend that demo code so that it supports a nonblocking socket.</p>
+
+<p>The complete source code for this example nonblocking TLS client is available in the <b>demos/guide</b> directory of the OpenSSL source distribution in the file <b>tls-client-non-block.c</b>. It is also available online at <a href="https://github.com/openssl/openssl/blob/master/demos/guide/tls-client-non-block.c">https://github.com/openssl/openssl/blob/master/demos/guide/tls-client-non-block.c</a>.</p>
+
+<p>As we saw in the previous example a blocking socket is one which waits (blocks) until data is available to read if you attempt to read from it when there is no data yet. Similarly it waits when writing if the socket is currently unable to write at the moment. This can simplify the development of code because you do not have to worry about what to do in these cases. The execution of the code will simply stop until it is able to continue. However in many cases you do not want this behaviour. Rather than stopping and waiting your application may need to go and do other tasks whilst the socket is unable to read/write, for example updating a GUI or performing operations on some other socket.</p>
+
+<p>With a nonblocking socket attempting to read or write to a socket that is currently unable to read or write will return immediately with a non-fatal error. Although OpenSSL does the reading/writing to the socket this nonblocking behaviour is propagated up to the application so that OpenSSL I/O functions such as <a href="../man3/SSL_read_ex.html">SSL_read_ex(3)</a> or <a href="../man3/SSL_write_ex.html">SSL_write_ex(3)</a> will not block.</p>
+
+<p>Since this page is building on the example developed on the <a href="../man7/ossl-guide-tls-client-block.html">ossl-guide-tls-client-block(7)</a> page we assume that you are familiar with it and we only explain how this example differs.</p>
+
+<h2 id="Setting-the-socket-to-be-nonblocking">Setting the socket to be nonblocking</h2>
+
+<p>The first step in writing an application that supports nonblocking is to set the socket into nonblocking mode. A socket will be default be blocking. The exact details on how to do this can differ from one platform to another. Fortunately OpenSSL offers a portable function that will do this for you:</p>
+
+<pre><code>/* Set to nonblocking mode */
+if (!BIO_socket_nbio(sock, 1)) {
+    sock = -1;
+    continue;
+}</code></pre>
+
+<p>You do not have to use OpenSSL&#39;s function for this. You can of course directly call whatever functions that your Operating System provides for this purpose on your platform.</p>
+
+<h2 id="Performing-work-while-waiting-for-the-socket">Performing work while waiting for the socket</h2>
+
+<p>In a nonblocking application you will need work to perform in the event that we want to read or write to the socket, but we are currently unable to. In fact this is the whole point of using a nonblocking socket, i.e. to give the application the opportunity to do something else. Whatever it is that the application has to do, it must also be prepared to come back and retry the operation that it previously attempted periodically to see if it can now complete. Ideally it would only do this in the event that the state of the underlying socket has actually changed (e.g. become readable where it wasn&#39;t before), but this does not have to be the case. It can retry at any time.</p>
+
+<p>Note that it is important that you retry exactly the same operation that you tried last time. You cannot start something new. For example if you were attempting to write the text &quot;Hello World&quot; and the operation failed because the socket is currently unable to write, then you cannot then attempt to write some other text when you retry the operation.</p>
+
+<p>In this demo application we will create a helper function which simulates doing other work. In fact, for the sake of simplicity, it will do nothing except wait for the state of the socket to change.</p>
+
+<p>We call our function <code>wait_for_activity()</code> because all it does is wait until the underlying socket has become readable or writeable when it wasn&#39;t before.</p>
+
+<pre><code>static void wait_for_activity(SSL *ssl, int write)
+{
+    fd_set fds;
+    int width, sock;
+
+    /* Get hold of the underlying file descriptor for the socket */
+    sock = SSL_get_fd(ssl);
+
+    FD_ZERO(&amp;fds);
+    FD_SET(sock, &amp;fds);
+    width = sock + 1;
+
+    /*
+     * Wait until the socket is writeable or readable. We use select here
+     * for the sake of simplicity and portability, but you could equally use
+     * poll/epoll or similar functions
+     *
+     * NOTE: For the purposes of this demonstration code this effectively
+     * makes this demo block until it has something more useful to do. In a
+     * real application you probably want to go and do other work here (e.g.
+     * update a GUI, or service other connections).
+     *
+     * Let&#39;s say for example that you want to update the progress counter on
+     * a GUI every 100ms. One way to do that would be to add a 100ms timeout
+     * in the last parameter to &quot;select&quot; below. Then, when select returns,
+     * you check if it did so because of activity on the file descriptors or
+     * because of the timeout. If it is due to the timeout then update the
+     * GUI and then restart the &quot;select&quot;.
+     */
+    if (write)
+        select(width, NULL, &amp;fds, NULL, NULL);
+    else
+        select(width, &amp;fds, NULL, NULL, NULL);
+}</code></pre>
+
+<p>In this example we are using the <code>select</code> function because it is very simple to use and is available on most Operating Systems. However you could use any other similar function to do the same thing. <code>select</code> waits for the state of the underlying socket(s) to become readable/writeable before returning. It also supports a &quot;timeout&quot; (as do most other similar functions) so in your own applications you can make use of this to periodically wake up and perform work while waiting for the socket state to change. But we don&#39;t use that timeout capability in this example for the sake of simplicity.</p>
+
+<h2 id="Handling-errors-from-OpenSSL-I-O-functions">Handling errors from OpenSSL I/O functions</h2>
+
+<p>An application that uses a nonblocking socket will need to be prepared to handle errors returned from OpenSSL I/O functions such as <a href="../man3/SSL_read_ex.html">SSL_read_ex(3)</a> or <a href="../man3/SSL_write_ex.html">SSL_write_ex(3)</a>. Errors may be fatal (for example because the underlying connection has failed), or non-fatal (for example because we are trying to read from the underlying socket but the data has not yet arrived from the peer).</p>
+
+<p><a href="../man3/SSL_read_ex.html">SSL_read_ex(3)</a> and <a href="../man3/SSL_write_ex.html">SSL_write_ex(3)</a> will return 0 to indicate an error and <a href="../man3/SSL_read.html">SSL_read(3)</a> and <a href="../man3/SSL_write.html">SSL_write(3)</a> will return 0 or a negative value to indicate an error. <a href="../man3/SSL_shutdown.html">SSL_shutdown(3)</a> will return a negative value to incidate an error.</p>
+
+<p>In the event of an error an application should call <a href="../man3/SSL_get_error.html">SSL_get_error(3)</a> to find out what type of error has occurred. If the error is non-fatal and can be retried then <a href="../man3/SSL_get_error.html">SSL_get_error(3)</a> will return <b>SSL_ERROR_WANT_READ</b> or <b>SSL_ERROR_WANT_WRITE</b> depending on whether OpenSSL wanted to read to or write from the socket but was unable to. Note that a call to <a href="../man3/SSL_read_ex.html">SSL_read_ex(3)</a> or <a href="../man3/SSL_read.html">SSL_read(3)</a> can still generate <b>SSL_ERROR_WANT_WRITE</b> because OpenSSL may need to write protocol messages (such as to update cryptographic keys) even if the application is only trying to read data. Similarly calls to <a href="../man3/SSL_write_ex.html">SSL_write_ex(3)</a> or <a href="../man3/SSL_write.html">SSL_write(3)</a> might generate <b>SSL_ERROR_WANT_READ</b>.</p>
+
+<p>Another type of non-fatal error that may occur is <b>SSL_ERROR_ZERO_RETURN</b>. This indicates an EOF (End-Of-File) which can occur if you attempt to read data from an <b>SSL</b> object but the peer has indicated that it will not send any more data on it. In this case you may still want to write data to the connection but you will not receive any more data.</p>
+
+<p>Fatal errors that may occur are <b>SSL_ERROR_SYSCALL</b> and <b>SSL_ERROR_SSL</b>. These indicate that the underlying connection has failed. You should not attempt to shut it down with <a href="../man3/SSL_shutdown.html">SSL_shutdown(3)</a>. <b>SSL_ERROR_SYSCALL</b> indicates that OpenSSL attempted to make a syscall that failed. You can consult <b>errno</b> for further details. <b>SSL_ERROR_SSL</b> indicates that some OpenSSL error occurred. You can consult the OpenSSL error stack for further details (for example by calling <a href="../man3/ERR_print_errors.html">ERR_print_errors(3)</a> to print out details of errors that have occurred).</p>
+
+<p>In our demo application we will write a function to handle these errors from OpenSSL I/O functions:</p>
+
+<pre><code>static int handle_io_failure(SSL *ssl, int res)
+{
+    switch (SSL_get_error(ssl, res)) {
+    case SSL_ERROR_WANT_READ:
+        /* Temporary failure. Wait until we can read and try again */
+        wait_for_activity(ssl, 0);
+        return 1;
+
+    case SSL_ERROR_WANT_WRITE:
+        /* Temporary failure. Wait until we can write and try again */
+        wait_for_activity(ssl, 1);
+        return 1;
+
+    case SSL_ERROR_ZERO_RETURN:
+        /* EOF */
+        return 0;
+
+    case SSL_ERROR_SYSCALL:
+        return -1;
+
+    case SSL_ERROR_SSL:
+        /*
+        * If the failure is due to a verification error we can get more
+        * information about it from SSL_get_verify_result().
+        */
+        if (SSL_get_verify_result(ssl) != X509_V_OK)
+            printf(&quot;Verify error: %s\n&quot;,
+                X509_verify_cert_error_string(SSL_get_verify_result(ssl)));
+        return -1;
+
+    default:
+        return -1;
+    }
+}</code></pre>
+
+<p>This function takes as arguments the <b>SSL</b> object that represents the connection, as well as the return code from the I/O function that failed. In the event of a non-fatal failure, it waits until a retry of the I/O operation might succeed (by using the <code>wait_for_activity()</code> function that we developed in the previous section). It returns 1 in the event of a non-fatal error (except EOF), 0 in the event of EOF, or -1 if a fatal error occurred.</p>
+
+<h2 id="Creating-the-SSL_CTX-and-SSL-objects">Creating the SSL_CTX and SSL objects</h2>
+
+<p>In order to connect to a server we must create <b>SSL_CTX</b> and <b>SSL</b> objects for this. The steps do this are the same as for a blocking client and are explained on the <a href="../man7/ossl-guide-tls-client-block.html">ossl-guide-tls-client-block(7)</a> page. We won&#39;t repeat that information here.</p>
+
+<h2 id="Performing-the-handshake">Performing the handshake</h2>
+
+<p>As in the demo for a blocking TLS client we use the <a href="../man3/SSL_connect.html">SSL_connect(3)</a> function to perform the TLS handshake with the server. Since we are using a nonblocking socket it is very likely that calls to this function will fail with a non-fatal error while we are waiting for the server to respond to our handshake messages. In such a case we must retry the same <a href="../man3/SSL_connect.html">SSL_connect(3)</a> call at a later time. In this demo we this in a loop:</p>
+
+<pre><code>/* Do the handshake with the server */
+while ((ret = SSL_connect(ssl)) != 1) {
+    if (handle_io_failure(ssl, ret) == 1)
+        continue; /* Retry */
+    printf(&quot;Failed to connect to server\n&quot;);
+    goto end; /* Cannot retry: error */
+}</code></pre>
+
+<p>We continually call <a href="../man3/SSL_connect.html">SSL_connect(3)</a> until it gives us a success response. Otherwise we use the <code>handle_io_failure()</code> function that we created earlier to work out what we should do next. Note that we do not expect an EOF to occur at this stage, so such a response is treated in the same way as a fatal error.</p>
+
+<h2 id="Sending-and-receiving-data">Sending and receiving data</h2>
+
+<p>As with the blocking TLS client demo we use the <a href="../man3/SSL_write_ex.html">SSL_write_ex(3)</a> function to send data to the server. As with <a href="../man3/SSL_connect.html">SSL_connect(3)</a> above, because we are using a nonblocking socket, this call could fail with a non-fatal error. In that case we should retry exactly the same <a href="../man3/SSL_write_ex.html">SSL_write_ex(3)</a> call again. Note that the parameters must be <i>exactly</i> the same, i.e. the same pointer to the buffer to write with the same length. You must not attempt to send different data on a retry. An optional mode does exist (<b>SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER</b>) which will configure OpenSSL to allow the buffer being written to change from one retry to the next. However, in this case, you must still retry exactly the same data - even though the buffer that contains that data may change location. See <a href="../man3/SSL_CTX_set_mode.html">SSL_CTX_set_mode(3)</a> for further details. As in the TLS client blocking tutorial (<a href="../man7/ossl-guide-tls-client-block.html">ossl-guide-tls-client-block(7)</a>) we write the request in three chunks.</p>
+
+<pre><code>/* Write an HTTP GET request to the peer */
+while (!SSL_write_ex(ssl, request_start, strlen(request_start), &amp;written)) {
+    if (handle_io_failure(ssl, 0) == 1)
+        continue; /* Retry */
+    printf(&quot;Failed to write start of HTTP request\n&quot;);
+    goto end; /* Cannot retry: error */
+}
+while (!SSL_write_ex(ssl, hostname, strlen(hostname), &amp;written)) {
+    if (handle_io_failure(ssl, 0) == 1)
+        continue; /* Retry */
+    printf(&quot;Failed to write hostname in HTTP request\n&quot;);
+    goto end; /* Cannot retry: error */
+}
+while (!SSL_write_ex(ssl, request_end, strlen(request_end), &amp;written)) {
+    if (handle_io_failure(ssl, 0) == 1)
+        continue; /* Retry */
+    printf(&quot;Failed to write end of HTTP request\n&quot;);
+    goto end; /* Cannot retry: error */
+}</code></pre>
+
+<p>On a write we do not expect to see an EOF response so we treat that case in the same way as a fatal error.</p>
+
+<p>Reading a response back from the server is similar:</p>
+
+<pre><code>do {
+    /*
+     * Get up to sizeof(buf) bytes of the response. We keep reading until
+     * the server closes the connection.
+     */
+    while (!eof &amp;&amp; !SSL_read_ex(ssl, buf, sizeof(buf), &amp;readbytes)) {
+        switch (handle_io_failure(ssl, 0)) {
+        case 1:
+            continue; /* Retry */
+        case 0:
+            eof = 1;
+            continue;
+        case -1:
+        default:
+            printf(&quot;Failed reading remaining data\n&quot;);
+            goto end; /* Cannot retry: error */
+        }
+    }
+    /*
+     * OpenSSL does not guarantee that the returned data is a string or
+     * that it is NUL terminated so we use fwrite() to write the exact
+     * number of bytes that we read. The data could be non-printable or
+     * have NUL characters in the middle of it. For this simple example
+     * we&#39;re going to print it to stdout anyway.
+     */
+    if (!eof)
+        fwrite(buf, 1, readbytes, stdout);
+} while (!eof);
+/* In case the response didn&#39;t finish with a newline we add one now */
+printf(&quot;\n&quot;);</code></pre>
+
+<p>The main difference this time is that it is valid for us to receive an EOF response when trying to read data from the server. This will occur when the server closes down the connection after sending all the data in its response.</p>
+
+<p>In this demo we just print out all the data we&#39;ve received back in the response from the server. We continue going around the loop until we either encounter a fatal error, or we receive an EOF (indicating a graceful finish).</p>
+
+<h2 id="Shutting-down-the-connection">Shutting down the connection</h2>
+
+<p>As in the TLS blocking example we must shutdown the connection when we are finished with it.</p>
+
+<p>If our application was initiating the shutdown then we would expect to see <a href="../man3/SSL_shutdown.html">SSL_shutdown(3)</a> give a return value of 0, and then we would continue to call it until we received a return value of 1 (meaning we have successfully completed the shutdown). In this particular example we don&#39;t expect SSL_shutdown() to return 0 because we have already received EOF from the server indicating that it has shutdown already. So we just keep calling it until SSL_shutdown() returns 1. Since we are using a nonblocking socket we might expect to have to retry this operation several times. If <a href="../man3/SSL_shutdown.html">SSL_shutdown(3)</a> returns a negative result then we must call <a href="../man3/SSL_get_error.html">SSL_get_error(3)</a> to work out what to do next. We use our handle_io_failure() function that we developed earlier for this:</p>
+
+<pre><code>/*
+ * The peer already shutdown gracefully (we know this because of the
+ * SSL_ERROR_ZERO_RETURN (i.e. EOF) above). We should do the same back.
+ */
+while ((ret = SSL_shutdown(ssl)) != 1) {
+    if (ret &lt; 0 &amp;&amp; handle_io_failure(ssl, ret) == 1)
+        continue; /* Retry */
+    /*
+     * ret == 0 is unexpected here because that means &quot;we&#39;ve sent a
+     * close_notify and we&#39;re waiting for one back&quot;. But we already know
+     * we got one from the peer because of the SSL_ERROR_ZERO_RETURN
+     * (i.e. EOF) above.
+     */
+    printf(&quot;Error shutting down\n&quot;);
+    goto end; /* Cannot retry: error */
+}</code></pre>
+
+<h2 id="Final-clean-up">Final clean up</h2>
+
+<p>As with the blocking TLS client example, once our connection is finished with we must free it. The steps to do this for this example are the same as for the blocking example, so we won&#39;t repeat it here.</p>
+
+<h1 id="FURTHER-READING">FURTHER READING</h1>
+
+<p>See <a href="../man7/ossl-guide-tls-client-block.html">ossl-guide-tls-client-block(7)</a> to read a tutorial on how to write a blocking TLS client. See <a href="../man7/ossl-guide-quic-client-block.html">ossl-guide-quic-client-block(7)</a> to see how to do the same thing for a QUIC client.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ossl-guide-introduction.html">ossl-guide-introduction(7)</a>, <a href="../man7/ossl-guide-libraries-introduction.html">ossl-guide-libraries-introduction(7)</a>, <a href="../man7/ossl-guide-libssl-introduction.html">ossl-guide-libssl-introduction(7)</a>, <a href="../man7/ossl-guide-tls-introduction.html">ossl-guide-tls-introduction(7)</a>, <a href="../man7/ossl-guide-tls-client-block.html">ossl-guide-tls-client-block(7)</a>, <a href="../man7/ossl-guide-quic-client-block.html">ossl-guide-quic-client-block(7)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,148 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>openssl-engine</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#OPTIONS">OPTIONS</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#ENVIRONMENT">ENVIRONMENT</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>openssl-engine - load and query engines</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<p><b>openssl engine</b> [<b>-help</b>] [<b>-v</b>] [<b>-vv</b>] [<b>-vvv</b>] [<b>-vvvv</b>] [<b>-c</b>] [<b>-t</b>] [<b>-tt</b>] [<b>-pre</b> <i>command</i>] ... [<b>-post</b> <i>command</i>] ... [<i>engine</i> ...]</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>This command has been deprecated. Providers should be used instead of engines.</p>
+
+<p>This command is used to query the status and capabilities of the specified <i>engine</i>s. Engines may be specified before and after all other command-line flags. Only those specified are queried.</p>
+
+<h1 id="OPTIONS">OPTIONS</h1>
+
+<dl>
+
+<dt id="help"><b>-help</b></dt>
+<dd>
+
+<p>Display an option summary.</p>
+
+</dd>
+<dt id="v--vv--vvv--vvvv"><b>-v</b> <b>-vv</b> <b>-vvv</b> <b>-vvvv</b></dt>
+<dd>
+
+<p>Provides information about each specified engine. The first flag lists all the possible run-time control commands; the second adds a description of each command; the third adds the input flags, and the final option adds the internal input flags.</p>
+
+</dd>
+<dt id="c"><b>-c</b></dt>
+<dd>
+
+<p>Lists the capabilities of each engine.</p>
+
+</dd>
+<dt id="t"><b>-t</b></dt>
+<dd>
+
+<p>Tests if each specified engine is available, and displays the answer.</p>
+
+</dd>
+<dt id="tt"><b>-tt</b></dt>
+<dd>
+
+<p>Displays an error trace for any unavailable engine.</p>
+
+</dd>
+<dt id="pre-command"><b>-pre</b> <i>command</i></dt>
+<dd>
+
+</dd>
+<dt id="post-command"><b>-post</b> <i>command</i></dt>
+<dd>
+
+<p>Command-line configuration of engines. The <b>-pre</b> command is given to the engine before it is loaded and the <b>-post</b> command is given after the engine is loaded. The <i>command</i> is of the form <i>cmd</i>:<i>val</i> where <i>cmd</i> is the command, and <i>val</i> is the value for the command. See the example below.</p>
+
+<p>These two options are cumulative, so they may be given more than once in the same command.</p>
+
+</dd>
+</dl>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>To list all the commands available to a dynamic engine:</p>
+
+<pre><code>$ openssl engine -t -tt -vvvv dynamic
+(dynamic) Dynamic engine loading support
+     [ unavailable ]
+     SO_PATH: Specifies the path to the new ENGINE shared library
+          (input flags): STRING
+     NO_VCHECK: Specifies to continue even if version checking fails (boolean)
+          (input flags): NUMERIC
+     ID: Specifies an ENGINE id name for loading
+          (input flags): STRING
+     LIST_ADD: Whether to add a loaded ENGINE to the internal list (0=no,1=yes,2=mandatory)
+          (input flags): NUMERIC
+     DIR_LOAD: Specifies whether to load from &#39;DIR_ADD&#39; directories (0=no,1=yes,2=mandatory)
+          (input flags): NUMERIC
+     DIR_ADD: Adds a directory from which ENGINEs can be loaded
+          (input flags): STRING
+     LOAD: Load up the ENGINE specified by other settings
+          (input flags): NO_INPUT</code></pre>
+
+<p>To list the capabilities of the <b>rsax</b> engine:</p>
+
+<pre><code>$ openssl engine -c
+(rsax) RSAX engine support
+ [RSA]
+(dynamic) Dynamic engine loading support</code></pre>
+
+<h1 id="ENVIRONMENT">ENVIRONMENT</h1>
+
+<dl>
+
+<dt id="OPENSSL_ENGINES"><b>OPENSSL_ENGINES</b></dt>
+<dd>
+
+<p>The path to the engines directory.</p>
+
+</dd>
+</dl>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man1/openssl.html">openssl(1)</a>, <a href="../man5/config.html">config(5)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>This command was deprecated in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2016-2020 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

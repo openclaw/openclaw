@@ -1,0 +1,426 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>ENGINE_add</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Reference-counting-and-handles">Reference counting and handles</a></li>
+      <li><a href="#Default-implementations">Default implementations</a></li>
+      <li><a href="#Application-requirements">Application requirements</a></li>
+      <li><a href="#Advanced-configuration-support">Advanced configuration support</a></li>
+    </ul>
+  </li>
+  <li><a href="#ENVIRONMENT">ENVIRONMENT</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>ENGINE_get_DH, ENGINE_get_DSA, ENGINE_by_id, ENGINE_get_cipher_engine, ENGINE_get_default_DH, ENGINE_get_default_DSA, ENGINE_get_default_RAND, ENGINE_get_default_RSA, ENGINE_get_digest_engine, ENGINE_get_first, ENGINE_get_last, ENGINE_get_next, ENGINE_get_prev, ENGINE_new, ENGINE_get_ciphers, ENGINE_get_ctrl_function, ENGINE_get_digests, ENGINE_get_destroy_function, ENGINE_get_finish_function, ENGINE_get_init_function, ENGINE_get_load_privkey_function, ENGINE_get_load_pubkey_function, ENGINE_load_private_key, ENGINE_load_public_key, ENGINE_get_RAND, ENGINE_get_RSA, ENGINE_get_id, ENGINE_get_name, ENGINE_get_cmd_defns, ENGINE_get_cipher, ENGINE_get_digest, ENGINE_add, ENGINE_cmd_is_executable, ENGINE_ctrl, ENGINE_ctrl_cmd, ENGINE_ctrl_cmd_string, ENGINE_finish, ENGINE_free, ENGINE_get_flags, ENGINE_init, ENGINE_register_DH, ENGINE_register_DSA, ENGINE_register_RAND, ENGINE_register_RSA, ENGINE_register_all_complete, ENGINE_register_ciphers, ENGINE_register_complete, ENGINE_register_digests, ENGINE_remove, ENGINE_set_DH, ENGINE_set_DSA, ENGINE_set_RAND, ENGINE_set_RSA, ENGINE_set_ciphers, ENGINE_set_cmd_defns, ENGINE_set_ctrl_function, ENGINE_set_default, ENGINE_set_default_DH, ENGINE_set_default_DSA, ENGINE_set_default_RAND, ENGINE_set_default_RSA, ENGINE_set_default_ciphers, ENGINE_set_default_digests, ENGINE_set_default_string, ENGINE_set_destroy_function, ENGINE_set_digests, ENGINE_set_finish_function, ENGINE_set_flags, ENGINE_set_id, ENGINE_set_init_function, ENGINE_set_load_privkey_function, ENGINE_set_load_pubkey_function, ENGINE_set_name, ENGINE_up_ref, ENGINE_get_table_flags, ENGINE_cleanup, ENGINE_load_builtin_engines, ENGINE_register_all_DH, ENGINE_register_all_DSA, ENGINE_register_all_RAND, ENGINE_register_all_RSA, ENGINE_register_all_ciphers, ENGINE_register_all_digests, ENGINE_set_table_flags, ENGINE_unregister_DH, ENGINE_unregister_DSA, ENGINE_unregister_RAND, ENGINE_unregister_RSA, ENGINE_unregister_ciphers, ENGINE_unregister_digests - ENGINE cryptographic module support</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/engine.h&gt;</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>ENGINE *ENGINE_get_first(void);
+ENGINE *ENGINE_get_last(void);
+ENGINE *ENGINE_get_next(ENGINE *e);
+ENGINE *ENGINE_get_prev(ENGINE *e);
+
+int ENGINE_add(ENGINE *e);
+int ENGINE_remove(ENGINE *e);
+
+ENGINE *ENGINE_by_id(const char *id);
+
+int ENGINE_init(ENGINE *e);
+int ENGINE_finish(ENGINE *e);
+
+void ENGINE_load_builtin_engines(void);
+
+ENGINE *ENGINE_get_default_RSA(void);
+ENGINE *ENGINE_get_default_DSA(void);
+ENGINE *ENGINE_get_default_DH(void);
+ENGINE *ENGINE_get_default_RAND(void);
+ENGINE *ENGINE_get_cipher_engine(int nid);
+ENGINE *ENGINE_get_digest_engine(int nid);
+
+int ENGINE_set_default_RSA(ENGINE *e);
+int ENGINE_set_default_DSA(ENGINE *e);
+int ENGINE_set_default_DH(ENGINE *e);
+int ENGINE_set_default_RAND(ENGINE *e);
+int ENGINE_set_default_ciphers(ENGINE *e);
+int ENGINE_set_default_digests(ENGINE *e);
+int ENGINE_set_default_string(ENGINE *e, const char *list);
+
+int ENGINE_set_default(ENGINE *e, unsigned int flags);
+
+unsigned int ENGINE_get_table_flags(void);
+void ENGINE_set_table_flags(unsigned int flags);
+
+int ENGINE_register_RSA(ENGINE *e);
+void ENGINE_unregister_RSA(ENGINE *e);
+void ENGINE_register_all_RSA(void);
+int ENGINE_register_DSA(ENGINE *e);
+void ENGINE_unregister_DSA(ENGINE *e);
+void ENGINE_register_all_DSA(void);
+int ENGINE_register_DH(ENGINE *e);
+void ENGINE_unregister_DH(ENGINE *e);
+void ENGINE_register_all_DH(void);
+int ENGINE_register_RAND(ENGINE *e);
+void ENGINE_unregister_RAND(ENGINE *e);
+void ENGINE_register_all_RAND(void);
+int ENGINE_register_ciphers(ENGINE *e);
+void ENGINE_unregister_ciphers(ENGINE *e);
+void ENGINE_register_all_ciphers(void);
+int ENGINE_register_digests(ENGINE *e);
+void ENGINE_unregister_digests(ENGINE *e);
+void ENGINE_register_all_digests(void);
+int ENGINE_register_complete(ENGINE *e);
+int ENGINE_register_all_complete(void);
+
+int ENGINE_ctrl(ENGINE *e, int cmd, long i, void *p, void (*f)(void));
+int ENGINE_cmd_is_executable(ENGINE *e, int cmd);
+int ENGINE_ctrl_cmd(ENGINE *e, const char *cmd_name,
+                    long i, void *p, void (*f)(void), int cmd_optional);
+int ENGINE_ctrl_cmd_string(ENGINE *e, const char *cmd_name, const char *arg,
+                           int cmd_optional);
+
+ENGINE *ENGINE_new(void);
+int ENGINE_free(ENGINE *e);
+int ENGINE_up_ref(ENGINE *e);
+
+int ENGINE_set_id(ENGINE *e, const char *id);
+int ENGINE_set_name(ENGINE *e, const char *name);
+int ENGINE_set_RSA(ENGINE *e, const RSA_METHOD *rsa_meth);
+int ENGINE_set_DSA(ENGINE *e, const DSA_METHOD *dsa_meth);
+int ENGINE_set_DH(ENGINE *e, const DH_METHOD *dh_meth);
+int ENGINE_set_RAND(ENGINE *e, const RAND_METHOD *rand_meth);
+int ENGINE_set_destroy_function(ENGINE *e, ENGINE_GEN_INT_FUNC_PTR destroy_f);
+int ENGINE_set_init_function(ENGINE *e, ENGINE_GEN_INT_FUNC_PTR init_f);
+int ENGINE_set_finish_function(ENGINE *e, ENGINE_GEN_INT_FUNC_PTR finish_f);
+int ENGINE_set_ctrl_function(ENGINE *e, ENGINE_CTRL_FUNC_PTR ctrl_f);
+int ENGINE_set_load_privkey_function(ENGINE *e, ENGINE_LOAD_KEY_PTR loadpriv_f);
+int ENGINE_set_load_pubkey_function(ENGINE *e, ENGINE_LOAD_KEY_PTR loadpub_f);
+int ENGINE_set_ciphers(ENGINE *e, ENGINE_CIPHERS_PTR f);
+int ENGINE_set_digests(ENGINE *e, ENGINE_DIGESTS_PTR f);
+int ENGINE_set_flags(ENGINE *e, int flags);
+int ENGINE_set_cmd_defns(ENGINE *e, const ENGINE_CMD_DEFN *defns);
+
+const char *ENGINE_get_id(const ENGINE *e);
+const char *ENGINE_get_name(const ENGINE *e);
+const RSA_METHOD *ENGINE_get_RSA(const ENGINE *e);
+const DSA_METHOD *ENGINE_get_DSA(const ENGINE *e);
+const DH_METHOD *ENGINE_get_DH(const ENGINE *e);
+const RAND_METHOD *ENGINE_get_RAND(const ENGINE *e);
+ENGINE_GEN_INT_FUNC_PTR ENGINE_get_destroy_function(const ENGINE *e);
+ENGINE_GEN_INT_FUNC_PTR ENGINE_get_init_function(const ENGINE *e);
+ENGINE_GEN_INT_FUNC_PTR ENGINE_get_finish_function(const ENGINE *e);
+ENGINE_CTRL_FUNC_PTR ENGINE_get_ctrl_function(const ENGINE *e);
+ENGINE_LOAD_KEY_PTR ENGINE_get_load_privkey_function(const ENGINE *e);
+ENGINE_LOAD_KEY_PTR ENGINE_get_load_pubkey_function(const ENGINE *e);
+ENGINE_CIPHERS_PTR ENGINE_get_ciphers(const ENGINE *e);
+ENGINE_DIGESTS_PTR ENGINE_get_digests(const ENGINE *e);
+const EVP_CIPHER *ENGINE_get_cipher(ENGINE *e, int nid);
+const EVP_MD *ENGINE_get_digest(ENGINE *e, int nid);
+int ENGINE_get_flags(const ENGINE *e);
+const ENGINE_CMD_DEFN *ENGINE_get_cmd_defns(const ENGINE *e);
+
+EVP_PKEY *ENGINE_load_private_key(ENGINE *e, const char *key_id,
+                                  UI_METHOD *ui_method, void *callback_data);
+EVP_PKEY *ENGINE_load_public_key(ENGINE *e, const char *key_id,
+                                 UI_METHOD *ui_method, void *callback_data);</code></pre>
+
+<p>The following function has been deprecated since OpenSSL 1.1.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>void ENGINE_cleanup(void);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>All of the functions described on this page are deprecated. Applications should instead use the provider APIs.</p>
+
+<p>These functions create, manipulate, and use cryptographic modules in the form of <b>ENGINE</b> objects. These objects act as containers for implementations of cryptographic algorithms, and support a reference-counted mechanism to allow them to be dynamically loaded in and out of the running application.</p>
+
+<p>The cryptographic functionality that can be provided by an <b>ENGINE</b> implementation includes the following abstractions;</p>
+
+<pre><code>RSA_METHOD - for providing alternative RSA implementations
+DSA_METHOD, DH_METHOD, RAND_METHOD, ECDH_METHOD, ECDSA_METHOD,
+      - similarly for other OpenSSL APIs
+EVP_CIPHER - potentially multiple cipher algorithms (indexed by &#39;nid&#39;)
+EVP_DIGEST - potentially multiple hash algorithms (indexed by &#39;nid&#39;)
+key-loading - loading public and/or private EVP_PKEY keys</code></pre>
+
+<h2 id="Reference-counting-and-handles">Reference counting and handles</h2>
+
+<p>Due to the modular nature of the ENGINE API, pointers to ENGINEs need to be treated as handles - i.e. not only as pointers, but also as references to the underlying ENGINE object. Ie. one should obtain a new reference when making copies of an ENGINE pointer if the copies will be used (and released) independently.</p>
+
+<p>ENGINE objects have two levels of reference-counting to match the way in which the objects are used. At the most basic level, each ENGINE pointer is inherently a <b>structural</b> reference - a structural reference is required to use the pointer value at all, as this kind of reference is a guarantee that the structure can not be deallocated until the reference is released.</p>
+
+<p>However, a structural reference provides no guarantee that the ENGINE is initialised and able to use any of its cryptographic implementations. Indeed it&#39;s quite possible that most ENGINEs will not initialise at all in typical environments, as ENGINEs are typically used to support specialised hardware. To use an ENGINE&#39;s functionality, you need a <b>functional</b> reference. This kind of reference can be considered a specialised form of structural reference, because each functional reference implicitly contains a structural reference as well - however to avoid difficult-to-find programming bugs, it is recommended to treat the two kinds of reference independently. If you have a functional reference to an ENGINE, you have a guarantee that the ENGINE has been initialised and is ready to perform cryptographic operations, and will remain initialised until after you have released your reference.</p>
+
+<p><i>Structural references</i></p>
+
+<p>This basic type of reference is used for instantiating new ENGINEs, iterating across OpenSSL&#39;s internal linked-list of loaded ENGINEs, reading information about an ENGINE, etc. Essentially a structural reference is sufficient if you only need to query or manipulate the data of an ENGINE implementation rather than use its functionality.</p>
+
+<p>The ENGINE_new() function returns a structural reference to a new (empty) ENGINE object. There are other ENGINE API functions that return structural references such as; ENGINE_by_id(), ENGINE_get_first(), ENGINE_get_last(), ENGINE_get_next(), ENGINE_get_prev(). All structural references should be released by a corresponding to call to the ENGINE_free() function - the ENGINE object itself will only actually be cleaned up and deallocated when the last structural reference is released. If the argument to ENGINE_free() is NULL, nothing is done.</p>
+
+<p>It should also be noted that many ENGINE API function calls that accept a structural reference will internally obtain another reference - typically this happens whenever the supplied ENGINE will be needed by OpenSSL after the function has returned. Eg. the function to add a new ENGINE to OpenSSL&#39;s internal list is ENGINE_add() - if this function returns success, then OpenSSL will have stored a new structural reference internally so the caller is still responsible for freeing their own reference with ENGINE_free() when they are finished with it. In a similar way, some functions will automatically release the structural reference passed to it if part of the function&#39;s job is to do so. Eg. the ENGINE_get_next() and ENGINE_get_prev() functions are used for iterating across the internal ENGINE list - they will return a new structural reference to the next (or previous) ENGINE in the list or NULL if at the end (or beginning) of the list, but in either case the structural reference passed to the function is released on behalf of the caller.</p>
+
+<p>To clarify a particular function&#39;s handling of references, one should always consult that function&#39;s documentation &quot;man&quot; page, or failing that the <i>&lt;openssl/engine.h&gt;</i> header file includes some hints.</p>
+
+<p><i>Functional references</i></p>
+
+<p>As mentioned, functional references exist when the cryptographic functionality of an ENGINE is required to be available. A functional reference can be obtained in one of two ways; from an existing structural reference to the required ENGINE, or by asking OpenSSL for the default operational ENGINE for a given cryptographic purpose.</p>
+
+<p>To obtain a functional reference from an existing structural reference, call the ENGINE_init() function. This returns zero if the ENGINE was not already operational and couldn&#39;t be successfully initialised (e.g. lack of system drivers, no special hardware attached, etc), otherwise it will return nonzero to indicate that the ENGINE is now operational and will have allocated a new <b>functional</b> reference to the ENGINE. All functional references are released by calling ENGINE_finish() (which removes the implicit structural reference as well).</p>
+
+<p>The second way to get a functional reference is by asking OpenSSL for a default implementation for a given task, e.g. by ENGINE_get_default_RSA(), ENGINE_get_default_cipher_engine(), etc. These are discussed in the next section, though they are not usually required by application programmers as they are used automatically when creating and using the relevant algorithm-specific types in OpenSSL, such as RSA, DSA, EVP_CIPHER_CTX, etc.</p>
+
+<h2 id="Default-implementations">Default implementations</h2>
+
+<p>For each supported abstraction, the ENGINE code maintains an internal table of state to control which implementations are available for a given abstraction and which should be used by default. These implementations are registered in the tables and indexed by an &#39;nid&#39; value, because abstractions like EVP_CIPHER and EVP_DIGEST support many distinct algorithms and modes, and ENGINEs can support arbitrarily many of them. In the case of other abstractions like RSA, DSA, etc, there is only one &quot;algorithm&quot; so all implementations implicitly register using the same &#39;nid&#39; index.</p>
+
+<p>When a default ENGINE is requested for a given abstraction/algorithm/mode, (e.g. when calling RSA_new_method(NULL)), a &quot;get_default&quot; call will be made to the ENGINE subsystem to process the corresponding state table and return a functional reference to an initialised ENGINE whose implementation should be used. If no ENGINE should (or can) be used, it will return NULL and the caller will operate with a NULL ENGINE handle - this usually equates to using the conventional software implementation. In the latter case, OpenSSL will from then on behave the way it used to before the ENGINE API existed.</p>
+
+<p>Each state table has a flag to note whether it has processed this &quot;get_default&quot; query since the table was last modified, because to process this question it must iterate across all the registered ENGINEs in the table trying to initialise each of them in turn, in case one of them is operational. If it returns a functional reference to an ENGINE, it will also cache another reference to speed up processing future queries (without needing to iterate across the table). Likewise, it will cache a NULL response if no ENGINE was available so that future queries won&#39;t repeat the same iteration unless the state table changes. This behaviour can also be changed; if the ENGINE_TABLE_FLAG_NOINIT flag is set (using ENGINE_set_table_flags()), no attempted initialisations will take place, instead the only way for the state table to return a non-NULL ENGINE to the &quot;get_default&quot; query will be if one is expressly set in the table. Eg. ENGINE_set_default_RSA() does the same job as ENGINE_register_RSA() except that it also sets the state table&#39;s cached response for the &quot;get_default&quot; query. In the case of abstractions like EVP_CIPHER, where implementations are indexed by &#39;nid&#39;, these flags and cached-responses are distinct for each &#39;nid&#39; value.</p>
+
+<h2 id="Application-requirements">Application requirements</h2>
+
+<p>This section will explain the basic things an application programmer should support to make the most useful elements of the ENGINE functionality available to the user. The first thing to consider is whether the programmer wishes to make alternative ENGINE modules available to the application and user. OpenSSL maintains an internal linked list of &quot;visible&quot; ENGINEs from which it has to operate - at start-up, this list is empty and in fact if an application does not call any ENGINE API calls and it uses static linking against openssl, then the resulting application binary will not contain any alternative ENGINE code at all. So the first consideration is whether any/all available ENGINE implementations should be made visible to OpenSSL - this is controlled by calling the various &quot;load&quot; functions.</p>
+
+<p>The fact that ENGINEs are made visible to OpenSSL (and thus are linked into the program and loaded into memory at run-time) does not mean they are &quot;registered&quot; or called into use by OpenSSL automatically - that behaviour is something for the application to control. Some applications will want to allow the user to specify exactly which ENGINE they want used if any is to be used at all. Others may prefer to load all support and have OpenSSL automatically use at run-time any ENGINE that is able to successfully initialise - i.e. to assume that this corresponds to acceleration hardware attached to the machine or some such thing. There are probably numerous other ways in which applications may prefer to handle things, so we will simply illustrate the consequences as they apply to a couple of simple cases and leave developers to consider these and the source code to openssl&#39;s built-in utilities as guides.</p>
+
+<p>If no ENGINE API functions are called within an application, then OpenSSL will not allocate any internal resources. Prior to OpenSSL 1.1.0, however, if any ENGINEs are loaded, even if not registered or used, it was necessary to call ENGINE_cleanup() before the program exits.</p>
+
+<p><i>Using a specific ENGINE implementation</i></p>
+
+<p>Here we&#39;ll assume an application has been configured by its user or admin to want to use the &quot;ACME&quot; ENGINE if it is available in the version of OpenSSL the application was compiled with. If it is available, it should be used by default for all RSA, DSA, and symmetric cipher operations, otherwise OpenSSL should use its built-in software as per usual. The following code illustrates how to approach this;</p>
+
+<pre><code>ENGINE *e;
+const char *engine_id = &quot;ACME&quot;;
+ENGINE_load_builtin_engines();
+e = ENGINE_by_id(engine_id);
+if (!e)
+    /* the engine isn&#39;t available */
+    return;
+if (!ENGINE_init(e)) {
+    /* the engine couldn&#39;t initialise, release &#39;e&#39; */
+    ENGINE_free(e);
+    return;
+}
+if (!ENGINE_set_default_RSA(e))
+    /*
+     * This should only happen when &#39;e&#39; can&#39;t initialise, but the previous
+     * statement suggests it did.
+     */
+    abort();
+ENGINE_set_default_DSA(e);
+ENGINE_set_default_ciphers(e);
+/* Release the functional reference from ENGINE_init() */
+ENGINE_finish(e);
+/* Release the structural reference from ENGINE_by_id() */
+ENGINE_free(e);</code></pre>
+
+<p><i>Automatically using built-in ENGINE implementations</i></p>
+
+<p>Here we&#39;ll assume we want to load and register all ENGINE implementations bundled with OpenSSL, such that for any cryptographic algorithm required by OpenSSL - if there is an ENGINE that implements it and can be initialised, it should be used. The following code illustrates how this can work;</p>
+
+<pre><code>/* Load all bundled ENGINEs into memory and make them visible */
+ENGINE_load_builtin_engines();
+/* Register all of them for every algorithm they collectively implement */
+ENGINE_register_all_complete();</code></pre>
+
+<p>That&#39;s all that&#39;s required. Eg. the next time OpenSSL tries to set up an RSA key, any bundled ENGINEs that implement RSA_METHOD will be passed to ENGINE_init() and if any of those succeed, that ENGINE will be set as the default for RSA use from then on.</p>
+
+<h2 id="Advanced-configuration-support">Advanced configuration support</h2>
+
+<p>There is a mechanism supported by the ENGINE framework that allows each ENGINE implementation to define an arbitrary set of configuration &quot;commands&quot; and expose them to OpenSSL and any applications based on OpenSSL. This mechanism is entirely based on the use of name-value pairs and assumes ASCII input (no unicode or UTF for now!), so it is ideal if applications want to provide a transparent way for users to provide arbitrary configuration &quot;directives&quot; directly to such ENGINEs. It is also possible for the application to dynamically interrogate the loaded ENGINE implementations for the names, descriptions, and input flags of their available &quot;control commands&quot;, providing a more flexible configuration scheme. However, if the user is expected to know which ENGINE device he/she is using (in the case of specialised hardware, this goes without saying) then applications may not need to concern themselves with discovering the supported control commands and simply prefer to pass settings into ENGINEs exactly as they are provided by the user.</p>
+
+<p>Before illustrating how control commands work, it is worth mentioning what they are typically used for. Broadly speaking there are two uses for control commands; the first is to provide the necessary details to the implementation (which may know nothing at all specific to the host system) so that it can be initialised for use. This could include the path to any driver or config files it needs to load, required network addresses, smart-card identifiers, passwords to initialise protected devices, logging information, etc etc. This class of commands typically needs to be passed to an ENGINE <b>before</b> attempting to initialise it, i.e. before calling ENGINE_init(). The other class of commands consist of settings or operations that tweak certain behaviour or cause certain operations to take place, and these commands may work either before or after ENGINE_init(), or in some cases both. ENGINE implementations should provide indications of this in the descriptions attached to built-in control commands and/or in external product documentation.</p>
+
+<p><i>Issuing control commands to an ENGINE</i></p>
+
+<p>Let&#39;s illustrate by example; a function for which the caller supplies the name of the ENGINE it wishes to use, a table of string-pairs for use before initialisation, and another table for use after initialisation. Note that the string-pairs used for control commands consist of a command &quot;name&quot; followed by the command &quot;parameter&quot; - the parameter could be NULL in some cases but the name can not. This function should initialise the ENGINE (issuing the &quot;pre&quot; commands beforehand and the &quot;post&quot; commands afterwards) and set it as the default for everything except RAND and then return a boolean success or failure.</p>
+
+<pre><code>int generic_load_engine_fn(const char *engine_id,
+                           const char **pre_cmds, int pre_num,
+                           const char **post_cmds, int post_num)
+{
+    ENGINE *e = ENGINE_by_id(engine_id);
+    if (!e) return 0;
+    while (pre_num--) {
+        if (!ENGINE_ctrl_cmd_string(e, pre_cmds[0], pre_cmds[1], 0)) {
+            fprintf(stderr, &quot;Failed command (%s - %s:%s)\n&quot;, engine_id,
+                    pre_cmds[0], pre_cmds[1] ? pre_cmds[1] : &quot;(NULL)&quot;);
+            ENGINE_free(e);
+            return 0;
+        }
+        pre_cmds += 2;
+    }
+    if (!ENGINE_init(e)) {
+        fprintf(stderr, &quot;Failed initialisation\n&quot;);
+        ENGINE_free(e);
+        return 0;
+    }
+    /*
+     * ENGINE_init() returned a functional reference, so free the structural
+     * reference from ENGINE_by_id().
+     */
+    ENGINE_free(e);
+    while (post_num--) {
+        if (!ENGINE_ctrl_cmd_string(e, post_cmds[0], post_cmds[1], 0)) {
+            fprintf(stderr, &quot;Failed command (%s - %s:%s)\n&quot;, engine_id,
+                    post_cmds[0], post_cmds[1] ? post_cmds[1] : &quot;(NULL)&quot;);
+            ENGINE_finish(e);
+            return 0;
+        }
+        post_cmds += 2;
+    }
+    ENGINE_set_default(e, ENGINE_METHOD_ALL &amp; ~ENGINE_METHOD_RAND);
+    /* Success */
+    return 1;
+}</code></pre>
+
+<p>Note that ENGINE_ctrl_cmd_string() accepts a boolean argument that can relax the semantics of the function - if set nonzero it will only return failure if the ENGINE supported the given command name but failed while executing it, if the ENGINE doesn&#39;t support the command name it will simply return success without doing anything. In this case we assume the user is only supplying commands specific to the given ENGINE so we set this to FALSE.</p>
+
+<p><i>Discovering supported control commands</i></p>
+
+<p>It is possible to discover at run-time the names, numerical-ids, descriptions and input parameters of the control commands supported by an ENGINE using a structural reference. Note that some control commands are defined by OpenSSL itself and it will intercept and handle these control commands on behalf of the ENGINE, i.e. the ENGINE&#39;s ctrl() handler is not used for the control command. <i>&lt;openssl/engine.h&gt;</i> defines an index, ENGINE_CMD_BASE, that all control commands implemented by ENGINEs should be numbered from. Any command value lower than this symbol is considered a &quot;generic&quot; command is handled directly by the OpenSSL core routines.</p>
+
+<p>It is using these &quot;core&quot; control commands that one can discover the control commands implemented by a given ENGINE, specifically the commands:</p>
+
+<pre><code>ENGINE_HAS_CTRL_FUNCTION
+ENGINE_CTRL_GET_FIRST_CMD_TYPE
+ENGINE_CTRL_GET_NEXT_CMD_TYPE
+ENGINE_CTRL_GET_CMD_FROM_NAME
+ENGINE_CTRL_GET_NAME_LEN_FROM_CMD
+ENGINE_CTRL_GET_NAME_FROM_CMD
+ENGINE_CTRL_GET_DESC_LEN_FROM_CMD
+ENGINE_CTRL_GET_DESC_FROM_CMD
+ENGINE_CTRL_GET_CMD_FLAGS</code></pre>
+
+<p>Whilst these commands are automatically processed by the OpenSSL framework code, they use various properties exposed by each ENGINE to process these queries. An ENGINE has 3 properties it exposes that can affect how this behaves; it can supply a ctrl() handler, it can specify ENGINE_FLAGS_MANUAL_CMD_CTRL in the ENGINE&#39;s flags, and it can expose an array of control command descriptions. If an ENGINE specifies the ENGINE_FLAGS_MANUAL_CMD_CTRL flag, then it will simply pass all these &quot;core&quot; control commands directly to the ENGINE&#39;s ctrl() handler (and thus, it must have supplied one), so it is up to the ENGINE to reply to these &quot;discovery&quot; commands itself. If that flag is not set, then the OpenSSL framework code will work with the following rules:</p>
+
+<pre><code>if no ctrl() handler supplied;
+    ENGINE_HAS_CTRL_FUNCTION returns FALSE (zero),
+    all other commands fail.
+if a ctrl() handler was supplied but no array of control commands;
+    ENGINE_HAS_CTRL_FUNCTION returns TRUE,
+    all other commands fail.
+if a ctrl() handler and array of control commands was supplied;
+    ENGINE_HAS_CTRL_FUNCTION returns TRUE,
+    all other commands proceed processing ...</code></pre>
+
+<p>If the ENGINE&#39;s array of control commands is empty then all other commands will fail, otherwise; ENGINE_CTRL_GET_FIRST_CMD_TYPE returns the identifier of the first command supported by the ENGINE, ENGINE_GET_NEXT_CMD_TYPE takes the identifier of a command supported by the ENGINE and returns the next command identifier or fails if there are no more, ENGINE_CMD_FROM_NAME takes a string name for a command and returns the corresponding identifier or fails if no such command name exists, and the remaining commands take a command identifier and return properties of the corresponding commands. All except ENGINE_CTRL_GET_FLAGS return the string length of a command name or description, or populate a supplied character buffer with a copy of the command name or description. ENGINE_CTRL_GET_FLAGS returns a bitwise-OR&#39;d mask of the following possible values:</p>
+
+<pre><code>ENGINE_CMD_FLAG_NUMERIC
+ENGINE_CMD_FLAG_STRING
+ENGINE_CMD_FLAG_NO_INPUT
+ENGINE_CMD_FLAG_INTERNAL</code></pre>
+
+<p>If the ENGINE_CMD_FLAG_INTERNAL flag is set, then any other flags are purely informational to the caller - this flag will prevent the command being usable for any higher-level ENGINE functions such as ENGINE_ctrl_cmd_string(). &quot;INTERNAL&quot; commands are not intended to be exposed to text-based configuration by applications, administrations, users, etc. These can support arbitrary operations via ENGINE_ctrl(), including passing to and/or from the control commands data of any arbitrary type. These commands are supported in the discovery mechanisms simply to allow applications to determine if an ENGINE supports certain specific commands it might want to use (e.g. application &quot;foo&quot; might query various ENGINEs to see if they implement &quot;FOO_GET_VENDOR_LOGO_GIF&quot; - and ENGINE could therefore decide whether or not to support this &quot;foo&quot;-specific extension).</p>
+
+<h1 id="ENVIRONMENT">ENVIRONMENT</h1>
+
+<dl>
+
+<dt id="OPENSSL_ENGINES"><b>OPENSSL_ENGINES</b></dt>
+<dd>
+
+<p>The path to the engines directory. Ignored in set-user-ID and set-group-ID programs.</p>
+
+</dd>
+</dl>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>ENGINE_get_first(), ENGINE_get_last(), ENGINE_get_next() and ENGINE_get_prev() return a valid <b>ENGINE</b> structure or NULL if an error occurred.</p>
+
+<p>ENGINE_add() and ENGINE_remove() return 1 on success or 0 on error.</p>
+
+<p>ENGINE_by_id() returns a valid <b>ENGINE</b> structure or NULL if an error occurred.</p>
+
+<p>ENGINE_init() and ENGINE_finish() return 1 on success or 0 on error.</p>
+
+<p>All ENGINE_get_default_TYPE() functions, ENGINE_get_cipher_engine() and ENGINE_get_digest_engine() return a valid <b>ENGINE</b> structure on success or NULL if an error occurred.</p>
+
+<p>All ENGINE_set_default_TYPE() functions return 1 on success or 0 on error.</p>
+
+<p>ENGINE_set_default() returns 1 on success or 0 on error.</p>
+
+<p>ENGINE_get_table_flags() returns an unsigned integer value representing the global table flags which are used to control the registration behaviour of <b>ENGINE</b> implementations.</p>
+
+<p>All ENGINE_register_TYPE() functions return 1 on success or 0 on error.</p>
+
+<p>ENGINE_register_complete() and ENGINE_register_all_complete() always return 1.</p>
+
+<p>ENGINE_ctrl() returns a positive value on success or others on error.</p>
+
+<p>ENGINE_cmd_is_executable() returns 1 if <b>cmd</b> is executable or 0 otherwise.</p>
+
+<p>ENGINE_ctrl_cmd() and ENGINE_ctrl_cmd_string() return 1 on success or 0 on error.</p>
+
+<p>ENGINE_new() returns a valid <b>ENGINE</b> structure on success or NULL if an error occurred.</p>
+
+<p>ENGINE_free() always returns 1.</p>
+
+<p>ENGINE_up_ref() returns 1 on success or 0 on error.</p>
+
+<p>ENGINE_set_id() and ENGINE_set_name() return 1 on success or 0 on error.</p>
+
+<p>All other <b>ENGINE_set_*</b> functions return 1 on success or 0 on error.</p>
+
+<p>ENGINE_get_id() and ENGINE_get_name() return a string representing the identifier and the name of the ENGINE <b>e</b> respectively.</p>
+
+<p>ENGINE_get_RSA(), ENGINE_get_DSA(), ENGINE_get_DH() and ENGINE_get_RAND() return corresponding method structures for each algorithms.</p>
+
+<p>ENGINE_get_destroy_function(), ENGINE_get_init_function(), ENGINE_get_finish_function(), ENGINE_get_ctrl_function(), ENGINE_get_load_privkey_function(), ENGINE_get_load_pubkey_function(), ENGINE_get_ciphers() and ENGINE_get_digests() return corresponding function pointers of the callbacks.</p>
+
+<p>ENGINE_get_cipher() returns a valid <b>EVP_CIPHER</b> structure on success or NULL if an error occurred.</p>
+
+<p>ENGINE_get_digest() returns a valid <b>EVP_MD</b> structure on success or NULL if an error occurred.</p>
+
+<p>ENGINE_get_flags() returns an integer representing the ENGINE flags which are used to control various behaviours of an ENGINE.</p>
+
+<p>ENGINE_get_cmd_defns() returns an <b>ENGINE_CMD_DEFN</b> structure or NULL if it&#39;s not set.</p>
+
+<p>ENGINE_load_private_key() and ENGINE_load_public_key() return a valid <b>EVP_PKEY</b> structure on success or NULL if an error occurred.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/OPENSSL_init_crypto.html">OPENSSL_init_crypto(3)</a>, <a href="../man3/RSA_new_method.html">RSA_new_method(3)</a>, <a href="../man3/DSA_new.html">DSA_new(3)</a>, <a href="../man3/DH_new.html">DH_new(3)</a>, <a href="../man3/RAND_bytes.html">RAND_bytes(3)</a>, <a href="../man5/config.html">config(5)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>All of these functions were deprecated in OpenSSL 3.0.</p>
+
+<p>ENGINE_cleanup() was deprecated in OpenSSL 1.1.0 by the automatic cleanup done by OPENSSL_cleanup() and should not be used.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2002-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

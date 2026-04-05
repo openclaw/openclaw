@@ -1,0 +1,96 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OCSP_sendreq_new</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OCSP_REQ_CTX, OCSP_sendreq_new, OCSP_sendreq_nbio, OCSP_sendreq_bio, OCSP_REQ_CTX_i2d, OCSP_REQ_CTX_add1_header, OCSP_REQ_CTX_free, OCSP_set_max_response_length, OCSP_REQ_CTX_set1_req - OCSP responder query functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ocsp.h&gt;
+
+OSSL_HTTP_REQ_CTX *OCSP_sendreq_new(BIO *io, const char *path,
+                                    const OCSP_REQUEST *req, int buf_size);
+OCSP_RESPONSE *OCSP_sendreq_bio(BIO *io, const char *path, OCSP_REQUEST *req);</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>typedef OSSL_HTTP_REQ_CTX OCSP_REQ_CTX;
+int OCSP_sendreq_nbio(OCSP_RESPONSE **presp, OSSL_HTTP_REQ_CTX *rctx);
+int OCSP_REQ_CTX_i2d(OCSP_REQ_CT *rctx, const ASN1_ITEM *it, ASN1_VALUE *req);
+int OCSP_REQ_CTX_add1_header(OCSP_REQ_CT *rctx,
+                             const char *name, const char *value);
+void OCSP_REQ_CTX_free(OCSP_REQ_CTX *rctx);
+void OCSP_set_max_response_length(OCSP_REQ_CT *rctx, unsigned long len);
+int OCSP_REQ_CTX_set1_req(OCSP_REQ_CTX *rctx, const OCSP_REQUEST *req);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>These functions perform an OCSP POST request / response transfer over HTTP, using the HTTP request functions described in <a href="../man3/OSSL_HTTP_REQ_CTX.html">OSSL_HTTP_REQ_CTX(3)</a>.</p>
+
+<p>The function OCSP_sendreq_new() builds a complete <b>OSSL_HTTP_REQ_CTX</b> structure with the <b>BIO</b> <i>io</i> to be used for requests and response, the URL path <i>path</i>, optionally the OCSP request <i>req</i>, and a response header maximum line length of <i>buf_size</i>. If <i>buf_size</i> is zero a default value of 4KiB is used. The <i>req</i> may be set to NULL and provided later using OCSP_REQ_CTX_set1_req() or <a href="../man3/OSSL_HTTP_REQ_CTX_set1_req.html">OSSL_HTTP_REQ_CTX_set1_req(3)</a>. The <i>io</i> and <i>path</i> arguments to OCSP_sendreq_new() correspond to the components of the URL. For example if the responder URL is <code>http://example.com/ocspreq</code> the BIO <i>io</i> should haven been connected to host <code>example.com</code> on port 80 and <i>path</i> should be set to <code>/ocspreq</code>.</p>
+
+<p>OCSP_sendreq_nbio() attempts to send the request prepared in <i>rctx</i> and to gather the response via HTTP, using the BIO <i>io</i> and <i>path</i> that were given when calling OCSP_sendreq_new(). If the operation gets completed it assigns the response, a pointer to a <b>OCSP_RESPONSE</b> structure, in <i>*presp</i>. The function may need to be called again if its result is -1, which indicates <a href="../man3/BIO_should_retry.html">BIO_should_retry(3)</a>. In such a case it is advisable to sleep a little in between, using <a href="../man3/BIO_wait.html">BIO_wait(3)</a> on the read BIO to prevent a busy loop.</p>
+
+<p>OCSP_sendreq_bio() combines OCSP_sendreq_new() with as many calls of OCSP_sendreq_nbio() as needed and then OCSP_REQ_CTX_free(), with a response header maximum line length 4k. It waits indefinitely on a response. It does not support setting a timeout or adding headers and is retained for compatibility; use <a href="../man3/OSSL_HTTP_transfer.html">OSSL_HTTP_transfer(3)</a> instead.</p>
+
+<p>OCSP_REQ_CTX_i2d(rctx, it, req) is equivalent to the following:</p>
+
+<pre><code>OSSL_HTTP_REQ_CTX_set1_req(rctx, &quot;application/ocsp-request&quot;, it, req)</code></pre>
+
+<p>OCSP_REQ_CTX_set1_req(rctx, req) is equivalent to the following:</p>
+
+<pre><code>OSSL_HTTP_REQ_CTX_set1_req(rctx, &quot;application/ocsp-request&quot;,
+                           ASN1_ITEM_rptr(OCSP_REQUEST),
+                           (const ASN1_VALUE *)req)</code></pre>
+
+<p>The deprecated type and the remaining deprecated functions have been superseded by the following equivalents: <b>OCSP_REQ_CTX</b> by <a href="../man3/OSSL_HTTP_REQ_CTX.html">OSSL_HTTP_REQ_CTX(3)</a>, OCSP_REQ_CTX_add1_header() by <a href="../man3/OSSL_HTTP_REQ_CTX_add1_header.html">OSSL_HTTP_REQ_CTX_add1_header(3)</a>, OCSP_REQ_CTX_free() by <a href="../man3/OSSL_HTTP_REQ_CTX_free.html">OSSL_HTTP_REQ_CTX_free(3)</a>, and OCSP_set_max_response_length() by <a href="../man3/OSSL_HTTP_REQ_CTX_set_max_response_length.html">OSSL_HTTP_REQ_CTX_set_max_response_length(3)</a>.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>OCSP_sendreq_new() returns a valid <b>OSSL_HTTP_REQ_CTX</b> structure or NULL if an error occurred.</p>
+
+<p>OCSP_sendreq_nbio() returns 1 for success, 0 on error, -1 if retry is needed.</p>
+
+<p>OCSP_sendreq_bio() returns the <b>OCSP_RESPONSE</b> structure sent by the responder or NULL if an error occurred.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/OSSL_HTTP_REQ_CTX.html">OSSL_HTTP_REQ_CTX(3)</a>, <a href="../man3/OSSL_HTTP_transfer.html">OSSL_HTTP_transfer(3)</a>, <a href="../man3/OCSP_cert_to_id.html">OCSP_cert_to_id(3)</a>, <a href="../man3/OCSP_request_add1_nonce.html">OCSP_request_add1_nonce(3)</a>, <a href="../man3/OCSP_REQUEST_new.html">OCSP_REQUEST_new(3)</a>, <a href="../man3/OCSP_resp_find_status.html">OCSP_resp_find_status(3)</a>, <a href="../man3/OCSP_response_status.html">OCSP_response_status(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p><b>OCSP_REQ_CTX</b>, OCSP_REQ_CTX_i2d(), OCSP_REQ_CTX_add1_header(), OCSP_REQ_CTX_free(), OCSP_set_max_response_length(), and OCSP_REQ_CTX_set1_req() were deprecated in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2015-2022 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,336 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>ossl-guide-libcrypto-introduction</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#INTRODUCTION">INTRODUCTION</a>
+    <ul>
+      <li><a href="#Algorithms">Algorithms</a></li>
+      <li><a href="#Operations">Operations</a></li>
+    </ul>
+  </li>
+  <li><a href="#ALGORITHM-FETCHING">ALGORITHM FETCHING</a>
+    <ul>
+      <li><a href="#Explicit-fetching">Explicit fetching</a></li>
+      <li><a href="#Implicit-fetching">Implicit fetching</a></li>
+      <li><a href="#Performance">Performance</a></li>
+    </ul>
+  </li>
+  <li><a href="#FETCHING-EXAMPLES">FETCHING EXAMPLES</a></li>
+  <li><a href="#USING-ALGORITHMS-IN-APPLICATIONS">USING ALGORITHMS IN APPLICATIONS</a></li>
+  <li><a href="#ENCODING-AND-DECODING-KEYS">ENCODING AND DECODING KEYS</a></li>
+  <li><a href="#FURTHER-READING">FURTHER READING</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>ossl-guide-libcrypto-introduction, crypto - OpenSSL Guide: An introduction to libcrypto</p>
+
+<h1 id="INTRODUCTION">INTRODUCTION</h1>
+
+<p>The OpenSSL cryptography library (<code>libcrypto</code>) enables access to a wide range of cryptographic algorithms used in various Internet standards. The services provided by this library are used by the OpenSSL implementations of TLS and CMS, and they have also been used to implement many other third party products and protocols.</p>
+
+<p>The functionality includes symmetric encryption, public key cryptography, key agreement, certificate handling, cryptographic hash functions, cryptographic pseudo-random number generators, message authentication codes (MACs), key derivation functions (KDFs), and various utilities.</p>
+
+<h2 id="Algorithms">Algorithms</h2>
+
+<p>Cryptographic primitives such as the SHA256 digest, or AES encryption are referred to in OpenSSL as &quot;algorithms&quot;. Each algorithm may have multiple implementations available for use. For example the RSA algorithm is available as a &quot;default&quot; implementation suitable for general use, and a &quot;fips&quot; implementation which has been validated to FIPS 140 standards for situations where that is important. It is also possible that a third party could add additional implementations such as in a hardware security module (HSM).</p>
+
+<p>Algorithms are implemented in providers. See <a href="../man7/ossl-guide-libraries-introduction.html">ossl-guide-libraries-introduction(7)</a> for information about providers.</p>
+
+<h2 id="Operations">Operations</h2>
+
+<p>Different algorithms can be grouped together by their purpose. For example there are algorithms for encryption, and different algorithms for digesting data. These different groups are known as &quot;operations&quot; in OpenSSL. Each operation has a different set of functions associated with it. For example to perform an encryption operation using AES (or any other encryption algorithm) you would use the encryption functions detailed on the <a href="../man3/EVP_EncryptInit.html">EVP_EncryptInit(3)</a> page. Or to perform a digest operation using SHA256 then you would use the digesting functions on the <a href="../man3/EVP_DigestInit.html">EVP_DigestInit(3)</a> page.</p>
+
+<h1 id="ALGORITHM-FETCHING">ALGORITHM FETCHING</h1>
+
+<p>In order to use an algorithm an implementation for it must first be &quot;fetched&quot;. Fetching is the process of looking through the available implementations, applying selection criteria (via a property query string), and finally choosing the implementation that will be used.</p>
+
+<p>Two types of fetching are supported by OpenSSL - <a href="#Explicit-fetching">&quot;Explicit fetching&quot;</a> and <a href="#Implicit-fetching">&quot;Implicit fetching&quot;</a>.</p>
+
+<h2 id="Explicit-fetching">Explicit fetching</h2>
+
+<p>Explicit fetching involves directly calling a specific API to fetch an algorithm implementation from a provider. This fetched object can then be passed to other APIs. These explicit fetching functions usually have the name <code>APINAME_fetch</code>, where <code>APINAME</code> is the name of the operation. For example <a href="../man3/EVP_MD_fetch.html">EVP_MD_fetch(3)</a> can be used to explicitly fetch a digest algorithm implementation. The user is responsible for freeing the object returned from the <code>APINAME_fetch</code> function using <code>APINAME_free</code> when it is no longer needed.</p>
+
+<p>These fetching functions follow a fairly common pattern, where three arguments are passed:</p>
+
+<dl>
+
+<dt id="The-library-context">The library context</dt>
+<dd>
+
+<p>See <a href="../man3/OSSL_LIB_CTX.html">OSSL_LIB_CTX(3)</a> for a more detailed description. This may be NULL to signify the default (global) library context, or a context created by the user. Only providers loaded in this library context (see <a href="../man3/OSSL_PROVIDER_load.html">OSSL_PROVIDER_load(3)</a>) will be considered by the fetching function. In case no provider has been loaded in this library context then the default provider will be loaded as a fallback (see <a href="../man7/OSSL_PROVIDER-default.html">OSSL_PROVIDER-default(7)</a>).</p>
+
+</dd>
+<dt id="An-identifier">An identifier</dt>
+<dd>
+
+<p>For all currently implemented fetching functions this is the algorithm name. Each provider supports a list of algorithm implementations. See the provider specific documentation for information on the algorithm implementations available in each provider: <a href="../man7/OSSL_PROVIDER-default.html">&quot;OPERATIONS AND ALGORITHMS&quot; in OSSL_PROVIDER-default(7)</a>, <a href="../man7/OSSL_PROVIDER-FIPS.html">&quot;OPERATIONS AND ALGORITHMS&quot; in OSSL_PROVIDER-FIPS(7)</a>, <a href="../man7/OSSL_PROVIDER-legacy.html">&quot;OPERATIONS AND ALGORITHMS&quot; in OSSL_PROVIDER-legacy(7)</a> and <a href="../man7/OSSL_PROVIDER-base.html">&quot;OPERATIONS AND ALGORITHMS&quot; in OSSL_PROVIDER-base(7)</a>.</p>
+
+<p>Note, while providers may register algorithms against a list of names using a string with a colon separated list of names, fetching algorithms using that format is currently unsupported.</p>
+
+</dd>
+<dt id="A-property-query-string">A property query string</dt>
+<dd>
+
+<p>The property query string used to guide selection of the algorithm implementation. See <a href="../man7/ossl-guide-libraries-introduction.html">&quot;PROPERTY QUERY STRINGS&quot; in ossl-guide-libraries-introduction(7)</a>.</p>
+
+</dd>
+</dl>
+
+<p>The algorithm implementation that is fetched can then be used with other diverse functions that use them. For example the <a href="../man3/EVP_DigestInit_ex.html">EVP_DigestInit_ex(3)</a> function takes as a parameter an <b>EVP_MD</b> object which may have been returned from an earlier call to <a href="../man3/EVP_MD_fetch.html">EVP_MD_fetch(3)</a>.</p>
+
+<h2 id="Implicit-fetching">Implicit fetching</h2>
+
+<p>OpenSSL has a number of functions that return an algorithm object with no associated implementation, such as <a href="../man3/EVP_sha256.html">EVP_sha256(3)</a>, <a href="../man3/EVP_aes_128_cbc.html">EVP_aes_128_cbc(3)</a>, <a href="../man3/EVP_get_cipherbyname.html">EVP_get_cipherbyname(3)</a> or <a href="../man3/EVP_get_digestbyname.html">EVP_get_digestbyname(3)</a>. These are present for compatibility with OpenSSL before version 3.0 where explicit fetching was not available.</p>
+
+<p>When they are used with functions like <a href="../man3/EVP_DigestInit_ex.html">EVP_DigestInit_ex(3)</a> or <a href="../man3/EVP_CipherInit_ex.html">EVP_CipherInit_ex(3)</a>, the actual implementation to be used is fetched implicitly using default search criteria (which uses NULL for the library context and property query string).</p>
+
+<p>In some cases implicit fetching can also occur when a NULL algorithm parameter is supplied. In this case an algorithm implementation is implicitly fetched using default search criteria and an algorithm name that is consistent with the context in which it is being used.</p>
+
+<p>Functions that use an <b>EVP_PKEY_CTX</b> or an <a href="../man3/EVP_PKEY.html">EVP_PKEY(3)</a>, such as <a href="../man3/EVP_DigestSignInit.html">EVP_DigestSignInit(3)</a>, all fetch the implementations implicitly. Usually the algorithm to fetch is determined based on the type of key that is being used and the function that has been called.</p>
+
+<h2 id="Performance">Performance</h2>
+
+<p>If you perform the same operation many times with the same algorithm then it is recommended to use a single explicit fetch of the algorithm and then reuse the explicitly fetched algorithm each subsequent time. This will typically be faster than implicitly fetching the algorithm every time you use it. See an example of Explicit fetching in <a href="#USING-ALGORITHMS-IN-APPLICATIONS">&quot;USING ALGORITHMS IN APPLICATIONS&quot;</a>.</p>
+
+<p>Prior to OpenSSL 3.0, functions such as EVP_sha256() which return a &quot;const&quot; object were used directly to indicate the algorithm to use in various function calls. If you pass the return value of one of these convenience functions to an operation then you are using implicit fetching. If you are converting an application that worked with an OpenSSL version prior to OpenSSL 3.0 then consider changing instances of implicit fetching to explicit fetching instead.</p>
+
+<p>If an explicitly fetched object is not passed to an operation, then any implicit fetch will use an internally cached prefetched object, but it will still be slower than passing the explicitly fetched object directly.</p>
+
+<p>The following functions can be used for explicit fetching:</p>
+
+<dl>
+
+<dt id="EVP_MD_fetch-3"><a href="../man3/EVP_MD_fetch.html">EVP_MD_fetch(3)</a></dt>
+<dd>
+
+<p>Fetch a message digest/hashing algorithm implementation.</p>
+
+</dd>
+<dt id="EVP_CIPHER_fetch-3"><a href="../man3/EVP_CIPHER_fetch.html">EVP_CIPHER_fetch(3)</a></dt>
+<dd>
+
+<p>Fetch a symmetric cipher algorithm implementation.</p>
+
+</dd>
+<dt id="EVP_KDF_fetch-3"><a href="../man3/EVP_KDF_fetch.html">EVP_KDF_fetch(3)</a></dt>
+<dd>
+
+<p>Fetch a Key Derivation Function (KDF) algorithm implementation.</p>
+
+</dd>
+<dt id="EVP_MAC_fetch-3"><a href="../man3/EVP_MAC_fetch.html">EVP_MAC_fetch(3)</a></dt>
+<dd>
+
+<p>Fetch a Message Authentication Code (MAC) algorithm implementation.</p>
+
+</dd>
+<dt id="EVP_KEM_fetch-3"><a href="../man3/EVP_KEM_fetch.html">EVP_KEM_fetch(3)</a></dt>
+<dd>
+
+<p>Fetch a Key Encapsulation Mechanism (KEM) algorithm implementation</p>
+
+</dd>
+<dt id="OSSL_ENCODER_fetch-3"><a href="../man3/OSSL_ENCODER_fetch.html">OSSL_ENCODER_fetch(3)</a></dt>
+<dd>
+
+<p>Fetch an encoder algorithm implementation (e.g. to encode keys to a specified format).</p>
+
+</dd>
+<dt id="OSSL_DECODER_fetch-3"><a href="../man3/OSSL_DECODER_fetch.html">OSSL_DECODER_fetch(3)</a></dt>
+<dd>
+
+<p>Fetch a decoder algorithm implementation (e.g. to decode keys from a specified format).</p>
+
+</dd>
+<dt id="EVP_RAND_fetch-3"><a href="../man3/EVP_RAND_fetch.html">EVP_RAND_fetch(3)</a></dt>
+<dd>
+
+<p>Fetch a Pseudo Random Number Generator (PRNG) algorithm implementation.</p>
+
+</dd>
+</dl>
+
+<p>See <a href="../man7/OSSL_PROVIDER-default.html">&quot;OPERATIONS AND ALGORITHMS&quot; in OSSL_PROVIDER-default(7)</a>, <a href="../man7/OSSL_PROVIDER-FIPS.html">&quot;OPERATIONS AND ALGORITHMS&quot; in OSSL_PROVIDER-FIPS(7)</a>, <a href="../man7/OSSL_PROVIDER-legacy.html">&quot;OPERATIONS AND ALGORITHMS&quot; in OSSL_PROVIDER-legacy(7)</a> and <a href="../man7/OSSL_PROVIDER-base.html">&quot;OPERATIONS AND ALGORITHMS&quot; in OSSL_PROVIDER-base(7)</a> for a list of algorithm names that can be fetched.</p>
+
+<h1 id="FETCHING-EXAMPLES">FETCHING EXAMPLES</h1>
+
+<p>The following section provides a series of examples of fetching algorithm implementations.</p>
+
+<p>Fetch any available implementation of SHA2-256 in the default context. Note that some algorithms have aliases. So &quot;SHA256&quot; and &quot;SHA2-256&quot; are synonymous:</p>
+
+<pre><code>EVP_MD *md = EVP_MD_fetch(NULL, &quot;SHA2-256&quot;, NULL);
+...
+EVP_MD_free(md);</code></pre>
+
+<p>Fetch any available implementation of AES-128-CBC in the default context:</p>
+
+<pre><code>EVP_CIPHER *cipher = EVP_CIPHER_fetch(NULL, &quot;AES-128-CBC&quot;, NULL);
+...
+EVP_CIPHER_free(cipher);</code></pre>
+
+<p>Fetch an implementation of SHA2-256 from the default provider in the default context:</p>
+
+<pre><code>EVP_MD *md = EVP_MD_fetch(NULL, &quot;SHA2-256&quot;, &quot;provider=default&quot;);
+...
+EVP_MD_free(md);</code></pre>
+
+<p>Fetch an implementation of SHA2-256 that is not from the default provider in the default context:</p>
+
+<pre><code>EVP_MD *md = EVP_MD_fetch(NULL, &quot;SHA2-256&quot;, &quot;provider!=default&quot;);
+...
+EVP_MD_free(md);</code></pre>
+
+<p>Fetch an implementation of SHA2-256 that is preferably from the FIPS provider in the default context:</p>
+
+<pre><code>EVP_MD *md = EVP_MD_fetch(NULL, &quot;SHA2-256&quot;, &quot;provider=?fips&quot;);
+...
+EVP_MD_free(md);</code></pre>
+
+<p>Fetch an implementation of SHA2-256 from the default provider in the specified library context:</p>
+
+<pre><code>EVP_MD *md = EVP_MD_fetch(libctx, &quot;SHA2-256&quot;, &quot;provider=default&quot;);
+...
+EVP_MD_free(md);</code></pre>
+
+<p>Load the legacy provider into the default context and then fetch an implementation of WHIRLPOOL from it:</p>
+
+<pre><code>/* This only needs to be done once - usually at application start up */
+OSSL_PROVIDER *legacy = OSSL_PROVIDER_load(NULL, &quot;legacy&quot;);
+
+EVP_MD *md = EVP_MD_fetch(NULL, &quot;WHIRLPOOL&quot;, &quot;provider=legacy&quot;);
+...
+EVP_MD_free(md);</code></pre>
+
+<p>Note that in the above example the property string &quot;provider=legacy&quot; is optional since, assuming no other providers have been loaded, the only implementation of the &quot;whirlpool&quot; algorithm is in the &quot;legacy&quot; provider. Also note that the default provider should be explicitly loaded if it is required in addition to other providers:</p>
+
+<pre><code>/* This only needs to be done once - usually at application start up */
+OSSL_PROVIDER *legacy = OSSL_PROVIDER_load(NULL, &quot;legacy&quot;);
+OSSL_PROVIDER *default = OSSL_PROVIDER_load(NULL, &quot;default&quot;);
+
+EVP_MD *md_whirlpool = EVP_MD_fetch(NULL, &quot;whirlpool&quot;, NULL);
+EVP_MD *md_sha256 = EVP_MD_fetch(NULL, &quot;SHA2-256&quot;, NULL);
+...
+EVP_MD_free(md_whirlpool);
+EVP_MD_free(md_sha256);</code></pre>
+
+<h1 id="USING-ALGORITHMS-IN-APPLICATIONS">USING ALGORITHMS IN APPLICATIONS</h1>
+
+<p>Cryptographic algorithms are made available to applications through use of the &quot;EVP&quot; APIs. Each of the various operations such as encryption, digesting, message authentication codes, etc., have a set of EVP function calls that can be invoked to use them. See the <a href="../man7/evp.html">evp(7)</a> page for further details.</p>
+
+<p>Most of these follow a common pattern. A &quot;context&quot; object is first created. For example for a digest operation you would use an <b>EVP_MD_CTX</b>, and for an encryption/decryption operation you would use an <b>EVP_CIPHER_CTX</b>. The operation is then initialised ready for use via an &quot;init&quot; function - optionally passing in a set of parameters (using the <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> type) to configure how the operation should behave. Next data is fed into the operation in a series of &quot;update&quot; calls. The operation is finalised using a &quot;final&quot; call which will typically provide some kind of output. Finally the context is cleaned up and freed.</p>
+
+<p>The following shows a complete example for doing this process for digesting data using SHA256. The process is similar for other operations such as encryption/decryption, signatures, message authentication codes, etc. Additional examples can be found in the OpenSSL demos (see <a href="../man7/ossl-guide-libraries-introduction.html">&quot;DEMO APPLICATIONS&quot; in ossl-guide-libraries-introduction(7)</a>).</p>
+
+<pre><code>#include &lt;stdio.h&gt;
+#include &lt;openssl/evp.h&gt;
+#include &lt;openssl/bio.h&gt;
+#include &lt;openssl/err.h&gt;
+
+int main(void)
+{
+    EVP_MD_CTX *ctx = NULL;
+    EVP_MD *sha256 = NULL;
+    const unsigned char msg[] = {
+        0x00, 0x01, 0x02, 0x03
+    };
+    unsigned int len = 0;
+    unsigned char *outdigest = NULL;
+    int ret = 1;
+
+    /* Create a context for the digest operation */
+    ctx = EVP_MD_CTX_new();
+    if (ctx == NULL)
+        goto err;
+
+    /*
+     * Fetch the SHA256 algorithm implementation for doing the digest. We&#39;re
+     * using the &quot;default&quot; library context here (first NULL parameter), and
+     * we&#39;re not supplying any particular search criteria for our SHA256
+     * implementation (second NULL parameter). Any SHA256 implementation will
+     * do.
+     * In a larger application this fetch would just be done once, and could
+     * be used for multiple calls to other operations such as EVP_DigestInit_ex().
+     */
+    sha256 = EVP_MD_fetch(NULL, &quot;SHA256&quot;, NULL);
+    if (sha256 == NULL)
+        goto err;
+
+   /* Initialise the digest operation */
+   if (!EVP_DigestInit_ex(ctx, sha256, NULL))
+       goto err;
+
+    /*
+     * Pass the message to be digested. This can be passed in over multiple
+     * EVP_DigestUpdate calls if necessary
+     */
+    if (!EVP_DigestUpdate(ctx, msg, sizeof(msg)))
+        goto err;
+
+    /* Allocate the output buffer */
+    outdigest = OPENSSL_malloc(EVP_MD_get_size(sha256));
+    if (outdigest == NULL)
+        goto err;
+
+    /* Now calculate the digest itself */
+    if (!EVP_DigestFinal_ex(ctx, outdigest, &amp;len))
+        goto err;
+
+    /* Print out the digest result */
+    BIO_dump_fp(stdout, outdigest, len);
+
+    ret = 0;
+
+ err:
+    /* Clean up all the resources we allocated */
+    OPENSSL_free(outdigest);
+    EVP_MD_free(sha256);
+    EVP_MD_CTX_free(ctx);
+    if (ret != 0)
+       ERR_print_errors_fp(stderr);
+    return ret;
+}</code></pre>
+
+<h1 id="ENCODING-AND-DECODING-KEYS">ENCODING AND DECODING KEYS</h1>
+
+<p>Many algorithms require the use of a key. Keys can be generated dynamically using the EVP APIs (for example see <a href="../man3/EVP_PKEY_Q_keygen.html">EVP_PKEY_Q_keygen(3)</a>). However it is often necessary to save or load keys (or their associated parameters) to or from some external format such as PEM or DER (see <a href="../man7/openssl-glossary.html">openssl-glossary(7)</a>). OpenSSL uses encoders and decoders to perform this task.</p>
+
+<p>Encoders and decoders are just algorithm implementations in the same way as any other algorithm implementation in OpenSSL. They are implemented by providers. The OpenSSL encoders and decoders are available in the default provider. They are also duplicated in the base provider.</p>
+
+<p>For information about encoders see <a href="../man3/OSSL_ENCODER_CTX_new_for_pkey.html">OSSL_ENCODER_CTX_new_for_pkey(3)</a>. For information about decoders see <a href="../man3/OSSL_DECODER_CTX_new_for_pkey.html">OSSL_DECODER_CTX_new_for_pkey(3)</a>.</p>
+
+<p>As well as using encoders/decoders directly there are also some helper functions that can be used for certain well known and commonly used formats. For example see <a href="../man3/PEM_read_PrivateKey.html">PEM_read_PrivateKey(3)</a> and <a href="../man3/PEM_write_PrivateKey.html">PEM_write_PrivateKey(3)</a> for information about reading and writing key data from PEM encoded files.</p>
+
+<h1 id="FURTHER-READING">FURTHER READING</h1>
+
+<p>See <a href="../man7/ossl-guide-libssl-introduction.html">ossl-guide-libssl-introduction(7)</a> for an introduction to using <code>libssl</code>.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man1/openssl.html">openssl(1)</a>, <a href="../man7/ssl.html">ssl(7)</a>, <a href="../man7/evp.html">evp(7)</a>, <a href="../man3/OSSL_LIB_CTX.html">OSSL_LIB_CTX(3)</a>, <a href="../man7/openssl-threads.html">openssl-threads(7)</a>, <a href="../man7/property.html">property(7)</a>, <a href="../man7/OSSL_PROVIDER-default.html">OSSL_PROVIDER-default(7)</a>, <a href="../man7/OSSL_PROVIDER-base.html">OSSL_PROVIDER-base(7)</a>, <a href="../man7/OSSL_PROVIDER-FIPS.html">OSSL_PROVIDER-FIPS(7)</a>, <a href="../man7/OSSL_PROVIDER-legacy.html">OSSL_PROVIDER-legacy(7)</a>, <a href="../man7/OSSL_PROVIDER-null.html">OSSL_PROVIDER-null(7)</a>, <a href="../man7/openssl-glossary.html">openssl-glossary(7)</a>, <a href="../man7/provider.html">provider(7)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,314 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>ossl-guide-quic-client-block</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SIMPLE-BLOCKING-QUIC-CLIENT-EXAMPLE">SIMPLE BLOCKING QUIC CLIENT EXAMPLE</a>
+    <ul>
+      <li><a href="#Creating-the-SSL_CTX-and-SSL-objects">Creating the SSL_CTX and SSL objects</a></li>
+      <li><a href="#Creating-the-socket-and-BIO">Creating the socket and BIO</a></li>
+      <li><a href="#Setting-the-servers-hostname">Setting the server&#39;s hostname</a></li>
+      <li><a href="#Setting-the-ALPN">Setting the ALPN</a></li>
+      <li><a href="#Setting-the-peer-address">Setting the peer address</a></li>
+      <li><a href="#The-handshake-and-application-data-transfer">The handshake and application data transfer</a></li>
+      <li><a href="#Shutting-down-the-connection">Shutting down the connection</a></li>
+    </ul>
+  </li>
+  <li><a href="#FURTHER-READING">FURTHER READING</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>ossl-guide-quic-client-block - OpenSSL Guide: Writing a simple blocking QUIC client</p>
+
+<h1 id="SIMPLE-BLOCKING-QUIC-CLIENT-EXAMPLE">SIMPLE BLOCKING QUIC CLIENT EXAMPLE</h1>
+
+<p>This page will present various source code samples demonstrating how to write a simple blocking QUIC client application which connects to a server, sends an HTTP/1.0 request to it, and reads back the response. Note that HTTP/1.0 over QUIC is non-standard and will not be supported by real world servers. This is for demonstration purposes only.</p>
+
+<p>We assume that you already have OpenSSL installed on your system; that you already have some fundamental understanding of OpenSSL concepts, TLS and QUIC (see <a href="../man7/ossl-guide-libraries-introduction.html">ossl-guide-libraries-introduction(7)</a>, <a href="../man7/ossl-guide-tls-introduction.html">ossl-guide-tls-introduction(7)</a> and <a href="../man7/ossl-guide-quic-introduction.html">ossl-guide-quic-introduction(7)</a>); and that you know how to write and build C code and link it against the libcrypto and libssl libraries that are provided by OpenSSL. It also assumes that you have a basic understanding of UDP/IP and sockets. The example code that we build in this tutorial will amend the blocking TLS client example that is covered in <a href="../man7/ossl-guide-tls-client-block.html">ossl-guide-tls-client-block(7)</a>. Only the differences between that client and this one will be discussed so we also assume that you have run through and understand that tutorial.</p>
+
+<p>For this tutorial our client will be using a single QUIC stream. A subsequent tutorial will discuss how to write a multi-stream client (see <a href="../man7/ossl-guide-quic-multi-stream.html">ossl-guide-quic-multi-stream(7)</a>).</p>
+
+<p>The complete source code for this example blocking QUIC client is available in the <code>demos/guide</code> directory of the OpenSSL source distribution in the file <code>quic-client-block.c</code>. It is also available online at <a href="https://github.com/openssl/openssl/blob/master/demos/guide/quic-client-block.c">https://github.com/openssl/openssl/blob/master/demos/guide/quic-client-block.c</a>.</p>
+
+<h2 id="Creating-the-SSL_CTX-and-SSL-objects">Creating the SSL_CTX and SSL objects</h2>
+
+<p>In the TLS tutorial (<a href="../man7/ossl-guide-tls-client-block.html">ossl-guide-tls-client-block(7)</a>) we created an <b>SSL_CTX</b> object for our client and used it to create an <b>SSL</b> object to represent the TLS connection. A QUIC connection works in exactly the same way. We first create an <b>SSL_CTX</b> object and then use it to create an <b>SSL</b> object to represent the QUIC connection.</p>
+
+<p>As in the TLS example the first step is to create an <b>SSL_CTX</b> object for our client. This is done in the same way as before except that we use a different &quot;method&quot;. OpenSSL offers two different QUIC client methods, i.e. <a href="../man3/OSSL_QUIC_client_method.html">OSSL_QUIC_client_method(3)</a> and <a href="../man3/OSSL_QUIC_client_thread_method.html">OSSL_QUIC_client_thread_method(3)</a>.</p>
+
+<p>The first one is the equivalent of <a href="../man3/TLS_client_method.html">TLS_client_method(3)</a> but for the QUIC protocol. The second one is the same, but it will additionally create a background thread for handling time based events (known as &quot;thread assisted mode&quot;, see <a href="../man7/ossl-guide-quic-introduction.html">ossl-guide-quic-introduction(7)</a>). For this tutorial we will be using <a href="../man3/OSSL_QUIC_client_method.html">OSSL_QUIC_client_method(3)</a> because we will not be leaving the QUIC connection idle in our application and so thread assisted mode is not needed.</p>
+
+<pre><code>/*
+ * Create an SSL_CTX which we can use to create SSL objects from. We
+ * want an SSL_CTX for creating clients so we use OSSL_QUIC_client_method()
+ * here.
+ */
+ctx = SSL_CTX_new(OSSL_QUIC_client_method());
+if (ctx == NULL) {
+    printf(&quot;Failed to create the SSL_CTX\n&quot;);
+    goto end;
+}</code></pre>
+
+<p>The other setup steps that we applied to the <b>SSL_CTX</b> for TLS also apply to QUIC except for restricting the TLS versions that we are willing to accept. The QUIC protocol implementation in OpenSSL currently only supports TLSv1.3. There is no need to call <a href="../man3/SSL_CTX_set_min_proto_version.html">SSL_CTX_set_min_proto_version(3)</a> or <a href="../man3/SSL_CTX_set_max_proto_version.html">SSL_CTX_set_max_proto_version(3)</a> in an OpenSSL QUIC application, and any such call will be ignored.</p>
+
+<p>Once the <b>SSL_CTX</b> is created, the <b>SSL</b> object is constructed in exactly the same way as for the TLS application.</p>
+
+<h2 id="Creating-the-socket-and-BIO">Creating the socket and BIO</h2>
+
+<p>A major difference between TLS and QUIC is the underlying transport protocol. TLS uses TCP while QUIC uses UDP. The way that the QUIC socket is created in our example code is much the same as for TLS. We use the <a href="../man3/BIO_lookup_ex.html">BIO_lookup_ex(3)</a> and <a href="../man3/BIO_socket.html">BIO_socket(3)</a> helper functions as we did in the previous tutorial except that we pass <b>SOCK_DGRAM</b> as an argument to indicate UDP (instead of <b>SOCK_STREAM</b> for TCP).</p>
+
+<pre><code>/*
+ * Lookup IP address info for the server.
+ */
+if (!BIO_lookup_ex(hostname, port, BIO_LOOKUP_CLIENT, family, SOCK_DGRAM, 0,
+                   &amp;res))
+    return NULL;
+
+/*
+ * Loop through all the possible addresses for the server and find one
+ * we can connect to.
+ */
+for (ai = res; ai != NULL; ai = BIO_ADDRINFO_next(ai)) {
+    /*
+     * Create a TCP socket. We could equally use non-OpenSSL calls such
+     * as &quot;socket&quot; here for this and the subsequent connect and close
+     * functions. But for portability reasons and also so that we get
+     * errors on the OpenSSL stack in the event of a failure we use
+     * OpenSSL&#39;s versions of these functions.
+     */
+    sock = BIO_socket(BIO_ADDRINFO_family(ai), SOCK_DGRAM, 0, 0);
+    if (sock == -1)
+        continue;
+
+    /* Connect the socket to the server&#39;s address */
+    if (!BIO_connect(sock, BIO_ADDRINFO_address(ai), 0)) {
+        BIO_closesocket(sock);
+        sock = -1;
+        continue;
+    }
+
+    /* Set to nonblocking mode */
+    if (!BIO_socket_nbio(sock, 1)) {
+        BIO_closesocket(sock);
+        sock = -1;
+        continue;
+    }
+
+    break;
+}
+
+if (sock != -1) {
+    *peer_addr = BIO_ADDR_dup(BIO_ADDRINFO_address(ai));
+    if (*peer_addr == NULL) {
+        BIO_closesocket(sock);
+        return NULL;
+    }
+}
+
+/* Free the address information resources we allocated earlier */
+BIO_ADDRINFO_free(res);</code></pre>
+
+<p>You may notice a couple of other differences between this code and the version that we used for TLS.</p>
+
+<p>Firstly, we set the socket into nonblocking mode. This must always be done for an OpenSSL QUIC application. This may be surprising considering that we are trying to write a blocking client. Despite this the <b>SSL</b> object will still have blocking behaviour. See <a href="../man7/ossl-guide-quic-introduction.html">ossl-guide-quic-introduction(7)</a> for further information on this.</p>
+
+<p>Secondly, we take note of the IP address of the peer that we are connecting to. We store that information away. We will need it later.</p>
+
+<p>See <a href="../man3/BIO_lookup_ex.html">BIO_lookup_ex(3)</a>, <a href="../man3/BIO_socket.html">BIO_socket(3)</a>, <a href="../man3/BIO_connect.html">BIO_connect(3)</a>, <a href="../man3/BIO_closesocket.html">BIO_closesocket(3)</a>, <a href="../man3/BIO_ADDRINFO_next.html">BIO_ADDRINFO_next(3)</a>, <a href="../man3/BIO_ADDRINFO_address.html">BIO_ADDRINFO_address(3)</a>, <a href="../man3/BIO_ADDRINFO_free.html">BIO_ADDRINFO_free(3)</a> and <a href="../man3/BIO_ADDR_dup.html">BIO_ADDR_dup(3)</a> for further information on the functions used here. In the above example code the <b>hostname</b> and <b>port</b> variables are strings, e.g. &quot;www.example.com&quot; and &quot;443&quot;.</p>
+
+<p>As for our TLS client, once the socket has been created and connected we need to associate it with a BIO object:</p>
+
+<pre><code>BIO *bio;
+
+/* Create a BIO to wrap the socket */
+bio = BIO_new(BIO_s_datagram());
+if (bio == NULL) {
+    BIO_closesocket(sock);
+    return NULL;
+}
+
+/*
+ * Associate the newly created BIO with the underlying socket. By
+ * passing BIO_CLOSE here the socket will be automatically closed when
+ * the BIO is freed. Alternatively you can use BIO_NOCLOSE, in which
+ * case you must close the socket explicitly when it is no longer
+ * needed.
+ */
+BIO_set_fd(bio, sock, BIO_CLOSE);</code></pre>
+
+<p>Note the use of <a href="../man3/BIO_s_datagram.html">BIO_s_datagram(3)</a> here as opposed to <a href="../man3/BIO_s_socket.html">BIO_s_socket(3)</a> that we used for our TLS client. This is again due to the fact that QUIC uses UDP instead of TCP for its transport layer. See <a href="../man3/BIO_new.html">BIO_new(3)</a>, <a href="../man3/BIO_s_datagram.html">BIO_s_datagram(3)</a> and <a href="../man3/BIO_set_fd.html">BIO_set_fd(3)</a> for further information on these functions.</p>
+
+<h2 id="Setting-the-servers-hostname">Setting the server&#39;s hostname</h2>
+
+<p>As in the TLS tutorial we need to set the server&#39;s hostname both for SNI (Server Name Indication) and for certificate validation purposes. The steps for this are identical to the TLS tutorial and won&#39;t be repeated here.</p>
+
+<h2 id="Setting-the-ALPN">Setting the ALPN</h2>
+
+<p>ALPN (Application-Layer Protocol Negotiation) is a feature of TLS that enables the application to negotiate which protocol will be used over the connection. For example, if you intend to use HTTP/3 over the connection then the ALPN value for that is &quot;h3&quot; (see <a href="https://www.iana.org/assignments/tls-extensiontype-values/tls-extensiontype-values.xml#alpn-protocol-ids">https://www.iana.org/assignments/tls-extensiontype-values/tls-extensiontype-values.xml#alpn-protocol-ids</a>). OpenSSL provides the ability for a client to specify the ALPN to use via the <a href="../man3/SSL_set_alpn_protos.html">SSL_set_alpn_protos(3)</a> function. This is optional for a TLS client and so our simple client that we developed in <a href="../man7/ossl-guide-tls-client-block.html">ossl-guide-tls-client-block(7)</a> did not use it. However QUIC mandates that the TLS handshake used in establishing a QUIC connection must use ALPN.</p>
+
+<pre><code>unsigned char alpn[] = { 8, &#39;h&#39;, &#39;t&#39;, &#39;t&#39;, &#39;p&#39;, &#39;/&#39;, &#39;1&#39;, &#39;.&#39;, &#39;0&#39; };
+
+/* SSL_set_alpn_protos returns 0 for success! */
+if (SSL_set_alpn_protos(ssl, alpn, sizeof(alpn)) != 0) {
+    printf(&quot;Failed to set the ALPN for the connection\n&quot;);
+    goto end;
+}</code></pre>
+
+<p>The ALPN is specified using a length prefixed array of unsigned chars (it is not a NUL terminated string). Our original TLS blocking client demo was using HTTP/1.0. We will use the same for this example. Unlike most OpenSSL functions <a href="../man3/SSL_set_alpn_protos.html">SSL_set_alpn_protos(3)</a> returns zero for success and nonzero for failure.</p>
+
+<h2 id="Setting-the-peer-address">Setting the peer address</h2>
+
+<p>An OpenSSL QUIC application must specify the target address of the server that is being connected to. In <a href="#Creating-the-socket-and-BIO">&quot;Creating the socket and BIO&quot;</a> above we saved that address away for future use. Now we need to use it via the <a href="../man3/SSL_set1_initial_peer_addr.html">SSL_set1_initial_peer_addr(3)</a> function.</p>
+
+<pre><code>/* Set the IP address of the remote peer */
+if (!SSL_set1_initial_peer_addr(ssl, peer_addr)) {
+    printf(&quot;Failed to set the initial peer address\n&quot;);
+    goto end;
+}</code></pre>
+
+<p>Note that we will need to free the <b>peer_addr</b> value that we allocated via <a href="../man3/BIO_ADDR_dup.html">BIO_ADDR_dup(3)</a> earlier:</p>
+
+<pre><code>BIO_ADDR_free(peer_addr);</code></pre>
+
+<h2 id="The-handshake-and-application-data-transfer">The handshake and application data transfer</h2>
+
+<p>Once initial setup of the <b>SSL</b> object is complete then we perform the handshake via <a href="../man3/SSL_connect.html">SSL_connect(3)</a> in exactly the same way as we did for the TLS client, so we won&#39;t repeat it here.</p>
+
+<p>We can also perform data transfer using a default QUIC stream that is automatically associated with the <b>SSL</b> object for us. We can transmit data using <a href="../man3/SSL_write_ex.html">SSL_write_ex(3)</a>, and receive data using <a href="../man3/SSL_read_ex.html">SSL_read_ex(3)</a> in the same way as for TLS. The main difference is that we have to account for failures slightly differently. With QUIC the stream can be reset by the peer (which is fatal for that stream), but the underlying connection itself may still be healthy.</p>
+
+<p>First, we write the entire request to the stream. We also must make sure to signal to the server that we have finished writing. This can be done by passing the SSL_WRITE_FLAG_CONCLUDE flag to <a href="../man3/SSL_write_ex2.html">SSL_write_ex2(3)</a> or by calling <a href="../man3/SSL_stream_conclude.html">SSL_stream_conclude(3)</a>. Since the first way is more efficient, we choose to do that.</p>
+
+<pre><code>/* Write an HTTP GET request to the peer */
+if (!SSL_write_ex(ssl, request_start, strlen(request_start), &amp;written)) {
+    printf(&quot;Failed to write start of HTTP request\n&quot;);
+    goto end;
+}
+if (!SSL_write_ex(ssl, hostname, strlen(hostname), &amp;written)) {
+    printf(&quot;Failed to write hostname in HTTP request\n&quot;);
+    goto end;
+}
+if (!SSL_write_ex2(ssl, request_end, strlen(request_end),
+    SSL_WRITE_FLAG_CONCLUDE, &amp;written)) {
+    printf(&quot;Failed to write end of HTTP request\n&quot;);
+    goto end;
+}</code></pre>
+
+<p>Then, we read the response from the server.</p>
+
+<pre><code>/*
+ * Get up to sizeof(buf) bytes of the response. We keep reading until the
+ * server closes the connection.
+ */
+while (SSL_read_ex(ssl, buf, sizeof(buf), &amp;readbytes)) {
+    /*
+    * OpenSSL does not guarantee that the returned data is a string or
+    * that it is NUL terminated so we use fwrite() to write the exact
+    * number of bytes that we read. The data could be non-printable or
+    * have NUL characters in the middle of it. For this simple example
+    * we&#39;re going to print it to stdout anyway.
+    */
+    fwrite(buf, 1, readbytes, stdout);
+}
+/* In case the response didn&#39;t finish with a newline we add one now */
+printf(&quot;\n&quot;);
+
+/*
+ * Check whether we finished the while loop above normally or as the
+ * result of an error. The 0 argument to SSL_get_error() is the return
+ * code we received from the SSL_read_ex() call. It must be 0 in order
+ * to get here. Normal completion is indicated by SSL_ERROR_ZERO_RETURN. In
+ * QUIC terms this means that the peer has sent FIN on the stream to
+ * indicate that no further data will be sent.
+ */
+switch (SSL_get_error(ssl, 0)) {
+case SSL_ERROR_ZERO_RETURN:
+    /* Normal completion of the stream */
+    break;
+
+case SSL_ERROR_SSL:
+    /*
+     * Some stream fatal error occurred. This could be because of a stream
+     * reset - or some failure occurred on the underlying connection.
+     */
+    switch (SSL_get_stream_read_state(ssl)) {
+    case SSL_STREAM_STATE_RESET_REMOTE:
+        printf(&quot;Stream reset occurred\n&quot;);
+        /* The stream has been reset but the connection is still healthy. */
+        break;
+
+    case SSL_STREAM_STATE_CONN_CLOSED:
+        printf(&quot;Connection closed\n&quot;);
+        /* Connection is already closed. Skip SSL_shutdown() */
+        goto end;
+
+    default:
+        printf(&quot;Unknown stream failure\n&quot;);
+        break;
+    }
+    break;
+
+default:
+    /* Some other unexpected error occurred */
+    printf (&quot;Failed reading remaining data\n&quot;);
+    break;
+}</code></pre>
+
+<p>In the above code example you can see that <b>SSL_ERROR_SSL</b> indicates a stream fatal error. We can use <a href="../man3/SSL_get_stream_read_state.html">SSL_get_stream_read_state(3)</a> to determine whether the stream has been reset, or if some other fatal error has occurred.</p>
+
+<h2 id="Shutting-down-the-connection">Shutting down the connection</h2>
+
+<p>In the TLS tutorial we knew that the server had finished sending data because <a href="../man3/SSL_read_ex.html">SSL_read_ex(3)</a> returned 0, and <a href="../man3/SSL_get_error.html">SSL_get_error(3)</a> returned <b>SSL_ERROR_ZERO_RETURN</b>. The same is true with QUIC except that <b>SSL_ERROR_ZERO_RETURN</b> should be interpreted slightly differently. With TLS we knew that this meant that the server had sent a &quot;close_notify&quot; alert. No more data will be sent from the server on that connection.</p>
+
+<p>With QUIC it means that the server has indicated &quot;FIN&quot; on the stream, meaning that it will no longer send any more data on that stream. However this only gives us information about the stream itself and does not tell us anything about the underlying connection. More data could still be sent from the server on some other stream. Additionally, although the server will not send any more data to the client, it does not prevent the client from sending more data to the server.</p>
+
+<p>In this tutorial, once we have finished reading data from the server on the one stream that we are using, we will close the connection down. As before we do this via the <a href="../man3/SSL_shutdown.html">SSL_shutdown(3)</a> function. This example for QUIC is very similar to the TLS version. However the <a href="../man3/SSL_shutdown.html">SSL_shutdown(3)</a> function will need to be called more than once:</p>
+
+<pre><code>/*
+ * Repeatedly call SSL_shutdown() until the connection is fully
+ * closed.
+ */
+do {
+    ret = SSL_shutdown(ssl);
+    if (ret &lt; 0) {
+        printf(&quot;Error shutting down: %d\n&quot;, ret);
+        goto end;
+    }
+} while (ret != 1);</code></pre>
+
+<p>The shutdown process is in two stages. In the first stage we wait until all the data we have buffered for sending on any stream has been successfully sent and acknowledged by the peer, and then we send a CONNECTION_CLOSE to the peer to indicate that the connection is no longer usable. This immediately closes the connection and no more data can be sent or received. <a href="../man3/SSL_shutdown.html">SSL_shutdown(3)</a> returns 0 once the first stage has been completed.</p>
+
+<p>In the second stage the connection enters a &quot;closing&quot; state. Application data cannot be sent or received in this state, but late arriving packets coming from the peer will be handled appropriately. Once this stage has completed successfully <a href="../man3/SSL_shutdown.html">SSL_shutdown(3)</a> will return 1 to indicate success.</p>
+
+<h1 id="FURTHER-READING">FURTHER READING</h1>
+
+<p>See <a href="../man7/ossl-guide-quic-multi-stream.html">ossl-guide-quic-multi-stream(7)</a> to read a tutorial on how to modify the client developed on this page to support multiple streams.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ossl-guide-introduction.html">ossl-guide-introduction(7)</a>, <a href="../man7/ossl-guide-libraries-introduction.html">ossl-guide-libraries-introduction(7)</a>, <a href="../man7/ossl-guide-libssl-introduction.html">ossl-guide-libssl-introduction(7)</a>, <a href="../man7/ossl-guide-tls-introduction.html">ossl-guide-tls-introduction(7)</a>, <a href="../man7/ossl-guide-tls-client-block.html">ossl-guide-tls-client-block(7)</a>, <a href="../man7/ossl-guide-quic-introduction.html">ossl-guide-quic-introduction(7)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2023-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

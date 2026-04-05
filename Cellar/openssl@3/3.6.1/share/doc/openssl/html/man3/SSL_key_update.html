@@ -1,0 +1,95 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_key_update</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#USAGE-WITH-QUIC">USAGE WITH QUIC</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_key_update, SSL_get_key_update_type, SSL_renegotiate, SSL_renegotiate_abbreviated, SSL_renegotiate_pending - initiate and obtain information about updating connection keys</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+int SSL_key_update(SSL *s, int updatetype);
+int SSL_get_key_update_type(const SSL *s);
+
+int SSL_renegotiate(SSL *s);
+int SSL_renegotiate_abbreviated(SSL *s);
+int SSL_renegotiate_pending(const SSL *s);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_key_update() schedules an update of the keys for the current TLS connection. If the <b>updatetype</b> parameter is set to <b>SSL_KEY_UPDATE_NOT_REQUESTED</b> then the sending keys for this connection will be updated and the peer will be informed of the change. If the <b>updatetype</b> parameter is set to <b>SSL_KEY_UPDATE_REQUESTED</b> then the sending keys for this connection will be updated and the peer will be informed of the change along with a request for the peer to additionally update its sending keys. It is an error if <b>updatetype</b> is set to <b>SSL_KEY_UPDATE_NONE</b>.</p>
+
+<p>SSL_key_update() must only be called after the initial handshake has been completed and TLSv1.3 or QUIC has been negotiated, at the same time, the application needs to ensure that the writing of data has been completed. The key update will not take place until the next time an IO operation such as SSL_read_ex() or SSL_write_ex() takes place on the connection. Alternatively SSL_do_handshake() can be called to force the update to take place immediately.</p>
+
+<p>SSL_get_key_update_type() can be used to determine whether a key update operation has been scheduled but not yet performed. The type of the pending key update operation will be returned if there is one, or SSL_KEY_UPDATE_NONE otherwise.</p>
+
+<p>SSL_renegotiate() and SSL_renegotiate_abbreviated() should only be called for connections that have negotiated TLSv1.2 or less. Calling them on any other connection will result in an error.</p>
+
+<p>When called from the client side, SSL_renegotiate() schedules a completely new handshake over an existing SSL/TLS connection. The next time an IO operation such as SSL_read_ex() or SSL_write_ex() takes place on the connection a check will be performed to confirm that it is a suitable time to start a renegotiation. If so, then it will be initiated immediately. OpenSSL will not attempt to resume any session associated with the connection in the new handshake. Note that some servers will respond to reneogitation attempts with a &quot;no_renegotiation&quot; alert. An OpenSSL will immediately fail the connection in this case.</p>
+
+<p>When called from the client side, SSL_renegotiate_abbreviated() works in the same was as SSL_renegotiate() except that OpenSSL will attempt to resume the session associated with the current connection in the new handshake.</p>
+
+<p>When called from the server side, SSL_renegotiate() and SSL_renegotiate_abbreviated() behave identically. They both schedule a request for a new handshake to be sent to the client. The next time an IO operation is performed then the same checks as on the client side are performed and then, if appropriate, the request is sent. The client may or may not respond with a new handshake and it may or may not attempt to resume an existing session. If a new handshake is started then this will be handled transparently by calling any OpenSSL IO function.</p>
+
+<p>If an OpenSSL client receives a renegotiation request from a server then again this will be handled transparently through calling any OpenSSL IO function. For a TLS connection the client will attempt to resume the current session in the new handshake. For historical reasons, DTLS clients will not attempt to resume the session in the new handshake.</p>
+
+<p>The SSL_renegotiate_pending() function returns 1 if a renegotiation or renegotiation request has been scheduled but not yet acted on, or 0 otherwise.</p>
+
+<h1 id="USAGE-WITH-QUIC">USAGE WITH QUIC</h1>
+
+<p>SSL_key_update() can also be used to perform a key update when using QUIC. The function must be called on a QUIC connection SSL object. This is normally done automatically when needed. Since a locally initiated QUIC key update always causes a peer to also trigger a key update, passing <b>SSL_KEY_UPDATE_NOT_REQUESTED</b> as <b>updatetype</b> has the same effect as passing <b>SSL_KEY_UPDATE_REQUESTED</b>.</p>
+
+<p>The QUIC connection must have been fully established before a key update can be performed, and other QUIC protocol rules govern how frequently QUIC key update can be performed. SSL_key_update() will fail if these requirements are not met.</p>
+
+<p>Because QUIC key updates are always handled immediately, SSL_get_key_update_type() always returns SSL_KEY_UPDATE_NONE when called on a QUIC connection SSL object.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_key_update(), SSL_renegotiate() and SSL_renegotiate_abbreviated() return 1 on success or 0 on error.</p>
+
+<p>SSL_get_key_update_type() returns the update type of the pending key update operation or SSL_KEY_UPDATE_NONE if there is none.</p>
+
+<p>SSL_renegotiate_pending() returns 1 if a renegotiation or renegotiation request has been scheduled but not yet acted on, or 0 otherwise.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a>, <a href="../man3/SSL_read_ex.html">SSL_read_ex(3)</a>, <a href="../man3/SSL_write_ex.html">SSL_write_ex(3)</a>, <a href="../man3/SSL_do_handshake.html">SSL_do_handshake(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The SSL_key_update() and SSL_get_key_update_type() functions were added in OpenSSL 1.1.1.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2017-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

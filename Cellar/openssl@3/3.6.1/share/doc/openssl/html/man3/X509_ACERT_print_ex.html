@@ -1,0 +1,110 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>X509_ACERT_print_ex</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>X509_ACERT_print_ex, X509_ACERT_print - X509_ACERT printing routines</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/x509_acert.h&gt;
+
+int X509_ACERT_print(BIO *bp, X509_ACERT *acert);
+int X509_ACERT_print_ex(BIO *bp, X509_ACERT *acert, unsigned long nmflags,
+                        unsigned long cflag);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>X509_ACERT_print_ex() prints a human readable version of the attribute certificate <i>acert</i> to BIO <i>bp</i>.</p>
+
+<p>The following data contained in the attribute certificate is printed in order:</p>
+
+<ul>
+
+<li><p>The header text &quot;Attribute certificate:&quot; and &quot;Data:&quot; (X509_FLAG_NO_HEADER)</p>
+
+<p>= item *</p>
+
+<p>The attribute certificate version number as defined by the standard, followed in parentheses by the value contained in the version field in hexadecimal notation. If the version number is not a valid value according to the specification, only the raw value is printed. See X509_ACERT_get_version(3) for details. (X509_FLAG_NO_VERSION)</p>
+
+<p>= item *</p>
+
+<p>The serial number of the attribute certificate (X509_FLAG_NO_SERIAL)</p>
+
+<p>= item *</p>
+
+<p>The identity of the holder of the attribute certificate. If the holder issuer name is present, the first GENERAL_NAME returned by X509_ACERT_get0_holder_entityName() is printed. If the holder baseCertificateId is present, the issuer name (printed with X509_NAME_print_ex) and serial number of the holder&#39;s certificate are displayed. (X509_FLAG_NO_SUBJECT)</p>
+
+<p>= item *</p>
+
+<p>The name of the attribute certificate issuer as returned from X509_ACERT_get0_issuerName() and printed using X509_NAME_print_ex(). (X509_FLAG_NO_ISSUER)</p>
+
+<p>= item *</p>
+
+<p>The period of validity between the times returned from X509_ACERT_get0_notBefore() and X509_ACERT_get0_notAfter(). The values are printed as a generalized times using ASN1_GENERALIZEDTIME_print(). (X509_FLAG_NO_VALIDITY)</p>
+
+<p>= item *</p>
+
+<p>The list of attributes contained in the attribute certificate. The attribute type is printed with i2a_ASN1_OBJECT(). String valued attributes are printed as raw string data. ASN1 encoded values are printed with ASN1_parse_dump(). (X509_FLAG_NO_ATTRIBUTES)</p>
+
+<p>= item *</p>
+
+<p>All X.509 extensions contained in the attribute certificate. (X509_FLAG_NO_EXTENSIONS)</p>
+
+<p>= item *</p>
+
+<p>The signature is printed with X509_signature_print(). (X509_FLAG_NO_SIGDUMP)</p>
+
+<p>If <i>cflag</i> is specifies as X509_FLAG_COMPAT, all of the above data in the attribute certificate will be printed.</p>
+
+<p>The <i>nmflags</i> flag determines the format used to output all fields printed using X509_NAME_print_ex(). See <a href="../man3/X509_NAME_print_ex.html">X509_NAME_print_ex(3)</a> for details.</p>
+
+<p>X509_ACERT_print() is equivalent to calling X509_ACERT_print_ex() with the <i>nmflags</i> and <i>cflags</i> set to XN_FLAG_COMPAT and X509_FLAG_COMPAT respectively.</p>
+
+</li>
+</ul>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>X509_ACERT_print_ex() X509_ACERT_print() return 1 for success and 0 for failure.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/X509_NAME_print_ex.html">X509_NAME_print_ex(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>X509_ACERT_print() and X509_ACERT_print_ex() were added in OpenSSL 3.4.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2023-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

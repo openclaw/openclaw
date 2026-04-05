@@ -1,0 +1,83 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_get_shared_sigalgs</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_get_shared_sigalgs, SSL_get_sigalgs - get supported signature algorithms</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+int SSL_get_shared_sigalgs(SSL *s, int idx,
+                           int *psign, int *phash, int *psignhash,
+                           unsigned char *rsig, unsigned char *rhash);
+
+int SSL_get_sigalgs(SSL *s, int idx,
+                    int *psign, int *phash, int *psignhash,
+                    unsigned char *rsig, unsigned char *rhash);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_get_shared_sigalgs() returns information about the shared signature algorithms supported by peer <b>s</b>. The parameter <b>idx</b> indicates the index of the shared signature algorithm to return starting from zero. The signature algorithm NID is written to <b>*psign</b>, the hash NID to <b>*phash</b> and the sign and hash NID to <b>*psignhash</b>. The raw signature and hash values are written to <b>*rsig</b> and <b>*rhash</b>.</p>
+
+<p>SSL_get_sigalgs() is similar to SSL_get_shared_sigalgs() except it returns information about all signature algorithms supported by <b>s</b> in the order they were sent by the peer.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_get_shared_sigalgs() and SSL_get_sigalgs() return the number of signature algorithms or <b>0</b> if the <b>idx</b> parameter is out of range.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>These functions are typically called for debugging purposes (to report the peer&#39;s preferences) or where an application wants finer control over certificate selection. Most applications will rely on internal handling and will not need to call them.</p>
+
+<p>If an application is only interested in the highest preference shared signature algorithm it can just set <b>idx</b> to zero.</p>
+
+<p>Any or all of the parameters <b>psign</b>, <b>phash</b>, <b>psignhash</b>, <b>rsig</b> or <b>rhash</b> can be set to <b>NULL</b> if the value is not required. By setting them all to <b>NULL</b> and setting <b>idx</b> to zero the total number of signature algorithms can be determined: which can be zero.</p>
+
+<p>These functions must be called after the peer has sent a list of supported signature algorithms: after a client hello (for servers) or a certificate request (for clients). They can (for example) be called in the certificate callback.</p>
+
+<p>Only TLS 1.2, TLS 1.3 and DTLS 1.2 currently support signature algorithms. If these functions are called on an earlier version of TLS or DTLS zero is returned.</p>
+
+<p>The shared signature algorithms returned by SSL_get_shared_sigalgs() are ordered according to configuration and peer preferences.</p>
+
+<p>The raw values correspond to the on the wire form as defined by RFC5246 et al. The NIDs are OpenSSL equivalents. For example if the peer sent sha256(4) and rsa(1) then <b>*rhash</b> would be 4, <b>*rsign</b> 1, <b>*phash</b> NID_sha256, <b>*psig</b> NID_rsaEncryption and <b>*psignhash</b> NID_sha256WithRSAEncryption.</p>
+
+<p>If a signature algorithm is not recognised the corresponding NIDs will be set to <b>NID_undef</b>. This may be because the value is not supported, is not an appropriate combination (for example MD5 and DSA) or the signature algorithm does not use a hash (for example Ed25519).</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/SSL_CTX_set_cert_cb.html">SSL_CTX_set_cert_cb(3)</a>, <a href="../man7/ssl.html">ssl(7)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2015-2018 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

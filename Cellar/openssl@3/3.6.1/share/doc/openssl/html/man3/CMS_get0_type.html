@@ -1,0 +1,87 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>CMS_get0_type</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>CMS_get0_type, CMS_set1_eContentType, CMS_get0_eContentType, CMS_get0_content - get and set CMS content types and content</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/cms.h&gt;
+
+const ASN1_OBJECT *CMS_get0_type(const CMS_ContentInfo *cms);
+int CMS_set1_eContentType(CMS_ContentInfo *cms, const ASN1_OBJECT *oid);
+const ASN1_OBJECT *CMS_get0_eContentType(CMS_ContentInfo *cms);
+ASN1_OCTET_STRING **CMS_get0_content(CMS_ContentInfo *cms);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>CMS_get0_type() returns the content type of a CMS_ContentInfo structure as an ASN1_OBJECT pointer. An application can then decide how to process the CMS_ContentInfo structure based on this value.</p>
+
+<p>CMS_set1_eContentType() sets the embedded content type of a CMS_ContentInfo structure. It should be called with CMS functions (such as <a href="../man3/CMS_sign.html">CMS_sign(3)</a>, <a href="../man3/CMS_encrypt.html">CMS_encrypt(3)</a>) with the <b>CMS_PARTIAL</b> flag and <b>before</b> the structure is finalised, otherwise the results are undefined.</p>
+
+<p>ASN1_OBJECT *CMS_get0_eContentType() returns a pointer to the embedded content type.</p>
+
+<p>CMS_get0_content() returns a pointer to the <b>ASN1_OCTET_STRING</b> pointer containing the embedded content.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>As the <b>0</b> implies CMS_get0_type(), CMS_get0_eContentType() and CMS_get0_content() return internal pointers which should <b>not</b> be freed up. CMS_set1_eContentType() copies the supplied OID and it <b>should</b> be freed up after use.</p>
+
+<p>The <b>ASN1_OBJECT</b> values returned can be converted to an integer <b>NID</b> value using OBJ_obj2nid(). For the currently supported content types the following values are returned:</p>
+
+<pre><code>NID_pkcs7_data
+NID_pkcs7_signed
+NID_pkcs7_digest
+NID_id_smime_ct_compressedData:
+NID_pkcs7_encrypted
+NID_pkcs7_enveloped</code></pre>
+
+<p>The return value of CMS_get0_content() is a pointer to the <b>ASN1_OCTET_STRING</b> content pointer. That means that for example:</p>
+
+<pre><code>ASN1_OCTET_STRING **pconf = CMS_get0_content(cms);</code></pre>
+
+<p><b>*pconf</b> could be NULL if there is no embedded content. Applications can access, modify or create the embedded content in a <b>CMS_ContentInfo</b> structure using this function. Applications usually will not need to modify the embedded content as it is normally set by higher level functions.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>CMS_get0_type() and CMS_get0_eContentType() return an ASN1_OBJECT structure.</p>
+
+<p>CMS_set1_eContentType() returns 1 for success or 0 if an error occurred. The error can be obtained from ERR_get_error(3).</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ERR_get_error.html">ERR_get_error(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2008-2016 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

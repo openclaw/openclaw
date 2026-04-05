@@ -1,0 +1,70 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_get0_connection</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_get0_connection, SSL_is_connection - get a QUIC connection SSL object from a QUIC stream SSL object</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+SSL *SSL_get0_connection(SSL *ssl);
+int SSL_is_connection(SSL *ssl);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The SSL_get0_connection() function, when called on a QUIC stream SSL object, returns the QUIC connection SSL object which the QUIC stream SSL object belongs to.</p>
+
+<p>When called on a QUIC connection SSL object, it returns the same object.</p>
+
+<p>When called on a non-QUIC object, it returns the same object it was passed.</p>
+
+<p>SSL_is_connection() returns 1 for QUIC connection SSL objects and for non-QUIC SSL objects, but returns 0 for QUIC stream SSL objects.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_get0_connection() returns the QUIC connection SSL object (for a QUIC stream SSL object) and otherwise returns the same SSL object passed. It always returns non-NULL.</p>
+
+<p>SSL_is_connection() returns 1 if the SSL object is not a QUIC stream SSL object and 0 otherwise.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/SSL_new.html">SSL_new(3)</a>, <a href="../man3/SSL_new_stream.html">SSL_new_stream(3)</a>, <a href="../man3/SSL_accept_stream.html">SSL_accept_stream(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>These functions were added in OpenSSL 3.2.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2002-2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,13 @@
+# Package Information for pkg-config
+
+prefix=/opt/homebrew/opt/sqlite
+exec_prefix=${prefix}
+libdir=/opt/homebrew/opt/sqlite/lib
+includedir=${prefix}/include
+
+Name: SQLite
+Description: SQL database engine
+Version: 3.51.3
+Libs: -L${libdir} -lsqlite3
+Libs.private:  -lz   
+Cflags: -I${includedir}

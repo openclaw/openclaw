@@ -1,0 +1,181 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>provider-object</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Parameter-reference">Parameter reference</a></li>
+    </ul>
+  </li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>provider-object - A specification for a provider-native object abstraction</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/core_object.h&gt;
+#include &lt;openssl/core_names.h&gt;</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The provider-native object abstraction is a set of <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> keys and values that can be used to pass provider-native objects to OpenSSL library code or between different provider operation implementations with the help of OpenSSL library code.</p>
+
+<p>The intention is that certain provider-native operations can pass any sort of object that belong with other operations, or with OpenSSL library code.</p>
+
+<p>An object may be passed in the following manners:</p>
+
+<ol>
+
+<li><p><i>By value</i></p>
+
+<p>This means that the <i>object data</i> is passed as an octet string or an UTF8 string, which can be handled in diverse ways by other provided implementations. The encoding of the object depends on the context it&#39;s used in; for example, <a href="../man3/OSSL_DECODER.html">OSSL_DECODER(3)</a> allows multiple encodings, depending on existing decoders. If central OpenSSL library functionality is to handle the data directly, it <b>must</b> be encoded in DER for all object types except for <b>OSSL_OBJECT_NAME</b> (see <a href="#Parameter-reference">&quot;Parameter reference&quot;</a> below), where it&#39;s assumed to a plain UTF8 string.</p>
+
+</li>
+<li><p><i>By reference</i></p>
+
+<p>This means that the <i>object data</i> isn&#39;t passed directly, an <i>object reference</i> is passed instead. It&#39;s an octet string that only the correct provider understands correctly.</p>
+
+</li>
+</ol>
+
+<p>Objects <i>by value</i> can be used by anything that handles DER encoded objects.</p>
+
+<p>Objects <i>by reference</i> need a higher level of cooperation from the implementation where the object originated (let&#39;s call it X) and its target implementation (let&#39;s call it Y):</p>
+
+<ol>
+
+<li><p><i>An object loading function in the target implementation</i></p>
+
+<p>The target implementation (Y) may have a function that can take an <i>object reference</i>. This can only be used if the target implementation is from the same provider as the one originating the object abstraction in question (X).</p>
+
+<p>The exact target implementation to use is determined from the <i>object type</i> and possibly the <i>object data type</i>. For example, when the OpenSSL library receives an object abstraction with the <i>object type</i> <b>OSSL_OBJECT_PKEY</b>, it will fetch a <a href="../man7/provider-keymgmt.html">provider-keymgmt(7)</a> using the <i>object data type</i> as its key type (the second argument in <a href="../man3/EVP_KEYMGMT_fetch.html">EVP_KEYMGMT_fetch(3)</a>).</p>
+
+</li>
+<li><p><i>An object exporter in the originating implementation</i></p>
+
+<p>The originating implementation (X) may have an exporter function. This exporter function can be used to export the object in <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> form, that can then be imported by the target implementation&#39;s imported function.</p>
+
+<p>This can be used when it&#39;s not possible to fetch the target implementation (Y) from the same provider.</p>
+
+</li>
+</ol>
+
+<h2 id="Parameter-reference">Parameter reference</h2>
+
+<p>A provider-native object abstraction is an <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> with a selection of the following parameters:</p>
+
+<dl>
+
+<dt id="data-OSSL_OBJECT_PARAM_DATA-octet-string-or-UTF8-string">&quot;data&quot; (<b>OSSL_OBJECT_PARAM_DATA</b>) &lt;octet string&gt; or &lt;UTF8 string&gt;</dt>
+<dd>
+
+<p>The object data <i>passed by value</i>.</p>
+
+</dd>
+<dt id="reference-OSSL_OBJECT_PARAM_REFERENCE-octet-string">&quot;reference&quot; (<b>OSSL_OBJECT_PARAM_REFERENCE</b>) &lt;octet string&gt;</dt>
+<dd>
+
+<p>The object data <i>passed by reference</i>.</p>
+
+</dd>
+<dt id="type-OSSL_OBJECT_PARAM_TYPE-integer">&quot;type&quot; (<b>OSSL_OBJECT_PARAM_TYPE</b>) &lt;integer&gt;</dt>
+<dd>
+
+<p>The <i>object type</i>, a number that may have any of the following values (all defined in <i>&lt;openssl/core_object.h&gt;</i>):</p>
+
+<dl>
+
+<dt id="OSSL_OBJECT_NAME"><b>OSSL_OBJECT_NAME</b></dt>
+<dd>
+
+<p>The object data may only be <i>passed by value</i>, and should be a UTF8 string.</p>
+
+<p>This is useful for <a href="../man7/provider-storemgmt.html">provider-storemgmt(7)</a> when a URI load results in new URIs.</p>
+
+</dd>
+<dt id="OSSL_OBJECT_PKEY"><b>OSSL_OBJECT_PKEY</b></dt>
+<dd>
+
+<p>The object data is suitable as provider-native <b>EVP_PKEY</b> key data. The object data may be <i>passed by value</i> or <i>passed by reference</i>.</p>
+
+</dd>
+<dt id="OSSL_OBJECT_CERT"><b>OSSL_OBJECT_CERT</b></dt>
+<dd>
+
+<p>The object data is suitable as <b>X509</b> data. The object data for this object type can only be <i>passed by value</i>, and should be an octet string.</p>
+
+<p>Since there&#39;s no provider-native X.509 object, OpenSSL libraries that receive this object abstraction are expected to convert the data to a <b>X509</b> object with d2i_X509().</p>
+
+</dd>
+<dt id="OSSL_OBJECT_CRL"><b>OSSL_OBJECT_CRL</b></dt>
+<dd>
+
+<p>The object data is suitable as <b>X509_CRL</b> data. The object data can only be <i>passed by value</i>, and should be an octet string.</p>
+
+<p>Since there&#39;s no provider-native X.509 CRL object, OpenSSL libraries that receive this object abstraction are expected to convert the data to a <b>X509_CRL</b> object with d2i_X509_CRL().</p>
+
+</dd>
+</dl>
+
+</dd>
+<dt id="data-type-OSSL_OBJECT_PARAM_DATA_TYPE-UTF8-string">&quot;data-type&quot; (<b>OSSL_OBJECT_PARAM_DATA_TYPE</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+<p>The specific type of the object content. Legitimate values depend on the object type; if it is <b>OSSL_OBJECT_PKEY</b>, the data type is expected to be a key type suitable for fetching a <a href="../man7/provider-keymgmt.html">provider-keymgmt(7)</a> that can handle the data.</p>
+
+</dd>
+<dt id="data-structure-OSSL_OBJECT_PARAM_DATA_STRUCTURE-UTF8-string">&quot;data-structure&quot; (<b>OSSL_OBJECT_PARAM_DATA_STRUCTURE</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+<p>The outermost structure of the object content. Legitimate values depend on the object type.</p>
+
+</dd>
+<dt id="desc-OSSL_OBJECT_PARAM_DESC-UTF8-string">&quot;desc&quot; (<b>OSSL_OBJECT_PARAM_DESC</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+<p>A human readable text that describes extra details on the object.</p>
+
+</dd>
+</dl>
+
+<p>When a provider-native object abstraction is used, it <i>must</i> contain object data in at least one form (object data <i>passed by value</i>, i.e. the &quot;data&quot; item, or object data <i>passed by reference</i>, i.e. the &quot;reference&quot; item). Both may be present at once, in which case the OpenSSL library code that receives this will use the most optimal variant.</p>
+
+<p>For objects with the object type <b>OSSL_OBJECT_NAME</b>, that object type <i>must</i> be given.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/provider.html">provider(7)</a>, <a href="../man3/OSSL_DECODER.html">OSSL_DECODER(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The concept of providers and everything surrounding them was introduced in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2020-2022 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,102 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_KEM-RSA</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#RSA-KEM-parameters">RSA KEM parameters</a></li>
+    </ul>
+  </li>
+  <li><a href="#CONFORMING-TO">CONFORMING TO</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_KEM-RSA - EVP_KEM RSA keytype and algorithm support</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The <b>RSA</b> keytype and its parameters are described in <a href="../man7/EVP_PKEY-RSA.html">EVP_PKEY-RSA(7)</a>. See <a href="../man3/EVP_PKEY_encapsulate.html">EVP_PKEY_encapsulate(3)</a> and <a href="../man3/EVP_PKEY_decapsulate.html">EVP_PKEY_decapsulate(3)</a> for more info.</p>
+
+<h2 id="RSA-KEM-parameters">RSA KEM parameters</h2>
+
+<dl>
+
+<dt id="operation-OSSL_KEM_PARAM_OPERATION-UTF8-string">&quot;operation&quot; (<b>OSSL_KEM_PARAM_OPERATION</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+<p>The OpenSSL RSA Key Encapsulation Mechanism only currently supports the following default operation (operating mode):</p>
+
+<dl>
+
+<dt id="RSASVE">&quot;RSASVE&quot;</dt>
+<dd>
+
+<p>The encapsulate function simply generates a secret using random bytes and then encrypts the secret using the RSA public key (with no padding). The decapsulate function recovers the secret using the RSA private key.</p>
+
+</dd>
+</dl>
+
+<p>This can be set using EVP_PKEY_CTX_set_kem_op().</p>
+
+</dd>
+<dt id="fips-indicator-OSSL_KEM_PARAM_FIPS_APPROVED_INDICATOR-integer">&quot;fips-indicator&quot; (<b>OSSL_KEM_PARAM_FIPS_APPROVED_INDICATOR</b>) &lt;integer&gt;</dt>
+<dd>
+
+</dd>
+<dt id="key-check-OSSL_KEM_PARAM_FIPS_KEY_CHECK-integer">&quot;key-check&quot; (<b>OSSL_KEM_PARAM_FIPS_KEY_CHECK</b>) &lt;integer&gt;</dt>
+<dd>
+
+<p>These parameters are described in <a href="../man7/provider-kem.html">provider-kem(7)</a>.</p>
+
+</dd>
+</dl>
+
+<h1 id="CONFORMING-TO">CONFORMING TO</h1>
+
+<dl>
+
+<dt id="SP800-56Br2">SP800-56Br2</dt>
+<dd>
+
+<p>Section 7.2.1.2 RSASVE Generate Operation (RSASVE.GENERATE). Section 7.2.1.3 RSASVE Recovery Operation (RSASVE.RECOVER).</p>
+
+</dd>
+</dl>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_PKEY_CTX_set_kem_op.html">EVP_PKEY_CTX_set_kem_op(3)</a>, <a href="../man3/EVP_PKEY_encapsulate.html">EVP_PKEY_encapsulate(3)</a>, <a href="../man3/EVP_PKEY_decapsulate.html">EVP_PKEY_decapsulate(3)</a> <a href="../man3/EVP_KEYMGMT.html">EVP_KEYMGMT(3)</a>, <a href="../man3/EVP_PKEY.html">EVP_PKEY(3)</a>, <a href="../man7/provider-keymgmt.html">provider-keymgmt(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>This functionality was added in OpenSSL 3.0.</p>
+
+<p>The <code>operation</code> (operating mode) was a required parameter prior to OpenSSL 3.5. As of OpenSSL 3.5, <code>RSASVE</code> is the default operating mode, and no explicit value need be specified.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2020-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

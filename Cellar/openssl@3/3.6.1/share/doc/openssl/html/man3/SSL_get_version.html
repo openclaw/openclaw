@@ -1,0 +1,201 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_get_version</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_client_version, SSL_get_version, SSL_is_dtls, SSL_is_tls, SSL_is_quic, SSL_version - get the protocol information of a connection</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+int SSL_client_version(const SSL *s);
+
+const char *SSL_get_version(const SSL *ssl);
+
+int SSL_is_dtls(const SSL *ssl);
+int SSL_is_tls(const SSL *ssl);
+int SSL_is_quic(const SSL *ssl);
+
+int SSL_version(const SSL *s);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>For SSL, TLS and DTLS protocols SSL_client_version() returns the numeric protocol version advertised by the client in the legacy_version field of the ClientHello when initiating the connection. Note that, for TLS, this value will never indicate a version greater than TLSv1.2 even if TLSv1.3 is subsequently negotiated. For QUIC connections it returns OSSL_QUIC1_VERSION.</p>
+
+<p>SSL_get_version() returns the name of the protocol used for the connection. SSL_version() returns the numeric protocol version used for the connection. They should only be called after the initial handshake has been completed. Prior to that the results returned from these functions may be unreliable.</p>
+
+<p>SSL_is_dtls() returns 1 if the connection is using DTLS or 0 if not.</p>
+
+<p>SSL_is_tls() returns 1 if the connection is using SSL/TLS or 0 if not.</p>
+
+<p>SSL_is_quic() returns 1 if the connection is using QUIC or 0 if not.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_get_version() returns one of the following strings:</p>
+
+<dl>
+
+<dt id="SSLv3">SSLv3</dt>
+<dd>
+
+<p>The connection uses the SSLv3 protocol.</p>
+
+</dd>
+<dt id="TLSv1">TLSv1</dt>
+<dd>
+
+<p>The connection uses the TLSv1.0 protocol.</p>
+
+</dd>
+<dt id="TLSv1.1">TLSv1.1</dt>
+<dd>
+
+<p>The connection uses the TLSv1.1 protocol.</p>
+
+</dd>
+<dt id="TLSv1.2">TLSv1.2</dt>
+<dd>
+
+<p>The connection uses the TLSv1.2 protocol.</p>
+
+</dd>
+<dt id="TLSv1.3">TLSv1.3</dt>
+<dd>
+
+<p>The connection uses the TLSv1.3 protocol.</p>
+
+</dd>
+<dt id="DTLSv0.9">DTLSv0.9</dt>
+<dd>
+
+<p>The connection uses an obsolete pre-standardisation DTLS protocol</p>
+
+</dd>
+<dt id="DTLSv1">DTLSv1</dt>
+<dd>
+
+<p>The connection uses the DTLSv1 protocol</p>
+
+</dd>
+<dt id="DTLSv1.2">DTLSv1.2</dt>
+<dd>
+
+<p>The connection uses the DTLSv1.2 protocol</p>
+
+</dd>
+<dt id="QUICv1">QUICv1</dt>
+<dd>
+
+<p>The connection uses the QUICv1 protocol.</p>
+
+</dd>
+<dt id="unknown">unknown</dt>
+<dd>
+
+<p>This indicates an unknown protocol version.</p>
+
+</dd>
+</dl>
+
+<p>SSL_version() and SSL_client_version() return an integer which could include any of the following:</p>
+
+<dl>
+
+<dt id="SSL3_VERSION">SSL3_VERSION</dt>
+<dd>
+
+<p>The connection uses the SSLv3 protocol.</p>
+
+</dd>
+<dt id="TLS1_VERSION">TLS1_VERSION</dt>
+<dd>
+
+<p>The connection uses the TLSv1.0 protocol.</p>
+
+</dd>
+<dt id="TLS1_1_VERSION">TLS1_1_VERSION</dt>
+<dd>
+
+<p>The connection uses the TLSv1.1 protocol.</p>
+
+</dd>
+<dt id="TLS1_2_VERSION">TLS1_2_VERSION</dt>
+<dd>
+
+<p>The connection uses the TLSv1.2 protocol.</p>
+
+</dd>
+<dt id="TLS1_3_VERSION">TLS1_3_VERSION</dt>
+<dd>
+
+<p>The connection uses the TLSv1.3 protocol (never returned for SSL_client_version()).</p>
+
+</dd>
+<dt id="DTLS1_BAD_VER">DTLS1_BAD_VER</dt>
+<dd>
+
+<p>The connection uses an obsolete pre-standardisation DTLS protocol</p>
+
+</dd>
+<dt id="DTLS1_VERSION">DTLS1_VERSION</dt>
+<dd>
+
+<p>The connection uses the DTLSv1 protocol</p>
+
+</dd>
+<dt id="DTLS1_2_VERSION">DTLS1_2_VERSION</dt>
+<dd>
+
+<p>The connection uses the DTLSv1.2 protocol</p>
+
+</dd>
+<dt id="OSSL_QUIC1_VERSION">OSSL_QUIC1_VERSION</dt>
+<dd>
+
+<p>The connection uses the QUICv1 protocol.</p>
+
+</dd>
+</dl>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The SSL_is_dtls() function was added in OpenSSL 1.1.0. The SSL_is_tls() and SSL_is_quic() functions were added in OpenSSL 3.2.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2001-2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

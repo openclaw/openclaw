@@ -1,0 +1,75 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>BN_new</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>BN_new, BN_secure_new, BN_clear, BN_free, BN_clear_free - allocate and free BIGNUMs</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/bn.h&gt;
+
+BIGNUM *BN_new(void);
+
+BIGNUM *BN_secure_new(void);
+
+void BN_clear(BIGNUM *a);
+
+void BN_free(BIGNUM *a);
+
+void BN_clear_free(BIGNUM *a);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>BN_new() allocates and initializes a <b>BIGNUM</b> structure. BN_secure_new() does the same except that the secure heap <a href="../man3/OPENSSL_secure_malloc.html">OPENSSL_secure_malloc(3)</a> is used to store the value.</p>
+
+<p>BN_clear() is used to destroy sensitive data such as keys when they are no longer needed. It erases the memory used by <b>a</b> and sets it to the value 0. If <b>a</b> is NULL, nothing is done.</p>
+
+<p>BN_free() frees the components of the <b>BIGNUM</b>, and if it was created by BN_new(), also the structure itself. BN_clear_free() additionally overwrites the data before the memory is returned to the system. If <b>a</b> is NULL, nothing is done.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>BN_new() and BN_secure_new() return a pointer to the <b>BIGNUM</b> initialised to the value 0. If the allocation fails, they return <b>NULL</b> and set an error code that can be obtained by <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>.</p>
+
+<p>BN_clear(), BN_free() and BN_clear_free() have no return values.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>, <a href="../man3/OPENSSL_secure_malloc.html">OPENSSL_secure_malloc(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>BN_init() was removed in OpenSSL 1.1.0; use BN_new() instead.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2017 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

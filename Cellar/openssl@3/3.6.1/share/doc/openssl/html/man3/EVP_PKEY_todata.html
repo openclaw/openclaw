@@ -1,0 +1,78 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_PKEY_todata</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_PKEY_todata, EVP_PKEY_export - functions to return keys as an array of key parameters</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+
+int EVP_PKEY_todata(const EVP_PKEY *pkey, int selection, OSSL_PARAM **params);
+int EVP_PKEY_export(const EVP_PKEY *pkey, int selection,
+                    OSSL_CALLBACK *export_cb, void *export_cbarg);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The functions described here are used to extract <b>EVP_PKEY</b> key values as an array of <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a>.</p>
+
+<p>EVP_PKEY_todata() extracts values from a key <i>pkey</i> using the <i>selection</i>. <i>selection</i> is described in <a href="../man3/EVP_PKEY_fromdata.html">&quot;Selections&quot; in EVP_PKEY_fromdata(3)</a>. <a href="../man3/OSSL_PARAM_free.html">OSSL_PARAM_free(3)</a> should be used to free the returned parameters in <i>*params</i>.</p>
+
+<p>EVP_PKEY_export() is similar to EVP_PKEY_todata() but uses a callback <i>export_cb</i> that gets passed the value of <i>export_cbarg</i>. See <a href="../man7/openssl-core.h.html">openssl-core.h(7)</a> for more information about the callback. Note that the <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> array that is passed to the callback is not persistent after the callback returns. The user must preserve the items of interest, or use EVP_PKEY_todata() if persistence is required.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>These functions only work with key management methods coming from a provider. This is the mirror function to <a href="../man3/EVP_PKEY_fromdata.html">EVP_PKEY_fromdata(3)</a>.</p>
+
+<p>LMS support is disabled by default at compile-time. To enable, specify the <b>enable-lms</b> build configuration option.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>EVP_PKEY_todata() and EVP_PKEY_export() return 1 for success and 0 for failure.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a>, <a href="../man7/openssl-core.h.html">openssl-core.h(7)</a>, <a href="../man3/EVP_PKEY_fromdata.html">EVP_PKEY_fromdata(3)</a>, <a href="../man7/EVP_PKEY-RSA.html">EVP_PKEY-RSA(7)</a>, <a href="../man7/EVP_PKEY-EC.html">EVP_PKEY-EC(7)</a>, <a href="../man7/EVP_PKEY-DSA.html">EVP_PKEY-DSA(7)</a>, <a href="../man7/EVP_PKEY-ED25519.html">EVP_PKEY-ED25519(7)</a> <a href="../man7/EVP_PKEY-ED448.html">EVP_PKEY-ED448(7)</a>, <a href="../man7/EVP_PKEY-DH.html">EVP_PKEY-DH(7)</a>, <a href="../man7/EVP_PKEY-X25519.html">EVP_PKEY-X25519(7)</a>, <a href="../man7/EVP_PKEY-X448.html">EVP_PKEY-X448(7)</a>, <a href="../man7/EVP_PKEY-LMS.html">EVP_PKEY-LMS(7)</a>, <a href="../man7/EVP_PKEY-ML-DSA.html">EVP_PKEY-ML-DSA(7)</a>, <a href="../man7/EVP_PKEY-ML-KEM.html">EVP_PKEY-ML-KEM(7)</a>, <a href="../man7/EVP_PKEY-SLH-DSA.html">EVP_PKEY-SLH-DSA(7)</a>.</p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>These functions were added in OpenSSL 3.0.</p>
+
+<p>Support for <b>ML-DSA</b>, <b>ML-KEM</b> and <b>SLH-DSA</b> was added in OpenSSL 3.5.</p>
+
+<p>Support for <b>LMS</b> was added in OpenSSL 3.6.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2021-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,103 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OSSL_LIB_CTX</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OSSL_LIB_CTX, OSSL_LIB_CTX_get_data, OSSL_LIB_CTX_new, OSSL_LIB_CTX_new_from_dispatch, OSSL_LIB_CTX_new_child, OSSL_LIB_CTX_free, OSSL_LIB_CTX_load_config, OSSL_LIB_CTX_get0_global_default, OSSL_LIB_CTX_set0_default - OpenSSL library context</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/crypto.h&gt;
+
+typedef struct ossl_lib_ctx_st OSSL_LIB_CTX;
+
+OSSL_LIB_CTX *OSSL_LIB_CTX_new(void);
+OSSL_LIB_CTX *OSSL_LIB_CTX_new_from_dispatch(const OSSL_CORE_HANDLE *handle,
+                                             const OSSL_DISPATCH *in);
+OSSL_LIB_CTX *OSSL_LIB_CTX_new_child(const OSSL_CORE_HANDLE *handle,
+                                     const OSSL_DISPATCH *in);
+int OSSL_LIB_CTX_load_config(OSSL_LIB_CTX *ctx, const char *config_file);
+void OSSL_LIB_CTX_free(OSSL_LIB_CTX *ctx);
+OSSL_LIB_CTX *OSSL_LIB_CTX_get0_global_default(void);
+OSSL_LIB_CTX *OSSL_LIB_CTX_set0_default(OSSL_LIB_CTX *ctx);
+void *OSSL_LIB_CTX_get_data(OSSL_LIB_CTX *ctx, int index);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p><b>OSSL_LIB_CTX</b> is an internal OpenSSL library context type. Applications may allocate their own, but may also use NULL to use a default context with functions that take an <b>OSSL_LIB_CTX</b> argument.</p>
+
+<p>When a non default library context is in use care should be taken with multi-threaded applications to properly clean up thread local resources before the OSSL_LIB_CTX is freed. See <a href="../man3/OPENSSL_thread_stop_ex.html">OPENSSL_thread_stop_ex(3)</a> for more information.</p>
+
+<p>OSSL_LIB_CTX_new() creates a new OpenSSL library context.</p>
+
+<p>OSSL_LIB_CTX_new_from_dispatch() creates a new OpenSSL library context initialised to use callbacks from the OSSL_DISPATCH structure. This is primarily useful for provider authors. The <i>handle</i> and dispatch structure arguments passed should be the same ones as passed to a provider&#39;s OSSL_provider_init function. Some OpenSSL functions, such as <a href="../man3/BIO_new_from_core_bio.html">BIO_new_from_core_bio(3)</a>, require the library context to be created in this way in order to work.</p>
+
+<p>OSSL_LIB_CTX_new_child() is only useful to provider authors and does the same thing as OSSL_LIB_CTX_new_from_dispatch() except that it additionally links the new library context to the application library context. The new library context is a full library context in its own right, but will have all the same providers available to it that are available in the application library context (without having to reload them). If the application loads or unloads providers from the application library context then this will be automatically mirrored in the child library context.</p>
+
+<p>In addition providers that are not loaded in the parent library context can be explicitly loaded into the child library context independently from the parent library context. Providers loaded independently in this way will not be mirrored in the parent library context and will not be affected if the parent library context subsequently loads the same provider.</p>
+
+<p>A provider may call the function <a href="../man3/OSSL_PROVIDER_load.html">OSSL_PROVIDER_load(3)</a> with the child library context as required. If the provider already exists due to it being mirrored from the parent library context then it will remain available and its reference count will be increased. If <a href="../man3/OSSL_PROVIDER_load.html">OSSL_PROVIDER_load(3)</a> is called in this way then <a href="../man3/OSSL_PROVIDER_unload.html">OSSL_PROVIDER_unload(3)</a> should be subsequently called to decrement the reference count. <a href="../man3/OSSL_PROVIDER_unload.html">OSSL_PROVIDER_unload(3)</a> must not be called for a provider in the child library context that did not have an earlier <a href="../man3/OSSL_PROVIDER_load.html">OSSL_PROVIDER_load(3)</a> call for that provider in that child library context.</p>
+
+<p>In addition to providers, a child library context will also mirror the default properties (set via <a href="../man3/EVP_set_default_properties.html">EVP_set_default_properties(3)</a>) from the parent library context. If <a href="../man3/EVP_set_default_properties.html">EVP_set_default_properties(3)</a> is called directly on a child library context then the new properties will override anything from the parent library context and mirroring of the properties will stop.</p>
+
+<p>When OSSL_LIB_CTX_new_child() is called from within the scope of a provider&#39;s <b>OSSL_provider_init</b> function the currently initialising provider is not yet available in the application&#39;s library context and therefore will similarly not yet be available in the newly constructed child library context. As soon as the <b>OSSL_provider_init</b> function returns then the new provider is available in the application&#39;s library context and will be similarly mirrored in the child library context.</p>
+
+<p>OSSL_LIB_CTX_load_config() loads a configuration file using the given <i>ctx</i>. This can be used to associate a library context with providers that are loaded from a configuration. This function must not be called concurrently from multiple threads on a single <i>ctx</i>.</p>
+
+<p>OSSL_LIB_CTX_free() frees the given <i>ctx</i>, unless it happens to be the default OpenSSL library context. If the argument is NULL, nothing is done.</p>
+
+<p>OSSL_LIB_CTX_get0_global_default() returns a concrete (non NULL) reference to the global default library context.</p>
+
+<p>OSSL_LIB_CTX_set0_default() sets the default OpenSSL library context to be <i>ctx</i> in the current thread. The previous default library context is returned. Care should be taken by the caller to restore the previous default library context with a subsequent call of this function. If <i>ctx</i> is NULL then no change is made to the default library context, but a pointer to the current library context is still returned. On a successful call of this function the returned value will always be a concrete (non NULL) library context.</p>
+
+<p>Care should be taken when changing the default library context and starting async jobs (see <a href="../man3/ASYNC_start_job.html">ASYNC_start_job(3)</a>), as the default library context when the job is started will be used throughout the lifetime of an async job, no matter how the calling thread makes further default library context changes in the mean time. This means that the calling thread must not free the library context that was the default at the start of the async job before that job has finished.</p>
+
+<p>OSSL_LIB_CTX_get_data() returns a memory address whose interpretation depends on the index. The index argument refers to a context member which is to be retrieved. The values for index are all private to OpenSSL currently and so applications should not typically call this function. If ctx is NULL then the function operates on the default library context. OSSL_LIB_CTX_get_data() returns a memory address whose interpretation depends on the index.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>OSSL_LIB_CTX_new(), OSSL_LIB_CTX_get0_global_default() and OSSL_LIB_CTX_set0_default() return a library context pointer on success, or NULL on error.</p>
+
+<p>OSSL_LIB_CTX_free() doesn&#39;t return any value.</p>
+
+<p>OSSL_LIB_CTX_load_config() returns 1 on success, 0 on error.</p>
+
+<p>OSSL_LIB_CTX_get_data() returns a memory address whose interpretation depends on the index.</p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>All of the functions described on this page were added in OpenSSL 3.0.</p>
+
+<p>OSSL_LIB_CTX_get_data() was introduced in OpenSSL 3.4.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2019-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

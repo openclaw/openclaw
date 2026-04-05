@@ -1,0 +1,119 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>PKCS12_newpass</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#BUGS">BUGS</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>PKCS12_newpass - change the password of a PKCS12 structure</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/pkcs12.h&gt;
+
+int PKCS12_newpass(PKCS12 *p12, const char *oldpass, const char *newpass);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>PKCS12_newpass() changes the password of a PKCS12 structure.</p>
+
+<p><b>p12</b> is a pointer to a PKCS12 structure. <b>oldpass</b> is the existing password and <b>newpass</b> is the new password.</p>
+
+<p>Each of <b>oldpass</b> and <b>newpass</b> is independently interpreted as a string in the UTF-8 encoding. If it is not valid UTF-8, it is assumed to be ISO8859-1 instead.</p>
+
+<p>In particular, this means that passwords in the locale character set (or code page on Windows) must potentially be converted to UTF-8 before use. This may include passwords from local text files, or input from the terminal or command line. Refer to the documentation of <a href="../man3/UI_OpenSSL.html">UI_OpenSSL(3)</a>, for example.</p>
+
+<p>If the PKCS#12 structure does not have a password, then you must use the empty string &quot;&quot; for <b>oldpass</b>. Using NULL for <b>oldpass</b> will result in a PKCS12_newpass() failure.</p>
+
+<p>If the wrong password is used for <b>oldpass</b> then the function will fail, with a MAC verification error. In rare cases the PKCS12 structure does not contain a MAC: in this case it will usually fail with a decryption padding error.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>PKCS12_newpass() returns 1 on success or 0 on failure. Applications can retrieve the most recent error from PKCS12_newpass() with ERR_get_error().</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>This example loads a PKCS#12 file, changes its password and writes out the result to a new file.</p>
+
+<pre><code>#include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+#include &lt;openssl/pem.h&gt;
+#include &lt;openssl/err.h&gt;
+#include &lt;openssl/pkcs12.h&gt;
+
+int main(int argc, char **argv)
+{
+    FILE *fp;
+    PKCS12 *p12;
+
+    if (argc != 5) {
+        fprintf(stderr, &quot;Usage: pkread p12file password newpass opfile\n&quot;);
+        return 1;
+    }
+    if ((fp = fopen(argv[1], &quot;rb&quot;)) == NULL) {
+        fprintf(stderr, &quot;Error opening file %s\n&quot;, argv[1]);
+        return 1;
+    }
+    p12 = d2i_PKCS12_fp(fp, NULL);
+    fclose(fp);
+    if (p12 == NULL) {
+        fprintf(stderr, &quot;Error reading PKCS#12 file\n&quot;);
+        ERR_print_errors_fp(stderr);
+        return 1;
+    }
+    if (PKCS12_newpass(p12, argv[2], argv[3]) == 0) {
+        fprintf(stderr, &quot;Error changing password\n&quot;);
+        ERR_print_errors_fp(stderr);
+        PKCS12_free(p12);
+        return 1;
+    }
+    if ((fp = fopen(argv[4], &quot;wb&quot;)) == NULL) {
+        fprintf(stderr, &quot;Error opening file %s\n&quot;, argv[4]);
+        PKCS12_free(p12);
+        return 1;
+    }
+    i2d_PKCS12_fp(fp, p12);
+    PKCS12_free(p12);
+    fclose(fp);
+    return 0;
+}</code></pre>
+
+<h1 id="BUGS">BUGS</h1>
+
+<p>The password format is a NULL terminated ASCII string which is converted to Unicode form internally. As a result some passwords cannot be supplied to this function.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/PKCS12_create.html">PKCS12_create(3)</a>, <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>, <a href="../man7/passphrase-encoding.html">passphrase-encoding(7)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2016-2018 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

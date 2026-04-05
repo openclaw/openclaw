@@ -1,0 +1,16 @@
+# Opus codec reference implementation pkg-config file
+
+prefix=/opt/homebrew/Cellar/opus/1.6.1
+exec_prefix=${prefix}
+libdir=/opt/homebrew/Cellar/opus/1.6.1/lib
+includedir=${prefix}/include
+
+Name: Opus
+Description: Opus IETF audio codec (floating-point build)
+URL: https://opus-codec.org/
+Version: 1.6.1
+Requires:
+Conflicts:
+Libs: -L${libdir} -lopus
+Libs.private: 
+Cflags: -I${includedir}/opus

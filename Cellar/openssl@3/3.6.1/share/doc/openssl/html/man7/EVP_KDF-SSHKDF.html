@@ -1,0 +1,214 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_KDF-SSHKDF</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Identity">Identity</a></li>
+      <li><a href="#Supported-parameters">Supported parameters</a></li>
+    </ul>
+  </li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#CONFORMING-TO">CONFORMING TO</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_KDF-SSHKDF - The SSHKDF EVP_KDF implementation</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>Support for computing the <b>SSHKDF</b> KDF through the <b>EVP_KDF</b> API.</p>
+
+<p>The EVP_KDF-SSHKDF algorithm implements the SSHKDF key derivation function. It is defined in RFC 4253, section 7.2 and is used by SSH to derive IVs, encryption keys and integrity keys. Five inputs are required to perform key derivation: The hashing function (for example SHA256), the Initial Key, the Exchange Hash, the Session ID, and the derivation key type.</p>
+
+<p>The output is considered to be keying material.</p>
+
+<h2 id="Identity">Identity</h2>
+
+<p>&quot;SSHKDF&quot; is the name for this implementation; it can be used with the EVP_KDF_fetch() function.</p>
+
+<h2 id="Supported-parameters">Supported parameters</h2>
+
+<p>The supported parameters are:</p>
+
+<dl>
+
+<dt id="properties-OSSL_KDF_PARAM_PROPERTIES-UTF8-string">&quot;properties&quot; (<b>OSSL_KDF_PARAM_PROPERTIES</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+</dd>
+<dt id="digest-OSSL_KDF_PARAM_DIGEST-UTF8-string">&quot;digest&quot; (<b>OSSL_KDF_PARAM_DIGEST</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+</dd>
+<dt id="key-OSSL_KDF_PARAM_KEY-octet-string">&quot;key&quot; (<b>OSSL_KDF_PARAM_KEY</b>) &lt;octet string&gt;</dt>
+<dd>
+
+<p>These parameters work as described in <a href="../man3/EVP_KDF.html">&quot;PARAMETERS&quot; in EVP_KDF(3)</a>.</p>
+
+</dd>
+<dt id="xcghash-OSSL_KDF_PARAM_SSHKDF_XCGHASH-octet-string">&quot;xcghash&quot; (<b>OSSL_KDF_PARAM_SSHKDF_XCGHASH</b>) &lt;octet string&gt;</dt>
+<dd>
+
+</dd>
+<dt id="session_id-OSSL_KDF_PARAM_SSHKDF_SESSION_ID-octet-string">&quot;session_id&quot; (<b>OSSL_KDF_PARAM_SSHKDF_SESSION_ID</b>) &lt;octet string&gt;</dt>
+<dd>
+
+<p>These parameters set the respective values for the KDF. If a value is already set, the contents are replaced.</p>
+
+</dd>
+<dt id="type-OSSL_KDF_PARAM_SSHKDF_TYPE-UTF8-string">&quot;type&quot; (<b>OSSL_KDF_PARAM_SSHKDF_TYPE</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+<p>This parameter sets the type for the SSHKDF operation. There are six supported types:</p>
+
+<dl>
+
+<dt id="EVP_KDF_SSHKDF_TYPE_INITIAL_IV_CLI_TO_SRV">EVP_KDF_SSHKDF_TYPE_INITIAL_IV_CLI_TO_SRV</dt>
+<dd>
+
+<p>The Initial IV from client to server. A single char of value 65 (ASCII char &#39;A&#39;).</p>
+
+</dd>
+<dt id="EVP_KDF_SSHKDF_TYPE_INITIAL_IV_SRV_TO_CLI">EVP_KDF_SSHKDF_TYPE_INITIAL_IV_SRV_TO_CLI</dt>
+<dd>
+
+<p>The Initial IV from server to client A single char of value 66 (ASCII char &#39;B&#39;).</p>
+
+</dd>
+<dt id="EVP_KDF_SSHKDF_TYPE_ENCRYPTION_KEY_CLI_TO_SRV">EVP_KDF_SSHKDF_TYPE_ENCRYPTION_KEY_CLI_TO_SRV</dt>
+<dd>
+
+<p>The Encryption Key from client to server A single char of value 67 (ASCII char &#39;C&#39;).</p>
+
+</dd>
+<dt id="EVP_KDF_SSHKDF_TYPE_ENCRYPTION_KEY_SRV_TO_CLI">EVP_KDF_SSHKDF_TYPE_ENCRYPTION_KEY_SRV_TO_CLI</dt>
+<dd>
+
+<p>The Encryption Key from server to client A single char of value 68 (ASCII char &#39;D&#39;).</p>
+
+</dd>
+<dt id="EVP_KDF_SSHKDF_TYPE_INTEGRITY_KEY_CLI_TO_SRV">EVP_KDF_SSHKDF_TYPE_INTEGRITY_KEY_CLI_TO_SRV</dt>
+<dd>
+
+<p>The Integrity Key from client to server A single char of value 69 (ASCII char &#39;E&#39;).</p>
+
+</dd>
+<dt id="EVP_KDF_SSHKDF_TYPE_INTEGRITY_KEY_SRV_TO_CLI">EVP_KDF_SSHKDF_TYPE_INTEGRITY_KEY_SRV_TO_CLI</dt>
+<dd>
+
+<p>The Integrity Key from client to server A single char of value 70 (ASCII char &#39;F&#39;).</p>
+
+</dd>
+</dl>
+
+</dd>
+</dl>
+
+<p>The OpenSSL FIPS provider also supports the following parameters:</p>
+
+<dl>
+
+<dt id="fips-indicator-OSSL_KDF_PARAM_FIPS_APPROVED_INDICATOR-integer">&quot;fips-indicator&quot; (<b>OSSL_KDF_PARAM_FIPS_APPROVED_INDICATOR</b>) &lt;integer&gt;</dt>
+<dd>
+
+<p>A getter that returns 1 if the operation is FIPS approved, or 0 otherwise. This may be used after calling EVP_KDF_derive. It returns 0 if any &quot;***-check&quot; related parameter is set to 0 and the check fails.</p>
+
+</dd>
+<dt id="digest-check-OSSL_KDF_PARAM_FIPS_DIGEST_CHECK-integer">&quot;digest-check&quot; (<b>OSSL_KDF_PARAM_FIPS_DIGEST_CHECK</b>) &lt;integer&gt;</dt>
+<dd>
+
+<p>The default value of 1 causes an error during EVP_KDF_CTX_set_params() if used digest is not approved. Setting this to zero will ignore the error and set the approved &quot;fips-indicator&quot; to 0. This option breaks FIPS compliance if it causes the approved &quot;fips-indicator&quot; to return 0.</p>
+
+<p>According to SP 800-135r1, the following are approved digest algorithms: SHA-1, SHA2-224, SHA2-256, SHA2-384, SHA2-512.</p>
+
+</dd>
+<dt id="key-check-OSSL_KDF_PARAM_FIPS_KEY_CHECK-integer">&quot;key-check&quot; (<b>OSSL_KDF_PARAM_FIPS_KEY_CHECK</b>) &lt;integer&gt;</dt>
+<dd>
+
+<p>The default value of 1 causes an error during EVP_KDF_CTX_set_params() if the length of used key-derivation key (<b>OSSL_KDF_PARAM_KEY</b>) is shorter than 112 bits. Setting this to zero will ignore the error and set the approved &quot;fips-indicator&quot; to 0. This option breaks FIPS compliance if it causes the approved &quot;fips-indicator&quot; to return 0.</p>
+
+</dd>
+</dl>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>A context for SSHKDF can be obtained by calling:</p>
+
+<pre><code>EVP_KDF *kdf = EVP_KDF_fetch(NULL, &quot;SSHKDF&quot;, NULL);
+EVP_KDF_CTX *kctx = EVP_KDF_CTX_new(kdf);</code></pre>
+
+<p>The output length of the SSHKDF derivation is specified via the <i>keylen</i> parameter to the <a href="../man3/EVP_KDF_derive.html">EVP_KDF_derive(3)</a> function. Since the SSHKDF output length is variable, calling <a href="../man3/EVP_KDF_CTX_get_kdf_size.html">EVP_KDF_CTX_get_kdf_size(3)</a> to obtain the requisite length is not meaningful. The caller must allocate a buffer of the desired length, and pass that buffer to the <a href="../man3/EVP_KDF_derive.html">EVP_KDF_derive(3)</a> function along with the desired length.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>This example derives an 8 byte IV using SHA-256 with a 1K &quot;key&quot; and appropriate &quot;xcghash&quot; and &quot;session_id&quot; values:</p>
+
+<pre><code>EVP_KDF *kdf;
+EVP_KDF_CTX *kctx;
+char type = EVP_KDF_SSHKDF_TYPE_INITIAL_IV_CLI_TO_SRV;
+unsigned char key[1024] = &quot;01234...&quot;;
+unsigned char xcghash[32] = &quot;012345...&quot;;
+unsigned char session_id[32] = &quot;012345...&quot;;
+unsigned char out[8];
+size_t outlen = sizeof(out);
+OSSL_PARAM params[6], *p = params;
+
+kdf = EVP_KDF_fetch(NULL, &quot;SSHKDF&quot;, NULL);
+kctx = EVP_KDF_CTX_new(kdf);
+EVP_KDF_free(kdf);
+
+*p++ = OSSL_PARAM_construct_utf8_string(OSSL_KDF_PARAM_DIGEST,
+                                        SN_sha256, strlen(SN_sha256));
+*p++ = OSSL_PARAM_construct_octet_string(OSSL_KDF_PARAM_KEY,
+                                         key, (size_t)1024);
+*p++ = OSSL_PARAM_construct_octet_string(OSSL_KDF_PARAM_SSHKDF_XCGHASH,
+                                         xcghash, (size_t)32);
+*p++ = OSSL_PARAM_construct_octet_string(OSSL_KDF_PARAM_SSHKDF_SESSION_ID,
+                                         session_id, (size_t)32);
+*p++ = OSSL_PARAM_construct_utf8_string(OSSL_KDF_PARAM_SSHKDF_TYPE,
+                                        &amp;type, sizeof(type));
+*p = OSSL_PARAM_construct_end();
+if (EVP_KDF_derive(kctx, out, outlen, params) &lt;= 0)
+    /* Error */</code></pre>
+
+<h1 id="CONFORMING-TO">CONFORMING TO</h1>
+
+<p>RFC 4253</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_KDF.html">EVP_KDF(3)</a>, <a href="../man3/EVP_KDF_CTX_new.html">EVP_KDF_CTX_new(3)</a>, <a href="../man3/EVP_KDF_CTX_free.html">EVP_KDF_CTX_free(3)</a>, <a href="../man3/EVP_KDF_CTX_set_params.html">EVP_KDF_CTX_set_params(3)</a>, <a href="../man3/EVP_KDF_CTX_get_kdf_size.html">EVP_KDF_CTX_get_kdf_size(3)</a>, <a href="../man3/EVP_KDF_derive.html">EVP_KDF_derive(3)</a>, <a href="../man3/EVP_KDF.html">&quot;PARAMETERS&quot; in EVP_KDF(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>This functionality was added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2016-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

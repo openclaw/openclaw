@@ -1,0 +1,82 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_CTX_set_client_cert_cb</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#BUGS">BUGS</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_CTX_set_client_cert_cb, SSL_CTX_get_client_cert_cb - handle client certificate callback function</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+void SSL_CTX_set_client_cert_cb(SSL_CTX *ctx,
+                                int (*client_cert_cb)(SSL *ssl, X509 **x509,
+                                                      EVP_PKEY **pkey));
+int (*SSL_CTX_get_client_cert_cb(SSL_CTX *ctx))(SSL *ssl, X509 **x509,
+                                                EVP_PKEY **pkey);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_CTX_set_client_cert_cb() sets the <i>client_cert_cb</i> callback, that is called when a client certificate is requested by a server and no certificate was yet set for the SSL object.</p>
+
+<p>When <i>client_cert_cb</i> is NULL, no callback function is used.</p>
+
+<p>SSL_CTX_get_client_cert_cb() returns a pointer to the currently set callback function.</p>
+
+<p><i>client_cert_cb</i> is the application defined callback. If it wants to set a certificate, a certificate/private key combination must be set using the <i>x509</i> and <i>pkey</i> arguments and &quot;1&quot; must be returned. The certificate will be installed into <i>ssl</i>, see the NOTES and BUGS sections. If no certificate should be set, &quot;0&quot; has to be returned and no certificate will be sent. A negative return value will suspend the handshake and the handshake function will return immediately. <a href="../man3/SSL_get_error.html">SSL_get_error(3)</a> will return SSL_ERROR_WANT_X509_LOOKUP to indicate, that the handshake was suspended. The next call to the handshake function will again lead to the call of <i>client_cert_cb</i>. It is the job of the <i>client_cert_cb</i> to store information about the state of the last call, if required to continue.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>During a handshake (or renegotiation) a server may request a certificate from the client. A client certificate must only be sent, when the server did send the request.</p>
+
+<p>When a certificate was set using the <a href="../man3/SSL_CTX_use_certificate.html">SSL_CTX_use_certificate(3)</a> family of functions, it will be sent to the server. The TLS standard requires that only a certificate is sent, if it matches the list of acceptable CAs sent by the server. This constraint is violated by the default behavior of the OpenSSL library. Using the callback function it is possible to implement a proper selection routine or to allow a user interaction to choose the certificate to be sent.</p>
+
+<p>If a callback function is defined and no certificate was yet defined for the SSL object, the callback function will be called. If the callback function returns a certificate, the OpenSSL library will try to load the private key and certificate data into the SSL object using the SSL_use_certificate() and SSL_use_private_key() functions. Thus it will permanently install the certificate and key for this SSL object. It will not be reset by calling <a href="../man3/SSL_clear.html">SSL_clear(3)</a>. If the callback returns no certificate, the OpenSSL library will not send a certificate.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_CTX_get_client_cert_cb() returns function pointer of <i>client_cert_cb</i> or NULL if the callback is not set.</p>
+
+<h1 id="BUGS">BUGS</h1>
+
+<p>The <i>client_cert_cb</i> cannot return a complete certificate chain, it can only return one client certificate. If the chain only has a length of 2, the root CA certificate may be omitted according to the TLS standard and thus a standard conforming answer can be sent to the server. For a longer chain, the client must send the complete chain (with the option to leave out the root CA certificate). This can only be accomplished by either adding the intermediate CA certificates into the trusted certificate store for the SSL_CTX object (resulting in having to add CA certificates that otherwise maybe would not be trusted), or by adding the chain certificates using the <a href="../man3/SSL_CTX_add_extra_chain_cert.html">SSL_CTX_add_extra_chain_cert(3)</a> function, which is only available for the SSL_CTX object as a whole and that therefore probably can only apply for one client certificate, making the concept of the callback function (to allow the choice from several certificates) questionable.</p>
+
+<p>Once the SSL object has been used in conjunction with the callback function, the certificate will be set for the SSL object and will not be cleared even when <a href="../man3/SSL_clear.html">SSL_clear(3)</a> is being called. It is therefore mandatory to destroy the SSL object using <a href="../man3/SSL_free.html">SSL_free(3)</a> and create a new one to return to the previous state.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a>, <a href="../man3/SSL_CTX_use_certificate.html">SSL_CTX_use_certificate(3)</a>, <a href="../man3/SSL_CTX_add_extra_chain_cert.html">SSL_CTX_add_extra_chain_cert(3)</a>, <a href="../man3/SSL_get_client_CA_list.html">SSL_get_client_CA_list(3)</a>, <a href="../man3/SSL_clear.html">SSL_clear(3)</a>, <a href="../man3/SSL_free.html">SSL_free(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2002-2020 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,116 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>ASN1_INTEGER_get_int64</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#BUGS">BUGS</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>ASN1_INTEGER_get_uint64, ASN1_INTEGER_set_uint64, ASN1_INTEGER_get_int64, ASN1_INTEGER_get, ASN1_INTEGER_set_int64, ASN1_INTEGER_set, BN_to_ASN1_INTEGER, ASN1_INTEGER_to_BN, ASN1_ENUMERATED_get_int64, ASN1_ENUMERATED_get, ASN1_ENUMERATED_set_int64, ASN1_ENUMERATED_set, BN_to_ASN1_ENUMERATED, ASN1_ENUMERATED_to_BN - ASN.1 INTEGER and ENUMERATED utilities</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/asn1.h&gt;
+
+int ASN1_INTEGER_get_int64(int64_t *pr, const ASN1_INTEGER *a);
+long ASN1_INTEGER_get(const ASN1_INTEGER *a);
+
+int ASN1_INTEGER_set_int64(ASN1_INTEGER *a, int64_t r);
+int ASN1_INTEGER_set(ASN1_INTEGER *a, long v);
+
+int ASN1_INTEGER_get_uint64(uint64_t *pr, const ASN1_INTEGER *a);
+int ASN1_INTEGER_set_uint64(ASN1_INTEGER *a, uint64_t r);
+
+ASN1_INTEGER *BN_to_ASN1_INTEGER(const BIGNUM *bn, ASN1_INTEGER *ai);
+BIGNUM *ASN1_INTEGER_to_BN(const ASN1_INTEGER *ai, BIGNUM *bn);
+
+int ASN1_ENUMERATED_get_int64(int64_t *pr, const ASN1_ENUMERATED *a);
+long ASN1_ENUMERATED_get(const ASN1_ENUMERATED *a);
+
+int ASN1_ENUMERATED_set_int64(ASN1_ENUMERATED *a, int64_t r);
+int ASN1_ENUMERATED_set(ASN1_ENUMERATED *a, long v);
+
+ASN1_ENUMERATED *BN_to_ASN1_ENUMERATED(const BIGNUM *bn, ASN1_ENUMERATED *ai);
+BIGNUM *ASN1_ENUMERATED_to_BN(const ASN1_ENUMERATED *ai, BIGNUM *bn);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>These functions convert to and from <b>ASN1_INTEGER</b> and <b>ASN1_ENUMERATED</b> structures.</p>
+
+<p>ASN1_INTEGER_get_int64() converts an <b>ASN1_INTEGER</b> into an <b>int64_t</b> type If successful it returns 1 and sets <i>*pr</i> to the value of <i>a</i>. If it fails (due to invalid type or the value being too big to fit into an <b>int64_t</b> type) it returns 0.</p>
+
+<p>ASN1_INTEGER_get_uint64() is similar to ASN1_INTEGER_get_int64_t() except it converts to a <b>uint64_t</b> type and an error is returned if the passed integer is negative.</p>
+
+<p>ASN1_INTEGER_get() also returns the value of <i>a</i> but it returns 0 if <i>a</i> is NULL and -1 on error (which is ambiguous because -1 is a legitimate value for an <b>ASN1_INTEGER</b>). New applications should use ASN1_INTEGER_get_int64() instead.</p>
+
+<p>ASN1_INTEGER_set_int64() sets the value of <b>ASN1_INTEGER</b> <i>a</i> to the <b>int64_t</b> value <i>r</i>.</p>
+
+<p>ASN1_INTEGER_set_uint64() sets the value of <b>ASN1_INTEGER</b> <i>a</i> to the <b>uint64_t</b> value <i>r</i>.</p>
+
+<p>ASN1_INTEGER_set() sets the value of <b>ASN1_INTEGER</b> <i>a</i> to the <i>long</i> value <i>v</i>.</p>
+
+<p>BN_to_ASN1_INTEGER() converts <b>BIGNUM</b> <i>bn</i> to an <b>ASN1_INTEGER</b>. If <i>ai</i> is NULL a new <b>ASN1_INTEGER</b> structure is returned. If <i>ai</i> is not NULL then the existing structure will be used instead.</p>
+
+<p>ASN1_INTEGER_to_BN() converts ASN1_INTEGER <i>ai</i> into a <b>BIGNUM</b>. If <i>bn</i> is NULL a new <b>BIGNUM</b> structure is returned. If <i>bn</i> is not NULL then the existing structure will be used instead.</p>
+
+<p>ASN1_ENUMERATED_get_int64(), ASN1_ENUMERATED_set_int64(), ASN1_ENUMERATED_set(), BN_to_ASN1_ENUMERATED() and ASN1_ENUMERATED_to_BN() behave in an identical way to their ASN1_INTEGER counterparts except they operate on an <b>ASN1_ENUMERATED</b> value.</p>
+
+<p>ASN1_ENUMERATED_get() returns the value of <i>a</i> in a similar way to ASN1_INTEGER_get() but it returns <b>0xffffffffL</b> if the value of <i>a</i> will not fit in a long type. New applications should use ASN1_ENUMERATED_get_int64() instead.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>In general an <b>ASN1_INTEGER</b> or <b>ASN1_ENUMERATED</b> type can contain an integer of almost arbitrary size and so cannot always be represented by a C <b>int64_t</b> type. However, in many cases (for example version numbers) they represent small integers which can be more easily manipulated if converted to an appropriate C integer type.</p>
+
+<h1 id="BUGS">BUGS</h1>
+
+<p>The ambiguous return values of ASN1_INTEGER_get() and ASN1_ENUMERATED_get() mean these functions should be avoided if possible. They are retained for compatibility. Normally the ambiguous return values are not legitimate values for the fields they represent.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>ASN1_INTEGER_set_int64(), ASN1_INTEGER_set(), ASN1_ENUMERATED_set_int64() and ASN1_ENUMERATED_set() return 1 for success and 0 for failure. They will only fail if a memory allocation error occurs.</p>
+
+<p>ASN1_INTEGER_get_int64() and ASN1_ENUMERATED_get_int64() return 1 for success and 0 for failure. They will fail if the passed type is incorrect (this will only happen if there is a programming error) or if the value exceeds the range of an <b>int64_t</b> type.</p>
+
+<p>BN_to_ASN1_INTEGER() and BN_to_ASN1_ENUMERATED() return an <b>ASN1_INTEGER</b> or <b>ASN1_ENUMERATED</b> structure respectively or NULL if an error occurs. They will only fail due to a memory allocation error.</p>
+
+<p>ASN1_INTEGER_to_BN() and ASN1_ENUMERATED_to_BN() return a <b>BIGNUM</b> structure of NULL if an error occurs. They can fail if the passed type is incorrect (due to programming error) or due to a memory allocation failure.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ERR_get_error.html">ERR_get_error(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>ASN1_INTEGER_set_int64(), ASN1_INTEGER_get_int64(), ASN1_ENUMERATED_set_int64() and ASN1_ENUMERATED_get_int64() were added in OpenSSL 1.1.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2015-2020 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

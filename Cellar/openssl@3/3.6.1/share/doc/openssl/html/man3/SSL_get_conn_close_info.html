@@ -1,0 +1,157 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_get_conn_close_info</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NON-STANDARD-TRANSPORT-ERROR-CODES">NON-STANDARD TRANSPORT ERROR CODES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_get_conn_close_info, SSL_CONN_CLOSE_FLAG_LOCAL, SSL_CONN_CLOSE_FLAG_TRANSPORT, OSSL_QUIC_ERR_NO_ERROR, OSSL_QUIC_ERR_INTERNAL_ERROR, OSSL_QUIC_ERR_CONNECTION_REFUSED, OSSL_QUIC_ERR_FLOW_CONTROL_ERROR, OSSL_QUIC_ERR_STREAM_LIMIT_ERROR, OSSL_QUIC_ERR_STREAM_STATE_ERROR, OSSL_QUIC_ERR_FINAL_SIZE_ERROR, OSSL_QUIC_ERR_FRAME_ENCODING_ERROR, OSSL_QUIC_ERR_TRANSPORT_PARAMETER_ERROR, OSSL_QUIC_ERR_CONNECTION_ID_LIMIT_ERROR, OSSL_QUIC_ERR_PROTOCOL_VIOLATION, OSSL_QUIC_ERR_INVALID_TOKEN, OSSL_QUIC_ERR_APPLICATION_ERROR, OSSL_QUIC_ERR_CRYPTO_BUFFER_EXCEEDED, OSSL_QUIC_ERR_KEY_UPDATE_ERROR, OSSL_QUIC_ERR_AEAD_LIMIT_REACHED, OSSL_QUIC_ERR_NO_VIABLE_PATH, OSSL_QUIC_ERR_CRYPTO_ERR_BEGIN, OSSL_QUIC_ERR_CRYPTO_ERR_END, OSSL_QUIC_ERR_CRYPTO_ERR, OSSL_QUIC_LOCAL_ERR_IDLE_TIMEOUT - get information about why a QUIC connection was closed</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+#define SSL_CONN_CLOSE_FLAG_LOCAL
+#define SSL_CONN_CLOSE_FLAG_TRANSPORT
+
+typedef struct ssl_conn_close_info_st {
+    uint64_t error_code, frame_type;
+    char     *reason;
+    size_t   reason_len;
+    uint32_t flags;
+} SSL_CONN_CLOSE_INFO;
+
+int SSL_get_conn_close_info(SSL *ssl, SSL_CONN_CLOSE_INFO *info,
+                            size_t info_len);
+
+#define OSSL_QUIC_ERR_NO_ERROR                  0x00
+#define OSSL_QUIC_ERR_INTERNAL_ERROR            0x01
+#define OSSL_QUIC_ERR_CONNECTION_REFUSED        0x02
+#define OSSL_QUIC_ERR_FLOW_CONTROL_ERROR        0x03
+#define OSSL_QUIC_ERR_STREAM_LIMIT_ERROR        0x04
+#define OSSL_QUIC_ERR_STREAM_STATE_ERROR        0x05
+#define OSSL_QUIC_ERR_FINAL_SIZE_ERROR          0x06
+#define OSSL_QUIC_ERR_FRAME_ENCODING_ERROR      0x07
+#define OSSL_QUIC_ERR_TRANSPORT_PARAMETER_ERROR 0x08
+#define OSSL_QUIC_ERR_CONNECTION_ID_LIMIT_ERROR 0x09
+#define OSSL_QUIC_ERR_PROTOCOL_VIOLATION        0x0A
+#define OSSL_QUIC_ERR_INVALID_TOKEN             0x0B
+#define OSSL_QUIC_ERR_APPLICATION_ERROR         0x0C
+#define OSSL_QUIC_ERR_CRYPTO_BUFFER_EXCEEDED    0x0D
+#define OSSL_QUIC_ERR_KEY_UPDATE_ERROR          0x0E
+#define OSSL_QUIC_ERR_AEAD_LIMIT_REACHED        0x0F
+#define OSSL_QUIC_ERR_NO_VIABLE_PATH            0x10
+
+/* Inclusive range for handshake-specific errors. */
+#define OSSL_QUIC_ERR_CRYPTO_ERR_BEGIN          0x0100
+#define OSSL_QUIC_ERR_CRYPTO_ERR_END            0x01FF
+
+#define OSSL_QUIC_ERR_CRYPTO_ERR(X)
+
+#define OSSL_QUIC_LOCAL_ERR_IDLE_TIMEOUT</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The SSL_get_conn_close_info() function provides information about why and how a QUIC connection was closed.</p>
+
+<p>Connection closure information is written to <i>*info</i>, which must be non-NULL. <i>info_len</i> must be set to <code>sizeof(*info)</code>.</p>
+
+<p>The following fields are set:</p>
+
+<dl>
+
+<dt id="error_code"><i>error_code</i></dt>
+<dd>
+
+<p>This is a 62-bit QUIC error code. It is either a 62-bit application error code (if <b>SSL_CONN_CLOSE_FLAG_TRANSPORT</b> not set in <i>flags</i>) or a 62-bit standard QUIC transport error code (if <b>SSL_CONN_CLOSE_FLAG_TRANSPORT</b> is set in <i>flags</i>).</p>
+
+</dd>
+<dt id="frame_type"><i>frame_type</i></dt>
+<dd>
+
+<p>If <b>SSL_CONN_CLOSE_FLAG_TRANSPORT</b> is set, this may be set to a QUIC frame type number which caused the connection to be closed. It may also be set to 0 if no frame type was specified as causing the connection to be closed. If <b>SSL_CONN_CLOSE_FLAG_TRANSPORT</b> is not set, this is set to 0.</p>
+
+</dd>
+<dt id="reason"><i>reason</i></dt>
+<dd>
+
+<p>If non-NULL, this is intended to be a UTF-8 textual string briefly describing the reason for connection closure. The length of the reason string in bytes is given in <i>reason_len</i>. While, if non-NULL, OpenSSL guarantees that this string will be zero terminated, consider that this buffer may originate from the (untrusted) peer and thus may also contain zero bytes elsewhere. Therefore, use of <i>reason_len</i> is recommended.</p>
+
+<p>While it is intended as per the QUIC protocol that this be a UTF-8 string, there is no guarantee that this is the case for strings received from the peer.</p>
+
+</dd>
+<dt id="SSL_CONN_CLOSE_FLAG_LOCAL"><b>SSL_CONN_CLOSE_FLAG_LOCAL</b></dt>
+<dd>
+
+<p>If <i>flags</i> has <b>SSL_CONN_CLOSE_FLAG_LOCAL</b> set, connection closure was locally triggered. This could be due to an application request (e.g. if <b>SSL_CONN_CLOSE_FLAG_TRANSPORT</b> is unset), or (if <i>SSL_CONN_CLOSE_FLAG_TRANSPORT</i> is set) due to logic internal to the QUIC implementation (for example, if the peer engages in a protocol violation, or an idle timeout occurs).</p>
+
+<p>If unset, connection closure was remotely triggered.</p>
+
+</dd>
+<dt id="SSL_CONN_CLOSE_FLAG_TRANSPORT"><b>SSL_CONN_CLOSE_FLAG_TRANSPORT</b></dt>
+<dd>
+
+<p>If <i>flags</i> has <b>SSL_CONN_CLOSE_FLAG_TRANSPORT</b> set, connection closure was triggered for QUIC protocol reasons. Otherwise, connection closure was triggered by the local or remote application.</p>
+
+</dd>
+</dl>
+
+<p>The <b>OSSL_QUIC_ERR</b> macro definitions provide the QUIC transport error codes as defined by RFC 9000. The OSSL_QUIC_ERR_CRYPTO_ERR() macro can be used to convert a TLS alert code into a QUIC transport error code by mapping it into the range reserved for such codes by RFC 9000. This range begins at <b>OSSL_QUIC_ERR_CRYPTO_ERR_BEGIN</b> and ends at <b>OSSL_QUIC_ERR_CRYPTO_ERR_END</b> inclusive.</p>
+
+<h1 id="NON-STANDARD-TRANSPORT-ERROR-CODES">NON-STANDARD TRANSPORT ERROR CODES</h1>
+
+<p>Some conditions which can cause QUIC connection termination are not signalled on the wire and therefore do not have standard error codes. OpenSSL indicates these errors via SSL_get_conn_close_info() by setting <b>SSL_CONN_CLOSE_FLAG_TRANSPORT</b> and using one of the following error values. These codes are specific to OpenSSL, and cannot be sent over the wire, as they are above 2**62.</p>
+
+<dl>
+
+<dt id="OSSL_QUIC_LOCAL_ERR_IDLE_TIMEOUT"><b>OSSL_QUIC_LOCAL_ERR_IDLE_TIMEOUT</b></dt>
+<dd>
+
+<p>The connection was terminated immediately due to the idle timeout expiring.</p>
+
+</dd>
+</dl>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_get_conn_close_info() returns 1 on success and 0 on failure. This function fails if called on a QUIC connection SSL object which has not yet been terminated. It also fails if called on a QUIC stream SSL object or a non-QUIC SSL object.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/SSL_shutdown_ex.html">SSL_shutdown_ex(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>This function was added in OpenSSL 3.2.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2002-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

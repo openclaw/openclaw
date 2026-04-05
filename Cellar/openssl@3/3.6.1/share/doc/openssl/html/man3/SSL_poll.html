@@ -1,0 +1,332 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_poll</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#EVENT-TYPES">EVENT TYPES</a></li>
+  <li><a href="#LIMITATIONS">LIMITATIONS</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_poll, SSL_POLL_EVENT_NONE, SSL_POLL_EVENT_F, SSL_POLL_EVENT_EL, SSL_POLL_EVENT_EC, SSL_POLL_EVENT_ECD, SSL_POLL_EVENT_ER, SSL_POLL_EVENT_EW, SSL_POLL_EVENT_R, SSL_POLL_EVENT_W, SSL_POLL_EVENT_IC, SSL_POLL_EVENT_ISB, SSL_POLL_EVENT_ISU, SSL_POLL_EVENT_OSB, SSL_POLL_EVENT_OSU, SSL_POLL_EVENT_RW, SSL_POLL_EVENT_RE, SSL_POLL_EVENT_WE, SSL_POLL_EVENT_RWE, SSL_POLL_EVENT_E, SSL_POLL_EVENT_IS, SSL_POLL_EVENT_ISE, SSL_POLL_EVENT_I, SSL_POLL_EVENT_OS, SSL_POLL_EVENT_OSE, SSL_POLL_FLAG_NO_HANDLE_EVENTS - determine or await readiness conditions for one or more pollable objects</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+#define SSL_POLL_EVENT_NONE        0
+
+#define SSL_POLL_EVENT_F           /* F   (Failure) */
+#define SSL_POLL_EVENT_EL          /* EL  (Exception on Listener) */
+#define SSL_POLL_EVENT_EC          /* EC  (Exception on Conn) */
+#define SSL_POLL_EVENT_ECD         /* ECD (Exception on Conn Drained) */
+#define SSL_POLL_EVENT_ER          /* ER  (Exception on Read) */
+#define SSL_POLL_EVENT_EW          /* EW  (Exception on Write) */
+#define SSL_POLL_EVENT_R           /* R   (Readable) */
+#define SSL_POLL_EVENT_W           /* W   (Writable) */
+#define SSL_POLL_EVENT_IC          /* IC  (Incoming Connection) */
+#define SSL_POLL_EVENT_ISB         /* ISB (Incoming Stream: Bidi) */
+#define SSL_POLL_EVENT_ISU         /* ISU (Incoming Stream: Uni) */
+#define SSL_POLL_EVENT_OSB         /* OSB (Outgoing Stream: Bidi) */
+#define SSL_POLL_EVENT_OSU         /* OSU (Outgoing Stream: Uni) */
+
+#define SSL_POLL_EVENT_RW          /* R   | W               */
+#define SSL_POLL_EVENT_RE          /* R   | ER              */
+#define SSL_POLL_EVENT_WE          /* W   | EW              */
+#define SSL_POLL_EVENT_RWE         /* RE  | WE              */
+#define SSL_POLL_EVENT_E           /* EL  | EC  | ER  | EW  */
+#define SSL_POLL_EVENT_IS          /* ISB | ISU             */
+#define SSL_POLL_EVENT_ISE         /* IS  | EC              */
+#define SSL_POLL_EVENT_I           /* IS                    */
+#define SSL_POLL_EVENT_OS          /* OSB | OSU             */
+#define SSL_POLL_EVENT_OSE         /* OS  | EC              */
+
+typedef struct ssl_poll_item_st {
+    BIO_POLL_DESCRIPTOR desc;
+    uint64_t            events, revents;
+} SSL_POLL_ITEM;
+
+#define SSL_POLL_FLAG_NO_HANDLE_EVENTS
+
+int SSL_poll(SSL_POLL_ITEM         *items,
+             size_t                num_items,
+             size_t                stride,
+             const struct timeval  *timeout,
+             uint64_t              flags,
+             size_t                *result_count);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_poll() allows the readiness conditions of the resources represented by one or more BIO_POLL_DESCRIPTOR structures to be determined. In particular, it can be used to query for readiness conditions on QUIC connection SSL objects and QUIC stream SSL objects in a single call. It can also be used to block until at least one of the given resources is ready.</p>
+
+<p>A call to SSL_poll() specifies an array of <b>SSL_POLL_ITEM</b> structures, each of which designates a resource which is being polled for readiness, and a set of event flags which indicate the specific readiness events which the caller is interested in in relation to the specified resource.</p>
+
+<p>The fields of <b>SSL_POLL_ITEM</b> are as follows:</p>
+
+<dl>
+
+<dt id="desc"><i>desc</i></dt>
+<dd>
+
+<p>The resource being polled for readiness, as represented by a <b>BIO_POLL_DESCRIPTOR</b>. Currently, this must be a poll descriptor of type <b>BIO_POLL_DESCRIPTOR_TYPE_SSL</b>, representing an SSL object pointer, and the SSL object must be a QUIC connection SSL object or QUIC stream SSL object.</p>
+
+<p>If a <b>SSL_POLL_ITEM</b> has a poll descriptor type of <b>BIO_POLL_DESCRIPTOR_TYPE_NONE</b>, or the SSL object pointer is NULL, the <b>SSL_POLL_ITEM</b> array entry is ignored and <i>revents</i> will be set to 0 on return.</p>
+
+</dd>
+<dt id="events"><i>events</i></dt>
+<dd>
+
+<p>This is the set of zero or more events which the caller is interested in learning about in relation to the resource described by <i>desc</i>. It is a collection of zero or more <b>SSL_POLL_EVENT</b> flags. See <a href="#EVENT-TYPES">&quot;EVENT TYPES&quot;</a> for a description of each of the event types.</p>
+
+</dd>
+<dt id="revents"><i>revents</i></dt>
+<dd>
+
+<p>After SSL_poll() returns, this is the set of zero or more events which are actually applicable to the resource described by <i>desc</i>. As for <i>events</i>, it is a collection of zero or more <b>SSL_POLL_EVENT</b> flags.</p>
+
+<p><i>revents</i> need not be a subset of the events specified in <i>events</i>, as some event types are defined as always being enabled (non-maskable). See <a href="#EVENT-TYPES">&quot;EVENT TYPES&quot;</a> for more information.</p>
+
+</dd>
+</dl>
+
+<p>To use SSL_poll(), call it with an array of <b>SSL_POLL_ITEM</b> structures. The array need remain allocated only for the duration of the call. <i>num_items</i> must be set to the number of entries in the array, and <i>stride</i> must be set to <code>sizeof(SSL_POLL_ITEM)</code>.</p>
+
+<p>The <i>timeout</i> argument specifies the timeout to use, and, implicitly, whether to use SSL_poll() in blocking or nonblocking mode:</p>
+
+<ul>
+
+<li><p>If <i>timeout</i> is NULL, the function blocks indefinitely until at least one resource is ready.</p>
+
+</li>
+<li><p>If <i>timeout</i> is non-NULL, and it points to a <b>struct timeval</b> which is set to zero, the function operates in nonblocking mode and returns immediately with readiness information.</p>
+
+</li>
+<li><p>If <i>timeout</i> is non-NULL, and it points to a <b>struct timeval</b> which is set to a value other than zero, the function blocks for the specified interval or until at least one of the specified resources is ready, whichever comes first.</p>
+
+</li>
+</ul>
+
+<p>The present implementation of SSL_poll() is a subset of the functionality which will eventually be available. For more information, see <a href="#LIMITATIONS">&quot;LIMITATIONS&quot;</a>.</p>
+
+<p>The following flags are currently defined for the <i>flags</i> argument:</p>
+
+<dl>
+
+<dt id="SSL_POLL_FLAG_NO_HANDLE_EVENTS"><b>SSL_POLL_FLAG_NO_HANDLE_EVENTS</b></dt>
+<dd>
+
+<p>This flag indicates that internal state machine processing should not be performed in an attempt to generate new readiness events. Only existing readiness events will be reported.</p>
+
+<p>If this flag is used in nonblocking mode (with a timeout of zero), no internal state machine processing is performed.</p>
+
+<p>If this flag is used in blocking mode (for example, with <i>timeout</i> set to NULL), event processing does not occur unless the function blocks.</p>
+
+</dd>
+</dl>
+
+<p>The <i>result_count</i> argument is optional. If it is non-NULL, it is used to output the number of entries in the array which have nonzero <i>revents</i> fields when the call to SSL_poll() returns; see <a href="#RETURN-VALUES">&quot;RETURN VALUES&quot;</a> for details.</p>
+
+<h1 id="EVENT-TYPES">EVENT TYPES</h1>
+
+<p>The SSL_poll() interface reports zero or more event types on a given resource, represented by a bit mask.</p>
+
+<p>All of the event types are level triggered and represent a readiness or permanent exception condition; as such, after an event has been reported by SSL_poll() for a resource, it will continue to be reported in future SSL_poll() calls until the condition ceases to be in effect. A caller must mask the given event type bit in future SSL_poll() calls if it does not wish to receive repeated notifications and has not caused the underlying readiness condition (for example, consuming all available data using <a href="../man3/SSL_read_ex.html">SSL_read_ex(3)</a> after <b>SSL_POLL_EVENT_R</b> is reported) to be deasserted.</p>
+
+<p>Some event types do not make sense on a given kind of resource. In this case, specifying that event type in <i>events</i> is a no-op and will be ignored, and the given event will never be reported in <i>revents</i>.</p>
+
+<p>Failure of the polling mechanism itself is considered distinct from an exception condition on a resource which was successfully polled. See <b>SSL_POLL_EVENT_F</b> and <a href="#RETURN-VALUES">&quot;RETURN VALUES&quot;</a> for details.</p>
+
+<p>In general, an application should always listen for the event types corresponding to exception conditions if it is listening to the corresponding non-exception event types (e.g. <b>SSL_POLL_EVENT_EC</b> and <b>SSL_POLL_EVENT_ER</b> for <b>SSL_POLL_EVENT_R</b>), as not doing so is unlikely to be a sound design.</p>
+
+<p>Some event types are non-maskable and may be reported in <i>revents</i> regardless of whether they were requested in <i>events</i>.</p>
+
+<p>The following event types are supported:</p>
+
+<dl>
+
+<dt id="SSL_POLL_EVENT_F"><b>SSL_POLL_EVENT_F</b></dt>
+<dd>
+
+<p>Polling failure. This event is raised when a resource could not be polled. It is distinct from an exception condition reported on a resource which was successfully polled and represents a failure of the polling process itself in relation to a resource. This may mean that SSL_poll() does not support the kind of resource specified.</p>
+
+<p>Where this event is raised on at least one item in <i>items</i>, SSL_poll() will return 0 and the ERR stack will contain information pertaining to the first item in <i>items</i> with <b>SSL_POLL_EVENT_F</b> set. See <a href="#RETURN-VALUES">&quot;RETURN VALUES&quot;</a> for more information.</p>
+
+<p>This event type may be raised even if it was not requested in <i>events</i>; specifying this event type in <i>events</i> does nothing.</p>
+
+</dd>
+<dt id="SSL_POLL_EVENT_EL"><b>SSL_POLL_EVENT_EL</b></dt>
+<dd>
+
+<p>Error at listener level. This event is raised when a listener has failed, for example if a network BIO has encountered a permanent error.</p>
+
+<p>This event is never raised on objects which are not listeners, but its occurrence will cause <b>SSL_POLL_EVENT_EC</b> to be raised on all dependent connections.</p>
+
+</dd>
+<dt id="SSL_POLL_EVENT_EC"><b>SSL_POLL_EVENT_EC</b></dt>
+<dd>
+
+<p>Error at connection level. This event is raised when a connection has failed. In particular, it is raised when a connection begins terminating.</p>
+
+<p>This event is never raised on objects which are not connections.</p>
+
+</dd>
+<dt id="SSL_POLL_EVENT_ECD"><b>SSL_POLL_EVENT_ECD</b></dt>
+<dd>
+
+<p>Error at connection level (drained). This event is raised when a connection has finished terminating, and has reached the terminated state. This event will generally occur after an interval of time passes after the <b>SSL_POLL_EVENT_EC</b> event is raised on a connection.</p>
+
+<p>This event is never raised on objects which are not connections.</p>
+
+</dd>
+<dt id="SSL_POLL_EVENT_ER"><b>SSL_POLL_EVENT_ER</b></dt>
+<dd>
+
+<p>Error in read direction. For QUIC, this is raised only in the event that a stream has a read part and that read part has been reset by the peer (for example, using a <b>RESET_STREAM</b> frame).</p>
+
+</dd>
+<dt id="SSL_POLL_EVENT_EW"><b>SSL_POLL_EVENT_EW</b></dt>
+<dd>
+
+<p>Error in write direction. For QUIC, this is raised only in the event that a stream has a write part and that write part has been reset by the peer using a <b>STOP_SENDING</b> frame.</p>
+
+</dd>
+<dt id="SSL_POLL_EVENT_R"><b>SSL_POLL_EVENT_R</b></dt>
+<dd>
+
+<p>Readable. This event is raised when a QUIC stream SSL object (or a QUIC connection SSL object with a default stream attached) has application data waiting to be read using <a href="../man3/SSL_read_ex.html">SSL_read_ex(3)</a>, or a FIN event as represented by <b>SSL_ERROR_ZERO_RETURN</b> waiting to be read.</p>
+
+<p>It is not raised in the event of the receiving part of the QUIC stream being reset by the peer; see <b>SSL_POLL_EVENT_ER</b>.</p>
+
+</dd>
+<dt id="SSL_POLL_EVENT_W"><b>SSL_POLL_EVENT_W</b></dt>
+<dd>
+
+<p>Writable. This event is raised when a QUIC stream SSL object (or a QUIC connection SSL object with a default stream attached) could accept more application data using <a href="../man3/SSL_write_ex.html">SSL_write_ex(3)</a>.</p>
+
+<p>This event is never raised by a receive-only stream.</p>
+
+<p>This event is never raised by a stream which has had its send part concluded normally (as with <a href="../man3/SSL_stream_conclude.html">SSL_stream_conclude(3)</a>) or locally reset (as with <a href="../man3/SSL_stream_reset.html">SSL_stream_reset(3)</a>).</p>
+
+<p>This event does not guarantee that a subsequent call to <a href="../man3/SSL_write_ex.html">SSL_write_ex(3)</a> will succeed.</p>
+
+</dd>
+<dt id="SSL_POLL_EVENT_IC"><b>SSL_POLL_EVENT_IC</b></dt>
+<dd>
+
+<p>This event, which is only raised by a QUIC listener SSL object, is raised when one or more incoming QUIC connections are available to be accepted using <a href="../man3/SSL_accept_connection.html">SSL_accept_connection(3)</a>.</p>
+
+</dd>
+<dt id="SSL_POLL_EVENT_ISB"><b>SSL_POLL_EVENT_ISB</b></dt>
+<dd>
+
+<p>This event, which is only raised by a QUIC connection SSL object, is raised when one or more incoming bidirectional streams are available to be accepted using <a href="../man3/SSL_accept_stream.html">SSL_accept_stream(3)</a>.</p>
+
+</dd>
+<dt id="SSL_POLL_EVENT_ISU"><b>SSL_POLL_EVENT_ISU</b></dt>
+<dd>
+
+<p>This event, which is only raised by a QUIC connection SSL object, is raised when one or more incoming unidirectional streams are available to be accepted using <a href="../man3/SSL_accept_stream.html">SSL_accept_stream(3)</a>.</p>
+
+</dd>
+<dt id="SSL_POLL_EVENT_OSB"><b>SSL_POLL_EVENT_OSB</b></dt>
+<dd>
+
+<p>This event, which is only raised by a QUIC connection SSL object, is raised when QUIC stream creation flow control currently permits at least one additional bidirectional stream to be locally created.</p>
+
+</dd>
+<dt id="SSL_POLL_EVENT_OSU"><b>SSL_POLL_EVENT_OSU</b></dt>
+<dd>
+
+<p>This event, which is only raised by a QUIC connection SSL object, is raised when QUIC stream creation flow control currently permits at least one additional unidirectional stream to be locally created.</p>
+
+</dd>
+</dl>
+
+<h1 id="LIMITATIONS">LIMITATIONS</h1>
+
+<p>SSL_poll() as presently implemented has the following limitation:</p>
+
+<ul>
+
+<li><p>Only <b>BIO_POLL_DESCRIPTOR</b> structures with type <b>BIO_POLL_DESCRIPTOR_TYPE_SSL</b>, referencing QUIC listener, connection or stream SSL objects, are supported.</p>
+
+</li>
+</ul>
+
+<p>This limitation may be revised in a future release of OpenSSL.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_poll() returns 1 on success and 0 on failure.</p>
+
+<p>Unless the <i>items</i> pointer itself is invalid, SSL_poll() will always initialise the <i>revents</i> fields of all items in the input array upon returning, even if it returns failure.</p>
+
+<p>If <i>result_count</i> is non-NULL, it is always written with the number of items in the array with nonzero <i>revents</i> fields, even if the SSL_poll() call returns failure.</p>
+
+<p>It is possible for <i>result_count</i> to be written as 0 even if the SSL_poll() call returns success, namely if no events were output but the polling process was successful (e.g. in nonblocking usage) or timed out.</p>
+
+<p>It is possible for <i>result_count</i> to be written as a nonzero value if the SSL_poll() call returns failure, for example due to <b>SSL_POLL_EVENT_F</b> events, or because some events were detected and output before encountering a failure condition while processing a subsequent entry in the <i>items</i> array.</p>
+
+<p>If at least one <b>SSL_POLL_EVENT_F</b> event is output, SSL_poll() is guaranteed to return 0 and guaranteed to place at least one ERR on the error stack describing the first <b>SSL_POLL_EVENT_F</b> output. Detailed information on any additional <b>SSL_POLL_EVENT_F</b> events is not available. SSL_poll() may or may not return more than one <b>SSL_POLL_EVENT_F</b> event at once.</p>
+
+<p>&quot;Normal&quot; events representing exceptional I/O conditions which do not constitute a failure of the SSL_poll() mechanism itself are not considered errors by SSL_poll() and are instead represented using their own event type; see <a href="#EVENT-TYPES">&quot;EVENT TYPES&quot;</a> for details.</p>
+
+<p>The caller can establish the meaning of the SSL_poll() return and output values as follows:</p>
+
+<ul>
+
+<li><p>If SSL_poll() returns 1 and <i>result_count</i> is zero, the operation timed out before any resource was ready.</p>
+
+</li>
+<li><p>If SSL_poll() returns 1 and <i>result_count</i> is nonzero, that many events were output.</p>
+
+</li>
+<li><p>If SSL_poll() returns 0 and <i>result_count</i> is zero, the caller has made a basic usage error; check the ERR stack for details.</p>
+
+</li>
+<li><p>If SSL_poll() returns 0 and <i>result_count</i> is nonzero, inspect the <i>items</i> array for <b>SSL_POLL_ITEM</b> structures with the <b>SSL_POLL_EVENT_F</b> event type raised in <i>revents</i>. The entries added to the ERR stack (of which there is guaranteed to be at least one) reflect the cause of the failure of the first item in <i>items</i> with <b>SSL_POLL_EVENT_F</b> raised. Note that there may be events other than <i>SSL_POLL_EVENT_F</i> output for items which come before the first item with <b>SSL_POLL_EVENT_F</b> raised, and additional <b>SSL_POLL_EVENT_F</b> events may or may not have been output, both of which which will be reflected in <i>result_count</i>.</p>
+
+</li>
+</ul>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/BIO_get_rpoll_descriptor.html">BIO_get_rpoll_descriptor(3)</a>, <a href="../man3/BIO_get_wpoll_descriptor.html">BIO_get_wpoll_descriptor(3)</a>, <a href="../man3/SSL_get_rpoll_descriptor.html">SSL_get_rpoll_descriptor(3)</a>, <a href="../man3/SSL_get_wpoll_descriptor.html">SSL_get_wpoll_descriptor(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>SSL_poll() was added in OpenSSL 3.3.</p>
+
+<p>Before 3.5, SSL_poll() did not support blocking operation and would fail if called with a NULL <i>timeout</i> parameter or a <i>timeout</i> parameter pointing to a <b>struct timeval</b> which was not zero.</p>
+
+<p>Before 3.5, the <b>SSL_POLL_EVENT_EL</b> and <b>SSL_POLL_EVENT_IC</b> event types were not present.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2024-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

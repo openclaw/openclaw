@@ -1,0 +1,108 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>X509_NAME_print_ex</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>X509_NAME_print_ex, X509_NAME_print_ex_fp, X509_NAME_print, X509_NAME_oneline - X509_NAME printing routines</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/x509.h&gt;
+
+int X509_NAME_print_ex(BIO *out, const X509_NAME *nm,
+                       int indent, unsigned long flags);
+int X509_NAME_print_ex_fp(FILE *fp, const X509_NAME *nm,
+                          int indent, unsigned long flags);
+char *X509_NAME_oneline(const X509_NAME *a, char *buf, int size);
+int X509_NAME_print(BIO *bp, const X509_NAME *name, int obase);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>X509_NAME_print_ex() prints a human readable version of <i>nm</i> to BIO <i>out</i>. Each line (for multiline formats) is indented by <i>indent</i> spaces. The output format can be extensively customised by use of the <i>flags</i> parameter.</p>
+
+<p>X509_NAME_print_ex_fp() is identical to X509_NAME_print_ex() except the output is written to FILE pointer <i>fp</i>.</p>
+
+<p>X509_NAME_oneline() prints an ASCII version of <i>a</i> to <i>buf</i>. This supports multi-valued RDNs and escapes <b>/</b> and <b>+</b> characters in values. If <i>buf</i> is <b>NULL</b> then a buffer is dynamically allocated and returned, and <i>size</i> is ignored. Otherwise, at most <i>size</i> bytes will be written, including the ending &#39;\0&#39;, and <i>buf</i> is returned.</p>
+
+<p>X509_NAME_print() prints out <i>name</i> to <i>bp</i> indenting each line by <i>obase</i> characters. Multiple lines are used if the output (including indent) exceeds 80 characters.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The functions X509_NAME_oneline() and X509_NAME_print() produce a non standard output form, they don&#39;t handle multi-character fields and have various quirks and inconsistencies. Their use is strongly discouraged in new applications and they could be deprecated in a future release.</p>
+
+<p>Although there are a large number of possible flags for most purposes <b>XN_FLAG_ONELINE</b>, <b>XN_FLAG_MULTILINE</b> or <b>XN_FLAG_RFC2253</b> will suffice. As noted on the <a href="../man3/ASN1_STRING_print_ex.html">ASN1_STRING_print_ex(3)</a> manual page for UTF8 terminals the <b>ASN1_STRFLGS_ESC_MSB</b> should be unset: so for example <b>XN_FLAG_ONELINE &amp; ~ASN1_STRFLGS_ESC_MSB</b> would be used.</p>
+
+<p>The complete set of the flags supported by X509_NAME_print_ex() is listed below.</p>
+
+<p>Several options can be ored together.</p>
+
+<p>The options <b>XN_FLAG_SEP_COMMA_PLUS</b>, <b>XN_FLAG_SEP_CPLUS_SPC</b>, <b>XN_FLAG_SEP_SPLUS_SPC</b> and <b>XN_FLAG_SEP_MULTILINE</b> determine the field separators to use. Two distinct separators are used between distinct RelativeDistinguishedName components and separate values in the same RDN for a multi-valued RDN. Multi-valued RDNs are currently very rare so the second separator will hardly ever be used.</p>
+
+<p><b>XN_FLAG_SEP_COMMA_PLUS</b> uses comma and plus as separators. <b>XN_FLAG_SEP_CPLUS_SPC</b> uses comma and plus with spaces: this is more readable that plain comma and plus. <b>XN_FLAG_SEP_SPLUS_SPC</b> uses spaced semicolon and plus. <b>XN_FLAG_SEP_MULTILINE</b> uses spaced newline and plus respectively.</p>
+
+<p>If <b>XN_FLAG_DN_REV</b> is set the whole DN is printed in reversed order.</p>
+
+<p>The fields <b>XN_FLAG_FN_SN</b>, <b>XN_FLAG_FN_LN</b>, <b>XN_FLAG_FN_OID</b>, <b>XN_FLAG_FN_NONE</b> determine how a field name is displayed. It will use the short name (e.g. CN) the long name (e.g. commonName) always use OID numerical form (normally OIDs are only used if the field name is not recognised) and no field name respectively.</p>
+
+<p>If <b>XN_FLAG_SPC_EQ</b> is set then spaces will be placed around the &#39;=&#39; character separating field names and values.</p>
+
+<p>If <b>XN_FLAG_DUMP_UNKNOWN_FIELDS</b> is set then the encoding of unknown fields is printed instead of the values.</p>
+
+<p>If <b>XN_FLAG_FN_ALIGN</b> is set then field names are padded to 20 characters: this is only of use for multiline format.</p>
+
+<p>Additionally all the options supported by ASN1_STRING_print_ex() can be used to control how each field value is displayed.</p>
+
+<p>In addition a number options can be set for commonly used formats.</p>
+
+<p><b>XN_FLAG_RFC2253</b> sets options which produce an output compatible with RFC2253. It is equivalent to: <code>ASN1_STRFLGS_RFC2253 | XN_FLAG_SEP_COMMA_PLUS | XN_FLAG_DN_REV | XN_FLAG_FN_SN | XN_FLAG_DUMP_UNKNOWN_FIELDS</code></p>
+
+<p><b>XN_FLAG_ONELINE</b> is a more readable one line format which is the same as: <code>ASN1_STRFLGS_RFC2253 | ASN1_STRFLGS_ESC_QUOTE | XN_FLAG_SEP_CPLUS_SPC | XN_FLAG_SPC_EQ | XN_FLAG_FN_SN</code></p>
+
+<p><b>XN_FLAG_MULTILINE</b> is a multiline format which is the same as: <code>ASN1_STRFLGS_ESC_CTRL | ASN1_STRFLGS_ESC_MSB | XN_FLAG_SEP_MULTILINE | XN_FLAG_SPC_EQ | XN_FLAG_FN_LN | XN_FLAG_FN_ALIGN</code></p>
+
+<p><b>XN_FLAG_COMPAT</b> uses a format identical to X509_NAME_print(): in fact it calls X509_NAME_print() internally.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>X509_NAME_oneline() returns a valid string on success or NULL on error.</p>
+
+<p>X509_NAME_print() returns 1 on success or 0 on error.</p>
+
+<p>X509_NAME_print_ex() and X509_NAME_print_ex_fp() return 1 on success or 0 on error if the <b>XN_FLAG_COMPAT</b> is set, which is the same as X509_NAME_print(). Otherwise, it returns -1 on error or other values on success.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ASN1_STRING_print_ex.html">ASN1_STRING_print_ex(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2002-2020 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

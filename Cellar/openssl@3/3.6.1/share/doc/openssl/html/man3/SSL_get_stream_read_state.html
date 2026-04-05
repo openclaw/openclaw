@@ -1,0 +1,144 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_get_stream_read_state</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_get_stream_read_state, SSL_get_stream_write_state, SSL_get_stream_read_error_code, SSL_get_stream_write_error_code, SSL_STREAM_STATE_NONE, SSL_STREAM_STATE_OK, SSL_STREAM_STATE_WRONG_DIR, SSL_STREAM_STATE_FINISHED, SSL_STREAM_STATE_RESET_LOCAL, SSL_STREAM_STATE_RESET_REMOTE, SSL_STREAM_STATE_CONN_CLOSED - get QUIC stream state</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+#define SSL_STREAM_STATE_NONE
+#define SSL_STREAM_STATE_OK
+#define SSL_STREAM_STATE_WRONG_DIR
+#define SSL_STREAM_STATE_FINISHED
+#define SSL_STREAM_STATE_RESET_LOCAL
+#define SSL_STREAM_STATE_RESET_REMOTE
+#define SSL_STREAM_STATE_CONN_CLOSED
+
+int SSL_get_stream_read_state(SSL *ssl);
+int SSL_get_stream_write_state(SSL *ssl);
+
+int SSL_get_stream_read_error_code(SSL *ssl, uint64_t *app_error_code);
+int SSL_get_stream_write_error_code(SSL *ssl, uint64_t *app_error_code);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_get_stream_read_state() and SSL_get_stream_write_state() retrieve the overall state of the receiving and sending parts of a QUIC stream, respectively.</p>
+
+<p>They both return one of the following values:</p>
+
+<dl>
+
+<dt id="SSL_STREAM_STATE_NONE"><b>SSL_STREAM_STATE_NONE</b></dt>
+<dd>
+
+<p>This value is returned if called on a non-QUIC SSL object, or on a QUIC connection SSL object without a default stream attached.</p>
+
+</dd>
+<dt id="SSL_STREAM_STATE_OK"><b>SSL_STREAM_STATE_OK</b></dt>
+<dd>
+
+<p>This value is returned on a stream which has not been concluded and remains healthy.</p>
+
+</dd>
+<dt id="SSL_STREAM_STATE_WRONG_DIR"><b>SSL_STREAM_STATE_WRONG_DIR</b></dt>
+<dd>
+
+<p>This value is returned if SSL_get_stream_read_state() is called on a locally-initiated (and thus send-only) unidirectional stream, or, conversely, if SSL_get_stream_write_state() is called on a remotely-initiated (and thus receive-only) unidirectional stream.</p>
+
+</dd>
+<dt id="SSL_STREAM_STATE_FINISHED"><b>SSL_STREAM_STATE_FINISHED</b></dt>
+<dd>
+
+<p>For SSL_get_stream_read_state(), this value is returned when the remote peer has signalled the end of the receiving part of the stream. Note that there may still be residual data available to read via <a href="../man3/SSL_read.html">SSL_read(3)</a> when this state is returned.</p>
+
+<p>For SSL_get_stream_write_state(), this value is returned when the local application has concluded the stream using <a href="../man3/SSL_stream_conclude.html">SSL_stream_conclude(3)</a>. Future <a href="../man3/SSL_write.html">SSL_write(3)</a> calls will not succeed.</p>
+
+</dd>
+<dt id="SSL_STREAM_STATE_RESET_LOCAL"><b>SSL_STREAM_STATE_RESET_LOCAL</b></dt>
+<dd>
+
+<p>This value is returned when the applicable stream part was reset by the local application.</p>
+
+<p>For SSL_get_stream_read_state(), this means that the receiving part of the stream was aborted using a locally transmitted QUIC <b>STOP_SENDING</b> frame. It may or may not still be possible to obtain any residual data which remains to be read by calling <a href="../man3/SSL_read.html">SSL_read(3)</a>.</p>
+
+<p>For SSL_get_stream_write_state(), this means that the sending part of the stream was aborted, for example because the application called <a href="../man3/SSL_stream_reset.html">SSL_stream_reset(3)</a>, or because a QUIC stream SSL object with an un-concluded sending part was freed using <a href="../man3/SSL_free.html">SSL_free(3)</a>. Calls to <a href="../man3/SSL_write.html">SSL_write(3)</a> will fail.</p>
+
+<p>When this value is returned, the application error code which was signalled can be obtained by calling SSL_get_stream_read_error_code() or SSL_get_stream_write_error_code() as appropriate.</p>
+
+</dd>
+<dt id="SSL_STREAM_STATE_RESET_REMOTE"><b>SSL_STREAM_STATE_RESET_REMOTE</b></dt>
+<dd>
+
+<p>This value is returned when the applicable stream part was reset by the remote peer.</p>
+
+<p>For SSL_get_stream_read_state(), this means that the peer sent a QUIC <b>RESET_STREAM</b> frame for the receiving part of the stream; the receiving part of the stream was logically aborted by the peer.</p>
+
+<p>For SSL_get_stream_write_state(), this means that the peer sent a QUIC <b>STOP_SENDING</b> frame for the sending part of the stream; the peer has indicated that it does not wish to receive further data on the sending part of the stream. Calls to <a href="../man3/SSL_write.html">SSL_write(3)</a> will fail.</p>
+
+<p>When this value is returned, the application error code which was signalled can be obtained by calling SSL_get_stream_read_error_code() or SSL_get_stream_write_error_code() as appropriate.</p>
+
+</dd>
+<dt id="SSL_STREAM_STATE_CONN_CLOSED"><b>SSL_STREAM_STATE_CONN_CLOSED</b></dt>
+<dd>
+
+<p>The QUIC connection to which the stream belongs was closed. You can obtain information about the circumstances of this closure using <a href="../man3/SSL_get_conn_close_info.html">SSL_get_conn_close_info(3)</a>. There may still be residual data available to read via <a href="../man3/SSL_read.html">SSL_read(3)</a> when this state is returned. Calls to <a href="../man3/SSL_write.html">SSL_write(3)</a> will fail. SSL_get_stream_read_state() will return this state if and only if SSL_get_stream_write_state() will also return this state.</p>
+
+</dd>
+</dl>
+
+<p>SSL_get_stream_read_error_code() and SSL_get_stream_write_error_code() provide the application error code which was signalled during non-normal termination of the receiving or sending parts of a stream, respectively. On success, the application error code is written to <i>*app_error_code</i>.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>If a QUIC connection is closed, the stream state for all streams transitions to <b>SSL_STREAM_STATE_CONN_CLOSED</b>, but no application error code can be retrieved using SSL_get_stream_read_error_code() or SSL_get_stream_write_error_code(), as the QUIC connection closure process does not cause an application error code to be associated with each individual stream still existing at the time of connection closure. However, you can obtain the overall error code associated with the connection closure using <a href="../man3/SSL_get_conn_close_info.html">SSL_get_conn_close_info(3)</a>.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_get_stream_read_state() and SSL_get_stream_write_state() return one of the <b>SSL_STREAM_STATE</b> values. If called on a non-QUIC SSL object, or a QUIC connection SSL object without a default stream, <b>SSL_STREAM_STATE_NONE</b> is returned.</p>
+
+<p>SSL_get_stream_read_error_code() and SSL_get_stream_write_error_code() return 1 on success and 0 if the stream was terminated normally. They return -1 on error, for example if the stream is still healthy, was still healthy at the time of connection closure, if called on a stream for which the respective stream part does not exist (e.g. on a unidirectional stream), or if called on a non-QUIC object or a QUIC connection SSL object without a default stream attached.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/SSL_stream_conclude.html">SSL_stream_conclude(3)</a>, <a href="../man3/SSL_stream_reset.html">SSL_stream_reset(3)</a>, <a href="../man3/SSL_new_stream.html">SSL_new_stream(3)</a>, <a href="../man3/SSL_accept_stream.html">SSL_accept_stream(3)</a>, <a href="../man3/SSL_get_conn_close_info.html">SSL_get_conn_close_info(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>These functions were added in OpenSSL 3.2.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2002-2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

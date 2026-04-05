@@ -1,0 +1,148 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>RSA_padding_add_PKCS1_type_1</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#WARNINGS">WARNINGS</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>RSA_padding_add_PKCS1_type_1, RSA_padding_check_PKCS1_type_1, RSA_padding_add_PKCS1_type_2, RSA_padding_check_PKCS1_type_2, RSA_padding_add_PKCS1_OAEP, RSA_padding_check_PKCS1_OAEP, RSA_padding_add_PKCS1_OAEP_mgf1, RSA_padding_check_PKCS1_OAEP_mgf1, RSA_padding_add_none, RSA_padding_check_none - asymmetric encryption padding</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/rsa.h&gt;</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>int RSA_padding_add_PKCS1_type_1(unsigned char *to, int tlen,
+                                 const unsigned char *f, int fl);
+
+int RSA_padding_check_PKCS1_type_1(unsigned char *to, int tlen,
+                                   const unsigned char *f, int fl, int rsa_len);
+
+int RSA_padding_add_PKCS1_type_2(unsigned char *to, int tlen,
+                                 const unsigned char *f, int fl);
+
+int RSA_padding_check_PKCS1_type_2(unsigned char *to, int tlen,
+                                   const unsigned char *f, int fl, int rsa_len);
+
+int RSA_padding_add_PKCS1_OAEP(unsigned char *to, int tlen,
+                               const unsigned char *f, int fl,
+                               const unsigned char *p, int pl);
+
+int RSA_padding_check_PKCS1_OAEP(unsigned char *to, int tlen,
+                                 const unsigned char *f, int fl, int rsa_len,
+                                 const unsigned char *p, int pl);
+
+int RSA_padding_add_PKCS1_OAEP_mgf1(unsigned char *to, int tlen,
+                                    const unsigned char *f, int fl,
+                                    const unsigned char *p, int pl,
+                                    const EVP_MD *md, const EVP_MD *mgf1md);
+
+int RSA_padding_check_PKCS1_OAEP_mgf1(unsigned char *to, int tlen,
+                                      const unsigned char *f, int fl, int rsa_len,
+                                      const unsigned char *p, int pl,
+                                      const EVP_MD *md, const EVP_MD *mgf1md);
+
+int RSA_padding_add_none(unsigned char *to, int tlen,
+                         const unsigned char *f, int fl);
+
+int RSA_padding_check_none(unsigned char *to, int tlen,
+                           const unsigned char *f, int fl, int rsa_len);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>All of the functions described on this page are deprecated. Applications should instead use the EVP PKEY APIs.</p>
+
+<p>The RSA_padding_xxx_xxx() functions are called from the RSA encrypt, decrypt, sign and verify functions. Normally they should not be called from application programs.</p>
+
+<p>However, they can also be called directly to implement padding for other asymmetric ciphers. RSA_padding_add_PKCS1_OAEP() and RSA_padding_check_PKCS1_OAEP() may be used in an application combined with <b>RSA_NO_PADDING</b> in order to implement OAEP with an encoding parameter.</p>
+
+<p>RSA_padding_add_xxx() encodes <b>fl</b> bytes from <b>f</b> so as to fit into <b>tlen</b> bytes and stores the result at <b>to</b>. An error occurs if <b>fl</b> does not meet the size requirements of the encoding method.</p>
+
+<p>The following encoding methods are implemented:</p>
+
+<dl>
+
+<dt id="PKCS1_type_1">PKCS1_type_1</dt>
+<dd>
+
+<p>PKCS #1 v2.0 EMSA-PKCS1-v1_5 (PKCS #1 v1.5 block type 1); used for signatures</p>
+
+</dd>
+<dt id="PKCS1_type_2">PKCS1_type_2</dt>
+<dd>
+
+<p>PKCS #1 v2.0 EME-PKCS1-v1_5 (PKCS #1 v1.5 block type 2)</p>
+
+</dd>
+<dt id="PKCS1_OAEP">PKCS1_OAEP</dt>
+<dd>
+
+<p>PKCS #1 v2.0 EME-OAEP</p>
+
+</dd>
+<dt id="none">none</dt>
+<dd>
+
+<p>simply copy the data</p>
+
+</dd>
+</dl>
+
+<p>The random number generator must be seeded prior to calling RSA_padding_add_xxx(). If the automatic seeding or reseeding of the OpenSSL CSPRNG fails due to external circumstances (see <a href="../man7/RAND.html">RAND(7)</a>), the operation will fail.</p>
+
+<p>RSA_padding_check_xxx() verifies that the <b>fl</b> bytes at <b>f</b> contain a valid encoding for a <b>rsa_len</b> byte RSA key in the respective encoding method and stores the recovered data of at most <b>tlen</b> bytes (for <b>RSA_NO_PADDING</b>: of size <b>tlen</b>) at <b>to</b>.</p>
+
+<p>For RSA_padding_xxx_OAEP(), <b>p</b> points to the encoding parameter of length <b>pl</b>. <b>p</b> may be <b>NULL</b> if <b>pl</b> is 0.</p>
+
+<p>For RSA_padding_xxx_OAEP_mgf1(), <b>md</b> points to the md hash, if <b>md</b> is <b>NULL</b> that means md=sha1, and <b>mgf1md</b> points to the mgf1 hash, if <b>mgf1md</b> is <b>NULL</b> that means mgf1md=md.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>The RSA_padding_add_xxx() functions return 1 on success, 0 on error. The RSA_padding_check_xxx() functions return the length of the recovered data, -1 on error. Error codes can be obtained by calling <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>.</p>
+
+<h1 id="WARNINGS">WARNINGS</h1>
+
+<p>The result of RSA_padding_check_PKCS1_type_2() is exactly the information which is used to mount a classical Bleichenbacher padding oracle attack. This is an inherent weakness in the PKCS #1 v1.5 padding design. Prefer PKCS1_OAEP padding. If that is not possible, the result of RSA_padding_check_PKCS1_type_2() should be checked in constant time if it matches the expected length of the plaintext and additionally some application specific consistency checks on the plaintext need to be performed in constant time. If the plaintext is rejected it must be kept secret which of the checks caused the application to reject the message. Do not remove the zero-padding from the decrypted raw RSA data which was computed by RSA_private_decrypt() with <b>RSA_NO_PADDING</b>, as this would create a small timing side channel which could be used to mount a Bleichenbacher attack against any padding mode including PKCS1_OAEP.</p>
+
+<p>You should prefer the use of EVP PKEY APIs for PKCS#1 v1.5 decryption as they implement the necessary workarounds internally.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/RSA_public_encrypt.html">RSA_public_encrypt(3)</a>, <a href="../man3/RSA_private_decrypt.html">RSA_private_decrypt(3)</a>, <a href="../man3/RSA_sign.html">RSA_sign(3)</a>, <a href="../man3/RSA_verify.html">RSA_verify(3)</a>, <a href="../man7/RAND.html">RAND(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>All of these functions were deprecated in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,115 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>MD5</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTE">NOTE</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#CONFORMING-TO">CONFORMING TO</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>MD2, MD4, MD5, MD2_Init, MD2_Update, MD2_Final, MD4_Init, MD4_Update, MD4_Final, MD5_Init, MD5_Update, MD5_Final - MD2, MD4, and MD5 hash functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>#include &lt;openssl/md2.h&gt;
+
+unsigned char *MD2(const unsigned char *d, unsigned long n, unsigned char *md);
+
+int MD2_Init(MD2_CTX *c);
+int MD2_Update(MD2_CTX *c, const unsigned char *data, unsigned long len);
+int MD2_Final(unsigned char *md, MD2_CTX *c);</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>#include &lt;openssl/md4.h&gt;
+
+unsigned char *MD4(const unsigned char *d, unsigned long n, unsigned char *md);
+
+int MD4_Init(MD4_CTX *c);
+int MD4_Update(MD4_CTX *c, const void *data, unsigned long len);
+int MD4_Final(unsigned char *md, MD4_CTX *c);</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>#include &lt;openssl/md5.h&gt;
+
+unsigned char *MD5(const unsigned char *d, unsigned long n, unsigned char *md);
+
+int MD5_Init(MD5_CTX *c);
+int MD5_Update(MD5_CTX *c, const void *data, unsigned long len);
+int MD5_Final(unsigned char *md, MD5_CTX *c);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>All of the functions described on this page are deprecated. Applications should instead use <a href="../man3/EVP_DigestInit_ex.html">EVP_DigestInit_ex(3)</a>, <a href="../man3/EVP_DigestUpdate.html">EVP_DigestUpdate(3)</a> and <a href="../man3/EVP_DigestFinal_ex.html">EVP_DigestFinal_ex(3)</a>.</p>
+
+<p>MD2, MD4, and MD5 are cryptographic hash functions with a 128 bit output.</p>
+
+<p>MD2(), MD4(), and MD5() compute the MD2, MD4, and MD5 message digest of the <b>n</b> bytes at <b>d</b> and place it in <b>md</b> (which must have space for MD2_DIGEST_LENGTH == MD4_DIGEST_LENGTH == MD5_DIGEST_LENGTH == 16 bytes of output). If <b>md</b> is NULL, the digest is placed in a static array.</p>
+
+<p>The following functions may be used if the message is not completely stored in memory:</p>
+
+<p>MD2_Init() initializes a <b>MD2_CTX</b> structure.</p>
+
+<p>MD2_Update() can be called repeatedly with chunks of the message to be hashed (<b>len</b> bytes at <b>data</b>).</p>
+
+<p>MD2_Final() places the message digest in <b>md</b>, which must have space for MD2_DIGEST_LENGTH == 16 bytes of output, and erases the <b>MD2_CTX</b>.</p>
+
+<p>MD4_Init(), MD4_Update(), MD4_Final(), MD5_Init(), MD5_Update(), and MD5_Final() are analogous using an <b>MD4_CTX</b> and <b>MD5_CTX</b> structure. The parameter <b>MUST NOT</b> be NULL.</p>
+
+<p>Applications should use the higher level functions <a href="../man3/EVP_DigestInit.html">EVP_DigestInit(3)</a> etc. instead of calling the hash functions directly.</p>
+
+<h1 id="NOTE">NOTE</h1>
+
+<p>MD2, MD4, and MD5 are recommended only for compatibility with existing applications. In new applications, hashes from the SHA-2 or SHA-3 family should be preferred.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>MD2(), MD4(), and MD5() return pointers to the hash value.</p>
+
+<p>MD2_Init(), MD2_Update(), MD2_Final(), MD4_Init(), MD4_Update(), MD4_Final(), MD5_Init(), MD5_Update(), and MD5_Final() return 1 for success, 0 otherwise.</p>
+
+<h1 id="CONFORMING-TO">CONFORMING TO</h1>
+
+<p>RFC 1319, RFC 1320, RFC 1321</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_DigestInit.html">EVP_DigestInit(3)</a>, <a href="../man7/EVP_MD-SHA2.html">EVP_MD-SHA2(7)</a>, <a href="../man7/EVP_MD-SHA3.html">EVP_MD-SHA3(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>All of these functions were deprecated in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

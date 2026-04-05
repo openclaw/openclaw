@@ -1,0 +1,74 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_get_peer_signature_nid</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_get0_peer_signature_name, SSL_get_peer_signature_nid, SSL_get_peer_signature_type_nid, SSL_get0_signature_name, SSL_get_signature_nid, SSL_get_signature_type_nid - get TLS message signing types</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+int SSL_get0_peer_signature_name(const SSL *ssl, const char **sigalg);
+int SSL_get_peer_signature_nid(SSL *ssl, int *psig_nid);
+int SSL_get_peer_signature_type_nid(const SSL *ssl, int *psigtype_nid);
+int SSL_get0_signature_name(SSL *ssl, const char **sigalg);
+int SSL_get_signature_nid(SSL *ssl, int *psig_nid);
+int SSL_get_signature_type_nid(const SSL *ssl, int *psigtype_nid);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_get0_peer_signature_name() sets <i>*sigalg</i> to the IANA name of the <a href="https://www.iana.org/assignments/tls-parameters/tls-parameters.xhtml#tls-signaturescheme">signature scheme</a> used by the peer to sign the TLS handshake. The caller must not free the returned pointer. The returned string should be copied if it is to be retained beyond the lifetime of the SSL connection.</p>
+
+<p>SSL_get_peer_signature_nid() sets <b>*psig_nid</b> to the NID of the digest used by the peer to sign TLS messages. It is implemented as a macro.</p>
+
+<p>SSL_get_peer_signature_type_nid() sets <b>*psigtype_nid</b> to the signature type used by the peer to sign TLS messages. Currently the signature type is the NID of the public key type used for signing except for PSS signing where it is <b>EVP_PKEY_RSA_PSS</b>. To differentiate between <b>rsa_pss_rsae_*</b> and <b>rsa_pss_pss_*</b> signatures, it&#39;s necessary to check the type of public key in the peer&#39;s certificate.</p>
+
+<p>SSL_get0_signature_name(), SSL_get_signature_nid() and SSL_get_signature_type_nid() return the equivalent information for the local end of the connection.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>These functions return 1 for success and 0 for failure. There are several possible reasons for failure: the peer or local end is a client and did not sign the handshake (did not use a client certificate), the cipher suite has no signature (e.g. it uses RSA key exchange or is anonymous), the TLS version is below 1.2 or the functions were called too early, e.g. before the peer signed a message.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a>, <a href="../man3/SSL_get_peer_certificate.html">SSL_get_peer_certificate(3)</a>,</p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The SSL_get0_peer_signature_name() and SSL_get0_signature_name() functions were added in OpenSSL 3.5.</p>
+
+<p>SSL_get_signature_nid() was added in OpenSSL 1.1.1a.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2017-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

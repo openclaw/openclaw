@@ -1,0 +1,13 @@
+prefix=/opt/homebrew/Cellar/svt-av1/4.1.0
+exec_prefix=${prefix}
+includedir=${prefix}/include
+libdir=${exec_prefix}/lib
+
+Name: SvtAv1Enc
+Description: SVT (Scalable Video Technology) for AV1 encoder library
+Version: 4.1.0
+Requires.private: 
+Libs: -L${libdir} -lSvtAv1Enc
+Libs.private: 
+Cflags: -I${includedir}/svt-av1 -DEB_DLL -DRTC_BUILD=0
+Cflags.private: -UEB_DLL

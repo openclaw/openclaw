@@ -1,0 +1,103 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>ASN1_STRING_print_ex</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>ASN1_tag2str, ASN1_STRING_print_ex, ASN1_STRING_print_ex_fp, ASN1_STRING_print - ASN1_STRING output routines</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/asn1.h&gt;
+
+int ASN1_STRING_print_ex(BIO *out, const ASN1_STRING *str, unsigned long flags);
+int ASN1_STRING_print_ex_fp(FILE *fp, const ASN1_STRING *str, unsigned long flags);
+int ASN1_STRING_print(BIO *out, const ASN1_STRING *str);
+
+const char *ASN1_tag2str(int tag);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>These functions output an <b>ASN1_STRING</b> structure. <b>ASN1_STRING</b> is used to represent all the ASN1 string types.</p>
+
+<p>ASN1_STRING_print_ex() outputs <i>str</i> to <i>out</i>, the format is determined by the options <i>flags</i>. ASN1_STRING_print_ex_fp() is identical except it outputs to <i>fp</i> instead.</p>
+
+<p>ASN1_STRING_print() prints <i>str</i> to <i>out</i> but using a different format to ASN1_STRING_print_ex(). It replaces unprintable characters (other than CR, LF) with &#39;.&#39;.</p>
+
+<p>ASN1_tag2str() returns a human-readable name of the specified ASN.1 <i>tag</i>.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>ASN1_STRING_print() is a deprecated function which should be avoided; use ASN1_STRING_print_ex() instead.</p>
+
+<p>Although there are a large number of options frequently <b>ASN1_STRFLGS_RFC2253</b> is suitable, or on UTF8 terminals <b>ASN1_STRFLGS_RFC2253 &amp; ~ASN1_STRFLGS_ESC_MSB</b>.</p>
+
+<p>The complete set of supported options for <i>flags</i> is listed below.</p>
+
+<p>Various characters can be escaped. If <b>ASN1_STRFLGS_ESC_2253</b> is set the characters determined by RFC2253 are escaped. If <b>ASN1_STRFLGS_ESC_CTRL</b> is set control characters are escaped. If <b>ASN1_STRFLGS_ESC_MSB</b> is set characters with the MSB set are escaped: this option should <b>not</b> be used if the terminal correctly interprets UTF8 sequences.</p>
+
+<p>Escaping takes several forms.</p>
+
+<p>If the character being escaped is a 16 bit character then the form &quot;\UXXXX&quot; is used using exactly four characters for the hex representation. If it is 32 bits then &quot;\WXXXXXXXX&quot; is used using eight characters of its hex representation. These forms will only be used if UTF8 conversion is not set (see below).</p>
+
+<p>Printable characters are normally escaped using the backslash &#39;\&#39; character. If <b>ASN1_STRFLGS_ESC_QUOTE</b> is set then the whole string is instead surrounded by double quote characters: this is arguably more readable than the backslash notation. Other characters use the &quot;\XX&quot; using exactly two characters of the hex representation.</p>
+
+<p>If <b>ASN1_STRFLGS_UTF8_CONVERT</b> is set then characters are converted to UTF8 format first. If the terminal supports the display of UTF8 sequences then this option will correctly display multi byte characters.</p>
+
+<p>If <b>ASN1_STRFLGS_IGNORE_TYPE</b> is set then the string type is not interpreted at all: everything is assumed to be one byte per character. This is primarily for debugging purposes and can result in confusing output in multi character strings.</p>
+
+<p>If <b>ASN1_STRFLGS_SHOW_TYPE</b> is set then the string type itself is printed out before its value (for example &quot;BMPSTRING&quot;), this actually uses ASN1_tag2str().</p>
+
+<p>The content of a string instead of being interpreted can be &quot;dumped&quot;: this just outputs the value of the string using the form #XXXX using hex format for each octet.</p>
+
+<p>If <b>ASN1_STRFLGS_DUMP_ALL</b> is set then any type is dumped.</p>
+
+<p>Normally non character string types (such as OCTET STRING) are assumed to be one byte per character, if <b>ASN1_STRFLGS_DUMP_UNKNOWN</b> is set then they will be dumped instead.</p>
+
+<p>When a type is dumped normally just the content octets are printed, if <b>ASN1_STRFLGS_DUMP_DER</b> is set then the complete encoding is dumped instead (including tag and length octets).</p>
+
+<p><b>ASN1_STRFLGS_RFC2253</b> includes all the flags required by RFC2253. It is equivalent to: ASN1_STRFLGS_ESC_2253 | ASN1_STRFLGS_ESC_CTRL | ASN1_STRFLGS_ESC_MSB | ASN1_STRFLGS_UTF8_CONVERT | ASN1_STRFLGS_DUMP_UNKNOWN ASN1_STRFLGS_DUMP_DER</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>ASN1_STRING_print_ex() and ASN1_STRING_print_ex_fp() return the number of characters written or -1 if an error occurred.</p>
+
+<p>ASN1_STRING_print() returns 1 on success or 0 on error.</p>
+
+<p>ASN1_tag2str() returns a human-readable name of the specified ASN.1 <i>tag</i>.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/X509_NAME_print_ex.html">X509_NAME_print_ex(3)</a>, <a href="../man3/ASN1_tag2str.html">ASN1_tag2str(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2002-2018 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

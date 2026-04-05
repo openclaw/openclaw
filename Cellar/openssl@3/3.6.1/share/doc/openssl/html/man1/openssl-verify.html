@@ -1,0 +1,183 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>openssl-verify</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#OPTIONS">OPTIONS</a></li>
+  <li><a href="#DIAGNOSTICS">DIAGNOSTICS</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>openssl-verify - certificate verification command</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<p><b>openssl</b> <b>verify</b> [<b>-help</b>] [<b>-CRLfile</b> <i>filename</i>|<i>uri</i>] [<b>-crl_download</b>] [<b>-show_chain</b>] [<b>-verbose</b>] [<b>-trusted</b> <i>filename</i>|<i>uri</i>] [<b>-untrusted</b> <i>filename</i>|<i>uri</i>] [<b>-vfyopt</b> <i>nm</i>:<i>v</i>] [<b>-nameopt</b> <i>option</i>] [<b>-CAfile</b> <i>file</i>] [<b>-no-CAfile</b>] [<b>-CApath</b> <i>dir</i>] [<b>-no-CApath</b>] [<b>-CAstore</b> <i>uri</i>] [<b>-no-CAstore</b>] [<b>-engine</b> <i>id</i>] [<b>-allow_proxy_certs</b>] [<b>-attime</b> <i>timestamp</i>] [<b>-no_check_time</b>] [<b>-check_ss_sig</b>] [<b>-crl_check</b>] [<b>-crl_check_all</b>] [<b>-explicit_policy</b>] [<b>-extended_crl</b>] [<b>-ignore_critical</b>] [<b>-inhibit_any</b>] [<b>-inhibit_map</b>] [<b>-partial_chain</b>] [<b>-policy</b> <i>arg</i>] [<b>-policy_check</b>] [<b>-policy_print</b>] [<b>-purpose</b> <i>purpose</i>] [<b>-suiteB_128</b>] [<b>-suiteB_128_only</b>] [<b>-suiteB_192</b>] [<b>-trusted_first</b>] [<b>-no_alt_chains</b>] [<b>-use_deltas</b>] [<b>-auth_level</b> <i>num</i>] [<b>-verify_depth</b> <i>num</i>] [<b>-verify_email</b> <i>email</i>] [<b>-verify_hostname</b> <i>hostname</i>] [<b>-verify_ip</b> <i>ip</i>] [<b>-verify_name</b> <i>name</i>] [<b>-x509_strict</b>] [<b>-issuer_checks</b>] [<b>-provider</b> <i>name</i>] [<b>-provider-path</b> <i>path</i>] [<b>-provparam</b> <i>[name:]key=value</i>] [<b>-propquery</b> <i>propq</i>] [<b>--</b>] [<i>certificate</i> ...]</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>This command verifies certificate chains. If a certificate chain has multiple problems, this program attempts to display all of them.</p>
+
+<h1 id="OPTIONS">OPTIONS</h1>
+
+<dl>
+
+<dt id="help"><b>-help</b></dt>
+<dd>
+
+<p>Print out a usage message.</p>
+
+</dd>
+<dt id="CRLfile-filename-uri"><b>-CRLfile</b> <i>filename</i>|<i>uri</i></dt>
+<dd>
+
+<p>The file or URI should contain one or more CRLs in PEM or DER format. This option can be specified more than once to include CRLs from multiple sources.</p>
+
+</dd>
+<dt id="crl_download"><b>-crl_download</b></dt>
+<dd>
+
+<p>Attempt to download CRL information for certificates via their CDP entries.</p>
+
+</dd>
+<dt id="show_chain"><b>-show_chain</b></dt>
+<dd>
+
+<p>Display information about the certificate chain that has been built (if successful). Certificates in the chain that came from the untrusted list will be flagged as &quot;untrusted&quot;.</p>
+
+</dd>
+<dt id="verbose"><b>-verbose</b></dt>
+<dd>
+
+<p>Print extra information about the operations being performed.</p>
+
+</dd>
+<dt id="trusted-filename-uri"><b>-trusted</b> <i>filename</i>|<i>uri</i></dt>
+<dd>
+
+<p>A file or URI of (more or less) trusted certificates. See <a href="../man1/openssl-verification-options.html">openssl-verification-options(1)</a> for more information on trust settings.</p>
+
+<p>This option can be specified more than once to load certificates from multiple sources.</p>
+
+</dd>
+<dt id="untrusted-filename-uri"><b>-untrusted</b> <i>filename</i>|<i>uri</i></dt>
+<dd>
+
+<p>A file or URI of untrusted certificates to use for chain building. This option can be specified more than once to load certificates from multiple sources.</p>
+
+</dd>
+<dt id="vfyopt-nm:v"><b>-vfyopt</b> <i>nm</i>:<i>v</i></dt>
+<dd>
+
+<p>Pass options to the signature algorithm during verify operations. Names and values of these options are algorithm-specific.</p>
+
+</dd>
+<dt id="nameopt-option"><b>-nameopt</b> <i>option</i></dt>
+<dd>
+
+<p>This specifies how the subject or issuer names are displayed. See <a href="../man1/openssl-namedisplay-options.html">openssl-namedisplay-options(1)</a> for details.</p>
+
+</dd>
+<dt id="engine-id"><b>-engine</b> <i>id</i></dt>
+<dd>
+
+<p>See <a href="../man1/openssl.html">&quot;Engine Options&quot; in openssl(1)</a>. This option is deprecated.</p>
+
+<p>To load certificates or CRLs that require engine support, specify the <b>-engine</b> option before any of the <b>-trusted</b>, <b>-untrusted</b> or <b>-CRLfile</b> options.</p>
+
+</dd>
+<dt id="CAfile-file--no-CAfile--CApath-dir--no-CApath--CAstore-uri--no-CAstore"><b>-CAfile</b> <i>file</i>, <b>-no-CAfile</b>, <b>-CApath</b> <i>dir</i>, <b>-no-CApath</b>, <b>-CAstore</b> <i>uri</i>, <b>-no-CAstore</b></dt>
+<dd>
+
+<p>See <a href="../man1/openssl-verification-options.html">&quot;Trusted Certificate Options&quot; in openssl-verification-options(1)</a> for details.</p>
+
+</dd>
+<dt id="allow_proxy_certs--attime--no_check_time--check_ss_sig--crl_check--crl_check_all--explicit_policy--extended_crl--ignore_critical--inhibit_any--inhibit_map--no_alt_chains--partial_chain--policy--policy_check--policy_print--purpose--suiteB_128--suiteB_128_only--suiteB_192--trusted_first--use_deltas--auth_level--verify_depth--verify_email--verify_hostname--verify_ip--verify_name--x509_strict--issuer_checks"><b>-allow_proxy_certs</b>, <b>-attime</b>, <b>-no_check_time</b>, <b>-check_ss_sig</b>, <b>-crl_check</b>, <b>-crl_check_all</b>, <b>-explicit_policy</b>, <b>-extended_crl</b>, <b>-ignore_critical</b>, <b>-inhibit_any</b>, <b>-inhibit_map</b>, <b>-no_alt_chains</b>, <b>-partial_chain</b>, <b>-policy</b>, <b>-policy_check</b>, <b>-policy_print</b>, <b>-purpose</b>, <b>-suiteB_128</b>, <b>-suiteB_128_only</b>, <b>-suiteB_192</b>, <b>-trusted_first</b>, <b>-use_deltas</b>, <b>-auth_level</b>, <b>-verify_depth</b>, <b>-verify_email</b>, <b>-verify_hostname</b>, <b>-verify_ip</b>, <b>-verify_name</b>, <b>-x509_strict</b> <b>-issuer_checks</b></dt>
+<dd>
+
+<p>Set various options of certificate chain verification. See <a href="../man1/openssl-verification-options.html">&quot;Verification Options&quot; in openssl-verification-options(1)</a> for details.</p>
+
+</dd>
+<dt id="provider-name"><b>-provider</b> <i>name</i></dt>
+<dd>
+
+</dd>
+<dt id="provider-path-path"><b>-provider-path</b> <i>path</i></dt>
+<dd>
+
+</dd>
+<dt id="provparam-name:-key-value"><b>-provparam</b> <i>[name:]key=value</i></dt>
+<dd>
+
+</dd>
+<dt id="propquery-propq"><b>-propquery</b> <i>propq</i></dt>
+<dd>
+
+<p>See <a href="../man1/openssl.html">&quot;Provider Options&quot; in openssl(1)</a>, <a href="../man7/provider.html">provider(7)</a>, and <a href="../man7/property.html">property(7)</a>.</p>
+
+</dd>
+<dt id="pod"><b>--</b></dt>
+<dd>
+
+<p>Indicates the last option. All arguments following this are assumed to be certificate files. This is useful if the first certificate filename begins with a <b>-</b>.</p>
+
+</dd>
+<dt id="certificate"><i>certificate</i> ...</dt>
+<dd>
+
+<p>One or more target certificates to verify, one per file. If no certificates are given, this command will attempt to read a single certificate from standard input.</p>
+
+</dd>
+</dl>
+
+<h1 id="DIAGNOSTICS">DIAGNOSTICS</h1>
+
+<p>When a verify operation fails the output messages can be somewhat cryptic. The general form of the error message is:</p>
+
+<pre><code>server.pem: /C=AU/ST=Queensland/O=CryptSoft Pty Ltd/CN=Test CA (1024 bit)
+error 24 at 1 depth lookup:invalid CA certificate</code></pre>
+
+<p>The first line contains the name of the certificate being verified followed by the subject name of the certificate. The second line contains the error number and the depth. The depth is number of the certificate being verified when a problem was detected starting with zero for the target (&quot;leaf&quot;) certificate itself then 1 for the CA that signed the target certificate and so on. Finally a textual version of the error number is presented.</p>
+
+<p>A list of the error codes and messages can be found in <a href="../man3/X509_STORE_CTX_get_error.html">X509_STORE_CTX_get_error(3)</a>; the full list is defined in the header file <i>&lt;openssl/x509_vfy.h&gt;</i>.</p>
+
+<p>This command ignores many errors, in order to allow all the problems with a certificate chain to be determined.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man1/openssl-verification-options.html">openssl-verification-options(1)</a>, <a href="../man1/openssl-x509.html">openssl-x509(1)</a>, <a href="../man7/ossl_store-file.html">ossl_store-file(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The <b>-show_chain</b> option was added in OpenSSL 1.1.0.</p>
+
+<p>The <b>-engine option</b> was deprecated in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,72 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_MD-SHA1</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Identities">Identities</a></li>
+      <li><a href="#Gettable-Parameters">Gettable Parameters</a></li>
+      <li><a href="#Settable-Context-Parameters">Settable Context Parameters</a></li>
+    </ul>
+  </li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_MD-SHA1 - The SHA1 EVP_MD implementation</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>Support for computing SHA1 digests through the <b>EVP_MD</b> API.</p>
+
+<h2 id="Identities">Identities</h2>
+
+<p>This implementation is available with the FIPS provider as well as the default provider, and is identified with the names &quot;SHA1&quot; and &quot;SHA-1&quot;.</p>
+
+<h2 id="Gettable-Parameters">Gettable Parameters</h2>
+
+<p>This implementation supports the common gettable parameters described in <a href="../man7/EVP_MD-common.html">EVP_MD-common(7)</a>.</p>
+
+<h2 id="Settable-Context-Parameters">Settable Context Parameters</h2>
+
+<p>This implementation supports the following <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> entries, settable for an <b>EVP_MD_CTX</b> with <a href="../man3/EVP_MD_CTX_set_params.html">EVP_MD_CTX_set_params(3)</a>:</p>
+
+<dl>
+
+<dt id="ssl3-ms-OSSL_DIGEST_PARAM_SSL3_MS-octet-string">&quot;ssl3-ms&quot; (<b>OSSL_DIGEST_PARAM_SSL3_MS</b>) &lt;octet string&gt;</dt>
+<dd>
+
+<p>This parameter is set by libssl in order to calculate a signature hash for an SSLv3 CertificateVerify message as per RFC6101. It is only set after all handshake messages have already been digested via OP_digest_update() calls. The parameter provides the master secret value to be added to the digest. The digest implementation should calculate the complete digest as per RFC6101 section 5.6.8. The next call after setting this parameter should be OP_digest_final().</p>
+
+</dd>
+</dl>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_MD_CTX_set_params.html">EVP_MD_CTX_set_params(3)</a>, <a href="../man7/provider-digest.html">provider-digest(7)</a>, <a href="../man7/OSSL_PROVIDER-FIPS.html">OSSL_PROVIDER-FIPS(7)</a>, <a href="../man7/OSSL_PROVIDER-default.html">OSSL_PROVIDER-default(7)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2020 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

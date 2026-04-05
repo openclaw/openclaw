@@ -1,0 +1,463 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>openssl-pkcs12</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#OPTIONS">OPTIONS</a>
+    <ul>
+      <li><a href="#PKCS-12-input-parsing-options">PKCS#12 input (parsing) options</a></li>
+      <li><a href="#PKCS-12-output-export-options">PKCS#12 output (export) options</a></li>
+    </ul>
+  </li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>openssl-pkcs12 - PKCS#12 file command</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<p><b>openssl</b> <b>pkcs12</b> [<b>-help</b>] [<b>-passin</b> <i>arg</i>] [<b>-passout</b> <i>arg</i>] [<b>-password</b> <i>arg</i>] [<b>-twopass</b>] [<b>-in</b> <i>filename</i>|<i>uri</i>] [<b>-out</b> <i>filename</i>] [<b>-nokeys</b>] [<b>-nocerts</b>] [<b>-noout</b>] [<b>-legacy</b>] [<b>-engine</b> <i>id</i>] [<b>-provider</b> <i>name</i>] [<b>-provider-path</b> <i>path</i>] [<b>-provparam</b> <i>[name:]key=value</i>] [<b>-propquery</b> <i>propq</i>] [<b>-rand</b> <i>files</i>] [<b>-writerand</b> <i>file</i>]</p>
+
+<p>PKCS#12 input (parsing) options: [<b>-info</b>] [<b>-nomacver</b>] [<b>-clcerts</b>] [<b>-cacerts</b>]</p>
+
+<p>[<b>-aes128</b>] [<b>-aes192</b>] [<b>-aes256</b>] [<b>-aria128</b>] [<b>-aria192</b>] [<b>-aria256</b>] [<b>-camellia128</b>] [<b>-camellia192</b>] [<b>-camellia256</b>] [<b>-des</b>] [<b>-des3</b>] [<b>-idea</b>] [<b>-noenc</b>] [<b>-nodes</b>]</p>
+
+<p>PKCS#12 output (export) options:</p>
+
+<p>[<b>-export</b>] [<b>-inkey</b> <i>filename</i>|<i>uri</i>] [<b>-certfile</b> <i>filename</i>] [<b>-passcerts</b> <i>arg</i>] [<b>-chain</b>] [<b>-untrusted</b> <i>filename</i>] [<b>-CAfile</b> <i>file</i>] [<b>-no-CAfile</b>] [<b>-CApath</b> <i>dir</i>] [<b>-no-CApath</b>] [<b>-CAstore</b> <i>uri</i>] [<b>-no-CAstore</b>] [<b>-name</b> <i>name</i>] [<b>-caname</b> <i>name</i>] [<b>-CSP</b> <i>name</i>] [<b>-LMK</b>] [<b>-keyex</b>] [<b>-keysig</b>] [<b>-keypbe</b> <i>cipher</i>] [<b>-certpbe</b> <i>cipher</i>] [<b>-descert</b>] [<b>-macalg</b> <i>digest</i>] [<b>-pbmac1_pbkdf2</b>] [<b>-pbmac1_pbkdf2_md</b> <i>digest</i>] [<b>-iter</b> <i>count</i>] [<b>-noiter</b>] [<b>-nomaciter</b>] [<b>-maciter</b>] [<b>-macsaltlen</b>] [<b>-nomac</b>] [<b>-jdktrust</b> <i>usage</i>]</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>This command allows PKCS#12 files (sometimes referred to as PFX files) to be created and parsed. PKCS#12 files are used by several programs including Netscape, MSIE and MS Outlook.</p>
+
+<h1 id="OPTIONS">OPTIONS</h1>
+
+<p>There are a lot of options the meaning of some depends of whether a PKCS#12 file is being created or parsed. By default a PKCS#12 file is parsed. A PKCS#12 file can be created by using the <b>-export</b> option (see below). The PKCS#12 export encryption and MAC options such as <b>-certpbe</b> and <b>-iter</b> and many further options such as <b>-chain</b> are relevant only with <b>-export</b>. Conversely, the options regarding encryption of private keys when outputting PKCS#12 input are relevant only when the <b>-export</b> option is not given.</p>
+
+<p>The default encryption algorithm is AES-256-CBC with PBKDF2 for key derivation.</p>
+
+<p>When encountering problems loading legacy PKCS#12 files that involve, for example, RC2-40-CBC, try using the <b>-legacy</b> option and, if needed, the <b>-provider-path</b> option.</p>
+
+<dl>
+
+<dt id="help"><b>-help</b></dt>
+<dd>
+
+<p>Print out a usage message.</p>
+
+</dd>
+<dt id="passin-arg"><b>-passin</b> <i>arg</i></dt>
+<dd>
+
+<p>The password source for the input, and for encrypting any private keys that are output. For more information about the format of <b>arg</b> see <a href="../man1/openssl-passphrase-options.html">openssl-passphrase-options(1)</a>.</p>
+
+</dd>
+<dt id="passout-arg"><b>-passout</b> <i>arg</i></dt>
+<dd>
+
+<p>The password source for output files.</p>
+
+</dd>
+<dt id="password-arg"><b>-password</b> <i>arg</i></dt>
+<dd>
+
+<p>With <b>-export</b>, <b>-password</b> is equivalent to <b>-passout</b>, otherwise it is equivalent to <b>-passin</b>.</p>
+
+</dd>
+<dt id="twopass"><b>-twopass</b></dt>
+<dd>
+
+<p>Prompt for separate integrity and encryption passwords: most software always assumes these are the same so this option will render such PKCS#12 files unreadable. Cannot be used in combination with the options <b>-password</b>, <b>-passin</b> if importing from PKCS#12, or <b>-passout</b> if exporting.</p>
+
+</dd>
+<dt id="nokeys"><b>-nokeys</b></dt>
+<dd>
+
+<p>No private keys will be output.</p>
+
+</dd>
+<dt id="nocerts"><b>-nocerts</b></dt>
+<dd>
+
+<p>No certificates will be output.</p>
+
+</dd>
+<dt id="noout"><b>-noout</b></dt>
+<dd>
+
+<p>This option inhibits all credentials output, and so the input is just verified.</p>
+
+</dd>
+<dt id="legacy"><b>-legacy</b></dt>
+<dd>
+
+<p>Use legacy mode of operation and automatically load the legacy provider. If OpenSSL is not installed system-wide, it is necessary to also use, for example, <code>-provider-path ./providers</code> or to set the environment variable <b>OPENSSL_MODULES</b> to point to the directory where the providers can be found.</p>
+
+<p>In the legacy mode, the default algorithm for certificate encryption is RC2_CBC or 3DES_CBC depending on whether the RC2 cipher is enabled in the build. The default algorithm for private key encryption is 3DES_CBC. If the legacy option is not specified, then the legacy provider is not loaded and the default encryption algorithm for both certificates and private keys is AES_256_CBC with PBKDF2 for key derivation.</p>
+
+</dd>
+<dt id="engine-id"><b>-engine</b> <i>id</i></dt>
+<dd>
+
+<p>See <a href="../man1/openssl.html">&quot;Engine Options&quot; in openssl(1)</a>. This option is deprecated.</p>
+
+</dd>
+<dt id="provider-name"><b>-provider</b> <i>name</i></dt>
+<dd>
+
+</dd>
+<dt id="provider-path-path"><b>-provider-path</b> <i>path</i></dt>
+<dd>
+
+</dd>
+<dt id="provparam-name:-key-value"><b>-provparam</b> <i>[name:]key=value</i></dt>
+<dd>
+
+</dd>
+<dt id="propquery-propq"><b>-propquery</b> <i>propq</i></dt>
+<dd>
+
+<p>See <a href="../man1/openssl.html">&quot;Provider Options&quot; in openssl(1)</a>, <a href="../man7/provider.html">provider(7)</a>, and <a href="../man7/property.html">property(7)</a>.</p>
+
+</dd>
+<dt id="rand-files--writerand-file"><b>-rand</b> <i>files</i>, <b>-writerand</b> <i>file</i></dt>
+<dd>
+
+<p>See <a href="../man1/openssl.html">&quot;Random State Options&quot; in openssl(1)</a> for details.</p>
+
+</dd>
+</dl>
+
+<h2 id="PKCS-12-input-parsing-options">PKCS#12 input (parsing) options</h2>
+
+<dl>
+
+<dt id="in-filename-uri"><b>-in</b> <i>filename</i>|<i>uri</i></dt>
+<dd>
+
+<p>This specifies the input filename or URI. Standard input is used by default. Without the <b>-export</b> option this must be PKCS#12 file to be parsed. For use with the <b>-export</b> option see the <a href="#PKCS-12-output-export-options">&quot;PKCS#12 output (export) options&quot;</a> section.</p>
+
+</dd>
+<dt id="out-filename"><b>-out</b> <i>filename</i></dt>
+<dd>
+
+<p>The filename to write certificates and private keys to, standard output by default. They are all written in PEM format.</p>
+
+</dd>
+<dt id="info"><b>-info</b></dt>
+<dd>
+
+<p>Output additional information about the PKCS#12 file structure, algorithms used and iteration counts.</p>
+
+</dd>
+<dt id="nomacver"><b>-nomacver</b></dt>
+<dd>
+
+<p>Don&#39;t attempt to verify the integrity MAC.</p>
+
+</dd>
+<dt id="clcerts"><b>-clcerts</b></dt>
+<dd>
+
+<p>Only output client certificates (not CA certificates).</p>
+
+</dd>
+<dt id="cacerts"><b>-cacerts</b></dt>
+<dd>
+
+<p>Only output CA certificates (not client certificates).</p>
+
+</dd>
+<dt id="aes128--aes192--aes256"><b>-aes128</b>, <b>-aes192</b>, <b>-aes256</b></dt>
+<dd>
+
+<p>Use AES to encrypt private keys before outputting.</p>
+
+</dd>
+<dt id="aria128--aria192--aria256"><b>-aria128</b>, <b>-aria192</b>, <b>-aria256</b></dt>
+<dd>
+
+<p>Use ARIA to encrypt private keys before outputting.</p>
+
+</dd>
+<dt id="camellia128--camellia192--camellia256"><b>-camellia128</b>, <b>-camellia192</b>, <b>-camellia256</b></dt>
+<dd>
+
+<p>Use Camellia to encrypt private keys before outputting.</p>
+
+</dd>
+<dt id="des"><b>-des</b></dt>
+<dd>
+
+<p>Use DES to encrypt private keys before outputting.</p>
+
+</dd>
+<dt id="des3"><b>-des3</b></dt>
+<dd>
+
+<p>Use triple DES to encrypt private keys before outputting.</p>
+
+</dd>
+<dt id="idea"><b>-idea</b></dt>
+<dd>
+
+<p>Use IDEA to encrypt private keys before outputting.</p>
+
+</dd>
+<dt id="noenc"><b>-noenc</b></dt>
+<dd>
+
+<p>Don&#39;t encrypt private keys at all.</p>
+
+</dd>
+<dt id="nodes"><b>-nodes</b></dt>
+<dd>
+
+<p>This option is deprecated since OpenSSL 3.0; use <b>-noenc</b> instead.</p>
+
+</dd>
+</dl>
+
+<h2 id="PKCS-12-output-export-options">PKCS#12 output (export) options</h2>
+
+<dl>
+
+<dt id="export"><b>-export</b></dt>
+<dd>
+
+<p>This option specifies that a PKCS#12 file will be created rather than parsed.</p>
+
+</dd>
+<dt id="out-filename1"><b>-out</b> <i>filename</i></dt>
+<dd>
+
+<p>This specifies filename to write the PKCS#12 file to. Standard output is used by default.</p>
+
+</dd>
+<dt id="in-filename-uri1"><b>-in</b> <i>filename</i>|<i>uri</i></dt>
+<dd>
+
+<p>This specifies the input filename or URI. Standard input is used by default. With the <b>-export</b> option this is a file with certificates and a key, or a URI that refers to a key accessed via an engine. The order of credentials in a file doesn&#39;t matter but one private key and its corresponding certificate should be present. If additional certificates are present they will also be included in the PKCS#12 output file.</p>
+
+</dd>
+<dt id="inkey-filename-uri"><b>-inkey</b> <i>filename</i>|<i>uri</i></dt>
+<dd>
+
+<p>The private key input for PKCS12 output. If this option is not specified then the input file (<b>-in</b> argument) must contain a private key. If no engine is used, the argument is taken as a file. If the <b>-engine</b> option is used or the URI has prefix <code>org.openssl.engine:</code> then the rest of the URI is taken as key identifier for the given engine.</p>
+
+</dd>
+<dt id="certfile-filename"><b>-certfile</b> <i>filename</i></dt>
+<dd>
+
+<p>An input file with extra certificates to be added to the PKCS#12 output if the <b>-export</b> option is given.</p>
+
+</dd>
+<dt id="passcerts-arg"><b>-passcerts</b> <i>arg</i></dt>
+<dd>
+
+<p>The password source for certificate input such as <b>-certfile</b> and <b>-untrusted</b>. For more information about the format of <b>arg</b> see <a href="../man1/openssl-passphrase-options.html">openssl-passphrase-options(1)</a>.</p>
+
+</dd>
+<dt id="chain"><b>-chain</b></dt>
+<dd>
+
+<p>If this option is present then the certificate chain of the end entity certificate is built and included in the PKCS#12 output file. The end entity certificate is the first one read from the <b>-in</b> file if no key is given, else the first certificate matching the given key. The standard CA trust store is used for chain building, as well as any untrusted CA certificates given with the <b>-untrusted</b> option.</p>
+
+</dd>
+<dt id="untrusted-filename"><b>-untrusted</b> <i>filename</i></dt>
+<dd>
+
+<p>An input file of untrusted certificates that may be used for chain building, which is relevant only when a PKCS#12 file is created with the <b>-export</b> option and the <b>-chain</b> option is given as well. Any certificates that are actually part of the chain are added to the output.</p>
+
+</dd>
+<dt id="CAfile-file--no-CAfile--CApath-dir--no-CApath--CAstore-uri--no-CAstore"><b>-CAfile</b> <i>file</i>, <b>-no-CAfile</b>, <b>-CApath</b> <i>dir</i>, <b>-no-CApath</b>, <b>-CAstore</b> <i>uri</i>, <b>-no-CAstore</b></dt>
+<dd>
+
+<p>See <a href="../man1/openssl-verification-options.html">&quot;Trusted Certificate Options&quot; in openssl-verification-options(1)</a> for details.</p>
+
+</dd>
+<dt id="name-friendlyname"><b>-name</b> <i>friendlyname</i></dt>
+<dd>
+
+<p>This specifies the &quot;friendly name&quot; for the certificates and private key. This name is typically displayed in list boxes by software importing the file.</p>
+
+</dd>
+<dt id="caname-friendlyname"><b>-caname</b> <i>friendlyname</i></dt>
+<dd>
+
+<p>This specifies the &quot;friendly name&quot; for other certificates. This option may be used multiple times to specify names for all certificates in the order they appear. Netscape ignores friendly names on other certificates whereas MSIE displays them.</p>
+
+</dd>
+<dt id="CSP-name"><b>-CSP</b> <i>name</i></dt>
+<dd>
+
+<p>Write <i>name</i> as a Microsoft CSP name. The password source for the input, and for encrypting any private keys that are output. For more information about the format of <b>arg</b> see <a href="../man1/openssl-passphrase-options.html">openssl-passphrase-options(1)</a>.</p>
+
+</dd>
+<dt id="LMK"><b>-LMK</b></dt>
+<dd>
+
+<p>Add the &quot;Local Key Set&quot; identifier to the attributes.</p>
+
+</dd>
+<dt id="keyex--keysig"><b>-keyex</b>|<b>-keysig</b></dt>
+<dd>
+
+<p>Specifies that the private key is to be used for key exchange or just signing. This option is only interpreted by MSIE and similar MS software. Normally &quot;export grade&quot; software will only allow 512 bit RSA keys to be used for encryption purposes but arbitrary length keys for signing. The <b>-keysig</b> option marks the key for signing only. Signing only keys can be used for S/MIME signing, authenticode (ActiveX control signing) and SSL client authentication, however, due to a bug only MSIE 5.0 and later support the use of signing only keys for SSL client authentication.</p>
+
+</dd>
+<dt id="keypbe-alg--certpbe-alg"><b>-keypbe</b> <i>alg</i>, <b>-certpbe</b> <i>alg</i></dt>
+<dd>
+
+<p>These options allow the algorithm used to encrypt the private key and certificates to be selected. Any PKCS#5 v1.5 or PKCS#12 PBE algorithm name can be used (see <a href="#NOTES">&quot;NOTES&quot;</a> section for more information). If a cipher name (as output by <code>openssl list -cipher-algorithms</code>) is specified then it is used with PKCS#5 v2.0. For interoperability reasons it is advisable to only use PKCS#12 algorithms.</p>
+
+<p>Special value <code>NONE</code> disables encryption of the private key and certificates.</p>
+
+</dd>
+<dt id="descert"><b>-descert</b></dt>
+<dd>
+
+<p>Encrypt the certificates using triple DES. By default the private key and the certificates are encrypted using AES-256-CBC unless the &#39;-legacy&#39; option is used. If &#39;-descert&#39; is used with the &#39;-legacy&#39; then both, the private key and the certificates are encrypted using triple DES.</p>
+
+</dd>
+<dt id="macalg-digest"><b>-macalg</b> <i>digest</i></dt>
+<dd>
+
+<p>Specify the MAC digest algorithm. If not included SHA256 will be used.</p>
+
+</dd>
+<dt id="pbmac1_pbkdf2"><b>-pbmac1_pbkdf2</b></dt>
+<dd>
+
+<p>Use PBMAC1 with PBKDF2 for MAC protection of the PKCS#12 file.</p>
+
+</dd>
+<dt id="pbmac1_pbkdf2_md-digest"><b>-pbmac1_pbkdf2_md</b> <i>digest</i></dt>
+<dd>
+
+<p>Specify the PBKDF2 KDF digest algorithm. If not specified, SHA256 will be used. Unless <code>-pbmac1_pbkdf2</code> is specified, this parameter is ignored.</p>
+
+</dd>
+<dt id="iter-count"><b>-iter</b> <i>count</i></dt>
+<dd>
+
+<p>This option specifies the iteration count for the encryption key and MAC. The default value is 2048.</p>
+
+<p>To discourage attacks by using large dictionaries of common passwords the algorithm that derives keys from passwords can have an iteration count applied to it: this causes a certain part of the algorithm to be repeated and slows it down. The MAC is used to check the file integrity but since it will normally have the same password as the keys and certificates it could also be attacked.</p>
+
+</dd>
+<dt id="noiter--nomaciter"><b>-noiter</b>, <b>-nomaciter</b></dt>
+<dd>
+
+<p>By default both encryption and MAC iteration counts are set to 2048, using these options the MAC and encryption iteration counts can be set to 1, since this reduces the file security you should not use these options unless you really have to. Most software supports both MAC and encryption iteration counts. MSIE 4.0 doesn&#39;t support MAC iteration counts so it needs the <b>-nomaciter</b> option.</p>
+
+</dd>
+<dt id="maciter"><b>-maciter</b></dt>
+<dd>
+
+<p>This option is included for compatibility with previous versions, it used to be needed to use MAC iterations counts but they are now used by default.</p>
+
+</dd>
+<dt id="macsaltlen"><b>-macsaltlen</b></dt>
+<dd>
+
+<p>This option specifies the salt length in bytes for the MAC. The salt length should be at least 16 bytes as per NIST SP 800-132, which is the default value.</p>
+
+</dd>
+<dt id="nomac"><b>-nomac</b></dt>
+<dd>
+
+<p>Do not attempt to provide the MAC integrity. This can be useful with the FIPS provider as the PKCS12 MAC requires PKCS12KDF which is not an approved FIPS algorithm and cannot be supported by the FIPS provider.</p>
+
+</dd>
+<dt id="jdktrust"><b>-jdktrust</b></dt>
+<dd>
+
+<p>Export pkcs12 file in a format compatible with Java keystore usage. This option accepts a string parameter indicating the trust oid name to be granted to the certificate it is associated with. Currently only &quot;anyExtendedKeyUsage&quot; is defined. Note that, as Java keystores do not accept PKCS12 files with both trusted certificates and keypairs, use of this option implies the setting of the <b>-nokeys</b> option</p>
+
+</dd>
+</dl>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>Although there are a large number of options most of them are very rarely used. For PKCS#12 file parsing only <b>-in</b> and <b>-out</b> need to be used for PKCS#12 file creation <b>-export</b> and <b>-name</b> are also used.</p>
+
+<p>If none of the <b>-clcerts</b>, <b>-cacerts</b> or <b>-nocerts</b> options are present then all certificates will be output in the order they appear in the input PKCS#12 files. There is no guarantee that the first certificate present is the one corresponding to the private key. Certain software which tries to get a private key and the corresponding certificate might assume that the first certificate in the file is the one corresponding to the private key, but that may not always be the case. Using the <b>-clcerts</b> option will solve this problem by only outputting the certificate corresponding to the private key. If the CA certificates are required then they can be output to a separate file using the <b>-nokeys</b> <b>-cacerts</b> options to just output CA certificates.</p>
+
+<p>The <b>-keypbe</b> and <b>-certpbe</b> algorithms allow the precise encryption algorithms for private keys and certificates to be specified. Normally the defaults are fine but occasionally software can&#39;t handle triple DES encrypted private keys, then the option <b>-keypbe</b> <i>PBE-SHA1-RC2-40</i> can be used to reduce the private key encryption to 40 bit RC2. A complete description of all algorithms is contained in <a href="../man1/openssl-pkcs8.html">openssl-pkcs8(1)</a>.</p>
+
+<p>Prior 1.1 release passwords containing non-ASCII characters were encoded in non-compliant manner, which limited interoperability, in first hand with Windows. But switching to standard-compliant password encoding poses problem accessing old data protected with broken encoding. For this reason even legacy encodings is attempted when reading the data. If you use PKCS#12 files in production application you are advised to convert the data, because implemented heuristic approach is not MT-safe, its sole goal is to facilitate the data upgrade with this command.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>Parse a PKCS#12 file and output it to a PEM file:</p>
+
+<pre><code>openssl pkcs12 -in file.p12 -out file.pem</code></pre>
+
+<p>Output only client certificates to a file:</p>
+
+<pre><code>openssl pkcs12 -in file.p12 -clcerts -out file.pem</code></pre>
+
+<p>Don&#39;t encrypt the private key:</p>
+
+<pre><code>openssl pkcs12 -in file.p12 -out file.pem -noenc</code></pre>
+
+<p>Print some info about a PKCS#12 file:</p>
+
+<pre><code>openssl pkcs12 -in file.p12 -info -noout</code></pre>
+
+<p>Print some info about a PKCS#12 file in legacy mode:</p>
+
+<pre><code>openssl pkcs12 -in file.p12 -info -noout -legacy</code></pre>
+
+<p>Create a PKCS#12 file from a PEM file that may contain a key and certificates:</p>
+
+<pre><code>openssl pkcs12 -export -in file.pem -out file.p12 -name &quot;My PSE&quot;</code></pre>
+
+<p>Include some extra certificates:</p>
+
+<pre><code>openssl pkcs12 -export -in file.pem -out file.p12 -name &quot;My PSE&quot; \
+ -certfile othercerts.pem</code></pre>
+
+<p>Export a PKCS#12 file with data from a certificate PEM file and from a further PEM file containing a key, with default algorithms as in the legacy provider:</p>
+
+<pre><code>openssl pkcs12 -export -in cert.pem -inkey key.pem -out file.p12 -legacy</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man1/openssl.html">openssl(1)</a>, <a href="../man1/openssl-pkcs8.html">openssl-pkcs8(1)</a>, <a href="../man7/ossl_store-file.html">ossl_store-file(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The <b>-engine</b> option was deprecated in OpenSSL 3.0. The <b>-nodes</b> option was deprecated in OpenSSL 3.0, too; use <b>-noenc</b> instead. The <b>-macsaltlen</b> option default changed from 8 to 16 bytes in OpenSSL 3.6.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

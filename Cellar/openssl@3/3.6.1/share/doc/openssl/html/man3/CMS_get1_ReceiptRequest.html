@@ -1,0 +1,92 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>CMS_get1_ReceiptRequest</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>CMS_ReceiptRequest_create0_ex, CMS_ReceiptRequest_create0, CMS_add1_ReceiptRequest, CMS_get1_ReceiptRequest, CMS_ReceiptRequest_get0_values - CMS signed receipt request functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/cms.h&gt;
+
+CMS_ReceiptRequest *CMS_ReceiptRequest_create0_ex(
+    unsigned char *id, int idlen, int allorfirst,
+    STACK_OF(GENERAL_NAMES) *receiptList, STACK_OF(GENERAL_NAMES) *receiptsTo,
+    OSSL_LIB_CTX *libctx);
+CMS_ReceiptRequest *CMS_ReceiptRequest_create0(
+    unsigned char *id, int idlen, int allorfirst,
+    STACK_OF(GENERAL_NAMES) *receiptList, STACK_OF(GENERAL_NAMES) *receiptsTo);
+int CMS_add1_ReceiptRequest(CMS_SignerInfo *si, CMS_ReceiptRequest *rr);
+int CMS_get1_ReceiptRequest(CMS_SignerInfo *si, CMS_ReceiptRequest **prr);
+void CMS_ReceiptRequest_get0_values(CMS_ReceiptRequest *rr, ASN1_STRING **pcid,
+                                    int *pallorfirst,
+                                    STACK_OF(GENERAL_NAMES) **plist,
+                                    STACK_OF(GENERAL_NAMES) **prto);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>CMS_ReceiptRequest_create0_ex() creates a signed receipt request structure. The <b>signedContentIdentifier</b> field is set using <i>id</i> and <i>idlen</i>, or it is set to 32 bytes of pseudo random data if <i>id</i> is NULL. If <i>receiptList</i> is NULL the allOrFirstTier option in <i>receiptsFrom</i> is used and set to the value of the <i>allorfirst</i> parameter. If <i>receiptList</i> is not NULL the <i>receiptList</i> option in <i>receiptsFrom</i> is used. The <i>receiptsTo</i> parameter specifies the <i>receiptsTo</i> field value. The library context <i>libctx</i> is used to find the public random generator.</p>
+
+<p>CMS_ReceiptRequest_create0() is similar to CMS_ReceiptRequest_create0_ex() but uses default values of NULL for the library context <i>libctx</i>.</p>
+
+<p>The CMS_add1_ReceiptRequest() function adds a signed receipt request <b>rr</b> to SignerInfo structure <b>si</b>.</p>
+
+<p>int CMS_get1_ReceiptRequest() looks for a signed receipt request in <b>si</b>, if any is found it is decoded and written to <b>prr</b>.</p>
+
+<p>CMS_ReceiptRequest_get0_values() retrieves the values of a receipt request. The signedContentIdentifier is copied to <b>pcid</b>. If the <b>allOrFirstTier</b> option of <b>receiptsFrom</b> is used its value is copied to <b>pallorfirst</b> otherwise the <b>receiptList</b> field is copied to <b>plist</b>. The <b>receiptsTo</b> parameter is copied to <b>prto</b>.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>For more details of the meaning of the fields see RFC2634.</p>
+
+<p>The contents of a signed receipt should only be considered meaningful if the corresponding CMS_ContentInfo structure can be successfully verified using CMS_verify().</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>CMS_ReceiptRequest_create0_ex() and CMS_ReceiptRequest_create0() return a signed receipt request structure or NULL if an error occurred.</p>
+
+<p>CMS_add1_ReceiptRequest() returns 1 for success or 0 if an error occurred.</p>
+
+<p>CMS_get1_ReceiptRequest() returns 1 is a signed receipt request is found and decoded. It returns 0 if a signed receipt request is not present and -1 if it is present but malformed.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>, <a href="../man3/CMS_sign.html">CMS_sign(3)</a>, <a href="../man3/CMS_sign_receipt.html">CMS_sign_receipt(3)</a>, <a href="../man3/CMS_verify.html">CMS_verify(3)</a> <a href="../man3/CMS_verify_receipt.html">CMS_verify_receipt(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The function CMS_ReceiptRequest_create0_ex() was added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2008-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,122 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_CTX_add1_chain_cert</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_CTX_set0_chain, SSL_CTX_set1_chain, SSL_CTX_add0_chain_cert, SSL_CTX_add1_chain_cert, SSL_CTX_get0_chain_certs, SSL_CTX_clear_chain_certs, SSL_set0_chain, SSL_set1_chain, SSL_add0_chain_cert, SSL_add1_chain_cert, SSL_get0_chain_certs, SSL_clear_chain_certs, SSL_CTX_build_cert_chain, SSL_build_cert_chain, SSL_CTX_select_current_cert, SSL_select_current_cert, SSL_CTX_set_current_cert, SSL_set_current_cert - extra chain certificate processing</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+int SSL_CTX_set0_chain(SSL_CTX *ctx, STACK_OF(X509) *sk);
+int SSL_CTX_set1_chain(SSL_CTX *ctx, STACK_OF(X509) *sk);
+int SSL_CTX_add0_chain_cert(SSL_CTX *ctx, X509 *x509);
+int SSL_CTX_add1_chain_cert(SSL_CTX *ctx, X509 *x509);
+int SSL_CTX_get0_chain_certs(SSL_CTX *ctx, STACK_OF(X509) **sk);
+int SSL_CTX_clear_chain_certs(SSL_CTX *ctx);
+
+int SSL_set0_chain(SSL *ssl, STACK_OF(X509) *sk);
+int SSL_set1_chain(SSL *ssl, STACK_OF(X509) *sk);
+int SSL_add0_chain_cert(SSL *ssl, X509 *x509);
+int SSL_add1_chain_cert(SSL *ssl, X509 *x509);
+int SSL_get0_chain_certs(SSL *ssl, STACK_OF(X509) **sk);
+int SSL_clear_chain_certs(SSL *ssl);
+
+int SSL_CTX_build_cert_chain(SSL_CTX *ctx, flags);
+int SSL_build_cert_chain(SSL *ssl, flags);
+
+int SSL_CTX_select_current_cert(SSL_CTX *ctx, X509 *x509);
+int SSL_select_current_cert(SSL *ssl, X509 *x509);
+int SSL_CTX_set_current_cert(SSL_CTX *ctx, long op);
+int SSL_set_current_cert(SSL *ssl, long op);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_CTX_set0_chain() and SSL_CTX_set1_chain() set the certificate chain associated with the current certificate of <b>ctx</b> to <b>sk</b>.</p>
+
+<p>SSL_CTX_add0_chain_cert() and SSL_CTX_add1_chain_cert() append the single certificate <b>x509</b> to the chain associated with the current certificate of <b>ctx</b>.</p>
+
+<p>SSL_CTX_get0_chain_certs() retrieves the chain associated with the current certificate of <b>ctx</b>.</p>
+
+<p>SSL_CTX_clear_chain_certs() clears any existing chain associated with the current certificate of <b>ctx</b>. (This is implemented by calling SSL_CTX_set0_chain() with <b>sk</b> set to <b>NULL</b>).</p>
+
+<p>SSL_CTX_build_cert_chain() builds the certificate chain for <b>ctx</b>. Normally this uses the chain store or the verify store if the chain store is not set. If the function is successful the built chain will replace any existing chain. The <b>flags</b> parameter can be set to <b>SSL_BUILD_CHAIN_FLAG_UNTRUSTED</b> to use existing chain certificates as untrusted CAs, <b>SSL_BUILD_CHAIN_FLAG_NO_ROOT</b> to omit the root CA from the built chain, <b>SSL_BUILD_CHAIN_FLAG_CHECK</b> to use all existing chain certificates only to build the chain (effectively sanity checking and rearranging them if necessary), the flag <b>SSL_BUILD_CHAIN_FLAG_IGNORE_ERROR</b> ignores any errors during verification: if flag <b>SSL_BUILD_CHAIN_FLAG_CLEAR_ERROR</b> is also set verification errors are cleared from the error queue. Details of the chain building process are described in <a href="../man1/openssl-verification-options.html">&quot;Certification Path Building&quot; in openssl-verification-options(1)</a>.</p>
+
+<p>Each of these functions operates on the <i>current</i> end entity (i.e. server or client) certificate. This is the last certificate loaded or selected on the corresponding <b>ctx</b> structure.</p>
+
+<p>SSL_CTX_select_current_cert() selects <b>x509</b> as the current end entity certificate, but only if <b>x509</b> has already been loaded into <b>ctx</b> using a function such as SSL_CTX_use_certificate().</p>
+
+<p>SSL_set0_chain(), SSL_set1_chain(), SSL_add0_chain_cert(), SSL_add1_chain_cert(), SSL_get0_chain_certs(), SSL_clear_chain_certs(), SSL_build_cert_chain(), SSL_select_current_cert() and SSL_set_current_cert() are similar except they apply to SSL structure <b>ssl</b>.</p>
+
+<p>SSL_CTX_set_current_cert() changes the current certificate to a value based on the <b>op</b> argument. Currently <b>op</b> can be <b>SSL_CERT_SET_FIRST</b> to use the first valid certificate or <b>SSL_CERT_SET_NEXT</b> to set the next valid certificate after the current certificate. These two operations can be used to iterate over all certificates in an <b>SSL_CTX</b> structure.</p>
+
+<p>SSL_set_current_cert() also supports the option <b>SSL_CERT_SET_SERVER</b>. If <b>ssl</b> is a server and has sent a certificate to a connected client this option sets that certificate to the current certificate and returns 1. If the negotiated cipher suite is anonymous (and thus no certificate will be sent) 2 is returned and the current certificate is unchanged. If <b>ssl</b> is not a server or a certificate has not been sent 0 is returned and the current certificate is unchanged.</p>
+
+<p>All these functions are implemented as macros. Those containing a <b>1</b> increment the reference count of the supplied certificate or chain so it must be freed at some point after the operation. Those containing a <b>0</b> do not increment reference counts and the supplied certificate or chain <b>MUST NOT</b> be freed after the operation.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The chains associate with an SSL_CTX structure are copied to any SSL structures when SSL_new() is called. SSL structures will not be affected by any chains subsequently changed in the parent SSL_CTX.</p>
+
+<p>One chain can be set for each key type supported by a server. So, for example, an RSA and a DSA certificate can (and often will) have different chains.</p>
+
+<p>The functions SSL_CTX_build_cert_chain() and SSL_build_cert_chain() can be used to check application configuration and to ensure any necessary subordinate CAs are sent in the correct order. Misconfigured applications sending incorrect certificate chains often cause problems with peers.</p>
+
+<p>For example an application can add any set of certificates using SSL_CTX_use_certificate_chain_file() then call SSL_CTX_build_cert_chain() with the option <b>SSL_BUILD_CHAIN_FLAG_CHECK</b> to check and reorder them.</p>
+
+<p>Applications can issue non fatal warnings when checking chains by setting the flag <b>SSL_BUILD_CHAIN_FLAG_IGNORE_ERRORS</b> and checking the return value.</p>
+
+<p>Calling SSL_CTX_build_cert_chain() or SSL_build_cert_chain() is more efficient than the automatic chain building as it is only performed once. Automatic chain building is performed on each new session.</p>
+
+<p>If any certificates are added using these functions no certificates added using SSL_CTX_add_extra_chain_cert() will be used.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_set_current_cert() with <b>SSL_CERT_SET_SERVER</b> return 1 for success, 2 if no server certificate is used because the cipher suites is anonymous and 0 for failure.</p>
+
+<p>SSL_CTX_build_cert_chain() and SSL_build_cert_chain() return 1 for success and 0 for failure. If the flag <b>SSL_BUILD_CHAIN_FLAG_IGNORE_ERROR</b> and a verification error occurs then 2 is returned.</p>
+
+<p>All other functions return 1 for success and 0 for failure.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a>, <a href="../man3/SSL_CTX_add_extra_chain_cert.html">SSL_CTX_add_extra_chain_cert(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>These functions were added in OpenSSL 1.0.2.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2013-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

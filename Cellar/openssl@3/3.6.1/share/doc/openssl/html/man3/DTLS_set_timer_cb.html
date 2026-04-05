@@ -1,0 +1,64 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>DTLS_set_timer_cb</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>DTLS_timer_cb, DTLS_set_timer_cb - Set callback for controlling DTLS timer duration</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+typedef unsigned int (*DTLS_timer_cb)(SSL *s, unsigned int timer_us);
+
+void DTLS_set_timer_cb(SSL *s, DTLS_timer_cb cb);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>This function sets an optional callback function for controlling the timeout interval on the DTLS protocol. The callback function will be called by DTLS for every new DTLS packet that is sent.</p>
+
+<p>The callback should return the timeout interval in micro seconds.</p>
+
+<p>The <i>timer_us</i> parameter of the callback is the last set timeout interval returned. On the first invocation of the callback, this value will be 0.</p>
+
+<p>At the beginning of the connection, if no timeout callback has been set via DTLS_set_timer_cb(), the default timeout value is 1 second. For all subsequent timeouts, the default behavior is to double the duration up to a maximum of 1 minute.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>Returns void.</p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The DTLS_set_timer_cb() function was added in OpenSSL 1.1.1.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2017-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

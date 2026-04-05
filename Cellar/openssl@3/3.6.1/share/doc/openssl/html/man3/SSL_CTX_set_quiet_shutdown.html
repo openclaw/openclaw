@@ -1,0 +1,79 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_CTX_set_quiet_shutdown</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_CTX_set_quiet_shutdown, SSL_CTX_get_quiet_shutdown, SSL_set_quiet_shutdown, SSL_get_quiet_shutdown - manipulate shutdown behaviour</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+void SSL_CTX_set_quiet_shutdown(SSL_CTX *ctx, int mode);
+int SSL_CTX_get_quiet_shutdown(const SSL_CTX *ctx);
+
+void SSL_set_quiet_shutdown(SSL *ssl, int mode);
+int SSL_get_quiet_shutdown(const SSL *ssl);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_CTX_set_quiet_shutdown() sets the &quot;quiet shutdown&quot; flag for <b>ctx</b> to be <b>mode</b>. SSL objects created from <b>ctx</b> inherit the <b>mode</b> valid at the time <a href="../man3/SSL_new.html">SSL_new(3)</a> is called. <b>mode</b> may be 0 or 1.</p>
+
+<p>SSL_CTX_get_quiet_shutdown() returns the &quot;quiet shutdown&quot; setting of <b>ctx</b>.</p>
+
+<p>SSL_set_quiet_shutdown() sets the &quot;quiet shutdown&quot; flag for <b>ssl</b> to be <b>mode</b>. The setting stays valid until <b>ssl</b> is removed with <a href="../man3/SSL_free.html">SSL_free(3)</a> or SSL_set_quiet_shutdown() is called again. It is not changed when <a href="../man3/SSL_clear.html">SSL_clear(3)</a> is called. <b>mode</b> may be 0 or 1.</p>
+
+<p>SSL_get_quiet_shutdown() returns the &quot;quiet shutdown&quot; setting of <b>ssl</b>.</p>
+
+<p>These functions are not supported for QUIC SSL objects. SSL_set_quiet_shutdown() has no effect if called on a QUIC SSL object.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>Normally when an SSL connection is finished, the parties must send out close_notify alert messages using <a href="../man3/SSL_shutdown.html">SSL_shutdown(3)</a> for a clean shutdown.</p>
+
+<p>When setting the &quot;quiet shutdown&quot; flag to 1, <a href="../man3/SSL_shutdown.html">SSL_shutdown(3)</a> will set the internal flags to SSL_SENT_SHUTDOWN|SSL_RECEIVED_SHUTDOWN. (<a href="../man3/SSL_shutdown.html">SSL_shutdown(3)</a> then behaves like <a href="../man3/SSL_set_shutdown.html">SSL_set_shutdown(3)</a> called with SSL_SENT_SHUTDOWN|SSL_RECEIVED_SHUTDOWN.) The session is thus considered to be shutdown, but no close_notify alert is sent to the peer. This behaviour violates the TLS standard.</p>
+
+<p>The default is normal shutdown behaviour as described by the TLS standard.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_CTX_set_quiet_shutdown() and SSL_set_quiet_shutdown() do not return diagnostic information.</p>
+
+<p>SSL_CTX_get_quiet_shutdown() and SSL_get_quiet_shutdown() return the current setting.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a>, <a href="../man3/SSL_shutdown.html">SSL_shutdown(3)</a>, <a href="../man3/SSL_set_shutdown.html">SSL_set_shutdown(3)</a>, <a href="../man3/SSL_new.html">SSL_new(3)</a>, <a href="../man3/SSL_clear.html">SSL_clear(3)</a>, <a href="../man3/SSL_free.html">SSL_free(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2001-2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

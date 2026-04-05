@@ -1,0 +1,260 @@
+.\" Hey, Emacs! This is -*-nroff-*- you know...
+.\"
+.\" pkgdata.1: manual page for the pkgdata utility
+.\"
+.\" Copyright (C) 2016 and later: Unicode, Inc. and others.
+.\" License & terms of use: http://www.unicode.org/copyright.html
+.\" Copyright (C) 2000-2009 IBM, Inc. and others.
+.\"
+.\" Manual page by Yves Arrouye <yves@realnames.com>.
+.\" Modified by Michael Ow <mow@us.ibm.com>.
+.\"
+.TH PKGDATA 1 "6 February 2009" "ICU MANPAGE" "ICU 78.3 Manual"
+.SH NAME
+.B pkgdata
+\- package data for use by ICU
+.SH SYNOPSIS
+.B pkgdata
+[
+.BR "\-h\fP, \fB\-?\fP, \fB\-\-help"
+]
+[
+.BI "\-v\fP, \fB\-\-verbose"
+]
+[
+.BR "\-c\fP, \fB\-\-copyright"
+|
+.BI "\-C\fP, \fB\-\-comment" " comment"
+]
+[
+.BI "\-m\fP, \fB\-\-mode" " mode"
+]
+.BI "\-p\fP, \fB\-\-name" " name"
+.BI "\-O\fP, \fB\-\-bldopt" " options"
+[
+.BI "\-e\fP, \fB\-\-entrypoint" " name"
+]
+[
+.BI "\-r\fP, \fB\-\-revision" " version"
+]
+[
+.BI "\-F\fP, \fB\-\-rebuild"
+]
+[
+.BI "\-I\fP, \fB\-\-install"
+]
+[
+.BI "\-s\fP, \fB\-\-sourcedir" " source"
+]
+[
+.BI "\-d\fP, \fB\-\-destdir" " destination"
+]
+[
+.BI "\-T\fP, \fB\-\-tempdir" " directory"
+]
+[
+.IR file " .\|.\|."
+]
+.SH DESCRIPTION
+.B pkgdata
+takes a set of data files and packages them for use by ICU or
+applications that use ICU. The typical reason to package files using
+.B pkgdata
+is to make their distribution easier and their loading by ICU faster
+and less consuming of limited system resources such as file
+descriptors.
+Packaged data also allow applications to be distributed with fewer
+resource files, or even with none at all if they link against the
+packaged data directly.
+.PP
+.B pkgdata
+supports a few different methods of packaging data that serve
+different purposes.
+.PP
+The default packaging
+.I mode
+is
+.BR common ,
+or
+.BR archive .
+In this mode, the different data files are bundled together as an
+architecture-dependent file that can later be memory mapped for use by
+ICU. Data packaged using this mode will be looked up under the ICU
+data directory. Such packaging is easy to use for applications resource
+bundles, for example, as long as the application can install the
+packaged file in the ICU data directory.
+.PP
+Another packaging mode is the
+.BR dll ,
+or
+.BR library ,
+mode, where the data files are compiled into a shared library. ICU
+used to be able to dynamically load these shared libraries, but as of
+ICU 2.0, such support has been removed. This mode is still useful for
+two main purposes: to build ICU itself, as the ICU data is packaged as
+a shared library by default; and to build resource bundles that are
+linked to the application that uses them. Such resource bundles can
+then be placed anywhere where the system's dynamic linker will be
+looking for shared libraries, instead of being forced to live inside
+the ICU data directory.
+.PP
+The
+.BR static
+packaging mode is similar to the shared library one except that it
+produces a static library.
+.\" Note that many platforms are not able to
+.\" dynamically load symbols from static object files, so for this reason
+.\" .BR udata_setAppData() 
+.\" must be called
+.\" to install this data. As a convenience, pkgdata will build a C source file
+.\" and a header file. Given a data package named
+.\" .IR name, in the output 
+.\" directory will be created
+.\" .IR name .c
+.\" and
+.\" .IR name .h with the single
+.\" function
+.\" .BR "udata_install_\fcIname\fB(UErrorCode *err)" ,
+.\" where
+.\" .I cname
+.\" is
+.\" .I name
+.\" turned into a valid C identifier.
+.\" The application need to call this function once. The error code returned
+.\" is that of
+.\" .BR udata_setAppData() .
+.\" .PP
+.\" Data pakackaged in a library, whether shared or static, 
+.\" Subsequently, the application can access this data by passing
+.\" .I name for the
+.\" .I path 
+.\" rgument to functions such as
+.\" .BR Bures_open() .
+.PP
+Finally,
+.B pkgdata
+supports a
+.B files
+mode which simply copies the data files instead of packaging
+them as a single file or library. This mode is mainly intended to
+provide support for building ICU before it is packaged as separate
+small packages for distribution with operating systems such as Debian
+GNU/Linux for example. Please refer to the packaging documentation in
+the ICU source distribution for further information on the use of this
+mode.
+.PP
+.B pkgdata
+builds, packages, installs, or cleans the appropriate data based on the options given
+without the need to call GNU
+.BR make
+anymore.
+.SH OPTIONS
+.TP
+.BR "\-h\fP, \fB\-?\fP, \fB\-\-help"
+Print help about usage and exit.
+.TP
+.BR "\-v\fP, \fB\-\-verbose"
+Display extra informative messages during execution.
+.TP
+.BR "\-c\fP, \fB\-\-copyright"
+Include a copyright notice in the binary data.
+.TP
+.BI "\-C\fP, \fB\-\-comment" " comment"
+Includes the specified
+.I comment
+in the resulting data instead of the ICU copyright notice. 
+.TP
+.BI "\-m\fP, \fB\-\-mode" " mode"
+Set the packaging
+.I mode
+to be used by 
+.BR pkgdata .
+The different modes and their meaning are explained in the
+.B DESCRIPTION
+section above. The valid mode names are
+.BR common
+(or
+.BR archive ),
+.BR dll
+(or
+.BR library ),
+and
+.BR files .
+.TP
+.BI "\-O\fP, \fB\-\-bldopt" " options"
+Specify options for the builder. The builder is used internally by
+.B pkgdata
+to generate the correct packaged file. Such options include, but are
+not limited to, setting variables used by
+.BR make (1)
+during the build of the packaged file. Note: If 
+.BR icu-config 
+is available, then this option is not needed.
+.TP
+.BI "\-p\fP, \fB\-\-name" " name"
+Set the packaged file name to
+.IR name .
+This name is also used as the default entry point name after having
+been turned into a valid C identifier.
+.TP
+.BI "\-e\fP, \fB\-\-entrypoint" " name"
+Set the data entry point (used for linking against the data in a
+shared library form) to
+.IR name .
+The default entry point name is the name set by the
+.BI "\-n\fP, \fB\-\-name"
+option.
+.TP
+.BI "\-r\fP, \fB\-\-revision" " version"
+Enable versioning of the shared library produced in
+.BR dll ,
+or
+.BR library ,
+mode. The version number has the format
+.I major\fP.\fIminor\fP.\fIpatchlevel
+and all parts except for
+.I major
+are optional. If only
+.I major
+is supplied then the version is
+assumed to be
+.IR major .0
+for versioning purposes.
+.TP
+.BI "\-F\fP, \fB\-\-rebuild"
+Force the rebuilding of all data and their repackaging.
+.TP
+.BI "\-I\fP, \fB\-\-install"
+Install the packaged file (or all the files in the
+.B files
+mode). If the variable
+.B DESTDIR
+is set it will be used for installation.
+.TP
+.BI "\-s\fP, \fB\-\-sourcedir" " source"
+Set the source directory to
+.IR source .
+The default source directory is the current directory.
+.TP
+.BI "\-d\fP, \fB\-\-destdir" " destination"
+Set the destination directory to
+.IR destination .
+The default destination directory is the current directory.
+.TP
+.BI "\-T\fP, \fB\-\-tempdir" " directory"
+Set the directory used to generate temporary files to
+.IR directory .
+The default temporary directory is the same as the destination
+directory
+as set by the
+.BI "\-d\fP, \fB\-\-destdir"
+option.
+.SH AUTHORS
+Steven Loomis
+.br
+Yves Arrouye
+.SH VERSION
+78.3
+.SH COPYRIGHT
+Copyright (C) 2000-2009 IBM, Inc. and others.
+

@@ -1,0 +1,119 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>X509_NAME_add_entry_by_txt</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#BUGS">BUGS</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>X509_NAME_add_entry_by_txt, X509_NAME_add_entry_by_OBJ, X509_NAME_add_entry_by_NID, X509_NAME_add_entry, X509_NAME_delete_entry - X509_NAME modification functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/x509.h&gt;
+
+int X509_NAME_add_entry_by_txt(X509_NAME *name, const char *field, int type,
+                               const unsigned char *bytes, int len, int loc, int set);
+
+int X509_NAME_add_entry_by_OBJ(X509_NAME *name, const ASN1_OBJECT *obj, int type,
+                               const unsigned char *bytes, int len, int loc, int set);
+
+int X509_NAME_add_entry_by_NID(X509_NAME *name, int nid, int type,
+                               const unsigned char *bytes, int len, int loc, int set);
+
+int X509_NAME_add_entry(X509_NAME *name, const X509_NAME_ENTRY *ne, int loc, int set);
+
+X509_NAME_ENTRY *X509_NAME_delete_entry(X509_NAME *name, int loc);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>X509_NAME_add_entry_by_txt(), X509_NAME_add_entry_by_OBJ() and X509_NAME_add_entry_by_NID() add a field whose name is defined by a string <b>field</b>, an object <b>obj</b> or a NID <b>nid</b> respectively. The field value to be added is in <b>bytes</b> of length <b>len</b>. If <b>len</b> is -1 then the field length is calculated internally using strlen(bytes).</p>
+
+<p>The type of field is determined by <b>type</b> which can either be a definition of the type of <b>bytes</b> (such as <b>MBSTRING_ASC</b>) or a standard ASN1 type (such as <b>V_ASN1_IA5STRING</b>). The new entry is added to a position determined by <b>loc</b> and <b>set</b>.</p>
+
+<p>X509_NAME_add_entry() adds a copy of <b>X509_NAME_ENTRY</b> structure <b>ne</b> to <b>name</b>. The new entry is added to a position determined by <b>loc</b> and <b>set</b>. Since a copy of <b>ne</b> is added <b>ne</b> must be freed up after the call.</p>
+
+<p>X509_NAME_delete_entry() deletes an entry from <b>name</b> at position <b>loc</b>. The deleted entry is returned and must be freed up.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The use of string types such as <b>MBSTRING_ASC</b> or <b>MBSTRING_UTF8</b> is strongly recommended for the <b>type</b> parameter. This allows the internal code to correctly determine the type of the field and to apply length checks according to the relevant standards. This is done using ASN1_STRING_set_by_NID().</p>
+
+<p>If instead an ASN1 type is used no checks are performed and the supplied data in <b>bytes</b> is used directly.</p>
+
+<p>In X509_NAME_add_entry_by_txt() the <b>field</b> string represents the field name using OBJ_txt2obj(field, 0).</p>
+
+<p>The <b>loc</b> and <b>set</b> parameters determine where a new entry should be added. For almost all applications <b>loc</b> can be set to -1 and <b>set</b> to 0. This adds a new entry to the end of <b>name</b> as a single valued RelativeDistinguishedName (RDN).</p>
+
+<p><b>loc</b> actually determines the index where the new entry is inserted: if it is -1 it is appended.</p>
+
+<p><b>set</b> determines how the new type is added. If it is zero a new RDN is created.</p>
+
+<p>If <b>set</b> is -1 or 1 it is added as a new set member to the previous or next RDN structure, respectively. This will then become part of a multi-valued RDN (containing a set of AVAs). Since multi-valued RDNs are very rarely used <b>set</b> typically will be zero.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>X509_NAME_add_entry_by_txt(), X509_NAME_add_entry_by_OBJ(), X509_NAME_add_entry_by_NID() and X509_NAME_add_entry() return 1 for success of 0 if an error occurred.</p>
+
+<p>X509_NAME_delete_entry() returns either the deleted <b>X509_NAME_ENTRY</b> structure or <b>NULL</b> if an error occurred.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>Create an <b>X509_NAME</b> structure:</p>
+
+<p>&quot;C=UK, O=Disorganized Organization, CN=Joe Bloggs&quot;</p>
+
+<pre><code>X509_NAME *nm;
+
+nm = X509_NAME_new();
+if (nm == NULL)
+    /* Some error */
+if (!X509_NAME_add_entry_by_txt(nm, &quot;C&quot;, MBSTRING_ASC,
+                                &quot;UK&quot;, -1, -1, 0))
+    /* Error */
+if (!X509_NAME_add_entry_by_txt(nm, &quot;O&quot;, MBSTRING_ASC,
+                                &quot;Disorganized Organization&quot;, -1, -1, 0))
+    /* Error */
+if (!X509_NAME_add_entry_by_txt(nm, &quot;CN&quot;, MBSTRING_ASC,
+                                &quot;Joe Bloggs&quot;, -1, -1, 0))
+    /* Error */</code></pre>
+
+<h1 id="BUGS">BUGS</h1>
+
+<p><b>type</b> can still be set to <b>V_ASN1_APP_CHOOSE</b> to use a different algorithm to determine field types. Since this form does not understand multicharacter types, performs no length checks and can result in invalid field types its use is strongly discouraged.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>, <a href="../man3/d2i_X509_NAME.html">d2i_X509_NAME(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2002-2020 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

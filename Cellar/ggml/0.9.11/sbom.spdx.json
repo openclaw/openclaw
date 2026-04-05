@@ -1,0 +1,114 @@
+{
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "spdxVersion": "SPDX-2.3",
+  "name": "SBOM-SPDX-ggml-0.9.11",
+  "creationInfo": {
+    "created": "2026-04-03T19:36:28Z",
+    "creators": ["Tool: https://github.com/Homebrew/brew@5.1.3"]
+  },
+  "dataLicense": "CC0-1.0",
+  "documentNamespace": "https://formulae.brew.sh/spdx/ggml-0.9.11.json",
+  "documentDescribes": [
+    "SPDXRef-Archive-ggml-src",
+    "SPDXRef-Package-SPDXRef-libomp-22.1.2",
+    "SPDXRef-Compiler",
+    "SPDXRef-Bottle-ggml"
+  ],
+  "files": [],
+  "packages": [
+    {
+      "SPDXID": "SPDXRef-Archive-ggml-src",
+      "name": "ggml",
+      "versionInfo": "0.9.11",
+      "filesAnalyzed": false,
+      "licenseDeclared": "NOASSERTION",
+      "builtDate": "2026-04-02 07:37:26 UTC",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "https://github.com/ggml-org/ggml/archive/refs/tags/v0.9.11.tar.gz",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [],
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "97b6f55df0e5d7c8f7528a443907752ff65c1c66bc0a3b71db2a0664e79c1982"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-SPDXRef-libomp-22.1.2",
+      "name": "libomp",
+      "versionInfo": "22.1.2",
+      "filesAnalyzed": false,
+      "licenseDeclared": "NOASSERTION",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "https://ghcr.io/v2/homebrew/core/libomp/blobs/sha256:82f432712cb1f241632bfcea9598cd728c7e4e581e49cd3dc3cbb401fe549a31",
+      "copyrightText": "NOASSERTION",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "82f432712cb1f241632bfcea9598cd728c7e4e581e49cd3dc3cbb401fe549a31"
+        }
+      ],
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:brew/libomp@22.1.2",
+          "referenceType": "purl"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Compiler",
+      "name": "clang",
+      "versionInfo": "26.3",
+      "filesAnalyzed": false,
+      "licenseDeclared": "NOASSERTION",
+      "licenseConcluded": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "checksums": [],
+      "externalRefs": []
+    },
+    {
+      "SPDXID": "SPDXRef-Bottle-ggml",
+      "name": "ggml",
+      "versionInfo": "0.9.11",
+      "filesAnalyzed": false,
+      "licenseDeclared": "NOASSERTION",
+      "builtDate": "2026-04-02 07:37:26 UTC",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "https://ghcr.io/v2/homebrew/core/ggml/blobs/sha256:df416e439f8bd8ad13e51117f2cfc4d27d9e4a131539df232ed284a0b36fbfe4",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:brew/homebrew/core/ggml@0.9.11",
+          "referenceType": "purl"
+        }
+      ],
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "df416e439f8bd8ad13e51117f2cfc4d27d9e4a131539df232ed284a0b36fbfe4"
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "spdxElementId": "SPDXRef-Package-SPDXRef-libomp-22.1.2",
+      "relationshipType": "RUNTIME_DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Bottle-ggml"
+    },
+    {
+      "spdxElementId": "SPDXRef-File-ggml",
+      "relationshipType": "PACKAGE_OF",
+      "relatedSpdxElement": "SPDXRef-Archive-ggml-src"
+    },
+    {
+      "spdxElementId": "SPDXRef-Compiler",
+      "relationshipType": "BUILD_TOOL_OF",
+      "relatedSpdxElement": "SPDXRef-Package-ggml-src"
+    }
+  ]
+}

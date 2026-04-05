@@ -1,0 +1,87 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>RSA_check_key</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#BUGS">BUGS</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>RSA_check_key_ex, RSA_check_key - validate private RSA keys</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/rsa.h&gt;</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>int RSA_check_key_ex(const RSA *rsa, BN_GENCB *cb);
+
+int RSA_check_key(const RSA *rsa);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>Both of the functions described on this page are deprecated. Applications should instead use <a href="../man3/EVP_PKEY_public_check.html">EVP_PKEY_public_check(3)</a>, <a href="../man3/EVP_PKEY_private_check.html">EVP_PKEY_private_check(3)</a> and <a href="../man3/EVP_PKEY_pairwise_check.html">EVP_PKEY_pairwise_check(3)</a>.</p>
+
+<p>RSA_check_key_ex() function validates RSA keys. It checks that <b>p</b> and <b>q</b> are in fact prime, and that <b>n = p*q</b>.</p>
+
+<p>It does not work on RSA public keys that have only the modulus and public exponent elements populated. It also checks that <b>d*e = 1 mod (p-1*q-1)</b>, and that <b>dmp1</b>, <b>dmq1</b> and <b>iqmp</b> are set correctly or are <b>NULL</b>. It performs integrity checks on all the RSA key material, so the RSA key structure must contain all the private key data too. Therefore, it cannot be used with any arbitrary RSA key object, even if it is otherwise fit for regular RSA operation.</p>
+
+<p>The <b>cb</b> parameter is a callback that will be invoked in the same manner as <a href="../man3/BN_is_prime_ex.html">BN_is_prime_ex(3)</a>.</p>
+
+<p>RSA_check_key() is equivalent to RSA_check_key_ex() with a NULL <b>cb</b>.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>RSA_check_key_ex() and RSA_check_key() return 1 if <b>rsa</b> is a valid RSA key, and 0 otherwise. They return -1 if an error occurs while checking the key.</p>
+
+<p>If the key is invalid or an error occurred, the reason code can be obtained using <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>Unlike most other RSA functions, this function does <b>not</b> work transparently with any underlying ENGINE implementation because it uses the key data in the RSA structure directly. An ENGINE implementation can override the way key data is stored and handled, and can even provide support for HSM keys - in which case the RSA structure may contain <b>no</b> key data at all! If the ENGINE in question is only being used for acceleration or analysis purposes, then in all likelihood the RSA key data is complete and untouched, but this can&#39;t be assumed in the general case.</p>
+
+<h1 id="BUGS">BUGS</h1>
+
+<p>A method of verifying the RSA key using opaque RSA API functions might need to be considered. Right now RSA_check_key() simply uses the RSA structure elements directly, bypassing the RSA_METHOD table altogether (and completely violating encapsulation and object-orientation in the process). The best fix will probably be to introduce a &quot;check_key()&quot; handler to the RSA_METHOD function table so that alternative implementations can also provide their own verifiers.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/BN_is_prime_ex.html">BN_is_prime_ex(3)</a>, <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>All of these functions were deprecated in OpenSSL 3.0.</p>
+
+<p>RSA_check_key_ex() appeared after OpenSSL 1.0.2.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2020 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

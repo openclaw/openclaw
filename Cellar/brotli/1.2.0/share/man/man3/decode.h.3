@@ -1,0 +1,505 @@
+.TH "decode.h" 3 "August 2021" "Brotli" \" -*- nroff -*-
+.ad l
+.nh
+.SH NAME
+decode.h \- API for Brotli decompression\&.  
+
+.SH SYNOPSIS
+.br
+.PP
+.SS "Macros"
+
+.in +1c
+.ti -1c
+.RI "#define \fBBROTLI_DECODER_ERROR_CODES_LIST\fP(BROTLI_ERROR_CODE,  SEPARATOR)        "
+.br
+.RI "\fITemplate that evaluates items of \fBBrotliDecoderErrorCode\fP\&. \fP"
+.ti -1c
+.RI "#define \fBBROTLI_LAST_ERROR_CODE\fP   BROTLI_DECODER_ERROR_UNREACHABLE"
+.br
+.RI "\fIThe value of the last error code, negative integer\&. \fP"
+.in -1c
+.SS "Typedefs"
+
+.in +1c
+.ti -1c
+.RI "typedef void(* \fBbrotli_decoder_metadata_chunk_func\fP) (void *opaque, const uint8_t *data, size_t size)"
+.br
+.RI "\fICallback to fire on metadata block chunk becomes available\&. \fP"
+.ti -1c
+.RI "typedef void(* \fBbrotli_decoder_metadata_start_func\fP) (void *opaque, size_t size)"
+.br
+.RI "\fICallback to fire on metadata block start\&. \fP"
+.ti -1c
+.RI "typedef enum \fBBrotliDecoderParameter\fP \fBBrotliDecoderParameter\fP"
+.br
+.RI "\fIOptions to be used with \fBBrotliDecoderSetParameter\fP\&. \fP"
+.ti -1c
+.RI "typedef struct BrotliDecoderStateStruct \fBBrotliDecoderState\fP"
+.br
+.RI "\fIOpaque structure that holds decoder state\&. \fP"
+.in -1c
+.SS "Enumerations"
+.SS "Functions"
+
+.in +1c
+.ti -1c
+.RI "\fBBROTLI_BOOL\fP \fBBrotliDecoderAttachDictionary\fP (\fBBrotliDecoderState\fP *state, BrotliSharedDictionaryType type, size_t data_size, const uint8_t data[data_size])"
+.br
+.RI "\fIAdds LZ77 prefix dictionary, adds or replaces built-in static dictionary and transforms\&. \fP"
+.ti -1c
+.RI "\fBBrotliDecoderState\fP * \fBBrotliDecoderCreateInstance\fP (\fBbrotli_alloc_func\fP alloc_func, \fBbrotli_free_func\fP free_func, void *opaque)"
+.br
+.RI "\fICreates an instance of \fBBrotliDecoderState\fP and initializes it\&. \fP"
+.ti -1c
+.RI "\fBBrotliDecoderResult\fP \fBBrotliDecoderDecompress\fP (size_t encoded_size, const uint8_t encoded_buffer[encoded_size], size_t *decoded_size, uint8_t decoded_buffer[*decoded_size])"
+.br
+.RI "\fIPerforms one-shot memory-to-memory decompression\&. \fP"
+.ti -1c
+.RI "\fBBrotliDecoderResult\fP \fBBrotliDecoderDecompressStream\fP (\fBBrotliDecoderState\fP *state, size_t *available_in, const uint8_t **next_in, size_t *available_out, uint8_t **next_out, size_t *total_out)"
+.br
+.RI "\fIDecompresses the input stream to the output stream\&. \fP"
+.ti -1c
+.RI "void \fBBrotliDecoderDestroyInstance\fP (\fBBrotliDecoderState\fP *state)"
+.br
+.RI "\fIDeinitializes and frees \fBBrotliDecoderState\fP instance\&. \fP"
+.ti -1c
+.RI "const char * \fBBrotliDecoderErrorString\fP (\fBBrotliDecoderErrorCode\fP c)"
+.br
+.RI "\fIConverts error code to a c-string\&. \fP"
+.ti -1c
+.RI "\fBBrotliDecoderErrorCode\fP \fBBrotliDecoderGetErrorCode\fP (const \fBBrotliDecoderState\fP *state)"
+.br
+.RI "\fIAcquires a detailed error code\&. \fP"
+.ti -1c
+.RI "\fBBROTLI_BOOL\fP \fBBrotliDecoderHasMoreOutput\fP (const \fBBrotliDecoderState\fP *state)"
+.br
+.RI "\fIChecks if decoder has more output\&. \fP"
+.ti -1c
+.RI "\fBBROTLI_BOOL\fP \fBBrotliDecoderIsFinished\fP (const \fBBrotliDecoderState\fP *state)"
+.br
+.RI "\fIChecks if decoder instance reached the final state\&. \fP"
+.ti -1c
+.RI "\fBBROTLI_BOOL\fP \fBBrotliDecoderIsUsed\fP (const \fBBrotliDecoderState\fP *state)"
+.br
+.RI "\fIChecks if instance has already consumed input\&. \fP"
+.ti -1c
+.RI "void \fBBrotliDecoderSetMetadataCallbacks\fP (\fBBrotliDecoderState\fP *state, \fBbrotli_decoder_metadata_start_func\fP start_func, \fBbrotli_decoder_metadata_chunk_func\fP chunk_func, void *opaque)"
+.br
+.RI "\fISets callback for receiving metadata blocks\&. \fP"
+.ti -1c
+.RI "\fBBROTLI_BOOL\fP \fBBrotliDecoderSetParameter\fP (\fBBrotliDecoderState\fP *state, \fBBrotliDecoderParameter\fP param, uint32_t value)"
+.br
+.RI "\fISets the specified parameter to the given decoder instance\&. \fP"
+.ti -1c
+.RI "const uint8_t * \fBBrotliDecoderTakeOutput\fP (\fBBrotliDecoderState\fP *state, size_t *size)"
+.br
+.RI "\fIAcquires pointer to internal output buffer\&. \fP"
+.ti -1c
+.RI "uint32_t \fBBrotliDecoderVersion\fP (void)"
+.br
+.RI "\fIGets a decoder library version\&. \fP"
+.in -1c
+.SH "Detailed Description"
+.PP 
+API for Brotli decompression\&. 
+
+
+.SH "Macro Definition Documentation"
+.PP 
+.SS "#define BROTLI_DECODER_ERROR_CODES_LIST(BROTLI_ERROR_CODE, SEPARATOR)"
+
+.PP
+Template that evaluates items of \fBBrotliDecoderErrorCode\fP\&. Example:
+.PP
+.nf
+// Log Brotli error code\&.
+switch (brotliDecoderErrorCode) {
+#define CASE_(PREFIX, NAME, CODE) \
+  case BROTLI_DECODER ## PREFIX ## NAME: \
+    LOG(INFO) << "error code:" << #NAME; \
+    break;
+#define NEWLINE_
+BROTLI_DECODER_ERROR_CODES_LIST(CASE_, NEWLINE_)
+#undef CASE_
+#undef NEWLINE_
+  default: LOG(FATAL) << "unknown brotli error code";
+}
+
+.fi
+.PP
+ 
+.SS "#define BROTLI_LAST_ERROR_CODE   BROTLI_DECODER_ERROR_UNREACHABLE"
+
+.PP
+The value of the last error code, negative integer\&. All other error code values are in the range from \fBBROTLI_LAST_ERROR_CODE\fP to \fC-1\fP\&. There are also 4 other possible non-error codes \fC0\fP \&.\&. \fC3\fP in \fBBrotliDecoderErrorCode\fP enumeration\&. 
+.SH "Typedef Documentation"
+.PP 
+.SS "typedef void(* brotli_decoder_metadata_chunk_func) (void *opaque, const uint8_t *data, size_t size)"
+
+.PP
+Callback to fire on metadata block chunk becomes available\&. This function can be invoked multiple times per metadata block; block should be considered finished when sum of \fCsize\fP matches the announced metadata block size\&. Chunks contents pointed by \fCdata\fP are transient and shouln not be accessed after leaving the callback\&.
+.PP
+\fBParameters:\fP
+.RS 4
+\fIopaque\fP callback handle 
+.br
+\fIdata\fP pointer to metadata contents 
+.br
+\fIsize\fP size of metadata block chunk, at least \fC1\fP 
+.RE
+.PP
+
+.SS "typedef void(* brotli_decoder_metadata_start_func) (void *opaque, size_t size)"
+
+.PP
+Callback to fire on metadata block start\&. After this callback is fired, if \fCsize\fP is not \fC0\fP, it is followed by \fBbrotli_decoder_metadata_chunk_func\fP as more metadata block contents become accessible\&.
+.PP
+\fBParameters:\fP
+.RS 4
+\fIopaque\fP callback handle 
+.br
+\fIsize\fP size of metadata block 
+.RE
+.PP
+
+.SS "typedef enum \fBBrotliDecoderParameter\fP  \fBBrotliDecoderParameter\fP"
+
+.PP
+Options to be used with \fBBrotliDecoderSetParameter\fP\&. 
+.SS "typedef struct BrotliDecoderStateStruct \fBBrotliDecoderState\fP"
+
+.PP
+Opaque structure that holds decoder state\&. Allocated and initialized with \fBBrotliDecoderCreateInstance\fP\&. Cleaned up and deallocated with \fBBrotliDecoderDestroyInstance\fP\&. 
+.SH "Enumeration Type Documentation"
+.PP 
+.SS "enum \fBBrotliDecoderErrorCode\fP"
+
+.PP
+Error code for detailed logging / production debugging\&. See \fBBrotliDecoderGetErrorCode\fP and \fBBROTLI_LAST_ERROR_CODE\fP\&. 
+.SS "enum \fBBrotliDecoderParameter\fP"
+
+.PP
+Options to be used with \fBBrotliDecoderSetParameter\fP\&. 
+.PP
+\fBEnumerator\fP
+.in +1c
+.TP
+\fB\fIBROTLI_DECODER_PARAM_DISABLE_RING_BUFFER_REALLOCATION \fP\fP
+Disable 'canny' ring buffer allocation strategy\&. Ring buffer is allocated according to window size, despite the real size of the content\&. 
+.TP
+\fB\fIBROTLI_DECODER_PARAM_LARGE_WINDOW \fP\fP
+Flag that determines if 'Large Window Brotli' is used\&. 
+.SS "enum \fBBrotliDecoderResult\fP"
+
+.PP
+Result type for \fBBrotliDecoderDecompress\fP and \fBBrotliDecoderDecompressStream\fP functions\&. 
+.PP
+\fBEnumerator\fP
+.in +1c
+.TP
+\fB\fIBROTLI_DECODER_RESULT_ERROR \fP\fP
+Decoding error, e\&.g\&. corrupted input or memory allocation problem\&. 
+.TP
+\fB\fIBROTLI_DECODER_RESULT_SUCCESS \fP\fP
+Decoding successfully completed\&. 
+.TP
+\fB\fIBROTLI_DECODER_RESULT_NEEDS_MORE_INPUT \fP\fP
+Partially done; should be called again with more input\&. 
+.TP
+\fB\fIBROTLI_DECODER_RESULT_NEEDS_MORE_OUTPUT \fP\fP
+Partially done; should be called again with more output\&. 
+.SH "Function Documentation"
+.PP 
+.SS "\fBBROTLI_BOOL\fP BrotliDecoderAttachDictionary (\fBBrotliDecoderState\fP * state, BrotliSharedDictionaryType type, size_t data_size, const uint8_t data[data_size])"
+
+.PP
+Adds LZ77 prefix dictionary, adds or replaces built-in static dictionary and transforms\&. Attached dictionary ownership is not transferred\&. Data provided to this method should be kept accessible until decoding is finished and decoder instance is destroyed\&.
+.PP
+\fBNote:\fP
+.RS 4
+Dictionaries can NOT be attached after actual decoding is started\&.
+.RE
+.PP
+\fBParameters:\fP
+.RS 4
+\fIstate\fP decoder instance 
+.br
+\fItype\fP dictionary data format 
+.br
+\fIdata_size\fP length of memory region pointed by \fCdata\fP 
+.br
+\fIdata\fP dictionary data in format corresponding to \fCtype\fP 
+.RE
+.PP
+\fBReturns:\fP
+.RS 4
+\fBBROTLI_FALSE\fP if dictionary is corrupted, or dictionary count limit is reached 
+.PP
+\fBBROTLI_TRUE\fP if dictionary is accepted / attached 
+.RE
+.PP
+
+.SS "\fBBrotliDecoderState\fP* BrotliDecoderCreateInstance (\fBbrotli_alloc_func\fP alloc_func, \fBbrotli_free_func\fP free_func, void * opaque)"
+
+.PP
+Creates an instance of \fBBrotliDecoderState\fP and initializes it\&. The instance can be used once for decoding and should then be destroyed with \fBBrotliDecoderDestroyInstance\fP, it cannot be reused for a new decoding session\&.
+.PP
+\fCalloc_func\fP and \fCfree_func\fP \fBMUST\fP be both zero or both non-zero\&. In the case they are both zero, default memory allocators are used\&. \fCopaque\fP is passed to \fCalloc_func\fP and \fCfree_func\fP when they are called\&. \fCfree_func\fP has to return without doing anything when asked to free a NULL pointer\&.
+.PP
+\fBParameters:\fP
+.RS 4
+\fIalloc_func\fP custom memory allocation function 
+.br
+\fIfree_func\fP custom memory free function 
+.br
+\fIopaque\fP custom memory manager handle 
+.RE
+.PP
+\fBReturns:\fP
+.RS 4
+\fC0\fP if instance can not be allocated or initialized 
+.PP
+pointer to initialized \fBBrotliDecoderState\fP otherwise 
+.RE
+.PP
+
+.SS "\fBBrotliDecoderResult\fP BrotliDecoderDecompress (size_t encoded_size, const uint8_t encoded_buffer[encoded_size], size_t * decoded_size, uint8_t decoded_buffer[*decoded_size])"
+
+.PP
+Performs one-shot memory-to-memory decompression\&. Decompresses the data in \fCencoded_buffer\fP into \fCdecoded_buffer\fP, and sets \fC*decoded_size\fP to the decompressed length\&.
+.PP
+\fBParameters:\fP
+.RS 4
+\fIencoded_size\fP size of \fCencoded_buffer\fP 
+.br
+\fIencoded_buffer\fP compressed data buffer with at least \fCencoded_size\fP addressable bytes 
+.br
+\fIdecoded_size\fP \fBin:\fP size of \fCdecoded_buffer\fP; 
+.br
+ \fBout:\fP length of decompressed data written to \fCdecoded_buffer\fP 
+.br
+\fIdecoded_buffer\fP decompressed data destination buffer 
+.RE
+.PP
+\fBReturns:\fP
+.RS 4
+\fBBROTLI_DECODER_RESULT_ERROR\fP if input is corrupted, memory allocation failed, or \fCdecoded_buffer\fP is not large enough; 
+.PP
+\fBBROTLI_DECODER_RESULT_SUCCESS\fP otherwise 
+.RE
+.PP
+
+.SS "\fBBrotliDecoderResult\fP BrotliDecoderDecompressStream (\fBBrotliDecoderState\fP * state, size_t * available_in, const uint8_t ** next_in, size_t * available_out, uint8_t ** next_out, size_t * total_out)"
+
+.PP
+Decompresses the input stream to the output stream\&. The values \fC*available_in\fP and \fC*available_out\fP must specify the number of bytes addressable at \fC*next_in\fP and \fC*next_out\fP respectively\&. When \fC*available_out\fP is \fC0\fP, \fCnext_out\fP is allowed to be \fCNULL\fP\&.
+.PP
+After each call, \fC*available_in\fP will be decremented by the amount of input bytes consumed, and the \fC*next_in\fP pointer will be incremented by that amount\&. Similarly, \fC*available_out\fP will be decremented by the amount of output bytes written, and the \fC*next_out\fP pointer will be incremented by that amount\&.
+.PP
+\fCtotal_out\fP, if it is not a null-pointer, will be set to the number of bytes decompressed since the last \fCstate\fP initialization\&.
+.PP
+\fBNote:\fP
+.RS 4
+Input is never overconsumed, so \fCnext_in\fP and \fCavailable_in\fP could be passed to the next consumer after decoding is complete\&.
+.RE
+.PP
+\fBParameters:\fP
+.RS 4
+\fIstate\fP decoder instance 
+.br
+\fIavailable_in\fP \fBin:\fP amount of available input; 
+.br
+ \fBout:\fP amount of unused input 
+.br
+\fInext_in\fP pointer to the next compressed byte 
+.br
+\fIavailable_out\fP \fBin:\fP length of output buffer; 
+.br
+ \fBout:\fP remaining size of output buffer 
+.br
+\fInext_out\fP output buffer cursor; can be \fCNULL\fP if \fCavailable_out\fP is \fC0\fP 
+.br
+\fItotal_out\fP number of bytes decompressed so far; can be \fCNULL\fP 
+.RE
+.PP
+\fBReturns:\fP
+.RS 4
+\fBBROTLI_DECODER_RESULT_ERROR\fP if input is corrupted, memory allocation failed, arguments were invalid, etc\&.; use \fBBrotliDecoderGetErrorCode\fP to get detailed error code 
+.PP
+\fBBROTLI_DECODER_RESULT_NEEDS_MORE_INPUT\fP decoding is blocked until more input data is provided 
+.PP
+\fBBROTLI_DECODER_RESULT_NEEDS_MORE_OUTPUT\fP decoding is blocked until more output space is provided 
+.PP
+\fBBROTLI_DECODER_RESULT_SUCCESS\fP decoding is finished, no more input might be consumed and no more output will be produced 
+.RE
+.PP
+
+.SS "void BrotliDecoderDestroyInstance (\fBBrotliDecoderState\fP * state)"
+
+.PP
+Deinitializes and frees \fBBrotliDecoderState\fP instance\&. 
+.PP
+\fBParameters:\fP
+.RS 4
+\fIstate\fP decoder instance to be cleaned up and deallocated 
+.RE
+.PP
+
+.SS "\fBBrotliDecoderErrorCode\fP BrotliDecoderGetErrorCode (const \fBBrotliDecoderState\fP * state)"
+
+.PP
+Acquires a detailed error code\&. Should be used only after \fBBrotliDecoderDecompressStream\fP returns \fBBROTLI_DECODER_RESULT_ERROR\fP\&.
+.PP
+See also \fBBrotliDecoderErrorString\fP
+.PP
+\fBParameters:\fP
+.RS 4
+\fIstate\fP decoder instance 
+.RE
+.PP
+\fBReturns:\fP
+.RS 4
+last saved error code 
+.RE
+.PP
+
+.SS "\fBBROTLI_BOOL\fP BrotliDecoderHasMoreOutput (const \fBBrotliDecoderState\fP * state)"
+
+.PP
+Checks if decoder has more output\&. 
+.PP
+\fBParameters:\fP
+.RS 4
+\fIstate\fP decoder instance 
+.RE
+.PP
+\fBReturns:\fP
+.RS 4
+\fBBROTLI_TRUE\fP, if decoder has some unconsumed output 
+.PP
+\fBBROTLI_FALSE\fP otherwise 
+.RE
+.PP
+
+.SS "\fBBROTLI_BOOL\fP BrotliDecoderIsFinished (const \fBBrotliDecoderState\fP * state)"
+
+.PP
+Checks if decoder instance reached the final state\&. 
+.PP
+\fBParameters:\fP
+.RS 4
+\fIstate\fP decoder instance 
+.RE
+.PP
+\fBReturns:\fP
+.RS 4
+\fBBROTLI_TRUE\fP if decoder is in a state where it reached the end of the input and produced all of the output 
+.PP
+\fBBROTLI_FALSE\fP otherwise 
+.RE
+.PP
+
+.SS "\fBBROTLI_BOOL\fP BrotliDecoderIsUsed (const \fBBrotliDecoderState\fP * state)"
+
+.PP
+Checks if instance has already consumed input\&. Instance that returns \fBBROTLI_FALSE\fP is considered 'fresh' and could be reused\&.
+.PP
+\fBParameters:\fP
+.RS 4
+\fIstate\fP decoder instance 
+.RE
+.PP
+\fBReturns:\fP
+.RS 4
+\fBBROTLI_TRUE\fP if decoder has already used some input bytes 
+.PP
+\fBBROTLI_FALSE\fP otherwise 
+.RE
+.PP
+
+.SS "void BrotliDecoderSetMetadataCallbacks (\fBBrotliDecoderState\fP * state, \fBbrotli_decoder_metadata_start_func\fP start_func, \fBbrotli_decoder_metadata_chunk_func\fP chunk_func, void * opaque)"
+
+.PP
+Sets callback for receiving metadata blocks\&. 
+.PP
+\fBParameters:\fP
+.RS 4
+\fIstate\fP decoder instance 
+.br
+\fIstart_func\fP callback on metadata block start 
+.br
+\fIchunk_func\fP callback on metadata block chunk 
+.br
+\fIopaque\fP callback handle 
+.RE
+.PP
+
+.SS "\fBBROTLI_BOOL\fP BrotliDecoderSetParameter (\fBBrotliDecoderState\fP * state, \fBBrotliDecoderParameter\fP param, uint32_t value)"
+
+.PP
+Sets the specified parameter to the given decoder instance\&. 
+.PP
+\fBParameters:\fP
+.RS 4
+\fIstate\fP decoder instance 
+.br
+\fIparam\fP parameter to set 
+.br
+\fIvalue\fP new parameter value 
+.RE
+.PP
+\fBReturns:\fP
+.RS 4
+\fBBROTLI_FALSE\fP if parameter is unrecognized, or value is invalid 
+.PP
+\fBBROTLI_TRUE\fP if value is accepted 
+.RE
+.PP
+
+.SS "const uint8_t* BrotliDecoderTakeOutput (\fBBrotliDecoderState\fP * state, size_t * size)"
+
+.PP
+Acquires pointer to internal output buffer\&. This method is used to make language bindings easier and more efficient:
+.IP "1." 4
+push data to \fBBrotliDecoderDecompressStream\fP, until \fBBROTLI_DECODER_RESULT_NEEDS_MORE_OUTPUT\fP is reported
+.IP "2." 4
+use \fBBrotliDecoderTakeOutput\fP to peek bytes and copy to language-specific entity
+.PP
+.PP
+Also this could be useful if there is an output stream that is able to consume all the provided data (e\&.g\&. when data is saved to file system)\&.
+.PP
+\fBAttention:\fP
+.RS 4
+After every call to \fBBrotliDecoderTakeOutput\fP \fC*size\fP bytes of output are considered consumed for all consecutive calls to the instance methods; returned pointer becomes invalidated as well\&.
+.RE
+.PP
+\fBNote:\fP
+.RS 4
+Decoder output is not guaranteed to be contiguous\&. This means that after the size-unrestricted call to \fBBrotliDecoderTakeOutput\fP, immediate next call to \fBBrotliDecoderTakeOutput\fP may return more data\&.
+.RE
+.PP
+\fBParameters:\fP
+.RS 4
+\fIstate\fP decoder instance 
+.br
+\fIsize\fP \fBin:\fP number of bytes caller is ready to take, \fC0\fP if any amount could be handled; 
+.br
+ \fBout:\fP amount of data pointed by returned pointer and considered consumed; 
+.br
+ out value is never greater than in value, unless it is \fC0\fP 
+.RE
+.PP
+\fBReturns:\fP
+.RS 4
+pointer to output data 
+.RE
+.PP
+
+.SS "uint32_t BrotliDecoderVersion (void)"
+
+.PP
+Gets a decoder library version\&. Look at BROTLI_MAKE_HEX_VERSION for more information\&. 
+.SH "Author"
+.PP 
+Generated automatically by Doxygen for Brotli from the source code\&.

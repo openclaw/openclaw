@@ -1,0 +1,83 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>X509_verify_cert</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>X509_build_chain, X509_verify_cert, X509_STORE_CTX_verify - build and verify X509 certificate chain</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/x509_vfy.h&gt;
+
+STACK_OF(X509) *X509_build_chain(X509 *target, STACK_OF(X509) *certs,
+                                 X509_STORE *store, int with_self_signed,
+                                 OSSL_LIB_CTX *libctx, const char *propq);
+int X509_verify_cert(X509_STORE_CTX *ctx);
+int X509_STORE_CTX_verify(X509_STORE_CTX *ctx);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>X509_build_chain() builds a certificate chain starting from <i>target</i> using the optional list of intermediate CA certificates <i>certs</i>. If <i>store</i> is NULL it builds the chain as far down as possible, ignoring errors. Else the chain must reach a trust anchor contained in <i>store</i>. It internally uses a <b>X509_STORE_CTX</b> structure associated with the library context <i>libctx</i> and property query string <i>propq</i>, both of which may be NULL. In case there is more than one possibility for the chain, only one is taken.</p>
+
+<p>On success it returns a pointer to a new stack of (up_ref&#39;ed) certificates starting with <i>target</i> and followed by all available intermediate certificates. A self-signed trust anchor is included only if <i>target</i> is the trust anchor of <i>with_self_signed</i> is 1. If a non-NULL stack is returned the caller is responsible for freeing it.</p>
+
+<p>The X509_verify_cert() function attempts to discover and validate a certificate chain based on parameters in <i>ctx</i>. The verification context, of type <b>X509_STORE_CTX</b>, can be constructed using <a href="../man3/X509_STORE_CTX_new.html">X509_STORE_CTX_new(3)</a> and <a href="../man3/X509_STORE_CTX_init.html">X509_STORE_CTX_init(3)</a>. It usually includes a target certificate to be verified, a set of certificates serving as trust anchors, a list of non-trusted certificates that may be helpful for chain construction, flags such as X509_V_FLAG_X509_STRICT, and various other optional components such as a callback function that allows customizing the verification outcome. A complete description of the certificate verification process is contained in the <a href="../man1/openssl-verification-options.html">openssl-verification-options(1)</a> manual page.</p>
+
+<p>Applications rarely call this function directly but it is used by OpenSSL internally for certificate validation, in both the S/MIME and SSL/TLS code.</p>
+
+<p>A negative return value from X509_verify_cert() can occur if it is invoked incorrectly, such as with no certificate set in <i>ctx</i>, or when it is called twice in succession without reinitialising <i>ctx</i> for the second call. A negative return value can also happen due to internal resource problems or because an internal inconsistency has been detected. Applications must interpret any return value &lt;= 0 as an error.</p>
+
+<p>The X509_STORE_CTX_verify() behaves like X509_verify_cert() except that its target certificate is the first element of the list of untrusted certificates in <i>ctx</i> unless a target certificate is set explicitly.</p>
+
+<p>When the verification target is a raw public key, rather than a certificate, both functions validate the target raw public key. In that case the number of possible checks is significantly reduced. The raw public key can be authenticated only via DANE TLSA records, either locally synthesised or obtained by the application from DNS. Raw public key DANE TLSA records may be added via <a href="../man3/SSL_add_expected_rpk.html">SSL_add_expected_rpk(3)</a> or <a href="../man3/SSL_dane_tlsa_add.html">SSL_dane_tlsa_add(3)</a>.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>X509_build_chain() returns NULL on error, else a stack of certificates.</p>
+
+<p>Both X509_verify_cert() and X509_STORE_CTX_verify() return 1 if a complete chain can be built and validated, otherwise they return 0, and in exceptional circumstances (such as malloc failure and internal errors) they can also return a negative code.</p>
+
+<p>If a complete chain can be built and validated both functions return 1. If the certificate must be rejected on the basis of the data available or any required certificate status data is not available they return 0. If no definite answer possible they usually return a negative code.</p>
+
+<p>On error or failure additional error information can be obtained by examining <i>ctx</i> using, for example, <a href="../man3/X509_STORE_CTX_get_error.html">X509_STORE_CTX_get_error(3)</a>. Even if verification indicated success, the stored error code may be different from X509_V_OK, likely because a verification callback function has waived the error.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/SSL_add_expected_rpk.html">SSL_add_expected_rpk(3)</a>, <a href="../man3/SSL_CTX_dane_enable.html">SSL_CTX_dane_enable(3)</a>, <a href="../man3/SSL_dane_tlsa_add.html">SSL_dane_tlsa_add(3)</a>, <a href="../man3/X509_STORE_CTX_new.html">X509_STORE_CTX_new(3)</a>, <a href="../man3/X509_STORE_CTX_init.html">X509_STORE_CTX_init(3)</a>, <a href="../man3/X509_STORE_CTX_init_rpk.html">X509_STORE_CTX_init_rpk(3)</a>, <a href="../man3/X509_STORE_CTX_get_error.html">X509_STORE_CTX_get_error(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>X509_build_chain() and X509_STORE_CTX_verify() were added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2009-2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

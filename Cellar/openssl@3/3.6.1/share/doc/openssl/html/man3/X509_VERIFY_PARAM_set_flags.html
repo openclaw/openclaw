@@ -1,0 +1,257 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>X509_VERIFY_PARAM_set_flags</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#VERIFICATION-FLAGS">VERIFICATION FLAGS</a></li>
+  <li><a href="#INHERITANCE-FLAGS">INHERITANCE FLAGS</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#BUGS">BUGS</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>X509_VERIFY_PARAM_set_flags, X509_VERIFY_PARAM_clear_flags, X509_VERIFY_PARAM_get_flags, X509_VERIFY_PARAM_set_purpose, X509_VERIFY_PARAM_get_purpose, X509_VERIFY_PARAM_get_inh_flags, X509_VERIFY_PARAM_set_inh_flags, X509_VERIFY_PARAM_set_trust, X509_VERIFY_PARAM_set_depth, X509_VERIFY_PARAM_get_depth, X509_VERIFY_PARAM_set_auth_level, X509_VERIFY_PARAM_get_auth_level, X509_VERIFY_PARAM_set_time, X509_VERIFY_PARAM_get_time, X509_VERIFY_PARAM_add0_policy, X509_VERIFY_PARAM_set1_policies, X509_VERIFY_PARAM_get0_host, X509_VERIFY_PARAM_set1_host, X509_VERIFY_PARAM_add1_host, X509_VERIFY_PARAM_set_hostflags, X509_VERIFY_PARAM_get_hostflags, X509_VERIFY_PARAM_get0_peername, X509_VERIFY_PARAM_get0_email, X509_VERIFY_PARAM_set1_email, X509_VERIFY_PARAM_set1_ip, X509_VERIFY_PARAM_get1_ip_asc, X509_VERIFY_PARAM_set1_ip_asc - X509 verification parameters</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/x509_vfy.h&gt;
+
+int X509_VERIFY_PARAM_set_flags(X509_VERIFY_PARAM *param,
+                                unsigned long flags);
+int X509_VERIFY_PARAM_clear_flags(X509_VERIFY_PARAM *param,
+                                  unsigned long flags);
+unsigned long X509_VERIFY_PARAM_get_flags(const X509_VERIFY_PARAM *param);
+
+int X509_VERIFY_PARAM_set_inh_flags(X509_VERIFY_PARAM *param,
+                                    uint32_t flags);
+uint32_t X509_VERIFY_PARAM_get_inh_flags(const X509_VERIFY_PARAM *param);
+
+int X509_VERIFY_PARAM_set_purpose(X509_VERIFY_PARAM *param, int purpose);
+int X509_VERIFY_PARAM_get_purpose(X509_VERIFY_PARAM *param);
+int X509_VERIFY_PARAM_set_trust(X509_VERIFY_PARAM *param, int trust);
+
+void X509_VERIFY_PARAM_set_time(X509_VERIFY_PARAM *param, time_t t);
+time_t X509_VERIFY_PARAM_get_time(const X509_VERIFY_PARAM *param);
+
+int X509_VERIFY_PARAM_add0_policy(X509_VERIFY_PARAM *param,
+                                  ASN1_OBJECT *policy);
+int X509_VERIFY_PARAM_set1_policies(X509_VERIFY_PARAM *param,
+                                    STACK_OF(ASN1_OBJECT) *policies);
+
+void X509_VERIFY_PARAM_set_depth(X509_VERIFY_PARAM *param, int depth);
+int X509_VERIFY_PARAM_get_depth(const X509_VERIFY_PARAM *param);
+
+void X509_VERIFY_PARAM_set_auth_level(X509_VERIFY_PARAM *param,
+                                      int auth_level);
+int X509_VERIFY_PARAM_get_auth_level(const X509_VERIFY_PARAM *param);
+
+char *X509_VERIFY_PARAM_get0_host(X509_VERIFY_PARAM *param, int n);
+int X509_VERIFY_PARAM_set1_host(X509_VERIFY_PARAM *param,
+                                const char *name, size_t namelen);
+int X509_VERIFY_PARAM_add1_host(X509_VERIFY_PARAM *param,
+                                const char *name, size_t namelen);
+void X509_VERIFY_PARAM_set_hostflags(X509_VERIFY_PARAM *param,
+                                     unsigned int flags);
+unsigned int X509_VERIFY_PARAM_get_hostflags(const X509_VERIFY_PARAM *param);
+char *X509_VERIFY_PARAM_get0_peername(const X509_VERIFY_PARAM *param);
+char *X509_VERIFY_PARAM_get0_email(X509_VERIFY_PARAM *param);
+int X509_VERIFY_PARAM_set1_email(X509_VERIFY_PARAM *param,
+                                 const char *email, size_t emaillen);
+char *X509_VERIFY_PARAM_get1_ip_asc(X509_VERIFY_PARAM *param);
+int X509_VERIFY_PARAM_set1_ip(X509_VERIFY_PARAM *param,
+                              const unsigned char *ip, size_t iplen);
+int X509_VERIFY_PARAM_set1_ip_asc(X509_VERIFY_PARAM *param, const char *ipasc);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>These functions manipulate the <b>X509_VERIFY_PARAM</b> structure associated with a certificate verification operation.</p>
+
+<p>The X509_VERIFY_PARAM_set_flags() function sets the flags in <b>param</b> by oring it with <b>flags</b>. See <a href="#VERIFICATION-FLAGS">&quot;VERIFICATION FLAGS&quot;</a> for a complete description of values the <b>flags</b> parameter can take.</p>
+
+<p>X509_VERIFY_PARAM_get_flags() returns the flags in <b>param</b>.</p>
+
+<p>X509_VERIFY_PARAM_get_inh_flags() returns the inheritance flags in <b>param</b> which specifies how verification flags are copied from one structure to another. X509_VERIFY_PARAM_set_inh_flags() sets the inheritance flags. See the <b>INHERITANCE FLAGS</b> section for a description of these bits.</p>
+
+<p>X509_VERIFY_PARAM_clear_flags() clears the flags <b>flags</b> in <b>param</b>.</p>
+
+<p>X509_VERIFY_PARAM_set_purpose() sets the verification purpose in <b>param</b> to <b>purpose</b>. This determines the acceptable purpose of the certificate chain, for example <b>X509_PURPOSE_SSL_CLIENT</b>. The purpose requirement is cleared if <b>purpose</b> is X509_PURPOSE_DEFAULT_ANY.</p>
+
+<p>X509_VERIFY_PARAM_get_purpose() returns the purpose in <b>param</b>.</p>
+
+<p>X509_VERIFY_PARAM_set_trust() sets the trust setting in <b>param</b> to <b>trust</b>.</p>
+
+<p>X509_VERIFY_PARAM_set_time() sets the verification time in <b>param</b> to <b>t</b>. Normally the current time is used.</p>
+
+<p>X509_VERIFY_PARAM_add0_policy() adds <b>policy</b> to the acceptable policy set. Contrary to preexisting documentation of this function it does not enable policy checking.</p>
+
+<p>X509_VERIFY_PARAM_set1_policies() enables policy checking (it is disabled by default) and sets the acceptable policy set to <b>policies</b>. Any existing policy set is cleared. The <b>policies</b> parameter can be <b>NULL</b> to clear an existing policy set.</p>
+
+<p>X509_VERIFY_PARAM_set_depth() sets the maximum verification depth to <b>depth</b>. That is the maximum number of intermediate CA certificates that can appear in a chain. A maximal depth chain contains 2 more certificates than the limit, since neither the end-entity certificate nor the trust-anchor count against this limit. Thus a <b>depth</b> limit of 0 only allows the end-entity certificate to be signed directly by the trust anchor, while with a <b>depth</b> limit of 1 there can be one intermediate CA certificate between the trust anchor and the end-entity certificate.</p>
+
+<p>X509_VERIFY_PARAM_set_auth_level() sets the authentication security level to <b>auth_level</b>. The authentication security level determines the acceptable signature and public key strength when verifying certificate chains. For a certificate chain to validate, the public keys of all the certificates must meet the specified security level. The signature algorithm security level is not enforced for the chain&#39;s <i>trust anchor</i> certificate, which is either directly trusted or validated by means other than its signature. See <a href="../man3/SSL_CTX_set_security_level.html">SSL_CTX_set_security_level(3)</a> for the definitions of the available levels. The default security level is -1, or &quot;not set&quot;. At security level 0 or lower all algorithms are acceptable. Security level 1 requires at least 80-bit-equivalent security and is broadly interoperable, though it will, for example, reject MD5 signatures or RSA keys shorter than 1024 bits.</p>
+
+<p>X509_VERIFY_PARAM_get0_host() returns the <b>n</b>th expected DNS hostname that has been set using X509_VERIFY_PARAM_set1_host() or X509_VERIFY_PARAM_add1_host(). To obtain all names start with <b>n</b> = 0 and increment <b>n</b> as long as no NULL pointer is returned.</p>
+
+<p>X509_VERIFY_PARAM_set1_host() sets the expected DNS hostname to <b>name</b> clearing any previously specified hostname. If <b>name</b> is NULL, or empty the list of hostnames is cleared, and name checks are not performed on the peer certificate. If <b>name</b> is NUL-terminated, <b>namelen</b> may be zero, otherwise <b>namelen</b> must be set to the length of <b>name</b>.</p>
+
+<p>When a hostname is specified, certificate verification automatically invokes <a href="../man3/X509_check_host.html">X509_check_host(3)</a> with flags equal to the <b>flags</b> argument given to X509_VERIFY_PARAM_set_hostflags() (default zero). Applications are strongly advised to use this interface in preference to explicitly calling <a href="../man3/X509_check_host.html">X509_check_host(3)</a>, hostname checks may be out of scope with the DANE-EE(3) certificate usage, and the internal check will be suppressed as appropriate when DANE verification is enabled.</p>
+
+<p>When the subject CommonName will not be ignored, whether as a result of the <b>X509_CHECK_FLAG_ALWAYS_CHECK_SUBJECT</b> host flag, or because no DNS subject alternative names are present in the certificate, any DNS name constraints in issuer certificates apply to the subject CommonName as well as the subject alternative name extension.</p>
+
+<p>When the subject CommonName will be ignored, whether as a result of the <b>X509_CHECK_FLAG_NEVER_CHECK_SUBJECT</b> host flag, or because some DNS subject alternative names are present in the certificate, DNS name constraints in issuer certificates will not be applied to the subject DN. As described in X509_check_host(3) the <b>X509_CHECK_FLAG_NEVER_CHECK_SUBJECT</b> flag takes precedence over the <b>X509_CHECK_FLAG_ALWAYS_CHECK_SUBJECT</b> flag.</p>
+
+<p>X509_VERIFY_PARAM_get_hostflags() returns any host flags previously set via a call to X509_VERIFY_PARAM_set_hostflags().</p>
+
+<p>X509_VERIFY_PARAM_add1_host() adds <b>name</b> as an additional reference identifier that can match the peer&#39;s certificate. Any previous names set via X509_VERIFY_PARAM_set1_host() or X509_VERIFY_PARAM_add1_host() are retained, no change is made if <b>name</b> is NULL or empty. When multiple names are configured, the peer is considered verified when any name matches.</p>
+
+<p>X509_VERIFY_PARAM_get0_peername() returns the DNS hostname or subject CommonName from the peer certificate that matched one of the reference identifiers. When wildcard matching is not disabled, or when a reference identifier specifies a parent domain (starts with &quot;.&quot;) rather than a hostname, the peer name may be a wildcard name or a sub-domain of the reference identifier respectively. The return string is allocated by the library and is no longer valid once the associated <b>param</b> argument is freed. Applications must not free the return value.</p>
+
+<p>X509_VERIFY_PARAM_get0_email() returns the expected RFC822 email address.</p>
+
+<p>X509_VERIFY_PARAM_set1_email() sets the expected RFC822 email address to <b>email</b>. If <b>email</b> is NUL-terminated, <b>emaillen</b> may be zero, otherwise <b>emaillen</b> must be set to the length of <b>email</b>. When an email address is specified, certificate verification automatically invokes <a href="../man3/X509_check_email.html">X509_check_email(3)</a>.</p>
+
+<p>X509_VERIFY_PARAM_get1_ip_asc() returns the expected IP address as a string. The caller is responsible for freeing it.</p>
+
+<p>X509_VERIFY_PARAM_set1_ip() sets the expected IP address to <b>ip</b>. The <b>ip</b> argument is in binary format, in network byte-order and <b>iplen</b> must be set to 4 for IPv4 and 16 for IPv6. When an IP address is specified, certificate verification automatically invokes <a href="../man3/X509_check_ip.html">X509_check_ip(3)</a>.</p>
+
+<p>X509_VERIFY_PARAM_set1_ip_asc() sets the expected IP address to <b>ipasc</b>. The <b>ipasc</b> argument is a NUL-terminal ASCII string: dotted decimal quad for IPv4 and colon-separated hexadecimal for IPv6. The condensed &quot;::&quot; notation is supported for IPv6 addresses.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>X509_VERIFY_PARAM_set_flags(), X509_VERIFY_PARAM_clear_flags(), X509_VERIFY_PARAM_set_inh_flags(), X509_VERIFY_PARAM_set_purpose(), X509_VERIFY_PARAM_set_trust(), X509_VERIFY_PARAM_add0_policy() X509_VERIFY_PARAM_set1_policies(), X509_VERIFY_PARAM_set1_host(), X509_VERIFY_PARAM_add1_host(), X509_VERIFY_PARAM_set1_email(), X509_VERIFY_PARAM_set1_ip() and X509_VERIFY_PARAM_set1_ip_asc() return 1 for success and 0 for failure.</p>
+
+<p>X509_VERIFY_PARAM_get0_host(), X509_VERIFY_PARAM_get0_email(), and X509_VERIFY_PARAM_get1_ip_asc(), return the string pointers specified above or NULL if the respective value has not been set or on error.</p>
+
+<p>X509_VERIFY_PARAM_get_flags() returns the current verification flags.</p>
+
+<p>X509_VERIFY_PARAM_get_hostflags() returns any current host flags.</p>
+
+<p>X509_VERIFY_PARAM_get_inh_flags() returns the current inheritance flags.</p>
+
+<p>X509_VERIFY_PARAM_set_time() and X509_VERIFY_PARAM_set_depth() do not return values.</p>
+
+<p>X509_VERIFY_PARAM_get_depth() returns the current verification depth.</p>
+
+<p>X509_VERIFY_PARAM_get_auth_level() returns the current authentication security level.</p>
+
+<p>X509_VERIFY_PARAM_get_purpose() returns the current purpose, which may be <b>X509_PURPOSE_DEFAULT_ANY</b> if unset.</p>
+
+<h1 id="VERIFICATION-FLAGS">VERIFICATION FLAGS</h1>
+
+<p>The verification flags consists of zero or more of the following flags ored together.</p>
+
+<p><b>X509_V_FLAG_CRL_CHECK</b> enables CRL checking for the certificate chain leaf certificate. An error occurs if a suitable CRL cannot be found.</p>
+
+<p><b>X509_V_FLAG_CRL_CHECK_ALL</b> expands CRL checking to the entire certificate chain if <b>X509_V_FLAG_CRL_CHECK</b> has also been enabled, and is otherwise ignored.</p>
+
+<p><b>X509_V_FLAG_OCSP_RESP_CHECK</b> enables Online Certificate Status Protocol (OCSP) checking for the certificate chain leaf certificate. An error occurs if a suitable OCSP response cannot be found.</p>
+
+<p><b>X509_V_FLAG_OCSP_RESP_CHECK_ALL</b> expands OCSP checking to the entire certificate chain if <b>X509_V_FLAG_OCSP_RESP_CHECK</b> has also been enabled, and is otherwise ignored.</p>
+
+<p><b>X509_V_FLAG_IGNORE_CRITICAL</b> disables critical extension checking. By default any unhandled critical extensions in certificates or (if checked) CRLs result in a fatal error. If this flag is set unhandled critical extensions are ignored. <b>WARNING</b> setting this option for anything other than debugging purposes can be a security risk. Finer control over which extensions are supported can be performed in the verification callback.</p>
+
+<p>The <b>X509_V_FLAG_X509_STRICT</b> flag disables workarounds for some broken certificates and makes the verification strictly apply <b>X509</b> rules.</p>
+
+<p><b>X509_V_FLAG_ALLOW_PROXY_CERTS</b> enables proxy certificate verification.</p>
+
+<p><b>X509_V_FLAG_POLICY_CHECK</b> enables certificate policy checking, by default no policy checking is performed. Additional information is sent to the verification callback relating to policy checking.</p>
+
+<p><b>X509_V_FLAG_EXPLICIT_POLICY</b>, <b>X509_V_FLAG_INHIBIT_ANY</b> and <b>X509_V_FLAG_INHIBIT_MAP</b> set the <b>require explicit policy</b>, <b>inhibit any policy</b> and <b>inhibit policy mapping</b> flags respectively as defined in <b>RFC3280</b>. Policy checking is automatically enabled if any of these flags are set.</p>
+
+<p>If <b>X509_V_FLAG_NOTIFY_POLICY</b> is set and the policy checking is successful a special status code is set to the verification callback. This permits it to examine the valid policy tree and perform additional checks or simply log it for debugging purposes.</p>
+
+<p>By default some additional features such as indirect CRLs and CRLs signed by different keys are disabled. If <b>X509_V_FLAG_EXTENDED_CRL_SUPPORT</b> is set they are enabled.</p>
+
+<p>If <b>X509_V_FLAG_USE_DELTAS</b> is set delta CRLs (if present) are used to determine certificate status. If not set deltas are ignored.</p>
+
+<p><b>X509_V_FLAG_CHECK_SS_SIGNATURE</b> requests checking the signature of the last certificate in a chain if the certificate is supposedly self-signed. This is prohibited and will result in an error if it is a non-conforming CA certificate with key usage restrictions not including the <i>keyCertSign</i> bit. By default this check is disabled because it doesn&#39;t add any additional security but in some cases applications might want to check the signature anyway. A side effect of not checking the self-signature of such a certificate is that disabled or unsupported message digests used for the signature are not treated as fatal errors.</p>
+
+<p>When <b>X509_V_FLAG_TRUSTED_FIRST</b> is set, which is always the case since OpenSSL 1.1.0, construction of the certificate chain in <a href="../man3/X509_verify_cert.html">X509_verify_cert(3)</a> searches the trust store for issuer certificates before searching the provided untrusted certificates. Local issuer certificates are often more likely to satisfy local security requirements and lead to a locally trusted root. This is especially important when some certificates in the trust store have explicit trust settings (see &quot;TRUST SETTINGS&quot; in <a href="../man1/openssl-x509.html">openssl-x509(1)</a>).</p>
+
+<p>The <b>X509_V_FLAG_NO_ALT_CHAINS</b> flag could have been used before OpenSSL 1.1.0 to suppress checking for alternative chains. By default, unless <b>X509_V_FLAG_TRUSTED_FIRST</b> is set, when building a certificate chain, if the first certificate chain found is not trusted, then OpenSSL will attempt to replace untrusted certificates supplied by the peer with certificates from the trust store to see if an alternative chain can be found that is trusted. As of OpenSSL 1.1.0, with <b>X509_V_FLAG_TRUSTED_FIRST</b> always set, this option has no effect.</p>
+
+<p>The <b>X509_V_FLAG_PARTIAL_CHAIN</b> flag causes non-self-signed certificates in the trust store to be treated as trust anchors, in the same way as self-signed root CA certificates. This makes it possible to trust self-issued certificates as well as certificates issued by an intermediate CA without having to trust their ancestor root CA. With OpenSSL 1.1.0 and later and <b>X509_V_FLAG_PARTIAL_CHAIN</b> set, chain construction stops as soon as the first certificate contained in the trust store is added to the chain, whether that certificate is a self-signed &quot;root&quot; certificate or a not self-signed &quot;intermediate&quot; or self-issued certificate. Thus, when an intermediate certificate is found in the trust store, the verified chain passed to callbacks may be shorter than it otherwise would be without the <b>X509_V_FLAG_PARTIAL_CHAIN</b> flag.</p>
+
+<p>The <b>X509_V_FLAG_NO_CHECK_TIME</b> flag suppresses checking the validity period of certificates and CRLs against the current time. If X509_VERIFY_PARAM_set_time() is used to specify a verification time, the check is not suppressed.</p>
+
+<h1 id="INHERITANCE-FLAGS">INHERITANCE FLAGS</h1>
+
+<p>These flags specify how parameters are &quot;inherited&quot; from one structure to another.</p>
+
+<p>If <b>X509_VP_FLAG_ONCE</b> is set then the current setting is zeroed after the next call.</p>
+
+<p>If <b>X509_VP_FLAG_LOCKED</b> is set then no values are copied. This overrides all of the following flags.</p>
+
+<p>If <b>X509_VP_FLAG_DEFAULT</b> is set then anything set in the source is copied to the destination. Effectively the values in &quot;to&quot; become default values which will be used only if nothing new is set in &quot;from&quot;. This is the default.</p>
+
+<p>If <b>X509_VP_FLAG_OVERWRITE</b> is set then all value are copied across whether they are set or not. Flags is still Ored though.</p>
+
+<p>If <b>X509_VP_FLAG_RESET_FLAGS</b> is set then the flags value is copied instead of ORed.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The above functions should be used to manipulate verification parameters instead of functions which work in specific structures such as X509_STORE_CTX_set_flags() which are likely to be deprecated in a future release.</p>
+
+<h1 id="BUGS">BUGS</h1>
+
+<p>Delta CRL checking is currently primitive. Only a single delta can be used and (partly due to limitations of <b>X509_STORE</b>) constructed CRLs are not maintained.</p>
+
+<p>If CRLs checking is enable CRLs are expected to be available in the corresponding <b>X509_STORE</b> structure. No attempt is made to download CRLs from the CRL distribution points extension.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>Enable CRL checking when performing certificate verification during SSL connections associated with an <b>SSL_CTX</b> structure <b>ctx</b>:</p>
+
+<pre><code>X509_VERIFY_PARAM *param;
+
+param = X509_VERIFY_PARAM_new();
+X509_VERIFY_PARAM_set_flags(param, X509_V_FLAG_CRL_CHECK);
+SSL_CTX_set1_param(ctx, param);
+X509_VERIFY_PARAM_free(param);</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/X509_verify_cert.html">X509_verify_cert(3)</a>, <a href="../man3/X509_check_host.html">X509_check_host(3)</a>, <a href="../man3/X509_check_email.html">X509_check_email(3)</a>, <a href="../man3/X509_check_ip.html">X509_check_ip(3)</a>, <a href="../man1/openssl-x509.html">openssl-x509(1)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The <b>X509_V_FLAG_NO_ALT_CHAINS</b> flag was added in OpenSSL 1.1.0. The flag <b>X509_V_FLAG_CB_ISSUER_CHECK</b> was deprecated in OpenSSL 1.1.0 and has no effect.</p>
+
+<p>The X509_VERIFY_PARAM_get_hostflags() function was added in OpenSSL 1.1.0i.</p>
+
+<p>The X509_VERIFY_PARAM_get0_host(), X509_VERIFY_PARAM_get0_email(), and X509_VERIFY_PARAM_get1_ip_asc() functions were added in OpenSSL 3.0.</p>
+
+<p>The function X509_VERIFY_PARAM_add0_policy() was historically documented as enabling policy checking however the implementation has never done this. The documentation was changed to align with the implementation.</p>
+
+<p>The X509_VERIFY_PARAM_get_purpose() function was added in OpenSSL 3.5.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2009-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

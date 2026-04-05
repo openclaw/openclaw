@@ -1,0 +1,154 @@
+.\"
+.\" Copyright 1998 by the Massachusetts Institute of Technology.
+.\" SPDX-License-Identifier: MIT
+.\"
+.TH ARES_QUERY 3 "24 July 1998"
+.SH NAME
+ares_query \- Initiate a single-question DNS query
+.SH SYNOPSIS
+.nf
+#include <ares.h>
+
+typedef void (*ares_callback_dnsrec)(void *arg, ares_status_t status,
+                                     size_t timeouts,
+                                     const ares_dns_record_t *dnsrec);
+
+ares_status_t ares_query_dnsrec(ares_channel_t      *channel,
+                                const char          *name,
+                                ares_dns_class_t     dnsclass,
+                                ares_dns_rec_type_t  type,
+                                ares_callback_dnsrec callback,
+                                void                *arg,
+                                unsigned short      *qid);
+
+typedef void (*ares_callback)(void *arg, int status,
+                              int timeouts, unsigned char *abuf,
+                              int alen);
+
+void ares_query(ares_channel_t *channel, const char *name,
+                int dnsclass, int type,
+                ares_callback callback, void *arg);
+
+.fi
+
+.SH DESCRIPTION
+
+The \fBares_query_dnsrec(3)\fP and \fBares_query(3)\fP functions initiate a
+single-question DNS query on the name service channel identified by
+.IR channel .
+The parameter
+.I name
+gives the query name as a NUL-terminated C string of period-separated
+labels optionally ending with a period; periods and backslashes within
+a label must be escaped with a backslash.  The parameters
+.I dnsclass
+and
+.I type
+give the class and type of the query.
+
+\fBares_query_dnsrec(3)\fP uses the ares \fBares_dns_class_t\fP and
+\fBares_dns_rec_type_t\fP defined types.  However, \fBares_query(3)\fP uses
+the values defined in \fB<arpa/nameser.h>\fP.
+
+When the query is complete or has failed, the ares library will invoke
+.IR callback .
+Completion or failure of the query may happen immediately (even before the
+return of the function call), or may happen during a later call to
+\fBares_process(3)\fP or \fBares_destroy(3)\fP.
+
+If this is called from a thread other than which the main program event loop is
+running, care needs to be taken to ensure any file descriptor lists are updated
+immediately within the eventloop.  When the associated callback is called,
+it is called with a channel lock so care must be taken to ensure any processing
+is minimal to prevent DNS channel stalls.
+
+The callback argument
+.I arg
+is copied from the \fBares_query_dnsrec(3)\fP or \fBares_query(3)\fP argument
+.IR arg .
+The callback argument
+.I status
+indicates whether the query succeeded and, if not, how it failed.  It
+may have any of the following values:
+.TP 19
+.B ARES_SUCCESS
+The query completed successfully.
+.TP 19
+.B ARES_ENODATA
+The query completed but contains no answers.
+.TP 19
+.B ARES_EFORMERR
+The query completed but the server claims that the query was
+malformatted.
+.TP 19
+.B ARES_ESERVFAIL
+The query completed but the server claims to have experienced a
+failure.  (This code can only occur if the
+.B ARES_FLAG_NOCHECKRESP
+flag was specified at channel initialization time; otherwise, such
+responses are ignored at the \fBares_send_dnsrec(3)\fP level.)
+.TP 19
+.B ARES_ENOTFOUND
+The query completed but the queried-for domain name was not found.
+.TP 19
+.B ARES_ENOTIMP
+The query completed but the server does not implement the operation
+requested by the query.  (This code can only occur if the
+.B ARES_FLAG_NOCHECKRESP
+flag was specified at channel initialization time; otherwise, such
+responses are ignored at the \fBares_send_dnsrec(3)\fP level.)
+.TP 19
+.B ARES_EREFUSED
+The query completed but the server refused the query.  (This code can
+only occur if the
+.B ARES_FLAG_NOCHECKRESP
+flag was specified at channel initialization time; otherwise, such
+responses are ignored at the \fBares_send_dnsrec(3)\fP level.)
+.TP 19
+.B ARES_EBADNAME
+The query name
+.I name
+could not be encoded as a domain name, either because it contained a
+zero-length label or because it contained a label of more than 63
+characters.
+.TP 19
+.B ARES_ETIMEOUT
+No name servers responded within the timeout period.
+.TP 19
+.B ARES_ECONNREFUSED
+No name servers could be contacted.
+.TP 19
+.B ARES_ENOMEM
+Memory was exhausted.
+.TP 19
+.B ARES_ECANCELLED
+The query was cancelled.
+.TP 19
+.B ARES_EDESTRUCTION
+The name service channel
+.I channel
+is being destroyed; the query will not be completed.
+.TP 19
+.B ARES_ENOSERVER
+The query will not be completed because no DNS servers were configured on the
+channel.
+.PP
+
+The callback argument
+.I timeouts
+reports how many times a query timed out during the execution of the
+given request.
+
+If the query completed (even if there was something wrong with it, as
+indicated by some of the above error codes), the callback argument
+.I dnsrec
+or
+.I abuf
+will be non-NULL, otherwise they will be NULL.
+
+.SH AVAILABILITY
+\fBares_query_dnsrec(3)\fP was introduced in c-ares 1.28.0.
+
+.SH SEE ALSO
+.BR ares_process (3),
+.BR ares_dns_record (3)

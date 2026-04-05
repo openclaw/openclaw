@@ -1,0 +1,94 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>RAND_load_file</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>RAND_load_file, RAND_write_file, RAND_file_name - PRNG seed file</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/rand.h&gt;
+
+int RAND_load_file(const char *filename, long max_bytes);
+
+int RAND_write_file(const char *filename);
+
+const char *RAND_file_name(char *buf, size_t num);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>RAND_load_file() reads a number of bytes from file <b>filename</b> and adds them to the PRNG. If <b>max_bytes</b> is nonnegative, up to <b>max_bytes</b> are read; if <b>max_bytes</b> is -1, the complete file is read (unless the file is not a regular file, in that case a fixed number of bytes, 256 in the current implementation, is attempted to be read). RAND_load_file() can read less than the complete file or the requested number of bytes if it doesn&#39;t fit in the return value type. Do not load the same file multiple times unless its contents have been updated by RAND_write_file() between reads. Also, note that <b>filename</b> should be adequately protected so that an attacker cannot replace or examine the contents. If <b>filename</b> is not a regular file, then user is considered to be responsible for any side effects, e.g. non-anticipated blocking or capture of controlling terminal.</p>
+
+<p>RAND_write_file() writes a number of random bytes (currently 128) to file <b>filename</b> which can be used to initialize the PRNG by calling RAND_load_file() in a later session.</p>
+
+<p>RAND_file_name() generates a default path for the random seed file. <b>buf</b> points to a buffer of size <b>num</b> in which to store the filename.</p>
+
+<p>On all systems, if the environment variable <b>RANDFILE</b> is set, its value will be used as the seed filename. Otherwise, the file is called <code>.rnd</code>, found in platform dependent locations:</p>
+
+<dl>
+
+<dt id="On-Windows-in-order-of-preference">On Windows (in order of preference)</dt>
+<dd>
+
+<pre><code>%HOME%, %USERPROFILE%, %SYSTEMROOT%, C:\</code></pre>
+
+</dd>
+<dt id="On-VMS">On VMS</dt>
+<dd>
+
+<pre><code>SYS$LOGIN:</code></pre>
+
+</dd>
+<dt id="On-all-other-systems">On all other systems</dt>
+<dd>
+
+<pre><code>$HOME</code></pre>
+
+</dd>
+</dl>
+
+<p>If <code>$HOME</code> (on non-Windows and non-VMS system) is not set either, or <b>num</b> is too small for the pathname, an error occurs.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>RAND_load_file() returns the number of bytes read or -1 on error.</p>
+
+<p>RAND_write_file() returns the number of bytes written, or -1 if the bytes written were generated without appropriate seeding.</p>
+
+<p>RAND_file_name() returns a pointer to <b>buf</b> on success, and NULL on error.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/RAND_add.html">RAND_add(3)</a>, <a href="../man3/RAND_bytes.html">RAND_bytes(3)</a>, <a href="../man7/RAND.html">RAND(7)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

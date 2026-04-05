@@ -1,0 +1,142 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>ECDSA_SIG_new</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#CONFORMING-TO">CONFORMING TO</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>ECDSA_SIG_new, ECDSA_SIG_free, ECDSA_SIG_get0, ECDSA_SIG_get0_r, ECDSA_SIG_get0_s, ECDSA_SIG_set0 - Functions for creating, destroying and manipulating ECDSA_SIG objects</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ecdsa.h&gt;
+
+ECDSA_SIG *ECDSA_SIG_new(void);
+void ECDSA_SIG_free(ECDSA_SIG *sig);
+void ECDSA_SIG_get0(const ECDSA_SIG *sig, const BIGNUM **pr, const BIGNUM **ps);
+const BIGNUM *ECDSA_SIG_get0_r(const ECDSA_SIG *sig);
+const BIGNUM *ECDSA_SIG_get0_s(const ECDSA_SIG *sig);
+int ECDSA_SIG_set0(ECDSA_SIG *sig, BIGNUM *r, BIGNUM *s);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p><b>ECDSA_SIG</b> is an opaque structure consisting of two BIGNUMs for the <i>r</i> and <i>s</i> value of an Elliptic Curve Digital Signature Algorithm (ECDSA) signature (see FIPS186-4 or X9.62). The <b>ECDSA_SIG</b> object was mainly used by the deprecated low level functions described in <a href="../man3/ECDSA_sign.html">ECDSA_sign(3)</a>, it is still required in order to be able to set or get the values of <i>r</i> and <i>s</i> into or from a signature. This is mainly used for testing purposes as shown in the <a href="#EXAMPLES">&quot;EXAMPLES&quot;</a>.</p>
+
+<p>ECDSA_SIG_new() allocates an empty <b>ECDSA_SIG</b> structure. Note: before OpenSSL 1.1.0, the <i>r</i> and <i>s</i> components were initialised.</p>
+
+<p>ECDSA_SIG_free() frees the <b>ECDSA_SIG</b> structure <i>sig</i>. If the argument is NULL, nothing is done.</p>
+
+<p>ECDSA_SIG_get0() returns internal pointers the <i>r</i> and <i>s</i> values contained in <i>sig</i> and stores them in <i>*pr</i> and <i>*ps</i>, respectively. The pointer <i>pr</i> or <i>ps</i> can be NULL, in which case the corresponding value is not returned.</p>
+
+<p>The values <i>r</i>, <i>s</i> can also be retrieved separately by the corresponding function ECDSA_SIG_get0_r() and ECDSA_SIG_get0_s(), respectively.</p>
+
+<p>Non-NULL <i>r</i> and <i>s</i> values can be set on the <i>sig</i> by calling ECDSA_SIG_set0(). Calling this function transfers the memory management of the values to the <b>ECDSA_SIG</b> object, and therefore the values that have been passed in should not be freed by the caller.</p>
+
+<p>See <a href="../man3/i2d_ECDSA_SIG.html">i2d_ECDSA_SIG(3)</a> and <a href="../man3/d2i_ECDSA_SIG.html">d2i_ECDSA_SIG(3)</a> for information about encoding and decoding ECDSA signatures to/from DER.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>ECDSA_SIG_new() returns NULL if the allocation fails.</p>
+
+<p>ECDSA_SIG_set0() returns 1 on success or 0 on failure.</p>
+
+<p>ECDSA_SIG_get0_r() and ECDSA_SIG_get0_s() return the corresponding value, or NULL if it is unset.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>Extract signature <i>r</i> and <i>s</i> values from a ECDSA <i>signature</i> of size <i>signaturelen</i>:</p>
+
+<pre><code>ECDSA_SIG *obj;
+const BIGNUM *r, *s;
+
+/* Load a signature into the ECDSA_SIG object */
+obj = d2i_ECDSA_SIG(NULL, &amp;signature, signaturelen);
+if (obj == NULL)
+    /* error */
+
+r = ECDSA_SIG_get0_r(obj);
+s = ECDSA_SIG_get0_s(obj);
+if (r == NULL || s == NULL)
+    /* error */
+
+/* Use BN_bn2binpad() here to convert to r and s into byte arrays */
+
+/*
+ * Do not try to access I&lt;r&gt; or I&lt;s&gt; after calling ECDSA_SIG_free(),
+ * as they are both freed by this call.
+ */
+ECDSA_SIG_free(obj);</code></pre>
+
+<p>Convert <i>r</i> and <i>s</i> byte arrays into an ECDSA_SIG <i>signature</i> of size <i>signaturelen</i>:</p>
+
+<pre><code>ECDSA_SIG *obj = NULL;
+unsigned char *signature = NULL;
+size_t signaturelen;
+BIGNUM *rbn = NULL, *sbn = NULL;
+
+obj = ECDSA_SIG_new();
+if (obj == NULL)
+    /* error */
+rbn = BN_bin2bn(r, rlen, NULL);
+sbn = BN_bin2bn(s, slen, NULL);
+if (rbn == NULL || sbn == NULL)
+    /* error */
+
+if (!ECDSA_SIG_set0(obj, rbn, sbn))
+    /* error */
+/* Set these to NULL since they are now owned by obj */
+rbn = sbn = NULL;
+
+signaturelen = i2d_ECDSA_SIG(obj, &amp;signature);
+if (signaturelen &lt;= 0)
+    /* error */
+
+/*
+ * This signature could now be passed to L&lt;EVP_DigestVerify(3)&gt;
+ * or L&lt;EVP_DigestVerifyFinal(3)&gt;
+ */
+
+BN_free(rbn);
+BN_free(sbn);
+OPENSSL_free(signature);
+ECDSA_SIG_free(obj);</code></pre>
+
+<h1 id="CONFORMING-TO">CONFORMING TO</h1>
+
+<p>ANSI X9.62, US Federal Information Processing Standard FIPS186-4 (Digital Signature Standard, DSS)</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EC_KEY_new.html">EC_KEY_new(3)</a>, <a href="../man3/EVP_DigestSignInit.html">EVP_DigestSignInit(3)</a>, <a href="../man3/EVP_DigestVerifyInit.html">EVP_DigestVerifyInit(3)</a>, <a href="../man3/EVP_PKEY_sign.html">EVP_PKEY_sign(3)</a> <a href="../man3/i2d_ECDSA_SIG.html">i2d_ECDSA_SIG(3)</a>, <a href="../man3/d2i_ECDSA_SIG.html">d2i_ECDSA_SIG(3)</a>, <a href="../man3/ECDSA_sign.html">ECDSA_sign(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2004-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

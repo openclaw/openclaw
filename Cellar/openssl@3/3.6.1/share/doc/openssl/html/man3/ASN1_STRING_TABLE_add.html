@@ -1,0 +1,82 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>ASN1_STRING_TABLE_add</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Types">Types</a></li>
+      <li><a href="#Functions">Functions</a></li>
+    </ul>
+  </li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>ASN1_STRING_TABLE, ASN1_STRING_TABLE_add, ASN1_STRING_TABLE_get, ASN1_STRING_TABLE_cleanup - ASN1_STRING_TABLE manipulation functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/asn1.h&gt;
+
+typedef struct asn1_string_table_st ASN1_STRING_TABLE;
+
+int ASN1_STRING_TABLE_add(int nid, long minsize, long maxsize,
+                          unsigned long mask, unsigned long flags);
+ASN1_STRING_TABLE *ASN1_STRING_TABLE_get(int nid);
+void ASN1_STRING_TABLE_cleanup(void);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<h2 id="Types">Types</h2>
+
+<p><b>ASN1_STRING_TABLE</b> is a table which holds string information (basically minimum size, maximum size, type and etc) for a NID object.</p>
+
+<h2 id="Functions">Functions</h2>
+
+<p>ASN1_STRING_TABLE_add() adds a new <b>ASN1_STRING_TABLE</b> item into the local ASN1 string table based on the <i>nid</i> along with other parameters.</p>
+
+<p>If the item is already in the table, fields of <b>ASN1_STRING_TABLE</b> are updated (depending on the values of those parameters, e.g., <i>minsize</i> and <i>maxsize</i> &gt;= 0, <i>mask</i> and <i>flags</i> != 0). If the <i>nid</i> is standard, a copy of the standard <b>ASN1_STRING_TABLE</b> is created and updated with other parameters.</p>
+
+<p>ASN1_STRING_TABLE_get() searches for an <b>ASN1_STRING_TABLE</b> item based on <i>nid</i>. It will search the local table first, then the standard one.</p>
+
+<p>ASN1_STRING_TABLE_cleanup() frees all <b>ASN1_STRING_TABLE</b> items added by ASN1_STRING_TABLE_add().</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>ASN1_STRING_TABLE_add() returns 1 on success, 0 if an error occurred.</p>
+
+<p>ASN1_STRING_TABLE_get() returns a valid <b>ASN1_STRING_TABLE</b> structure or NULL if nothing is found.</p>
+
+<p>ASN1_STRING_TABLE_cleanup() does not return a value.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ERR_get_error.html">ERR_get_error(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2017-2020 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

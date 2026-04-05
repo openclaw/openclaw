@@ -1,0 +1,482 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>openssl-ocsp</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a>
+    <ul>
+      <li><a href="#OCSP-Client">OCSP Client</a></li>
+      <li><a href="#OCSP-Server">OCSP Server</a></li>
+    </ul>
+  </li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#OPTIONS">OPTIONS</a>
+    <ul>
+      <li><a href="#OCSP-Client-Options">OCSP Client Options</a></li>
+      <li><a href="#OCSP-Server-Options">OCSP Server Options</a></li>
+    </ul>
+  </li>
+  <li><a href="#OCSP-RESPONSE-VERIFICATION">OCSP RESPONSE VERIFICATION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>openssl-ocsp - Online Certificate Status Protocol command</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<h2 id="OCSP-Client">OCSP Client</h2>
+
+<p><b>openssl</b> <b>ocsp</b> [<b>-help</b>] [<b>-out</b> <i>file</i>] [<b>-issuer</b> <i>file</i>] [<b>-cert</b> <i>file</i>] [<b>-no_certs</b>] [<b>-serial</b> <i>n</i>] [<b>-signer</b> <i>file</i>] [<b>-signkey</b> <i>file</i>] [<b>-sign_other</b> <i>file</i>] [<b>-nonce</b>] [<b>-no_nonce</b>] [<b>-req_text</b>] [<b>-resp_text</b>] [<b>-text</b>] [<b>-reqout</b> <i>filename</i>] [<b>-respout</b> <i>filename</i>] [<b>-reqin</b> <i>filename</i>] [<b>-respin</b> <i>filename</i>] [<b>-url</b> <i>URL</i>] [<b>-host</b> <i>host</i>:<i>port</i>] [<b>-path</b> <i>pathname</i>] [<b>-proxy</b> <i>[http[s]://][userinfo@]host[:port][/path][?query][#fragment]</i>] [<b>-no_proxy</b> <i>addresses</i>] [<b>-header</b>] [<b>-timeout</b> <i>seconds</i>] [<b>-VAfile</b> <i>file</i>] [<b>-validity_period</b> <i>n</i>] [<b>-status_age</b> <i>n</i>] [<b>-noverify</b>] [<b>-verify_other</b> <i>file</i>] [<b>-trust_other</b>] [<b>-no_intern</b>] [<b>-no_signature_verify</b>] [<b>-no_cert_verify</b>] [<b>-no_chain</b>] [<b>-no_cert_checks</b>] [<b>-no_explicit</b>] [<b>-port</b> <i>num</i>] [<b>-ignore_err</b>]</p>
+
+<h2 id="OCSP-Server">OCSP Server</h2>
+
+<p><b>openssl</b> <b>ocsp</b> [<b>-index</b> <i>file</i>] [<b>-CA</b> <i>file</i>] [<b>-rsigner</b> <i>file</i>] [<b>-rkey</b> <i>file</i>] [<b>-passin</b> <i>arg</i>] [<b>-rother</b> <i>file</i>] [<b>-rsigopt</b> <i>nm</i>:<i>v</i>] [<b>-rmd</b> <i>digest</i>] [<b>-badsig</b>] [<b>-resp_no_certs</b>] [<b>-nmin</b> <i>n</i>] [<b>-ndays</b> <i>n</i>] [<b>-resp_key_id</b>] [<b>-nrequest</b> <i>n</i>] [<b>-multi</b> <i>process-count</i>] [<b>-rcid</b> <i>digest</i>] [<b>-<i>digest</i></b>] [<b>-CAfile</b> <i>file</i>] [<b>-no-CAfile</b>] [<b>-CApath</b> <i>dir</i>] [<b>-no-CApath</b>] [<b>-CAstore</b> <i>uri</i>] [<b>-no-CAstore</b>] [<b>-allow_proxy_certs</b>] [<b>-attime</b> <i>timestamp</i>] [<b>-no_check_time</b>] [<b>-check_ss_sig</b>] [<b>-crl_check</b>] [<b>-crl_check_all</b>] [<b>-explicit_policy</b>] [<b>-extended_crl</b>] [<b>-ignore_critical</b>] [<b>-inhibit_any</b>] [<b>-inhibit_map</b>] [<b>-partial_chain</b>] [<b>-policy</b> <i>arg</i>] [<b>-policy_check</b>] [<b>-policy_print</b>] [<b>-purpose</b> <i>purpose</i>] [<b>-suiteB_128</b>] [<b>-suiteB_128_only</b>] [<b>-suiteB_192</b>] [<b>-trusted_first</b>] [<b>-no_alt_chains</b>] [<b>-use_deltas</b>] [<b>-auth_level</b> <i>num</i>] [<b>-verify_depth</b> <i>num</i>] [<b>-verify_email</b> <i>email</i>] [<b>-verify_hostname</b> <i>hostname</i>] [<b>-verify_ip</b> <i>ip</i>] [<b>-verify_name</b> <i>name</i>] [<b>-x509_strict</b>] [<b>-issuer_checks</b>] [<b>-provider</b> <i>name</i>] [<b>-provider-path</b> <i>path</i>] [<b>-provparam</b> <i>[name:]key=value</i>] [<b>-propquery</b> <i>propq</i>]</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The Online Certificate Status Protocol (OCSP) enables applications to determine the (revocation) state of an identified certificate (RFC 2560).</p>
+
+<p>This command performs many common OCSP tasks. It can be used to print out requests and responses, create requests and send queries to an OCSP responder and behave like a mini OCSP server itself.</p>
+
+<h1 id="OPTIONS">OPTIONS</h1>
+
+<p>This command operates as either a client or a server. The options are described below, divided into those two modes.</p>
+
+<h2 id="OCSP-Client-Options">OCSP Client Options</h2>
+
+<dl>
+
+<dt id="help"><b>-help</b></dt>
+<dd>
+
+<p>Print out a usage message.</p>
+
+</dd>
+<dt id="out-filename"><b>-out</b> <i>filename</i></dt>
+<dd>
+
+<p>specify output filename, default is standard output.</p>
+
+</dd>
+<dt id="issuer-filename"><b>-issuer</b> <i>filename</i></dt>
+<dd>
+
+<p>This specifies the current issuer certificate. The input can be in PEM, DER, or PKCS#12 format.</p>
+
+<p>This option can be used multiple times. This option <b>MUST</b> come before any <b>-cert</b> options.</p>
+
+</dd>
+<dt id="cert-filename"><b>-cert</b> <i>filename</i></dt>
+<dd>
+
+<p>Add the certificate <i>filename</i> to the request. The input can be in PEM, DER, or PKCS#12 format.</p>
+
+<p>This option can be used multiple times. The issuer certificate is taken from the previous <b>-issuer</b> option, or an error occurs if no issuer certificate is specified.</p>
+
+</dd>
+<dt id="no_certs"><b>-no_certs</b></dt>
+<dd>
+
+<p>Don&#39;t include any certificates in signed request.</p>
+
+</dd>
+<dt id="serial-num"><b>-serial</b> <i>num</i></dt>
+<dd>
+
+<p>Same as the <b>-cert</b> option except the certificate with serial number <b>num</b> is added to the request. The serial number is interpreted as a decimal integer unless preceded by <code>0x</code>. Negative integers can also be specified by preceding the value by a <code>-</code> sign.</p>
+
+</dd>
+<dt id="signer-filename--signkey-filename"><b>-signer</b> <i>filename</i>, <b>-signkey</b> <i>filename</i></dt>
+<dd>
+
+<p>Sign the OCSP request using the certificate specified in the <b>-signer</b> option and the private key specified by the <b>-signkey</b> option. The input can be in PEM, DER, or PKCS#12 format.</p>
+
+<p>If the <b>-signkey</b> option is not present then the private key is read from the same file as the certificate. If neither option is specified then the OCSP request is not signed.</p>
+
+</dd>
+<dt id="sign_other-filename"><b>-sign_other</b> <i>filename</i></dt>
+<dd>
+
+<p>Additional certificates to include in the signed request. The input can be in PEM, DER, or PKCS#12 format.</p>
+
+</dd>
+<dt id="nonce--no_nonce"><b>-nonce</b>, <b>-no_nonce</b></dt>
+<dd>
+
+<p>Add an OCSP nonce extension to a request or disable OCSP nonce addition. Normally if an OCSP request is input using the <b>-reqin</b> option no nonce is added: using the <b>-nonce</b> option will force addition of a nonce. If an OCSP request is being created (using <b>-cert</b> and <b>-serial</b> options) a nonce is automatically added specifying <b>-no_nonce</b> overrides this.</p>
+
+</dd>
+<dt id="req_text--resp_text--text"><b>-req_text</b>, <b>-resp_text</b>, <b>-text</b></dt>
+<dd>
+
+<p>Print out the text form of the OCSP request, response or both respectively.</p>
+
+</dd>
+<dt id="reqout-file--respout-filename"><b>-reqout</b> <i>file</i>, <b>-respout</b> <i>filename</i></dt>
+<dd>
+
+<p>Write out the DER-encoded OCSP request or response to <i>filename</i>. The output filename can be the same as the input filename, which leads to replacing the file contents. Note that file I/O is not atomic. The output file is truncated and then written.</p>
+
+</dd>
+<dt id="reqin-file--respin-filename"><b>-reqin</b> <i>file</i>, <b>-respin</b> <i>filename</i></dt>
+<dd>
+
+<p>Read OCSP request or response file from <i>file</i>. These option are ignored if OCSP request or response creation is implied by other options (for example with <b>-serial</b>, <b>-cert</b> and <b>-host</b> options).</p>
+
+</dd>
+<dt id="url-responder_url"><b>-url</b> <i>responder_url</i></dt>
+<dd>
+
+<p>Specify the responder host and optionally port and path via a URL. Both HTTP and HTTPS (SSL/TLS) URLs can be specified. The optional userinfo and fragment components are ignored. Any given query component is handled as part of the path component. For details, see the <b>-host</b> and <b>-path</b> options described next.</p>
+
+</dd>
+<dt id="host-host:port--path-pathname"><b>-host</b> <i>host</i>:<i>port</i>, <b>-path</b> <i>pathname</i></dt>
+<dd>
+
+<p>If the <b>-host</b> option is present then the OCSP request is sent to the host <i>host</i> on port <i>port</i>. The <i>host</i> may be a domain name or an IP (v4 or v6) address, such as <code>127.0.0.1</code> or <code>[::1]</code> for localhost. If it is an IPv6 address, it must be enclosed in <code>[</code> and <code>]</code>.</p>
+
+<p>The <b>-path</b> option specifies the HTTP pathname to use or &quot;/&quot; by default. This is equivalent to specifying <b>-url</b> with scheme http:// and the given <i>host</i>, <i>port</i>, and optional <i>pathname</i>.</p>
+
+</dd>
+<dt id="proxy-http-s-:-userinfo-host-:port-path-query-fragment"><b>-proxy</b> <i>[http[s]://][userinfo@]host[:port][/path][?query][#fragment]</i></dt>
+<dd>
+
+<p>The HTTP(S) proxy server to use for reaching the OCSP server unless <b>-no_proxy</b> applies, see below. If the host string is an IPv6 address, it must be enclosed in <code>[</code> and <code>]</code>. The proxy port defaults to 80 or 443 if the scheme is <code>https</code>; apart from that the optional <code>http://</code> or <code>https://</code> prefix is ignored, as well as any userinfo, path, query, and fragment components. Defaults to the environment variable <code>http_proxy</code> if set, else <code>HTTP_PROXY</code> in case no TLS is used, otherwise <code>https_proxy</code> if set, else <code>HTTPS_PROXY</code>.</p>
+
+</dd>
+<dt id="no_proxy-addresses"><b>-no_proxy</b> <i>addresses</i></dt>
+<dd>
+
+<p>List of IP addresses and/or DNS names of servers not to use an HTTP(S) proxy for, separated by commas and/or whitespace (where in the latter case the whole argument must be enclosed in &quot;...&quot;). Default is from the environment variable <code>no_proxy</code> if set, else <code>NO_PROXY</code>.</p>
+
+</dd>
+<dt id="header-name-value"><b>-header</b> <i>name</i>=<i>value</i></dt>
+<dd>
+
+<p>Adds the header <i>name</i> with the specified <i>value</i> to the OCSP request that is sent to the responder. This may be repeated.</p>
+
+</dd>
+<dt id="timeout-seconds"><b>-timeout</b> <i>seconds</i></dt>
+<dd>
+
+<p>Connection timeout to the OCSP responder in seconds. On POSIX systems, when running as an OCSP responder, this option also limits the time that the responder is willing to wait for the client request. This time is measured from the time the responder accepts the connection until the complete request is received.</p>
+
+</dd>
+<dt id="verify_other-file"><b>-verify_other</b> <i>file</i></dt>
+<dd>
+
+<p>File or URI containing additional certificates to search when attempting to locate the OCSP response signing certificate. Some responders omit the actual signer&#39;s certificate from the response: this option can be used to supply the necessary certificate in such cases. The input can be in PEM, DER, or PKCS#12 format.</p>
+
+</dd>
+<dt id="trust_other"><b>-trust_other</b></dt>
+<dd>
+
+<p>The certificates specified by the <b>-verify_other</b> option should be explicitly trusted and no additional checks will be performed on them. This is useful when the complete responder certificate chain is not available or trusting a root CA is not appropriate.</p>
+
+</dd>
+<dt id="VAfile-file"><b>-VAfile</b> <i>file</i></dt>
+<dd>
+
+<p>File or URI containing explicitly trusted responder certificates. Equivalent to the <b>-verify_other</b> and <b>-trust_other</b> options. The input can be in PEM, DER, or PKCS#12 format.</p>
+
+</dd>
+<dt id="noverify"><b>-noverify</b></dt>
+<dd>
+
+<p>Don&#39;t attempt to verify the OCSP response signature or the nonce values. This option will normally only be used for debugging since it disables all verification of the responders certificate.</p>
+
+</dd>
+<dt id="no_intern"><b>-no_intern</b></dt>
+<dd>
+
+<p>Ignore certificates contained in the OCSP response when searching for the signers certificate. With this option the signers certificate must be specified with either the <b>-verify_other</b> or <b>-VAfile</b> options.</p>
+
+</dd>
+<dt id="no_signature_verify"><b>-no_signature_verify</b></dt>
+<dd>
+
+<p>Don&#39;t check the signature on the OCSP response. Since this option tolerates invalid signatures on OCSP responses it will normally only be used for testing purposes.</p>
+
+</dd>
+<dt id="no_cert_verify"><b>-no_cert_verify</b></dt>
+<dd>
+
+<p>Don&#39;t verify the OCSP response signers certificate at all. Since this option allows the OCSP response to be signed by any certificate it should only be used for testing purposes.</p>
+
+</dd>
+<dt id="no_chain"><b>-no_chain</b></dt>
+<dd>
+
+<p>Do not use certificates in the response as additional untrusted CA certificates.</p>
+
+</dd>
+<dt id="no_explicit"><b>-no_explicit</b></dt>
+<dd>
+
+<p>Do not explicitly trust the root CA if it is set to be trusted for OCSP signing.</p>
+
+</dd>
+<dt id="no_cert_checks"><b>-no_cert_checks</b></dt>
+<dd>
+
+<p>Don&#39;t perform any additional checks on the OCSP response signers certificate. That is do not make any checks to see if the signers certificate is authorised to provide the necessary status information: as a result this option should only be used for testing purposes.</p>
+
+</dd>
+<dt id="validity_period-nsec--status_age-age"><b>-validity_period</b> <i>nsec</i>, <b>-status_age</b> <i>age</i></dt>
+<dd>
+
+<p>These options specify the range of times, in seconds, which will be tolerated in an OCSP response. Each certificate status response includes a <b>notBefore</b> time and an optional <b>notAfter</b> time. The current time should fall between these two values, but the interval between the two times may be only a few seconds. In practice the OCSP responder and clients clocks may not be precisely synchronised and so such a check may fail. To avoid this the <b>-validity_period</b> option can be used to specify an acceptable error range in seconds, the default value is 5 minutes.</p>
+
+<p>If the <b>notAfter</b> time is omitted from a response then this means that new status information is immediately available. In this case the age of the <b>notBefore</b> field is checked to see it is not older than <i>age</i> seconds old. By default this additional check is not performed.</p>
+
+</dd>
+<dt id="rcid-digest"><b>-rcid</b> <i>digest</i></dt>
+<dd>
+
+<p>This option sets the digest algorithm to use for certificate identification in the OCSP response. Any digest supported by the <a href="../man1/openssl-dgst.html">openssl-dgst(1)</a> command can be used. The default is the same digest algorithm used in the request.</p>
+
+</dd>
+<dt id="digest"><b>-<i>digest</i></b></dt>
+<dd>
+
+<p>This option sets digest algorithm to use for certificate identification in the OCSP request. Any digest supported by the OpenSSL <b>dgst</b> command can be used. The default is SHA-1. This option may be used multiple times to specify the digest used by subsequent certificate identifiers.</p>
+
+</dd>
+<dt id="CAfile-file--no-CAfile--CApath-dir--no-CApath--CAstore-uri--no-CAstore"><b>-CAfile</b> <i>file</i>, <b>-no-CAfile</b>, <b>-CApath</b> <i>dir</i>, <b>-no-CApath</b>, <b>-CAstore</b> <i>uri</i>, <b>-no-CAstore</b></dt>
+<dd>
+
+<p>See <a href="../man1/openssl-verification-options.html">&quot;Trusted Certificate Options&quot; in openssl-verification-options(1)</a> for details.</p>
+
+</dd>
+<dt id="allow_proxy_certs--attime--no_check_time--check_ss_sig--crl_check--crl_check_all--explicit_policy--extended_crl--ignore_critical--inhibit_any--inhibit_map--no_alt_chains--partial_chain--policy--policy_check--policy_print--purpose--suiteB_128--suiteB_128_only--suiteB_192--trusted_first--use_deltas--auth_level--verify_depth--verify_email--verify_hostname--verify_ip--verify_name--x509_strict--issuer_checks"><b>-allow_proxy_certs</b>, <b>-attime</b>, <b>-no_check_time</b>, <b>-check_ss_sig</b>, <b>-crl_check</b>, <b>-crl_check_all</b>, <b>-explicit_policy</b>, <b>-extended_crl</b>, <b>-ignore_critical</b>, <b>-inhibit_any</b>, <b>-inhibit_map</b>, <b>-no_alt_chains</b>, <b>-partial_chain</b>, <b>-policy</b>, <b>-policy_check</b>, <b>-policy_print</b>, <b>-purpose</b>, <b>-suiteB_128</b>, <b>-suiteB_128_only</b>, <b>-suiteB_192</b>, <b>-trusted_first</b>, <b>-use_deltas</b>, <b>-auth_level</b>, <b>-verify_depth</b>, <b>-verify_email</b>, <b>-verify_hostname</b>, <b>-verify_ip</b>, <b>-verify_name</b>, <b>-x509_strict</b> <b>-issuer_checks</b></dt>
+<dd>
+
+<p>Set various options of certificate chain verification. See <a href="../man1/openssl-verification-options.html">&quot;Verification Options&quot; in openssl-verification-options(1)</a> for details.</p>
+
+</dd>
+<dt id="provider-name"><b>-provider</b> <i>name</i></dt>
+<dd>
+
+</dd>
+<dt id="provider-path-path"><b>-provider-path</b> <i>path</i></dt>
+<dd>
+
+</dd>
+<dt id="provparam-name:-key-value"><b>-provparam</b> <i>[name:]key=value</i></dt>
+<dd>
+
+</dd>
+<dt id="propquery-propq"><b>-propquery</b> <i>propq</i></dt>
+<dd>
+
+<p>See <a href="../man1/openssl.html">&quot;Provider Options&quot; in openssl(1)</a>, <a href="../man7/provider.html">provider(7)</a>, and <a href="../man7/property.html">property(7)</a>.</p>
+
+</dd>
+</dl>
+
+<h2 id="OCSP-Server-Options">OCSP Server Options</h2>
+
+<dl>
+
+<dt id="index-indexfile"><b>-index</b> <i>indexfile</i></dt>
+<dd>
+
+<p>The <i>indexfile</i> parameter is the name of a text index file in <b>ca</b> format containing certificate revocation information.</p>
+
+<p>If the <b>-index</b> option is specified then this command switches to responder mode, otherwise it is in client mode. The request(s) the responder processes can be either specified on the command line (using <b>-issuer</b> and <b>-serial</b> options), supplied in a file (using the <b>-reqin</b> option) or via external OCSP clients (if <b>-port</b> or <b>-url</b> is specified).</p>
+
+<p>If the <b>-index</b> option is present then the <b>-CA</b> and <b>-rsigner</b> options must also be present.</p>
+
+</dd>
+<dt id="CA-file"><b>-CA</b> <i>file</i></dt>
+<dd>
+
+<p>CA certificates corresponding to the revocation information in the index file given with <b>-index</b>. The input can be in PEM, DER, or PKCS#12 format.</p>
+
+</dd>
+<dt id="rsigner-file"><b>-rsigner</b> <i>file</i></dt>
+<dd>
+
+<p>The certificate to sign OCSP responses with. The input can be in PEM, DER, or PKCS#12 format.</p>
+
+</dd>
+<dt id="rkey-file"><b>-rkey</b> <i>file</i></dt>
+<dd>
+
+<p>The private key to sign OCSP responses with: if not present the file specified in the <b>-rsigner</b> option is used.</p>
+
+</dd>
+<dt id="passin-arg"><b>-passin</b> <i>arg</i></dt>
+<dd>
+
+<p>The private key password source. For more information about the format of <i>arg</i> see <a href="../man1/openssl-passphrase-options.html">openssl-passphrase-options(1)</a>.</p>
+
+</dd>
+<dt id="rother-file"><b>-rother</b> <i>file</i></dt>
+<dd>
+
+<p>Additional certificates to include in the OCSP response. The input can be in PEM, DER, or PKCS#12 format.</p>
+
+</dd>
+<dt id="rsigopt-nm:v"><b>-rsigopt</b> <i>nm</i>:<i>v</i></dt>
+<dd>
+
+<p>Pass options to the signature algorithm when signing OCSP responses. Names and values of these options are algorithm-specific.</p>
+
+</dd>
+<dt id="rmd-digest"><b>-rmd</b> <i>digest</i></dt>
+<dd>
+
+<p>The digest to use when signing the response.</p>
+
+</dd>
+<dt id="badsig"><b>-badsig</b></dt>
+<dd>
+
+<p>Corrupt the response signature before writing it; this can be useful for testing.</p>
+
+</dd>
+<dt id="resp_no_certs"><b>-resp_no_certs</b></dt>
+<dd>
+
+<p>Don&#39;t include any certificates in the OCSP response.</p>
+
+</dd>
+<dt id="resp_key_id"><b>-resp_key_id</b></dt>
+<dd>
+
+<p>Identify the signer certificate using the key ID, default is to use the subject name.</p>
+
+</dd>
+<dt id="port-portnum"><b>-port</b> <i>portnum</i></dt>
+<dd>
+
+<p>Port to listen for OCSP requests on. Both IPv4 and IPv6 are possible. The port may also be specified using the <b>-url</b> option. A <code>0</code> argument indicates that any available port shall be chosen automatically.</p>
+
+</dd>
+<dt id="ignore_err"><b>-ignore_err</b></dt>
+<dd>
+
+<p>Ignore malformed requests or responses: When acting as an OCSP client, retry if a malformed response is received. When acting as an OCSP responder, continue running instead of terminating upon receiving a malformed request.</p>
+
+</dd>
+<dt id="nrequest-number"><b>-nrequest</b> <i>number</i></dt>
+<dd>
+
+<p>The OCSP server will exit after receiving <i>number</i> requests, default unlimited.</p>
+
+</dd>
+<dt id="multi-process-count"><b>-multi</b> <i>process-count</i></dt>
+<dd>
+
+<p>Run the specified number of OCSP responder child processes, with the parent process respawning child processes as needed. Child processes will detect changes in the CA index file and automatically reload it. When running as a responder <b>-timeout</b> option is recommended to limit the time each child is willing to wait for the client&#39;s OCSP response. This option is available on POSIX systems (that support the fork() and other required unix system-calls).</p>
+
+</dd>
+<dt id="nmin-minutes--ndays-days"><b>-nmin</b> <i>minutes</i>, <b>-ndays</b> <i>days</i></dt>
+<dd>
+
+<p>Number of minutes or days when fresh revocation information is available: used in the <b>nextUpdate</b> field. If neither option is present then the <b>nextUpdate</b> field is omitted meaning fresh revocation information is immediately available.</p>
+
+</dd>
+</dl>
+
+<h1 id="OCSP-RESPONSE-VERIFICATION">OCSP RESPONSE VERIFICATION</h1>
+
+<p>OCSP Response follows the rules specified in RFC2560.</p>
+
+<p>Initially the OCSP responder certificate is located and the signature on the OCSP request checked using the responder certificate&#39;s public key.</p>
+
+<p>Then a normal certificate verify is performed on the OCSP responder certificate building up a certificate chain in the process. The locations of the trusted certificates used to build the chain can be specified by the <b>-CAfile</b>, <b>-CApath</b> or <b>-CAstore</b> options or they will be looked for in the standard OpenSSL certificates directory.</p>
+
+<p>If the initial verify fails then the OCSP verify process halts with an error.</p>
+
+<p>Otherwise the issuing CA certificate in the request is compared to the OCSP responder certificate: if there is a match then the OCSP verify succeeds.</p>
+
+<p>Otherwise the OCSP responder certificate&#39;s CA is checked against the issuing CA certificate in the request. If there is a match and the OCSPSigning extended key usage is present in the OCSP responder certificate then the OCSP verify succeeds.</p>
+
+<p>Otherwise, if <b>-no_explicit</b> is <b>not</b> set the root CA of the OCSP responders CA is checked to see if it is trusted for OCSP signing. If it is the OCSP verify succeeds.</p>
+
+<p>If none of these checks is successful then the OCSP verify fails.</p>
+
+<p>What this effectively means if that if the OCSP responder certificate is authorised directly by the CA it is issuing revocation information about (and it is correctly configured) then verification will succeed.</p>
+
+<p>If the OCSP responder is a &quot;global responder&quot; which can give details about multiple CAs and has its own separate certificate chain then its root CA can be trusted for OCSP signing. For example:</p>
+
+<pre><code>openssl x509 -in ocspCA.pem -addtrust OCSPSigning -out trustedCA.pem</code></pre>
+
+<p>Alternatively the responder certificate itself can be explicitly trusted with the <b>-VAfile</b> option.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>As noted, most of the verify options are for testing or debugging purposes. Normally only the <b>-CApath</b>, <b>-CAfile</b>, <b>-CAstore</b> and (if the responder is a &#39;global VA&#39;) <b>-VAfile</b> options need to be used.</p>
+
+<p>The OCSP server is only useful for test and demonstration purposes: it is not really usable as a full OCSP responder. It contains only a very simple HTTP request handling and can only handle the POST form of OCSP queries. It also handles requests serially meaning it cannot respond to new requests until it has processed the current one. The text index file format of revocation is also inefficient for large quantities of revocation data.</p>
+
+<p>It is possible to run this command in responder mode via a CGI script using the <b>-reqin</b> and <b>-respout</b> options.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>Create an OCSP request and write it to a file:</p>
+
+<pre><code>openssl ocsp -issuer issuer.pem -cert c1.pem -cert c2.pem -reqout req.der</code></pre>
+
+<p>Send a query to an OCSP responder with URL http://ocsp.myhost.com/ save the response to a file, print it out in text form, and verify the response:</p>
+
+<pre><code>openssl ocsp -issuer issuer.pem -cert c1.pem -cert c2.pem \
+    -url http://ocsp.myhost.com/ -resp_text -respout resp.der</code></pre>
+
+<p>Read in an OCSP response and print out text form:</p>
+
+<pre><code>openssl ocsp -respin resp.der -text -noverify</code></pre>
+
+<p>OCSP server on port 8888 using a standard <b>ca</b> configuration, and a separate responder certificate. All requests and responses are printed to a file.</p>
+
+<pre><code>openssl ocsp -index demoCA/index.txt -port 8888 -rsigner rcert.pem -CA demoCA/cacert.pem
+       -text -out log.txt</code></pre>
+
+<p>As above but exit after processing one request:</p>
+
+<pre><code>openssl ocsp -index demoCA/index.txt -port 8888 -rsigner rcert.pem -CA demoCA/cacert.pem
+    -nrequest 1</code></pre>
+
+<p>Query status information using an internally generated request:</p>
+
+<pre><code>openssl ocsp -index demoCA/index.txt -rsigner rcert.pem -CA demoCA/cacert.pem
+    -issuer demoCA/cacert.pem -serial 1</code></pre>
+
+<p>Query status information using request read from a file, and write the response to a second file.</p>
+
+<pre><code>openssl ocsp -index demoCA/index.txt -rsigner rcert.pem -CA demoCA/cacert.pem
+    -reqin req.der -respout resp.der</code></pre>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The -no_alt_chains option was added in OpenSSL 1.1.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2001-2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

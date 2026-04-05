@@ -1,0 +1,68 @@
+.\"
+.\" Copyright 1998 by the Massachusetts Institute of Technology.
+.\" SPDX-License-Identifier: MIT
+.\"
+.TH ARES_GETHOSTBYNAME 3 "25 July 1998"
+.SH NAME
+ares_gethostbyname_file \- Lookup a name in the system's hosts file
+.SH SYNOPSIS
+.nf
+#include <ares.h>
+
+int ares_gethostbyname_file(ares_channel_t *\fIchannel\fP, const char *\fIname\fP,
+                            int \fIfamily\fP, struct hostent **host)
+.fi
+.SH DESCRIPTION
+The
+.B ares_gethostbyname_file
+function performs a host lookup by name against the system's hosts file (or equivalent local hostname database).  
+The
+.IR channel
+parameter is required, but no asynchronous queries are performed.  Instead, the
+lookup is done via the same mechanism used to perform 'f' lookups
+(see the
+.I lookups
+options field in \fIares_init_options(3)\fP).
+The parameter
+.I name
+gives the hostname as a NUL-terminated C string, and
+.I family
+gives the desired type of address for the resulting host entry.  
+.PP
+The return value indicates whether the query succeeded and, if not, how it
+failed.  It may have any of the following values:
+.TP 19
+.B ARES_SUCCESS
+The host lookup completed successfully and 
+.I host
+now points to the result (and must be freed with \fIares_free_hostent(3)\fP).
+.TP 19
+.B ARES_ENOTFOUND
+The hostname
+.I name
+was not found.
+.TP 19
+.B ARES_EFILE
+There was a file I/O error while performing the lookup.
+.TP 19
+.B ARES_ENOMEM
+Memory was exhausted.
+.PP
+On successful completion of the query, the pointer pointed to by
+.I host
+points to a
+.B struct hostent
+containing the address of the host returned by the lookup.  The user must
+free the memory pointed to by
+.IR host
+when finished with it by calling \fIares_free_hostent(3)\fP.  If the lookup did
+not complete successfully, 
+.I host
+will be
+.BR NULL .
+.SH AVAILABILITY
+Added in c-ares 1.5.4
+.SH SEE ALSO
+.BR ares_gethostbyname (3),
+.BR ares_free_hostent (3),
+.BR ares_init_options (3)

@@ -1,0 +1,1 @@
+../../../completions/fish/brew.fish

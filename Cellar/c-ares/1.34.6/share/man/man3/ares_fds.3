@@ -1,0 +1,57 @@
+.\"
+.\" Copyright 1998 by the Massachusetts Institute of Technology.
+.\" SPDX-License-Identifier: MIT
+.\"
+.TH ARES_FDS 3 "23 July 1998"
+.SH NAME
+ares_fds \- return file descriptors to select on (deprecated)
+.SH SYNOPSIS
+.nf
+#include <ares.h>
+
+int ares_fds(const ares_channel_t *\fIchannel\fP,
+             fd_set *\fIread_fds\fP,
+             fd_set *\fIwrite_fds\fP)
+.fi
+.SH DESCRIPTION
+See the \fBNOTES\fP section on issues with this function and alternatives.
+
+The \fBares_fds(3)\fP function retrieves the set of file descriptors which the
+calling application should \fBselect(2)\fP on for reading and writing for the
+processing of name service queries pending on the name service channel
+identified by \fIchannel\fP.  Should not be used with \fBARES_OPT_EVENT_THREAD\fP
+is passed to \fIares_init_options(3)\fP.
+
+File descriptors will be set in the file descriptor sets pointed to by
+\fIread_fds\fP and \fIwrite_fds\fP as appropriate.  File descriptors already
+set in \fIread_fds\fP and \fIwrite_fds\fP will remain set; initialization of
+the file descriptor sets (using \fBFD_ZERO\fP) is the responsibility of the
+caller.
+.SH RETURN VALUES
+\fBares_fds(3)\fP returns a value that is one greater than the number of the
+highest socket set in either \fIread_fds\fP or \fIwrite_fds\fP.  If no queries
+are active, \fBares_fds(3)\fP returns 0.
+
+.SH NOTES
+The \fBselect(2)\fP call which takes the \fIfd_set\fP parameter has significant
+limitations which can impact modern systems.  The limitations can vary from
+system to system, but in general if the file descriptor value itself is greater
+than 1024 (not the count but the actual value), this can lead to
+\fBares_fds(3)\fP writing out of bounds which will cause a system crash.  In
+modern networking clients, it is not unusual to have file descriptor values
+above 1024, especially when a library is pulled in as a dependency into a larger
+project.
+
+c-ares does not attempt to detect this condition to prevent crashes due to both
+implementation-defined behavior in the OS as well as integrator-controllable
+tunables which may impact the limits.
+
+It is recommended to use \fBARES_OPT_EVENT_THREAD\fP passed to
+\fIares_init_options(3)\fP, or socket state callbacks
+(\fBARES_OPT_SOCK_STATE_CB\fP) registered via \fIares_init_options(3)\fP and use
+more modern methods to check for socket readable/writable state such as
+\fIpoll(2)\fP, \fIepoll(2)\fP, or \fIkqueue(2)\fP.
+.SH SEE ALSO
+.BR ares_init_options (3),
+.BR ares_timeout (3),
+.BR ares_process (3)

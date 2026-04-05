@@ -1,0 +1,65 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>o2i_SCT_LIST</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>o2i_SCT_LIST, i2o_SCT_LIST, o2i_SCT, i2o_SCT - decode and encode Signed Certificate Timestamp lists in TLS wire format</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ct.h&gt;
+
+STACK_OF(SCT) *o2i_SCT_LIST(STACK_OF(SCT) **a, const unsigned char **pp,
+                            size_t len);
+int i2o_SCT_LIST(const STACK_OF(SCT) *a, unsigned char **pp);
+SCT *o2i_SCT(SCT **psct, const unsigned char **in, size_t len);
+int i2o_SCT(const SCT *sct, unsigned char **out);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The SCT_LIST and SCT functions are very similar to the i2d and d2i family of functions, except that they convert to and from TLS wire format, as described in RFC 6962. See <a href="../man3/d2i_SCT_LIST.html">d2i_SCT_LIST(3)</a> for more information about how the parameters are treated and the return values.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>All of the functions have return values consistent with those stated for <a href="../man3/d2i_SCT_LIST.html">d2i_SCT_LIST(3)</a> and <a href="../man3/i2d_SCT_LIST.html">i2d_SCT_LIST(3)</a>.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ct.html">ct(7)</a>, <a href="../man3/d2i_SCT_LIST.html">d2i_SCT_LIST(3)</a>, <a href="../man3/i2d_SCT_LIST.html">i2d_SCT_LIST(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>These functions were added in OpenSSL 1.1.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2016 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

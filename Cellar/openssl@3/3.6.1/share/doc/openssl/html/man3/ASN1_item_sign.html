@@ -1,0 +1,216 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>ASN1_item_sign</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>ASN1_item_sign, ASN1_item_sign_ex, ASN1_item_sign_ctx, ASN1_item_verify, ASN1_item_verify_ex, ASN1_item_verify_ctx - ASN1 sign and verify</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/x509.h&gt;
+
+int ASN1_item_sign_ex(const ASN1_ITEM *it, X509_ALGOR *algor1,
+                      X509_ALGOR *algor2, ASN1_BIT_STRING *signature,
+                      const void *data, const ASN1_OCTET_STRING *id,
+                      EVP_PKEY *pkey, const EVP_MD *md, OSSL_LIB_CTX *libctx,
+                      const char *propq);
+
+int ASN1_item_sign(const ASN1_ITEM *it, X509_ALGOR *algor1, X509_ALGOR *algor2,
+                   ASN1_BIT_STRING *signature, const void *data,
+                   EVP_PKEY *pkey, const EVP_MD *md);
+
+int ASN1_item_sign_ctx(const ASN1_ITEM *it, X509_ALGOR *algor1,
+                       X509_ALGOR *algor2, ASN1_BIT_STRING *signature,
+                       const void *data, EVP_MD_CTX *ctx);
+
+int ASN1_item_verify_ex(const ASN1_ITEM *it, const X509_ALGOR *alg,
+                        const ASN1_BIT_STRING *signature, const void *data,
+                        const ASN1_OCTET_STRING *id, EVP_PKEY *pkey,
+                        OSSL_LIB_CTX *libctx, const char *propq);
+
+int ASN1_item_verify(const ASN1_ITEM *it, const X509_ALGOR *alg,
+                     const ASN1_BIT_STRING *signature, const void *data,
+                     EVP_PKEY *pkey);
+
+int ASN1_item_verify_ctx(const ASN1_ITEM *it, const X509_ALGOR *alg,
+                         const ASN1_BIT_STRING *signature, const void *data,
+                         EVP_MD_CTX *ctx);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>ASN1_item_sign_ex() is used to sign arbitrary ASN1 data using a data object <i>data</i>, the ASN.1 structure <i>it</i>, private key <i>pkey</i>, and message digest <i>md</i>. The data to be signed is formed by taking the data object in <i>data</i> and converting it to DER format using the ASN.1 type structure <i>it</i>. Examples of values that can be used for <i>it</i> are <i>ASN1_ITEM_rptr(X509_CINF)</i>, <i>ASN1_ITEM_rptr(X509_REQ_INFO)</i>, and <i>ASN1_ITEM_rptr(X509_CRL_INFO)</i>.</p>
+
+<p><i>signature</i>, &lt;algor1&gt;, and <i>algor2</i> are essentially output parameters. The generated signature is set into <i>signature</i>, which must have been allocated beforehand, e.g., using <i>ASN1_BIT_STRING_new()</i>. This may happen indirectly, for instance by having an ASN.1 structure like <b>X509</b> that includes a non-optional signature field of type <b>ASN1_BIT_STRING</b>. The &lt;algor1&gt; and <i>algor2</i> parameters are optional and support outputting up to two <b>X509_ALGOR</b> values representing the signature algorithm (typically including a digest algorithm, and/or possibly other parameters), which is useful for structures like <b>X509</b> that must contain the same signature algorithm information in two places: <i>sig_alg</i> and <i>cert_info.signature</i>. Each of the &lt;algor1&gt; and <i>algor2</i> pointers may be NULL, otherwise they must have been allocated beforehand (e.g., using <i>X509_ALGOR_new()</i>, or indirectly like for the <b>X509</b>fields <i>sig_alg</i> and <i>cert_info.signature</i>), and the ASN1_item_sign_ex() function sets into it the signature algorithm. This is done before generating the signature value and setting it into <i>signature</i>.</p>
+
+<p>The <b>OSSL_LIB_CTX</b> specified in <i>libctx</i> and the property query string specified in <i>props</i> are used when searching for algorithms in providers. The optional parameter <i>id</i> can be NULL, but can be set for special key types. See EVP_PKEY_CTX_set1_id() for further info.</p>
+
+<p>ASN1_item_sign() is similar to ASN1_item_sign_ex() but uses default values of NULL for the <i>id</i>, <i>libctx</i> and <i>propq</i>.</p>
+
+<p>ASN1_item_sign_ctx() is similar to ASN1_item_sign() but uses the parameters contained in digest context <i>ctx</i>.</p>
+
+<p>ASN1_item_verify_ex() is used to verify the signature <i>signature</i> of internal data <i>data</i> using the public key <i>pkey</i> and algorithm identifier <i>alg</i>. The data that is verified is formed by taking the data object in <i>data</i> and converting it to der format using the ASN.1 structure <i>it</i>. The <b>OSSL_LIB_CTX</b> specified in <i>libctx</i> and the property query string specified in <i>props</i> are used when searching for algorithms in providers. The optional parameter <i>id</i> can be NULL, but can be set for special key types. See EVP_PKEY_CTX_set1_id() for further info.</p>
+
+<p>ASN1_item_verify() is similar to ASN1_item_verify_ex() but uses default values of NULL for the <i>id</i>, <i>libctx</i> and <i>propq</i>.</p>
+
+<p>ASN1_item_verify_ctx() is similar to ASN1_item_verify() but uses the parameters contained in digest context <i>ctx</i>.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>All sign functions return the size of the signature in bytes for success and zero for failure.</p>
+
+<p>All verify functions return 1 if the signature is valid and 0 if the signature check fails. If the signature could not be checked at all because it was ill-formed or some other error occurred then -1 is returned.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>In the following example a &#39;MyObject&#39; object is signed using the key contained in an EVP_MD_CTX. The signature is written to MyObject.signature. The object is then output in DER format and then loaded back in and verified.</p>
+
+<pre><code> #include &lt;openssl/x509.h&gt;
+ #include &lt;openssl/asn1t.h&gt;
+
+ /* An object used to store the ASN1 data fields that will be signed */
+ typedef struct MySignInfoObject_st
+ {
+     ASN1_INTEGER *version;
+     X509_ALGOR sig_alg;
+ } MySignInfoObject;
+
+ DECLARE_ASN1_FUNCTIONS(MySignInfoObject)
+ /*
+  * A higher level object containing the ASN1 fields, signature alg and
+  * output signature.
+  */
+ typedef struct MyObject_st
+ {
+     MySignInfoObject info;
+     X509_ALGOR sig_alg;
+     ASN1_BIT_STRING *signature;
+ } MyObject;
+
+ DECLARE_ASN1_FUNCTIONS(MyObject)
+
+ /* The ASN1 definition of MySignInfoObject */
+ ASN1_SEQUENCE_cb(MySignInfoObject, NULL) = {
+     ASN1_SIMPLE(MySignInfoObject, version, ASN1_INTEGER)
+     ASN1_EMBED(MySignInfoObject, sig_alg, X509_ALGOR),
+ } ASN1_SEQUENCE_END_cb(MySignInfoObject, MySignInfoObject)
+
+ /* new, free, d2i &amp; i2d functions for MySignInfoObject */
+ IMPLEMENT_ASN1_FUNCTIONS(MySignInfoObject)
+
+ /* The ASN1 definition of MyObject */
+ ASN1_SEQUENCE_cb(MyObject, NULL) = {
+     ASN1_EMBED(MyObject, info, MySignInfoObject),
+     ASN1_EMBED(MyObject, sig_alg, X509_ALGOR),
+     ASN1_SIMPLE(MyObject, signature, ASN1_BIT_STRING)
+ } ASN1_SEQUENCE_END_cb(MyObject, MyObject)
+
+ /* new, free, d2i &amp; i2d functions for MyObject */
+ IMPLEMENT_ASN1_FUNCTIONS(MyObject)
+
+ int test_asn1_item_sign_verify(const char *mdname, EVP_PKEY *pkey, long version)
+ {
+    int ret = 0;
+    unsigned char *obj_der = NULL;
+    const unsigned char *p = NULL;
+    MyObject *obj = NULL, *loaded_obj = NULL;
+    const ASN1_ITEM *it = ASN1_ITEM_rptr(MySignInfoObject);
+    EVP_MD_CTX *sctx = NULL, *vctx = NULL;
+    int len;
+
+    /* Create MyObject and set its version */
+    obj = MyObject_new();
+    if (obj == NULL)
+        goto err;
+    if (!ASN1_INTEGER_set(obj-&gt;info.version, version))
+        goto err;
+
+    /* Set the key and digest used for signing */
+    sctx = EVP_MD_CTX_new();
+    if (sctx == NULL
+        || !EVP_DigestSignInit_ex(sctx, NULL, mdname, NULL, NULL, pkey))
+        goto err;
+
+    /*
+     * it contains the mapping between ASN.1 data and an object MySignInfoObject
+     * obj-&gt;info is the &#39;MySignInfoObject&#39; object that will be
+     *   converted into DER data and then signed.
+     * obj-&gt;signature will contain the output signature.
+     * obj-&gt;sig_alg is filled with the private key&#39;s signing algorithm id.
+     * obj-&gt;info.sig_alg is another copy of the signing algorithm id that sits
+     * within MyObject.
+     */
+    len = ASN1_item_sign_ctx(it, &amp;obj-&gt;sig_alg, &amp;obj-&gt;info.sig_alg,
+                             obj-&gt;signature, &amp;obj-&gt;info, sctx);
+    if (len &lt;= 0
+        || X509_ALGOR_cmp(&amp;obj-&gt;sig_alg, &amp;obj-&gt;info.sig_alg) != 0)
+        goto err;
+
+    /* Output MyObject in der form */
+    len = i2d_MyObject(obj, &amp;obj_der);
+    if (len &lt;= 0)
+        goto err;
+
+    /* Set the key and digest used for verifying */
+    vctx = EVP_MD_CTX_new();
+    if (vctx == NULL
+        || !EVP_DigestVerifyInit_ex(vctx, NULL, mdname, NULL, NULL, pkey))
+        goto err;
+
+    /* Load the der data back into an object */
+    p = obj_der;
+    loaded_obj = d2i_MyObject(NULL, &amp;p, len);
+    if (loaded_obj == NULL)
+        goto err;
+    /* Verify the loaded object */
+    ret = ASN1_item_verify_ctx(it, &amp;loaded_obj-&gt;sig_alg, loaded_obj-&gt;signature,
+                               &amp;loaded_obj-&gt;info, vctx);
+err:
+    OPENSSL_free(obj_der);
+    MyObject_free(loaded_obj);
+    MyObject_free(obj);
+    EVP_MD_CTX_free(sctx);
+    EVP_MD_CTX_free(vctx);
+    return ret;
+ }</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/X509_sign.html">X509_sign(3)</a>, <a href="../man3/X509_verify.html">X509_verify(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>ASN1_item_sign_ex() and ASN1_item_verify_ex() were added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2020-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

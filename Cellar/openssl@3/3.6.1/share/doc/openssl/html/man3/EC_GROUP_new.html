@@ -1,0 +1,172 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EC_GROUP_new</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EC_GROUP_get_ecparameters, EC_GROUP_get_ecpkparameters, EC_GROUP_new_from_params, EC_GROUP_to_params, EC_GROUP_new_from_ecparameters, EC_GROUP_new_from_ecpkparameters, EC_GROUP_new, EC_GROUP_free, EC_GROUP_clear_free, EC_GROUP_new_curve_GFp, EC_GROUP_new_curve_GF2m, EC_GROUP_new_by_curve_name_ex, EC_GROUP_new_by_curve_name, EC_GROUP_set_curve, EC_GROUP_get_curve, EC_GROUP_set_curve_GFp, EC_GROUP_get_curve_GFp, EC_GROUP_set_curve_GF2m, EC_GROUP_get_curve_GF2m, EC_get_builtin_curves, OSSL_EC_curve_nid2name - Functions for creating and destroying EC_GROUP objects</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ec.h&gt;
+
+EC_GROUP *EC_GROUP_new_from_params(const OSSL_PARAM params[],
+                                   OSSL_LIB_CTX *libctx, const char *propq);
+OSSL_PARAM *EC_GROUP_to_params(const EC_GROUP *group, OSSL_LIB_CTX *libctx,
+                               const char *propq, BN_CTX *bnctx);
+EC_GROUP *EC_GROUP_new_from_ecparameters(const ECPARAMETERS *params);
+EC_GROUP *EC_GROUP_new_from_ecpkparameters(const ECPKPARAMETERS *params);
+void EC_GROUP_free(EC_GROUP *group);
+
+EC_GROUP *EC_GROUP_new_curve_GFp(const BIGNUM *p, const BIGNUM *a,
+                                 const BIGNUM *b, BN_CTX *ctx);
+EC_GROUP *EC_GROUP_new_curve_GF2m(const BIGNUM *p, const BIGNUM *a,
+                                  const BIGNUM *b, BN_CTX *ctx);
+EC_GROUP *EC_GROUP_new_by_curve_name_ex(OSSL_LIB_CTX *libctx, const char *propq,
+                                        int nid);
+EC_GROUP *EC_GROUP_new_by_curve_name(int nid);
+
+int EC_GROUP_set_curve(EC_GROUP *group, const BIGNUM *p, const BIGNUM *a,
+                       const BIGNUM *b, BN_CTX *ctx);
+int EC_GROUP_get_curve(const EC_GROUP *group, BIGNUM *p, BIGNUM *a, BIGNUM *b,
+                       BN_CTX *ctx);
+
+ECPARAMETERS *EC_GROUP_get_ecparameters(const EC_GROUP *group,
+                                        ECPARAMETERS *params);
+ECPKPARAMETERS *EC_GROUP_get_ecpkparameters(const EC_GROUP *group,
+                                            ECPKPARAMETERS *params);
+
+size_t EC_get_builtin_curves(EC_builtin_curve *r, size_t nitems);
+const char *OSSL_EC_curve_nid2name(int nid);</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>EC_GROUP *EC_GROUP_new(const EC_METHOD *meth);
+void EC_GROUP_clear_free(EC_GROUP *group);
+
+int EC_GROUP_set_curve_GFp(EC_GROUP *group, const BIGNUM *p,
+                           const BIGNUM *a, const BIGNUM *b, BN_CTX *ctx);
+int EC_GROUP_get_curve_GFp(const EC_GROUP *group, BIGNUM *p,
+                           BIGNUM *a, BIGNUM *b, BN_CTX *ctx);
+int EC_GROUP_set_curve_GF2m(EC_GROUP *group, const BIGNUM *p,
+                            const BIGNUM *a, const BIGNUM *b, BN_CTX *ctx);
+int EC_GROUP_get_curve_GF2m(const EC_GROUP *group, BIGNUM *p,
+                            BIGNUM *a, BIGNUM *b, BN_CTX *ctx);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>Within the library there are two forms of elliptic curve that are of interest. The first form is those defined over the prime field Fp. The elements of Fp are the integers 0 to p-1, where p is a prime number. This gives us a revised elliptic curve equation as follows:</p>
+
+<p>y^2 mod p = x^3 +ax + b mod p</p>
+
+<p>The second form is those defined over a binary field F2^m where the elements of the field are integers of length at most m bits. For this form the elliptic curve equation is modified to:</p>
+
+<p>y^2 + xy = x^3 + ax^2 + b (where b != 0)</p>
+
+<p>Operations in a binary field are performed relative to an <b>irreducible polynomial</b>. All such curves with OpenSSL use a trinomial or a pentanomial for this parameter.</p>
+
+<p>Although deprecated since OpenSSL 3.0 and should no longer be used, a new curve can be constructed by calling EC_GROUP_new(), using the implementation provided by <i>meth</i> (see <a href="../man3/EC_GFp_simple_method.html">EC_GFp_simple_method(3)</a>) and associated with the library context <i>ctx</i> (see <a href="../man3/OSSL_LIB_CTX.html">OSSL_LIB_CTX(3)</a>). The <i>ctx</i> parameter may be NULL in which case the default library context is used. It is then necessary to call EC_GROUP_set_curve() to set the curve parameters. Applications should instead use one of the other EC_GROUP_new_* constructors.</p>
+
+<p>EC_GROUP_new_from_params() creates a group with parameters specified by <i>params</i>. The library context <i>libctx</i> (see <a href="../man3/OSSL_LIB_CTX.html">OSSL_LIB_CTX(3)</a>) and property query string <i>propq</i> are used to fetch algorithms from providers. <i>params</i> may be either a list of explicit params or a named group, The values for <i>ctx</i> and <i>propq</i> may be NULL. The <i>params</i> that can be used are described in <a href="../man7/EVP_PKEY-EC.html"><b>EVP_PKEY-EC</b>(7)</a>.</p>
+
+<p>EC_GROUP_to_params creates an OSSL_PARAM array with the corresponding parameters describing the given EC_GROUP. The resulting parameters may contain parameters describing a named or explicit curve depending on the EC_GROUP. The library context <i>libctx</i> (see <a href="../man3/OSSL_LIB_CTX.html">OSSL_LIB_CTX(3)</a>) and property query string <i>propq</i> are used to fetch algorithms from providers. <i>bnctx</i> is an optional preallocated BN_CTX (to save the overhead of allocating and freeing the structure in a loop). The values for <i>libctx</i>, <i>propq</i> and <i>bnctx</i> may be NULL. The caller is responsible for freeing the OSSL_PARAM pointer returned.</p>
+
+<p>EC_GROUP_new_from_ecparameters() will create a group from the specified <i>params</i> and EC_GROUP_new_from_ecpkparameters() will create a group from the specific PK <i>params</i>.</p>
+
+<p>EC_GROUP_set_curve() sets the curve parameters <i>p</i>, <i>a</i> and <i>b</i>. For a curve over Fp <i>p</i> is the prime for the field. For a curve over F2^m <i>p</i> represents the irreducible polynomial - each bit represents a term in the polynomial. Therefore, there will either be three or five bits set dependent on whether the polynomial is a trinomial or a pentanomial. In either case, <i>a</i> and <i>b</i> represents the coefficients a and b from the relevant equation introduced above.</p>
+
+<p>EC_group_get_curve() obtains the previously set curve parameters.</p>
+
+<p>EC_GROUP_set_curve_GFp() and EC_GROUP_set_curve_GF2m() are synonyms for EC_GROUP_set_curve(). They are defined for backwards compatibility only and should not be used.</p>
+
+<p>EC_GROUP_get_curve_GFp() and EC_GROUP_get_curve_GF2m() are synonyms for EC_GROUP_get_curve(). They are defined for backwards compatibility only and should not be used.</p>
+
+<p>The functions EC_GROUP_new_curve_GFp() and EC_GROUP_new_curve_GF2m() are shortcuts for calling EC_GROUP_new() and then the EC_GROUP_set_curve() function. An appropriate default implementation method will be used.</p>
+
+<p>Whilst the library can be used to create any curve using the functions described above, there are also a number of predefined curves that are available. In order to obtain a list of all of the predefined curves, call the function EC_get_builtin_curves(). The parameter <i>r</i> should be an array of EC_builtin_curve structures of size <i>nitems</i>. The function will populate the <i>r</i> array with information about the built-in curves. If <i>nitems</i> is less than the total number of curves available, then the first <i>nitems</i> curves will be returned. Otherwise the total number of curves will be provided. The return value is the total number of curves available (whether that number has been populated in <i>r</i> or not). Passing a NULL <i>r</i>, or setting <i>nitems</i> to 0 will do nothing other than return the total number of curves available. The EC_builtin_curve structure is defined as follows:</p>
+
+<pre><code>typedef struct {
+       int nid;
+       const char *comment;
+       } EC_builtin_curve;</code></pre>
+
+<p>Each EC_builtin_curve item has a unique integer id (<i>nid</i>), and a human readable comment string describing the curve.</p>
+
+<p>In order to construct a built-in curve use the function EC_GROUP_new_by_curve_name_ex() and provide the <i>nid</i> of the curve to be constructed, the associated library context to be used in <i>ctx</i> (see <a href="../man3/OSSL_LIB_CTX.html">OSSL_LIB_CTX(3)</a>) and any property query string in <i>propq</i>. The <i>ctx</i> value may be NULL in which case the default library context is used. The <i>propq</i> value may also be NULL.</p>
+
+<p>EC_GROUP_new_by_curve_name() is the same as EC_GROUP_new_by_curve_name_ex() except that the default library context is always used along with a NULL property query string.</p>
+
+<p>EC_GROUP_free() frees the memory associated with the EC_GROUP. If <i>group</i> is NULL nothing is done.</p>
+
+<p>EC_GROUP_clear_free() is deprecated: it was meant to destroy any sensitive data held within the EC_GROUP and then free its memory, but since all the data stored in the EC_GROUP is public anyway, this function is unnecessary. Its use can be safely replaced with EC_GROUP_free(). If <i>group</i> is NULL nothing is done.</p>
+
+<p>OSSL_EC_curve_nid2name() converts a curve <i>nid</i> into the corresponding name.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>All EC_GROUP_new* functions return a pointer to the newly constructed group, or NULL on error.</p>
+
+<p>EC_get_builtin_curves() returns the number of built-in curves that are available.</p>
+
+<p>EC_GROUP_set_curve_GFp(), EC_GROUP_get_curve_GFp(), EC_GROUP_set_curve_GF2m(), EC_GROUP_get_curve_GF2m() return 1 on success or 0 on error.</p>
+
+<p>OSSL_EC_curve_nid2name() returns a character string constant, or NULL on error.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/crypto.html">crypto(7)</a>, <a href="../man3/EC_GROUP_copy.html">EC_GROUP_copy(3)</a>, <a href="../man3/EC_POINT_new.html">EC_POINT_new(3)</a>, <a href="../man3/EC_POINT_add.html">EC_POINT_add(3)</a>, <a href="../man3/EC_KEY_new.html">EC_KEY_new(3)</a>, <a href="../man3/EC_GFp_simple_method.html">EC_GFp_simple_method(3)</a>, <a href="../man3/d2i_ECPKParameters.html">d2i_ECPKParameters(3)</a>, <a href="../man3/OSSL_LIB_CTX.html">OSSL_LIB_CTX(3)</a>, <a href="../man7/EVP_PKEY-EC.html">EVP_PKEY-EC(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>EC_GROUP_to_params() was added in OpenSSL 3.2.</p>
+
+<ul>
+
+<li><p>EC_GROUP_new() was deprecated in OpenSSL 3.0.</p>
+
+<p>EC_GROUP_new_by_curve_name_ex() and EC_GROUP_new_from_params() were added in OpenSSL 3.0.</p>
+
+</li>
+<li><p>EC_GROUP_clear_free() was deprecated in OpenSSL 3.0; use EC_GROUP_free() instead.</p>
+
+</li>
+<li><p></p>
+
+<pre><code>EC_GROUP_set_curve_GFp(), EC_GROUP_get_curve_GFp(),
+EC_GROUP_set_curve_GF2m() and EC_GROUP_get_curve_GF2m() were deprecated in
+OpenSSL 3.0; use EC_GROUP_set_curve() and EC_GROUP_get_curve() instead.</code></pre>
+
+</li>
+</ul>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2013-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

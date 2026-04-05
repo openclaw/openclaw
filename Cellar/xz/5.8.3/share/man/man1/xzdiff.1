@@ -1,0 +1,99 @@
+.\" SPDX-License-Identifier: 0BSD
+.\"
+.\" Authors: Lasse Collin
+.\"          Jia Tan
+.\"
+.\" (Note that this file is not based on gzip's zdiff.1.)
+.\"
+.TH XZDIFF 1 "2025-03-06" "Tukaani" "XZ Utils"
+.SH NAME
+xzcmp, xzdiff, lzcmp, lzdiff \- compare compressed files
+.
+.SH SYNOPSIS
+.B xzcmp
+.RI [ option... ]
+.I file1
+.RI [ file2 ]
+.br
+.B xzdiff
+\&...
+.br
+.B lzcmp
+\&...
+(DEPRECATED)
+.br
+.B lzdiff
+\&...
+(DEPRECATED)
+.
+.SH DESCRIPTION
+.B xzcmp
+and
+.B xzdiff
+compare uncompressed contents of two files.
+Uncompressed data and options are passed to
+.BR cmp (1)
+or
+.BR diff (1)
+unless
+.B \-\-help
+or
+.B \-\-version
+is specified.
+.PP
+If both
+.I file1
+and
+.I file2
+are specified, they can be uncompressed files or files in formats that
+.BR xz (1),
+.BR gzip (1),
+.BR bzip2 (1),
+.BR lzop (1),
+.BR zstd (1),
+or
+.BR lz4 (1)
+can decompress.
+The required decompression commands are determined from
+the filename suffixes of
+.I file1
+and
+.IR file2 .
+A file with an unknown suffix is assumed to be either uncompressed
+or in a format that
+.BR xz (1)
+can decompress.
+.PP
+If only one filename is provided,
+.I file1
+must have a suffix of a supported compression format and the name for
+.I file2
+is assumed to be
+.I file1
+with the compression format suffix removed.
+.PP
+The commands
+.B lzcmp
+and
+.B lzdiff
+are provided for backward compatibility with LZMA Utils.
+They are deprecated and will be removed in a future version.
+.
+.SH EXIT STATUS
+If a decompression error occurs, the exit status is
+.BR 2 .
+Otherwise the exit status of
+.BR cmp (1)
+or
+.BR diff (1)
+is used.
+.
+.SH "SEE ALSO"
+.BR cmp (1),
+.BR diff (1),
+.BR xz (1),
+.BR gzip (1),
+.BR bzip2 (1),
+.BR lzop (1),
+.BR zstd (1),
+.BR lz4 (1)

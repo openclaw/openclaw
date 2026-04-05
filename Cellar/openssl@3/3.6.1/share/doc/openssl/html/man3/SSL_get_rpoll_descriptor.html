@@ -1,0 +1,91 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_get_rpoll_descriptor</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_get_rpoll_descriptor, SSL_get_wpoll_descriptor, SSL_net_read_desired, SSL_net_write_desired - obtain information which can be used to determine when network I/O can be performed</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+int SSL_get_rpoll_descriptor(SSL *s, BIO_POLL_DESCRIPTOR *desc);
+int SSL_get_wpoll_descriptor(SSL *s, BIO_POLL_DESCRIPTOR *desc);
+int SSL_net_read_desired(SSL *s);
+int SSL_net_write_desired(SSL *s);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The functions SSL_get_rpoll_descriptor() and SSL_get_wpoll_descriptor() can be used to determine when an SSL object which represents a QUIC connection can perform useful network I/O, so that an application using a QUIC connection SSL object in nonblocking mode can determine when it should call SSL_handle_events().</p>
+
+<p>On success, these functions output poll descriptors. For more information on poll descriptors, see <a href="../man3/BIO_get_rpoll_descriptor.html">BIO_get_rpoll_descriptor(3)</a>.</p>
+
+<p>The functions SSL_net_read_desired() and SSL_net_write_desired() return 1 or 0 depending on whether the SSL object is currently interested in receiving data from the network and/or writing data to the network respectively. If an SSL object is not interested in reading data from the network at the current time, SSL_net_read_desired() will return 0; likewise, if an SSL object is not interested in writing data to the network at the current time, SSL_net_write_desired() will return 0.</p>
+
+<p>The intention is that an application using QUIC in nonblocking mode can use these calls, in conjunction with <a href="../man3/SSL_get_event_timeout.html">SSL_get_event_timeout(3)</a> to wait for network I/O conditions which allow the SSL object to perform useful work. When such a condition arises, <a href="../man3/SSL_handle_events.html">SSL_handle_events(3)</a> should be called.</p>
+
+<p>In particular, the expected usage is as follows:</p>
+
+<ul>
+
+<li><p>SSL_handle_events() should be called whenever the timeout returned by SSL_get_event_timeout(3) (if any) expires</p>
+
+</li>
+<li><p>If the last call to SSL_net_read_desired() returned 1, SSL_handle_events() should be called whenever the poll descriptor output by SSL_get_rpoll_descriptor() becomes readable.</p>
+
+</li>
+<li><p>If the last call to SSL_net_write_desired() returned 1, SSL_handle_events() should be called whenever the poll descriptor output by SSL_get_wpoll_descriptor() becomes writable.</p>
+
+</li>
+</ul>
+
+<p>The return values of the SSL_net_read_desired() and SSL_net_write_desired() functions may change in response to any call to the SSL object other than SSL_net_read_desired(), SSL_net_write_desired(), SSL_get_rpoll_descriptor(), SSL_get_wpoll_descriptor() and SSL_get_event_timeout().</p>
+
+<p>On non-QUIC SSL objects, calls to SSL_get_rpoll_descriptor() and SSL_get_wpoll_descriptor() function the same as calls to BIO_get_rpoll_descriptor() and BIO_get_wpoll_descriptor() on the respective read and write BIOs configured on the SSL object.</p>
+
+<p>On non-QUIC SSL objects, calls to SSL_net_read_desired() and SSL_net_write_desired() function identically to calls to SSL_want_read() and SSL_want_write() respectively.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>These functions return 1 on success and 0 on failure.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/SSL_handle_events.html">SSL_handle_events(3)</a>, <a href="../man3/SSL_get_event_timeout.html">SSL_get_event_timeout(3)</a>, <a href="../man7/ssl.html">ssl(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The SSL_get_rpoll_descriptor(), SSL_get_wpoll_descriptor(), SSL_net_read_desired() and SSL_net_write_desired() functions were added in OpenSSL 3.2.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2022-2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

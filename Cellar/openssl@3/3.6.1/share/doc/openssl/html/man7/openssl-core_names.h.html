@@ -1,0 +1,63 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>openssl-core_names.h</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#CAVEATS">CAVEATS</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>openssl/core_names.h - OpenSSL provider parameter names</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/core_names.h&gt;</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The <i>&lt;openssl/core_names.h&gt;</i> header defines a multitude of macros for <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> names, algorithm names and other known names used with OpenSSL&#39;s providers, made available for practical purposes only.</p>
+
+<p>Existing names are further described in the manuals for OpenSSL&#39;s providers (see <a href="#SEE-ALSO">&quot;SEE ALSO&quot;</a>) and the manuals for each algorithm they provide (listed in those provider manuals).</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/OSSL_PROVIDER-default.html">OSSL_PROVIDER-default(7)</a>, <a href="../man7/OSSL_PROVIDER-FIPS.html">OSSL_PROVIDER-FIPS(7)</a>, <a href="../man7/OSSL_PROVIDER-legacy.html">OSSL_PROVIDER-legacy(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The macros described here were added in OpenSSL 3.0.</p>
+
+<h1 id="CAVEATS">CAVEATS</h1>
+
+<p><i>This header file does not constitute a general registry of names</i>. Providers that implement new algorithms are to be responsible for their own parameter names.</p>
+
+<p>However, authors of provider that implement their own variants of algorithms that OpenSSL providers support will want to pay attention to the names provided in this header to work in a compatible manner.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2020 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

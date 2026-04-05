@@ -1,0 +1,84 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_KEM-ML-KEM</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#ML-KEM-KEM-parameters">ML-KEM KEM parameters</a></li>
+    </ul>
+  </li>
+  <li><a href="#CONFORMING-TO">CONFORMING TO</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_KEM-ML-KEM-512, EVP_KEM-ML-KEM-768, EVP_KEM-ML-KEM-1024, EVP_KEM-ML-KEM - EVP_KEM ML-KEM keytype and algorithm support</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The <b>ML-KEM</b> keytypes and parameters are described in <a href="../man7/EVP_PKEY-ML-KEM.html">EVP_PKEY-ML-KEM(7)</a>. See <a href="../man3/EVP_PKEY_encapsulate.html">EVP_PKEY_encapsulate(3)</a> and <a href="../man3/EVP_PKEY_decapsulate.html">EVP_PKEY_decapsulate(3)</a> for more details about basic KEM operations.</p>
+
+<h2 id="ML-KEM-KEM-parameters">ML-KEM KEM parameters</h2>
+
+<dl>
+
+<dt id="ikme-OSSL_KEM_PARAM_IKME-octet-string">&quot;ikme&quot; (<b>OSSL_KEM_PARAM_IKME</b>) &lt;octet string&gt;</dt>
+<dd>
+
+<p>The OpenSSL ML-KEM encapsulation mechanism can only be modified by setting randomness during encapsulation, this enables testing, as per FIPS 203, section 6.2, algorithm 17.</p>
+
+<p>This parameter should not be used for purposes other than testing.</p>
+
+<p>When this parameter is not set, encapsulation proceeds as per FIPS 203, section 7.2</p>
+
+<p>This parameter is only settable.</p>
+
+</dd>
+</dl>
+
+<p>This can be set when using EVP_PKEY_encapsulate_init().</p>
+
+<h1 id="CONFORMING-TO">CONFORMING TO</h1>
+
+<dl>
+
+<dt id="FIPS203">FIPS203</dt>
+<dd>
+
+</dd>
+</dl>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_PKEY_encapsulate.html">EVP_PKEY_encapsulate(3)</a>, <a href="../man3/EVP_PKEY_decapsulate.html">EVP_PKEY_decapsulate(3)</a>, <a href="../man3/EVP_KEYMGMT.html">EVP_KEYMGMT(3)</a>, <a href="../man3/EVP_PKEY.html">EVP_PKEY(3)</a>, <a href="../man7/provider-keymgmt.html">provider-keymgmt(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>This functionality was added in OpenSSL 3.5.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2024-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

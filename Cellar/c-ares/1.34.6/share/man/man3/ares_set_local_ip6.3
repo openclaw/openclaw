@@ -1,0 +1,22 @@
+.\"
+.\" Copyright 2010 by Ben Greear <greearb@candelatech.com>
+.\" SPDX-License-Identifier: MIT
+.\"
+.TH ARES_SET_LOCAL_IP6 3 "30 June 2010"
+.SH NAME
+ares_set_local_ip6 \- Set local IPv6 address outgoing requests.
+.SH SYNOPSIS
+.nf
+#include <ares.h>
+
+void ares_set_local_ip6(ares_channel_t *\fIchannel\fP, const unsigned char* \fIlocal_ip6\fP)
+.fi
+.SH DESCRIPTION
+The \fBares_set_local_ip6\fP function sets the IPv6 address for outbound IPv6
+requests.  The parameter \fIlocal_ip6\fP is specified in network byte order.
+This allows users to specify outbound interfaces when used on multi-homed
+systems.  The \fIlocal_ip6\fP argument must be 16 bytes in length.
+.SH SEE ALSO
+.BR ares_set_local_ip4 (3)
+.SH NOTES
+This function was added in c-ares 1.7.4

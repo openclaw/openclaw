@@ -1,0 +1,71 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>X509_get_default_cert_file</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#BUGS">BUGS</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>X509_get_default_cert_file, X509_get_default_cert_file_env, X509_get_default_cert_dir, X509_get_default_cert_dir_env - retrieve default locations for trusted CA certificates</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/x509.h&gt;
+
+const char *X509_get_default_cert_file(void);
+const char *X509_get_default_cert_dir(void);
+
+const char *X509_get_default_cert_file_env(void);
+const char *X509_get_default_cert_dir_env(void);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The X509_get_default_cert_file() function returns the default path to a file containing trusted CA certificates. OpenSSL will use this as the default path when it is asked to load trusted CA certificates from a file and no other path is specified. If the file exists, CA certificates are loaded from the file.</p>
+
+<p>The X509_get_default_cert_dir() function returns a default delimeter-separated list of paths to a directories containing trusted CA certificates named in the hashed format. OpenSSL will use this as the default list of paths when it is asked to load trusted CA certificates from a directory and no other path is specified. If a given directory in the list exists, OpenSSL attempts to lookup CA certificates in this directory by calculating a filename based on a hash of the certificate&#39;s subject name.</p>
+
+<p>X509_get_default_cert_file_env() returns an environment variable name which is recommended to specify a nondefault value to be used instead of the value returned by X509_get_default_cert_file(). The value returned by the latter function is not affected by these environment variables; you must check for this environment variable yourself, using this function to retrieve the correct environment variable name. If an environment variable is not set, the value returned by the X509_get_default_cert_file() should be used.</p>
+
+<p>X509_get_default_cert_dir_env() returns the environment variable name which is recommended to specify a nondefault value to be used instead of the value returned by X509_get_default_cert_dir(). The value specified by this environment variable can also be a store URI (but see BUGS below).</p>
+
+<h1 id="BUGS">BUGS</h1>
+
+<p>By default (for example, when <a href="../man3/X509_STORE_set_default_paths.html">X509_STORE_set_default_paths(3)</a> is used), the environment variable name returned by X509_get_default_cert_dir_env() is interpreted both as a delimiter-separated list of paths, and as a store URI. This is ambiguous. For example, specifying a value of <b>&quot;file:///etc/certs&quot;</b> would cause instantiation of the &quot;file&quot; store provided as part of the default provider, but would also cause an <a href="../man3/X509_LOOKUP_hash_dir.html">X509_LOOKUP_hash_dir(3)</a> instance to look for certificates in the directory <b>&quot;file&quot;</b> (relative to the current working directory) and the directory <b>&quot;///etc/certs&quot;</b>. This can be avoided by avoiding use of the environment variable mechanism and using other methods to construct X509_LOOKUP instances.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>These functions return pointers to constant strings with static storage duration.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/X509_LOOKUP.html">X509_LOOKUP(3)</a>, <a href="../man3/SSL_CTX_set_default_verify_file.html">SSL_CTX_set_default_verify_file(3)</a>, <a href="../man3/SSL_CTX_set_default_verify_dir.html">SSL_CTX_set_default_verify_dir(3)</a>, <a href="../man3/SSL_CTX_set_default_verify_store.html">SSL_CTX_set_default_verify_store(3)</a>, <a href="../man3/SSL_CTX_load_verify_file.html">SSL_CTX_load_verify_file(3)</a>, <a href="../man3/SSL_CTX_load_verify_dir.html">SSL_CTX_load_verify_dir(3)</a>, <a href="../man3/SSL_CTX_load_verify_store.html">SSL_CTX_load_verify_store(3)</a>, <a href="../man3/SSL_CTX_load_verify_locations.html">SSL_CTX_load_verify_locations(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2022-2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

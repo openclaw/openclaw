@@ -1,0 +1,635 @@
+.TH "encode.h" 3 "August 2021" "Brotli" \" -*- nroff -*-
+.ad l
+.nh
+.SH NAME
+encode.h \- API for Brotli compression\&.  
+
+.SH SYNOPSIS
+.br
+.PP
+.SS "Macros"
+
+.in +1c
+.ti -1c
+.RI "#define \fBBROTLI_DEFAULT_MODE\fP   \fBBROTLI_MODE_GENERIC\fP"
+.br
+.RI "\fIDefault value for \fBBROTLI_PARAM_MODE\fP parameter\&. \fP"
+.ti -1c
+.RI "#define \fBBROTLI_DEFAULT_QUALITY\fP   11"
+.br
+.RI "\fIDefault value for \fBBROTLI_PARAM_QUALITY\fP parameter\&. \fP"
+.ti -1c
+.RI "#define \fBBROTLI_DEFAULT_WINDOW\fP   22"
+.br
+.RI "\fIDefault value for \fBBROTLI_PARAM_LGWIN\fP parameter\&. \fP"
+.ti -1c
+.RI "#define \fBBROTLI_LARGE_MAX_WINDOW_BITS\fP   30"
+.br
+.RI "\fIMaximal value for \fBBROTLI_PARAM_LGWIN\fP parameter in 'Large Window Brotli' (32-bit)\&. \fP"
+.ti -1c
+.RI "#define \fBBROTLI_MAX_INPUT_BLOCK_BITS\fP   24"
+.br
+.RI "\fIMaximal value for \fBBROTLI_PARAM_LGBLOCK\fP parameter\&. \fP"
+.ti -1c
+.RI "#define \fBBROTLI_MAX_QUALITY\fP   11"
+.br
+.RI "\fIMaximal value for \fBBROTLI_PARAM_QUALITY\fP parameter\&. \fP"
+.ti -1c
+.RI "#define \fBBROTLI_MAX_WINDOW_BITS\fP   24"
+.br
+.RI "\fIMaximal value for \fBBROTLI_PARAM_LGWIN\fP parameter\&. \fP"
+.ti -1c
+.RI "#define \fBBROTLI_MIN_INPUT_BLOCK_BITS\fP   16"
+.br
+.RI "\fIMinimal value for \fBBROTLI_PARAM_LGBLOCK\fP parameter\&. \fP"
+.ti -1c
+.RI "#define \fBBROTLI_MIN_QUALITY\fP   0"
+.br
+.RI "\fIMinimal value for \fBBROTLI_PARAM_QUALITY\fP parameter\&. \fP"
+.ti -1c
+.RI "#define \fBBROTLI_MIN_WINDOW_BITS\fP   10"
+.br
+.RI "\fIMinimal value for \fBBROTLI_PARAM_LGWIN\fP parameter\&. \fP"
+.in -1c
+.SS "Typedefs"
+
+.in +1c
+.ti -1c
+.RI "typedef enum \fBBrotliEncoderMode\fP \fBBrotliEncoderMode\fP"
+.br
+.RI "\fIOptions for \fBBROTLI_PARAM_MODE\fP parameter\&. \fP"
+.ti -1c
+.RI "typedef enum \fBBrotliEncoderOperation\fP \fBBrotliEncoderOperation\fP"
+.br
+.RI "\fIOperations that can be performed by streaming encoder\&. \fP"
+.ti -1c
+.RI "typedef enum \fBBrotliEncoderParameter\fP \fBBrotliEncoderParameter\fP"
+.br
+.RI "\fIOptions to be used with \fBBrotliEncoderSetParameter\fP\&. \fP"
+.ti -1c
+.RI "typedef struct BrotliEncoderStateStruct \fBBrotliEncoderState\fP"
+.br
+.RI "\fIOpaque structure that holds encoder state\&. \fP"
+.in -1c
+.SS "Enumerations"
+.SS "Functions"
+
+.in +1c
+.ti -1c
+.RI "\fBBROTLI_BOOL\fP \fBBrotliEncoderAttachPreparedDictionary\fP (\fBBrotliEncoderState\fP *state, const BrotliEncoderPreparedDictionary *dictionary)"
+.br
+.RI "\fIAttaches a prepared dictionary of any type to the encoder\&. \fP"
+.ti -1c
+.RI "\fBBROTLI_BOOL\fP \fBBrotliEncoderCompress\fP (int quality, int lgwin, \fBBrotliEncoderMode\fP mode, size_t input_size, const uint8_t input_buffer[input_size], size_t *encoded_size, uint8_t encoded_buffer[*encoded_size])"
+.br
+.RI "\fIPerforms one-shot memory-to-memory compression\&. \fP"
+.ti -1c
+.RI "\fBBROTLI_BOOL\fP \fBBrotliEncoderCompressStream\fP (\fBBrotliEncoderState\fP *state, \fBBrotliEncoderOperation\fP op, size_t *available_in, const uint8_t **next_in, size_t *available_out, uint8_t **next_out, size_t *total_out)"
+.br
+.RI "\fICompresses input stream to output stream\&. \fP"
+.ti -1c
+.RI "\fBBrotliEncoderState\fP * \fBBrotliEncoderCreateInstance\fP (\fBbrotli_alloc_func\fP alloc_func, \fBbrotli_free_func\fP free_func, void *opaque)"
+.br
+.RI "\fICreates an instance of \fBBrotliEncoderState\fP and initializes it\&. \fP"
+.ti -1c
+.RI "void \fBBrotliEncoderDestroyInstance\fP (\fBBrotliEncoderState\fP *state)"
+.br
+.RI "\fIDeinitializes and frees \fBBrotliEncoderState\fP instance\&. \fP"
+.ti -1c
+.RI "\fBBROTLI_BOOL\fP \fBBrotliEncoderHasMoreOutput\fP (\fBBrotliEncoderState\fP *state)"
+.br
+.RI "\fIChecks if encoder has more output\&. \fP"
+.ti -1c
+.RI "\fBBROTLI_BOOL\fP \fBBrotliEncoderIsFinished\fP (\fBBrotliEncoderState\fP *state)"
+.br
+.RI "\fIChecks if encoder instance reached the final state\&. \fP"
+.ti -1c
+.RI "size_t \fBBrotliEncoderMaxCompressedSize\fP (size_t input_size)"
+.br
+.RI "\fICalculates the output size bound for the given \fCinput_size\fP\&. \fP"
+.ti -1c
+.RI "BrotliEncoderPreparedDictionary * \fBBrotliEncoderPrepareDictionary\fP (BrotliSharedDictionaryType type, size_t data_size, const uint8_t data[data_size], int quality, \fBbrotli_alloc_func\fP alloc_func, \fBbrotli_free_func\fP free_func, void *opaque)"
+.br
+.RI "\fIPrepares a shared dictionary from the given file format for the encoder\&. \fP"
+.ti -1c
+.RI "\fBBROTLI_BOOL\fP \fBBrotliEncoderSetParameter\fP (\fBBrotliEncoderState\fP *state, \fBBrotliEncoderParameter\fP param, uint32_t value)"
+.br
+.RI "\fISets the specified parameter to the given encoder instance\&. \fP"
+.ti -1c
+.RI "const uint8_t * \fBBrotliEncoderTakeOutput\fP (\fBBrotliEncoderState\fP *state, size_t *size)"
+.br
+.RI "\fIAcquires pointer to internal output buffer\&. \fP"
+.ti -1c
+.RI "uint32_t \fBBrotliEncoderVersion\fP (void)"
+.br
+.RI "\fIGets an encoder library version\&. \fP"
+.in -1c
+.SH "Detailed Description"
+.PP 
+API for Brotli compression\&. 
+
+
+.SH "Macro Definition Documentation"
+.PP 
+.SS "#define BROTLI_DEFAULT_MODE   \fBBROTLI_MODE_GENERIC\fP"
+
+.PP
+Default value for \fBBROTLI_PARAM_MODE\fP parameter\&. 
+.SS "#define BROTLI_DEFAULT_QUALITY   11"
+
+.PP
+Default value for \fBBROTLI_PARAM_QUALITY\fP parameter\&. 
+.SS "#define BROTLI_DEFAULT_WINDOW   22"
+
+.PP
+Default value for \fBBROTLI_PARAM_LGWIN\fP parameter\&. 
+.SS "#define BROTLI_MAX_INPUT_BLOCK_BITS   24"
+
+.PP
+Maximal value for \fBBROTLI_PARAM_LGBLOCK\fP parameter\&. 
+.SS "#define BROTLI_MAX_QUALITY   11"
+
+.PP
+Maximal value for \fBBROTLI_PARAM_QUALITY\fP parameter\&. 
+.SS "#define BROTLI_MAX_WINDOW_BITS   24"
+
+.PP
+Maximal value for \fBBROTLI_PARAM_LGWIN\fP parameter\&. 
+.PP
+\fBNote:\fP
+.RS 4
+equal to \fCBROTLI_MAX_DISTANCE_BITS\fP constant\&. 
+.RE
+.PP
+
+.SS "#define BROTLI_MIN_INPUT_BLOCK_BITS   16"
+
+.PP
+Minimal value for \fBBROTLI_PARAM_LGBLOCK\fP parameter\&. 
+.SS "#define BROTLI_MIN_QUALITY   0"
+
+.PP
+Minimal value for \fBBROTLI_PARAM_QUALITY\fP parameter\&. 
+.SS "#define BROTLI_MIN_WINDOW_BITS   10"
+
+.PP
+Minimal value for \fBBROTLI_PARAM_LGWIN\fP parameter\&. 
+.SH "Typedef Documentation"
+.PP 
+.SS "typedef enum \fBBrotliEncoderMode\fP  \fBBrotliEncoderMode\fP"
+
+.PP
+Options for \fBBROTLI_PARAM_MODE\fP parameter\&. 
+.SS "typedef enum \fBBrotliEncoderOperation\fP  \fBBrotliEncoderOperation\fP"
+
+.PP
+Operations that can be performed by streaming encoder\&. 
+.SS "typedef enum \fBBrotliEncoderParameter\fP  \fBBrotliEncoderParameter\fP"
+
+.PP
+Options to be used with \fBBrotliEncoderSetParameter\fP\&. 
+.SS "typedef struct BrotliEncoderStateStruct \fBBrotliEncoderState\fP"
+
+.PP
+Opaque structure that holds encoder state\&. Allocated and initialized with \fBBrotliEncoderCreateInstance\fP\&. Cleaned up and deallocated with \fBBrotliEncoderDestroyInstance\fP\&. 
+.SH "Enumeration Type Documentation"
+.PP 
+.SS "enum \fBBrotliEncoderMode\fP"
+
+.PP
+Options for \fBBROTLI_PARAM_MODE\fP parameter\&. 
+.PP
+\fBEnumerator\fP
+.in +1c
+.TP
+\fB\fIBROTLI_MODE_GENERIC \fP\fP
+Default compression mode\&. In this mode compressor does not know anything in advance about the properties of the input\&. 
+.TP
+\fB\fIBROTLI_MODE_TEXT \fP\fP
+Compression mode for UTF-8 formatted text input\&. 
+.TP
+\fB\fIBROTLI_MODE_FONT \fP\fP
+Compression mode used in WOFF 2\&.0\&. 
+.SS "enum \fBBrotliEncoderOperation\fP"
+
+.PP
+Operations that can be performed by streaming encoder\&. 
+.PP
+\fBEnumerator\fP
+.in +1c
+.TP
+\fB\fIBROTLI_OPERATION_PROCESS \fP\fP
+Process input\&. Encoder may postpone producing output, until it has processed enough input\&. 
+.TP
+\fB\fIBROTLI_OPERATION_FLUSH \fP\fP
+Produce output for all processed input\&. Actual flush is performed when input stream is depleted and there is enough space in output stream\&. This means that client should repeat \fBBROTLI_OPERATION_FLUSH\fP operation until \fCavailable_in\fP becomes \fC0\fP, and \fBBrotliEncoderHasMoreOutput\fP returns \fBBROTLI_FALSE\fP\&. If output is acquired via \fBBrotliEncoderTakeOutput\fP, then operation should be repeated after output buffer is drained\&.
+.PP
+\fBWarning:\fP
+.RS 4
+Until flush is complete, client \fBSHOULD\fP \fBNOT\fP swap, reduce or extend input stream\&.
+.RE
+.PP
+When flush is complete, output data will be sufficient for decoder to reproduce all the given input\&. 
+.TP
+\fB\fIBROTLI_OPERATION_FINISH \fP\fP
+Finalize the stream\&. Actual finalization is performed when input stream is depleted and there is enough space in output stream\&. This means that client should repeat \fBBROTLI_OPERATION_FINISH\fP operation until \fCavailable_in\fP becomes \fC0\fP, and \fBBrotliEncoderHasMoreOutput\fP returns \fBBROTLI_FALSE\fP\&. If output is acquired via \fBBrotliEncoderTakeOutput\fP, then operation should be repeated after output buffer is drained\&.
+.PP
+\fBWarning:\fP
+.RS 4
+Until finalization is complete, client \fBSHOULD\fP \fBNOT\fP swap, reduce or extend input stream\&.
+.RE
+.PP
+Helper function \fBBrotliEncoderIsFinished\fP checks if stream is finalized and output fully dumped\&.
+.PP
+Adding more input data to finalized stream is impossible\&. 
+.TP
+\fB\fIBROTLI_OPERATION_EMIT_METADATA \fP\fP
+Emit metadata block to stream\&. Metadata is opaque to Brotli: neither encoder, nor decoder processes this data or relies on it\&. It may be used to pass some extra information from encoder client to decoder client without interfering with main data stream\&.
+.PP
+\fBNote:\fP
+.RS 4
+Encoder may emit empty metadata blocks internally, to pad encoded stream to byte boundary\&.
+.RE
+.PP
+\fBWarning:\fP
+.RS 4
+Until emitting metadata is complete client \fBSHOULD\fP \fBNOT\fP swap, reduce or extend input stream\&.
+.PP
+The whole content of input buffer is considered to be the content of metadata block\&. Do \fBNOT\fP \fIappend\fP metadata to input stream, before it is depleted with other operations\&.
+.RE
+.PP
+Stream is soft-flushed before metadata block is emitted\&. Metadata block \fBMUST\fP be no longer than than 16MiB\&. 
+.SS "enum \fBBrotliEncoderParameter\fP"
+
+.PP
+Options to be used with \fBBrotliEncoderSetParameter\fP\&. 
+.PP
+\fBEnumerator\fP
+.in +1c
+.TP
+\fB\fIBROTLI_PARAM_MODE \fP\fP
+Tune encoder for specific input\&. \fBBrotliEncoderMode\fP enumerates all available values\&. 
+.TP
+\fB\fIBROTLI_PARAM_QUALITY \fP\fP
+The main compression speed-density lever\&. The higher the quality, the slower the compression\&. Range is from \fBBROTLI_MIN_QUALITY\fP to \fBBROTLI_MAX_QUALITY\fP\&. 
+.TP
+\fB\fIBROTLI_PARAM_LGWIN \fP\fP
+Recommended sliding LZ77 window size\&. Encoder may reduce this value, e\&.g\&. if input is much smaller than window size\&.
+.PP
+Window size is \fC(1 << value) - 16\fP\&.
+.PP
+Range is from \fBBROTLI_MIN_WINDOW_BITS\fP to \fBBROTLI_MAX_WINDOW_BITS\fP\&. 
+.TP
+\fB\fIBROTLI_PARAM_LGBLOCK \fP\fP
+Recommended input block size\&. Encoder may reduce this value, e\&.g\&. if input is much smaller than input block size\&.
+.PP
+Range is from \fBBROTLI_MIN_INPUT_BLOCK_BITS\fP to \fBBROTLI_MAX_INPUT_BLOCK_BITS\fP\&.
+.PP
+\fBNote:\fP
+.RS 4
+Bigger input block size allows better compression, but consumes more memory\&. 
+.br
+ The rough formula of memory used for temporary input storage is \fC3 << lgBlock\fP\&. 
+.RE
+.PP
+
+.TP
+\fB\fIBROTLI_PARAM_DISABLE_LITERAL_CONTEXT_MODELING \fP\fP
+Flag that affects usage of 'literal context modeling' format feature\&. This flag is a 'decoding-speed vs compression ratio' trade-off\&. 
+.TP
+\fB\fIBROTLI_PARAM_SIZE_HINT \fP\fP
+Estimated total input size for all \fBBrotliEncoderCompressStream\fP calls\&. The default value is 0, which means that the total input size is unknown\&. 
+.TP
+\fB\fIBROTLI_PARAM_LARGE_WINDOW \fP\fP
+Flag that determines if 'Large Window Brotli' is used\&. 
+.TP
+\fB\fIBROTLI_PARAM_NPOSTFIX \fP\fP
+Recommended number of postfix bits (NPOSTFIX)\&. Encoder may change this value\&.
+.PP
+Range is from 0 to \fBBROTLI_MAX_NPOSTFIX\fP\&. 
+.TP
+\fB\fIBROTLI_PARAM_NDIRECT \fP\fP
+Recommended number of direct distance codes (NDIRECT)\&. Encoder may change this value\&.
+.PP
+Range is from 0 to (15 << NPOSTFIX) in steps of (1 << NPOSTFIX)\&. 
+.TP
+\fB\fIBROTLI_PARAM_STREAM_OFFSET \fP\fP
+Number of bytes of input stream already processed by a different instance\&. 
+.PP
+\fBNote:\fP
+.RS 4
+It is important to configure all the encoder instances with same parameters (except this one) in order to allow all the encoded parts obey the same restrictions implied by header\&.
+.RE
+.PP
+If offset is not 0, then stream header is omitted\&. In any case output start is byte aligned, so for proper streams stitching 'predecessor' stream must be flushed\&.
+.PP
+Range is not artificially limited, but all the values greater or equal to maximal window size have the same effect\&. Values greater than 2**30 are not allowed\&. 
+.SH "Function Documentation"
+.PP 
+.SS "\fBBROTLI_BOOL\fP BrotliEncoderAttachPreparedDictionary (\fBBrotliEncoderState\fP * state, const BrotliEncoderPreparedDictionary * dictionary)"
+
+.PP
+Attaches a prepared dictionary of any type to the encoder\&. Can be used multiple times to attach multiple dictionaries\&. The dictionary type was determined by BrotliEncoderPrepareDictionary\&. Multiple raw prefix dictionaries and/or max 1 serialized dictionary with custom words can be attached\&.
+.PP
+\fBReturns:\fP
+.RS 4
+\fBBROTLI_FALSE\fP in case of error 
+.PP
+\fBBROTLI_TRUE\fP otherwise 
+.RE
+.PP
+
+.SS "\fBBROTLI_BOOL\fP BrotliEncoderCompress (int quality, int lgwin, \fBBrotliEncoderMode\fP mode, size_t input_size, const uint8_t input_buffer[input_size], size_t * encoded_size, uint8_t encoded_buffer[*encoded_size])"
+
+.PP
+Performs one-shot memory-to-memory compression\&. Compresses the data in \fCinput_buffer\fP into \fCencoded_buffer\fP, and sets \fC*encoded_size\fP to the compressed length\&.
+.PP
+\fBNote:\fP
+.RS 4
+If \fBBrotliEncoderMaxCompressedSize\fP(\fCinput_size\fP) returns non-zero value, then output is guaranteed to be no longer than that\&.
+.PP
+If \fClgwin\fP is greater than \fBBROTLI_MAX_WINDOW_BITS\fP then resulting stream might be incompatible with RFC 7932; to decode such streams, decoder should be configured with \fBBROTLI_DECODER_PARAM_LARGE_WINDOW\fP = \fC1\fP 
+.RE
+.PP
+\fBParameters:\fP
+.RS 4
+\fIquality\fP quality parameter value, e\&.g\&. \fBBROTLI_DEFAULT_QUALITY\fP 
+.br
+\fIlgwin\fP lgwin parameter value, e\&.g\&. \fBBROTLI_DEFAULT_WINDOW\fP 
+.br
+\fImode\fP mode parameter value, e\&.g\&. \fBBROTLI_DEFAULT_MODE\fP 
+.br
+\fIinput_size\fP size of \fCinput_buffer\fP 
+.br
+\fIinput_buffer\fP input data buffer with at least \fCinput_size\fP addressable bytes 
+.br
+\fIencoded_size\fP \fBin:\fP size of \fCencoded_buffer\fP; 
+.br
+ \fBout:\fP length of compressed data written to \fCencoded_buffer\fP, or \fC0\fP if compression fails 
+.br
+\fIencoded_buffer\fP compressed data destination buffer 
+.RE
+.PP
+\fBReturns:\fP
+.RS 4
+\fBBROTLI_FALSE\fP in case of compression error 
+.PP
+\fBBROTLI_FALSE\fP if output buffer is too small 
+.PP
+\fBBROTLI_TRUE\fP otherwise 
+.RE
+.PP
+
+.SS "\fBBROTLI_BOOL\fP BrotliEncoderCompressStream (\fBBrotliEncoderState\fP * state, \fBBrotliEncoderOperation\fP op, size_t * available_in, const uint8_t ** next_in, size_t * available_out, uint8_t ** next_out, size_t * total_out)"
+
+.PP
+Compresses input stream to output stream\&. The values \fC*available_in\fP and \fC*available_out\fP must specify the number of bytes addressable at \fC*next_in\fP and \fC*next_out\fP respectively\&. When \fC*available_out\fP is \fC0\fP, \fCnext_out\fP is allowed to be \fCNULL\fP\&.
+.PP
+After each call, \fC*available_in\fP will be decremented by the amount of input bytes consumed, and the \fC*next_in\fP pointer will be incremented by that amount\&. Similarly, \fC*available_out\fP will be decremented by the amount of output bytes written, and the \fC*next_out\fP pointer will be incremented by that amount\&.
+.PP
+\fCtotal_out\fP, if it is not a null-pointer, will be set to the number of bytes compressed since the last \fCstate\fP initialization\&.
+.PP
+Internally workflow consists of 3 tasks:
+.IP "1." 4
+(optionally) copy input data to internal buffer
+.IP "2." 4
+actually compress data and (optionally) store it to internal buffer
+.IP "3." 4
+(optionally) copy compressed bytes from internal buffer to output stream
+.PP
+.PP
+Whenever all 3 tasks can't move forward anymore, or error occurs, this method returns the control flow to caller\&.
+.PP
+\fCop\fP is used to perform flush, finish the stream, or inject metadata block\&. See \fBBrotliEncoderOperation\fP for more information\&.
+.PP
+Flushing the stream means forcing encoding of all input passed to encoder and completing the current output block, so it could be fully decoded by stream decoder\&. To perform flush set \fCop\fP to \fBBROTLI_OPERATION_FLUSH\fP\&. Under some circumstances (e\&.g\&. lack of output stream capacity) this operation would require several calls to \fBBrotliEncoderCompressStream\fP\&. The method must be called again until both input stream is depleted and encoder has no more output (see \fBBrotliEncoderHasMoreOutput\fP) after the method is called\&.
+.PP
+Finishing the stream means encoding of all input passed to encoder and adding specific 'final' marks, so stream decoder could determine that stream is complete\&. To perform finish set \fCop\fP to \fBBROTLI_OPERATION_FINISH\fP\&. Under some circumstances (e\&.g\&. lack of output stream capacity) this operation would require several calls to \fBBrotliEncoderCompressStream\fP\&. The method must be called again until both input stream is depleted and encoder has no more output (see \fBBrotliEncoderHasMoreOutput\fP) after the method is called\&.
+.PP
+\fBWarning:\fP
+.RS 4
+When flushing and finishing, \fCop\fP should not change until operation is complete; input stream should not be swapped, reduced or extended as well\&.
+.RE
+.PP
+\fBParameters:\fP
+.RS 4
+\fIstate\fP encoder instance 
+.br
+\fIop\fP requested operation 
+.br
+\fIavailable_in\fP \fBin:\fP amount of available input; 
+.br
+ \fBout:\fP amount of unused input 
+.br
+\fInext_in\fP pointer to the next input byte 
+.br
+\fIavailable_out\fP \fBin:\fP length of output buffer; 
+.br
+ \fBout:\fP remaining size of output buffer 
+.br
+\fInext_out\fP compressed output buffer cursor; can be \fCNULL\fP if \fCavailable_out\fP is \fC0\fP 
+.br
+\fItotal_out\fP number of bytes produced so far; can be \fCNULL\fP 
+.RE
+.PP
+\fBReturns:\fP
+.RS 4
+\fBBROTLI_FALSE\fP if there was an error 
+.PP
+\fBBROTLI_TRUE\fP otherwise 
+.RE
+.PP
+
+.SS "\fBBrotliEncoderState\fP* BrotliEncoderCreateInstance (\fBbrotli_alloc_func\fP alloc_func, \fBbrotli_free_func\fP free_func, void * opaque)"
+
+.PP
+Creates an instance of \fBBrotliEncoderState\fP and initializes it\&. \fCalloc_func\fP and \fCfree_func\fP \fBMUST\fP be both zero or both non-zero\&. In the case they are both zero, default memory allocators are used\&. \fCopaque\fP is passed to \fCalloc_func\fP and \fCfree_func\fP when they are called\&. \fCfree_func\fP has to return without doing anything when asked to free a NULL pointer\&.
+.PP
+\fBParameters:\fP
+.RS 4
+\fIalloc_func\fP custom memory allocation function 
+.br
+\fIfree_func\fP custom memory free function 
+.br
+\fIopaque\fP custom memory manager handle 
+.RE
+.PP
+\fBReturns:\fP
+.RS 4
+\fC0\fP if instance can not be allocated or initialized 
+.PP
+pointer to initialized \fBBrotliEncoderState\fP otherwise 
+.RE
+.PP
+
+.SS "void BrotliEncoderDestroyInstance (\fBBrotliEncoderState\fP * state)"
+
+.PP
+Deinitializes and frees \fBBrotliEncoderState\fP instance\&. 
+.PP
+\fBParameters:\fP
+.RS 4
+\fIstate\fP decoder instance to be cleaned up and deallocated 
+.RE
+.PP
+
+.SS "\fBBROTLI_BOOL\fP BrotliEncoderHasMoreOutput (\fBBrotliEncoderState\fP * state)"
+
+.PP
+Checks if encoder has more output\&. 
+.PP
+\fBParameters:\fP
+.RS 4
+\fIstate\fP encoder instance 
+.RE
+.PP
+\fBReturns:\fP
+.RS 4
+\fBBROTLI_TRUE\fP, if encoder has some unconsumed output 
+.PP
+\fBBROTLI_FALSE\fP otherwise 
+.RE
+.PP
+
+.SS "\fBBROTLI_BOOL\fP BrotliEncoderIsFinished (\fBBrotliEncoderState\fP * state)"
+
+.PP
+Checks if encoder instance reached the final state\&. 
+.PP
+\fBParameters:\fP
+.RS 4
+\fIstate\fP encoder instance 
+.RE
+.PP
+\fBReturns:\fP
+.RS 4
+\fBBROTLI_TRUE\fP if encoder is in a state where it reached the end of the input and produced all of the output 
+.PP
+\fBBROTLI_FALSE\fP otherwise 
+.RE
+.PP
+
+.SS "size_t BrotliEncoderMaxCompressedSize (size_t input_size)"
+
+.PP
+Calculates the output size bound for the given \fCinput_size\fP\&. 
+.PP
+\fBWarning:\fP
+.RS 4
+Result is only valid if quality is at least \fC2\fP and, in case \fBBrotliEncoderCompressStream\fP was used, no flushes (\fBBROTLI_OPERATION_FLUSH\fP) were performed\&.
+.RE
+.PP
+\fBParameters:\fP
+.RS 4
+\fIinput_size\fP size of projected input 
+.RE
+.PP
+\fBReturns:\fP
+.RS 4
+\fC0\fP if result does not fit \fCsize_t\fP 
+.RE
+.PP
+
+.SS "BrotliEncoderPreparedDictionary* BrotliEncoderPrepareDictionary (BrotliSharedDictionaryType type, size_t data_size, const uint8_t data[data_size], int quality, \fBbrotli_alloc_func\fP alloc_func, \fBbrotli_free_func\fP free_func, void * opaque)"
+
+.PP
+Prepares a shared dictionary from the given file format for the encoder\&. \fCalloc_func\fP and \fCfree_func\fP \fBMUST\fP be both zero or both non-zero\&. In the case they are both zero, default memory allocators are used\&. \fCopaque\fP is passed to \fCalloc_func\fP and \fCfree_func\fP when they are called\&. \fCfree_func\fP has to return without doing anything when asked to free a NULL pointer\&.
+.PP
+\fBWarning:\fP
+.RS 4
+Created instance is 'lean'; it does not contain copy of \fCdata\fP, rather it contains only pointer to it; therefore, \fCdata\fP \fBMUST\fP outlive the created instance\&.
+.RE
+.PP
+\fBParameters:\fP
+.RS 4
+\fItype\fP type of dictionary stored in data 
+.br
+\fIdata_size\fP size of \fCdata\fP buffer 
+.br
+\fIdata\fP pointer to the dictionary data 
+.br
+\fIquality\fP the maximum Brotli quality to prepare the dictionary for, use BROTLI_MAX_QUALITY by default 
+.br
+\fIalloc_func\fP custom memory allocation function 
+.br
+\fIfree_func\fP custom memory free function 
+.br
+\fIopaque\fP custom memory manager handle 
+.RE
+.PP
+
+.SS "\fBBROTLI_BOOL\fP BrotliEncoderSetParameter (\fBBrotliEncoderState\fP * state, \fBBrotliEncoderParameter\fP param, uint32_t value)"
+
+.PP
+Sets the specified parameter to the given encoder instance\&. 
+.PP
+\fBParameters:\fP
+.RS 4
+\fIstate\fP encoder instance 
+.br
+\fIparam\fP parameter to set 
+.br
+\fIvalue\fP new parameter value 
+.RE
+.PP
+\fBReturns:\fP
+.RS 4
+\fBBROTLI_FALSE\fP if parameter is unrecognized, or value is invalid 
+.PP
+\fBBROTLI_FALSE\fP if value of parameter can not be changed at current encoder state (e\&.g\&. when encoding is started, window size might be already encoded and therefore it is impossible to change it) 
+.PP
+\fBBROTLI_TRUE\fP if value is accepted 
+.RE
+.PP
+\fBWarning:\fP
+.RS 4
+invalid values might be accepted in case they would not break encoding process\&. 
+.RE
+.PP
+
+.SS "const uint8_t* BrotliEncoderTakeOutput (\fBBrotliEncoderState\fP * state, size_t * size)"
+
+.PP
+Acquires pointer to internal output buffer\&. This method is used to make language bindings easier and more efficient:
+.IP "1." 4
+push data to \fBBrotliEncoderCompressStream\fP, until \fBBrotliEncoderHasMoreOutput\fP returns BROTLI_TRUE
+.IP "2." 4
+use \fBBrotliEncoderTakeOutput\fP to peek bytes and copy to language-specific entity
+.PP
+.PP
+Also this could be useful if there is an output stream that is able to consume all the provided data (e\&.g\&. when data is saved to file system)\&.
+.PP
+\fBAttention:\fP
+.RS 4
+After every call to \fBBrotliEncoderTakeOutput\fP \fC*size\fP bytes of output are considered consumed for all consecutive calls to the instance methods; returned pointer becomes invalidated as well\&.
+.RE
+.PP
+\fBNote:\fP
+.RS 4
+Encoder output is not guaranteed to be contiguous\&. This means that after the size-unrestricted call to \fBBrotliEncoderTakeOutput\fP, immediate next call to \fBBrotliEncoderTakeOutput\fP may return more data\&.
+.RE
+.PP
+\fBParameters:\fP
+.RS 4
+\fIstate\fP encoder instance 
+.br
+\fIsize\fP \fBin:\fP number of bytes caller is ready to take, \fC0\fP if any amount could be handled; 
+.br
+ \fBout:\fP amount of data pointed by returned pointer and considered consumed; 
+.br
+ out value is never greater than in value, unless it is \fC0\fP 
+.RE
+.PP
+\fBReturns:\fP
+.RS 4
+pointer to output data 
+.RE
+.PP
+
+.SS "uint32_t BrotliEncoderVersion (void)"
+
+.PP
+Gets an encoder library version\&. Look at BROTLI_MAKE_HEX_VERSION for more information\&. 
+.SH "Author"
+.PP 
+Generated automatically by Doxygen for Brotli from the source code\&.

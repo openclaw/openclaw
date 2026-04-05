@@ -1,0 +1,53 @@
+.\"
+.\" Copyright 2023 by the c-ares project and its contributors
+.\" SPDX-License-Identifier: MIT
+.\"
+.TH ARES_REINIT 3 "12 November 2023"
+.SH NAME
+ares_reinit \- ReInitialize a resolver channel from system configuration.
+.SH SYNOPSIS
+.nf
+#include <ares.h>
+
+int ares_reinit(ares_channel_t *\fIchannel\fP)
+.fi
+.SH DESCRIPTION
+The \fBares_reinit(3)\fP function re-reads the system configuration and safely
+applies the configuration to the existing channel.  System configuration will
+never override user-provided settings such as provided via
+\fBares_init_options(3)\fP or \fBares_set_servers(3)\fP.
+
+Any existing queries will be automatically requeued if the server they are
+currently assigned to is removed from the system configuration.
+
+This function may cause additional file descriptors to be created, and existing
+ones to be destroyed if server configuration has changed.
+
+\Bares_reinit(3)\fP, when compiled with thread safety, will spawn a background
+thread to read the configuration and apply it.  It is crucial that developers
+use the \fBARES_OPT_SOCK_STATE_CB\fP or \fBARES_OPT_EVENT_THREAD\fP so that
+notifications of changes are alerted.  If using \fBares_getsock(3)\fP or
+\fBares_fds(3)\fP, no notification is possible which could cause a stall.
+
+.SH RETURN VALUES
+\fIares_reinit(3)\fP can return any of the following values:
+.TP 14
+.B ARES_SUCCESS
+Initialization succeeded.
+.TP 14
+.B ARES_EFILE
+A configuration file could not be read.
+.TP 14
+.B ARES_ENOMEM
+The process's available memory was exhausted.
+
+.SH AVAILABILITY
+This function was first introduced in c-ares version 1.22.0.
+.SH SEE ALSO
+.BR ares_init (3),
+.BR ares_init_options (3),
+.BR ares_destroy (3),
+.BR ares_dup (3),
+.BR ares_library_init (3),
+.BR ares_set_servers (3),
+.BR ares_threadsafety (3)

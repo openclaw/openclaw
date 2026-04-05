@@ -1,0 +1,191 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>life_cycle-mac</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#State-Transition-Diagram">State Transition Diagram</a></li>
+      <li><a href="#Formal-State-Transitions">Formal State Transitions</a></li>
+    </ul>
+  </li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>life_cycle-mac - The MAC algorithm life-cycle</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>All message authentication codes (MACs) go through a number of stages in their life-cycle:</p>
+
+<dl>
+
+<dt id="start">start</dt>
+<dd>
+
+<p>This state represents the MAC before it has been allocated. It is the starting state for any life-cycle transitions.</p>
+
+</dd>
+<dt id="newed">newed</dt>
+<dd>
+
+<p>This state represents the MAC after it has been allocated.</p>
+
+</dd>
+<dt id="initialised">initialised</dt>
+<dd>
+
+<p>This state represents the MAC when it is set up and capable of processing input.</p>
+
+</dd>
+<dt id="updated">updated</dt>
+<dd>
+
+<p>This state represents the MAC when it is set up and capable of processing additional input or generating output.</p>
+
+</dd>
+<dt id="finaled">finaled</dt>
+<dd>
+
+<p>This state represents the MAC when it has generated output.</p>
+
+</dd>
+<dt id="freed">freed</dt>
+<dd>
+
+<p>This state is entered when the MAC is freed. It is the terminal state for all life-cycle transitions.</p>
+
+</dd>
+</dl>
+
+<h2 id="State-Transition-Diagram">State Transition Diagram</h2>
+
+<p>The usual life-cycle of a MAC is illustrated:</p>
+
+<img src="img/mac.png">
+
+<h2 id="Formal-State-Transitions">Formal State Transitions</h2>
+
+<p>This section defines all of the legal state transitions. This is the canonical list.</p>
+
+<table style="border:1px solid; border-collapse:collapse">
+<tr><th style="border:1px solid" align="left">Function Call</th>
+    <th style="border:1px solid" colspan="6">Current State</th></tr>
+<tr><th style="border:1px solid"></th>
+    <th style="border:1px solid" align="center">start</th>
+    <th style="border:1px solid" align="center">newed</th>
+    <th style="border:1px solid" align="center">initialised</th>
+    <th style="border:1px solid" align="center">updated</th>
+    <th style="border:1px solid" align="center">finaled</th>
+    <th style="border:1px solid" align="center">freed</th></tr>
+<tr><th style="border:1px solid" align="left">EVP_MAC_CTX_new</th>
+    <td style="border:1px solid" align="center">newed</td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td></tr>
+<tr><th style="border:1px solid" align="left">EVP_MAC_init</th>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center">initialised</td>
+    <td style="border:1px solid" align="center">initialised</td>
+    <td style="border:1px solid" align="center">initialised</td>
+    <td style="border:1px solid" align="center">initialised</td>
+    <td style="border:1px solid" align="center"></td></tr>
+<tr><th style="border:1px solid" align="left">EVP_MAC_update</th>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center">updated</td>
+    <td style="border:1px solid" align="center">updated</td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td></tr>
+<tr><th style="border:1px solid" align="left">EVP_MAC_final</th>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center">finaled</td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td></tr>
+<tr><th style="border:1px solid" align="left">EVP_MAC_finalXOF</th>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center">finaled</td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td></tr>
+<tr><th style="border:1px solid" align="left">EVP_MAC_CTX_free</th>
+    <td style="border:1px solid" align="center">freed</td>
+    <td style="border:1px solid" align="center">freed</td>
+    <td style="border:1px solid" align="center">freed</td>
+    <td style="border:1px solid" align="center">freed</td>
+    <td style="border:1px solid" align="center">freed</td>
+    <td style="border:1px solid" align="center"></td></tr>
+<tr><th style="border:1px solid" align="left">EVP_MAC_CTX_get_params</th>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center">newed</td>
+    <td style="border:1px solid" align="center">initialised</td>
+    <td style="border:1px solid" align="center">updated</td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td></tr>
+<tr><th style="border:1px solid" align="left">EVP_MAC_CTX_set_params</th>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center">newed</td>
+    <td style="border:1px solid" align="center">initialised</td>
+    <td style="border:1px solid" align="center">updated</td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td></tr>
+<tr><th style="border:1px solid" align="left">EVP_MAC_CTX_gettable_params</th>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center">newed</td>
+    <td style="border:1px solid" align="center">initialised</td>
+    <td style="border:1px solid" align="center">updated</td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td></tr>
+<tr><th style="border:1px solid" align="left">EVP_MAC_CTX_settable_params</th>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center">newed</td>
+    <td style="border:1px solid" align="center">initialised</td>
+    <td style="border:1px solid" align="center">updated</td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td></tr>
+</table>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>At some point the EVP layer will begin enforcing the transitions described herein.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/provider-mac.html">provider-mac(7)</a>, <a href="../man3/EVP_MAC.html">EVP_MAC(3)</a>.</p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The provider MAC interface was introduced in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

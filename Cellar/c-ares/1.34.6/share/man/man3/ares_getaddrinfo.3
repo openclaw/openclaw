@@ -1,0 +1,194 @@
+.\"
+.\" Copyright 1998 by the Massachusetts Institute of Technology.
+.\" SPDX-License-Identifier: MIT
+.\"
+.TH ARES_GETADDRINFO 3 "4 November 2018"
+.SH NAME
+ares_getaddrinfo \- Initiate a host query by name and service
+.SH SYNOPSIS
+.nf
+#include <ares.h>
+
+typedef void (*ares_addrinfo_callback)(void *\fIarg\fP, int \fIstatus\fP,
+                                       int \fItimeouts\fP,
+                                       struct ares_addrinfo *\fIresult\fP)
+
+void ares_getaddrinfo(ares_channel_t *\fIchannel\fP, const char *\fIname\fP,
+                      const char* \fIservice\fP,
+                      const struct ares_addrinfo_hints *\fIhints\fP,
+                      ares_addrinfo_callback \fIcallback\fP, void *\fIarg\fP)
+.fi
+.SH DESCRIPTION
+The \fBares_getaddrinfo(3)\fP function initiates a host query by name on the
+name service channel identified by
+.IR channel .
+The
+.I name
+and
+.I service
+parameters give the hostname and service as NULL-terminated C strings.
+The
+.I hints
+parameter is an
+.BR ares_addrinfo_hints
+structure:
+.PP
+.RS
+.EX
+struct ares_addrinfo_hints {
+  int ai_flags;
+  int ai_family;
+  int ai_socktype;
+  int ai_protocol;
+};
+.EE
+.RE
+.TP
+.I ai_family
+Specifies desired address family. AF_UNSPEC means return both AF_INET and AF_INET6.
+.TP
+.I ai_socktype
+Specifies desired socket type, for example SOCK_STREAM or SOCK_DGRAM.
+Setting this to 0 means any type.
+.TP
+.I ai_protocol
+Setting this to 0 means any protocol.
+.TP
+.I ai_flags
+Specifies additional options, see below.
+.PP
+.TP 19
+.B ARES_AI_NUMERICSERV
+If this option is set
+.I service
+field will be treated as a numeric value.
+.TP 19
+.B ARES_AI_CANONNAME
+The ares_addrinfo structure will return a canonical names list.
+.TP 19
+.B ARES_AI_NOSORT
+Result addresses will not be sorted and no connections to resolved addresses will be attempted.
+.TP 19
+.B ARES_AI_ENVHOSTS
+Read hosts file path from the environment variable
+.I CARES_HOSTS .
+.PP
+When the query is complete or has failed, the ares library will invoke \fIcallback\fP.
+Completion or failure of the query may happen immediately, or may happen
+during a later call to \fIares_process(3)\fP, \fIares_destroy(3)\fP or
+\fIares_cancel(3)\fP.
+.PP
+When the associated callback is called, it is called with a channel lock so care
+must be taken to ensure any processing is minimal to prevent DNS channel stalls.
+
+The callback may be triggered from a different thread than the one which
+called \fIares_getaddrinfo(3)\fP.
+
+For integrators running their own event loops and not using \fBARES_OPT_EVENT_THREAD\fP,
+care needs to be taken to ensure any file descriptor lists are updated immediately
+within the eventloop when notified.
+.PP
+The callback argument
+.I arg
+is copied from the \fBares_getaddrinfo(3)\fP argument
+.IR arg .
+The callback argument
+.I status
+indicates whether the query succeeded and, if not, how it failed.  It
+may have any of the following values:
+.TP 19
+.B ARES_SUCCESS
+The host lookup completed successfully.
+.TP 19
+.B ARES_ENOTIMP
+The ares library does not know how to find addresses of type
+.IR family .
+.TP 19
+.B ARES_ENOTFOUND
+The
+.I name
+was not found.
+.TP 19
+.B ARES_ENOMEM
+Memory was exhausted.
+.TP 19
+.B ARES_ESERVICE
+The textual service name provided could not be dereferenced into a port.
+.TP 19
+.B ARES_ECANCELLED
+The query was cancelled.
+.TP 19
+.B ARES_EDESTRUCTION
+The name service channel
+.I channel
+is being destroyed; the query will not be completed.
+.PP
+On successful completion of the query, the callback argument
+.I result
+points to a
+.B struct ares_addrinfo
+which contains two linked lists, one with resolved addresses and another with canonical names. 
+Also included is the official name of the host (analogous to gethostbyname() h_name).
+.PP
+.RS
+.EX
+struct ares_addrinfo {
+  struct ares_addrinfo_cname *cnames;
+  struct ares_addrinfo_node  *nodes;
+  char *name;
+};
+.EE
+.RE
+.PP
+.I ares_addrinfo_node
+structure is similar to RFC3493 addrinfo, but without canonname and with extra ttl field.
+.RS
+.PP
+.EX
+struct ares_addrinfo_node {
+  int                        ai_ttl;
+  int                        ai_flags;
+  int                        ai_family;
+  int                        ai_socktype;
+  int                        ai_protocol;
+  ares_socklen_t             ai_addrlen;
+  struct sockaddr           *ai_addr;
+  struct ares_addrinfo_node *ai_next;
+};
+.EE
+.RE
+.PP
+.I ares_addrinfo_cname
+structure is a linked list of CNAME records where
+.I ttl
+is a time to live
+.I alias
+is a label of the resource record and
+.I name
+is a value (canonical name) of the resource record.
+See RFC2181 10.1.1. CNAME terminology.
+.RS
+.PP
+.EX
+struct ares_addrinfo_cname {
+  int                         ttl;
+  char                       *alias;
+  char                       *name;
+  struct ares_addrinfo_cname *next;
+};
+.EE
+.RE
+.PP
+The reserved memory has to be deleted by \fBares_freeaddrinfo(3)\fP.
+
+The result is sorted according to RFC6724 except:
+ - Rule 3 (Avoid deprecated addresses)
+ - Rule 4 (Prefer home addresses)
+ - Rule 7 (Prefer native transport)
+
+Please note that the function will attempt a connection
+on each of the resolved addresses as per RFC6724.
+.SH AVAILABILITY
+This function was added in c-ares 1.16.0, released in March 2020.
+.SH SEE ALSO
+.BR ares_freeaddrinfo (3)

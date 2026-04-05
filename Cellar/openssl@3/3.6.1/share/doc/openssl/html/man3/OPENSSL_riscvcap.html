@@ -1,0 +1,271 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OPENSSL_riscvcap</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OPENSSL_riscvcap - the RISC-V processor capabilities vector</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>env OPENSSL_riscvcap=... &lt;application&gt;</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>libcrypto supports RISC-V instruction set extensions. These extensions are denoted by individual extension names in the capabilities vector. For Linux platform, when libcrypto is initialized, the results returned by the RISC-V Hardware Probing syscall (hwprobe) are stored in the vector. Otherwise all capabilities are disabled.</p>
+
+<p>To override the set of instructions available to an application, you can set the <b>OPENSSL_riscvcap</b> environment variable before you start the application.</p>
+
+<p>The environment variable is similar to the RISC-V ISA string defined in the RISC-V Instruction Set Manual. It is case insensitive. Though due to the limit of the environment variable parser inside libcrypto, an extension must be prefixed with an underscore to make it recognizable. This also applies to the Vector extension.</p>
+
+<pre><code>OPENSSL_riscvcap=&quot;rv64gc_v_zba_zbb_zbs...&quot;</code></pre>
+
+<p>Note that extension implication is currently not implemented. For example, when &quot;rv64gc_b&quot; is provided as the environment variable, zba/zbb/zbs would not be implied in the capability vector.</p>
+
+<p>Currently only these extensions are recognized:</p>
+
+<dl>
+
+<dt id="ZBA">ZBA</dt>
+<dd>
+
+<p>Address Generation</p>
+
+<p>Could be detected using hwprobe for Linux kernel &gt;= 6.5</p>
+
+</dd>
+<dt id="ZBB">ZBB</dt>
+<dd>
+
+<p>Basic bit-manipulation</p>
+
+<p>Could be detected using hwprobe for Linux kernel &gt;= 6.5</p>
+
+</dd>
+<dt id="ZBC">ZBC</dt>
+<dd>
+
+<p>Carry-less multiplication</p>
+
+<p>Could be detected using hwprobe for Linux kernel &gt;= 6.8</p>
+
+</dd>
+<dt id="ZBS">ZBS</dt>
+<dd>
+
+<p>Single-bit instructions</p>
+
+<p>Could be detected using hwprobe for Linux kernel &gt;= 6.5</p>
+
+</dd>
+<dt id="ZBKB">ZBKB</dt>
+<dd>
+
+<p>Bit-manipulation for Cryptography</p>
+
+<p>Could be detected using hwprobe for Linux kernel &gt;= 6.8</p>
+
+</dd>
+<dt id="ZBKC">ZBKC</dt>
+<dd>
+
+<p>Carry-less multiplication for Cryptography</p>
+
+<p>Could be detected using hwprobe for Linux kernel &gt;= 6.8</p>
+
+</dd>
+<dt id="ZBKX">ZBKX</dt>
+<dd>
+
+<p>Crossbar permutations</p>
+
+<p>Could be detected using hwprobe for Linux kernel &gt;= 6.8</p>
+
+</dd>
+<dt id="ZKND">ZKND</dt>
+<dd>
+
+<p>NIST Suite: AES Decryption</p>
+
+<p>Could be detected using hwprobe for Linux kernel &gt;= 6.8</p>
+
+</dd>
+<dt id="ZKNE">ZKNE</dt>
+<dd>
+
+<p>NIST Suite: AES Encryption</p>
+
+<p>Could be detected using hwprobe for Linux kernel &gt;= 6.8</p>
+
+</dd>
+<dt id="ZKNH">ZKNH</dt>
+<dd>
+
+<p>NIST Suite: Hash Function Instructions</p>
+
+<p>Could be detected using hwprobe for Linux kernel &gt;= 6.8</p>
+
+</dd>
+<dt id="ZKSED">ZKSED</dt>
+<dd>
+
+<p>ShangMi Suite: SM4 Block Cipher Instructions</p>
+
+<p>Could be detected using hwprobe for Linux kernel &gt;= 6.8</p>
+
+</dd>
+<dt id="ZKSH">ZKSH</dt>
+<dd>
+
+<p>ShangMi Suite: SM3 Hash Function Instructions</p>
+
+<p>Could be detected using hwprobe for Linux kernel &gt;= 6.8</p>
+
+</dd>
+<dt id="ZKR">ZKR</dt>
+<dd>
+
+<p>Entropy Source Extension</p>
+
+</dd>
+<dt id="ZKT">ZKT</dt>
+<dd>
+
+<p>Data Independent Execution Latency</p>
+
+<p>Could be detected using hwprobe for Linux kernel &gt;= 6.8</p>
+
+</dd>
+<dt id="V">V</dt>
+<dd>
+
+<p>Vector Extension for Application Processors</p>
+
+<p>Could be detected using hwprobe for Linux kernel &gt;= 6.5</p>
+
+</dd>
+<dt id="ZVBB">ZVBB</dt>
+<dd>
+
+<p>Vector Basic Bit-manipulation</p>
+
+<p>Could be detected using hwprobe for Linux kernel &gt;= 6.8</p>
+
+</dd>
+<dt id="ZVBC">ZVBC</dt>
+<dd>
+
+<p>Vector Carryless Multiplication</p>
+
+<p>Could be detected using hwprobe for Linux kernel &gt;= 6.8</p>
+
+</dd>
+<dt id="ZVKB">ZVKB</dt>
+<dd>
+
+<p>Vector Cryptography Bit-manipulation</p>
+
+<p>Could be detected using hwprobe for Linux kernel &gt;= 6.8</p>
+
+</dd>
+<dt id="ZVKG">ZVKG</dt>
+<dd>
+
+<p>Vector GCM/GMAC</p>
+
+<p>Could be detected using hwprobe for Linux kernel &gt;= 6.8</p>
+
+</dd>
+<dt id="ZVKNED">ZVKNED</dt>
+<dd>
+
+<p>NIST Suite: Vector AES Block Cipher</p>
+
+<p>Could be detected using hwprobe for Linux kernel &gt;= 6.8</p>
+
+</dd>
+<dt id="ZVKNHA">ZVKNHA</dt>
+<dd>
+
+<p>NIST Suite: Vector SHA-2 Secure Hash</p>
+
+<p>Could be detected using hwprobe for Linux kernel &gt;= 6.8</p>
+
+</dd>
+<dt id="ZVKNHB">ZVKNHB</dt>
+<dd>
+
+<p>NIST Suite: Vector SHA-2 Secure Hash</p>
+
+<p>Could be detected using hwprobe for Linux kernel &gt;= 6.8</p>
+
+</dd>
+<dt id="ZVKSED">ZVKSED</dt>
+<dd>
+
+<p>ShangMi Suite: SM4 Block Cipher</p>
+
+<p>Could be detected using hwprobe for Linux kernel &gt;= 6.8</p>
+
+</dd>
+<dt id="ZVKSH">ZVKSH</dt>
+<dd>
+
+<p>ShangMi Suite: SM3 Secure Hash</p>
+
+<p>Could be detected using hwprobe for Linux kernel &gt;= 6.8</p>
+
+</dd>
+</dl>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>Not available.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>Check currently detected capabilities</p>
+
+<pre><code>$ openssl info -cpusettings
+OPENSSL_riscvcap=RV64GC_ZBA_ZBB_ZBC_ZBS_V vlen:256</code></pre>
+
+<p>Note: The first word in the displayed capabilities is the RISC-V base architecture value, which is derived from the compiler configuration. It is therefore not overridable by the environment variable. When the V extension is given the riscv_vlen value is always displayed, there is no way to override the riscv_vlen by the environment variable.</p>
+
+<p>Disables all instruction set extensions:</p>
+
+<pre><code>export OPENSSL_riscvcap=&quot;rv64gc&quot;</code></pre>
+
+<p>Only enable the vector extension:</p>
+
+<pre><code>export OPENSSL_riscvcap=&quot;rv64gc_v&quot;</code></pre>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,73 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>RSA-PSS</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Signing-and-Verification">Signing and Verification</a></li>
+      <li><a href="#Key-Generation">Key Generation</a></li>
+    </ul>
+  </li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#CONFORMING-TO">CONFORMING TO</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>RSA-PSS - EVP_PKEY RSA-PSS algorithm support</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The <b>RSA-PSS</b> EVP_PKEY implementation is a restricted version of the RSA algorithm which only supports signing, verification and key generation using PSS padding modes with optional parameter restrictions.</p>
+
+<p>It has associated private key and public key formats.</p>
+
+<p>This algorithm shares several control operations with the <b>RSA</b> algorithm but with some restrictions described below.</p>
+
+<h2 id="Signing-and-Verification">Signing and Verification</h2>
+
+<p>Signing and verification is similar to the <b>RSA</b> algorithm except the padding mode is always PSS. If the key in use has parameter restrictions then the corresponding signature parameters are set to the restrictions: for example, if the key can only be used with digest SHA256, MGF1 SHA256 and minimum salt length 32 then the digest, MGF1 digest and salt length will be set to SHA256, SHA256 and 32 respectively.</p>
+
+<h2 id="Key-Generation">Key Generation</h2>
+
+<p>By default no parameter restrictions are placed on the generated key.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The public key format is documented in RFC4055.</p>
+
+<p>The PKCS#8 private key format used for RSA-PSS keys is similar to the RSA format except it uses the <b>id-RSASSA-PSS</b> OID and the parameters field, if present, restricts the key parameters in the same way as the public key.</p>
+
+<h1 id="CONFORMING-TO">CONFORMING TO</h1>
+
+<p>RFC 4055</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_PKEY_CTX_set_rsa_pss_keygen_md.html">EVP_PKEY_CTX_set_rsa_pss_keygen_md(3)</a>, <a href="../man3/EVP_PKEY_CTX_set_rsa_pss_keygen_mgf1_md.html">EVP_PKEY_CTX_set_rsa_pss_keygen_mgf1_md(3)</a>, <a href="../man3/EVP_PKEY_CTX_set_rsa_pss_keygen_saltlen.html">EVP_PKEY_CTX_set_rsa_pss_keygen_saltlen(3)</a>, <a href="../man3/EVP_PKEY_CTX_new.html">EVP_PKEY_CTX_new(3)</a>, <a href="../man3/EVP_PKEY_CTX_ctrl_str.html">EVP_PKEY_CTX_ctrl_str(3)</a>, <a href="../man3/EVP_PKEY_derive.html">EVP_PKEY_derive(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2017-2018 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

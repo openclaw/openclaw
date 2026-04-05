@@ -1,0 +1,66 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>DTLSv1_handle_timeout</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>DTLSv1_handle_timeout - handle a pending timeout event for a DTLS or QUIC SSL object</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+int DTLSv1_handle_timeout(SSL *ssl);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>DTLSv1_handle_timeout() handles any timeout events which have become pending on a DTLS or QUIC SSL object.</p>
+
+<p>Use <a href="../man3/DTLSv1_get_timeout.html">DTLSv1_get_timeout(3)</a> or <a href="../man3/SSL_get_event_timeout.html">SSL_get_event_timeout(3)</a> to determine when to call DTLSv1_handle_timeout().</p>
+
+<p>This function is only applicable to DTLS or QUIC SSL objects. It returns 0 if called on any other kind of SSL object.</p>
+
+<p><a href="../man3/SSL_handle_events.html">SSL_handle_events(3)</a> supersedes all use cases for this function and may be used instead of it.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>Returns 1 if there was a pending timeout event and it was handled successfully.</p>
+
+<p>Returns 0 if there was no pending timeout event, or if the SSL object is not a DTLS or QUIC object.</p>
+
+<p>Returns -1 if there was a pending timeout event but it could not be handled successfully.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/DTLSv1_get_timeout.html">DTLSv1_get_timeout(3)</a>, <a href="../man3/SSL_handle_events.html">SSL_handle_events(3)</a>, <a href="../man7/ssl.html">ssl(7)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

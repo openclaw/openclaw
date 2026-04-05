@@ -1,0 +1,175 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_RAND-TEST-RAND</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Identity">Identity</a></li>
+      <li><a href="#Supported-parameters">Supported parameters</a></li>
+    </ul>
+  </li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_RAND-TEST-RAND - The test EVP_RAND implementation</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>Support for a test generator through the <b>EVP_RAND</b> API. This generator is for test purposes only, it does not generate random numbers.</p>
+
+<h2 id="Identity">Identity</h2>
+
+<p>&quot;TEST-RAND&quot; is the name for this implementation; it can be used with the EVP_RAND_fetch() function.</p>
+
+<h2 id="Supported-parameters">Supported parameters</h2>
+
+<p>The supported parameters are:</p>
+
+<dl>
+
+<dt id="state-OSSL_RAND_PARAM_STATE-integer">&quot;state&quot; (<b>OSSL_RAND_PARAM_STATE</b>) &lt;integer&gt;</dt>
+<dd>
+
+</dd>
+<dt id="fips-indicator-OSSL_RAND_PARAM_FIPS_APPROVED_INDICATOR-integer">&quot;fips-indicator&quot; (<b>OSSL_RAND_PARAM_FIPS_APPROVED_INDICATOR</b>) &lt;integer&gt;</dt>
+<dd>
+
+<p>These parameter works as described in <a href="../man3/EVP_RAND.html">&quot;PARAMETERS&quot; in EVP_RAND(3)</a>.</p>
+
+</dd>
+<dt id="strength-OSSL_RAND_PARAM_STRENGTH-unsigned-integer">&quot;strength&quot; (<b>OSSL_RAND_PARAM_STRENGTH</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+</dd>
+<dt id="reseed_requests-OSSL_DRBG_PARAM_RESEED_REQUESTS-unsigned-integer">&quot;reseed_requests&quot; (<b>OSSL_DRBG_PARAM_RESEED_REQUESTS</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+</dd>
+<dt id="reseed_time_interval-OSSL_DRBG_PARAM_RESEED_TIME_INTERVAL-integer">&quot;reseed_time_interval&quot; (<b>OSSL_DRBG_PARAM_RESEED_TIME_INTERVAL</b>) &lt;integer&gt;</dt>
+<dd>
+
+</dd>
+<dt id="max_request-OSSL_DRBG_PARAM_RESEED_REQUESTS-unsigned-integer">&quot;max_request&quot; (<b>OSSL_DRBG_PARAM_RESEED_REQUESTS</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+</dd>
+<dt id="min_entropylen-OSSL_DRBG_PARAM_MIN_ENTROPYLEN-unsigned-integer">&quot;min_entropylen&quot; (<b>OSSL_DRBG_PARAM_MIN_ENTROPYLEN</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+</dd>
+<dt id="max_entropylen-OSSL_DRBG_PARAM_MAX_ENTROPYLEN-unsigned-integer">&quot;max_entropylen&quot; (<b>OSSL_DRBG_PARAM_MAX_ENTROPYLEN</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+</dd>
+<dt id="min_noncelen-OSSL_DRBG_PARAM_MIN_NONCELEN-unsigned-integer">&quot;min_noncelen&quot; (<b>OSSL_DRBG_PARAM_MIN_NONCELEN</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+</dd>
+<dt id="max_noncelen-OSSL_DRBG_PARAM_MAX_NONCELEN-unsigned-integer">&quot;max_noncelen&quot; (<b>OSSL_DRBG_PARAM_MAX_NONCELEN</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+</dd>
+<dt id="max_perslen-OSSL_DRBG_PARAM_MAX_PERSLEN-unsigned-integer">&quot;max_perslen&quot; (<b>OSSL_DRBG_PARAM_MAX_PERSLEN</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+</dd>
+<dt id="max_adinlen-OSSL_DRBG_PARAM_MAX_ADINLEN-unsigned-integer">&quot;max_adinlen&quot; (<b>OSSL_DRBG_PARAM_MAX_ADINLEN</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+</dd>
+<dt id="reseed_counter-OSSL_DRBG_PARAM_RESEED_COUNTER-unsigned-integer">&quot;reseed_counter&quot; (<b>OSSL_DRBG_PARAM_RESEED_COUNTER</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+<p>These parameters work as described in <a href="../man3/EVP_RAND.html">&quot;PARAMETERS&quot; in EVP_RAND(3)</a>, except that they can all be set as well as read.</p>
+
+</dd>
+<dt id="test_entropy-OSSL_RAND_PARAM_TEST_ENTROPY-octet-string">&quot;test_entropy&quot; (<b>OSSL_RAND_PARAM_TEST_ENTROPY</b>) &lt;octet string&gt;</dt>
+<dd>
+
+<p>Sets the bytes returned when the test generator is sent an entropy request. The current position is remembered across generate calls. If there are insufficient data present to satisfy a call, an error is returned.</p>
+
+</dd>
+<dt id="test_nonce-OSSL_RAND_PARAM_TEST_NONCE-octet-string">&quot;test_nonce&quot; (<b>OSSL_RAND_PARAM_TEST_NONCE</b>) &lt;octet string&gt;</dt>
+<dd>
+
+<p>Sets the bytes returned when the test generator is sent a nonce request. Each nonce request will return all of the bytes.</p>
+
+</dd>
+<dt id="generate-OSSL_RAND_PARAM_GENERATE-integer">&quot;generate&quot; (<b>OSSL_RAND_PARAM_GENERATE</b>) &lt;integer&gt;</dt>
+<dd>
+
+<p>If this parameter is zero, it will only emit the nonce and entropy data supplied via the aforementioned parameters. Otherwise, low quality non-cryptographic pseudorandom output is produced. This parameter defaults to zero.</p>
+
+</dd>
+</dl>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>A context for a test generator can be obtained by calling:</p>
+
+<pre><code>EVP_RAND *rand = EVP_RAND_fetch(NULL, &quot;TEST-RAND&quot;, NULL);
+EVP_RAND_CTX *rctx = EVP_RAND_CTX_new(rand, NULL);</code></pre>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<pre><code>EVP_RAND *rand;
+EVP_RAND_CTX *rctx;
+unsigned char bytes[100];
+OSSL_PARAM params[4], *p = params;
+unsigned char entropy[1000] = { ... };
+unsigned char nonce[20] = { ... };
+unsigned int strength = 48;
+
+rand = EVP_RAND_fetch(NULL, &quot;TEST-RAND&quot;, NULL);
+rctx = EVP_RAND_CTX_new(rand, NULL);
+EVP_RAND_free(rand);
+
+*p++ = OSSL_PARAM_construct_uint(OSSL_RAND_PARAM_STRENGTH, &amp;strength);
+*p++ = OSSL_PARAM_construct_octet_string(OSSL_RAND_PARAM_TEST_ENTROPY,
+                                         entropy, sizeof(entropy));
+*p++ = OSSL_PARAM_construct_octet_string(OSSL_RAND_PARAM_TEST_NONCE,
+                                         nonce, sizeof(nonce));
+*p = OSSL_PARAM_construct_end();
+EVP_RAND_instantiate(rctx, strength, 0, NULL, 0, params);
+
+EVP_RAND_generate(rctx, bytes, sizeof(bytes), strength, 0, NULL, 0);
+
+EVP_RAND_CTX_free(rctx);</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_RAND.html">EVP_RAND(3)</a>, <a href="../man3/EVP_RAND.html">&quot;PARAMETERS&quot; in EVP_RAND(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>This functionality was added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2020-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

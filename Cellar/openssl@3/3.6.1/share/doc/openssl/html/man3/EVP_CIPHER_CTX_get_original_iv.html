@@ -1,0 +1,69 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_CIPHER_CTX_get_original_iv</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_CIPHER_CTX_get_original_iv, EVP_CIPHER_CTX_get_updated_iv, EVP_CIPHER_CTX_iv, EVP_CIPHER_CTX_original_iv, EVP_CIPHER_CTX_iv_noconst - Routines to inspect EVP_CIPHER_CTX IV data</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+
+int EVP_CIPHER_CTX_get_original_iv(EVP_CIPHER_CTX *ctx, void *buf, size_t len);
+int EVP_CIPHER_CTX_get_updated_iv(EVP_CIPHER_CTX *ctx, void *buf, size_t len);</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>const unsigned char *EVP_CIPHER_CTX_iv(const EVP_CIPHER_CTX *ctx);
+const unsigned char *EVP_CIPHER_CTX_original_iv(const EVP_CIPHER_CTX *ctx);
+unsigned char *EVP_CIPHER_CTX_iv_noconst(EVP_CIPHER_CTX *ctx);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>EVP_CIPHER_CTX_get_original_iv() and EVP_CIPHER_CTX_get_updated_iv() copy initialization vector (IV) information from the <b>EVP_CIPHER_CTX</b> into the caller-supplied buffer. <a href="../man3/EVP_CIPHER_CTX_get_iv_length.html">EVP_CIPHER_CTX_get_iv_length(3)</a> can be used to determine an appropriate buffer size, and if the supplied buffer is too small, an error will be returned (and no data copied). EVP_CIPHER_CTX_get_original_iv() accesses the (&quot;original&quot;) IV that was supplied when the <b>EVP_CIPHER_CTX</b> was initialized, and EVP_CIPHER_CTX_get_updated_iv() accesses the current &quot;IV state&quot; of the cipher, which is updated during cipher operation for certain cipher modes (e.g., CBC and OFB).</p>
+
+<p>The functions EVP_CIPHER_CTX_iv(), EVP_CIPHER_CTX_original_iv(), and EVP_CIPHER_CTX_iv_noconst() are deprecated functions that provide similar (at a conceptual level) functionality. EVP_CIPHER_CTX_iv() returns a pointer to the beginning of the &quot;IV state&quot; as maintained internally in the <b>EVP_CIPHER_CTX</b>; EVP_CIPHER_CTX_original_iv() returns a pointer to the beginning of the (&quot;original&quot;) IV, as maintained by the <b>EVP_CIPHER_CTX</b>, that was provided when the <b>EVP_CIPHER_CTX</b> was initialized; and EVP_CIPHER_CTX_get_iv_noconst() is the same as EVP_CIPHER_CTX_iv() but has a different return type for the pointer.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>EVP_CIPHER_CTX_get_original_iv() and EVP_CIPHER_CTX_get_updated_iv() return 1 on success and 0 on failure.</p>
+
+<p>The functions EVP_CIPHER_CTX_iv(), EVP_CIPHER_CTX_original_iv(), and EVP_CIPHER_CTX_iv_noconst() return a pointer to an IV as an array of bytes on success, and NULL on failure.</p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>EVP_CIPHER_CTX_get_original_iv() and EVP_CIPHER_CTX_get_updated_iv() were added in OpenSSL 3.0.0.</p>
+
+<p>EVP_CIPHER_CTX_iv(), EVP_CIPHER_CTX_original_iv(), and EVP_CIPHER_CTX_iv_noconst() were added in OpenSSL 1.1.0, and were deprecated in OpenSSL 3.0.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2020-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

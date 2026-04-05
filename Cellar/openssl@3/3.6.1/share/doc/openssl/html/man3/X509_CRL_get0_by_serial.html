@@ -1,0 +1,99 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>X509_CRL_get0_by_serial</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>X509_CRL_get0_by_serial, X509_CRL_get0_by_cert, X509_CRL_get_REVOKED, X509_REVOKED_get0_serialNumber, X509_REVOKED_get0_revocationDate, X509_REVOKED_set_serialNumber, X509_REVOKED_set_revocationDate, X509_CRL_add0_revoked, X509_CRL_sort - CRL revoked entry utility functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/x509.h&gt;
+
+int X509_CRL_get0_by_serial(X509_CRL *crl,
+                            X509_REVOKED **ret, const ASN1_INTEGER *serial);
+int X509_CRL_get0_by_cert(X509_CRL *crl, X509_REVOKED **ret, X509 *x);
+
+STACK_OF(X509_REVOKED) *X509_CRL_get_REVOKED(X509_CRL *crl);
+
+const ASN1_INTEGER *X509_REVOKED_get0_serialNumber(const X509_REVOKED *r);
+const ASN1_TIME *X509_REVOKED_get0_revocationDate(const X509_REVOKED *r);
+
+int X509_REVOKED_set_serialNumber(X509_REVOKED *r, ASN1_INTEGER *serial);
+int X509_REVOKED_set_revocationDate(X509_REVOKED *r, ASN1_TIME *tm);
+
+int X509_CRL_add0_revoked(X509_CRL *crl, X509_REVOKED *rev);
+
+int X509_CRL_sort(X509_CRL *crl);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>X509_CRL_get0_by_serial() attempts to find a revoked entry in <i>crl</i> for serial number <i>serial</i>. If it is successful, it sets <i>*ret</i> to the internal pointer of the matching entry. As a result, <i>*ret</i> <b>MUST NOT</b> be freed after the call.</p>
+
+<p>X509_CRL_get0_by_cert() is similar to X509_get0_by_serial() except it looks for a revoked entry using the serial number of certificate <i>x</i>.</p>
+
+<p>X509_CRL_get_REVOKED() returns an internal pointer to a STACK of all revoked entries for <i>crl</i>.</p>
+
+<p>X509_REVOKED_get0_serialNumber() returns an internal pointer to the serial number of <i>r</i>.</p>
+
+<p>X509_REVOKED_get0_revocationDate() returns an internal pointer to the revocation date of <i>r</i>.</p>
+
+<p>X509_REVOKED_set_serialNumber() sets the serial number of <i>r</i> to <i>serial</i>. The supplied <i>serial</i> pointer is not used internally so it should be freed after use.</p>
+
+<p>X509_REVOKED_set_revocationDate() sets the revocation date of <i>r</i> to <i>tm</i>. The supplied <i>tm</i> pointer is not used internally so it should be freed after use.</p>
+
+<p>X509_CRL_add0_revoked() appends revoked entry <i>rev</i> to CRL <i>crl</i>. The pointer <i>rev</i> is used internally so it <b>MUST NOT</b> be freed after the call: it is freed when the parent CRL is freed.</p>
+
+<p>X509_CRL_sort() sorts the revoked entries of <i>crl</i> into ascending serial number order.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>Applications can determine the number of revoked entries returned by X509_CRL_get_REVOKED() using sk_X509_REVOKED_num() and examine each one in turn using sk_X509_REVOKED_value().</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>X509_CRL_get0_by_serial() and X509_CRL_get0_by_cert() return 0 for failure, 1 on success except if the revoked entry has the reason <code>removeFromCRL</code> (8), in which case 2 is returned.</p>
+
+<p>X509_CRL_get_REVOKED() returns a STACK of revoked entries.</p>
+
+<p>X509_REVOKED_get0_serialNumber() returns an <b>ASN1_INTEGER</b> structure.</p>
+
+<p>X509_REVOKED_get0_revocationDate() returns an <b>ASN1_TIME</b> structure.</p>
+
+<p>X509_REVOKED_set_serialNumber(), X509_REVOKED_set_revocationDate(), X509_CRL_add0_revoked() and X509_CRL_sort() return 1 for success and 0 for failure.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/d2i_X509.html">d2i_X509(3)</a>, <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>, <a href="../man3/X509_get0_signature.html">X509_get0_signature(3)</a>, <a href="../man3/X509_get_ext_d2i.html">X509_get_ext_d2i(3)</a>, <a href="../man3/X509_get_extension_flags.html">X509_get_extension_flags(3)</a>, <a href="../man3/X509_get_pubkey.html">X509_get_pubkey(3)</a>, <a href="../man3/X509_get_subject_name.html">X509_get_subject_name(3)</a>, <a href="../man3/X509_get_version.html">X509_get_version(3)</a>, <a href="../man3/X509_NAME_add_entry_by_txt.html">X509_NAME_add_entry_by_txt(3)</a>, <a href="../man3/X509_NAME_ENTRY_get_object.html">X509_NAME_ENTRY_get_object(3)</a>, <a href="../man3/X509_NAME_get_index_by_NID.html">X509_NAME_get_index_by_NID(3)</a>, <a href="../man3/X509_NAME_print_ex.html">X509_NAME_print_ex(3)</a>, <a href="../man3/X509_new.html">X509_new(3)</a>, <a href="../man3/X509_sign.html">X509_sign(3)</a>, <a href="../man3/X509V3_get_d2i.html">X509V3_get_d2i(3)</a>, <a href="../man3/X509_verify_cert.html">X509_verify_cert(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2015-2020 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

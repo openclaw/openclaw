@@ -1,0 +1,82 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_SealInit</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_SealInit, EVP_SealUpdate, EVP_SealFinal - EVP envelope encryption</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+
+int EVP_SealInit(EVP_CIPHER_CTX *ctx, const EVP_CIPHER *type,
+                 unsigned char **ek, int *ekl, unsigned char *iv,
+                 EVP_PKEY **pubk, int npubk);
+int EVP_SealUpdate(EVP_CIPHER_CTX *ctx, unsigned char *out,
+                   int *outl, unsigned char *in, int inl);
+int EVP_SealFinal(EVP_CIPHER_CTX *ctx, unsigned char *out, int *outl);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The EVP envelope routines are a high-level interface to envelope encryption. They generate a random key and IV (if required) then &quot;envelope&quot; it by using public key encryption. Data can then be encrypted using this key.</p>
+
+<p>EVP_SealInit() initializes a cipher context <b>ctx</b> for encryption with cipher <b>type</b> using a random secret key and IV. <b>type</b> is normally supplied by a function such as EVP_aes_256_cbc(). The secret key is encrypted using one or more public keys, this allows the same encrypted data to be decrypted using any of the corresponding private keys. <b>ek</b> is an array of buffers where the public key encrypted secret key will be written, each buffer must contain enough room for the corresponding encrypted key: that is <b>ek[i]</b> must have room for <b>EVP_PKEY_get_size(pubk[i])</b> bytes. The actual size of each encrypted secret key is written to the array <b>ekl</b>. <b>pubk</b> is an array of <b>npubk</b> public keys.</p>
+
+<p>The <b>iv</b> parameter is a buffer where the generated IV is written to. It must contain enough room for the corresponding cipher&#39;s IV, as determined by (for example) EVP_CIPHER_get_iv_length(type).</p>
+
+<p>If the cipher does not require an IV then the <b>iv</b> parameter is ignored and can be <b>NULL</b>.</p>
+
+<p>EVP_SealUpdate() and EVP_SealFinal() have exactly the same properties as the EVP_EncryptUpdate() and EVP_EncryptFinal() routines, as documented on the <a href="../man3/EVP_EncryptInit.html">EVP_EncryptInit(3)</a> manual page.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>EVP_SealInit() returns 0 on error or <b>npubk</b> if successful.</p>
+
+<p>EVP_SealUpdate() and EVP_SealFinal() return 1 for success and 0 for failure.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>Because a random secret key is generated the random number generator must be seeded when EVP_SealInit() is called. If the automatic seeding or reseeding of the OpenSSL CSPRNG fails due to external circumstances (see <a href="../man7/RAND.html">RAND(7)</a>), the operation will fail.</p>
+
+<p>The public key must be RSA because it is the only OpenSSL public key algorithm that supports key transport.</p>
+
+<p>Envelope encryption is the usual method of using public key encryption on large amounts of data, this is because public key encryption is slow but symmetric encryption is fast. So symmetric encryption is used for bulk encryption and the small random symmetric key used is transferred using public key encryption.</p>
+
+<p>It is possible to call EVP_SealInit() twice in the same way as EVP_EncryptInit(). The first call should have <b>npubk</b> set to 0 and (after setting any cipher parameters) it should be called again with <b>type</b> set to NULL.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/evp.html">evp(7)</a>, <a href="../man3/RAND_bytes.html">RAND_bytes(3)</a>, <a href="../man3/EVP_EncryptInit.html">EVP_EncryptInit(3)</a>, <a href="../man3/EVP_OpenInit.html">EVP_OpenInit(3)</a>, <a href="../man7/RAND.html">RAND(7)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

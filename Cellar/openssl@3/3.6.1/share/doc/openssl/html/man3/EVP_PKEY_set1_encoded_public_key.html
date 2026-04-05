@@ -1,0 +1,141 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_PKEY_set1_encoded_public_key</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a>
+    <ul>
+      <li><a href="#Set-up-a-peers-EVP_PKEY-ready-for-a-key-exchange-operation">Set up a peer&#39;s EVP_PKEY ready for a key exchange operation</a></li>
+      <li><a href="#Get-an-encoded-public-key-to-send-to-a-peer">Get an encoded public key to send to a peer</a></li>
+    </ul>
+  </li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_PKEY_set1_encoded_public_key, EVP_PKEY_get1_encoded_public_key, EVP_PKEY_set1_tls_encodedpoint, EVP_PKEY_get1_tls_encodedpoint - functions to set and get public key data within an EVP_PKEY</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+
+int EVP_PKEY_set1_encoded_public_key(EVP_PKEY *pkey,
+                                     const unsigned char *pub, size_t publen);
+
+size_t EVP_PKEY_get1_encoded_public_key(EVP_PKEY *pkey, unsigned char **ppub);</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>int EVP_PKEY_set1_tls_encodedpoint(EVP_PKEY *pkey,
+                                   const unsigned char *pt, size_t ptlen);
+
+size_t EVP_PKEY_get1_tls_encodedpoint(EVP_PKEY *pkey, unsigned char **ppt);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>EVP_PKEY_set1_encoded_public_key() can be used to set the public key value within an existing EVP_PKEY object, which does not yet have either a public or private key assigned. For the built-in OpenSSL algorithms this currently only works for those that support key exchange or key encapsulation. Parameters are not set as part of this operation, so typically an application will create an EVP_PKEY first, set the parameters on it, and then call this function. For example setting the parameters might be done using <a href="../man3/EVP_PKEY_copy_parameters.html">EVP_PKEY_copy_parameters(3)</a>.</p>
+
+<p>The format for the encoded public key will depend on the algorithm in use. For DH it should be encoded as a positive integer in big-endian form. For EC is should be a point conforming to Sec. 2.3.4 of the SECG SEC 1 (&quot;Elliptic Curve Cryptography&quot;) standard. For <b>X25519</b> and <b>X448</b> it should be encoded in the format defined by RFC7748. For <b>ML-KEM-512</b>, <b>ML-KEM-768</b> and <b>ML-KEM-1024</b>, this is the public key format defined in <b>FIPS 203</b> (the 12-bit per-coefficient encoded public <i>t</i> vector and 32-byte matrix seed <i>rho</i>).</p>
+
+<p>The key to be updated is supplied in <b>pkey</b>. The buffer containing the encoded key is pointed to be <b>pub</b>. The length of the buffer is supplied in <b>publen</b>.</p>
+
+<p>EVP_PKEY_get1_encoded_public_key() does the equivalent operation except that the encoded public key is returned to the application. The key containing the public key data is supplied in <b>pkey</b>. A buffer containing the encoded key will be allocated and stored in <b>*ppub</b>. The length of the encoded public key is returned by the function. The application is responsible for freeing the allocated buffer.</p>
+
+<p>The macro EVP_PKEY_set1_tls_encodedpoint() is deprecated and simply calls EVP_PKEY_set1_encoded_public_key() with all the same arguments. New applications should use EVP_PKEY_set1_encoded_public_key() instead.</p>
+
+<p>The macro EVP_PKEY_get1_tls_encodedpoint() is deprecated and simply calls EVP_PKEY_get1_encoded_public_key() with all the same arguments. New applications should use EVP_PKEY_get1_encoded_public_key() instead.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>EVP_PKEY_set1_encoded_public_key() returns 1 for success and 0 or a negative value for failure.</p>
+
+<p>EVP_PKEY_get1_encoded_public_key() returns the length of the encoded key or 0 for failure.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>See <a href="../man3/EVP_PKEY_derive_init.html">EVP_PKEY_derive_init(3)</a> and <a href="../man3/EVP_PKEY_derive.html">EVP_PKEY_derive(3)</a> for information about performing a key exchange operation.</p>
+
+<h2 id="Set-up-a-peers-EVP_PKEY-ready-for-a-key-exchange-operation">Set up a peer&#39;s EVP_PKEY ready for a key exchange operation</h2>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+
+int exchange(EVP_PKEY *ourkey, unsigned char *peer_pub, size_t peer_pub_len)
+{
+    EVP_PKEY *peerkey = EVP_PKEY_new();
+
+    if (peerkey == NULL || EVP_PKEY_copy_parameters(peerkey, ourkey) &lt;= 0)
+        return 0;
+
+    if (EVP_PKEY_set1_encoded_public_key(peerkey, peer_pub,
+                                         peer_pub_len) &lt;= 0)
+        return 0;
+
+    /* Do the key exchange here */
+
+    EVP_PKEY_free(peerkey);
+
+    return 1;
+}</code></pre>
+
+<h2 id="Get-an-encoded-public-key-to-send-to-a-peer">Get an encoded public key to send to a peer</h2>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+
+int get_encoded_pub_key(EVP_PKEY *ourkey)
+{
+    unsigned char *pubkey;
+    size_t pubkey_len;
+
+   pubkey_len = EVP_PKEY_get1_encoded_public_key(ourkey, &amp;pubkey);
+   if (pubkey_len == 0)
+       return 0;
+
+   /*
+    * Send the encoded public key stored in the buffer at &quot;pubkey&quot; and of
+    * length pubkey_len, to the peer.
+    */
+
+   OPENSSL_free(pubkey);
+   return 1;
+}</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_PKEY_new.html">EVP_PKEY_new(3)</a>, <a href="../man3/EVP_PKEY_copy_parameters.html">EVP_PKEY_copy_parameters(3)</a>, <a href="../man3/EVP_PKEY_derive_init.html">EVP_PKEY_derive_init(3)</a>, <a href="../man3/EVP_PKEY_derive.html">EVP_PKEY_derive(3)</a>, <a href="../man7/EVP_PKEY-DH.html">EVP_PKEY-DH(7)</a>, <a href="../man7/EVP_PKEY-EC.html">EVP_PKEY-EC(7)</a>, <a href="../man7/EVP_PKEY-X25519.html">EVP_PKEY-X25519(7)</a>, <a href="../man7/EVP_PKEY-X448.html">EVP_PKEY-X448(7)</a>, <a href="../man7/EVP_PKEY-ML-KEM-512.html">EVP_PKEY-ML-KEM-512(7)</a>, <a href="../man7/EVP_PKEY-ML-KEM-768.html">EVP_PKEY-ML-KEM-768(7)</a>, <a href="../man7/EVP_PKEY-ML-KEM-1024.html">EVP_PKEY-ML-KEM-1024(7)</a>.</p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>EVP_PKEY_set1_encoded_public_key() and EVP_PKEY_get1_encoded_public_key() were added in OpenSSL 3.0.</p>
+
+<p>EVP_PKEY_set1_tls_encodedpoint() and EVP_PKEY_get1_tls_encodedpoint() were deprecated in OpenSSL 3.0.</p>
+
+<p>Support for <b>ML-KEM</b> was added in OpenSSL 3.5.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2020-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

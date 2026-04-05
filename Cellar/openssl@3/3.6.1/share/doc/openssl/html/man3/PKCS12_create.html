@@ -1,0 +1,115 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>PKCS12_create</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#CONFORMING-TO">CONFORMING TO</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>PKCS12_create, PKCS12_create_ex, PKCS12_create_cb, PKCS12_create_ex2 - create a PKCS#12 structure</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code> #include &lt;openssl/pkcs12.h&gt;
+
+ PKCS12 *PKCS12_create(const char *pass, const char *name, EVP_PKEY *pkey,
+                       X509 *cert, STACK_OF(X509) *ca,
+                       int nid_key, int nid_cert, int iter, int mac_iter, int keytype);
+ PKCS12 *PKCS12_create_ex(const char *pass, const char *name, EVP_PKEY *pkey,
+                          X509 *cert, STACK_OF(X509) *ca, int nid_key, int nid_cert,
+                          int iter, int mac_iter, int keytype,
+                          OSSL_LIB_CTX *ctx, const char *propq);
+
+ typedef int PKCS12_create_cb(PKCS12_SAFEBAG *bag, void *cbarg);
+
+ PKCS12 *PKCS12_create_ex2(const char *pass, const char *name, EVP_PKEY *pkey,
+                           X509 *cert, STACK_OF(X509) *ca, int nid_key, int nid_cert,
+                           int iter, int mac_iter, int keytype,
+                           OSSL_LIB_CTX *ctx, const char *propq,
+                           PKCS12_create_cb *cb, void *cbarg);
+=head1 DESCRIPTION</code></pre>
+
+<p>PKCS12_create() creates a PKCS#12 structure.</p>
+
+<p><i>pass</i> is the passphrase to use. <i>name</i> is the <b>friendlyName</b> to use for the supplied certificate and key. <i>pkey</i> is the private key to include in the structure and <i>cert</i> its corresponding certificates. <i>ca</i>, if not <b>NULL</b> is an optional set of certificates to also include in the structure.</p>
+
+<p><i>nid_key</i> and <i>nid_cert</i> are the encryption algorithms that should be used for the key and certificate respectively. The modes GCM, CCM, XTS, and OCB are unsupported. <i>iter</i> is the encryption algorithm iteration count to use and <i>mac_iter</i> is the MAC iteration count to use. <i>keytype</i> is the type of key.</p>
+
+<p>PKCS12_create_ex() is identical to PKCS12_create() but allows for a library context <i>ctx</i> and property query <i>propq</i> to be used to select algorithm implementations.</p>
+
+<p>PKCS12_create_ex2() is identical to PKCS12_create_ex() but allows for a user defined callback <i>cb</i> of type <b>PKCS12_create_cb</b> to be specified and also allows for an optional argument <i>cbarg</i> to be passed back to the callback.</p>
+
+<p>The <i>cb</i> if specified will be called for every safebag added to the PKCS12 structure and allows for optional application processing on the associated safebag. For example one such use could be to add attributes to the safebag.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The parameters <i>nid_key</i>, <i>nid_cert</i>, <i>iter</i>, <i>mac_iter</i> and <i>keytype</i> can all be set to zero and sensible defaults will be used.</p>
+
+<p>These defaults are: AES password based encryption (PBES2 with PBKDF2 and AES-256-CBC) for private keys and certificates, the PBKDF2 and MAC key derivation iteration count of <b>PKCS12_DEFAULT_ITER</b> (currently 2048), and MAC algorithm HMAC with SHA2-256. The MAC key derivation algorithm used for the outer PKCS#12 structure is PKCS12KDF.</p>
+
+<p>The default MAC iteration count is 1 in order to retain compatibility with old software which did not interpret MAC iteration counts. If such compatibility is not required then <i>mac_iter</i> should be set to PKCS12_DEFAULT_ITER.</p>
+
+<p><i>keytype</i> adds a flag to the store private key. This is a non standard extension that is only currently interpreted by MSIE. If set to zero the flag is omitted, if set to <b>KEY_SIG</b> the key can be used for signing only, if set to <b>KEY_EX</b> it can be used for signing and encryption. This option was useful for old export grade software which could use signing only keys of arbitrary size but had restrictions on the permissible sizes of keys which could be used for encryption.</p>
+
+<p>If <i>name</i> is <b>NULL</b> and <i>cert</i> contains an <i>alias</i> then this will be used for the corresponding <b>friendlyName</b> in the PKCS12 structure instead. Similarly, if <i>pkey</i> is NULL and <i>cert</i> contains a <i>keyid</i> then this will be used for the corresponding <b>localKeyID</b> in the PKCS12 structure instead of the id calculated from the <i>pkey</i>.</p>
+
+<p>For all certificates in <i>ca</i> then if a certificate contains an <i>alias</i> or <i>keyid</i> then this will be used for the corresponding <b>friendlyName</b> or <b>localKeyID</b> in the PKCS12 structure.</p>
+
+<p>Either <i>pkey</i>, <i>cert</i> or both can be <b>NULL</b> to indicate that no key or certificate is required. In previous versions both had to be present or a fatal error is returned.</p>
+
+<p><i>nid_key</i> or <i>nid_cert</i> can be set to -1 indicating that no encryption should be used.</p>
+
+<p><i>mac_iter</i> can be set to -1 and the MAC will then be omitted entirely. This can be useful when running with the FIPS provider as the PKCS12KDF is not a FIPS approvable algorithm.</p>
+
+<p>PKCS12_create() makes assumptions regarding the encoding of the given pass phrase. See <a href="../man7/passphrase-encoding.html">passphrase-encoding(7)</a> for more information.</p>
+
+<p>If <i>cb</i> is specified, then it should return 1 for success and -1 for a fatal error. A return of 0 is intended to mean to not add the bag after all.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>PKCS12_create() returns a valid <b>PKCS12</b> structure or NULL if an error occurred.</p>
+
+<h1 id="CONFORMING-TO">CONFORMING TO</h1>
+
+<p>IETF RFC 7292 (<a href="https://tools.ietf.org/html/rfc7292">https://tools.ietf.org/html/rfc7292</a>)</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/EVP_KDF-PKCS12KDF.html">EVP_KDF-PKCS12KDF(7)</a>, <a href="../man3/d2i_PKCS12.html">d2i_PKCS12(3)</a>, <a href="../man7/OSSL_PROVIDER-FIPS.html">OSSL_PROVIDER-FIPS(7)</a>, <a href="../man7/passphrase-encoding.html">passphrase-encoding(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>PKCS12_create_ex() was added in OpenSSL 3.0. PKCS12_create_ex2() was added in OpenSSL 3.2.</p>
+
+<p>The defaults for encryption algorithms, MAC algorithm, and the MAC key derivation iteration count were changed in OpenSSL 3.0 to more modern standards.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2002-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

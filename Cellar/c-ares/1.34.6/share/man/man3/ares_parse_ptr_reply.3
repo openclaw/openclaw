@@ -1,0 +1,59 @@
+.\"
+.\" Copyright 1998 by the Massachusetts Institute of Technology.
+.\" SPDX-License-Identifier: MIT
+.\"
+.TH ARES_PARSE_PTR_REPLY 3 "25 July 1998"
+.SH NAME
+ares_parse_ptr_reply \- Parse a reply to a DNS query of type PTR into a hostent
+.SH SYNOPSIS
+.nf
+#include <ares.h>
+
+int ares_parse_ptr_reply(const unsigned char *\fIabuf\fP, int \fIalen\fP,
+                         const void *\fIaddr\fP, int \fIaddrlen\fP,
+                         int \fIfamily\fP, struct hostent **\fIhost\fP);
+.fi
+.SH DESCRIPTION
+The
+.B ares_parse_ptr_reply
+function parses the response to a query of type PTR into a
+.BR "struct hostent" .
+The parameters
+.I abuf
+and
+.I alen
+give the contents of the response.  The parameters
+.IR addr ,
+.IR addrlen ,
+and
+.I family
+specify which address was queried for; they are not used to verify the
+response, merely used to fill in the address of the
+.BR "struct hostent" .
+The resulting
+.B struct hostent
+is stored in allocated memory and a pointer to it stored into the
+variable pointed to by
+.IR host .
+It is the caller's responsibility to free the resulting host structure
+using
+.BR ares_free_hostent (3)
+when it is no longer needed.
+.SH RETURN VALUES
+.B ares_parse_ptr_reply
+can return any of the following values:
+.TP 15
+.B ARES_SUCCESS
+The response was successfully parsed.
+.TP 15
+.B ARES_EBADRESP
+The response was malformatted.
+.TP 15
+.B ARES_ENODATA
+The response did not contain an answer to the query.
+.TP 15
+.B ARES_ENOMEM
+Memory was exhausted.
+.SH SEE ALSO
+.BR ares_gethostbyaddr (3),
+.BR ares_free_hostent (3)

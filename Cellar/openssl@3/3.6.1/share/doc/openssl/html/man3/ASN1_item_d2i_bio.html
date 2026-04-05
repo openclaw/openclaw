@@ -1,0 +1,101 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>ASN1_item_d2i_bio</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>ASN1_item_d2i_ex, ASN1_item_d2i, ASN1_item_d2i_bio_ex, ASN1_item_d2i_bio, ASN1_item_d2i_fp_ex, ASN1_item_d2i_fp, ASN1_item_i2d_mem_bio, ASN1_item_pack, ASN1_item_unpack_ex, ASN1_item_unpack - decode and encode DER-encoded ASN.1 structures</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/asn1.h&gt;
+
+ASN1_VALUE *ASN1_item_d2i_ex(ASN1_VALUE **pval, const unsigned char **in,
+                             long len, const ASN1_ITEM *it,
+                             OSSL_LIB_CTX *libctx, const char *propq);
+ASN1_VALUE *ASN1_item_d2i(ASN1_VALUE **pval, const unsigned char **in,
+                          long len, const ASN1_ITEM *it);
+
+void *ASN1_item_d2i_bio_ex(const ASN1_ITEM *it, BIO *in, void *x,
+                           OSSL_LIB_CTX *libctx, const char *propq);
+void *ASN1_item_d2i_bio(const ASN1_ITEM *it, BIO *in, void *x);
+
+void *ASN1_item_d2i_fp_ex(const ASN1_ITEM *it, FILE *in, void *x,
+                          OSSL_LIB_CTX *libctx, const char *propq);
+void *ASN1_item_d2i_fp(const ASN1_ITEM *it, FILE *in, void *x);
+
+BIO *ASN1_item_i2d_mem_bio(const ASN1_ITEM *it, const ASN1_VALUE *val);
+
+ASN1_STRING *ASN1_item_pack(void *obj, const ASN1_ITEM *it, ASN1_STRING **oct);
+
+void *ASN1_item_unpack(const ASN1_STRING *oct, const ASN1_ITEM *it);
+
+void *ASN1_item_unpack_ex(const ASN1_STRING *oct, const ASN1_ITEM *it,
+                         OSSL_LIB_CTX *libctx, const char *propq);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>ASN1_item_d2i_ex() decodes the contents of the data stored in <i>*in</i> of length <i>len</i> which must be a DER-encoded ASN.1 structure, using the ASN.1 template <i>it</i>. It places the result in <i>*pval</i> unless <i>pval</i> is NULL. If <i>*pval</i> is non-NULL on entry then the <b>ASN1_VALUE</b> present there will be reused. Otherwise a new <b>ASN1_VALUE</b> will be allocated. If any algorithm fetches are required during the process then they will use the <b>OSSL_LIB_CTX</b>provided in the <i>libctx</i> parameter and the property query string in <i>propq</i>. See <a href="../man7/crypto.html">&quot;ALGORITHM FETCHING&quot; in crypto(7)</a> for more information about algorithm fetching. On exit <i>*in</i> will be updated to point to the next byte in the buffer after the decoded structure.</p>
+
+<p>ASN1_item_d2i() is the same as ASN1_item_d2i_ex() except that the default OSSL_LIB_CTX is used (i.e. NULL) and with a NULL property query string.</p>
+
+<p>ASN1_item_d2i_bio_ex() decodes the contents of its input BIO <i>in</i>, which must be a DER-encoded ASN.1 structure, using the ASN.1 template <i>it</i> and places the result in <i>*pval</i> unless <i>pval</i> is NULL. If <i>in</i> is NULL it returns NULL, else a pointer to the parsed structure. If any algorithm fetches are required during the process then they will use the <b>OSSL_LIB_CTX</b> provided in the <i>libctx</i> parameter and the property query string in <i>propq</i>. See <a href="../man7/crypto.html">&quot;ALGORITHM FETCHING&quot; in crypto(7)</a> for more information about algorithm fetching.</p>
+
+<p>ASN1_item_d2i_bio() is the same as ASN1_item_d2i_bio_ex() except that the default <b>OSSL_LIB_CTX</b> is used (i.e. NULL) and with a NULL property query string.</p>
+
+<p>ASN1_item_d2i_fp_ex() is the same as ASN1_item_d2i_bio_ex() except that a FILE pointer is provided instead of a BIO.</p>
+
+<p>ASN1_item_d2i_fp() is the same as ASN1_item_d2i_fp_ex() except that the default <b>OSSL_LIB_CTX</b> is used (i.e. NULL) and with a NULL property query string.</p>
+
+<p>ASN1_item_i2d_mem_bio() encodes the given ASN.1 value <i>val</i> using the ASN.1 template <i>it</i> and returns the result in a memory BIO.</p>
+
+<p>ASN1_item_pack() encodes the given ASN.1 value in <i>obj</i> using the ASN.1 template <i>it</i> and returns an <b>ASN1_STRING</b> object. If the passed in <i>*oct</i> is not NULL then this is used to store the returned result, otherwise a new <b>ASN1_STRING</b> object is created. If <i>oct</i> is not NULL and <i>*oct</i> is NULL then the returned return is also set into <i>*oct</i>. If there is an error the optional passed in <b>ASN1_STRING</b> will not be freed, but the previous value may be cleared when ASN1_STRING_set0(*oct, NULL, 0) is called internally.</p>
+
+<p>ASN1_item_unpack() uses ASN1_item_d2i() to decode the DER-encoded <b>ASN1_STRING</b> <i>oct</i> using the ASN.1 template <i>it</i>.</p>
+
+<p>ASN1_item_unpack_ex() is similar to ASN1_item_unpack(), but uses ASN1_item_d2i_ex() so that the <i>libctx</i> and <i>propq</i> can be used when doing algorithm fetching.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>ASN1_item_d2i_bio(), ASN1_item_unpack_ex() and ASN1_item_unpack() return a pointer to an <b>ASN1_VALUE</b> or NULL on error.</p>
+
+<p>ASN1_item_i2d_mem_bio() returns a pointer to a memory BIO or NULL on error.</p>
+
+<p>ASN1_item_pack() returns a pointer to an <b>ASN1_STRING</b> or NULL on error.</p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The functions ASN1_item_d2i_ex(), ASN1_item_d2i_bio_ex(), ASN1_item_d2i_fp_ex() and ASN1_item_i2d_mem_bio() were added in OpenSSL 3.0.</p>
+
+<p>The function ASN1_item_unpack_ex() was added in OpenSSL 3.2.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2021-2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

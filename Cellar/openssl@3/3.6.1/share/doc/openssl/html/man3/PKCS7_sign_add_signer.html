@@ -1,0 +1,95 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>PKCS7_sign_add_signer</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>PKCS7_sign_add_signer, PKCS7_add_certificate, PKCS7_add_crl - add information to PKCS7 structure</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/pkcs7.h&gt;
+
+PKCS7_SIGNER_INFO *PKCS7_sign_add_signer(PKCS7 *p7, X509 *signcert,
+                                         EVP_PKEY *pkey, const EVP_MD *md, int flags);
+int PKCS7_add_certificate(PKCS7 *p7, X509 *cert);
+int PKCS7_add_crl(PKCS7 *p7, X509_CRL *crl);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>PKCS7_sign_add_signer() adds a signer with certificate <i>signcert</i> and private key <i>pkey</i> using message digest <i>md</i> to a PKCS7 signed data structure <i>p7</i>.</p>
+
+<p>The <b>PKCS7</b> structure should be obtained from an initial call to PKCS7_sign() with the flag <b>PKCS7_PARTIAL</b> set or in the case or re-signing a valid PKCS#7 signed data structure.</p>
+
+<p>If the <i>md</i> parameter is NULL then the default digest for the public key algorithm will be used.</p>
+
+<p>Unless the <b>PKCS7_REUSE_DIGEST</b> flag is set the returned <b>PKCS7</b> structure is not complete and must be finalized either by streaming (if applicable) or a call to PKCS7_final().</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The main purpose of this function is to provide finer control over a PKCS#7 signed data structure where the simpler PKCS7_sign() function defaults are not appropriate. For example if multiple signers or non default digest algorithms are needed.</p>
+
+<p>Any of the following flags (ored together) can be passed in the <i>flags</i> parameter.</p>
+
+<p>If <b>PKCS7_REUSE_DIGEST</b> is set then an attempt is made to copy the content digest value from the <b>PKCS7</b> structure: to add a signer to an existing structure. An error occurs if a matching digest value cannot be found to copy. The returned <b>PKCS7</b> structure will be valid and finalized when this flag is set.</p>
+
+<p>If <b>PKCS7_PARTIAL</b> is set in addition to <b>PKCS7_REUSE_DIGEST</b> then the <b>PKCS7_SIGNER_INO</b> structure will not be finalized so additional attributes can be added. In this case an explicit call to PKCS7_SIGNER_INFO_sign() is needed to finalize it.</p>
+
+<p>If <b>PKCS7_NOCERTS</b> is set the signer&#39;s certificate will not be included in the <b>PKCS7</b> structure, the signer&#39;s certificate must still be supplied in the <i>signcert</i> parameter though. This can reduce the size of the signature if the signers certificate can be obtained by other means: for example a previously signed message.</p>
+
+<p>The signedData structure includes several PKCS#7 authenticatedAttributes including the signing time, the PKCS#7 content type and the supported list of ciphers in an SMIMECapabilities attribute. If <b>PKCS7_NOATTR</b> is set then no authenticatedAttributes will be used. If <b>PKCS7_NOSMIMECAP</b> is set then just the SMIMECapabilities are omitted.</p>
+
+<p>If present the SMIMECapabilities attribute indicates support for the following algorithms: triple DES, 128 bit RC2, 64 bit RC2, DES and 40 bit RC2. If any of these algorithms is disabled then it will not be included.</p>
+
+<p>PKCS7_sign_add_signers() returns an internal pointer to the <b>PKCS7_SIGNER_INFO</b> structure just added, which can be used to set additional attributes before it is finalized.</p>
+
+<p>PKCS7_add_certificate() adds to the <b>PKCS7</b> structure <i>p7</i> the certificate <i>cert</i>, which may be an end-entity (signer) certificate or a CA certificate useful for chain building. This is done internally by <a href="../man3/PKCS7_sign_ex.html">PKCS7_sign_ex(3)</a> and similar signing functions. It may have to be used before calling <a href="../man3/PKCS7_verify.html">PKCS7_verify(3)</a> in order to provide any missing certificate(s) needed for verification.</p>
+
+<p>PKCS7_add_crl() adds the CRL <i>crl</i> to the <b>PKCS7</b> structure <i>p7</i>. This may be called to provide certificate status information to be included when signing or to use when verifying the <b>PKCS7</b> structure.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>PKCS7_sign_add_signers() returns an internal pointer to the <b>PKCS7_SIGNER_INFO</b> structure just added or NULL if an error occurs.</p>
+
+<p>PKCS7_add_certificate() and PKCS7_add_crl() return 1 on success, 0 on error.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>, <a href="../man3/PKCS7_sign_ex.html">PKCS7_sign_ex(3)</a>, <a href="../man3/PKCS7_final.html">PKCS7_final(3)</a>, <a href="../man3/PKCS7_verify.html">PKCS7_verify(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The PPKCS7_sign_add_signer() function was added in OpenSSL 1.0.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2007-2016 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

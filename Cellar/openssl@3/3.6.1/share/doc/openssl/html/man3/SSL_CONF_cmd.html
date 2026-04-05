@@ -1,0 +1,680 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_CONF_cmd</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#SUPPORTED-COMMAND-LINE-COMMANDS">SUPPORTED COMMAND LINE COMMANDS</a>
+    <ul>
+      <li><a href="#Additional-Options">Additional Options</a></li>
+    </ul>
+  </li>
+  <li><a href="#SUPPORTED-CONFIGURATION-FILE-COMMANDS">SUPPORTED CONFIGURATION FILE COMMANDS</a></li>
+  <li><a href="#SUPPORTED-COMMAND-TYPES">SUPPORTED COMMAND TYPES</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_CONF_cmd_value_type, SSL_CONF_cmd - send configuration command</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+int SSL_CONF_cmd(SSL_CONF_CTX *ctx, const char *option, const char *value);
+int SSL_CONF_cmd_value_type(SSL_CONF_CTX *ctx, const char *option);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The function SSL_CONF_cmd() performs configuration operation <b>option</b> with optional parameter <b>value</b> on <b>ctx</b>. Its purpose is to simplify application configuration of <b>SSL_CTX</b> or <b>SSL</b> structures by providing a common framework for command line options or configuration files.</p>
+
+<p>SSL_CONF_cmd_value_type() returns the type of value that <b>option</b> refers to.</p>
+
+<h1 id="SUPPORTED-COMMAND-LINE-COMMANDS">SUPPORTED COMMAND LINE COMMANDS</h1>
+
+<p>Currently supported <b>option</b> names for command lines (i.e. when the flag <b>SSL_CONF_FLAG_CMDLINE</b> is set) are listed below. Note: all <b>option</b> names are case sensitive. Unless otherwise stated commands can be used by both clients and servers and the <b>value</b> parameter is not used. The default prefix for command line commands is <b>-</b> and that is reflected below.</p>
+
+<dl>
+
+<dt id="bugs"><b>-bugs</b></dt>
+<dd>
+
+<p>Various bug workarounds are set, same as setting <b>SSL_OP_ALL</b>.</p>
+
+</dd>
+<dt id="no_comp"><b>-no_comp</b></dt>
+<dd>
+
+<p>Disables support for SSL/TLS compression, same as setting <b>SSL_OP_NO_COMPRESSION</b>. As of OpenSSL 1.1.0, compression is off by default.</p>
+
+</dd>
+<dt id="comp"><b>-comp</b></dt>
+<dd>
+
+<p>Enables support for SSL/TLS compression, same as clearing <b>SSL_OP_NO_COMPRESSION</b>. This command was introduced in OpenSSL 1.1.0. As of OpenSSL 1.1.0, compression is off by default. TLS compression can only be used in security level 1 or lower. From OpenSSL 3.2.0 and above the default security level is 2, so this option will have no effect without also changing the security level. See <a href="../man3/SSL_CTX_set_security_level.html">SSL_CTX_set_security_level(3)</a>.</p>
+
+</dd>
+<dt id="no_ticket"><b>-no_ticket</b></dt>
+<dd>
+
+<p>Disables support for session tickets, same as setting <b>SSL_OP_NO_TICKET</b>.</p>
+
+</dd>
+<dt id="serverpref"><b>-serverpref</b></dt>
+<dd>
+
+<p>Use server and not client preference order when determining which cipher suite, signature algorithm or elliptic curve (TLS 1.2) or group (TLS 1.3) to use for an incoming connection. Equivalent to <b>SSL_OP_SERVER_PREFERENCE</b>. Only used by servers.</p>
+
+</dd>
+<dt id="client_renegotiation"><b>-client_renegotiation</b></dt>
+<dd>
+
+<p>Allows servers to accept client-initiated renegotiation. Equivalent to setting <b>SSL_OP_ALLOW_CLIENT_RENEGOTIATION</b>. Only used by servers.</p>
+
+</dd>
+<dt id="legacy_renegotiation"><b>-legacy_renegotiation</b></dt>
+<dd>
+
+<p>Permits the use of unsafe legacy renegotiation. Equivalent to setting <b>SSL_OP_ALLOW_UNSAFE_LEGACY_RENEGOTIATION</b>.</p>
+
+</dd>
+<dt id="no_renegotiation"><b>-no_renegotiation</b></dt>
+<dd>
+
+<p>Disables all attempts at renegotiation in (D)TLSv1.2 and earlier, same as setting <b>SSL_OP_NO_RENEGOTIATION</b>.</p>
+
+</dd>
+<dt id="no_resumption_on_reneg"><b>-no_resumption_on_reneg</b></dt>
+<dd>
+
+<p>Sets <b>SSL_OP_NO_SESSION_RESUMPTION_ON_RENEGOTIATION</b>. Only used by servers.</p>
+
+</dd>
+<dt id="legacy_server_connect--no_legacy_server_connect"><b>-legacy_server_connect</b>, <b>-no_legacy_server_connect</b></dt>
+<dd>
+
+<p>Permits or prohibits the use of unsafe legacy renegotiation for OpenSSL clients only. Equivalent to setting or clearing <b>SSL_OP_LEGACY_SERVER_CONNECT</b>.</p>
+
+</dd>
+<dt id="prioritize_chacha"><b>-prioritize_chacha</b></dt>
+<dd>
+
+<p>Prioritize ChaCha ciphers when the client has a ChaCha20 cipher at the top of its preference list. This usually indicates a client without AES hardware acceleration (e.g. mobile) is in use. Equivalent to <b>SSL_OP_PRIORITIZE_CHACHA</b>. Only used by servers. Requires <b>-serverpref</b>.</p>
+
+</dd>
+<dt id="allow_no_dhe_kex"><b>-allow_no_dhe_kex</b></dt>
+<dd>
+
+<p>In TLSv1.3 allow a non-(ec)dhe based key exchange mode on resumption. This means that there will be no forward secrecy for the resumed session.</p>
+
+</dd>
+<dt id="prefer_no_dhe_kex"><b>-prefer_no_dhe_kex</b></dt>
+<dd>
+
+<p>In TLSv1.3, on resumption let the server prefer a non-(ec)dhe based key exchange mode over an (ec)dhe based one. Requires <b>-allow_no_dhe_kex</b>. Equivalent to <b>SSL_OP_PREFER_NO_DHE_KEX</b>. Only used by servers.</p>
+
+</dd>
+<dt id="strict"><b>-strict</b></dt>
+<dd>
+
+<p>Enables strict mode protocol handling. Equivalent to setting <b>SSL_CERT_FLAG_TLS_STRICT</b>.</p>
+
+</dd>
+<dt id="sigalgs-algs"><b>-sigalgs</b> <i>algs</i></dt>
+<dd>
+
+<p>This sets the supported signature algorithms for TLSv1.2 and TLSv1.3. For clients this value is used directly for the supported signature algorithms extension. For servers it is used to determine which signature algorithms to support.</p>
+
+<p>The <b>algs</b> argument should be a colon separated list of signature algorithms in order of decreasing preference of the form <b>algorithm+hash</b> or <b>signature_scheme</b>. For the default providers shipped with OpenSSL, <b>algorithm</b> is one of <b>RSA</b>, <b>DSA</b> or <b>ECDSA</b> and <b>hash</b> is a supported algorithm OID short name such as <b>SHA1</b>, <b>SHA224</b>, <b>SHA256</b>, <b>SHA384</b> or <b>SHA512</b>. <b>signature_scheme</b> is one of the signature schemes defined in TLSv1.3, specified using the IETF name, e.g., <b>ecdsa_secp256r1_sha256</b>, <b>ed25519</b>, or <b>rsa_pss_pss_sha256</b>. Additional providers may make available further algorithms via the TLS-SIGALG capability. Signature scheme names and public key algorithm names (but not the hash names) in the <b>algorithm+hash</b> form are case-insensitive. See <a href="../man7/provider-base.html">provider-base(7)</a>.</p>
+
+<p>If this option is not set then all signature algorithms supported by all activated providers are permissible.</p>
+
+<p>Note: algorithms which specify a PKCS#1 v1.5 signature scheme (either by using <b>RSA</b> as the <b>algorithm</b> or by using one of the <b>rsa_pkcs1_*</b> identifiers) are ignored in TLSv1.3 and will not be negotiated.</p>
+
+</dd>
+<dt id="client_sigalgs-algs"><b>-client_sigalgs</b> <i>algs</i></dt>
+<dd>
+
+<p>This sets the supported signature algorithms associated with client authentication for TLSv1.2 and TLSv1.3. For servers the <b>algs</b> is used in the <b>signature_algorithms</b> field of a <b>CertificateRequest</b> message. For clients it is used to determine which signature algorithm to use with the client certificate. If a server does not request a certificate this option has no effect.</p>
+
+<p>The syntax of <b>algs</b> is identical to <b>-sigalgs</b>. If not set, then the value set for <b>-sigalgs</b> will be used instead.</p>
+
+</dd>
+<dt id="groups-groups"><b>-groups</b> <i>groups</i></dt>
+<dd>
+
+<p>This sets the supported groups. For clients, the groups are sent using the supported groups extension. For servers, it is used to determine which group to use. This setting affects groups used for signatures (in TLSv1.2 and earlier) and key exchange.</p>
+
+<p>In its simplest form the <i>groups</i> argument is a colon separated list of groups. The preferred names are those listed in the IANA <a href="https://www.iana.org/assignments/tls-parameters/tls-parameters.xhtml#tls-parameters-8">TLS Supported Groups</a> registry.</p>
+
+<p>For some groups, OpenSSL supports additional aliases. Such an alias could be a <b>NIST</b> name (e.g. <b>P-256</b>), an OpenSSL OID name (e.g. <b>prime256v1</b>), or some other commonly used name. Group names are case-insensitive in OpenSSL 3.5 and later. The list should be in order of preference with the most preferred group first.</p>
+
+<p>The first group listed will also be used for the <b>key_share</b> sent by a client in a TLSv1.3 <b>ClientHello</b>.</p>
+
+<p>The commands below list the IANA names for TLS 1.2 and TLS 1.3, respectively:</p>
+
+<pre><code>$ openssl list -tls1_2 -tls-groups
+$ openssl list -tls1_3 -tls-groups</code></pre>
+
+<p>The recommended groups (in order of decreasing performance) for TLS 1.3 are presently:</p>
+
+<p><b>x25519</b>, <b>secp256r1</b>, <b>x448</b>, and <b>secp384r1</b>.</p>
+
+<p>The stronger security margins of the last two, come at a significant performance penalty.</p>
+
+<p>An enriched alternative syntax, that enables clients to send multiple keyshares and allows servers to prioritise some groups over others, is described in <a href="../man3/SSL_CTX_set1_groups_list.html">SSL_CTX_set1_groups_list(3)</a>. Since TLS 1.2 has neither keyshares nor a hello retry mechanism, with TLS 1.2 the enriched syntax is ultimately equivalent to just a simple ordered list of groups, as with the simple form above.</p>
+
+</dd>
+<dt id="curves-groups"><b>-curves</b> <i>groups</i></dt>
+<dd>
+
+<p>This is a synonym for the <b>-groups</b> command.</p>
+
+</dd>
+<dt id="named_curve-curve"><b>-named_curve</b> <i>curve</i></dt>
+<dd>
+
+<p>This sets the temporary curve used for ephemeral ECDH modes. This is only applicable in TLS 1.0 and 1.1, and should not be used with later protocol versions.</p>
+
+<p>The <i>curve</i> argument is a curve name or the special value <b>auto</b> which picks an appropriate curve based on client and server preferences. The curve can be either the <b>NIST</b> name (e.g. <b>P-256</b>) or an OpenSSL OID name (e.g. <b>prime256v1</b>). Even with TLS 1.0 and 1.1, the default value of <code>auto</code> is strongly recommended over choosing a specific curve. Curve names are case-insensitive in OpenSSL 3.5 and later.</p>
+
+</dd>
+<dt id="tx_cert_comp"><b>-tx_cert_comp</b></dt>
+<dd>
+
+<p>Enables support for sending TLSv1.3 compressed certificates.</p>
+
+</dd>
+<dt id="no_tx_cert_comp"><b>-no_tx_cert_comp</b></dt>
+<dd>
+
+<p>Disables support for sending TLSv1.3 compressed certificates.</p>
+
+</dd>
+<dt id="rx_cert_comp"><b>-rx_cert_comp</b></dt>
+<dd>
+
+<p>Enables support for receiving TLSv1.3 compressed certificates.</p>
+
+</dd>
+<dt id="no_rx_cert_comp"><b>-no_rx_cert_comp</b></dt>
+<dd>
+
+<p>Disables support for receiving TLSv1.3 compressed certificates.</p>
+
+</dd>
+<dt id="comp1"><b>-comp</b></dt>
+<dd>
+
+</dd>
+<dt id="cipher-ciphers"><b>-cipher</b> <i>ciphers</i></dt>
+<dd>
+
+<p>Sets the TLSv1.2 and below ciphersuite list to <b>ciphers</b>. This list will be combined with any configured TLSv1.3 ciphersuites. Note: syntax checking of <b>ciphers</b> is currently not performed unless a <b>SSL</b> or <b>SSL_CTX</b> structure is associated with <b>ctx</b>.</p>
+
+</dd>
+<dt id="ciphersuites-1.3ciphers"><b>-ciphersuites</b> <i>1.3ciphers</i></dt>
+<dd>
+
+<p>Sets the available ciphersuites for TLSv1.3 to value. This is a colon-separated list of TLSv1.3 ciphersuite names in order of preference. This list will be combined any configured TLSv1.2 and below ciphersuites. See <a href="../man1/openssl-ciphers.html">openssl-ciphers(1)</a> for more information.</p>
+
+</dd>
+<dt id="min_protocol-minprot--max_protocol-maxprot"><b>-min_protocol</b> <i>minprot</i>, <b>-max_protocol</b> <i>maxprot</i></dt>
+<dd>
+
+<p>Sets the minimum and maximum supported protocol. Currently supported protocol values are <b>SSLv3</b>, <b>TLSv1</b>, <b>TLSv1.1</b>, <b>TLSv1.2</b>, <b>TLSv1.3</b> for TLS; <b>DTLSv1</b>, <b>DTLSv1.2</b> for DTLS, and <b>None</b> for no limit. If either the lower or upper bound is not specified then only the other bound applies, if specified. If your application supports both TLS and DTLS you can specify any of these options twice, once with a bound for TLS and again with an appropriate bound for DTLS. To restrict the supported protocol versions use these commands rather than the deprecated alternative commands below.</p>
+
+</dd>
+<dt id="record_padding-padding"><b>-record_padding</b> <i>padding</i></dt>
+<dd>
+
+<p>Controls use of TLSv1.3 record layer padding. <b>padding</b> is a string of the form &quot;number[,number]&quot; where the (required) first number is the padding block size (in octets) for application data, and the optional second number is the padding block size for handshake and alert messages. If the optional second number is omitted, the same padding will be applied to all messages.</p>
+
+<p>Padding attempts to pad TLSv1.3 records so that they are a multiple of the set length on send. A value of 0 or 1 turns off padding as relevant. Otherwise, the values must be &gt;1 or &lt;=16384.</p>
+
+</dd>
+<dt id="debug_broken_protocol"><b>-debug_broken_protocol</b></dt>
+<dd>
+
+<p>Ignored.</p>
+
+</dd>
+<dt id="no_middlebox"><b>-no_middlebox</b></dt>
+<dd>
+
+<p>Turn off &quot;middlebox compatibility&quot;, as described below.</p>
+
+</dd>
+</dl>
+
+<h2 id="Additional-Options">Additional Options</h2>
+
+<p>The following options are accepted by SSL_CONF_cmd(), but are not processed by the OpenSSL commands.</p>
+
+<dl>
+
+<dt id="cert-file"><b>-cert</b> <i>file</i></dt>
+<dd>
+
+<p>Attempts to use <b>file</b> as the certificate for the appropriate context. It currently uses SSL_CTX_use_certificate_chain_file() if an <b>SSL_CTX</b> structure is set or SSL_use_certificate_file() with filetype PEM if an <b>SSL</b> structure is set. This option is only supported if certificate operations are permitted.</p>
+
+</dd>
+<dt id="key-file"><b>-key</b> <i>file</i></dt>
+<dd>
+
+<p>Attempts to use <b>file</b> as the private key for the appropriate context. This option is only supported if certificate operations are permitted. Note: if no <b>-key</b> option is set then a private key is not loaded unless the flag <b>SSL_CONF_FLAG_REQUIRE_PRIVATE</b> is set.</p>
+
+</dd>
+<dt id="dhparam-file"><b>-dhparam</b> <i>file</i></dt>
+<dd>
+
+<p>Attempts to use <b>file</b> as the set of temporary DH parameters for the appropriate context. This option is only supported if certificate operations are permitted.</p>
+
+</dd>
+<dt id="no_ssl3--no_tls1--no_tls1_1--no_tls1_2--no_tls1_3"><b>-no_ssl3</b>, <b>-no_tls1</b>, <b>-no_tls1_1</b>, <b>-no_tls1_2</b>, <b>-no_tls1_3</b></dt>
+<dd>
+
+<p>Disables protocol support for SSLv3, TLSv1.0, TLSv1.1, TLSv1.2 or TLSv1.3 by setting the corresponding options <b>SSL_OP_NO_SSLv3</b>, <b>SSL_OP_NO_TLSv1</b>, <b>SSL_OP_NO_TLSv1_1</b>, <b>SSL_OP_NO_TLSv1_2</b> and <b>SSL_OP_NO_TLSv1_3</b> respectively. These options are deprecated, use <b>-min_protocol</b> and <b>-max_protocol</b> instead.</p>
+
+</dd>
+<dt id="anti_replay--no_anti_replay"><b>-anti_replay</b>, <b>-no_anti_replay</b></dt>
+<dd>
+
+<p>Switches replay protection, on or off respectively. With replay protection on, OpenSSL will automatically detect if a session ticket has been used more than once, TLSv1.3 has been negotiated, and early data is enabled on the server. A full handshake is forced if a session ticket is used a second or subsequent time. Anti-Replay is on by default unless overridden by a configuration file and is only used by servers. Anti-replay measures are required for compliance with the TLSv1.3 specification. Some applications may be able to mitigate the replay risks in other ways and in such cases the built-in OpenSSL functionality is not required. Switching off anti-replay is equivalent to <b>SSL_OP_NO_ANTI_REPLAY</b>.</p>
+
+</dd>
+</dl>
+
+<h1 id="SUPPORTED-CONFIGURATION-FILE-COMMANDS">SUPPORTED CONFIGURATION FILE COMMANDS</h1>
+
+<p>Currently supported <b>option</b> names for configuration files (i.e., when the flag <b>SSL_CONF_FLAG_FILE</b> is set) are listed below. All configuration file <b>option</b> names are case insensitive so <b>signaturealgorithms</b> is recognised as well as <b>SignatureAlgorithms</b>. Unless otherwise stated the <b>value</b> names are also case insensitive.</p>
+
+<p>Note: the command prefix (if set) alters the recognised <b>option</b> values.</p>
+
+<dl>
+
+<dt id="CipherString"><b>CipherString</b></dt>
+<dd>
+
+<p>Sets the ciphersuite list for TLSv1.2 and below to <b>value</b>. This list will be combined with any configured TLSv1.3 ciphersuites. Note: syntax checking of <b>value</b> is currently not performed unless an <b>SSL</b> or <b>SSL_CTX</b> structure is associated with <b>ctx</b>.</p>
+
+</dd>
+<dt id="Ciphersuites"><b>Ciphersuites</b></dt>
+<dd>
+
+<p>Sets the available ciphersuites for TLSv1.3 to <b>value</b>. This is a colon-separated list of TLSv1.3 ciphersuite names in order of preference. This list will be combined any configured TLSv1.2 and below ciphersuites. See <a href="../man1/openssl-ciphers.html">openssl-ciphers(1)</a> for more information.</p>
+
+</dd>
+<dt id="Certificate"><b>Certificate</b></dt>
+<dd>
+
+<p>Attempts to use the file <b>value</b> as the certificate for the appropriate context. It currently uses SSL_CTX_use_certificate_chain_file() if an <b>SSL_CTX</b> structure is set or SSL_use_certificate_file() with filetype PEM if an <b>SSL</b> structure is set. This option is only supported if certificate operations are permitted.</p>
+
+</dd>
+<dt id="PrivateKey"><b>PrivateKey</b></dt>
+<dd>
+
+<p>Attempts to use the file <b>value</b> as the private key for the appropriate context. This option is only supported if certificate operations are permitted. Note: if no <b>PrivateKey</b> option is set then a private key is not loaded unless the <b>SSL_CONF_FLAG_REQUIRE_PRIVATE</b> is set.</p>
+
+</dd>
+<dt id="ChainCAFile-ChainCAPath-VerifyCAFile-VerifyCAPath"><b>ChainCAFile</b>, <b>ChainCAPath</b>, <b>VerifyCAFile</b>, <b>VerifyCAPath</b></dt>
+<dd>
+
+<p>These options indicate a file or directory used for building certificate chains or verifying certificate chains. These options are only supported if certificate operations are permitted.</p>
+
+</dd>
+<dt id="RequestCAFile"><b>RequestCAFile</b></dt>
+<dd>
+
+<p>This option indicates a file containing a set of certificates in PEM form. The subject names of the certificates are sent to the peer in the <b>certificate_authorities</b> extension for TLS 1.3 (in ClientHello or CertificateRequest) or in a certificate request for previous versions or TLS.</p>
+
+</dd>
+<dt id="ServerInfoFile"><b>ServerInfoFile</b></dt>
+<dd>
+
+<p>Attempts to use the file <b>value</b> in the &quot;serverinfo&quot; extension using the function SSL_CTX_use_serverinfo_file.</p>
+
+</dd>
+<dt id="DHParameters"><b>DHParameters</b></dt>
+<dd>
+
+<p>Attempts to use the file <b>value</b> as the set of temporary DH parameters for the appropriate context. This option is only supported if certificate operations are permitted.</p>
+
+</dd>
+<dt id="RecordPadding"><b>RecordPadding</b></dt>
+<dd>
+
+<p>Controls use of TLSv1.3 record layer padding. <b>value</b> is a string of the form &quot;number[,number]&quot; where the (required) first number is the padding block size (in octets) for application data, and the optional second number is the padding block size for handshake and alert messages. If the optional second number is omitted, the same padding will be applied to all messages.</p>
+
+<p>Padding attempts to pad TLSv1.3 records so that they are a multiple of the set length on send. A value of 0 or 1 turns off padding as relevant. Otherwise, the values must be &gt;1 or &lt;=16384.</p>
+
+<p>Note that, for QUIC objects, padding is always performed at the packet level, and so cannot be done at the record level. Given that, when the config file is created, there is no knowledge of what kind of SSL objects are being created, this option is silently ignored for QUIC objects.</p>
+
+</dd>
+<dt id="SignatureAlgorithms"><b>SignatureAlgorithms</b></dt>
+<dd>
+
+<p>This sets the supported signature algorithms for TLSv1.2 and TLSv1.3. For clients this value is used directly for the supported signature algorithms extension. For servers it is used to determine which signature algorithms to support.</p>
+
+<p>The <b>value</b> argument should be a colon separated list of signature algorithms in order of decreasing preference of the form <b>algorithm+hash</b> or <b>signature_scheme</b>. For the default providers shipped with OpenSSL, <b>algorithm</b> is one of <b>RSA</b>, <b>DSA</b> or <b>ECDSA</b> and <b>hash</b> is a supported algorithm OID short name such as <b>SHA1</b>, <b>SHA224</b>, <b>SHA256</b>, <b>SHA384</b> or <b>SHA512</b>. <b>signature_scheme</b> is one of the signature schemes defined in TLSv1.3, specified using the IANA name, e.g., <b>ecdsa_secp256r1_sha256</b>, <b>ed25519</b>, or <b>rsa_pss_pss_sha256</b>. Signature scheme names and public key algorithm names (but not the hash names) in the <b>algorithm+hash</b> form are case-insensitive. Additional providers may make available further signature schemes via the TLS_SIGALG capability. See <a href="../man7/provider-base.html">&quot;CAPABILITIES&quot; in provider-base(7)</a>.</p>
+
+<p>If this option is not set then all signature algorithms supported by all activated providers are permissible.</p>
+
+<p>Note: algorithms which specify a PKCS#1 v1.5 signature scheme (either by using <b>RSA</b> as the <b>algorithm</b> or by using one of the <b>rsa_pkcs1_*</b> identifiers) are ignored in TLSv1.3 and will not be negotiated.</p>
+
+</dd>
+<dt id="ClientSignatureAlgorithms"><b>ClientSignatureAlgorithms</b></dt>
+<dd>
+
+<p>This sets the supported signature algorithms associated with client authentication for TLSv1.2 and TLSv1.3. For servers the value is used in the <b>signature_algorithms</b> field of a <b>CertificateRequest</b> message. For clients it is used to determine which signature algorithm to use with the client certificate. If a server does not request a certificate this option has no effect.</p>
+
+<p>The syntax of <b>value</b> is identical to <b>SignatureAlgorithms</b>. If not set then the value set for <b>SignatureAlgorithms</b> will be used instead.</p>
+
+</dd>
+<dt id="Groups"><b>Groups</b></dt>
+<dd>
+
+<p>This sets the supported groups. For clients, the groups are sent using the supported groups extension. For servers, it is used to determine which group to use. This setting affects groups used for signatures (in TLSv1.2 and earlier) and key exchange. The first group listed will also be used for the <b>key_share</b> sent by a client in a TLSv1.3 <b>ClientHello</b>.</p>
+
+<p>The <b>groups</b> argument is a colon separated list of groups. The preferred names are those listed in the IANA <a href="https://www.iana.org/assignments/tls-parameters/tls-parameters.xhtml#tls-parameters-8">TLS Supported Groups</a> registry. For some groups, OpenSSL supports additional aliases. Such an alias could be a <b>NIST</b> name (e.g. <b>P-256</b>), an OpenSSL OID name (e.g. <b>prime256v1</b>), or some other commonly used name. Group names are case-insensitive in OpenSSL 3.5 and later. The list should be in order of preference with the most preferred group first.</p>
+
+<p>The commands below list the available groups for TLS 1.2 and TLS 1.3, respectively:</p>
+
+<pre><code>$ openssl list -tls1_2 -tls-groups
+$ openssl list -tls1_3 -tls-groups</code></pre>
+
+<p>An enriched alternative syntax, that enables clients to send multiple keyshares and allows servers to prioritise some groups over others, is described in <a href="../man3/SSL_CTX_set1_groups_list.html">SSL_CTX_set1_groups_list(3)</a>. Since TLS 1.2 has neither keyshares nor a hello retry mechanism, with TLS 1.2 the enriched syntax is ultimately equivalent to just a simple ordered list of groups, as with the simple form above.</p>
+
+</dd>
+<dt id="Curves"><b>Curves</b></dt>
+<dd>
+
+<p>This is a synonym for the &quot;Groups&quot; command.</p>
+
+</dd>
+<dt id="MinProtocol"><b>MinProtocol</b></dt>
+<dd>
+
+<p>This sets the minimum supported SSL, TLS or DTLS version.</p>
+
+<p>Currently supported protocol values are <b>SSLv3</b>, <b>TLSv1</b>, <b>TLSv1.1</b>, <b>TLSv1.2</b>, <b>TLSv1.3</b>, <b>DTLSv1</b> and <b>DTLSv1.2</b>. The SSL and TLS bounds apply only to TLS-based contexts, while the DTLS bounds apply only to DTLS-based contexts. The command can be repeated with one instance setting a TLS bound, and the other setting a DTLS bound. The value <b>None</b> applies to both types of contexts and disables the limits.</p>
+
+</dd>
+<dt id="MaxProtocol"><b>MaxProtocol</b></dt>
+<dd>
+
+<p>This sets the maximum supported SSL, TLS or DTLS version.</p>
+
+<p>Currently supported protocol values are <b>SSLv3</b>, <b>TLSv1</b>, <b>TLSv1.1</b>, <b>TLSv1.2</b>, <b>TLSv1.3</b>, <b>DTLSv1</b> and <b>DTLSv1.2</b>. The SSL and TLS bounds apply only to TLS-based contexts, while the DTLS bounds apply only to DTLS-based contexts. The command can be repeated with one instance setting a TLS bound, and the other setting a DTLS bound. The value <b>None</b> applies to both types of contexts and disables the limits.</p>
+
+</dd>
+<dt id="Protocol"><b>Protocol</b></dt>
+<dd>
+
+<p>This can be used to enable or disable certain versions of the SSL, TLS or DTLS protocol.</p>
+
+<p>The <b>value</b> argument is a comma separated list of supported protocols to enable or disable. If a protocol is preceded by <b>-</b> that version is disabled.</p>
+
+<p>All protocol versions are enabled by default. You need to disable at least one protocol version for this setting have any effect. Only enabling some protocol versions does not disable the other protocol versions.</p>
+
+<p>Currently supported protocol values are <b>SSLv3</b>, <b>TLSv1</b>, <b>TLSv1.1</b>, <b>TLSv1.2</b>, <b>TLSv1.3</b>, <b>DTLSv1</b> and <b>DTLSv1.2</b>. The special value <b>ALL</b> refers to all supported versions.</p>
+
+<p>This can&#39;t enable protocols that are disabled using <b>MinProtocol</b> or <b>MaxProtocol</b>, but can disable protocols that are still allowed by them.</p>
+
+<p>The <b>Protocol</b> command is fragile and deprecated; do not use it. Use <b>MinProtocol</b> and <b>MaxProtocol</b> instead. If you do use <b>Protocol</b>, make sure that the resulting range of enabled protocols has no &quot;holes&quot;, e.g. if TLS 1.0 and TLS 1.2 are both enabled, make sure to also leave TLS 1.1 enabled.</p>
+
+</dd>
+<dt id="Options"><b>Options</b></dt>
+<dd>
+
+<p>The <b>value</b> argument is a comma separated list of various flags to set. If a flag string is preceded <b>-</b> it is disabled. See the <a href="../man3/SSL_CTX_set_options.html">SSL_CTX_set_options(3)</a> function for more details of individual options.</p>
+
+<p>Each option is listed below. Where an operation is enabled by default the <b>-flag</b> syntax is needed to disable it.</p>
+
+<p><b>SessionTicket</b>: session ticket support, enabled by default. Inverse of <b>SSL_OP_NO_TICKET</b>: that is <b>-SessionTicket</b> is the same as setting <b>SSL_OP_NO_TICKET</b>.</p>
+
+<p><b>Compression</b>: SSL/TLS compression support, disabled by default. Inverse of <b>SSL_OP_NO_COMPRESSION</b>.</p>
+
+<p><b>EmptyFragments</b>: use empty fragments as a countermeasure against a SSL 3.0/TLS 1.0 protocol vulnerability affecting CBC ciphers. It is set by default. Inverse of <b>SSL_OP_DONT_INSERT_EMPTY_FRAGMENTS</b>.</p>
+
+<p><b>Bugs</b>: enable various bug workarounds. Same as <b>SSL_OP_ALL</b>.</p>
+
+<p><b>DHSingle</b>: enable single use DH keys, set by default. Inverse of <b>SSL_OP_DH_SINGLE</b>. Only used by servers.</p>
+
+<p><b>ECDHSingle</b>: enable single use ECDH keys, set by default. Inverse of <b>SSL_OP_ECDH_SINGLE</b>. Only used by servers.</p>
+
+<p><b>ServerPreference</b>: use server and not client preference order when determining which cipher suite, signature algorithm or elliptic curve (TLS 1.2) or group (TSL 1.3) to use for an incoming connection. Equivalent to <b>SSL_OP_SERVER_PREFERENCE</b>. Only used by servers.</p>
+
+<p><b>PrioritizeChaCha</b>: prioritizes ChaCha ciphers when the client has a ChaCha20 cipher at the top of its preference list. This usually indicates a mobile client is in use. Equivalent to <b>SSL_OP_PRIORITIZE_CHACHA</b>. Only used by servers.</p>
+
+<p><b>NoResumptionOnRenegotiation</b>: set <b>SSL_OP_NO_SESSION_RESUMPTION_ON_RENEGOTIATION</b> flag. Only used by servers.</p>
+
+<p><b>NoRenegotiation</b>: disables all attempts at renegotiation in TLSv1.2 and earlier, same as setting <b>SSL_OP_NO_RENEGOTIATION</b>.</p>
+
+<p><b>UnsafeLegacyRenegotiation</b>: permits the use of unsafe legacy renegotiation. Equivalent to <b>SSL_OP_ALLOW_UNSAFE_LEGACY_RENEGOTIATION</b>.</p>
+
+<p><b>UnsafeLegacyServerConnect</b>: permits the use of unsafe legacy renegotiation for OpenSSL clients only. Equivalent to <b>SSL_OP_LEGACY_SERVER_CONNECT</b>.</p>
+
+<p><b>EncryptThenMac</b>: use encrypt-then-mac extension, enabled by default. Inverse of <b>SSL_OP_NO_ENCRYPT_THEN_MAC</b>: that is, <b>-EncryptThenMac</b> is the same as setting <b>SSL_OP_NO_ENCRYPT_THEN_MAC</b>.</p>
+
+<p><b>AllowNoDHEKEX</b>: In TLSv1.3 allow a non-(ec)dhe based key exchange mode on resumption. This means that there will be no forward secrecy for the resumed session. Equivalent to <b>SSL_OP_ALLOW_NO_DHE_KEX</b>.</p>
+
+<p><b>PreferNoDHEKEX</b>: In TLSv1.3, on resumption let the server prefer a non-(ec)dhe based key exchange mode over an (ec)dhe based one. Requires <b>AllowNoDHEKEX</b>. Equivalent to <b>SSL_OP_PREFER_NO_DHE_KEX</b>. Only used by servers.</p>
+
+<p><b>MiddleboxCompat</b>: If set then dummy Change Cipher Spec (CCS) messages are sent in TLSv1.3. This has the effect of making TLSv1.3 look more like TLSv1.2 so that middleboxes that do not understand TLSv1.3 will not drop the connection. This option is set by default. A future version of OpenSSL may not set this by default. Equivalent to <b>SSL_OP_ENABLE_MIDDLEBOX_COMPAT</b>.</p>
+
+<p><b>AntiReplay</b>: If set then OpenSSL will automatically detect if a session ticket has been used more than once, TLSv1.3 has been negotiated, and early data is enabled on the server. A full handshake is forced if a session ticket is used a second or subsequent time. This option is set by default and is only used by servers. Anti-replay measures are required to comply with the TLSv1.3 specification. Some applications may be able to mitigate the replay risks in other ways and in such cases the built-in OpenSSL functionality is not required. Disabling anti-replay is equivalent to setting <b>SSL_OP_NO_ANTI_REPLAY</b>.</p>
+
+<p><b>ExtendedMasterSecret</b>: use extended master secret extension, enabled by default. Inverse of <b>SSL_OP_NO_EXTENDED_MASTER_SECRET</b>: that is, <b>-ExtendedMasterSecret</b> is the same as setting <b>SSL_OP_NO_EXTENDED_MASTER_SECRET</b>.</p>
+
+<p><b>CANames</b>: use CA names extension, enabled by default. Inverse of <b>SSL_OP_DISABLE_TLSEXT_CA_NAMES</b>: that is, <b>-CANames</b> is the same as setting <b>SSL_OP_DISABLE_TLSEXT_CA_NAMES</b>.</p>
+
+<p><b>KTLS</b>: Enables kernel TLS if support has been compiled in, and it is supported by the negotiated ciphersuites and extensions. Equivalent to <b>SSL_OP_ENABLE_KTLS</b>.</p>
+
+<p><b>StrictCertCheck</b>: Enable strict certificate checking. Equivalent to setting <b>SSL_CERT_FLAG_TLS_STRICT</b> with SSL_CTX_set_cert_flags().</p>
+
+<p><b>TxCertificateCompression</b>: support sending compressed certificates, enabled by default. Inverse of <b>SSL_OP_NO_TX_CERTIFICATE_COMPRESSION</b>: that is, <b>-TxCertificateCompression</b> is the same as setting <b>SSL_OP_NO_TX_CERTIFICATE_COMPRESSION</b>.</p>
+
+<p><b>RxCertificateCompression</b>: support receiving compressed certificates, enabled by default. Inverse of <b>SSL_OP_NO_RX_CERTIFICATE_COMPRESSION</b>: that is, <b>-RxCertificateCompression</b> is the same as setting <b>SSL_OP_NO_RX_CERTIFICATE_COMPRESSION</b>.</p>
+
+<p><b>KTLSTxZerocopySendfile</b>: use the zerocopy TX mode of sendfile(), which gives a performance boost when used with KTLS hardware offload. Note that invalid TLS records might be transmitted if the file is changed while being sent. This option has no effect if <b>KTLS</b> is not enabled. Equivalent to <b>SSL_OP_ENABLE_KTLS_TX_ZEROCOPY_SENDFILE</b>. This option only applies to Linux. KTLS sendfile on FreeBSD doesn&#39;t offer an option to disable zerocopy and always runs in this mode.</p>
+
+<p><b>IgnoreUnexpectedEOF</b>: Equivalent to <b>SSL_OP_IGNORE_UNEXPECTED_EOF</b>. You should only enable this option if the protocol running over TLS can detect a truncation attack itself, and that the application is checking for that truncation attack.</p>
+
+</dd>
+<dt id="VerifyMode"><b>VerifyMode</b></dt>
+<dd>
+
+<p>The <b>value</b> argument is a comma separated list of flags to set.</p>
+
+<p><b>Peer</b> enables peer verification: for clients only.</p>
+
+<p><b>Request</b> requests but does not require a certificate from the client. Servers only.</p>
+
+<p><b>Require</b> requests and requires a certificate from the client: an error occurs if the client does not present a certificate. Servers only.</p>
+
+<p><b>Once</b> requests a certificate from a client only on the initial connection: not when renegotiating. Servers only.</p>
+
+<p><b>RequestPostHandshake</b> configures the connection to support requests but does not require a certificate from the client post-handshake. A certificate will not be requested during the initial handshake. The server application must provide a mechanism to request a certificate post-handshake. Servers only. TLSv1.3 only.</p>
+
+<p><b>RequiresPostHandshake</b> configures the connection to support requests and requires a certificate from the client post-handshake: an error occurs if the client does not present a certificate. A certificate will not be requested during the initial handshake. The server application must provide a mechanism to request a certificate post-handshake. Servers only. TLSv1.3 only.</p>
+
+</dd>
+<dt id="ClientCAFile-ClientCAPath"><b>ClientCAFile</b>, <b>ClientCAPath</b></dt>
+<dd>
+
+<p>A file or directory of certificates in PEM format whose names are used as the set of acceptable names for client CAs. Servers only. This option is only supported if certificate operations are permitted.</p>
+
+</dd>
+</dl>
+
+<h1 id="SUPPORTED-COMMAND-TYPES">SUPPORTED COMMAND TYPES</h1>
+
+<p>The function SSL_CONF_cmd_value_type() currently returns one of the following types:</p>
+
+<dl>
+
+<dt id="SSL_CONF_TYPE_UNKNOWN"><b>SSL_CONF_TYPE_UNKNOWN</b></dt>
+<dd>
+
+<p>The <b>option</b> string is unrecognised, this return value can be use to flag syntax errors.</p>
+
+</dd>
+<dt id="SSL_CONF_TYPE_STRING"><b>SSL_CONF_TYPE_STRING</b></dt>
+<dd>
+
+<p>The value is a string without any specific structure.</p>
+
+</dd>
+<dt id="SSL_CONF_TYPE_FILE"><b>SSL_CONF_TYPE_FILE</b></dt>
+<dd>
+
+<p>The value is a filename.</p>
+
+</dd>
+<dt id="SSL_CONF_TYPE_DIR"><b>SSL_CONF_TYPE_DIR</b></dt>
+<dd>
+
+<p>The value is a directory name.</p>
+
+</dd>
+<dt id="SSL_CONF_TYPE_NONE"><b>SSL_CONF_TYPE_NONE</b></dt>
+<dd>
+
+<p>The value string is not used e.g. a command line option which doesn&#39;t take an argument.</p>
+
+</dd>
+</dl>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The order of operations is significant. This can be used to set either defaults or values which cannot be overridden. For example if an application calls:</p>
+
+<pre><code>SSL_CONF_cmd(ctx, &quot;Protocol&quot;, &quot;-SSLv3&quot;);
+SSL_CONF_cmd(ctx, userparam, uservalue);</code></pre>
+
+<p>it will disable SSLv3 support by default but the user can override it. If however the call sequence is:</p>
+
+<pre><code>SSL_CONF_cmd(ctx, userparam, uservalue);
+SSL_CONF_cmd(ctx, &quot;Protocol&quot;, &quot;-SSLv3&quot;);</code></pre>
+
+<p>SSLv3 is <b>always</b> disabled and attempt to override this by the user are ignored.</p>
+
+<p>By checking the return code of SSL_CONF_cmd() it is possible to query if a given <b>option</b> is recognised, this is useful if SSL_CONF_cmd() values are mixed with additional application specific operations.</p>
+
+<p>For example an application might call SSL_CONF_cmd() and if it returns -2 (unrecognised command) continue with processing of application specific commands.</p>
+
+<p>Applications can also use SSL_CONF_cmd() to process command lines though the utility function SSL_CONF_cmd_argv() is normally used instead. One way to do this is to set the prefix to an appropriate value using SSL_CONF_CTX_set1_prefix(), pass the current argument to <b>option</b> and the following argument to <b>value</b> (which may be NULL).</p>
+
+<p>In this case if the return value is positive then it is used to skip that number of arguments as they have been processed by SSL_CONF_cmd(). If -2 is returned then <b>option</b> is not recognised and application specific arguments can be checked instead. If -3 is returned a required argument is missing and an error is indicated. If 0 is returned some other error occurred and this can be reported back to the user.</p>
+
+<p>The function SSL_CONF_cmd_value_type() can be used by applications to check for the existence of a command or to perform additional syntax checking or translation of the command value. For example if the return value is <b>SSL_CONF_TYPE_FILE</b> an application could translate a relative pathname to an absolute pathname.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_CONF_cmd() returns 1 if the value of <b>option</b> is recognised and <b>value</b> is <b>NOT</b> used and 2 if both <b>option</b> and <b>value</b> are used. In other words it returns the number of arguments processed. This is useful when processing command lines.</p>
+
+<p>A return value of -2 means <b>option</b> is not recognised.</p>
+
+<p>A return value of -3 means <b>option</b> is recognised and the command requires a value but <b>value</b> is NULL.</p>
+
+<p>A return code of 0 indicates that both <b>option</b> and <b>value</b> are valid but an error occurred attempting to perform the operation: for example due to an error in the syntax of <b>value</b> in this case the error queue may provide additional information.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>Set supported signature algorithms:</p>
+
+<pre><code>SSL_CONF_cmd(ctx, &quot;SignatureAlgorithms&quot;, &quot;ECDSA+SHA256:RSA+SHA256:DSA+SHA256&quot;);</code></pre>
+
+<p>There are various ways to select the supported protocols.</p>
+
+<p>This set the minimum protocol version to TLSv1, and so disables SSLv3. This is the recommended way to disable protocols.</p>
+
+<pre><code>SSL_CONF_cmd(ctx, &quot;MinProtocol&quot;, &quot;TLSv1&quot;);</code></pre>
+
+<p>The following also disables SSLv3:</p>
+
+<pre><code>SSL_CONF_cmd(ctx, &quot;Protocol&quot;, &quot;-SSLv3&quot;);</code></pre>
+
+<p>The following will first enable all protocols, and then disable SSLv3. If no protocol versions were disabled before this has the same effect as &quot;-SSLv3&quot;, but if some versions were disables this will re-enable them before disabling SSLv3.</p>
+
+<pre><code>SSL_CONF_cmd(ctx, &quot;Protocol&quot;, &quot;ALL,-SSLv3&quot;);</code></pre>
+
+<p>Only enable TLSv1.2:</p>
+
+<pre><code>SSL_CONF_cmd(ctx, &quot;MinProtocol&quot;, &quot;TLSv1.2&quot;);
+SSL_CONF_cmd(ctx, &quot;MaxProtocol&quot;, &quot;TLSv1.2&quot;);</code></pre>
+
+<p>This also only enables TLSv1.2:</p>
+
+<pre><code>SSL_CONF_cmd(ctx, &quot;Protocol&quot;, &quot;-ALL,TLSv1.2&quot;);</code></pre>
+
+<p>Disable TLS session tickets:</p>
+
+<pre><code>SSL_CONF_cmd(ctx, &quot;Options&quot;, &quot;-SessionTicket&quot;);</code></pre>
+
+<p>Enable compression:</p>
+
+<pre><code>SSL_CONF_cmd(ctx, &quot;Options&quot;, &quot;Compression&quot;);</code></pre>
+
+<p>Set supported curves to P-256, P-384:</p>
+
+<pre><code>SSL_CONF_cmd(ctx, &quot;Curves&quot;, &quot;P-256:P-384&quot;);</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a>, <a href="../man3/SSL_CONF_CTX_new.html">SSL_CONF_CTX_new(3)</a>, <a href="../man3/SSL_CONF_CTX_set_flags.html">SSL_CONF_CTX_set_flags(3)</a>, <a href="../man3/SSL_CONF_CTX_set1_prefix.html">SSL_CONF_CTX_set1_prefix(3)</a>, <a href="../man3/SSL_CONF_CTX_set_ssl_ctx.html">SSL_CONF_CTX_set_ssl_ctx(3)</a>, <a href="../man3/SSL_CONF_cmd_argv.html">SSL_CONF_cmd_argv(3)</a>, <a href="../man3/SSL_CTX_set_options.html">SSL_CTX_set_options(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The SSL_CONF_cmd() function was added in OpenSSL 1.0.2.</p>
+
+<p>The <b>SSL_OP_NO_SSL2</b> option doesn&#39;t have effect since 1.1.0, but the macro is retained for backwards compatibility.</p>
+
+<p>The <b>SSL_CONF_TYPE_NONE</b> was added in OpenSSL 1.1.0. In earlier versions of OpenSSL passing a command which didn&#39;t take an argument would return <b>SSL_CONF_TYPE_UNKNOWN</b>.</p>
+
+<p><b>MinProtocol</b> and <b>MaxProtocol</b> where added in OpenSSL 1.1.0.</p>
+
+<p><b>AllowNoDHEKEX</b> and <b>PrioritizeChaCha</b> were added in OpenSSL 1.1.1.</p>
+
+<p>The <b>UnsafeLegacyServerConnect</b> option is no longer set by default from OpenSSL 3.0.</p>
+
+<p>The <b>TxCertificateCompression</b> and <b>RxCertificateCompression</b> options were added in OpenSSL 3.2.</p>
+
+<p><b>PreferNoDHEKEX</b> was added in OpenSSL 3.3.</p>
+
+<p>OpenSSL 3.5 introduces support for post-quantum (PQ) TLS key exchange via the <b>MLKEM512</b>, <b>MLKEM768</b> and <b>MLKEM1024</b> TLS groups. These are based on the underlying <b>ML-KEM-512</b>, <b>ML-KEM-768</b> and <b>ML-KEM-1024</b> algorithms from FIPS 203.</p>
+
+<p>OpenSSL 3.5 also introduces support for three <b>hybrid</b> ECDH PQ key exchange TLS groups: <b>X25519MLKEM768</b>, <b>SecP256r1MLKEM768</b> and <b>SecP384r1MLKEM1024</b>. They offer CPU performance comparable to the associated ECDH group, though at the cost of significantly larger key exchange messages. The third group, <b>SecP384r1MLKEM1024</b> is substantially more CPU-intensive, largely as a result of the high CPU cost of ECDH for the underlying <b>P-384</b> group. Also its key exchange messages at close to 1700 bytes are larger than the roughly 1200 bytes for the first two groups.</p>
+
+<p>As of OpenSSL 3.5 key exchange group names are case-insensitive.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2012-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,133 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OSSL_ENCODER_CTX_new_for_pkey</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Output-types">Output types</a></li>
+      <li><a href="#Selections">Selections</a></li>
+    </ul>
+  </li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OSSL_ENCODER_CTX_new_for_pkey, OSSL_ENCODER_CTX_set_cipher, OSSL_ENCODER_CTX_set_passphrase, OSSL_ENCODER_CTX_set_pem_password_cb, OSSL_ENCODER_CTX_set_passphrase_cb, OSSL_ENCODER_CTX_set_passphrase_ui - Encoder routines to encode EVP_PKEYs</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/encoder.h&gt;
+
+OSSL_ENCODER_CTX *
+OSSL_ENCODER_CTX_new_for_pkey(const EVP_PKEY *pkey, int selection,
+                              const char *output_type,
+                              const char *output_structure,
+                              const char *propquery);
+
+int OSSL_ENCODER_CTX_set_cipher(OSSL_ENCODER_CTX *ctx,
+                                const char *cipher_name,
+                                const char *propquery);
+int OSSL_ENCODER_CTX_set_passphrase(OSSL_ENCODER_CTX *ctx,
+                                    const unsigned char *kstr,
+                                    size_t klen);
+int OSSL_ENCODER_CTX_set_pem_password_cb(OSSL_ENCODER_CTX *ctx,
+                                         pem_password_cb *cb, void *cbarg);
+int OSSL_ENCODER_CTX_set_passphrase_ui(OSSL_ENCODER_CTX *ctx,
+                                       const UI_METHOD *ui_method,
+                                       void *ui_data);
+int OSSL_ENCODER_CTX_set_passphrase_cb(OSSL_ENCODER_CTX *ctx,
+                                       OSSL_PASSPHRASE_CALLBACK *cb,
+                                       void *cbarg);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>OSSL_ENCODER_CTX_new_for_pkey() is a utility function that creates a <b>OSSL_ENCODER_CTX</b>, finds all applicable encoder implementations and sets them up, so almost all the caller has to do next is call functions like <a href="../man3/OSSL_ENCODER_to_bio.html">OSSL_ENCODER_to_bio(3)</a>. <i>output_type</i> determines the final output encoding, and <i>selection</i> can be used to select what parts of the <i>pkey</i> should be included in the output. <i>output_type</i> is further discussed in <a href="#Output-types">&quot;Output types&quot;</a> below, and <i>selection</i> is further described in <a href="#Selections">&quot;Selections&quot;</a>.</p>
+
+<p>Internally, OSSL_ENCODER_CTX_new_for_pkey() uses the names from the <a href="../man3/EVP_KEYMGMT.html">EVP_KEYMGMT(3)</a> implementation associated with <i>pkey</i> to build a list of applicable encoder implementations that are used to process the <i>pkey</i> into the encoding named by <i>output_type</i>, with the outermost structure named by <i>output_structure</i> if that&#39;s relevant. All these implementations are implicitly fetched, with <i>propquery</i> for finer selection.</p>
+
+<p>If no suitable encoder implementation is found, OSSL_ENCODER_CTX_new_for_pkey() still creates a <b>OSSL_ENCODER_CTX</b>, but with no associated encoder (<a href="../man3/OSSL_ENCODER_CTX_get_num_encoders.html">OSSL_ENCODER_CTX_get_num_encoders(3)</a> returns zero). This helps the caller to distinguish between an error when creating the <b>OSSL_ENCODER_CTX</b> and missing encoder implementation, and allows it to act accordingly.</p>
+
+<p>Note that OSSL_ENCODER_CTX_new_for_pkey() finalises the OSSL_ENCODER_CTX; after that the OSSL_ENCODER_CTX_set_* and OSSL_ENCODER_CTX_add_* functions described in <a href="../man3/OSSL_ENCODER_CTX.html">OSSL_ENCODER_CTX(3)</a> shouldn&#39;t be called.</p>
+
+<p>OSSL_ENCODER_CTX_set_cipher() tells the implementation what cipher should be used to encrypt encoded keys. The cipher is given by name <i>cipher_name</i>. The interpretation of that <i>cipher_name</i> is implementation dependent. The implementation may implement the cipher directly itself or by other implementations, or it may choose to fetch it. If the implementation supports fetching the cipher, then it may use <i>propquery</i> as properties to be queried for when fetching. <i>cipher_name</i> may also be NULL, which will result in unencrypted encoding.</p>
+
+<p>OSSL_ENCODER_CTX_set_passphrase() gives the implementation a pass phrase to use when encrypting the encoded private key. Alternatively, a pass phrase callback may be specified with the following functions.</p>
+
+<p>OSSL_ENCODER_CTX_set_pem_password_cb(), OSSL_ENCODER_CTX_set_passphrase_ui() and OSSL_ENCODER_CTX_set_passphrase_cb() sets up a callback method that the implementation can use to prompt for a pass phrase, giving the caller the choice of preferred pass phrase callback form. These are called indirectly, through an internal <a href="../man3/OSSL_PASSPHRASE_CALLBACK.html">OSSL_PASSPHRASE_CALLBACK(3)</a> function.</p>
+
+<h2 id="Output-types">Output types</h2>
+
+<p>The possible <b>EVP_PKEY</b> output types depends on the available implementations.</p>
+
+<p>OpenSSL has built in implementations for the following output types:</p>
+
+<dl>
+
+<dt id="TEXT"><code>TEXT</code></dt>
+<dd>
+
+<p>The output is a human readable description of the key. <a href="../man3/EVP_PKEY_print_private.html">EVP_PKEY_print_private(3)</a>, <a href="../man3/EVP_PKEY_print_public.html">EVP_PKEY_print_public(3)</a> and <a href="../man3/EVP_PKEY_print_params.html">EVP_PKEY_print_params(3)</a> use this for their output.</p>
+
+</dd>
+<dt id="DER"><code>DER</code></dt>
+<dd>
+
+<p>The output is the DER encoding of the <i>selection</i> of the <i>pkey</i>.</p>
+
+</dd>
+<dt id="PEM"><code>PEM</code></dt>
+<dd>
+
+<p>The output is the <i>selection</i> of the <i>pkey</i> in PEM format.</p>
+
+</dd>
+</dl>
+
+<h2 id="Selections">Selections</h2>
+
+<p><i>selection</i> can be any one of the values described in <a href="../man3/EVP_PKEY_fromdata.html">&quot;Selections&quot; in EVP_PKEY_fromdata(3)</a>.</p>
+
+<p>These are only &#39;hints&#39; since the encoder implementations are free to determine what makes sense to include in the output, and this may depend on the desired output. For example, an EC key in a PKCS#8 structure doesn&#39;t usually include the public key.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>OSSL_ENCODER_CTX_new_for_pkey() returns a pointer to an <b>OSSL_ENCODER_CTX</b>, or NULL if it couldn&#39;t be created.</p>
+
+<p>OSSL_ENCODER_CTX_set_cipher(), OSSL_ENCODER_CTX_set_passphrase(), OSSL_ENCODER_CTX_set_pem_password_cb(), OSSL_ENCODER_CTX_set_passphrase_ui() and OSSL_ENCODER_CTX_set_passphrase_cb() all return 1 on success, or 0 on failure.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/provider.html">provider(7)</a>, <a href="../man3/OSSL_ENCODER.html">OSSL_ENCODER(3)</a>, <a href="../man3/OSSL_ENCODER_CTX.html">OSSL_ENCODER_CTX(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The functions described here were added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2019-2022 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

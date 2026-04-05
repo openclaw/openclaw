@@ -1,0 +1,1 @@
+../../Cellar/svt-av1/4.1.0/lib/pkgconfig/SvtAv1Enc.pc

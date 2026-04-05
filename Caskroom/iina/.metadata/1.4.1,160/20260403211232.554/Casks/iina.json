@@ -1,0 +1,92 @@
+{
+  "full_token": "iina",
+  "old_tokens": [],
+  "tap": "homebrew/cask",
+  "name": ["IINA"],
+  "desc": "Free and open-source media player",
+  "homepage": "https://iina.io/",
+  "url": "https://dl-portal.iina.io/IINA.v1.4.1.dmg",
+  "url_specs": {},
+  "version": "1.4.1,160",
+  "autobump": true,
+  "no_autobump_message": null,
+  "skip_livecheck": false,
+  "installed": null,
+  "installed_time": null,
+  "bundle_version": null,
+  "bundle_short_version": null,
+  "outdated": false,
+  "sha256": "177ad469ea129bed95a82ac59b5fb58d0a06c35342fca7a37dba214a8821f848",
+  "artifacts": [
+    {
+      "uninstall": [
+        {
+          "quit": "com.colliderli.iina"
+        }
+      ]
+    },
+    {
+      "app": ["IINA.app"]
+    },
+    {
+      "binary": [
+        "$APPDIR/IINA.app/Contents/MacOS/iina-cli",
+        {
+          "target": "iina"
+        }
+      ]
+    },
+    {
+      "zap": [
+        {
+          "trash": [
+            "~/Library/Application Scripts/com.colliderli.iina.OpenInIINA",
+            "~/Library/Application Support/com.apple.sharedfilelist/com.apple.LSSharedFileList.ApplicationRecentDocuments/com.colliderli.iina.sfl*",
+            "~/Library/Application Support/com.colliderli.iina",
+            "~/Library/Application Support/CrashReporter/IINA*.plist",
+            "~/Library/Caches/com.colliderli.iina",
+            "~/Library/Containers/com.colliderli.iina.OpenInIINA",
+            "~/Library/Cookies/com.colliderli.iina.binarycookies",
+            "~/Library/HTTPStorages/com.colliderli.iina",
+            "~/Library/Logs/com.colliderli.iina",
+            "~/Library/Logs/DiagnosticReports/IINA*.crash",
+            "~/Library/Preferences/com.colliderli.iina.plist",
+            "~/Library/Safari/Extensions/Open in IINA*.safariextz",
+            "~/Library/Saved Application State/com.colliderli.iina.savedState",
+            "~/Library/WebKit/com.colliderli.iina"
+          ]
+        }
+      ]
+    }
+  ],
+  "caveats": null,
+  "caveats_rosetta": null,
+  "depends_on": {
+    "macos": {
+      ">=": ["10.15"]
+    }
+  },
+  "conflicts_with": null,
+  "container": null,
+  "rename": [],
+  "auto_updates": true,
+  "deprecated": false,
+  "deprecation_date": null,
+  "deprecation_reason": null,
+  "deprecation_replacement_formula": null,
+  "deprecation_replacement_cask": null,
+  "deprecate_args": null,
+  "disabled": false,
+  "disable_date": null,
+  "disable_reason": null,
+  "disable_replacement_formula": null,
+  "disable_replacement_cask": null,
+  "disable_args": null,
+  "tap_git_head": "834f7288050dac189899ff69cfbc54bff5b7a726",
+  "languages": [],
+  "ruby_source_path": "Casks/i/iina.rb",
+  "ruby_source_checksum": {
+    "sha256": "29bb96868da235f9ffeb83df94a7c8e379e5de4c7c9b90541789011d00a982de"
+  },
+  "variations": {}
+}

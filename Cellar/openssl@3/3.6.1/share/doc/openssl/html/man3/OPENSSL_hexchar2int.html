@@ -1,0 +1,70 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OPENSSL_hexchar2int</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OPENSSL_hexchar2int, OPENSSL_hexstr2buf_ex, OPENSSL_hexstr2buf, OPENSSL_buf2hexstr_ex, OPENSSL_buf2hexstr - Hex encoding and decoding functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/crypto.h&gt;
+
+int OPENSSL_hexchar2int(unsigned char c);
+int OPENSSL_hexstr2buf_ex(unsigned char *buf, size_t buf_n, long *buflen,
+                          const char *str, const char sep);
+unsigned char *OPENSSL_hexstr2buf(const char *str, long *len);
+int OPENSSL_buf2hexstr_ex(char *str, size_t str_n, size_t *strlength,
+                          const unsigned char *buf, long buflen,
+                          const char sep);
+char *OPENSSL_buf2hexstr(const unsigned char *buf, long buflen);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>OPENSSL_hexchar2int() converts a hexadecimal character to its numeric equivalent.</p>
+
+<p>OPENSSL_hexstr2buf_ex() decodes the hex string <b>str</b> and places the resulting string of bytes in the given <i>buf</i>. The character <i>sep</i> is the separator between the bytes, setting this to &#39;\0&#39; means that there is no separator. <i>buf_n</i> gives the size of the buffer. If <i>buflen</i> is not NULL, it is filled in with the result length. To find out how large the result will be, call this function with NULL for <i>buf</i>. Colons between two-character hex &quot;bytes&quot; are accepted and ignored. An odd number of hex digits is an error.</p>
+
+<p>OPENSSL_hexstr2buf() does the same thing as OPENSSL_hexstr2buf_ex(), but allocates the space for the result, and returns the result. It uses a default separator of &#39;:&#39;. The memory is allocated by calling OPENSSL_malloc() and should be released by calling OPENSSL_free().</p>
+
+<p>OPENSSL_buf2hexstr_ex() encodes the contents of the given <i>buf</i> with length <i>buflen</i> and places the resulting hexadecimal character string in the given <i>str</i>. The character <i>sep</i> is the separator between the bytes, setting this to &#39;\0&#39; means that there is no separator. <i>str_n</i> gives the size of the of the string buffer. If <i>strlength</i> is not NULL, it is filled in with the result length. To find out how large the result will be, call this function with NULL for <i>str</i>.</p>
+
+<p>OPENSSL_buf2hexstr() does the same thing as OPENSSL_buf2hexstr_ex(), but allocates the space for the result, and returns the result. It uses a default separator of &#39;:&#39;. The memory is allocated by calling OPENSSL_malloc() and should be released by calling OPENSSL_free().</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>OPENSSL_hexchar2int returns the value of a decoded hex character, or -1 on error.</p>
+
+<p>OPENSSL_buf2hexstr() and OPENSSL_hexstr2buf() return a pointer to allocated memory, or NULL on error.</p>
+
+<p>OPENSSL_buf2hexstr_ex() and OPENSSL_hexstr2buf_ex() return 1 on success, or 0 on error.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2016-2022 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

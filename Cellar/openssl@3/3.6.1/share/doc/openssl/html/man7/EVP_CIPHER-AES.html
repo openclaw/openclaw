@@ -1,0 +1,135 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_CIPHER-AES</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Algorithm-Names">Algorithm Names</a></li>
+      <li><a href="#Parameters">Parameters</a></li>
+    </ul>
+  </li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_CIPHER-AES - The AES EVP_CIPHER implementations</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>Support for AES symmetric encryption using the <b>EVP_CIPHER</b> API.</p>
+
+<h2 id="Algorithm-Names">Algorithm Names</h2>
+
+<p>The following algorithms are available in the FIPS provider as well as the default provider:</p>
+
+<dl>
+
+<dt id="AES-128-CBC-AES-192-CBC-and-AES-256-CBC">&quot;AES-128-CBC&quot;, &quot;AES-192-CBC&quot; and &quot;AES-256-CBC&quot;</dt>
+<dd>
+
+</dd>
+<dt id="AES-128-CBC-CTS-AES-192-CBC-CTS-and-AES-256-CBC-CTS">&quot;AES-128-CBC-CTS&quot;, &quot;AES-192-CBC-CTS&quot; and &quot;AES-256-CBC-CTS&quot;</dt>
+<dd>
+
+</dd>
+<dt id="AES-128-CFB-AES-192-CFB-AES-256-CFB-AES-128-CFB1-AES-192-CFB1-AES-256-CFB1-AES-128-CFB8-AES-192-CFB8-and-AES-256-CFB8">&quot;AES-128-CFB&quot;, &quot;AES-192-CFB&quot;, &quot;AES-256-CFB&quot;, &quot;AES-128-CFB1&quot;, &quot;AES-192-CFB1&quot;, &quot;AES-256-CFB1&quot;, &quot;AES-128-CFB8&quot;, &quot;AES-192-CFB8&quot; and &quot;AES-256-CFB8&quot;</dt>
+<dd>
+
+</dd>
+<dt id="AES-128-CTR-AES-192-CTR-and-AES-256-CTR">&quot;AES-128-CTR&quot;, &quot;AES-192-CTR&quot; and &quot;AES-256-CTR&quot;</dt>
+<dd>
+
+</dd>
+<dt id="AES-128-ECB-AES-192-ECB-and-AES-256-ECB">&quot;AES-128-ECB&quot;, &quot;AES-192-ECB&quot; and &quot;AES-256-ECB&quot;</dt>
+<dd>
+
+</dd>
+<dt id="AES-192-OFB-AES-128-OFB-and-AES-256-OFB">&quot;AES-192-OFB&quot;, &quot;AES-128-OFB&quot; and &quot;AES-256-OFB&quot;</dt>
+<dd>
+
+</dd>
+<dt id="AES-128-XTS-and-AES-256-XTS">&quot;AES-128-XTS&quot; and &quot;AES-256-XTS&quot;</dt>
+<dd>
+
+</dd>
+<dt id="AES-128-CCM-AES-192-CCM-and-AES-256-CCM">&quot;AES-128-CCM&quot;, &quot;AES-192-CCM&quot; and &quot;AES-256-CCM&quot;</dt>
+<dd>
+
+</dd>
+<dt id="AES-128-GCM-AES-192-GCM-and-AES-256-GCM">&quot;AES-128-GCM&quot;, &quot;AES-192-GCM&quot; and &quot;AES-256-GCM&quot;</dt>
+<dd>
+
+</dd>
+<dt id="AES-128-WRAP-AES-192-WRAP-AES-256-WRAP-AES-128-WRAP-PAD-AES-192-WRAP-PAD-AES-256-WRAP-PAD-AES-128-WRAP-INV-AES-192-WRAP-INV-AES-256-WRAP-INV-AES-128-WRAP-PAD-INV-AES-192-WRAP-PAD-INV-and-AES-256-WRAP-PAD-INV">&quot;AES-128-WRAP&quot;, &quot;AES-192-WRAP&quot;, &quot;AES-256-WRAP&quot;, &quot;AES-128-WRAP-PAD&quot;, &quot;AES-192-WRAP-PAD&quot;, &quot;AES-256-WRAP-PAD&quot;, &quot;AES-128-WRAP-INV&quot;, &quot;AES-192-WRAP-INV&quot;, &quot;AES-256-WRAP-INV&quot;, &quot;AES-128-WRAP-PAD-INV&quot;, &quot;AES-192-WRAP-PAD-INV&quot; and &quot;AES-256-WRAP-PAD-INV&quot;</dt>
+<dd>
+
+</dd>
+<dt id="AES-128-CBC-HMAC-SHA1-AES-256-CBC-HMAC-SHA1-AES-128-CBC-HMAC-SHA256-and-AES-256-CBC-HMAC-SHA256">&quot;AES-128-CBC-HMAC-SHA1&quot;, &quot;AES-256-CBC-HMAC-SHA1&quot;, &quot;AES-128-CBC-HMAC-SHA256&quot; and &quot;AES-256-CBC-HMAC-SHA256&quot;</dt>
+<dd>
+
+</dd>
+</dl>
+
+<p>The following algorithms are available in the default provider, but not the FIPS provider:</p>
+
+<dl>
+
+<dt id="AES-128-OCB-AES-192-OCB-and-AES-256-OCB">&quot;AES-128-OCB&quot;, &quot;AES-192-OCB&quot; and &quot;AES-256-OCB&quot;</dt>
+<dd>
+
+</dd>
+<dt id="AES-128-SIV-AES-192-SIV-and-AES-256-SIV">&quot;AES-128-SIV&quot;, &quot;AES-192-SIV&quot; and &quot;AES-256-SIV&quot;</dt>
+<dd>
+
+</dd>
+<dt id="AES-128-GCM-SIV-AES-192-GCM-SIV-and-AES-256-GCM-SIV">&quot;AES-128-GCM-SIV&quot;, &quot;AES-192-GCM-SIV&quot; and &quot;AES-256-GCM-SIV&quot;</dt>
+<dd>
+
+</dd>
+</dl>
+
+<h2 id="Parameters">Parameters</h2>
+
+<p>This implementation supports the parameters described in <a href="../man3/EVP_EncryptInit.html">&quot;PARAMETERS&quot; in EVP_EncryptInit(3)</a>.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The AES-SIV and AES-WRAP mode implementations do not support streaming. That means to obtain correct results there can be only one <a href="../man3/EVP_EncryptUpdate.html">EVP_EncryptUpdate(3)</a> or <a href="../man3/EVP_DecryptUpdate.html">EVP_DecryptUpdate(3)</a> call after the initialization of the context.</p>
+
+<p>The AES-XTS implementations allow streaming to be performed, but each <a href="../man3/EVP_EncryptUpdate.html">EVP_EncryptUpdate(3)</a> or <a href="../man3/EVP_DecryptUpdate.html">EVP_DecryptUpdate(3)</a> call requires each input to be a multiple of the blocksize. Only the final EVP_EncryptUpdate() or EVP_DecryptUpdate() call can optionally have an input that is not a multiple of the blocksize but is larger than one block. In that case ciphertext stealing (CTS) is used to fill the block.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/provider-cipher.html">provider-cipher(7)</a>, <a href="../man7/OSSL_PROVIDER-FIPS.html">OSSL_PROVIDER-FIPS(7)</a>, <a href="../man7/OSSL_PROVIDER-default.html">OSSL_PROVIDER-default(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The GCM-SIV mode ciphers were added in OpenSSL version 3.2.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2021-2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

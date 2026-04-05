@@ -1,0 +1,415 @@
+.\"
+.\" Copyright 1998 by the Massachusetts Institute of Technology.
+.\" Copyright (C) 2004-2010 by Daniel Stenberg
+.\"
+.\" SPDX-License-Identifier: MIT
+.\"
+.TH ARES_INIT_OPTIONS 3 "5 March 2010"
+.SH NAME
+ares_init_options, ares_init \- Initialize a resolver channel
+.SH SYNOPSIS
+.nf
+#include <ares.h>
+
+struct ares_server_failover_options {
+  unsigned short retry_chance;
+  size_t retry_delay;
+};
+
+struct ares_options {
+  int flags;
+  int timeout; /* in seconds or milliseconds, depending on options */
+  int tries;
+  int ndots;
+  unsigned short udp_port;
+  unsigned short tcp_port;
+  int socket_send_buffer_size;
+  int socket_receive_buffer_size;
+  struct in_addr *servers;
+  int nservers;
+  char **domains;
+  int ndomains;
+  char *lookups;
+  ares_sock_state_cb sock_state_cb;
+  void *sock_state_cb_data;
+  struct apattern *sortlist;
+  int nsort;
+  int ednspsz;
+  char *resolvconf_path;
+  char *hosts_path;
+  int udp_max_queries;
+  int maxtimeout; /* in milliseconds */
+  unsigned int qcache_max_ttl; /* in seconds */
+  ares_evsys_t evsys;
+  struct ares_server_failover_options server_failover_opts;
+};
+
+int ares_init_options(ares_channel_t **\fIchannelptr\fP,
+                      const struct ares_options *\fIoptions\fP,
+                      int \fIoptmask\fP);
+
+int ares_init(ares_channel_t **\fIchannelptr\fP);
+
+.fi
+.SH DESCRIPTION
+The \fBares_init(3)\fP function is equivalent to calling
+\fBares_init_options(channelptr, NULL, 0)\fP.  It is recommended to use
+\fBares_init_options(3)\fP instead and to set or make configurable the
+appropriate options for your application.
+
+The \fBares_init_options(3)\fP function initializes a communications channel
+for name service lookups.  If it returns successfully,
+\fBares_init_options(3)\fP will set the variable pointed to by
+\fIchannelptr\fP to a handle used to identify the name service channel.  The
+caller should invoke \fIares_destroy(3)\fP on the handle when the channel is
+no longer needed.
+
+It is recommended for an application to have at most one ares channel and use
+this for all DNS queries for the life of the application.  When system
+configuration changes, \fIares_reinit(3)\fP can be called to reload the
+configuration if necessary.  The recommended concurrent query limit is about
+32k queries, but remembering that when specifying AF_UNSPEC for
+\fBares_getaddrinfo(3)\fP or \fBares_gethostbyname(3)\fP, they may spawn
+2 queries internally.  The reason for the limit is c-ares does not allow
+duplicate DNS query ids (which have a maximum of 64k) to be oustanding at a
+given time, and it must randomly search for an available id thus 32k will limit
+the number of searches.  This limitation should not be a concern for most
+implementations and c-ares may implement queuing in future releases to lift this
+limitation.
+
+The \fIoptmask\fP parameter generally specifies which fields in the structure pointed to
+by \fIoptions\fP are set, as follows:
+.TP 18
+.B ARES_OPT_FLAGS
+.B int \fIflags\fP;
+.br
+Flags controlling the behavior of the resolver:
+.RS 4
+.TP 23
+.B ARES_FLAG_USEVC
+Always use TCP queries (the "virtual circuit") instead of UDP
+queries.  Normally, TCP is only used if a UDP query yields a truncated
+result.
+.TP 23
+.B ARES_FLAG_PRIMARY
+Only query the first server in the list of servers to query.
+.TP 23
+.B ARES_FLAG_IGNTC
+If a truncated response to a UDP query is received, do not fall back
+to TCP; simply continue on with the truncated response.
+.TP 23
+.B ARES_FLAG_NORECURSE
+Do not set the "recursion desired" bit on outgoing queries, so that the name
+server being contacted will not try to fetch the answer from other servers if
+it doesn't know the answer locally. Be aware that ares will not do the
+recursion for you.  Recursion must be handled by the application calling ares
+if \fIARES_FLAG_NORECURSE\fP is set.
+.TP 23
+.B ARES_FLAG_STAYOPEN
+Do not close communications sockets when the number of active queries
+drops to zero.
+.TP 23
+.B ARES_FLAG_NOSEARCH
+Do not use the default search domains; only query hostnames as-is or
+as aliases.
+.TP 23
+.B ARES_FLAG_NOALIASES
+Do not honor the HOSTALIASES environment variable, which normally
+specifies a file of hostname translations.
+.TP 23
+.B ARES_FLAG_NOCHECKRESP
+Do not discard responses with the SERVFAIL, NOTIMP, or REFUSED
+response code or responses whose questions don't match the questions
+in the request.  Primarily useful for writing clients which might be
+used to test or debug name servers.
+.TP 23
+.B ARES_FLAG_EDNS
+Include an EDNS pseudo-resource record (RFC 2671) in generated requests.  As of
+v1.22, this is on by default if flags are otherwise not set.
+.TP 23
+.B ARES_FLAG_NO_DFLT_SVR
+Do not attempt to add a default local named server if there are no other
+servers available.  Instead, fail initialization with \fIARES_ENOSERVER\fP.
+.TP 23
+.B ARES_FLAG_DNS0x20
+Enable support for DNS 0x20 as per https://datatracker.ietf.org/doc/html/draft-vixie-dnsext-dns0x20-00
+which adds additional entropy to the request by randomizing the case of the
+query name.  Integrators need to ensure they treat DNS name responses as
+case-insensitive.  In rare circumstances this may cause the inability to lookup
+certain domains if the upstream server or the authoritative server for the
+domain is non-compliant.
+.RE
+.TP 18
+.B ARES_OPT_TIMEOUT
+.B int \fItimeout\fP;
+.br
+The number of seconds each name server is given to respond to a query on the
+first try.  See \fIARES_OPT_TIMEOUTMS\fP which this value is converted into.
+.TP 18
+.B ARES_OPT_TIMEOUTMS
+.B int \fItimeout\fP;
+.br
+The number of milliseconds each name server is given to respond to a query on
+the first try of any given server. The default is two seconds, however any
+value below 250ms will automatically be set to 250ms (roughly the RTT half-way
+around the world). Note that this option is specified with the same struct field
+as the former \fIARES_OPT_TIMEOUT\fP, it is but the option bits that tell c-ares
+how to interpret the number. This option was added in c-ares 1.5.2.
+
+As of c-ares 1.32.0, this option is only honored on the first successful query
+to any given server, after that the timeout is automatically calculated based
+on prior query history.
+.TP 18
+.B ARES_OPT_TRIES
+.B int \fItries\fP;
+.br
+The number of tries the resolver will try contacting each name server
+before giving up.  The default is three tries.
+.TP 18
+.B ARES_OPT_NDOTS
+.B int \fIndots\fP;
+.br
+The number of dots which must be present in a domain name for it to be
+queried for "as is" prior to querying for it with the default domain
+extensions appended.  The default value is 1 unless set otherwise by
+resolv.conf or the RES_OPTIONS environment variable.  Valid range is 0-15.
+.TP 18
+.B ARES_OPT_MAXTIMEOUTMS
+.B int \fImaxtimeout\fP;
+.br
+The upper bound for timeout between sequential retry attempts.  When retrying
+queries, the timeout is increased from the requested timeout parameter, this
+caps the value.
+.TP 18
+.B ARES_OPT_UDP_PORT
+.B unsigned short \fIudp_port\fP;
+.br
+The port to use for queries over UDP, in host byte order.
+The default value is 53, the standard name service port.
+.TP 18
+.B ARES_OPT_TCP_PORT
+.B unsigned short \fItcp_port\fP;
+.br
+The port to use for queries over TCP, in host byte order.
+The default value is 53, the standard name service port.
+.TP 18
+.B ARES_OPT_SERVERS
+.B struct in_addr *\fIservers\fP;
+.br
+.B int \fInservers\fP;
+.br
+The list of IPv4 servers to contact, instead of the servers specified in
+resolv.conf or the local named. In order to allow specification of either IPv4
+or IPv6 name servers, the \Bares_set_servers(3)\fP function must be used
+instead.
+.TP 18
+.B ARES_OPT_DOMAINS
+.B char **\fIdomains\fP;
+.br
+.B int \fIndomains\fP;
+.br
+The domains to search, instead of the domains specified in resolv.conf
+or the domain derived from the kernel hostname variable.
+.TP 18
+.B ARES_OPT_LOOKUPS
+.B char *\fIlookups\fP;
+.br
+The lookups to perform for host queries.
+.I lookups
+should be set to a string of the characters "b" or "f", where "b"
+indicates a DNS lookup and "f" indicates a lookup in the hosts file.
+.TP 18
+.B ARES_OPT_SOCK_STATE_CB
+.B void (*\fIsock_state_cb\fP)(void *data, ares_socket_t socket_fd, int readable, int writable);
+.br
+.B void *\fIsock_state_cb_data\fP;
+.br
+A callback function to be invoked when a socket changes state.
+.I socket_fd
+will be passed the socket whose state has changed;
+.I readable
+will be set to true if the socket should listen for read events, and
+.I writable
+will be set to true if the socket should listen for write events.
+The value of
+.I sock_state_cb_data
+will be passed as the
+.I data
+argument.  The channel lock is held during this callback, if in a multithreaded
+application, care must be taken to ensure lock order is correct to be able to
+handle this and avoid deadlocks.
+
+Cannot be used with \fBARES_OPT_EVENT_THREAD\fP.
+.TP 18
+.B ARES_OPT_SORTLIST
+.B struct apattern *\fIsortlist\fP;
+.br
+.B int \fInsort\fP;
+.br
+A list of IP address ranges that specifies the order of preference that
+results from \fIares_gethostbyname\fP should be returned in.  Note that
+this can only be used with a sortlist retrieved via
+\fBares_save_options(3)\fP (because
+.B struct apattern
+is opaque); to set a fresh sort list, use \fBares_set_sortlist(3)\fP.
+.TP 18
+.B ARES_OPT_SOCK_SNDBUF
+.B int \fIsocket_send_buffer_size\fP;
+.br
+The send buffer size to set for the socket.
+.TP 18
+.B ARES_OPT_SOCK_RCVBUF
+.B int \fIsocket_receive_buffer_size\fP;
+.br
+The receive buffer size to set for the socket.
+.TP 18
+.B ARES_OPT_EDNSPSZ
+.B int \fIednspsz\fP;
+.br
+The message size to be advertised in EDNS; only takes effect if the
+.B ARES_FLAG_EDNS
+flag is set.  Defaults to 1232, the recommended size.
+.TP 18
+.B ARES_OPT_RESOLVCONF
+.B char *\fIresolvconf_path\fP;
+.br
+The path to use for reading the resolv.conf file. The
+.I resolvconf_path
+should be set to a path string, and will be honoured on *nix like systems. The
+default is
+.B /etc/resolv.conf
+.br
+.TP 18
+.B ARES_OPT_HOSTS_FILE
+.B char *\fIhosts_path\fP;
+.br
+The path to use for reading the hosts file. The
+.I hosts_path
+should be set to a path string, and will be honoured on *nix like systems. The
+default is
+.B /etc/hosts
+.br
+.TP 18
+.B ARES_OPT_UDP_MAX_QUERIES
+.B int \fIudp_max_queries\fP;
+.br
+The maximum number of udp queries that can be sent on a single ephemeral port
+to a given DNS server before a new ephemeral port is assigned.  Any value of 0
+or less will be considered unlimited, and is the default.
+.br
+.TP 18
+.B ARES_OPT_QUERY_CACHE
+.B unsigned int \fIqcache_max_ttl\fP;
+.br
+As of c-ares 1.31.0, the query cache is enabled by default with a TTL of 1hr.
+To disable the query cache, specify this option with a TTL of 0.  The query
+cache is based on the returned TTL in the DNS message.  Only fully successful
+and NXDOMAIN query results will be cached.  Fill in the \fIqcache_max_ttl\fP
+with the maximum number of seconds a query result may be cached which will
+override a larger TTL in the response message. This must be a non-zero value
+otherwise the cache will be disabled. Choose a reasonable value for your
+application such as 300 (5 minutes) or 3600 (1 hour).  The query cache is
+automatically flushed if a server configuration change is made.
+.br
+.TP 18
+.B ARES_OPT_EVENT_THREAD
+.B ares_evsys_t \fIevsys\fP;
+.br
+Enable the built-in event thread (Recommended). Introduced in c-ares 1.26.0.
+Set the \fIevsys\fP parameter to \fBARES_EVSYS_DEFAULT\fP (0).  Other values are
+reserved for testing and should not be used by integrators.
+
+This option cannot be used with the \fBARES_OPT_SOCK_STATE_CB\fP option, nor the
+\fIares_set_socket_functions(3)\fP or
+\fIares_set_socket_configure_callback(3)\fP functions.
+
+When enabled, the integrator is no longer responsible for notifying c-ares of
+any events on the file descriptors, so \fIares_process(3)\fP nor
+\fIares_process_fd(3)\fP should ever be called when this option is enabled.
+
+As of c-ares 1.29.0, when enabled, it will also automatically re-load the
+system configuration when changes are detected.
+
+Use \fIares_threadsafety(3)\fP to determine if this option is available to be
+used.
+
+Returns \fBARES_ENOTIMP\fP if this option is passed but not available, and
+\fBARES_ESERVFAIL\fP if there is a critical failure during initialization of
+the event thread.
+.br
+.TP 18
+.B ARES_OPT_SERVER_FAILOVER
+.B struct ares_server_failover_options \fIserver_failover_opts\fP;
+.br
+Configure server failover retry behavior.  When a DNS server fails to
+respond to a query, c-ares will deprioritize the server.  On subsequent
+queries, servers with fewer consecutive failures will be selected in
+preference.  However, in order to detect when such a server has recovered,
+c-ares will occasionally retry failed servers by probing with a copy of
+the query, without affecting the latency of the actual requested query.  The
+\fIares_server_failover_options\fP structure contains options to control this
+behavior.
+The \fIretry_chance\fP field gives the probability (1/N) of retrying a
+failed server on any given query.  Setting to a value of 0 disables retries.
+The \fIretry_delay\fP field gives the minimum delay in milliseconds that c-ares
+will wait before retrying a specific failed server.
+If this option is not specificed then c-ares will use a probability of 10%
+and a minimum delay of 5 seconds.
+.br
+.PP
+The \fIoptmask\fP parameter also includes options without a corresponding
+field in the
+.B ares_options
+structure, as follows:
+.TP 23
+.B ARES_OPT_ROTATE
+Perform round-robin selection of the nameservers configured for the channel
+for each resolution.
+.TP 23
+.B ARES_OPT_NOROTATE
+Do not perform round-robin nameserver selection; always use the list of
+nameservers in the same order.  The default is not to rotate servers, however
+the system configuration can specify the desire to rotate and this
+configuration value can negate such a system configuration.
+.PP
+
+.SH RETURN VALUES
+\fBares_init_options(3)\fP and \fBares_init(3)\fP can return any of the
+following values:
+.TP 14
+.B ARES_SUCCESS
+Initialization succeeded.
+.TP 14
+.B ARES_EFILE
+A configuration file could not be read.
+.TP 14
+.B ARES_ENOMEM
+The process's available memory was exhausted.
+.TP 14
+.B ARES_ENOTINITIALIZED
+c-ares library initialization not yet performed.
+.TP 14
+.B ARES_ENOSERVER
+No DNS servers were available to use.
+.SH NOTES
+When initializing from
+.B /etc/resolv.conf,
+(or, alternatively when specified by the
+.I resolvconf_path
+path location)
+\fBares_init_options(3)\fP and \fBares_init(3)\fP reads the \fIdomain\fP and
+\fIsearch\fP directives to allow lookups of short names relative to the domains
+specified. The \fIdomain\fP and \fIsearch\fP directives override one another.
+If more than one instance of either \fIdomain\fP or \fIsearch\fP directives is
+specified, the last occurrence wins. For more information, please see the
+.BR resolv.conf (5)
+manual page.
+.SH SEE ALSO
+.BR ares_reinit (3),
+.BR ares_destroy (3),
+.BR ares_dup (3),
+.BR ares_library_init (3),
+.BR ares_save_options (3),
+.BR ares_set_servers (3),
+.BR ares_set_sortlist (3),
+.BR ares_threadsafety (3)

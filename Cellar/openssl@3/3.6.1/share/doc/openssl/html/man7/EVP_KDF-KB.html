@@ -1,0 +1,232 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_KDF-KB</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Identity">Identity</a></li>
+      <li><a href="#Supported-parameters">Supported parameters</a></li>
+    </ul>
+  </li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#CONFORMING-TO">CONFORMING TO</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_KDF-KB - The Key-Based EVP_KDF implementation</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The EVP_KDF-KB algorithm implements the Key-Based key derivation function (KBKDF). KBKDF derives a key from repeated application of a keyed MAC to an input secret (and other optional values).</p>
+
+<p>The output is considered to be keying material.</p>
+
+<h2 id="Identity">Identity</h2>
+
+<p>&quot;KBKDF&quot; is the name for this implementation; it can be used with the EVP_KDF_fetch() function.</p>
+
+<h2 id="Supported-parameters">Supported parameters</h2>
+
+<p>The supported parameters are:</p>
+
+<dl>
+
+<dt id="mode-OSSL_KDF_PARAM_MODE-UTF8-string">&quot;mode&quot; (<b>OSSL_KDF_PARAM_MODE</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+<p>The mode parameter determines which flavor of KBKDF to use - currently the choices are &quot;counter&quot; and &quot;feedback&quot;. &quot;counter&quot; is the default, and will be used if unspecified.</p>
+
+</dd>
+<dt id="mac-OSSL_KDF_PARAM_MAC-UTF8-string">&quot;mac&quot; (<b>OSSL_KDF_PARAM_MAC</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+<p>The value is either CMAC, HMAC, KMAC128 or KMAC256.</p>
+
+</dd>
+<dt id="digest-OSSL_KDF_PARAM_DIGEST-UTF8-string">&quot;digest&quot; (<b>OSSL_KDF_PARAM_DIGEST</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+</dd>
+<dt id="cipher-OSSL_KDF_PARAM_CIPHER-UTF8-string">&quot;cipher&quot; (<b>OSSL_KDF_PARAM_CIPHER</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+</dd>
+<dt id="properties-OSSL_KDF_PARAM_PROPERTIES-UTF8-string">&quot;properties&quot; (<b>OSSL_KDF_PARAM_PROPERTIES</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+</dd>
+<dt id="key-OSSL_KDF_PARAM_KEY-octet-string">&quot;key&quot; (<b>OSSL_KDF_PARAM_KEY</b>) &lt;octet string&gt;</dt>
+<dd>
+
+</dd>
+<dt id="salt-OSSL_KDF_PARAM_SALT-octet-string">&quot;salt&quot; (<b>OSSL_KDF_PARAM_SALT</b>) &lt;octet string&gt;</dt>
+<dd>
+
+</dd>
+<dt id="info-OSSL_KDF_PARAM_INFO-octet-string">&quot;info (<b>OSSL_KDF_PARAM_INFO</b>) &lt;octet string&gt;</dt>
+<dd>
+
+</dd>
+<dt id="seed-OSSL_KDF_PARAM_SEED-octet-string">&quot;seed&quot; (<b>OSSL_KDF_PARAM_SEED</b>) &lt;octet string&gt;</dt>
+<dd>
+
+<p>The seed parameter is unused in counter mode.</p>
+
+</dd>
+<dt id="use-l-OSSL_KDF_PARAM_KBKDF_USE_L-integer">&quot;use-l&quot; (<b>OSSL_KDF_PARAM_KBKDF_USE_L</b>) &lt;integer&gt;</dt>
+<dd>
+
+<p>Set to <b>0</b> to disable use of the optional Fixed Input data &#39;L&#39; (see SP800-108). The default value of <b>1</b> will be used if unspecified.</p>
+
+</dd>
+<dt id="use-separator-OSSL_KDF_PARAM_KBKDF_USE_SEPARATOR-integer">&quot;use-separator&quot; (<b>OSSL_KDF_PARAM_KBKDF_USE_SEPARATOR</b>) &lt;integer&gt;</dt>
+<dd>
+
+<p>Set to <b>0</b> to disable use of the optional Fixed Input data &#39;zero separator&#39; (see SP800-108) that is placed between the Label and Context. The default value of <b>1</b> will be used if unspecified.</p>
+
+</dd>
+<dt id="r-OSSL_KDF_PARAM_KBKDF_R-integer">&quot;r&quot; (<b>OSSL_KDF_PARAM_KBKDF_R</b>) &lt;integer&gt;</dt>
+<dd>
+
+<p>Set the fixed value &#39;r&#39;, indicating the length of the counter in bits.</p>
+
+<p>Supported values are <b>8</b>, <b>16</b>, <b>24</b>, and <b>32</b>. The default value of <b>32</b> will be used if unspecified.</p>
+
+</dd>
+</dl>
+
+<p>The OpenSSL FIPS provider also supports the following parameters:</p>
+
+<dl>
+
+<dt id="fips-indicator-OSSL_KDF_PARAM_FIPS_APPROVED_INDICATOR-integer">&quot;fips-indicator&quot; (<b>OSSL_KDF_PARAM_FIPS_APPROVED_INDICATOR</b>) &lt;integer&gt;</dt>
+<dd>
+
+<p>A getter that returns 1 if the operation is FIPS approved, or 0 otherwise. This may be used after calling EVP_KDF_derive. It returns 0 if &quot;key-check&quot; is set to 0 and the check fails.</p>
+
+</dd>
+<dt id="key-check-OSSL_KDF_PARAM_FIPS_KEY_CHECK-integer">&quot;key-check&quot; (<b>OSSL_KDF_PARAM_FIPS_KEY_CHECK</b>) &lt;integer&gt;</dt>
+<dd>
+
+<p>The default value of 1 causes an error during EVP_KDF_CTX_set_params() if the length of used key-derivation key (<b>OSSL_KDF_PARAM_KEY</b>) is shorter than 112 bits. Setting this to zero will ignore the error and set the approved &quot;fips-indicator&quot; to 0. This option breaks FIPS compliance if it causes the approved &quot;fips-indicator&quot; to return 0.</p>
+
+</dd>
+</dl>
+
+<p>Depending on whether mac is CMAC or HMAC, either digest or cipher is required (respectively) and the other is unused. They are unused for KMAC128 and KMAC256.</p>
+
+<p>The parameters key, salt, info, and seed correspond to KI, Label, Context, and IV (respectively) in SP800-108. As in that document, salt, info, and seed are optional and may be omitted.</p>
+
+<p>&quot;mac&quot;, &quot;digest&quot;, cipher&quot; and &quot;properties&quot; are described in <a href="../man3/EVP_KDF.html">&quot;PARAMETERS&quot; in EVP_KDF(3)</a>.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>A context for KBKDF can be obtained by calling:</p>
+
+<pre><code>EVP_KDF *kdf = EVP_KDF_fetch(NULL, &quot;KBKDF&quot;, NULL);
+EVP_KDF_CTX *kctx = EVP_KDF_CTX_new(kdf);</code></pre>
+
+<p>The output length of an KBKDF is specified via the <code>keylen</code> parameter to the <a href="../man3/EVP_KDF_derive.html">EVP_KDF_derive(3)</a> function.</p>
+
+<p>Note that currently OpenSSL only implements counter and feedback modes. Other variants may be supported in the future.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>This example derives 10 bytes using COUNTER-HMAC-SHA256, with KI &quot;secret&quot;, Label &quot;label&quot;, and Context &quot;context&quot;.</p>
+
+<pre><code>EVP_KDF *kdf;
+EVP_KDF_CTX *kctx;
+unsigned char out[10];
+OSSL_PARAM params[6], *p = params;
+
+kdf = EVP_KDF_fetch(NULL, &quot;KBKDF&quot;, NULL);
+kctx = EVP_KDF_CTX_new(kdf);
+EVP_KDF_free(kdf);
+
+*p++ = OSSL_PARAM_construct_utf8_string(OSSL_KDF_PARAM_DIGEST,
+                                        &quot;SHA2-256&quot;, 0);
+*p++ = OSSL_PARAM_construct_utf8_string(OSSL_KDF_PARAM_MAC,
+                                        &quot;HMAC&quot;, 0);
+*p++ = OSSL_PARAM_construct_octet_string(OSSL_KDF_PARAM_KEY,
+                                         &quot;secret&quot;, strlen(&quot;secret&quot;));
+*p++ = OSSL_PARAM_construct_octet_string(OSSL_KDF_PARAM_SALT,
+                                         &quot;label&quot;, strlen(&quot;label&quot;));
+*p++ = OSSL_PARAM_construct_octet_string(OSSL_KDF_PARAM_INFO,
+                                         &quot;context&quot;, strlen(&quot;context&quot;));
+*p = OSSL_PARAM_construct_end();
+if (EVP_KDF_derive(kctx, out, sizeof(out), params) &lt;= 0)
+    error(&quot;EVP_KDF_derive&quot;);
+
+EVP_KDF_CTX_free(kctx);</code></pre>
+
+<p>This example derives 10 bytes using FEEDBACK-CMAC-AES256, with KI &quot;secret&quot;, Label &quot;label&quot;, and IV &quot;sixteen bytes iv&quot;.</p>
+
+<pre><code>EVP_KDF *kdf;
+EVP_KDF_CTX *kctx;
+unsigned char out[10];
+OSSL_PARAM params[8], *p = params;
+unsigned char *iv = &quot;sixteen bytes iv&quot;;
+
+kdf = EVP_KDF_fetch(NULL, &quot;KBKDF&quot;, NULL);
+kctx = EVP_KDF_CTX_new(kdf);
+EVP_KDF_free(kdf);
+
+*p++ = OSSL_PARAM_construct_utf8_string(OSSL_KDF_PARAM_CIPHER, &quot;AES256&quot;, 0);
+*p++ = OSSL_PARAM_construct_utf8_string(OSSL_KDF_PARAM_MAC, &quot;CMAC&quot;, 0);
+*p++ = OSSL_PARAM_construct_utf8_string(OSSL_KDF_PARAM_MODE, &quot;FEEDBACK&quot;, 0);
+*p++ = OSSL_PARAM_construct_octet_string(OSSL_KDF_PARAM_KEY,
+                                         &quot;secret&quot;, strlen(&quot;secret&quot;));
+*p++ = OSSL_PARAM_construct_octet_string(OSSL_KDF_PARAM_SALT,
+                                         &quot;label&quot;, strlen(&quot;label&quot;));
+*p++ = OSSL_PARAM_construct_octet_string(OSSL_KDF_PARAM_INFO,
+                                         &quot;context&quot;, strlen(&quot;context&quot;));
+*p++ = OSSL_PARAM_construct_octet_string(OSSL_KDF_PARAM_SEED,
+                                         iv, strlen(iv));
+*p = OSSL_PARAM_construct_end();
+if (EVP_KDF_derive(kctx, out, sizeof(out), params) &lt;= 0)
+    error(&quot;EVP_KDF_derive&quot;);
+
+EVP_KDF_CTX_free(kctx);</code></pre>
+
+<h1 id="CONFORMING-TO">CONFORMING TO</h1>
+
+<p>NIST SP800-108, IETF RFC 6803, IETF RFC 8009.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_KDF.html">EVP_KDF(3)</a>, <a href="../man3/EVP_KDF_CTX_free.html">EVP_KDF_CTX_free(3)</a>, <a href="../man3/EVP_KDF_CTX_get_kdf_size.html">EVP_KDF_CTX_get_kdf_size(3)</a>, <a href="../man3/EVP_KDF_derive.html">EVP_KDF_derive(3)</a>, <a href="../man3/EVP_KDF.html">&quot;PARAMETERS&quot; in EVP_KDF(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>This functionality was added in OpenSSL 3.0.</p>
+
+<p>Support for KMAC was added in OpenSSL 3.1.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2019-2024 The OpenSSL Project Authors. All Rights Reserved. Copyright 2019 Red Hat, Inc.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

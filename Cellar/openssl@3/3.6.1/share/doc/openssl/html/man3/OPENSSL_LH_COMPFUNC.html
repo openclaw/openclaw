@@ -1,0 +1,234 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OPENSSL_LH_COMPFUNC</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#NOTE">NOTE</a></li>
+  <li><a href="#BUGS">BUGS</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>LHASH, LHASH_OF, DEFINE_LHASH_OF_EX, DEFINE_LHASH_OF, OPENSSL_LH_COMPFUNC, OPENSSL_LH_HASHFUNC, OPENSSL_LH_DOALL_FUNC, LHASH_DOALL_ARG_FN_TYPE, IMPLEMENT_LHASH_HASH_FN, IMPLEMENT_LHASH_COMP_FN, lh_TYPE_new, lh_TYPE_free, lh_TYPE_flush, lh_TYPE_insert, lh_TYPE_delete, lh_TYPE_retrieve, lh_TYPE_doall, lh_TYPE_doall_arg, lh_TYPE_num_items, lh_TYPE_get_down_load, lh_TYPE_set_down_load, lh_TYPE_error, OPENSSL_LH_new, OPENSSL_LH_free, OPENSSL_LH_flush, OPENSSL_LH_insert, OPENSSL_LH_delete, OPENSSL_LH_retrieve, OPENSSL_LH_doall, OPENSSL_LH_doall_arg, OPENSSL_LH_doall_arg_thunk, OPENSSL_LH_set_thunks, OPENSSL_LH_num_items, OPENSSL_LH_get_down_load, OPENSSL_LH_set_down_load, OPENSSL_LH_error - dynamic hash table</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/lhash.h&gt;
+
+LHASH_OF(TYPE)
+
+DEFINE_LHASH_OF_EX(TYPE);
+
+LHASH_OF(TYPE) *lh_TYPE_new(OPENSSL_LH_HASHFUNC hash, OPENSSL_LH_COMPFUNC compare);
+void lh_TYPE_free(LHASH_OF(TYPE) *table);
+void lh_TYPE_flush(LHASH_OF(TYPE) *table);
+OPENSSL_LHASH *OPENSSL_LH_set_thunks(OPENSSL_LHASH *lh,
+                                     OPENSSL_LH_HASHFUNCTHUNK hw,
+                                     OPENSSL_LH_COMPFUNCTHUNK cw,
+                                     OPENSSL_LH_DOALL_FUNC_THUNK daw,
+                                     OPENSSL_LH_DOALL_FUNCARG_THUNK daaw)
+
+TYPE *lh_TYPE_insert(LHASH_OF(TYPE) *table, TYPE *data);
+TYPE *lh_TYPE_delete(LHASH_OF(TYPE) *table, TYPE *data);
+TYPE *lh_TYPE_retrieve(LHASH_OF(TYPE) *table, TYPE *data);
+
+void lh_TYPE_doall(LHASH_OF(TYPE) *table, OPENSSL_LH_DOALL_FUNC func);
+void lh_TYPE_doall_arg(LHASH_OF(TYPE) *table, OPENSSL_LH_DOALL_FUNCARG func,
+                       TYPE *arg);
+void OPENSSL_LH_doall_arg_thunk(OPENSSL_LHASH *lh,
+                                OPENSSL_LH_DOALL_FUNCARG_THUNK daaw,
+                                OPENSSL_LH_DOALL_FUNCARG fn, void *arg)
+
+unsigned long lh_TYPE_num_items(OPENSSL_LHASH *lh);
+unsigned long lh_TYPE_get_down_load(OPENSSL_LHASH *lh);
+void lh_TYPE_set_down_load(OPENSSL_LHASH *lh, unsigned long dl);
+
+int lh_TYPE_error(LHASH_OF(TYPE) *table);
+
+typedef int (*OPENSSL_LH_COMPFUNC)(const void *, const void *);
+typedef unsigned long (*OPENSSL_LH_HASHFUNC)(const void *);
+typedef void (*OPENSSL_LH_DOALL_FUNC)(const void *);
+typedef void (*LHASH_DOALL_ARG_FN_TYPE)(const void *, const void *);
+
+OPENSSL_LHASH *OPENSSL_LH_new(OPENSSL_LH_HASHFUNC h, OPENSSL_LH_COMPFUNC c);
+void OPENSSL_LH_free(OPENSSL_LHASH *lh);
+void OPENSSL_LH_flush(OPENSSL_LHASH *lh);
+
+void *OPENSSL_LH_insert(OPENSSL_LHASH *lh, void *data);
+void *OPENSSL_LH_delete(OPENSSL_LHASH *lh, const void *data);
+void *OPENSSL_LH_retrieve(OPENSSL_LHASH *lh, const void *data);
+
+void OPENSSL_LH_doall(OPENSSL_LHASH *lh, OPENSSL_LH_DOALL_FUNC func);
+void OPENSSL_LH_doall_arg(OPENSSL_LHASH *lh, OPENSSL_LH_DOALL_FUNCARG func, void *arg);
+
+unsigned long OPENSSL_LH_num_items(OPENSSL_LHASH *lh);
+unsigned long OPENSSL_LH_get_down_load(OPENSSL_LHASH *lh);
+void OPENSSL_LH_set_down_load(OPENSSL_LHASH *lh, unsigned long dl);
+
+int OPENSSL_LH_error(OPENSSL_LHASH *lh);
+
+#define LH_LOAD_MULT   /* integer constant */</code></pre>
+
+<p>The following macro is deprecated:</p>
+
+<pre><code>DEFINE_LHASH_OF(TYPE);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>This library implements type-checked dynamic hash tables. The hash table entries can be arbitrary structures. Usually they consist of key and value fields. In the description here, <b><i>TYPE</i></b> is used a placeholder for any of the OpenSSL datatypes, such as <i>SSL_SESSION</i>.</p>
+
+<p>To define a new type-checked dynamic hash table, use <b>DEFINE_LHASH_OF_EX</b>(). <b>DEFINE_LHASH_OF</b>() was previously used for this purpose, but is now deprecated. The <b>DEFINE_LHASH_OF_EX</b>() macro provides all functionality of <b>DEFINE_LHASH_OF</b>() except for certain deprecated statistics functions (see OPENSSL_LH_stats(3)).</p>
+
+<p><b>lh_<i>TYPE</i>_new</b>() creates a new <b>LHASH_OF</b>(<b><i>TYPE</i></b>) structure to store arbitrary data entries, and specifies the &#39;hash&#39; and &#39;compare&#39; callbacks to be used in organising the table&#39;s entries. The <i>hash</i> callback takes a pointer to a table entry as its argument and returns an unsigned long hash value for its key field. The hash value is normally truncated to a power of 2, so make sure that your hash function returns well mixed low order bits. The <i>compare</i> callback takes two arguments (pointers to two hash table entries), and returns 0 if their keys are equal, nonzero otherwise.</p>
+
+<p>If your hash table will contain items of some particular type and the <i>hash</i> and <i>compare</i> callbacks hash/compare these types, then the <b>IMPLEMENT_LHASH_HASH_FN</b> and <b>IMPLEMENT_LHASH_COMP_FN</b> macros can be used to create callback wrappers of the prototypes required by <b>lh_<i>TYPE</i>_new</b>() as shown in this example:</p>
+
+<pre><code>/*
+ * Implement the hash and compare functions; &quot;stuff&quot; can be any word.
+ */
+static unsigned long stuff_hash(const TYPE *a)
+{
+    ...
+}
+static int stuff_cmp(const TYPE *a, const TYPE *b)
+{
+    ...
+}
+
+/*
+ * Implement the wrapper functions.
+ */
+static IMPLEMENT_LHASH_HASH_FN(stuff, TYPE)
+static IMPLEMENT_LHASH_COMP_FN(stuff, TYPE)</code></pre>
+
+<p>If the type is going to be used in several places, the following macros can be used in a common header file to declare the function wrappers:</p>
+
+<pre><code>DECLARE_LHASH_HASH_FN(stuff, TYPE)
+DECLARE_LHASH_COMP_FN(stuff, TYPE)</code></pre>
+
+<p>Then a hash table of <b><i>TYPE</i></b> objects can be created using this:</p>
+
+<pre><code>LHASH_OF(TYPE) *htable;
+
+htable = B&lt;lh_I&lt;TYPE&gt;_new&gt;(LHASH_HASH_FN(stuff), LHASH_COMP_FN(stuff));</code></pre>
+
+<p><b>lh_<i>TYPE</i>_free</b>() frees the <b>LHASH_OF</b>(<b><i>TYPE</i></b>) structure <i>table</i>. Allocated hash table entries will not be freed; consider using <b>lh_<i>TYPE</i>_doall</b>() to deallocate any remaining entries in the hash table (see below). If the argument is NULL, nothing is done.</p>
+
+<p><b>lh_<i>TYPE</i>_flush</b>() empties the <b>LHASH_OF</b>(<b><i>TYPE</i></b>) structure <i>table</i>. New entries can be added to the flushed table. Allocated hash table entries will not be freed; consider using <b>lh_<i>TYPE</i>_doall</b>() to deallocate any remaining entries in the hash table (see below).</p>
+
+<p><b>lh_<i>TYPE</i>_insert</b>() inserts the structure pointed to by <i>data</i> into <i>table</i>. If there already is an entry with the same key, the old value is replaced. Note that <b>lh_<i>TYPE</i>_insert</b>() stores pointers, the data are not copied.</p>
+
+<p><b>lh_<i>TYPE</i>_delete</b>() deletes an entry from <i>table</i>.</p>
+
+<p><b>lh_<i>TYPE</i>_retrieve</b>() looks up an entry in <i>table</i>. Normally, <i>data</i> is a structure with the key field(s) set; the function will return a pointer to a fully populated structure.</p>
+
+<p><b>lh_<i>TYPE</i>_doall</b>() will, for every entry in the hash table, call <i>func</i> with the data item as its parameter. For example:</p>
+
+<pre><code>/* Cleans up resources belonging to &#39;a&#39; (this is implemented elsewhere) */
+void TYPE_cleanup_doall(TYPE *a);
+
+/* Implement a prototype-compatible wrapper for &quot;TYPE_cleanup&quot; */
+IMPLEMENT_LHASH_DOALL_FN(TYPE_cleanup, TYPE)
+
+/* Call &quot;TYPE_cleanup&quot; against all items in a hash table. */
+lh_TYPE_doall(hashtable, LHASH_DOALL_FN(TYPE_cleanup));
+
+/* Then the hash table itself can be deallocated */
+lh_TYPE_free(hashtable);</code></pre>
+
+<p><b>lh_<i>TYPE</i>_doall_arg</b>() is the same as <b>lh_<i>TYPE</i>_doall</b>() except that <i>func</i> will be called with <i>arg</i> as the second argument and <i>func</i> should be of type <b>LHASH_DOALL_ARG_FN</b>(<b><i>TYPE</i></b>) (a callback prototype that is passed both the table entry and an extra argument). As with lh_doall(), you can instead choose to declare your callback with a prototype matching the types you are dealing with and use the declare/implement macros to create compatible wrappers that cast variables before calling your type-specific callbacks. An example of this is demonstrated here (printing all hash table entries to a BIO that is provided by the caller):</p>
+
+<pre><code>/* Prints item &#39;a&#39; to &#39;output_bio&#39; (this is implemented elsewhere) */
+void TYPE_print_doall_arg(const TYPE *a, BIO *output_bio);
+
+/* Implement a prototype-compatible wrapper for &quot;TYPE_print&quot; */
+static IMPLEMENT_LHASH_DOALL_ARG_FN(TYPE, const TYPE, BIO)
+
+/* Print out the entire hashtable to a particular BIO */
+lh_TYPE_doall_arg(hashtable, LHASH_DOALL_ARG_FN(TYPE_print), BIO,
+                  logging_bio);</code></pre>
+
+<p>Note that it is by default <b>not</b> safe to use <b>lh_<i>TYPE</i>_delete</b>() inside a callback passed to <b>lh_<i>TYPE</i>_doall</b>() or <b>lh_<i>TYPE</i>_doall_arg</b>(). The reason for this is that deleting an item from the hash table may result in the hash table being contracted to a smaller size and rehashed. <b>lh_<i>TYPE</i>_doall</b>() and <b>lh_<i>TYPE</i>_doall_arg</b>() are unsafe and will exhibit undefined behaviour under these conditions, as these functions assume the hash table size and bucket pointers do not change during the call.</p>
+
+<p>If it is desired to use <b>lh_<i>TYPE</i>_doall</b>() or <b>lh_<i>TYPE</i>_doall_arg</b>() with <b>lh_<i>TYPE</i>_delete</b>(), it is essential that you call <b>lh_<i>TYPE</i>_set_down_load</b>() with a <i>down_load</i> argument of 0 first. This disables hash table contraction and guarantees that it will be safe to delete items from a hash table during a call to <b>lh_<i>TYPE</i>_doall</b>() or <b>lh_<i>TYPE</i>_doall_arg</b>().</p>
+
+<p>It is never safe to call <b>lh_<i>TYPE</i>_insert</b>() during a call to <b>lh_<i>TYPE</i>_doall</b>() or <b>lh_<i>TYPE</i>_doall_arg</b>().</p>
+
+<p><b>lh_<i>TYPE</i>_error</b>() can be used to determine if an error occurred in the last operation.</p>
+
+<p><b>lh_<i>TYPE</i>_num_items</b>() returns the number of items in the hash table.</p>
+
+<p><b>lh_<i>TYPE</i>_get_down_load</b>() and <b>lh_<i>TYPE</i>_set_down_load</b>() get and set the factor used to determine when the hash table is contracted. The factor is the load factor at or below which hash table contraction will occur, multiplied by <b>LH_LOAD_MULT</b>, where the load factor is the number of items divided by the number of nodes. Setting this value to 0 disables hash table contraction.</p>
+
+<p>OPENSSL_LH_new() is the same as the <b>lh_<i>TYPE</i>_new</b>() except that it is not type specific. So instead of returning an <b>LHASH_OF(<i>TYPE</i>)</b> value it returns a <b>void *</b>. In the same way the functions OPENSSL_LH_free(), OPENSSL_LH_flush(), OPENSSL_LH_insert(), OPENSSL_LH_delete(), OPENSSL_LH_retrieve(), OPENSSL_LH_doall(), OPENSSL_LH_doall_arg(), OPENSSL_LH_num_items(), OPENSSL_LH_get_down_load(), OPENSSL_LH_set_down_load() and OPENSSL_LH_error() are equivalent to the similarly named <b>lh_<i>TYPE</i></b> functions except that they return or use a <b>void *</b> where the equivalent <b>lh_<i>TYPE</i></b> function returns or uses a <b><i>TYPE</i> *</b> or <b>LHASH_OF(<i>TYPE</i>) *</b>. <b>lh_<i>TYPE</i></b> functions are implemented as type checked wrappers around the <b>OPENSSL_LH</b> functions. Most applications should not call the <b>OPENSSL_LH</b> functions directly.</p>
+
+<p>OPENSSL_LH_set_thunks() and OPENSSL_LH_doall_arg_thunk(), while public by necessity, are actually internal functions and should not be used.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p><b>lh_<i>TYPE</i>_new</b>() and OPENSSL_LH_new() return NULL on error, otherwise a pointer to the new <b>LHASH</b> structure.</p>
+
+<p>When a hash table entry is replaced, <b>lh_<i>TYPE</i>_insert</b>() or OPENSSL_LH_insert() return the value being replaced. NULL is returned on normal operation and on error.</p>
+
+<p><b>lh_<i>TYPE</i>_delete</b>() and OPENSSL_LH_delete() return the entry being deleted. NULL is returned if there is no such value in the hash table.</p>
+
+<p><b>lh_<i>TYPE</i>_retrieve</b>() and OPENSSL_LH_retrieve() return the hash table entry if it has been found, NULL otherwise.</p>
+
+<p><b>lh_<i>TYPE</i>_error</b>() and OPENSSL_LH_error() return 1 if an error occurred in the last operation, 0 otherwise. It&#39;s meaningful only after non-retrieve operations.</p>
+
+<p><b>lh_<i>TYPE</i>_free</b>(), OPENSSL_LH_free(), <b>lh_<i>TYPE</i>_flush</b>(), OPENSSL_LH_flush(), <b>lh_<i>TYPE</i>_doall</b>() OPENSSL_LH_doall(), <b>lh_<i>TYPE</i>_doall_arg</b>() and OPENSSL_LH_doall_arg() return no values.</p>
+
+<h1 id="NOTE">NOTE</h1>
+
+<p>The LHASH code is not thread safe. All updating operations, as well as <b>lh_<i>TYPE</i>_error</b>() or OPENSSL_LH_error() calls must be performed under a write lock. All retrieve operations should be performed under a read lock, <i>unless</i> accurate usage statistics are desired. In which case, a write lock should be used for retrieve operations as well. For output of the usage statistics, using the functions from <a href="../man3/OPENSSL_LH_stats.html">OPENSSL_LH_stats(3)</a>, a read lock suffices.</p>
+
+<p>The LHASH code regards table entries as constant data. As such, it internally represents lh_insert()&#39;d items with a &quot;const void *&quot; pointer type. This is why callbacks such as those used by lh_doall() and lh_doall_arg() declare their prototypes with &quot;const&quot;, even for the parameters that pass back the table items&#39; data pointers - for consistency, user-provided data is &quot;const&quot; at all times as far as the LHASH code is concerned. However, as callers are themselves providing these pointers, they can choose whether they too should be treating all such parameters as constant.</p>
+
+<p>As an example, a hash table may be maintained by code that, for reasons of encapsulation, has only &quot;const&quot; access to the data being indexed in the hash table (i.e. it is returned as &quot;const&quot; from elsewhere in their code) - in this case the LHASH prototypes are appropriate as-is. Conversely, if the caller is responsible for the life-time of the data in question, then they may well wish to make modifications to table item passed back in the lh_doall() or lh_doall_arg() callbacks (see the &quot;TYPE_cleanup&quot; example above). If so, the caller can either cast the &quot;const&quot; away (if they&#39;re providing the raw callbacks themselves) or use the macros to declare/implement the wrapper functions without &quot;const&quot; types.</p>
+
+<p>Callers that only have &quot;const&quot; access to data they&#39;re indexing in a table, yet declare callbacks without constant types (or cast the &quot;const&quot; away themselves), are therefore creating their own risks/bugs without being encouraged to do so by the API. On a related note, those auditing code should pay special attention to any instances of DECLARE/IMPLEMENT_LHASH_DOALL_[ARG_]_FN macros that provide types without any &quot;const&quot; qualifiers.</p>
+
+<h1 id="BUGS">BUGS</h1>
+
+<p><b>lh_<i>TYPE</i>_insert</b>() and OPENSSL_LH_insert() return NULL both for success and error.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/OPENSSL_LH_stats.html">OPENSSL_LH_stats(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>In OpenSSL 1.0.0, the lhash interface was revamped for better type checking.</p>
+
+<p>In OpenSSL 3.1, <b>DEFINE_LHASH_OF_EX</b>() was introduced and <b>DEFINE_LHASH_OF</b>() was deprecated.</p>
+
+<p>OPENSSL_LH_doall_arg_thunk(), OPENSSL_LH_set_thunks() were added in OpenSSL 3.3.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,53 @@
+.\"
+.\" Copyright 1998 by Daniel Stenberg
+.\" SPDX-License-Identifier: MIT
+.\"
+.TH ARES_GETSOCK 3 "11 March 2010"
+.SH NAME
+ares_getsock \- get socket descriptors to wait on (deprecated)
+.SH SYNOPSIS
+.nf
+#include <ares.h>
+
+int ares_getsock(const ares_channel_t *\fIchannel\fP, ares_socket_t *\fIsocks\fP,
+                 int \fInumsocks\fP);
+.fi
+.SH DESCRIPTION
+The
+.B ares_getsock
+function retrieves the set of socket descriptors which the calling
+application should wait on for reading and/or writing for the
+processing of name service queries pending on the name service channel
+identified by
+.IR channel .
+Socket descriptors will be set in the socket descriptor array pointed to by
+\fIsocks\fP.
+\fInumsocks\fP is the size of the given array in number of ints.
+
+This function can only return information up to 16 sockets. If more are
+in use, they are simply not reported back.
+.SH RETURN VALUES
+\fBares_getsock\fP returns a bitmask for what actions to wait for on the
+different sockets. The ares.h header file provides these convenience macros to
+extract the information appropriately:
+
+.nf
+#define ARES_GETSOCK_MAXNUM 16 /* ares_getsock() can return info about
+                                  this many sockets */
+#define ARES_GETSOCK_READABLE(bits,num) (bits & (1<< (num)))
+#define ARES_GETSOCK_WRITABLE(bits,num) (bits & (1 << ((num) + \
+                                         ARES_GETSOCK_MAXNUM)))
+.fi
+.SH NOTES
+This function was added in c-ares 1.3.1 and deprecated in c-ares 1.20.0 due to
+the implementation of \fBARES_OPT_MAX_UDP_QUERIES\fP which makes it likely to
+exceed 16 open file descriptors.
+
+It is recommended to use \fBARES_OPT_EVENT_THREAD\fP passed to
+\fIares_init_options(3)\fP or to use socket state callbacks
+(\fBARES_OPT_SOCK_STATE_CB\fP) registered via \fBares_init_options(3)\fP.
+.SH SEE ALSO
+.BR ares_init_options (3),
+.BR ares_timeout (3),
+.BR ares_fds (3),
+.BR ares_process (3)

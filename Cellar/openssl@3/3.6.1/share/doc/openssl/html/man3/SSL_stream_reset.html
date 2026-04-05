@@ -1,0 +1,88 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_stream_reset</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_stream_reset - reset a QUIC stream</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+typedef struct ssl_stream_reset_args_st {
+    uint64_t quic_error_code;
+} SSL_STREAM_RESET_ARGS;
+
+int SSL_stream_reset(SSL *ssl,
+                     const SSL_STREAM_RESET_ARGS *args,
+                     size_t args_len);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The SSL_stream_reset() function resets the send part of a QUIC stream when called on a QUIC stream SSL object, or on a QUIC connection SSL object with a default stream attached.</p>
+
+<p>If <i>args</i> is non-NULL, <i>args_len</i> must be set to <code>sizeof(*args)</code>.</p>
+
+<p><i>quic_error_code</i> is an application-specified error code, which must be in the range [0, 2**62-1]. If <i>args</i> is NULL, a value of 0 is used.</p>
+
+<p>Resetting a stream indicates to an application that the sending part of the stream is terminating abnormally. When a stream is reset, the implementation does not guarantee that any data already passed to <a href="../man3/SSL_write.html">SSL_write(3)</a> will be received by the peer, and data already passed to <a href="../man3/SSL_write.html">SSL_write(3)</a> but not yet transmitted may or may not be discarded. As such, you should only reset a stream when the information transmitted on the stream no longer matters, for example due to an error condition.</p>
+
+<p>This function cannot be called on a unidirectional stream initiated by the peer, as only the sending side of a stream can initiate a stream reset.</p>
+
+<p>It is also possible to trigger a stream reset by calling <a href="../man3/SSL_free.html">SSL_free(3)</a>; see the documentation for <a href="../man3/SSL_free.html">SSL_free(3)</a> for details.</p>
+
+<p>The receiving part of the stream (for bidirectional streams) continues to function normally.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>This function corresponds to the QUIC <b>RESET_STREAM</b> frame.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>Returns 1 on success and 0 on failure.</p>
+
+<p>This function fails if called on a QUIC connection SSL object without a default stream attached, or on a non-QUIC SSL object.</p>
+
+<p>After the first call to this function succeeds for a given stream, subsequent calls succeed but are ignored. The application error code used is that passed to the first successful call to this function.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/SSL_free.html">SSL_free(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>SSL_stream_reset() was added in OpenSSL 3.2.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2002-2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

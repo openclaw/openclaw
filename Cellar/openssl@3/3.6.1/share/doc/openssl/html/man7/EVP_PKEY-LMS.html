@@ -1,0 +1,129 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_PKEY-LMS</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Common-LMS-parameters">Common LMS parameters</a></li>
+    </ul>
+  </li>
+  <li><a href="#CONFORMING-TO">CONFORMING TO</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_PKEY-LMS, EVP_KEYMGMT-LMS, LMS - EVP_PKEY Leighton-Micali Signature (LMS) keytype and algorithm support</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The <b>LMS</b> keytype is implemented in OpenSSL&#39;s default and FIPS providers. The OpenSSL providers only support LMS signature verification, as this is a [SP 800-208](https://csrc.nist.gov/pubs/sp/800/208/final) requirement for FIPS software modules.</p>
+
+<h2 id="Common-LMS-parameters">Common LMS parameters</h2>
+
+<p>LMS public keys are encoded in XDR format (i.e. not ASN1 format). The following parameters are used by EVP_PKEY_fromdata() and by the LMS keymanager for import and export.</p>
+
+<dl>
+
+<dt id="pub-OSSL_PKEY_PARAM_PUB_KEY-octet-string">&quot;pub&quot; (<b>OSSL_PKEY_PARAM_PUB_KEY</b>) &lt;octet string&gt;</dt>
+<dd>
+
+<p>Used for getting and setting the encoding of an LMS public key. The public key is expected to be in XDR format.</p>
+
+</dd>
+</dl>
+
+<h1 id="CONFORMING-TO">CONFORMING TO</h1>
+
+<dl>
+
+<dt id="RFC-8554">RFC 8554</dt>
+<dd>
+
+<p>Leighton-Micali Hash-Based Signatures</p>
+
+</dd>
+<dt id="NIST-SP800-208">NIST SP800-208</dt>
+<dd>
+
+<p>Recommendation for Stateful Hash-Based Signature Schemes</p>
+
+</dd>
+<dt id="CNSA-2.0">CNSA 2.0</dt>
+<dd>
+
+<p>Commercial National Security Algorithm Suite</p>
+
+</dd>
+</dl>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>LMS support is disabled by default at compile-time. To enable it, specify the <b>enable-lms</b> build configuration option.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>NOTE error checking has been omitted in these examples</p>
+
+<p>An <b>EVP_PKEY</b> context can be obtained by calling:</p>
+
+<pre><code>EVP_PKEY_CTX *ctx = EVP_PKEY_CTX_new_from_name(libctx, &quot;LMS&quot;, propq);</code></pre>
+
+<p>An <b>LMS</b> public key can be loaded simply like this:</p>
+
+<pre><code>EVP_PKEY *pkey = NULL;
+OSSL_DECODER_CTX *dctx = NULL;
+int selection = OSSL_KEYMGMT_SELECT_PUBLIC_KEY;
+
+dctx = OSSL_DECODER_CTX_new_for_pkey(&amp;pkey, &quot;XDR&quot;, NULL,
+                                     &quot;LMS&quot;, selection, libctx, propq);
+ret = OSSL_DECODER_from_bio(dctx, bio);
+OSSL_DECODER_CTX_free(dctx);</code></pre>
+
+<p>To load a LMS key from XDR encoded &quot;data&quot; of size &quot;datalen&quot;:</p>
+
+<pre><code>EVP_PKEY *key = NULL;
+OSSL_PARAM params[2];
+
+params[0] =
+    OSSL_PARAM_construct_octet_string(OSSL_PKEY_PARAM_ENCODED_PUBLIC_KEY,
+                                      (unsigned char *)data, datalen);
+params[1] = OSSL_PARAM_construct_end();
+ret = EVP_PKEY_fromdata_init(ctx)
+ret = EVP_PKEY_fromdata(ctx, &amp;key, EVP_PKEY_PUBLIC_KEY, params);</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_KEYMGMT.html">EVP_KEYMGMT(3)</a>, <a href="../man3/EVP_PKEY.html">EVP_PKEY(3)</a>, <a href="../man7/EVP_SIGNATURE-LMS.html">EVP_SIGNATURE-LMS(7)</a>, <a href="../man7/provider-keymgmt.html">provider-keymgmt(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>This functionality was added in OpenSSL 3.6.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

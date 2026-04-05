@@ -1,0 +1,75 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OSSL_CMP_MSG_http_perform</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OSSL_CMP_MSG_http_perform - client-side HTTP(S) transfer of a CMP request-response pair</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/cmp.h&gt;
+
+OSSL_CMP_MSG *OSSL_CMP_MSG_http_perform(OSSL_CMP_CTX *ctx,
+                                        const OSSL_CMP_MSG *req);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>OSSL_CMP_MSG_http_perform() sends the given PKIMessage <i>req</i> to the CMP server specified in <i>ctx</i> and returns the result obtained from it.</p>
+
+<p>If <a href="../man3/OSSL_CMP_CTX_set_transfer_cb_arg.html">OSSL_CMP_CTX_set_transfer_cb_arg(3)</a> has been used to set the transfer callback argument then the provided pointer <i>bios</i> is taken as a two-element <b>BIO</b> array to use for the exchange with the server as described for the <i>bio</i> and <i>rbio</i> parameters of <a href="../man3/OSSL_HTTP_open.html">OSSL_HTTP_open(3)</a>. For instance, the two BIO pointers may be equal and refer to a TLS connection, such as in BRSKI-AE where a pre-established TLS channel is reused for CMP.</p>
+
+<p>Otherwise the server specified via <a href="../man3/OSSL_CMP_CTX_set1_server.html">OSSL_CMP_CTX_set1_server(3)</a> and optionally <a href="../man3/OSSL_CMP_CTX_set_serverPort.html">OSSL_CMP_CTX_set_serverPort(3)</a> is contacted, where the default port is 80 for HTTP and 443 for HTTPS. The HTTP path (aka &quot;CMP alias&quot; in this context) to use is by default <code>/</code>, otherwise the string specified via <a href="../man3/OSSL_CMP_CTX_set1_serverPath.html">OSSL_CMP_CTX_set1_serverPath(3)</a>. On success the function returns the server&#39;s response PKIMessage.</p>
+
+<p>The function makes use of any HTTP callback function set via <a href="../man3/OSSL_CMP_CTX_set_http_cb.html">OSSL_CMP_CTX_set_http_cb(3)</a>. It respects any timeout value set via <a href="../man3/OSSL_CMP_CTX_set_option.html">OSSL_CMP_CTX_set_option(3)</a> with an <b>OSSL_CMP_OPT_MSG_TIMEOUT</b> argument. It also respects any HTTP(S) proxy options set via <a href="../man3/OSSL_CMP_CTX_set1_proxy.html">OSSL_CMP_CTX_set1_proxy(3)</a> and <a href="../man3/OSSL_CMP_CTX_set1_no_proxy.html">OSSL_CMP_CTX_set1_no_proxy(3)</a> and the respective environment variables. Proxying plain HTTP is supported directly, while using a proxy for HTTPS connections requires a suitable callback function such as <a href="../man3/OSSL_HTTP_proxy_connect.html">OSSL_HTTP_proxy_connect(3)</a>.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>CMP is defined in RFC 9810. HTTP transfer for CMP is defined in RFC 9811.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>OSSL_CMP_MSG_http_perform() returns the received CMP response message on success, else NULL.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/OSSL_CMP_CTX_new.html">OSSL_CMP_CTX_new(3)</a>, <a href="../man3/OSSL_HTTP_open.html">OSSL_HTTP_open(3)</a>, and <a href="../man3/OSSL_HTTP_proxy_connect.html">OSSL_HTTP_proxy_connect(3)</a>.</p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The OpenSSL CMP support was added in OpenSSL 3.0.</p>
+
+<p>The OSSL_CMP_MSG_http_perform() use of transfer_cb_arg was added in OpenSSL 3.5.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2007-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

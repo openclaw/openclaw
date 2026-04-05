@@ -1,0 +1,187 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>BIO_s_accept</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>BIO_s_accept, BIO_set_accept_name, BIO_set_accept_port, BIO_get_accept_name, BIO_get_accept_port, BIO_new_accept, BIO_set_nbio_accept, BIO_set_tfo_accept, BIO_set_accept_bios, BIO_get_peer_name, BIO_get_peer_port, BIO_get_accept_ip_family, BIO_set_accept_ip_family, BIO_set_bind_mode, BIO_get_bind_mode, BIO_do_accept - accept BIO</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/bio.h&gt;
+
+const BIO_METHOD *BIO_s_accept(void);
+
+long BIO_set_accept_name(BIO *b, char *name);
+char *BIO_get_accept_name(BIO *b);
+
+long BIO_set_accept_port(BIO *b, char *port);
+char *BIO_get_accept_port(BIO *b);
+
+BIO *BIO_new_accept(char *host_port);
+
+long BIO_set_nbio_accept(BIO *b, int n);
+long BIO_set_tfo_accept(BIO *b, int n);
+long BIO_set_accept_bios(BIO *b, char *bio);
+
+char *BIO_get_peer_name(BIO *b);
+char *BIO_get_peer_port(BIO *b);
+long BIO_get_accept_ip_family(BIO *b);
+long BIO_set_accept_ip_family(BIO *b, long family);
+
+long BIO_set_bind_mode(BIO *b, long mode);
+long BIO_get_bind_mode(BIO *b);
+
+int BIO_do_accept(BIO *b);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>BIO_s_accept() returns the accept BIO method. This is a wrapper round the platform&#39;s TCP/IP socket accept routines.</p>
+
+<p>Using accept BIOs, TCP/IP connections can be accepted and data transferred using only BIO routines. In this way any platform specific operations are hidden by the BIO abstraction.</p>
+
+<p>Read and write operations on an accept BIO will perform I/O on the underlying connection. If no connection is established and the port (see below) is set up properly then the BIO waits for an incoming connection.</p>
+
+<p>Accept BIOs support BIO_puts() but not BIO_gets().</p>
+
+<p>If the close flag is set on an accept BIO then any active connection on that chain is shutdown and the socket closed when the BIO is freed.</p>
+
+<p>Calling BIO_reset() on an accept BIO will close any active connection and reset the BIO into a state where it awaits another incoming connection.</p>
+
+<p>BIO_get_fd() and BIO_set_fd() can be called to retrieve or set the accept socket. See <a href="../man3/BIO_s_fd.html">BIO_s_fd(3)</a></p>
+
+<p>BIO_set_accept_name() uses the string <b>name</b> to set the accept name. The name is represented as a string of the form &quot;host:port&quot;, where &quot;host&quot; is the interface to use and &quot;port&quot; is the port. The host can be &quot;*&quot; or empty which is interpreted as meaning any interface. If the host is an IPv6 address, it has to be enclosed in brackets, for example &quot;[::1]:https&quot;. &quot;port&quot; has the same syntax as the port specified in BIO_set_conn_port() for connect BIOs, that is it can be a numerical port string or a string to lookup using getservbyname() and a string table.</p>
+
+<p>BIO_set_accept_port() uses the string <b>port</b> to set the accept port of BIO <i>b</i>. &quot;port&quot; has the same syntax as the port specified in BIO_set_conn_port() for connect BIOs, that is it can be a numerical port string or a string to lookup using getservbyname() and a string table. If the given port is <code>0</code> then a random available port is chosen. It may be queried using BIO_sock_info() and <a href="../man3/BIO_ADDR_service_string.html">BIO_ADDR_service_string(3)</a>.</p>
+
+<p>BIO_new_accept() combines BIO_new() and BIO_set_accept_name() into a single call: that is it creates a new accept BIO with port <b>host_port</b>.</p>
+
+<p>BIO_set_nbio_accept() sets the accept socket to blocking mode (the default) if <b>n</b> is 0 or non blocking mode if <b>n</b> is 1.</p>
+
+<p>BIO_set_tfo_accept() enables TCP Fast Open on the accept socket if <b>n</b> is 1 or disables TCP Fast Open if <b>n</b> is 0 (the default). Setting the value to 1 is equivalent to setting <b>BIO_SOCK_TFO</b> in BIO_set_bind_mode().</p>
+
+<p>BIO_set_accept_bios() can be used to set a chain of BIOs which will be duplicated and prepended to the chain when an incoming connection is received. This is useful if, for example, a buffering or SSL BIO is required for each connection. The chain of BIOs must not be freed after this call, they will be automatically freed when the accept BIO is freed.</p>
+
+<p>BIO_get_accept_ip_family() returns the IP family accepted by the BIO <i>b</i>, which may be <b>BIO_FAMILY_IPV4</b>, <b>BIO_FAMILY_IPV6</b>, or <b>BIO_FAMILY_IPANY</b>.</p>
+
+<p>BIO_set_accept_ip_family() sets the IP family <i>family</i> accepted by BIO <i>b</i>. The default is <b>BIO_FAMILY_IPANY</b>.</p>
+
+<p>BIO_set_bind_mode() and BIO_get_bind_mode() set and retrieve the current bind mode. If <b>BIO_BIND_NORMAL</b> (the default) is set then another socket cannot be bound to the same port. If <b>BIO_BIND_REUSEADDR</b> is set then other sockets can bind to the same port. If <b>BIO_BIND_REUSEADDR_IF_UNUSED</b> is set then and attempt is first made to use BIO_BIN_NORMAL, if this fails and the port is not in use then a second attempt is made using <b>BIO_BIND_REUSEADDR</b>. If <b>BIO_SOCK_TFO</b> is set, then the socket will be configured to accept TCP Fast Open connections.</p>
+
+<p>BIO_do_accept() serves two functions. When it is first called, after the accept BIO has been setup, it will attempt to create the accept socket and bind an address to it. Second and subsequent calls to BIO_do_accept() will await an incoming connection, or request a retry in non blocking mode.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>When an accept BIO is at the end of a chain it will await an incoming connection before processing I/O calls. When an accept BIO is not at then end of a chain it passes I/O calls to the next BIO in the chain.</p>
+
+<p>When a connection is established a new socket BIO is created for the connection and appended to the chain. That is the chain is now accept-&gt;socket. This effectively means that attempting I/O on an initial accept socket will await an incoming connection then perform I/O on it.</p>
+
+<p>If any additional BIOs have been set using BIO_set_accept_bios() then they are placed between the socket and the accept BIO, that is the chain will be accept-&gt;otherbios-&gt;socket.</p>
+
+<p>If a server wishes to process multiple connections (as is normally the case) then the accept BIO must be made available for further incoming connections. This can be done by waiting for a connection and then calling:</p>
+
+<pre><code>connection = BIO_pop(accept);</code></pre>
+
+<p>After this call <b>connection</b> will contain a BIO for the recently established connection and <b>accept</b> will now be a single BIO again which can be used to await further incoming connections. If no further connections will be accepted the <b>accept</b> can be freed using BIO_free().</p>
+
+<p>If only a single connection will be processed it is possible to perform I/O using the accept BIO itself. This is often undesirable however because the accept BIO will still accept additional incoming connections. This can be resolved by using BIO_pop() (see above) and freeing up the accept BIO after the initial connection.</p>
+
+<p>If the underlying accept socket is nonblocking and BIO_do_accept() is called to await an incoming connection it is possible for BIO_should_io_special() with the reason BIO_RR_ACCEPT. If this happens then it is an indication that an accept attempt would block: the application should take appropriate action to wait until the underlying socket has accepted a connection and retry the call.</p>
+
+<p>BIO_set_accept_name(), BIO_get_accept_name(), BIO_set_accept_port(), BIO_get_accept_port(), BIO_set_nbio_accept(), BIO_set_accept_bios(), BIO_get_peer_name(), BIO_get_peer_port(), BIO_get_accept_ip_family(), BIO_set_accept_ip_family(), BIO_set_bind_mode(), BIO_get_bind_mode() and BIO_do_accept() are macros.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>BIO_do_accept(), BIO_set_accept_name(), BIO_set_accept_port(), BIO_set_nbio_accept(), BIO_set_accept_bios(), BIO_set_accept_ip_family(), and BIO_set_bind_mode() return 1 for success and &lt;= 0 for failure.</p>
+
+<p>BIO_get_accept_name() returns the accept name or NULL on error. BIO_get_peer_name() returns the peer name or NULL on error.</p>
+
+<p>BIO_get_accept_port() returns the accept port as a string or NULL on error. BIO_get_peer_port() returns the peer port as a string or NULL on error. BIO_get_accept_ip_family() returns the IP family or &lt;= 0 on error.</p>
+
+<p>BIO_get_bind_mode() returns the set of <b>BIO_BIND</b> flags, or &lt;= 0 on failure.</p>
+
+<p>BIO_new_accept() returns a BIO or NULL on error.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>This example accepts two connections on port 4444, sends messages down each and finally closes both down.</p>
+
+<pre><code>BIO *abio, *cbio, *cbio2;
+
+/* First call to BIO_do_accept() sets up accept BIO */
+abio = BIO_new_accept(&quot;4444&quot;);
+if (BIO_do_accept(abio) &lt;= 0) {
+    fprintf(stderr, &quot;Error setting up accept\n&quot;);
+    ERR_print_errors_fp(stderr);
+    exit(1);
+}
+
+/* Wait for incoming connection */
+if (BIO_do_accept(abio) &lt;= 0) {
+    fprintf(stderr, &quot;Error accepting connection\n&quot;);
+    ERR_print_errors_fp(stderr);
+    exit(1);
+}
+fprintf(stderr, &quot;Connection 1 established\n&quot;);
+
+/* Retrieve BIO for connection */
+cbio = BIO_pop(abio);
+BIO_puts(cbio, &quot;Connection 1: Sending out Data on initial connection\n&quot;);
+fprintf(stderr, &quot;Sent out data on connection 1\n&quot;);
+
+/* Wait for another connection */
+if (BIO_do_accept(abio) &lt;= 0) {
+    fprintf(stderr, &quot;Error accepting connection\n&quot;);
+    ERR_print_errors_fp(stderr);
+    exit(1);
+}
+fprintf(stderr, &quot;Connection 2 established\n&quot;);
+
+/* Close accept BIO to refuse further connections */
+cbio2 = BIO_pop(abio);
+BIO_free(abio);
+BIO_puts(cbio2, &quot;Connection 2: Sending out Data on second\n&quot;);
+fprintf(stderr, &quot;Sent out data on connection 2\n&quot;);
+
+BIO_puts(cbio, &quot;Connection 1: Second connection established\n&quot;);
+
+/* Close the two established connections */
+BIO_free(cbio);
+BIO_free(cbio2);</code></pre>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>BIO_set_tfo_accept() was added in OpenSSL 3.2.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2022 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

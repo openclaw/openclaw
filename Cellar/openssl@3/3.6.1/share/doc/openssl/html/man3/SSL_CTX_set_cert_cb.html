@@ -1,0 +1,75 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_CTX_set_cert_cb</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_CTX_set_cert_cb, SSL_set_cert_cb - handle certificate callback function</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+void SSL_CTX_set_cert_cb(SSL_CTX *c, int (*cert_cb)(SSL *ssl, void *arg),
+                         void *arg);
+void SSL_set_cert_cb(SSL *s, int (*cert_cb)(SSL *ssl, void *arg), void *arg);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_CTX_set_cert_cb() and SSL_set_cert_cb() sets the <i>cert_cb</i> callback, <i>arg</i> value is pointer which is passed to the application callback.</p>
+
+<p>When <i>cert_cb</i> is NULL, no callback function is used.</p>
+
+<p><i>cert_cb</i> is the application defined callback. It is called before a certificate will be used by a client or server. The callback can then inspect the passed <i>ssl</i> structure and set or clear any appropriate certificates. If the callback is successful it <b>MUST</b> return 1 even if no certificates have been set. A zero is returned on error which will abort the handshake with a fatal internal error alert. A negative return value will suspend the handshake and the handshake function will return immediately. <a href="../man3/SSL_get_error.html">SSL_get_error(3)</a> will return SSL_ERROR_WANT_X509_LOOKUP to indicate, that the handshake was suspended. The next call to the handshake function will again lead to the call of <i>cert_cb</i>. It is the job of the <i>cert_cb</i> to store information about the state of the last call, if required to continue.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>An application will typically call SSL_use_certificate() and SSL_use_PrivateKey() to set the end entity certificate and private key. It can add intermediate and optionally the root CA certificates using SSL_add1_chain_cert().</p>
+
+<p>It might also call SSL_certs_clear() to delete any certificates associated with the <b>SSL</b> object.</p>
+
+<p>The certificate callback functionality supersedes the (largely broken) functionality provided by the old client certificate callback interface. It is <b>always</b> called even is a certificate is already set so the callback can modify or delete the existing certificate.</p>
+
+<p>A more advanced callback might examine the handshake parameters and set whatever chain is appropriate. For example a legacy client supporting only TLSv1.0 might receive a certificate chain signed using SHA1 whereas a TLSv1.2 or later client which advertises support for SHA256 could receive a chain using SHA256.</p>
+
+<p>Normal server sanity checks are performed on any certificates set by the callback. So if an EC chain is set for a curve the client does not support it will <b>not</b> be used.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_CTX_set_cert_cb() and SSL_set_cert_cb() do not return values.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a>, <a href="../man3/SSL_use_certificate.html">SSL_use_certificate(3)</a>, <a href="../man3/SSL_add1_chain_cert.html">SSL_add1_chain_cert(3)</a>, <a href="../man3/SSL_get_client_CA_list.html">SSL_get_client_CA_list(3)</a>, <a href="../man3/SSL_clear.html">SSL_clear(3)</a>, <a href="../man3/SSL_free.html">SSL_free(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2014-2020 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

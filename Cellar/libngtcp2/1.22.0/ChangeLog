@@ -1,0 +1,1646 @@
+commit 2a441e8540d192b0707989b146ce80efcae5f0d6
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-29
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-29
+
+    Bump package and library versions
+
+commit 3567e26f09c643ccee2cda4ad279d8762c4b4c9f
+Merge: fc580dff cbc25764
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-29
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-29
+
+    Merge pull request #2110 from ngtcp2/bump-aws-lc
+    
+    Bump aws-lc to v1.71.0
+
+commit cbc25764f91422e04a068abbe72a3f29a23bd9b7
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-29
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-29
+
+    Bump aws-lc to v1.71.0
+
+commit fc580dff64a24756a97a77bf7174319c4797da70
+Merge: 822fc599 a573350d
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-29
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-29
+
+    Merge pull request #2109 from ngtcp2/doc-handshake-interruptions
+    
+    doc: Add documentation about TLS handshake interruptions
+
+commit a573350d6cb7367bb349ff579ee922328cbc502e
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-29
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-29
+
+    doc: Add documentation about TLS handshake interruptions
+
+commit 822fc5999c04192f9b8bca6f155fb69535a90fb2
+Merge: 7cc27449 51c60049
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-28
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-28
+
+    Merge pull request #2108 from ngtcp2/bump-boringssl
+    
+    Bump boringssl
+
+commit 51c60049245c141df00474c98d2be9d3dde31a16
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-28
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-28
+
+    Bump boringssl
+
+commit 7cc27449df9b78c35cb21717e932cad22bb66d6d
+Merge: e0f5159d 3e8ed57b
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-28
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-28
+
+    Merge pull request #2107 from ngtcp2/refine-handshake-continuation
+    
+    Refine handshake continuation
+
+commit 3e8ed57bc0ffb267a041496a180e797e21a58d39
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-28
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-28
+
+    Refine handshake continuation
+    
+    Handle continuation in handshake encryption level.
+    
+    Support more boringssl interruptions.
+
+commit e0f5159d8668cf3a88ed17d08cb13e7fecee30d3
+Merge: 4d29bacc cf8da2be
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-28
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-28
+
+    Merge pull request #2106 from ngtcp2/bump-picotls
+    
+    Bump picotls
+
+commit cf8da2be2be274c1ee10c23721972795bb0210ef
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-28
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-28
+
+    Bump picotls
+
+commit 4d29baccb957fb3f6132db3cce350cf61857e646
+Merge: 275784fa 516f9386
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-28
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-28
+
+    Merge pull request #2105 from ngtcp2/bump-wolfssl
+    
+    Bump wolfssl to v5.9.0-stable
+
+commit 516f9386723bbbbbfe0a33eb407f249e38db8aab
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-28
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-28
+
+    Bump wolfssl to v5.9.0-stable
+
+commit 275784fa28b54d29b01a6c76eaa3c5a802b02c43
+Merge: 9fda15c3 c1bc4837
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-28
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-28
+
+    Merge pull request #2104 from ngtcp2/continue-handshake
+    
+    Add function to continue TLS handshake
+
+commit c1bc48379af517e71ff4ca600e069de637a1c79e
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-28
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-28
+
+    Add function to continue TLS handshake
+    
+    TLS handshake can be interrupted in various reasons (e.g., private key
+    signing, certificate lookup, etc).  Just calling
+    ngtcp2_crypto_read_write_data is not enough.  ngtcp2_conn_read_pkt is
+    effectively noop if input data is empty.  To deal with this problem,
+    new function ngtcp2_conn_continue_handshake is added.  It is the
+    stripped version of ngtcp2_conn_read_pkt and drives TLS handshake
+    forward when application is ready to continue the handshake.  As an
+    example of this feature, we specifically added support for the private
+    key offloading in boringssl.  We also make
+    ngtcp2_crypto_recv_crypto_data_cb not return error when quictls or
+    ossl crypto library return -10001 or -10002.
+
+commit 9fda15c36790ef4cbd379570b52c97098be66782
+Merge: e87a2a3d 3c0adceb
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-27
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-27
+
+    Merge pull request #2102 from ngtcp2/examples-sim-expected
+    
+    examples: Modernize sim with std::expected
+
+commit 3c0adceb121e2271e967f00a400bbf892faaf4ed
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-27
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-27
+
+    examples: Modernize sim with std::expected
+
+commit e87a2a3d35097b28a95a7cf45ac62b53d1a1742c
+Merge: 42893b26 bf5a8812
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-26
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-26
+
+    Merge pull request #2101 from ngtcp2/fix-stateless-reset-token-assertion-error
+    
+    Fix assertion error when seq=0 Connection ID is required on 0.5RTT
+
+commit bf5a8812d0db99f019ad88321dc7412ef4c450e1
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-26
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-26
+
+    Fix assertion error when seq=0 Connection ID is required on 0.5RTT
+
+commit 42893b26d414dae7da4f5e7f284cf06e491a6774
+Merge: 28358a95 cd93af46
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-23
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-23
+
+    Merge pull request #2099 from ngtcp2/fix-dockerfile-warning
+    
+    Fix Dockerfile warning
+
+commit cd93af469997360a63b3f5e5cd75dc1f8a33ef2a
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-23
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-23
+
+    Fix Dockerfile warning
+
+commit 28358a959fa3204bd19161b4c2b3a6c125e818d2
+Merge: e5782333 bfb1c87c
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-23
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-23
+
+    Merge pull request #2098 from ngtcp2/examples-fixup
+    
+    examples: Fix some glitches
+
+commit bfb1c87cc30332c966ac037fa952afd4b382326b
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-23
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-23
+
+    examples: Fix some glitches
+
+commit e578233370f33ea3576faf81679e476507458579
+Merge: ab7d3e9f 013cc843
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-23
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-23
+
+    Merge pull request #2097 from ngtcp2/examples-modernize-h09client
+    
+    examples: Modernize h09client
+
+commit 013cc843bad30e88178c556d13ec568277e9551b
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-23
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-23
+
+    examples: Modernize h09client
+
+commit ab7d3e9f2ec6fcabc3b1f69baab080a4203e5108
+Merge: 11a7a084 e2b6d675
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-23
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-23
+
+    Merge pull request #2096 from ngtcp2/dependabot/github_actions/microsoft/setup-msbuild-3
+    
+    build(deps): bump microsoft/setup-msbuild from 2 to 3
+
+commit e2b6d6756614395fa037f5cf19ea798c4c810b3f
+Author:     dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>
+AuthorDate: 2026-03-23
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-23
+
+    build(deps): bump microsoft/setup-msbuild from 2 to 3
+    
+    Bumps [microsoft/setup-msbuild](https://github.com/microsoft/setup-msbuild) from 2 to 3.
+    - [Release notes](https://github.com/microsoft/setup-msbuild/releases)
+    - [Commits](https://github.com/microsoft/setup-msbuild/compare/v2...v3)
+    
+    ---
+    updated-dependencies:
+    - dependency-name: microsoft/setup-msbuild
+      dependency-version: '3'
+      dependency-type: direct:production
+      update-type: version-update:semver-major
+    ...
+    
+    Signed-off-by: dependabot[bot] <support@github.com>
+
+commit 11a7a084dde82fa5f9862e464ee187ccfcb6be8a
+Merge: b2e785df b241d041
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-22
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-22
+
+    Merge pull request #2095 from ngtcp2/examples-range-concept
+    
+    examples: Fix range concept
+
+commit b241d04108b7de75f98deb8c655c835e1064f4ea
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-22
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-22
+
+    examples: Fix range concept
+
+commit b2e785df3f2cfa3e8326d5896f9b9491606212da
+Merge: c9158bd3 85b03fa7
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-22
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-22
+
+    Merge pull request #2094 from ngtcp2/examples-client-fix-missing-expected
+    
+    examples: Fix missing error handling modernization in client
+
+commit 85b03fa76034e581864b758298827c1a8e36fe10
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-22
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-22
+
+    examples: Fix missing error handling modernization in client
+
+commit c9158bd391e6601d2f391bd327c67441ae908bc5
+Merge: 12a4aac2 934df375
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-22
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-22
+
+    Merge pull request #2093 from ngtcp2/examples-server-fix-error-msg
+    
+    examples: Fix error message in server
+
+commit 934df375e2838f4e2e5237f90fc612e4734d4c28
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-22
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-22
+
+    examples: Fix error message in server
+
+commit 12a4aac2c29f9b9d6e4c79cdb0d3c88772a834d2
+Merge: 71a0267d 214047d6
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-22
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-22
+
+    Merge pull request #2092 from ngtcp2/examples-print-client
+    
+    examples: Adopt std::print in client
+
+commit 214047d6b52f24979768cd4b8c35e9a01d9119e7
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-22
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-22
+
+    examples: Adopt std::print in client
+
+commit 71a0267d6de293f6eebf7d754099d7a1ec29fd2c
+Merge: faa440d5 488a17f6
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-22
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-22
+
+    Merge pull request #2091 from ngtcp2/examples-expected-client
+    
+    examples: Adopt std::expected in client
+
+commit 488a17f67e65efa9350ccf573f9459901cb1213b
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-22
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-22
+
+    examples: Adopt std::expected in client
+
+commit faa440d54083c0ba85f90794bbcbee5e48bde119
+Merge: eb4e5855 58dea35d
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-22
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-22
+
+    Merge pull request #2090 from ngtcp2/examples-too-many-preferred-versions
+    
+    examples: Exit when too many preferred versions are given
+
+commit 58dea35d4ec218b2578e68164aad0feb23014b3a
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-22
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-22
+
+    examples: Exit when too many preferred versions are given
+
+commit eb4e5855d0547246821a0e2572a3fbf3733e127e
+Merge: 8498de95 4f929ae5
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-22
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-22
+
+    Merge pull request #2089 from ngtcp2/examples-modernize-h09server
+    
+    examples: Modernize h09server
+
+commit 4f929ae5466ca993e1142840af11d52ca353641a
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-22
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-22
+
+    examples: Modernize h09server
+
+commit 8498de955f2b4830e543aff12291af31324b2b60
+Merge: 6cc340e5 9f2871eb
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-22
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-22
+
+    Merge pull request #2088 from ngtcp2/examples-robust-normalize-path
+    
+    examples: Make util::normalize_path robust
+
+commit 9f2871eb0feadf889010d2dd9b2c81c464068ae7
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-22
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-22
+
+    examples: Make util::normalize_path robust
+
+commit 6cc340e5c0dd9f47fb8830d080779c8df369a2b1
+Merge: 6b0f5555 d27612b9
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-22
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-22
+
+    Merge pull request #2086 from ngtcp2/examples-print-server
+    
+    examples: Adopt std::print in server
+
+commit d27612b9c6a48db268a317c65e3f6f80945271d0
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-22
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-22
+
+    examples: Adopt std::print in server
+
+commit 6b0f5555a4dd02646cc4dff38223e9b1a5b84a6c
+Merge: c65e7083 91f92806
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-22
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-22
+
+    Merge pull request #2087 from ngtcp2/examples-fix-remote-http3-settings-output
+    
+    examples: Fix remote h3 settings output
+
+commit 91f9280662eb92a88484e549c2e0baf710770bf7
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-22
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-22
+
+    examples: Fix remote h3 settings output
+
+commit c65e7083b6d1bc309cdc7a3414b59afd3ee49344
+Merge: 0b5003ef 2ef25b30
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-22
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-22
+
+    Merge pull request #2085 from ngtcp2/examples-print-tls-adapters
+    
+    examples: Adopt std::print in TLS library adapters
+
+commit 2ef25b306b9b23c11e2f51d9cf549a83812ad52e
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-22
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-22
+
+    examples: Adopt std::print in TLS library adapters
+
+commit 0b5003efc2c94764a87563fa733691d728851817
+Merge: ca5ecc2c 34cf5a40
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-22
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-22
+
+    Merge pull request #2084 from ngtcp2/examples-print-util-debug-shared
+    
+    examples: Adopt std::print in util, debug, and shared
+
+commit 34cf5a40a110f90cfd89045733ccc0dd5ac08925
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-21
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-22
+
+    examples: Adopt std::print in util, debug, and shared
+
+commit ca5ecc2c3d0763e0a4ee3c1c0553317204fc0c45
+Merge: 6549d39d f6923008
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-21
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-21
+
+    Merge pull request #2083 from ngtcp2/examples-fix-missing-error
+    
+    examples: Fix missing error handler in wolfssl util
+
+commit f69230087685952af45b351bdcc7a183576eaec1
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-21
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-21
+
+    examples: Fix missing error handler in wolfssl util
+
+commit 6549d39d33b9921b013472142d7977f2f9daf85c
+Merge: 93624b9a 4623bb4d
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-21
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-21
+
+    Merge pull request #2082 from ngtcp2/examples-expected-server
+    
+    examples: Refactor server with std::expected
+
+commit 4623bb4d46dfbbc05d5e551ed602d138382a178b
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-20
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-21
+
+    examples: Refactor server with std::expected
+
+commit 93624b9a731069b5826471eb459cef27c61ec687
+Merge: d02921cf b581b667
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-20
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-20
+
+    Merge pull request #2081 from ngtcp2/examples-expected-server-stream
+    
+    examples: Refactor server Stream with std::expected
+
+commit b581b667a89eaa14bbcfaf3ad3159ca27ec24cb8
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-20
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-20
+
+    examples: Refactor server Stream with std::expected
+
+commit d02921cf5e0df0ae9e8dce6b99effab85ca9f255
+Merge: 1453d00f 37360e90
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-20
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-20
+
+    Merge pull request #2080 from ngtcp2/examples-expected-tls-adapters
+    
+    examples: Adopt std::expected for TLS library adapters
+
+commit 37360e90e9edc2ff8043206a4133d9c3756f0b46
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-20
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-20
+
+    examples: Adopt std::expected for TLS library adapters
+
+commit 1453d00fad3cf51de01a876c49c53e048834e664
+Merge: 5c2faa40 c11edd2d
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-20
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-20
+
+    Merge pull request #2079 from ngtcp2/examples-resize-and-overwrite
+    
+    examples: Refactor with std::string::resize_and_overwrite
+
+commit c11edd2d345eaa7080ae43ac75dab1f626403cf0
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-20
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-20
+
+    examples: Refactor with std::string::resize_and_overwrite
+
+commit 5c2faa40bc8f86dbb38457fd7c7391245ef653f6
+Merge: 08be23d9 9da92186
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-20
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-20
+
+    Merge pull request #2078 from ngtcp2/examples-remove-unused
+    
+    Examples remove unused
+
+commit 9da921869a8e15f883cfb37e7e68c858f58150bb
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-20
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-20
+
+    examples: Remove util::generate_secret
+    
+    Use util::generate_secure_random instead.
+
+commit c8850533e9240b4549966ead5631730f8c21011d
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-20
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-20
+
+    examples: Remove unused ClientBase::{write,read}_transport_params
+
+commit 08be23d9c7c31a55991a6ef46de551b590f210f9
+Merge: 8936c1c5 d2fedc2b
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-20
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-20
+
+    Merge pull request #2077 from ngtcp2/examples-expected-shared-util
+    
+    examples: Use std::expected in shared and util
+
+commit d2fedc2b9bc62f760ddcef97271172fe88fcd860
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-20
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-20
+
+    examples: Use std::expected in shared and util
+
+commit 8936c1c5c3d90e7110419ed783160de49ce8ab82
+Merge: ddacb27f 1e5da01b
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-20
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-20
+
+    Merge pull request #2076 from ngtcp2/examples-refactor-token-gen
+    
+    examples: Refactor retry token generation
+
+commit 1e5da01b2bd27f9bfd9266e8c3ac7243e97906ef
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-20
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-20
+
+    examples: Refactor retry token generation
+
+commit ddacb27fb2a3124c2ad7b608b13f59adfa724fa3
+Merge: e8a52de1 bebf1ee1
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-19
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-19
+
+    Merge pull request #2075 from ngtcp2/examples-refactor-hexdump
+    
+    examples: Refactor hexdump
+
+commit bebf1ee15a22ce42b98e71e3c5a9759a806db363
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-18
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-18
+
+    examples: Refactor hexdump
+
+commit e8a52de15955db0a4da7507fdc1f25d29a43dcea
+Merge: 8b911be2 c2eb225a
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-18
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-18
+
+    Merge pull request #2074 from ngtcp2/fix-interop-build
+    
+    interop: Fix build
+
+commit c2eb225a335016d1cdabc9d028cece7285777531
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-18
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-18
+
+    interop: Fix build
+
+commit 8b911be21fc0813fab2ffe3c2fec068e65498325
+Merge: 44f98a2f 36a4de09
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-18
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-18
+
+    Merge pull request #2073 from ngtcp2/examples-expected
+    
+    examples: Replace std::optional with std::expected for error handling
+
+commit 36a4de092b6818ef5979f2c2400ae3fb35441ac9
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-17
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-17
+
+    cmake: Enable c++23
+
+commit a899829b916865ab2073f6f6e1594d33a8ca5b24
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-17
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-17
+
+    examples: Replace std::optional with std::expected for error handling
+
+commit 44f98a2f0ead4f3b54bc897d6ee1b88731d46079
+Merge: 10e27fd6 92068635
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-17
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-17
+
+    Merge pull request #2072 from ngtcp2/require-c++-23
+    
+    Require C++23
+
+commit 92068635f2951ef164aad8ef093d9ecb804953ab
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-17
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-17
+
+    Require C++23
+
+commit 10e27fd63cc7dd87236ab15de4a02eca6801e234
+Merge: 6f9933ba 95c75394
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-16
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-16
+
+    Merge pull request #2070 from ngtcp2/remove-requires-from-boringssl-pc
+    
+    boringssl: Remove openssl from Requires.private
+
+commit 95c75394810ba7f16e11f435f73c5918fd49f35c
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-16
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-16
+
+    boringssl: Remove openssl from Requires.private
+    
+    boringssl does not provide openssl.pc.  aws-lc has one, but we do not
+    deal with it specially for now.
+
+commit 6f9933ba72f461641e1611cb764cf0e44b8d9d3c
+Merge: cab1c9ff cecd608a
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-14
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-14
+
+    Merge pull request #2069 from ngtcp2/examples-pass-sv-by-value
+    
+    examples: Pass std::string_view by value
+
+commit cecd608adaed6dfc3124251d4fa1c586ed2ecccd
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-14
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-14
+
+    examples: Pass std::string_view by value
+
+commit cab1c9ffcbcbefb49368f4d9a3ed80955c7895b9
+Merge: 5e3ad556 8d9f254a
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-14
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-14
+
+    Merge pull request #2068 from ngtcp2/pad-handshake-for-gso
+    
+    Pad Handshake packet to write the next 1RTT packet in the same GSO
+
+commit 8d9f254a163e4a1398580163b978df5ef1a33c38
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-14
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-14
+
+    Pad Handshake packet to write the next 1RTT packet in the same GSO
+
+commit 5e3ad5568aed0192e7c433a026dabb54af6338a6
+Merge: 4a16c684 bf1f4d8e
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-14
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-14
+
+    Merge pull request #2067 from ngtcp2/examples-fix-path-handling
+    
+    examples: Fix path handling that does not start /
+
+commit bf1f4d8e7c0a7f2b95617f0888068b3c33b3f635
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-14
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-14
+
+    examples: Fix path handling that does not start /
+
+commit 4a16c6840b5a44829c5c8169a86190ef0723bc8f
+Merge: 65f88589 2c0b8b0d
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-11
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-11
+
+    Merge pull request #2066 from ngtcp2/examples-wolfssl-negotiated-group
+    
+    examples: Implement the negotiated group output for wolfSSL
+
+commit 2c0b8b0d4b851724a61bf9abcd88a4ab65accedc
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-11
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-11
+
+    examples: Implement the negotiated group output for wolfSSL
+
+commit 65f885897e0c7f66ca8f498637f1a0ace0b89e0d
+Merge: d44e3bee e60b7587
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-10
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-10
+
+    Merge pull request #2065 from ngtcp2/dependabot/github_actions/docker/build-push-action-7
+    
+    build(deps): bump docker/build-push-action from 6 to 7
+
+commit e60b75873dc92f6451327b67e3c96c448132f36d
+Author:     dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>
+AuthorDate: 2026-03-10
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-10
+
+    build(deps): bump docker/build-push-action from 6 to 7
+    
+    Bumps [docker/build-push-action](https://github.com/docker/build-push-action) from 6 to 7.
+    - [Release notes](https://github.com/docker/build-push-action/releases)
+    - [Commits](https://github.com/docker/build-push-action/compare/v6...v7)
+    
+    ---
+    updated-dependencies:
+    - dependency-name: docker/build-push-action
+      dependency-version: '7'
+      dependency-type: direct:production
+      update-type: version-update:semver-major
+    ...
+    
+    Signed-off-by: dependabot[bot] <support@github.com>
+
+commit d44e3beebb862e4b520665637a1bc36d4a3d9305
+Merge: 5922f610 1f2919ed
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-10
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-10
+
+    Merge pull request #2064 from ngtcp2/dependabot/github_actions/docker/setup-buildx-action-4
+    
+    build(deps): bump docker/setup-buildx-action from 3 to 4
+
+commit 5922f610d39665371fffa2709518a87476846375
+Merge: b4261333 555e9bd1
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-10
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-10
+
+    Merge pull request #2063 from ngtcp2/dependabot/github_actions/docker/setup-docker-action-5
+    
+    build(deps): bump docker/setup-docker-action from 4 to 5
+
+commit b4261333ebd82bb3a7ce0a19c1373fae8d94c6f8
+Merge: c114f7e9 4010b48d
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-10
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-10
+
+    Merge pull request #2062 from ngtcp2/dependabot/github_actions/docker/metadata-action-6
+    
+    build(deps): bump docker/metadata-action from 5 to 6
+
+commit 1f2919ed2f8d9a9d087bd4991c4b6ffad60006aa
+Author:     dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>
+AuthorDate: 2026-03-10
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-10
+
+    build(deps): bump docker/setup-buildx-action from 3 to 4
+    
+    Bumps [docker/setup-buildx-action](https://github.com/docker/setup-buildx-action) from 3 to 4.
+    - [Release notes](https://github.com/docker/setup-buildx-action/releases)
+    - [Commits](https://github.com/docker/setup-buildx-action/compare/v3...v4)
+    
+    ---
+    updated-dependencies:
+    - dependency-name: docker/setup-buildx-action
+      dependency-version: '4'
+      dependency-type: direct:production
+      update-type: version-update:semver-major
+    ...
+    
+    Signed-off-by: dependabot[bot] <support@github.com>
+
+commit c114f7e909c35791745459aa20ba47e2300326f0
+Merge: 28d31264 a2c2c850
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-10
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-10
+
+    Merge pull request #2061 from ngtcp2/dependabot/github_actions/docker/login-action-4
+    
+    build(deps): bump docker/login-action from 3 to 4
+
+commit 555e9bd1e74da11df7596f6999ba67cb03923cc5
+Author:     dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>
+AuthorDate: 2026-03-09
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-09
+
+    build(deps): bump docker/setup-docker-action from 4 to 5
+    
+    Bumps [docker/setup-docker-action](https://github.com/docker/setup-docker-action) from 4 to 5.
+    - [Release notes](https://github.com/docker/setup-docker-action/releases)
+    - [Commits](https://github.com/docker/setup-docker-action/compare/v4...v5)
+    
+    ---
+    updated-dependencies:
+    - dependency-name: docker/setup-docker-action
+      dependency-version: '5'
+      dependency-type: direct:production
+      update-type: version-update:semver-major
+    ...
+    
+    Signed-off-by: dependabot[bot] <support@github.com>
+
+commit 4010b48db05cf97ff10a427486eab467e87b3582
+Author:     dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>
+AuthorDate: 2026-03-09
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-09
+
+    build(deps): bump docker/metadata-action from 5 to 6
+    
+    Bumps [docker/metadata-action](https://github.com/docker/metadata-action) from 5 to 6.
+    - [Release notes](https://github.com/docker/metadata-action/releases)
+    - [Commits](https://github.com/docker/metadata-action/compare/v5...v6)
+    
+    ---
+    updated-dependencies:
+    - dependency-name: docker/metadata-action
+      dependency-version: '6'
+      dependency-type: direct:production
+      update-type: version-update:semver-major
+    ...
+    
+    Signed-off-by: dependabot[bot] <support@github.com>
+
+commit a2c2c8501e09fdba98e48b848ad21f56e4a58d60
+Author:     dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>
+AuthorDate: 2026-03-09
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-09
+
+    build(deps): bump docker/login-action from 3 to 4
+    
+    Bumps [docker/login-action](https://github.com/docker/login-action) from 3 to 4.
+    - [Release notes](https://github.com/docker/login-action/releases)
+    - [Commits](https://github.com/docker/login-action/compare/v3...v4)
+    
+    ---
+    updated-dependencies:
+    - dependency-name: docker/login-action
+      dependency-version: '4'
+      dependency-type: direct:production
+      update-type: version-update:semver-major
+    ...
+    
+    Signed-off-by: dependabot[bot] <support@github.com>
+
+commit 28d312645e4c9c912f825a689535efedf0a98bfe
+Merge: 4db41835 02da6218
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-04
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-04
+
+    Merge pull request #2059 from ngtcp2/gha-macos-26
+    
+    GHA: Build with macos-26
+
+commit 02da621868672d55f6a283cd8233c5c003466ab7
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-04
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-04
+
+    GHA: Build with macos-26
+
+commit 4db41835bb161f972da81bc4a5d8eebdc69a9048
+Merge: d5a7e797 96287f22
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-04
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-04
+
+    Merge pull request #2058 from ngtcp2/docker-aws-lc
+    
+    docker: Switch to aws-lc
+
+commit 96287f22132e32750f9656e2850b9f41970964f6
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-04
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-04
+
+    docker: Switch to aws-lc
+
+commit d5a7e7973e2c9781552c6a053d808ebe535a002d
+Merge: 49e9b0bf c89799f7
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-04
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-04
+
+    Merge pull request #2057 from ngtcp2/more-structured-init
+    
+    More use of designated initializers
+
+commit c89799f7528c52f6aeb1488e4bc5012981780757
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-04
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-04
+
+    More use of designated initializers
+
+commit 49e9b0bfa4d7f467a152e173bacf86c263c62585
+Merge: 57d24f58 5057de3d
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-03
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-03
+
+    Merge pull request #2056 from ngtcp2/crypto-no-padding-disable
+    
+    crypto: No need to disable padding for aes-ecb
+
+commit 57d24f58b98e7cf9d8035cc1fa8797f9d1c1b8c9
+Merge: ed5e22dd 4723bbf9
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-03
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-03
+
+    Merge pull request #2055 from ngtcp2/upcase-hex-char-in-str
+    
+    Upcase hex char in string literals
+
+commit 5057de3d6d8dd9496ed046ec06764e7ee8ea9808
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-03
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-03
+
+    crypto: No need to disable padding for aes-ecb
+    
+    We always feed 16 bytes to encrypt and never decrypt them.  That means
+    no need to disable padding for openssl EVP.
+
+commit 4723bbf9faaab9b0fc6bcfa7056bfc4ccff07749
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-03
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-03
+
+    Upcase hex char in string literals
+
+commit ed5e22dda33ebce8b6c1a4f79c99fcc39910359b
+Merge: 0682a70a f82102ce
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-03
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-03
+
+    Merge pull request #2054 from ngtcp2/wolfssl-hp-ecb
+    
+    crypto/wolfssl: Use aes-ecb for header protection cipher
+
+commit f82102ce5f401eb75bbb78b953be94537a8153c5
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-03
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-03
+
+    crypto/wolfssl: Use aes-ecb for header protection cipher
+
+commit 0682a70a98488481b999118466b88da405ceb0bf
+Merge: b2bff227 bfb11734
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-03
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-03
+
+    Merge pull request #2053 from ngtcp2/chacha-full-block-enc
+    
+    crypto: Encrypt full chacha block
+
+commit bfb1173488be3a330f8e584cd3a84b63423d9b53
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-03
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-03
+
+    crypto: Encrypt full chacha block
+
+commit b2bff2277a2f6c75054b8568c2a4cbd8dda2db64
+Merge: 9ac6f9b9 598142e8
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-03
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-03
+
+    Merge pull request #2052 from ngtcp2/hp-ecb
+    
+    Hp ecb
+
+commit 598142e8e7c4012c44a81ee479f4b151ffa47a69
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-03
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-03
+
+    crypto/picotls: Use aes-ecb for header protection cipher
+
+commit 2f2d7ce7c69141a05cada655048fb81eaabae08b
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-03
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-03
+
+    crypto/ossl: Use aes-ecb for header protection cipher
+
+commit 860b03556637593d619d3ec5e5aad2136fd47c55
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-03
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-03
+
+    crypto/quictls: Use aes-ecb for header protection cipher
+
+commit 9ac6f9b9529f7b9c32ca853a19305b0813db84e0
+Merge: 412a9710 2e131723
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-03
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-03
+
+    Merge pull request #2051 from ngtcp2/avoid-memset
+    
+    Avoid memset for struct initialization
+
+commit 2e131723740e9ceb7cfc0a0515113de1cbdf73e8
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-03
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-03
+
+    Avoid memset for struct initialization
+
+commit 412a9710a340b1b1b565da372252395e70a17d92
+Merge: c2f70e35 cb946d2d
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-03
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-03
+
+    Merge pull request #2045 from ngtcp2/dependabot/github_actions/actions/download-artifact-8
+    
+    build(deps): bump actions/download-artifact from 7 to 8
+
+commit c2f70e3551496fb565c0fe33500d7607045a3e1c
+Merge: 09f4e782 d73e0e6f
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-02
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-02
+
+    Merge pull request #2050 from ngtcp2/tests-more-static-const
+    
+    tests: More static const variables
+
+commit d73e0e6f70a3fa801872c5e8b1db56c861255de0
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-02
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-02
+
+    tests: More static const variables
+
+commit 09f4e782f67871166c55bfb2fda58a7fb1efb95c
+Merge: 93855d9d 3b79fcb5
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-02
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-02
+
+    Merge pull request #2044 from ngtcp2/dependabot/github_actions/actions/upload-artifact-7
+    
+    build(deps): bump actions/upload-artifact from 6 to 7
+
+commit 93855d9d63c100e8dbb2b6975dcd42970812649d
+Merge: dbf7e88a 74adf847
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-02
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-02
+
+    Merge pull request #2049 from ngtcp2/tests-static-null-crypto
+    
+    tests: Make shared crypto objects static const
+
+commit 74adf8473a4074b184754be6d21bd622f807ecc1
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-02
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-02
+
+    tests: Make shared crypto objects static const
+
+commit dbf7e88aedb87be9d02ce145e8437ff2fa28f6d1
+Merge: f796f561 3754629f
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-02
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-02
+
+    Merge pull request #2048 from ngtcp2/tp-tests-init
+    
+    tests: Inline initialization for transport parameters tests
+
+commit 3754629f599321e79e6501247f49a33029412d7c
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-02
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-02
+
+    tests: Inline initialization for transport parameters tests
+
+commit f796f561c60daa8d99b99ef14f6b4a6ef2f68664
+Merge: 34f8bab2 7cb65698
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-02
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-02
+
+    Merge pull request #2047 from ngtcp2/tests-eliminate-xcid_init
+    
+    tests: Remove xcid_init in favor of make_xcid
+
+commit 7cb65698e7d7fac1224075ec3b9c226d7054a810
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-02
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-02
+
+    tests: Remove xcid_init in favor of make_xcid
+
+commit 34f8bab2158701a9aab92b0f2035609e1f62fcfc
+Merge: 47ac3995 1c2230da
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-02
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-02
+
+    Merge pull request #2043 from ngtcp2/refactor-ncid
+    
+    Store cid and token directly into frame
+
+commit cb946d2d9b0c2405bfbcf35bd9283dc3f219b8d1
+Author:     dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>
+AuthorDate: 2026-03-02
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-02
+
+    build(deps): bump actions/download-artifact from 7 to 8
+    
+    Bumps [actions/download-artifact](https://github.com/actions/download-artifact) from 7 to 8.
+    - [Release notes](https://github.com/actions/download-artifact/releases)
+    - [Commits](https://github.com/actions/download-artifact/compare/v7...v8)
+    
+    ---
+    updated-dependencies:
+    - dependency-name: actions/download-artifact
+      dependency-version: '8'
+      dependency-type: direct:production
+      update-type: version-update:semver-major
+    ...
+    
+    Signed-off-by: dependabot[bot] <support@github.com>
+
+commit 3b79fcb5d5bb4acad8cb0ba1d6c0565a5744ab0a
+Author:     dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>
+AuthorDate: 2026-03-02
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-02
+
+    build(deps): bump actions/upload-artifact from 6 to 7
+    
+    Bumps [actions/upload-artifact](https://github.com/actions/upload-artifact) from 6 to 7.
+    - [Release notes](https://github.com/actions/upload-artifact/releases)
+    - [Commits](https://github.com/actions/upload-artifact/compare/v6...v7)
+    
+    ---
+    updated-dependencies:
+    - dependency-name: actions/upload-artifact
+      dependency-version: '7'
+      dependency-type: direct:production
+      update-type: version-update:semver-major
+    ...
+    
+    Signed-off-by: dependabot[bot] <support@github.com>
+
+commit 1c2230da98c161569ad4d3db1a2cb56cf6406e64
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-01
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-01
+
+    Store cid and token directly into frame
+
+commit 47ac39953f018f3b639c90b44489ef101f861488
+Merge: 845f40d9 7934f786
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-01
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-01
+
+    Merge pull request #2042 from ngtcp2/struct-path-challenge-data
+    
+    Introduce struct ngtcp2_path_challenge_data
+
+commit 7934f7862d9febf64c0ebb81d01422392f506d73
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-01
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-01
+
+    Introduce struct ngtcp2_path_challenge_data
+    
+    This commit introduces struct ngtcp2_path_challenge_data just like
+    ngtcp2_stateless_reset_token in earlier commits.
+    
+    This commit deprecates ngtcp2_get_path_challenge_data.  It adds
+    ngtcp2_get_path_challenge_data2 as a replacement.
+    
+    This commit deprecates ngtcp2_crypto_get_path_challenge_data_cb.  It
+    adds ngtcp2_crypto_get_path_challenge_data2_cb as a replacement.
+
+commit 845f40d9f8927076b96d9f85d5226046ec86d491
+Merge: 2cef4e43 121451a7
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-01
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-01
+
+    Merge pull request #2041 from ngtcp2/sizeof-token
+    
+    Prefer sizeof token instead of integer constant
+
+commit 121451a7c3de85b8fc55c876a50c83c325124d39
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-01
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-01
+
+    Prefer sizeof token instead of integer constant
+
+commit 2cef4e433aa6016e833f1283b207078835839f6d
+Merge: 2b3f82e4 cffd81fc
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-01
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-01
+
+    Merge pull request #2040 from ngtcp2/get-active-dcid2
+    
+    Add ngtcp2_conn_get_active_dcid2 and ngtcp2_cid_token2
+
+commit cffd81fcc8f15f12d358e6f23f91f26f45053bac
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-01
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-01
+
+    Add ngtcp2_conn_get_active_dcid2 and ngtcp2_cid_token2
+    
+    Add ngtcp2_conn_get_active_dcid2 and ngtcp2_cid_token2.  Deprecate
+    ngtcp2_conn_get_active_dcid and ngtcp2_cid_token.
+
+commit 2b3f82e4f9d59b05f6968fed72cb53339afc8b36
+Merge: 12226d31 a6aa6e48
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-01
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-01
+
+    Merge pull request #2039 from ngtcp2/update-callbacks-test
+    
+    Add missing callbacks to callbacks test
+
+commit a6aa6e48a51126646a60e8c0b18129ee44c38e41
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-01
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-01
+
+    Add missing callbacks to callbacks test
+
+commit 12226d31009ec766bb4b4beae3355f6e0b5d372b
+Merge: d3dae556 0fa5868a
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-01
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-01
+
+    Merge pull request #2038 from ngtcp2/pkt-write-stateless-reset2
+    
+    Add ngtcp2_pkt_write_stateless_reset2
+
+commit 0fa5868a32bb760046f3d110c30a817bd0af1700
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-01
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-01
+
+    Add ngtcp2_pkt_write_stateless_reset2
+    
+    Add ngtcp2_pkt_write_stateless_reset2 and deprecate
+    ngtcp2_pkt_write_stateless_reset.  ngtcp2_pkt_write_stateless_reset is
+    now implemented on top of ngtcp2_pkt_write_stateless_reset2.
+
+commit d3dae55647c0f2fea47a7b59afb0cdda5ad8fae7
+Merge: 53db23c2 3da95cec
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-01
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-01
+
+    Merge pull request #2037 from ngtcp2/migrate-new-cbs
+    
+    Migrate to new callbacks
+
+commit 3da95cecb21c004cb6c080e410ebadc06688b15d
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-01
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-01
+
+    Migrate to new callbacks
+    
+    Migrate to new callbacks that use ngtcp2_stateless_reset_token.
+
+commit 53db23c2db916fcf31e3519fd3446c2a92377634
+Merge: 889d8fa5 76b15762
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-01
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-01
+
+    Merge pull request #2036 from ngtcp2/fix-assertion-failure-without-get_new_connection_id
+    
+    Fix assertion failure without get_new_connection_id
+
+commit 76b157620919547aa7a9bbd8c0c7508672442e92
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-01
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-01
+
+    Fix assertion failure without get_new_connection_id
+
+commit 889d8fa505ee4b54842020759f0c2378cc8fe4be
+Merge: 6597d5b4 b7bfe41d
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-03-01
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-03-01
+
+    Merge pull request #2035 from ngtcp2/struct-stateless-reset-token
+    
+    Introduce struct ngtcp2_stateless_reset_token
+
+commit b7bfe41db898b59bda031f8ca2d41abf51fa3726
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-02-28
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-01
+
+    Introduce struct ngtcp2_stateless_reset_token
+    
+    This commit introduces ngtcp2_stateless_reset_token that stores
+    stateless reset token as the name suggests.  Previously, we use bare
+    uint8_t[NGTCP2_STATELESS_RESET_TOKENLEN] for this purpose, then pass
+    the array pointer to functions, assuming that it has the capacity of
+    NGTCP2_STATELESS_RESET_TOKENLEN bytes.  With
+    ngtcp2_stateless_reset_token, the length is always explicit because of
+    the embedded array.  It also make the copy a bit easier without
+    memcpy.
+    
+    This commit deprecates ngtcp2_pkt_stateless_reset, and adds
+    ngtcp2_pkt_stateless_reset2 as a replacement.
+    
+    It also deprecates the following callbacks:
+    
+    - ngtcp2_recv_stateless_reset
+    - ngtcp2_get_new_connection_id
+    - ngtcp2_connection_id_status
+    
+    and, adds the following callbacks as their replacements:
+    
+    - ngtcp2_recv_stateless_reset2
+    - ngtcp2_get_new_connection_id2
+    - ngtcp2_connection_id_status2
+
+commit 6597d5b404a0517e3c26d40832e5b67ec50b9c8e
+Merge: 0f724721 0f689e14
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-02-28
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-02-28
+
+    Merge pull request #2033 from ngtcp2/deprecate-quictls
+    
+    Deprecate quictls
+
+commit 0f724721d864ccf6f2b9de3c22cf8e8fe5c2901a
+Merge: 77d62f7c c0bc90c7
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-02-28
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-02-28
+
+    Merge pull request #2032 from ngtcp2/update-gitignore
+    
+    Add missing entries to .gitignore
+
+commit 0f689e1449bf6ae6eca58aa143e763dcbea14824
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-02-27
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-02-27
+
+    Deprecate quictls
+    
+    quictls repository (https://github.com/quictls/openssl) has been
+    archived.  The development of its successor,
+    https://github.com/quictls/quictls, has stagnated since late last
+    year.  We cannot expect new release from this project any time soon.
+    Because now we have several alternatives (e.g., wolfSSL, boringssl,
+    aws-lc, libressl, and OpenSSL), we decided to deprecate the use of
+    quictls.  The code under crypto/quictls are shared by libressl, so
+    they are not removed for the time being.  This commit just declare the
+    deprecation of quictls in documentation wise.
+
+commit c0bc90c73999b09c16a0a46509218584f275817e
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-02-27
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-02-27
+
+    Add missing entries to .gitignore
+
+commit 77d62f7c0cdd62a6fdbdd8de150c44d585389712
+Merge: 9880308b 14808a38
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-02-27
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-02-27
+
+    Merge pull request #2031 from ngtcp2/copilot/update-numeric-literal-suffixes
+    
+    Consistent hex literals and integer suffixes
+
+commit 14808a384b01a19c400bdee00b0bb8c51af4c633
+Author:     copilot-swe-agent[bot] <198982749+Copilot@users.noreply.github.com>
+AuthorDate: 2026-02-27
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-02-27
+
+    Consistent hex literals and integer suffixes
+    
+    - Prefer L, LL, U, UL, and ULL integer suffixes
+    - Prefer uppercase hex literals
+    
+    Co-authored-by: tatsuhiro-t <404610+tatsuhiro-t@users.noreply.github.com>
+
+commit 9880308b6b6f138d6ce3e2090137b84928921797
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-02-26
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-02-26
+
+    Bump package version

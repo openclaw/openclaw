@@ -1,0 +1,66 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OSSL_STORE_attach</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OSSL_STORE_attach - Functions to read objects from a BIO</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/store.h&gt;
+
+OSSL_STORE_CTX *OSSL_STORE_attach(BIO *bio, const char *scheme,
+                                  OSSL_LIB_CTX *libctx, const char *propq,
+                                  const UI_METHOD *ui_method, void *ui_data,
+                                  const OSSL_PARAM params[],
+                                  OSSL_STORE_post_process_info_fn post_process,
+                                  void *post_process_data);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>OSSL_STORE_attach() works like <a href="../man3/OSSL_STORE_open.html">OSSL_STORE_open(3)</a>, except it takes a <b>BIO</b> <i>bio</i> instead of a <i>uri</i>, along with a <i>scheme</i> to determine what loader should be used to process the data. The reference count of the <b>BIO</b> object is increased by 1 if the call is successful.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>OSSL_STORE_attach() returns a pointer to a <b>OSSL_STORE_CTX</b> on success, or NULL on failure.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ossl_store.html">ossl_store(7)</a>, <a href="../man3/OSSL_STORE_open.html">OSSL_STORE_open(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>OSSL_STORE_attach() was added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2020-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

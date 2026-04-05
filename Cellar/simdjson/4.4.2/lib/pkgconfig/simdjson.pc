@@ -1,0 +1,11 @@
+prefix=/opt/homebrew/Cellar/simdjson/4.4.2
+includedir=${prefix}/include
+libdir=${prefix}/lib
+
+Name: simdjson
+Description: Parsing gigabytes of JSON per second
+URL: https://simdjson.org/
+Version: 4.4.2
+Cflags: -I${includedir} -DSIMDJSON_THREADS_ENABLED=1
+Libs: -L${libdir} -lsimdjson
+

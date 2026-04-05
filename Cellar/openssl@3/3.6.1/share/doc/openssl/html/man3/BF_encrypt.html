@@ -1,0 +1,104 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>BF_encrypt</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#NOTE">NOTE</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>BF_set_key, BF_encrypt, BF_decrypt, BF_ecb_encrypt, BF_cbc_encrypt, BF_cfb64_encrypt, BF_ofb64_encrypt, BF_options - Blowfish encryption</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/blowfish.h&gt;</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>void BF_set_key(BF_KEY *key, int len, const unsigned char *data);
+
+void BF_ecb_encrypt(const unsigned char *in, unsigned char *out,
+                    BF_KEY *key, int enc);
+void BF_cbc_encrypt(const unsigned char *in, unsigned char *out,
+                    long length, BF_KEY *schedule,
+                    unsigned char *ivec, int enc);
+void BF_cfb64_encrypt(const unsigned char *in, unsigned char *out,
+                      long length, BF_KEY *schedule,
+                      unsigned char *ivec, int *num, int enc);
+void BF_ofb64_encrypt(const unsigned char *in, unsigned char *out,
+                      long length, BF_KEY *schedule,
+                      unsigned char *ivec, int *num);
+const char *BF_options(void);
+
+void BF_encrypt(BF_LONG *data, const BF_KEY *key);
+void BF_decrypt(BF_LONG *data, const BF_KEY *key);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>All of the functions described on this page are deprecated. Applications should instead use <a href="../man3/EVP_EncryptInit_ex.html">EVP_EncryptInit_ex(3)</a>, <a href="../man3/EVP_EncryptUpdate.html">EVP_EncryptUpdate(3)</a> and <a href="../man3/EVP_EncryptFinal_ex.html">EVP_EncryptFinal_ex(3)</a> or the equivalently named decrypt functions.</p>
+
+<p>This library implements the Blowfish cipher, which was invented and described by Counterpane (see http://www.counterpane.com/blowfish.html ).</p>
+
+<p>Blowfish is a block cipher that operates on 64 bit (8 byte) blocks of data. It uses a variable size key, but typically, 128 bit (16 byte) keys are considered good for strong encryption. Blowfish can be used in the same modes as DES (see <a href="../man7/des_modes.html">des_modes(7)</a>). Blowfish is currently one of the faster block ciphers. It is quite a bit faster than DES, and much faster than IDEA or RC2.</p>
+
+<p>Blowfish consists of a key setup phase and the actual encryption or decryption phase.</p>
+
+<p>BF_set_key() sets up the <b>BF_KEY</b> <b>key</b> using the <b>len</b> bytes long key at <b>data</b>.</p>
+
+<p>BF_ecb_encrypt() is the basic Blowfish encryption and decryption function. It encrypts or decrypts the first 64 bits of <b>in</b> using the key <b>key</b>, putting the result in <b>out</b>. <b>enc</b> decides if encryption (<b>BF_ENCRYPT</b>) or decryption (<b>BF_DECRYPT</b>) shall be performed. The vector pointed at by <b>in</b> and <b>out</b> must be 64 bits in length, no less. If they are larger, everything after the first 64 bits is ignored.</p>
+
+<p>The mode functions BF_cbc_encrypt(), BF_cfb64_encrypt() and BF_ofb64_encrypt() all operate on variable length data. They all take an initialization vector <b>ivec</b> which needs to be passed along into the next call of the same function for the same message. <b>ivec</b> may be initialized with anything, but the recipient needs to know what it was initialized with, or it won&#39;t be able to decrypt. Some programs and protocols simplify this, like SSH, where <b>ivec</b> is simply initialized to zero. BF_cbc_encrypt() operates on data that is a multiple of 8 bytes long, while BF_cfb64_encrypt() and BF_ofb64_encrypt() are used to encrypt a variable number of bytes (the amount does not have to be an exact multiple of 8). The purpose of the latter two is to simulate stream ciphers, and therefore, they need the parameter <b>num</b>, which is a pointer to an integer where the current offset in <b>ivec</b> is stored between calls. This integer must be initialized to zero when <b>ivec</b> is initialized.</p>
+
+<p>BF_cbc_encrypt() is the Cipher Block Chaining function for Blowfish. It encrypts or decrypts the 64 bits chunks of <b>in</b> using the key <b>schedule</b>, putting the result in <b>out</b>. <b>enc</b> decides if encryption (BF_ENCRYPT) or decryption (BF_DECRYPT) shall be performed. <b>ivec</b> must point at an 8 byte long initialization vector.</p>
+
+<p>BF_cfb64_encrypt() is the CFB mode for Blowfish with 64 bit feedback. It encrypts or decrypts the bytes in <b>in</b> using the key <b>schedule</b>, putting the result in <b>out</b>. <b>enc</b> decides if encryption (<b>BF_ENCRYPT</b>) or decryption (<b>BF_DECRYPT</b>) shall be performed. <b>ivec</b> must point at an 8 byte long initialization vector. <b>num</b> must point at an integer which must be initially zero.</p>
+
+<p>BF_ofb64_encrypt() is the OFB mode for Blowfish with 64 bit feedback. It uses the same parameters as BF_cfb64_encrypt(), which must be initialized the same way.</p>
+
+<p>BF_encrypt() and BF_decrypt() are the lowest level functions for Blowfish encryption. They encrypt/decrypt the first 64 bits of the vector pointed by <b>data</b>, using the key <b>key</b>. These functions should not be used unless you implement &#39;modes&#39; of Blowfish. The alternative is to use BF_ecb_encrypt(). If you still want to use these functions, you should be aware that they take each 32-bit chunk in host-byte order, which is little-endian on little-endian platforms and big-endian on big-endian ones.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>None of the functions presented here return any value.</p>
+
+<h1 id="NOTE">NOTE</h1>
+
+<p>Applications should use the higher level functions <a href="../man3/EVP_EncryptInit.html">EVP_EncryptInit(3)</a> etc. instead of calling these functions directly.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_EncryptInit.html">EVP_EncryptInit(3)</a>, <a href="../man7/des_modes.html">des_modes(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>All of these functions were deprecated in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2020 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

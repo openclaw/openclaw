@@ -1,0 +1,107 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_set_default_stream_mode</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_set_default_stream_mode, SSL_DEFAULT_STREAM_MODE_NONE, SSL_DEFAULT_STREAM_MODE_AUTO_BIDI, SSL_DEFAULT_STREAM_MODE_AUTO_UNI - manage the default stream for a QUIC connection</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+#define SSL_DEFAULT_STREAM_MODE_NONE
+#define SSL_DEFAULT_STREAM_MODE_AUTO_BIDI
+#define SSL_DEFAULT_STREAM_MODE_AUTO_UNI
+
+int SSL_set_default_stream_mode(SSL *conn, uint32_t mode);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>A QUIC connection SSL object may have a default stream attached to it. A default stream is a QUIC stream to which calls to <a href="../man3/SSL_read.html">SSL_read(3)</a> and <a href="../man3/SSL_write.html">SSL_write(3)</a> made on a QUIC connection SSL object are redirected. Default stream handling allows legacy applications to use QUIC similarly to a traditional TLS connection.</p>
+
+<p>When not disabled, a default stream is automatically created on an outgoing connection once <a href="../man3/SSL_read.html">SSL_read(3)</a> or <a href="../man3/SSL_write.html">SSL_write(3)</a> is called.</p>
+
+<p>A QUIC stream must be explicitly designated as client-initiated or server-initiated up front. This broadly corresponds to whether an application protocol involves the client transmitting first, or the server transmitting first. As such, if <a href="../man3/SSL_read.html">SSL_read(3)</a> is called first (before any call to <a href="../man3/SSL_write.html">SSL_write(3)</a>) after establishing a connection, OpenSSL will wait for the server to open the first server-initiated stream, and then bind this as the default stream. Conversely, if <a href="../man3/SSL_write.html">SSL_write(3)</a> is called before any call to <a href="../man3/SSL_read.html">SSL_read(3)</a>, OpenSSL assumes the client wishes to transmit first, creates a client-initiated stream, and binds this as the default stream.</p>
+
+<p>By default, the default stream created is bidirectional. If a unidirectional stream is desired, or if the application wishes to disable default stream functionality, SSL_set_default_stream_mode() (discussed below) can be used to accomplish this.</p>
+
+<p>When a QUIC connection SSL object has no default stream currently associated with it, for example because default stream functionality was disabled, calls to functions which require a stream on the QUIC connection SSL object (for example, <a href="../man3/SSL_read.html">SSL_read(3)</a> and <a href="../man3/SSL_write.html">SSL_write(3)</a>) will fail.</p>
+
+<p>It is recommended that new applications and applications which rely on multiple streams forego use of the default stream functionality, which is intended for legacy applications.</p>
+
+<p>SSL_set_default_stream_mode() can be used to configure or disable default stream handling. It can only be called on a QUIC connection SSL object prior to any default stream being created. If used, it is recommended to call it immediately after calling <a href="../man3/SSL_new.html">SSL_new(3)</a>, prior to initiating a connection. The argument <i>mode</i> may be one of the following options:</p>
+
+<dl>
+
+<dt id="SSL_DEFAULT_STREAM_MODE_AUTO_BIDI">SSL_DEFAULT_STREAM_MODE_AUTO_BIDI</dt>
+<dd>
+
+<p>This is the default setting. If <a href="../man3/SSL_write.html">SSL_write(3)</a> is called prior to any call to <a href="../man3/SSL_read.html">SSL_read(3)</a>, a bidirectional client-initiated stream is created and bound as the default stream. If <a href="../man3/SSL_read.html">SSL_read(3)</a> is called prior to any call to <a href="../man3/SSL_write.html">SSL_write(3)</a>, OpenSSL waits for an incoming stream from the peer (causing <a href="../man3/SSL_read.html">SSL_read(3)</a> to block if the connection is in blocking mode), and then binds that stream as the default stream. Note that this incoming stream may be either bidirectional or unidirectional; thus, this setting does not guarantee the presence of a bidirectional stream when <a href="../man3/SSL_read.html">SSL_read(3)</a> is called first. To determine the type of a stream after a call to <a href="../man3/SSL_read.html">SSL_read(3)</a>, use <a href="../man3/SSL_get_stream_type.html">SSL_get_stream_type(3)</a>.</p>
+
+</dd>
+<dt id="SSL_DEFAULT_STREAM_MODE_AUTO_UNI">SSL_DEFAULT_STREAM_MODE_AUTO_UNI</dt>
+<dd>
+
+<p>In this mode, if <a href="../man3/SSL_write.html">SSL_write(3)</a> is called prior to any call to <a href="../man3/SSL_read.html">SSL_read(3)</a>, a unidirectional client-initiated stream is created and bound as the default stream. The behaviour is otherwise identical to that of <b>SSL_DEFAULT_STREAM_MODE_AUTO_BIDI</b>. The behaviour when <a href="../man3/SSL_read.html">SSL_read(3)</a> is called prior to any call to <a href="../man3/SSL_write.html">SSL_write(3)</a> is unchanged.</p>
+
+</dd>
+<dt id="SSL_DEFAULT_STREAM_MODE_NONE">SSL_DEFAULT_STREAM_MODE_NONE</dt>
+<dd>
+
+<p>Default stream creation is inhibited. This is the recommended mode of operation. <a href="../man3/SSL_read.html">SSL_read(3)</a> and <a href="../man3/SSL_write.html">SSL_write(3)</a> calls cannot be made on the QUIC connection SSL object directly. You must obtain streams using <a href="../man3/SSL_new_stream.html">SSL_new_stream(3)</a> or <a href="../man3/SSL_accept_stream.html">SSL_accept_stream(3)</a> in order to communicate with the peer.</p>
+
+</dd>
+</dl>
+
+<p>A default stream will not be automatically created on a QUIC connection SSL object if the default stream mode is set to <b>SSL_DEFAULT_STREAM_MODE_NONE</b>.</p>
+
+<p><a href="../man3/SSL_set_incoming_stream_policy.html">SSL_set_incoming_stream_policy(3)</a> interacts significantly with the default stream functionality.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_set_default_stream_mode() returns 1 on success and 0 on failure.</p>
+
+<p>SSL_set_default_stream_mode() fails if it is called after a default stream has already been established.</p>
+
+<p>These functions fail if called on a QUIC stream SSL object or on a non-QUIC SSL object.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/SSL_new_stream.html">SSL_new_stream(3)</a>, <a href="../man3/SSL_accept_stream.html">SSL_accept_stream(3)</a>, <a href="../man3/SSL_free.html">SSL_free(3)</a>, <a href="../man3/SSL_set_incoming_stream_policy.html">SSL_set_incoming_stream_policy(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>These functions were added in OpenSSL 3.2.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2002-2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,413 @@
+.\"
+.\" Standard preamble:
+.\" ========================================================================
+.de Sp \" Vertical space (when we can't use .PP)
+.if t .sp .5v
+.if n .sp
+..
+.de Vb \" Begin verbatim text
+.ft CW
+.nf
+.ne \\$1
+..
+.de Ve \" End verbatim text
+.ft R
+.fi
+..
+.\" Set up some character translations and predefined strings.  \*(-- will
+.\" give an unbreakable dash, \*(PI will give pi, \*(L" will give a left
+.\" double quote, and \*(R" will give a right double quote.  \*(C+ will
+.\" give a nicer C++.  Capital omega is used to do unbreakable dashes and
+.\" therefore won't be available.  \*(C` and \*(C' expand to `' in nroff,
+.\" nothing in troff, for use with C<>.
+.tr \(*W-
+.ds C+ C\v'-.1v'\h'-1p'\s-2+\h'-1p'+\s0\v'.1v'\h'-1p'
+.ie n \{\
+.    ds -- \(*W-
+.    ds PI pi
+.    if (\n(.H=4u)&(1m=24u) .ds -- \(*W\h'-12u'\(*W\h'-12u'-\" diablo 10 pitch
+.    if (\n(.H=4u)&(1m=20u) .ds -- \(*W\h'-12u'\(*W\h'-8u'-\"  diablo 12 pitch
+.    ds L" ""
+.    ds R" ""
+.    ds C` ""
+.    ds C' ""
+'br\}
+.el\{\
+.    ds -- \|\(em\|
+.    ds PI \(*p
+.    ds L" ``
+.    ds R" ''
+.    ds C`
+.    ds C'
+'br\}
+.\"
+.\" Escape single quotes in literal strings from groff's Unicode transform.
+.ie \n(.g .ds Aq \(aq
+.el       .ds Aq '
+.\"
+.\" If the F register is >0, we'll generate index entries on stderr for
+.\" titles (.TH), headers (.SH), subsections (.SS), items (.Ip), and index
+.\" entries marked with X<> in POD.  Of course, you'll have to process the
+.\" output yourself in some meaningful fashion.
+.\"
+.\" Avoid warning from groff about undefined register 'F'.
+.de IX
+..
+.nr rF 0
+.if \n(.g .if rF .nr rF 1
+.if (\n(rF:(\n(.g==0)) \{\
+.    if \nF \{\
+.        de IX
+.        tm Index:\\$1\t\\n%\t"\\$2"
+..
+.        if !\nF==2 \{\
+.            nr % 0
+.            nr F 2
+.        \}
+.    \}
+.\}
+.rr rF
+.\"
+.\" Accent mark definitions (@(#)ms.acc 1.5 88/02/08 SMI; from UCB 4.2).
+.\" Fear.  Run.  Save yourself.  No user-serviceable parts.
+.    \" fudge factors for nroff and troff
+.if n \{\
+.    ds #H 0
+.    ds #V .8m
+.    ds #F .3m
+.    ds #[ \f1
+.    ds #] \fP
+.\}
+.if t \{\
+.    ds #H ((1u-(\\\\n(.fu%2u))*.13m)
+.    ds #V .6m
+.    ds #F 0
+.    ds #[ \&
+.    ds #] \&
+.\}
+.    \" simple accents for nroff and troff
+.if n \{\
+.    ds ' \&
+.    ds ` \&
+.    ds ^ \&
+.    ds , \&
+.    ds ~ ~
+.    ds /
+.\}
+.if t \{\
+.    ds ' \\k:\h'-(\\n(.wu*8/10-\*(#H)'\'\h"|\\n:u"
+.    ds ` \\k:\h'-(\\n(.wu*8/10-\*(#H)'\`\h'|\\n:u'
+.    ds ^ \\k:\h'-(\\n(.wu*10/11-\*(#H)'^\h'|\\n:u'
+.    ds , \\k:\h'-(\\n(.wu*8/10)',\h'|\\n:u'
+.    ds ~ \\k:\h'-(\\n(.wu-\*(#H-.1m)'~\h'|\\n:u'
+.    ds / \\k:\h'-(\\n(.wu*8/10-\*(#H)'\z\(sl\h'|\\n:u'
+.\}
+.    \" troff and (daisy-wheel) nroff accents
+.ds : \\k:\h'-(\\n(.wu*8/10-\*(#H+.1m+\*(#F)'\v'-\*(#V'\z.\h'.2m+\*(#F'.\h'|\\n:u'\v'\*(#V'
+.ds 8 \h'\*(#H'\(*b\h'-\*(#H'
+.ds o \\k:\h'-(\\n(.wu+\w'\(de'u-\*(#H)/2u'\v'-.3n'\*(#[\z\(de\v'.3n'\h'|\\n:u'\*(#]
+.ds d- \h'\*(#H'\(pd\h'-\w'~'u'\v'-.25m'\f2\(hy\fP\v'.25m'\h'-\*(#H'
+.ds D- D\\k:\h'-\w'D'u'\v'-.11m'\z\(hy\v'.11m'\h'|\\n:u'
+.ds th \*(#[\v'.3m'\s+1I\s-1\v'-.3m'\h'-(\w'I'u*2/3)'\s-1o\s+1\*(#]
+.ds Th \*(#[\s+2I\s-2\h'-\w'I'u*3/5'\v'-.3m'o\v'.3m'\*(#]
+.ds ae a\h'-(\w'a'u*4/10)'e
+.ds Ae A\h'-(\w'A'u*4/10)'E
+.    \" corrections for vroff
+.if v .ds ~ \\k:\h'-(\\n(.wu*9/10-\*(#H)'\s-2\u~\d\s+2\h'|\\n:u'
+.if v .ds ^ \\k:\h'-(\\n(.wu*10/11-\*(#H)'\v'-.4m'^\v'.4m'\h'|\\n:u'
+.    \" for low resolution devices (crt and lpr)
+.if \n(.H>23 .if \n(.V>19 \
+\{\
+.    ds : e
+.    ds 8 ss
+.    ds o a
+.    ds d- d\h'-1'\(ga
+.    ds D- D\h'-1'\(hy
+.    ds th \o'bp'
+.    ds Th \o'LP'
+.    ds ae ae
+.    ds Ae AE
+.\}
+.rm #[ #] #H #V #F C
+.\" ========================================================================
+.\"
+.IX Title "FFMPEG-RESAMPLER 1"
+.TH FFMPEG-RESAMPLER 1 " " " " " "
+.\" For nroff, turn off justification.  Always turn off hyphenation; it makes
+.\" way too many mistakes in technical documents.
+.if n .ad l
+.nh
+.SH "NAME"
+ffmpeg\-resampler \- FFmpeg Resampler
+.SH "DESCRIPTION"
+.IX Header "DESCRIPTION"
+The FFmpeg resampler provides a high-level interface to the
+libswresample library audio resampling utilities. In particular it
+allows one to perform audio resampling, audio channel layout rematrixing,
+and convert audio format and packing layout.
+.SH "RESAMPLER OPTIONS"
+.IX Header "RESAMPLER OPTIONS"
+The audio resampler supports the following named options.
+.PP
+Options may be set by specifying \-\fIoption\fR \fIvalue\fR in the
+FFmpeg tools, \fIoption\fR=\fIvalue\fR for the aresample filter,
+by setting the value explicitly in the
+\&\f(CW\*(C`SwrContext\*(C'\fR options or using the \fIlibavutil/opt.h\fR \s-1API\s0 for
+programmatic use.
+.IP "\fBuchl, used_chlayout\fR" 4
+.IX Item "uchl, used_chlayout"
+Set used input channel layout. Default is unset. This option is
+only used for special remapping.
+.IP "\fBisr, in_sample_rate\fR" 4
+.IX Item "isr, in_sample_rate"
+Set the input sample rate. Default value is 0.
+.IP "\fBosr, out_sample_rate\fR" 4
+.IX Item "osr, out_sample_rate"
+Set the output sample rate. Default value is 0.
+.IP "\fBisf, in_sample_fmt\fR" 4
+.IX Item "isf, in_sample_fmt"
+Specify the input sample format. It is set by default to \f(CW\*(C`none\*(C'\fR.
+.IP "\fBosf, out_sample_fmt\fR" 4
+.IX Item "osf, out_sample_fmt"
+Specify the output sample format. It is set by default to \f(CW\*(C`none\*(C'\fR.
+.IP "\fBtsf, internal_sample_fmt\fR" 4
+.IX Item "tsf, internal_sample_fmt"
+Set the internal sample format. Default value is \f(CW\*(C`none\*(C'\fR.
+This will automatically be chosen when it is not explicitly set.
+.IP "\fBichl, in_chlayout\fR" 4
+.IX Item "ichl, in_chlayout"
+.PD 0
+.IP "\fBochl, out_chlayout\fR" 4
+.IX Item "ochl, out_chlayout"
+.PD
+Set the input/output channel layout.
+.Sp
+See \fBthe Channel Layout section in the \fBffmpeg\-utils\fB\|(1) manual\fR
+for the required syntax.
+.IP "\fBclev, center_mix_level\fR" 4
+.IX Item "clev, center_mix_level"
+Set the center mix level. It is a value expressed in deciBel, and must be
+in the interval [\-32,32].
+.IP "\fBslev, surround_mix_level\fR" 4
+.IX Item "slev, surround_mix_level"
+Set the surround mix level. It is a value expressed in deciBel, and must
+be in the interval [\-32,32].
+.IP "\fBlfe_mix_level\fR" 4
+.IX Item "lfe_mix_level"
+Set \s-1LFE\s0 mix into non \s-1LFE\s0 level. It is used when there is a \s-1LFE\s0 input but no
+\&\s-1LFE\s0 output. It is a value expressed in deciBel, and must
+be in the interval [\-32,32].
+.IP "\fBrmvol, rematrix_volume\fR" 4
+.IX Item "rmvol, rematrix_volume"
+Set rematrix volume. Default value is 1.0.
+.IP "\fBrematrix_maxval\fR" 4
+.IX Item "rematrix_maxval"
+Set maximum output value for rematrixing.
+This can be used to prevent clipping vs. preventing volume reduction.
+A value of 1.0 prevents clipping.
+.IP "\fBflags, swr_flags\fR" 4
+.IX Item "flags, swr_flags"
+Set flags used by the converter. Default value is 0.
+.Sp
+It supports the following individual flags:
+.RS 4
+.IP "\fBres\fR" 4
+.IX Item "res"
+force resampling, this flag forces resampling to be used even when the
+input and output sample rates match.
+.RE
+.RS 4
+.RE
+.IP "\fBdither_scale\fR" 4
+.IX Item "dither_scale"
+Set the dither scale. Default value is 1.
+.IP "\fBdither_method\fR" 4
+.IX Item "dither_method"
+Set dither method. Default value is 0.
+.Sp
+Supported values:
+.RS 4
+.IP "\fBrectangular\fR" 4
+.IX Item "rectangular"
+select rectangular dither
+.IP "\fBtriangular\fR" 4
+.IX Item "triangular"
+select triangular dither
+.IP "\fBtriangular_hp\fR" 4
+.IX Item "triangular_hp"
+select triangular dither with high pass
+.IP "\fBlipshitz\fR" 4
+.IX Item "lipshitz"
+select Lipshitz noise shaping dither.
+.IP "\fBshibata\fR" 4
+.IX Item "shibata"
+select Shibata noise shaping dither.
+.IP "\fBlow_shibata\fR" 4
+.IX Item "low_shibata"
+select low Shibata noise shaping dither.
+.IP "\fBhigh_shibata\fR" 4
+.IX Item "high_shibata"
+select high Shibata noise shaping dither.
+.IP "\fBf_weighted\fR" 4
+.IX Item "f_weighted"
+select f\-weighted noise shaping dither
+.IP "\fBmodified_e_weighted\fR" 4
+.IX Item "modified_e_weighted"
+select modified-e-weighted noise shaping dither
+.IP "\fBimproved_e_weighted\fR" 4
+.IX Item "improved_e_weighted"
+select improved-e-weighted noise shaping dither
+.RE
+.RS 4
+.RE
+.IP "\fBresampler\fR" 4
+.IX Item "resampler"
+Set resampling engine. Default value is swr.
+.Sp
+Supported values:
+.RS 4
+.IP "\fBswr\fR" 4
+.IX Item "swr"
+select the native \s-1SW\s0 Resampler; filter options precision and cheby are not
+applicable in this case.
+.IP "\fBsoxr\fR" 4
+.IX Item "soxr"
+select the SoX Resampler (where available); compensation, and filter options
+filter_size, phase_shift, exact_rational, filter_type & kaiser_beta, are not
+applicable in this case.
+.RE
+.RS 4
+.RE
+.IP "\fBfilter_size\fR" 4
+.IX Item "filter_size"
+For swr only, set resampling filter size, default value is 32.
+.IP "\fBphase_shift\fR" 4
+.IX Item "phase_shift"
+For swr only, set resampling phase shift, default value is 10, and must be in
+the interval [0,30].
+.IP "\fBlinear_interp\fR" 4
+.IX Item "linear_interp"
+Use linear interpolation when enabled (the default). Disable it if you want
+to preserve speed instead of quality when exact_rational fails.
+.IP "\fBexact_rational\fR" 4
+.IX Item "exact_rational"
+For swr only, when enabled, try to use exact phase_count based on input and
+output sample rate. However, if it is larger than \f(CW\*(C`1 << phase_shift\*(C'\fR,
+the phase_count will be \f(CW\*(C`1 << phase_shift\*(C'\fR as fallback. Default is enabled.
+.IP "\fBcutoff\fR" 4
+.IX Item "cutoff"
+Set cutoff frequency (swr: 6dB point; soxr: 0dB point) ratio; must be a float
+value between 0 and 1.  Default value is 0.97 with swr, and 0.91 with soxr
+(which, with a sample-rate of 44100, preserves the entire audio band to 20kHz).
+.IP "\fBprecision\fR" 4
+.IX Item "precision"
+For soxr only, the precision in bits to which the resampled signal will be
+calculated.  The default value of 20 (which, with suitable dithering, is
+appropriate for a destination bit-depth of 16) gives SoX's 'High Quality'; a
+value of 28 gives SoX's 'Very High Quality'.
+.IP "\fBcheby\fR" 4
+.IX Item "cheby"
+For soxr only, selects passband rolloff none (Chebyshev) & higher-precision
+approximation for 'irrational' ratios. Default value is 0.
+.IP "\fBasync\fR" 4
+.IX Item "async"
+For swr only, simple 1 parameter audio sync to timestamps using stretching,
+squeezing, filling and trimming. Setting this to 1 will enable filling and
+trimming, larger values represent the maximum amount in samples that the data
+may be stretched or squeezed for each second.
+Default value is 0, thus no compensation is applied to make the samples match
+the audio timestamps.
+.IP "\fBfirst_pts\fR" 4
+.IX Item "first_pts"
+For swr only, assume the first pts should be this value. The time unit is 1 / sample rate.
+This allows for padding/trimming at the start of stream. By default, no
+assumption is made about the first frame's expected pts, so no padding or
+trimming is done. For example, this could be set to 0 to pad the beginning with
+silence if an audio stream starts after the video stream or to trim any samples
+with a negative pts due to encoder delay.
+.IP "\fBmin_comp\fR" 4
+.IX Item "min_comp"
+For swr only, set the minimum difference between timestamps and audio data (in
+seconds) to trigger stretching/squeezing/filling or trimming of the
+data to make it match the timestamps. The default is that
+stretching/squeezing/filling and trimming is disabled
+(\fBmin_comp\fR = \f(CW\*(C`FLT_MAX\*(C'\fR).
+.IP "\fBmin_hard_comp\fR" 4
+.IX Item "min_hard_comp"
+For swr only, set the minimum difference between timestamps and audio data (in
+seconds) to trigger adding/dropping samples to make it match the
+timestamps.  This option effectively is a threshold to select between
+hard (trim/fill) and soft (squeeze/stretch) compensation. Note that
+all compensation is by default disabled through \fBmin_comp\fR.
+The default is 0.1.
+.IP "\fBcomp_duration\fR" 4
+.IX Item "comp_duration"
+For swr only, set duration (in seconds) over which data is stretched/squeezed
+to make it match the timestamps. Must be a non-negative double float value,
+default value is 1.0.
+.IP "\fBmax_soft_comp\fR" 4
+.IX Item "max_soft_comp"
+For swr only, set maximum factor by which data is stretched/squeezed to make it
+match the timestamps. Must be a non-negative double float value, default value
+is 0.
+.IP "\fBmatrix_encoding\fR" 4
+.IX Item "matrix_encoding"
+Select matrixed stereo encoding.
+.Sp
+It accepts the following values:
+.RS 4
+.IP "\fBnone\fR" 4
+.IX Item "none"
+select none
+.IP "\fBdolby\fR" 4
+.IX Item "dolby"
+select Dolby
+.IP "\fBdplii\fR" 4
+.IX Item "dplii"
+select Dolby Pro Logic \s-1II\s0
+.RE
+.RS 4
+.Sp
+Default value is \f(CW\*(C`none\*(C'\fR.
+.RE
+.IP "\fBfilter_type\fR" 4
+.IX Item "filter_type"
+For swr only, select resampling filter type. This only affects resampling
+operations.
+.Sp
+It accepts the following values:
+.RS 4
+.IP "\fBcubic\fR" 4
+.IX Item "cubic"
+select cubic
+.IP "\fBblackman_nuttall\fR" 4
+.IX Item "blackman_nuttall"
+select Blackman Nuttall windowed sinc
+.IP "\fBkaiser\fR" 4
+.IX Item "kaiser"
+select Kaiser windowed sinc
+.RE
+.RS 4
+.RE
+.IP "\fBkaiser_beta\fR" 4
+.IX Item "kaiser_beta"
+For swr only, set Kaiser window beta value. Must be a double float value in the
+interval [2,16], default value is 9.
+.IP "\fBoutput_sample_bits\fR" 4
+.IX Item "output_sample_bits"
+For swr only, set number of used output sample bits for dithering. Must be an integer in the
+interval [0,64], default value is 0, which means it's not used.
+.SH "SEE ALSO"
+.IX Header "SEE ALSO"
+\&\fBffmpeg\fR\|(1), \fBffplay\fR\|(1), \fBffprobe\fR\|(1), \fBlibswresample\fR\|(3)
+.SH "AUTHORS"
+.IX Header "AUTHORS"
+The FFmpeg developers.
+.PP
+For details about the authorship, see the Git history of the project
+(https://git.ffmpeg.org/ffmpeg), e.g. by typing the command
+\&\fBgit log\fR in the FFmpeg source directory, or browsing the
+online repository at <\fBhttps://git.ffmpeg.org/ffmpeg\fR>.
+.PP
+Maintainers for the specific components are listed in the file
+\&\fI\s-1MAINTAINERS\s0\fR in the source code tree.

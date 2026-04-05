@@ -1,0 +1,104 @@
+.\" Hey, Emacs! This is -*-nroff-*- you know...
+.\"
+.\" gensprep.8: manual page for the gensprep utility
+.\"
+.\" Copyright (C) 2016 and later: Unicode, Inc. and others.
+.\" License & terms of use: http://www.unicode.org/copyright.html
+.\" Copyright (C) 2003 IBM, Inc. and others.
+.\"
+.TH gensprep 8 "18 March 2003" "ICU MANPAGE" "ICU 78.3 Manual"
+.SH NAME
+.B gensprep
+\- compile StringPrep data from files filtered by filterRFC3454.pl 
+.SH SYNOPSIS
+.B gensprep
+[
+.BR "\-h\fP, \fB\-?\fP, \fB\-\-help"
+]
+[
+.BR "\-v\fP, \fB\-\-verbose"
+]
+[
+.BI "\-c\fP, \fB\-\-copyright"
+]
+[
+.BI "\-s\fP, \fB\-\-sourcedir" " source"
+]
+[
+.BI "\-d\fP, \fB\-\-destdir" " destination"
+]
+.SH DESCRIPTION
+.B gensprep
+reads filtered RFC 3454 files and compiles their
+information into a binary form.
+The resulting file,
+.BR <name>.icu ,
+can then be read directly by ICU, or used by
+.BR pkgdata (8)
+for incorporation into a larger archive or library.
+.LP
+The files read by
+.B gensprep
+are described in the
+.B FILES
+section. 
+.SH OPTIONS
+.TP
+.BR "\-h\fP, \fB\-?\fP, \fB\-\-help"
+Print help about usage and exit.
+.TP
+.BR "\-v\fP, \fB\-\-verbose"
+Display extra informative messages during execution.
+.TP
+.BI "\-c\fP, \fB\-\-copyright"
+Include a copyright notice into the binary data.
+.TP
+.BI "\-s\fP, \fB\-\-sourcedir" " source"
+Set the source directory to
+.IR source .
+The default source directory is specified by the environment variable
+.BR ICU_DATA .
+.TP
+.BI "\-d\fP, \fB\-\-destdir" " destination"
+Set the destination directory to
+.IR destination .
+The default destination directory is specified by the environment variable
+.BR ICU_DATA .
+.SH ENVIRONMENT
+.TP 10
+.B ICU_DATA
+Specifies the directory containing ICU data. Defaults to
+.BR ${prefix}/share/icu/78.3/ .
+Some tools in ICU depend on the presence of the trailing slash. It is thus
+important to make sure that it is present if
+.B ICU_DATA
+is set.
+.SH FILES
+The following files are read by
+.B gensprep
+and are looked for in the
+.I source
+/misc for rfc3454_*.txt files and in 
+.I source
+/unidata for NormalizationCorrections.txt.
+.TP 20
+.B rfc3453_A_1.txt 
+Contains the list of unassigned codepoints in Unicode version 3.2.0.\|.\|.. 
+.TP
+.B rfc3454_B_1.txt
+Contains the list of code points that are commonly mapped to nothing.\|.\|..
+.TP
+.B rfc3454_B_2.txt
+Contains the list of mappings for casefolding of  code points when Normalization form NFKC is specified.\|.\|..
+.TP
+.B rfc3454_C_X.txt
+Contains the list of code points that are prohibited for IDNA.
+.TP
+.B NormalizationCorrections.txt
+Contains the list of code points whose normalization has changed since Unicode Version 3.2.0. 
+.SH VERSION
+78.3
+.SH COPYRIGHT
+Copyright (C) 2000-2002 IBM, Inc. and others.
+.SH SEE ALSO
+.BR pkgdata (8)

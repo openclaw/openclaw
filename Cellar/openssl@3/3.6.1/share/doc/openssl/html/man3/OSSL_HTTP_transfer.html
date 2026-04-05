@@ -1,0 +1,163 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OSSL_HTTP_transfer</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OSSL_HTTP_open, OSSL_HTTP_bio_cb_t, OSSL_HTTP_proxy_connect, OSSL_HTTP_set1_request, OSSL_HTTP_exchange, OSSL_HTTP_get, OSSL_HTTP_transfer, OSSL_HTTP_close - HTTP client high-level functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/http.h&gt;
+
+typedef BIO *(*OSSL_HTTP_bio_cb_t)(BIO *bio, void *arg,
+                                   int connect, int detail);
+OSSL_HTTP_REQ_CTX *OSSL_HTTP_open(const char *server, const char *port,
+                                  const char *proxy, const char *no_proxy,
+                                  int use_ssl, BIO *bio, BIO *rbio,
+                                  OSSL_HTTP_bio_cb_t bio_update_fn, void *arg,
+                                  int buf_size, int overall_timeout);
+int OSSL_HTTP_proxy_connect(BIO *bio, const char *server, const char *port,
+                            const char *proxyuser, const char *proxypass,
+                            int timeout, BIO *bio_err, const char *prog);
+int OSSL_HTTP_set1_request(OSSL_HTTP_REQ_CTX *rctx, const char *path,
+                           const STACK_OF(CONF_VALUE) *headers,
+                           const char *content_type, BIO *req,
+                           const char *expected_content_type, int expect_asn1,
+                           size_t max_resp_len, int timeout, int keep_alive);
+BIO *OSSL_HTTP_exchange(OSSL_HTTP_REQ_CTX *rctx, char **redirection_url);
+BIO *OSSL_HTTP_get(const char *url, const char *proxy, const char *no_proxy,
+                   BIO *bio, BIO *rbio,
+                   OSSL_HTTP_bio_cb_t bio_update_fn, void *arg,
+                   int buf_size, const STACK_OF(CONF_VALUE) *headers,
+                   const char *expected_content_type, int expect_asn1,
+                   size_t max_resp_len, int timeout);
+BIO *OSSL_HTTP_transfer(OSSL_HTTP_REQ_CTX **prctx,
+                        const char *server, const char *port,
+                        const char *path, int use_ssl,
+                        const char *proxy, const char *no_proxy,
+                        BIO *bio, BIO *rbio,
+                        OSSL_HTTP_bio_cb_t bio_update_fn, void *arg,
+                        int buf_size, const STACK_OF(CONF_VALUE) *headers,
+                        const char *content_type, BIO *req,
+                        const char *expected_content_type, int expect_asn1,
+                        size_t max_resp_len, int timeout, int keep_alive);
+int OSSL_HTTP_close(OSSL_HTTP_REQ_CTX *rctx, int ok);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>OSSL_HTTP_open() initiates an HTTP session using the <i>bio</i> argument if not NULL, else by connecting to a given <i>server</i> optionally via a <i>proxy</i>.</p>
+
+<p>Typically the OpenSSL build supports sockets and the <i>bio</i> parameter is NULL. In this case <i>rbio</i> must be NULL as well and the <i>server</i> must be non-NULL. The function creates a network BIO internally using <a href="../man3/BIO_new_connect.html">BIO_new_connect(3)</a> for connecting to the given server and the optionally given <i>port</i>, defaulting to 80 for HTTP or 443 for HTTPS. Then this internal BIO is used for setting up a connection and for exchanging one or more request and response.</p>
+
+<p>If <i>bio</i> is given and <i>rbio</i> is NULL then this <i>bio</i> is used instead. If both <i>bio</i> and <i>rbio</i> are given (which may be memory BIOs for instance) then no explicit connection is set up, but <i>bio</i> is used for writing requests and <i>rbio</i> for reading responses. As soon as the client has flushed <i>bio</i> the server must be ready to provide a response or indicate a waiting condition via <i>rbio</i>.</p>
+
+<p>If <i>bio</i> is given, it is an error to provide non-NULL <i>proxy</i> or <i>no_proxy</i> arguments, while <i>server</i> and <i>port</i> arguments may be given to support diagnostic output. If <i>bio</i> is NULL the optional <i>proxy</i> parameter can be used to set an HTTP(S) proxy to use (unless overridden by &quot;no_proxy&quot; settings). If TLS is not used this defaults to the environment variable <code>http_proxy</code> if set, else <code>HTTP_PROXY</code>. If <i>use_ssl</i> != 0 it defaults to <code>https_proxy</code> if set, else <code>HTTPS_PROXY</code>. An empty proxy string <code>&quot;&quot;</code> forbids using a proxy. Otherwise, the format is <code>[http[s]://][userinfo@]host[:port][/path][?query][#fragment]</code>, where any userinfo, path, query, and fragment given is ignored. If the host string is an IPv6 address, it must be enclosed in <code>[</code> and <code>]</code>. The default proxy port number is 80, or 443 in case &quot;https:&quot; is given. The HTTP client functions connect via the given proxy unless the <i>server</i> is found in the optional list <i>no_proxy</i> of proxy hostnames or IP addresses separated by <code>,</code> and/or whitespace (if not NULL; default is the environment variable <code>no_proxy</code> if set, else <code>NO_PROXY</code>). Proxying plain HTTP is supported directly, while using a proxy for HTTPS connections requires a suitable callback function such as OSSL_HTTP_proxy_connect(), described below.</p>
+
+<p>If <i>use_ssl</i> is nonzero a TLS connection is requested and the <i>bio_update_fn</i> parameter must be provided.</p>
+
+<p>The parameter <i>bio_update_fn</i>, which is optional if <i>use_ssl</i> is 0, may be used to modify the connection BIO used by the HTTP client, but cannot be used when both <i>bio</i> and <i>rbio</i> are given. <i>bio_update_fn</i> is a BIO connect/disconnect callback function with prototype</p>
+
+<pre><code>BIO *(*OSSL_HTTP_bio_cb_t)(BIO *bio, void *arg, int connect, int detail)</code></pre>
+
+<p>The callback function may modify the BIO provided in the <i>bio</i> argument, whereby it may use an optional custom defined argument <i>arg</i>, which can for instance point to an <b>SSL_CTX</b> structure. During connection establishment, just after calling BIO_do_connect_retry(), the callback function is invoked with the <i>connect</i> argument being 1 and <i>detail</i> being 1 if <i>use_ssl</i> is nonzero (i.e., HTTPS is requested), else 0. On disconnect <i>connect</i> is 0 and <i>detail</i> is 1 if no error occurred, else 0. For instance, on connect the callback may push an SSL BIO to implement HTTPS; after disconnect it may do some diagnostic output and pop and free the SSL BIO.</p>
+
+<p>The callback function must return either the potentially modified BIO <i>bio</i> or NULL to indicate failure, in which case it should not modify the BIO.</p>
+
+<p>Here is a simple example that supports TLS connections (but not via a proxy):</p>
+
+<pre><code>BIO *http_tls_cb(BIO *bio, void *arg, int connect, int detail)
+{
+    if (connect &amp;&amp; detail) { /* connecting with TLS */
+        SSL_CTX *ctx = (SSL_CTX *)arg;
+        BIO *sbio = BIO_new_ssl(ctx, 1);
+
+        bio = sbio != NULL ? BIO_push(sbio, bio) : NULL;
+    } else if (!connect) { /* disconnecting */
+        BIO *hbio;
+
+        if (!detail) { /* an error has occurred */
+            /* optionally add diagnostics here */
+        }
+        BIO_ssl_shutdown(bio);
+        hbio = BIO_pop(bio);
+        BIO_free(bio); /* SSL BIO */
+        bio = hbio;
+    }
+    return bio;
+}</code></pre>
+
+<p>After disconnect the modified BIO will be deallocated using BIO_free_all(). The optional callback function argument <i>arg</i> is not consumed, so must be freed by the caller when not needed any more.</p>
+
+<p>The <i>buf_size</i> parameter specifies the response header maximum line length. A value &lt;= 0 means that the <b>OSSL_HTTP_DEFAULT_MAX_LINE_LEN</b> (4KiB) is used. <i>buf_size</i> is also used as the number of content bytes that are read at a time.</p>
+
+<p>If the <i>overall_timeout</i> parameter is &gt; 0 this indicates the maximum number of seconds the overall HTTP transfer (i.e., connection setup if needed, sending requests, and receiving responses) is allowed to take until completion. A value &lt;= 0 enables waiting indefinitely, i.e., no timeout.</p>
+
+<p>OSSL_HTTP_proxy_connect() may be used by an above BIO connect callback function to set up an SSL/TLS connection via an HTTPS proxy. It promotes the given BIO <i>bio</i> representing a connection pre-established with a TLS proxy using the HTTP CONNECT method, optionally using proxy client credentials <i>proxyuser</i> and <i>proxypass</i>, to connect with TLS protection ultimately to <i>server</i> and <i>port</i>. If the <i>port</i> argument is NULL or the empty string it defaults to &quot;443&quot;. If the <i>timeout</i> parameter is &gt; 0 this indicates the maximum number of seconds the connection setup is allowed to take. A value &lt;= 0 enables waiting indefinitely, i.e., no timeout. Since this function is typically called by applications such as <a href="../man1/openssl-s_client.html">openssl-s_client(1)</a> it uses the <i>bio_err</i> and <i>prog</i> parameters (unless NULL) to print additional diagnostic information in a user-oriented way.</p>
+
+<p>OSSL_HTTP_set1_request() sets up in <i>rctx</i> the request header and content data and expectations on the response using the following parameters. If &lt;rctx&gt; indicates using a proxy for HTTP (but not HTTPS), the server host (and optionally port) needs to be placed in the header; thus it must be present in <i>rctx</i>. For backward compatibility, the server (and optional port) may also be given in the <i>path</i> argument beginning with <code>http://</code> (thus giving an absoluteURI). If <i>path</i> is NULL it defaults to &quot;/&quot;. If <i>req</i> is NULL the HTTP GET method will be used to send the request else HTTP POST with the contents of <i>req</i> and optional <i>content_type</i>, where the length of the data in <i>req</i> does not need to be determined in advance: the BIO will be read on-the-fly while sending the request, which supports streaming. The optional list <i>headers</i> may contain additional custom HTTP header lines. The <i>max_resp_len</i> parameter specifies the maximum allowed response content length, where the value 0 indicates no limit. For the meaning of the <i>expected_content_type</i>, <i>expect_asn1</i>, <i>timeout</i>, and <i>keep_alive</i> parameters, see <a href="../man3/OSSL_HTTP_REQ_CTX_set_expected.html">OSSL_HTTP_REQ_CTX_set_expected(3)</a>.</p>
+
+<p>OSSL_HTTP_exchange() exchanges any form of HTTP request and response as specified by <i>rctx</i>, which must include both connection and request data, typically set up using OSSL_HTTP_open() and OSSL_HTTP_set1_request(). It implements the core of the functions described below. If the HTTP method is GET and <i>redirection_url</i> is not NULL the latter pointer is used to provide any new location that the server may return with HTTP code 301 (MOVED_PERMANENTLY) or 302 (FOUND). In this case the function returns NULL and the caller is responsible for deallocating the URL with <a href="../man3/OPENSSL_free.html">OPENSSL_free(3)</a>. If the response header contains one or more <code>Content-Length</code> lines and/or an ASN.1-encoded response is expected, which should include a total length, the length indications received are checked for consistency and for not exceeding any given maximum response length. If an ASN.1-encoded response is expected, the function returns on success the contents buffered in a memory BIO, which does not support streaming. Otherwise it returns directly the read BIO that holds the response contents, which allows a response of indefinite length and may support streaming. The caller is responsible for freeing the BIO pointer obtained.</p>
+
+<p>OSSL_HTTP_get() uses HTTP GET to obtain data from <i>bio</i> if non-NULL, else from the server contained in the <i>url</i>, and returns it as a BIO. It supports redirection via HTTP status code 301 or 302. It is meant for transfers with a single round trip, so does not support persistent connections. If <i>bio</i> is non-NULL, any host and port components in the <i>url</i> are not used for connecting but the hostname is used, as usual, for the <code>Host</code> header. Any userinfo and fragment components in the <i>url</i> are ignored. Any query component is handled as part of the path component. If the scheme component of the <i>url</i> is <code>https</code> a TLS connection is requested and the <i>bio_update_fn</i>, as described for OSSL_HTTP_open(), must be provided. Also the remaining parameters are interpreted as described for OSSL_HTTP_open() and OSSL_HTTP_set1_request(), respectively. The caller is responsible for freeing the BIO pointer obtained.</p>
+
+<p>OSSL_HTTP_transfer() exchanges an HTTP request and response over a connection managed via <i>prctx</i> without supporting redirection. It combines OSSL_HTTP_open(), OSSL_HTTP_set1_request(), OSSL_HTTP_exchange(), and OSSL_HTTP_close(). If <i>prctx</i> is not NULL it reuses any open connection represented by a non-NULL <i>*prctx</i>. It keeps the connection open if a persistent connection is requested or required and this was granted by the server, else it closes the connection and assigns NULL to <i>*prctx</i>. The remaining parameters are interpreted as described for OSSL_HTTP_open() and OSSL_HTTP_set1_request(), respectively. The caller is responsible for freeing the BIO pointer obtained.</p>
+
+<p>OSSL_HTTP_close() closes the connection and releases <i>rctx</i>. The <i>ok</i> parameter is passed to any BIO update function given during setup as described above for OSSL_HTTP_open(). It must be 1 if no error occurred during the HTTP transfer and 0 otherwise.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The names of the environment variables used by this implementation: <code>http_proxy</code>, <code>HTTP_PROXY</code>, <code>https_proxy</code>, <code>HTTPS_PROXY</code>, <code>no_proxy</code>, and <code>NO_PROXY</code>, have been chosen for maximal compatibility with other HTTP client implementations such as wget, curl, and git.</p>
+
+<p>When built with tracing enabled, OSSL_HTTP_transfer() and all functions using it may be traced using <b>OSSL_TRACE_CATEGORY_HTTP</b>. See also <a href="../man3/OSSL_trace_enabled.html">OSSL_trace_enabled(3)</a> and <a href="../man7/openssl-env.html">openssl-env(7)</a>.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>OSSL_HTTP_open() returns on success a <b>OSSL_HTTP_REQ_CTX</b>, else NULL.</p>
+
+<p>OSSL_HTTP_proxy_connect() and OSSL_HTTP_set1_request() return 1 on success, 0 on error.</p>
+
+<p>On success, OSSL_HTTP_exchange(), OSSL_HTTP_get(), and OSSL_HTTP_transfer() return a memory BIO that buffers all the data received if an ASN.1-encoded response is expected, otherwise a BIO that may support streaming. The BIO must be freed by the caller. On failure, they return NULL. Failure conditions include connection/transfer timeout, parse errors, etc. The caller is responsible for freeing the BIO pointer obtained.</p>
+
+<p>OSSL_HTTP_close() returns 0 if anything went wrong while disconnecting, else 1.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/OSSL_HTTP_parse_url.html">OSSL_HTTP_parse_url(3)</a>, <a href="../man3/BIO_new_connect.html">BIO_new_connect(3)</a>, <a href="../man3/ASN1_item_i2d_mem_bio.html">ASN1_item_i2d_mem_bio(3)</a>, <a href="../man3/ASN1_item_d2i_bio.html">ASN1_item_d2i_bio(3)</a>, <a href="../man3/OSSL_HTTP_REQ_CTX_set_expected.html">OSSL_HTTP_REQ_CTX_set_expected(3)</a>, <a href="../man3/OSSL_HTTP_is_alive.html">OSSL_HTTP_is_alive(3)</a>, <a href="../man3/OSSL_trace_enabled.html">OSSL_trace_enabled(3)</a>, and <a href="../man7/openssl-env.html">openssl-env(7)</a>.</p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>All the functions described here were added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2019-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

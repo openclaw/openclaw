@@ -1,0 +1,82 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OSSL_STORE_expect</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OSSL_STORE_expect, OSSL_STORE_supports_search, OSSL_STORE_find - Specify what object type is expected</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/store.h&gt;
+
+int OSSL_STORE_expect(OSSL_STORE_CTX *ctx, int expected_type);
+
+int OSSL_STORE_supports_search(OSSL_STORE_CTX *ctx, int criterion_type);
+
+int OSSL_STORE_find(OSSL_STORE_CTX *ctx, OSSL_STORE_SEARCH *search);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>OSSL_STORE_expect() helps applications filter what OSSL_STORE_load() returns by specifying a <b>OSSL_STORE_INFO</b> type. By default, no expectations on the types of objects to be loaded are made. <i>expected_type</i> may be 0 to indicate explicitly that no expectation is made, or it may be any of the known object types (see <a href="../man3/OSSL_STORE_INFO.html">&quot;SUPPORTED OBJECTS&quot; in OSSL_STORE_INFO(3)</a>) except for <b>OSSL_STORE_INFO_NAME</b>. For example, if <code>file:/foo/bar/store.pem</code> contains several objects of different type and only certificates are interesting, the application can simply say that it expects the type <b>OSSL_STORE_INFO_CERT</b>.</p>
+
+<p>OSSL_STORE_find() helps applications specify a criterion for a more fine grained search of objects.</p>
+
+<p>OSSL_STORE_supports_search() checks if the loader of the given OSSL_STORE context supports the given search type. See <a href="../man3/OSSL_STORE_SEARCH.html">&quot;SUPPORTED CRITERION TYPES&quot; in OSSL_STORE_SEARCH(3)</a> for information on the supported search criterion types.</p>
+
+<p>OSSL_STORE_expect() and OSSL_STORE_find <i>must</i> be called before the first OSSL_STORE_load() of a given session, or they will fail.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>If a more elaborate filter is required by the application, a better choice would be to use a post-processing function. See <a href="../man3/OSSL_STORE_open.html">OSSL_STORE_open(3)</a> for more information.</p>
+
+<p>However, some loaders may take advantage of the knowledge of an expected type to make object retrieval more efficient, so if a single type is expected, this method is usually preferable.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>OSSL_STORE_expect() returns 1 on success, or 0 on failure.</p>
+
+<p>OSSL_STORE_supports_search() returns 1 if the criterion is supported, or 0 otherwise.</p>
+
+<p>OSSL_STORE_find() returns 1 on success, or 0 on failure.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ossl_store.html">ossl_store(7)</a>, <a href="../man3/OSSL_STORE_INFO.html">OSSL_STORE_INFO(3)</a>, <a href="../man3/OSSL_STORE_SEARCH.html">OSSL_STORE_SEARCH(3)</a>, <a href="../man3/OSSL_STORE_load.html">OSSL_STORE_load(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>OSSL_STORE_expect(), OSSL_STORE_supports_search() and OSSL_STORE_find() were added in OpenSSL 1.1.1.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2018-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

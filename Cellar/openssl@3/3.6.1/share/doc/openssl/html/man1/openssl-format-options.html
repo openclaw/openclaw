@@ -1,0 +1,161 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>openssl-format-options</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#OPTIONS">OPTIONS</a>
+    <ul>
+      <li><a href="#Format-Options">Format Options</a></li>
+      <li><a href="#Format-Option-Arguments">Format Option Arguments</a></li>
+    </ul>
+  </li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>openssl-format-options - OpenSSL command input and output format options</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<p><b>openssl</b> <i>command</i> [ <i>options</i> ... ] [ <i>parameters</i> ... ]</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>Several OpenSSL commands can take input or generate output in a variety of formats.</p>
+
+<p>Since OpenSSL 3.0 keys, single certificates, and CRLs can be read from files in any of the <b>DER</b>, <b>PEM</b> or <b>P12</b> formats. Specifying their input format is no more needed and the openssl commands will automatically try all the possible formats. However if the <b>DER</b> or <b>PEM</b> input format is specified it will be enforced.</p>
+
+<p>In order to access a key via an engine the input format <b>ENGINE</b> may be used; alternatively the key identifier in the &lt;uri&gt; argument of the respective key option may be preceded by <code>org.openssl.engine:</code>. See <a href="../man1/openssl.html">&quot;Engine Options&quot; in openssl(1)</a> for an example usage of the latter.</p>
+
+<h1 id="OPTIONS">OPTIONS</h1>
+
+<h2 id="Format-Options">Format Options</h2>
+
+<p>The options to specify the format are as follows. Refer to the individual man page to see which options are accepted.</p>
+
+<dl>
+
+<dt id="inform-format--outform-format"><b>-inform</b> <i>format</i>, <b>-outform</b> <i>format</i></dt>
+<dd>
+
+<p>The format of the input or output streams.</p>
+
+</dd>
+<dt id="keyform-format"><b>-keyform</b> <i>format</i></dt>
+<dd>
+
+<p>Format of a private key input source.</p>
+
+</dd>
+<dt id="CRLform-format"><b>-CRLform</b> <i>format</i></dt>
+<dd>
+
+<p>Format of a CRL input source.</p>
+
+</dd>
+</dl>
+
+<h2 id="Format-Option-Arguments">Format Option Arguments</h2>
+
+<p>The possible format arguments are described below. Both uppercase and lowercase are accepted.</p>
+
+<p>The list of acceptable format arguments, and the default, is described in each command documentation.</p>
+
+<dl>
+
+<dt id="DER"><b>DER</b></dt>
+<dd>
+
+<p>A binary format, encoded or parsed according to Distinguished Encoding Rules (DER) of the ASN.1 data language.</p>
+
+</dd>
+<dt id="ENGINE"><b>ENGINE</b></dt>
+<dd>
+
+<p>Used to specify that the cryptographic material is in an OpenSSL <b>engine</b>. An engine must be configured or specified using the <b>-engine</b> option. A password or PIN may be supplied to the engine using the <b>-passin</b> option.</p>
+
+</dd>
+<dt id="P12"><b>P12</b></dt>
+<dd>
+
+<p>A DER-encoded file containing a PKCS#12 object. It might be necessary to provide a decryption password to retrieve the private key.</p>
+
+</dd>
+<dt id="PEM"><b>PEM</b></dt>
+<dd>
+
+<p>A text format defined in IETF RFC 1421 and IETF RFC 7468. Briefly, this is a block of base-64 encoding (defined in IETF RFC 4648), with specific lines used to mark the start and end:</p>
+
+<pre><code>Text before the BEGIN line is ignored.
+----- BEGIN object-type -----
+OT43gQKBgQC/2OHZoko6iRlNOAQ/tMVFNq7fL81GivoQ9F1U0Qr+DH3ZfaH8eIkX
+xT0ToMPJUzWAn8pZv0snA0um6SIgvkCuxO84OkANCVbttzXImIsL7pFzfcwV/ERK
+UM6j0ZuSMFOCr/lGPAoOQU0fskidGEHi1/kW+suSr28TqsyYZpwBDQ==
+----- END object-type -----
+Text after the END line is also ignored</code></pre>
+
+<p>The <i>object-type</i> must match the type of object that is expected. For example a <code>BEGIN X509 CERTIFICATE</code> will not match if the command is trying to read a private key. The types supported include:</p>
+
+<pre><code>ANY PRIVATE KEY
+CERTIFICATE
+CERTIFICATE REQUEST
+CMS
+DH PARAMETERS
+DSA PARAMETERS
+DSA PUBLIC KEY
+EC PARAMETERS
+EC PRIVATE KEY
+ECDSA PUBLIC KEY
+ENCRYPTED PRIVATE KEY
+PARAMETERS
+PKCS #7 SIGNED DATA
+PKCS7
+PRIVATE KEY
+PUBLIC KEY
+RSA PRIVATE KEY
+SSL SESSION PARAMETERS
+TRUSTED CERTIFICATE
+X509 CRL
+X9.42 DH PARAMETERS</code></pre>
+
+<p>The following legacy <i>object-type</i>&#39;s are also supported for compatibility with earlier releases:</p>
+
+<pre><code>DSA PRIVATE KEY
+NEW CERTIFICATE REQUEST
+RSA PUBLIC KEY
+X509 CERTIFICATE</code></pre>
+
+</dd>
+<dt id="SMIME"><b>SMIME</b></dt>
+<dd>
+
+<p>An S/MIME object as described in IETF RFC 8551. Earlier versions were known as CMS and are compatible. Note that the parsing is simple and might fail to parse some legal data.</p>
+
+</dd>
+</dl>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,54 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_CIPHER_CTX_get_app_data</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_CIPHER_CTX_get_app_data, EVP_CIPHER_CTX_set_app_data - Routines to inspect and modify application data related to EVP_CIPHER_CTX</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+
+void *EVP_CIPHER_CTX_get_app_data(const EVP_CIPHER_CTX *ctx);
+void EVP_CIPHER_CTX_set_app_data(EVP_CIPHER_CTX *ctx, void *data);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The functions EVP_CIPHER_CTX_set_app_data() and EVP_CIPHER_CTX_get_app_data() associate an opaque, application-defined pointer with an EVP_CIPHER_CTX object.</p>
+
+<p>This pointer is not interpreted by the library and is reserved entirely for use by the application. It may be used to store arbitrary context or state that needs to be accessible wherever the corresponding EVP_CIPHER_CTX is available.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>The EVP_CIPHER_CTX_get_app_data() function returns a opaque pointer to the current application data for the EVP_CIPHER_CTX.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2026 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

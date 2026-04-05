@@ -1,0 +1,142 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_KDF-PBKDF2</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Identity">Identity</a></li>
+      <li><a href="#Supported-parameters">Supported parameters</a></li>
+    </ul>
+  </li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#CONFORMING-TO">CONFORMING TO</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_KDF-PBKDF2 - The PBKDF2 EVP_KDF implementation</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>Support for computing the <b>PBKDF2</b> password-based KDF through the <b>EVP_KDF</b> API.</p>
+
+<p>The EVP_KDF-PBKDF2 algorithm implements the PBKDF2 password-based key derivation function, as described in SP800-132; it derives a key from a password using a salt and iteration count.</p>
+
+<p>The output is considered to be a cryptographic key.</p>
+
+<h2 id="Identity">Identity</h2>
+
+<p>&quot;PBKDF2&quot; is the name for this implementation; it can be used with the EVP_KDF_fetch() function.</p>
+
+<h2 id="Supported-parameters">Supported parameters</h2>
+
+<p>The supported parameters are:</p>
+
+<dl>
+
+<dt id="pass-OSSL_KDF_PARAM_PASSWORD-octet-string">&quot;pass&quot; (<b>OSSL_KDF_PARAM_PASSWORD</b>) &lt;octet string&gt;</dt>
+<dd>
+
+</dd>
+<dt id="salt-OSSL_KDF_PARAM_SALT-octet-string">&quot;salt&quot; (<b>OSSL_KDF_PARAM_SALT</b>) &lt;octet string&gt;</dt>
+<dd>
+
+</dd>
+<dt id="iter-OSSL_KDF_PARAM_ITER-unsigned-integer">&quot;iter&quot; (<b>OSSL_KDF_PARAM_ITER</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+<p>This parameter has a default value of 2048.</p>
+
+</dd>
+<dt id="properties-OSSL_KDF_PARAM_PROPERTIES-UTF8-string">&quot;properties&quot; (<b>OSSL_KDF_PARAM_PROPERTIES</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+</dd>
+<dt id="digest-OSSL_KDF_PARAM_DIGEST-UTF8-string">&quot;digest&quot; (<b>OSSL_KDF_PARAM_DIGEST</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+<p>These parameters work as described in <a href="../man3/EVP_KDF.html">&quot;PARAMETERS&quot; in EVP_KDF(3)</a>.</p>
+
+</dd>
+<dt id="pkcs5-OSSL_KDF_PARAM_PKCS5-integer">&quot;pkcs5&quot; (<b>OSSL_KDF_PARAM_PKCS5</b>) &lt;integer&gt;</dt>
+<dd>
+
+<p>This parameter can be used to enable or disable SP800-132 compliance checks. Setting the mode to 0 enables the compliance checks.</p>
+
+<p>The checks performed are:</p>
+
+<dl>
+
+<dt id="the-iteration-count-is-at-least-1000">- the iteration count is at least 1000.</dt>
+<dd>
+
+</dd>
+<dt id="the-salt-length-is-at-least-128-bits">- the salt length is at least 128 bits.</dt>
+<dd>
+
+</dd>
+<dt id="the-derived-key-length-is-at-least-112-bits">- the derived key length is at least 112 bits.</dt>
+<dd>
+
+</dd>
+</dl>
+
+<p>The default provider uses a default mode of 1 for backwards compatibility, and the FIPS provider uses a default mode of 0. This option breaks FIPS compliance if it causes the approved &quot;fips-indicator&quot; to return 0.</p>
+
+</dd>
+<dt id="fips-indicator-OSSL_KDF_PARAM_FIPS_APPROVED_INDICATOR-integer">&quot;fips-indicator&quot; (<b>OSSL_KDF_PARAM_FIPS_APPROVED_INDICATOR</b>) &lt;integer&gt;</dt>
+<dd>
+
+<p>This option is used by the OpenSSL FIPS provider.</p>
+
+<p>A getter that returns 1 if the operation is FIPS approved, or 0 otherwise. This may be used after calling EVP_KDF_derive. It returns 0 if &quot;pkcs5&quot; is set to 1 and the derived key length, salt length or iteration count test fails.</p>
+
+</dd>
+</dl>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>A typical application of this algorithm is to derive keying material for an encryption algorithm from a password in the &quot;pass&quot;, a salt in &quot;salt&quot;, and an iteration count.</p>
+
+<p>Increasing the &quot;iter&quot; parameter slows down the algorithm which makes it harder for an attacker to perform a brute force attack using a large number of candidate passwords.</p>
+
+<p>No assumption is made regarding the given password; it is simply treated as a byte sequence.</p>
+
+<h1 id="CONFORMING-TO">CONFORMING TO</h1>
+
+<p>SP800-132</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_KDF.html">EVP_KDF(3)</a>, <a href="../man3/EVP_KDF_CTX_new.html">EVP_KDF_CTX_new(3)</a>, <a href="../man3/EVP_KDF_CTX_free.html">EVP_KDF_CTX_free(3)</a>, <a href="../man3/EVP_KDF_CTX_set_params.html">EVP_KDF_CTX_set_params(3)</a>, <a href="../man3/EVP_KDF_derive.html">EVP_KDF_derive(3)</a>, <a href="../man3/EVP_KDF.html">&quot;PARAMETERS&quot; in EVP_KDF(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>This functionality was added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2018-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

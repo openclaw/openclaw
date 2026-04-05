@@ -1,0 +1,76 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>X509_ACERT_add1_attr</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>X509_ACERT_add1_attr, X509_ACERT_add1_attr_by_NID, X509_ACERT_add1_attr_by_OBJ, X509_ACERT_add1_attr_by_txt, X509_ACERT_delete_attr - X509_ACERT attribute functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/x509_acert.h&gt;
+
+int X509_ACERT_add1_attr(X509_ACERT *x, X509_ATTRIBUTE *attr);
+int X509_ACERT_add1_attr_by_NID(X509_ACERT *x, int nid, int type,
+                                const void *bytes, int len);
+int X509_ACERT_add1_attr_by_OBJ(X509_ACERT *x, const ASN1_OBJECT *obj,
+                                int type, const void *bytes, int len);
+int X509_ACERT_add1_attr_by_txt(X509_ACERT *x, const char *attrname, int type,
+                                const unsigned char *bytes, int len);
+X509_ATTRIBUTE *X509_ACERT_delete_attr(X509_ACERT *x, int loc);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>X509_ACERT_add1_attr() adds a constructed X509_ATTRIBUTE <b>attr</b> to the existing X509_ACERT structure <b>x</b>.</p>
+
+<p>X509_ACERT_add1_attr_by_NID() and X509_ACERT_add1_attr_by_OBJ() add an attribute of type <i>nid</i> or <i>obj</i> with a value of ASN1 type <i>type</i> constructed using <i>len</i> bytes from <i>bytes</i>.</p>
+
+<p>X509_ACERT_add1_attr_by_txt() adds an attribute of type <i>attrname</i> with a value of ASN1 type <i>type</i> constructed using <i>len</i> bytes from <i>bytes</i>.</p>
+
+<p>X509_ACERT_delete_attr() will delete the <i>loc</i>th attribute from <i>x</i> and return a pointer to it or NULL if there are fewer than <i>loc</i> attributes contained in <i>x</i>.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>X509_ACERT_add1_attr(), X509_ACERT_add1_attr_by_NID(), and X509_ACERT_add1_attr_by_OBJ() return 1 for success and 0 for failure.</p>
+
+<p>X509_ACERT_delete_attr() returns a <b>X509_ATTRIBUTE</b> pointer on success or NULL on failure.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/X509_ACERT_get_attr_count.html">X509_ACERT_get_attr_count(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>X509_ACERT_add1_attr(), X509_ACERT_add1_attr_by_NID(), X509_ACERT_add1_attr_by_OBJ(), X509_ACERT_add1_attr_by_txt() and X509_ACERT_delete_attr() were added in OpenSSL 3.4.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2023-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

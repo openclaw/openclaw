@@ -1,0 +1,83 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+        "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+ <head>
+  <meta name="generator" content="PSPad editor, www.pspad.com" />
+  <meta http-equiv="content-type" content="text/html; charset=UTF-8" />
+  <link rel="stylesheet" type="text/css" href="styles/lame.css" />
+	<title>LAME MP3 Encoder :: Variable Bit Rate</title>
+ </head>
+ <body>
+<div id="menu">
+	<ul>
+		<li><a href="index.html">Index page</a></li>
+		<li><a href="about.html">About LAME</a></li>
+		<li><a style="border: 0" href="introduction.html">Intro to encoding</a>
+    <div id="submenu">
+    	<ul>
+    		<li><a href="cbr.html">CBR </a></li>
+    		<li><a href="abr.html">ABR </a></li>
+        <li><a href="vbr.html">VBR </a></li>
+        <li><a style="border: 0" href="ms_stereo.html">M/S Stereo</a></li>
+    	</ul>
+    </div>
+    </li>
+		<li><a href="usage.html">Usage of LAME</a></li>
+		<li><a href="history.html">Version history</a></li>
+		<li><a href="contributors.html">Coders of LAME</a></li>
+		<li><a href="contact.html">Contact LAME</a></li>
+		<li><a style="border: 0" href="links.html">LAME links</a></li>
+	</ul>
+</div>
+<div id="container">
+<div id="content">
+
+<div align="center">
+	<img src="images/logo.gif" width="358" height="231" alt="LAME Official Logo" />
+	<h2 class="hilight">LAME - Variable Bit Rate</h2>
+</div>
+
+<p>Suggested usage:</p>
+<blockquote class="code">lame -V2 input.wav output.mp3</blockquote>
+
+<p>
+In Variable Bitrate (VBR) coding, the user chooses a desired quality level
+instead of a bitrate. A correct implementation should be able to maintain the
+same quality perception, changing the bitrate to a higher or lower one whenever
+the audio file is more or less complex. With MP3, this is not always possible.
+</p>
+<p>
+VBR encoding is the logical way of encoding data. General data compressors (like
+.zip and .rar) are VBR, as lossless codecs are as well. Being able to indicate
+a quality value, the encoder decides for each frame, which is the most appropiate
+bitrate to keep it.
+</p>
+<p>
+The main advantage of using VBR is that the encoder will use the smallest amount
+of bytes needed to keep the asked quality. The inconvenience is that the
+file size is quite unpredictable, and can change from file to file in more than
+50kbps. (or nearly double the size, with different genres and quasi-mono content)
+</p>
+</div>
+<div id="footer">
+
+<a href="http://sourceforge.net/projects/lame"><img src="http://sflogo.sourceforge.net/sflogo.php?group_id=290&amp;type=12"
+ alt="Get LAME (Lame Aint an MP3 Encoder) at SourceForge.net. Fast, secure and Free Open Source software downloads"
+ border="0" height="30" width="120" /></a>
+
+<a href="http://validator.w3.org/#validate_by_upload"><img src="images/valid-xhtml10.png"
+ alt="Valid XHTML 1.0 Transitional" border="0" height="31" width="88" /></a>
+
+<a href="http://jigsaw.w3.org/css-validator/"><img src="images/valid-css.png"
+ alt="Valid CSS!" border="0" height="31" width="88" /></a>
+
+<p>HTML markup and design by <a
+href="http://www.rjamorim.com" target="_blank">Roberto Amorim</a> and <a
+href="http://www.maresweb.de" target="_blank">Sebastian Mares</a>. Logo by <a 
+href="http://www.brightercreative.co.uk">Sam Fisher</a>.</p>
+
+</div>
+</div>
+
+</body>
+</html>

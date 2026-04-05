@@ -1,0 +1,121 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_PKEY-HMAC</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Common-MAC-parameters">Common MAC parameters</a></li>
+      <li><a href="#CMAC-parameters">CMAC parameters</a></li>
+      <li><a href="#Common-MAC-key-generation-parameters">Common MAC key generation parameters</a></li>
+      <li><a href="#CMAC-key-generation-parameters">CMAC key generation parameters</a></li>
+    </ul>
+  </li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_PKEY-HMAC, EVP_KEYMGMT-HMAC, EVP_PKEY-Siphash, EVP_KEYMGMT-Siphash, EVP_PKEY-Poly1305, EVP_KEYMGMT-Poly1305, EVP_PKEY-CMAC, EVP_KEYMGMT-CMAC - EVP_PKEY legacy MAC keytypes and algorithm support</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The <b>HMAC</b> and <b>CMAC</b> key types are implemented in OpenSSL&#39;s default and FIPS providers. Additionally the <b>Siphash</b> and <b>Poly1305</b> key types are implemented in the default provider. Performing MAC operations via an EVP_PKEY is considered legacy and are only available for backwards compatibility purposes and for a restricted set of algorithms. The preferred way of performing MAC operations is via the EVP_MAC APIs. See <a href="../man3/EVP_MAC_init.html">EVP_MAC_init(3)</a>.</p>
+
+<p>For further details on using EVP_PKEY based MAC keys see <a href="../man7/EVP_SIGNATURE-HMAC.html">EVP_SIGNATURE-HMAC(7)</a>, <a href="../man7/EVP_SIGNATURE-Siphash.html">EVP_SIGNATURE-Siphash(7)</a>, <a href="../man7/EVP_SIGNATURE-Poly1305.html">EVP_SIGNATURE-Poly1305(7)</a> or <a href="../man7/EVP_SIGNATURE-CMAC.html">EVP_SIGNATURE-CMAC(7)</a>.</p>
+
+<h2 id="Common-MAC-parameters">Common MAC parameters</h2>
+
+<p>All the <b>MAC</b> keytypes support the following parameters.</p>
+
+<dl>
+
+<dt id="priv-OSSL_PKEY_PARAM_PRIV_KEY-octet-string">&quot;priv&quot; (<b>OSSL_PKEY_PARAM_PRIV_KEY</b>) &lt;octet string&gt;</dt>
+<dd>
+
+<p>The MAC key value.</p>
+
+</dd>
+<dt id="properties-OSSL_PKEY_PARAM_PROPERTIES-UTF8-string">&quot;properties&quot; (<b>OSSL_PKEY_PARAM_PROPERTIES</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+<p>A property query string to be used when any algorithms are fetched.</p>
+
+</dd>
+</dl>
+
+<h2 id="CMAC-parameters">CMAC parameters</h2>
+
+<p>As well as the parameters described above, the <b>CMAC</b> keytype additionally supports the following parameters.</p>
+
+<dl>
+
+<dt id="cipher-OSSL_PKEY_PARAM_CIPHER-UTF8-string">&quot;cipher&quot; (<b>OSSL_PKEY_PARAM_CIPHER</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+<p>The name of a cipher to be used when generating the MAC.</p>
+
+</dd>
+<dt id="engine-OSSL_PKEY_PARAM_ENGINE-UTF8-string">&quot;engine&quot; (<b>OSSL_PKEY_PARAM_ENGINE</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+<p>The name of an engine to be used for the specified cipher (if any).</p>
+
+</dd>
+</dl>
+
+<h2 id="Common-MAC-key-generation-parameters">Common MAC key generation parameters</h2>
+
+<p>MAC key generation is unusual in that no new key is actually generated. Instead a new provider side key object is created with the supplied raw key value. This is done for backwards compatibility with previous versions of OpenSSL.</p>
+
+<dl>
+
+<dt id="priv-OSSL_PKEY_PARAM_PRIV_KEY-octet-string1">&quot;priv&quot; (<b>OSSL_PKEY_PARAM_PRIV_KEY</b>) &lt;octet string&gt;</dt>
+<dd>
+
+<p>The MAC key value.</p>
+
+</dd>
+</dl>
+
+<h2 id="CMAC-key-generation-parameters">CMAC key generation parameters</h2>
+
+<p>In addition to the common MAC key generation parameters, the CMAC key generation additionally recognises the following.</p>
+
+<dl>
+
+<dt id="cipher-OSSL_PKEY_PARAM_CIPHER-UTF8-string1">&quot;cipher&quot; (<b>OSSL_PKEY_PARAM_CIPHER</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+<p>The name of a cipher to be used when generating the MAC.</p>
+
+</dd>
+</dl>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_KEYMGMT.html">EVP_KEYMGMT(3)</a>, <a href="../man3/EVP_PKEY.html">EVP_PKEY(3)</a>, <a href="../man7/provider-keymgmt.html">provider-keymgmt(7)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2020 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

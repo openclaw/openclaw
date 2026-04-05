@@ -1,0 +1,110 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_MAC-BLAKE2</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Identity">Identity</a></li>
+      <li><a href="#Supported-parameters">Supported parameters</a></li>
+    </ul>
+  </li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_MAC-BLAKE2, EVP_MAC-BLAKE2BMAC, EVP_MAC-BLAKE2SMAC - The BLAKE2 EVP_MAC implementations</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>Support for computing BLAKE2 MACs through the <b>EVP_MAC</b> API.</p>
+
+<h2 id="Identity">Identity</h2>
+
+<p>These implementations are identified with one of these names and properties, to be used with EVP_MAC_fetch():</p>
+
+<dl>
+
+<dt id="BLAKE2BMAC-provider-default">&quot;BLAKE2BMAC&quot;, &quot;provider=default&quot;</dt>
+<dd>
+
+</dd>
+<dt id="BLAKE2SMAC-provider-default">&quot;BLAKE2SMAC&quot;, &quot;provider=default&quot;</dt>
+<dd>
+
+</dd>
+</dl>
+
+<h2 id="Supported-parameters">Supported parameters</h2>
+
+<p>The general description of these parameters can be found in <a href="../man3/EVP_MAC.html">&quot;PARAMETERS&quot; in EVP_MAC(3)</a>.</p>
+
+<p>All these parameters (except for &quot;block-size&quot;) can be set with EVP_MAC_CTX_set_params(). Furthermore, the &quot;size&quot; parameter can be retrieved with EVP_MAC_CTX_get_params(), or with EVP_MAC_CTX_get_mac_size(). The length of the &quot;size&quot; parameter should not exceed that of a <b>size_t</b>. Likewise, the &quot;block-size&quot; parameter can be retrieved with EVP_MAC_CTX_get_params(), or with EVP_MAC_CTX_get_block_size().</p>
+
+<dl>
+
+<dt id="key-OSSL_MAC_PARAM_KEY-octet-string">&quot;key&quot; (<b>OSSL_MAC_PARAM_KEY</b>) &lt;octet string&gt;</dt>
+<dd>
+
+<p>Sets the MAC key. It may be at most 64 bytes for BLAKE2BMAC or 32 for BLAKE2SMAC and at least 1 byte in both cases. Setting this parameter is identical to passing a <i>key</i> to <a href="../man3/EVP_MAC_init.html">EVP_MAC_init(3)</a>.</p>
+
+</dd>
+<dt id="custom-OSSL_MAC_PARAM_CUSTOM-octet-string">&quot;custom&quot; (<b>OSSL_MAC_PARAM_CUSTOM</b>) &lt;octet string&gt;</dt>
+<dd>
+
+<p>Sets the customization/personalization string. It is an optional value of at most 16 bytes for BLAKE2BMAC or 8 for BLAKE2SMAC, and is empty by default.</p>
+
+</dd>
+<dt id="salt-OSSL_MAC_PARAM_SALT-octet-string">&quot;salt&quot; (<b>OSSL_MAC_PARAM_SALT</b>) &lt;octet string&gt;</dt>
+<dd>
+
+<p>Sets the salt. It is an optional value of at most 16 bytes for BLAKE2BMAC or 8 for BLAKE2SMAC, and is empty by default.</p>
+
+</dd>
+<dt id="size-OSSL_MAC_PARAM_SIZE-unsigned-integer">&quot;size&quot; (<b>OSSL_MAC_PARAM_SIZE</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+<p>Sets the MAC size. It can be any number between 1 and 32 for EVP_MAC_BLAKE2S or between 1 and 64 for EVP_MAC_BLAKE2B. It is 32 and 64 respectively by default.</p>
+
+</dd>
+<dt id="block-size-OSSL_MAC_PARAM_BLOCK_SIZE-unsigned-integer">&quot;block-size&quot; (<b>OSSL_MAC_PARAM_BLOCK_SIZE</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+<p>Gets the MAC block size. It is 64 for EVP_MAC_BLAKE2S and 128 for EVP_MAC_BLAKE2B.</p>
+
+</dd>
+</dl>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_MAC_CTX_get_params.html">EVP_MAC_CTX_get_params(3)</a>, <a href="../man3/EVP_MAC_CTX_set_params.html">EVP_MAC_CTX_set_params(3)</a>, <a href="../man3/EVP_MAC.html">&quot;PARAMETERS&quot; in EVP_MAC(3)</a>, <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The macros and functions described here were added to OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2018-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

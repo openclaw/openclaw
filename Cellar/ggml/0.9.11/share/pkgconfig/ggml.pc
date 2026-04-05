@@ -1,0 +1,10 @@
+prefix=/opt/homebrew/Cellar/ggml/0.9.11
+exec_prefix=${prefix}
+includedir=${prefix}/include
+libdir=${prefix}/lib
+
+Name: ggml
+Description: The GGML Tensor Library for Machine Learning
+Version: 0.9.11
+Cflags: -I${includedir}
+Libs: -L${libdir} -lggml

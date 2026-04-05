@@ -1,0 +1,22 @@
+.\"
+.\" Copyright 1998 by the Massachusetts Institute of Technology.
+.\" SPDX-License-Identifier: MIT
+.\"
+.TH ARES_FREEADDRINFO 3 "31 October 2018"
+.SH NAME
+ares_freeaddrinfo \- Free addrinfo structure allocated by ares functions
+.SH SYNOPSIS
+.nf
+#include <ares.h>
+
+void ares_freeaddrinfo(struct ares_addrinfo *\fIai\fP)
+.fi
+.SH DESCRIPTION
+The
+.B ares_freeaddrinfo
+function frees a
+.B struct ares_addrinfo
+returned in \fIresult\fP of
+.B ares_addrinfo_callback
+.SH SEE ALSO
+.BR ares_getaddrinfo (3),

@@ -1,0 +1,11 @@
+prefix=/opt/homebrew/Cellar/simdutf/8.2.0
+includedir=${prefix}/include
+libdir=${prefix}/lib
+
+Name: simdutf
+Description: Fast Unicode validation, transcoding and processing
+URL: 
+Version: 8.2.0
+Cflags: -I${includedir} 
+Libs: -L${libdir} -lsimdutf
+

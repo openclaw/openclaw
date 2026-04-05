@@ -1,0 +1,47 @@
+commit f769990597670f3ea8d2440d1e18a3f9a0df9bc0
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-18
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-18
+
+    Update manual pages
+
+commit 50c710a78464441dc4d623d28db628c08f506458
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-03-17
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-18
+
+    Bump package and library versions
+
+commit c619c7be0737ac78051b1cacf4b1ce5467eb838d
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-02-18
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-18
+
+    Add tests for iframe->state validation
+
+commit 5c7df8fa815ac1004d9ecb9d1f7595c4d37f46e1
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-02-18
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-17
+
+    Fix missing iframe->state validations to avoid assertion failure
+
+commit 4af04320f2eb531e142875a5272fbf77651714f0
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-02-18
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-17
+
+    altsvc: Avoid pointer arithmetic against NULL
+
+commit 943b64cfc57f6c66f26f8d6db6538e06a474a8c2
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-02-18
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-03-17
+
+    Check nghttp2_is_fatal first

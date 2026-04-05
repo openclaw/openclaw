@@ -1,0 +1,157 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_KEYEXCH-ECDH</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#ECDH-Key-Exchange-parameters">ECDH Key Exchange parameters</a></li>
+    </ul>
+  </li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_KEYEXCH-ECDH - ECDH Key Exchange algorithm support</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>Key exchange support for the <b>ECDH</b> key type.</p>
+
+<h2 id="ECDH-Key-Exchange-parameters">ECDH Key Exchange parameters</h2>
+
+<dl>
+
+<dt id="ecdh-cofactor-mode-OSSL_EXCHANGE_PARAM_EC_ECDH_COFACTOR_MODE-integer">&quot;ecdh-cofactor-mode&quot; (<b>OSSL_EXCHANGE_PARAM_EC_ECDH_COFACTOR_MODE</b>) &lt;integer&gt;</dt>
+<dd>
+
+<p>Sets or gets the ECDH mode of operation for the associated key exchange ctx.</p>
+
+<p>In the context of an Elliptic Curve Diffie-Hellman key exchange, this parameter can be used to select between the plain Diffie-Hellman (DH) or Cofactor Diffie-Hellman (CDH) variants of the key exchange algorithm.</p>
+
+<p>When setting, the value should be 1, 0 or -1, respectively forcing cofactor mode on, off, or resetting it to the default for the private key associated with the given key exchange ctx.</p>
+
+<p>When getting, the value should be either 1 or 0, respectively signaling if the cofactor mode is on or off.</p>
+
+<p>See also <a href="../man7/provider-keymgmt.html">provider-keymgmt(7)</a> for the related <b>OSSL_PKEY_PARAM_USE_COFACTOR_ECDH</b> parameter that can be set on a per-key basis.</p>
+
+</dd>
+<dt id="kdf-type-OSSL_EXCHANGE_PARAM_KDF_TYPE-UTF8-string">&quot;kdf-type&quot; (<b>OSSL_EXCHANGE_PARAM_KDF_TYPE</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+</dd>
+<dt id="kdf-digest-OSSL_EXCHANGE_PARAM_KDF_DIGEST-UTF8-string">&quot;kdf-digest&quot; (<b>OSSL_EXCHANGE_PARAM_KDF_DIGEST</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+</dd>
+<dt id="kdf-digest-props-OSSL_EXCHANGE_PARAM_KDF_DIGEST_PROPS-UTF8-string">&quot;kdf-digest-props&quot; (<b>OSSL_EXCHANGE_PARAM_KDF_DIGEST_PROPS</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+</dd>
+<dt id="kdf-outlen-OSSL_EXCHANGE_PARAM_KDF_OUTLEN-unsigned-integer">&quot;kdf-outlen&quot; (<b>OSSL_EXCHANGE_PARAM_KDF_OUTLEN</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+</dd>
+<dt id="kdf-ukm-OSSL_EXCHANGE_PARAM_KDF_UKM-octet-string">&quot;kdf-ukm&quot; (<b>OSSL_EXCHANGE_PARAM_KDF_UKM</b>) &lt;octet string&gt;</dt>
+<dd>
+
+</dd>
+</dl>
+
+<p>The OpenSSL FIPS provider also supports the following parameters:</p>
+
+<dl>
+
+<dt id="fips-indicator-OSSL_EXCHANGE_PARAM_FIPS_APPROVED_INDICATOR-integer">&quot;fips-indicator&quot; (<b>OSSL_EXCHANGE_PARAM_FIPS_APPROVED_INDICATOR</b>) &lt;integer&gt;</dt>
+<dd>
+
+</dd>
+<dt id="key-check-OSSL_EXCHANGE_PARAM_FIPS_KEY_CHECK-integer">&quot;key-check&quot; (<b>OSSL_EXCHANGE_PARAM_FIPS_KEY_CHECK</b>) &lt;integer&gt;</dt>
+<dd>
+
+</dd>
+<dt id="digest-check-OSSL_EXCHANGE_PARAM_FIPS_DIGEST_CHECK-integer">&quot;digest-check&quot; (<b>OSSL_EXCHANGE_PARAM_FIPS_DIGEST_CHECK</b>) &lt;integer&gt;</dt>
+<dd>
+
+<p>See <a href="../man7/provider-keyexch.html">&quot;Common Key Exchange parameters&quot; in provider-keyexch(7)</a>.</p>
+
+</dd>
+<dt id="ecdh-cofactor-check-OSSL_EXCHANGE_PARAM_FIPS_ECDH_COFACTOR_CHECK-integer">&quot;ecdh-cofactor-check&quot; (<b>OSSL_EXCHANGE_PARAM_FIPS_ECDH_COFACTOR_CHECK</b>) &lt;integer&gt;</dt>
+<dd>
+
+<p>If required this parameter should before OSSL_FUNC_keyexch_derive(). The default value of 1 causes an error during the OSSL_FUNC_keyexch_derive if the EC curve has a cofactor that is not 1, and the cofactor is not used. Setting this to 0 will ignore the error and set the approved &quot;fips-indicator&quot; to 0. This option breaks FIPS compliance if it causes the approved &quot;fips-indicator&quot; to return 0.</p>
+
+</dd>
+</dl>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>Examples of key agreement can be found in demos/keyexch.</p>
+
+<p>Keys for the host and peer must be generated as shown in <a href="../man7/EVP_PKEY-EC.html">&quot;Examples&quot; in EVP_PKEY-EC(7)</a> using the same curve name.</p>
+
+<p>The code to generate a shared secret for the normal case is identical to <a href="../man7/EVP_KEYEXCH-DH.html">&quot;Examples&quot; in EVP_KEYEXCH-DH(7)</a>.</p>
+
+<p>To derive a shared secret on the host using the host&#39;s key and the peer&#39;s public key but also using X963KDF with a user key material:</p>
+
+<pre><code>/* It is assumed that the host_key, peer_pub_key and ukm are set up */
+void derive_secret(EVP_PKEY *host_key, EVP_PKEY *peer_key,
+                   unsigned char *ukm, size_t ukm_len)
+{
+    unsigned char secret[64];
+    size_t out_len = sizeof(secret);
+    size_t secret_len = out_len;
+    unsigned int pad = 1;
+    OSSL_PARAM params[6];
+    EVP_PKEY_CTX *dctx = EVP_PKEY_CTX_new_from_pkey(NULL, host_key, NULL);
+
+    EVP_PKEY_derive_init(dctx);
+
+    params[0] = OSSL_PARAM_construct_uint(OSSL_EXCHANGE_PARAM_PAD, &amp;pad);
+    params[1] = OSSL_PARAM_construct_utf8_string(OSSL_EXCHANGE_PARAM_KDF_TYPE,
+                                                 &quot;X963KDF&quot;, 0);
+    params[2] = OSSL_PARAM_construct_utf8_string(OSSL_EXCHANGE_PARAM_KDF_DIGEST,
+                                                 &quot;SHA1&quot;, 0);
+    params[3] = OSSL_PARAM_construct_size_t(OSSL_EXCHANGE_PARAM_KDF_OUTLEN,
+                                            &amp;out_len);
+    params[4] = OSSL_PARAM_construct_octet_string(OSSL_EXCHANGE_PARAM_KDF_UKM,
+                                                  ukm, ukm_len);
+    params[5] = OSSL_PARAM_construct_end();
+    EVP_PKEY_CTX_set_params(dctx, params);
+
+    EVP_PKEY_derive_set_peer(dctx, peer_pub_key);
+    EVP_PKEY_derive(dctx, secret, &amp;secret_len);
+    ...
+    OPENSSL_clear_free(secret, secret_len);
+    EVP_PKEY_CTX_free(dctx);
+}</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/EVP_PKEY-EC.html">EVP_PKEY-EC(7)</a> <a href="../man3/EVP_PKEY.html">EVP_PKEY(3)</a>, <a href="../man7/provider-keyexch.html">provider-keyexch(7)</a>, <a href="../man7/provider-keymgmt.html">provider-keymgmt(7)</a>, <a href="../man7/OSSL_PROVIDER-default.html">OSSL_PROVIDER-default(7)</a>, <a href="../man7/OSSL_PROVIDER-FIPS.html">OSSL_PROVIDER-FIPS(7)</a>,</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2020-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

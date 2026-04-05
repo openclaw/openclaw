@@ -1,0 +1,100 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_CTX_set_default_passwd_cb</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_CTX_set_default_passwd_cb, SSL_CTX_set_default_passwd_cb_userdata, SSL_CTX_get_default_passwd_cb, SSL_CTX_get_default_passwd_cb_userdata, SSL_set_default_passwd_cb, SSL_set_default_passwd_cb_userdata, SSL_get_default_passwd_cb, SSL_get_default_passwd_cb_userdata - set or get passwd callback for encrypted PEM file handling</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+void SSL_CTX_set_default_passwd_cb(SSL_CTX *ctx, pem_password_cb *cb);
+void SSL_CTX_set_default_passwd_cb_userdata(SSL_CTX *ctx, void *u);
+pem_password_cb *SSL_CTX_get_default_passwd_cb(SSL_CTX *ctx);
+void *SSL_CTX_get_default_passwd_cb_userdata(SSL_CTX *ctx);
+
+void SSL_set_default_passwd_cb(SSL *s, pem_password_cb *cb);
+void SSL_set_default_passwd_cb_userdata(SSL *s, void *u);
+pem_password_cb *SSL_get_default_passwd_cb(SSL *s);
+void *SSL_get_default_passwd_cb_userdata(SSL *s);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_CTX_set_default_passwd_cb() sets the default password callback called when loading/storing a PEM certificate with encryption.</p>
+
+<p>SSL_CTX_set_default_passwd_cb_userdata() sets a pointer to userdata, <b>u</b>, which will be provided to the password callback on invocation.</p>
+
+<p>SSL_CTX_get_default_passwd_cb() returns a function pointer to the password callback currently set in <b>ctx</b>. If no callback was explicitly set, the NULL pointer is returned.</p>
+
+<p>SSL_CTX_get_default_passwd_cb_userdata() returns a pointer to the userdata currently set in <b>ctx</b>. If no userdata was explicitly set, the NULL pointer is returned.</p>
+
+<p>SSL_set_default_passwd_cb(), SSL_set_default_passwd_cb_userdata(), SSL_get_default_passwd_cb() and SSL_get_default_passwd_cb_userdata() perform the same function as their SSL_CTX counterparts, but using an SSL object.</p>
+
+<p>The password callback, which must be provided by the application, hands back the password to be used during decryption. On invocation a pointer to userdata is provided. The function must store the password into the provided buffer <b>buf</b> which is of size <b>size</b>. The actual length of the password must be returned to the calling function. <b>rwflag</b> indicates whether the callback is used for reading/decryption (rwflag=0) or writing/encryption (rwflag=1). For more details, see <a href="../man3/pem_password_cb.html">pem_password_cb(3)</a>.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>When loading or storing private keys, a password might be supplied to protect the private key. The way this password can be supplied may depend on the application. If only one private key is handled, it can be practical to have the callback handle the password dialog interactively. If several keys have to be handled, it can be practical to ask for the password once, then keep it in memory and use it several times. In the last case, the password could be stored into the userdata storage and the callback only returns the password already stored.</p>
+
+<p>When asking for the password interactively, the callback can use <b>rwflag</b> to check, whether an item shall be encrypted (rwflag=1). In this case the password dialog may ask for the same password twice for comparison in order to catch typos, that would make decryption impossible.</p>
+
+<p>Other items in PEM formatting (certificates) can also be encrypted, it is however not usual, as certificate information is considered public.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>These functions do not provide diagnostic information.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>The following example returns the password provided as userdata to the calling function. The password is considered to be a &#39;\0&#39; terminated string. If the password does not fit into the buffer, the password is truncated.</p>
+
+<pre><code>int my_cb(char *buf, int size, int rwflag, void *u)
+{
+    strncpy(buf, (char *)u, size);
+    buf[size - 1] = &#39;\0&#39;;
+    return strlen(buf);
+}</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a>, <a href="../man3/SSL_CTX_use_certificate.html">SSL_CTX_use_certificate(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>SSL_CTX_get_default_passwd_cb(), SSL_CTX_get_default_passwd_cb_userdata(), SSL_set_default_passwd_cb() and SSL_set_default_passwd_cb_userdata() were added in OpenSSL 1.1.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2019 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

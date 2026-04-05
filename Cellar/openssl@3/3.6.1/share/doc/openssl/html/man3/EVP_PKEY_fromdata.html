@@ -1,0 +1,278 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_PKEY_fromdata</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Selections">Selections</a></li>
+    </ul>
+  </li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a>
+    <ul>
+      <li><a href="#Creating-an-RSA-keypair-using-raw-key-data">Creating an RSA keypair using raw key data</a></li>
+      <li><a href="#Creating-an-ECC-keypair-using-raw-key-data">Creating an ECC keypair using raw key data</a></li>
+      <li><a href="#Finding-out-params-for-an-unknown-key-type">Finding out params for an unknown key type</a></li>
+    </ul>
+  </li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_PKEY_fromdata_init, EVP_PKEY_fromdata, EVP_PKEY_fromdata_settable - functions to create keys and key parameters from user data</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+
+int EVP_PKEY_fromdata_init(EVP_PKEY_CTX *ctx);
+int EVP_PKEY_fromdata(EVP_PKEY_CTX *ctx, EVP_PKEY **ppkey, int selection,
+                      OSSL_PARAM params[]);
+const OSSL_PARAM *EVP_PKEY_fromdata_settable(EVP_PKEY_CTX *ctx, int selection);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The functions described here are used to create new keys from user provided key data, such as <i>n</i>, <i>e</i> and <i>d</i> for a minimal RSA keypair.</p>
+
+<p>These functions use an <b>EVP_PKEY_CTX</b> context, which should primarily be created with <a href="../man3/EVP_PKEY_CTX_new_from_name.html">EVP_PKEY_CTX_new_from_name(3)</a> or <a href="../man3/EVP_PKEY_CTX_new_id.html">EVP_PKEY_CTX_new_id(3)</a>.</p>
+
+<p>The exact key data that the user can pass depends on the key type. These are passed as an <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> array.</p>
+
+<p>EVP_PKEY_fromdata_init() initializes a public key algorithm context for creating a key or key parameters from user data.</p>
+
+<p>EVP_PKEY_fromdata() creates the structure to store a key or key parameters, given data from <i>params</i>, <i>selection</i> and a context that&#39;s been initialized with EVP_PKEY_fromdata_init(). The result is written to <i>*ppkey</i>. <i>selection</i> is described in <a href="#Selections">&quot;Selections&quot;</a>. The parameters that can be used for various types of key are as described by the various &quot;Common parameters&quot; sections of the <a href="../man7/EVP_PKEY-RSA.html"><b>EVP_PKEY-RSA</b>(7)</a>, <a href="../man7/EVP_PKEY-DSA.html"><b>EVP_PKEY-DSA</b>(7)</a>, <a href="../man7/EVP_PKEY-DH.html"><b>EVP_PKEY-DH</b>(7)</a>, <a href="../man7/EVP_PKEY-EC.html"><b>EVP_PKEY-EC</b>(7)</a>, <a href="../man7/EVP_PKEY-ED448.html"><b>EVP_PKEY-ED448</b>(7)</a>, <a href="../man7/EVP_PKEY-X25519.html"><b>EVP_PKEY-X25519</b>(7)</a>, <a href="../man7/EVP_PKEY-X448.html"><b>EVP_PKEY-X448</b>(7)</a>, <a href="../man7/EVP_PKEY-ED25519.html"><b>EVP_PKEY-ED25519</b>(7)</a>, <a href="../man7/EVP_PKEY-ML-DSA.html"><b>EVP_PKEY-ML-DSA(7)</b></a> and <a href="../man7/EVP_PKEY-ML-KEM.html"><b>EVP_PKEY-ML-KEM(7)</b></a> pages.</p>
+
+<p>EVP_PKEY_fromdata_settable() gets a constant <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> array that describes the settable parameters that can be used with EVP_PKEY_fromdata(). <i>selection</i> is described in <a href="#Selections">&quot;Selections&quot;</a>.</p>
+
+<p>Parameters in the <i>params</i> array that are not among the settable parameters for the given <i>selection</i> are ignored.</p>
+
+<h2 id="Selections">Selections</h2>
+
+<p>The following constants can be used for <i>selection</i>:</p>
+
+<dl>
+
+<dt id="EVP_PKEY_KEY_PARAMETERS"><b>EVP_PKEY_KEY_PARAMETERS</b></dt>
+<dd>
+
+<p>Only key parameters will be selected.</p>
+
+</dd>
+<dt id="EVP_PKEY_PUBLIC_KEY"><b>EVP_PKEY_PUBLIC_KEY</b></dt>
+<dd>
+
+<p>Only public key components will be selected. This includes optional key parameters.</p>
+
+</dd>
+<dt id="EVP_PKEY_KEYPAIR"><b>EVP_PKEY_KEYPAIR</b></dt>
+<dd>
+
+<p>Any keypair components will be selected. This includes the private key, public key and key parameters.</p>
+
+</dd>
+</dl>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>These functions only work with key management methods coming from a provider. This is the mirror function to <a href="../man3/EVP_PKEY_todata.html">EVP_PKEY_todata(3)</a>.</p>
+
+<p>LMS support is disabled by default at compile-time. To enable, specify the <b>enable-lms</b> build configuration option.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>EVP_PKEY_fromdata_init() and EVP_PKEY_fromdata() return 1 for success and 0 or a negative value for failure. In particular a return value of -2 indicates the operation is not supported by the public key algorithm.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>These examples are very terse for the sake of staying on topic, which is the EVP_PKEY_fromdata() set of functions. In real applications, BIGNUMs would be handled and converted to byte arrays with BN_bn2nativepad(), but that&#39;s off topic here.</p>
+
+<h2 id="Creating-an-RSA-keypair-using-raw-key-data">Creating an RSA keypair using raw key data</h2>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+
+/*
+ * These are extremely small to make this example simple.  A real
+ * and secure application will not use such small numbers.  A real
+ * and secure application is expected to use BIGNUMs, and to build
+ * this array dynamically.
+ */
+unsigned long rsa_n = 0xbc747fc5;
+unsigned long rsa_e = 0x10001;
+unsigned long rsa_d = 0x7b133399;
+OSSL_PARAM params[] = {
+    OSSL_PARAM_ulong(&quot;n&quot;, &amp;rsa_n),
+    OSSL_PARAM_ulong(&quot;e&quot;, &amp;rsa_e),
+    OSSL_PARAM_ulong(&quot;d&quot;, &amp;rsa_d),
+    OSSL_PARAM_END
+};
+
+int main()
+{
+    EVP_PKEY_CTX *ctx = EVP_PKEY_CTX_new_from_name(NULL, &quot;RSA&quot;, NULL);
+    EVP_PKEY *pkey = NULL;
+
+    if (ctx == NULL
+        || EVP_PKEY_fromdata_init(ctx) &lt;= 0
+        || EVP_PKEY_fromdata(ctx, &amp;pkey, EVP_PKEY_KEYPAIR, params) &lt;= 0)
+        exit(1);
+
+    /* Do what you want with |pkey| */
+}</code></pre>
+
+<h2 id="Creating-an-ECC-keypair-using-raw-key-data">Creating an ECC keypair using raw key data</h2>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+#include &lt;openssl/param_build.h&gt;
+#include &lt;openssl/ec.h&gt;
+
+/*
+ * Fixed data to represent the private and public key.
+ */
+const unsigned char priv_data[] = {
+    0xb9, 0x2f, 0x3c, 0xe6, 0x2f, 0xfb, 0x45, 0x68,
+    0x39, 0x96, 0xf0, 0x2a, 0xaf, 0x6c, 0xda, 0xf2,
+    0x89, 0x8a, 0x27, 0xbf, 0x39, 0x9b, 0x7e, 0x54,
+    0x21, 0xc2, 0xa1, 0xe5, 0x36, 0x12, 0x48, 0x5d
+};
+/* UNCOMPRESSED FORMAT */
+const unsigned char pub_data[] = {
+    POINT_CONVERSION_UNCOMPRESSED,
+    0xcf, 0x20, 0xfb, 0x9a, 0x1d, 0x11, 0x6c, 0x5e,
+    0x9f, 0xec, 0x38, 0x87, 0x6c, 0x1d, 0x2f, 0x58,
+    0x47, 0xab, 0xa3, 0x9b, 0x79, 0x23, 0xe6, 0xeb,
+    0x94, 0x6f, 0x97, 0xdb, 0xa3, 0x7d, 0xbd, 0xe5,
+    0x26, 0xca, 0x07, 0x17, 0x8d, 0x26, 0x75, 0xff,
+    0xcb, 0x8e, 0xb6, 0x84, 0xd0, 0x24, 0x02, 0x25,
+    0x8f, 0xb9, 0x33, 0x6e, 0xcf, 0x12, 0x16, 0x2f,
+    0x5c, 0xcd, 0x86, 0x71, 0xa8, 0xbf, 0x1a, 0x47
+};
+
+int main()
+{
+    EVP_PKEY_CTX *ctx;
+    EVP_PKEY *pkey = NULL;
+    BIGNUM *priv;
+    OSSL_PARAM_BLD *param_bld;
+    OSSL_PARAM *params = NULL;
+    int exitcode = 0;
+
+    priv = BN_bin2bn(priv_data, sizeof(priv_data), NULL);
+
+    param_bld = OSSL_PARAM_BLD_new();
+    if (priv != NULL &amp;&amp; param_bld != NULL
+        &amp;&amp; OSSL_PARAM_BLD_push_utf8_string(param_bld, &quot;group&quot;,
+                                           &quot;prime256v1&quot;, 0)
+        &amp;&amp; OSSL_PARAM_BLD_push_BN(param_bld, &quot;priv&quot;, priv)
+        &amp;&amp; OSSL_PARAM_BLD_push_octet_string(param_bld, &quot;pub&quot;,
+                                            pub_data, sizeof(pub_data)))
+        params = OSSL_PARAM_BLD_to_param(param_bld);
+
+    ctx = EVP_PKEY_CTX_new_from_name(NULL, &quot;EC&quot;, NULL);
+    if (ctx == NULL
+        || params == NULL
+        || EVP_PKEY_fromdata_init(ctx) &lt;= 0
+        || EVP_PKEY_fromdata(ctx, &amp;pkey, EVP_PKEY_KEYPAIR, params) &lt;= 0) {
+        exitcode = 1;
+    } else {
+        /* Do what you want with |pkey| */
+    }
+
+    EVP_PKEY_free(pkey);
+    EVP_PKEY_CTX_free(ctx);
+    OSSL_PARAM_free(params);
+    OSSL_PARAM_BLD_free(param_bld);
+    BN_free(priv);
+
+    exit(exitcode);
+}</code></pre>
+
+<h2 id="Finding-out-params-for-an-unknown-key-type">Finding out params for an unknown key type</h2>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+#include &lt;openssl/core.h&gt;
+
+/* Program expects a key type as first argument */
+int main(int argc, char *argv[])
+{
+    EVP_PKEY_CTX *ctx = EVP_PKEY_CTX_new_from_name(NULL, argv[1], NULL);
+    const OSSL_PARAM *settable_params = NULL;
+
+    if (ctx == NULL)
+       exit(1);
+   settable_params = EVP_PKEY_fromdata_settable(ctx, EVP_PKEY_KEYPAIR);
+   if (settable_params == NULL)
+        exit(1);
+
+    for (; settable_params-&gt;key != NULL; settable_params++) {
+        const char *datatype = NULL;
+
+        switch (settable_params-&gt;data_type) {
+        case OSSL_PARAM_INTEGER:
+            datatype = &quot;integer&quot;;
+            break;
+        case OSSL_PARAM_UNSIGNED_INTEGER:
+            datatype = &quot;unsigned integer&quot;;
+            break;
+        case OSSL_PARAM_UTF8_STRING:
+            datatype = &quot;printable string (utf-8 encoding expected)&quot;;
+            break;
+        case OSSL_PARAM_UTF8_PTR:
+            datatype = &quot;printable string pointer (utf-8 encoding expected)&quot;;
+            break;
+        case OSSL_PARAM_OCTET_STRING:
+            datatype = &quot;octet string&quot;;
+            break;
+        case OSSL_PARAM_OCTET_PTR:
+            datatype = &quot;octet string pointer&quot;;
+            break;
+        }
+        printf(&quot;%s : %s &quot;, settable_params-&gt;key, datatype);
+        if (settable_params-&gt;data_size == 0)
+            printf(&quot;(unlimited size)\n&quot;);
+        else
+            printf(&quot;(maximum size %zu)\n&quot;, settable_params-&gt;data_size);
+    }
+}</code></pre>
+
+<p>The descriptor <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> returned by EVP_PKEY_fromdata_settable() may also be used programmatically, for example with <a href="../man3/OSSL_PARAM_allocate_from_text.html">OSSL_PARAM_allocate_from_text(3)</a>.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_PKEY_CTX_new.html">EVP_PKEY_CTX_new(3)</a>, <a href="../man3/EVP_PKEY_todata.html">EVP_PKEY_todata(3)</a>, <a href="../man3/EVP_PKEY_gettable_params.html">EVP_PKEY_gettable_params(3)</a>, <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a>, <a href="../man7/provider.html">provider(7)</a>, <a href="../man7/EVP_PKEY-RSA.html">EVP_PKEY-RSA(7)</a>, <a href="../man7/EVP_PKEY-EC.html">EVP_PKEY-EC(7)</a>, <a href="../man7/EVP_PKEY-ED25519.html">EVP_PKEY-ED25519(7)</a>, <a href="../man7/EVP_PKEY-ED448.html">EVP_PKEY-ED448(7)</a>, <a href="../man7/EVP_PKEY-LMS.html">EVP_PKEY-LMS(7)</a>, <a href="../man7/EVP_PKEY-DSA.html">EVP_PKEY-DSA(7)</a>, <a href="../man7/EVP_PKEY-DH.html">EVP_PKEY-DH(7)</a>, <a href="../man7/EVP_PKEY-X25519.html">EVP_PKEY-X25519(7)</a>, <a href="../man7/EVP_PKEY-X448.html">EVP_PKEY-X448(7)</a>, <a href="../man7/EVP_PKEY-ML-DSA.html">EVP_PKEY-ML-DSA(7)</a>, <a href="../man7/EVP_PKEY-ML-KEM.html">EVP_PKEY-ML-KEM(7)</a>, <a href="../man7/EVP_PKEY-SLH-DSA.html">EVP_PKEY-SLH-DSA(7)</a>.</p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>These functions were added in OpenSSL 3.0.</p>
+
+<p>Support for <b>ML-DSA</b>, <b>ML-KEM</b> and <b>SLH-DSA</b> was added in OpenSSL 3.5.</p>
+
+<p>Support for <b>LMS</b> was added in OpenSSL 3.6.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2019-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

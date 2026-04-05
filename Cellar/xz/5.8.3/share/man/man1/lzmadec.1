@@ -1,0 +1,144 @@
+.\" SPDX-License-Identifier: 0BSD
+.\"
+.\" Author: Lasse Collin
+.\"
+.TH XZDEC 1 "2024-04-08" "Tukaani" "XZ Utils"
+.SH NAME
+xzdec, lzmadec \- Small .xz and .lzma decompressors
+.SH SYNOPSIS
+.B xzdec
+.RI [ option... ]
+.RI [ file... ]
+.br
+.B lzmadec
+.RI [ option... ]
+.RI [ file... ]
+.SH DESCRIPTION
+.B xzdec
+is a liblzma-based decompression-only tool for
+.B .xz
+(and only
+.BR .xz )
+files.
+.B xzdec
+is intended to work as a drop-in replacement for
+.BR xz (1)
+in the most common situations where a script
+has been written to use
+.B "xz \-\-decompress \-\-stdout"
+(and possibly a few other commonly used options) to decompress
+.B .xz
+files.
+.B lzmadec
+is identical to
+.B xzdec
+except that
+.B lzmadec
+supports
+.B .lzma
+files instead of
+.B .xz
+files.
+.PP
+To reduce the size of the executable,
+.B xzdec
+doesn't support multithreading or localization,
+and doesn't read options from
+.B XZ_DEFAULTS
+and
+.B XZ_OPT
+environment variables.
+.B xzdec
+doesn't support displaying intermediate progress information: sending
+.B SIGINFO
+to
+.B xzdec
+does nothing, but sending
+.B SIGUSR1
+terminates the process instead of displaying progress information.
+.SH OPTIONS
+.TP
+.BR \-d ", " \-\-decompress ", " \-\-uncompress
+Ignored for
+.BR xz (1)
+compatibility.
+.B xzdec
+supports only decompression.
+.TP
+.BR \-k ", " \-\-keep
+Ignored for
+.BR xz (1)
+compatibility.
+.B xzdec
+never creates or removes any files.
+.TP
+.BR \-c ", " \-\-stdout ", " \-\-to-stdout
+Ignored for
+.BR xz (1)
+compatibility.
+.B xzdec
+always writes the decompressed data to standard output.
+.TP
+.BR \-q ", " \-\-quiet
+Specifying this once does nothing since
+.B xzdec
+never displays any warnings or notices.
+Specify this twice to suppress errors.
+.TP
+.BR \-Q ", " \-\-no-warn
+Ignored for
+.BR xz (1)
+compatibility.
+.B xzdec
+never uses the exit status 2.
+.TP
+.BR \-h ", " \-\-help
+Display a help message and exit successfully.
+.TP
+.BR \-V ", " \-\-version
+Display the version number of
+.B xzdec
+and liblzma.
+.SH "EXIT STATUS"
+.TP
+.B 0
+All was good.
+.TP
+.B 1
+An error occurred.
+.PP
+.B xzdec
+doesn't have any warning messages like
+.BR xz (1)
+has, thus the exit status 2 is not used by
+.BR xzdec .
+.SH NOTES
+Use
+.BR xz (1)
+instead of
+.B xzdec
+or
+.B lzmadec
+for normal everyday use.
+.B xzdec
+or
+.B lzmadec
+are meant only for situations where it is important to have
+a smaller decompressor than the full-featured
+.BR xz (1).
+.PP
+.B xzdec
+and
+.B lzmadec
+are not really that small.
+The size can be reduced further by dropping
+features from liblzma at compile time,
+but that shouldn't usually be done for executables distributed
+in typical non-embedded operating system distributions.
+If you need a truly small
+.B .xz
+decompressor, consider using XZ Embedded.
+.SH "SEE ALSO"
+.BR xz (1)
+.PP
+XZ Embedded: <https://tukaani.org/xz/embedded.html>

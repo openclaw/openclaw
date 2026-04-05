@@ -1,0 +1,111 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>RSA_public_encrypt</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#WARNINGS">WARNINGS</a></li>
+  <li><a href="#CONFORMING-TO">CONFORMING TO</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>RSA_public_encrypt, RSA_private_decrypt - RSA public key cryptography</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/rsa.h&gt;</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>int RSA_public_encrypt(int flen, const unsigned char *from,
+                       unsigned char *to, RSA *rsa, int padding);
+
+int RSA_private_decrypt(int flen, const unsigned char *from,
+                        unsigned char *to, RSA *rsa, int padding);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>Both of the functions described on this page are deprecated. Applications should instead use <a href="../man3/EVP_PKEY_encrypt_init_ex.html">EVP_PKEY_encrypt_init_ex(3)</a>, <a href="../man3/EVP_PKEY_encrypt.html">EVP_PKEY_encrypt(3)</a>, <a href="../man3/EVP_PKEY_decrypt_init_ex.html">EVP_PKEY_decrypt_init_ex(3)</a> and <a href="../man3/EVP_PKEY_decrypt.html">EVP_PKEY_decrypt(3)</a>.</p>
+
+<p>RSA_public_encrypt() encrypts the <b>flen</b> bytes at <b>from</b> (usually a session key) using the public key <b>rsa</b> and stores the ciphertext in <b>to</b>. <b>to</b> must point to RSA_size(<b>rsa</b>) bytes of memory.</p>
+
+<p><b>padding</b> denotes one of the following modes:</p>
+
+<dl>
+
+<dt id="RSA_PKCS1_PADDING">RSA_PKCS1_PADDING</dt>
+<dd>
+
+<p>PKCS #1 v1.5 padding. This currently is the most widely used mode. However, it is highly recommended to use RSA_PKCS1_OAEP_PADDING in new applications. SEE WARNING BELOW.</p>
+
+</dd>
+<dt id="RSA_PKCS1_OAEP_PADDING">RSA_PKCS1_OAEP_PADDING</dt>
+<dd>
+
+<p>EME-OAEP as defined in PKCS #1 v2.0 with SHA-1, MGF1 and an empty encoding parameter. This mode is recommended for all new applications.</p>
+
+</dd>
+<dt id="RSA_NO_PADDING">RSA_NO_PADDING</dt>
+<dd>
+
+<p>Raw RSA encryption. This mode should <i>only</i> be used to implement cryptographically sound padding modes in the application code. Encrypting user data directly with RSA is insecure.</p>
+
+</dd>
+</dl>
+
+<p>When encrypting <b>flen</b> must not be more than RSA_size(<b>rsa</b>) - 11 for the PKCS #1 v1.5 based padding modes, not more than RSA_size(<b>rsa</b>) - 42 for RSA_PKCS1_OAEP_PADDING and exactly RSA_size(<b>rsa</b>) for RSA_NO_PADDING. When a padding mode other than RSA_NO_PADDING is in use, then RSA_public_encrypt() will include some random bytes into the ciphertext and therefore the ciphertext will be different each time, even if the plaintext and the public key are exactly identical. The returned ciphertext in <b>to</b> will always be zero padded to exactly RSA_size(<b>rsa</b>) bytes. <b>to</b> and <b>from</b> may overlap.</p>
+
+<p>RSA_private_decrypt() decrypts the <b>flen</b> bytes at <b>from</b> using the private key <b>rsa</b> and stores the plaintext in <b>to</b>. <b>flen</b> should be equal to RSA_size(<b>rsa</b>) but may be smaller, when leading zero bytes are in the ciphertext. Those are not important and may be removed, but RSA_public_encrypt() does not do that. <b>to</b> must point to a memory section large enough to hold the maximal possible decrypted data (which is equal to RSA_size(<b>rsa</b>) for RSA_NO_PADDING, RSA_size(<b>rsa</b>) - 11 for the PKCS #1 v1.5 based padding modes and RSA_size(<b>rsa</b>) - 42 for RSA_PKCS1_OAEP_PADDING). <b>padding</b> is the padding mode that was used to encrypt the data. <b>to</b> and <b>from</b> may overlap.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>RSA_public_encrypt() returns the size of the encrypted data (i.e., RSA_size(<b>rsa</b>)). RSA_private_decrypt() returns the size of the recovered plaintext. A return value of 0 is not an error and means only that the plaintext was empty.</p>
+
+<p>On error, -1 is returned; the error codes can be obtained by <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>.</p>
+
+<h1 id="WARNINGS">WARNINGS</h1>
+
+<p>Decryption failures in the RSA_PKCS1_PADDING mode leak information which can potentially be used to mount a Bleichenbacher padding oracle attack. This is an inherent weakness in the PKCS #1 v1.5 padding design. Prefer RSA_PKCS1_OAEP_PADDING.</p>
+
+<p>In OpenSSL before version 3.2.0, both the return value and the length of returned value could be used to mount the Bleichenbacher attack. Since version 3.2.0, the default provider in OpenSSL does not return an error when padding checks fail. Instead it generates a random message based on used private key and provided ciphertext so that application code doesn&#39;t have to implement a side-channel secure error handling. Applications that want to be secure against side-channel attacks with providers that don&#39;t implement implicit rejection, still need to handle the returned values using side-channel free code. Side-channel free handling of the error stack can be performed using either a pair of unconditional <a href="../man3/ERR_set_mark.html">ERR_set_mark(3)</a> and <a href="../man3/ERR_pop_to_mark.html">ERR_pop_to_mark(3)</a> calls or by using the <a href="../man3/ERR_clear_error.html">ERR_clear_error(3)</a> call.</p>
+
+<h1 id="CONFORMING-TO">CONFORMING TO</h1>
+
+<p>SSL, PKCS #1 v2.0</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>, <a href="../man3/RAND_bytes.html">RAND_bytes(3)</a>, <a href="../man3/RSA_size.html">RSA_size(3)</a>, <a href="../man3/EVP_PKEY_decrypt.html">EVP_PKEY_decrypt(3)</a>, <a href="../man3/EVP_PKEY_encrypt.html">EVP_PKEY_encrypt(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>Both of these functions were deprecated in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,95 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>CMS_decrypt</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#BUGS">BUGS</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>CMS_decrypt, CMS_decrypt_set1_pkey_and_peer, CMS_decrypt_set1_pkey, CMS_decrypt_set1_password - decrypt content from a CMS envelopedData structure</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/cms.h&gt;
+
+int CMS_decrypt(CMS_ContentInfo *cms, EVP_PKEY *pkey, X509 *cert,
+                BIO *dcont, BIO *out, unsigned int flags);
+int CMS_decrypt_set1_pkey_and_peer(CMS_ContentInfo *cms,
+                EVP_PKEY *pk, X509 *cert, X509 *peer);
+int CMS_decrypt_set1_pkey(CMS_ContentInfo *cms, EVP_PKEY *pk, X509 *cert);
+int CMS_decrypt_set1_password(CMS_ContentInfo *cms,
+                              unsigned char *pass, ossl_ssize_t passlen);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>CMS_decrypt() extracts the decrypted content from a CMS EnvelopedData or AuthEnvelopedData structure. It uses CMS_decrypt_set1_pkey() to decrypt the content with the recipient private key <i>pkey</i> if <i>pkey</i> is not NULL. In this case, the associated certificate is recommended to provide in <i>cert</i> - see the NOTES below. <i>out</i> is a BIO to write the content to and <i>flags</i> is an optional set of flags. If <i>pkey</i> is NULL the function assumes that decryption was already done (e.g., using CMS_decrypt_set1_pkey() or CMS_decrypt_set1_password()) and just provides the content unless <i>cert</i>, <i>dcont</i>, and <i>out</i> are NULL as well. The <i>dcont</i> parameter is used in the rare case where the encrypted content is detached. It will normally be set to NULL.</p>
+
+<p>CMS_decrypt_set1_pkey_and_peer() decrypts the CMS_ContentInfo structure <i>cms</i> using the private key <i>pkey</i>, the corresponding certificate <i>cert</i>, which is recommended but may be NULL, and the (optional) originator certificate <i>peer</i>. On success, it also records in <i>cms</i> the decryption key <i>pkey</i>, and then should be followed by <code>CMS_decrypt(cms, NULL, NULL, dcont, out, flags)</code>. This call deallocates any decryption key stored in <i>cms</i>.</p>
+
+<p>CMS_decrypt_set1_pkey() is the same as CMS_decrypt_set1_pkey_and_peer() with <i>peer</i> being NULL.</p>
+
+<p>CMS_decrypt_set1_password() decrypts the CMS_ContentInfo structure <i>cms</i> using the secret <i>pass</i> of length <i>passlen</i>. On success, it also records in <i>cms</i> the decryption key used, and then should be followed by <code>CMS_decrypt(cms, NULL, NULL, dcont, out, flags)</code>. This call deallocates any decryption key stored in <i>cms</i>.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>Although the recipients certificate is not needed to decrypt the data it is needed to locate the appropriate (of possible several) recipients in the CMS structure.</p>
+
+<p>If <i>cert</i> is set to NULL all possible recipients are tried. This case however is problematic. To thwart the MMA attack (Bleichenbacher&#39;s attack on PKCS #1 v1.5 RSA padding) all recipients are tried whether they succeed or not. If no recipient succeeds then a random symmetric key is used to decrypt the content: this will typically output garbage and may (but is not guaranteed to) ultimately return a padding error only. If CMS_decrypt() just returned an error when all recipient encrypted keys failed to decrypt an attacker could use this in a timing attack. If the special flag <b>CMS_DEBUG_DECRYPT</b> is set then the above behaviour is modified and an error <b>is</b> returned if no recipient encrypted key can be decrypted <b>without</b> generating a random content encryption key. Applications should use this flag with <b>extreme caution</b> especially in automated gateways as it can leave them open to attack.</p>
+
+<p>It is possible to determine the correct recipient key by other means (for example looking them up in a database) and setting them in the CMS structure in advance using the CMS utility functions such as CMS_set1_pkey(), or use CMS_decrypt_set1_password() if the recipient has a symmetric key. In these cases both <i>cert</i> and <i>pkey</i> should be set to NULL.</p>
+
+<p>To process KEKRecipientInfo types CMS_set1_key() or CMS_RecipientInfo_set0_key() and CMS_RecipientInfo_decrypt() should be called before CMS_decrypt() and <i>cert</i> and <i>pkey</i> set to NULL.</p>
+
+<p>The following flags can be passed in the <i>flags</i> parameter.</p>
+
+<p>If the <b>CMS_TEXT</b> flag is set MIME headers for type <code>text/plain</code> are deleted from the content. If the content is not of type <code>text/plain</code> then an error is returned.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>CMS_decrypt(), CMS_decrypt_set1_pkey_and_peer(), CMS_decrypt_set1_pkey(), and CMS_decrypt_set1_password() return either 1 for success or 0 for failure. The error can be obtained from ERR_get_error(3).</p>
+
+<h1 id="BUGS">BUGS</h1>
+
+<p>The <b>set1_</b> part of these function names is misleading and should better read: <b>with_</b>.</p>
+
+<p>The lack of single pass processing and the need to hold all data in memory as mentioned in CMS_verify() also applies to CMS_decrypt().</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>, <a href="../man3/CMS_encrypt.html">CMS_encrypt(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>CMS_decrypt_set1_pkey_and_peer() and CMS_decrypt_set1_password() were added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2008-2020 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,172 @@
+{
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "spdxVersion": "SPDX-2.3",
+  "name": "SBOM-SPDX-whisper-cpp-1.8.4",
+  "creationInfo": {
+    "created": "2026-04-03T19:36:28Z",
+    "creators": ["Tool: https://github.com/Homebrew/brew@5.1.3"]
+  },
+  "dataLicense": "CC0-1.0",
+  "documentNamespace": "https://formulae.brew.sh/spdx/whisper-cpp-1.8.4.json",
+  "documentDescribes": [
+    "SPDXRef-Archive-whisper-cpp-src",
+    "SPDXRef-Package-SPDXRef-libomp-22.1.2",
+    "SPDXRef-Package-SPDXRef-ggml-0.9.11",
+    "SPDXRef-Package-SPDXRef-sdl2-2.32.10",
+    "SPDXRef-Compiler",
+    "SPDXRef-Bottle-whisper-cpp"
+  ],
+  "files": [],
+  "packages": [
+    {
+      "SPDXID": "SPDXRef-Archive-whisper-cpp-src",
+      "name": "whisper-cpp",
+      "versionInfo": "1.8.4",
+      "filesAnalyzed": false,
+      "licenseDeclared": "NOASSERTION",
+      "builtDate": "2026-03-19 08:40:13 UTC",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "https://github.com/ggml-org/whisper.cpp/archive/refs/tags/v1.8.4.tar.gz",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [],
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "b26f30e52c095ccb75da40b168437736605eb280de57381887bf9e2b65f31e66"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-SPDXRef-libomp-22.1.2",
+      "name": "libomp",
+      "versionInfo": "22.1.2",
+      "filesAnalyzed": false,
+      "licenseDeclared": "NOASSERTION",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "https://ghcr.io/v2/homebrew/core/libomp/blobs/sha256:82f432712cb1f241632bfcea9598cd728c7e4e581e49cd3dc3cbb401fe549a31",
+      "copyrightText": "NOASSERTION",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "82f432712cb1f241632bfcea9598cd728c7e4e581e49cd3dc3cbb401fe549a31"
+        }
+      ],
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:brew/libomp@22.1.2",
+          "referenceType": "purl"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-SPDXRef-ggml-0.9.11",
+      "name": "ggml",
+      "versionInfo": "0.9.11",
+      "filesAnalyzed": false,
+      "licenseDeclared": "NOASSERTION",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "https://ghcr.io/v2/homebrew/core/ggml/blobs/sha256:df416e439f8bd8ad13e51117f2cfc4d27d9e4a131539df232ed284a0b36fbfe4",
+      "copyrightText": "NOASSERTION",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "df416e439f8bd8ad13e51117f2cfc4d27d9e4a131539df232ed284a0b36fbfe4"
+        }
+      ],
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:brew/ggml@0.9.11",
+          "referenceType": "purl"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-SPDXRef-sdl2-2.32.10",
+      "name": "sdl2",
+      "versionInfo": "2.32.10",
+      "filesAnalyzed": false,
+      "licenseDeclared": "NOASSERTION",
+      "licenseConcluded": "Zlib",
+      "downloadLocation": "https://ghcr.io/v2/homebrew/core/sdl2/blobs/sha256:d023e694d63e6d5adc1acb6110fc57e31fcd1cbcec974f51f4993e108ddc4f80",
+      "copyrightText": "NOASSERTION",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "d023e694d63e6d5adc1acb6110fc57e31fcd1cbcec974f51f4993e108ddc4f80"
+        }
+      ],
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:brew/sdl2@2.32.10",
+          "referenceType": "purl"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Compiler",
+      "name": "clang",
+      "versionInfo": "26.3",
+      "filesAnalyzed": false,
+      "licenseDeclared": "NOASSERTION",
+      "licenseConcluded": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "checksums": [],
+      "externalRefs": []
+    },
+    {
+      "SPDXID": "SPDXRef-Bottle-whisper-cpp",
+      "name": "whisper-cpp",
+      "versionInfo": "1.8.4",
+      "filesAnalyzed": false,
+      "licenseDeclared": "NOASSERTION",
+      "builtDate": "2026-03-19 08:40:13 UTC",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "https://ghcr.io/v2/homebrew/core/whisper-cpp/blobs/sha256:fca60c843fa6658257b7a7664eb7d47b84ddb5439e76ffc3c2d9aaf3c58c1c83",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:brew/homebrew/core/whisper-cpp@1.8.4",
+          "referenceType": "purl"
+        }
+      ],
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "fca60c843fa6658257b7a7664eb7d47b84ddb5439e76ffc3c2d9aaf3c58c1c83"
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "spdxElementId": "SPDXRef-Package-SPDXRef-libomp-22.1.2",
+      "relationshipType": "RUNTIME_DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Bottle-whisper-cpp"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-SPDXRef-ggml-0.9.11",
+      "relationshipType": "RUNTIME_DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Bottle-whisper-cpp"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-SPDXRef-sdl2-2.32.10",
+      "relationshipType": "RUNTIME_DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Bottle-whisper-cpp"
+    },
+    {
+      "spdxElementId": "SPDXRef-File-whisper-cpp",
+      "relationshipType": "PACKAGE_OF",
+      "relatedSpdxElement": "SPDXRef-Archive-whisper-cpp-src"
+    },
+    {
+      "spdxElementId": "SPDXRef-Compiler",
+      "relationshipType": "BUILD_TOOL_OF",
+      "relatedSpdxElement": "SPDXRef-Package-whisper-cpp-src"
+    }
+  ]
+}

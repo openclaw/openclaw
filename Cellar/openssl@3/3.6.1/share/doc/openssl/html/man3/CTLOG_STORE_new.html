@@ -1,0 +1,91 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>CTLOG_STORE_new</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>CTLOG_STORE_new_ex, CTLOG_STORE_new, CTLOG_STORE_free, CTLOG_STORE_load_default_file, CTLOG_STORE_load_file - Create and populate a Certificate Transparency log list</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ct.h&gt;
+
+CTLOG_STORE *CTLOG_STORE_new_ex(OSSL_LIB_CTX *libctx, const char *propq);
+CTLOG_STORE *CTLOG_STORE_new(void);
+void CTLOG_STORE_free(CTLOG_STORE *store);
+
+int CTLOG_STORE_load_default_file(CTLOG_STORE *store);
+int CTLOG_STORE_load_file(CTLOG_STORE *store, const char *file);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>A CTLOG_STORE is a container for a list of CTLOGs (Certificate Transparency logs). The list can be loaded from one or more files and then searched by LogID (see RFC 6962, Section 3.2, for the definition of a LogID).</p>
+
+<p>CTLOG_STORE_new_ex() creates an empty list of CT logs associated with the library context <i>libctx</i> and the property query string <i>propq</i>.</p>
+
+<p>CTLOG_STORE_new() does the same thing as CTLOG_STORE_new_ex() but with the default library context and property query string.</p>
+
+<p>The CTLOG_STORE is then populated by CTLOG_STORE_load_default_file() or CTLOG_STORE_load_file(). CTLOG_STORE_load_default_file() loads from the default file, which is named <i>ct_log_list.cnf</i> in OPENSSLDIR (see the output of <a href="../man1/openssl-version.html">openssl-version(1)</a>). This can be overridden using an environment variable named <b>CTLOG_FILE</b>. CTLOG_STORE_load_file() loads from a caller-specified file path instead. Both of these functions append any loaded CT logs to the CTLOG_STORE.</p>
+
+<p>The expected format of the file is:</p>
+
+<pre><code>enabled_logs=foo,bar
+
+[foo]
+description = Log 1
+key = &lt;base64-encoded DER SubjectPublicKeyInfo here&gt;
+
+[bar]
+description = Log 2
+key = &lt;base64-encoded DER SubjectPublicKeyInfo here&gt;</code></pre>
+
+<p>Once a CTLOG_STORE is no longer required, it should be passed to CTLOG_STORE_free(). This will delete all of the CTLOGs stored within, along with the CTLOG_STORE itself. If the argument is NULL, nothing is done.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>If there are any invalid CT logs in a file, they are skipped and the remaining valid logs will still be added to the CTLOG_STORE. A CT log will be considered invalid if it is missing a &quot;key&quot; or &quot;description&quot; field.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>Both <b>CTLOG_STORE_load_default_file</b> and <b>CTLOG_STORE_load_file</b> return 1 if all CT logs in the file are successfully parsed and loaded, 0 otherwise.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ct.html">ct(7)</a>, <a href="../man3/CTLOG_STORE_get0_log_by_id.html">CTLOG_STORE_get0_log_by_id(3)</a>, <a href="../man3/SSL_CTX_set_ctlog_list_file.html">SSL_CTX_set_ctlog_list_file(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>CTLOG_STORE_new_ex was added in OpenSSL 3.0. All other functions were added in OpenSSL 1.1.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2016-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,156 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>BIO_f_md</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#BUGS">BUGS</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>BIO_f_md, BIO_set_md, BIO_get_md, BIO_get_md_ctx - message digest BIO filter</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/bio.h&gt;
+#include &lt;openssl/evp.h&gt;
+
+const BIO_METHOD *BIO_f_md(void);
+int BIO_set_md(BIO *b, EVP_MD *md);
+int BIO_get_md(BIO *b, EVP_MD **mdp);
+int BIO_get_md_ctx(BIO *b, EVP_MD_CTX **mdcp);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>BIO_f_md() returns the message digest BIO method. This is a filter BIO that digests any data passed through it. It is a BIO wrapper for the digest routines EVP_DigestInit(), EVP_DigestUpdate() and EVP_DigestFinal().</p>
+
+<p>Any data written or read through a digest BIO using BIO_read_ex() and BIO_write_ex() is digested.</p>
+
+<p>BIO_gets(), if its <b>size</b> parameter is large enough finishes the digest calculation and returns the digest value. BIO_puts() is not supported.</p>
+
+<p>BIO_reset() reinitialises a digest BIO.</p>
+
+<p>BIO_set_md() sets the message digest of BIO <b>b</b> to <b>md</b>: this must be called to initialize a digest BIO before any data is passed through it. It is a BIO_ctrl() macro.</p>
+
+<p>BIO_get_md() places a pointer to the digest BIOs digest method in <b>mdp</b>. It is a BIO_ctrl() macro.</p>
+
+<p>BIO_get_md_ctx() returns the digest BIOs context into <b>mdcp</b>.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The context returned by BIO_get_md_ctx() can be used in calls to EVP_DigestFinal() and also the signature routines EVP_SignFinal() and EVP_VerifyFinal().</p>
+
+<p>The context returned by BIO_get_md_ctx() is an internal context structure. Changes made to this context will affect the digest BIO itself and the context pointer will become invalid when the digest BIO is freed.</p>
+
+<p>After the digest has been retrieved from a digest BIO it must be reinitialized by calling BIO_reset(), or BIO_set_md() before any more data is passed through it.</p>
+
+<p>If an application needs to call BIO_gets() or BIO_puts() through a chain containing digest BIOs then this can be done by prepending a buffering BIO.</p>
+
+<p>Calling BIO_get_md_ctx() will return the context and initialize the BIO state. This allows applications to initialize the context externally if the standard calls such as BIO_set_md() are not sufficiently flexible.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>BIO_f_md() returns the digest BIO method.</p>
+
+<p>BIO_set_md(), BIO_get_md() and BIO_md_ctx() return 1 for success and &lt;=0 for failure.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>The following example creates a BIO chain containing an SHA1 and MD5 digest BIO and passes the string &quot;Hello World&quot; through it. Error checking has been omitted for clarity.</p>
+
+<pre><code>BIO *bio, *mdtmp;
+char message[] = &quot;Hello World&quot;;
+
+bio = BIO_new(BIO_s_null());
+mdtmp = BIO_new(BIO_f_md());
+BIO_set_md(mdtmp, EVP_sha1());
+/*
+ * For BIO_push() we want to append the sink BIO and keep a note of
+ * the start of the chain.
+ */
+bio = BIO_push(mdtmp, bio);
+mdtmp = BIO_new(BIO_f_md());
+BIO_set_md(mdtmp, EVP_md5());
+bio = BIO_push(mdtmp, bio);
+/* Note: mdtmp can now be discarded */
+BIO_write(bio, message, strlen(message));</code></pre>
+
+<p>The next example digests data by reading through a chain instead:</p>
+
+<pre><code>BIO *bio, *mdtmp;
+char buf[1024];
+int rdlen;
+
+bio = BIO_new_file(file, &quot;rb&quot;);
+mdtmp = BIO_new(BIO_f_md());
+BIO_set_md(mdtmp, EVP_sha1());
+bio = BIO_push(mdtmp, bio);
+mdtmp = BIO_new(BIO_f_md());
+BIO_set_md(mdtmp, EVP_md5());
+bio = BIO_push(mdtmp, bio);
+do {
+    rdlen = BIO_read(bio, buf, sizeof(buf));
+    /* Might want to do something with the data here */
+} while (rdlen &gt; 0);</code></pre>
+
+<p>This next example retrieves the message digests from a BIO chain and outputs them. This could be used with the examples above.</p>
+
+<pre><code>BIO *mdtmp;
+unsigned char mdbuf[EVP_MAX_MD_SIZE];
+int mdlen;
+int i;
+
+mdtmp = bio;   /* Assume bio has previously been set up */
+do {
+    EVP_MD *md;
+
+    mdtmp = BIO_find_type(mdtmp, BIO_TYPE_MD);
+    if (!mdtmp)
+        break;
+    BIO_get_md(mdtmp, &amp;md);
+    printf(&quot;%s digest&quot;, OBJ_nid2sn(EVP_MD_get_type(md)));
+    mdlen = BIO_gets(mdtmp, mdbuf, EVP_MAX_MD_SIZE);
+    for (i = 0; i &lt; mdlen; i++) printf(&quot;:%02X&quot;, mdbuf[i]);
+    printf(&quot;\n&quot;);
+    mdtmp = BIO_next(mdtmp);
+} while (mdtmp);
+
+BIO_free_all(bio);</code></pre>
+
+<h1 id="BUGS">BUGS</h1>
+
+<p>The lack of support for BIO_puts() and the non standard behaviour of BIO_gets() could be regarded as anomalous. It could be argued that BIO_gets() and BIO_puts() should be passed to the next BIO in the chain and digest the data passed through and that digests should be retrieved using a separate BIO_ctrl() call.</p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>Before OpenSSL 1.0.0., the call to BIO_get_md_ctx() would only work if the BIO was initialized first.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

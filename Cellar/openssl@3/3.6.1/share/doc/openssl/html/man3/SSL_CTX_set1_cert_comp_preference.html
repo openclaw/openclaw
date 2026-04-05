@@ -1,0 +1,133 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_CTX_set1_cert_comp_preference</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_CTX_set1_cert_comp_preference, SSL_set1_cert_comp_preference, SSL_CTX_compress_certs, SSL_compress_certs, SSL_CTX_get1_compressed_cert, SSL_get1_compressed_cert, SSL_CTX_set1_compressed_cert, SSL_set1_compressed_cert - Certificate compression functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+int SSL_CTX_set1_cert_comp_preference(SSL_CTX *ctx, int *algs, size_t len);
+int SSL_set1_cert_comp_preference(SSL *ssl, int *algs, size_t len);
+
+int SSL_CTX_compress_certs(SSL_CTX *ctx, int alg);
+int SSL_compress_certs(SSL *ssl, int alg);
+
+size_t SSL_CTX_get1_compressed_cert(SSL_CTX *ctx, int alg, unsigned char **data,
+                                    size_t *orig_len);
+size_t SSL_get1_compressed_cert(SSL *ssl, int alg, unsigned char **data,
+                                size_t *orig_len);
+
+int SSL_CTX_set1_compressed_cert(SSL_CTX *ctx, int alg,
+                                 unsigned char *comp_data,
+                                 size_t comp_length, size_t orig_length);
+int SSL_set1_compressed_cert(SSL *ssl, int alg, unsigned char *comp_data,
+                             size_t comp_length, size_t orig_length);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>These functions control the certificate compression feature. Certificate compression is only available for TLSv1.3 as defined in RFC8879.</p>
+
+<p>SSL_CTX_set1_cert_comp_preference() and SSL_set1_cert_comp_preference() are used to specify the preferred compression algorithms. The <b>algs</b> argument is an array of algorithms, and <b>length</b> is number of elements in the <b>algs</b> array. Only those algorithms enabled in the library will be accepted in <b>algs</b>, unknown algorithms in <b>algs</b> are ignored. On an error, the preference order is left unmodified.</p>
+
+<p>The following compression algorithms (<b>alg</b> arguments) may be used:</p>
+
+<ul>
+
+<li><p>TLSEXT_comp_cert_brotli</p>
+
+</li>
+<li><p>TLSEXT_comp_cert_zlib</p>
+
+</li>
+<li><p>TLSEXT_comp_cert_zstd</p>
+
+</li>
+</ul>
+
+<p>The above is also the default preference order. If a preference order is not specified, then the default preference order is sent to the peer and the received peer&#39;s preference order will be used when compressing a certificate. Otherwise, the configured preference order is sent to the peer and is used to filter the peer&#39;s preference order.</p>
+
+<p>SSL_CTX_compress_certs() and SSL_compress_certs() are used to pre-compress all the configured certificates on an SSL_CTX/SSL object with algorithm <b>alg</b>. If <b>alg</b> is 0, then the certificates are compressed with the algorithms specified in the preference list. Calling these functions on a client SSL_CTX/SSL object will result in an error, as only server certificates may be pre-compressed.</p>
+
+<p>SSL_CTX_get1_compressed_cert() and SSL_get1_compressed_cert() are used to get the pre-compressed certificate most recently set that may be stored for later use. Calling these functions on a client SSL_CTX/SSL object will result in an error, as only server certificates may be pre-compressed. The <b>data</b> and <b>orig_len</b> arguments are required.</p>
+
+<p>The compressed certificate data may be passed to SSL_CTX_set1_compressed_cert() or SSL_set1_compressed_cert() to provide a pre-compressed version of the most recently set certificate. This pre-compressed certificate can only be used by a server.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>Each side of the connection sends their compression algorithm preference list to their peer indicating compressed certificate support. The received preference list is filtered by the configured preference list (i.e. the intersection is saved). As the default list includes all the enabled algorithms, not specifying a preference will allow any enabled algorithm by the peer. The filtered peer&#39;s preference order is used to determine what algorithm to use when sending a compressed certificate.</p>
+
+<p>Only server certificates may be pre-compressed. Calling any of these functions (except SSL_CTX_set1_cert_comp_preference()/SSL_set1_cert_comp_preference()) on a client SSL_CTX/SSL object will return an error. Client certificates are compressed on-demand as unique context data from the server is compressed along with the certificate.</p>
+
+<p>For SSL_CTX_set1_cert_comp_preference() and SSL_set1_cert_comp_preference() the <b>len</b> argument is the size of the <b>algs</b> argument in bytes.</p>
+
+<p>The compressed certificate returned by SSL_CTX_get1_compressed_cert() and SSL_get1_compressed_cert() is the last certificate set on the SSL_CTX/SSL object. The certificate is copied by the function and the caller must free <b>*data</b> via OPENSSL_free().</p>
+
+<p>The compressed certificate data set by SSL_CTX_set1_compressed_cert() and SSL_set1_compressed_cert() is copied into the SSL_CTX/SSL object.</p>
+
+<p>SSL_CTX_compress_certs() and SSL_compress_certs() return an error under the following conditions:</p>
+
+<ul>
+
+<li><p>If no certificates have been configured.</p>
+
+</li>
+<li><p>If the specified algorithm <b>alg</b> is not enabled.</p>
+
+</li>
+<li><p>If <b>alg</b> is 0 and no compression algorithms are enabled.</p>
+
+</li>
+</ul>
+
+<p>Sending compressed certificates may be disabled on a connection via the SSL_OP_NO_TX_CERTIFICATE_COMPRESSION option. Receiving compressed certificates may be disabled on a connection via the SSL_OP_NO_RX_CERTIFICATE_COMPRESSION option.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_CTX_set1_cert_comp_preference(), SSL_set1_cert_comp_preference(), SSL_CTX_compress_certs(), SSL_compress_certs(), SSL_CTX_set1_compressed_cert(), and SSL_set1_compressed_cert() return 1 for success and 0 on error.</p>
+
+<p>SSL_CTX_get1_compressed_cert() and SSL_get1_compressed_cert() return the length of the allocated memory on success and 0 on error.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/SSL_CTX_set_options.html">SSL_CTX_set_options(3)</a>, <a href="../man3/SSL_CTX_use_certificate.html">SSL_CTX_use_certificate(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>These functions were added in OpenSSL 3.2.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2022 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

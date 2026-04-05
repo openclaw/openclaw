@@ -1,0 +1,169 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>ASN1_EXTERN_FUNCS</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>ASN1_EXTERN_FUNCS, ASN1_ex_d2i, ASN1_ex_d2i_ex, ASN1_ex_i2d, ASN1_ex_new_func, ASN1_ex_new_ex_func, ASN1_ex_free_func, ASN1_ex_print_func, IMPLEMENT_EXTERN_ASN1 - ASN.1 external function support</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/asn1t.h&gt;
+
+typedef int ASN1_ex_d2i(ASN1_VALUE **pval, const unsigned char **in, long len,
+                        const ASN1_ITEM *it, int tag, int aclass, char opt,
+                        ASN1_TLC *ctx);
+typedef int ASN1_ex_d2i_ex(ASN1_VALUE **pval, const unsigned char **in, long len,
+                           const ASN1_ITEM *it, int tag, int aclass, char opt,
+                           ASN1_TLC *ctx, OSSL_LIB_CTX *libctx,
+                           const char *propq);
+typedef int ASN1_ex_i2d(const ASN1_VALUE **pval, unsigned char **out,
+                        const ASN1_ITEM *it, int tag, int aclass);
+typedef int ASN1_ex_new_func(ASN1_VALUE **pval, const ASN1_ITEM *it);
+typedef int ASN1_ex_new_ex_func(ASN1_VALUE **pval, const ASN1_ITEM *it,
+                                OSSL_LIB_CTX *libctx, const char *propq);
+typedef void ASN1_ex_free_func(ASN1_VALUE **pval, const ASN1_ITEM *it);
+typedef int ASN1_ex_print_func(BIO *out, const ASN1_VALUE **pval,
+                               int indent, const char *fname,
+                               const ASN1_PCTX *pctx);
+
+struct ASN1_EXTERN_FUNCS_st {
+   void *app_data;
+   ASN1_ex_new_func *asn1_ex_new;
+   ASN1_ex_free_func *asn1_ex_free;
+   ASN1_ex_free_func *asn1_ex_clear;
+   ASN1_ex_d2i *asn1_ex_d2i;
+   ASN1_ex_i2d *asn1_ex_i2d;
+   ASN1_ex_print_func *asn1_ex_print;
+   ASN1_ex_new_ex_func *asn1_ex_new_ex;
+   ASN1_ex_d2i_ex *asn1_ex_d2i_ex;
+};
+typedef struct ASN1_EXTERN_FUNCS_st ASN1_EXTERN_FUNCS;
+
+#define IMPLEMENT_EXTERN_ASN1(sname, tag, fptrs)</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>ASN.1 data structures templates are typically defined in OpenSSL using a series of macros such as ASN1_SEQUENCE(), ASN1_SEQUENCE_END() and so on. Instead templates can also be defined based entirely on external functions. These external functions are called to perform operations such as creating a new <b>ASN1_VALUE</b> or converting an <b>ASN1_VALUE</b> to or from DER encoding.</p>
+
+<p>The macro IMPLEMENT_EXTERN_ASN1() can be used to create such an externally defined structure. The name of the structure should be supplied in the <i>sname</i> parameter. The tag for the structure (e.g. typically <b>V_ASN1_SEQUENCE</b>) should be supplied in the <i>tag</i> parameter. Finally a pointer to an <b>ASN1_EXTERN_FUNCS</b> structure should be supplied in the <i>fptrs</i> parameter.</p>
+
+<p>The <b>ASN1_EXTERN_FUNCS</b> structure has the following entries.</p>
+
+<dl>
+
+<dt id="app_data"><i>app_data</i></dt>
+<dd>
+
+<p>A pointer to arbitrary application specific data.</p>
+
+</dd>
+<dt id="asn1_ex_new"><i>asn1_ex_new</i></dt>
+<dd>
+
+<p>A &quot;new&quot; function responsible for constructing a new <b>ASN1_VALUE</b> object. The newly constructed value should be stored in <i>*pval</i>. The <i>it</i> parameter is a pointer to the <b>ASN1_ITEM</b> template object created via the IMPLEMENT_EXTERN_ASN1() macro.</p>
+
+<p>Returns a positive value on success or 0 on error.</p>
+
+</dd>
+<dt id="asn1_ex_free"><i>asn1_ex_free</i></dt>
+<dd>
+
+<p>A &quot;free&quot; function responsible for freeing the <b>ASN1_VALUE</b> passed in <i>*pval</i> that was previously allocated via a &quot;new&quot; function. The <i>it</i> parameter is a pointer to the <b>ASN1_ITEM</b> template object created via the IMPLEMENT_EXTERN_ASN1() macro.</p>
+
+</dd>
+<dt id="asn1_ex_clear"><i>asn1_ex_clear</i></dt>
+<dd>
+
+<p>A &quot;clear&quot; function responsible for clearing any data in the <b>ASN1_VALUE</b> passed in <i>*pval</i> and making it suitable for reuse. The <i>it</i> parameter is a pointer to the <b>ASN1_ITEM</b> template object created via the IMPLEMENT_EXTERN_ASN1() macro.</p>
+
+</dd>
+<dt id="asn1_ex_d2i"><i>asn1_ex_d2i</i></dt>
+<dd>
+
+<p>A &quot;d2i&quot; function responsible for converting DER data with the tag <i>tag</i> and class <i>class</i> into an <b>ASN1_VALUE</b>. If <i>*pval</i> is non-NULL then the <b>ASN_VALUE</b> it points to should be reused. Otherwise a new <b>ASN1_VALUE</b> should be allocated and stored in <i>*pval</i>. <i>*in</i> points to the DER data to be decoded and <i>len</i> is the length of that data. After decoding <i>*in</i> should be updated to point at the next byte after the decoded data. If the <b>ASN1_VALUE</b> is considered optional in this context then <i>opt</i> will be nonzero. Otherwise it will be zero. The <i>it</i> parameter is a pointer to the <b>ASN1_ITEM</b> template object created via the IMPLEMENT_EXTERN_ASN1() macro. A pointer to the current <b>ASN1_TLC</b> context (which may be required for other ASN1 function calls) is passed in the <i>ctx</i> parameter.</p>
+
+<p>The <i>asn1_ex_d2i</i> entry may be NULL if <i>asn1_ex_d2i_ex</i> has been specified instead.</p>
+
+<p>Returns &lt;= 0 on error or a positive value on success.</p>
+
+</dd>
+<dt id="asn1_ex_i2d"><i>asn1_ex_i2d</i></dt>
+<dd>
+
+<p>An &quot;i2d&quot; function responsible for converting an <b>ASN1_VALUE</b> into DER encoding. On entry <i>*pval</i> will contain the <b>ASN1_VALUE</b> to be encoded. If default tagging is to be used then <i>tag</i> will be -1 on entry. Otherwise if implicit tagging should be used then <i>tag</i> and <i>aclass</i> will be the tag and associated class.</p>
+
+<p>If <i>out</i> is not NULL then this function should write the DER encoded data to the buffer in <i>*out</i>, and then increment <i>*out</i> to point to immediately after the data just written.</p>
+
+<p>If <i>out</i> is NULL then no data should be written but the length calculated and returned as if it were.</p>
+
+<p>The <i>asn1_ex_i2d</i> entry may be NULL if <i>asn1_ex_i2d_ex</i> has been specified instead.</p>
+
+<p>The return value should be negative if a fatal error occurred, or 0 if a non-fatal error occurred. Otherwise it should return the length of the encoded data.</p>
+
+</dd>
+<dt id="asn1_ex_print"><i>asn1_ex_print</i></dt>
+<dd>
+
+<p>A &quot;print&quot; function. <i>out</i> is the BIO to print the output to. <i>*pval</i> is the <b>ASN1_VALUE</b> to be printed. <i>indent</i> is the number of spaces of indenting to be printed before any data is printed. <i>fname</i> is currently unused and is always &quot;&quot;. <i>pctx</i> is a pointer to the <b>ASN1_PCTX</b> for the print operation.</p>
+
+<p>Returns 0 on error or a positive value on success. If the return value is 2 then an additional newline will be printed after the data printed by this function.</p>
+
+</dd>
+<dt id="asn1_ex_new_ex"><i>asn1_ex_new_ex</i></dt>
+<dd>
+
+<p>This is the same as <i>asn1_ex_new</i> except that it is additionally passed the OSSL_LIB_CTX to be used in <i>libctx</i> and any property query string to be used for algorithm fetching in the <i>propq</i> parameter. See <a href="../man7/crypto.html">&quot;ALGORITHM FETCHING&quot; in crypto(7)</a> for further details. If <i>asn1_ex_new_ex</i> is non NULL, then it will always be called in preference to <i>asn1_ex_new</i>.</p>
+
+</dd>
+<dt id="asn1_ex_d2i_ex"><i>asn1_ex_d2i_ex</i></dt>
+<dd>
+
+<p>This is the same as <i>asn1_ex_d2i</i> except that it is additionally passed the OSSL_LIB_CTX to be used in <i>libctx</i> and any property query string to be used for algorithm fetching in the <i>propq</i> parameter. See <a href="../man7/crypto.html">&quot;ALGORITHM FETCHING&quot; in crypto(7)</a> for further details. If <i>asn1_ex_d2i_ex</i> is non NULL, then it will always be called in preference to <i>asn1_ex_d2i</i>.</p>
+
+</dd>
+</dl>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>Return values for the various callbacks are as described above.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ASN1_item_new_ex.html">ASN1_item_new_ex(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The <i>asn1_ex_new_ex</i> and <i>asn1_ex_d2i_ex</i> callbacks were added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

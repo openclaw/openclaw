@@ -1,0 +1,1358 @@
+.\"
+.\" Standard preamble:
+.\" ========================================================================
+.de Sp \" Vertical space (when we can't use .PP)
+.if t .sp .5v
+.if n .sp
+..
+.de Vb \" Begin verbatim text
+.ft CW
+.nf
+.ne \\$1
+..
+.de Ve \" End verbatim text
+.ft R
+.fi
+..
+.\" Set up some character translations and predefined strings.  \*(-- will
+.\" give an unbreakable dash, \*(PI will give pi, \*(L" will give a left
+.\" double quote, and \*(R" will give a right double quote.  \*(C+ will
+.\" give a nicer C++.  Capital omega is used to do unbreakable dashes and
+.\" therefore won't be available.  \*(C` and \*(C' expand to `' in nroff,
+.\" nothing in troff, for use with C<>.
+.tr \(*W-
+.ds C+ C\v'-.1v'\h'-1p'\s-2+\h'-1p'+\s0\v'.1v'\h'-1p'
+.ie n \{\
+.    ds -- \(*W-
+.    ds PI pi
+.    if (\n(.H=4u)&(1m=24u) .ds -- \(*W\h'-12u'\(*W\h'-12u'-\" diablo 10 pitch
+.    if (\n(.H=4u)&(1m=20u) .ds -- \(*W\h'-12u'\(*W\h'-8u'-\"  diablo 12 pitch
+.    ds L" ""
+.    ds R" ""
+.    ds C` ""
+.    ds C' ""
+'br\}
+.el\{\
+.    ds -- \|\(em\|
+.    ds PI \(*p
+.    ds L" ``
+.    ds R" ''
+.    ds C`
+.    ds C'
+'br\}
+.\"
+.\" Escape single quotes in literal strings from groff's Unicode transform.
+.ie \n(.g .ds Aq \(aq
+.el       .ds Aq '
+.\"
+.\" If the F register is >0, we'll generate index entries on stderr for
+.\" titles (.TH), headers (.SH), subsections (.SS), items (.Ip), and index
+.\" entries marked with X<> in POD.  Of course, you'll have to process the
+.\" output yourself in some meaningful fashion.
+.\"
+.\" Avoid warning from groff about undefined register 'F'.
+.de IX
+..
+.nr rF 0
+.if \n(.g .if rF .nr rF 1
+.if (\n(rF:(\n(.g==0)) \{\
+.    if \nF \{\
+.        de IX
+.        tm Index:\\$1\t\\n%\t"\\$2"
+..
+.        if !\nF==2 \{\
+.            nr % 0
+.            nr F 2
+.        \}
+.    \}
+.\}
+.rr rF
+.\"
+.\" Accent mark definitions (@(#)ms.acc 1.5 88/02/08 SMI; from UCB 4.2).
+.\" Fear.  Run.  Save yourself.  No user-serviceable parts.
+.    \" fudge factors for nroff and troff
+.if n \{\
+.    ds #H 0
+.    ds #V .8m
+.    ds #F .3m
+.    ds #[ \f1
+.    ds #] \fP
+.\}
+.if t \{\
+.    ds #H ((1u-(\\\\n(.fu%2u))*.13m)
+.    ds #V .6m
+.    ds #F 0
+.    ds #[ \&
+.    ds #] \&
+.\}
+.    \" simple accents for nroff and troff
+.if n \{\
+.    ds ' \&
+.    ds ` \&
+.    ds ^ \&
+.    ds , \&
+.    ds ~ ~
+.    ds /
+.\}
+.if t \{\
+.    ds ' \\k:\h'-(\\n(.wu*8/10-\*(#H)'\'\h"|\\n:u"
+.    ds ` \\k:\h'-(\\n(.wu*8/10-\*(#H)'\`\h'|\\n:u'
+.    ds ^ \\k:\h'-(\\n(.wu*10/11-\*(#H)'^\h'|\\n:u'
+.    ds , \\k:\h'-(\\n(.wu*8/10)',\h'|\\n:u'
+.    ds ~ \\k:\h'-(\\n(.wu-\*(#H-.1m)'~\h'|\\n:u'
+.    ds / \\k:\h'-(\\n(.wu*8/10-\*(#H)'\z\(sl\h'|\\n:u'
+.\}
+.    \" troff and (daisy-wheel) nroff accents
+.ds : \\k:\h'-(\\n(.wu*8/10-\*(#H+.1m+\*(#F)'\v'-\*(#V'\z.\h'.2m+\*(#F'.\h'|\\n:u'\v'\*(#V'
+.ds 8 \h'\*(#H'\(*b\h'-\*(#H'
+.ds o \\k:\h'-(\\n(.wu+\w'\(de'u-\*(#H)/2u'\v'-.3n'\*(#[\z\(de\v'.3n'\h'|\\n:u'\*(#]
+.ds d- \h'\*(#H'\(pd\h'-\w'~'u'\v'-.25m'\f2\(hy\fP\v'.25m'\h'-\*(#H'
+.ds D- D\\k:\h'-\w'D'u'\v'-.11m'\z\(hy\v'.11m'\h'|\\n:u'
+.ds th \*(#[\v'.3m'\s+1I\s-1\v'-.3m'\h'-(\w'I'u*2/3)'\s-1o\s+1\*(#]
+.ds Th \*(#[\s+2I\s-2\h'-\w'I'u*3/5'\v'-.3m'o\v'.3m'\*(#]
+.ds ae a\h'-(\w'a'u*4/10)'e
+.ds Ae A\h'-(\w'A'u*4/10)'E
+.    \" corrections for vroff
+.if v .ds ~ \\k:\h'-(\\n(.wu*9/10-\*(#H)'\s-2\u~\d\s+2\h'|\\n:u'
+.if v .ds ^ \\k:\h'-(\\n(.wu*10/11-\*(#H)'\v'-.4m'^\v'.4m'\h'|\\n:u'
+.    \" for low resolution devices (crt and lpr)
+.if \n(.H>23 .if \n(.V>19 \
+\{\
+.    ds : e
+.    ds 8 ss
+.    ds o a
+.    ds d- d\h'-1'\(ga
+.    ds D- D\h'-1'\(hy
+.    ds th \o'bp'
+.    ds Th \o'LP'
+.    ds ae ae
+.    ds Ae AE
+.\}
+.rm #[ #] #H #V #F C
+.\" ========================================================================
+.\"
+.IX Title "FFMPEG-BITSTREAM-FILTERS 1"
+.TH FFMPEG-BITSTREAM-FILTERS 1 " " " " " "
+.\" For nroff, turn off justification.  Always turn off hyphenation; it makes
+.\" way too many mistakes in technical documents.
+.if n .ad l
+.nh
+.SH "NAME"
+ffmpeg\-bitstream\-filters \- FFmpeg bitstream filters
+.SH "DESCRIPTION"
+.IX Header "DESCRIPTION"
+This document describes the bitstream filters provided by the
+libavcodec library.
+.PP
+A bitstream filter operates on the encoded stream data, and performs
+bitstream level modifications without performing decoding.
+.SH "BITSTREAM FILTERS"
+.IX Header "BITSTREAM FILTERS"
+When you configure your FFmpeg build, all the supported bitstream
+filters are enabled by default. You can list all available ones using
+the configure option \f(CW\*(C`\-\-list\-bsfs\*(C'\fR.
+.PP
+You can disable all the bitstream filters using the configure option
+\&\f(CW\*(C`\-\-disable\-bsfs\*(C'\fR, and selectively enable any bitstream filter using
+the option \f(CW\*(C`\-\-enable\-bsf=BSF\*(C'\fR, or you can disable a particular
+bitstream filter using the option \f(CW\*(C`\-\-disable\-bsf=BSF\*(C'\fR.
+.PP
+The option \f(CW\*(C`\-bsfs\*(C'\fR of the ff* tools will display the list of
+all the supported bitstream filters included in your build.
+.PP
+The ff* tools have a \-bsf option applied per stream, taking a
+comma-separated list of filters, whose parameters follow the filter
+name after a '='.
+.PP
+.Vb 1
+\&        ffmpeg \-i INPUT \-c:v copy \-bsf:v filter1[=opt1=str1:opt2=str2][,filter2] OUTPUT
+.Ve
+.PP
+Below is a description of the currently available bitstream filters,
+with their parameters, if any.
+.SS "aac_adtstoasc"
+.IX Subsection "aac_adtstoasc"
+Convert \s-1MPEG\-2/4 AAC ADTS\s0 to an \s-1MPEG\-4\s0 Audio Specific Configuration
+bitstream.
+.PP
+This filter creates an \s-1MPEG\-4\s0 AudioSpecificConfig from an \s-1MPEG\-2/4
+ADTS\s0 header and removes the \s-1ADTS\s0 header.
+.PP
+This filter is required for example when copying an \s-1AAC\s0 stream from a
+raw \s-1ADTS AAC\s0 or an MPEG-TS container to \s-1MP4A\-LATM,\s0 to an \s-1FLV\s0 file, or
+to \s-1MOV/MP4\s0 files and related formats such as 3GP or M4A. Please note
+that it is auto-inserted for \s-1MP4A\-LATM\s0 and \s-1MOV/MP4\s0 and related formats.
+.SS "av1_metadata"
+.IX Subsection "av1_metadata"
+Modify metadata embedded in an \s-1AV1\s0 stream.
+.IP "\fBtd\fR" 4
+.IX Item "td"
+Insert or remove temporal delimiter OBUs in all temporal units of the
+stream.
+.RS 4
+.IP "\fBinsert\fR" 4
+.IX Item "insert"
+Insert a \s-1TD\s0 at the beginning of every \s-1TU\s0 which does not already have one.
+.IP "\fBremove\fR" 4
+.IX Item "remove"
+Remove the \s-1TD\s0 from the beginning of every \s-1TU\s0 which has one.
+.RE
+.RS 4
+.RE
+.IP "\fBcolor_primaries\fR" 4
+.IX Item "color_primaries"
+.PD 0
+.IP "\fBtransfer_characteristics\fR" 4
+.IX Item "transfer_characteristics"
+.IP "\fBmatrix_coefficients\fR" 4
+.IX Item "matrix_coefficients"
+.PD
+Set the color description fields in the stream (see \s-1AV1\s0 section 6.4.2).
+.IP "\fBcolor_range\fR" 4
+.IX Item "color_range"
+Set the color range in the stream (see \s-1AV1\s0 section 6.4.2; note that
+this cannot be set for streams using \s-1BT.709\s0 primaries, sRGB transfer
+characteristic and identity (\s-1RGB\s0) matrix coefficients).
+.RS 4
+.IP "\fBtv\fR" 4
+.IX Item "tv"
+Limited range.
+.IP "\fBpc\fR" 4
+.IX Item "pc"
+Full range.
+.RE
+.RS 4
+.RE
+.IP "\fBchroma_sample_position\fR" 4
+.IX Item "chroma_sample_position"
+Set the chroma sample location in the stream (see \s-1AV1\s0 section 6.4.2).
+This can only be set for 4:2:0 streams.
+.RS 4
+.IP "\fBvertical\fR" 4
+.IX Item "vertical"
+Left position (matching the default in \s-1MPEG\-2\s0 and H.264).
+.IP "\fBcolocated\fR" 4
+.IX Item "colocated"
+Top-left position.
+.RE
+.RS 4
+.RE
+.IP "\fBtick_rate\fR" 4
+.IX Item "tick_rate"
+Set the tick rate (\fItime_scale / num_units_in_display_tick\fR) in
+the timing info in the sequence header.
+.IP "\fBnum_ticks_per_picture\fR" 4
+.IX Item "num_ticks_per_picture"
+Set the number of ticks in each picture, to indicate that the stream
+has a fixed framerate.  Ignored if \fBtick_rate\fR is not also set.
+.IP "\fBdelete_padding\fR" 4
+.IX Item "delete_padding"
+Deletes Padding OBUs.
+.SS "chomp"
+.IX Subsection "chomp"
+Remove zero padding at the end of a packet.
+.SS "dca_core"
+.IX Subsection "dca_core"
+Extract the core from a \s-1DCA/DTS\s0 stream, dropping extensions such as
+DTS-HD.
+.SS "dovi_rpu"
+.IX Subsection "dovi_rpu"
+Manipulate Dolby Vision metadata in a \s-1HEVC/AV1\s0 bitstream, optionally enabling
+metadata compression.
+.IP "\fBstrip\fR" 4
+.IX Item "strip"
+If enabled, strip all Dolby Vision metadata (configuration record + \s-1RPU\s0 data
+blocks) from the stream.
+.IP "\fBcompression\fR" 4
+.IX Item "compression"
+Which compression level to enable.
+.RS 4
+.IP "\fBnone\fR" 4
+.IX Item "none"
+No metadata compression.
+.IP "\fBlimited\fR" 4
+.IX Item "limited"
+Limited metadata compression scheme. Should be compatible with most devices.
+This is the default.
+.IP "\fBextended\fR" 4
+.IX Item "extended"
+Extended metadata compression. Devices are not required to support this. Note
+that this level currently behaves the same as \fBlimited\fR in libavcodec.
+.RE
+.RS 4
+.RE
+.SS "dump_extra"
+.IX Subsection "dump_extra"
+Add extradata to the beginning of the filtered packets except when
+said packets already exactly begin with the extradata that is intended
+to be added.
+.IP "\fBfreq\fR" 4
+.IX Item "freq"
+The additional argument specifies which packets should be filtered.
+It accepts the values:
+.RS 4
+.IP "\fBk\fR" 4
+.IX Item "k"
+.PD 0
+.IP "\fBkeyframe\fR" 4
+.IX Item "keyframe"
+.PD
+add extradata to all key packets
+.IP "\fBe\fR" 4
+.IX Item "e"
+.PD 0
+.IP "\fBall\fR" 4
+.IX Item "all"
+.PD
+add extradata to all packets
+.RE
+.RS 4
+.RE
+.PP
+If not specified it is assumed \fBk\fR.
+.PP
+For example the following \fBffmpeg\fR command forces a global
+header (thus disabling individual packet headers) in the H.264 packets
+generated by the \f(CW\*(C`libx264\*(C'\fR encoder, but corrects them by adding
+the header stored in extradata to the key packets:
+.PP
+.Vb 1
+\&        ffmpeg \-i INPUT \-map 0 \-flags:v +global_header \-c:v libx264 \-bsf:v dump_extra out.ts
+.Ve
+.SS "dv_error_marker"
+.IX Subsection "dv_error_marker"
+Blocks in \s-1DV\s0 which are marked as damaged are replaced by blocks of the specified color.
+.IP "\fBcolor\fR" 4
+.IX Item "color"
+The color to replace damaged blocks by
+.IP "\fBsta\fR" 4
+.IX Item "sta"
+A 16 bit mask which specifies which of the 16 possible error status values are
+to be replaced by colored blocks. 0xFFFE is the default which replaces all non 0
+error status values.
+.RS 4
+.IP "\fBok\fR" 4
+.IX Item "ok"
+No error, no concealment
+.IP "\fBerr\fR" 4
+.IX Item "err"
+Error, No concealment
+.IP "\fBres\fR" 4
+.IX Item "res"
+Reserved
+.IP "\fBnotok\fR" 4
+.IX Item "notok"
+Error or concealment
+.IP "\fBnotres\fR" 4
+.IX Item "notres"
+Not reserved
+.IP "\fBAa, Ba, Ca, Ab, Bb, Cb, A, B, C, a, b, erri, erru\fR" 4
+.IX Item "Aa, Ba, Ca, Ab, Bb, Cb, A, B, C, a, b, erri, erru"
+The specific error status code
+.RE
+.RS 4
+.Sp
+see page 44\-46 or section 5.5 of
+<\fBhttp://web.archive.org/web/20060927044735/http://www.smpte.org/smpte_store/standards/pdf/s314m.pdf\fR>
+.RE
+.SS "eac3_core"
+.IX Subsection "eac3_core"
+Extract the core from a E\-AC\-3 stream, dropping extra channels.
+.SS "eia608_to_smpte436m"
+.IX Subsection "eia608_to_smpte436m"
+Convert from a \f(CW\*(C`EIA_608\*(C'\fR stream to a \f(CW\*(C`SMPTE_436M_ANC\*(C'\fR data stream, wrapping the closed captions in \s-1CTA\-708 CDP VANC\s0 packets.
+.IP "\fBline_number\fR" 4
+.IX Item "line_number"
+Choose which line number the generated \s-1VANC\s0 packets should go on. You generally want either line 9 (the default) or 11.
+.IP "\fBwrapping_type\fR" 4
+.IX Item "wrapping_type"
+Choose the \s-1SMPTE 436M\s0 wrapping type, defaults to \fBvanc_frame\fR.
+It accepts the values:
+.RS 4
+.IP "\fBvanc_frame\fR" 4
+.IX Item "vanc_frame"
+\&\s-1VANC\s0 frame (interlaced or segmented progressive frame)
+.IP "\fBvanc_field_1\fR" 4
+.IX Item "vanc_field_1"
+.PD 0
+.IP "\fBvanc_field_2\fR" 4
+.IX Item "vanc_field_2"
+.IP "\fBvanc_progressive_frame\fR" 4
+.IX Item "vanc_progressive_frame"
+.RE
+.RS 4
+.RE
+.IP "\fBsample_coding\fR" 4
+.IX Item "sample_coding"
+.PD
+Choose the \s-1SMPTE 436M\s0 sample coding, defaults to \fB8bit_luma\fR.
+It accepts the values:
+.RS 4
+.IP "\fB8bit_luma\fR" 4
+.IX Item "8bit_luma"
+8\-bit component luma samples
+.IP "\fB8bit_color_diff\fR" 4
+.IX Item "8bit_color_diff"
+8\-bit component color difference samples
+.IP "\fB8bit_luma_and_color_diff\fR" 4
+.IX Item "8bit_luma_and_color_diff"
+8\-bit component luma and color difference samples
+.IP "\fB10bit_luma\fR" 4
+.IX Item "10bit_luma"
+10\-bit component luma samples
+.IP "\fB10bit_color_diff\fR" 4
+.IX Item "10bit_color_diff"
+10\-bit component color difference samples
+.IP "\fB10bit_luma_and_color_diff\fR" 4
+.IX Item "10bit_luma_and_color_diff"
+10\-bit component luma and color difference samples
+.IP "\fB8bit_luma_parity_error\fR" 4
+.IX Item "8bit_luma_parity_error"
+8\-bit component luma samples with parity error
+.IP "\fB8bit_color_diff_parity_error\fR" 4
+.IX Item "8bit_color_diff_parity_error"
+8\-bit component color difference samples with parity error
+.IP "\fB8bit_luma_and_color_diff_parity_error\fR" 4
+.IX Item "8bit_luma_and_color_diff_parity_error"
+8\-bit component luma and color difference samples with parity error
+.RE
+.RS 4
+.RE
+.IP "\fBinitial_cdp_sequence_cntr\fR" 4
+.IX Item "initial_cdp_sequence_cntr"
+The initial value of the \s-1CDP\s0's 16\-bit unsigned integer \f(CW\*(C`cdp_hdr_sequence_cntr\*(C'\fR and \f(CW\*(C`cdp_ftr_sequence_cntr\*(C'\fR fields. Defaults to 0.
+.IP "\fBcdp_frame_rate\fR" 4
+.IX Item "cdp_frame_rate"
+Set the \s-1CDP\s0's \f(CW\*(C`cdp_frame_rate\*(C'\fR field. This doesn't actually change the timing of the data stream, it just changes the values inserted in that field in the generated \s-1CDP\s0 packets. Defaults to \fB30000/1001\fR.
+.SS "extract_extradata"
+.IX Subsection "extract_extradata"
+Extract the in-band extradata.
+.PP
+Certain codecs allow the long-term headers (e.g. \s-1MPEG\-2\s0 sequence headers,
+or H.264/HEVC (\s-1VPS/\s0)SPS/PPS) to be transmitted either \*(L"in-band\*(R" (i.e. as a part
+of the bitstream containing the coded frames) or \*(L"out of band\*(R" (e.g. on the
+container level). This latter form is called \*(L"extradata\*(R" in FFmpeg terminology.
+.PP
+This bitstream filter detects the in-band headers and makes them available as
+extradata.
+.IP "\fBremove\fR" 4
+.IX Item "remove"
+When this option is enabled, the long-term headers are removed from the
+bitstream after extraction.
+.SS "filter_units"
+.IX Subsection "filter_units"
+Remove units with types in or not in a given set from the stream.
+.IP "\fBpass_types\fR" 4
+.IX Item "pass_types"
+List of unit types or ranges of unit types to pass through while removing
+all others.  This is specified as a '|'\-separated list of unit type values
+or ranges of values with '\-'.
+.IP "\fBremove_types\fR" 4
+.IX Item "remove_types"
+Identical to \fBpass_types\fR, except the units in the given set
+removed and all others passed through.
+.PP
+The types used by pass_types and remove_types correspond to \s-1NAL\s0 unit types
+(nal_unit_type) in H.264, \s-1HEVC\s0 and H.266 (see Table 7\-1 in the H.264
+and \s-1HEVC\s0 specifications or Table 5 in the H.266 specification), to
+marker values for \s-1JPEG\s0 (without 0xFF prefix) and to start codes without
+start code prefix (i.e. the byte following the 0x000001) for \s-1MPEG\-2.\s0
+For \s-1VP8\s0 and \s-1VP9,\s0 every unit has type zero.
+.PP
+Extradata is unchanged by this transformation, but note that if the stream
+contains inline parameter sets then the output may be unusable if they are
+removed.
+.PP
+For example, to remove all non-VCL \s-1NAL\s0 units from an H.264 stream:
+.PP
+.Vb 1
+\&        ffmpeg \-i INPUT \-c:v copy \-bsf:v \*(Aqfilter_units=pass_types=1\-5\*(Aq OUTPUT
+.Ve
+.PP
+To remove all AUDs, \s-1SEI\s0 and filler from an H.265 stream:
+.PP
+.Vb 1
+\&        ffmpeg \-i INPUT \-c:v copy \-bsf:v \*(Aqfilter_units=remove_types=35|38\-40\*(Aq OUTPUT
+.Ve
+.PP
+To remove all user data from a \s-1MPEG\-2\s0 stream, including Closed Captions:
+.PP
+.Vb 1
+\&        ffmpeg \-i INPUT \-c:v copy \-bsf:v \*(Aqfilter_units=remove_types=178\*(Aq OUTPUT
+.Ve
+.PP
+To remove all \s-1SEI\s0 from a H264 stream, including Closed Captions:
+.PP
+.Vb 1
+\&        ffmpeg \-i INPUT \-c:v copy \-bsf:v \*(Aqfilter_units=remove_types=6\*(Aq OUTPUT
+.Ve
+.PP
+To remove all prefix and suffix \s-1SEI\s0 from a \s-1HEVC\s0 stream, including Closed Captions and dynamic \s-1HDR:\s0
+.PP
+.Vb 1
+\&        ffmpeg \-i INPUT \-c:v copy \-bsf:v \*(Aqfilter_units=remove_types=39|40\*(Aq OUTPUT
+.Ve
+.SS "hapqa_extract"
+.IX Subsection "hapqa_extract"
+Extract Rgb or Alpha part of an \s-1HAPQA\s0 file, without recompression, in order to create an \s-1HAPQ\s0 or an HAPAlphaOnly file.
+.IP "\fBtexture\fR" 4
+.IX Item "texture"
+Specifies the texture to keep.
+.RS 4
+.IP "\fBcolor\fR" 4
+.IX Item "color"
+.PD 0
+.IP "\fBalpha\fR" 4
+.IX Item "alpha"
+.RE
+.RS 4
+.RE
+.PD
+.PP
+Convert \s-1HAPQA\s0 to \s-1HAPQ\s0
+.PP
+.Vb 1
+\&        ffmpeg \-i hapqa_inputfile.mov \-c copy \-bsf:v hapqa_extract=texture=color \-tag:v HapY \-metadata:s:v:0 encoder="HAPQ" hapq_file.mov
+.Ve
+.PP
+Convert \s-1HAPQA\s0 to HAPAlphaOnly
+.PP
+.Vb 1
+\&        ffmpeg \-i hapqa_inputfile.mov \-c copy \-bsf:v hapqa_extract=texture=alpha \-tag:v HapA \-metadata:s:v:0 encoder="HAPAlpha Only" hapalphaonly_file.mov
+.Ve
+.SS "h264_metadata"
+.IX Subsection "h264_metadata"
+Modify metadata embedded in an H.264 stream.
+.IP "\fBaud\fR" 4
+.IX Item "aud"
+Insert or remove \s-1AUD NAL\s0 units in all access units of the stream.
+.RS 4
+.IP "\fBpass\fR" 4
+.IX Item "pass"
+.PD 0
+.IP "\fBinsert\fR" 4
+.IX Item "insert"
+.IP "\fBremove\fR" 4
+.IX Item "remove"
+.RE
+.RS 4
+.PD
+.Sp
+Default is pass.
+.RE
+.IP "\fBsample_aspect_ratio\fR" 4
+.IX Item "sample_aspect_ratio"
+Set the sample aspect ratio of the stream in the \s-1VUI\s0 parameters.
+See H.264 table E\-1.
+.IP "\fBoverscan_appropriate_flag\fR" 4
+.IX Item "overscan_appropriate_flag"
+Set whether the stream is suitable for display using overscan
+or not (see H.264 section E.2.1).
+.IP "\fBvideo_format\fR" 4
+.IX Item "video_format"
+.PD 0
+.IP "\fBvideo_full_range_flag\fR" 4
+.IX Item "video_full_range_flag"
+.PD
+Set the video format in the stream (see H.264 section E.2.1 and
+table E\-2).
+.IP "\fBcolour_primaries\fR" 4
+.IX Item "colour_primaries"
+.PD 0
+.IP "\fBtransfer_characteristics\fR" 4
+.IX Item "transfer_characteristics"
+.IP "\fBmatrix_coefficients\fR" 4
+.IX Item "matrix_coefficients"
+.PD
+Set the colour description in the stream (see H.264 section E.2.1
+and tables E\-3, E\-4 and E\-5).
+.IP "\fBchroma_sample_loc_type\fR" 4
+.IX Item "chroma_sample_loc_type"
+Set the chroma sample location in the stream (see H.264 section
+E.2.1 and figure E\-1).
+.IP "\fBtick_rate\fR" 4
+.IX Item "tick_rate"
+Set the tick rate (time_scale / num_units_in_tick) in the \s-1VUI\s0
+parameters.  This is the smallest time unit representable in the
+stream, and in many cases represents the field rate of the stream
+(double the frame rate).
+.IP "\fBfixed_frame_rate_flag\fR" 4
+.IX Item "fixed_frame_rate_flag"
+Set whether the stream has fixed framerate \- typically this indicates
+that the framerate is exactly half the tick rate, but the exact
+meaning is dependent on interlacing and the picture structure (see
+H.264 section E.2.1 and table E\-6).
+.IP "\fBzero_new_constraint_set_flags\fR" 4
+.IX Item "zero_new_constraint_set_flags"
+Zero constraint_set4_flag and constraint_set5_flag in the \s-1SPS.\s0 These
+bits were reserved in a previous version of the H.264 spec, and thus
+some hardware decoders require these to be zero. The result of zeroing
+this is still a valid bitstream.
+.IP "\fBcrop_left\fR" 4
+.IX Item "crop_left"
+.PD 0
+.IP "\fBcrop_right\fR" 4
+.IX Item "crop_right"
+.IP "\fBcrop_top\fR" 4
+.IX Item "crop_top"
+.IP "\fBcrop_bottom\fR" 4
+.IX Item "crop_bottom"
+.PD
+Set the frame cropping offsets in the \s-1SPS.\s0  These values will replace
+the current ones if the stream is already cropped.
+.Sp
+These fields are set in pixels.  Note that some sizes may not be
+representable if the chroma is subsampled or the stream is interlaced
+(see H.264 section 7.4.2.1.1).
+.IP "\fBsei_user_data\fR" 4
+.IX Item "sei_user_data"
+Insert a string as \s-1SEI\s0 unregistered user data.  The argument must
+be of the form \fIUUID+string\fR, where the \s-1UUID\s0 is as hex digits
+possibly separated by hyphens, and the string can be anything.
+.Sp
+For example, \fB086f3693\-b7b3\-4f2c\-9653\-21492feee5b8+hello\fR will
+insert the string ``hello'' associated with the given \s-1UUID.\s0
+.IP "\fBdelete_filler\fR" 4
+.IX Item "delete_filler"
+Deletes both filler \s-1NAL\s0 units and filler \s-1SEI\s0 messages.
+.IP "\fBdisplay_orientation\fR" 4
+.IX Item "display_orientation"
+Insert, extract or remove Display orientation \s-1SEI\s0 messages.
+See H.264 section D.1.27 and D.2.27 for syntax and semantics.
+.RS 4
+.IP "\fBpass\fR" 4
+.IX Item "pass"
+.PD 0
+.IP "\fBinsert\fR" 4
+.IX Item "insert"
+.IP "\fBremove\fR" 4
+.IX Item "remove"
+.IP "\fBextract\fR" 4
+.IX Item "extract"
+.RE
+.RS 4
+.PD
+.Sp
+Default is pass.
+.Sp
+Insert mode works in conjunction with \f(CW\*(C`rotate\*(C'\fR and \f(CW\*(C`flip\*(C'\fR options.
+Any pre-existing Display orientation messages will be removed in insert or remove mode.
+Extract mode attaches the display matrix to the packet as side data.
+.RE
+.IP "\fBrotate\fR" 4
+.IX Item "rotate"
+Set rotation in display orientation \s-1SEI\s0 (anticlockwise angle in degrees).
+Range is \-360 to +360. Default is NaN.
+.IP "\fBflip\fR" 4
+.IX Item "flip"
+Set flip in display orientation \s-1SEI.\s0
+.RS 4
+.IP "\fBhorizontal\fR" 4
+.IX Item "horizontal"
+.PD 0
+.IP "\fBvertical\fR" 4
+.IX Item "vertical"
+.RE
+.RS 4
+.PD
+.Sp
+Default is unset.
+.RE
+.IP "\fBlevel\fR" 4
+.IX Item "level"
+Set the level in the \s-1SPS.\s0  Refer to H.264 section A.3 and tables A\-1
+to A\-5.
+.Sp
+The argument must be the name of a level (for example, \fB4.2\fR), a
+level_idc value (for example, \fB42\fR), or the special name \fBauto\fR
+indicating that the filter should attempt to guess the level from the
+input stream properties.
+.SS "h264_mp4toannexb"
+.IX Subsection "h264_mp4toannexb"
+Convert an H.264 bitstream from length prefixed mode to start code
+prefixed mode (as defined in the Annex B of the ITU-T H.264
+specification).
+.PP
+This is required by some streaming formats, typically the \s-1MPEG\-2\s0
+transport stream format (muxer \f(CW\*(C`mpegts\*(C'\fR).
+.PP
+For example to remux an \s-1MP4\s0 file containing an H.264 stream to mpegts
+format with \fBffmpeg\fR, you can use the command:
+.PP
+.Vb 1
+\&        ffmpeg \-i INPUT.mp4 \-codec copy \-bsf:v h264_mp4toannexb OUTPUT.ts
+.Ve
+.PP
+Please note that this filter is auto-inserted for MPEG-TS (muxer
+\&\f(CW\*(C`mpegts\*(C'\fR) and raw H.264 (muxer \f(CW\*(C`h264\*(C'\fR) output formats.
+.SS "h264_redundant_pps"
+.IX Subsection "h264_redundant_pps"
+This applies a specific fixup to some Blu-ray \s-1BDMV H264\s0 streams
+which contain redundant PPSs. The PPSs modify irrelevant parameters
+of the stream, confusing other transformations which require
+the correct extradata.
+.PP
+The encoder used on these impacted streams adds extra PPSs throughout
+the stream, varying the initial \s-1QP\s0 and whether weighted prediction
+was enabled. This causes issues after copying the stream into
+a global header container, as the starting \s-1PPS\s0 is not suitable
+for the rest of the stream. One side effect, for example,
+is seeking will return garbled output until a new \s-1PPS\s0 appears.
+.PP
+This \s-1BSF\s0 removes the extra PPSs and rewrites the slice headers
+such that the stream uses a single leading \s-1PPS\s0 in the global header,
+which resolves the issue.
+.SS "hevc_metadata"
+.IX Subsection "hevc_metadata"
+Modify metadata embedded in an \s-1HEVC\s0 stream.
+.IP "\fBaud\fR" 4
+.IX Item "aud"
+Insert or remove \s-1AUD NAL\s0 units in all access units of the stream.
+.RS 4
+.IP "\fBinsert\fR" 4
+.IX Item "insert"
+.PD 0
+.IP "\fBremove\fR" 4
+.IX Item "remove"
+.RE
+.RS 4
+.RE
+.IP "\fBsample_aspect_ratio\fR" 4
+.IX Item "sample_aspect_ratio"
+.PD
+Set the sample aspect ratio in the stream in the \s-1VUI\s0 parameters.
+.IP "\fBvideo_format\fR" 4
+.IX Item "video_format"
+.PD 0
+.IP "\fBvideo_full_range_flag\fR" 4
+.IX Item "video_full_range_flag"
+.PD
+Set the video format in the stream (see H.265 section E.3.1 and
+table E.2).
+.IP "\fBcolour_primaries\fR" 4
+.IX Item "colour_primaries"
+.PD 0
+.IP "\fBtransfer_characteristics\fR" 4
+.IX Item "transfer_characteristics"
+.IP "\fBmatrix_coefficients\fR" 4
+.IX Item "matrix_coefficients"
+.PD
+Set the colour description in the stream (see H.265 section E.3.1
+and tables E.3, E.4 and E.5).
+.IP "\fBchroma_sample_loc_type\fR" 4
+.IX Item "chroma_sample_loc_type"
+Set the chroma sample location in the stream (see H.265 section
+E.3.1 and figure E.1).
+.IP "\fBtick_rate\fR" 4
+.IX Item "tick_rate"
+Set the tick rate in the \s-1VPS\s0 and \s-1VUI\s0 parameters (time_scale /
+num_units_in_tick). Combined with \fBnum_ticks_poc_diff_one\fR, this can
+set a constant framerate in the stream.  Note that it is likely to be
+overridden by container parameters when the stream is in a container.
+.IP "\fBnum_ticks_poc_diff_one\fR" 4
+.IX Item "num_ticks_poc_diff_one"
+Set poc_proportional_to_timing_flag in \s-1VPS\s0 and \s-1VUI\s0 and use this value
+to set num_ticks_poc_diff_one_minus1 (see H.265 sections 7.4.3.1 and
+E.3.1).  Ignored if \fBtick_rate\fR is not also set.
+.IP "\fBcrop_left\fR" 4
+.IX Item "crop_left"
+.PD 0
+.IP "\fBcrop_right\fR" 4
+.IX Item "crop_right"
+.IP "\fBcrop_top\fR" 4
+.IX Item "crop_top"
+.IP "\fBcrop_bottom\fR" 4
+.IX Item "crop_bottom"
+.PD
+Set the conformance window cropping offsets in the \s-1SPS.\s0  These values
+will replace the current ones if the stream is already cropped.
+.Sp
+These fields are set in pixels.  Note that some sizes may not be
+representable if the chroma is subsampled (H.265 section 7.4.3.2.1).
+.IP "\fBwidth\fR" 4
+.IX Item "width"
+.PD 0
+.IP "\fBheight\fR" 4
+.IX Item "height"
+.PD
+Set width and height after crop.
+.IP "\fBlevel\fR" 4
+.IX Item "level"
+Set the level in the \s-1VPS\s0 and \s-1SPS.\s0  See H.265 section A.4 and tables
+A.6 and A.7.
+.Sp
+The argument must be the name of a level (for example, \fB5.1\fR), a
+\&\fIgeneral_level_idc\fR value (for example, \fB153\fR for level 5.1),
+or the special name \fBauto\fR indicating that the filter should
+attempt to guess the level from the input stream properties.
+.SS "hevc_mp4toannexb"
+.IX Subsection "hevc_mp4toannexb"
+Convert an \s-1HEVC/H.265\s0 bitstream from length prefixed mode to start code
+prefixed mode (as defined in the Annex B of the ITU-T H.265
+specification).
+.PP
+This is required by some streaming formats, typically the \s-1MPEG\-2\s0
+transport stream format (muxer \f(CW\*(C`mpegts\*(C'\fR).
+.PP
+For example to remux an \s-1MP4\s0 file containing an \s-1HEVC\s0 stream to mpegts
+format with \fBffmpeg\fR, you can use the command:
+.PP
+.Vb 1
+\&        ffmpeg \-i INPUT.mp4 \-codec copy \-bsf:v hevc_mp4toannexb OUTPUT.ts
+.Ve
+.PP
+Please note that this filter is auto-inserted for MPEG-TS (muxer
+\&\f(CW\*(C`mpegts\*(C'\fR) and raw \s-1HEVC/H.265\s0 (muxer \f(CW\*(C`h265\*(C'\fR or
+\&\f(CW\*(C`hevc\*(C'\fR) output formats.
+.SS "imxdump"
+.IX Subsection "imxdump"
+Modifies the bitstream to fit in \s-1MOV\s0 and to be usable by the Final Cut
+Pro decoder. This filter only applies to the mpeg2video codec, and is
+likely not needed for Final Cut Pro 7 and newer with the appropriate
+\&\fB\-tag:v\fR.
+.PP
+For example, to remux 30 MB/sec \s-1NTSC IMX\s0 to \s-1MOV:\s0
+.PP
+.Vb 1
+\&        ffmpeg \-i input.mxf \-c copy \-bsf:v imxdump \-tag:v mx3n output.mov
+.Ve
+.SS "mjpeg2jpeg"
+.IX Subsection "mjpeg2jpeg"
+Convert \s-1MJPEG/AVI1\s0 packets to full \s-1JPEG/JFIF\s0 packets.
+.PP
+\&\s-1MJPEG\s0 is a video codec wherein each video frame is essentially a
+\&\s-1JPEG\s0 image. The individual frames can be extracted without loss,
+e.g. by
+.PP
+.Vb 1
+\&        ffmpeg \-i ../some_mjpeg.avi \-c:v copy frames_%d.jpg
+.Ve
+.PP
+Unfortunately, these chunks are incomplete \s-1JPEG\s0 images, because
+they lack the \s-1DHT\s0 segment required for decoding. Quoting from
+<\fBhttp://www.digitalpreservation.gov/formats/fdd/fdd000063.shtml\fR>:
+.PP
+Avery Lee, writing in the rec.video.desktop newsgroup in 2001,
+commented that \*(L"\s-1MJPEG,\s0 or at least the \s-1MJPEG\s0 in AVIs having the
+\&\s-1MJPG\s0 fourcc, is restricted \s-1JPEG\s0 with a fixed \*(-- and *omitted* \*(--
+Huffman table. The \s-1JPEG\s0 must be YCbCr colorspace, it must be 4:2:2,
+and it must use basic Huffman encoding, not arithmetic or
+progressive. . . . You can indeed extract the \s-1MJPEG\s0 frames and
+decode them with a regular \s-1JPEG\s0 decoder, but you have to prepend
+the \s-1DHT\s0 segment to them, or else the decoder won't have any idea
+how to decompress the data. The exact table necessary is given in
+the OpenDML spec.\*(R"
+.PP
+This bitstream filter patches the header of frames extracted from an \s-1MJPEG\s0
+stream (carrying the \s-1AVI1\s0 header \s-1ID\s0 and lacking a \s-1DHT\s0 segment) to
+produce fully qualified \s-1JPEG\s0 images.
+.PP
+.Vb 3
+\&        ffmpeg \-i mjpeg\-movie.avi \-c:v copy \-bsf:v mjpeg2jpeg frame_%d.jpg
+\&        exiftran \-i \-9 frame*.jpg
+\&        ffmpeg \-i frame_%d.jpg \-c:v copy rotated.avi
+.Ve
+.SS "mjpegadump"
+.IX Subsection "mjpegadump"
+Add an \s-1MJPEG A\s0 header to the bitstream, to enable decoding by
+Quicktime.
+.SS "mov2textsub"
+.IX Subsection "mov2textsub"
+Extract a representable text file from \s-1MOV\s0 subtitles, stripping the
+metadata header from each subtitle packet.
+.PP
+See also the \fBtext2movsub\fR filter.
+.SS "mpeg2_metadata"
+.IX Subsection "mpeg2_metadata"
+Modify metadata embedded in an \s-1MPEG\-2\s0 stream.
+.IP "\fBdisplay_aspect_ratio\fR" 4
+.IX Item "display_aspect_ratio"
+Set the display aspect ratio in the stream.
+.Sp
+The following fixed values are supported:
+.RS 4
+.IP "\fB4/3\fR" 4
+.IX Item "4/3"
+.PD 0
+.IP "\fB16/9\fR" 4
+.IX Item "16/9"
+.IP "\fB221/100\fR" 4
+.IX Item "221/100"
+.RE
+.RS 4
+.PD
+.Sp
+Any other value will result in square pixels being signalled instead
+(see H.262 section 6.3.3 and table 6\-3).
+.RE
+.IP "\fBframe_rate\fR" 4
+.IX Item "frame_rate"
+Set the frame rate in the stream.  This is constructed from a table
+of known values combined with a small multiplier and divisor \- if
+the supplied value is not exactly representable, the nearest
+representable value will be used instead (see H.262 section 6.3.3
+and table 6\-4).
+.IP "\fBvideo_format\fR" 4
+.IX Item "video_format"
+Set the video format in the stream (see H.262 section 6.3.6 and
+table 6\-6).
+.IP "\fBcolour_primaries\fR" 4
+.IX Item "colour_primaries"
+.PD 0
+.IP "\fBtransfer_characteristics\fR" 4
+.IX Item "transfer_characteristics"
+.IP "\fBmatrix_coefficients\fR" 4
+.IX Item "matrix_coefficients"
+.PD
+Set the colour description in the stream (see H.262 section 6.3.6
+and tables 6\-7, 6\-8 and 6\-9).
+.SS "mpeg4_unpack_bframes"
+.IX Subsection "mpeg4_unpack_bframes"
+Unpack DivX-style packed B\-frames.
+.PP
+DivX-style packed B\-frames are not valid \s-1MPEG\-4\s0 and were only a
+workaround for the broken Video for Windows subsystem.
+They use more space, can cause minor \s-1AV\s0 sync issues, require more
+\&\s-1CPU\s0 power to decode (unless the player has some decoded picture queue
+to compensate the 2,0,2,0 frame per packet style) and cause
+trouble if copied into a standard container like mp4 or mpeg\-ps/ts,
+because \s-1MPEG\-4\s0 decoders may not be able to decode them, since they are
+not valid \s-1MPEG\-4.\s0
+.PP
+For example to fix an \s-1AVI\s0 file containing an \s-1MPEG\-4\s0 stream with
+DivX-style packed B\-frames using \fBffmpeg\fR, you can use the command:
+.PP
+.Vb 1
+\&        ffmpeg \-i INPUT.avi \-codec copy \-bsf:v mpeg4_unpack_bframes OUTPUT.avi
+.Ve
+.SS "noise"
+.IX Subsection "noise"
+Damages the contents of packets or simply drops them without damaging the
+container. Can be used for fuzzing or testing error resilience/concealment.
+.PP
+Parameters:
+.IP "\fBamount\fR" 4
+.IX Item "amount"
+Accepts an expression whose evaluation per-packet determines how often bytes in that
+packet will be modified. A value below 0 will result in a variable frequency.
+Default is 0 which results in no modification. However, if neither amount nor drop is specified,
+amount will be set to \fI\-1\fR. See below for accepted variables.
+.IP "\fBdrop\fR" 4
+.IX Item "drop"
+Accepts an expression evaluated per-packet whose value determines whether that packet is dropped.
+Evaluation to a positive value results in the packet being dropped. Evaluation to a negative
+value results in a variable chance of it being dropped, roughly inverse in proportion to the magnitude
+of the value. Default is 0 which results in no drops. See below for accepted variables.
+.IP "\fBdropamount\fR" 4
+.IX Item "dropamount"
+Accepts a non-negative integer, which assigns a variable chance of it being dropped, roughly inverse
+in proportion to the value. Default is 0 which results in no drops. This option is kept for backwards
+compatibility and is equivalent to setting drop to a negative value with the same magnitude
+i.e. \f(CW\*(C`dropamount=4\*(C'\fR is the same as \f(CW\*(C`drop=\-4\*(C'\fR. Ignored if drop is also specified.
+.PP
+Both \f(CW\*(C`amount\*(C'\fR and \f(CW\*(C`drop\*(C'\fR accept expressions containing the following variables:
+.IP "\fBn\fR" 4
+.IX Item "n"
+The index of the packet, starting from zero.
+.IP "\fBtb\fR" 4
+.IX Item "tb"
+The timebase for packet timestamps.
+.IP "\fBpts\fR" 4
+.IX Item "pts"
+Packet presentation timestamp.
+.IP "\fBdts\fR" 4
+.IX Item "dts"
+Packet decoding timestamp.
+.IP "\fBnopts\fR" 4
+.IX Item "nopts"
+Constant representing \s-1AV_NOPTS_VALUE.\s0
+.IP "\fBstartpts\fR" 4
+.IX Item "startpts"
+First non\-AV_NOPTS_VALUE \s-1PTS\s0 seen in the stream.
+.IP "\fBstartdts\fR" 4
+.IX Item "startdts"
+First non\-AV_NOPTS_VALUE \s-1DTS\s0 seen in the stream.
+.IP "\fBduration\fR" 4
+.IX Item "duration"
+.PD 0
+.IP "\fBd\fR" 4
+.IX Item "d"
+.PD
+Packet duration, in timebase units.
+.IP "\fBpos\fR" 4
+.IX Item "pos"
+Packet position in input; may be \-1 when unknown or not set.
+.IP "\fBsize\fR" 4
+.IX Item "size"
+Packet size, in bytes.
+.IP "\fBkey\fR" 4
+.IX Item "key"
+Whether packet is marked as a keyframe.
+.IP "\fBstate\fR" 4
+.IX Item "state"
+A pseudo random integer, primarily derived from the content of packet payload.
+.PP
+\fIExamples\fR
+.IX Subsection "Examples"
+.PP
+Apply modification to every byte but don't drop any packets.
+.PP
+.Vb 1
+\&        ffmpeg \-i INPUT \-c copy \-bsf noise=1 output.mkv
+.Ve
+.PP
+Drop every video packet not marked as a keyframe after timestamp 30s but do not
+modify any of the remaining packets.
+.PP
+.Vb 1
+\&        ffmpeg \-i INPUT \-c copy \-bsf:v noise=drop=\*(Aqgt(pts*tb\e,30)*not(key)\*(Aq output.mkv
+.Ve
+.PP
+Drop one second of audio every 10 seconds and add some random noise to the rest.
+.PP
+.Vb 1
+\&        ffmpeg \-i INPUT \-c copy \-bsf:a noise=amount=\-1:drop=\*(Aqbetween(mod(pts*tb\e,10)\e,9\e,10)\*(Aq output.mkv
+.Ve
+.SS "null"
+.IX Subsection "null"
+This bitstream filter passes the packets through unchanged.
+.SS "pcm_rechunk"
+.IX Subsection "pcm_rechunk"
+Repacketize \s-1PCM\s0 audio to a fixed number of samples per packet or a fixed packet
+rate per second. This is similar to the \fBasetnsamples audio
+filter\fR but works on audio packets instead of audio frames.
+.IP "\fBnb_out_samples, n\fR" 4
+.IX Item "nb_out_samples, n"
+Set the number of samples per each output audio packet. The number is intended
+as the number of samples \fIper each channel\fR. Default value is 1024.
+.IP "\fBpad, p\fR" 4
+.IX Item "pad, p"
+If set to 1, the filter will pad the last audio packet with silence, so that it
+will contain the same number of samples (or roughly the same number of samples,
+see \fBframe_rate\fR) as the previous ones. Default value is 1.
+.IP "\fBframe_rate, r\fR" 4
+.IX Item "frame_rate, r"
+This option makes the filter output a fixed number of packets per second instead
+of a fixed number of samples per packet. If the audio sample rate is not
+divisible by the frame rate then the number of samples will not be constant but
+will vary slightly so that each packet will start as close to the frame
+boundary as possible. Using this option has precedence over \fBnb_out_samples\fR.
+.PP
+You can generate the well known 1602\-1601\-1602\-1601\-1602 pattern of 48kHz audio
+for \s-1NTSC\s0 frame rate using the \fBframe_rate\fR option.
+.PP
+.Vb 1
+\&        ffmpeg \-f lavfi \-i sine=r=48000:d=1 \-c pcm_s16le \-bsf pcm_rechunk=r=30000/1001 \-f framecrc \-
+.Ve
+.SS "pgs_frame_merge"
+.IX Subsection "pgs_frame_merge"
+Merge a sequence of \s-1PGS\s0 Subtitle segments ending with an \*(L"end of display set\*(R"
+segment into a single packet.
+.PP
+This is required by some containers that support \s-1PGS\s0 subtitles
+(muxer \f(CW\*(C`matroska\*(C'\fR).
+.SS "prores_metadata"
+.IX Subsection "prores_metadata"
+Modify color property metadata embedded in prores stream.
+.IP "\fBcolor_primaries\fR" 4
+.IX Item "color_primaries"
+Set the color primaries.
+Available values are:
+.RS 4
+.IP "\fBauto\fR" 4
+.IX Item "auto"
+Keep the same color primaries property (default).
+.IP "\fBunknown\fR" 4
+.IX Item "unknown"
+.PD 0
+.IP "\fBbt709\fR" 4
+.IX Item "bt709"
+.IP "\fBbt470bg\fR" 4
+.IX Item "bt470bg"
+.PD
+\&\s-1BT601 625\s0
+.IP "\fBsmpte170m\fR" 4
+.IX Item "smpte170m"
+\&\s-1BT601 525\s0
+.IP "\fBbt2020\fR" 4
+.IX Item "bt2020"
+.PD 0
+.IP "\fBsmpte431\fR" 4
+.IX Item "smpte431"
+.PD
+\&\s-1DCI P3\s0
+.IP "\fBsmpte432\fR" 4
+.IX Item "smpte432"
+P3 D65
+.RE
+.RS 4
+.RE
+.IP "\fBtransfer_characteristics\fR" 4
+.IX Item "transfer_characteristics"
+Set the color transfer.
+Available values are:
+.RS 4
+.IP "\fBauto\fR" 4
+.IX Item "auto"
+Keep the same transfer characteristics property (default).
+.IP "\fBunknown\fR" 4
+.IX Item "unknown"
+.PD 0
+.IP "\fBbt709\fR" 4
+.IX Item "bt709"
+.PD
+\&\s-1BT 601, BT 709, BT 2020\s0
+.IP "\fBsmpte2084\fR" 4
+.IX Item "smpte2084"
+\&\s-1SMPTE ST 2084\s0
+.IP "\fBarib\-std\-b67\fR" 4
+.IX Item "arib-std-b67"
+\&\s-1ARIB STD\-B67\s0
+.RE
+.RS 4
+.RE
+.IP "\fBmatrix_coefficients\fR" 4
+.IX Item "matrix_coefficients"
+Set the matrix coefficient.
+Available values are:
+.RS 4
+.IP "\fBauto\fR" 4
+.IX Item "auto"
+Keep the same colorspace property (default).
+.IP "\fBunknown\fR" 4
+.IX Item "unknown"
+.PD 0
+.IP "\fBbt709\fR" 4
+.IX Item "bt709"
+.IP "\fBsmpte170m\fR" 4
+.IX Item "smpte170m"
+.PD
+\&\s-1BT 601\s0
+.IP "\fBbt2020nc\fR" 4
+.IX Item "bt2020nc"
+.RE
+.RS 4
+.RE
+.PP
+Set Rec709 colorspace for each frame of the file
+.PP
+.Vb 1
+\&        ffmpeg \-i INPUT \-c copy \-bsf:v prores_metadata=color_primaries=bt709:color_trc=bt709:colorspace=bt709 output.mov
+.Ve
+.PP
+Set Hybrid Log-Gamma parameters for each frame of the file
+.PP
+.Vb 1
+\&        ffmpeg \-i INPUT \-c copy \-bsf:v prores_metadata=color_primaries=bt2020:color_trc=arib\-std\-b67:colorspace=bt2020nc output.mov
+.Ve
+.SS "remove_extra"
+.IX Subsection "remove_extra"
+Remove extradata from packets.
+.PP
+It accepts the following parameter:
+.IP "\fBfreq\fR" 4
+.IX Item "freq"
+Set which frame types to remove extradata from.
+.RS 4
+.IP "\fBk\fR" 4
+.IX Item "k"
+Remove extradata from non-keyframes only.
+.IP "\fBkeyframe\fR" 4
+.IX Item "keyframe"
+Remove extradata from keyframes only.
+.IP "\fBe, all\fR" 4
+.IX Item "e, all"
+Remove extradata from all frames.
+.RE
+.RS 4
+.RE
+.SS "setts"
+.IX Subsection "setts"
+Set \s-1PTS\s0 and \s-1DTS\s0 in packets.
+.PP
+It accepts the following parameters:
+.IP "\fBts\fR" 4
+.IX Item "ts"
+.PD 0
+.IP "\fBpts\fR" 4
+.IX Item "pts"
+.IP "\fBdts\fR" 4
+.IX Item "dts"
+.PD
+Set expressions for \s-1PTS, DTS\s0 or both.
+.IP "\fBduration\fR" 4
+.IX Item "duration"
+Set expression for duration.
+.IP "\fBtime_base\fR" 4
+.IX Item "time_base"
+Set output time base.
+.IP "\fBprescale\fR" 4
+.IX Item "prescale"
+Set whether to convert time fields to user-set output time base before evaluation of expressions. Defaults to 0.
+.PP
+The expressions are evaluated through the eval \s-1API\s0 and can contain the following
+constants:
+.IP "\fBN\fR" 4
+.IX Item "N"
+The count of the input packet. Starting from 0.
+.IP "\fB\s-1TS\s0\fR" 4
+.IX Item "TS"
+The demux timestamp in input in case of \f(CW\*(C`ts\*(C'\fR or \f(CW\*(C`dts\*(C'\fR option or presentation
+timestamp in case of \f(CW\*(C`pts\*(C'\fR option.
+.IP "\fB\s-1POS\s0\fR" 4
+.IX Item "POS"
+The original position in the file of the packet, or undefined if undefined
+for the current packet
+.IP "\fB\s-1DTS\s0\fR" 4
+.IX Item "DTS"
+The demux timestamp in input.
+.IP "\fB\s-1PTS\s0\fR" 4
+.IX Item "PTS"
+The presentation timestamp in input.
+.IP "\fB\s-1DURATION\s0\fR" 4
+.IX Item "DURATION"
+The duration in input.
+.IP "\fB\s-1STARTDTS\s0\fR" 4
+.IX Item "STARTDTS"
+The \s-1DTS\s0 of the first packet.
+.IP "\fB\s-1STARTPTS\s0\fR" 4
+.IX Item "STARTPTS"
+The \s-1PTS\s0 of the first packet.
+.IP "\fB\s-1PREV_INDTS\s0\fR" 4
+.IX Item "PREV_INDTS"
+The previous input \s-1DTS.\s0
+.IP "\fB\s-1PREV_INPTS\s0\fR" 4
+.IX Item "PREV_INPTS"
+The previous input \s-1PTS.\s0
+.IP "\fB\s-1PREV_INDURATION\s0\fR" 4
+.IX Item "PREV_INDURATION"
+The previous input duration.
+.IP "\fB\s-1PREV_OUTDTS\s0\fR" 4
+.IX Item "PREV_OUTDTS"
+The previous output \s-1DTS.\s0
+.IP "\fB\s-1PREV_OUTPTS\s0\fR" 4
+.IX Item "PREV_OUTPTS"
+The previous output \s-1PTS.\s0
+.IP "\fB\s-1PREV_OUTDURATION\s0\fR" 4
+.IX Item "PREV_OUTDURATION"
+The previous output duration.
+.IP "\fB\s-1NEXT_DTS\s0\fR" 4
+.IX Item "NEXT_DTS"
+The next input \s-1DTS.\s0
+.IP "\fB\s-1NEXT_PTS\s0\fR" 4
+.IX Item "NEXT_PTS"
+The next input \s-1PTS.\s0
+.IP "\fB\s-1NEXT_DURATION\s0\fR" 4
+.IX Item "NEXT_DURATION"
+The next input duration.
+.IP "\fB\s-1TB\s0\fR" 4
+.IX Item "TB"
+The timebase in which time fields are denominated. The user-set output timebase if prescale is enabled, else the input timebase.
+.IP "\fB\s-1TB_OUT\s0\fR" 4
+.IX Item "TB_OUT"
+The output timebase.
+.IP "\fB\s-1SR\s0\fR" 4
+.IX Item "SR"
+The sample rate of stream packet belongs.
+.IP "\fB\s-1NOPTS\s0\fR" 4
+.IX Item "NOPTS"
+The \s-1AV_NOPTS_VALUE\s0 constant.
+.PP
+For example, to set \s-1PTS\s0 equal to \s-1DTS\s0 (not recommended if B\-frames are involved):
+.PP
+.Vb 1
+\&        ffmpeg \-i INPUT \-c:a copy \-bsf:a setts=pts=DTS out.mkv
+.Ve
+.SS "showinfo"
+.IX Subsection "showinfo"
+Log basic packet information. Mainly useful for testing, debugging,
+and development.
+.SS "smpte436m_to_eia608"
+.IX Subsection "smpte436m_to_eia608"
+Convert from a \f(CW\*(C`SMPTE_436M_ANC\*(C'\fR data stream to a \f(CW\*(C`EIA_608\*(C'\fR stream,
+extracting the closed captions from \s-1CTA\-708 CDP VANC\s0 packets, and ignoring all other data.
+.SS "text2movsub"
+.IX Subsection "text2movsub"
+Convert text subtitles to \s-1MOV\s0 subtitles (as used by the \f(CW\*(C`mov_text\*(C'\fR
+codec) with metadata headers.
+.PP
+See also the \fBmov2textsub\fR filter.
+.SS "trace_headers"
+.IX Subsection "trace_headers"
+Log trace output containing all syntax elements in the coded stream
+headers (everything above the level of individual coded blocks).
+This can be useful for debugging low-level stream issues.
+.PP
+Supports \s-1AV1, H.264, H.265,\s0 (M)JPEG, \s-1MPEG\-2\s0 and \s-1VP9,\s0 but depending
+on the build only a subset of these may be available.
+.SS "truehd_core"
+.IX Subsection "truehd_core"
+Extract the core from a TrueHD stream, dropping \s-1ATMOS\s0 data.
+.SS "vp9_metadata"
+.IX Subsection "vp9_metadata"
+Modify metadata embedded in a \s-1VP9\s0 stream.
+.IP "\fBcolor_space\fR" 4
+.IX Item "color_space"
+Set the color space value in the frame header.  Note that any frame
+set to \s-1RGB\s0 will be implicitly set to \s-1PC\s0 range and that \s-1RGB\s0 is
+incompatible with profiles 0 and 2.
+.RS 4
+.IP "\fBunknown\fR" 4
+.IX Item "unknown"
+.PD 0
+.IP "\fBbt601\fR" 4
+.IX Item "bt601"
+.IP "\fBbt709\fR" 4
+.IX Item "bt709"
+.IP "\fBsmpte170\fR" 4
+.IX Item "smpte170"
+.IP "\fBsmpte240\fR" 4
+.IX Item "smpte240"
+.IP "\fBbt2020\fR" 4
+.IX Item "bt2020"
+.IP "\fBrgb\fR" 4
+.IX Item "rgb"
+.RE
+.RS 4
+.RE
+.IP "\fBcolor_range\fR" 4
+.IX Item "color_range"
+.PD
+Set the color range value in the frame header.  Note that any value
+imposed by the color space will take precedence over this value.
+.RS 4
+.IP "\fBtv\fR" 4
+.IX Item "tv"
+.PD 0
+.IP "\fBpc\fR" 4
+.IX Item "pc"
+.RE
+.RS 4
+.RE
+.PD
+.SS "vp9_superframe"
+.IX Subsection "vp9_superframe"
+Merge \s-1VP9\s0 invisible (alt-ref) frames back into \s-1VP9\s0 superframes. This
+fixes merging of split/segmented \s-1VP9\s0 streams where the alt-ref frame
+was split from its visible counterpart.
+.SS "vp9_superframe_split"
+.IX Subsection "vp9_superframe_split"
+Split \s-1VP9\s0 superframes into single frames.
+.SS "vp9_raw_reorder"
+.IX Subsection "vp9_raw_reorder"
+Given a \s-1VP9\s0 stream with correct timestamps but possibly out of order,
+insert additional show-existing-frame packets to correct the ordering.
+.SH "SEE ALSO"
+.IX Header "SEE ALSO"
+\&\fBffmpeg\fR\|(1), \fBffplay\fR\|(1), \fBffprobe\fR\|(1), \fBlibavcodec\fR\|(3)
+.SH "AUTHORS"
+.IX Header "AUTHORS"
+The FFmpeg developers.
+.PP
+For details about the authorship, see the Git history of the project
+(https://git.ffmpeg.org/ffmpeg), e.g. by typing the command
+\&\fBgit log\fR in the FFmpeg source directory, or browsing the
+online repository at <\fBhttps://git.ffmpeg.org/ffmpeg\fR>.
+.PP
+Maintainers for the specific components are listed in the file
+\&\fI\s-1MAINTAINERS\s0\fR in the source code tree.

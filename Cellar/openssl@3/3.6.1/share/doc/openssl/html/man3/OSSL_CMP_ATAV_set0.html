@@ -1,0 +1,108 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OSSL_CMP_ATAV_set0</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OSSL_CMP_ATAV, OSSL_CMP_ATAV_create, OSSL_CMP_ATAV_set0, OSSL_CMP_ATAV_get0_type, OSSL_CMP_ATAV_get0_value, OSSL_CMP_ATAV_new_algId, OSSL_CMP_ATAV_get0_algId, OSSL_CMP_ATAV_new_rsaKeyLen, OSSL_CMP_ATAV_get_rsaKeyLen, OSSL_CMP_ATAVS, OSSL_CMP_ATAV_push1, OSSL_CMP_ATAV_free - OSSL_CMP_ATAV utility functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/cmp.h&gt;
+
+typedef OSSL_CRMF_ATTRIBUTETYPEANDVALUE OSSL_CMP_ATAV;
+OSSL_CMP_ATAV *OSSL_CMP_ATAV_create(ASN1_OBJECT *type, ASN1_TYPE *value);
+void OSSL_CMP_ATAV_set0(OSSL_CMP_ATAV *atav, ASN1_OBJECT *type,
+                        ASN1_TYPE *value);
+ASN1_OBJECT *OSSL_CMP_ATAV_get0_type(const OSSL_CMP_ATAV *atav);
+ASN1_TYPE *OSSL_CMP_ATAV_get0_value(const OSSL_CMP_ATAV *atav);
+
+OSSL_CMP_ATAV *OSSL_CMP_ATAV_new_algId(const X509_ALGOR *alg);
+X509_ALGOR *OSSL_CMP_ATAV_get0_algId(const OSSL_CMP_ATAV *atav);
+OSSL_CMP_ATAV *OSSL_CMP_ATAV_new_rsaKeyLen(int len);
+int OSSL_CMP_ATAV_get_rsaKeyLen(const OSSL_CMP_ATAV *atav);
+
+typedef STACK_OF(OSSL_CRMF_ATTRIBUTETYPEANDVALUE) OSSL_CMP_ATAVS;
+int OSSL_CMP_ATAV_push1(OSSL_CMP_ATAVS **sk_p, const OSSL_CMP_ATAV *atav);
+void OSSL_CMP_ATAV_free(OSSL_CMP_ATAV *atav);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p><b>OSSL_CMP_ATAV</b> is a short hand of <b>OSSL_CRMF_ATTRIBUTETYPEANDVALUE</b>, defined in RFC 4211 Appendix B. It is typically used in CertRequest structures, but also in CertReqTemplateContent structures for key specifications.</p>
+
+<p>OSSL_CMP_ATAV_create() creates a new <b>OSSL_CMP_ATAV</b> structure and fills it in. It combines OSSL_CMP_ATAV_new() and OSSL_CMP_ATAV_set0().</p>
+
+<p>OSSL_CMP_ATAV_set0() sets the <i>atav</i> with an infoType of <i>type</i> and an infoValue of <i>value</i>. The pointers <i>type</i> and <i>value</i> may be NULL, otherwise they must <b>not</b> be freed up after the call because their ownership is transferred to <i>atav</i>. The <i>itav</i> pointer must not be NULL.</p>
+
+<p>OSSL_CMP_ATAV_get0_type() returns a direct pointer to the infoType in the <i>atav</i> unless it is NULL.</p>
+
+<p>OSSL_CMP_ATAV_get0_value() returns a direct pointer to the infoValue in the <i>atav</i> as generic <b>ASN1_TYPE</b> pointer unless <i>atav</i> is NULL.</p>
+
+<p>OSSL_CMP_ATAV_new_algId() creates a new <b>OSSL_CMP_ATAV</b> structure of type <b>algId</b> and fills it in with a copy of the given <i>alg</i>.</p>
+
+<p>OSSL_CMP_ATAV_get0_algId() returns a direct pointer to the algId infoValue in the <i>atav</i> of type <b>X509_ALGOR</b> or NULL if <i>atav</i> is NULL or does not contain an algId.</p>
+
+<p>OSSL_CMP_ATAV_new_rsaKeyLen() creates a new <b>OSSL_CMP_ATAV</b> structure of type <b>rsaKeyLen</b> and fills it in with the given <i>len</i>, which must be positive.</p>
+
+<p>OSSL_CMP_ATAV_get_rsaKeyLen() returns the RSA key length in rsaKeyLen infoValue in the <i>atav</i>, -1 if <i>atav</i> is NULL or does not contain an rsaKeyLen or cannot be parsed, or -2 if the value is less than 1 or is greater than INT_MAX.</p>
+
+<p>OSSL_CMP_ATAV_push1() pushes a copy of <i>atav</i> to the stack of <b>OSSL_CMP_ATAV</b> pointed to by <i>*sk_p</i>. It creates a new stack if <i>*sk_p</i> points to NULL.</p>
+
+<p>OSSL_CMP_ATAV_free() deallocates <i>atav</i>. It is defined as a macro.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>CMP is defined in RFC 9810. CRMF is defined in RFC 4211.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>OSSL_CMP_ATAV_create(), OSSL_CMP_ATAV_new_algId(), and OSSL_CMP_ATAV_new_rsaKeyLen() return a pointer to the ATAV structure on success, or NULL on error.</p>
+
+<p>OSSL_CMP_ATAV_set0() and OSSL_CMP_ATAV_free() do not return a value.</p>
+
+<p>OSSL_CMP_ATAV_get0_type(), OSSL_CMP_ATAV_get0_value(), and OSSL_CMP_ATAV_get0_algId() return the respective pointer or NULL if their input is NULL.</p>
+
+<p>OSSL_CMP_ATAV_get_rsaKeyLen() return a key length in bits or &lt; 0 on error.</p>
+
+<p>OSSL_CMP_ATAV_push1() returns 1 on success, 0 on error.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/OSSL_CMP_ITAV_new0_certReqTemplate.html">OSSL_CMP_ITAV_new0_certReqTemplate(3)</a>, <a href="../man3/ASN1_TYPE_set.html">ASN1_TYPE_set(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The <b>OSSL_CMP_ATAV</b> type and related functions were added in OpenSSL 3.4.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2022-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

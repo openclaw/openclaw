@@ -1,0 +1,183 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_CTX_set_msg_callback</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_CTX_set_msg_callback, SSL_CTX_set_msg_callback_arg, SSL_set_msg_callback, SSL_set_msg_callback_arg, SSL_trace - install callback for observing protocol messages</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+void SSL_CTX_set_msg_callback(SSL_CTX *ctx,
+                              void (*cb)(int write_p, int version,
+                                         int content_type, const void *buf,
+                                         size_t len, SSL *ssl, void *arg));
+void SSL_CTX_set_msg_callback_arg(SSL_CTX *ctx, void *arg);
+
+void SSL_set_msg_callback(SSL *ssl,
+                          void (*cb)(int write_p, int version,
+                                     int content_type, const void *buf,
+                                     size_t len, SSL *ssl, void *arg));
+void SSL_set_msg_callback_arg(SSL *ssl, void *arg);
+
+void SSL_trace(int write_p, int version, int content_type,
+               const void *buf, size_t len, SSL *ssl, void *arg);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_CTX_set_msg_callback() or SSL_set_msg_callback() can be used to define a message callback function <i>cb</i> for observing all SSL/TLS/QUIC protocol messages (such as handshake messages) that are received or sent, as well as other events that occur during processing. SSL_CTX_set_msg_callback_arg() and SSL_set_msg_callback_arg() can be used to set argument <i>arg</i> to the callback function, which is available for arbitrary application use.</p>
+
+<p>SSL_CTX_set_msg_callback() and SSL_CTX_set_msg_callback_arg() specify default settings that will be copied to new <b>SSL</b> objects by <a href="../man3/SSL_new.html">SSL_new(3)</a>. SSL_set_msg_callback() and SSL_set_msg_callback_arg() modify the actual settings of an <b>SSL</b> object. Using a <b>NULL</b> pointer for <i>cb</i> disables the message callback.</p>
+
+<p>When <i>cb</i> is called by the SSL/TLS/QUIC library the function arguments have the following meaning:</p>
+
+<dl>
+
+<dt id="write_p"><i>write_p</i></dt>
+<dd>
+
+<p>This flag is <b>0</b> when a protocol message has been received and <b>1</b> when a protocol message has been sent.</p>
+
+</dd>
+<dt id="version"><i>version</i></dt>
+<dd>
+
+<p>The protocol version according to which the protocol message is interpreted by the library such as <b>TLS1_3_VERSION</b>, <b>TLS1_2_VERSION</b>, <b>OSSL_QUIC1_VERSION</b> etc. For the SSL3_RT_HEADER pseudo content type (see NOTES below) this value will be the decoded version/legacy_version field of the record header.</p>
+
+</dd>
+<dt id="content_type"><i>content_type</i></dt>
+<dd>
+
+<p>This is one of the content type values defined in the protocol specification (<b>SSL3_RT_CHANGE_CIPHER_SPEC</b>, <b>SSL3_RT_ALERT</b>, <b>SSL3_RT_HANDSHAKE</b>; but never <b>SSL3_RT_APPLICATION_DATA</b> because the callback will only be called for protocol messages). Alternatively it may be a &quot;pseudo&quot; content type. These pseudo content types are used to signal some other event in the processing of data (see NOTES below).</p>
+
+</dd>
+<dt id="buf-len"><i>buf</i>, <i>len</i></dt>
+<dd>
+
+<p><i>buf</i> points to a buffer containing the protocol message or other data (in the case of pseudo content types), which consists of <i>len</i> bytes. The buffer is no longer valid after the callback function has returned.</p>
+
+</dd>
+<dt id="ssl"><i>ssl</i></dt>
+<dd>
+
+<p>The <b>SSL</b> object that received or sent the message.</p>
+
+</dd>
+<dt id="arg"><i>arg</i></dt>
+<dd>
+
+<p>The user-defined argument optionally defined by SSL_CTX_set_msg_callback_arg() or SSL_set_msg_callback_arg().</p>
+
+</dd>
+</dl>
+
+<p>The SSL_trace() function can be used as a pre-written callback in a call to SSL_CTX_set_msg_callback() or SSL_set_msg_callback(). It requires a BIO to be set as the callback argument via SSL_CTX_set_msg_callback_arg() or SSL_set_msg_callback_arg(). Setting this callback will cause human readable diagostic tracing information about an SSL/TLS/QUIC connection to be written to the BIO.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>Protocol messages are passed to the callback function after decryption and fragment collection where applicable. (Thus record boundaries are not visible.)</p>
+
+<p>If processing a received protocol message results in an error, the callback function may not be called. For example, the callback function will never see messages that are considered too large to be processed.</p>
+
+<p>Due to automatic protocol version negotiation, <i>version</i> is not necessarily the protocol version used by the sender of the message: If a TLS 1.0 ClientHello message is received by an SSL 3.0-only server, <i>version</i> will be <b>SSL3_VERSION</b>.</p>
+
+<p>Pseudo content type values may be sent at various points during the processing of data. The following pseudo content types are currently defined:</p>
+
+<dl>
+
+<dt id="SSL3_RT_HEADER"><b>SSL3_RT_HEADER</b></dt>
+<dd>
+
+<p>Used when a TLS record is sent or received. The <b>buf</b> contains the record header bytes only.</p>
+
+</dd>
+<dt id="SSL3_RT_INNER_CONTENT_TYPE"><b>SSL3_RT_INNER_CONTENT_TYPE</b></dt>
+<dd>
+
+<p>Used when an encrypted TLSv1.3 record is sent or received. In encrypted TLSv1.3 records the content type in the record header is always SSL3_RT_APPLICATION_DATA. The real content type for the record is contained in an &quot;inner&quot; content type. <b>buf</b> contains the encoded &quot;inner&quot; content type byte.</p>
+
+</dd>
+<dt id="SSL3_RT_QUIC_DATAGRAM"><b>SSL3_RT_QUIC_DATAGRAM</b></dt>
+<dd>
+
+<p>Used when a QUIC datagram is sent or received.</p>
+
+</dd>
+<dt id="SSL3_RT_QUIC_PACKET"><b>SSL3_RT_QUIC_PACKET</b></dt>
+<dd>
+
+<p>Used when a QUIC packet is sent or received.</p>
+
+</dd>
+<dt id="SSL3_RT_QUIC_FRAME_FULL"><b>SSL3_RT_QUIC_FRAME_FULL</b></dt>
+<dd>
+
+<p>Used when a QUIC frame is sent or received. This is only used for non-crypto and stream data related frames. The full QUIC frame data is supplied.</p>
+
+</dd>
+<dt id="SSL3_RT_QUIC_FRAME_HEADER"><b>SSL3_RT_QUIC_FRAME_HEADER</b></dt>
+<dd>
+
+<p>Used when a QUIC stream data or crypto frame is sent or received. Only the QUIC frame header data is supplied.</p>
+
+</dd>
+<dt id="SSL3_RT_QUIC_FRAME_PADDING"><b>SSL3_RT_QUIC_FRAME_PADDING</b></dt>
+<dd>
+
+<p>Used when a sequence of one or more QUIC padding frames is sent or received. A padding frame consists of a single byte and it is common to have multiple such frames in a sequence. Rather than supplying each frame individually the callback will supply all the padding frames in one go via this pseudo content type.</p>
+
+</dd>
+</dl>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_CTX_set_msg_callback(), SSL_CTX_set_msg_callback_arg(), SSL_set_msg_callback() and SSL_set_msg_callback_arg() do not return values.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a>, <a href="../man3/SSL_new.html">SSL_new(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The pseudo content type <b>SSL3_RT_INNER_CONTENT_TYPE</b> was added in OpenSSL 1.1.1.</p>
+
+<p>The pseudo content types <b>SSL3_RT_QUIC_DATAGRAM</b>, <b>SSL3_RT_QUIC_PACKET</b>, <b>SSL3_RT_QUIC_FRAME_FULL</b>, <b>SSL3_RT_QUIC_FRAME_HEADER</b> and <b>SSL3_RT_QUIC_FRAME_PADDING</b> were added in OpenSSL 3.2.</p>
+
+<p>In versions previous to OpenSSL 3.0 <i>cb</i> was called with 0 as <i>version</i> for the pseudo content type <b>SSL3_RT_HEADER</b> for TLS records.</p>
+
+<p>In versions previous to OpenSSL 3.2 <i>cb</i> was called with 0 as <i>version</i> for the pseudo content type <b>SSL3_RT_HEADER</b> for DTLS records.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2001-2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

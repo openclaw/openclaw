@@ -1,0 +1,69 @@
+.\"
+.\" Copyright 1998 by the Massachusetts Institute of Technology.
+.\" Copyright (C) 2008-2010 by Daniel Stenberg
+.\" SPDX-License-Identifier: MIT
+.\"
+.TH ARES_GET_SERVERS 3 "5 March 2010"
+.SH NAME
+ares_get_servers, ares_get_servers_ports \- Retrieve name servers from an initialized ares_channel (deprecated)
+.SH SYNOPSIS
+.nf
+#include <ares.h>
+
+int ares_get_servers(const ares_channel_t *\fIchannel\fP,
+                     struct ares_addr_node **\fIservers\fP)
+
+int ares_get_servers_ports(const ares_channel_t *\fIchannel\fP,
+                           struct ares_addr_port_node **\fIservers\fP)
+.fi
+.SH DESCRIPTION
+The \fBares_get_servers(3)\fP function retrieves name servers configuration
+from the
+channel data identified by
+.IR channel ,
+as a linked list of ares_addr_node structs storing a pointer to the first
+node at the address specified by
+.IR servers .
+
+The \fBares_get_servers_ports(3)\fP function also retrieves any per-server
+port information that may have been previously configured, returning a linked
+list of ares_addr_port structures.
+
+Function caller may traverse the returned name server linked list, or may use
+it directly as suitable input for the \fBares_set_servers(3)\fP /
+\fBares_set_servers_ports(3)\fP functions, but
+shall not shrink or extend the list on its own.
+
+Each node of the name server linked list is stored in memory dynamically
+allocated and managed by c-ares. It is the caller's responsibility to free
+the resulting linked list, using \fBares_free_data(3)\fP , once the caller
+does not need it any longer.
+
+This function is capable of handling IPv4 and IPv6 name server
+addresses simultaneously, rendering \fBares_save_options(3)\fP with
+optmask \fBARES_OPT_SERVERS\fP functionally obsolete except for
+IPv4-only name server usage.
+
+.SH RETURN VALUES
+This function may return any of the following values:
+.TP 15
+.B ARES_SUCCESS
+The name servers configuration was successfully retrieved
+.TP 15
+.B ARES_ENOMEM
+The memory was exhausted
+.TP 15
+.B ARES_ENODATA
+The channel data identified by
+.IR channel
+was invalid.
+.SH SEE ALSO
+.BR ares_set_servers (3),
+.BR ares_init_options (3),
+.BR ares_save_options(3)
+.SH AVAILABILITY
+\fBares_get_servers(3)\fP was added in c-ares 1.7.1;
+\fBares_get_servers_ports(3)\fP was added in c-ares 1.11.0.
+.SH NOTES
+As of c-ares 1.24, these functions are deprecated due to their lack of ability
+to store the entire server configuration.  Use \fBares_get_servers_csv(3)\fP.

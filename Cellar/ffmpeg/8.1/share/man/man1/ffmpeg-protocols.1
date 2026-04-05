@@ -1,0 +1,2480 @@
+.\"
+.\" Standard preamble:
+.\" ========================================================================
+.de Sp \" Vertical space (when we can't use .PP)
+.if t .sp .5v
+.if n .sp
+..
+.de Vb \" Begin verbatim text
+.ft CW
+.nf
+.ne \\$1
+..
+.de Ve \" End verbatim text
+.ft R
+.fi
+..
+.\" Set up some character translations and predefined strings.  \*(-- will
+.\" give an unbreakable dash, \*(PI will give pi, \*(L" will give a left
+.\" double quote, and \*(R" will give a right double quote.  \*(C+ will
+.\" give a nicer C++.  Capital omega is used to do unbreakable dashes and
+.\" therefore won't be available.  \*(C` and \*(C' expand to `' in nroff,
+.\" nothing in troff, for use with C<>.
+.tr \(*W-
+.ds C+ C\v'-.1v'\h'-1p'\s-2+\h'-1p'+\s0\v'.1v'\h'-1p'
+.ie n \{\
+.    ds -- \(*W-
+.    ds PI pi
+.    if (\n(.H=4u)&(1m=24u) .ds -- \(*W\h'-12u'\(*W\h'-12u'-\" diablo 10 pitch
+.    if (\n(.H=4u)&(1m=20u) .ds -- \(*W\h'-12u'\(*W\h'-8u'-\"  diablo 12 pitch
+.    ds L" ""
+.    ds R" ""
+.    ds C` ""
+.    ds C' ""
+'br\}
+.el\{\
+.    ds -- \|\(em\|
+.    ds PI \(*p
+.    ds L" ``
+.    ds R" ''
+.    ds C`
+.    ds C'
+'br\}
+.\"
+.\" Escape single quotes in literal strings from groff's Unicode transform.
+.ie \n(.g .ds Aq \(aq
+.el       .ds Aq '
+.\"
+.\" If the F register is >0, we'll generate index entries on stderr for
+.\" titles (.TH), headers (.SH), subsections (.SS), items (.Ip), and index
+.\" entries marked with X<> in POD.  Of course, you'll have to process the
+.\" output yourself in some meaningful fashion.
+.\"
+.\" Avoid warning from groff about undefined register 'F'.
+.de IX
+..
+.nr rF 0
+.if \n(.g .if rF .nr rF 1
+.if (\n(rF:(\n(.g==0)) \{\
+.    if \nF \{\
+.        de IX
+.        tm Index:\\$1\t\\n%\t"\\$2"
+..
+.        if !\nF==2 \{\
+.            nr % 0
+.            nr F 2
+.        \}
+.    \}
+.\}
+.rr rF
+.\"
+.\" Accent mark definitions (@(#)ms.acc 1.5 88/02/08 SMI; from UCB 4.2).
+.\" Fear.  Run.  Save yourself.  No user-serviceable parts.
+.    \" fudge factors for nroff and troff
+.if n \{\
+.    ds #H 0
+.    ds #V .8m
+.    ds #F .3m
+.    ds #[ \f1
+.    ds #] \fP
+.\}
+.if t \{\
+.    ds #H ((1u-(\\\\n(.fu%2u))*.13m)
+.    ds #V .6m
+.    ds #F 0
+.    ds #[ \&
+.    ds #] \&
+.\}
+.    \" simple accents for nroff and troff
+.if n \{\
+.    ds ' \&
+.    ds ` \&
+.    ds ^ \&
+.    ds , \&
+.    ds ~ ~
+.    ds /
+.\}
+.if t \{\
+.    ds ' \\k:\h'-(\\n(.wu*8/10-\*(#H)'\'\h"|\\n:u"
+.    ds ` \\k:\h'-(\\n(.wu*8/10-\*(#H)'\`\h'|\\n:u'
+.    ds ^ \\k:\h'-(\\n(.wu*10/11-\*(#H)'^\h'|\\n:u'
+.    ds , \\k:\h'-(\\n(.wu*8/10)',\h'|\\n:u'
+.    ds ~ \\k:\h'-(\\n(.wu-\*(#H-.1m)'~\h'|\\n:u'
+.    ds / \\k:\h'-(\\n(.wu*8/10-\*(#H)'\z\(sl\h'|\\n:u'
+.\}
+.    \" troff and (daisy-wheel) nroff accents
+.ds : \\k:\h'-(\\n(.wu*8/10-\*(#H+.1m+\*(#F)'\v'-\*(#V'\z.\h'.2m+\*(#F'.\h'|\\n:u'\v'\*(#V'
+.ds 8 \h'\*(#H'\(*b\h'-\*(#H'
+.ds o \\k:\h'-(\\n(.wu+\w'\(de'u-\*(#H)/2u'\v'-.3n'\*(#[\z\(de\v'.3n'\h'|\\n:u'\*(#]
+.ds d- \h'\*(#H'\(pd\h'-\w'~'u'\v'-.25m'\f2\(hy\fP\v'.25m'\h'-\*(#H'
+.ds D- D\\k:\h'-\w'D'u'\v'-.11m'\z\(hy\v'.11m'\h'|\\n:u'
+.ds th \*(#[\v'.3m'\s+1I\s-1\v'-.3m'\h'-(\w'I'u*2/3)'\s-1o\s+1\*(#]
+.ds Th \*(#[\s+2I\s-2\h'-\w'I'u*3/5'\v'-.3m'o\v'.3m'\*(#]
+.ds ae a\h'-(\w'a'u*4/10)'e
+.ds Ae A\h'-(\w'A'u*4/10)'E
+.    \" corrections for vroff
+.if v .ds ~ \\k:\h'-(\\n(.wu*9/10-\*(#H)'\s-2\u~\d\s+2\h'|\\n:u'
+.if v .ds ^ \\k:\h'-(\\n(.wu*10/11-\*(#H)'\v'-.4m'^\v'.4m'\h'|\\n:u'
+.    \" for low resolution devices (crt and lpr)
+.if \n(.H>23 .if \n(.V>19 \
+\{\
+.    ds : e
+.    ds 8 ss
+.    ds o a
+.    ds d- d\h'-1'\(ga
+.    ds D- D\h'-1'\(hy
+.    ds th \o'bp'
+.    ds Th \o'LP'
+.    ds ae ae
+.    ds Ae AE
+.\}
+.rm #[ #] #H #V #F C
+.\" ========================================================================
+.\"
+.IX Title "FFMPEG-PROTOCOLS 1"
+.TH FFMPEG-PROTOCOLS 1 " " " " " "
+.\" For nroff, turn off justification.  Always turn off hyphenation; it makes
+.\" way too many mistakes in technical documents.
+.if n .ad l
+.nh
+.SH "NAME"
+ffmpeg\-protocols \- FFmpeg protocols
+.SH "DESCRIPTION"
+.IX Header "DESCRIPTION"
+This document describes the input and output protocols provided by the
+libavformat library.
+.SH "PROTOCOL OPTIONS"
+.IX Header "PROTOCOL OPTIONS"
+The libavformat library provides some generic global options, which
+can be set on all the protocols. In addition each protocol may support
+so-called private options, which are specific for that component.
+.PP
+Options may be set by specifying \-\fIoption\fR \fIvalue\fR in the
+FFmpeg tools, or by setting the value explicitly in the
+\&\f(CW\*(C`AVFormatContext\*(C'\fR options or using the \fIlibavutil/opt.h\fR \s-1API\s0
+for programmatic use.
+.PP
+The list of supported options follows:
+.IP "\fBprotocol_whitelist\fR \fIlist\fR \fB(\fR\fIinput\fR\fB)\fR" 4
+.IX Item "protocol_whitelist list (input)"
+Set a \*(L",\*(R"\-separated list of allowed protocols. \*(L"\s-1ALL\*(R"\s0 matches all protocols. Protocols
+prefixed by \*(L"\-\*(R" are disabled.
+All protocols are allowed by default but protocols used by an another
+protocol (nested protocols) are restricted to a per protocol subset.
+.SH "PROTOCOLS"
+.IX Header "PROTOCOLS"
+Protocols are configured elements in FFmpeg that enable access to
+resources that require specific protocols.
+.PP
+When you configure your FFmpeg build, all the supported protocols are
+enabled by default. You can list all available ones using the
+configure option \*(L"\-\-list\-protocols\*(R".
+.PP
+You can disable all the protocols using the configure option
+\&\*(L"\-\-disable\-protocols\*(R", and selectively enable a protocol using the
+option "\-\-enable\-protocol=\fI\s-1PROTOCOL\s0\fR\*(L", or you can disable a
+particular protocol using the option
+\&\*(R"\-\-disable\-protocol=\fI\s-1PROTOCOL\s0\fR".
+.PP
+The option \*(L"\-protocols\*(R" of the ff* tools will display the list of
+supported protocols.
+.PP
+All protocols accept the following options:
+.IP "\fBrw_timeout\fR" 4
+.IX Item "rw_timeout"
+Maximum time to wait for (network) read/write operations to complete,
+in microseconds.
+.PP
+A description of the currently available protocols follows.
+.SS "amqp"
+.IX Subsection "amqp"
+Advanced Message Queueing Protocol (\s-1AMQP\s0) version 0\-9\-1 is a broker based
+publish-subscribe communication protocol.
+.PP
+FFmpeg must be compiled with \-\-enable\-librabbitmq to support \s-1AMQP. A\s0 separate
+\&\s-1AMQP\s0 broker must also be run. An example open-source \s-1AMQP\s0 broker is RabbitMQ.
+.PP
+After starting the broker, an FFmpeg client may stream data to the broker using
+the command:
+.PP
+.Vb 1
+\&        ffmpeg \-re \-i input \-f mpegts amqp://[[user]:[password]@]hostname[:port][/vhost]
+.Ve
+.PP
+Where hostname and port (default is 5672) is the address of the broker. The
+client may also set a user/password for authentication. The default for both
+fields is \*(L"guest\*(R". Name of virtual host on broker can be set with vhost. The
+default value is \*(L"/\*(R".
+.PP
+Multiple subscribers may stream from the broker using the command:
+.PP
+.Vb 1
+\&        ffplay amqp://[[user]:[password]@]hostname[:port][/vhost]
+.Ve
+.PP
+In RabbitMQ all data published to the broker flows through a specific exchange,
+and each subscribing client has an assigned queue/buffer. When a packet arrives
+at an exchange, it may be copied to a client's queue depending on the exchange
+and routing_key fields.
+.PP
+The following options are supported:
+.IP "\fBexchange\fR" 4
+.IX Item "exchange"
+Sets the exchange to use on the broker. RabbitMQ has several predefined
+exchanges: \*(L"amq.direct\*(R" is the default exchange, where the publisher and
+subscriber must have a matching routing_key; \*(L"amq.fanout\*(R" is the same as a
+broadcast operation (i.e. the data is forwarded to all queues on the fanout
+exchange independent of the routing_key); and \*(L"amq.topic\*(R" is similar to
+\&\*(L"amq.direct\*(R", but allows for more complex pattern matching (refer to the RabbitMQ
+documentation).
+.IP "\fBrouting_key\fR" 4
+.IX Item "routing_key"
+Sets the routing key. The default value is \*(L"amqp\*(R". The routing key is used on
+the \*(L"amq.direct\*(R" and \*(L"amq.topic\*(R" exchanges to decide whether packets are written
+to the queue of a subscriber.
+.IP "\fBpkt_size\fR" 4
+.IX Item "pkt_size"
+Maximum size of each packet sent/received to the broker. Default is 131072.
+Minimum is 4096 and max is any large value (representable by an int). When
+receiving packets, this sets an internal buffer size in FFmpeg. It should be
+equal to or greater than the size of the published packets to the broker. Otherwise
+the received message may be truncated causing decoding errors.
+.IP "\fBconnection_timeout\fR" 4
+.IX Item "connection_timeout"
+The timeout in seconds during the initial connection to the broker. The
+default value is rw_timeout, or 5 seconds if rw_timeout is not set.
+.IP "\fBdelivery_mode\fR \fImode\fR" 4
+.IX Item "delivery_mode mode"
+Sets the delivery mode of each message sent to broker.
+The following values are accepted:
+.RS 4
+.IP "\fBpersistent\fR" 4
+.IX Item "persistent"
+Delivery mode set to \*(L"persistent\*(R" (2). This is the default value.
+Messages may be written to the broker's disk depending on its setup.
+.IP "\fBnon-persistent\fR" 4
+.IX Item "non-persistent"
+Delivery mode set to \*(L"non-persistent\*(R" (1).
+Messages will stay in broker's memory unless the broker is under memory
+pressure.
+.RE
+.RS 4
+.RE
+.SS "async"
+.IX Subsection "async"
+Asynchronous data filling wrapper for input stream.
+.PP
+Fill data in a background thread, to decouple I/O operation from demux thread.
+.PP
+.Vb 3
+\&        async:<URL>
+\&        async:http://host/resource
+\&        async:cache:http://host/resource
+.Ve
+.SS "bluray"
+.IX Subsection "bluray"
+Read BluRay playlist.
+.PP
+The accepted options are:
+.IP "\fBangle\fR" 4
+.IX Item "angle"
+BluRay angle
+.IP "\fBchapter\fR" 4
+.IX Item "chapter"
+Start chapter (1...N)
+.IP "\fBplaylist\fR" 4
+.IX Item "playlist"
+Playlist to read (\s-1BDMV/PLAYLIST/\s0?????.mpls)
+.PP
+Examples:
+.PP
+Read longest playlist from BluRay mounted to /mnt/bluray:
+.PP
+.Vb 1
+\&        bluray:/mnt/bluray
+.Ve
+.PP
+Read angle 2 of playlist 4 from BluRay mounted to /mnt/bluray, start from chapter 2:
+.PP
+.Vb 1
+\&        \-playlist 4 \-angle 2 \-chapter 2 bluray:/mnt/bluray
+.Ve
+.SS "cache"
+.IX Subsection "cache"
+Caching wrapper for input stream.
+.PP
+Cache the input stream to temporary file. It brings seeking capability to live streams.
+.PP
+The accepted options are:
+.IP "\fBread_ahead_limit\fR" 4
+.IX Item "read_ahead_limit"
+Amount in bytes that may be read ahead when seeking isn't supported. Range is \-1 to \s-1INT_MAX.\s0
+\&\-1 for unlimited. Default is 65536.
+.PP
+\&\s-1URL\s0 Syntax is
+.PP
+.Vb 1
+\&        cache:<URL>
+.Ve
+.SS "concat"
+.IX Subsection "concat"
+Physical concatenation protocol.
+.PP
+Read and seek from many resources in sequence as if they were
+a unique resource.
+.PP
+A \s-1URL\s0 accepted by this protocol has the syntax:
+.PP
+.Vb 1
+\&        concat:<URL1>|<URL2>|...|<URLN>
+.Ve
+.PP
+where \fI\s-1URL1\s0\fR, \fI\s-1URL2\s0\fR, ..., \fI\s-1URLN\s0\fR are the urls of the
+resource to be concatenated, each one possibly specifying a distinct
+protocol.
+.PP
+For example to read a sequence of files \fIsplit1.mpeg\fR,
+\&\fIsplit2.mpeg\fR, \fIsplit3.mpeg\fR with \fBffplay\fR use the
+command:
+.PP
+.Vb 1
+\&        ffplay concat:split1.mpeg\e|split2.mpeg\e|split3.mpeg
+.Ve
+.PP
+Note that you may need to escape the character \*(L"|\*(R" which is special for
+many shells.
+.SS "concatf"
+.IX Subsection "concatf"
+Physical concatenation protocol using a line break delimited list of
+resources.
+.PP
+Read and seek from many resources in sequence as if they were
+a unique resource.
+.PP
+A \s-1URL\s0 accepted by this protocol has the syntax:
+.PP
+.Vb 1
+\&        concatf:<URL>
+.Ve
+.PP
+where \fI\s-1URL\s0\fR is the url containing a line break delimited list of
+resources to be concatenated, each one possibly specifying a distinct
+protocol. Special characters must be escaped with backslash or single
+quotes. See \fBthe \*(L"Quoting and escaping\*(R"
+section in the \fBffmpeg\-utils\fB\|(1) manual\fR.
+.PP
+For example to read a sequence of files \fIsplit1.mpeg\fR,
+\&\fIsplit2.mpeg\fR, \fIsplit3.mpeg\fR listed in separate lines within
+a file \fIsplit.txt\fR with \fBffplay\fR use the command:
+.PP
+.Vb 1
+\&        ffplay concatf:split.txt
+.Ve
+.PP
+Where \fIsplit.txt\fR contains the lines:
+.PP
+.Vb 3
+\&        split1.mpeg
+\&        split2.mpeg
+\&        split3.mpeg
+.Ve
+.SS "crypto"
+.IX Subsection "crypto"
+AES-encrypted stream reading protocol.
+.PP
+The accepted options are:
+.IP "\fBkey\fR" 4
+.IX Item "key"
+Set the \s-1AES\s0 decryption key binary block from given hexadecimal representation.
+.IP "\fBiv\fR" 4
+.IX Item "iv"
+Set the \s-1AES\s0 decryption initialization vector binary block from given hexadecimal representation.
+.PP
+Accepted \s-1URL\s0 formats:
+.PP
+.Vb 2
+\&        crypto:<URL>
+\&        crypto+<URL>
+.Ve
+.SS "data"
+.IX Subsection "data"
+Data in-line in the \s-1URI.\s0 See <\fBhttp://en.wikipedia.org/wiki/Data_URI_scheme\fR>.
+.PP
+For example, to convert a \s-1GIF\s0 file given inline with \fBffmpeg\fR:
+.PP
+.Vb 1
+\&        ffmpeg \-i "data:image/gif;base64,R0lGODdhCAAIAMIEAAAAAAAA//8AAP//AP///////////////ywAAAAACAAIAAADF0gEDLojDgdGiJdJqUX02iB4E8Q9jUMkADs=" smiley.png
+.Ve
+.SS "fd"
+.IX Subsection "fd"
+File descriptor access protocol.
+.PP
+The accepted syntax is:
+.PP
+.Vb 1
+\&        fd: \-fd <file_descriptor>
+.Ve
+.PP
+If \fBfd\fR is not specified, by default the stdout file descriptor will be
+used for writing, stdin for reading. Unlike the pipe protocol, fd protocol has
+seek support if it corresponding to a regular file. fd protocol doesn't support
+pass file descriptor via \s-1URL\s0 for security.
+.PP
+This protocol accepts the following options:
+.IP "\fBblocksize\fR" 4
+.IX Item "blocksize"
+Set I/O operation maximum block size, in bytes. Default value is
+\&\f(CW\*(C`INT_MAX\*(C'\fR, which results in not limiting the requested block size.
+Setting this value reasonably low improves user termination request reaction
+time, which is valuable if data transmission is slow.
+.IP "\fBfd\fR" 4
+.IX Item "fd"
+Set file descriptor.
+.SS "file"
+.IX Subsection "file"
+File access protocol.
+.PP
+Read from or write to a file.
+.PP
+A file \s-1URL\s0 can have the form:
+.PP
+.Vb 1
+\&        file:<filename>
+.Ve
+.PP
+where \fIfilename\fR is the path of the file to read.
+.PP
+An \s-1URL\s0 that does not have a protocol prefix will be assumed to be a
+file \s-1URL.\s0 Depending on the build, an \s-1URL\s0 that looks like a Windows
+path with the drive letter at the beginning will also be assumed to be
+a file \s-1URL\s0 (usually not the case in builds for unix-like systems).
+.PP
+For example to read from a file \fIinput.mpeg\fR with \fBffmpeg\fR
+use the command:
+.PP
+.Vb 1
+\&        ffmpeg \-i file:input.mpeg output.mpeg
+.Ve
+.PP
+This protocol accepts the following options:
+.IP "\fBtruncate\fR" 4
+.IX Item "truncate"
+Truncate existing files on write, if set to 1. A value of 0 prevents
+truncating. Default value is 1.
+.IP "\fBblocksize\fR" 4
+.IX Item "blocksize"
+Set I/O operation maximum block size, in bytes. Default value is
+\&\f(CW\*(C`INT_MAX\*(C'\fR, which results in not limiting the requested block size.
+Setting this value reasonably low improves user termination request reaction
+time, which is valuable for files on slow medium.
+.IP "\fBfollow\fR" 4
+.IX Item "follow"
+If set to 1, the protocol will retry reading at the end of the file, allowing
+reading files that still are being written. In order for this to terminate,
+you either need to use the rw_timeout option, or use the interrupt callback
+(for \s-1API\s0 users).
+.IP "\fBseekable\fR" 4
+.IX Item "seekable"
+Controls if seekability is advertised on the file. 0 means non-seekable, \-1
+means auto (seekable for normal files, non-seekable for named pipes).
+.Sp
+Many demuxers handle seekable and non-seekable resources differently,
+overriding this might speed up opening certain files at the cost of losing some
+features (e.g. accurate seeking).
+.IP "\fBpkt_size\fR" 4
+.IX Item "pkt_size"
+Set the maximum packet size used for file I/O. A smaller value may reduce
+memory usage. A higher value may increase throughput especially with networked
+filesystems.
+.Sp
+For reading, if explicitly set, it overrides the default internal buffer size
+(32 \s-1KB\s0) and limits the maximum amount of data read per operation.
+.Sp
+For writing, this sets the size of each write operation. The default is 256 \s-1KB\s0
+for regular files, 32 \s-1KB\s0 otherwise.
+.SS "ftp"
+.IX Subsection "ftp"
+\&\s-1FTP\s0 (File Transfer Protocol).
+.PP
+Read from or write to remote resources using \s-1FTP\s0 protocol.
+.PP
+Following syntax is required.
+.PP
+.Vb 1
+\&        ftp://[user[:password]@]server[:port]/path/to/remote/resource.mpeg
+.Ve
+.PP
+This protocol accepts the following options.
+.IP "\fBtimeout\fR" 4
+.IX Item "timeout"
+Set timeout in microseconds of socket I/O operations used by the underlying low level
+operation. By default it is set to \-1, which means that the timeout is
+not specified.
+.IP "\fBftp-user\fR" 4
+.IX Item "ftp-user"
+Set a user to be used for authenticating to the \s-1FTP\s0 server. This is overridden by the
+user in the \s-1FTP URL.\s0
+.IP "\fBftp-password\fR" 4
+.IX Item "ftp-password"
+Set a password to be used for authenticating to the \s-1FTP\s0 server. This is overridden by
+the password in the \s-1FTP URL,\s0 or by \fBftp-anonymous-password\fR if no user is set.
+.IP "\fBftp-anonymous-password\fR" 4
+.IX Item "ftp-anonymous-password"
+Password used when login as anonymous user. Typically an e\-mail address
+should be used.
+.IP "\fBftp-write-seekable\fR" 4
+.IX Item "ftp-write-seekable"
+Control seekability of connection during encoding. If set to 1 the
+resource is supposed to be seekable, if set to 0 it is assumed not
+to be seekable. Default value is 0.
+.PP
+\&\s-1NOTE:\s0 Protocol can be used as output, but it is recommended to not do
+it, unless special care is taken (tests, customized server configuration
+etc.). Different \s-1FTP\s0 servers behave in different way during seek
+operation. ff* tools may produce incomplete content due to server limitations.
+.SS "gopher"
+.IX Subsection "gopher"
+Gopher protocol.
+.SS "gophers"
+.IX Subsection "gophers"
+Gophers protocol.
+.PP
+The Gopher protocol with \s-1TLS\s0 encapsulation.
+.SS "http"
+.IX Subsection "http"
+\&\s-1HTTP\s0 (Hyper Text Transfer Protocol).
+.PP
+This protocol accepts the following options:
+.IP "\fBseekable\fR" 4
+.IX Item "seekable"
+Control seekability of connection. If set to 1 the resource is
+supposed to be seekable, if set to 0 it is assumed not to be seekable,
+if set to \-1 it will try to autodetect if it is seekable. Default
+value is \-1.
+.IP "\fBchunked_post\fR" 4
+.IX Item "chunked_post"
+If set to 1 use chunked Transfer-Encoding for posts, default is 1.
+.IP "\fBhttp_proxy\fR" 4
+.IX Item "http_proxy"
+set \s-1HTTP\s0 proxy to tunnel through e.g. http://example.com:1234
+.IP "\fBheaders\fR" 4
+.IX Item "headers"
+Set custom \s-1HTTP\s0 headers, can override built in default headers. The
+value must be a string encoding the headers.
+.IP "\fBcontent_type\fR" 4
+.IX Item "content_type"
+Set a specific content type for the \s-1POST\s0 messages or for listen mode.
+.IP "\fBuser_agent\fR" 4
+.IX Item "user_agent"
+Override the User-Agent header. If not specified the protocol will use a
+string describing the libavformat build. (\*(L"Lavf/<version>\*(R")
+.IP "\fBreferer\fR" 4
+.IX Item "referer"
+Set the Referer header. Include 'Referer: \s-1URL\s0' header in \s-1HTTP\s0 request.
+.IP "\fBmultiple_requests\fR" 4
+.IX Item "multiple_requests"
+Use persistent connections if set to 1, default is 0.
+.IP "\fBrequest_size\fR" 4
+.IX Item "request_size"
+Limit the size of requests made. This is useful for some pathological servers
+that throttle unbounded range requests, as well as when expecting to seek
+frequently. Disabled (set to 0) by default.
+.Sp
+Note that if enabling this option, it's strongly recommended to also enable
+the \fBmultiple_requests\fR option, as well as setting
+\&\fBshort_seek_size\fR to the same value or higher. Doing so allows FFmpeg
+to reuse a single \s-1HTTP\s0 connection wherever possible.
+.IP "\fBinitial_request_size\fR" 4
+.IX Item "initial_request_size"
+Limit the size of initial requests. Similar to \f(CW\*(C`request_size\*(C'\fR, but only
+used during initial format parsing. Useful for formats like \s-1MXF\s0 or \s-1MOV\s0 that
+require frequent seeks during header parsing. Lasts until the demuxer makes a
+read request larger than this size (without a seek in between), after which
+the implementation will continue using requests as usual. Disabled (set to 0)
+by default.
+.Sp
+Note that if enabling this option, it's strongly recommended to also enable
+the \fBmultiple_requests\fR option, as well as setting
+\&\fBshort_seek_size\fR to the same value or higher.
+.IP "\fBpost_data\fR" 4
+.IX Item "post_data"
+Set custom \s-1HTTP\s0 post data.
+.IP "\fBmime_type\fR" 4
+.IX Item "mime_type"
+Export the \s-1MIME\s0 type.
+.IP "\fBhttp_version\fR" 4
+.IX Item "http_version"
+Exports the \s-1HTTP\s0 response version number. Usually \*(L"1.0\*(R" or \*(L"1.1\*(R".
+.IP "\fBcookies\fR" 4
+.IX Item "cookies"
+Set the cookies to be sent in future requests. The format of each cookie is the
+same as the value of a Set-Cookie \s-1HTTP\s0 response field. Multiple cookies can be
+delimited by a newline character.
+.IP "\fBicy\fR" 4
+.IX Item "icy"
+If set to 1 request \s-1ICY\s0 (SHOUTcast) metadata from the server. If the server
+supports this, the metadata has to be retrieved by the application by reading
+the \fBicy_metadata_headers\fR and \fBicy_metadata_packet\fR options.
+The default is 1.
+.IP "\fBicy_metadata_headers\fR" 4
+.IX Item "icy_metadata_headers"
+If the server supports \s-1ICY\s0 metadata, this contains the ICY-specific \s-1HTTP\s0 reply
+headers, separated by newline characters.
+.IP "\fBicy_metadata_packet\fR" 4
+.IX Item "icy_metadata_packet"
+If the server supports \s-1ICY\s0 metadata, and \fBicy\fR was set to 1, this
+contains the last non-empty metadata packet sent by the server. It should be
+polled in regular intervals by applications interested in mid-stream metadata
+updates.
+.IP "\fBmetadata\fR" 4
+.IX Item "metadata"
+Set an exported dictionary containing Icecast metadata from the bitstream, if present.
+Only useful with the C \s-1API.\s0
+.IP "\fBauth_type\fR" 4
+.IX Item "auth_type"
+Set \s-1HTTP\s0 authentication type. No option for Digest, since this method requires
+getting nonce parameters from the server first and can't be used straight away like
+Basic.
+.RS 4
+.IP "\fBnone\fR" 4
+.IX Item "none"
+Choose the \s-1HTTP\s0 authentication type automatically. This is the default.
+.IP "\fBbasic\fR" 4
+.IX Item "basic"
+Choose the \s-1HTTP\s0 basic authentication.
+.Sp
+Basic authentication sends a Base64\-encoded string that contains a user name and password
+for the client. Base64 is not a form of encryption and should be considered the same as
+sending the user name and password in clear text (Base64 is a reversible encoding).
+If a resource needs to be protected, strongly consider using an authentication scheme
+other than basic authentication. \s-1HTTPS/TLS\s0 should be used with basic authentication.
+Without these additional security enhancements, basic authentication should not be used
+to protect sensitive or valuable information.
+.RE
+.RS 4
+.RE
+.IP "\fBsend_expect_100\fR" 4
+.IX Item "send_expect_100"
+Send an Expect: 100\-continue header for \s-1POST.\s0 If set to 1 it will send, if set
+to 0 it won't, if set to \-1 it will try to send if it is applicable. Default
+value is \-1.
+.IP "\fBlocation\fR" 4
+.IX Item "location"
+An exported dictionary containing the content location. Only useful with the C
+\&\s-1API.\s0
+.IP "\fBoffset\fR" 4
+.IX Item "offset"
+Set initial byte offset.
+.IP "\fBend_offset\fR" 4
+.IX Item "end_offset"
+Try to limit the request to bytes preceding this offset.
+.IP "\fBmethod\fR" 4
+.IX Item "method"
+When used as a client option it sets the \s-1HTTP\s0 method for the request.
+.Sp
+When used as a server option it sets the \s-1HTTP\s0 method that is going to be
+expected from the client(s).
+If the expected and the received \s-1HTTP\s0 method do not match the client will
+be given a Bad Request response.
+When unset the \s-1HTTP\s0 method is not checked for now. This will be replaced by
+autodetection in the future.
+.IP "\fBreconnect\fR" 4
+.IX Item "reconnect"
+Reconnect automatically when disconnected before \s-1EOF\s0 is hit.
+.IP "\fBreconnect_at_eof\fR" 4
+.IX Item "reconnect_at_eof"
+If set then eof is treated like an error and causes reconnection, this is useful
+for live / endless streams.
+.IP "\fBreconnect_on_network_error\fR" 4
+.IX Item "reconnect_on_network_error"
+Reconnect automatically in case of \s-1TCP/TLS\s0 errors during connect.
+.IP "\fBreconnect_on_http_error\fR" 4
+.IX Item "reconnect_on_http_error"
+A comma separated list of \s-1HTTP\s0 status codes to reconnect on. The list can
+include specific status codes (e.g. '503') or the strings '4xx' / '5xx'.
+.IP "\fBreconnect_streamed\fR" 4
+.IX Item "reconnect_streamed"
+If set then even streamed/non seekable streams will be reconnected on errors.
+.IP "\fBreconnect_delay_max\fR" 4
+.IX Item "reconnect_delay_max"
+Set the maximum delay in seconds after which to give up reconnecting.
+.IP "\fBreconnect_max_retries\fR" 4
+.IX Item "reconnect_max_retries"
+Set the maximum number of times to retry a connection. Default unset.
+.IP "\fBreconnect_delay_total_max\fR" 4
+.IX Item "reconnect_delay_total_max"
+Set the maximum total delay in seconds after which to give up reconnecting.
+.IP "\fBrespect_retry_after\fR" 4
+.IX Item "respect_retry_after"
+If enabled, and a Retry-After header is encountered, its requested reconnection
+delay will be honored, rather than using exponential backoff. Useful for 429 and
+503 errors. Default enabled.
+.IP "\fBlisten\fR" 4
+.IX Item "listen"
+If set to 1 enables experimental \s-1HTTP\s0 server. This can be used to send data when
+used as an output option, or read data from a client with \s-1HTTP POST\s0 when used as
+an input option.
+If set to 2 enables experimental multi-client \s-1HTTP\s0 server. This is not yet implemented
+in ffmpeg.c and thus must not be used as a command line option.
+.Sp
+.Vb 2
+\&        # Server side (sending):
+\&        ffmpeg \-i somefile.ogg \-c copy \-listen 1 \-f ogg http://<server>:<port>
+\&        
+\&        # Client side (receiving):
+\&        ffmpeg \-i http://<server>:<port> \-c copy somefile.ogg
+\&        
+\&        # Client can also be done with wget:
+\&        wget http://<server>:<port> \-O somefile.ogg
+\&        
+\&        # Server side (receiving):
+\&        ffmpeg \-listen 1 \-i http://<server>:<port> \-c copy somefile.ogg
+\&        
+\&        # Client side (sending):
+\&        ffmpeg \-i somefile.ogg \-chunked_post 0 \-c copy \-f ogg http://<server>:<port>
+\&        
+\&        # Client can also be done with wget:
+\&        wget \-\-post\-file=somefile.ogg http://<server>:<port>
+.Ve
+.IP "\fBresource\fR" 4
+.IX Item "resource"
+The resource requested by a client, when the experimental \s-1HTTP\s0 server is in use.
+.IP "\fBreply_code\fR" 4
+.IX Item "reply_code"
+The \s-1HTTP\s0 code returned to the client, when the experimental \s-1HTTP\s0 server is in use.
+.IP "\fBshort_seek_size\fR" 4
+.IX Item "short_seek_size"
+Set the threshold, in bytes, for when a readahead should be preferred over a seek and
+new \s-1HTTP\s0 request. This is useful, for example, to make sure the same connection
+is used for reading large video packets with small audio packets in between.
+.PP
+\fI\s-1HTTP\s0 Cookies\fR
+.IX Subsection "HTTP Cookies"
+.PP
+Some \s-1HTTP\s0 requests will be denied unless cookie values are passed in with the
+request. The \fBcookies\fR option allows these cookies to be specified. At
+the very least, each cookie must specify a value along with a path and domain.
+\&\s-1HTTP\s0 requests that match both the domain and path will automatically include the
+cookie value in the \s-1HTTP\s0 Cookie header field. Multiple cookies can be delimited
+by a newline.
+.PP
+The required syntax to play a stream specifying a cookie is:
+.PP
+.Vb 1
+\&        ffplay \-cookies "nlqptid=nltid=tsn; path=/; domain=somedomain.com;" http://somedomain.com/somestream.m3u8
+.Ve
+.SS "Icecast"
+.IX Subsection "Icecast"
+Icecast protocol (stream to Icecast servers)
+.PP
+This protocol accepts the following options:
+.IP "\fBice_genre\fR" 4
+.IX Item "ice_genre"
+Set the stream genre.
+.IP "\fBice_name\fR" 4
+.IX Item "ice_name"
+Set the stream name.
+.IP "\fBice_description\fR" 4
+.IX Item "ice_description"
+Set the stream description.
+.IP "\fBice_url\fR" 4
+.IX Item "ice_url"
+Set the stream website \s-1URL.\s0
+.IP "\fBice_public\fR" 4
+.IX Item "ice_public"
+Set if the stream should be public.
+The default is 0 (not public).
+.IP "\fBuser_agent\fR" 4
+.IX Item "user_agent"
+Override the User-Agent header. If not specified a string of the form
+\&\*(L"Lavf/<version>\*(R" will be used.
+.IP "\fBpassword\fR" 4
+.IX Item "password"
+Set the Icecast mountpoint password.
+.IP "\fBcontent_type\fR" 4
+.IX Item "content_type"
+Set the stream content type. This must be set if it is different from
+audio/mpeg.
+.IP "\fBlegacy_icecast\fR" 4
+.IX Item "legacy_icecast"
+This enables support for Icecast versions < 2.4.0, that do not support the
+\&\s-1HTTP PUT\s0 method but the \s-1SOURCE\s0 method.
+.IP "\fBtls\fR" 4
+.IX Item "tls"
+Establish a \s-1TLS\s0 (\s-1HTTPS\s0) connection to Icecast.
+.PP
+.Vb 1
+\&        icecast://[<username>[:<password>]@]<server>:<port>/<mountpoint>
+.Ve
+.SS "ipfs"
+.IX Subsection "ipfs"
+InterPlanetary File System (\s-1IPFS\s0) protocol support. One can access files stored
+on the \s-1IPFS\s0 network through so-called gateways. These are http(s) endpoints.
+This protocol wraps the \s-1IPFS\s0 native protocols (ipfs:// and ipns://) to be sent
+to such a gateway. Users can (and should) host their own node which means this
+protocol will use one's local gateway to access files on the \s-1IPFS\s0 network.
+.PP
+This protocol accepts the following options:
+.IP "\fBgateway\fR" 4
+.IX Item "gateway"
+Defines the gateway to use. When not set, the protocol will first try
+locating the local gateway by looking at \f(CW$IPFS_GATEWAY\fR, \f(CW$IPFS_PATH\fR
+and \f(CW\*(C`$HOME/.ipfs/\*(C'\fR, in that order.
+.PP
+One can use this protocol in 2 ways. Using \s-1IPFS:\s0
+.PP
+.Vb 1
+\&        ffplay ipfs://<hash>
+.Ve
+.PP
+Or the \s-1IPNS\s0 protocol (\s-1IPNS\s0 is mutable \s-1IPFS\s0):
+.PP
+.Vb 1
+\&        ffplay ipns://<hash>
+.Ve
+.SS "mmst"
+.IX Subsection "mmst"
+\&\s-1MMS\s0 (Microsoft Media Server) protocol over \s-1TCP.\s0
+.SS "mmsh"
+.IX Subsection "mmsh"
+\&\s-1MMS\s0 (Microsoft Media Server) protocol over \s-1HTTP.\s0
+.PP
+The required syntax is:
+.PP
+.Vb 1
+\&        mmsh://<server>[:<port>][/<app>][/<playpath>]
+.Ve
+.SS "md5"
+.IX Subsection "md5"
+\&\s-1MD5\s0 output protocol.
+.PP
+Computes the \s-1MD5\s0 hash of the data to be written, and on close writes
+this to the designated output or stdout if none is specified. It can
+be used to test muxers without writing an actual file.
+.PP
+Some examples follow.
+.PP
+.Vb 2
+\&        # Write the MD5 hash of the encoded AVI file to the file output.avi.md5.
+\&        ffmpeg \-i input.flv \-f avi \-y md5:output.avi.md5
+\&        
+\&        # Write the MD5 hash of the encoded AVI file to stdout.
+\&        ffmpeg \-i input.flv \-f avi \-y md5:
+.Ve
+.PP
+Note that some formats (typically \s-1MOV\s0) require the output protocol to
+be seekable, so they will fail with the \s-1MD5\s0 output protocol.
+.SS "pipe"
+.IX Subsection "pipe"
+\&\s-1UNIX\s0 pipe access protocol.
+.PP
+Read and write from \s-1UNIX\s0 pipes.
+.PP
+The accepted syntax is:
+.PP
+.Vb 1
+\&        pipe:[<number>]
+.Ve
+.PP
+If \fBfd\fR isn't specified, \fInumber\fR is the number corresponding to the file descriptor of the
+pipe (e.g. 0 for stdin, 1 for stdout, 2 for stderr).  If \fInumber\fR
+is not specified, by default the stdout file descriptor will be used
+for writing, stdin for reading.
+.PP
+For example to read from stdin with \fBffmpeg\fR:
+.PP
+.Vb 3
+\&        cat test.wav | ffmpeg \-i pipe:0
+\&        # ...this is the same as...
+\&        cat test.wav | ffmpeg \-i pipe:
+.Ve
+.PP
+For writing to stdout with \fBffmpeg\fR:
+.PP
+.Vb 3
+\&        ffmpeg \-i test.wav \-f avi pipe:1 | cat > test.avi
+\&        # ...this is the same as...
+\&        ffmpeg \-i test.wav \-f avi pipe: | cat > test.avi
+.Ve
+.PP
+This protocol accepts the following options:
+.IP "\fBblocksize\fR" 4
+.IX Item "blocksize"
+Set I/O operation maximum block size, in bytes. Default value is
+\&\f(CW\*(C`INT_MAX\*(C'\fR, which results in not limiting the requested block size.
+Setting this value reasonably low improves user termination request reaction
+time, which is valuable if data transmission is slow.
+.IP "\fBfd\fR" 4
+.IX Item "fd"
+Set file descriptor.
+.PP
+Note that some formats (typically \s-1MOV\s0), require the output protocol to
+be seekable, so they will fail with the pipe output protocol.
+.SS "prompeg"
+.IX Subsection "prompeg"
+Pro-MPEG Code of Practice #3 Release 2 \s-1FEC\s0 protocol.
+.PP
+The Pro-MPEG CoP#3 \s-1FEC\s0 is a 2D parity-check forward error correction mechanism
+for \s-1MPEG\-2\s0 Transport Streams sent over \s-1RTP.\s0
+.PP
+This protocol must be used in conjunction with the \f(CW\*(C`rtp_mpegts\*(C'\fR muxer and
+the \f(CW\*(C`rtp\*(C'\fR protocol.
+.PP
+The required syntax is:
+.PP
+.Vb 1
+\&        \-f rtp_mpegts \-fec prompeg=<option>=<val>... rtp://<hostname>:<port>
+.Ve
+.PP
+The destination \s-1UDP\s0 ports are \f(CW\*(C`port + 2\*(C'\fR for the column \s-1FEC\s0 stream
+and \f(CW\*(C`port + 4\*(C'\fR for the row \s-1FEC\s0 stream.
+.PP
+This protocol accepts the following options:
+.IP "\fBl=\fR\fIn\fR" 4
+.IX Item "l=n"
+The number of columns (4\-20, LxD <= 100)
+.IP "\fBd=\fR\fIn\fR" 4
+.IX Item "d=n"
+The number of rows (4\-20, LxD <= 100)
+.PP
+Example usage:
+.PP
+.Vb 1
+\&        \-f rtp_mpegts \-fec prompeg=l=8:d=4 rtp://<hostname>:<port>
+.Ve
+.SS "rist"
+.IX Subsection "rist"
+Reliable Internet Streaming Transport protocol
+.PP
+The accepted options are:
+.IP "\fBrist_profile\fR" 4
+.IX Item "rist_profile"
+Supported values:
+.RS 4
+.IP "\fBsimple\fR" 4
+.IX Item "simple"
+.PD 0
+.IP "\fBmain\fR" 4
+.IX Item "main"
+.PD
+This one is default.
+.IP "\fBadvanced\fR" 4
+.IX Item "advanced"
+.RE
+.RS 4
+.RE
+.PD 0
+.IP "\fBbuffer_size\fR" 4
+.IX Item "buffer_size"
+.PD
+Set internal \s-1RIST\s0 buffer size in milliseconds for retransmission of data.
+Default value is 0 which means the librist default (1 sec). Maximum value is 30
+seconds.
+.IP "\fBfifo_size\fR" 4
+.IX Item "fifo_size"
+Size of the librist receiver output fifo in number of packets. This must be a
+power of 2.
+Defaults to 8192 (vs the librist default of 1024).
+.IP "\fBoverrun_nonfatal=\fR\fI1|0\fR" 4
+.IX Item "overrun_nonfatal=1|0"
+Survive in case of librist fifo buffer overrun. Default value is 0.
+.IP "\fBpkt_size\fR" 4
+.IX Item "pkt_size"
+Set maximum packet size for sending data. 1316 by default.
+.IP "\fBlog_level\fR" 4
+.IX Item "log_level"
+Set loglevel for \s-1RIST\s0 logging messages. You only need to set this if you
+explicitly want to enable debug level messages or packet loss simulation,
+otherwise the regular loglevel is respected.
+.IP "\fBsecret\fR" 4
+.IX Item "secret"
+Set override of encryption secret, by default is unset.
+.IP "\fBencryption\fR" 4
+.IX Item "encryption"
+Set encryption type, by default is disabled.
+Acceptable values are 128 and 256.
+.SS "rtmp"
+.IX Subsection "rtmp"
+Real-Time Messaging Protocol.
+.PP
+The Real-Time Messaging Protocol (\s-1RTMP\s0) is used for streaming multimedia
+content across a \s-1TCP/IP\s0 network.
+.PP
+The required syntax is:
+.PP
+.Vb 1
+\&        rtmp://[<username>:<password>@]<server>[:<port>][/<app>][/<instance>][/<playpath>]
+.Ve
+.PP
+The accepted parameters are:
+.IP "\fBusername\fR" 4
+.IX Item "username"
+An optional username (mostly for publishing).
+.IP "\fBpassword\fR" 4
+.IX Item "password"
+An optional password (mostly for publishing).
+.IP "\fBserver\fR" 4
+.IX Item "server"
+The address of the \s-1RTMP\s0 server.
+.IP "\fBport\fR" 4
+.IX Item "port"
+The number of the \s-1TCP\s0 port to use (by default is 1935).
+.IP "\fBapp\fR" 4
+.IX Item "app"
+It is the name of the application to access. It usually corresponds to
+the path where the application is installed on the \s-1RTMP\s0 server
+(e.g. \fI/ondemand/\fR, \fI/flash/live/\fR, etc.). You can override
+the value parsed from the \s-1URI\s0 through the \f(CW\*(C`rtmp_app\*(C'\fR option, too.
+.IP "\fBplaypath\fR" 4
+.IX Item "playpath"
+It is the path or name of the resource to play with reference to the
+application specified in \fIapp\fR, may be prefixed by \*(L"mp4:\*(R". You
+can override the value parsed from the \s-1URI\s0 through the \f(CW\*(C`rtmp_playpath\*(C'\fR
+option, too.
+.IP "\fBlisten\fR" 4
+.IX Item "listen"
+Act as a server, listening for an incoming connection.
+.IP "\fBtimeout\fR" 4
+.IX Item "timeout"
+Maximum time to wait for the incoming connection. Implies listen.
+.PP
+Additionally, the following parameters can be set via command line options
+(or in code via \f(CW\*(C`AVOption\*(C'\fRs):
+.IP "\fBrtmp_app\fR" 4
+.IX Item "rtmp_app"
+Name of application to connect on the \s-1RTMP\s0 server. This option
+overrides the parameter specified in the \s-1URI.\s0
+.IP "\fBrtmp_buffer\fR" 4
+.IX Item "rtmp_buffer"
+Set the client buffer time in milliseconds. The default is 3000.
+.IP "\fBrtmp_conn\fR" 4
+.IX Item "rtmp_conn"
+Extra arbitrary \s-1AMF\s0 connection parameters, parsed from a string,
+e.g. like \f(CW\*(C`B:1 S:authMe O:1 NN:code:1.23 NS:flag:ok O:0\*(C'\fR.
+Each value is prefixed by a single character denoting the type,
+B for Boolean, N for number, S for string, O for object, or Z for null,
+followed by a colon. For Booleans the data must be either 0 or 1 for
+\&\s-1FALSE\s0 or \s-1TRUE,\s0 respectively.  Likewise for Objects the data must be 0 or
+1 to end or begin an object, respectively. Data items in subobjects may
+be named, by prefixing the type with 'N' and specifying the name before
+the value (i.e. \f(CW\*(C`NB:myFlag:1\*(C'\fR). This option may be used multiple
+times to construct arbitrary \s-1AMF\s0 sequences.
+.IP "\fBrtmp_enhanced_codecs\fR" 4
+.IX Item "rtmp_enhanced_codecs"
+Specify the list of codecs the client advertises to support in an
+enhanced \s-1RTMP\s0 stream. This option should be set to a comma separated
+list of fourcc values, like \f(CW\*(C`hvc1,av01,vp09\*(C'\fR for multiple codecs
+or \f(CW\*(C`hvc1\*(C'\fR for only one codec. The specified list will be presented
+in the \*(L"fourCcLive\*(R" property of the Connect Command Message.
+.IP "\fBrtmp_flashver\fR" 4
+.IX Item "rtmp_flashver"
+Version of the Flash plugin used to run the \s-1SWF\s0 player. The default
+is \s-1LNX 9,0,124,2.\s0 (When publishing, the default is \s-1FMLE/3.0\s0 (compatible;
+<libavformat version>).)
+.IP "\fBrtmp_flush_interval\fR" 4
+.IX Item "rtmp_flush_interval"
+Number of packets flushed in the same request (\s-1RTMPT\s0 only). The default
+is 10.
+.IP "\fBrtmp_live\fR" 4
+.IX Item "rtmp_live"
+Specify that the media is a live stream. No resuming or seeking in
+live streams is possible. The default value is \f(CW\*(C`any\*(C'\fR, which means the
+subscriber first tries to play the live stream specified in the
+playpath. If a live stream of that name is not found, it plays the
+recorded stream. The other possible values are \f(CW\*(C`live\*(C'\fR and
+\&\f(CW\*(C`recorded\*(C'\fR.
+.IP "\fBrtmp_pageurl\fR" 4
+.IX Item "rtmp_pageurl"
+\&\s-1URL\s0 of the web page in which the media was embedded. By default no
+value will be sent.
+.IP "\fBrtmp_playpath\fR" 4
+.IX Item "rtmp_playpath"
+Stream identifier to play or to publish. This option overrides the
+parameter specified in the \s-1URI.\s0
+.IP "\fBrtmp_subscribe\fR" 4
+.IX Item "rtmp_subscribe"
+Name of live stream to subscribe to. By default no value will be sent.
+It is only sent if the option is specified or if rtmp_live
+is set to live.
+.IP "\fBrtmp_swfhash\fR" 4
+.IX Item "rtmp_swfhash"
+\&\s-1SHA256\s0 hash of the decompressed \s-1SWF\s0 file (32 bytes).
+.IP "\fBrtmp_swfsize\fR" 4
+.IX Item "rtmp_swfsize"
+Size of the decompressed \s-1SWF\s0 file, required for SWFVerification.
+.IP "\fBrtmp_swfurl\fR" 4
+.IX Item "rtmp_swfurl"
+\&\s-1URL\s0 of the \s-1SWF\s0 player for the media. By default no value will be sent.
+.IP "\fBrtmp_swfverify\fR" 4
+.IX Item "rtmp_swfverify"
+\&\s-1URL\s0 to player swf file, compute hash/size automatically.
+.IP "\fBrtmp_tcurl\fR" 4
+.IX Item "rtmp_tcurl"
+\&\s-1URL\s0 of the target stream. Defaults to proto://host[:port]/app.
+.IP "\fBtcp_nodelay=\fR\fI1|0\fR" 4
+.IX Item "tcp_nodelay=1|0"
+Set \s-1TCP_NODELAY\s0 to disable Nagle's algorithm. Default value is 0.
+.Sp
+\&\fIRemark: Writing to the socket is currently not optimized to minimize system calls and reduces the efficiency / effect of \s-1TCP_NODELAY.\s0\fR
+.IP "\fBtcp_keepalive=\fR\fI1|0\fR" 4
+.IX Item "tcp_keepalive=1|0"
+Enable the \s-1TCP\s0 keepalive mechanism to detect dead peers and help maintain long-lived idle connections. Default value is 0.
+.Sp
+Only the basic keepalive option (\s-1SO_KEEPALIVE\s0) can be enabled or disabled. Platform-specific tuning parameters such as \s-1TCP_KEEPIDLE, TCP_KEEPINTVL,\s0 or \s-1TCP_KEEPCNT\s0 are not configurable and will use the operating system's default values.
+.PP
+For example to read with \fBffplay\fR a multimedia resource named
+\&\*(L"sample\*(R" from the application \*(L"vod\*(R" from an \s-1RTMP\s0 server \*(L"myserver\*(R":
+.PP
+.Vb 1
+\&        ffplay rtmp://myserver/vod/sample
+.Ve
+.PP
+To publish to a password protected server, passing the playpath and
+app names separately:
+.PP
+.Vb 1
+\&        ffmpeg \-re \-i <input> \-f flv \-rtmp_playpath some/long/path \-rtmp_app long/app/name rtmp://username:password@myserver/
+.Ve
+.SS "rtmpe"
+.IX Subsection "rtmpe"
+Encrypted Real-Time Messaging Protocol.
+.PP
+The Encrypted Real-Time Messaging Protocol (\s-1RTMPE\s0) is used for
+streaming multimedia content within standard cryptographic primitives,
+consisting of Diffie-Hellman key exchange and \s-1HMACSHA256,\s0 generating
+a pair of \s-1RC4\s0 keys.
+.SS "rtmps"
+.IX Subsection "rtmps"
+Real-Time Messaging Protocol over a secure \s-1SSL\s0 connection.
+.PP
+The Real-Time Messaging Protocol (\s-1RTMPS\s0) is used for streaming
+multimedia content across an encrypted connection.
+.SS "rtmpt"
+.IX Subsection "rtmpt"
+Real-Time Messaging Protocol tunneled through \s-1HTTP.\s0
+.PP
+The Real-Time Messaging Protocol tunneled through \s-1HTTP\s0 (\s-1RTMPT\s0) is used
+for streaming multimedia content within \s-1HTTP\s0 requests to traverse
+firewalls.
+.SS "rtmpte"
+.IX Subsection "rtmpte"
+Encrypted Real-Time Messaging Protocol tunneled through \s-1HTTP.\s0
+.PP
+The Encrypted Real-Time Messaging Protocol tunneled through \s-1HTTP\s0 (\s-1RTMPTE\s0)
+is used for streaming multimedia content within \s-1HTTP\s0 requests to traverse
+firewalls.
+.SS "rtmpts"
+.IX Subsection "rtmpts"
+Real-Time Messaging Protocol tunneled through \s-1HTTPS.\s0
+.PP
+The Real-Time Messaging Protocol tunneled through \s-1HTTPS\s0 (\s-1RTMPTS\s0) is used
+for streaming multimedia content within \s-1HTTPS\s0 requests to traverse
+firewalls.
+.SS "libsmbclient"
+.IX Subsection "libsmbclient"
+libsmbclient permits one to manipulate \s-1CIFS/SMB\s0 network resources.
+.PP
+Following syntax is required.
+.PP
+.Vb 1
+\&        smb://[[domain:]user[:password@]]server[/share[/path[/file]]]
+.Ve
+.PP
+This protocol accepts the following options.
+.IP "\fBtimeout\fR" 4
+.IX Item "timeout"
+Set timeout in milliseconds of socket I/O operations used by the underlying
+low level operation. By default it is set to \-1, which means that the timeout
+is not specified.
+.IP "\fBtruncate\fR" 4
+.IX Item "truncate"
+Truncate existing files on write, if set to 1. A value of 0 prevents
+truncating. Default value is 1.
+.IP "\fBworkgroup\fR" 4
+.IX Item "workgroup"
+Set the workgroup used for making connections. By default workgroup is not specified.
+.PP
+For more information see: <\fBhttp://www.samba.org/\fR>.
+.SS "libssh"
+.IX Subsection "libssh"
+Secure File Transfer Protocol via libssh
+.PP
+Read from or write to remote resources using \s-1SFTP\s0 protocol.
+.PP
+Following syntax is required.
+.PP
+.Vb 1
+\&        sftp://[user[:password]@]server[:port]/path/to/remote/resource.mpeg
+.Ve
+.PP
+This protocol accepts the following options.
+.IP "\fBtimeout\fR" 4
+.IX Item "timeout"
+Set timeout of socket I/O operations used by the underlying low level
+operation. By default it is set to \-1, which means that the timeout
+is not specified.
+.IP "\fBtruncate\fR" 4
+.IX Item "truncate"
+Truncate existing files on write, if set to 1. A value of 0 prevents
+truncating. Default value is 1.
+.IP "\fBprivate_key\fR" 4
+.IX Item "private_key"
+Specify the path of the file containing private key to use during authorization.
+By default libssh searches for keys in the \fI~/.ssh/\fR directory.
+.PP
+Example: Play a file stored on remote server.
+.PP
+.Vb 1
+\&        ffplay sftp://user:password@server_address:22/home/user/resource.mpeg
+.Ve
+.SS "librtmp rtmp, rtmpe, rtmps, rtmpt, rtmpte"
+.IX Subsection "librtmp rtmp, rtmpe, rtmps, rtmpt, rtmpte"
+Real-Time Messaging Protocol and its variants supported through
+librtmp.
+.PP
+Requires the presence of the librtmp headers and library during
+configuration. You need to explicitly configure the build with
+\&\*(L"\-\-enable\-librtmp\*(R". If enabled this will replace the native \s-1RTMP\s0
+protocol.
+.PP
+This protocol provides most client functions and a few server
+functions needed to support \s-1RTMP, RTMP\s0 tunneled in \s-1HTTP\s0 (\s-1RTMPT\s0),
+encrypted \s-1RTMP\s0 (\s-1RTMPE\s0), \s-1RTMP\s0 over \s-1SSL/TLS\s0 (\s-1RTMPS\s0) and tunneled
+variants of these encrypted types (\s-1RTMPTE, RTMPTS\s0).
+.PP
+The required syntax is:
+.PP
+.Vb 1
+\&        <rtmp_proto>://<server>[:<port>][/<app>][/<playpath>] <options>
+.Ve
+.PP
+where \fIrtmp_proto\fR is one of the strings \*(L"rtmp\*(R", \*(L"rtmpt\*(R", \*(L"rtmpe\*(R",
+\&\*(L"rtmps\*(R", \*(L"rtmpte\*(R", \*(L"rtmpts\*(R" corresponding to each \s-1RTMP\s0 variant, and
+\&\fIserver\fR, \fIport\fR, \fIapp\fR and \fIplaypath\fR have the same
+meaning as specified for the \s-1RTMP\s0 native protocol.
+\&\fIoptions\fR contains a list of space-separated options of the form
+\&\fIkey\fR=\fIval\fR.
+.PP
+See the librtmp manual page (man 3 librtmp) for more information.
+.PP
+For example, to stream a file in real-time to an \s-1RTMP\s0 server using
+\&\fBffmpeg\fR:
+.PP
+.Vb 1
+\&        ffmpeg \-re \-i myfile \-f flv rtmp://myserver/live/mystream
+.Ve
+.PP
+To play the same stream using \fBffplay\fR:
+.PP
+.Vb 1
+\&        ffplay "rtmp://myserver/live/mystream live=1"
+.Ve
+.SS "rtp"
+.IX Subsection "rtp"
+Real-time Transport Protocol.
+.PP
+The required syntax for an \s-1RTP URL\s0 is:
+.PP
+.Vb 1
+\&        rtp://<hostname>[:<port>][?<options>]
+.Ve
+.PP
+\&\fIport\fR specifies the \s-1RTP\s0 port to use.
+.PP
+\&\fIoptions\fR contains a list of &\-separated options of the form
+\&\fIkey\fR=\fIval\fR. Standard percent-encoding (and using the plus sign for
+space) can be used to escape keys and values.
+.PP
+Options can also can be specified via command line options (or in code via
+\&\f(CW\*(C`AVOption\*(C'\fRs).
+.PP
+The list of supported options follows.
+.IP "\fBttl=\fR\fIn\fR" 4
+.IX Item "ttl=n"
+Set the \s-1TTL\s0 (Time-To-Live) value (for multicast only).
+.IP "\fBrtcpport=\fR\fIn\fR" 4
+.IX Item "rtcpport=n"
+Set the remote \s-1RTCP\s0 port to \fIn\fR.
+.IP "\fBlocalport, local_rtpport, localrtpport=\fR\fIn\fR" 4
+.IX Item "localport, local_rtpport, localrtpport=n"
+Set the local \s-1RTP\s0 port to \fIn\fR.
+.Sp
+Using the localport option name is deprecated and should not be used.
+.IP "\fBlocal_rtcpport, localrtcpport=\fR\fIn\fR\fB'\fR" 4
+.IX Item "local_rtcpport, localrtcpport=n'"
+Set the local \s-1RTCP\s0 port to \fIn\fR.
+.IP "\fBpkt_size=\fR\fIn\fR" 4
+.IX Item "pkt_size=n"
+Set max packet size (in bytes) to \fIn\fR.
+.IP "\fBbuffer_size=\fR\fIsize\fR" 4
+.IX Item "buffer_size=size"
+Set the maximum \s-1UDP\s0 socket buffer size in bytes.
+.IP "\fBconnect=0|1\fR" 4
+.IX Item "connect=0|1"
+Do a \f(CW\*(C`connect()\*(C'\fR on the \s-1UDP\s0 socket (if set to 1) or not (if set
+to 0).
+.IP "\fBsources=\fR\fIip\fR\fB[,\fR\fIip\fR\fB]\fR" 4
+.IX Item "sources=ip[,ip]"
+List allowed source \s-1IP\s0 addresses.
+.IP "\fBblock=\fR\fIip\fR\fB[,\fR\fIip\fR\fB]\fR" 4
+.IX Item "block=ip[,ip]"
+List disallowed (blocked) source \s-1IP\s0 addresses.
+.IP "\fBwrite_to_source=0|1\fR" 4
+.IX Item "write_to_source=0|1"
+Send packets to the source address of the latest received packet (if
+set to 1) or to a default remote address (if set to 0).
+.IP "\fBlocaladdr=\fR\fIaddr\fR" 4
+.IX Item "localaddr=addr"
+Local \s-1IP\s0 address of a network interface used for sending packets or joining
+multicast groups.
+.IP "\fBtimeout=\fR\fIn\fR" 4
+.IX Item "timeout=n"
+Set timeout (in microseconds) of socket I/O operations to \fIn\fR.
+.PP
+Important notes:
+.IP "1." 4
+If \fBrtcpport\fR is not set the \s-1RTCP\s0 port will be set to the \s-1RTP\s0
+port value plus 1.
+.IP "2." 4
+If \fBlocalrtpport\fR (the local \s-1RTP\s0 port) is not set any available
+port will be used for the local \s-1RTP\s0 and \s-1RTCP\s0 ports.
+.IP "3." 4
+If \fBlocalrtcpport\fR (the local \s-1RTCP\s0 port) is not set it will be
+set to the local \s-1RTP\s0 port value plus 1.
+.SS "rtsp"
+.IX Subsection "rtsp"
+Real-Time Streaming Protocol.
+.PP
+\&\s-1RTSP\s0 is not technically a protocol handler in libavformat, it is a demuxer
+and muxer. The demuxer supports both normal \s-1RTSP\s0 (with data transferred
+over \s-1RTP\s0; this is used by e.g. Apple and Microsoft) and Real-RTSP (with
+data transferred over \s-1RDT\s0).
+.PP
+The muxer can be used to send a stream using \s-1RTSP ANNOUNCE\s0 to a server
+supporting it (currently Darwin Streaming Server and Mischa Spiegelmock's
+<\fBhttps://github.com/revmischa/rtsp\-server\fR>).
+.PP
+The required syntax for a \s-1RTSP\s0 url is:
+.PP
+.Vb 1
+\&        rtsp://<hostname>[:<port>]/<path>
+.Ve
+.PP
+Options can be set on the \fBffmpeg\fR/\fBffplay\fR command
+line, or set in code via \f(CW\*(C`AVOption\*(C'\fRs or in
+\&\f(CW\*(C`avformat_open_input\*(C'\fR.
+.PP
+\fIMuxer\fR
+.IX Subsection "Muxer"
+.PP
+The following options are supported.
+.IP "\fBrtsp_transport\fR" 4
+.IX Item "rtsp_transport"
+Set \s-1RTSP\s0 transport protocols.
+.Sp
+It accepts the following values:
+.RS 4
+.IP "\fBudp\fR" 4
+.IX Item "udp"
+Use \s-1UDP\s0 as lower transport protocol.
+.IP "\fBtcp\fR" 4
+.IX Item "tcp"
+Use \s-1TCP\s0 (interleaving within the \s-1RTSP\s0 control channel) as lower
+transport protocol.
+.RE
+.RS 4
+.Sp
+Default value is \fB0\fR.
+.RE
+.IP "\fBrtsp_flags\fR" 4
+.IX Item "rtsp_flags"
+Set \s-1RTSP\s0 flags.
+.Sp
+The following values are accepted:
+.RS 4
+.IP "\fBlatm\fR" 4
+.IX Item "latm"
+Use \s-1MP4A\-LATM\s0 packetization instead of \s-1MPEG4\-GENERIC\s0 for \s-1AAC.\s0
+.IP "\fBrfc2190\fR" 4
+.IX Item "rfc2190"
+Use \s-1RFC 2190\s0 packetization instead of \s-1RFC 4629\s0 for H.263.
+.IP "\fBskip_rtcp\fR" 4
+.IX Item "skip_rtcp"
+Don't send \s-1RTCP\s0 sender reports.
+.IP "\fBh264_mode0\fR" 4
+.IX Item "h264_mode0"
+Use mode 0 for H.264 in \s-1RTP.\s0
+.IP "\fBsend_bye\fR" 4
+.IX Item "send_bye"
+Send \s-1RTCP BYE\s0 packets when finishing.
+.RE
+.RS 4
+.Sp
+Default value is \fB0\fR.
+.RE
+.IP "\fBmin_port\fR" 4
+.IX Item "min_port"
+Set minimum local \s-1UDP\s0 port. Default value is 5000.
+.IP "\fBmax_port\fR" 4
+.IX Item "max_port"
+Set maximum local \s-1UDP\s0 port. Default value is 65000.
+.IP "\fBbuffer_size\fR" 4
+.IX Item "buffer_size"
+Set the maximum socket buffer size in bytes.
+.IP "\fBpkt_size\fR" 4
+.IX Item "pkt_size"
+Set max send packet size (in bytes). Default value is 1472.
+.PP
+\fIDemuxer\fR
+.IX Subsection "Demuxer"
+.PP
+The following options are supported.
+.IP "\fBinitial_pause\fR" 4
+.IX Item "initial_pause"
+Do not start playing the stream immediately if set to 1. Default value
+is 0.
+.IP "\fBrtsp_transport\fR" 4
+.IX Item "rtsp_transport"
+Set \s-1RTSP\s0 transport protocols.
+.Sp
+It accepts the following values:
+.RS 4
+.IP "\fBudp\fR" 4
+.IX Item "udp"
+Use \s-1UDP\s0 as lower transport protocol.
+.IP "\fBtcp\fR" 4
+.IX Item "tcp"
+Use \s-1TCP\s0 (interleaving within the \s-1RTSP\s0 control channel) as lower
+transport protocol.
+.IP "\fBudp_multicast\fR" 4
+.IX Item "udp_multicast"
+Use \s-1UDP\s0 multicast as lower transport protocol.
+.IP "\fBhttp\fR" 4
+.IX Item "http"
+Use \s-1HTTP\s0 tunneling as lower transport protocol, which is useful for
+passing proxies.
+.IP "\fBhttps\fR" 4
+.IX Item "https"
+Use HTTPs tunneling as lower transport protocol, which is useful for
+passing proxies and widely used for security consideration.
+.RE
+.RS 4
+.Sp
+Multiple lower transport protocols may be specified, in that case they are
+tried one at a time (if the setup of one fails, the next one is tried).
+For the muxer, only the \fBtcp\fR and \fBudp\fR options are supported.
+.RE
+.IP "\fBrtsp_flags\fR" 4
+.IX Item "rtsp_flags"
+Set \s-1RTSP\s0 flags.
+.Sp
+The following values are accepted:
+.RS 4
+.IP "\fBfilter_src\fR" 4
+.IX Item "filter_src"
+Accept packets only from negotiated peer address and port.
+.IP "\fBlisten\fR" 4
+.IX Item "listen"
+Act as a server, listening for an incoming connection.
+.IP "\fBprefer_tcp\fR" 4
+.IX Item "prefer_tcp"
+Try \s-1TCP\s0 for \s-1RTP\s0 transport first, if \s-1TCP\s0 is available as \s-1RTSP RTP\s0 transport.
+.IP "\fBsatip_raw\fR" 4
+.IX Item "satip_raw"
+Export raw MPEG-TS stream instead of demuxing. The flag will simply write out
+the raw stream, with the original PAT/PMT/PIDs intact.
+.RE
+.RS 4
+.Sp
+Default value is \fBnone\fR.
+.RE
+.IP "\fBallowed_media_types\fR" 4
+.IX Item "allowed_media_types"
+Set media types to accept from the server.
+.Sp
+The following flags are accepted:
+.RS 4
+.IP "\fBvideo\fR" 4
+.IX Item "video"
+.PD 0
+.IP "\fBaudio\fR" 4
+.IX Item "audio"
+.IP "\fBdata\fR" 4
+.IX Item "data"
+.IP "\fBsubtitle\fR" 4
+.IX Item "subtitle"
+.RE
+.RS 4
+.PD
+.Sp
+By default it accepts all media types.
+.RE
+.IP "\fBmin_port\fR" 4
+.IX Item "min_port"
+Set minimum local \s-1UDP\s0 port. Default value is 5000.
+.IP "\fBmax_port\fR" 4
+.IX Item "max_port"
+Set maximum local \s-1UDP\s0 port. Default value is 65000.
+.IP "\fBlisten_timeout\fR" 4
+.IX Item "listen_timeout"
+Set maximum timeout (in seconds) to establish an initial connection. Setting
+\&\fBlisten_timeout\fR > 0 sets \fBrtsp_flags\fR to \fBlisten\fR. Default is \-1
+which means an infinite timeout when \fBlisten\fR mode is set.
+.IP "\fBreorder_queue_size\fR" 4
+.IX Item "reorder_queue_size"
+Set number of packets to buffer for handling of reordered packets.
+.IP "\fBtimeout\fR" 4
+.IX Item "timeout"
+Set socket \s-1TCP I/O\s0 timeout in microseconds.
+.IP "\fBuser_agent\fR" 4
+.IX Item "user_agent"
+Override User-Agent header. If not specified, it defaults to the
+libavformat identifier string.
+.IP "\fBbuffer_size\fR" 4
+.IX Item "buffer_size"
+Set the maximum socket buffer size in bytes.
+.PP
+When receiving data over \s-1UDP,\s0 the demuxer tries to reorder received packets
+(since they may arrive out of order, or packets may get lost totally). This
+can be disabled by setting the maximum demuxing delay to zero (via
+the \f(CW\*(C`max_delay\*(C'\fR field of AVFormatContext).
+.PP
+When watching multi-bitrate Real-RTSP streams with \fBffplay\fR, the
+streams to display can be chosen with \f(CW\*(C`\-vst\*(C'\fR \fIn\fR and
+\&\f(CW\*(C`\-ast\*(C'\fR \fIn\fR for video and audio respectively, and can be switched
+on the fly by pressing \f(CW\*(C`v\*(C'\fR and \f(CW\*(C`a\*(C'\fR.
+.PP
+\fIExamples\fR
+.IX Subsection "Examples"
+.PP
+The following examples all make use of the \fBffplay\fR and
+\&\fBffmpeg\fR tools.
+.IP "\(bu" 4
+Watch a stream over \s-1UDP,\s0 with a max reordering delay of 0.5 seconds:
+.Sp
+.Vb 1
+\&        ffplay \-max_delay 500000 \-rtsp_transport udp rtsp://server/video.mp4
+.Ve
+.IP "\(bu" 4
+Watch a stream tunneled over \s-1HTTP:\s0
+.Sp
+.Vb 1
+\&        ffplay \-rtsp_transport http rtsp://server/video.mp4
+.Ve
+.IP "\(bu" 4
+Send a stream in realtime to a \s-1RTSP\s0 server, for others to watch:
+.Sp
+.Vb 1
+\&        ffmpeg \-re \-i <input> \-f rtsp \-muxdelay 0.1 rtsp://server/live.sdp
+.Ve
+.IP "\(bu" 4
+Receive a stream in realtime:
+.Sp
+.Vb 1
+\&        ffmpeg \-rtsp_flags listen \-i rtsp://ownaddress/live.sdp <output>
+.Ve
+.SS "sap"
+.IX Subsection "sap"
+Session Announcement Protocol (\s-1RFC 2974\s0). This is not technically a
+protocol handler in libavformat, it is a muxer and demuxer.
+It is used for signalling of \s-1RTP\s0 streams, by announcing the \s-1SDP\s0 for the
+streams regularly on a separate port.
+.PP
+\fIMuxer\fR
+.IX Subsection "Muxer"
+.PP
+The syntax for a \s-1SAP\s0 url given to the muxer is:
+.PP
+.Vb 1
+\&        sap://<destination>[:<port>][?<options>]
+.Ve
+.PP
+The \s-1RTP\s0 packets are sent to \fIdestination\fR on port \fIport\fR,
+or to port 5004 if no port is specified.
+\&\fIoptions\fR is a \f(CW\*(C`&\*(C'\fR\-separated list. The following options
+are supported:
+.IP "\fBannounce_addr=\fR\fIaddress\fR" 4
+.IX Item "announce_addr=address"
+Specify the destination \s-1IP\s0 address for sending the announcements to.
+If omitted, the announcements are sent to the commonly used \s-1SAP\s0
+announcement multicast address 224.2.127.254 (sap.mcast.net), or
+ff0e::2:7ffe if \fIdestination\fR is an IPv6 address.
+.IP "\fBannounce_port=\fR\fIport\fR" 4
+.IX Item "announce_port=port"
+Specify the port to send the announcements on, defaults to
+9875 if not specified.
+.IP "\fBttl=\fR\fIttl\fR" 4
+.IX Item "ttl=ttl"
+Specify the time to live value for the announcements and \s-1RTP\s0 packets,
+defaults to 255.
+.IP "\fBsame_port=\fR\fI0|1\fR" 4
+.IX Item "same_port=0|1"
+If set to 1, send all \s-1RTP\s0 streams on the same port pair. If zero (the
+default), all streams are sent on unique ports, with each stream on a
+port 2 numbers higher than the previous.
+VLC/Live555 requires this to be set to 1, to be able to receive the stream.
+The \s-1RTP\s0 stack in libavformat for receiving requires all streams to be sent
+on unique ports.
+.PP
+Example command lines follow.
+.PP
+To broadcast a stream on the local subnet, for watching in \s-1VLC:\s0
+.PP
+.Vb 1
+\&        ffmpeg \-re \-i <input> \-f sap sap://224.0.0.255?same_port=1
+.Ve
+.PP
+Similarly, for watching in \fBffplay\fR:
+.PP
+.Vb 1
+\&        ffmpeg \-re \-i <input> \-f sap sap://224.0.0.255
+.Ve
+.PP
+And for watching in \fBffplay\fR, over IPv6:
+.PP
+.Vb 1
+\&        ffmpeg \-re \-i <input> \-f sap sap://[ff0e::1:2:3:4]
+.Ve
+.PP
+\fIDemuxer\fR
+.IX Subsection "Demuxer"
+.PP
+The syntax for a \s-1SAP\s0 url given to the demuxer is:
+.PP
+.Vb 1
+\&        sap://[<address>][:<port>]
+.Ve
+.PP
+\&\fIaddress\fR is the multicast address to listen for announcements on,
+if omitted, the default 224.2.127.254 (sap.mcast.net) is used. \fIport\fR
+is the port that is listened on, 9875 if omitted.
+.PP
+The demuxers listens for announcements on the given address and port.
+Once an announcement is received, it tries to receive that particular stream.
+.PP
+Example command lines follow.
+.PP
+To play back the first stream announced on the normal \s-1SAP\s0 multicast address:
+.PP
+.Vb 1
+\&        ffplay sap://
+.Ve
+.PP
+To play back the first stream announced on one the default IPv6 \s-1SAP\s0 multicast address:
+.PP
+.Vb 1
+\&        ffplay sap://[ff0e::2:7ffe]
+.Ve
+.SS "sctp"
+.IX Subsection "sctp"
+Stream Control Transmission Protocol.
+.PP
+The accepted \s-1URL\s0 syntax is:
+.PP
+.Vb 1
+\&        sctp://<host>:<port>[?<options>]
+.Ve
+.PP
+\&\fIoptions\fR contains a list of &\-separated options of the form
+\&\fIkey\fR=\fIval\fR. Standard percent-encoding (and using the plus sign for
+space) can be used to escape keys and values.
+.PP
+Options can also can be specified via command line options (or in code via
+\&\f(CW\*(C`AVOption\*(C'\fRs).
+.PP
+The list of supported options follows.
+.IP "\fBlisten\fR" 4
+.IX Item "listen"
+If set to any value, listen for an incoming connection. Outgoing connection is done by default.
+.IP "\fBmax_streams\fR" 4
+.IX Item "max_streams"
+Set the maximum number of streams. By default no limit is set.
+.SS "srt"
+.IX Subsection "srt"
+Haivision Secure Reliable Transport Protocol via libsrt.
+.PP
+The supported syntax for a \s-1SRT URL\s0 is:
+.PP
+.Vb 1
+\&        srt://<hostname>:<port>[?<options>]
+.Ve
+.PP
+\&\fIoptions\fR contains a list of &\-separated options of the form
+\&\fIkey\fR=\fIval\fR. Standard percent-encoding (and using the plus sign for
+space) can be used to escape keys and values.
+.PP
+Options can also can be specified via command line options (or in code via
+\&\f(CW\*(C`AVOption\*(C'\fRs).
+.PP
+The list of supported options follows.
+.IP "\fBconnect_timeout=\fR\fImilliseconds\fR" 4
+.IX Item "connect_timeout=milliseconds"
+Connection timeout; \s-1SRT\s0 cannot connect for \s-1RTT\s0 > 1500 msec
+(2 handshake exchanges) with the default connect timeout of
+3 seconds. This option applies to the caller and rendezvous
+connection modes. The connect timeout is 10 times the value
+set for the rendezvous mode (which can be used as a
+workaround for this connection problem with earlier versions).
+.IP "\fBffs=\fR\fIbytes\fR" 4
+.IX Item "ffs=bytes"
+Flight Flag Size (Window Size), in bytes. \s-1FFS\s0 is actually an
+internal parameter and you should set it to not less than
+\&\fBrecv_buffer_size\fR and \fBmss\fR. The default value
+is relatively large, therefore unless you set a very large receiver buffer,
+you do not need to change this option. Default value is 25600.
+.IP "\fBinputbw=\fR\fIbytes/seconds\fR" 4
+.IX Item "inputbw=bytes/seconds"
+Sender nominal input rate, in bytes per seconds. Used along with
+\&\fBoheadbw\fR, when \fBmaxbw\fR is set to relative (0), to
+calculate maximum sending rate when recovery packets are sent
+along with the main media stream:
+\&\fBinputbw\fR * (100 + \fBoheadbw\fR) / 100
+if \fBinputbw\fR is not set while \fBmaxbw\fR is set to
+relative (0), the actual input rate is evaluated inside
+the library. Default value is 0.
+.IP "\fBiptos=\fR\fItos\fR" 4
+.IX Item "iptos=tos"
+\&\s-1IP\s0 Type of Service. Applies to sender only. Default value is 0xB8.
+.IP "\fBipttl=\fR\fIttl\fR" 4
+.IX Item "ipttl=ttl"
+\&\s-1IP\s0 Time To Live. Applies to sender only. Default value is 64.
+.IP "\fBlatency=\fR\fImicroseconds\fR" 4
+.IX Item "latency=microseconds"
+Timestamp-based Packet Delivery Delay.
+Used to absorb bursts of missed packet retransmissions.
+This flag sets both \fBrcvlatency\fR and \fBpeerlatency\fR
+to the same value. Note that prior to version 1.3.0
+this is the only flag to set the latency, however
+this is effectively equivalent to setting \fBpeerlatency\fR,
+when side is sender and \fBrcvlatency\fR
+when side is receiver, and the bidirectional stream
+sending is not supported.
+.IP "\fBlisten_timeout=\fR\fImicroseconds\fR" 4
+.IX Item "listen_timeout=microseconds"
+Set socket listen timeout.
+.IP "\fBmaxbw=\fR\fIbytes/seconds\fR" 4
+.IX Item "maxbw=bytes/seconds"
+Maximum sending bandwidth, in bytes per seconds.
+\&\-1 infinite (\s-1CSRTCC\s0 limit is 30mbps)
+0 relative to input rate (see \fBinputbw\fR)
+>0 absolute limit value
+Default value is 0 (relative)
+.IP "\fBmode=\fR\fIcaller|listener|rendezvous\fR" 4
+.IX Item "mode=caller|listener|rendezvous"
+Connection mode.
+\&\fBcaller\fR opens client connection.
+\&\fBlistener\fR starts server to listen for incoming connections.
+\&\fBrendezvous\fR use Rendez-Vous connection mode.
+Default value is caller.
+.IP "\fBmss=\fR\fIbytes\fR" 4
+.IX Item "mss=bytes"
+Maximum Segment Size, in bytes. Used for buffer allocation
+and rate calculation using a packet counter assuming fully
+filled packets. The smallest \s-1MSS\s0 between the peers is
+used. This is 1500 by default in the overall internet.
+This is the maximum size of the \s-1UDP\s0 packet and can be
+only decreased, unless you have some unusual dedicated
+network settings. Default value is 1500.
+.IP "\fBnakreport=\fR\fI1|0\fR" 4
+.IX Item "nakreport=1|0"
+If set to 1, Receiver will send `UMSG_LOSSREPORT` messages
+periodically until a lost packet is retransmitted or
+intentionally dropped. Default value is 1.
+.IP "\fBoheadbw=\fR\fIpercents\fR" 4
+.IX Item "oheadbw=percents"
+Recovery bandwidth overhead above input rate, in percents.
+See \fBinputbw\fR. Default value is 25%.
+.IP "\fBpassphrase=\fR\fIstring\fR" 4
+.IX Item "passphrase=string"
+HaiCrypt Encryption/Decryption Passphrase string, length
+from 10 to 79 characters. The passphrase is the shared
+secret between the sender and the receiver. It is used
+to generate the Key Encrypting Key using \s-1PBKDF2\s0
+(Password-Based Key Derivation Function). It is used
+only if \fBpbkeylen\fR is non-zero. It is used on
+the receiver only if the received data is encrypted.
+The configured passphrase cannot be recovered (write-only).
+.IP "\fBenforced_encryption=\fR\fI1|0\fR" 4
+.IX Item "enforced_encryption=1|0"
+If true, both connection parties must have the same password
+set (including empty, that is, with no encryption). If the
+password doesn't match or only one side is unencrypted,
+the connection is rejected. Default is true.
+.IP "\fBkmrefreshrate=\fR\fIpackets\fR" 4
+.IX Item "kmrefreshrate=packets"
+The number of packets to be transmitted after which the
+encryption key is switched to a new key. Default is \-1.
+\&\-1 means auto (0x1000000 in srt library). The range for
+this option is integers in the 0 \- \f(CW\*(C`INT_MAX\*(C'\fR.
+.IP "\fBkmpreannounce=\fR\fIpackets\fR" 4
+.IX Item "kmpreannounce=packets"
+The interval between when a new encryption key is sent and
+when switchover occurs. This value also applies to the
+subsequent interval between when switchover occurs and
+when the old encryption key is decommissioned. Default is \-1.
+\&\-1 means auto (0x1000 in srt library). The range for
+this option is integers in the 0 \- \f(CW\*(C`INT_MAX\*(C'\fR.
+.IP "\fBsnddropdelay=\fR\fImicroseconds\fR" 4
+.IX Item "snddropdelay=microseconds"
+The sender's extra delay before dropping packets. This delay is
+added to the default drop delay time interval value.
+.Sp
+Special value \-1: Do not drop packets on the sender at all.
+.IP "\fBpayload_size=\fR\fIbytes\fR" 4
+.IX Item "payload_size=bytes"
+Sets the maximum declared size of a packet transferred
+during the single call to the sending function in Live
+mode. Use 0 if this value isn't used (which is default in
+file mode).
+Default is \-1 (automatic), which typically means MPEG-TS;
+if you are going to use \s-1SRT\s0
+to send any different kind of payload, such as, for example,
+wrapping a live stream in very small frames, then you can
+use a bigger maximum frame size, though not greater than
+1456 bytes.
+.IP "\fBpkt_size=\fR\fIbytes\fR" 4
+.IX Item "pkt_size=bytes"
+Alias for \fBpayload_size\fR.
+.IP "\fBpeerlatency=\fR\fImicroseconds\fR" 4
+.IX Item "peerlatency=microseconds"
+The latency value (as described in \fBrcvlatency\fR) that is
+set by the sender side as a minimum value for the receiver.
+.IP "\fBpbkeylen=\fR\fIbytes\fR" 4
+.IX Item "pbkeylen=bytes"
+Sender encryption key length, in bytes.
+Only can be set to 0, 16, 24 and 32.
+Enable sender encryption if not 0.
+Not required on receiver (set to 0),
+key size obtained from sender in HaiCrypt handshake.
+Default value is 0.
+.IP "\fBrcvlatency=\fR\fImicroseconds\fR" 4
+.IX Item "rcvlatency=microseconds"
+The time that should elapse since the moment when the
+packet was sent and the moment when it's delivered to
+the receiver application in the receiving function.
+This time should be a buffer time large enough to cover
+the time spent for sending, unexpectedly extended \s-1RTT\s0
+time, and the time needed to retransmit the lost \s-1UDP\s0
+packet. The effective latency value will be the maximum
+of this options' value and the value of \fBpeerlatency\fR
+set by the peer side. Before version 1.3.0 this option
+is only available as \fBlatency\fR.
+.IP "\fBrecv_buffer_size=\fR\fIbytes\fR" 4
+.IX Item "recv_buffer_size=bytes"
+Set \s-1UDP\s0 receive buffer size, expressed in bytes.
+.IP "\fBsend_buffer_size=\fR\fIbytes\fR" 4
+.IX Item "send_buffer_size=bytes"
+Set \s-1UDP\s0 send buffer size, expressed in bytes.
+.IP "\fBtimeout=\fR\fImicroseconds\fR" 4
+.IX Item "timeout=microseconds"
+Set raise error timeouts for read, write and connect operations. Note that the
+\&\s-1SRT\s0 library has internal timeouts which can be controlled separately, the
+value set here is only a cap on those.
+.IP "\fBtlpktdrop=\fR\fI1|0\fR" 4
+.IX Item "tlpktdrop=1|0"
+Too-late Packet Drop. When enabled on receiver, it skips
+missing packets that have not been delivered in time and
+delivers the following packets to the application when
+their time-to-play has come. It also sends a fake \s-1ACK\s0 to
+the sender. When enabled on sender and enabled on the
+receiving peer, the sender drops the older packets that
+have no chance of being delivered in time. It was
+automatically enabled in the sender if the receiver
+supports it.
+.IP "\fBsndbuf=\fR\fIbytes\fR" 4
+.IX Item "sndbuf=bytes"
+Set send buffer size, expressed in bytes.
+.IP "\fBrcvbuf=\fR\fIbytes\fR" 4
+.IX Item "rcvbuf=bytes"
+Set receive buffer size, expressed in bytes.
+.Sp
+Receive buffer must not be greater than \fBffs\fR.
+.IP "\fBlossmaxttl=\fR\fIpackets\fR" 4
+.IX Item "lossmaxttl=packets"
+The value up to which the Reorder Tolerance may grow. When
+Reorder Tolerance is > 0, then packet loss report is delayed
+until that number of packets come in. Reorder Tolerance
+increases every time a \*(L"belated\*(R" packet has come, but it
+wasn't due to retransmission (that is, when \s-1UDP\s0 packets tend
+to come out of order), with the difference between the latest
+sequence and this packet's sequence, and not more than the
+value of this option. By default it's 0, which means that this
+mechanism is turned off, and the loss report is always sent
+immediately upon experiencing a \*(L"gap\*(R" in sequences.
+.IP "\fBminversion\fR" 4
+.IX Item "minversion"
+The minimum \s-1SRT\s0 version that is required from the peer. A connection
+to a peer that does not satisfy the minimum version requirement
+will be rejected.
+.Sp
+The version format in hex is 0xXXYYZZ for x.y.z in human readable
+form.
+.IP "\fBstreamid=\fR\fIstring\fR" 4
+.IX Item "streamid=string"
+A string limited to 512 characters that can be set on the socket prior
+to connecting. This stream \s-1ID\s0 will be able to be retrieved by the
+listener side from the socket that is returned from srt_accept and
+was connected by a socket with that set stream \s-1ID. SRT\s0 does not enforce
+any special interpretation of the contents of this string.
+This option doesnXt make sense in Rendezvous connection; the result
+might be that simply one side will override the value from the other
+side and itXs the matter of luck which one would win
+.IP "\fBsrt_streamid=\fR\fIstring\fR" 4
+.IX Item "srt_streamid=string"
+Alias for \fBstreamid\fR to avoid conflict with ffmpeg command line option.
+.IP "\fBsmoother=\fR\fIlive|file\fR" 4
+.IX Item "smoother=live|file"
+The type of Smoother used for the transmission for that socket, which
+is responsible for the transmission and congestion control. The Smoother
+type must be exactly the same on both connecting parties, otherwise
+the connection is rejected.
+.IP "\fBmessageapi=\fR\fI1|0\fR" 4
+.IX Item "messageapi=1|0"
+When set, this socket uses the Message \s-1API,\s0 otherwise it uses Buffer
+\&\s-1API.\s0 Note that in live mode (see \fBtranstype\fR) thereXs only
+message \s-1API\s0 available. In File mode you can chose to use one of two modes:
+.Sp
+Stream \s-1API\s0 (default, when this option is false). In this mode you may
+send as many data as you wish with one sending instruction, or even use
+dedicated functions that read directly from a file. The internal facility
+will take care of any speed and congestion control. When receiving, you
+can also receive as many data as desired, the data not extracted will be
+waiting for the next call. There is no boundary between data portions in
+the Stream mode.
+.Sp
+Message \s-1API.\s0 In this mode your single sending instruction passes exactly
+one piece of data that has boundaries (a message). Contrary to Live mode,
+this message may span across multiple \s-1UDP\s0 packets and the only size
+limitation is that it shall fit as a whole in the sending buffer. The
+receiver shall use as large buffer as necessary to receive the message,
+otherwise the message will not be given up. When the message is not
+complete (not all packets received or there was a packet loss) it will
+not be given up.
+.IP "\fBtranstype=\fR\fIlive|file\fR" 4
+.IX Item "transtype=live|file"
+Sets the transmission type for the socket, in particular, setting this
+option sets multiple other parameters to their default values as required
+for a particular transmission type.
+.Sp
+live: Set options as for live transmission. In this mode, you should
+send by one sending instruction only so many data that fit in one \s-1UDP\s0 packet,
+and limited to the value defined first in \fBpayload_size\fR (1316 is
+default in this mode). There is no speed control in this mode, only the
+bandwidth control, if configured, in order to not exceed the bandwidth with
+the overhead transmission (retransmitted and control packets).
+.Sp
+file: Set options as for non-live transmission. See \fBmessageapi\fR
+for further explanations
+.IP "\fBlinger=\fR\fIseconds\fR" 4
+.IX Item "linger=seconds"
+The number of seconds that the socket waits for unsent data when closing.
+Default is \-1. \-1 means auto (off with 0 seconds in live mode, on with 180
+seconds in file mode). The range for this option is integers in the
+0 \- \f(CW\*(C`INT_MAX\*(C'\fR.
+.IP "\fBtsbpd=\fR\fI1|0\fR" 4
+.IX Item "tsbpd=1|0"
+When true, use Timestamp-based Packet Delivery mode. The default behavior
+depends on the transmission type: enabled in live mode, disabled in file
+mode.
+.PP
+For more information see: <\fBhttps://github.com/Haivision/srt\fR>.
+.SS "srtp"
+.IX Subsection "srtp"
+Secure Real-time Transport Protocol.
+.PP
+The accepted options are:
+.IP "\fBsrtp_in_suite\fR" 4
+.IX Item "srtp_in_suite"
+.PD 0
+.IP "\fBsrtp_out_suite\fR" 4
+.IX Item "srtp_out_suite"
+.PD
+Select input and output encoding suites.
+.Sp
+Supported values:
+.RS 4
+.IP "\fB\s-1AES_CM_128_HMAC_SHA1_80\s0\fR" 4
+.IX Item "AES_CM_128_HMAC_SHA1_80"
+.PD 0
+.IP "\fB\s-1SRTP_AES128_CM_HMAC_SHA1_80\s0\fR" 4
+.IX Item "SRTP_AES128_CM_HMAC_SHA1_80"
+.IP "\fB\s-1AES_CM_128_HMAC_SHA1_32\s0\fR" 4
+.IX Item "AES_CM_128_HMAC_SHA1_32"
+.IP "\fB\s-1SRTP_AES128_CM_HMAC_SHA1_32\s0\fR" 4
+.IX Item "SRTP_AES128_CM_HMAC_SHA1_32"
+.RE
+.RS 4
+.RE
+.IP "\fBsrtp_in_params\fR" 4
+.IX Item "srtp_in_params"
+.IP "\fBsrtp_out_params\fR" 4
+.IX Item "srtp_out_params"
+.PD
+Set input and output encoding parameters, which are expressed by a
+base64\-encoded representation of a binary block. The first 16 bytes of
+this binary block are used as master key, the following 14 bytes are
+used as master salt.
+.SS "subfile"
+.IX Subsection "subfile"
+Virtually extract a segment of a file or another stream.
+The underlying stream must be seekable.
+.PP
+Accepted options:
+.IP "\fBstart\fR" 4
+.IX Item "start"
+Start offset of the extracted segment, in bytes.
+.IP "\fBend\fR" 4
+.IX Item "end"
+End offset of the extracted segment, in bytes.
+If set to 0, extract till end of file.
+.PP
+Examples:
+.PP
+Extract a chapter from a \s-1DVD VOB\s0 file (start and end sectors obtained
+externally and multiplied by 2048):
+.PP
+.Vb 1
+\&        subfile,,start,153391104,end,268142592,,:/media/dvd/VIDEO_TS/VTS_08_1.VOB
+.Ve
+.PP
+Play an \s-1AVI\s0 file directly from a \s-1TAR\s0 archive:
+.PP
+.Vb 1
+\&        subfile,,start,183241728,end,366490624,,:archive.tar
+.Ve
+.PP
+Play a MPEG-TS file from start offset till end:
+.PP
+.Vb 1
+\&        subfile,,start,32815239,end,0,,:video.ts
+.Ve
+.SS "tee"
+.IX Subsection "tee"
+Writes the output to multiple protocols. The individual outputs are separated
+by |
+.PP
+.Vb 1
+\&        tee:file://path/to/local/this.avi|file://path/to/local/that.avi
+.Ve
+.SS "tcp"
+.IX Subsection "tcp"
+Transmission Control Protocol.
+.PP
+The required syntax for a \s-1TCP\s0 url is:
+.PP
+.Vb 1
+\&        tcp://<hostname>:<port>[?<options>]
+.Ve
+.PP
+\&\fIoptions\fR contains a list of &\-separated options of the form
+\&\fIkey\fR=\fIval\fR. Standard percent-encoding (and using the plus sign for
+space) can be used to escape keys and values.
+.PP
+Options can also can be specified via command line options (or in code via
+\&\f(CW\*(C`AVOption\*(C'\fRs).
+.PP
+The list of supported options follows.
+.IP "\fBlisten=\fR\fI2|1|0\fR" 4
+.IX Item "listen=2|1|0"
+Listen for an incoming connection. 0 disables listen, 1 enables listen in
+single client mode, 2 enables listen in multi-client mode. Default value is 0.
+.IP "\fBlocal_addr=\fR\fIaddr\fR" 4
+.IX Item "local_addr=addr"
+Local \s-1IP\s0 address of a network interface used for tcp socket connect.
+.IP "\fBlocal_port=\fR\fIport\fR" 4
+.IX Item "local_port=port"
+Local port used for tcp socket connect.
+.IP "\fBtimeout=\fR\fImicroseconds\fR" 4
+.IX Item "timeout=microseconds"
+Set raise error timeout, expressed in microseconds.
+.Sp
+This option is only relevant in read mode: if no data arrived in more
+than this time interval, raise error.
+.IP "\fBlisten_timeout=\fR\fImilliseconds\fR" 4
+.IX Item "listen_timeout=milliseconds"
+Set listen timeout, expressed in milliseconds.
+.IP "\fBrecv_buffer_size=\fR\fIbytes\fR" 4
+.IX Item "recv_buffer_size=bytes"
+Set receive buffer size, expressed bytes.
+.IP "\fBsend_buffer_size=\fR\fIbytes\fR" 4
+.IX Item "send_buffer_size=bytes"
+Set send buffer size, expressed bytes.
+.IP "\fBtcp_nodelay=\fR\fI1|0\fR" 4
+.IX Item "tcp_nodelay=1|0"
+Set \s-1TCP_NODELAY\s0 to disable Nagle's algorithm. Default value is 0.
+.Sp
+\&\fIRemark: Writing to the socket is currently not optimized to minimize system calls and reduces the efficiency / effect of \s-1TCP_NODELAY.\s0\fR
+.IP "\fBtcp_mss=\fR\fIbytes\fR" 4
+.IX Item "tcp_mss=bytes"
+Set maximum segment size for outgoing \s-1TCP\s0 packets, expressed in bytes.
+.PP
+The following example shows how to setup a listening \s-1TCP\s0 connection
+with \fBffmpeg\fR, which is then accessed with \fBffplay\fR:
+.PP
+.Vb 2
+\&        ffmpeg \-i <input> \-f <format> tcp://<hostname>:<port>?listen
+\&        ffplay tcp://<hostname>:<port>
+.Ve
+.SS "tls"
+.IX Subsection "tls"
+Transport Layer Security (\s-1TLS\s0) / Secure Sockets Layer (\s-1SSL\s0)
+.PP
+The required syntax for a \s-1TLS/SSL\s0 url is:
+.PP
+.Vb 1
+\&        tls://<hostname>:<port>[?<options>]
+.Ve
+.PP
+\&\fIoptions\fR contains a list of &\-separated options of the form
+\&\fIkey\fR=\fIval\fR. Standard percent-encoding (and using the plus sign for
+space) can be used to escape keys and values.
+.PP
+Options can also can be specified via command line options (or in code via
+\&\f(CW\*(C`AVOption\*(C'\fRs).
+.PP
+The list of supported options follows.
+.IP "\fBca_file, cafile=\fR\fIfilename\fR" 4
+.IX Item "ca_file, cafile=filename"
+A file containing certificate authority (\s-1CA\s0) root certificates to treat
+as trusted. If the linked \s-1TLS\s0 library contains a default this might not
+need to be specified for verification to work, but not all libraries and
+setups have defaults built in.
+The file must be in OpenSSL \s-1PEM\s0 format.
+.IP "\fBtls_verify, verify=\fR\fI1|0\fR" 4
+.IX Item "tls_verify, verify=1|0"
+If enabled, try to verify the peer that we are communicating with.
+Note, if using OpenSSL, this currently only makes sure that the
+peer certificate is signed by one of the root certificates in the \s-1CA\s0
+database, but it does not validate that the certificate actually
+matches the host name we are trying to connect to. (With other backends,
+the host name is validated as well.)
+.Sp
+This is disabled by default since it requires a \s-1CA\s0 database to be
+provided by the caller in many cases.
+.IP "\fBcert_file, cert=\fR\fIfilename\fR" 4
+.IX Item "cert_file, cert=filename"
+A file containing a certificate to use in the handshake with the peer.
+(When operating as server, in listen mode, this is more often required
+by the peer, while client certificates only are mandated in certain
+setups.)
+.IP "\fBkey_file, key=\fR\fIfilename\fR" 4
+.IX Item "key_file, key=filename"
+A file containing the private key for the certificate.
+.IP "\fBlisten=\fR\fI1|0\fR" 4
+.IX Item "listen=1|0"
+If enabled, listen for connections on the provided port, and assume
+the server role in the handshake instead of the client role.
+.IP "\fBhttp_proxy\fR" 4
+.IX Item "http_proxy"
+The \s-1HTTP\s0 proxy to tunnel through, e.g. \f(CW\*(C`http://example.com:1234\*(C'\fR.
+The proxy must support the \s-1CONNECT\s0 method.
+.PP
+Example command lines:
+.PP
+To create a \s-1TLS/SSL\s0 server that serves an input stream.
+.PP
+.Vb 1
+\&        ffmpeg \-i <input> \-f <format> tls://<hostname>:<port>?listen&cert=<server.crt>&key=<server.key>
+.Ve
+.PP
+To play back a stream from the \s-1TLS/SSL\s0 server using \fBffplay\fR:
+.PP
+.Vb 1
+\&        ffplay tls://<hostname>:<port>
+.Ve
+.SS "dtls"
+.IX Subsection "dtls"
+Datagram Transport Layer Security (\s-1DTLS\s0)
+.PP
+The required syntax for a \s-1DTLS URL\s0 is:
+.PP
+.Vb 1
+\&        dtls://<hostname>:<port>[?<options>]
+.Ve
+.PP
+\&\fIoptions\fR contains a list of &\-separated options of the form
+\&\fIkey\fR=\fIval\fR. Standard percent-encoding (and using the plus sign for
+space) can be used to escape keys and values.
+.PP
+Options can also can be specified via command line options (or in code via
+\&\f(CW\*(C`AVOption\*(C'\fRs).
+.PP
+\&\s-1DTLS\s0 shares most options with \s-1TLS,\s0 but operates over \s-1UDP\s0 instead of \s-1TCP.\s0
+.PP
+The list of supported options follows.
+.IP "\fBca_file, cafile=\fR\fIfilename\fR" 4
+.IX Item "ca_file, cafile=filename"
+A file containing certificate authority (\s-1CA\s0) root certificates to treat
+as trusted. If the linked \s-1TLS\s0 library contains a default this might not
+need to be specified for verification to work, but not all libraries and
+setups have defaults built in.
+The file must be in OpenSSL \s-1PEM\s0 format.
+.IP "\fBtls_verify, verify=\fR\fI1|0\fR" 4
+.IX Item "tls_verify, verify=1|0"
+If enabled, try to verify the peer that we are communicating with.
+Note, if using OpenSSL, this currently only makes sure that the
+peer certificate is signed by one of the root certificates in the \s-1CA\s0
+database, but it does not validate that the certificate actually
+matches the host name we are trying to connect to.
+.Sp
+This is disabled by default since it requires a \s-1CA\s0 database to be
+provided by the caller in many cases.
+.IP "\fBcert_file, cert=\fR\fIfilename\fR" 4
+.IX Item "cert_file, cert=filename"
+A file containing a certificate to use in the handshake with the peer.
+(When operating as server, in listen mode, this is more often required
+by the peer, while client certificates only are mandated in certain
+setups.)
+.IP "\fBkey_file, key=\fR\fIfilename\fR" 4
+.IX Item "key_file, key=filename"
+A file containing the private key for the certificate.
+.IP "\fBcert_pem=\fR\fIstring\fR" 4
+.IX Item "cert_pem=string"
+Certificate \s-1PEM\s0 string
+.IP "\fBkey_pem=\fR\fIstring\fR" 4
+.IX Item "key_pem=string"
+Private key \s-1PEM\s0 string
+.IP "\fBlisten=\fR\fI1|0\fR" 4
+.IX Item "listen=1|0"
+If enabled, listen for connections on the provided port, and assume
+the server role in the handshake instead of the client role.
+.IP "\fBmtu=\fR\fIsize\fR" 4
+.IX Item "mtu=size"
+Set the Maximum Transmission Unit (\s-1MTU\s0) for \s-1DTLS\s0 packets.
+.IP "\fBuse_srtp=\fR\fI1|0\fR" 4
+.IX Item "use_srtp=1|0"
+Enable the use_srtp \s-1DTLS\s0 extension.
+This is used in WebRTC applications to establish \s-1SRTP\s0 encryption keys
+through the \s-1DTLS\s0 handshake. Default is disabled.
+.IP "\fBexternal_sock=\fR\fI1|0\fR" 4
+.IX Item "external_sock=1|0"
+Use an external socket instead of creating a new one.
+This option only makes sense to pass when interacting with the code via
+\&\s-1API,\s0 enabling this from \s-1CLI\s0 will cause immediate failure.
+Default is disabled.
+.PP
+Example command lines:
+.PP
+To create a \s-1DTLS\s0 server:
+.PP
+.Vb 1
+\&        ffmpeg \-listen 1 \-i dtls://<hostname>:<port> <output>
+.Ve
+.PP
+To create a \s-1DTLS\s0 client and send data to server:
+.PP
+.Vb 1
+\&        ffmpeg \-i <input> \-f <format> dtls://<hostname>:<port>
+.Ve
+.SS "udp"
+.IX Subsection "udp"
+User Datagram Protocol.
+.PP
+The required syntax for an \s-1UDP URL\s0 is:
+.PP
+.Vb 1
+\&        udp://<hostname>:<port>[?<options>]
+.Ve
+.PP
+\&\fIoptions\fR contains a list of &\-separated options of the form
+\&\fIkey\fR=\fIval\fR. Standard percent-encoding (and using the plus sign for
+space) can be used to escape keys and values.
+.PP
+Options can also can be specified via command line options (or in code via
+\&\f(CW\*(C`AVOption\*(C'\fRs).
+.PP
+In case threading is enabled on the system, a circular buffer is used
+to store the incoming data, which allows one to reduce loss of data due to
+\&\s-1UDP\s0 socket buffer overruns. The \fIfifo_size\fR and
+\&\fIoverrun_nonfatal\fR options are related to this buffer.
+.PP
+The list of supported options follows.
+.IP "\fBbuffer_size=\fR\fIsize\fR" 4
+.IX Item "buffer_size=size"
+Set the \s-1UDP\s0 maximum socket buffer size in bytes. This is used to set either
+the receive or send buffer size, depending on what the socket is used for.
+Default is 32 \s-1KB\s0 for output, 384 \s-1KB\s0 for input.  See also \fIfifo_size\fR.
+.IP "\fBbitrate=\fR\fIbitrate\fR" 4
+.IX Item "bitrate=bitrate"
+If set to nonzero, the output will have the specified constant bitrate if the
+input has enough packets to sustain it.
+.IP "\fBburst_bits=\fR\fIbits\fR" 4
+.IX Item "burst_bits=bits"
+When using \fIbitrate\fR this specifies the maximum number of bits in
+packet bursts.
+.IP "\fBlocalport=\fR\fIport\fR" 4
+.IX Item "localport=port"
+Override the local \s-1UDP\s0 port to bind with.
+.IP "\fBlocaladdr=\fR\fIaddr\fR" 4
+.IX Item "localaddr=addr"
+Local \s-1IP\s0 address of a network interface used for sending packets or joining
+multicast groups.
+.IP "\fBpkt_size=\fR\fIsize\fR" 4
+.IX Item "pkt_size=size"
+Set the size in bytes of \s-1UDP\s0 packets.
+.IP "\fBreuse=\fR\fI1|0\fR" 4
+.IX Item "reuse=1|0"
+Explicitly allow or disallow reusing \s-1UDP\s0 sockets.
+.IP "\fBttl=\fR\fIttl\fR" 4
+.IX Item "ttl=ttl"
+Set the time to live value (for multicast only).
+.IP "\fBdscp=\fR\fIdscp\fR" 4
+.IX Item "dscp=dscp"
+Set the 6\-bit \s-1DSCP\s0 field for outgoing packets.
+.IP "\fBconnect=\fR\fI1|0\fR" 4
+.IX Item "connect=1|0"
+Initialize the \s-1UDP\s0 socket with \f(CW\*(C`connect()\*(C'\fR. In this case, the
+destination address can't be changed with ff_udp_set_remote_url later.
+If the destination address isn't known at the start, this option can
+be specified in ff_udp_set_remote_url, too.
+This allows finding out the source address for the packets with getsockname,
+and makes writes return with \s-1AVERROR\s0(\s-1ECONNREFUSED\s0) if \*(L"destination
+unreachable\*(R" is received.
+For receiving, this gives the benefit of only receiving packets from
+the specified peer address/port.
+.IP "\fBsources=\fR\fIaddress\fR\fB[,\fR\fIaddress\fR\fB]\fR" 4
+.IX Item "sources=address[,address]"
+Only receive packets sent from the specified addresses. In case of multicast,
+also subscribe to multicast traffic coming from these addresses only.
+.IP "\fBblock=\fR\fIaddress\fR\fB[,\fR\fIaddress\fR\fB]\fR" 4
+.IX Item "block=address[,address]"
+Ignore packets sent from the specified addresses. In case of multicast, also
+exclude the source addresses in the multicast subscription.
+.IP "\fBfifo_size=\fR\fIunits\fR" 4
+.IX Item "fifo_size=units"
+Set the \s-1UDP\s0 receiving circular buffer size, expressed as a number of
+packets with size of 188 bytes. If not specified defaults to 7*4096.
+.IP "\fBoverrun_nonfatal=\fR\fI1|0\fR" 4
+.IX Item "overrun_nonfatal=1|0"
+Survive in case of \s-1UDP\s0 receiving circular buffer overrun. Default
+value is 0.
+.IP "\fBtimeout=\fR\fImicroseconds\fR" 4
+.IX Item "timeout=microseconds"
+Set raise error timeout, expressed in microseconds.
+.Sp
+This option is only relevant in read mode: if no data arrived in more
+than this time interval, raise error.
+.IP "\fBbroadcast=\fR\fI1|0\fR" 4
+.IX Item "broadcast=1|0"
+Explicitly allow or disallow \s-1UDP\s0 broadcasting.
+.Sp
+Note that broadcasting may not work properly on networks having
+a broadcast storm protection.
+.PP
+\fIExamples\fR
+.IX Subsection "Examples"
+.IP "\(bu" 4
+Use \fBffmpeg\fR to stream over \s-1UDP\s0 to a remote endpoint:
+.Sp
+.Vb 1
+\&        ffmpeg \-i <input> \-f <format> udp://<hostname>:<port>
+.Ve
+.IP "\(bu" 4
+Use \fBffmpeg\fR to stream in mpegts format over \s-1UDP\s0 using 188
+sized \s-1UDP\s0 packets, using a large input buffer:
+.Sp
+.Vb 1
+\&        ffmpeg \-i <input> \-f mpegts udp://<hostname>:<port>?pkt_size=188&buffer_size=65535
+.Ve
+.IP "\(bu" 4
+Use \fBffmpeg\fR to receive over \s-1UDP\s0 from a remote endpoint:
+.Sp
+.Vb 1
+\&        ffmpeg \-i udp://[<multicast\-address>]:<port> ...
+.Ve
+.SS "unix"
+.IX Subsection "unix"
+Unix local socket
+.PP
+The required syntax for a Unix socket \s-1URL\s0 is:
+.PP
+.Vb 1
+\&        unix://<filepath>
+.Ve
+.PP
+The following parameters can be set via command line options
+(or in code via \f(CW\*(C`AVOption\*(C'\fRs):
+.IP "\fBtimeout\fR" 4
+.IX Item "timeout"
+Timeout in ms.
+.IP "\fBlisten\fR" 4
+.IX Item "listen"
+Create the Unix socket in listening mode.
+.IP "\fBtype\fR" 4
+.IX Item "type"
+Select socket type.
+.RS 4
+.IP "\fBstream Corresponds to \s-1SOCK_STREAM\s0 (reliable stream-oriented)\fR" 4
+.IX Item "stream Corresponds to SOCK_STREAM (reliable stream-oriented)"
+.PD 0
+.IP "\fBdatagram Corresponds to \s-1SOCK_DGRAM\s0 (unreliable packet-oriented)\fR" 4
+.IX Item "datagram Corresponds to SOCK_DGRAM (unreliable packet-oriented)"
+.IP "\fBseqpacket Corresponds to \s-1SOCK_SEQPACKET\s0 (reliable packet-oriented)\fR" 4
+.IX Item "seqpacket Corresponds to SOCK_SEQPACKET (reliable packet-oriented)"
+.RE
+.RS 4
+.RE
+.IP "\fBpkt_size\fR" 4
+.IX Item "pkt_size"
+.PD
+Maximum packet size for packet-oriented sockets (\s-1SOCK_DGRAM\s0 and
+\&\s-1SOCK_SEQPACKET\s0). If greater than zero, this value is used as
+\&\f(CW\*(C`max_packet_size\*(C'\fR. Ignored for \s-1SOCK_STREAM.\s0 Default is \f(CW0\fR.
+.SS "zmq"
+.IX Subsection "zmq"
+ZeroMQ asynchronous messaging using the libzmq library.
+.PP
+This library supports unicast streaming to multiple clients without relying on
+an external server.
+.PP
+The required syntax for streaming or connecting to a stream is:
+.PP
+.Vb 1
+\&        zmq:tcp://ip\-address:port
+.Ve
+.PP
+Example:
+Create a localhost stream on port 5555:
+.PP
+.Vb 1
+\&        ffmpeg \-re \-i input \-f mpegts zmq:tcp://127.0.0.1:5555
+.Ve
+.PP
+Multiple clients may connect to the stream using:
+.PP
+.Vb 1
+\&        ffplay zmq:tcp://127.0.0.1:5555
+.Ve
+.PP
+Streaming to multiple clients is implemented using a ZeroMQ Pub-Sub pattern.
+The server side binds to a port and publishes data. Clients connect to the
+server (via \s-1IP\s0 address/port) and subscribe to the stream. The order in which
+the server and client start generally does not matter.
+.PP
+ffmpeg must be compiled with the \-\-enable\-libzmq option to support
+this protocol.
+.PP
+Options can be set on the \fBffmpeg\fR/\fBffplay\fR command
+line. The following options are supported:
+.IP "\fBpkt_size\fR" 4
+.IX Item "pkt_size"
+Forces the maximum packet size for sending/receiving data. The default value is
+131,072 bytes. On the server side, this sets the maximum size of sent packets
+via ZeroMQ. On the clients, it sets an internal buffer size for receiving
+packets. Note that pkt_size on the clients should be equal to or greater than
+pkt_size on the server. Otherwise the received message may be truncated causing
+decoding errors.
+.SH "SEE ALSO"
+.IX Header "SEE ALSO"
+\&\fBffmpeg\fR\|(1), \fBffplay\fR\|(1), \fBffprobe\fR\|(1), \fBlibavformat\fR\|(3)
+.SH "AUTHORS"
+.IX Header "AUTHORS"
+The FFmpeg developers.
+.PP
+For details about the authorship, see the Git history of the project
+(https://git.ffmpeg.org/ffmpeg), e.g. by typing the command
+\&\fBgit log\fR in the FFmpeg source directory, or browsing the
+online repository at <\fBhttps://git.ffmpeg.org/ffmpeg\fR>.
+.PP
+Maintainers for the specific components are listed in the file
+\&\fI\s-1MAINTAINERS\s0\fR in the source code tree.

@@ -1,0 +1,85 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_accept_stream</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_accept_stream, SSL_get_accept_stream_queue_len, SSL_ACCEPT_STREAM_NO_BLOCK, SSL_ACCEPT_STREAM_UNI, SSL_ACCEPT_STREAM_BIDI - accept an incoming QUIC stream from a QUIC peer</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+#define SSL_ACCEPT_STREAM_NO_BLOCK
+#define SSL_ACCEPT_STREAM_UNI
+#define SSL_ACCEPT_STREAM_BIDI
+
+SSL *SSL_accept_stream(SSL *ssl, uint64_t flags);
+
+size_t SSL_get_accept_stream_queue_len(SSL *ssl);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The SSL_accept_stream() function attempts to dequeue an incoming stream from the given QUIC connection SSL object and returns the newly allocated QUIC stream SSL object.</p>
+
+<p>If the queue of incoming streams is empty, this function returns NULL (in nonblocking mode) or waits for an incoming stream (in blocking mode). This function may still return NULL in blocking mode, for example if the underlying connection is terminated.</p>
+
+<p>The caller is responsible for managing the lifetime of the returned QUIC stream SSL object; for more information, see <a href="../man3/SSL_free.html">SSL_free(3)</a>.</p>
+
+<p>This function will block if the QUIC connection SSL object is configured in blocking mode (see <a href="../man3/SSL_set_blocking_mode.html">SSL_set_blocking_mode(3)</a>), but this may be bypassed by passing the flag <b>SSL_ACCEPT_STREAM_NO_BLOCK</b> in <i>flags</i>. If this flag is set, this function never blocks.</p>
+
+<p>By default, this function will return the first incoming stream, whether it is unidirectional or bidirectional. Passing the flag <b>SSL_ACCEPT_STREAM_UNI</b> or <b>SSL_ACCEPT_STREAM_BIDI</b> will return the first stream that is unidirectional or bidirectional, respectively. If these flags are both set, either type can be returned. A NULL return value may mean that there are still streams that can be dequeued.</p>
+
+<p>Calling SSL_accept_stream() if there is no default stream already present inhibits the future creation of a default stream. See <a href="../man7/openssl-quic.html">openssl-quic(7)</a>.</p>
+
+<p>SSL_get_accept_stream_queue_len() returns the number of incoming streams currently waiting in the accept queue.</p>
+
+<p>These functions can be used from multiple threads for the same QUIC connection.</p>
+
+<p>Depending on whether default stream functionality is being used, it may be necessary to explicitly configure the incoming stream policy before streams can be accepted; see <a href="../man3/SSL_set_incoming_stream_policy.html">SSL_set_incoming_stream_policy(3)</a>. See also <a href="../man7/openssl-quic.html">&quot;MODES OF OPERATION&quot; in openssl-quic(7)</a> for more information on default stream functionality.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_accept_stream() returns a newly allocated QUIC stream SSL object, or NULL if no new incoming streams are available, or if the connection has been terminated, or if called on an SSL object other than a QUIC connection SSL object. <a href="../man3/SSL_get_error.html">SSL_get_error(3)</a> can be used to obtain further information in this case.</p>
+
+<p>SSL_get_accept_stream_queue_len() returns the number of incoming streams currently waiting in the accept queue, or 0 if called on an SSL object other than a QUIC connection SSL object.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/openssl-quic.html">&quot;MODES OF OPERATION&quot; in openssl-quic(7)</a>, <a href="../man3/SSL_new_stream.html">SSL_new_stream(3)</a>, <a href="../man3/SSL_set_blocking_mode.html">SSL_set_blocking_mode(3)</a>, <a href="../man3/SSL_free.html">SSL_free(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>SSL_accept_stream() and SSL_get_accept_stream_queue_len() were added in OpenSSL 3.2.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2002-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

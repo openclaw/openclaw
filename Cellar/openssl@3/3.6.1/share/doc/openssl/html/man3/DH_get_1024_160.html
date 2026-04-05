@@ -1,0 +1,81 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>DH_get_1024_160</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>DH_get_1024_160, DH_get_2048_224, DH_get_2048_256, BN_get0_nist_prime_192, BN_get0_nist_prime_224, BN_get0_nist_prime_256, BN_get0_nist_prime_384, BN_get0_nist_prime_521, BN_get_rfc2409_prime_768, BN_get_rfc2409_prime_1024, BN_get_rfc3526_prime_1536, BN_get_rfc3526_prime_2048, BN_get_rfc3526_prime_3072, BN_get_rfc3526_prime_4096, BN_get_rfc3526_prime_6144, BN_get_rfc3526_prime_8192 - Create standardized public primes or DH pairs</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/dh.h&gt;
+
+const BIGNUM *BN_get0_nist_prime_192(void);
+const BIGNUM *BN_get0_nist_prime_224(void);
+const BIGNUM *BN_get0_nist_prime_256(void);
+const BIGNUM *BN_get0_nist_prime_384(void);
+const BIGNUM *BN_get0_nist_prime_521(void);
+
+BIGNUM *BN_get_rfc2409_prime_768(BIGNUM *bn);
+BIGNUM *BN_get_rfc2409_prime_1024(BIGNUM *bn);
+BIGNUM *BN_get_rfc3526_prime_1536(BIGNUM *bn);
+BIGNUM *BN_get_rfc3526_prime_2048(BIGNUM *bn);
+BIGNUM *BN_get_rfc3526_prime_3072(BIGNUM *bn);
+BIGNUM *BN_get_rfc3526_prime_4096(BIGNUM *bn);
+BIGNUM *BN_get_rfc3526_prime_6144(BIGNUM *bn);
+BIGNUM *BN_get_rfc3526_prime_8192(BIGNUM *bn);</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>#include &lt;openssl/dh.h&gt;
+
+DH *DH_get_1024_160(void);
+DH *DH_get_2048_224(void);
+DH *DH_get_2048_256(void);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>DH_get_1024_160(), DH_get_2048_224(), and DH_get_2048_256() each return a DH object for the IETF RFC 5114 value. These functions are deprecated. Applications should instead use EVP_PKEY_CTX_set_dh_rfc5114() and EVP_PKEY_CTX_set_dhx_rfc5114() as described in <a href="../man3/EVP_PKEY_CTX_ctrl.html">EVP_PKEY_CTX_ctrl(3)</a> or by setting the <b>OSSL_PKEY_PARAM_GROUP_NAME</b> as specified in <a href="../man7/EVP_PKEY-DH.html">&quot;DH parameters&quot; in EVP_PKEY-DH(7)</a>) to one of &quot;dh_1024_160&quot;, &quot;dh_2048_224&quot; or &quot;dh_2048_256&quot;.</p>
+
+<p>BN_get0_nist_prime_192(), BN_get0_nist_prime_224(), BN_get0_nist_prime_256(), BN_get0_nist_prime_384(), and BN_get0_nist_prime_521() functions return a BIGNUM for the specific NIST prime curve (e.g., P-256).</p>
+
+<p>BN_get_rfc2409_prime_768(), BN_get_rfc2409_prime_1024(), BN_get_rfc3526_prime_1536(), BN_get_rfc3526_prime_2048(), BN_get_rfc3526_prime_3072(), BN_get_rfc3526_prime_4096(), BN_get_rfc3526_prime_6144(), and BN_get_rfc3526_prime_8192() functions return a BIGNUM for the specified size from IETF RFC 2409. If <b>bn</b> is not NULL, the BIGNUM will be set into that location as well.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>Defined above.</p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The functions DH_get_1024_160(), DH_get_2048_224() and DH_get_2048_256() were deprecated in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2016-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

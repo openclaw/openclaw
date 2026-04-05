@@ -1,0 +1,96 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>ossl-guide-libssl-introduction</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#INTRODUCTION">INTRODUCTION</a></li>
+  <li><a href="#DATA-STRUCTURES">DATA STRUCTURES</a></li>
+  <li><a href="#FURTHER-READING">FURTHER READING</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>ossl-guide-libssl-introduction, ssl - OpenSSL Guide: An introduction to libssl</p>
+
+<h1 id="INTRODUCTION">INTRODUCTION</h1>
+
+<p>The OpenSSL <code>libssl</code> library provides implementations of several secure network communications protocols. Specifically it provides SSL/TLS (SSLv3, TLSv1, TLSv1.1, TLSv1.2 and TLSv1.3), DTLS (DTLSv1 and DTLSv1.2) and QUIC (client side only). The library depends on <code>libcrypto</code> for its underlying cryptographic operations (see <a href="../man7/ossl-guide-libcrypto-introduction.html">ossl-guide-libcrypto-introduction(7)</a>).</p>
+
+<p>The set of APIs supplied by <code>libssl</code> is common across all of these different network protocols, so a developer familiar with writing applications using one of these protocols should be able to transition to using another with relative ease.</p>
+
+<p>An application written to use <code>libssl</code> will include the <i>&lt;openssl/ssl.h&gt;</i> header file and will typically use two main data structures, i.e. <b>SSL</b> and <b>SSL_CTX</b>.</p>
+
+<p>An <b>SSL</b> object is used to represent a connection to a remote peer. Once a connection with a remote peer has been established data can be exchanged with that peer.</p>
+
+<p>When using DTLS any data that is exchanged uses &quot;datagram&quot; semantics, i.e. the packets of data can be delivered in any order, and they are not guaranteed to arrive at all. In this case the <b>SSL</b> object used for the connection is also used for exchanging data with the peer.</p>
+
+<p>Both TLS and QUIC support the concept of a &quot;stream&quot; of data. Data sent via a stream is guaranteed to be delivered in order without any data loss. A stream can be uni- or bi-directional.</p>
+
+<p>SSL/TLS only supports one stream of data per connection and it is always bi-directional. In this case the <b>SSL</b> object used for the connection also represents that stream. See <a href="../man7/ossl-guide-tls-introduction.html">ossl-guide-tls-introduction(7)</a> for more information.</p>
+
+<p>The QUIC protocol can support multiple streams per connection and they can be uni- or bi-directional. In this case an <b>SSL</b> object can represent the underlying connection, or a stream, or both. Where multiple streams are in use a separate <b>SSL</b> object is used for each one. See <a href="../man7/ossl-guide-quic-introduction.html">ossl-guide-quic-introduction(7)</a> for more information.</p>
+
+<p>An <b>SSL_CTX</b> object is used to create the <b>SSL</b> object for the underlying connection. A single <b>SSL_CTX</b> object can be used to create many connections (each represented by a separate <b>SSL</b> object). Many API functions in libssl exist in two forms: one that takes an <b>SSL_CTX</b> and one that takes an <b>SSL</b>. Typically settings that you apply to the <b>SSL_CTX</b> will then be inherited by any <b>SSL</b> object that you create from it. Alternatively you can apply settings directly to the <b>SSL</b> object without affecting other <b>SSL</b> objects. Note that you should not normally make changes to an <b>SSL_CTX</b> after the first <b>SSL</b> object has been created from it.</p>
+
+<h1 id="DATA-STRUCTURES">DATA STRUCTURES</h1>
+
+<p>As well as <b>SSL_CTX</b> and <b>SSL</b> there are a number of other data structures that an application may need to use. They are summarised below.</p>
+
+<dl>
+
+<dt id="SSL_METHOD-SSL-Method"><b>SSL_METHOD</b> (SSL Method)</dt>
+<dd>
+
+<p>This structure is used to indicate the kind of connection you want to make, e.g. whether it is to represent the client or the server, and whether it is to use SSL/TLS, DTLS or QUIC. It is passed as a parameter when creating the <b>SSL_CTX</b>.</p>
+
+</dd>
+<dt id="SSL_SESSION-SSL-Session"><b>SSL_SESSION</b> (SSL Session)</dt>
+<dd>
+
+<p>After establishing a connection with a peer the agreed cryptographic material can be reused to create future connections with the same peer more rapidly. The set of data used for such a future connection establishment attempt is collected together into an <b>SSL_SESSION</b> object. A single successful connection with a peer may generate zero or more such <b>SSL_SESSION</b> objects for use in future connection attempts.</p>
+
+</dd>
+<dt id="SSL_CIPHER-SSL-Cipher"><b>SSL_CIPHER</b> (SSL Cipher)</dt>
+<dd>
+
+<p>During connection establishment the client and server agree upon cryptographic algorithms they are going to use for encryption and other uses. A single set of cryptographic algorithms that are to be used together is known as a ciphersuite. Such a set is represented by an <b>SSL_CIPHER</b> object.</p>
+
+<p>The set of available ciphersuites that can be used are configured in the <b>SSL_CTX</b> or <b>SSL</b>.</p>
+
+</dd>
+</dl>
+
+<h1 id="FURTHER-READING">FURTHER READING</h1>
+
+<p>See <a href="../man7/ossl-guide-tls-introduction.html">ossl-guide-tls-introduction(7)</a> for an introduction to the SSL/TLS protocol and <a href="../man7/ossl-guide-quic-introduction.html">ossl-guide-quic-introduction(7)</a> for an introduction to QUIC.</p>
+
+<p>See <a href="../man7/ossl-guide-libcrypto-introduction.html">ossl-guide-libcrypto-introduction(7)</a> for an introduction to <code>libcrypto</code>.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ossl-guide-libcrypto-introduction.html">ossl-guide-libcrypto-introduction(7)</a>, <a href="../man7/ossl-guide-tls-introduction.html">ossl-guide-tls-introduction(7)</a>, <a href="../man7/ossl-guide-quic-introduction.html">ossl-guide-quic-introduction(7)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

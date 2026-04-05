@@ -1,0 +1,58 @@
+
+Authors of XZ Utils
+===================
+
+    XZ Utils is developed and maintained by
+    Lasse Collin <lasse.collin@tukaani.org>.
+
+    Major parts of liblzma are based on code written by Igor Pavlov,
+    specifically the LZMA SDK <https://7-zip.org/sdk.html>. Without
+    this code, XZ Utils wouldn't exist.
+
+    The SHA-256 implementation in liblzma is based on code written by
+    Wei Dai in Crypto++ Library <https://www.cryptopp.com/>.
+
+    A few scripts have been adapted from GNU gzip. The original
+    versions were written by Jean-loup Gailly, Charles Levert, and
+    Paul Eggert. Andrew Dudman helped adapting the scripts and their
+    man pages for XZ Utils.
+
+    The initial version of the threaded .xz decompressor was written
+    by Sebastian Andrzej Siewior.
+
+    The initial version of the .lz (lzip) decoder was written
+    by Michał Górny.
+
+    Architecture-specific CRC optimizations were contributed by
+    Ilya Kurdyukov, Chenxi Mao, and Xi Ruoyao.
+
+    Other authors:
+      - Jonathan Nieder
+      - Joachim Henke
+
+    Special author: Jia Tan was a co-maintainer in 2022-2024. He and
+    the team behind him inserted a backdoor (CVE-2024-3094) into
+    XZ Utils 5.6.0 and 5.6.1 releases. He suddenly disappeared when
+    this was discovered.
+
+    Many people have contributed improvements or reported bugs.
+    Most of these people are mentioned in the file THANKS.
+
+    The translations of the command line tools and man pages have been
+    contributed by many people via the Translation Project:
+
+      - https://translationproject.org/domain/xz.html
+      - https://translationproject.org/domain/xz-man.html
+
+    The authors of the translated man pages are in the header comments
+    of the man page files. In the source package, the authors of the
+    translations are in po/*.po and po4a/*.po files.
+
+    Third-party code whose authors aren't listed here:
+
+      - GNU getopt_long() in the 'lib' directory is included for
+        platforms that don't have a usable getopt_long().
+
+      - The build system files from GNU Autoconf, GNU Automake,
+        GNU Libtool, GNU Gettext, Autoconf Archive, and related files.
+

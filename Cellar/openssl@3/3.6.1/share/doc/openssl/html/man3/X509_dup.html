@@ -1,0 +1,102 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>X509_dup</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>DECLARE_ASN1_FUNCTIONS, IMPLEMENT_ASN1_FUNCTIONS, ASN1_ITEM, ACCESS_DESCRIPTION_free, ACCESS_DESCRIPTION_new, ADMISSIONS_free, ADMISSIONS_new, ADMISSION_SYNTAX_free, ADMISSION_SYNTAX_new, ASIdOrRange_free, ASIdOrRange_new, ASIdentifierChoice_free, ASIdentifierChoice_new, ASIdentifiers_free, ASIdentifiers_new, ASRange_free, ASRange_new, AUTHORITY_INFO_ACCESS_free, AUTHORITY_INFO_ACCESS_new, AUTHORITY_KEYID_free, AUTHORITY_KEYID_new, BASIC_CONSTRAINTS_free, BASIC_CONSTRAINTS_new, CERTIFICATEPOLICIES_free, CERTIFICATEPOLICIES_new, CMS_ContentInfo_free, CMS_ContentInfo_new, CMS_ContentInfo_new_ex, CMS_ContentInfo_print_ctx, CMS_EnvelopedData_it, CMS_EnvelopedData_dup, CMS_ReceiptRequest_free, CMS_ReceiptRequest_new, CMS_SignedData_free, CMS_SignedData_new, CRL_DIST_POINTS_free, CRL_DIST_POINTS_new, DIRECTORYSTRING_free, DIRECTORYSTRING_new, DISPLAYTEXT_free, DISPLAYTEXT_new, DIST_POINT_NAME_free, DIST_POINT_NAME_new, DIST_POINT_NAME_dup, DIST_POINT_free, DIST_POINT_new, DSAparams_dup, ECPARAMETERS_free, ECPARAMETERS_new, ECPKPARAMETERS_free, ECPKPARAMETERS_new, EDIPARTYNAME_free, EDIPARTYNAME_new, ESS_CERT_ID_dup, ESS_CERT_ID_free, ESS_CERT_ID_new, ESS_CERT_ID_V2_dup, ESS_CERT_ID_V2_free, ESS_CERT_ID_V2_new, ESS_ISSUER_SERIAL_dup, ESS_ISSUER_SERIAL_free, ESS_ISSUER_SERIAL_new, ESS_SIGNING_CERT_dup, ESS_SIGNING_CERT_free, ESS_SIGNING_CERT_it, ESS_SIGNING_CERT_new, ESS_SIGNING_CERT_V2_dup, ESS_SIGNING_CERT_V2_free, ESS_SIGNING_CERT_V2_it, ESS_SIGNING_CERT_V2_new, EXTENDED_KEY_USAGE_free, EXTENDED_KEY_USAGE_new, GENERAL_NAMES_free, GENERAL_NAMES_new, GENERAL_NAME_dup, GENERAL_NAME_free, GENERAL_NAME_new, GENERAL_SUBTREE_free, GENERAL_SUBTREE_new, OSSL_IETF_ATTR_SYNTAX_free, OSSL_IETF_ATTR_SYNTAX_it, OSSL_IETF_ATTR_SYNTAX_new, IPAddressChoice_free, IPAddressChoice_new, IPAddressFamily_free, IPAddressFamily_new, IPAddressOrRange_free, IPAddressOrRange_new, IPAddressRange_free, IPAddressRange_new, ISSUER_SIGN_TOOL_free, ISSUER_SIGN_TOOL_it, ISSUER_SIGN_TOOL_new, ISSUING_DIST_POINT_free, ISSUING_DIST_POINT_it, ISSUING_DIST_POINT_new, NAME_CONSTRAINTS_free, NAME_CONSTRAINTS_new, NAMING_AUTHORITY_free, NAMING_AUTHORITY_new, NETSCAPE_CERT_SEQUENCE_free, NETSCAPE_CERT_SEQUENCE_new, NETSCAPE_SPKAC_free, NETSCAPE_SPKAC_new, NETSCAPE_SPKI_free, NETSCAPE_SPKI_new, NOTICEREF_free, NOTICEREF_new, OCSP_BASICRESP_free, OCSP_BASICRESP_new, OCSP_CERTID_dup, OCSP_CERTID_new, OCSP_CERTSTATUS_free, OCSP_CERTSTATUS_new, OCSP_CRLID_free, OCSP_CRLID_new, OCSP_ONEREQ_free, OCSP_ONEREQ_new, OCSP_REQINFO_free, OCSP_REQINFO_new, OCSP_RESPBYTES_free, OCSP_RESPBYTES_new, OCSP_RESPDATA_free, OCSP_RESPDATA_new, OCSP_RESPID_free, OCSP_RESPID_new, OCSP_RESPONSE_new, OCSP_REVOKEDINFO_free, OCSP_REVOKEDINFO_new, OCSP_SERVICELOC_free, OCSP_SERVICELOC_new, OCSP_SIGNATURE_free, OCSP_SIGNATURE_new, OCSP_SINGLERESP_free, OCSP_SINGLERESP_new, OSSL_AA_DIST_POINT_free, OSSL_AA_DIST_POINT_new, OSSL_AA_DIST_POINT_it, OSSL_ALLOWED_ATTRIBUTES_CHOICE_free, OSSL_ALLOWED_ATTRIBUTES_CHOICE_new, OSSL_ALLOWED_ATTRIBUTES_CHOICE_it, OSSL_ALLOWED_ATTRIBUTES_ITEM_free, OSSL_ALLOWED_ATTRIBUTES_ITEM_new, OSSL_ALLOWED_ATTRIBUTES_ITEM_it, OSSL_ALLOWED_ATTRIBUTES_SYNTAX_free, OSSL_ALLOWED_ATTRIBUTES_SYNTAX_new, OSSL_ALLOWED_ATTRIBUTES_SYNTAX_it, OSSL_ATAV_free, OSSL_ATAV_new, OSSL_ATAV_it, OSSL_ATTRIBUTE_DESCRIPTOR_free, OSSL_ATTRIBUTE_DESCRIPTOR_new, OSSL_ATTRIBUTE_DESCRIPTOR_it, OSSL_ATTRIBUTE_MAPPING_free, OSSL_ATTRIBUTE_MAPPING_new, OSSL_ATTRIBUTE_MAPPING_it, OSSL_ATTRIBUTE_MAPPINGS_free, OSSL_ATTRIBUTE_MAPPINGS_new, OSSL_ATTRIBUTE_MAPPINGS_it, OSSL_ATTRIBUTE_TYPE_MAPPING_free, OSSL_ATTRIBUTE_TYPE_MAPPING_new, OSSL_ATTRIBUTE_TYPE_MAPPING_it, OSSL_ATTRIBUTE_VALUE_MAPPING_free, OSSL_ATTRIBUTE_VALUE_MAPPING_new, OSSL_ATTRIBUTE_VALUE_MAPPING_it, OSSL_ATTRIBUTES_SYNTAX_free, OSSL_ATTRIBUTES_SYNTAX_it, OSSL_ATTRIBUTES_SYNTAX_new, OSSL_AUTHORITY_ATTRIBUTE_ID_SYNTAX_free, OSSL_AUTHORITY_ATTRIBUTE_ID_SYNTAX_it, OSSL_AUTHORITY_ATTRIBUTE_ID_SYNTAX_new, OSSL_BASIC_ATTR_CONSTRAINTS_free, OSSL_BASIC_ATTR_CONSTRAINTS_it, OSSL_BASIC_ATTR_CONSTRAINTS_new, OSSL_CMP_ATAVS_new, OSSL_CMP_ATAVS_free, OSSL_CMP_ATAVS_it, OSSL_CMP_CRLSTATUS_free, OSSL_CMP_ITAV_dup, OSSL_CMP_ITAV_free, OSSL_CMP_MSG_dup, OSSL_CMP_MSG_it, OSSL_CMP_MSG_free, OSSL_CMP_PKIHEADER_free, OSSL_CMP_PKIHEADER_it, OSSL_CMP_PKIHEADER_new, OSSL_CMP_PKISI_dup, OSSL_CMP_PKISI_free, OSSL_CMP_PKISI_it, OSSL_CMP_PKISI_new, OSSL_CMP_PKISTATUS_it, OSSL_CRMF_CERTID_dup, OSSL_CRMF_CERTID_free, OSSL_CRMF_CERTID_it, OSSL_CRMF_CERTID_new, OSSL_CRMF_CERTTEMPLATE_free, OSSL_CRMF_CERTTEMPLATE_it, OSSL_CRMF_CERTTEMPLATE_new, OSSL_CRMF_CERTTEMPLATE_dup, OSSL_CRMF_ATTRIBUTETYPEANDVALUE_dup, OSSL_CRMF_ATTRIBUTETYPEANDVALUE_free, OSSL_CRMF_ENCRYPTEDKEY_free, OSSL_CRMF_ENCRYPTEDKEY_it, OSSL_CRMF_ENCRYPTEDKEY_new, OSSL_CRMF_ENCRYPTEDVALUE_free, OSSL_CRMF_ENCRYPTEDVALUE_it, OSSL_CRMF_ENCRYPTEDVALUE_new, OSSL_CRMF_MSGS_free, OSSL_CRMF_MSGS_it, OSSL_CRMF_MSGS_new, OSSL_CRMF_MSG_dup, OSSL_CRMF_MSG_free, OSSL_CRMF_MSG_it, OSSL_CRMF_MSG_new, OSSL_CRMF_PBMPARAMETER_free, OSSL_CRMF_PBMPARAMETER_it, OSSL_CRMF_PBMPARAMETER_new, OSSL_CRMF_PKIPUBLICATIONINFO_free, OSSL_CRMF_PKIPUBLICATIONINFO_it, OSSL_CRMF_PKIPUBLICATIONINFO_new, OSSL_CRMF_SINGLEPUBINFO_free, OSSL_CRMF_SINGLEPUBINFO_it, OSSL_CRMF_SINGLEPUBINFO_new, OSSL_DAY_TIME_free, OSSL_DAY_TIME_new, OSSL_DAY_TIME_it, OSSL_DAY_TIME_BAND_free, OSSL_DAY_TIME_BAND_new, OSSL_DAY_TIME_BAND_it, OSSL_HASH_free, OSSL_HASH_it, OSSL_HASH_new, OSSL_INFO_SYNTAX_free, OSSL_INFO_SYNTAX_it, OSSL_INFO_SYNTAX_new, OSSL_INFO_SYNTAX_POINTER_free, OSSL_INFO_SYNTAX_POINTER_it, OSSL_INFO_SYNTAX_POINTER_new, OSSL_PRIVILEGE_POLICY_ID_free, OSSL_PRIVILEGE_POLICY_ID_it, OSSL_PRIVILEGE_POLICY_ID_new, OSSL_TARGET_CERT_free, OSSL_TARGET_CERT_it, OSSL_TARGET_CERT_new, OSSL_TARGET_free, OSSL_TARGET_it, OSSL_TARGET_new, OSSL_TARGETING_INFORMATION_free, OSSL_TARGETING_INFORMATION_it, OSSL_TARGETING_INFORMATION_new, OSSL_TARGETS_free, OSSL_TARGETS_it, OSSL_TARGETS_new, OSSL_IETF_ATTR_SYNTAX_VALUE_free, OSSL_IETF_ATTR_SYNTAX_VALUE_it, OSSL_IETF_ATTR_SYNTAX_VALUE_new, OSSL_ISSUER_SERIAL_free, OSSL_ISSUER_SERIAL_new, OSSL_NAMED_DAY_free, OSSL_NAMED_DAY_new, OSSL_NAMED_DAY_it, OSSL_OBJECT_DIGEST_INFO_free, OSSL_OBJECT_DIGEST_INFO_new, OSSL_ROLE_SPEC_CERT_ID_free, OSSL_ROLE_SPEC_CERT_ID_new, OSSL_ROLE_SPEC_CERT_ID_it, OSSL_ROLE_SPEC_CERT_ID_SYNTAX_free, OSSL_ROLE_SPEC_CERT_ID_SYNTAX_new, OSSL_ROLE_SPEC_CERT_ID_SYNTAX_it, OSSL_TIME_PERIOD_free, OSSL_TIME_PERIOD_new, OSSL_TIME_PERIOD_it, OSSL_TIME_SPEC_ABSOLUTE_free, OSSL_TIME_SPEC_ABSOLUTE_new, OSSL_TIME_SPEC_ABSOLUTE_it, OSSL_TIME_SPEC_free, OSSL_TIME_SPEC_new, OSSL_TIME_SPEC_it, OSSL_TIME_SPEC_DAY_free, OSSL_TIME_SPEC_DAY_new, OSSL_TIME_SPEC_DAY_it, OSSL_TIME_SPEC_MONTH_free, OSSL_TIME_SPEC_MONTH_new, OSSL_TIME_SPEC_MONTH_it, OSSL_TIME_SPEC_TIME_free, OSSL_TIME_SPEC_TIME_new, OSSL_TIME_SPEC_TIME_it, OSSL_TIME_SPEC_WEEKS_free, OSSL_TIME_SPEC_WEEKS_new, OSSL_TIME_SPEC_WEEKS_it, OSSL_TIME_SPEC_X_DAY_OF_free, OSSL_TIME_SPEC_X_DAY_OF_new, OSSL_TIME_SPEC_X_DAY_OF_it, OSSL_USER_NOTICE_SYNTAX_free, OSSL_USER_NOTICE_SYNTAX_new, OSSL_USER_NOTICE_SYNTAX_it, OTHERNAME_free, OTHERNAME_new, PBE2PARAM_free, PBE2PARAM_new, PBEPARAM_free, PBEPARAM_new, PBKDF2PARAM_free, PBKDF2PARAM_new, PBMAC1PARAM_free, PBMAC1PARAM_it, PBMAC1PARAM_new, PKCS12_BAGS_free, PKCS12_BAGS_new, PKCS12_MAC_DATA_free, PKCS12_MAC_DATA_new, PKCS12_SAFEBAG_free, PKCS12_SAFEBAG_new, PKCS12_free, PKCS12_new, PKCS7_DIGEST_free, PKCS7_DIGEST_new, PKCS7_ENCRYPT_free, PKCS7_ENCRYPT_new, PKCS7_ENC_CONTENT_free, PKCS7_ENC_CONTENT_new, PKCS7_ENVELOPE_free, PKCS7_ENVELOPE_new, PKCS7_ISSUER_AND_SERIAL_free, PKCS7_ISSUER_AND_SERIAL_new, PKCS7_RECIP_INFO_free, PKCS7_RECIP_INFO_new, PKCS7_SIGNED_free, PKCS7_SIGNED_new, PKCS7_SIGNER_INFO_free, PKCS7_SIGNER_INFO_new, PKCS7_SIGN_ENVELOPE_free, PKCS7_SIGN_ENVELOPE_new, PKCS7_dup, PKCS7_free, PKCS7_new_ex, PKCS7_new, PKCS7_print_ctx, PKCS8_PRIV_KEY_INFO_free, PKCS8_PRIV_KEY_INFO_new, PKEY_USAGE_PERIOD_free, PKEY_USAGE_PERIOD_new, POLICYINFO_free, POLICYINFO_new, POLICYQUALINFO_free, POLICYQUALINFO_new, POLICY_CONSTRAINTS_free, POLICY_CONSTRAINTS_new, POLICY_MAPPING_free, POLICY_MAPPING_new, PROFESSION_INFOS_free, PROFESSION_INFOS_new, PROFESSION_INFO_free, PROFESSION_INFO_new, PROXY_CERT_INFO_EXTENSION_free, PROXY_CERT_INFO_EXTENSION_new, PROXY_POLICY_free, PROXY_POLICY_new, RSAPrivateKey_dup, RSAPublicKey_dup, RSA_OAEP_PARAMS_free, RSA_OAEP_PARAMS_new, RSA_PSS_PARAMS_free, RSA_PSS_PARAMS_new, RSA_PSS_PARAMS_dup, SCRYPT_PARAMS_free, SCRYPT_PARAMS_new, SXNETID_free, SXNETID_new, SXNET_free, SXNET_new, TLS_FEATURE_free, TLS_FEATURE_new, TS_ACCURACY_dup, TS_ACCURACY_free, TS_ACCURACY_new, TS_MSG_IMPRINT_dup, TS_MSG_IMPRINT_free, TS_MSG_IMPRINT_new, TS_REQ_dup, TS_REQ_free, TS_REQ_new, TS_RESP_dup, TS_RESP_free, TS_RESP_new, TS_STATUS_INFO_dup, TS_STATUS_INFO_free, TS_STATUS_INFO_new, TS_TST_INFO_dup, TS_TST_INFO_free, TS_TST_INFO_new, USERNOTICE_free, USERNOTICE_new, X509_ACERT_dup, X509_ACERT_free, X509_ACERT_it, X509_ACERT_new, X509_ACERT_INFO_free, X509_ACERT_INFO_it, X509_ACERT_INFO_new, X509_ACERT_ISSUER_V2FORM_free, X509_ACERT_ISSUER_V2FORM_new, X509_ALGOR_free, X509_ALGOR_it, X509_ALGOR_new, X509_ATTRIBUTE_dup, X509_ATTRIBUTE_free, X509_ATTRIBUTE_new, X509_CERT_AUX_free, X509_CERT_AUX_new, X509_CINF_free, X509_CINF_new, X509_CRL_INFO_free, X509_CRL_INFO_new, X509_CRL_dup, X509_CRL_free, X509_CRL_new_ex, X509_CRL_new, X509_EXTENSION_dup, X509_EXTENSION_free, X509_EXTENSION_new, X509_NAME_ENTRY_dup, X509_NAME_ENTRY_free, X509_NAME_ENTRY_new, X509_NAME_dup, X509_NAME_free, X509_NAME_new, X509_REQ_INFO_free, X509_REQ_INFO_new, X509_REQ_dup, X509_REQ_free, X509_REQ_new, X509_REQ_new_ex, X509_REVOKED_dup, X509_REVOKED_free, X509_REVOKED_new, X509_SIG_free, X509_SIG_new, X509_VAL_free, X509_VAL_new, X509_dup, - ASN1 object utilities</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/asn1t.h&gt;
+
+DECLARE_ASN1_FUNCTIONS(type)
+IMPLEMENT_ASN1_FUNCTIONS(stname)
+
+typedef struct ASN1_ITEM_st ASN1_ITEM;
+
+extern const ASN1_ITEM TYPE_it;
+TYPE *TYPE_new(void);
+TYPE *TYPE_dup(const TYPE *a);
+void TYPE_free(TYPE *a);
+int TYPE_print_ctx(BIO *out, TYPE *a, int indent, const ASN1_PCTX *pctx);</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>DSA *DSAparams_dup(const DSA *dsa);
+RSA *RSAPrivateKey_dup(const RSA *rsa);
+RSA *RSAPublicKey_dup(const RSA *rsa);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>In the description below, <b><i>TYPE</i></b> is used as a placeholder for any of the OpenSSL datatypes, such as <b>X509</b>.</p>
+
+<p>The OpenSSL ASN1 parsing library templates are like a data-driven bytecode interpreter. Every ASN1 object as a global variable, TYPE_it, that describes the item such as its fields. (On systems which cannot export variables from shared libraries, the global is instead a function which returns a pointer to a static variable.</p>
+
+<p>The macro DECLARE_ASN1_FUNCTIONS() is typically used in header files to generate the function declarations.</p>
+
+<p>The macro IMPLEMENT_ASN1_FUNCTIONS() is used once in a source file to generate the function bodies.</p>
+
+<p><b><i>TYPE</i>_new</b>() allocates an empty object of the indicated type. The object returned must be released by calling <b><i>TYPE</i>_free</b>().</p>
+
+<p><b><i>TYPE</i>_new_ex</b>() is similar to <b><i>TYPE</i>_new</b>() but also passes the library context <i>libctx</i> and the property query <i>propq</i> to use when retrieving algorithms from providers. This created object can then be used when loading binary data using <b>d2i_<i>TYPE</i></b>().</p>
+
+<p><b><i>TYPE</i>_dup</b>() copies an existing object, leaving it untouched. Note, however, that the internal representation of the object may contain (besides the ASN.1 structure) further data, which is not copied. For instance, an <b>X509</b> object usually is augmented by cached information on X.509v3 extensions, etc., and losing it can lead to wrong validation results. To avoid such situations, better use <b><i>TYPE</i>_up_ref</b>() if available. For the case of <b>X509</b> objects, an alternative to using <a href="../man3/X509_up_ref.html">X509_up_ref(3)</a> may be to still call <b><i>TYPE</i>_dup</b>(), e.g., <i>copied_cert = X509_dup(cert)</i>, followed by <i>X509_check_purpose(copied_cert, -1, 0)</i>, which re-builds the cached data.</p>
+
+<p><b><i>TYPE</i>_free</b>() releases the object and all pointers and sub-objects within it. If the argument is NULL, nothing is done.</p>
+
+<p><b><i>TYPE</i>_print_ctx</b>() prints the object <i>a</i> on the specified BIO <i>out</i>. Each line will be prefixed with <i>indent</i> spaces. The <i>pctx</i> specifies the printing context and is for internal use; use NULL to get the default behavior. If a print function is user-defined, then pass in any <i>pctx</i> down to any nested calls.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p><b><i>TYPE</i>_new</b>(), <b><i>TYPE</i>_new_ex</b>() and <b><i>TYPE</i>_dup</b>() return a pointer to the object or NULL on failure.</p>
+
+<p><b><i>TYPE</i>_print_ctx</b>() returns 1 on success or zero on failure.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/X509_up_ref.html">X509_up_ref(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The functions X509_REQ_new_ex(), X509_CRL_new_ex(), PKCS7_new_ex() and CMS_ContentInfo_new_ex() were added in OpenSSL 3.0.</p>
+
+<p>The functions DSAparams_dup(), RSAPrivateKey_dup() and RSAPublicKey_dup() were deprecated in 3.0.</p>
+
+<p>CMS_EnvelopedData_it(), CMS_SignedData_free(), CMS_SignedData_new() were added in OpenSSL 3.2.</p>
+
+<p>DIST_POINT_NAME_dup(), OSSL_IETF_ATTR_SYNTAX_free(), OSSL_IETF_ATTR_SYNTAX_it(), OSSL_IETF_ATTR_SYNTAX_new(), OSSL_ATTRIBUTES_SYNTAX_free(), OSSL_ATTRIBUTES_SYNTAX_it(), OSSL_ATTRIBUTES_SYNTAX_new(), OSSL_BASIC_ATTR_CONSTRAINTS_free(), OSSL_BASIC_ATTR_CONSTRAINTS_it(), OSSL_BASIC_ATTR_CONSTRAINTS_new(), OSSL_CMP_ATAVS_new(), OSSL_CMP_ATAVS_free(), OSSL_CMP_ATAVS_it(), OSSL_CMP_CRLSTATUS_free(), OSSL_CRMF_CERTTEMPLATE_dup(), OSSL_CRMF_ATTRIBUTETYPEANDVALUE_dup(), OSSL_CRMF_ATTRIBUTETYPEANDVALUE_free(), OSSL_TARGET_free(), OSSL_TARGET_it(), OSSL_TARGET_new(), OSSL_TARGETING_INFORMATION_free(), OSSL_TARGETING_INFORMATION_it(), OSSL_TARGETING_INFORMATION_new(), OSSL_TARGETS_free(), OSSL_TARGETS_it(), OSSL_TARGETS_new(), OSSL_IETF_ATTR_SYNTAX_VALUE_free(), OSSL_IETF_ATTR_SYNTAX_VALUE_it(), OSSL_IETF_ATTR_SYNTAX_VALUE_new(), OSSL_ISSUER_SERIAL_free(), OSSL_ISSUER_SERIAL_new(), OSSL_OBJECT_DIGEST_INFO_free(), OSSL_OBJECT_DIGEST_INFO_new(), OSSL_USER_NOTICE_SYNTAX_free(), OSSL_USER_NOTICE_SYNTAX_new(), OSSL_USER_NOTICE_SYNTAX_it(), PBMAC1PARAM_free(), PBMAC1PARAM_it(), PBMAC1PARAM_new(), X509_ACERT_dup(), X509_ACERT_free(), X509_ACERT_it(), X509_ACERT_new(), X509_ACERT_INFO_free(), X509_ACERT_INFO_it(), X509_ACERT_INFO_new(), X509_ACERT_ISSUER_V2FORM_free(), X509_ACERT_ISSUER_V2FORM_new() were added in OpenSSL 3.4.</p>
+
+<p>OSSL_AA_DIST_POINT_free(), OSSL_AA_DIST_POINT_new(), OSSL_AA_DIST_POINT_it(), OSSL_ALLOWED_ATTRIBUTES_CHOICE_free(), OSSL_ALLOWED_ATTRIBUTES_CHOICE_new(), OSSL_ALLOWED_ATTRIBUTES_CHOICE_it(), OSSL_ALLOWED_ATTRIBUTES_ITEM_free(), OSSL_ALLOWED_ATTRIBUTES_ITEM_new(), OSSL_ALLOWED_ATTRIBUTES_ITEM_it(), OSSL_ALLOWED_ATTRIBUTES_SYNTAX_free(), OSSL_ALLOWED_ATTRIBUTES_SYNTAX_new(), OSSL_ALLOWED_ATTRIBUTES_SYNTAX_it(), OSSL_ATAV_free(), OSSL_ATAV_it(), OSSL_ATAV_new(), OSSL_ATTRIBUTE_DESCRIPTOR_free(), OSSL_ATTRIBUTE_DESCRIPTOR_new(), OSSL_ATTRIBUTE_DESCRIPTOR_it(), OSSL_ATTRIBUTE_MAPPINGS_free(), OSSL_ATTRIBUTE_MAPPINGS_it(), OSSL_ATTRIBUTE_MAPPINGS_new(), OSSL_ATTRIBUTE_MAPPING_free(), OSSL_ATTRIBUTE_MAPPING_it(), OSSL_ATTRIBUTE_MAPPING_new(), OSSL_ATTRIBUTE_TYPE_MAPPING_free(), OSSL_ATTRIBUTE_TYPE_MAPPING_it(), OSSL_ATTRIBUTE_TYPE_MAPPING_new(), OSSL_ATTRIBUTE_VALUE_MAPPING_free(), OSSL_ATTRIBUTE_VALUE_MAPPING_it(), OSSL_ATTRIBUTE_VALUE_MAPPING_new(), OSSL_AUTHORITY_ATTRIBUTE_ID_SYNTAX_free(), OSSL_AUTHORITY_ATTRIBUTE_ID_SYNTAX_it(), OSSL_AUTHORITY_ATTRIBUTE_ID_SYNTAX_new(), OSSL_HASH_free(), OSSL_HASH_it(), OSSL_HASH_new(), OSSL_INFO_SYNTAX_free(), OSSL_INFO_SYNTAX_it(), OSSL_INFO_SYNTAX_new(), OSSL_INFO_SYNTAX_POINTER_free(), OSSL_INFO_SYNTAX_POINTER_it(), OSSL_INFO_SYNTAX_POINTER_new(), OSSL_PRIVILEGE_POLICY_ID_free(), OSSL_PRIVILEGE_POLICY_ID_it(), OSSL_PRIVILEGE_POLICY_ID_new(), OSSL_ROLE_SPEC_CERT_ID_free(), OSSL_ROLE_SPEC_CERT_ID_new(), OSSL_ROLE_SPEC_CERT_ID_it(), OSSL_ROLE_SPEC_CERT_ID_SYNTAX_free(), OSSL_ROLE_SPEC_CERT_ID_SYNTAX_new(), OSSL_ROLE_SPEC_CERT_ID_SYNTAX_it(), OSSL_DAY_TIME_BAND_free(), OSSL_DAY_TIME_BAND_it(), OSSL_DAY_TIME_BAND_new(), OSSL_DAY_TIME_free(), OSSL_DAY_TIME_it(), OSSL_DAY_TIME_new(), OSSL_NAMED_DAY_free(), OSSL_NAMED_DAY_it(), OSSL_NAMED_DAY_new(), OSSL_TIME_PERIOD_free(), OSSL_TIME_PERIOD_it(), OSSL_TIME_PERIOD_new(), OSSL_TIME_SPEC_ABSOLUTE_free(), OSSL_TIME_SPEC_ABSOLUTE_it(), OSSL_TIME_SPEC_ABSOLUTE_new(), OSSL_TIME_SPEC_DAY_free(), OSSL_TIME_SPEC_DAY_it(), OSSL_TIME_SPEC_DAY_new(), OSSL_TIME_SPEC_MONTH_free(), OSSL_TIME_SPEC_MONTH_it(), OSSL_TIME_SPEC_MONTH_new(), OSSL_TIME_SPEC_TIME_free(), OSSL_TIME_SPEC_TIME_it(), OSSL_TIME_SPEC_TIME_new(), OSSL_TIME_SPEC_WEEKS_free(), OSSL_TIME_SPEC_WEEKS_it(), OSSL_TIME_SPEC_WEEKS_new(), OSSL_TIME_SPEC_X_DAY_OF_free(), OSSL_TIME_SPEC_X_DAY_OF_it(), OSSL_TIME_SPEC_X_DAY_OF_new(), OSSL_TIME_SPEC_free(), OSSL_TIME_SPEC_it(), OSSL_TIME_SPEC_new(), CMS_EnvelopedData_dup(), OSSL_CRMF_ENCRYPTEDKEY_free(), OSSL_CRMF_ENCRYPTEDKEY_it() and OSSL_CRMF_ENCRYPTEDKEY_new() were added in OpenSSL 3.5.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2016-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

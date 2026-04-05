@@ -1,0 +1,121 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_CTX_use_certificate</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_CTX_use_certificate, SSL_CTX_use_certificate_ASN1, SSL_CTX_use_certificate_file, SSL_use_certificate, SSL_use_certificate_ASN1, SSL_use_certificate_file, SSL_CTX_use_certificate_chain_file, SSL_use_certificate_chain_file, SSL_CTX_use_PrivateKey, SSL_CTX_use_PrivateKey_ASN1, SSL_CTX_use_PrivateKey_file, SSL_CTX_use_RSAPrivateKey, SSL_CTX_use_RSAPrivateKey_ASN1, SSL_CTX_use_RSAPrivateKey_file, SSL_use_PrivateKey_file, SSL_use_PrivateKey_ASN1, SSL_use_PrivateKey, SSL_use_RSAPrivateKey, SSL_use_RSAPrivateKey_ASN1, SSL_use_RSAPrivateKey_file, SSL_CTX_check_private_key, SSL_check_private_key, SSL_CTX_use_cert_and_key, SSL_use_cert_and_key - load certificate and key data</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+int SSL_CTX_use_certificate(SSL_CTX *ctx, X509 *x);
+int SSL_CTX_use_certificate_ASN1(SSL_CTX *ctx, int len, const unsigned char *d);
+int SSL_CTX_use_certificate_file(SSL_CTX *ctx, const char *file, int type);
+int SSL_use_certificate(SSL *ssl, X509 *x);
+int SSL_use_certificate_ASN1(SSL *ssl, const unsigned char *d, int len);
+int SSL_use_certificate_file(SSL *ssl, const char *file, int type);
+
+int SSL_CTX_use_certificate_chain_file(SSL_CTX *ctx, const char *file);
+int SSL_use_certificate_chain_file(SSL *ssl, const char *file);
+
+int SSL_CTX_use_PrivateKey(SSL_CTX *ctx, EVP_PKEY *pkey);
+int SSL_CTX_use_PrivateKey_ASN1(int pk, SSL_CTX *ctx, const unsigned char *d,
+                                long len);
+int SSL_CTX_use_PrivateKey_file(SSL_CTX *ctx, const char *file, int type);
+int SSL_CTX_use_RSAPrivateKey(SSL_CTX *ctx, RSA *rsa);
+int SSL_CTX_use_RSAPrivateKey_ASN1(SSL_CTX *ctx, const unsigned char *d, long len);
+int SSL_CTX_use_RSAPrivateKey_file(SSL_CTX *ctx, const char *file, int type);
+int SSL_use_PrivateKey(SSL *ssl, EVP_PKEY *pkey);
+int SSL_use_PrivateKey_ASN1(int pk, SSL *ssl, const unsigned char *d, long len);
+int SSL_use_PrivateKey_file(SSL *ssl, const char *file, int type);
+int SSL_use_RSAPrivateKey(SSL *ssl, RSA *rsa);
+int SSL_use_RSAPrivateKey_ASN1(SSL *ssl, const unsigned char *d, long len);
+int SSL_use_RSAPrivateKey_file(SSL *ssl, const char *file, int type);
+
+int SSL_CTX_check_private_key(const SSL_CTX *ctx);
+int SSL_check_private_key(const SSL *ssl);
+
+int SSL_CTX_use_cert_and_key(SSL_CTX *ctx, X509 *x, EVP_PKEY *pkey, STACK_OF(X509) *chain, int override);
+int SSL_use_cert_and_key(SSL *ssl, X509 *x, EVP_PKEY *pkey, STACK_OF(X509) *chain, int override);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>These functions load the certificates and private keys into the SSL_CTX or SSL object, respectively.</p>
+
+<p>The SSL_CTX_* class of functions loads the certificates and keys into the SSL_CTX object <b>ctx</b>. The information is passed to SSL objects <b>ssl</b> created from <b>ctx</b> with <a href="../man3/SSL_new.html">SSL_new(3)</a> by copying, so that changes applied to <b>ctx</b> do not propagate to already existing SSL objects.</p>
+
+<p>The SSL_* class of functions only loads certificates and keys into a specific SSL object. The specific information is kept, when <a href="../man3/SSL_clear.html">SSL_clear(3)</a> is called for this SSL object.</p>
+
+<p>SSL_CTX_use_certificate() loads the certificate <b>x</b> into <b>ctx</b>, SSL_use_certificate() loads <b>x</b> into <b>ssl</b>. The rest of the certificates needed to form the complete certificate chain can be specified using the <a href="../man3/SSL_CTX_add_extra_chain_cert.html">SSL_CTX_add_extra_chain_cert(3)</a> function. On success the reference counter of the <b>x</b> is incremented.</p>
+
+<p>SSL_CTX_use_certificate_ASN1() loads the ASN1 encoded certificate from the memory location <b>d</b> (with length <b>len</b>) into <b>ctx</b>, SSL_use_certificate_ASN1() loads the ASN1 encoded certificate into <b>ssl</b>.</p>
+
+<p>SSL_CTX_use_certificate_file() loads the first certificate stored in <b>file</b> into <b>ctx</b>. The formatting <b>type</b> of the certificate must be specified from the known types SSL_FILETYPE_PEM, SSL_FILETYPE_ASN1. SSL_use_certificate_file() loads the certificate from <b>file</b> into <b>ssl</b>. See the NOTES section on why SSL_CTX_use_certificate_chain_file() should be preferred.</p>
+
+<p>SSL_CTX_use_certificate_chain_file() loads a certificate chain from <b>file</b> into <b>ctx</b>. The certificates must be in PEM format and must be sorted starting with the subject&#39;s certificate (actual client or server certificate), followed by intermediate CA certificates if applicable, and ending at the highest level (root) CA. SSL_use_certificate_chain_file() is similar except it loads the certificate chain into <b>ssl</b>.</p>
+
+<p>SSL_CTX_use_PrivateKey() adds <b>pkey</b> as private key to <b>ctx</b>. <b>ctx</b> <b>MUST NOT</b> be NULL. SSL_CTX_use_RSAPrivateKey() adds the private key <b>rsa</b> of type RSA to <b>ctx</b>. SSL_use_PrivateKey() adds <b>pkey</b> as private key to <b>ssl</b>; SSL_use_RSAPrivateKey() adds <b>rsa</b> as private key of type RSA to <b>ssl</b>. If a certificate has already been set and the private key does not belong to the certificate an error is returned. To change a [certificate/private-key] pair, the new certificate needs to be set first with SSL_use_certificate() or SSL_CTX_use_certificate() before setting the private key with SSL_CTX_use_PrivateKey() or SSL_use_PrivateKey(). On success the reference counter of the <b>pkey</b>/<b>rsa</b> is incremented.</p>
+
+<p>SSL_CTX_use_cert_and_key() and SSL_use_cert_and_key() assign the X.509 certificate <b>x</b>, private key <b>key</b>, and certificate <b>chain</b> onto the corresponding <b>ssl</b> or <b>ctx</b>. The <b>pkey</b> argument must be the private key of the X.509 certificate <b>x</b>. If the <b>override</b> argument is 0, then <b>x</b>, <b>pkey</b> and <b>chain</b> are set only if all were not previously set. If <b>override</b> is non-0, then the certificate, private key and chain certs are always set. If <b>pkey</b> is NULL, then the public key of <b>x</b> is used as the private key. This is intended to be used with hardware (via the ENGINE interface) that stores the private key securely, such that it cannot be accessed by OpenSSL. The reference count of the public key is incremented (twice if there is no private key); it is not copied nor duplicated. This allows all private key validations checks to succeed without an actual private key being assigned via SSL_CTX_use_PrivateKey(), etc.</p>
+
+<p>SSL_CTX_use_PrivateKey_ASN1() adds the private key of type <b>pk</b> stored at memory location <b>d</b> (length <b>len</b>) to <b>ctx</b>. SSL_CTX_use_RSAPrivateKey_ASN1() adds the private key of type RSA stored at memory location <b>d</b> (length <b>len</b>) to <b>ctx</b>. SSL_use_PrivateKey_ASN1() and SSL_use_RSAPrivateKey_ASN1() add the private key to <b>ssl</b>.</p>
+
+<p>SSL_CTX_use_PrivateKey_file() adds the first private key found in <b>file</b> to <b>ctx</b>. The formatting <b>type</b> of the private key must be specified from the known types SSL_FILETYPE_PEM, SSL_FILETYPE_ASN1. SSL_CTX_use_RSAPrivateKey_file() adds the first private RSA key found in <b>file</b> to <b>ctx</b>. SSL_use_PrivateKey_file() adds the first private key found in <b>file</b> to <b>ssl</b>; SSL_use_RSAPrivateKey_file() adds the first private RSA key found to <b>ssl</b>. <b>ctx</b> <b>MUST NOT</b> be NULL.</p>
+
+<p>SSL_CTX_check_private_key() checks the consistency of a private key with the corresponding certificate loaded into <b>ctx</b>. If more than one key/certificate pair (RSA/DSA) is installed, the last item installed will be checked. If e.g. the last item was an RSA certificate or key, the RSA key/certificate pair will be checked. SSL_check_private_key() performs the same check for <b>ssl</b>. If no key/certificate was explicitly added for this <b>ssl</b>, the last item added into <b>ctx</b> will be checked.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The internal certificate store of OpenSSL can hold several private key/certificate pairs at a time. The certificate used depends on the cipher selected, see also <a href="../man3/SSL_CTX_set_cipher_list.html">SSL_CTX_set_cipher_list(3)</a>.</p>
+
+<p>When reading certificates and private keys from file, files of type SSL_FILETYPE_ASN1 (also known as <b>DER</b>, binary encoding) can only contain one certificate or private key, consequently SSL_CTX_use_certificate_chain_file() is only applicable to PEM formatting. Files of type SSL_FILETYPE_PEM can contain more than one item.</p>
+
+<p>SSL_CTX_use_certificate_chain_file() adds the first certificate found in the file to the certificate store. The other certificates are added to the store of chain certificates using <a href="../man3/SSL_CTX_add1_chain_cert.html">SSL_CTX_add1_chain_cert(3)</a>. Note: versions of OpenSSL before 1.0.2 only had a single certificate chain store for all certificate types, OpenSSL 1.0.2 and later have a separate chain store for each type. SSL_CTX_use_certificate_chain_file() should be used instead of the SSL_CTX_use_certificate_file() function in order to allow the use of complete certificate chains even when no trusted CA storage is used or when the CA issuing the certificate shall not be added to the trusted CA storage.</p>
+
+<p>If additional certificates are needed to complete the chain during the TLS negotiation, CA certificates are additionally looked up in the locations of trusted CA certificates, see <a href="../man3/SSL_CTX_load_verify_locations.html">SSL_CTX_load_verify_locations(3)</a>.</p>
+
+<p>The private keys loaded from file can be encrypted. In order to successfully load encrypted keys, a function returning the passphrase must have been supplied, see <a href="../man3/SSL_CTX_set_default_passwd_cb.html">SSL_CTX_set_default_passwd_cb(3)</a>. (Certificate files might be encrypted as well from the technical point of view, it however does not make sense as the data in the certificate is considered public anyway.)</p>
+
+<p>All of the functions to set a new certificate will replace any existing certificate of the same type that has already been set. Similarly all of the functions to set a new private key will replace any private key that has already been set. Applications should call <a href="../man3/SSL_CTX_check_private_key.html">SSL_CTX_check_private_key(3)</a> or <a href="../man3/SSL_check_private_key.html">SSL_check_private_key(3)</a> as appropriate after loading a new certificate and private key to confirm that the certificate and key match.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>On success, the functions return 1. Otherwise check out the error stack to find out the reason.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a>, <a href="../man3/SSL_new.html">SSL_new(3)</a>, <a href="../man3/SSL_clear.html">SSL_clear(3)</a>, <a href="../man3/SSL_CTX_load_verify_locations.html">SSL_CTX_load_verify_locations(3)</a>, <a href="../man3/SSL_CTX_set_default_passwd_cb.html">SSL_CTX_set_default_passwd_cb(3)</a>, <a href="../man3/SSL_CTX_set_cipher_list.html">SSL_CTX_set_cipher_list(3)</a>, <a href="../man3/SSL_CTX_set_client_CA_list.html">SSL_CTX_set_client_CA_list(3)</a>, <a href="../man3/SSL_CTX_set_client_cert_cb.html">SSL_CTX_set_client_cert_cb(3)</a>, <a href="../man3/SSL_CTX_add_extra_chain_cert.html">SSL_CTX_add_extra_chain_cert(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,104 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+        "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+ <head>
+  <meta name="generator" content="PSPad editor, www.pspad.com" />
+  <meta http-equiv="content-type" content="text/html; charset=UTF-8" />
+  <link rel="stylesheet" type="text/css" href="styles/lame.css" />
+	<title>LAME MP3 Encoder :: Constant Bit Rate</title>
+ </head>
+ <body>
+<div id="menu">
+	<ul>
+		<li><a href="index.html">Index page</a></li>
+		<li><a href="about.html">About LAME</a></li>
+		<li><a style="border: 0" href="introduction.html">Intro to encoding</a>
+    <div id="submenu">
+    	<ul>
+    		<li><a href="cbr.html">CBR </a></li>
+    		<li><a href="abr.html">ABR </a></li>
+        <li><a href="vbr.html">VBR </a></li>
+        <li><a style="border: 0" href="ms_stereo.html">M/S Stereo</a></li>
+    	</ul>
+    </div>
+    </li>
+		<li><a href="usage.html">Usage of LAME</a></li>
+		<li><a href="history.html">Version history</a></li>
+		<li><a href="contributors.html">Coders of LAME</a></li>
+		<li><a href="contact.html">Contact LAME</a></li>
+		<li><a style="border: 0" href="links.html">LAME links</a></li>
+	</ul>
+</div>
+<div id="container">
+<div id="content">
+
+<div align="center">
+	<img src="images/logo.gif" width="358" height="231" alt="LAME Official Logo" />
+	<h2 class="hilight">LAME - Constant Bit Rate</h2>
+</div>
+
+<p>Suggested usage:</p>
+<blockquote class="code">lame -b 128 input.wav output.mp3</blockquote>
+
+<p>
+CBR encoding is the basic encoding mode of MP3: The bitrate is kept constant
+across the entire file, which means the same number of bits is allocated to
+encode each second of audio, and internally, frames of audio data occur at
+regular, predictable intervals, given a predictable file size for a given
+duration. CBR is therefore the "opposite" of <a href="vbr.html">VBR</a>.
+</p>
+<p>
+That said, in some formats there may be some variability in the number of bits
+that contain actual audio information from frame to frame. This concept manifests
+in the <i>bit reservoir</i> of MP3s. In a CBR MP3, even though the frames are of
+a fixed size, the audio data is not necessarily distributed consistently between
+them; audio for one frame might use fewer bits than the frame has, so that frame
+adds the spare bits to a <i>reservoir</i> that can supplement the bits allocated
+to the next frame. Thus, the effective bitrate is allowed to vary somewhat in a
+CBR MP3, even though there is a fixed number of frames for the duration of audio.
+For example, for a 256kbps file, the bitrate of a single frame can be up to 320
+kbps, but the frame immediately before and/or after that one would have to use
+fewer bits, whereas in VBR, there would be no such restriction. Consequently, the
+amount of variability across the entire MP3 is not as great as that afforded by
+VBR, but it is not insignificant; a CBR encoder that does not efficiently use
+the reservoir will likely produce a lower quality file than one that does.
+</p>
+<p>
+<a href="abr.html">ABR</a> is a more flexible way to encode where filesize is
+important, but still giving some flexibility to choose frame sizes.
+</p>
+<h3>Who should use CBR</h3>
+<p>
+CBR is useful for people who are concerned about maintaining maximum
+compatibility, especially with certain streaming applications and some
+hardware-based decoders that don't reliably support VBR.
+</p>
+<p>
+CBR is also useful for people who desire the ability to obtain accurate
+estimates of the bitrate or approximate duration of a file's decoded audio
+without scanning and partially decoding the entire file.
+</p>
+
+</div>
+<div id="footer">
+
+<a href="http://sourceforge.net/projects/lame"><img src="http://sflogo.sourceforge.net/sflogo.php?group_id=290&amp;type=12"
+ alt="Get LAME (Lame Aint an MP3 Encoder) at SourceForge.net. Fast, secure and Free Open Source software downloads"
+ border="0" height="30" width="120" /></a>
+
+<a href="http://validator.w3.org/#validate_by_upload"><img src="images/valid-xhtml10.png"
+ alt="Valid XHTML 1.0 Transitional" border="0" height="31" width="88" /></a>
+
+<a href="http://jigsaw.w3.org/css-validator/"><img src="images/valid-css.png"
+ alt="Valid CSS!" border="0" height="31" width="88" /></a>
+
+<p>HTML markup and design by <a
+href="http://www.rjamorim.com" target="_blank">Roberto Amorim</a> and <a
+href="http://www.maresweb.de" target="_blank">Sebastian Mares</a>. Logo by <a 
+href="http://www.brightercreative.co.uk">Sam Fisher</a>.</p>
+
+</div>
+</div>
+
+</body>
+</html>

@@ -1,0 +1,3046 @@
+
+XZ Utils Release Notes
+======================
+
+5.8.3 (2026-03-31)
+
+    IMPORTANT: This includes a fix for CVE-2026-34743 which affects all
+    XZ Utils versions since 5.0.0. No new 5.2.x, 5.4.x, or 5.6.x
+    releases will be made, but the fix is in the v5.2, v5.4, and v5.6
+    branches in the xz Git repository.
+
+    * liblzma:
+
+        - Fix a buffer overflow in lzma_index_append(): If
+          lzma_index_decoder() was used to decode an Index that
+          contained no Records, the resulting lzma_index was left in
+          a state where where a subsequent lzma_index_append() would
+          allocate too little memory, and a buffer overflow would occur.
+
+          The lzma_index functions are rarely used by applications
+          directly. In the few applications that do use these functions,
+          the combination of function calls required to trigger this bug
+          are unlikely to exist, because there typically is no reason to
+          append Records to a decoded lzma_index. Thus, it's likely that
+          this bug cannot be triggered in any real-world application.
+
+          The bug was reported and discovered by Cantina using their
+          AppSec agent, Apex.
+
+        - Fix the build on Windows ARM64EC.
+
+        - Add "License: 0BSD" to liblzma.pc.
+
+    * xz:
+
+        - Fix invalid memory access in --files and --files0. All of
+          the following must be true to trigger it:
+
+            1. A string being read (which supposedly is a filename) is
+               at least SIZE_MAX / 2 bytes long. This size is plausible
+               on 32-bit platforms (2 GiB - 1 B).
+
+            2. realloc(ptr, SIZE_MAX / 2 + 1) must succeed.
+               On glibc >= 2.30 it shouldn't because the value
+               exceeds PTRDIFF_MAX.
+
+            3. An integer overflow results in a realloc(ptr, 0) call.
+               If it doesn't return NULL, then invalid memory access
+               will occur.
+
+        - On QNX, don't use fsync() on directories because it fails.
+
+    * Autotools: Enable 32-bit x86 assembler on Hurd by default.
+      It was already enabled in the CMake-based build.
+
+    * Translations: Add Arabic man page translations.
+
+
+5.8.2 (2025-12-17)
+
+    * liblzma:
+
+        - Fix the build on ARM64 on glibc versions older than
+          2.24 (2016). They don't have HWCAP_CRC32 in <sys/auxv.h>.
+
+        - Disable CLMUL CRC code when building for 32-bit x86 with
+          old MSVC versions. This avoids a compiler bug. The exact
+          compiler version in which the issue was fixed is unknown,
+          but VS 2022 17.13 (MSVC 19.43.34808) is known to work, so
+          CLMUL CRC on 32-bit x86 is disabled with MSVC versions
+          older than that.
+
+    * xz:
+
+        - Add a workaround for Red Hat Enterprise Linux 9 kernel bug
+          which made xz fail with "xz: Failed to enable the sandbox".
+          It only occurs with xz 5.8.0 and 5.8.1 binaries built for
+          other distros. For example, running Debian 13 in a container
+          on RHEL/CentOS 9 would trigger the issue.
+
+          The bug was introduced in RHEL 9 kernel 5.14.0-603.el9
+          (2025-07-30) and fixed in 5.14.0-648.el9 (2025-12-05).
+          However, as of writing, the fixed kernel isn't available
+          to RHEL 9 users yet, so including the workaround in this
+          xz release seems reasonable. The workaround will be removed
+          when it's no longer needed.
+
+          xzdec was also affected by this issue.
+
+        - On AIX, don't use fsync() on directories because it fails.
+
+        - Fix the build on Emscripten.
+
+        - Fix the build on clang-cl on Windows.
+
+        - Take resource limits (RLIMIT_DATA, RLIMIT_AS, and RLIMIT_VMEM)
+          into account when determining the default memory usage limit
+          for multithreaded mode. This should prevent xz from failing
+          when a resource limit has been set to a value that is less
+          than 1/4 of total RAM. Other memory limits can still trigger
+          the same issue, for example, Linux cgroup v2 memory.max.
+
+    * Build systems:
+
+        - When symbol versioning is enabled, pass --undefined-version
+          to the linker if the option is supported. This fixes the
+          build when using LLVM's lld and some liblzma features have
+          been disabled at build time.
+
+        - ARM64: Fix autodetection of fast unaligned memory access when
+          using GCC and -mstrict-align is in effect. Previously the
+          build systems would incorrectly guess that unaligned access
+          is fast, which would result in much slower binaries than
+          needed. The fix is a workaround for GCC bug 111555;
+          autodetection already worked with Clang.
+
+        - LoongArch: Autodetect if fast unaligned memory access is
+          supported. This can improve compression speed by 15 % (but
+          not decompression speed).
+
+    * Translations:
+
+        - Update the Spanish translation.
+
+        - Add Swedish man page translations.
+
+        - Update Italian, Korean, Romanian, Serbian, and Ukrainian
+          man page translations.
+
+
+5.8.1 (2025-04-03)
+
+    IMPORTANT: This includes a security fix for CVE-2025-31115 which
+    affects XZ Utils from 5.3.3alpha to 5.8.0. No new 5.4.x or 5.6.x
+    releases will be made, but the fix is in the v5.4 and v5.6 branches
+    in the xz Git repository. A standalone patch for all affected
+    versions is available as well.
+
+    * Multithreaded .xz decoder (lzma_stream_decoder_mt()):
+
+        - Fix a bug that could at least result in a crash with
+          invalid input. (CVE-2025-31115)
+
+        - Fix a performance bug: Only one thread was used if the whole
+          input file was provided at once to lzma_code(), the output
+          buffer was big enough, timeout was disabled, and LZMA_FINISH
+          was used. There are no bug reports about this, thus it's
+          possible that no real-world application was affected.
+
+    * Avoid <stdalign.h> even with C11/C17 compilers. This fixes the
+      build with Oracle Developer Studio 12.6 on Solaris 10 when the
+      compiler is in C11 mode (the header doesn't exist).
+
+    * Autotools: Restore compatibility with GNU make versions older
+      than 4.0 by creating the package using GNU gettext 0.23.1
+      infrastructure instead of 0.24.
+
+    * Update Croatian translation.
+
+
+5.8.0 (2025-03-25)
+
+    This bumps the minor version of liblzma because new features were
+    added. The API and ABI are still backward compatible with liblzma
+    5.6.x, 5.4.x, 5.2.x, and 5.0.x.
+
+    * liblzma on 32/64-bit x86: When possible, use SSE2 intrinsics
+      instead of memcpy() in the LZMA/LZMA2 decoder. In typical cases,
+      this may reduce decompression time by 0-5 %. However, when built
+      against musl libc, over 15 % time reduction was observed with
+      highly compressed files.
+
+    * CMake: Make the feature test macros match the Autotools-based
+      build on NetBSD, Darwin, and mingw-w64.
+
+    * Update the Croatian, Italian, Portuguese, and Romanian
+      translations.
+
+    * Update the German, Italian, Korean, Romanian, Serbian, and
+      Ukrainian man page translations.
+
+    Summary of changes in the 5.7.x development releases:
+
+    * Mark the following LZMA Utils script aliases as deprecated:
+      lzcmp, lzdiff, lzless, lzmore, lzgrep, lzegrep, and lzfgrep.
+
+    * liblzma:
+
+        - Improve LZMA/LZMA2 encoder speed on 64-bit PowerPC (both
+          endiannesses) and those 64-bit RISC-V processors that
+          support fast unaligned access.
+
+        - Add low-level APIs for RISC-V, ARM64, and x86 BCJ filters
+          to lzma/bcj.h. These are primarily for erofs-utils.
+
+        - x86/x86-64/E2K CLMUL CRC code was rewritten.
+
+        - Use the CRC32 instructions on LoongArch.
+
+    * xz:
+
+        - Synchronize the output file and its directory using fsync()
+          before deleting the input file. No syncing is done when xz
+          isn't going to delete the input file.
+
+        - Add --no-sync to disable the sync-before-delete behavior.
+
+        - Make --single-stream imply --keep.
+
+    * xz, xzdec, lzmainfo: When printing messages, replace
+      non-printable characters with question marks.
+
+    * xz and xzdec on Linux: Support Landlock ABI versions 5 and 6.
+
+    * CMake: Revise the configuration variables and some of their
+      options, and document them in the file INSTALL. CMake support
+      is no longer experimental. (It was already not experimental
+      when building for native Windows.)
+
+    * Add build-aux/license-check.sh.
+
+
+5.7.2beta (2025-03-08)
+
+    * On the man pages, mark the following LZMA Utils script aliases as
+      deprecated: lzcmp, lzdiff, lzless, lzmore, lzgrep, lzegrep, and
+      lzfgrep. The commands that start with xz* instead of lz* have
+      identical behavior.
+
+      The LZMA Utils aliases lzma, unlzma, and lzcat aren't deprecated
+      because some of these aliases are still in common use. lzmadec
+      and lzmainfo aren't deprecated either.
+
+    * xz: In the ENVIRONMENT section of the man page, warn about
+      problems that some uses of XZ_DEFAULTS and XZ_OPT may create.
+
+    * Windows (native builds, not Cygwin): In xz, xzdec, and lzmadec,
+      avoid an error message on broken pipe.
+
+    * Autotools: Fix out-of-tree builds when using the bundled
+      getopt_long.
+
+    * Translations:
+
+        - Updated: Chinese (traditional), Croatian, Finnish, Georgian,
+          German, Korean, Polish, Romanian, Serbian, Spanish, Swedish,
+          Turkish, and Ukrainian
+
+        - Added: Dutch
+
+    * Man page translations:
+
+        - Updated: German, Korean, Romanian, and Ukrainian
+
+        - Added: Italian and Serbian
+
+
+5.7.1alpha (2025-01-23)
+
+    * All fixes from 5.6.4.
+
+    * liblzma:
+
+        - Improve LZMA/LZMA2 encoder speed on 64-bit PowerPC (both
+          endiannesses) and those 64-bit RISC-V processors that
+          support fast unaligned access.
+
+        - x86/x86-64/E2K CLMUL CRC code was rewritten. It's faster and
+          doesn't cause false positives from sanitizers. Attributes
+          like __attribute__((__no_sanitize_address__)) are no longer
+          present.
+
+        - On 32-bit x86, CLMUL CRC and the old (but still good)
+          assembly versions now co-exist with runtime detection.
+          Both Autotools and CMake build systems handle this
+          automatically now.
+
+        - Use the CRC32 instructions on LoongArch to make CRC32
+          calculation faster.
+
+        - Add low-level APIs for RISC-V, ARM64, and x86 BCJ filters
+          to lzma/bcj.h. These are primarily for erofs-utils.
+
+        - Minor tweaks to ARM64 CRC32 code and BCJ filters were made.
+
+    * xz:
+
+        - Synchronize the output file and its directory before deleting
+          the input file using fsync(). This reduces the probability of
+          data loss after a system crash. However, it can be a major
+          performance hit if processing many small files.
+
+          NOTE: No syncing is done when xz isn't going to delete
+          the input file.
+
+        - Add a new option --no-sync to disable the sync-before-delete
+          behavior. It's useful when compressing many small files and
+          one doesn't worry about data loss in case of a system crash.
+
+        - Make --single-stream imply --keep.
+
+        - Use automatic word wrapping for the text in --help and
+          similar situations to hopefully make the strings easier for
+          majority of translators (no need to count spaces anymore).
+
+    * xz, xzdec, lzmainfo: When printing messages, replace
+      non-printable characters with question marks. This way
+      malicious filenames cannot be used to send escape sequences
+      to a terminal. This change is also applied to filenames shown
+      in "xz --robot --list".
+
+    * xz and xzdec on Linux: Add support for Landlock ABI versions 5
+      and 6.
+
+    * CMake updates:
+
+        - Increase the minimum required CMake version to 3.20.
+
+        - Revise the configuration variables and some of their options.
+          Document them in the file INSTALL.
+
+        - Attempt to produce liblzma.pc so that the paths are based on
+          ${prefix}, which makes it simpler to override the paths
+          if the liblzma files have been moved.
+
+        - To enable translations, gettext-tools is now required. The
+          CMake build no longer supports installing pre-compiled
+          message catalog binary files (po/*.gmo).
+
+        - Apple: Use Mach-O shared library versioning that is
+          compatible with GNU Libtool. This should make it easier to
+          switch between the build systems on Apple OSes that enforce
+          the correct compatibility_version (macOS >= 12 doesn't?).
+          This change is backward compatible: binaries linked against
+          old CMake-built liblzma will run with liblzma that uses
+          Libtool style versioning.
+
+        - Windows (not Cygwin): Document CMAKE_DLL_NAME_WITH_SOVERSION
+          (CMake >= 3.27) in the file INSTALL. This option should
+          usually be left to its default value (OFF). It can be set
+          to ON if the liblzma DLL filename must be compatible with
+          the versioned filename produced by GNU Libtool. For example,
+          binaries distributed in MSYS2 use a versioned DLL filename.
+
+        - CMake support is no longer experimental. (It was already
+          not experimental when building for native Windows.)
+
+    * Windows: Building liblzma with Visual Studio 2013 is no longer
+      supported. Visual Studio 2015 or later (with CMake) can be used
+      to build liblzma and the command line tools.
+
+    * Add preliminary Georgian translation. This already contains
+      translations of most of the strings that are now automatically
+      word wrapped.
+
+    * Add build-aux/license-check.sh. Without arguments, it checks that
+      no license information has been forgotten. With the -v argument,
+      it shows the license info (or the lack of it) for each file.
+
+      If the .git directory is available, only the files in the
+      repository are checked. Without the .git directory, a clean tree
+      from an extracted release tarball is expected.
+
+
+5.6.4 (2025-01-23)
+
+    * liblzma: Fix LZMA/LZMA2 encoder on big endian ARM64.
+
+    * xz:
+
+        - Fix --filters= and --filters1= ... --filters9= options
+          parsing. They require an argument, thus "xz --filters lzma2"
+          should work in addition to "xz --filters=lzma2".
+
+        - On the man page, note in the --compress and --decompress
+          options that the default behavior is to delete the input
+          file unless writing to standard output. It was already
+          documented in the DESCRIPTION section but new users in
+          a hurry might miss it.
+
+    * Windows (native builds, not Cygwin): Fix regressions introduced
+      in XZ Utils 5.6.3 which caused non-ASCII characters to display
+      incorrectly. Only builds with translation support were affected
+      (--enable-nls or ENABLE_NLS=ON). The following changes affect
+      builds that have translations enabled:
+
+        - Require UCRT because MSVCRT doesn't support UTF-8
+          locales and thus translations won't be readable on
+          Windows 10 version 1903 and later. (MSVCRT builds
+          are still possible with --disable-nls or ENABLE_NLS=OFF.)
+
+        - Require gettext-runtime >= 0.23.1 because older versions
+          don't autodetect the use of the UTF-8 code page. This
+          resulted in garbled non-ASCII characters even with UCRT.
+
+        - Partially fix alignment issues in xz --verbose --list
+          with translated messages. Chinese (simplified),
+          Chinese (traditional), and Korean column headings
+          are misaligned still because Windows and MinGW-w64
+          don't provide wcwidth() and XZ Utils doesn't include
+          a replacement function either.
+
+    * CMake: Explicitly disable unity builds. This prevents build
+      failures when another project uses XZ Utils via CMake's
+      FetchContent module, and that project enables unity builds.
+
+    * Update Chinese (traditional) and Serbian translations.
+
+
+5.6.3 (2024-10-01)
+
+    IMPORTANT: This includes a Windows-specific security fix to
+    the command line tools (CVE-2024-47611). liblzma isn't affected
+    by this issue.
+
+    * liblzma:
+
+        - Fix x86-64 inline assembly compatibility with GNU Binutils
+          older than 2.27.
+
+        - Fix the build with GCC 4.2 on OpenBSD/sparc64.
+
+    * xzdec: Display an error instead of failing silently if the
+      unsupported option -M is specified.
+
+    * lzmainfo: Fix integer overflows when rounding the dictionary and
+      uncompressed sizes to the nearest mebibyte.
+
+    * Windows (except Cygwin and MSYS2): Add an application manifest to
+      xz, xzdec, lzmadec, and lzmainfo executables:
+
+        - Declare them compatible with Vista/7/8/8.1/10/11. This way
+          the programs won't needlessly use Operating System Context
+          of Vista when running on later Windows versions. This setting
+          doesn't mean that the executables cannot run on even older
+          versions if otherwise built that way.
+
+        - Declare them as UAC-compliant. MSVC added this by default
+          already but it wasn't done with MinGW-w64, at least not
+          with all toolchain variants.
+
+        - Declare them long path aware. This makes long path names
+          work on Windows 10 and 11 if the feature has been enabled
+          in the Windows registry.
+
+        - Use the UTF-8 code page on Windows 10 version 1903 and later.
+
+            * Now command line tools can access files whose names
+              contain characters that don't exist in the current
+              legacy code page.
+
+            * The options --files and --files0 now expect file lists
+              to be in UTF-8 instead of the legacy code page.
+
+            * This fixes a security issue: If a command line contains
+              Unicode characters (for example, filenames) that don't
+              exist in the current legacy code page, the characters are
+              converted to similar-looking characters with best-fit
+              mapping. Some best-fit mappings result in ASCII
+              characters that change the meaning of the command line,
+              which can be exploited with malicious filenames to do
+              argument injection or directory traversal attacks.
+              UTF-8 avoids best-fit mappings and thus fixes the issue.
+              (CVE-2024-47611)
+
+              Forcing the process code page to UTF-8 is possible only
+              on Windows 10 version 1903 and later. The command line
+              tools remain vulnerable if used on an old older
+              version of Windows.
+
+              This issue was discovered by Orange Tsai and splitline
+              from DEVCORE Research Team.
+
+              A related smaller issue remains: Windows filenames may
+              contain unpaired surrogates (invalid UTF-16). These are
+              converted to the replacement character U+FFFD in the
+              UTF-8 code page. Thus, filenames with different unpaired
+              surrogates appear identical and aren't distinguishable
+              from filenames that contain the actual replacement
+              character U+FFFD.
+
+            * When building with MinGW-w64, it is recommended to use
+              UCRT version instead of the old MSVCRT. For example,
+              non-ASCII characters from filenames won't print
+              correctly in messages to console with MSVCRT with
+              the UTF-8 code page (a cosmetic issue). liblzma-only
+              builds are still fine with MSVCRT.
+
+        - Cygwin and MSYS2 process command line options differently and
+          the above issues don't exist. There is no need to replace the
+          default application manifest on Cygwin and MSYS2.
+
+    * Autotools-based build:
+
+        - Fix feature checks with link-time optimization (-flto).
+
+        - Solaris: Fix a compatibility issue in version.sh. It matters
+          if one wants to regenerate configure by running autoconf.
+
+    * CMake:
+
+        - Use paths relative to ${prefix} in liblzma.pc when possible.
+          This is done only with CMake >= 3.20.
+
+        - MSVC: Install liblzma.pc as it can be useful with MSVC too.
+
+        - Windows: Fix liblzma filename prefix, for example:
+
+            * Cygwin: The DLL was incorrectly named liblzma-5.dll.
+              Now it is cyglzma-5.dll.
+
+            * MSVC: Rename import library from liblzma.lib to lzma.lib
+              while keeping liblzma.dll name as is. This helps with
+              "pkgconf --msvc-syntax --libs liblzma" because it mungles
+              "-llzma" in liblzma.pc to "lzma.lib".
+
+            * MinGW-w64: No changes.
+
+        - Windows: Use the correct resource file for lzmadec.exe.
+          Previously the resource file for xzdec.exe was used for both.
+          Autotools-based build isn't affected.
+
+        - Prefer a C11 compiler over a C99 compiler but accept both.
+
+        - Link Threads::Threads against liblzma using PRIVATE so that
+          -pthread and such flags won't unnecessarily get included in
+          the usage requirements of shared liblzma. That is,
+          target_link_libraries(foo PRIVATE liblzma::liblzma) no
+          longer adds -pthread if using POSIX threads and linking
+          against shared liblzma. The threading flags are still added
+          if linking against static liblzma.
+
+    * Updated translations: Catalan, Chinese (simplified), and
+      Brazilian Portuguese.
+
+
+5.6.2 (2024-05-29)
+
+    * Remove the backdoor (CVE-2024-3094).
+
+    * Not changed: Memory sanitizer (MSAN) has a false positive
+      in the CRC CLMUL code which also makes OSS Fuzz unhappy.
+      Valgrind is smarter and doesn't complain.
+
+      A revision to the CLMUL code is coming anyway and this issue
+      will be cleaned up as part of it. It won't be backported to
+      5.6.x or 5.4.x because the old code isn't wrong. There is
+      no reason to risk introducing regressions in old branches
+      just to silence a false positive.
+
+    * liblzma:
+
+        - lzma_index_decoder() and lzma_index_buffer_decode(): Fix
+          a missing output pointer initialization (*i = NULL) if the
+          functions are called with invalid arguments. The API docs
+          say that such an initialization is always done. In practice
+          this matters very little because the problem can only occur
+          if the calling application has a bug and these functions
+          return LZMA_PROG_ERROR.
+
+        - lzma_str_to_filters(): Fix a missing output pointer
+          initialization (*error_pos = 0). This is very similar
+          to the fix above.
+
+        - Fix C standard conformance with function pointer types.
+
+        - Remove GNU indirect function (IFUNC) support. This is *NOT*
+          done for security reasons even though the backdoor relied on
+          this code. The performance benefits of IFUNC are too tiny in
+          this project to make the extra complexity worth it.
+
+        - FreeBSD on ARM64: Add error checking to CRC32 instruction
+          support detection.
+
+        - Fix building with NVIDIA HPC SDK.
+
+    * xz:
+
+        - Fix a C standard conformance issue in --block-list parsing
+          (arithmetic on a null pointer).
+
+        - Fix a warning from GNU groff when processing the man page:
+          "warning: cannot select font 'CW'"
+
+    * xzdec: Add support for Linux Landlock ABI version 4. xz already
+      had the v3-to-v4 change but it had been forgotten from xzdec.
+
+    * Autotools-based build system (configure):
+
+        - Symbol versioning variant can now be overridden with
+          --enable-symbol-versions. Documentation in INSTALL was
+          updated to match.
+
+        - Add new configure option --enable-doxygen to enable
+          generation and installation of the liblzma API documentation
+          using Doxygen. Documentation in INSTALL and PACKAGERS was
+          updated to match.
+
+    CMake:
+
+        - Fix detection of Linux Landlock support. The detection code
+          in CMakeLists.txt had been sabotaged.
+
+        - Disable symbol versioning on non-glibc Linux to match what
+          the Autotools build does. For example, symbol versioning
+          isn't enabled with musl.
+
+        - Symbol versioning variant can now be overridden by setting
+          SYMBOL_VERSIONING to "OFF", "generic", or "linux".
+
+        - Add support for all tests in typical build configurations.
+          Now the only difference to the tests coverage to Autotools
+          is that CMake-based build will skip more tests if features
+          are disabled. Such builds are only for special cases like
+          embedded systems.
+
+        - Separate the CMake code for the tests into tests/tests.cmake.
+          It is used conditionally, thus it is possible to
+
+              rm -rf tests
+
+          and the CMake-based build will still work normally except
+          that no tests are then available.
+
+        - Add a option ENABLE_DOXYGEN to enable generation and
+          installation of the liblzma API documentation using Doxygen.
+
+    * Documentation:
+
+        - Omit the Doxygen-generated liblzma API documentation from the
+          package. Instead, the generation and installation of the API
+          docs can be enabled with a configure or CMake option if
+          Doxygen is available.
+
+        - Remove the XZ logo which was used in the API documentation.
+          The logo has been retired and isn't used by the project
+          anymore. However, it's OK to use it in contexts that refer
+          to the backdoor incident.
+
+        - Remove the PDF versions of the man pages from the source
+          package. These existed primarily for users of operating
+          systems which don't come with tools to render man page
+          source files. The plain text versions are still included
+          in doc/man/txt. PDF files can still be generated to doc/man,
+          if the required tools are available, using "make pdf" after
+          running "configure".
+
+        - Update home page URLs back to their old locations on
+          tukaani.org.
+
+        - Update maintainer info.
+
+    * Tests:
+
+        - In tests/files/README, explain how to recreate the ARM64
+          test files.
+
+        - Remove two tests that used tiny x86 and SPARC object files
+          as the input files. The matching .c file was included but
+          the object files aren't easy to reproduce. The test cases
+          weren't great anyway; they were from the early days (2009)
+          of the project when the test suite had very few tests.
+
+        - Improve a few tests.
+
+
+5.6.1 (2024-03-09)
+
+    IMPORTANT: This fixed bugs in the backdoor (CVE-2024-3094) (someone
+    had forgot to run Valgrind).
+
+    * liblzma: Fixed two bugs relating to GNU indirect function (IFUNC)
+      with GCC. The more serious bug caused a program linked with
+      liblzma to crash on start up if the flag -fprofile-generate was
+      used to build liblzma. The second bug caused liblzma to falsely
+      report an invalid write to Valgrind when loading liblzma.
+
+    * xz: Changed the messages for thread reduction due to memory
+      constraints to only appear under the highest verbosity level.
+
+    * Build:
+
+        - Fixed a build issue when the header file <linux/landlock.h>
+          was present on the system but the Landlock system calls were
+          not defined in <sys/syscall.h>.
+
+        - The CMake build now warns and disables NLS if both gettext
+          tools and pre-created .gmo files are missing. Previously,
+          this caused the CMake build to fail.
+
+    * Minor improvements to man pages.
+
+    * Minor improvements to tests.
+
+
+5.6.0 (2024-02-24)
+
+    IMPORTANT: This added a backdoor (CVE-2024-3094). It's enabled only
+    in the release tarballs.
+
+    This bumps the minor version of liblzma because new features were
+    added. The API and ABI are still backward compatible with liblzma
+    5.4.x and 5.2.x and 5.0.x.
+
+    NOTE: As described in the NEWS for 5.5.2beta, the core components
+    are now under the BSD Zero Clause License (0BSD).
+
+    Since 5.5.2beta:
+
+    * liblzma:
+
+        - Disabled the branchless C variant in the LZMA decoder based
+          on the benchmark results from the community.
+
+        - Disabled x86-64 inline assembly on x32 to fix the build.
+
+    * Sandboxing support in xz:
+
+        - Landlock is now used even when xz needs to create files.
+          In this case the sandbox has to be more permissive than
+          when no files need to be created. A similar thing was
+          already in use with pledge(2) since 5.3.4alpha.
+
+        - Landlock and pledge(2) are now stricter when reading from
+          more than one input file and only writing to standard output.
+
+        - Added support for Landlock ABI version 4.
+
+    * CMake:
+
+        - Default to -O2 instead of -O3 with CMAKE_BUILD_TYPE=Release.
+          -O3 is not useful for speed and makes the code larger.
+
+        - Now builds lzmainfo and lzmadec.
+
+        - xzdiff, xzgrep, xzless, xzmore, and their symlinks are now
+          installed. The scripts are also tested during "make test".
+
+        - Added translation support for xz, lzmainfo, and the
+          man pages.
+
+        - Applied the symbol versioning workaround for MicroBlaze that
+          is used in the Autotools build.
+
+        - The general XZ Utils and liblzma API documentation is now
+          installed.
+
+        - The CMake component names were changed a little and several
+          were added. liblzma_Runtime and liblzma_Development are
+          unchanged.
+
+        - Minimum required CMake version is now 3.14. However,
+          translation support is disabled with CMake versions
+          older than 3.20.
+
+        - The CMake-based build is now close to feature parity with the
+          Autotools-based build. Most importantly a few tests aren't
+          run yet. Testing the CMake-based build on different operating
+          systems would be welcome now. See the comment at the top of
+          CMakeLists.txt.
+
+    * Fixed a bug in the Autotools feature test for ARM64 CRC32
+      instruction support for old versions of Clang. This did not
+      affect the CMake build.
+
+    * Windows:
+
+        - The build instructions in INSTALL and windows/INSTALL*.txt
+          were revised completely.
+
+        - windows/build-with-cmake.bat along with the instructions
+          in windows/INSTALL-MinGW-w64_with_CMake.txt should make
+          it very easy to build liblzma.dll and xz.exe on Windows
+          using CMake and MinGW-w64 with either GCC or Clang/LLVM.
+
+        - windows/build.bash was updated. It now works on MSYS2 and
+          on GNU/Linux (cross-compiling) to create a .zip and .7z
+          package for 32-bit and 64-bit x86 using GCC + MinGW-w64.
+
+    * The TODO file is no longer installed as part of the
+      documentation. The file is out of date and does not reflect
+      the actual tasks that will be completed in the future.
+
+    * Translations:
+
+        - Translated lzmainfo man pages are now installed. These
+          had been forgotten in earlier versions.
+
+        - Updated Croatian, Esperanto, German, Hungarian, Korean,
+          Polish, Romanian, Spanish, Swedish, Vietnamese, and Ukrainian
+          translations.
+
+        - Updated German, Korean, Romanian, and Ukrainian man page
+          translations.
+
+    * Added a few tests.
+
+    Summary of new features added in the 5.5.x development releases:
+
+    * liblzma:
+
+        - LZMA decoder: Speed optimizations to the C code and
+          added GCC & Clang compatible inline assembly for x86-64.
+
+        - Added lzma_mt_block_size() to recommend a Block size for
+          multithreaded encoding.
+
+        - Added CLMUL-based CRC32 on x86-64 and E2K with runtime
+          processor detection. Similar to CRC64, on 32-bit x86 it
+          isn't available unless --disable-assembler is used.
+
+        - Optimized the CRC32 calculation on ARM64 platforms using the
+          CRC32 instructions. Runtime detection for the instruction is
+          used on GNU/Linux, FreeBSD, Windows, and macOS. If the
+          compiler flags indicate unconditional CRC32 instruction
+          support (+crc) then the generic version is not built.
+
+        - Added definitions of mask values like
+          LZMA_INDEX_CHECK_MASK_CRC32 to <lzma/index.h>.
+
+    * xz:
+
+        - Multithreaded mode is now the default. This improves
+          compression speed and creates .xz files that can be
+          decompressed in multithreaded mode. The downsides are
+          increased memory usage and slightly worse compression ratio.
+
+        - Added a new command line option --filters to set the filter
+          chain using the liblzma filter string syntax.
+
+        - Added new command line options --filters1 ... --filters9 to
+          set additional filter chains using the liblzma filter string
+          syntax. The --block-list option now allows specifying filter
+          chains that were set using these new options.
+
+        - Ported the command line tools to Windows MSVC.
+          Visual Studio 2015 or later is required.
+
+    * Added lz4 support to xzdiff/xzcmp and xzgrep.
+
+
+5.5.2beta (2024-02-14)
+
+    * Licensing change: The core components are now under the
+      BSD Zero Clause License (0BSD). In XZ Utils 5.4.6 and older
+      and 5.5.1alpha these components are in the public domain and
+      obviously remain so; the change affects the new releases only.
+
+      0BSD is an extremely permissive license which doesn't require
+      retaining or reproducing copyright or license notices when
+      distributing the code, thus in practice there is extremely
+      little difference to public domain.
+
+    * liblzma
+
+        - Significant speed optimizations to the LZMA decoder were
+          made. There are now three variants that can be chosen at
+          build time:
+
+            * Basic C version: This is a few percent faster than
+              5.4.x due to some new optimizations.
+
+            * Branchless C: This is currently the default on platforms
+              for which there is no assembly code. This should be a few
+              percent faster than the basic C version.
+
+            * x86-64 inline assembly. This works with GCC and Clang.
+
+          The default choice can currently be overridden by setting
+          LZMA_RANGE_DECODER_CONFIG in CPPFLAGS: 0 means the basic
+          version and 3 means that branchless C version.
+
+        - Optimized the CRC32 calculation on ARM64 platforms using the
+          CRC32 instructions. The instructions are optional in ARMv8.0
+          and are required in ARMv8.1 and later. Runtime detection for
+          the instruction is used on GNU/Linux, FreeBSD, Windows, and
+          macOS. If the compiler flags indicate unconditional CRC32
+          instruction support (+crc) then the generic version is not
+          built.
+
+    * Added lz4 support to xzdiff/xzcmp and xzgrep.
+
+    * Man pages of xzdiff/xzcmp, xzgrep, and xzmore were rewritten
+      to simplify licensing of the man page translations.
+
+    * Translations:
+
+        - Updated Chinese (simplified), German, Korean, Polish,
+          Romanian, Spanish, Swedish, and Ukrainian translations.
+
+        - Updated German, Korean, Romanian, and Ukrainian man page
+          translations.
+
+    * Small improvements to the tests.
+
+    * Added doc/examples/11_file_info.c. It was added to the Git
+      repository in 2017 but forgotten to be added into distribution
+      tarballs.
+
+    * Removed doc/examples_old. These were from 2012.
+
+    * Removed the macos/build.sh script. It had not been updated
+      since 2013.
+
+
+5.5.1alpha (2024-01-26)
+
+    * Added a new filter for RISC-V binaries. The filter can be used
+      for 32-bit and 64-bit binaries with either little or big
+      endianness. In liblzma, the Filter ID is LZMA_FILTER_RISCV (0x0B)
+      and the xz option is --riscv. liblzma filter string syntax
+      recognizes this filter as "riscv".
+
+    * liblzma:
+
+        - Added lzma_mt_block_size() to recommend a Block size for
+          multithreaded encoding
+
+        - Added CLMUL-based CRC32 on x86-64 and E2K with runtime
+          processor detection. Similar to CRC64, on 32-bit x86 it
+          isn't available unless --disable-assembler is used.
+
+        - Implemented GNU indirect function (IFUNC) as a runtime
+          function dispatching method for CRC32 and CRC64 fast
+          implementations on x86. Only GNU/Linux (glibc) and FreeBSD
+          builds will use IFUNC, unless --enable-ifunc is specified to
+          configure.
+
+        - Added definitions of mask values like
+          LZMA_INDEX_CHECK_MASK_CRC32 to <lzma/index.h>.
+
+        - The XZ logo is now included in the Doxygen generated
+          documentation. It is licensed under Creative Commons
+          Attribution-ShareAlike 4.0.
+
+    * xz:
+
+        - Multithreaded mode is now the default. This improves
+          compression speed and creates .xz files that can be
+          decompressed multithreaded at the cost of increased memory
+          usage and slightly worse compression ratio.
+
+        - Added new command line option --filters to set the filter
+          chain using liblzma filter string syntax.
+
+        - Added new command line options --filters1 ... --filters9 to
+          set additional filter chains using liblzma filter string
+          syntax. The --block-list option now allows specifying filter
+          chains that were set using these new options.
+
+        - Added support for Linux Landlock as a sandboxing method.
+
+        - xzdec now supports pledge(2), Capsicum, and Linux Landlock as
+          sandboxing methods.
+
+        - Progress indicator time stats remain accurate after pausing
+          xz with SIGTSTP.
+
+        - Ported xz and xzdec to Windows MSVC. Visual Studio 2015 or
+          later is required.
+
+    * CMake Build:
+
+        - Supports pledge(2), Capsicum, and Linux Landlock sandboxing
+          methods.
+
+        - Replacement functions for getopt_long() are used on platforms
+          that do not have it.
+
+    * Enabled unaligned access by default on PowerPC64LE and on RISC-V
+      targets that define __riscv_misaligned_fast.
+
+    * Tests:
+
+        - Added two new fuzz targets to OSS-Fuzz.
+
+        - Implemented Continuous Integration (CI) testing using
+          GitHub Actions.
+
+    * Changed quoting style from `...' to '...' in all messages,
+      scripts, and documentation.
+
+    * Added basic Codespell support to help catch typo errors.
+
+
+5.4.7 (2024-05-29)
+
+    * Not changed: Memory sanitizer (MSAN) has a false positive
+      in the CRC CLMUL code which also makes OSS Fuzz unhappy.
+      Valgrind is smarter and doesn't complain.
+
+      A revision to the CLMUL code is coming anyway and this issue
+      will be cleaned up as part of it. It won't be backported to
+      5.6.x or 5.4.x because the old code isn't wrong. There is
+      no reason to risk introducing regressions in old branches
+      just to silence a false positive.
+
+    * liblzma:
+
+        - lzma_index_decoder() and lzma_index_buffer_decode(): Fix
+          a missing output pointer initialization (*i = NULL) if the
+          functions are called with invalid arguments. The API docs
+          say that such an initialization is always done. In practice
+          this matters very little because the problem can only occur
+          if the calling application has a bug and these functions
+          return LZMA_PROG_ERROR.
+
+        - lzma_str_to_filters(): Fix a missing output pointer
+          initialization (*error_pos = 0). This is very similar
+          to the fix above.
+
+        - Fix C standard conformance with function pointer types.
+          This newly showed up with Clang 17 with -fsanitize=undefined.
+          There are no bug reports about this.
+
+        - Fix building with NVIDIA HPC SDK.
+
+    * xz:
+
+        - Fix a C standard conformance issue in --block-list parsing
+          (arithmetic on a null pointer).
+
+        - Fix a warning from GNU groff when processing the man page:
+          "warning: cannot select font 'CW'"
+
+        - Fix outdated threading related information on the man page.
+
+    * xzless:
+
+        - With "less" version 451 and later, use "||-" instead of "|-"
+          in the environment variable LESSOPEN. This way compressed
+          files that contain no uncompressed data are shown correctly
+          as empty.
+
+        - With "less" version 632 and later, use --show-preproc-errors
+          to make "less" show a warning on decompression errors.
+
+    * Autotools-based build system (configure):
+
+        - Symbol versioning variant can now be overridden with
+          --enable-symbol-versions. Documentation in INSTALL was
+          updated to match.
+
+    CMake:
+
+        - Linux on MicroBlaze is handled specially now. This matches
+          the changes made to the Autotools-based build in XZ Utils
+          5.4.2 and 5.2.11.
+
+        - Disable symbol versioning on non-glibc Linux to match what
+          the Autotools build does. For example, symbol versioning
+          isn't enabled with musl.
+
+        - Symbol versioning variant can now be overridden by setting
+          SYMBOL_VERSIONING to "OFF", "generic", or "linux".
+
+    * Documentation:
+
+        - Clarify the description of --disable-assembler in INSTALL.
+          The option only affects 32-bit x86 assembly usage.
+
+        - Add doc/examples/11_file_info.c. It was added to the
+          Git repository in 2017 but forgotten to be added into
+          distribution tarballs.
+
+        - Don't install the TODO file as part of the documentation.
+          The file is out of date.
+
+        - Update home page URLs back to their old locations on
+          tukaani.org.
+
+        - Update maintainer info.
+
+
+5.4.6 (2024-01-26)
+
+    * Fixed a bug involving internal function pointers in liblzma not
+      being initialized to NULL. The bug can only be triggered if
+      lzma_filters_update() is called on a LZMA1 encoder, so it does
+      not affect xz or any application known to us that uses liblzma.
+
+    * xz:
+
+        - Fixed a regression introduced in 5.4.2 that caused encoding
+          in the raw format to unnecessarily fail if --suffix was not
+          used. For instance, the following command no longer reports
+          that --suffix must be used:
+
+              echo foo | xz --format=raw --lzma2 | wc -c
+
+        - Fixed an issue on MinGW-w64 builds that prevented reading
+          from or writing to non-terminal character devices like NUL.
+
+    * Added a new test.
+
+
+5.4.5 (2023-11-01)
+
+    * liblzma:
+
+        - Use __attribute__((__no_sanitize_address__)) to avoid address
+          sanitization with CRC64 CLMUL. It uses 16-byte-aligned reads
+          which can extend past the bounds of the input buffer and
+          inherently trigger address sanitization errors. This isn't
+          a bug.
+
+        - Fixed an assertion failure that could be triggered by a large
+          unpadded_size argument. It was verified that there was no
+          other bug than the assertion failure.
+
+        - Fixed a bug that prevented building with Windows Vista
+          threading when __attribute__((__constructor__)) is not
+          supported.
+
+    * xz now properly handles special files such as "con" or "nul" on
+      Windows. Before this fix, the following wrote "foo" to the
+      console and deleted the input file "con_xz":
+
+          echo foo | xz > con_xz
+          xz --suffix=_xz --decompress con_xz
+
+    * Build systems:
+
+        - Allow builds with Windows win95 threading and small mode when
+          __attribute__((__constructor__)) is supported.
+
+        - Added a new line to liblzma.pc for MSYS2 (Windows):
+
+              Cflags.private: -DLZMA_API_STATIC
+
+          When compiling code that will link against static liblzma,
+          the LZMA_API_STATIC macro needs to be defined on Windows.
+
+        - CMake specific changes:
+
+            * Fixed a bug that allowed CLOCK_MONOTONIC to be used even
+              if the check for it failed.
+
+            * Fixed a bug where configuring CMake multiple times
+              resulted in HAVE_CLOCK_GETTIME and HAVE_CLOCK_MONOTONIC
+              not being set.
+
+            * Fixed the build with MinGW-w64-based Clang/LLVM 17.
+              llvm-windres now has more accurate GNU windres emulation
+              so the GNU windres workaround from 5.4.1 is needed with
+              llvm-windres version 17 too.
+
+            * The import library on Windows is now properly named
+              "liblzma.dll.a" instead of "libliblzma.dll.a"
+
+            * Fixed a bug causing the Ninja Generator to fail on
+              UNIX-like systems. This bug was introduced in 5.4.0.
+
+            * Added a new option to disable CLMUL CRC64.
+
+            * A module-definition (.def) file is now created when
+              building liblzma.dll with MinGW-w64.
+
+            * The pkg-config liblzma.pc file is now installed on all
+              builds except when using MSVC on Windows.
+
+            * Added large file support by default for platforms that
+              need it to handle files larger than 2 GiB. This includes
+              MinGW-w64, even 64-bit builds.
+
+    * Small fixes and improvements to the tests.
+
+    * Updated translations: Chinese (simplified) and Esperanto.
+
+
+5.4.4 (2023-08-02)
+
+    * liblzma and xzdec can now build against WASI SDK when threading
+      support is disabled. xz and tests don't build yet.
+
+    * CMake:
+
+        - Fixed a bug preventing other projects from including liblzma
+          multiple times using find_package().
+
+        - Don't create broken symlinks in Cygwin and MSYS2 unless
+          supported by the environment. This prevented building for the
+          default MSYS2 environment. The problem was introduced in
+          xz 5.4.0.
+
+    * Documentation:
+
+        - Small improvements to man pages.
+
+        - Small improvements and typo fixes for liblzma API
+          documentation.
+
+    * Tests:
+
+        - Added a new section to INSTALL to describe basic test usage
+          and address recent questions about building the tests when
+          cross compiling.
+
+        - Small fixes and improvements to the tests.
+
+    * Translations:
+
+        - Fixed a mistake that caused one of the error messages to not
+          be translated. This only affected versions 5.4.2 and 5.4.3.
+
+        - Updated the Chinese (simplified), Croatian, Esperanto, German,
+          Korean, Polish, Romanian, Spanish, Swedish, Ukrainian, and
+          Vietnamese translations.
+
+        - Updated the German, Korean, Romanian, and Ukrainian man page
+          translations.
+
+
+5.4.3 (2023-05-04)
+
+    * All fixes from 5.2.12
+
+    * Features in the CMake build can now be disabled as CMake cache
+      variables, similar to the Autotools build.
+
+    * Minor update to the Croatian translation.
+
+
+5.4.2 (2023-03-18)
+
+    * All fixes from 5.2.11 that were not included in 5.4.1.
+
+    * If xz is built with support for the Capsicum sandbox but running
+      in an environment that doesn't support Capsicum, xz now runs
+      normally without sandboxing instead of exiting with an error.
+
+    * liblzma:
+
+        - Documentation was updated to improve the style, consistency,
+          and completeness of the liblzma API headers.
+
+        - The Doxygen-generated HTML documentation for the liblzma API
+          header files is now included in the source release and is
+          installed as part of "make install". All JavaScript is
+          removed to simplify license compliance and to reduce the
+          install size.
+
+        - Fixed a minor bug in lzma_str_from_filters() that produced
+          too many filters in the output string instead of reporting
+          an error if the input array had more than four filters. This
+          bug did not affect xz.
+
+    * Build systems:
+
+        - autogen.sh now invokes the doxygen tool via the new wrapper
+          script doxygen/update-doxygen, unless the command line option
+          --no-doxygen is used.
+
+        - Added microlzma_encoder.c and microlzma_decoder.c to the
+          VS project files for Windows and to the CMake build. These
+          should have been included in 5.3.2alpha.
+
+    * Tests:
+
+        - Added a test to the CMake build that was forgotten in the
+          previous release.
+
+        - Added and refactored a few tests.
+
+    * Translations:
+
+        - Updated the Brazilian Portuguese translation.
+
+        - Added Brazilian Portuguese man page translation.
+
+
+5.4.1 (2023-01-11)
+
+    * liblzma:
+
+        - Fixed the return value of lzma_microlzma_encoder() if the
+          LZMA options lc/lp/pb are invalid. Invalid lc/lp/pb options
+          made the function return LZMA_STREAM_END without encoding
+          anything instead of returning LZMA_OPTIONS_ERROR.
+
+        - Windows / Visual Studio: Workaround a possible compiler bug
+          when targeting 32-bit x86 and compiling the CLMUL version of
+          the CRC64 code. The CLMUL code isn't enabled by the Windows
+          project files but it is in the CMake-based builds.
+
+    * Build systems:
+
+        - Windows-specific CMake changes:
+
+            * Don't try to enable CLMUL CRC64 code if _mm_set_epi64x()
+              isn't available. This fixes CMake-based build with Visual
+              Studio 2013.
+
+            * Created a workaround for a build failure with windres
+              from GNU binutils. It is used only when the C compiler
+              is GCC (not Clang). The workaround is incompatible
+              with llvm-windres, resulting in "XZx20Utils" instead
+              of "XZ Utils" in the resource file, but without the
+              workaround llvm-windres works correctly. See the
+              comment in CMakeLists.txt for details.
+
+            * Included the resource files in the xz and xzdec build
+              rules. Building the command line tools is still
+              experimental but possible with MinGW-w64.
+
+        - Visual Studio: Added stream_decoder_mt.c to the project
+          files. Now the threaded decompressor lzma_stream_decoder_mt()
+          gets built. CMake-based build wasn't affected.
+
+        - Updated windows/INSTALL-MSVC.txt to mention that CMake-based
+          build is now the preferred method with Visual Studio. The
+          project files will probably be removed after 5.4.x releases.
+
+        - Changes to #defines in config.h:
+
+            * HAVE_DECL_CLOCK_MONOTONIC was replaced by
+              HAVE_CLOCK_MONOTONIC. The old macro was always defined
+              in configure-generated config.h to either 0 or 1. The
+              new macro is defined (to 1) only if the declaration of
+              CLOCK_MONOTONIC is available. This matches the way most
+              other config.h macros work and makes things simpler with
+              other build systems.
+
+            * HAVE_DECL_PROGRAM_INVOCATION_NAME was replaced by
+              HAVE_PROGRAM_INVOCATION_NAME for the same reason.
+
+    * Tests:
+
+        - Fixed test script compatibility with ancient /bin/sh
+          versions. Now the five test_compress_* tests should
+          no longer fail on Solaris 10.
+
+        - Added and refactored a few tests.
+
+    * Translations:
+
+        - Updated the Catalan and Esperanto translations.
+
+        - Added Korean and Ukrainian man page translations.
+
+
+5.4.0 (2022-12-13)
+
+    This bumps the minor version of liblzma because new features were
+    added. The API and ABI are still backward compatible with liblzma
+    5.2.x and 5.0.x.
+
+    Since 5.3.5beta:
+
+    * All fixes from 5.2.10.
+
+    * The ARM64 filter is now stable. The xz option is now --arm64.
+      Decompression requires XZ Utils 5.4.0. In the future the ARM64
+      filter will be supported by XZ for Java, XZ Embedded (including
+      the version in Linux), LZMA SDK, and 7-Zip.
+
+    * Translations:
+
+        - Updated Catalan, Croatian, German, Romanian, and Turkish
+          translations.
+
+        - Updated German man page translations.
+
+        - Added Romanian man page translations.
+
+    Summary of new features added in the 5.3.x development releases:
+
+    * liblzma:
+
+        - Added threaded .xz decompressor lzma_stream_decoder_mt().
+          It can use multiple threads with .xz files that have multiple
+          Blocks with size information in Block Headers. The threaded
+          encoder in xz has always created such files.
+
+          Single-threaded encoder cannot store the size information in
+          Block Headers even if one used LZMA_FULL_FLUSH to create
+          multiple Blocks, so this threaded decoder cannot use multiple
+          threads with such files.
+
+          If there are multiple Streams (concatenated .xz files), one
+          Stream will be decompressed completely before starting the
+          next Stream.
+
+        - A new decoder flag LZMA_FAIL_FAST was added. It makes the
+          threaded decompressor report errors soon instead of first
+          flushing all pending data before the error location.
+
+        - New Filter IDs:
+            * LZMA_FILTER_ARM64 is for ARM64 binaries.
+            * LZMA_FILTER_LZMA1EXT is for raw LZMA1 streams that don't
+              necessarily use the end marker.
+
+        - Added lzma_str_to_filters(), lzma_str_from_filters(), and
+          lzma_str_list_filters() to convert a preset or a filter chain
+          string to a lzma_filter[] and vice versa. These should make
+          it easier to write applications that allow users to specify
+          custom compression options.
+
+        - Added lzma_filters_free() which can be convenient for freeing
+          the filter options in a filter chain (an array of lzma_filter
+          structures).
+
+        - lzma_file_info_decoder() to makes it a little easier to get
+          the Index field from .xz files. This helps in getting the
+          uncompressed file size but an easy-to-use random access
+          API is still missing which has existed in XZ for Java for
+          a long time.
+
+        - Added lzma_microlzma_encoder() and lzma_microlzma_decoder().
+          It is used by erofs-utils and may be used by others too.
+
+          The MicroLZMA format is a raw LZMA stream (without end marker)
+          whose first byte (always 0x00) has been replaced with
+          bitwise-negation of the LZMA properties (lc/lp/pb). It was
+          created for use in EROFS but may be used in other contexts
+          as well where it is important to avoid wasting bytes for
+          stream headers or footers. The format is also supported by
+          XZ Embedded (the XZ Embedded version in Linux got MicroLZMA
+          support in Linux 5.16).
+
+          The MicroLZMA encoder API in liblzma can compress into a
+          fixed-sized output buffer so that as much data is compressed
+          as can be fit into the buffer while still creating a valid
+          MicroLZMA stream. This is needed for EROFS.
+
+        - Added lzma_lzip_decoder() to decompress the .lz (lzip) file
+          format version 0 and the original unextended version 1 files.
+          Also lzma_auto_decoder() supports .lz files.
+
+        - lzma_filters_update() can now be used with the multi-threaded
+          encoder (lzma_stream_encoder_mt()) to change the filter chain
+          after LZMA_FULL_BARRIER or LZMA_FULL_FLUSH.
+
+        - In lzma_options_lzma, allow nice_len = 2 and 3 with the match
+          finders that require at least 3 or 4. Now it is internally
+          rounded up if needed.
+
+        - CLMUL-based CRC64 on x86-64 and E2K with runtime processor
+          detection. On 32-bit x86 it currently isn't available unless
+          --disable-assembler is used which can make the non-CLMUL
+          CRC64 slower; this might be fixed in the future.
+
+        - Building with --disable-threads --enable-small
+          is now thread-safe if the compiler supports
+          __attribute__((__constructor__)).
+
+    * xz:
+
+        - Using -T0 (--threads=0) will now use multi-threaded encoder
+          even on a single-core system. This is to ensure that output
+          from the same xz binary is identical on both single-core and
+          multi-core systems.
+
+        - --threads=+1 or -T+1 is now a way to put xz into
+          multi-threaded mode while using only one worker thread.
+          The + is ignored if the number is not 1.
+
+        - A default soft memory usage limit is now used for compression
+          when -T0 is used and no explicit limit has been specified.
+          This soft limit is used to restrict the number of threads
+          but if the limit is exceeded with even one thread then xz
+          will continue with one thread using the multi-threaded
+          encoder and this limit is ignored. If the number of threads
+          is specified manually then no default limit will be used;
+          this affects only -T0.
+
+          This change helps on systems that have very many cores and
+          using all of them for xz makes no sense. Previously xz -T0
+          could run out of memory on such systems because it attempted
+          to reserve memory for too many threads.
+
+          This also helps with 32-bit builds which don't have a large
+          amount of address space that would be required for many
+          threads. The default soft limit for -T0 is at most 1400 MiB
+          on all 32-bit platforms.
+
+        - Previously a low value in --memlimit-compress wouldn't cause
+          xz to switch from multi-threaded mode to single-threaded mode
+          if the limit cannot otherwise be met; xz failed instead. Now
+          xz can switch to single-threaded mode and then, if needed,
+          scale down the LZMA2 dictionary size too just like it already
+          did when it was started in single-threaded mode.
+
+        - The option --no-adjust no longer prevents xz from scaling down
+          the number of threads as that doesn't affect the compressed
+          output (only performance). Now --no-adjust only prevents
+          adjustments that affect compressed output, that is, with
+          --no-adjust xz won't switch from multi-threaded mode to
+          single-threaded mode and won't scale down the LZMA2
+          dictionary size.
+
+        - Added a new option --memlimit-mt-decompress=LIMIT. This is
+          used to limit the number of decompressor threads (possibly
+          falling back to single-threaded mode) but it will never make
+          xz refuse to decompress a file. This has a system-specific
+          default value because without any limit xz could end up
+          allocating memory for the whole compressed input file, the
+          whole uncompressed output file, multiple thread-specific
+          decompressor instances and so on. Basically xz could
+          attempt to use an insane amount of memory even with fairly
+          common files. The system-specific default value is currently
+          the same as the one used for compression with -T0.
+
+          The new option works together with the existing option
+          --memlimit-decompress=LIMIT. The old option sets a hard limit
+          that must not be exceeded (xz will refuse to decompress)
+          while the new option only restricts the number of threads.
+          If the limit set with --memlimit-mt-decompress is greater
+          than the limit set with --memlimit-compress, then the latter
+          value is used also for --memlimit-mt-decompress.
+
+        - Added new information to the output of xz --info-memory and
+          new fields to the output of xz --robot --info-memory.
+
+        - In --lzma2=nice=NUMBER allow 2 and 3 with all match finders
+          now that liblzma handles it.
+
+        - Don't mention endianness for ARM and ARM-Thumb filters in
+          --long-help. The filters only work for little endian
+          instruction encoding but modern ARM processors using
+          big endian data access still use little endian
+          instruction encoding. So the help text was misleading.
+          In contrast, the PowerPC filter is only for big endian
+          32/64-bit PowerPC code. Little endian PowerPC would need
+          a separate filter.
+
+        - Added decompression support for the .lz (lzip) file format
+          version 0 and the original unextended version 1. It is
+          autodetected by default. See also the option --format on
+          the xz man page.
+
+        - Sandboxing enabled by default:
+            * Capsicum (FreeBSD)
+            * pledge(2) (OpenBSD)
+
+    * Scripts now support the .lz format using xz.
+
+    * A few new tests were added.
+
+    * The liblzma-specific tests are now supported in CMake-based
+      builds too ("make test").
+
+
+5.3.5beta (2022-12-01)
+
+    * All fixes from 5.2.9.
+
+    * liblzma:
+
+        - Added new LZMA_FILTER_LZMA1EXT for raw encoder and decoder to
+          handle raw LZMA1 streams that don't have end of payload marker
+          (EOPM) alias end of stream (EOS) marker. It can be used in
+          filter chains, for example, with the x86 BCJ filter.
+
+        - Added lzma_str_to_filters(), lzma_str_from_filters(), and
+          lzma_str_list_filters() to make it easier for applications
+          to get custom compression options from a user and convert
+          it to an array of lzma_filter structures.
+
+        - Added lzma_filters_free().
+
+        - lzma_filters_update() can now be used with the multi-threaded
+          encoder (lzma_stream_encoder_mt()) to change the filter chain
+          after LZMA_FULL_BARRIER or LZMA_FULL_FLUSH.
+
+        - In lzma_options_lzma, allow nice_len = 2 and 3 with the match
+          finders that require at least 3 or 4. Now it is internally
+          rounded up if needed.
+
+        - ARM64 filter was modified. It is still experimental.
+
+        - Fixed LTO build with Clang if -fgnuc-version=10 or similar
+          was used to make Clang look like GCC >= 10. Now it uses
+          __has_attribute(__symver__) which should be reliable.
+
+    * xz:
+
+        - --threads=+1 or -T+1 is now a way to put xz into multi-threaded
+          mode while using only one worker thread.
+
+        - In --lzma2=nice=NUMBER allow 2 and 3 with all match finders
+          now that liblzma handles it.
+
+    * Updated translations: Chinese (simplified), Korean, and Turkish.
+
+
+5.3.4alpha (2022-11-15)
+
+    * All fixes from 5.2.7 and 5.2.8.
+
+    * liblzma:
+
+        - Minor improvements to the threaded decoder.
+
+        - Added CRC64 implementation that uses SSSE3, SSE4.1, and CLMUL
+          instructions on 32/64-bit x86 and E2K. On 32-bit x86 it's
+          not enabled unless --disable-assembler is used but then
+          the non-CLMUL code might be slower. Processor support is
+          detected at runtime so this is built by default on x86-64
+          and E2K. On these platforms, if compiler flags indicate
+          unconditional CLMUL support (-msse4.1 -mpclmul) then the
+          generic version is not built, making liblzma 8-9 KiB smaller
+          compared to having both versions included.
+
+          With extremely compressible files this can make decompression
+          up to twice as fast but with typical files 5 % improvement
+          is a more realistic expectation.
+
+          The CLMUL version is slower than the generic version with
+          tiny inputs (especially at 1-8 bytes per call, but up to
+          16 bytes). In normal use in xz this doesn't matter at all.
+
+        - Added an experimental ARM64 filter. This is *not* the final
+          version! Files created with this experimental version won't
+          be supported in the future versions! The filter design is
+          a compromise where improving one use case makes some other
+          cases worse.
+
+        - Added decompression support for the .lz (lzip) file format
+          version 0 and the original unextended version 1. See the
+          API docs of lzma_lzip_decoder() for details. Also
+          lzma_auto_decoder() supports .lz files.
+
+        - Building with --disable-threads --enable-small
+          is now thread-safe if the compiler supports
+          __attribute__((__constructor__))
+
+    * xz:
+
+        - Added support for OpenBSD's pledge(2) as a sandboxing method.
+
+        - Don't mention endianness for ARM and ARM-Thumb filters in
+          --long-help. The filters only work for little endian
+          instruction encoding but modern ARM processors using
+          big endian data access still use little endian
+          instruction encoding. So the help text was misleading.
+          In contrast, the PowerPC filter is only for big endian
+          32/64-bit PowerPC code. Little endian PowerPC would need
+          a separate filter.
+
+        - Added --experimental-arm64. This will be renamed once the
+          filter is finished. Files created with this experimental
+          filter will not be supported in the future!
+
+        - Added new fields to the output of xz --robot --info-memory.
+
+        - Added decompression support for the .lz (lzip) file format
+          version 0 and the original unextended version 1. It is
+          autodetected by default. See also the option --format on
+          the xz man page.
+
+    * Scripts now support the .lz format using xz.
+
+    * Build systems:
+
+        - New #defines in config.h: HAVE_ENCODER_ARM64,
+          HAVE_DECODER_ARM64, HAVE_LZIP_DECODER, HAVE_CPUID_H,
+          HAVE_FUNC_ATTRIBUTE_CONSTRUCTOR, HAVE_USABLE_CLMUL
+
+        - New configure options: --disable-clmul-crc,
+          --disable-microlzma, --disable-lzip-decoder, and
+          'pledge' is now an option in --enable-sandbox (but
+          it's autodetected by default anyway).
+
+        - INSTALL was updated to document the new configure options.
+
+        - PACKAGERS now lists also --disable-microlzma and
+          --disable-lzip-decoder as configure options that must
+          not be used in builds for non-embedded use.
+
+    * Tests:
+
+        - Fix some of the tests so that they skip instead of fail if
+          certain features have been disabled with configure options.
+          It's still not perfect.
+
+        - Other improvements to tests.
+
+    * Updated translations: Croatian, Finnish, Hungarian, Polish,
+      Romanian, Spanish, Swedish, and Ukrainian.
+
+
+5.3.3alpha (2022-08-22)
+
+    * All fixes from 5.2.6.
+
+    * liblzma:
+
+        - Fixed 32-bit build.
+
+        - Added threaded .xz decompressor lzma_stream_decoder_mt().
+          It can use multiple threads with .xz files that have multiple
+          Blocks with size information in Block Headers. The threaded
+          encoder in xz has always created such files.
+
+          Single-threaded encoder cannot store the size information in
+          Block Headers even if one used LZMA_FULL_FLUSH to create
+          multiple Blocks, so this threaded decoder cannot use multiple
+          threads with such files.
+
+          If there are multiple Streams (concatenated .xz files), one
+          Stream will be decompressed completely before starting the
+          next Stream.
+
+        - A new decoder flag LZMA_FAIL_FAST was added. It makes the
+          threaded decompressor report errors soon instead of first
+          flushing all pending data before the error location.
+
+    * xz:
+
+        - Using -T0 (--threads=0) will now use multi-threaded encoder
+          even on a single-core system. This is to ensure that output
+          from the same xz binary is identical on both single-core and
+          multi-core systems.
+
+        - A default soft memory usage limit is now used for compression
+          when -T0 is used and no explicit limit has been specified.
+          This soft limit is used to restrict the number of threads
+          but if the limit is exceeded with even one thread then xz
+          will continue with one thread using the multi-threaded
+          encoder and this limit is ignored. If the number of threads
+          is specified manually then no default limit will be used;
+          this affects only -T0.
+
+          This change helps on systems that have very many cores and
+          using all of them for xz makes no sense. Previously xz -T0
+          could run out of memory on such systems because it attempted
+          to reserve memory for too many threads.
+
+          This also helps with 32-bit builds which don't have a large
+          amount of address space that would be required for many
+          threads. The default limit is 1400 MiB on all 32-bit
+          platforms with -T0.
+
+          Now xz -T0 should just work. It might use too few threads
+          in some cases but at least it shouldn't easily run out of
+          memory. It's possible that this will be tweaked before 5.4.0.
+
+        - Changes to --memlimit-compress and --no-adjust:
+
+          In single-threaded mode, --memlimit-compress can make xz
+          scale down the LZMA2 dictionary size to meet the memory usage
+          limit. This obviously affects the compressed output. However,
+          if xz was in threaded mode, --memlimit-compress could make xz
+          reduce the number of threads but it wouldn't make xz switch
+          from multi-threaded mode to single-threaded mode or scale
+          down the LZMA2 dictionary size. This seemed illogical.
+
+          Now --memlimit-compress can make xz switch to single-threaded
+          mode if one thread in multi-threaded mode uses too much
+          memory. If memory usage is still too high, then the LZMA2
+          dictionary size can be scaled down too.
+
+          The option --no-adjust was also changed so that it no longer
+          prevents xz from scaling down the number of threads as that
+          doesn't affect compressed output (only performance). After
+          this commit --no-adjust only prevents adjustments that affect
+          compressed output, that is, with --no-adjust xz won't switch
+          from multithreaded mode to single-threaded mode and won't
+          scale down the LZMA2 dictionary size.
+
+        - Added a new option --memlimit-mt-decompress=LIMIT. This is
+          used to limit the number of decompressor threads (possibly
+          falling back to single-threaded mode) but it will never make
+          xz refuse to decompress a file. This has a system-specific
+          default value because without any limit xz could end up
+          allocating memory for the whole compressed input file, the
+          whole uncompressed output file, multiple thread-specific
+          decompressor instances and so on. Basically xz could
+          attempt to use an insane amount of memory even with fairly
+          common files.
+
+          The new option works together with the existing option
+          --memlimit-decompress=LIMIT. The old option sets a hard limit
+          that must not be exceeded (xz will refuse to decompress)
+          while the new option only restricts the number of threads.
+          If the limit set with --memlimit-mt-decompress is greater
+          than the limit set with --memlimit-compress, then the latter
+          value is used also for --memlimit-mt-decompress.
+
+    * Tests:
+
+        - Added a few more tests.
+
+        - Added tests/code_coverage.sh to create a code coverage report
+          of the tests.
+
+    * Build systems:
+
+        - Automake's parallel test harness is now used to make tests
+          finish faster.
+
+        - Added the CMake files to the distribution tarball. These were
+          supposed to be in 5.2.5 already.
+
+        - Added liblzma tests to the CMake build.
+
+        - Windows: Fix building of liblzma.dll with the included
+          Visual Studio project files.
+
+
+5.3.2alpha (2021-10-28)
+
+    This release was made on short notice so that recent erofs-utils can
+    be built with LZMA support without needing a snapshot from xz.git.
+    Thus many pending things were not included, not even updated
+    translations (which would need to be updated for the new --list
+    strings anyway).
+
+    * All fixes from 5.2.5.
+
+    * xz:
+
+        - When copying metadata from the source file to the destination
+          file, don't try to set the group (GID) if it is already set
+          correctly. This avoids a failure on OpenBSD (and possibly on
+          a few other OSes) where files may get created so that their
+          group doesn't belong to the user, and fchown(2) can fail even
+          if it needs to do nothing.
+
+        - The --keep option now accepts symlinks, hardlinks, and
+          setuid, setgid, and sticky files. Previously this required
+          using --force.
+
+        - Split the long strings used in --list and --info-memory modes
+          to make them much easier for translators.
+
+        - If built with sandbox support and enabling the sandbox fails,
+          xz will now immediately exit with exit status of 1. Previously
+          it would only display a warning if -vv was used.
+
+        - Cap --memlimit-compress to 2000 MiB on MIPS32 because on
+          MIPS32 userspace processes are limited to 2 GiB of address
+          space.
+
+    * liblzma:
+
+        - Added lzma_microlzma_encoder() and lzma_microlzma_decoder().
+          The API is in lzma/container.h.
+
+          The MicroLZMA format is a raw LZMA stream (without end marker)
+          whose first byte (always 0x00) has been replaced with
+          bitwise-negation of the LZMA properties (lc/lp/pb). It was
+          created for use in EROFS but may be used in other contexts
+          as well where it is important to avoid wasting bytes for
+          stream headers or footers. The format is also supported by
+          XZ Embedded.
+
+          The MicroLZMA encoder API in liblzma can compress into a
+          fixed-sized output buffer so that as much data is compressed
+          as can be fit into the buffer while still creating a valid
+          MicroLZMA stream. This is needed for EROFS.
+
+        - Added fuzzing support.
+
+        - Support Intel Control-flow Enforcement Technology (CET) in
+          32-bit x86 assembly files.
+
+        - Visual Studio: Use non-standard _MSVC_LANG to detect C++
+          standard version in the lzma.h API header. It's used to
+          detect when "noexcept" can be used.
+
+    * Scripts:
+
+        - Fix exit status of xzdiff/xzcmp. Exit status could be 2 when
+          the correct value is 1.
+
+        - Fix exit status of xzgrep.
+
+        - Detect corrupt .bz2 files in xzgrep.
+
+        - Add zstd support to xzgrep and xzdiff/xzcmp.
+
+        - Fix less(1) version detection in xzless. It failed if the
+          version number from "less -V" contained a dot.
+
+    * Fix typos and technical issues in man pages.
+
+    * Build systems:
+
+        - Windows: Fix building of resource files when config.h isn't
+          used. CMake + Visual Studio can now build liblzma.dll.
+
+        - Various fixes to the CMake support. It might still need a few
+          more fixes even for liblzma-only builds.
+
+
+5.3.1alpha (2018-04-29)
+
+    * All fixes from 5.2.4.
+
+    * Add lzma_file_info_decoder() into liblzma and use it in xz to
+      implement the --list feature.
+
+    * Capsicum sandbox support is enabled by default where available
+      (FreeBSD >= 10).
+
+
+5.2.13 (2024-05-29)
+
+    * liblzma:
+
+        - lzma_index_append(): Fix an assertion failure that could be
+          triggered by a large unpadded_size argument. It was verified
+          that there was no other bug than the assertion failure.
+
+        - lzma_index_decoder() and lzma_index_buffer_decode(): Fix
+          a missing output pointer initialization (*i = NULL) if the
+          functions are called with invalid arguments. The API docs
+          say that such an initialization is always done. In practice
+          this matters very little because the problem can only occur
+          if the calling application has a bug and these functions
+          return LZMA_PROG_ERROR.
+
+        - Fix C standard conformance with function pointer types.
+          This newly showed up with Clang 17 with -fsanitize=undefined.
+          There are no bug reports about this.
+
+        - Fix building with NVIDIA HPC SDK.
+
+        - Fix building with Windows Vista threads and --enable-small.
+          (CMake build doesn't support ENABLE_SMALL in XZ Utils 5.2.x.)
+
+    * xz:
+
+        - Fix a C standard conformance issue in --block-list parsing
+          (arithmetic on a null pointer).
+
+        - Fix a warning from GNU groff when processing the man page:
+          "warning: cannot select font 'CW'"
+
+        - Windows: Handle special files such as "con" or "nul". Earlier
+          the following wrote "foo" to the console and deleted the input
+          file "con_xz":
+
+              echo foo | xz > con_xz
+              xz --suffix=_xz --decompress con_xz
+
+        - Windows: Fix an issue that prevented reading from or writing
+          to non-terminal character devices like NUL.
+
+    * xzless:
+
+        - With "less" version 451 and later, use "||-" instead of "|-"
+          in the environment variable LESSOPEN. This way compressed
+          files that contain no uncompressed data are shown correctly
+          as empty.
+
+        - With "less" version 632 and later, use --show-preproc-errors
+          to make "less" show a warning on decompression errors.
+
+    * Build systems:
+
+        - Add a new line to liblzma.pc for MSYS2 (Windows):
+
+              Cflags.private: -DLZMA_API_STATIC
+
+          When compiling code that will link against static liblzma,
+          the LZMA_API_STATIC macro needs to be defined on Windows.
+
+        - Autotools (configure):
+
+            * Symbol versioning variant can now be overridden with
+              --enable-symbol-versions. Documentation in INSTALL was
+              updated to match.
+
+        - CMake:
+
+            * Fix a bug that prevented other projects from including
+              liblzma multiple times using find_package().
+
+            * Fix a bug where configuring CMake multiple times resulted
+              in HAVE_CLOCK_GETTIME and HAVE_CLOCK_MONOTONIC not being
+              defined.
+
+            * Fix the build with MinGW-w64-based Clang/LLVM 17.
+              llvm-windres now has more accurate GNU windres emulation
+              so the GNU windres workaround from 5.4.1 is needed with
+              llvm-windres version 17 too.
+
+            * The import library on Windows is now properly named
+              "liblzma.dll.a" instead of "libliblzma.dll.a"
+
+            * Add large file support by default for platforms that
+              need it to handle files larger than 2 GiB. This includes
+              MinGW-w64, even 64-bit builds.
+
+            * Linux on MicroBlaze is handled specially now. This
+              matches the changes made to the Autotools-based build
+              in XZ Utils 5.4.2 and 5.2.11.
+
+            * Disable symbol versioning on non-glibc Linux to match
+              what the Autotools build does. For example, symbol
+              versioning isn't enabled with musl.
+
+            * Symbol versioning variant can now be overridden by
+              setting SYMBOL_VERSIONING to "OFF", "generic", or
+              "linux".
+
+    * Documentation:
+
+        - Clarify the description of --disable-assembler in INSTALL.
+          The option only affects 32-bit x86 assembly usage.
+
+        - Don't install the TODO file as part of the documentation.
+          The file is out of date.
+
+        - Update home page URLs back to their old locations on
+          tukaani.org.
+
+        - Update maintainer info.
+
+
+5.2.12 (2023-05-04)
+
+    * Fixed a build system bug that prevented building liblzma as a
+      shared library when configured with --disable-threads. This bug
+      affected releases 5.2.6 to 5.2.11 and 5.4.0 to 5.4.2.
+
+    * Include <intrin.h> for Windows intrinsic functions where they are
+      needed. This fixed a bug that prevented building liblzma using
+      clang-cl on Windows.
+
+    * Minor update to the Croatian translation. The small change
+      applies to a string in both 5.2 and 5.4 branches.
+
+
+5.2.11 (2023-03-18)
+
+    * Removed all possible cases of null pointer + 0. It is undefined
+      behavior in C99 and C17. This was detected by a sanitizer and had
+      not caused any known issues.
+
+    * Build systems:
+
+        - Added a workaround for building with GCC on MicroBlaze Linux.
+          GCC 12 on MicroBlaze doesn't support the __symver__ attribute
+          even though __has_attribute(__symver__) returns true. The
+          build is now done without the extra RHEL/CentOS 7 symbols
+          that were added in XZ Utils 5.2.7. The workaround only
+          applies to the Autotools build (not CMake).
+
+        - CMake: Ensure that the C compiler language is set to C99 or
+          a newer standard.
+
+        - CMake changes from XZ Utils 5.4.1:
+
+            * Added a workaround for a build failure with
+              windres from GNU binutils.
+
+            * Included the Windows resource files in the xz
+              and xzdec build rules.
+
+
+5.2.10 (2022-12-13)
+
+    * xz: Don't modify argv[] when parsing the --memlimit* and
+      --block-list command line options. This fixes confusing
+      arguments in process listing (like "ps auxf").
+
+    * GNU/Linux only: Use __has_attribute(__symver__) to detect if
+      that attribute is supported. This fixes build on Mandriva where
+      Clang is patched to define __GNUC__ to 11 by default (instead
+      of 4 as used by Clang upstream).
+
+
+5.2.9 (2022-11-30)
+
+    * liblzma:
+
+        - Fixed an infinite loop in LZMA encoder initialization
+          if dict_size >= 2 GiB. (The encoder only supports up
+          to 1536 MiB.)
+
+        - Fixed two cases of invalid free() that can happen if
+          a tiny allocation fails in encoder re-initialization
+          or in lzma_filters_update(). These bugs had some
+          similarities with the bug fixed in 5.2.7.
+
+        - Fixed lzma_block_encoder() not allowing the use of
+          LZMA_SYNC_FLUSH with lzma_code() even though it was
+          documented to be supported. The sync-flush code in
+          the Block encoder was already used internally via
+          lzma_stream_encoder(), so this was just a missing flag
+          in the lzma_block_encoder() API function.
+
+        - GNU/Linux only: Don't put symbol versions into static
+          liblzma as it breaks things in some cases (and even if
+          it didn't break anything, symbol versions in static
+          libraries are useless anyway). The downside of the fix
+          is that if the configure options --with-pic or --without-pic
+          are used then it's not possible to build both shared and
+          static liblzma at the same time on GNU/Linux anymore;
+          with those options --disable-static or --disable-shared
+          must be used too.
+
+    * New email address for bug reports is <xz@tukaani.org> which
+      forwards messages to Lasse Collin and Jia Tan.
+
+
+5.2.8 (2022-11-13)
+
+    * xz:
+
+        - If xz cannot remove an input file when it should, this
+          is now treated as a warning (exit status 2) instead of
+          an error (exit status 1). This matches GNU gzip and it
+          is more logical as at that point the output file has
+          already been successfully closed.
+
+        - Fix handling of .xz files with an unsupported check type.
+          Previously such printed a warning message but then xz
+          behaved as if an error had occurred (didn't decompress,
+          exit status 1). Now a warning is printed, decompression
+          is done anyway, and exit status is 2. This used to work
+          slightly before 5.0.0. In practice this bug matters only
+          if xz has been built with some check types disabled. As
+          instructed in PACKAGERS, such builds should be done in
+          special situations only.
+
+        - Fix "xz -dc --single-stream tests/files/good-0-empty.xz"
+          which failed with "Internal error (bug)". That is,
+          --single-stream was broken if the first .xz stream in
+          the input file didn't contain any uncompressed data.
+
+        - Fix displaying file sizes in the progress indicator when
+          working in passthru mode and there are multiple input files.
+          Just like "gzip -cdf", "xz -cdf" works like "cat" when the
+          input file isn't a supported compressed file format. In
+          this case the file size counters weren't reset between
+          files so with multiple input files the progress indicator
+          displayed an incorrect (too large) value.
+
+    * liblzma:
+
+        - API docs in lzma/container.h:
+            * Update the list of decoder flags in the decoder
+              function docs.
+            * Explain LZMA_CONCATENATED behavior with .lzma files
+              in lzma_auto_decoder() docs.
+
+        - OpenBSD: Use HW_NCPUONLINE to detect the number of
+          available hardware threads in lzma_physmem().
+
+        - Fix use of wrong macro to detect x86 SSE2 support.
+          __SSE2_MATH__ was used with GCC/Clang but the correct
+          one is __SSE2__. The first one means that SSE2 is used
+          for floating point math which is irrelevant here.
+          The affected SSE2 code isn't used on x86-64 so this affects
+          only 32-bit x86 builds that use -msse2 without -mfpmath=sse
+          (there is no runtime detection for SSE2). It improves LZMA
+          compression speed (not decompression).
+
+        - Fix the build with Intel C compiler 2021 (ICC, not ICX)
+          on Linux. It defines __GNUC__ to 10 but doesn't support
+          the __symver__ attribute introduced in GCC 10.
+
+    * Scripts: Ignore warnings from xz by using --quiet --no-warn.
+      This is needed if the input .xz files use an unsupported
+      check type.
+
+    * Translations:
+
+        - Updated Croatian and Turkish translations.
+
+        - One new translations wasn't included because it needed
+          technical fixes. It will be in upcoming 5.4.0. No new
+          translations will be added to the 5.2.x branch anymore.
+
+        - Renamed the French man page translation file from
+          fr_FR.po to fr.po and thus also its install directory
+          (like /usr/share/man/fr_FR -> .../fr).
+
+        - Man page translations for upcoming 5.4.0 are now handled
+          in the Translation Project.
+
+    * Update doc/faq.txt a little so it's less out-of-date.
+
+
+5.2.7 (2022-09-30)
+
+    * liblzma:
+
+        - Made lzma_filters_copy() to never modify the destination
+          array if an error occurs. lzma_stream_encoder() and
+          lzma_stream_encoder_mt() already assumed this. Before this
+          change, if a tiny memory allocation in lzma_filters_copy()
+          failed it would lead to a crash (invalid free() or invalid
+          memory reads) in the cleanup paths of these two encoder
+          initialization functions.
+
+        - Added missing integer overflow check to lzma_index_append().
+          This affects xz --list and other applications that decode
+          the Index field from .xz files using lzma_index_decoder().
+          Normal decompression of .xz files doesn't call this code
+          and thus most applications using liblzma aren't affected
+          by this bug.
+
+        - Single-threaded .xz decoder (lzma_stream_decoder()): If
+          lzma_code() returns LZMA_MEMLIMIT_ERROR it is now possible
+          to use lzma_memlimit_set() to increase the limit and continue
+          decoding. This was supposed to work from the beginning
+          but there was a bug. With other decoders (.lzma or
+          threaded .xz decoder) this already worked correctly.
+
+        - Fixed accumulation of integrity check type statistics in
+          lzma_index_cat(). This bug made lzma_index_checks() return
+          only the type of the integrity check of the last Stream
+          when multiple lzma_indexes were concatenated. Most
+          applications don't use these APIs but in xz it made
+          xz --list not list all check types from concatenated .xz
+          files. In xz --list --verbose only the per-file "Check:"
+          lines were affected and in xz --robot --list only the "file"
+          line was affected.
+
+        - Added ABI compatibility with executables that were linked
+          against liblzma in RHEL/CentOS 7 or other liblzma builds
+          that had copied the problematic patch from RHEL/CentOS 7
+          (xz-5.2.2-compat-libs.patch). For the details, see the
+          comment at the top of src/liblzma/validate_map.sh.
+
+          WARNING: This uses __symver__ attribute with GCC >= 10.
+          In other cases the traditional __asm__(".symver ...")
+          is used. Using link-time optimization (LTO, -flto) with
+          GCC versions older than 10 can silently result in
+          broken liblzma.so.5 (incorrect symbol versions)! If you
+          want to use -flto with GCC, you must use GCC >= 10.
+          LTO with Clang seems to work even with the traditional
+          __asm__(".symver ...") method.
+
+    * xzgrep: Fixed compatibility with old shells that break if
+      comments inside command substitutions have apostrophes (').
+      This problem was introduced in 5.2.6.
+
+    * Build systems:
+
+        - New #define in config.h: HAVE_SYMBOL_VERSIONS_LINUX
+
+        - Windows: Fixed liblzma.dll build with Visual Studio project
+          files. It broke in 5.2.6 due to a change that was made to
+          improve CMake support.
+
+        - Windows: Building liblzma with UNICODE defined should now
+          work.
+
+        - CMake files are now actually included in the release tarball.
+          They should have been in 5.2.5 already.
+
+        - Minor CMake fixes and improvements.
+
+    * Added a new translation: Turkish
+
+
+5.2.6 (2022-08-12)
+
+    * xz:
+
+        - The --keep option now accepts symlinks, hardlinks, and
+          setuid, setgid, and sticky files. Previously this required
+          using --force.
+
+        - When copying metadata from the source file to the destination
+          file, don't try to set the group (GID) if it is already set
+          correctly. This avoids a failure on OpenBSD (and possibly on
+          a few other OSes) where files may get created so that their
+          group doesn't belong to the user, and fchown(2) can fail even
+          if it needs to do nothing.
+
+        - Cap --memlimit-compress to 2000 MiB instead of 4020 MiB on
+          MIPS32 because on MIPS32 userspace processes are limited
+          to 2 GiB of address space.
+
+    * liblzma:
+
+        - Fixed a missing error-check in the threaded encoder. If a
+          small memory allocation fails, a .xz file with an invalid
+          Index field would be created. Decompressing such a file would
+          produce the correct output but result in an error at the end.
+          Thus this is a "mild" data corruption bug. Note that while
+          a failed memory allocation can trigger the bug, it cannot
+          cause invalid memory access.
+
+        - The decoder for .lzma files now supports files that have
+          uncompressed size stored in the header and still use the
+          end of payload marker (end of stream marker) at the end
+          of the LZMA stream. Such files are rare but, according to
+          the documentation in LZMA SDK, they are valid.
+          doc/lzma-file-format.txt was updated too.
+
+        - Improved 32-bit x86 assembly files:
+            * Support Intel Control-flow Enforcement Technology (CET)
+            * Use non-executable stack on FreeBSD.
+
+        - Visual Studio: Use non-standard _MSVC_LANG to detect C++
+          standard version in the lzma.h API header. It's used to
+          detect when "noexcept" can be used.
+
+    * xzgrep:
+
+        - Fixed arbitrary command injection via a malicious filename
+          (CVE-2022-1271, ZDI-CAN-16587). A standalone patch for
+          this was released to the public on 2022-04-07. A slight
+          robustness improvement has been made since then and, if
+          using GNU or *BSD grep, a new faster method is now used
+          that doesn't use the old sed-based construct at all. This
+          also fixes bad output with GNU grep >= 3.5 (2020-09-27)
+          when xzgrepping binary files.
+
+          This vulnerability was discovered by:
+          cleemy desu wayo working with Trend Micro Zero Day Initiative
+
+        - Fixed detection of corrupt .bz2 files.
+
+        - Improved error handling to fix exit status in some situations
+          and to fix handling of signals: in some situations a signal
+          didn't make xzgrep exit when it clearly should have. It's
+          possible that the signal handling still isn't quite perfect
+          but hopefully it's good enough.
+
+        - Documented exit statuses on the man page.
+
+        - xzegrep and xzfgrep now use "grep -E" and "grep -F" instead
+          of the deprecated egrep and fgrep commands.
+
+        - Fixed parsing of the options -E, -F, -G, -P, and -X. The
+          problem occurred when multiple options were specified in
+          a single argument, for example,
+
+              echo foo | xzgrep -Fe foo
+
+          treated foo as a filename because -Fe wasn't correctly
+          split into -F -e.
+
+        - Added zstd support.
+
+    * xzdiff/xzcmp:
+
+        - Fixed wrong exit status. Exit status could be 2 when the
+          correct value is 1.
+
+        - Documented on the man page that exit status of 2 is used
+          for decompression errors.
+
+        - Added zstd support.
+
+    * xzless:
+
+        - Fix less(1) version detection. It failed if the version number
+          from "less -V" contained a dot.
+
+    * Translations:
+
+        - Added new translations: Catalan, Croatian, Esperanto,
+          Korean, Portuguese, Romanian, Serbian, Spanish, Swedish,
+          and Ukrainian
+
+        - Updated the Brazilian Portuguese translation.
+
+        - Added French man page translation. This and the existing
+          German translation aren't complete anymore because the
+          English man pages got a few updates and the translators
+          weren't reached so that they could update their work.
+
+    * Build systems:
+
+        - Windows: Fix building of resource files when config.h isn't
+          used. CMake + Visual Studio can now build liblzma.dll.
+
+        - Various fixes to the CMake support. Building static or shared
+          liblzma should work fine in most cases. In contrast, building
+          the command line tools with CMake is still clearly incomplete
+          and experimental and should be used for testing only.
+
+
+5.2.5 (2020-03-17)
+
+    * liblzma:
+
+        - Fixed several C99/C11 conformance bugs. Now the code is clean
+          under gcc/clang -fsanitize=undefined. Some of these changes
+          might have a negative effect on performance with old GCC
+          versions or compilers other than GCC and Clang. The configure
+          option --enable-unsafe-type-punning can be used to (mostly)
+          restore the old behavior but it shouldn't normally be used.
+
+        - Improved API documentation of lzma_properties_decode().
+
+        - Added a very minor encoder speed optimization.
+
+    * xz:
+
+        - Fixed a crash in "xz -dcfv not_an_xz_file". All four options
+          were required to trigger it. The crash occurred in the
+          progress indicator code when xz was in passthru mode where
+          xz works like "cat".
+
+        - Fixed an integer overflow with 32-bit off_t. It could happen
+          when decompressing a file that has a long run of zero bytes
+          which xz would try to write as a sparse file. Since the build
+          system enables large file support by default, off_t is
+          normally 64-bit even on 32-bit systems.
+
+        - Fixes for --flush-timeout:
+            * Fix semi-busy-waiting.
+            * Avoid unneeded flushes when no new input has arrived
+              since the previous flush was completed.
+
+        - Added a special case for 32-bit xz: If --memlimit-compress is
+          used to specify a limit that exceeds 4020 MiB, the limit will
+          be set to 4020 MiB. The values "0" and "max" aren't affected
+          by this and neither is decompression. This hack can be
+          helpful when a 32-bit xz has access to 4 GiB address space
+          but the specified memlimit exceeds 4 GiB. This can happen
+          e.g. with some scripts.
+
+        - Capsicum sandbox is now enabled by default where available
+          (FreeBSD >= 10). The sandbox debug messages (xz -vv) were
+          removed since they seemed to be more annoying than useful.
+
+        - DOS build now requires DJGPP 2.05 instead of 2.04beta.
+          A workaround for a locale problem with DJGPP 2.05 was added.
+
+    * xzgrep and other scripts:
+
+        - Added a configure option --enable-path-for-scripts=PREFIX.
+          It is disabled by default except on Solaris where the default
+          is /usr/xpg4/bin. See INSTALL for details.
+
+        - Added a workaround for a POSIX shell detection problem on
+          Solaris.
+
+    * Build systems:
+
+        - Added preliminary build instructions for z/OS. See INSTALL
+          section 1.2.9.
+
+        - Experimental CMake support was added. It should work to build
+          static liblzma on a few operating systems. It may or may not
+          work to build shared liblzma. On some platforms it can build
+          xz and xzdec too but those are only for testing. See the
+          comment in the beginning of CMakeLists.txt for details.
+
+        - Visual Studio project files were updated.
+          WindowsTargetPlatformVersion was removed from VS2017 files
+          and set to "10.0" in the added VS2019 files. In the future
+          the VS project files will be removed when CMake support is
+          good enough.
+
+        - New #defines in config.h: HAVE___BUILTIN_ASSUME_ALIGNED,
+          HAVE___BUILTIN_BSWAPXX, and TUKLIB_USE_UNSAFE_TYPE_PUNNING.
+
+        - autogen.sh has a new optional dependency on po4a and a new
+          option --no-po4a to skip that step. This matters only if one
+          wants to remake the build files. po4a is used to update the
+          translated man pages but as long as the man pages haven't
+          been modified, there's nothing to update and one can use
+          --no-po4a to avoid the dependency on po4a.
+
+    * Translations:
+
+        - XZ Utils translations are now handled by the Translation
+          Project: https://translationproject.org/domain/xz.html
+
+        - All man pages are now included in German too.
+
+        - New xz translations: Brazilian Portuguese, Finnish,
+          Hungarian, Chinese (simplified), Chinese (traditional),
+          and Danish (partial translation)
+
+        - Updated xz translations: French, German, Italian, and Polish
+
+        - Unfortunately a few new xz translations weren't included due
+          to technical problems like too long lines in --help output or
+          misaligned column headings in tables. In the future, many of
+          these strings will be split and e.g. the table column
+          alignment will be handled in software. This should make the
+          strings easier to translate.
+
+
+5.2.4 (2018-04-29)
+
+    * liblzma:
+
+        - Allow 0 as memory usage limit instead of returning
+          LZMA_PROG_ERROR. Now 0 is treated as if 1 byte was specified,
+          which effectively is the same as 0.
+
+        - Use "noexcept" keyword instead of "throw()" in the public
+          headers when a C++11 (or newer standard) compiler is used.
+
+        - Added a portability fix for recent Intel C Compilers.
+
+        - Microsoft Visual Studio build files have been moved under
+          windows/vs2013 and windows/vs2017.
+
+    * xz:
+
+        - Fix "xz --list --robot missing_or_bad_file.xz" which would
+          try to print an uninitialized string and thus produce garbage
+          output. Since the exit status is non-zero, most uses of such
+          a command won't try to interpret the garbage output.
+
+        - "xz --list foo.xz" could print "Internal error (bug)" in a
+          corner case where a specific memory usage limit had been set.
+
+
+5.2.3 (2016-12-30)
+
+    * xz:
+
+        - Always close a file before trying to delete it to avoid
+          problems on some operating system and file system combinations.
+
+        - Fixed copying of file timestamps on Windows.
+
+        - Added experimental (disabled by default) sandbox support using
+          Capsicum (FreeBSD >= 10). See --enable-sandbox in INSTALL.
+
+    * C99/C11 conformance fixes to liblzma. The issues affected at least
+      some builds using link-time optimizations.
+
+    * Fixed bugs in the rarely-used function lzma_index_dup().
+
+    * Use of external SHA-256 code is now disabled by default.
+      It can still be enabled by passing --enable-external-sha256
+      to configure. The reasons to disable it by default (see INSTALL
+      for more details):
+
+        - Some OS-specific SHA-256 implementations conflict with
+          OpenSSL and cause problems in programs that link against both
+          liblzma and libcrypto. At least FreeBSD 10 and MINIX 3.3.0
+          are affected.
+
+        - The internal SHA-256 is faster than the SHA-256 code in
+          some operating systems.
+
+    * Changed CPU core count detection to use sched_getaffinity() on
+      GNU/Linux and GNU/kFreeBSD.
+
+    * Fixes to the build-system and xz to make xz buildable even when
+      encoders, decoders, or threading have been disabled from libilzma
+      using configure options. These fixes added two new #defines to
+      config.h: HAVE_ENCODERS and HAVE_DECODERS.
+
+
+5.2.2 (2015-09-29)
+
+    * Fixed bugs in QNX-specific code.
+
+    * Omitted the use of pipe2() even if it is available to avoid
+      portability issues with some old Linux and glibc combinations.
+
+    * Updated German translation.
+
+    * Added project files to build static and shared liblzma (not the
+      whole XZ Utils) with Visual Studio 2013 update 2 or later.
+
+    * Documented that threaded decompression hasn't been implemented
+      yet. A 5.2.0 NEWS entry describing multi-threading support had
+      incorrectly said "decompression" when it should have said
+      "compression".
+
+
+5.2.1 (2015-02-26)
+
+    * Fixed a compression-ratio regression in fast mode of LZMA1 and
+      LZMA2. The bug is present in 5.1.4beta and 5.2.0 releases.
+
+    * Fixed a portability problem in xz that affected at least OpenBSD.
+
+    * Fixed xzdiff to be compatible with FreeBSD's mktemp which differs
+      from most other mktemp implementations.
+
+    * Changed CPU core count detection to use cpuset_getaffinity() on
+      FreeBSD.
+
+
+5.2.0 (2014-12-21)
+
+    Since 5.1.4beta:
+
+    * All fixes from 5.0.8
+
+    * liblzma: Fixed lzma_stream_encoder_mt_memusage() when a preset
+      was used.
+
+    * xzdiff: If mktemp isn't installed, mkdir will be used as
+      a fallback to create a temporary directory. Installing mktemp
+      is still recommended.
+
+    * Updated French, German, Italian, Polish, and Vietnamese
+      translations.
+
+    Summary of fixes and new features added in the 5.1.x development
+    releases:
+
+    * liblzma:
+
+        - Added support for multi-threaded compression. See the
+          lzma_mt structure, lzma_stream_encoder_mt(), and
+          lzma_stream_encoder_mt_memusage() in <lzma/container.h>,
+          lzma_get_progress() in <lzma/base.h>, and lzma_cputhreads()
+          in <lzma/hardware.h> for details.
+
+        - Made the uses of lzma_allocator const correct.
+
+        - Added lzma_block_uncomp_encode() to create uncompressed
+          .xz Blocks using LZMA2 uncompressed chunks.
+
+        - Added support for LZMA_IGNORE_CHECK.
+
+        - A few speed optimizations were made.
+
+        - Added support for symbol versioning. It is enabled by default
+          on GNU/Linux, other GNU-based systems, and FreeBSD.
+
+        - liblzma (not the whole XZ Utils) should now be buildable
+          with MSVC 2013 update 2 or later using windows/config.h.
+
+    * xz:
+
+        - Fixed a race condition in the signal handling. It was
+          possible that e.g. the first SIGINT didn't make xz exit
+          if reading or writing blocked and one had bad luck. The fix
+          is non-trivial, so as of writing it is unknown if it will be
+          backported to the v5.0 branch.
+
+        - Multi-threaded compression can be enabled with the
+          --threads (-T) option.
+          [Fixed: This originally said "decompression".]
+
+        - New command line options in xz: --single-stream,
+          --block-size=SIZE, --block-list=SIZES,
+          --flush-timeout=TIMEOUT, and --ignore-check.
+
+        - xz -lvv now shows the minimum xz version that is required to
+          decompress the file. Currently it is 5.0.0 for all supported
+          .xz files except files with empty LZMA2 streams require 5.0.2.
+
+    * xzdiff and xzgrep now support .lzo files if lzop is installed.
+      The .tzo suffix is also recognized as a shorthand for .tar.lzo.
+
+
+5.1.4beta (2014-09-14)
+
+    * All fixes from 5.0.6
+
+    * liblzma: Fixed the use of presets in threaded encoder
+      initialization.
+
+    * xz --block-list and --block-size can now be used together
+      in single-threaded mode. Previously the combination only
+      worked in multi-threaded mode.
+
+    * Added support for LZMA_IGNORE_CHECK to liblzma and made it
+      available in xz as --ignore-check.
+
+    * liblzma speed optimizations:
+
+        - Initialization of a new LZMA1 or LZMA2 encoder has been
+          optimized. (The speed of reinitializing an already-allocated
+          encoder isn't affected.) This helps when compressing many
+          small buffers with lzma_stream_buffer_encode() and other
+          similar situations where an already-allocated encoder state
+          isn't reused. This speed-up is visible in xz too if one
+          compresses many small files one at a time instead running xz
+          once and giving all files as command-line arguments.
+
+        - Buffer comparisons are now much faster when unaligned access
+          is allowed (configured with --enable-unaligned-access). This
+          speeds up encoding significantly. There is arch-specific code
+          for 32-bit and 64-bit x86 (32-bit needs SSE2 for the best
+          results and there's no run-time CPU detection for now).
+          For other archs there is only generic code which probably
+          isn't as optimal as arch-specific solutions could be.
+
+        - A few speed optimizations were made to the SHA-256 code.
+          (Note that the builtin SHA-256 code isn't used on all
+          operating systems.)
+
+    * liblzma can now be built with MSVC 2013 update 2 or later
+      using windows/config.h.
+
+    * Vietnamese translation was added.
+
+
+5.1.3alpha (2013-10-26)
+
+    * All fixes from 5.0.5
+
+    * liblzma:
+
+        - Fixed a deadlock in the threaded encoder.
+
+        - Made the uses of lzma_allocator const correct.
+
+        - Added lzma_block_uncomp_encode() to create uncompressed
+          .xz Blocks using LZMA2 uncompressed chunks.
+
+        - Added support for native threads on Windows and the ability
+          to detect the number of CPU cores.
+
+    * xz:
+
+        - Fixed a race condition in the signal handling. It was
+          possible that e.g. the first SIGINT didn't make xz exit
+          if reading or writing blocked and one had bad luck. The fix
+          is non-trivial, so as of writing it is unknown if it will be
+          backported to the v5.0 branch.
+
+        - Made the progress indicator work correctly in threaded mode.
+
+        - Threaded encoder now works together with --block-list=SIZES.
+
+        - Added preliminary support for --flush-timeout=TIMEOUT.
+          It can be useful for (somewhat) real-time streaming. For
+          now the decompression side has to be done with something
+          else than the xz tool due to how xz does buffering, but this
+          should be fixed.
+
+
+5.1.2alpha (2012-07-04)
+
+    * All fixes from 5.0.3 and 5.0.4
+
+    * liblzma:
+
+        - Fixed a deadlock and an invalid free() in the threaded encoder.
+
+        - Added support for symbol versioning. It is enabled by default
+          on GNU/Linux, other GNU-based systems, and FreeBSD.
+
+        - Use SHA-256 implementation from the operating system if one is
+          available in libc, libmd, or libutil. liblzma won't use e.g.
+          OpenSSL or libgcrypt to avoid introducing new dependencies.
+
+        - Fixed liblzma.pc for static linking.
+
+        - Fixed a few portability bugs.
+
+    * xz --decompress --single-stream now fixes the input position after
+      successful decompression. Now the following works:
+
+          echo foo | xz > foo.xz
+          echo bar | xz >> foo.xz
+          ( xz -dc --single-stream ; xz -dc --single-stream ) < foo.xz
+
+      Note that it doesn't work if the input is not seekable
+      or if there is Stream Padding between the concatenated
+      .xz Streams.
+
+    * xz -lvv now shows the minimum xz version that is required to
+      decompress the file. Currently it is 5.0.0 for all supported .xz
+      files except files with empty LZMA2 streams require 5.0.2.
+
+    * Added an *incomplete* implementation of --block-list=SIZES to xz.
+      It only works correctly in single-threaded mode and when
+      --block-size isn't used at the same time. --block-list allows
+      specifying the sizes of Blocks which can be useful e.g. when
+      creating files for random-access reading.
+
+
+5.1.1alpha (2011-04-12)
+
+    * All fixes from 5.0.2
+
+    * liblzma fixes that will also be included in 5.0.3:
+
+        - A memory leak was fixed.
+
+        - lzma_stream_buffer_encode() no longer creates an empty .xz
+          Block if encoding an empty buffer. Such an empty Block with
+          LZMA2 data would trigger a bug in 5.0.1 and older (see the
+          first bullet point in 5.0.2 notes). When releasing 5.0.2,
+          I thought that no encoder creates this kind of files but
+          I was wrong.
+
+        - Validate function arguments better in a few functions. Most
+          importantly, specifying an unsupported integrity check to
+          lzma_stream_buffer_encode() no longer creates a corrupt .xz
+          file. Probably no application tries to do that, so this
+          shouldn't be a big problem in practice.
+
+        - Document that lzma_block_buffer_encode(),
+          lzma_easy_buffer_encode(), lzma_stream_encoder(), and
+          lzma_stream_buffer_encode() may return LZMA_UNSUPPORTED_CHECK.
+
+        - The return values of the _memusage() functions are now
+          documented better.
+
+    * Support for multithreaded compression was added using the simplest
+      method, which splits the input data into blocks and compresses
+      them independently. Other methods will be added in the future.
+      The current method has room for improvement, e.g. it is possible
+      to reduce the memory usage.
+
+    * Added the options --single-stream and --block-size=SIZE to xz.
+
+    * xzdiff and xzgrep now support .lzo files if lzop is installed.
+      The .tzo suffix is also recognized as a shorthand for .tar.lzo.
+
+    * Support for short 8.3 filenames under DOS was added to xz. It is
+      experimental and may change before it gets into a stable release.
+
+
+5.0.8 (2014-12-21)
+
+    * Fixed an old bug in xzgrep that affected OpenBSD and probably
+      a few other operating systems too.
+
+    * Updated French and German translations.
+
+    * Added support for detecting the amount of RAM on AmigaOS/AROS.
+
+    * Minor build system updates.
+
+
+5.0.7 (2014-09-20)
+
+    * Fix regressions introduced in 5.0.6:
+
+        - Fix building with non-GNU make.
+
+        - Fix invalid Libs.private value in liblzma.pc which broke
+          static linking against liblzma if the linker flags were
+          taken from pkg-config.
+
+
+5.0.6 (2014-09-14)
+
+    * xzgrep now exits with status 0 if at least one file matched.
+
+    * A few minor portability and build system fixes
+
+
+5.0.5 (2013-06-30)
+
+    * lzmadec and liblzma's lzma_alone_decoder(): Support decompressing
+      .lzma files that have less common settings in the headers
+      (dictionary size other than 2^n or 2^n + 2^(n-1), or uncompressed
+      size greater than 256 GiB). The limitations existed to avoid false
+      positives when detecting .lzma files. The lc + lp <= 4 limitation
+      still remains since liblzma's LZMA decoder has that limitation.
+
+      NOTE: xz's .lzma support or liblzma's lzma_auto_decoder() are NOT
+      affected by this change. They still consider uncommon .lzma headers
+      as not being in the .lzma format. Changing this would give way too
+      many false positives.
+
+    * xz:
+
+        - Interaction of preset and custom filter chain options was
+          made less illogical. This affects only certain less typical
+          uses cases so few people are expected to notice this change.
+
+          Now when a custom filter chain option (e.g. --lzma2) is
+          specified, all preset options (-0 ... -9, -e) earlier are on
+          the command line are completely forgotten. Similarly, when
+          a preset option is specified, all custom filter chain options
+          earlier on the command line are completely forgotten.
+
+          Example 1: "xz -9 --lzma2=preset=5 -e" is equivalent to "xz -e"
+          which is equivalent to "xz -6e". Earlier -e didn't put xz back
+          into preset mode and thus the example command was equivalent
+          to "xz --lzma2=preset=5".
+
+          Example 2: "xz -9e --lzma2=preset=5 -7" is equivalent to
+          "xz -7". Earlier a custom filter chain option didn't make
+          xz forget the -e option so the example was equivalent to
+          "xz -7e".
+
+        - Fixes and improvements to error handling.
+
+        - Various fixes to the man page.
+
+    * xzless: Fixed to work with "less" versions 448 and later.
+
+    * xzgrep: Made -h an alias for --no-filename.
+
+    * Include the previously missing debug/translation.bash which can
+      be useful for translators.
+
+    * Include a build script for Mac OS X. This has been in the Git
+      repository since 2010 but due to a mistake in Makefile.am the
+      script hasn't been included in a release tarball before.
+
+
+5.0.4 (2012-06-22)
+
+    * liblzma:
+
+        - Fix lzma_index_init(). It could crash if memory allocation
+          failed.
+
+        - Fix the possibility of an incorrect LZMA_BUF_ERROR when a BCJ
+          filter is used and the application only provides exactly as
+          much output space as is the uncompressed size of the file.
+
+        - Fix a bug in doc/examples_old/xz_pipe_decompress.c. It didn't
+          check if the last call to lzma_code() really returned
+          LZMA_STREAM_END, which made the program think that truncated
+          files are valid.
+
+        - New example programs in doc/examples (old programs are now in
+          doc/examples_old). These have more comments and more detailed
+          error handling.
+
+    * Fix "xz -lvv foo.xz". It could crash on some corrupted files.
+
+    * Fix output of "xz --robot -lv" and "xz --robot -lvv" which
+      incorrectly printed the filename also in the "foo (x/x)" format.
+
+    * Fix exit status of "xzdiff foo.xz bar.xz".
+
+    * Fix exit status of "xzgrep foo binary_file".
+
+    * Fix portability to EBCDIC systems.
+
+    * Fix a configure issue on AIX with the XL C compiler. See INSTALL
+      for details.
+
+    * Update French, German, Italian, and Polish translations.
+
+
+5.0.3 (2011-05-21)
+
+    * liblzma fixes:
+
+        - A memory leak was fixed.
+
+        - lzma_stream_buffer_encode() no longer creates an empty .xz
+          Block if encoding an empty buffer. Such an empty Block with
+          LZMA2 data would trigger a bug in 5.0.1 and older (see the
+          first bullet point in 5.0.2 notes). When releasing 5.0.2,
+          I thought that no encoder creates this kind of files but
+          I was wrong.
+
+        - Validate function arguments better in a few functions. Most
+          importantly, specifying an unsupported integrity check to
+          lzma_stream_buffer_encode() no longer creates a corrupt .xz
+          file. Probably no application tries to do that, so this
+          shouldn't be a big problem in practice.
+
+        - Document that lzma_block_buffer_encode(),
+          lzma_easy_buffer_encode(), lzma_stream_encoder(), and
+          lzma_stream_buffer_encode() may return LZMA_UNSUPPORTED_CHECK.
+
+        - The return values of the _memusage() functions are now
+          documented better.
+
+    * Fix command name detection in xzgrep. xzegrep and xzfgrep now
+      correctly use egrep and fgrep instead of grep.
+
+    * French translation was added.
+
+
+5.0.2 (2011-04-01)
+
+    * LZMA2 decompressor now correctly accepts LZMA2 streams with no
+      uncompressed data. Previously it considered them corrupt. The
+      bug can affect applications that use raw LZMA2 streams. It is
+      very unlikely to affect .xz files because no compressor creates
+      .xz files with empty LZMA2 streams. (Empty .xz files are a
+      different thing than empty LZMA2 streams.)
+
+    * "xz --suffix=.foo filename.foo" now refuses to compress the
+      file due to it already having the suffix .foo. It was already
+      documented on the man page, but the code lacked the test.
+
+    * "xzgrep -l foo bar.xz" works now.
+
+    * Polish translation was added.
+
+
+5.0.1 (2011-01-29)
+
+    * xz --force now (de)compresses files that have setuid, setgid,
+      or sticky bit set and files that have multiple hard links.
+      The man page had it documented this way already, but the code
+      had a bug.
+
+    * gzip and bzip2 support in xzdiff was fixed.
+
+    * Portability fixes
+
+    * Minor fix to Czech translation
+
+
+5.0.0 (2010-10-23)
+
+    Only the most important changes compared to 4.999.9beta are listed
+    here. One change is especially important:
+
+      * The memory usage limit is now disabled by default. Some scripts
+        written before this change may have used --memory=max on xz command
+        line or in XZ_OPT. THESE USES OF --memory=max SHOULD BE REMOVED
+        NOW, because they interfere with user's ability to set the memory
+        usage limit himself. If user-specified limit causes problems to
+        your script, blame the user.
+
+    Other significant changes:
+
+      * Added support for XZ_DEFAULTS environment variable. This variable
+        allows users to set default options for xz, e.g. default memory
+        usage limit or default compression level. Scripts that use xz
+        must never set or unset XZ_DEFAULTS. Scripts should use XZ_OPT
+        instead if they need a way to pass options to xz via an
+        environment variable.
+
+      * The compression settings associated with the preset levels
+        -0 ... -9 have been changed. --extreme was changed a little too.
+        It is now less likely to make compression worse, but with some
+        files the new --extreme may compress slightly worse than the old
+        --extreme.
+
+      * If a preset level (-0 ... -9) is specified after a custom filter
+        chain options have been used (e.g. --lzma2), the custom filter
+        chain will be forgotten. Earlier the preset options were
+        completely ignored after custom filter chain options had been
+        seen.
+
+      * xz will create sparse files when decompressing if the uncompressed
+        data contains long sequences of binary zeros. This is done even
+        when writing to standard output that is connected to a regular
+        file and certain additional conditions are met to make it safe.
+
+      * Support for "xz --list" was added. Combine with --verbose or
+        --verbose --verbose (-vv) for detailed output.
+
+      * I had hoped that liblzma API would have been stable after
+        4.999.9beta, but there have been a couple of changes in the
+        advanced features, which don't affect most applications:
+
+          - Index handling code was revised. If you were using the old
+            API, you will get a compiler error (so it's easy to notice).
+
+          - A subtle but important change was made to the Block handling
+            API. lzma_block.version has to be initialized even for
+            lzma_block_header_decode(). Code that doesn't do it will work
+            for now, but might break in the future, which makes this API
+            change easy to miss.
+
+      * The major soname has been bumped to 5.0.0. liblzma API and ABI
+        are now stable, so the need to recompile programs linking against
+        liblzma shouldn't arise soon.
+

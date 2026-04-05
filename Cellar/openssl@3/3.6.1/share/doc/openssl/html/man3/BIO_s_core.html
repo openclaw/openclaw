@@ -1,0 +1,83 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>BIO_s_core</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>BIO_s_core, BIO_new_from_core_bio - OSSL_CORE_BIO functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/bio.h&gt;
+
+const BIO_METHOD *BIO_s_core(void);
+
+BIO *BIO_new_from_core_bio(OSSL_LIB_CTX *libctx, OSSL_CORE_BIO *corebio);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>BIO_s_core() returns the core BIO method function.</p>
+
+<p>A core BIO is treated as source/sink BIO which communicates to some external BIO. This is primarily useful to provider authors. A number of calls from libcrypto into a provider supply an OSSL_CORE_BIO parameter. This represents a BIO within libcrypto, but cannot be used directly by a provider. Instead it should be wrapped using a BIO_s_core().</p>
+
+<p>Once a BIO is constructed based on BIO_s_core(), the associated OSSL_CORE_BIO object should be set on it using BIO_set_data(3). Note that the BIO will only operate correctly if it is associated with a library context constructed using OSSL_LIB_CTX_new_from_dispatch(3). To associate the BIO with a library context construct it using BIO_new_ex(3).</p>
+
+<p>BIO_new_from_core_bio() is a convenience function that constructs a new BIO based on BIO_s_core() and that is associated with the given library context. It then also sets the OSSL_CORE_BIO object on the BIO using BIO_set_data(3).</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>BIO_s_core() return a core BIO <b>BIO_METHOD</b> structure.</p>
+
+<p>BIO_new_from_core_bio() returns a BIO structure on success or NULL on failure. A failure will most commonly be because the library context was not constructed using OSSL_LIB_CTX_new_from_dispatch(3).</p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>BIO_s_core() and BIO_new_from_core_bio() were added in OpenSSL 3.0.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>Create a core BIO and write some data to it:</p>
+
+<pre><code>int some_function(OSSL_LIB_CTX *libctx, OSSL_CORE_BIO *corebio) {
+    BIO *cbio = BIO_new_from_core_bio(libctx, corebio);
+
+    if (cbio == NULL)
+        return 0;
+
+    BIO_puts(cbio, &quot;Hello World\n&quot;);
+
+    BIO_free(cbio);
+    return 1;
+}</code></pre>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2021-2022 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

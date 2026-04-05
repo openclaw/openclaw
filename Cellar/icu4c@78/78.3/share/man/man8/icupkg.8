@@ -1,0 +1,206 @@
+.\" Hey, Emacs! This is -*-nroff-*- you know...
+.\"
+.\" icupkg.8: manual page for the icupkg utility
+.\"
+.\" Copyright (C) 2016 and later: Unicode, Inc. and others.
+.\" License & terms of use: http://www.unicode.org/copyright.html
+.\" Copyright (C) 2000-2006 IBM, Inc. and others.
+.\"
+.TH ICUPKG 8 "18 August 2006" "ICU MANPAGE" "ICU 78.3 Manual"
+.SH NAME
+.B icupkg
+\- extract or modify an ICU
+.B .dat
+archive
+.SH SYNOPSIS
+.B icupkg
+[
+.BR "\-h\fP, \fB\-?\fP, \fB\-\-help"
+]
+[
+.BR "\-tl\fP, \fB\-\-type" " l"
+|
+.BR "\-tb\fP, \fB\-\-type" " b"
+|
+.BR "\-te\fP, \fB\-\-type" " e"
+]
+[
+.BR "\-c\fP, \fB\-\-copyright"
+|
+.BI "\-C\fP, \fB\-\-comment" " comment"
+]
+[
+.BI "\-a\fP, \fB\-\-add" " list"
+]
+[
+.BI "\-r\fP, \fB\-\-remove" " list"
+]
+[
+.BI "\-x\fP, \fB\-\-extract" " list"
+]
+[
+.BI "\-l\fP, \fB\-\-list"
+]
+[
+.BI "\-s\fP, \fB\-\-sourcedir" " source"
+]
+[
+.BI "\-d\fP, \fB\-\-destdir" " destination"
+]
+[
+.BI "\-w\fP, \fB\-\-writepkg"
+]
+[
+.BI "\-m\fP, \fB\-\-matchmode" " mode"
+]
+.IR infilename
+[
+.BI "outfilename"
+]
+.SH DESCRIPTION
+.B icupkg
+reads the input ICU
+.B .dat
+package file, modify it according to the options,
+swap it to the desired platform properties (charset & endianness),
+and optionally write the resulting ICU
+.B .dat
+package to the output file.
+Items are removed, then added, then extracted and listed.
+An ICU
+.B .dat
+package is written if items are removed or added,
+or if the input and output filenames differ,
+or if the
+.BR "\-w\fP, \fB\-\-writepkg"
+option is set.
+.PP
+If the input filename is "new" then an empty package is created.
+If the output filename is missing, then it is automatically generated
+from the input filename. If the input filename ends with an l, b, or e
+matching its platform properties, then the output filename will
+contain the letter from the
+.BI "\-t\fP, \fB\-\-type"
+option.
+.PP
+This tool can also be used to just swap a single ICU data file, replacing the
+former icuswap tool. For this mode, provide the infilename (and optional
+outfilename) for a non-package ICU data file.
+Allowed options include
+.BI "\-t\fP, \fB\-w\fP, \fB\-s\fP"
+and
+.BI \-d
+.
+The filenames can be absolute, or relative to the source/dest dir paths.
+Other options are not allowed in this mode.
+.SH OPTIONS
+.TP
+.BR "\-h\fP, \fB\-?\fP, \fB\-\-help"
+Print help about usage and exit.
+.TP
+.BI "\-tl\fP, \fB\-\-type" " l"
+Output for little-endian/ASCII charset family.
+The output type defaults to the input type.
+.TP
+.BI "\-tb\fP, \fB\-\-type" " b"
+Output for big-endian/ASCII charset family.
+The output type defaults to the input type.
+.TP
+.BI "\-te\fP, \fB\-\-type" " e"
+Output for big-endian/EBCDIC charset family.
+The output type defaults to the input type.
+.TP
+.BR \-c\fP, \fB\-\-copyright
+Include the ICU copyright notice in the resulting data.
+.TP
+.BI "\-C\fP, \fB\-\-comment" " comment"
+Include the specified
+.I comment
+in the resulting data instead of the ICU copyright notice. 
+.TP
+.BI "\-a\fP, \fB\-\-add" " list"
+Add items from the
+.I list
+to the package. The list can be a single filename with a
+.B .txt
+file extension containing a list of item filenames, or an ICU
+.B .dat
+package filename.
+.TP
+.BI "\-r\fP, \fB\-\-remove" " list"
+Remove items from the
+.I list
+from the package. The list can be a single filename with a
+.B .txt
+file extension containing a list of item filenames, or an ICU
+.B .dat
+package filename.
+.TP
+.BI "\-x\fP, \fB\-\-extract" " list"
+Extract items from the
+.I list
+from the package. The list can be a single filename with a
+.B .txt
+file extension containing a list of item filenames, or an ICU
+.B .dat
+package filename.
+.TP
+.BI "\-m\fP, \fB\-\-matchmode" " mode"
+Set the matching mode for item names with wildcards.
+.TP
+.BI "\-s\fP, \fB\-\-sourcedir" " source"
+Set the source directory to
+.IR source .
+The default source directory is the current directory.
+.TP
+.BI "\-d\fP, \fB\-\-destdir" " destination"
+Set the destination directory to
+.IR destination .
+The default destination directory is the current directory.
+.TP
+.BI "\-l\fP, \fB\-\-list"
+List the package items to stdout (after modifying the package).
+.SH LIST FILE SYNTAX
+Items are listed on one or more lines and separated by whitespace (space+tab).
+Comments begin with
+.B #
+and are ignored. Empty lines are ignored. Lines where the first non-whitespace
+character is one of "%&'()*+,-./:;<=>?_ are also ignored
+to reserve for future syntax.
+.PP
+Items for removal or extraction may contain a single 
+.B *
+wildcard character. The 
+.B *
+matches zero or more characters. If
+.BI "\-m\fP, \fB\-\-matchmode" " noslash"
+is set, then the
+.B *
+character does not match the
+.B /
+character.
+.PP
+Items must be listed relative to the package, and the
+.B "\fB\-\-sourcedir"
+or the
+.B "\fB\-\-destdir"
+path will be prepended. The paths are only prepended to item
+filenames while adding or extracting items, not to ICU .dat package or list
+filenames.
+.PP
+Paths may contain
+.B /
+instead of the platform's file separator character and are converted as
+appropriate.
+.SH AUTHORS
+Markus Scherer
+.br
+George Rhoten
+.SH VERSION
+1.0
+.SH COPYRIGHT
+Copyright (C) 2006 IBM, Inc. and others.
+.SH SEE ALSO
+.BR pkgdata (1)
+.BR genrb (1)
+

@@ -1,0 +1,152 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_CTX_set_split_send_fragment</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_CTX_set_max_send_fragment, SSL_set_max_send_fragment, SSL_CTX_set_split_send_fragment, SSL_set_split_send_fragment, SSL_CTX_set_max_pipelines, SSL_set_max_pipelines, SSL_CTX_set_default_read_buffer_len, SSL_set_default_read_buffer_len, SSL_CTX_set_tlsext_max_fragment_length, SSL_set_tlsext_max_fragment_length, SSL_SESSION_get_max_fragment_length - Control fragment size settings and pipelining operations</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+long SSL_CTX_set_max_send_fragment(SSL_CTX *ctx, long);
+long SSL_set_max_send_fragment(SSL *ssl, long m);
+
+long SSL_CTX_set_max_pipelines(SSL_CTX *ctx, long m);
+long SSL_set_max_pipelines(SSL_CTX *ssl, long m);
+
+long SSL_CTX_set_split_send_fragment(SSL_CTX *ctx, long m);
+long SSL_set_split_send_fragment(SSL *ssl, long m);
+
+void SSL_CTX_set_default_read_buffer_len(SSL_CTX *ctx, size_t len);
+void SSL_set_default_read_buffer_len(SSL *s, size_t len);
+
+int SSL_CTX_set_tlsext_max_fragment_length(SSL_CTX *ctx, uint8_t mode);
+int SSL_set_tlsext_max_fragment_length(SSL *ssl, uint8_t mode);
+uint8_t SSL_SESSION_get_max_fragment_length(const SSL_SESSION *session);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>Some engines are able to process multiple simultaneous crypto operations. This capability could be utilised to parallelise the processing of a single connection. For example a single write can be split into multiple records and each one encrypted independently and in parallel. Note: this will only work in TLS1.1+. There is no support in SSLv3, TLSv1.0 or DTLS (any version). This capability is known as &quot;pipelining&quot; within OpenSSL.</p>
+
+<p>In order to benefit from the pipelining capability. You need to have an engine that provides ciphers that support this. The OpenSSL &quot;dasync&quot; engine provides AES128-SHA based ciphers that have this capability. However, these are for development and test purposes only.</p>
+
+<p>SSL_CTX_set_max_send_fragment() and SSL_set_max_send_fragment() set the <b>max_send_fragment</b> parameter for SSL_CTX and SSL objects respectively. This value restricts the amount of plaintext bytes that will be sent in any one SSL/TLS record. By default its value is SSL3_RT_MAX_PLAIN_LENGTH (16384). These functions will only accept a value in the range 512 - SSL3_RT_MAX_PLAIN_LENGTH.</p>
+
+<p>SSL_CTX_set_max_pipelines() and SSL_set_max_pipelines() set the maximum number of pipelines that will be used at any one time. This value applies to both &quot;read&quot; pipelining and &quot;write&quot; pipelining. By default only one pipeline will be used (i.e. normal non-parallel operation). The number of pipelines set must be in the range 1 - SSL_MAX_PIPELINES (32). Setting this to a value &gt; 1 will also automatically turn on &quot;read_ahead&quot; (see <a href="../man3/SSL_CTX_set_read_ahead.html">SSL_CTX_set_read_ahead(3)</a>). This is explained further below. OpenSSL will only ever use more than one pipeline if a cipher suite is negotiated that uses a pipeline capable cipher provided by an engine.</p>
+
+<p>Pipelining operates slightly differently for reading encrypted data compared to writing encrypted data. SSL_CTX_set_split_send_fragment() and SSL_set_split_send_fragment() define how data is split up into pipelines when writing encrypted data. The number of pipelines used will be determined by the amount of data provided to the SSL_write_ex() or SSL_write() call divided by <b>split_send_fragment</b>.</p>
+
+<p>For example if <b>split_send_fragment</b> is set to 2000 and <b>max_pipelines</b> is 4 then:</p>
+
+<p>SSL_write/SSL_write_ex called with 0-2000 bytes == 1 pipeline used</p>
+
+<p>SSL_write/SSL_write_ex called with 2001-4000 bytes == 2 pipelines used</p>
+
+<p>SSL_write/SSL_write_ex called with 4001-6000 bytes == 3 pipelines used</p>
+
+<p>SSL_write/SSL_write_ex called with 6001+ bytes == 4 pipelines used</p>
+
+<p><b>split_send_fragment</b> must always be less than or equal to <b>max_send_fragment</b>. By default it is set to be equal to <b>max_send_fragment</b>. This will mean that the same number of records will always be created as would have been created in the non-parallel case, although the data will be apportioned differently. In the parallel case data will be spread equally between the pipelines.</p>
+
+<p>Read pipelining is controlled in a slightly different way than with write pipelining. While reading we are constrained by the number of records that the peer (and the network) can provide to us in one go. The more records we can get in one go the more opportunity we have to parallelise the processing. As noted above when setting <b>max_pipelines</b> to a value greater than one, <b>read_ahead</b> is automatically set. The <b>read_ahead</b> parameter causes OpenSSL to attempt to read as much data into the read buffer as the network can provide and will fit into the buffer. Without this set data is read into the read buffer one record at a time. The more data that can be read, the more opportunity there is for parallelising the processing at the cost of increased memory overhead per connection. Setting <b>read_ahead</b> can impact the behaviour of the SSL_pending() function (see <a href="../man3/SSL_pending.html">SSL_pending(3)</a>). In addition the default size of the internal read buffer is multiplied by the number of pipelines available to ensure that we can read multiple records in one go. This can therefore have a significant impact on memory usage.</p>
+
+<p>The SSL_CTX_set_default_read_buffer_len() and SSL_set_default_read_buffer_len() functions control the size of the read buffer that will be used. The <b>len</b> parameter sets the size of the buffer. The value will only be used if it is greater than the default that would have been used anyway. The normal default value depends on a number of factors but it will be at least SSL3_RT_MAX_PLAIN_LENGTH + SSL3_RT_MAX_ENCRYPTED_OVERHEAD (16704) bytes.</p>
+
+<p>SSL_CTX_set_tlsext_max_fragment_length() sets the default maximum fragment length negotiation mode via value <b>mode</b> to <b>ctx</b>. This setting affects only SSL instances created after this function is called. It affects the client-side as only its side may initiate this extension use.</p>
+
+<p>SSL_set_tlsext_max_fragment_length() sets the maximum fragment length negotiation mode via value <b>mode</b> to <b>ssl</b>. This setting will be used during a handshake when extensions are exchanged between client and server. So it only affects SSL sessions created after this function is called. It affects the client-side as only its side may initiate this extension use.</p>
+
+<p>SSL_SESSION_get_max_fragment_length() gets the maximum fragment length negotiated in <b>session</b>.</p>
+
+<p>These functions cannot be used with QUIC SSL objects. SSL_set_max_send_fragment(), SSL_set_max_pipelines(), SSL_set_split_send_fragment(), SSL_set_default_read_buffer_len() and SSL_set_tlsext_max_fragment_length() fail if called on a QUIC SSL object.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>All non-void functions return 1 on success and 0 on failure.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The Maximum Fragment Length extension support is optional on the server side. If the server does not support this extension then SSL_SESSION_get_max_fragment_length() will return: TLSEXT_max_fragment_length_DISABLED.</p>
+
+<p>The following modes are available:</p>
+
+<dl>
+
+<dt id="TLSEXT_max_fragment_length_DISABLED">TLSEXT_max_fragment_length_DISABLED</dt>
+<dd>
+
+<p>Disables Maximum Fragment Length Negotiation (default).</p>
+
+</dd>
+<dt id="TLSEXT_max_fragment_length_512">TLSEXT_max_fragment_length_512</dt>
+<dd>
+
+<p>Sets Maximum Fragment Length to 512 bytes.</p>
+
+</dd>
+<dt id="TLSEXT_max_fragment_length_1024">TLSEXT_max_fragment_length_1024</dt>
+<dd>
+
+<p>Sets Maximum Fragment Length to 1024.</p>
+
+</dd>
+<dt id="TLSEXT_max_fragment_length_2048">TLSEXT_max_fragment_length_2048</dt>
+<dd>
+
+<p>Sets Maximum Fragment Length to 2048.</p>
+
+</dd>
+<dt id="TLSEXT_max_fragment_length_4096">TLSEXT_max_fragment_length_4096</dt>
+<dd>
+
+<p>Sets Maximum Fragment Length to 4096.</p>
+
+</dd>
+</dl>
+
+<p>With the exception of SSL_CTX_set_default_read_buffer_len() SSL_set_default_read_buffer_len(), SSL_CTX_set_tlsext_max_fragment_length(), SSL_set_tlsext_max_fragment_length() and SSL_SESSION_get_max_fragment_length() all these functions are implemented using macros.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a>, <a href="../man3/SSL_CTX_set_read_ahead.html">SSL_CTX_set_read_ahead(3)</a>, <a href="../man3/SSL_pending.html">SSL_pending(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The SSL_CTX_set_max_pipelines(), SSL_set_max_pipelines(), SSL_CTX_set_split_send_fragment(), SSL_set_split_send_fragment(), SSL_CTX_set_default_read_buffer_len() and SSL_set_default_read_buffer_len() functions were added in OpenSSL 1.1.0.</p>
+
+<p>The SSL_CTX_set_tlsext_max_fragment_length(), SSL_set_tlsext_max_fragment_length() and SSL_SESSION_get_max_fragment_length() functions were added in OpenSSL 1.1.1.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2016-2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

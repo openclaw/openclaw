@@ -1,0 +1,62 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_PKEY_CTX_get_algor</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_CIPHER_CTX_get_algor, EVP_CIPHER_CTX_get_algor_params, EVP_CIPHER_CTX_set_algor_params, EVP_PKEY_CTX_get_algor, EVP_PKEY_CTX_get_algor_params, EVP_PKEY_CTX_set_algor_params - pass AlgorithmIdentifier and its params to/from algorithm implementations</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>int EVP_TYPE_CTX_get_algor(EVP_TYPE_CTX *ctx, X509_ALGOR **alg);
+int EVP_TYPE_CTX_get_algor_params(EVP_TYPE_CTX *ctx, X509_ALGOR *alg);
+int EVP_TYPE_CTX_set_algor_params(EVP_TYPE_CTX *ctx, const X509_ALGOR *alg);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>In the description here and the <a href="#SYNOPSIS">&quot;SYNOPSIS&quot;</a> above, <b><i>TYPE</i></b> is used as a placeholder for any EVP operation type.</p>
+
+<p><b>EVP_<i>TYPE</i>_CTX_get_algor</b>() attempts to retrieve a complete AlgorithmIdentifier from the <b>EVP_<i>TYPE</i></b> implementation, and populates <i>*alg</i> with it. If <i>alg</i> is NULL, calling this function will serve to see if calling this function is supported at all by the <b>EVP_<i>TYPE</i></b> implementation. If <i>*alg</i> is NULL, space will be allocated automatically, and assigned to <i>*alg</i>.</p>
+
+<p><b>EVP_<i>TYPE</i>_CTX_get_algor_params</b>() attempts to retrieve the <i>parameters</i> part of an AlgorithmIdentifier from the <b>EVP_<i>TYPE</i></b> implementation, and populates <i>alg-</i>parameters&gt; with it. If <i>alg</i> is NULL, calling this function will serve to see if calling this function is supported at all by the <b>EVP_<i>TYPE</i></b> implementation. If <i>alg-&gt;parameters</i> is NULL, space will be allocated automatically, and assigned to <i>alg-&gt;parameters</i>. If <i>alg-&gt;parameters</i> is not NULL, its previous contents will be overwritten with the retrieved AlgorithmIdentifier parameters. Beware!</p>
+
+<p><b>EVP_<i>TYPE</i>_CTX_set_algor_params</b>() attempts to pass <i>alg-&gt;parameters</i> to the <b>EVP_<i>TYPE</i></b> implementation. If <i>alg</i> is NULL, calling this function will serve to see if calling this function is supported at all by the <b>EVP_<i>TYPE</i></b> implementation.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>All functions return 1 for success, and 0 or a negative number if an error occurs. In particular, -2 is returned when the function isn&#39;t supported by the <b>EVP_<i>TYPE</i></b> implementation.</p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>These functions were added in OpenSSL 3.4.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

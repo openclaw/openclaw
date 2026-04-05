@@ -1,0 +1,134 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_load_client_CA_file</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_load_client_CA_file_ex, SSL_load_client_CA_file, SSL_add_file_cert_subjects_to_stack, SSL_add_dir_cert_subjects_to_stack, SSL_add_store_cert_subjects_to_stack - load certificate names</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+STACK_OF(X509_NAME) *SSL_load_client_CA_file_ex(const char *file,
+                                                OSSL_LIB_CTX *libctx,
+                                                const char *propq);
+STACK_OF(X509_NAME) *SSL_load_client_CA_file(const char *file);
+
+int SSL_add_file_cert_subjects_to_stack(STACK_OF(X509_NAME) *stack,
+                                        const char *file);
+int SSL_add_dir_cert_subjects_to_stack(STACK_OF(X509_NAME) *stack,
+                                       const char *dir);
+int SSL_add_store_cert_subjects_to_stack(STACK_OF(X509_NAME) *stack,
+                                         const char *store);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_load_client_CA_file_ex() reads certificates from <i>file</i> and returns a STACK_OF(X509_NAME) with the subject names found. The library context <i>libctx</i> and property query <i>propq</i> are used when fetching algorithms from providers.</p>
+
+<p>SSL_load_client_CA_file() is similar to SSL_load_client_CA_file_ex() but uses NULL for the library context <i>libctx</i> and property query <i>propq</i>.</p>
+
+<p>SSL_add_file_cert_subjects_to_stack() reads certificates from <i>file</i>, and adds their subject name to the already existing <i>stack</i>.</p>
+
+<p>SSL_add_dir_cert_subjects_to_stack() reads certificates from every file in the directory <i>dir</i>, and adds their subject name to the already existing <i>stack</i>.</p>
+
+<p>SSL_add_store_cert_subjects_to_stack() loads certificates from the <i>store</i> URI, and adds their subject name to the already existing <i>stack</i>.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>SSL_load_client_CA_file() reads a file of PEM formatted certificates and extracts the X509_NAMES of the certificates found. While the name suggests the specific usage as support function for <a href="../man3/SSL_CTX_set_client_CA_list.html">SSL_CTX_set_client_CA_list(3)</a>, it is not limited to CA certificates.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>The following return values can occur for SSL_load_client_CA_file_ex(), and SSL_load_client_CA_file():</p>
+
+<dl>
+
+<dt id="NULL">NULL</dt>
+<dd>
+
+<p>The operation failed, check out the error stack for the reason.</p>
+
+</dd>
+<dt id="Pointer-to-STACK_OF-X509_NAME">Pointer to STACK_OF(X509_NAME)</dt>
+<dd>
+
+<p>Pointer to the subject names of the successfully read certificates.</p>
+
+</dd>
+</dl>
+
+<p>The following return values can occur for SSL_add_file_cert_subjects_to_stack(), SSL_add_dir_cert_subjects_to_stack(), and SSL_add_store_cert_subjects_to_stack():</p>
+
+<dl>
+
+<dt id="Failure">0 (Failure)</dt>
+<dd>
+
+<p>The operation failed.</p>
+
+</dd>
+<dt id="Success">1 (Success)</dt>
+<dd>
+
+<p>The operation succeeded.</p>
+
+</dd>
+</dl>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>Load names of CAs from file and use it as a client CA list:</p>
+
+<pre><code>SSL_CTX *ctx;
+STACK_OF(X509_NAME) *cert_names;
+
+...
+cert_names = SSL_load_client_CA_file(&quot;/path/to/CAfile.pem&quot;);
+if (cert_names != NULL)
+    SSL_CTX_set_client_CA_list(ctx, cert_names);
+else
+    /* error */
+...</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a>, <a href="../man7/ossl_store.html">ossl_store(7)</a>, <a href="../man3/SSL_CTX_set_client_CA_list.html">SSL_CTX_set_client_CA_list(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>SSL_load_client_CA_file_ex() and SSL_add_store_cert_subjects_to_stack() were added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

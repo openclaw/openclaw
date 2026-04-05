@@ -1,0 +1,156 @@
+.\"
+.\" Copyright 1998 by the Massachusetts Institute of Technology.
+.\" SPDX-License-Identifier: MIT
+.\"
+.TH ARES_SEND 3 "25 July 1998"
+.SH NAME
+ares_send \- Initiate a DNS query
+.SH SYNOPSIS
+.nf
+#include <ares.h>
+
+typedef void (*ares_callback_dnsrec)(void *arg, ares_status_t status,
+                                     size_t timeouts,
+                                     const ares_dns_record_t *dnsrec);
+
+ares_status_t ares_send_dnsrec(ares_channel_t *channel,
+                               const ares_dns_record_t *dnsrec,
+                               ares_callback_dnsrec callback,
+                               void *arg, unsigned short *qid);
+
+typedef void (*ares_callback)(void *arg, int status,
+                              int timeouts, unsigned char *abuf,
+                              int alen);
+
+void ares_send(ares_channel_t *channel, const unsigned char *qbuf,
+               int qlen, ares_callback callback, void *arg);
+
+.fi
+.SH DESCRIPTION
+The \fIares_send_dnsrec(3)\fP function initiates a DNS query formatted using the
+\fIares_dns_record_t *\fP data structure created via
+\fIares_dns_record_create(3)\fP in the
+.IR dnsrec
+parameter.  The supplied callback in the
+.IR callback
+parameter also returns the response using a
+\fIares_dns_record_t *\fP data structure.
+
+The \fIares_send(3)\fP function similarly initiates a DNS query, but instead uses
+raw binary buffers with fully formatted DNS messages passed in the request via the
+.IR qbuf
+and
+.IR qlen
+parameters. The supplied callback in the
+.IR callback
+parameter also returns the raw binary DNS response in the
+.IR abuf
+and
+.IR alen
+parameters. This method should be considered deprecated in favor of
+\fIares_send_dnsrec(3)\fP.
+
+Both functions take an initialized ares channel identified by
+.IR channel .
+
+The \fIares_send_dnsrec(3)\fP also can be supplied an optional output parameter of
+.IR qid
+to populate the query id as it was placed on the wire.
+
+The \fIares_send_dnsrec(3)\fP function returns an \fIares_status_t\fP response
+code.  This may be useful to know that the query was enqueued properly.  The
+response code does not reflect the result of the query, just the result of the
+enqueuing of the query.
+
+Completion or failure of the query may happen immediately (even before the
+function returning), or may happen later as network events are processed.
+
+When the associated callback is called, it is called with a channel lock so care
+must be taken to ensure any processing is minimal to prevent DNS channel stalls.
+
+The callback may be triggered from a different thread than the one which
+called \fIares_send_dnsrec(3)\fP or \fIares_send(3)\fP.
+
+For integrators running their own event loops and not using \fBARES_OPT_EVENT_THREAD\fP,
+care needs to be taken to ensure any file descriptor lists are updated immediately
+within the eventloop when notified.
+
+The callback argument
+.IR arg
+is copied from the \fIares_send_dnsrec(3)\fP or \fIares_send(3)\fP
+.IR arg
+parameter.
+
+The callback argument
+.I status
+indicates whether the query succeeded and, if not, how it failed.  It
+may have any of the following values:
+.TP 19
+.B ARES_SUCCESS
+The query completed.
+.TP 19
+.B ARES_EBADQUERY
+The query buffer was poorly formed (was not long enough for a DNS
+header or was too long for TCP transmission).
+.TP 19
+.B ARES_ETIMEOUT
+No name servers responded within the timeout period.
+.TP 19
+.B ARES_ECONNREFUSED
+No name servers could be contacted.
+.TP 19
+.B ARES_ENOMEM
+Memory was exhausted.
+.TP 19
+.B ARES_ECANCELLED
+The query was cancelled.
+.TP 19
+.B ARES_EDESTRUCTION
+The name service channel
+.I channel
+is being destroyed; the query will not be completed.
+.TP 19
+.B ARES_ENOSERVER
+The query will not be completed because no DNS servers were configured on the
+channel.
+.TP 19
+.B ARES_EBADQUERY
+Misformatted DNS query.
+.PP
+
+The callback argument
+.I timeouts
+reports how many times a query timed out during the execution of the
+given request.
+
+If the query completed, the callback argument
+.IR dnsrec
+for \fIares_send_dnsrec(3)\fP or
+.IR abuf
+and
+.IR alen
+for \fIares_send(3)\fP will be non-NULL.
+
+Unless the flag
+.B ARES_FLAG_NOCHECKRESP
+was set at channel initialization time, \fIares_send_dnsrec(3)\fP and
+\fIares_send(3)\fP will normally ignore responses whose questions do not match
+the supplied questions, as well as responses with reply codes of
+.BR SERVFAIL ,
+.BR NOTIMP ,
+and
+.BR REFUSED .
+Unlike other query functions in the ares library, however,
+\fIares_send_dnsrec(3)\fP and \fIares_send(3)\fP do not inspect the header of
+the reply packet to determine the error status, so a callback status of
+.B ARES_SUCCESS
+does not reflect as much about the response as for other query functions.
+
+.SH AVAILABILITY
+\fBares_send_dnsrec(3)\fP was introduced in c-ares 1.28.0.
+
+.SH SEE ALSO
+.BR ares_dns_record_create (3),
+.BR ares_process (3),
+.BR ares_search (3),
+.BR ares_dns_record (3)

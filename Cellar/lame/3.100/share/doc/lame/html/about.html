@@ -1,0 +1,138 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+        "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+ <head>
+  <meta name="generator" content="PSPad editor, www.pspad.com" />
+  <meta http-equiv="content-type" content="text/html; charset=UTF-8" />
+  <link rel="stylesheet" type="text/css" href="styles/lame.css" />
+  <title>About the LAME encoder</title>
+ </head>
+ <body>
+<div id="menu">
+	<ul>
+		<li><a href="index.html">Index page</a></li>
+		<li><a href="about.html">About LAME</a></li>
+		<li><a href="introduction.html">Intro to encoding</a></li>
+		<li><a href="usage.html">Usage of LAME</a></li>
+		<li><a href="history.html">Version history</a></li>
+		<li><a href="contributors.html">Coders of LAME</a></li>
+		<li><a href="contact.html">Contact LAME</a></li>
+		<li><a style="border: 0" href="links.html">LAME links</a></li>
+	</ul>
+</div>
+<div id="container">
+<div id="content">
+
+<div align="center">
+	<img src="images/logo.gif" width="358" height="231" alt="LAME Official Logo" />
+	<h2 class="hilight">About LAME</h2>
+</div>
+
+<p>
+	LAME development started around mid-1998. Mike Cheng started it as a patch
+	against the 8hz-MP3 encoder sources. After some quality concerns raised by
+	others, he decided to start from scratch based on the dist10 sources. His 
+	goal was only to speed up the dist10 sources, and leave its quality untouched. 
+	That branch (a patch against the reference sources) became Lame 2.0, and not
+  until Lame 3.81 (May 2000) the latest remainings of dist10 code were removed,
+  making LAME no more only a patch.
+</p>
+
+<p>
+	The project quickly became a team project. Mike Cheng eventually left
+	leadership and started working on tooLame, an MP2 encoder. Mark Taylor became
+	leader and started pursuing increased quality in addition to better speed. He
+	can be considered the initiator of the LAME project in its current form. He
+	released version 3.0 featuring gpsycho, a new psychoacoustic model he
+	developed.
+</p>
+
+<p>
+	In early 2003 Mark left project leadership, and since then the project has
+	been lead through the cooperation of the active developers (currently 4
+	individuals).
+</p>
+
+<p>
+	Today, LAME is considered the best MP3 encoder at mid-high bitrates and at
+	VBR<a href="#note1"><sup>1</sup></a>, mostly thanks to the dedicated work of its developers and the open 
+	source licensing model that allowed the project to tap into engineering 
+	resources from all around the world. Both quality and speed improvements are 
+	still happening, probably making LAME the only MP3 encoder still being 
+	actively developed.
+</p>
+
+
+<h3>LAME features:</h3>
+<ul>
+	<li>
+		Supports MPEG1, MPEG2 and MPEG2.5<a href="#note2"><sup>2</sup></a> layer III encoding.
+	</li>
+	<li>
+		Encodes in CBR (constant bitrate) and in two types of variable bitrate, VBR and ABR<a
+		href="#note3"><sup>3</sup></a>, as well as freeformat.
+	</li>
+  <li>
+    Supports mono and stereo signals. Stereo signals are encoded by default with
+    an advanced algorithm<a	href="#note4"><sup>4</sup></a> to maximize the quality.
+  </li>
+	<li>
+    Tuned default parameters for optimum encoding.		
+	</li>
+	<li>
+	  Fast. Encodes to -V 2 at 17 times realtime on a P4 2.8Ghz.
+	</li>
+	<li>
+		Uses an advanced psycho acoustic and noise shaping model improved during years.
+	</li>
+	<li>
+		Developed under the <a href="http://www.gnu.org/licenses/lgpl.html">LGPL</a>
+    GNU license
+	</li>
+</ul>
+<div id="notes">
+<ol>
+<li><a name="note1"></a> See the results of <a href="http://listening-tests.hydrogenaudio.org/sebastian/">
+several blind tests</a> conducted by hydrogenaudio members.
+</li>
+<li><a name="note2"></a> MPEG1 sample rates are 32Khz, 44.1Khz and 48Khz.
+<br/>
+MPEG2 sample rates are 16Khz, 22.05Khz and 24Khz.
+<br/>
+ MPEG 2.5 does not exist as a standard. It is an extension from
+ <a href="http://www.fraunhofer.de/">fraunhofer</a> that added the possibility
+ to encode in 8Khz, 11,025Khz and 12Khz.
+</li>
+<li><a name="note3"></a> See <a href="vbr.html">Variable Bit Rate</a> and
+<a href="abr.html">Average Bit Rate (ABR)</a>.
+</li>
+<li><a name="note4"></a> The stereo encoding of LAME automatically switches between 
+ Mid-Side and simple-stereo to maximize the available bits while preserving the 
+ quality. More info in <a href="ms_stereo.html">Mid/Side Stereo</a>
+</li> 
+</ol>
+</div>
+
+</div>
+<div id="footer">
+
+<a href="http://sourceforge.net/projects/lame"><img src="http://sflogo.sourceforge.net/sflogo.php?group_id=290&amp;type=12"
+ alt="Get LAME (Lame Aint an MP3 Encoder) at SourceForge.net. Fast, secure and Free Open Source software downloads"
+ border="0" height="30" width="120" /></a>
+
+<a href="http://validator.w3.org/#validate_by_upload"><img src="images/valid-xhtml10.png"
+ alt="Valid XHTML 1.0 Transitional" border="0" height="31" width="88" /></a>
+
+<a href="http://jigsaw.w3.org/css-validator/"><img src="images/valid-css.png"
+ alt="Valid CSS!" border="0" height="31" width="88" /></a>
+
+<p>HTML markup and design by <a
+href="http://www.rjamorim.com" target="_blank">Roberto Amorim</a> and <a
+href="http://www.maresweb.de" target="_blank">Sebastian Mares</a>. Logo by <a 
+href="http://www.brightercreative.co.uk">Sam Fisher</a>.</p>
+
+</div>
+</div>
+
+ </body>
+</html>

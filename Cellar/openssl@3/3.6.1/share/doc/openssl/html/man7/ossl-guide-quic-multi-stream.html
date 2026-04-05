@@ -1,0 +1,277 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>ossl-guide-quic-multi-stream</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#INTRODUCTION">INTRODUCTION</a></li>
+  <li><a href="#QUIC-STREAMS">QUIC STREAMS</a></li>
+  <li><a href="#THE-DEFAULT-STREAM">THE DEFAULT STREAM</a></li>
+  <li><a href="#CREATING-NEW-STREAMS">CREATING NEW STREAMS</a></li>
+  <li><a href="#USING-A-STREAM-TO-SEND-AND-RECEIVE-DATA">USING A STREAM TO SEND AND RECEIVE DATA</a></li>
+  <li><a href="#STREAMS-AND-CONNECTIONS">STREAMS AND CONNECTIONS</a></li>
+  <li><a href="#SIMPLE-MULTI-STREAM-QUIC-CLIENT-EXAMPLE">SIMPLE MULTI-STREAM QUIC CLIENT EXAMPLE</a>
+    <ul>
+      <li><a href="#Disabling-the-default-stream">Disabling the default stream</a></li>
+      <li><a href="#Creating-the-request-streams">Creating the request streams</a></li>
+      <li><a href="#Writing-data-to-the-streams">Writing data to the streams</a></li>
+      <li><a href="#Reading-data-from-a-stream">Reading data from a stream</a></li>
+      <li><a href="#Accepting-an-incoming-stream">Accepting an incoming stream</a></li>
+      <li><a href="#Cleaning-up-the-streams">Cleaning up the streams</a></li>
+    </ul>
+  </li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>ossl-guide-quic-multi-stream - OpenSSL Guide: Writing a simple multi-stream QUIC client</p>
+
+<h1 id="INTRODUCTION">INTRODUCTION</h1>
+
+<p>This page will introduce some important concepts required to write a simple QUIC multi-stream application. It assumes a basic understanding of QUIC and how it is used in OpenSSL. See <a href="../man7/ossl-guide-quic-introduction.html">ossl-guide-quic-introduction(7)</a> and <a href="../man7/ossl-guide-quic-client-block.html">ossl-guide-quic-client-block(7)</a>.</p>
+
+<h1 id="QUIC-STREAMS">QUIC STREAMS</h1>
+
+<p>In a QUIC multi-stream application we separate out the concepts of a QUIC &quot;connection&quot; and a QUIC &quot;stream&quot;. A connection object represents the overarching details of the connection between a client and a server including all its negotiated and configured parameters. We use the <b>SSL</b> object for that in an OpenSSL application (known as the connection <b>SSL</b> object). It is created by an application calling <a href="../man3/SSL_new.html">SSL_new(3)</a>.</p>
+
+<p>Separately a connection can have zero or more streams associated with it (although a connection with zero streams is probably not very useful, so normally you would have at least one). A stream is used to send and receive data between the two peers. Each stream is also represented by an <b>SSL</b> object. A stream is logically independent of all the other streams associated with the same connection. Data sent on a stream is guaranteed to be delivered in the order that it was sent within that stream. The same is not true across streams, e.g. if an application sends data on stream 1 first and then sends some more data on stream 2 second, then the remote peer may receive the data sent on stream 2 before it receives the data sent on stream 1.</p>
+
+<p>Once the connection <b>SSL</b> object has completed its handshake (i.e. <a href="../man3/SSL_connect.html">SSL_connect(3)</a> has returned 1), stream <b>SSL</b> objects are created by the application calling <a href="../man3/SSL_new_stream.html">SSL_new_stream(3)</a> or <a href="../man3/SSL_accept_stream.html">SSL_accept_stream(3)</a> (see <a href="#CREATING-NEW-STREAMS">&quot;CREATING NEW STREAMS&quot;</a> below).</p>
+
+<p>The same threading rules apply to <b>SSL</b> objects as for most OpenSSL objects (see <a href="../man7/ossl-guide-libraries-introduction.html">ossl-guide-libraries-introduction(7)</a>). In particular most OpenSSL functions are thread safe, but the <b>SSL</b> object is not. This means that you can use an <b>SSL</b> object representing one stream at the same time as another thread is using a different <b>SSL</b> object for a different stream on the same connection. But you cannot use the same <b>SSL</b> object on two different threads at the same time (without additional application level locking).</p>
+
+<h1 id="THE-DEFAULT-STREAM">THE DEFAULT STREAM</h1>
+
+<p>A connection <b>SSL</b> object may also (optionally) be associated with a stream. This stream is known as the default stream. The default stream is automatically created and associated with the <b>SSL</b> object when the application calls <a href="../man3/SSL_read_ex.html">SSL_read_ex(3)</a>, <a href="../man3/SSL_read.html">SSL_read(3)</a>, <a href="../man3/SSL_write_ex.html">SSL_write_ex(3)</a> or <a href="../man3/SSL_write.html">SSL_write(3)</a> and passes the connection <b>SSL</b> object as a parameter.</p>
+
+<p>If a client application calls <a href="../man3/SSL_write_ex.html">SSL_write_ex(3)</a> or <a href="../man3/SSL_write.html">SSL_write(3)</a> first then (by default) the default stream will be a client-initiated bi-directional stream. If a client application calls <a href="../man3/SSL_read_ex.html">SSL_read_ex(3)</a> or <a href="../man3/SSL_read.html">SSL_read(3)</a> first then the first stream initiated by the server will be used as the default stream (whether it is bi-directional or uni-directional).</p>
+
+<p>This behaviour can be controlled via the default stream mode. See <a href="../man3/SSL_set_default_stream_mode.html">SSL_set_default_stream_mode(3)</a> for further details.</p>
+
+<p>It is recommended that new multi-stream applications should not use a default stream at all and instead should use a separate stream <b>SSL</b> object for each stream that is used. This requires calling <a href="../man3/SSL_set_default_stream_mode.html">SSL_set_default_stream_mode(3)</a> and setting the mode to <b>SSL_DEFAULT_STREAM_MODE_NONE</b>.</p>
+
+<h1 id="CREATING-NEW-STREAMS">CREATING NEW STREAMS</h1>
+
+<p>An endpoint can create a new stream by calling <a href="../man3/SSL_new_stream.html">SSL_new_stream(3)</a>. This creates a locally initiated stream. In order to do so you must pass the QUIC connection <b>SSL</b> object as a parameter. You can also specify whether you want a bi-directional or a uni-directional stream.</p>
+
+<p>The function returns a new QUIC stream <b>SSL</b> object for sending and receiving data on that stream.</p>
+
+<p>The peer may also initiate streams. An application can use the function <a href="../man3/SSL_get_accept_stream_queue_len.html">SSL_get_accept_stream_queue_len(3)</a> to determine the number of streams that the peer has initiated that are waiting for the application to handle. An application can call <a href="../man3/SSL_accept_stream.html">SSL_accept_stream(3)</a> to create a new <b>SSL</b> object for a remotely initiated stream. If the peer has not initiated any then this call will block until one is available if the connection object is in blocking mode (see <a href="../man3/SSL_set_blocking_mode.html">SSL_set_blocking_mode(3)</a>).</p>
+
+<p>When using a default stream OpenSSL will prevent new streams from being accepted. To override this behaviour you must call <a href="../man3/SSL_set_incoming_stream_policy.html">SSL_set_incoming_stream_policy(3)</a> to set the policy to <b>SSL_INCOMING_STREAM_POLICY_ACCEPT</b>. See the man page for further details. This is not relevant if the default stream has been disabled as described in <a href="#THE-DEFAULT-STREAM">&quot;THE DEFAULT STREAM&quot;</a> above.</p>
+
+<p>Any stream may be bi-directional or uni-directional. If it is uni-directional then the initiator can write to it but not read from it, and vice-versa for the peer. You can determine what type of stream an <b>SSL</b> object represents by calling <a href="../man3/SSL_get_stream_type.html">SSL_get_stream_type(3)</a>. See the man page for further details.</p>
+
+<h1 id="USING-A-STREAM-TO-SEND-AND-RECEIVE-DATA">USING A STREAM TO SEND AND RECEIVE DATA</h1>
+
+<p>Once you have a stream <b>SSL</b> object (which includes the connection <b>SSL</b> object if a default stream is in use) then you can send and receive data over it using the <a href="../man3/SSL_write_ex.html">SSL_write_ex(3)</a>, <a href="../man3/SSL_write.html">SSL_write(3)</a>, <a href="../man3/SSL_read_ex.html">SSL_read_ex(3)</a> or <a href="../man3/SSL_read.html">SSL_read(3)</a> functions. See the man pages for further details.</p>
+
+<p>In the event of one of these functions not returning a success code then you should call <a href="../man3/SSL_get_error.html">SSL_get_error(3)</a> to find out further details about the error. In blocking mode this will either be a fatal error (e.g. <b>SSL_ERROR_SYSCALL</b> or <b>SSL_ERROR_SSL</b>), or it will be <b>SSL_ERROR_ZERO_RETURN</b> which can occur when attempting to read data from a stream and the peer has indicated that the stream is concluded (i.e. &quot;FIN&quot; has been signalled on the stream). This means that the peer will send no more data on that stream. Note that the interpretation of <b>SSL_ERROR_ZERO_RETURN</b> is slightly different for a QUIC application compared to a TLS application. In TLS it occurs when the connection has been shutdown by the peer. In QUIC this only tells you that the current stream has been concluded by the peer. It tells you nothing about the underlying connection. If the peer has concluded the stream then no more data will be received on it, however an application can still send data to the peer until the send side of the stream has also been concluded. This can happen by the application calling <a href="../man3/SSL_stream_conclude.html">SSL_stream_conclude(3)</a>. It is an error to attempt to send more data on a stream after <a href="../man3/SSL_stream_conclude.html">SSL_stream_conclude(3)</a> has been called.</p>
+
+<p>It is also possible to abandon a stream abnormally by calling <a href="../man3/SSL_stream_reset.html">SSL_stream_reset(3)</a>.</p>
+
+<p>Once a stream object is no longer needed it should be freed via a call to <a href="../man3/SSL_free.html">SSL_free(3)</a>. An application should not call <a href="../man3/SSL_shutdown.html">SSL_shutdown(3)</a> on it since this is only meaningful for connection level <b>SSL</b> objects. Freeing the stream will automatically signal STOP_SENDING to the peer.</p>
+
+<h1 id="STREAMS-AND-CONNECTIONS">STREAMS AND CONNECTIONS</h1>
+
+<p>Given a stream object it is possible to get the <b>SSL</b> object corresponding to the connection via a call to <a href="../man3/SSL_get0_connection.html">SSL_get0_connection(3)</a>. Multi-threaded restrictions apply so care should be taken when using the returned connection object. Specifically, if you are handling each of your stream objects in a different thread and call <a href="../man3/SSL_get0_connection.html">SSL_get0_connection(3)</a> from within that thread then you must be careful to not to call any function that uses the connection object at the same time as one of the other threads is also using that connection object (with the exception of <a href="../man3/SSL_accept_stream.html">SSL_accept_stream(3)</a> and <a href="../man3/SSL_get_accept_stream_queue_len.html">SSL_get_accept_stream_queue_len(3)</a> which are thread-safe).</p>
+
+<p>A stream object does not inherit all its settings and values from its parent <b>SSL</b> connection object. Therefore certain function calls that are relevant to the connection as a whole will not work on a stream. For example the function <a href="../man3/SSL_get_certificate.html">SSL_get_certificate(3)</a> can be used to obtain a handle on the peer certificate when called with a connection <b>SSL</b> object. When called with a stream <b>SSL</b> object it will return NULL.</p>
+
+<h1 id="SIMPLE-MULTI-STREAM-QUIC-CLIENT-EXAMPLE">SIMPLE MULTI-STREAM QUIC CLIENT EXAMPLE</h1>
+
+<p>This section will present various source code samples demonstrating how to write a simple multi-stream QUIC client application which connects to a server, send some HTTP/1.0 requests to it, and read back the responses. Note that HTTP/1.0 over QUIC is non-standard and will not be supported by real world servers. This is for demonstration purposes only.</p>
+
+<p>We will build on the example code for the simple blocking QUIC client that is covered on the <a href="../man7/ossl-guide-quic-client-block.html">ossl-guide-quic-client-block(7)</a> page and we assume that you are familiar with it. We will only describe the differences between the simple blocking QUIC client and the multi-stream QUIC client. Although the example code uses blocking <b>SSL</b> objects, you can equally use nonblocking <b>SSL</b> objects. See <a href="../man7/ossl-guide-quic-client-non-block.html">ossl-guide-quic-client-non-block(7)</a> for more information about writing a nonblocking QUIC client.</p>
+
+<p>The complete source code for this example multi-stream QUIC client is available in the <code>demos/guide</code> directory of the OpenSSL source distribution in the file <code>quic-multi-stream.c</code>. It is also available online at <a href="https://github.com/openssl/openssl/blob/master/demos/guide/quic-multi-stream.c">https://github.com/openssl/openssl/blob/master/demos/guide/quic-multi-stream.c</a>.</p>
+
+<h2 id="Disabling-the-default-stream">Disabling the default stream</h2>
+
+<p>As discussed above in <a href="#THE-DEFAULT-STREAM">&quot;THE DEFAULT STREAM&quot;</a> we will follow the recommendation to disable the default stream for our multi-stream client. To do this we call the <a href="../man3/SSL_set_default_stream_mode.html">SSL_set_default_stream_mode(3)</a> function and pass in our connection <b>SSL</b> object and the value <b>SSL_DEFAULT_STREAM_MODE_NONE</b>.</p>
+
+<pre><code>/*
+ * We will use multiple streams so we will disable the default stream mode.
+ * This is not a requirement for using multiple streams but is recommended.
+ */
+if (!SSL_set_default_stream_mode(ssl, SSL_DEFAULT_STREAM_MODE_NONE)) {
+    printf(&quot;Failed to disable the default stream mode\n&quot;);
+    goto end;
+}</code></pre>
+
+<h2 id="Creating-the-request-streams">Creating the request streams</h2>
+
+<p>For the purposes of this example we will create two different streams to send two different HTTP requests to the server. For the purposes of demonstration the first of these will be a bi-directional stream and the second one will be a uni-directional one:</p>
+
+<pre><code>/*
+ * We create two new client initiated streams. The first will be
+ * bi-directional, and the second will be uni-directional.
+ */
+stream1 = SSL_new_stream(ssl, 0);
+stream2 = SSL_new_stream(ssl, SSL_STREAM_FLAG_UNI);
+if (stream1 == NULL || stream2 == NULL) {
+    printf(&quot;Failed to create streams\n&quot;);
+    goto end;
+}</code></pre>
+
+<h2 id="Writing-data-to-the-streams">Writing data to the streams</h2>
+
+<p>Once the streams are successfully created we can start writing data to them. In this example we will be sending a different HTTP request on each stream. To avoid repeating too much code we write a simple helper function to send an HTTP request to a stream:</p>
+
+<pre><code>int write_a_request(SSL *stream, const char *request_start,
+                    const char *hostname)
+{
+    const char *request_end = &quot;\r\n\r\n&quot;;
+    size_t written;
+
+    if (!SSL_write_ex(stream, request_start, strlen(request_start), &amp;written))
+        return 0;
+    if (!SSL_write_ex(stream, hostname, strlen(hostname), &amp;written))
+        return 0;
+    if (!SSL_write_ex(stream, request_end, strlen(request_end), &amp;written))
+        return 0;
+
+    return 1;
+}</code></pre>
+
+<p>We assume the strings <b>request1_start</b> and <b>request2_start</b> hold the appropriate HTTP requests. We can then call our helper function above to send the requests on the two streams. For the sake of simplicity this example does this sequentially, writing to <b>stream1</b> first and, when this is successful, writing to <b>stream2</b> second. Remember that our client is blocking so these calls will only return once they have been successfully completed. A real application would not need to do these writes sequentially or in any particular order. For example we could start two threads (one for each stream) and write the requests to each stream simultaneously.</p>
+
+<pre><code>/* Write an HTTP GET request on each of our streams to the peer */
+if (!write_a_request(stream1, request1_start, hostname)) {
+    printf(&quot;Failed to write HTTP request on stream 1\n&quot;);
+    goto end;
+}
+
+if (!write_a_request(stream2, request2_start, hostname)) {
+    printf(&quot;Failed to write HTTP request on stream 2\n&quot;);
+    goto end;
+}</code></pre>
+
+<h2 id="Reading-data-from-a-stream">Reading data from a stream</h2>
+
+<p>In this example <b>stream1</b> is a bi-directional stream so, once we have sent the request on it, we can attempt to read the response from the server back. Here we just repeatedly call <a href="../man3/SSL_read_ex.html">SSL_read_ex(3)</a> until that function fails (indicating either that there has been a problem, or that the peer has signalled the stream as concluded).</p>
+
+<pre><code>printf(&quot;Stream 1 data:\n&quot;);
+/*
+ * Get up to sizeof(buf) bytes of the response from stream 1 (which is a
+ * bidirectional stream). We keep reading until the server closes the
+ * connection.
+ */
+while (SSL_read_ex(stream1, buf, sizeof(buf), &amp;readbytes)) {
+    /*
+    * OpenSSL does not guarantee that the returned data is a string or
+    * that it is NUL terminated so we use fwrite() to write the exact
+    * number of bytes that we read. The data could be non-printable or
+    * have NUL characters in the middle of it. For this simple example
+    * we&#39;re going to print it to stdout anyway.
+    */
+    fwrite(buf, 1, readbytes, stdout);
+}
+/* In case the response didn&#39;t finish with a newline we add one now */
+printf(&quot;\n&quot;);</code></pre>
+
+<p>In a blocking application like this one calls to <a href="../man3/SSL_read_ex.html">SSL_read_ex(3)</a> will either succeed immediately returning data that is already available, or they will block waiting for more data to become available and return it when it is, or they will fail with a 0 response code.</p>
+
+<p>Once we exit the while loop above we know that the last call to <a href="../man3/SSL_read_ex.html">SSL_read_ex(3)</a> gave a 0 response code so we call the <a href="../man3/SSL_get_error.html">SSL_get_error(3)</a> function to find out more details. Since this is a blocking application this will either return <b>SSL_ERROR_SYSCALL</b> or <b>SSL_ERROR_SSL</b> indicating a fundamental problem, or it will return <b>SSL_ERROR_ZERO_RETURN</b> indicating that the stream is concluded and there will be no more data available to read from it. Care must be taken to distinguish between an error at the stream level (i.e. a stream reset) and an error at the connection level (i.e. a connection closed). The <a href="../man3/SSL_get_stream_read_state.html">SSL_get_stream_read_state(3)</a> function can be used to distinguish between these different cases.</p>
+
+<pre><code>/*
+ * Check whether we finished the while loop above normally or as the
+ * result of an error. The 0 argument to SSL_get_error() is the return
+ * code we received from the SSL_read_ex() call. It must be 0 in order
+ * to get here. Normal completion is indicated by SSL_ERROR_ZERO_RETURN. In
+ * QUIC terms this means that the peer has sent FIN on the stream to
+ * indicate that no further data will be sent.
+ */
+switch (SSL_get_error(stream1, 0)) {
+case SSL_ERROR_ZERO_RETURN:
+    /* Normal completion of the stream */
+    break;
+
+case SSL_ERROR_SSL:
+    /*
+     * Some stream fatal error occurred. This could be because of a stream
+     * reset - or some failure occurred on the underlying connection.
+     */
+    switch (SSL_get_stream_read_state(stream1)) {
+    case SSL_STREAM_STATE_RESET_REMOTE:
+        printf(&quot;Stream reset occurred\n&quot;);
+        /* The stream has been reset but the connection is still healthy. */
+        break;
+
+    case SSL_STREAM_STATE_CONN_CLOSED:
+        printf(&quot;Connection closed\n&quot;);
+        /* Connection is already closed. Skip SSL_shutdown() */
+        goto end;
+
+    default:
+        printf(&quot;Unknown stream failure\n&quot;);
+        break;
+    }
+    break;
+
+default:
+    /* Some other unexpected error occurred */
+    printf (&quot;Failed reading remaining data\n&quot;);
+    break;
+}</code></pre>
+
+<h2 id="Accepting-an-incoming-stream">Accepting an incoming stream</h2>
+
+<p>Our <b>stream2</b> object that we created above was a uni-directional stream so it cannot be used to receive data from the server. In this hypothetical example we assume that the server initiates a new stream to send us back the data that we requested. To do that we call <a href="../man3/SSL_accept_stream.html">SSL_accept_stream(3)</a>. Since this is a blocking application this will wait indefinitely until the new stream has arrived and is available for us to accept. In the event of an error it will return <b>NULL</b>.</p>
+
+<pre><code>/*
+ * In our hypothetical HTTP/1.0 over QUIC protocol that we are using we
+ * assume that the server will respond with a server initiated stream
+ * containing the data requested in our uni-directional stream. This doesn&#39;t
+ * really make sense to do in a real protocol, but its just for
+ * demonstration purposes.
+ *
+ * We&#39;re using blocking mode so this will block until a stream becomes
+ * available. We could override this behaviour if we wanted to by setting
+ * the SSL_ACCEPT_STREAM_NO_BLOCK flag in the second argument below.
+ */
+stream3 = SSL_accept_stream(ssl, 0);
+if (stream3 == NULL) {
+    printf(&quot;Failed to accept a new stream\n&quot;);
+    goto end;
+}</code></pre>
+
+<p>We can now read data from the stream in the same way that we did for <b>stream1</b> above. We won&#39;t repeat that here.</p>
+
+<h2 id="Cleaning-up-the-streams">Cleaning up the streams</h2>
+
+<p>Once we have finished using our streams we can simply free them by calling <a href="../man3/SSL_free.html">SSL_free(3)</a>. Optionally we could call <a href="../man3/SSL_stream_conclude.html">SSL_stream_conclude(3)</a> on them if we want to indicate to the peer that we won&#39;t be sending them any more data, but we don&#39;t do that in this example because we assume that the HTTP application protocol supplies sufficient information for the peer to know when we have finished sending request data.</p>
+
+<p>We should not call <a href="../man3/SSL_shutdown.html">SSL_shutdown(3)</a> or <a href="../man3/SSL_shutdown_ex.html">SSL_shutdown_ex(3)</a> on the stream objects since those calls should not be used for streams.</p>
+
+<pre><code>SSL_free(stream1);
+SSL_free(stream2);
+SSL_free(stream3);</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ossl-guide-introduction.html">ossl-guide-introduction(7)</a>, <a href="../man7/ossl-guide-libraries-introduction.html">ossl-guide-libraries-introduction(7)</a>, <a href="../man7/ossl-guide-libssl-introduction.html">ossl-guide-libssl-introduction(7)</a> <a href="../man7/ossl-guide-quic-introduction.html">ossl-guide-quic-introduction(7)</a>, <a href="../man7/ossl-guide-quic-client-block.html">ossl-guide-quic-client-block(7)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

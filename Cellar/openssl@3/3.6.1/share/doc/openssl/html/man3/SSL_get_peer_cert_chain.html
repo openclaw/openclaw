@@ -1,0 +1,84 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_get_peer_cert_chain</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_get_peer_cert_chain, SSL_get0_verified_chain - get the X509 certificate chain of the peer</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+STACK_OF(X509) *SSL_get_peer_cert_chain(const SSL *ssl);
+STACK_OF(X509) *SSL_get0_verified_chain(const SSL *ssl);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_get_peer_cert_chain() returns a pointer to STACK_OF(X509) certificates forming the certificate chain sent by the peer. If called on the client side, the stack also contains the peer&#39;s certificate; if called on the server side, the peer&#39;s certificate must be obtained separately using <a href="../man3/SSL_get_peer_certificate.html">SSL_get_peer_certificate(3)</a>. If the peer did not present a certificate, NULL is returned.</p>
+
+<p>NB: SSL_get_peer_cert_chain() returns the peer chain as sent by the peer: it only consists of certificates the peer has sent (in the order the peer has sent them) it is <b>not</b> a verified chain.</p>
+
+<p>SSL_get0_verified_chain() returns the <b>verified</b> certificate chain of the peer including the peer&#39;s end entity certificate. It must be called after a session has been successfully established. If peer verification was not successful (as indicated by SSL_get_verify_result() not returning X509_V_OK) the chain may be incomplete or invalid.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>If the session is resumed peers do not send certificates so a NULL pointer is returned by these functions. Applications can call SSL_session_reused() to determine whether a session is resumed.</p>
+
+<p>The reference count of each certificate in the returned STACK_OF(X509) object is not incremented and the returned stack may be invalidated by renegotiation. If applications wish to use any certificates in the returned chain indefinitely they must increase the reference counts using X509_up_ref() or obtain a copy of the whole chain with X509_chain_up_ref().</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>The following return values can occur:</p>
+
+<dl>
+
+<dt id="NULL">NULL</dt>
+<dd>
+
+<p>No certificate was presented by the peer or no connection was established or the certificate chain is no longer available when a session is reused.</p>
+
+</dd>
+<dt id="Pointer-to-a-STACK_OF-X509">Pointer to a STACK_OF(X509)</dt>
+<dd>
+
+<p>The return value points to the certificate chain presented by the peer.</p>
+
+</dd>
+</dl>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a>, <a href="../man3/SSL_get_peer_certificate.html">SSL_get_peer_certificate(3)</a>, <a href="../man3/X509_up_ref.html">X509_up_ref(3)</a>, <a href="../man3/X509_chain_up_ref.html">X509_chain_up_ref(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2016 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

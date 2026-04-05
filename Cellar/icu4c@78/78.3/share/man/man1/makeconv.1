@@ -1,0 +1,114 @@
+.\" Hey, Emacs! This is -*-nroff-*- you know...
+.\"
+.\" makeconv.1: manual page for the makeconv utility
+.\"
+.\" Copyright (C) 2016 and later: Unicode, Inc. and others.
+.\" License & terms of use: http://www.unicode.org/copyright.html
+.\" Copyright (C) 2000-2002 IBM, Inc. and others.
+.\"
+.\" Manual page by Yves Arrouye <yves@realnames.com>.
+.\"
+.TH MAKECONV 1 "16 April 2002" "ICU MANPAGE" "ICU 78.3 Manual"
+.SH NAME
+.B makeconv
+\- compile a converter table
+.SH SYNOPSIS
+.B makeconv
+[
+.BR "\-h\fP, \fB\-?\fP, \fB\-\-help"
+]
+[
+.BR "\-c\fP, \fB\-\-copyright"
+]
+[
+.BR "\-v\fP, \fB\-\-verbose"
+]
+[
+.BI "\-d\fP, \fB\-\-destdir" " destination"
+]
+.IR convertertable " .\|.\|."
+.SH DESCRIPTION
+.B makeconv
+converts the ICU converter table
+.I convertertable
+into a binary file. The binary file has the same base name as
+.I convertertable
+but has a
+.B .cnv
+extension (instead of the typical
+.B .ucm
+extension of the
+.I convertertable
+file).
+This binary file can then be read directly by ICU, or used by
+.BR pkgdata (1)
+for incorporation into a larger archive or library.
+.PP
+The
+.I convertertable
+must be in the ICU ucm (Unicode Codepage Mapping) format in order to
+be understood by
+.BR makeconv .
+The ICU ucm format is similar to the IBM NLTC upmap/tpmap/rpmap files.
+Comments in the
+.I convertertable
+are handled as follows. If a comment (starting with a `#' sign) that
+is after some text does contain the fallback indicator `|' then only
+the text starting with the `#' sign, and ending before the `|' sign,
+is ignored.
+Otherwise, or if the comment is the first thing on the line,
+the comment runs up to the end of the line. This special
+handling of comments is to accommodate the practice of putting fallback
+information in comments in the strict IBM NLTC ucmap format.
+.PP
+Note that new converters will be automatically found by ICU after their
+installation in ICU's data directory. They do not need to
+be listed in the
+.BR convrtrs.txt (5)
+converters aliases file in order to be available to applications using ICU.
+They do need to be listed there if one wants to give them aliases, or
+tags, though.
+.SH OPTIONS
+.TP
+.BR "\-h\fP, \fB\-?\fP, \fB\-\-help"
+Print help about usage and exit.
+.TP
+.BR "\-c\fP, \fB\-\-copyright"
+Include a copyright notice in the binary data.
+.TP
+.BR "\-v\fP, \fB\-\-verbose"
+Display extra informative messages during execution.
+.TP
+.BI "\-d\fP, \fB\-\-destdir" " destination"
+Set the destination directory to
+.IR destination .
+The default destination directory is specified by the environment variable
+.BR ICU_DATA .
+.SH CAVEATS
+If an existing converter table is changed and recompiled using
+.BR makeconv ,
+the resulting binary file must be packaged in the same way that it was
+packaged initially. For example, if converters were grouped together in
+an archive or a library with
+.BR pkgdata (1),
+then the archive or library must be rebuilt with the new binary file.
+A standalone binary converter file will not take precedence over a
+packaged one.
+.SH ENVIRONMENT
+.TP 10
+.B ICU_DATA
+Specifies the directory containing ICU data. Defaults to
+.BR ${prefix}/share/icu/78.3/ .
+Some tools in ICU depend on the presence of the trailing slash. It is thus
+important to make sure that it is present if
+.B ICU_DATA
+is set.
+.SH VERSION
+78.3
+.SH COPYRIGHT
+Copyright (C) 2000 IBM, Inc. and others.
+.SH SEE ALSO
+.BR convrtrs.txt (5) 
+.br
+.BR pkgdata (1)
+

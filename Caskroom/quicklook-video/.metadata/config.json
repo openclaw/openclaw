@@ -1,0 +1,22 @@
+{
+  "default": {
+    "languages": ["ko-KR"],
+    "appdir": "/Applications",
+    "keyboard_layoutdir": "/Library/Keyboard Layouts",
+    "colorpickerdir": "/Users/kdh/Library/ColorPickers",
+    "prefpanedir": "/Users/kdh/Library/PreferencePanes",
+    "qlplugindir": "/Users/kdh/Library/QuickLook",
+    "mdimporterdir": "/Users/kdh/Library/Spotlight",
+    "dictionarydir": "/Users/kdh/Library/Dictionaries",
+    "fontdir": "/Users/kdh/Library/Fonts",
+    "servicedir": "/Users/kdh/Library/Services",
+    "input_methoddir": "/Users/kdh/Library/Input Methods",
+    "internet_plugindir": "/Users/kdh/Library/Internet Plug-Ins",
+    "audio_unit_plugindir": "/Users/kdh/Library/Audio/Plug-Ins/Components",
+    "vst_plugindir": "/Users/kdh/Library/Audio/Plug-Ins/VST",
+    "vst3_plugindir": "/Users/kdh/Library/Audio/Plug-Ins/VST3",
+    "screen_saverdir": "/Users/kdh/Library/Screen Savers"
+  },
+  "env": {},
+  "explicit": {}
+}

@@ -1,0 +1,82 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_CTX_set_min_proto_version</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_CTX_set_min_proto_version, SSL_CTX_set_max_proto_version, SSL_CTX_get_min_proto_version, SSL_CTX_get_max_proto_version, SSL_set_min_proto_version, SSL_set_max_proto_version, SSL_get_min_proto_version, SSL_get_max_proto_version - Get and set minimum and maximum supported protocol version</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+int SSL_CTX_set_min_proto_version(SSL_CTX *ctx, int version);
+int SSL_CTX_set_max_proto_version(SSL_CTX *ctx, int version);
+int SSL_CTX_get_min_proto_version(SSL_CTX *ctx);
+int SSL_CTX_get_max_proto_version(SSL_CTX *ctx);
+
+int SSL_set_min_proto_version(SSL *ssl, int version);
+int SSL_set_max_proto_version(SSL *ssl, int version);
+int SSL_get_min_proto_version(SSL *ssl);
+int SSL_get_max_proto_version(SSL *ssl);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The functions get or set the minimum and maximum supported protocol versions for the <b>ctx</b> or <b>ssl</b>. This works in combination with the options set via <a href="../man3/SSL_CTX_set_options.html">SSL_CTX_set_options(3)</a> that also make it possible to disable specific protocol versions. Use these functions instead of disabling specific protocol versions.</p>
+
+<p>Setting the minimum or maximum version to 0 (default), will enable protocol versions down to the lowest version, or up to the highest version supported by the library, respectively. The supported versions might be controlled by system configuration.</p>
+
+<p>Getters return 0 in case <b>ctx</b> or <b>ssl</b> have been configured to automatically use the lowest or highest version supported by the library.</p>
+
+<p>Currently supported versions are <b>SSL3_VERSION</b>, <b>TLS1_VERSION</b>, <b>TLS1_1_VERSION</b>, <b>TLS1_2_VERSION</b>, <b>TLS1_3_VERSION</b> for TLS and <b>DTLS1_VERSION</b>, <b>DTLS1_2_VERSION</b> for DTLS.</p>
+
+<p>In the current version of OpenSSL only QUICv1 is supported in conjunction with TLSv1.3. Calling these functions on a QUIC object has no effect.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>These setter functions return 1 on success and 0 on failure. The getter functions return the configured version or 0 for auto-configuration of lowest or highest protocol, respectively.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>All these functions are implemented using macros.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a>, <a href="../man3/SSL_CTX_set_options.html">SSL_CTX_set_options(3)</a>, <a href="../man3/SSL_CONF_cmd.html">SSL_CONF_cmd(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The setter functions were added in OpenSSL 1.1.0. The getter functions were added in OpenSSL 1.1.1.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2016-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,112 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>BN_BLINDING_new</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>BN_BLINDING_new, BN_BLINDING_free, BN_BLINDING_update, BN_BLINDING_convert, BN_BLINDING_invert, BN_BLINDING_convert_ex, BN_BLINDING_invert_ex, BN_BLINDING_is_current_thread, BN_BLINDING_set_current_thread, BN_BLINDING_lock, BN_BLINDING_unlock, BN_BLINDING_get_flags, BN_BLINDING_set_flags, BN_BLINDING_create_param - blinding related BIGNUM functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/bn.h&gt;
+
+BN_BLINDING *BN_BLINDING_new(const BIGNUM *A, const BIGNUM *Ai,
+                             BIGNUM *mod);
+void BN_BLINDING_free(BN_BLINDING *b);
+int BN_BLINDING_update(BN_BLINDING *b, BN_CTX *ctx);
+int BN_BLINDING_convert(BIGNUM *n, BN_BLINDING *b, BN_CTX *ctx);
+int BN_BLINDING_invert(BIGNUM *n, BN_BLINDING *b, BN_CTX *ctx);
+int BN_BLINDING_convert_ex(BIGNUM *n, BIGNUM *r, BN_BLINDING *b,
+                           BN_CTX *ctx);
+int BN_BLINDING_invert_ex(BIGNUM *n, const BIGNUM *r, BN_BLINDING *b,
+                          BN_CTX *ctx);
+int BN_BLINDING_is_current_thread(BN_BLINDING *b);
+void BN_BLINDING_set_current_thread(BN_BLINDING *b);
+int BN_BLINDING_lock(BN_BLINDING *b);
+int BN_BLINDING_unlock(BN_BLINDING *b);
+unsigned long BN_BLINDING_get_flags(const BN_BLINDING *b);
+void BN_BLINDING_set_flags(BN_BLINDING *b, unsigned long flags);
+BN_BLINDING *BN_BLINDING_create_param(BN_BLINDING *b,
+                                      const BIGNUM *e, BIGNUM *m, BN_CTX *ctx,
+                                      int (*bn_mod_exp)(BIGNUM *r,
+                                                        const BIGNUM *a,
+                                                        const BIGNUM *p,
+                                                        const BIGNUM *m,
+                                                        BN_CTX *ctx,
+                                                        BN_MONT_CTX *m_ctx),
+                                      BN_MONT_CTX *m_ctx);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>BN_BLINDING_new() allocates a new <b>BN_BLINDING</b> structure and copies the <b>A</b> and <b>Ai</b> values into the newly created <b>BN_BLINDING</b> object.</p>
+
+<p>BN_BLINDING_free() frees the <b>BN_BLINDING</b> structure. If <b>b</b> is NULL, nothing is done.</p>
+
+<p>BN_BLINDING_update() updates the <b>BN_BLINDING</b> parameters by squaring the <b>A</b> and <b>Ai</b> or, after specific number of uses and if the necessary parameters are set, by re-creating the blinding parameters.</p>
+
+<p>BN_BLINDING_convert_ex() multiplies <b>n</b> with the blinding factor <b>A</b>. If <b>r</b> is not NULL a copy the inverse blinding factor <b>Ai</b> will be returned in <b>r</b> (this is useful if a <b>RSA</b> object is shared among several threads). BN_BLINDING_invert_ex() multiplies <b>n</b> with the inverse blinding factor <b>Ai</b>. If <b>r</b> is not NULL it will be used as the inverse blinding.</p>
+
+<p>BN_BLINDING_convert() and BN_BLINDING_invert() are wrapper functions for BN_BLINDING_convert_ex() and BN_BLINDING_invert_ex() with <b>r</b> set to NULL.</p>
+
+<p>BN_BLINDING_is_current_thread() returns whether the <b>BN_BLINDING</b> structure is owned by the current thread. This is to help users provide proper locking if needed for multi-threaded use.</p>
+
+<p>BN_BLINDING_set_current_thread() sets the current thread as the owner of the <b>BN_BLINDING</b> structure.</p>
+
+<p>BN_BLINDING_lock() locks the <b>BN_BLINDING</b> structure.</p>
+
+<p>BN_BLINDING_unlock() unlocks the <b>BN_BLINDING</b> structure.</p>
+
+<p>BN_BLINDING_get_flags() returns the BN_BLINDING flags. Currently there are two supported flags: <b>BN_BLINDING_NO_UPDATE</b> and <b>BN_BLINDING_NO_RECREATE</b>. <b>BN_BLINDING_NO_UPDATE</b> inhibits the automatic update of the <b>BN_BLINDING</b> parameters after each use and <b>BN_BLINDING_NO_RECREATE</b> inhibits the automatic re-creation of the <b>BN_BLINDING</b> parameters after a fixed number of uses (currently 32). In newly allocated <b>BN_BLINDING</b> objects no flags are set. BN_BLINDING_set_flags() sets the <b>BN_BLINDING</b> parameters flags.</p>
+
+<p>BN_BLINDING_create_param() creates new <b>BN_BLINDING</b> parameters using the exponent <b>e</b> and the modulus <b>m</b>. <b>bn_mod_exp</b> and <b>m_ctx</b> can be used to pass special functions for exponentiation (normally BN_mod_exp_mont() and <b>BN_MONT_CTX</b>).</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>BN_BLINDING_new() returns the newly allocated <b>BN_BLINDING</b> structure or NULL in case of an error.</p>
+
+<p>BN_BLINDING_update(), BN_BLINDING_convert(), BN_BLINDING_invert(), BN_BLINDING_convert_ex() and BN_BLINDING_invert_ex() return 1 on success and 0 if an error occurred.</p>
+
+<p>BN_BLINDING_is_current_thread() returns 1 if the current thread owns the <b>BN_BLINDING</b> object, 0 otherwise.</p>
+
+<p>BN_BLINDING_set_current_thread() doesn&#39;t return anything.</p>
+
+<p>BN_BLINDING_lock(), BN_BLINDING_unlock() return 1 if the operation succeeded or 0 on error.</p>
+
+<p>BN_BLINDING_get_flags() returns the currently set <b>BN_BLINDING</b> flags (a <b>unsigned long</b> value).</p>
+
+<p>BN_BLINDING_create_param() returns the newly created <b>BN_BLINDING</b> parameters or NULL on error.</p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>BN_BLINDING_thread_id() was first introduced in OpenSSL 1.0.0, and it deprecates BN_BLINDING_set_thread_id() and BN_BLINDING_get_thread_id().</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2005-2017 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,121 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OSSL_DECODER_CTX_new_for_pkey</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Input-Types">Input Types</a></li>
+      <li><a href="#Input-Structures">Input Structures</a></li>
+      <li><a href="#Selections">Selections</a></li>
+    </ul>
+  </li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OSSL_DECODER_CTX_new_for_pkey, OSSL_DECODER_CTX_set_passphrase, OSSL_DECODER_CTX_set_pem_password_cb, OSSL_DECODER_CTX_set_passphrase_ui, OSSL_DECODER_CTX_set_passphrase_cb - Decoder routines to decode EVP_PKEYs</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/decoder.h&gt;
+
+OSSL_DECODER_CTX *
+OSSL_DECODER_CTX_new_for_pkey(EVP_PKEY **pkey,
+                              const char *input_type,
+                              const char *input_struct,
+                              const char *keytype, int selection,
+                              OSSL_LIB_CTX *libctx, const char *propquery);
+
+int OSSL_DECODER_CTX_set_passphrase(OSSL_DECODER_CTX *ctx,
+                                    const unsigned char *kstr,
+                                    size_t klen);
+int OSSL_DECODER_CTX_set_pem_password_cb(OSSL_DECODER_CTX *ctx,
+                                         pem_password_cb *cb,
+                                         void *cbarg);
+int OSSL_DECODER_CTX_set_passphrase_ui(OSSL_DECODER_CTX *ctx,
+                                       const UI_METHOD *ui_method,
+                                       void *ui_data);
+int OSSL_DECODER_CTX_set_passphrase_cb(OSSL_DECODER_CTX *ctx,
+                                       OSSL_PASSPHRASE_CALLBACK *cb,
+                                       void *cbarg);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>OSSL_DECODER_CTX_new_for_pkey() is a utility function that creates a <b>OSSL_DECODER_CTX</b>, finds all applicable decoder implementations and sets them up, so all the caller has to do next is call functions like <a href="../man3/OSSL_DECODER_from_bio.html">OSSL_DECODER_from_bio(3)</a>. The caller may use the optional <i>input_type</i>, <i>input_struct</i>, <i>keytype</i> and <i>selection</i> to specify what the input is expected to contain. The <i>pkey</i> must reference an <b>EVP_PKEY *</b> variable that will be set to the newly created <b>EVP_PKEY</b> on successful decoding. The referenced variable must be initialized to NULL before calling the function.</p>
+
+<p>Internally OSSL_DECODER_CTX_new_for_pkey() searches for all available <a href="../man3/EVP_KEYMGMT.html">EVP_KEYMGMT(3)</a> implementations, and then builds a list of all potential decoder implementations that may be able to process the encoded input into data suitable for <b>EVP_PKEY</b>s. All these implementations are implicitly fetched using <i>libctx</i> and <i>propquery</i>.</p>
+
+<p>The search of decoder implementations can be limited with <i>input_type</i> and <i>input_struct</i> which specifies a starting input type and input structure. NULL is valid for both of them and signifies that the decoder implementations will find out the input type on their own. They are set with <a href="../man3/OSSL_DECODER_CTX_set_input_type.html">OSSL_DECODER_CTX_set_input_type(3)</a> and <a href="../man3/OSSL_DECODER_CTX_set_input_structure.html">OSSL_DECODER_CTX_set_input_structure(3)</a>. See <a href="#Input-Types">&quot;Input Types&quot;</a> and <a href="#Input-Structures">&quot;Input Structures&quot;</a> below for further information.</p>
+
+<p>The search of decoder implementations can also be limited with <i>keytype</i> and <i>selection</i>, which specifies the expected resulting keytype and contents. NULL and zero are valid and signify that the decoder implementations will find out the keytype and key contents on their own from the input they get.</p>
+
+<p>If no suitable decoder implementation is found, OSSL_DECODER_CTX_new_for_pkey() still creates a <b>OSSL_DECODER_CTX</b>, but with no associated decoder (<a href="../man3/OSSL_DECODER_CTX_get_num_decoders.html">OSSL_DECODER_CTX_get_num_decoders(3)</a> returns zero). This helps the caller to distinguish between an error when creating the <b>OSSL_ENCODER_CTX</b> and missing encoder implementation, and allows it to act accordingly.</p>
+
+<p>Note that OSSL_DECODER_CTX_new_for_pkey() finalises the OSSL_DECODER_CTX; after that the OSSL_DECODER_CTX_set_* and OSSL_DECODER_CTX_add_* functions described in <a href="../man3/OSSL_DECODER_CTX.html">OSSL_DECODER_CTX(3)</a> shouldn&#39;t be called.</p>
+
+<p>OSSL_DECODER_CTX_set_passphrase() gives the implementation a pass phrase to use when decrypting the encoded private key. Alternatively, a pass phrase callback may be specified with the following functions.</p>
+
+<p>OSSL_DECODER_CTX_set_pem_password_cb(), OSSL_DECODER_CTX_set_passphrase_ui() and OSSL_DECODER_CTX_set_passphrase_cb() set up a callback method that the implementation can use to prompt for a pass phrase, giving the caller the choice of preferred pass phrase callback form. These are called indirectly, through an internal <a href="../man3/OSSL_PASSPHRASE_CALLBACK.html">OSSL_PASSPHRASE_CALLBACK(3)</a> function.</p>
+
+<p>The internal <a href="../man3/OSSL_PASSPHRASE_CALLBACK.html">OSSL_PASSPHRASE_CALLBACK(3)</a> function caches the pass phrase, to be reused in all decodings that are performed in the same decoding run (for example, within one <a href="../man3/OSSL_DECODER_from_bio.html">OSSL_DECODER_from_bio(3)</a> call).</p>
+
+<h2 id="Input-Types">Input Types</h2>
+
+<p>Available input types depend on the implementations that available providers offer, and provider documentation should have the details.</p>
+
+<p>Among the known input types that OpenSSL decoder implementations offer for <b>EVP_PKEY</b>s are <code>DER</code>, <code>PEM</code>, <code>MSBLOB</code> and <code>PVK</code>. See <a href="../man7/openssl-glossary.html">openssl-glossary(7)</a> for further information on what these input types mean.</p>
+
+<h2 id="Input-Structures">Input Structures</h2>
+
+<p>Available input structures depend on the implementations that available providers offer, and provider documentation should have the details.</p>
+
+<p>Among the known input structures that OpenSSL decoder implementations offer for <b>EVP_PKEY</b>s are <code>pkcs8</code> and <code>SubjectPublicKeyInfo</code>.</p>
+
+<p>OpenSSL decoder implementations also support the input structure <code>type-specific</code>. This is the structure used for keys encoded according to key type specific specifications. For example, RSA keys encoded according to PKCS#1.</p>
+
+<h2 id="Selections">Selections</h2>
+
+<p><i>selection</i> can be any one of the values described in <a href="../man3/EVP_PKEY_fromdata.html">&quot;Selections&quot; in EVP_PKEY_fromdata(3)</a>. Additionally <i>selection</i> can also be set to <b>0</b> to indicate that the code will auto detect the selection.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>OSSL_DECODER_CTX_new_for_pkey() returns a pointer to a <b>OSSL_DECODER_CTX</b>, or NULL if it couldn&#39;t be created.</p>
+
+<p>OSSL_DECODER_CTX_set_passphrase(), OSSL_DECODER_CTX_set_pem_password_cb(), OSSL_DECODER_CTX_set_passphrase_ui() and OSSL_DECODER_CTX_set_passphrase_cb() all return 1 on success, or 0 on failure.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/provider.html">provider(7)</a>, <a href="../man3/OSSL_DECODER.html">OSSL_DECODER(3)</a>, <a href="../man3/OSSL_DECODER_CTX.html">OSSL_DECODER_CTX(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The functions described here were added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2020-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

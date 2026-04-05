@@ -1,0 +1,162 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>openssl-srp</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#OPTIONS">OPTIONS</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>openssl-srp - maintain SRP password file</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<p><b>openssl srp</b> [<b>-help</b>] [<b>-verbose</b>] [<b>-add</b>] [<b>-modify</b>] [<b>-delete</b>] [<b>-list</b>] [<b>-name</b> <i>section</i>] [<b>-srpvfile</b> <i>file</i>] [<b>-gn</b> <i>identifier</i>] [<b>-userinfo</b> <i>text</i>] [<b>-passin</b> <i>arg</i>] [<b>-passout</b> <i>arg</i>] [<b>-engine</b> <i>id</i>] [<b>-rand</b> <i>files</i>] [<b>-writerand</b> <i>file</i>] [<b>-provider</b> <i>name</i>] [<b>-provider-path</b> <i>path</i>] [<b>-provparam</b> <i>[name:]key=value</i>] [<b>-propquery</b> <i>propq</i>] [<b>-config</b> <i>configfile</i>] [<i>user</i> ...]</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>This command is deprecated. It is used to maintain an SRP (secure remote password) file. At most one of the <b>-add</b>, <b>-modify</b>, <b>-delete</b>, and <b>-list</b> options can be specified. These options take zero or more usernames as parameters and perform the appropriate operation on the SRP file. For <b>-list</b>, if no <i>user</i> is given then all users are displayed.</p>
+
+<p>The configuration file to use, and the section within the file, can be specified with the <b>-config</b> and <b>-name</b> flags, respectively.</p>
+
+<h1 id="OPTIONS">OPTIONS</h1>
+
+<dl>
+
+<dt id="help"><b>-help</b></dt>
+<dd>
+
+<p>Display an option summary.</p>
+
+</dd>
+<dt id="verbose"><b>-verbose</b></dt>
+<dd>
+
+<p>Generate verbose output while processing.</p>
+
+</dd>
+<dt id="add"><b>-add</b></dt>
+<dd>
+
+<p>Add a user and SRP verifier.</p>
+
+</dd>
+<dt id="modify"><b>-modify</b></dt>
+<dd>
+
+<p>Modify the SRP verifier of an existing user.</p>
+
+</dd>
+<dt id="delete"><b>-delete</b></dt>
+<dd>
+
+<p>Delete user from verifier file.</p>
+
+</dd>
+<dt id="list"><b>-list</b></dt>
+<dd>
+
+<p>List users.</p>
+
+</dd>
+<dt id="name"><b>-name</b></dt>
+<dd>
+
+<p>The particular SRP definition to use.</p>
+
+</dd>
+<dt id="srpvfile-file"><b>-srpvfile</b> <i>file</i></dt>
+<dd>
+
+<p>If the config file is not specified, <b>-srpvfile</b> can be used to specify the file to operate on.</p>
+
+</dd>
+<dt id="gn"><b>-gn</b></dt>
+<dd>
+
+<p>Specifies the <b>g</b> and <b>N</b> values, using one of the strengths defined in IETF RFC 5054.</p>
+
+</dd>
+<dt id="userinfo"><b>-userinfo</b></dt>
+<dd>
+
+<p>specifies additional information to add when adding or modifying a user.</p>
+
+</dd>
+<dt id="passin-arg--passout-arg"><b>-passin</b> <i>arg</i>, <b>-passout</b> <i>arg</i></dt>
+<dd>
+
+<p>The password source for the input and output file. For more information about the format of <b>arg</b> see <a href="../man1/openssl-passphrase-options.html">openssl-passphrase-options(1)</a>.</p>
+
+</dd>
+<dt id="engine-id"><b>-engine</b> <i>id</i></dt>
+<dd>
+
+<p>See <a href="../man1/openssl.html">&quot;Engine Options&quot; in openssl(1)</a>. This option is deprecated.</p>
+
+</dd>
+<dt id="rand-files--writerand-file"><b>-rand</b> <i>files</i>, <b>-writerand</b> <i>file</i></dt>
+<dd>
+
+<p>See <a href="../man1/openssl.html">&quot;Random State Options&quot; in openssl(1)</a> for details.</p>
+
+</dd>
+<dt id="provider-name"><b>-provider</b> <i>name</i></dt>
+<dd>
+
+</dd>
+<dt id="provider-path-path"><b>-provider-path</b> <i>path</i></dt>
+<dd>
+
+</dd>
+<dt id="provparam-name:-key-value"><b>-provparam</b> <i>[name:]key=value</i></dt>
+<dd>
+
+</dd>
+<dt id="propquery-propq"><b>-propquery</b> <i>propq</i></dt>
+<dd>
+
+<p>See <a href="../man1/openssl.html">&quot;Provider Options&quot; in openssl(1)</a>, <a href="../man7/provider.html">provider(7)</a>, and <a href="../man7/property.html">property(7)</a>.</p>
+
+</dd>
+<dt id="config-configfile"><b>-config</b> <i>configfile</i></dt>
+<dd>
+
+<p>See <a href="../man1/openssl.html">&quot;Configuration Option&quot; in openssl(1)</a>.</p>
+
+<p>[<b>-rand</b> <i>files</i>] [<b>-writerand</b> <i>file</i>]</p>
+
+</dd>
+</dl>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The <b>-engine</b> option was deprecated in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2017-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

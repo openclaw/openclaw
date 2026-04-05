@@ -1,0 +1,115 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>X509_ACERT_get0_holder_baseCertId</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>X509_ACERT_get0_holder_baseCertId, X509_ACERT_get0_holder_digest, X509_ACERT_get0_holder_entityName, X509_ACERT_set0_holder_baseCertId, X509_ACERT_set0_holder_digest, X509_ACERT_set0_holder_entityName, OSSL_ISSUER_SERIAL_get0_issuer, OSSL_ISSUER_SERIAL_get0_issuerUID, OSSL_ISSUER_SERIAL_get0_serial, OSSL_ISSUER_SERIAL_set1_issuer, OSSL_ISSUER_SERIAL_set1_issuerUID, OSSL_ISSUER_SERIAL_set1_serial, OSSL_OBJECT_DIGEST_INFO_get0_digest, OSSL_OBJECT_DIGEST_INFO_set1_digest - get and set Attribute Certificate holder fields</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/x509_acert.h&gt;
+
+const GENERAL_NAMES *X509_ACERT_get0_holder_entityName(const X509_ACERT *x);
+OSSL_ISSUER_SERIAL *X509_ACERT_get0_holder_baseCertId(const X509_ACERT *x);
+OSSL_OBJECT_DIGEST_INFO * X509_ACERT_get0_holder_digest(const X509_ACERT *x);
+void X509_ACERT_set0_holder_entityName(X509_ACERT *x, GENERAL_NAMES *name);
+void X509_ACERT_set0_holder_baseCertId(X509_ACERT *x, OSSL_ISSUER_SERIAL *isss);
+void X509_ACERT_set0_holder_digest(X509_ACERT *x,
+                                   OSSL_OBJECT_DIGEST_INFO *dinfo);
+
+X509_NAME *OSSL_ISSUER_SERIAL_get0_issuer(OSSL_ISSUER_SERIAL *isss);
+ASN1_INTEGER *OSSL_ISSUER_SERIAL_get0_serial(OSSL_ISSUER_SERIAL *isss);
+ASN1_BIT_STRING *OSSL_ISSUER_SERIAL_get0_issuerUID(OSSL_ISSUER_SERIAL *isss);
+int OSSL_ISSUER_SERIAL_set1_issuer(OSSL_ISSUER_SERIAL *isss, X509_NAME *issuer);
+int OSSL_ISSUER_SERIAL_set1_serial(OSSL_ISSUER_SERIAL *isss, ASN1_INTEGER *serial);
+int OSSL_ISSUER_SERIAL_set1_issuerUID(OSSL_ISSUER_SERIAL *isss, ASN1_BIT_STRING *uid);
+
+void OSSL_OBJECT_DIGEST_INFO_get0_digest(OSSL_OBJECT_DIGEST_INFO *o,
+                                         ASN1_ENUMERATED **digestedObjectType,
+                                         X509_ALGOR **digestAlgorithm,
+                                         ASN1_BIT_STRING **digest);
+void OSSL_OBJECT_DIGEST_INFO_set1_digest(OSSL_OBJECT_DIGEST_INFO *o,
+                                         ASN1_ENUMERATED *digestedObjectType,
+                                         X509_ALGOR *digestAlgorithm,
+                                         ASN1_BIT_STRING *digest);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>These routines set and get the holder identity of an X509 attribute certificate.</p>
+
+<p>X509_ACERT_set0_holder_entityName() sets the identity as a <b>GENERAL_NAME</b> <i>name</i>, X509_ACERT_set0_holder_baseCertId() sets the identity based on the issuer and serial number of a certificate detailed in <i>isss</i> and X509_ACERT_set0_holder_digest() sets the holder entity based on digest information <i>dinfo</i>. Although RFC 5755 section 4.2.2 recommends that only one of the above methods be used to set the holder identity for a given attribute certificate <i>x</i>, setting multiple methods at the same time is possible. It is up to the application to handle cases when conflicting identity information is specified using different methods.</p>
+
+<p>Pointers to the internal structures describing the holder identity of attribute certificate <i>x</i> can be retrieved with X509_ACERT_get0_holder_entityName(), X509_ACERT_get0_holder_baseCertId(), and X509_ACERT_get0_holder_digest().</p>
+
+<p>A <b>OSSL_ISSUER_SERIAL</b> object holds the subject name and UID of a certificate issuer and a certificate&#39;s serial number. OSSL_ISSUER_SERIAL_set1_issuer(), OSSL_ISSUER_SERIAL_set1_issuerUID(), and OSSL_ISSUER_SERIAL_set1_serial() respectively copy these values into the <b>OSSL_ISSUER_SERIAL</b> structure. The application is responsible for freeing its own copy of these values after use. OSSL_ISSUER_SERIAL_get0_issuer(), OSSL_ISSUER_SERIAL_get0_issuerUID(), and OSSL_ISSUER_SERIAL_get0_serial() return pointers to these values in the object.</p>
+
+<p>An <b>OSSL_OBJECT_DIGEST_INFO</b> object holds a digest of data to identify the attribute certificate holder. OSSL_OBJECT_DIGEST_INFO_set1_digest() sets the digest information of the object. The type of <i>digest</i> information is given by <i>digestedObjectType</i> and can be one of:</p>
+
+<dl>
+
+<dt id="OSSL_OBJECT_DIGEST_INFO_PUBLIC_KEY">OSSL_OBJECT_DIGEST_INFO_PUBLIC_KEY</dt>
+<dd>
+
+<p>Hash of a public key</p>
+
+</dd>
+<dt id="OSSL_OBJECT_DIGEST_INFO_PUBLIC_KEY_CERT">OSSL_OBJECT_DIGEST_INFO_PUBLIC_KEY_CERT</dt>
+<dd>
+
+<p>Hash of a public key certificate</p>
+
+</dd>
+<dt id="OSSL_OBJECT_DIGEST_INFO_OTHER">OSSL_OBJECT_DIGEST_INFO_OTHER</dt>
+<dd>
+
+<p>Hash of another object. See NOTES below.</p>
+
+</dd>
+</dl>
+
+<p><i>digestAlgorithm</i> indicates the algorithm used to compute <i>digest</i>.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>All <i>set0</i>/<i>set1</i> routines return 1 for success and 0 for failure. All <i>get0</i> functions return a pointer to the object&#39;s inner structure. These pointers must not be freed after use.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>Although the value of <b>OSSL_OBJECT_DIGEST_INFO_OTHER</b> is defined in RFC 5755, its use is prohibited for conformant attribute certificates.</p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>These functions were added in OpenSSL 3.4.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2023-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

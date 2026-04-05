@@ -1,0 +1,111 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_MAC-GMAC</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Identity">Identity</a></li>
+      <li><a href="#Supported-parameters">Supported parameters</a></li>
+    </ul>
+  </li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_MAC-GMAC - The GMAC EVP_MAC implementation</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>Support for computing GMAC MACs through the <b>EVP_MAC</b> API.</p>
+
+<p>This implementation uses EVP_CIPHER functions to get access to the underlying cipher.</p>
+
+<h2 id="Identity">Identity</h2>
+
+<p>This implementation is identified with this name and properties, to be used with EVP_MAC_fetch():</p>
+
+<dl>
+
+<dt id="GMAC-provider-default-or-provider-fips">&quot;GMAC&quot;, &quot;provider=default&quot; or &quot;provider=fips&quot;</dt>
+<dd>
+
+</dd>
+</dl>
+
+<h2 id="Supported-parameters">Supported parameters</h2>
+
+<p>The general description of these parameters can be found in <a href="../man3/EVP_MAC.html">&quot;PARAMETERS&quot; in EVP_MAC(3)</a>.</p>
+
+<p>The following parameter can be set with EVP_MAC_CTX_set_params():</p>
+
+<dl>
+
+<dt id="key-OSSL_MAC_PARAM_KEY-octet-string">&quot;key&quot; (<b>OSSL_MAC_PARAM_KEY</b>) &lt;octet string&gt;</dt>
+<dd>
+
+<p>Sets the MAC key. Setting this parameter is identical to passing a <i>key</i> to <a href="../man3/EVP_MAC_init.html">EVP_MAC_init(3)</a>.</p>
+
+</dd>
+<dt id="iv-OSSL_MAC_PARAM_IV-octet-string">&quot;iv&quot; (<b>OSSL_MAC_PARAM_IV</b>) &lt;octet string&gt;</dt>
+<dd>
+
+<p>Sets the IV of the underlying cipher, when applicable.</p>
+
+</dd>
+<dt id="cipher-OSSL_MAC_PARAM_CIPHER-UTF8-string">&quot;cipher&quot; (<b>OSSL_MAC_PARAM_CIPHER</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+<p>Sets the name of the underlying cipher to be used.</p>
+
+</dd>
+<dt id="properties-OSSL_MAC_PARAM_PROPERTIES-UTF8-string">&quot;properties&quot; (<b>OSSL_MAC_PARAM_PROPERTIES</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+<p>Sets the properties to be queried when trying to fetch the underlying cipher. This must be given together with the cipher naming parameter to be considered valid.</p>
+
+</dd>
+</dl>
+
+<p>The following parameters can be retrieved with EVP_MAC_CTX_get_params():</p>
+
+<dl>
+
+<dt id="size-OSSL_MAC_PARAM_SIZE-unsigned-integer">&quot;size&quot; (<b>OSSL_MAC_PARAM_SIZE</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+<p>Gets the MAC size.</p>
+
+</dd>
+</dl>
+
+<p>The &quot;size&quot; parameter can also be retrieved with EVP_MAC_CTX_get_mac_size(). The length of the &quot;size&quot; parameter is equal to that of an <b>unsigned int</b>.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_MAC_CTX_get_params.html">EVP_MAC_CTX_get_params(3)</a>, <a href="../man3/EVP_MAC_CTX_set_params.html">EVP_MAC_CTX_set_params(3)</a>, <a href="../man3/EVP_MAC.html">&quot;PARAMETERS&quot; in EVP_MAC(3)</a>, <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2018-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

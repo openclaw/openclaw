@@ -1,0 +1,151 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>BIO_ctrl</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#BUGS">BUGS</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>BIO_ctrl, BIO_callback_ctrl, BIO_ptr_ctrl, BIO_int_ctrl, BIO_reset, BIO_seek, BIO_tell, BIO_flush, BIO_eof, BIO_set_close, BIO_get_close, BIO_pending, BIO_wpending, BIO_ctrl_pending, BIO_ctrl_wpending, BIO_get_info_callback, BIO_set_info_callback, BIO_info_cb, BIO_get_ktls_send, BIO_get_ktls_recv, BIO_set_conn_mode, BIO_get_conn_mode, BIO_set_tfo - BIO control operations</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/bio.h&gt;
+
+typedef int BIO_info_cb(BIO *b, int state, int res);
+
+long BIO_ctrl(BIO *bp, int cmd, long larg, void *parg);
+long BIO_callback_ctrl(BIO *b, int cmd, BIO_info_cb *cb);
+void *BIO_ptr_ctrl(BIO *bp, int cmd, long larg);
+long BIO_int_ctrl(BIO *bp, int cmd, long larg, int iarg);
+
+int BIO_reset(BIO *b);
+int BIO_seek(BIO *b, int ofs);
+int BIO_tell(BIO *b);
+int BIO_flush(BIO *b);
+int BIO_eof(BIO *b);
+int BIO_set_close(BIO *b, long flag);
+int BIO_get_close(BIO *b);
+int BIO_pending(BIO *b);
+int BIO_wpending(BIO *b);
+size_t BIO_ctrl_pending(BIO *b);
+size_t BIO_ctrl_wpending(BIO *b);
+
+int BIO_get_info_callback(BIO *b, BIO_info_cb **cbp);
+int BIO_set_info_callback(BIO *b, BIO_info_cb *cb);
+
+int BIO_get_ktls_send(BIO *b);
+int BIO_get_ktls_recv(BIO *b);
+
+int BIO_set_conn_mode(BIO *b, int mode);
+int BIO_get_conn_mode(BIO *b);
+
+int BIO_set_tfo(BIO *b, int onoff);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>BIO_ctrl(), BIO_callback_ctrl(), BIO_ptr_ctrl() and BIO_int_ctrl() are BIO &quot;control&quot; operations taking arguments of various types. These functions are not normally called directly, various macros are used instead. The standard macros are described below, macros specific to a particular type of BIO are described in the specific BIOs manual page as well as any special features of the standard calls.</p>
+
+<p>BIO_reset() typically resets a BIO to some initial state, in the case of file related BIOs for example it rewinds the file pointer to the start of the file.</p>
+
+<p>BIO_seek() resets a file related BIO&#39;s (that is file descriptor and FILE BIOs) file position pointer to <b>ofs</b> bytes from start of file.</p>
+
+<p>BIO_tell() returns the current file position of a file related BIO.</p>
+
+<p>BIO_flush() normally writes out any internally buffered data, in some cases it is used to signal EOF and that no more data will be written.</p>
+
+<p>BIO_eof() returns 1 if the BIO has read EOF, the precise meaning of &quot;EOF&quot; varies according to the BIO type.</p>
+
+<p>BIO_set_close() sets the BIO <b>b</b> close flag to <b>flag</b>. <b>flag</b> can take the value BIO_CLOSE or BIO_NOCLOSE. Typically BIO_CLOSE is used in a source/sink BIO to indicate that the underlying I/O stream should be closed when the BIO is freed.</p>
+
+<p>BIO_get_close() returns the BIOs close flag.</p>
+
+<p>BIO_pending(), BIO_ctrl_pending(), BIO_wpending() and BIO_ctrl_wpending() return the number of pending characters in the BIOs read and write buffers. Not all BIOs support these calls. BIO_ctrl_pending() and BIO_ctrl_wpending() return a size_t type and are functions, BIO_pending() and BIO_wpending() are macros which call BIO_ctrl().</p>
+
+<p>BIO_get_ktls_send() returns 1 if the BIO is using the Kernel TLS data-path for sending. Otherwise, it returns zero. BIO_get_ktls_recv() returns 1 if the BIO is using the Kernel TLS data-path for receiving. Otherwise, it returns zero.</p>
+
+<p>BIO_get_conn_mode() returns the BIO connection mode. BIO_set_conn_mode() sets the BIO connection mode.</p>
+
+<p>BIO_set_tfo() disables TCP Fast Open when <b>onoff</b> is 0, and enables TCP Fast Open when <b>onoff</b> is nonzero. Setting the value to 1 is equivalent to setting <b>BIO_SOCK_TFO</b> in BIO_set_conn_mode().</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>BIO_reset() normally returns 1 for success and &lt;=0 for failure. File BIOs are an exception, they return 0 for success and -1 for failure.</p>
+
+<p>BIO_seek() and BIO_tell() both return the current file position on success and -1 for failure, except file BIOs which for BIO_seek() always return 0 for success and -1 for failure.</p>
+
+<p>BIO_flush() returns 1 for success and &lt;=0 for failure.</p>
+
+<p>BIO_eof() returns 1 if EOF has been reached, 0 if not, or negative values for failure.</p>
+
+<p>BIO_set_close() returns 1 on success or &lt;=0 for failure.</p>
+
+<p>BIO_get_close() returns the close flag value: BIO_CLOSE or BIO_NOCLOSE. It also returns other negative values if an error occurs.</p>
+
+<p>BIO_pending(), BIO_ctrl_pending(), BIO_wpending() and BIO_ctrl_wpending() return the amount of pending data. BIO_pending() and BIO_wpending() return negative value or 0 on error. BIO_ctrl_pending() and BIO_ctrl_wpending() return 0 on error.</p>
+
+<p>BIO_get_ktls_send() returns 1 if the BIO is using the Kernel TLS data-path for sending. Otherwise, it returns zero. BIO_get_ktls_recv() returns 1 if the BIO is using the Kernel TLS data-path for receiving. Otherwise, it returns zero.</p>
+
+<p>BIO_set_conn_mode() returns 1 for success and 0 for failure. BIO_get_conn_mode() returns the current connection mode. Which may contain the bitwise-or of the following flags:</p>
+
+<pre><code>BIO_SOCK_REUSEADDR
+BIO_SOCK_V6_ONLY
+BIO_SOCK_KEEPALIVE
+BIO_SOCK_NONBLOCK
+BIO_SOCK_NODELAY
+BIO_SOCK_TFO</code></pre>
+
+<p>BIO_set_tfo() returns 1 for success, and 0 for failure.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>BIO_flush(), because it can write data may return 0 or -1 indicating that the call should be retried later in a similar manner to BIO_write_ex(). The BIO_should_retry() call should be used and appropriate action taken is the call fails.</p>
+
+<p>The return values of BIO_pending() and BIO_wpending() may not reliably determine the amount of pending data in all cases. For example in the case of a file BIO some data may be available in the FILE structures internal buffers but it is not possible to determine this in a portably way. For other types of BIO they may not be supported.</p>
+
+<p>Filter BIOs if they do not internally handle a particular BIO_ctrl() operation usually pass the operation to the next BIO in the chain. This often means there is no need to locate the required BIO for a particular operation, it can be called on a chain and it will be automatically passed to the relevant BIO. However, this can cause unexpected results: for example no current filter BIOs implement BIO_seek(), but this may still succeed if the chain ends in a FILE or file descriptor BIO.</p>
+
+<p>Source/sink BIOs return an 0 if they do not recognize the BIO_ctrl() operation.</p>
+
+<h1 id="BUGS">BUGS</h1>
+
+<p>Some of the return values are ambiguous and care should be taken. In particular a return value of 0 can be returned if an operation is not supported, if an error occurred, if EOF has not been reached and in the case of BIO_seek() on a file BIO for a successful operation.</p>
+
+<p>In older versions of OpenSSL the BIO_ctrl_pending() and BIO_ctrl_wpending() could return values greater than INT_MAX on error.</p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The BIO_get_ktls_send() and BIO_get_ktls_recv() macros were added in OpenSSL 3.0. They were modified to never return -1 in OpenSSL 3.0.4.</p>
+
+<p>The BIO_get_conn_mode(), BIO_set_conn_mode() and BIO_set_tfo() functions were added in OpenSSL 3.2.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2022 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,303 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>ASYNC_start_job</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>ASYNC_get_wait_ctx, ASYNC_init_thread, ASYNC_cleanup_thread, ASYNC_start_job, ASYNC_pause_job, ASYNC_get_current_job, ASYNC_block_pause, ASYNC_unblock_pause, ASYNC_is_capable, ASYNC_stack_alloc_fn, ASYNC_stack_free_fn, ASYNC_set_mem_functions, ASYNC_get_mem_functions - asynchronous job management functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/async.h&gt;
+
+int ASYNC_init_thread(size_t max_size, size_t init_size);
+void ASYNC_cleanup_thread(void);
+
+int ASYNC_start_job(ASYNC_JOB **job, ASYNC_WAIT_CTX *ctx, int *ret,
+                    int (*func)(void *), void *args, size_t size);
+int ASYNC_pause_job(void);
+
+ASYNC_JOB *ASYNC_get_current_job(void);
+ASYNC_WAIT_CTX *ASYNC_get_wait_ctx(ASYNC_JOB *job);
+void ASYNC_block_pause(void);
+void ASYNC_unblock_pause(void);
+
+int ASYNC_is_capable(void);
+
+typedef void *(*ASYNC_stack_alloc_fn)(size_t *num);
+typedef void (*ASYNC_stack_free_fn)(void *addr);
+int ASYNC_set_mem_functions(ASYNC_stack_alloc_fn alloc_fn,
+                            ASYNC_stack_free_fn free_fn);
+void ASYNC_get_mem_functions(ASYNC_stack_alloc_fn *alloc_fn,
+                             ASYNC_stack_free_fn *free_fn);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>OpenSSL implements asynchronous capabilities through an <b>ASYNC_JOB</b>. This represents code that can be started and executes until some event occurs. At that point the code can be paused and control returns to user code until some subsequent event indicates that the job can be resumed. It&#39;s OpenSSL specific implementation of cooperative multitasking.</p>
+
+<p>The creation of an <b>ASYNC_JOB</b> is a relatively expensive operation. Therefore, for efficiency reasons, jobs can be created up front and reused many times. They are held in a pool until they are needed, at which point they are removed from the pool, used, and then returned to the pool when the job completes. If the user application is multi-threaded, then ASYNC_init_thread() may be called for each thread that will initiate asynchronous jobs. Before user code exits per-thread resources need to be cleaned up. This will normally occur automatically (see <a href="../man3/OPENSSL_init_crypto.html">OPENSSL_init_crypto(3)</a>) but may be explicitly initiated by using ASYNC_cleanup_thread(). No asynchronous jobs must be outstanding for the thread when ASYNC_cleanup_thread() is called. Failing to ensure this will result in memory leaks.</p>
+
+<p>The <i>max_size</i> argument limits the number of <b>ASYNC_JOB</b>s that will be held in the pool. If <i>max_size</i> is set to 0 then no upper limit is set. When an <b>ASYNC_JOB</b> is needed but there are none available in the pool already then one will be automatically created, as long as the total of <b>ASYNC_JOB</b>s managed by the pool does not exceed <i>max_size</i>. When the pool is first initialised <i>init_size</i> <b>ASYNC_JOB</b>s will be created immediately. If ASYNC_init_thread() is not called before the pool is first used then it will be called automatically with a <i>max_size</i> of 0 (no upper limit) and an <i>init_size</i> of 0 (no <b>ASYNC_JOB</b>s created up front).</p>
+
+<p>An asynchronous job is started by calling the ASYNC_start_job() function. Initially <i>*job</i> should be NULL. <i>ctx</i> should point to an <b>ASYNC_WAIT_CTX</b> object created through the <a href="../man3/ASYNC_WAIT_CTX_new.html">ASYNC_WAIT_CTX_new(3)</a> function. <i>ret</i> should point to a location where the return value of the asynchronous function should be stored on completion of the job. <i>func</i> represents the function that should be started asynchronously. The data pointed to by <i>args</i> and of size <i>size</i> will be copied and then passed as an argument to <i>func</i> when the job starts. ASYNC_start_job will return one of the following values:</p>
+
+<dl>
+
+<dt id="ASYNC_ERR"><b>ASYNC_ERR</b></dt>
+<dd>
+
+<p>An error occurred trying to start the job. Check the OpenSSL error queue (e.g. see <a href="../man3/ERR_print_errors.html">ERR_print_errors(3)</a>) for more details.</p>
+
+</dd>
+<dt id="ASYNC_NO_JOBS"><b>ASYNC_NO_JOBS</b></dt>
+<dd>
+
+<p>There are no jobs currently available in the pool. This call can be retried again at a later time.</p>
+
+</dd>
+<dt id="ASYNC_PAUSE"><b>ASYNC_PAUSE</b></dt>
+<dd>
+
+<p>The job was successfully started but was &quot;paused&quot; before it completed (see ASYNC_pause_job() below). A handle to the job is placed in <i>*job</i>. Other work can be performed (if desired) and the job restarted at a later time. To restart a job call ASYNC_start_job() again passing the job handle in <i>*job</i>. The <i>func</i>, <i>args</i> and <i>size</i> parameters will be ignored when restarting a job. When restarting a job ASYNC_start_job() <b>must</b> be called from the same thread that the job was originally started from. <b>ASYNC_WAIT_CTX</b> is used to know when a job is ready to be restarted.</p>
+
+</dd>
+<dt id="ASYNC_FINISH"><b>ASYNC_FINISH</b></dt>
+<dd>
+
+<p>The job completed. <i>*job</i> will be NULL and the return value from <i>func</i> will be placed in <i>*ret</i>.</p>
+
+</dd>
+</dl>
+
+<p>At any one time there can be a maximum of one job actively running per thread (you can have many that are paused). ASYNC_get_current_job() can be used to get a pointer to the currently executing <b>ASYNC_JOB</b>. If no job is currently executing then this will return NULL.</p>
+
+<p>If executing within the context of a job (i.e. having been called directly or indirectly by the function &quot;func&quot; passed as an argument to ASYNC_start_job()) then ASYNC_pause_job() will immediately return control to the calling application with <b>ASYNC_PAUSE</b> returned from the ASYNC_start_job() call. A subsequent call to ASYNC_start_job passing in the relevant <b>ASYNC_JOB</b> in the <i>*job</i> parameter will resume execution from the ASYNC_pause_job() call. If ASYNC_pause_job() is called whilst not within the context of a job then no action is taken and ASYNC_pause_job() returns immediately.</p>
+
+<p>ASYNC_get_wait_ctx() can be used to get a pointer to the <b>ASYNC_WAIT_CTX</b> for the <i>job</i> (see <a href="../man3/ASYNC_WAIT_CTX_new.html">ASYNC_WAIT_CTX_new(3)</a>). <b>ASYNC_WAIT_CTX</b>s contain two different ways to notify applications that a job is ready to be resumed. One is a &quot;wait&quot; file descriptor, and the other is a &quot;callback&quot; mechanism.</p>
+
+<p>The &quot;wait&quot; file descriptor associated with <b>ASYNC_WAIT_CTX</b> is used for applications to wait for the file descriptor to be ready for &quot;read&quot; using a system function call such as select(2) or poll(2) (being ready for &quot;read&quot; indicates that the job should be resumed). If no file descriptor is made available then an application will have to periodically &quot;poll&quot; the job by attempting to restart it to see if it is ready to continue.</p>
+
+<p><b>ASYNC_WAIT_CTX</b>s also have a &quot;callback&quot; mechanism to notify applications. The callback is set by an application, and it will be automatically called when an engine completes a cryptography operation, so that the application can resume the paused work flow without polling. An engine could be written to look whether the callback has been set. If it has then it would use the callback mechanism in preference to the file descriptor notifications. If a callback is not set then the engine may use file descriptor based notifications. Please note that not all engines may support the callback mechanism, so the callback may not be used even if it has been set. See ASYNC_WAIT_CTX_new() for more details.</p>
+
+<p>The ASYNC_block_pause() function will prevent the currently active job from pausing. The block will remain in place until a subsequent call to ASYNC_unblock_pause(). These functions can be nested, e.g. if you call ASYNC_block_pause() twice then you must call ASYNC_unblock_pause() twice in order to re-enable pausing. If these functions are called while there is no currently active job then they have no effect. This functionality can be useful to avoid deadlock scenarios. For example during the execution of an <b>ASYNC_JOB</b> an application acquires a lock. It then calls some cryptographic function which invokes ASYNC_pause_job(). This returns control back to the code that created the <b>ASYNC_JOB</b>. If that code then attempts to acquire the same lock before resuming the original job then a deadlock can occur. By calling ASYNC_block_pause() immediately after acquiring the lock and ASYNC_unblock_pause() immediately before releasing it then this situation cannot occur.</p>
+
+<p>Some platforms cannot support async operations. The ASYNC_is_capable() function can be used to detect whether the current platform is async capable or not.</p>
+
+<p>Custom memory allocation functions are supported for the POSIX platform. Custom memory allocation functions allow alternative methods of allocating stack memory such as mmap, or using stack memory from the current thread. Using an ASYNC_stack_alloc_fn callback also allows manipulation of the stack size, which defaults to 32k. The stack size can be altered by allocating a stack of a size different to the requested size, and passing back the new stack size in the callback&#39;s <i>*num</i> parameter.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>ASYNC_init_thread returns 1 on success or 0 otherwise.</p>
+
+<p>ASYNC_start_job returns one of <b>ASYNC_ERR</b>, <b>ASYNC_NO_JOBS</b>, <b>ASYNC_PAUSE</b> or <b>ASYNC_FINISH</b> as described above.</p>
+
+<p>ASYNC_pause_job returns 0 if an error occurred or 1 on success. If called when not within the context of an <b>ASYNC_JOB</b> then this is counted as success so 1 is returned.</p>
+
+<p>ASYNC_get_current_job returns a pointer to the currently executing <b>ASYNC_JOB</b> or NULL if not within the context of a job.</p>
+
+<p>ASYNC_get_wait_ctx() returns a pointer to the <b>ASYNC_WAIT_CTX</b> for the job.</p>
+
+<p>ASYNC_is_capable() returns 1 if the current platform is async capable or 0 otherwise.</p>
+
+<p>ASYNC_set_mem_functions returns 1 if custom stack allocators are supported by the current platform and no allocations have already occurred or 0 otherwise.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>On Windows platforms the <i>&lt;openssl/async.h&gt;</i> header is dependent on some of the types customarily made available by including <i>&lt;windows.h&gt;</i>. The application developer is likely to require control over when the latter is included, commonly as one of the first included headers. Therefore, it is defined as an application developer&#39;s responsibility to include <i>&lt;windows.h&gt;</i> prior to <i>&lt;openssl/async.h&gt;</i>.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>The following example demonstrates how to use most of the core async APIs:</p>
+
+<pre><code>#ifdef _WIN32
+# include &lt;windows.h&gt;
+#endif
+#include &lt;stdio.h&gt;
+#include &lt;unistd.h&gt;
+#include &lt;openssl/async.h&gt;
+#include &lt;openssl/crypto.h&gt;
+
+int unique = 0;
+
+void cleanup(ASYNC_WAIT_CTX *ctx, const void *key, OSSL_ASYNC_FD r, void *vw)
+{
+    OSSL_ASYNC_FD *w = (OSSL_ASYNC_FD *)vw;
+
+    close(r);
+    close(*w);
+    OPENSSL_free(w);
+}
+
+int jobfunc(void *arg)
+{
+    ASYNC_JOB *currjob;
+    unsigned char *msg;
+    int pipefds[2] = {0, 0};
+    OSSL_ASYNC_FD *wptr;
+    char buf = &#39;X&#39;;
+
+    currjob = ASYNC_get_current_job();
+    if (currjob != NULL) {
+        printf(&quot;Executing within a job\n&quot;);
+    } else {
+        printf(&quot;Not executing within a job - should not happen\n&quot;);
+        return 0;
+    }
+
+    msg = (unsigned char *)arg;
+    printf(&quot;Passed in message is: %s\n&quot;, msg);
+
+    /*
+     * Create a way to inform the calling thread when this job is ready
+     * to resume, in this example we&#39;re using file descriptors.
+     * For offloading the task to an asynchronous ENGINE it&#39;s not necessary,
+     * the ENGINE should handle that internally.
+     */
+
+    if (pipe(pipefds) != 0) {
+        printf(&quot;Failed to create pipe\n&quot;);
+        return 0;
+    }
+    wptr = OPENSSL_malloc(sizeof(OSSL_ASYNC_FD));
+    if (wptr == NULL) {
+        printf(&quot;Failed to malloc\n&quot;);
+        return 0;
+    }
+    *wptr = pipefds[1];
+    ASYNC_WAIT_CTX_set_wait_fd(ASYNC_get_wait_ctx(currjob), &amp;unique,
+                               pipefds[0], wptr, cleanup);
+
+    /*
+     * Normally some external event (like a network read being ready,
+     * disk access being finished, or some hardware offload operation
+     * completing) would cause this to happen at some
+     * later point - but we do it here for demo purposes, i.e.
+     * immediately signalling that the job is ready to be woken up after
+     * we return to main via ASYNC_pause_job().
+     */
+    write(pipefds[1], &amp;buf, 1);
+
+    /*
+     * Return control back to main just before calling a blocking
+     * method. The main thread will wait until pipefds[0] is ready
+     * for reading before returning control to this thread.
+     */
+    ASYNC_pause_job();
+
+    /* Perform the blocking call (it won&#39;t block with this example code) */
+    read(pipefds[0], &amp;buf, 1);
+
+    printf (&quot;Resumed the job after a pause\n&quot;);
+
+    return 1;
+}
+
+int main(void)
+{
+    ASYNC_JOB *job = NULL;
+    ASYNC_WAIT_CTX *ctx = NULL;
+    int ret;
+    OSSL_ASYNC_FD waitfd;
+    fd_set waitfdset;
+    size_t numfds;
+    unsigned char msg[13] = &quot;Hello world!&quot;;
+
+    printf(&quot;Starting...\n&quot;);
+
+    ctx = ASYNC_WAIT_CTX_new();
+    if (ctx == NULL) {
+        printf(&quot;Failed to create ASYNC_WAIT_CTX\n&quot;);
+        abort();
+    }
+
+    for (;;) {
+        switch (ASYNC_start_job(&amp;job, ctx, &amp;ret, jobfunc, msg, sizeof(msg))) {
+        case ASYNC_ERR:
+        case ASYNC_NO_JOBS:
+            printf(&quot;An error occurred\n&quot;);
+            goto end;
+        case ASYNC_PAUSE:
+            printf(&quot;Job was paused\n&quot;);
+            break;
+        case ASYNC_FINISH:
+            printf(&quot;Job finished with return value %d\n&quot;, ret);
+            goto end;
+        }
+
+        /* Get the file descriptor we can use to wait for the job
+         * to be ready to be woken up
+         */
+        printf(&quot;Waiting for the job to be woken up\n&quot;);
+
+        if (!ASYNC_WAIT_CTX_get_all_fds(ctx, NULL, &amp;numfds)
+                || numfds &gt; 1) {
+            printf(&quot;Unexpected number of fds\n&quot;);
+            abort();
+        }
+        ASYNC_WAIT_CTX_get_all_fds(ctx, &amp;waitfd, &amp;numfds);
+        FD_ZERO(&amp;waitfdset);
+        FD_SET(waitfd, &amp;waitfdset);
+
+        /* Wait for the job to be ready for wakeup */
+        select(waitfd + 1, &amp;waitfdset, NULL, NULL, NULL);
+    }
+
+end:
+    ASYNC_WAIT_CTX_free(ctx);
+    printf(&quot;Finishing\n&quot;);
+
+    return 0;
+}</code></pre>
+
+<p>The expected output from executing the above example program is:</p>
+
+<pre><code>Starting...
+Executing within a job
+Passed in message is: Hello world!
+Job was paused
+Waiting for the job to be woken up
+Resumed the job after a pause
+Job finished with return value 1
+Finishing</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/crypto.html">crypto(7)</a>, <a href="../man3/ERR_print_errors.html">ERR_print_errors(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>ASYNC_init_thread, ASYNC_cleanup_thread, ASYNC_start_job, ASYNC_pause_job, ASYNC_get_current_job, ASYNC_get_wait_ctx(), ASYNC_block_pause(), ASYNC_unblock_pause() and ASYNC_is_capable() were first added in OpenSSL 1.1.0. ASYNC_set_mem_functions(), ASYNC_get_mem_functions() were added in OpenSSL 3.2.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2015-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

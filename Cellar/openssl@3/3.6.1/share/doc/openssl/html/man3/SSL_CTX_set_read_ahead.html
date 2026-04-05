@@ -1,0 +1,74 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_CTX_set_read_ahead</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_CTX_set_read_ahead, SSL_CTX_get_read_ahead, SSL_set_read_ahead, SSL_get_read_ahead, SSL_CTX_get_default_read_ahead - manage whether to read as many input bytes as possible</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+void SSL_set_read_ahead(SSL *s, int yes);
+int SSL_get_read_ahead(const SSL *s);
+
+SSL_CTX_set_read_ahead(SSL_CTX *ctx, int yes);
+long SSL_CTX_get_read_ahead(SSL_CTX *ctx);
+long SSL_CTX_get_default_read_ahead(SSL_CTX *ctx);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_CTX_set_read_ahead() and SSL_set_read_ahead() set whether we should read as many input bytes as possible (for nonblocking reads) or not. For example if <b>x</b> bytes are currently required by OpenSSL, but <b>y</b> bytes are available from the underlying BIO (where <b>y</b> &gt; <b>x</b>), then OpenSSL will read all <b>y</b> bytes into its buffer (providing that the buffer is large enough) if reading ahead is on, or <b>x</b> bytes otherwise. Setting the parameter <b>yes</b> to 0 turns reading ahead is off, other values turn it on. SSL_CTX_set_default_read_ahead() is identical to SSL_CTX_set_read_ahead().</p>
+
+<p>SSL_CTX_get_read_ahead() and SSL_get_read_ahead() indicate whether reading ahead has been set or not. SSL_CTX_get_default_read_ahead() is identical to SSL_CTX_get_read_ahead().</p>
+
+<p>These functions cannot be used with QUIC SSL objects. SSL_set_read_ahead() has no effect if called on a QUIC SSL object.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>These functions have no impact when used with DTLS. The return values for SSL_CTX_get_read_head() and SSL_get_read_ahead() are undefined for DTLS. Setting <b>read_ahead</b> can impact the behaviour of the SSL_pending() function (see <a href="../man3/SSL_pending.html">SSL_pending(3)</a>).</p>
+
+<p>Since SSL_read() can return <b>SSL_ERROR_WANT_READ</b> for non-application data records, and SSL_has_pending() can&#39;t tell the difference between processed and unprocessed data, it&#39;s recommended that if read ahead is turned on that <b>SSL_MODE_AUTO_RETRY</b> is not turned off using SSL_CTX_clear_mode(). That will prevent getting <b>SSL_ERROR_WANT_READ</b> when there is still a complete record available that hasn&#39;t been processed.</p>
+
+<p>If the application wants to continue to use the underlying transport (e.g. TCP connection) after the SSL connection is finished using SSL_shutdown() reading ahead should be turned off. Otherwise the SSL structure might read data that it shouldn&#39;t.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_get_read_ahead() and SSL_CTX_get_read_ahead() return 0 if reading ahead is off, and non zero otherwise.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a>, <a href="../man3/SSL_pending.html">SSL_pending(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2015-2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

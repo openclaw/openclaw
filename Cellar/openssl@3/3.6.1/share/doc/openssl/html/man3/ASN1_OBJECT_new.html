@@ -1,0 +1,68 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>ASN1_OBJECT_new</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>ASN1_OBJECT_new, ASN1_OBJECT_free - object allocation functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/asn1.h&gt;
+
+ASN1_OBJECT *ASN1_OBJECT_new(void);
+void ASN1_OBJECT_free(ASN1_OBJECT *a);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The <b>ASN1_OBJECT</b> allocation routines, allocate and free an <b>ASN1_OBJECT</b> structure, which represents an ASN1 OBJECT IDENTIFIER.</p>
+
+<p>ASN1_OBJECT_new() allocates and initializes an <b>ASN1_OBJECT</b> structure.</p>
+
+<p>ASN1_OBJECT_free() frees up the <b>ASN1_OBJECT</b> structure <i>a</i>. If <i>a</i> is NULL, nothing is done.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>Although ASN1_OBJECT_new() allocates a new <b>ASN1_OBJECT</b> structure it is almost never used in applications. The ASN1 object utility functions such as OBJ_nid2obj() are used instead.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>If the allocation fails, ASN1_OBJECT_new() returns NULL and sets an error code that can be obtained by <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>. Otherwise it returns a pointer to the newly allocated structure.</p>
+
+<p>ASN1_OBJECT_free() returns no value.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>, <a href="../man3/d2i_ASN1_OBJECT.html">d2i_ASN1_OBJECT(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2002-2016 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

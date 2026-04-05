@@ -1,0 +1,80 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>X25519</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>X25519, X448 - EVP_PKEY X25519 and X448 support</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The <b>X25519</b> and <b>X448</b> EVP_PKEY implementation supports key generation and key derivation using <b>X25519</b> and <b>X448</b>. It has associated private and public key formats compatible with RFC 8410.</p>
+
+<p>No additional parameters can be set during key generation.</p>
+
+<p>The peer public key must be set using EVP_PKEY_derive_set_peer() when performing key derivation.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>A context for the <b>X25519</b> algorithm can be obtained by calling:</p>
+
+<pre><code>EVP_PKEY_CTX *pctx = EVP_PKEY_CTX_new_id(EVP_PKEY_X25519, NULL);</code></pre>
+
+<p>For the <b>X448</b> algorithm a context can be obtained by calling:</p>
+
+<pre><code>EVP_PKEY_CTX *pctx = EVP_PKEY_CTX_new_id(EVP_PKEY_X448, NULL);</code></pre>
+
+<p>X25519 or X448 private keys can be set directly using <a href="../man3/EVP_PKEY_new_raw_private_key.html">EVP_PKEY_new_raw_private_key(3)</a> or loaded from a PKCS#8 private key file using <a href="../man3/PEM_read_bio_PrivateKey.html">PEM_read_bio_PrivateKey(3)</a> (or similar function). Completely new keys can also be generated (see the example below). Setting a private key also sets the associated public key.</p>
+
+<p>X25519 or X448 public keys can be set directly using <a href="../man3/EVP_PKEY_new_raw_public_key.html">EVP_PKEY_new_raw_public_key(3)</a> or loaded from a SubjectPublicKeyInfo structure in a PEM file using <a href="../man3/PEM_read_bio_PUBKEY.html">PEM_read_bio_PUBKEY(3)</a> (or similar function).</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>This example generates an <b>X25519</b> private key and writes it to standard output in PEM format:</p>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+#include &lt;openssl/pem.h&gt;
+...
+EVP_PKEY *pkey = NULL;
+EVP_PKEY_CTX *pctx = EVP_PKEY_CTX_new_id(EVP_PKEY_X25519, NULL);
+EVP_PKEY_keygen_init(pctx);
+EVP_PKEY_keygen(pctx, &amp;pkey);
+EVP_PKEY_CTX_free(pctx);
+PEM_write_PrivateKey(stdout, pkey, NULL, NULL, 0, NULL, NULL);</code></pre>
+
+<p>The key derivation example in <a href="../man3/EVP_PKEY_derive.html">EVP_PKEY_derive(3)</a> can be used with <b>X25519</b> and <b>X448</b>.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_PKEY_CTX_new.html">EVP_PKEY_CTX_new(3)</a>, <a href="../man3/EVP_PKEY_keygen.html">EVP_PKEY_keygen(3)</a>, <a href="../man3/EVP_PKEY_derive.html">EVP_PKEY_derive(3)</a>, <a href="../man3/EVP_PKEY_derive_set_peer.html">EVP_PKEY_derive_set_peer(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2017-2020 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

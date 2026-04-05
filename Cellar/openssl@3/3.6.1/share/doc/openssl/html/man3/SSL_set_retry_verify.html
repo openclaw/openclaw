@@ -1,0 +1,86 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_set_retry_verify</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_set_retry_verify - indicate that certificate verification should be retried</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+int SSL_set_retry_verify(SSL *ssl);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_set_retry_verify() should be called from the certificate verification callback on a client when the application wants to indicate that the handshake should be suspended and the control should be returned to the application. <a href="../man3/SSL_want_retry_verify.html">SSL_want_retry_verify(3)</a> will return 1 as a consequence until the handshake is resumed again by the application, retrying the verification step.</p>
+
+<p>Please refer to <a href="../man3/SSL_CTX_set_cert_verify_callback.html">SSL_CTX_set_cert_verify_callback(3)</a> for further details.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The effect of calling SSL_set_retry_verify() outside of the certificate verification callback on the client side is undefined.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_set_retry verify() returns 1 on success, 0 otherwise.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>The following code snippet shows how to obtain the <b>SSL</b> object associated with the <b>X509_STORE_CTX</b> to call the SSL_set_retry_verify() function:</p>
+
+<pre><code>int idx = SSL_get_ex_data_X509_STORE_CTX_idx();
+SSL *ssl;
+
+/* this should not happen but check anyway */
+if (idx &lt; 0
+    || (ssl = X509_STORE_CTX_get_ex_data(ctx, idx)) == NULL)
+    return 0;
+
+if (/* we need to retry verification callback */)
+    return SSL_set_retry_verify(ssl);
+
+/* do normal processing of the verification callback */</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a>, <a href="../man3/SSL_connect.html">SSL_connect(3)</a>, <a href="../man3/SSL_CTX_set_cert_verify_callback.html">SSL_CTX_set_cert_verify_callback(3)</a>, <a href="../man3/SSL_want_retry_verify.html">SSL_want_retry_verify(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>SSL_set_retry_verify() was added in OpenSSL 3.0.2 to replace backwards incompatible handling of a negative return value from the verification callback.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2022 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

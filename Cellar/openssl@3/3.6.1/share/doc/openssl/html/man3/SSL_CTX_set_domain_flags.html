@@ -1,0 +1,126 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_CTX_set_domain_flags</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_CTX_set_domain_flags, SSL_CTX_get_domain_flags, SSL_get_domain_flags, SSL_DOMAIN_FLAG_SINGLE_THREAD, SSL_DOMAIN_FLAG_MULTI_THREAD, SSL_DOMAIN_FLAG_THREAD_ASSISTED, SSL_DOMAIN_FLAG_BLOCKING, SSL_DOMAIN_FLAG_LEGACY_BLOCKING - control the concurrency model used by a QUIC domain</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+#define SSL_DOMAIN_FLAG_SINGLE_THREAD
+#define SSL_DOMAIN_FLAG_MULTI_THREAD
+#define SSL_DOMAIN_FLAG_LEGACY_BLOCKING
+#define SSL_DOMAIN_FLAG_BLOCKING
+#define SSL_DOMAIN_FLAG_THREAD_ASSISTED
+
+int SSL_CTX_set_domain_flags(SSL_CTX *ctx, uint64_t flags);
+int SSL_CTX_get_domain_flags(SSL_CTX *ctx, uint64_t *flags);
+
+int SSL_get_domain_flags(SSL *ssl, uint64_t *flags);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_CTX_set_domain_flags() and SSL_CTX_get_domain_flags() set and get the QUIC domain flags on a <b>SSL_CTX</b> using a QUIC <b>SSL_METHOD</b>. These flags determine the concurrency model which is used for a QUIC domain. A detailed introduction to these concepts can be found in <a href="../man7/openssl-quic-concurrency.html">openssl-quic-concurrency(7)</a>.</p>
+
+<p>Applications may use either one the flags here:</p>
+
+<dl>
+
+<dt id="SSL_DOMAIN_FLAG_SINGLE_THREAD"><b>SSL_DOMAIN_FLAG_SINGLE_THREAD</b></dt>
+<dd>
+
+<p>Specifying this flag configures the Single-Threaded Concurrency Model (SCM).</p>
+
+</dd>
+<dt id="SSL_DOMAIN_FLAG_MULTI_THREAD"><b>SSL_DOMAIN_FLAG_MULTI_THREAD</b></dt>
+<dd>
+
+<p>Specifying this flag configures the Contentive Concurrency Model (CCM) (unless <b>SSL_DOMAIN_FLAG_THREAD_ASSISTED</b> is also specified).</p>
+
+<p>If OpenSSL was built without thread support, this is identical to <b>SSL_DOMAIN_FLAG_SINGLE_THREAD</b>.</p>
+
+</dd>
+<dt id="SSL_DOMAIN_FLAG_THREAD_ASSISTED"><b>SSL_DOMAIN_FLAG_THREAD_ASSISTED</b></dt>
+<dd>
+
+<p>Specifying this flag configures the Thread-Assisted Concurrency Model (TACM). It implies <b>SSL_DOMAIN_FLAG_MULTI_THREAD</b> and <b>SSL_DOMAIN_FLAG_BLOCKING</b>.</p>
+
+<p>This concurrency model is not available if OpenSSL was built without thread support, in which case attempting to configure it will result in an error.</p>
+
+</dd>
+<dt id="SSL_DOMAIN_FLAG_BLOCKING"><b>SSL_DOMAIN_FLAG_BLOCKING</b></dt>
+<dd>
+
+<p>Enable reliable support for blocking I/O calls, allocating whatever OS resources are necessary to realise this. If this flag is specified, <b>SSL_DOMAIN_FLAG_LEGACY_BLOCKING</b> is ignored.</p>
+
+</dd>
+<dt id="SSL_DOMAIN_FLAG_LEGACY_BLOCKING"><b>SSL_DOMAIN_FLAG_LEGACY_BLOCKING</b></dt>
+<dd>
+
+<p>Enables legacy blocking compatibility mode. See <a href="../man7/openssl-quic-concurrency.html">&quot;Legacy Blocking Support Compatibility&quot; in openssl-quic-concurrency(7)</a>.</p>
+
+</dd>
+</dl>
+
+<p>Mutually exclusive flag combinations result in an error (for example, combining <b>SSL_DOMAIN_FLAG_SINGLE_THREAD</b> and <b>SSL_DOMAIN_FLAG_MULTI_THREADED</b>).</p>
+
+<p>Because exactly one concurrency model must be chosen, the domain flags cannot be set to 0 and attempting to do so will result in an error.</p>
+
+<p>Changing these flags using SSL_CTX_set_domain_flags() has no effect on QUIC domains which have already been created.</p>
+
+<p>The default set of domain flags set on a newly created <b>SSL_CTX</b> may vary by OpenSSL version, chosen <b>SSL_METHOD</b>, and operating environment. See <a href="../man7/openssl-quic-concurrency.html">openssl-quic-concurrency(7)</a> for details. An application can retrieve the default domain flags by calling SSL_CTX_get_domain_flags() immediately after constructing a <b>SSL_CTX</b>.</p>
+
+<p>SSL_get_domain_flags() retrieves the domain flags which are effective for a QUIC domain when called on any QUIC SSL object under that domain.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_CTX_set_domain_flags(), SSL_CTX_get_domain_flags() and SSL_get_domain_flags() return 1 on success and 0 on failure.</p>
+
+<p>SSL_CTX_set_domain_flags() fails if called with a set of flags which are inconsistent or which cannot be supported given the current environment.</p>
+
+<p>SSL_CTX_set_domain_flags() and SSL_CTX_get_domain_flags() fail if called on a <b>SSL_CTX</b> which is not using a QUIC <b>SSL_METHOD</b>.</p>
+
+<p>SSL_get_domain_flags() fails if called on a non-QUIC SSL object.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/SSL_new_domain.html">SSL_new_domain(3)</a>, <a href="../man7/openssl-quic-concurrency.html">openssl-quic-concurrency(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>These functions were added in OpenSSL 3.5.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2024-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

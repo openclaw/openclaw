@@ -1,0 +1,122 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SRP_create_verifier</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SRP_create_verifier_ex, SRP_create_verifier, SRP_create_verifier_BN_ex, SRP_create_verifier_BN, SRP_check_known_gN_param, SRP_get_default_gN - SRP authentication primitives</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/srp.h&gt;</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>int SRP_create_verifier_BN_ex(const char *user, const char *pass, BIGNUM **salt,
+                              BIGNUM **verifier, const BIGNUM *N,
+                              const BIGNUM *g, OSSL_LIB_CTX *libctx,
+                              const char *propq);
+char *SRP_create_verifier_BN(const char *user, const char *pass, BIGNUM **salt,
+                             BIGNUM **verifier, const BIGNUM *N, const BIGNUM *g);
+char *SRP_create_verifier_ex(const char *user, const char *pass, char **salt,
+                             char **verifier, const char *N, const char *g,
+                             OSSL_LIB_CTX *libctx, const char *propq);
+char *SRP_create_verifier(const char *user, const char *pass, char **salt,
+                          char **verifier, const char *N, const char *g);
+
+char *SRP_check_known_gN_param(const BIGNUM *g, const BIGNUM *N);
+SRP_gN *SRP_get_default_gN(const char *id);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>All of the functions described on this page are deprecated. There are no available replacement functions at this time.</p>
+
+<p>The SRP_create_verifier_BN_ex() function creates an SRP password verifier from the supplied parameters as defined in section 2.4 of RFC 5054 using the library context <i>libctx</i> and property query string <i>propq</i>. Any cryptographic algorithms that need to be fetched will use the <i>libctx</i> and <i>propq</i>. See <a href="../man7/crypto.html">&quot;ALGORITHM FETCHING&quot; in crypto(7)</a>.</p>
+
+<p>SRP_create_verifier_BN() is the same as SRP_create_verifier_BN_ex() except the default library context and property query string is used.</p>
+
+<p>On successful exit <i>*verifier</i> will point to a newly allocated BIGNUM containing the verifier and (if a salt was not provided) <i>*salt</i> will be populated with a newly allocated BIGNUM containing a random salt. If <i>*salt</i> is not NULL then the provided salt is used instead. The caller is responsible for freeing the allocated <i>*salt</i> and <i>*verifier</i> BIGNUMS (use <a href="../man3/BN_free.html">BN_free(3)</a>).</p>
+
+<p>The SRP_create_verifier() function is similar to SRP_create_verifier_BN() but all numeric parameters are in a non-standard base64 encoding originally designed for compatibility with libsrp. This is mainly present for historical compatibility and its use is discouraged. It is possible to pass NULL as <i>N</i> and an SRP group id as <i>g</i> instead to load the appropriate gN values (see SRP_get_default_gN()). If both <i>N</i> and <i>g</i> are NULL the 8192-bit SRP group parameters are used. The caller is responsible for freeing the allocated <i>*salt</i> and <i>*verifier</i> (use <a href="../man3/OPENSSL_free.html">OPENSSL_free(3)</a>).</p>
+
+<p>The SRP_check_known_gN_param() function checks that <i>g</i> and <i>N</i> are valid SRP group parameters from RFC 5054 appendix A.</p>
+
+<p>The SRP_get_default_gN() function returns the gN parameters for the RFC 5054 <i>id</i> SRP group size. The known ids are &quot;1024&quot;, &quot;1536&quot;, &quot;2048&quot;, &quot;3072&quot;, &quot;4096&quot;, &quot;6144&quot; and &quot;8192&quot;.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SRP_create_verifier_BN_ex() and SRP_create_verifier_BN() return 1 on success and 0 on failure.</p>
+
+<p>SRP_create_verifier_ex() and SRP_create_verifier() return NULL on failure and a non-NULL value on success: &quot;*&quot; if <i>N</i> is not NULL, the selected group id otherwise. This value should not be freed.</p>
+
+<p>SRP_check_known_gN_param() returns the text representation of the group id (i.e. the prime bit size) or NULL if the arguments are not valid SRP group parameters. This value should not be freed.</p>
+
+<p>SRP_get_default_gN() returns NULL if <i>id</i> is not a valid group size, or the 8192-bit group parameters if <i>id</i> is NULL.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>Generate and store a 8192 bit password verifier (error handling omitted for clarity):</p>
+
+<pre><code>#include &lt;openssl/bn.h&gt;
+#include &lt;openssl/srp.h&gt;
+
+const char *username = &quot;username&quot;;
+const char *password = &quot;password&quot;;
+
+SRP_VBASE *srpData = SRP_VBASE_new(NULL);
+
+SRP_gN *gN = SRP_get_default_gN(&quot;8192&quot;);
+
+BIGNUM *salt = NULL, *verifier = NULL;
+SRP_create_verifier_BN_ex(username, password, &amp;salt, &amp;verifier, gN-&gt;N, gN-&gt;g,
+                          NULL, NULL);
+
+SRP_user_pwd *pwd = SRP_user_pwd_new();
+SRP_user_pwd_set1_ids(pwd, username, NULL);
+SRP_user_pwd_set0_sv(pwd, salt, verifier);
+SRP_user_pwd_set_gN(pwd, gN-&gt;g, gN-&gt;N);
+
+SRP_VBASE_add0_user(srpData, pwd);</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man1/openssl-srp.html">openssl-srp(1)</a>, <a href="../man3/SRP_VBASE_new.html">SRP_VBASE_new(3)</a>, <a href="../man3/SRP_user_pwd_new.html">SRP_user_pwd_new(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>SRP_create_verifier_BN_ex() and SRP_create_verifier_ex() were introduced in OpenSSL 3.0. All other functions were added in OpenSSL 1.0.1.</p>
+
+<p>All of these functions were deprecated in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2018-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

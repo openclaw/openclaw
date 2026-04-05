@@ -1,0 +1,312 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>life_cycle-cipher</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#State-Transition-Diagram">State Transition Diagram</a></li>
+      <li><a href="#Formal-State-Transitions">Formal State Transitions</a></li>
+    </ul>
+  </li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>life_cycle-cipher - The cipher algorithm life-cycle</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>All symmetric ciphers (CIPHERs) go through a number of stages in their life-cycle:</p>
+
+<dl>
+
+<dt id="start">start</dt>
+<dd>
+
+<p>This state represents the CIPHER before it has been allocated. It is the starting state for any life-cycle transitions.</p>
+
+</dd>
+<dt id="newed">newed</dt>
+<dd>
+
+<p>This state represents the CIPHER after it has been allocated.</p>
+
+</dd>
+<dt id="initialised">initialised</dt>
+<dd>
+
+<p>These states represent the CIPHER when it is set up and capable of processing input. There are three possible initialised states:</p>
+
+<dl>
+
+<dt id="initialised-using-EVP_CipherInit">initialised using EVP_CipherInit</dt>
+<dd>
+
+</dd>
+<dt id="initialised-for-decryption-using-EVP_DecryptInit">initialised for decryption using EVP_DecryptInit</dt>
+<dd>
+
+</dd>
+<dt id="initialised-for-encryption-using-EVP_EncryptInit">initialised for encryption using EVP_EncryptInit</dt>
+<dd>
+
+</dd>
+</dl>
+
+</dd>
+<dt id="updated">updated</dt>
+<dd>
+
+<p>These states represent the CIPHER when it is set up and capable of processing additional input or generating output. The three possible states directly correspond to those for initialised above. The three different streams should not be mixed.</p>
+
+</dd>
+<dt id="finaled">finaled</dt>
+<dd>
+
+<p>This state represents the CIPHER when it has generated output.</p>
+
+</dd>
+<dt id="freed">freed</dt>
+<dd>
+
+<p>This state is entered when the CIPHER is freed. It is the terminal state for all life-cycle transitions.</p>
+
+</dd>
+</dl>
+
+<h2 id="State-Transition-Diagram">State Transition Diagram</h2>
+
+<p>The usual life-cycle of a CIPHER is illustrated:</p>
+
+<img src="img/cipher.png">
+
+<h2 id="Formal-State-Transitions">Formal State Transitions</h2>
+
+<p>This section defines all of the legal state transitions. This is the canonical list.</p>
+
+<table style="border:1px solid; border-collapse:collapse">
+<tr><th style="border:1px solid" align="left">Function Call</th>
+    <th style="border:1px solid" colspan="10">Current State</th></tr>
+<tr><th style="border:1px solid"></th>
+    <th style="border:1px solid" align="center">start</th>
+    <th style="border:1px solid" align="center">newed</th>
+    <th style="border:1px solid" align="center">initialised</th>
+    <th style="border:1px solid" align="center">updated</th>
+    <th style="border:1px solid" align="center">finaled</th>
+    <th style="border:1px solid" align="center">initialised<br>decryption</th>
+    <th style="border:1px solid" align="center">updated<br>decryption</th>
+    <th style="border:1px solid" align="center">initialised<br>encryption</th>
+    <th style="border:1px solid" align="center">updated<br>encryption</th>
+    <th style="border:1px solid" align="center">freed</th></tr>
+<tr><th style="border:1px solid" align="left">EVP_CIPHER_CTX_new</th>
+    <td style="border:1px solid" align="center">newed</td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td></tr>
+<tr><th style="border:1px solid" align="left">EVP_CipherInit</th>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center">initialised</td>
+    <td style="border:1px solid" align="center">initialised</td>
+    <td style="border:1px solid" align="center">initialised</td>
+    <td style="border:1px solid" align="center">initialised</td>
+    <td style="border:1px solid" align="center">initialised</td>
+    <td style="border:1px solid" align="center">initialised</td>
+    <td style="border:1px solid" align="center">initialised</td>
+    <td style="border:1px solid" align="center">initialised</td>
+    <td style="border:1px solid" align="center"></td></tr>
+<tr><th style="border:1px solid" align="left">EVP_DecryptInit</th>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center">initialised<br>decryption</td>
+    <td style="border:1px solid" align="center">initialised<br>decryption</td>
+    <td style="border:1px solid" align="center">initialised<br>decryption</td>
+    <td style="border:1px solid" align="center">initialised<br>decryption</td>
+    <td style="border:1px solid" align="center">initialised<br>decryption</td>
+    <td style="border:1px solid" align="center">initialised<br>decryption</td>
+    <td style="border:1px solid" align="center">initialised<br>decryption</td>
+    <td style="border:1px solid" align="center">initialised<br>decryption</td>
+    <td style="border:1px solid" align="center"></td></tr>
+<tr><th style="border:1px solid" align="left">EVP_EncryptInit</th>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center">initialised<br>encryption</td>
+    <td style="border:1px solid" align="center">initialised<br>encryption</td>
+    <td style="border:1px solid" align="center">initialised<br>encryption</td>
+    <td style="border:1px solid" align="center">initialised<br>encryption</td>
+    <td style="border:1px solid" align="center">initialised<br>encryption</td>
+    <td style="border:1px solid" align="center">initialised<br>encryption</td>
+    <td style="border:1px solid" align="center">initialised<br>encryption</td>
+    <td style="border:1px solid" align="center">initialised<br>encryption</td>
+    <td style="border:1px solid" align="center"></td></tr>
+<tr><th style="border:1px solid" align="left">EVP_CipherUpdate</th>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center">updated</td>
+    <td style="border:1px solid" align="center">updated</td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td></tr>
+<tr><th style="border:1px solid" align="left">EVP_DecryptUpdate</th>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center">updated<br>decryption</td>
+    <td style="border:1px solid" align="center">updated<br>decryption</td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td></tr>
+<tr><th style="border:1px solid" align="left">EVP_EncryptUpdate</th>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center">updated<br>encryption</td>
+    <td style="border:1px solid" align="center">updated<br>encryption</td>
+    <td style="border:1px solid" align="center"></td></tr>
+<tr><th style="border:1px solid" align="left">EVP_CipherFinal</th>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center">finaled</td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td></tr>
+<tr><th style="border:1px solid" align="left">EVP_DecryptFinal</th>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center">finaled<br>decryption</td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td></tr>
+<tr><th style="border:1px solid" align="left">EVP_EncryptFinal</th>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center">finaled<br>decryption</td>
+    <td style="border:1px solid" align="center"></td></tr>
+<tr><th style="border:1px solid" align="left">EVP_CIPHER_CTX_free</th>
+    <td style="border:1px solid" align="center">freed</td>
+    <td style="border:1px solid" align="center">freed</td>
+    <td style="border:1px solid" align="center">freed</td>
+    <td style="border:1px solid" align="center">freed</td>
+    <td style="border:1px solid" align="center">freed</td>
+    <td style="border:1px solid" align="center">freed</td>
+    <td style="border:1px solid" align="center">freed</td>
+    <td style="border:1px solid" align="center">freed</td>
+    <td style="border:1px solid" align="center">freed</td>
+    <td style="border:1px solid" align="center"></td></tr>
+<tr><th style="border:1px solid" align="left">EVP_CIPHER_CTX_reset</th>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center">newed</td>
+    <td style="border:1px solid" align="center">newed</td>
+    <td style="border:1px solid" align="center">newed</td>
+    <td style="border:1px solid" align="center">newed</td>
+    <td style="border:1px solid" align="center">newed</td>
+    <td style="border:1px solid" align="center">newed</td>
+    <td style="border:1px solid" align="center">newed</td>
+    <td style="border:1px solid" align="center"></td></tr>
+<tr><th style="border:1px solid" align="left">EVP_CIPHER_CTX_get_params</th>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center">newed</td>
+    <td style="border:1px solid" align="center">initialised</td>
+    <td style="border:1px solid" align="center">updated</td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center">initialised<br>decryption</td>
+    <td style="border:1px solid" align="center">updated<br>decryption</td>
+    <td style="border:1px solid" align="center">initialised<br>encryption</td>
+    <td style="border:1px solid" align="center">updated<br>encryption</td>
+    <td style="border:1px solid" align="center"></td></tr>
+<tr><th style="border:1px solid" align="left">EVP_CIPHER_CTX_set_params</th>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center">newed</td>
+    <td style="border:1px solid" align="center">initialised</td>
+    <td style="border:1px solid" align="center">updated</td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center">initialised<br>decryption</td>
+    <td style="border:1px solid" align="center">updated<br>decryption</td>
+    <td style="border:1px solid" align="center">initialised<br>encryption</td>
+    <td style="border:1px solid" align="center">updated<br>encryption</td>
+    <td style="border:1px solid" align="center"></td></tr>
+<tr><th style="border:1px solid" align="left">EVP_CIPHER_CTX_gettable_params</th>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center">newed</td>
+    <td style="border:1px solid" align="center">initialised</td>
+    <td style="border:1px solid" align="center">updated</td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center">initialised<br>decryption</td>
+    <td style="border:1px solid" align="center">updated<br>decryption</td>
+    <td style="border:1px solid" align="center">initialised<br>encryption</td>
+    <td style="border:1px solid" align="center">updated<br>encryption</td>
+    <td style="border:1px solid" align="center"></td></tr>
+<tr><th style="border:1px solid" align="left">EVP_CIPHER_CTX_settable_params</th>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center">newed</td>
+    <td style="border:1px solid" align="center">initialised</td>
+    <td style="border:1px solid" align="center">updated</td>
+    <td style="border:1px solid" align="center"></td>
+    <td style="border:1px solid" align="center">initialised<br>decryption</td>
+    <td style="border:1px solid" align="center">updated<br>decryption</td>
+    <td style="border:1px solid" align="center">initialised<br>encryption</td>
+    <td style="border:1px solid" align="center">updated<br>encryption</td>
+    <td style="border:1px solid" align="center"></td></tr>
+</table>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>At some point the EVP layer will begin enforcing the transitions described herein.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/provider-cipher.html">provider-cipher(7)</a>, <a href="../man3/EVP_EncryptInit.html">EVP_EncryptInit(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

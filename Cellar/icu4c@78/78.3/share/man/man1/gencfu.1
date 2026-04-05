@@ -1,0 +1,93 @@
+.\" Hey, Emacs! This is -*-nroff-*- you know...
+.\"
+.\" gencfu.1: manual page for the gencfu utility
+.\"
+.\" Copyright (C) 2016 and later: Unicode, Inc. and others.
+.\" License & terms of use: http://www.unicode.org/copyright.html
+.\" Copyright (C) 2012 International Business Machines Corporation and others
+.\"
+.TH GENCFU 1 "24 May 2009" "ICU MANPAGE" "ICU 78.3 Manual"
+.SH NAME
+.B gencfu
+\- Generates Unicode Confusable data files
+.SH SYNOPSIS
+.B gencfu
+[
+.BR "\-h\fP, \fB\-?\fP, \fB\-\-help"
+]
+[
+.BR "\-V\fP, \fB\-\-version"
+]
+[
+.BR "\-c\fP, \fB\-\-copyright"
+]
+[
+.BR "\-v\fP, \fB\-\-verbose"
+]
+[
+.BI "\-d\fP, \fB\-\-destdir" " destination"
+]
+[
+.BI "\-i\fP, \fB\-\-icudatadir" " directory"
+]
+.BI "\-r\fP, \fB\-\-rules" " rule\-file"
+.BI "\-w\fP, \fB\-\-wsrules" " whole\-script\-rule\-file"
+.BI "\-o\fP, \fB\-\-out" " output\-file"
+.SH DESCRIPTION
+.B gencfu
+reads confusable character definitions in the input file, which are
+plain text files containing confusable character
+definitions in the input format defined by Unicode UAX39 for the files
+.I confusables.txt
+and
+.I confusablesWholeScript.txt.
+This source (.txt) format is also accepted by ICU spoof detectors.
+The files must be encoded in utf-8 format, with or without a BOM.
+Normally the output data file has the
+.B .cfu
+extension.
+.SH OPTIONS
+.TP
+.BR "\-h\fP, \fB\-?\fP, \fB\-\-help"
+Print help about usage and exit.
+.TP
+.BR "\-V\fP, \fB\-\-version"
+Print the version of
+.B gencfu
+and exit.
+.TP
+.BR "\-c\fP, \fB\-\-copyright"
+Embeds the standard ICU copyright into the
+.IR output-file .
+.TP
+.BR "\-v\fP, \fB\-\-verbose"
+Display extra informative messages during execution.
+.TP
+.BI "\-d\fP, \fB\-\-destdir" " destination"
+Set the destination directory of the
+.IR output-file
+to
+.IR destination .
+.TP
+.BI "\-i\fP, \fB\-\-icudatadir" " directory"
+Look for any necessary ICU data files in
+.IR directory .
+For example, the file
+.B pnames.icu
+must be located when ICU's data is not built as a shared library.
+The default ICU data directory is specified by the environment variable
+.BR ICU_DATA .
+Most configurations of ICU do not require this argument.
+.TP
+.BI "\-r\fP, \fB\-\-rules" " rule\-file"
+The source file to read.
+.TP
+.BI "\-w\fP, \fB\-\-wsrules" " whole\-script\-rule\-file"
+The whole script source file to read.
+.TP
+.BI "\-o\fP, \fB\-\-out" " output\-file"
+The output data file to write.
+.SH VERSION
+1.0
+.SH COPYRIGHT
+Copyright (C) 2009 International Business Machines Corporation and others

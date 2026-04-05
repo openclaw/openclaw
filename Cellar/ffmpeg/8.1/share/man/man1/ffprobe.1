@@ -1,0 +1,1316 @@
+.\"
+.\" Standard preamble:
+.\" ========================================================================
+.de Sp \" Vertical space (when we can't use .PP)
+.if t .sp .5v
+.if n .sp
+..
+.de Vb \" Begin verbatim text
+.ft CW
+.nf
+.ne \\$1
+..
+.de Ve \" End verbatim text
+.ft R
+.fi
+..
+.\" Set up some character translations and predefined strings.  \*(-- will
+.\" give an unbreakable dash, \*(PI will give pi, \*(L" will give a left
+.\" double quote, and \*(R" will give a right double quote.  \*(C+ will
+.\" give a nicer C++.  Capital omega is used to do unbreakable dashes and
+.\" therefore won't be available.  \*(C` and \*(C' expand to `' in nroff,
+.\" nothing in troff, for use with C<>.
+.tr \(*W-
+.ds C+ C\v'-.1v'\h'-1p'\s-2+\h'-1p'+\s0\v'.1v'\h'-1p'
+.ie n \{\
+.    ds -- \(*W-
+.    ds PI pi
+.    if (\n(.H=4u)&(1m=24u) .ds -- \(*W\h'-12u'\(*W\h'-12u'-\" diablo 10 pitch
+.    if (\n(.H=4u)&(1m=20u) .ds -- \(*W\h'-12u'\(*W\h'-8u'-\"  diablo 12 pitch
+.    ds L" ""
+.    ds R" ""
+.    ds C` ""
+.    ds C' ""
+'br\}
+.el\{\
+.    ds -- \|\(em\|
+.    ds PI \(*p
+.    ds L" ``
+.    ds R" ''
+.    ds C`
+.    ds C'
+'br\}
+.\"
+.\" Escape single quotes in literal strings from groff's Unicode transform.
+.ie \n(.g .ds Aq \(aq
+.el       .ds Aq '
+.\"
+.\" If the F register is >0, we'll generate index entries on stderr for
+.\" titles (.TH), headers (.SH), subsections (.SS), items (.Ip), and index
+.\" entries marked with X<> in POD.  Of course, you'll have to process the
+.\" output yourself in some meaningful fashion.
+.\"
+.\" Avoid warning from groff about undefined register 'F'.
+.de IX
+..
+.nr rF 0
+.if \n(.g .if rF .nr rF 1
+.if (\n(rF:(\n(.g==0)) \{\
+.    if \nF \{\
+.        de IX
+.        tm Index:\\$1\t\\n%\t"\\$2"
+..
+.        if !\nF==2 \{\
+.            nr % 0
+.            nr F 2
+.        \}
+.    \}
+.\}
+.rr rF
+.\"
+.\" Accent mark definitions (@(#)ms.acc 1.5 88/02/08 SMI; from UCB 4.2).
+.\" Fear.  Run.  Save yourself.  No user-serviceable parts.
+.    \" fudge factors for nroff and troff
+.if n \{\
+.    ds #H 0
+.    ds #V .8m
+.    ds #F .3m
+.    ds #[ \f1
+.    ds #] \fP
+.\}
+.if t \{\
+.    ds #H ((1u-(\\\\n(.fu%2u))*.13m)
+.    ds #V .6m
+.    ds #F 0
+.    ds #[ \&
+.    ds #] \&
+.\}
+.    \" simple accents for nroff and troff
+.if n \{\
+.    ds ' \&
+.    ds ` \&
+.    ds ^ \&
+.    ds , \&
+.    ds ~ ~
+.    ds /
+.\}
+.if t \{\
+.    ds ' \\k:\h'-(\\n(.wu*8/10-\*(#H)'\'\h"|\\n:u"
+.    ds ` \\k:\h'-(\\n(.wu*8/10-\*(#H)'\`\h'|\\n:u'
+.    ds ^ \\k:\h'-(\\n(.wu*10/11-\*(#H)'^\h'|\\n:u'
+.    ds , \\k:\h'-(\\n(.wu*8/10)',\h'|\\n:u'
+.    ds ~ \\k:\h'-(\\n(.wu-\*(#H-.1m)'~\h'|\\n:u'
+.    ds / \\k:\h'-(\\n(.wu*8/10-\*(#H)'\z\(sl\h'|\\n:u'
+.\}
+.    \" troff and (daisy-wheel) nroff accents
+.ds : \\k:\h'-(\\n(.wu*8/10-\*(#H+.1m+\*(#F)'\v'-\*(#V'\z.\h'.2m+\*(#F'.\h'|\\n:u'\v'\*(#V'
+.ds 8 \h'\*(#H'\(*b\h'-\*(#H'
+.ds o \\k:\h'-(\\n(.wu+\w'\(de'u-\*(#H)/2u'\v'-.3n'\*(#[\z\(de\v'.3n'\h'|\\n:u'\*(#]
+.ds d- \h'\*(#H'\(pd\h'-\w'~'u'\v'-.25m'\f2\(hy\fP\v'.25m'\h'-\*(#H'
+.ds D- D\\k:\h'-\w'D'u'\v'-.11m'\z\(hy\v'.11m'\h'|\\n:u'
+.ds th \*(#[\v'.3m'\s+1I\s-1\v'-.3m'\h'-(\w'I'u*2/3)'\s-1o\s+1\*(#]
+.ds Th \*(#[\s+2I\s-2\h'-\w'I'u*3/5'\v'-.3m'o\v'.3m'\*(#]
+.ds ae a\h'-(\w'a'u*4/10)'e
+.ds Ae A\h'-(\w'A'u*4/10)'E
+.    \" corrections for vroff
+.if v .ds ~ \\k:\h'-(\\n(.wu*9/10-\*(#H)'\s-2\u~\d\s+2\h'|\\n:u'
+.if v .ds ^ \\k:\h'-(\\n(.wu*10/11-\*(#H)'\v'-.4m'^\v'.4m'\h'|\\n:u'
+.    \" for low resolution devices (crt and lpr)
+.if \n(.H>23 .if \n(.V>19 \
+\{\
+.    ds : e
+.    ds 8 ss
+.    ds o a
+.    ds d- d\h'-1'\(ga
+.    ds D- D\h'-1'\(hy
+.    ds th \o'bp'
+.    ds Th \o'LP'
+.    ds ae ae
+.    ds Ae AE
+.\}
+.rm #[ #] #H #V #F C
+.\" ========================================================================
+.\"
+.IX Title "FFPROBE 1"
+.TH FFPROBE 1 " " " " " "
+.\" For nroff, turn off justification.  Always turn off hyphenation; it makes
+.\" way too many mistakes in technical documents.
+.if n .ad l
+.nh
+.SH "NAME"
+ffprobe \- ffprobe media prober
+.SH "SYNOPSIS"
+.IX Header "SYNOPSIS"
+ffprobe [\fIoptions\fR] \fIinput_url\fR
+.SH "DESCRIPTION"
+.IX Header "DESCRIPTION"
+ffprobe gathers information from multimedia streams and prints it in
+human\- and machine-readable fashion.
+.PP
+For example it can be used to check the format of the container used
+by a multimedia stream and the format and type of each media stream
+contained in it.
+.PP
+If a url is specified in input, ffprobe will try to open and
+probe the url content. If the url cannot be opened or recognized as
+a multimedia file, a positive exit code is returned.
+.PP
+If no output is specified as output with \fBo\fR ffprobe will write
+to stdout.
+.PP
+ffprobe may be employed both as a standalone application or in
+combination with a textual filter, which may perform more
+sophisticated processing, e.g. statistical processing or plotting.
+.PP
+Options are used to list some of the formats supported by ffprobe or
+for specifying which information to display, and for setting how
+ffprobe will show it.
+.PP
+ffprobe output is designed to be easily parsable by a textual filter,
+and consists of one or more sections of a form defined by the selected
+writer, which is specified by the \fBoutput_format\fR option.
+.PP
+Sections may contain other nested sections, and are identified by a
+name (which may be shared by other sections), and an unique
+name. See the output of \fBsections\fR.
+.PP
+Metadata tags stored in the container or in the streams are recognized
+and printed in the corresponding \*(L"\s-1FORMAT\*(R", \*(L"STREAM\*(R", \*(L"STREAM_GROUP_STREAM\*(R"\s0
+or \*(L"\s-1PROGRAM_STREAM\*(R"\s0 section.
+.SH "OPTIONS"
+.IX Header "OPTIONS"
+All the numerical options, if not specified otherwise, accept a string
+representing a number as input, which may be followed by one of the \s-1SI\s0
+unit prefixes, for example: 'K', 'M', or 'G'.
+.PP
+If 'i' is appended to the \s-1SI\s0 unit prefix, the complete prefix will be
+interpreted as a unit prefix for binary multiples, which are based on
+powers of 1024 instead of powers of 1000. Appending 'B' to the \s-1SI\s0 unit
+prefix multiplies the value by 8. This allows using, for example:
+\&'\s-1KB\s0', 'MiB', 'G' and 'B' as number suffixes.
+.PP
+Options which do not take arguments are boolean options, and set the
+corresponding value to true. They can be set to false by prefixing
+the option name with \*(L"no\*(R". For example using \*(L"\-nofoo\*(R"
+will set the boolean option with name \*(L"foo\*(R" to false.
+.PP
+Options that take arguments support a special syntax where the argument given on
+the command line is interpreted as a path to the file from which the actual
+argument value is loaded. To use this feature, add a forward slash '/'
+immediately before the option name (after the leading dash). E.g.
+.PP
+.Vb 1
+\&        ffmpeg \-i INPUT \-/filter:v filter.script OUTPUT
+.Ve
+.PP
+will load a filtergraph description from the file named \fIfilter.script\fR.
+.SS "Stream specifiers"
+.IX Subsection "Stream specifiers"
+Some options are applied per-stream, e.g. bitrate or codec. Stream specifiers
+are used to precisely specify which stream(s) a given option belongs to.
+.PP
+A stream specifier is a string generally appended to the option name and
+separated from it by a colon. E.g. \f(CW\*(C`\-codec:a:1 ac3\*(C'\fR contains the
+\&\f(CW\*(C`a:1\*(C'\fR stream specifier, which matches the second audio stream. Therefore, it
+would select the ac3 codec for the second audio stream.
+.PP
+A stream specifier can match several streams, so that the option is applied to all
+of them. E.g. the stream specifier in \f(CW\*(C`\-b:a 128k\*(C'\fR matches all audio
+streams.
+.PP
+An empty stream specifier matches all streams. For example, \f(CW\*(C`\-codec copy\*(C'\fR
+or \f(CW\*(C`\-codec: copy\*(C'\fR would copy all the streams without reencoding.
+.PP
+Possible forms of stream specifiers are:
+.IP "\fIstream_index\fR" 4
+.IX Item "stream_index"
+Matches the stream with this index. E.g. \f(CW\*(C`\-threads:1 4\*(C'\fR would set the
+thread count for the second stream to 4. If \fIstream_index\fR is used as an
+additional stream specifier (see below), then it selects stream number
+\&\fIstream_index\fR from the matching streams. Stream numbering is based on the
+order of the streams as detected by libavformat except when a stream group
+specifier or program \s-1ID\s0 is also specified. In this case it is based on the
+ordering of the streams in the group or program.
+.IP "\fIstream_type\fR\fB[:\fR\fIadditional_stream_specifier\fR\fB]\fR" 4
+.IX Item "stream_type[:additional_stream_specifier]"
+\&\fIstream_type\fR is one of following: 'v' or 'V' for video, 'a' for audio, 's'
+for subtitle, 'd' for data, and 't' for attachments. 'v' matches all video
+streams, 'V' only matches video streams which are not attached pictures, video
+thumbnails or cover arts. If \fIadditional_stream_specifier\fR is used, then
+it matches streams which both have this type and match the
+\&\fIadditional_stream_specifier\fR. Otherwise, it matches all streams of the
+specified type.
+.IP "\fBg:\fR\fIgroup_specifier\fR\fB[:\fR\fIadditional_stream_specifier\fR\fB]\fR" 4
+.IX Item "g:group_specifier[:additional_stream_specifier]"
+Matches streams which are in the group with the specifier \fIgroup_specifier\fR.
+if \fIadditional_stream_specifier\fR is used, then it matches streams which both
+are part of the group and match the \fIadditional_stream_specifier\fR.
+\&\fIgroup_specifier\fR may be one of the following:
+.RS 4
+.IP "\fIgroup_index\fR" 4
+.IX Item "group_index"
+Match the stream with this group index.
+.IP "\fB#\fR\fIgroup_id\fR \fBor i:\fR\fIgroup_id\fR" 4
+.IX Item "#group_id or i:group_id"
+Match the stream with this group id.
+.RE
+.RS 4
+.RE
+.IP "\fBp:\fR\fIprogram_id\fR\fB[:\fR\fIadditional_stream_specifier\fR\fB]\fR" 4
+.IX Item "p:program_id[:additional_stream_specifier]"
+Matches streams which are in the program with the id \fIprogram_id\fR. If
+\&\fIadditional_stream_specifier\fR is used, then it matches streams which both
+are part of the program and match the \fIadditional_stream_specifier\fR.
+.IP "\fB#\fR\fIstream_id\fR \fBor i:\fR\fIstream_id\fR" 4
+.IX Item "#stream_id or i:stream_id"
+Match the stream by stream id (e.g. \s-1PID\s0 in MPEG-TS container).
+.IP "\fBm:\fR\fIkey\fR\fB[:\fR\fIvalue\fR\fB]\fR" 4
+.IX Item "m:key[:value]"
+Matches streams with the metadata tag \fIkey\fR having the specified value. If
+\&\fIvalue\fR is not given, matches streams that contain the given tag with any
+value. The colon character ':' in \fIkey\fR or \fIvalue\fR needs to be
+backslash-escaped.
+.IP "\fBdisp:\fR\fIdispositions\fR\fB[:\fR\fIadditional_stream_specifier\fR\fB]\fR" 4
+.IX Item "disp:dispositions[:additional_stream_specifier]"
+Matches streams with the given disposition(s). \fIdispositions\fR is a list of
+one or more dispositions (as printed by the \fB\-dispositions\fR option)
+joined with '+'.
+.IP "\fBu\fR" 4
+.IX Item "u"
+Matches streams with usable configuration, the codec must be defined and the
+essential information such as video dimension or audio sample rate must be present.
+.Sp
+Note that in \fBffmpeg\fR, matching by metadata will only work properly for
+input files.
+.SS "Generic options"
+.IX Subsection "Generic options"
+These options are shared amongst the ff* tools.
+.IP "\fB\-L, \-license\fR" 4
+.IX Item "-L, -license"
+Show license.
+.IP "\fB\-h, \-?, \-help, \-\-help [\fR\fIarg\fR\fB]\fR" 4
+.IX Item "-h, -?, -help, --help [arg]"
+Show help. An optional parameter may be specified to print help about a specific
+item. If no argument is specified, only basic (non advanced) tool
+options are shown.
+.Sp
+Possible values of \fIarg\fR are:
+.RS 4
+.IP "\fBlong\fR" 4
+.IX Item "long"
+Print advanced tool options in addition to the basic tool options.
+.IP "\fBfull\fR" 4
+.IX Item "full"
+Print complete list of options, including shared and private options
+for encoders, decoders, demuxers, muxers, filters, etc.
+.IP "\fBdecoder=\fR\fIdecoder_name\fR" 4
+.IX Item "decoder=decoder_name"
+Print detailed information about the decoder named \fIdecoder_name\fR. Use the
+\&\fB\-decoders\fR option to get a list of all decoders.
+.IP "\fBencoder=\fR\fIencoder_name\fR" 4
+.IX Item "encoder=encoder_name"
+Print detailed information about the encoder named \fIencoder_name\fR. Use the
+\&\fB\-encoders\fR option to get a list of all encoders.
+.IP "\fBdemuxer=\fR\fIdemuxer_name\fR" 4
+.IX Item "demuxer=demuxer_name"
+Print detailed information about the demuxer named \fIdemuxer_name\fR. Use the
+\&\fB\-formats\fR option to get a list of all demuxers and muxers.
+.IP "\fBmuxer=\fR\fImuxer_name\fR" 4
+.IX Item "muxer=muxer_name"
+Print detailed information about the muxer named \fImuxer_name\fR. Use the
+\&\fB\-formats\fR option to get a list of all muxers and demuxers.
+.IP "\fBfilter=\fR\fIfilter_name\fR" 4
+.IX Item "filter=filter_name"
+Print detailed information about the filter named \fIfilter_name\fR. Use the
+\&\fB\-filters\fR option to get a list of all filters.
+.IP "\fBbsf=\fR\fIbitstream_filter_name\fR" 4
+.IX Item "bsf=bitstream_filter_name"
+Print detailed information about the bitstream filter named \fIbitstream_filter_name\fR.
+Use the \fB\-bsfs\fR option to get a list of all bitstream filters.
+.IP "\fBprotocol=\fR\fIprotocol_name\fR" 4
+.IX Item "protocol=protocol_name"
+Print detailed information about the protocol named \fIprotocol_name\fR.
+Use the \fB\-protocols\fR option to get a list of all protocols.
+.RE
+.RS 4
+.RE
+.IP "\fB\-version\fR" 4
+.IX Item "-version"
+Show version.
+.IP "\fB\-buildconf\fR" 4
+.IX Item "-buildconf"
+Show the build configuration, one option per line.
+.IP "\fB\-formats\fR" 4
+.IX Item "-formats"
+Show available formats (including devices).
+.IP "\fB\-demuxers\fR" 4
+.IX Item "-demuxers"
+Show available demuxers.
+.IP "\fB\-muxers\fR" 4
+.IX Item "-muxers"
+Show available muxers.
+.IP "\fB\-devices\fR" 4
+.IX Item "-devices"
+Show available devices.
+.IP "\fB\-codecs\fR" 4
+.IX Item "-codecs"
+Show all codecs known to libavcodec.
+.Sp
+Note that the term 'codec' is used throughout this documentation as a shortcut
+for what is more correctly called a media bitstream format.
+.IP "\fB\-decoders\fR" 4
+.IX Item "-decoders"
+Show available decoders.
+.IP "\fB\-encoders\fR" 4
+.IX Item "-encoders"
+Show all available encoders.
+.IP "\fB\-bsfs\fR" 4
+.IX Item "-bsfs"
+Show available bitstream filters.
+.IP "\fB\-protocols\fR" 4
+.IX Item "-protocols"
+Show available protocols.
+.IP "\fB\-filters\fR" 4
+.IX Item "-filters"
+Show available libavfilter filters.
+.IP "\fB\-pix_fmts\fR" 4
+.IX Item "-pix_fmts"
+Show available pixel formats.
+.IP "\fB\-sample_fmts\fR" 4
+.IX Item "-sample_fmts"
+Show available sample formats.
+.IP "\fB\-layouts\fR" 4
+.IX Item "-layouts"
+Show channel names and standard channel layouts.
+.IP "\fB\-dispositions\fR" 4
+.IX Item "-dispositions"
+Show stream dispositions.
+.IP "\fB\-colors\fR" 4
+.IX Item "-colors"
+Show recognized color names.
+.IP "\fB\-sources\fR \fIdevice\fR\fB[,\fR\fIopt1\fR\fB=\fR\fIval1\fR\fB[,\fR\fIopt2\fR\fB=\fR\fIval2\fR\fB]...]\fR" 4
+.IX Item "-sources device[,opt1=val1[,opt2=val2]...]"
+Show autodetected sources of the input device.
+Some devices may provide system-dependent source names that cannot be autodetected.
+The returned list cannot be assumed to be always complete.
+.Sp
+.Vb 1
+\&        ffmpeg \-sources pulse,server=192.168.0.4
+.Ve
+.IP "\fB\-sinks\fR \fIdevice\fR\fB[,\fR\fIopt1\fR\fB=\fR\fIval1\fR\fB[,\fR\fIopt2\fR\fB=\fR\fIval2\fR\fB]...]\fR" 4
+.IX Item "-sinks device[,opt1=val1[,opt2=val2]...]"
+Show autodetected sinks of the output device.
+Some devices may provide system-dependent sink names that cannot be autodetected.
+The returned list cannot be assumed to be always complete.
+.Sp
+.Vb 1
+\&        ffmpeg \-sinks pulse,server=192.168.0.4
+.Ve
+.IP "\fB\-loglevel [\fR\fIflags\fR\fB+]\fR\fIloglevel\fR \fB| \-v [\fR\fIflags\fR\fB+]\fR\fIloglevel\fR" 4
+.IX Item "-loglevel [flags+]loglevel | -v [flags+]loglevel"
+Set logging level and flags used by the library.
+.Sp
+The optional \fIflags\fR prefix can consist of the following values:
+.RS 4
+.IP "\fBrepeat\fR" 4
+.IX Item "repeat"
+Indicates that repeated log output should not be compressed to the first line
+and the \*(L"Last message repeated n times\*(R" line will be omitted.
+.IP "\fBlevel\fR" 4
+.IX Item "level"
+Indicates that log output should add a \f(CW\*(C`[level]\*(C'\fR prefix to each message
+line. This can be used as an alternative to log coloring, e.g. when dumping the
+log to file.
+.IP "\fBtime\fR" 4
+.IX Item "time"
+Indicates that log lines should be prefixed with time information.
+.IP "\fBdatetime\fR" 4
+.IX Item "datetime"
+Indicates that log lines should be prefixed with date and time information.
+.RE
+.RS 4
+.Sp
+Flags can also be used alone by adding a '+'/'\-' prefix to set/reset a single
+flag without affecting other \fIflags\fR or changing \fIloglevel\fR. When
+setting both \fIflags\fR and \fIloglevel\fR, a '+' separator is expected
+between the last \fIflags\fR value and before \fIloglevel\fR.
+.Sp
+\&\fIloglevel\fR is a string or a number containing one of the following values:
+.IP "\fBquiet, \-8\fR" 4
+.IX Item "quiet, -8"
+Show nothing at all; be silent.
+.IP "\fBpanic, 0\fR" 4
+.IX Item "panic, 0"
+Only show fatal errors which could lead the process to crash, such as
+an assertion failure. This is not currently used for anything.
+.IP "\fBfatal, 8\fR" 4
+.IX Item "fatal, 8"
+Only show fatal errors. These are errors after which the process absolutely
+cannot continue.
+.IP "\fBerror, 16\fR" 4
+.IX Item "error, 16"
+Show all errors, including ones which can be recovered from.
+.IP "\fBwarning, 24\fR" 4
+.IX Item "warning, 24"
+Show all warnings and errors. Any message related to possibly
+incorrect or unexpected events will be shown.
+.IP "\fBinfo, 32\fR" 4
+.IX Item "info, 32"
+Show informative messages during processing. This is in addition to
+warnings and errors. This is the default value.
+.IP "\fBverbose, 40\fR" 4
+.IX Item "verbose, 40"
+Same as \f(CW\*(C`info\*(C'\fR, except more verbose.
+.IP "\fBdebug, 48\fR" 4
+.IX Item "debug, 48"
+Show everything, including debugging information.
+.IP "\fBtrace, 56\fR" 4
+.IX Item "trace, 56"
+.RE
+.RS 4
+.Sp
+For example to enable repeated log output, add the \f(CW\*(C`level\*(C'\fR prefix, and set
+\&\fIloglevel\fR to \f(CW\*(C`verbose\*(C'\fR:
+.Sp
+.Vb 1
+\&        ffmpeg \-loglevel repeat+level+verbose \-i input output
+.Ve
+.Sp
+Another example that enables repeated log output without affecting current
+state of \f(CW\*(C`level\*(C'\fR prefix flag or \fIloglevel\fR:
+.Sp
+.Vb 1
+\&        ffmpeg [...] \-loglevel +repeat
+.Ve
+.Sp
+By default the program logs to stderr. If coloring is supported by the
+terminal, colors are used to mark errors and warnings. Log coloring
+can be disabled setting the environment variable
+\&\fB\s-1AV_LOG_FORCE_NOCOLOR\s0\fR, or can be forced setting
+the environment variable \fB\s-1AV_LOG_FORCE_COLOR\s0\fR.
+.RE
+.IP "\fB\-report\fR" 4
+.IX Item "-report"
+Dump full command line and log output to a file named
+\&\f(CW\*(C`\f(CIprogram\f(CW\-\f(CIYYYYMMDD\f(CW\-\f(CIHHMMSS\f(CW.log\*(C'\fR in the current
+directory.
+This file can be useful for bug reports.
+It also implies \f(CW\*(C`\-loglevel debug\*(C'\fR.
+.Sp
+Setting the environment variable \fB\s-1FFREPORT\s0\fR to any value has the
+same effect. If the value is a ':'\-separated key=value sequence, these
+options will affect the report; option values must be escaped if they
+contain special characters or the options delimiter ':' (see the
+``Quoting and escaping'' section in the ffmpeg-utils manual).
+.Sp
+The following options are recognized:
+.RS 4
+.IP "\fBfile\fR" 4
+.IX Item "file"
+set the file name to use for the report; \f(CW%p\fR is expanded to the name
+of the program, \f(CW%t\fR is expanded to a timestamp, \f(CW\*(C`%%\*(C'\fR is expanded
+to a plain \f(CW\*(C`%\*(C'\fR
+.IP "\fBlevel\fR" 4
+.IX Item "level"
+set the log verbosity level using a numerical value (see \f(CW\*(C`\-loglevel\*(C'\fR).
+.RE
+.RS 4
+.Sp
+For example, to output a report to a file named \fIffreport.log\fR
+using a log level of \f(CW32\fR (alias for log level \f(CW\*(C`info\*(C'\fR):
+.Sp
+.Vb 1
+\&        FFREPORT=file=ffreport.log:level=32 ffmpeg \-i input output
+.Ve
+.Sp
+Errors in parsing the environment variable are not fatal, and will not
+appear in the report.
+.RE
+.IP "\fB\-hide_banner\fR" 4
+.IX Item "-hide_banner"
+Suppress printing banner.
+.Sp
+All FFmpeg tools will normally show a copyright notice, build options
+and library versions. This option can be used to suppress printing
+this information.
+.IP "\fB\-cpuflags flags (\fR\fIglobal\fR\fB)\fR" 4
+.IX Item "-cpuflags flags (global)"
+Allows setting and clearing cpu flags. This option is intended
+for testing. Do not use it unless you know what you're doing.
+.Sp
+.Vb 3
+\&        ffmpeg \-cpuflags \-sse+mmx ...
+\&        ffmpeg \-cpuflags mmx ...
+\&        ffmpeg \-cpuflags 0 ...
+.Ve
+.Sp
+Possible flags for this option are:
+.RS 4
+.IP "\fBx86\fR" 4
+.IX Item "x86"
+.RS 4
+.PD 0
+.IP "\fBmmx\fR" 4
+.IX Item "mmx"
+.IP "\fBmmxext\fR" 4
+.IX Item "mmxext"
+.IP "\fBsse\fR" 4
+.IX Item "sse"
+.IP "\fBsse2\fR" 4
+.IX Item "sse2"
+.IP "\fBsse2slow\fR" 4
+.IX Item "sse2slow"
+.IP "\fBsse3\fR" 4
+.IX Item "sse3"
+.IP "\fBsse3slow\fR" 4
+.IX Item "sse3slow"
+.IP "\fBssse3\fR" 4
+.IX Item "ssse3"
+.IP "\fBatom\fR" 4
+.IX Item "atom"
+.IP "\fBsse4.1\fR" 4
+.IX Item "sse4.1"
+.IP "\fBsse4.2\fR" 4
+.IX Item "sse4.2"
+.IP "\fBavx\fR" 4
+.IX Item "avx"
+.IP "\fBavx2\fR" 4
+.IX Item "avx2"
+.IP "\fBxop\fR" 4
+.IX Item "xop"
+.IP "\fBfma3\fR" 4
+.IX Item "fma3"
+.IP "\fBfma4\fR" 4
+.IX Item "fma4"
+.IP "\fB3dnow\fR" 4
+.IX Item "3dnow"
+.IP "\fB3dnowext\fR" 4
+.IX Item "3dnowext"
+.IP "\fBbmi1\fR" 4
+.IX Item "bmi1"
+.IP "\fBbmi2\fR" 4
+.IX Item "bmi2"
+.IP "\fBcmov\fR" 4
+.IX Item "cmov"
+.RE
+.RS 4
+.RE
+.IP "\fB\s-1ARM\s0\fR" 4
+.IX Item "ARM"
+.RS 4
+.IP "\fBarmv5te\fR" 4
+.IX Item "armv5te"
+.IP "\fBarmv6\fR" 4
+.IX Item "armv6"
+.IP "\fBarmv6t2\fR" 4
+.IX Item "armv6t2"
+.IP "\fBvfp\fR" 4
+.IX Item "vfp"
+.IP "\fBvfpv3\fR" 4
+.IX Item "vfpv3"
+.IP "\fBneon\fR" 4
+.IX Item "neon"
+.IP "\fBsetend\fR" 4
+.IX Item "setend"
+.RE
+.RS 4
+.RE
+.IP "\fBAArch64\fR" 4
+.IX Item "AArch64"
+.RS 4
+.IP "\fBarmv8\fR" 4
+.IX Item "armv8"
+.IP "\fBvfp\fR" 4
+.IX Item "vfp"
+.IP "\fBneon\fR" 4
+.IX Item "neon"
+.RE
+.RS 4
+.RE
+.IP "\fBPowerPC\fR" 4
+.IX Item "PowerPC"
+.RS 4
+.IP "\fBaltivec\fR" 4
+.IX Item "altivec"
+.RE
+.RS 4
+.RE
+.IP "\fBSpecific Processors\fR" 4
+.IX Item "Specific Processors"
+.RS 4
+.IP "\fBpentium2\fR" 4
+.IX Item "pentium2"
+.IP "\fBpentium3\fR" 4
+.IX Item "pentium3"
+.IP "\fBpentium4\fR" 4
+.IX Item "pentium4"
+.IP "\fBk6\fR" 4
+.IX Item "k6"
+.IP "\fBk62\fR" 4
+.IX Item "k62"
+.IP "\fBathlon\fR" 4
+.IX Item "athlon"
+.IP "\fBathlonxp\fR" 4
+.IX Item "athlonxp"
+.IP "\fBk8\fR" 4
+.IX Item "k8"
+.RE
+.RS 4
+.RE
+.RE
+.RS 4
+.RE
+.IP "\fB\-cpucount\fR \fIcount\fR \fB(\fR\fIglobal\fR\fB)\fR" 4
+.IX Item "-cpucount count (global)"
+.PD
+Override detection of \s-1CPU\s0 count. This option is intended
+for testing. Do not use it unless you know what you're doing.
+.Sp
+.Vb 1
+\&        ffmpeg \-cpucount 2
+.Ve
+.IP "\fB\-max_alloc\fR \fIbytes\fR" 4
+.IX Item "-max_alloc bytes"
+Set the maximum size limit for allocating a block on the heap by ffmpeg's
+family of malloc functions. Exercise \fBextreme caution\fR when using
+this option. Don't use if you do not understand the full consequence of doing so.
+Default is \s-1INT_MAX.\s0
+.SS "AVOptions"
+.IX Subsection "AVOptions"
+These options are provided directly by the libavformat, libavdevice and
+libavcodec libraries. To see the list of available AVOptions, use the
+\&\fB\-help\fR option. They are separated into two categories:
+.IP "\fBgeneric\fR" 4
+.IX Item "generic"
+These options can be set for any container, codec or device. Generic options
+are listed under AVFormatContext options for containers/devices and under
+AVCodecContext options for codecs.
+.IP "\fBprivate\fR" 4
+.IX Item "private"
+These options are specific to the given container, device or codec. Private
+options are listed under their corresponding containers/devices/codecs.
+.PP
+For example to write an ID3v2.3 header instead of a default ID3v2.4 to
+an \s-1MP3\s0 file, use the \fBid3v2_version\fR private option of the \s-1MP3\s0
+muxer:
+.PP
+.Vb 1
+\&        ffmpeg \-i input.flac \-id3v2_version 3 out.mp3
+.Ve
+.PP
+All codec AVOptions are per-stream, and thus a stream specifier
+should be attached to them:
+.PP
+.Vb 1
+\&        ffmpeg \-i multichannel.mxf \-map 0:v:0 \-map 0:a:0 \-map 0:a:0 \-c:a:0 ac3 \-b:a:0 640k \-ac:a:1 2 \-c:a:1 aac \-b:2 128k out.mp4
+.Ve
+.PP
+In the above example, a multichannel audio stream is mapped twice for output.
+The first instance is encoded with codec ac3 and bitrate 640k.
+The second instance is downmixed to 2 channels and encoded with codec aac. A bitrate of 128k is specified for it using
+absolute index of the output stream.
+.PP
+Note: the \fB\-nooption\fR syntax cannot be used for boolean
+AVOptions, use \fB\-option 0\fR/\fB\-option 1\fR.
+.PP
+Note: the old undocumented way of specifying per-stream AVOptions by
+prepending v/a/s to the options name is now obsolete and will be
+removed soon.
+.SS "Main options"
+.IX Subsection "Main options"
+.IP "\fB\-f\fR \fIformat\fR" 4
+.IX Item "-f format"
+Force format to use.
+.IP "\fB\-unit\fR" 4
+.IX Item "-unit"
+Show the unit of the displayed values.
+.IP "\fB\-prefix\fR" 4
+.IX Item "-prefix"
+Use \s-1SI\s0 prefixes for the displayed values.
+Unless the \*(L"\-byte_binary_prefix\*(R" option is used all the prefixes
+are decimal.
+.IP "\fB\-byte_binary_prefix\fR" 4
+.IX Item "-byte_binary_prefix"
+Force the use of binary prefixes for byte values.
+.IP "\fB\-sexagesimal\fR" 4
+.IX Item "-sexagesimal"
+Use sexagesimal format \s-1HH:MM:SS.MICROSECONDS\s0 for time values.
+.IP "\fB\-pretty\fR" 4
+.IX Item "-pretty"
+Prettify the format of the displayed values, it corresponds to the
+options \*(L"\-unit \-prefix \-byte_binary_prefix \-sexagesimal\*(R".
+.IP "\fB\-output_format, \-of, \-print_format\fR \fIwriter_name\fR\fB[=\fR\fIwriter_options\fR\fB]\fR" 4
+.IX Item "-output_format, -of, -print_format writer_name[=writer_options]"
+Set the output printing format.
+.Sp
+\&\fIwriter_name\fR specifies the name of the writer, and
+\&\fIwriter_options\fR specifies the options to be passed to the writer.
+.Sp
+For example for printing the output in \s-1JSON\s0 format, specify:
+.Sp
+.Vb 1
+\&        \-output_format json
+.Ve
+.Sp
+For more details on the available output printing formats, see the
+Writers section below.
+.IP "\fB\-sections\fR" 4
+.IX Item "-sections"
+Print sections structure and section information, and exit. The output
+is not meant to be parsed by a machine.
+.IP "\fB\-select_streams\fR \fIstream_specifier\fR" 4
+.IX Item "-select_streams stream_specifier"
+Select only the streams specified by \fIstream_specifier\fR. This
+option affects only the options related to streams
+(e.g. \f(CW\*(C`show_streams\*(C'\fR, \f(CW\*(C`show_packets\*(C'\fR, etc.).
+.Sp
+For example to show only audio streams, you can use the command:
+.Sp
+.Vb 1
+\&        ffprobe \-show_streams \-select_streams a INPUT
+.Ve
+.Sp
+To show only video packets belonging to the video stream with index 1:
+.Sp
+.Vb 1
+\&        ffprobe \-show_packets \-select_streams v:1 INPUT
+.Ve
+.IP "\fB\-show_data\fR" 4
+.IX Item "-show_data"
+Show payload data, as a hexadecimal and \s-1ASCII\s0 dump (other formats can be
+selected using \fB\-data_dump_format\fR). Coupled with
+\&\fB\-show_packets\fR, it will dump the packets' data. Coupled with
+\&\fB\-show_streams\fR, it will dump the codec extradata.
+.Sp
+The dump is printed as the \*(L"data\*(R" field. It may contain newlines.
+.IP "\fB\-show_data_hash\fR \fIalgorithm\fR" 4
+.IX Item "-show_data_hash algorithm"
+Show a hash of payload data, for packets with \fB\-show_packets\fR and for
+codec extradata with \fB\-show_streams\fR.
+.IP "\fB\-data_dump_format\fR \fIformat\fR" 4
+.IX Item "-data_dump_format format"
+Select a format used for the data dumps enabled with the \fB\-show_data\fR
+option. The default is \f(CW\*(C`xxd\*(C'\fR which is a hexdump format compatible with the
+well-known \fBxxd\fR program. \f(CW\*(C`base64\*(C'\fR is also supported.
+.IP "\fB\-show_error\fR" 4
+.IX Item "-show_error"
+Show information about the error found when trying to probe the input.
+.Sp
+The error information is printed within a section with name \*(L"\s-1ERROR\*(R".\s0
+.IP "\fB\-show_format\fR" 4
+.IX Item "-show_format"
+Show information about the container format of the input multimedia
+stream.
+.Sp
+All the container format information is printed within a section with
+name \*(L"\s-1FORMAT\*(R".\s0
+.IP "\fB\-show_entries\fR \fIsection_entries\fR" 4
+.IX Item "-show_entries section_entries"
+Set list of entries to show.
+.Sp
+Entries are specified according to the following
+syntax. \fIsection_entries\fR contains a list of section entries
+separated by \f(CW\*(C`:\*(C'\fR. Each section entry is composed by a section
+name (or unique name), optionally followed by a list of entries local
+to that section, separated by \f(CW\*(C`,\*(C'\fR.
+.Sp
+If section name is specified but is followed by no \f(CW\*(C`=\*(C'\fR, all
+entries are printed to output, together with all the contained
+sections. Otherwise only the entries specified in the local section
+entries list are printed. In particular, if \f(CW\*(C`=\*(C'\fR is specified but
+the list of local entries is empty, then no entries will be shown for
+that section.
+.Sp
+Note that the order of specification of the local section entries is
+not honored in the output, and the usual display order will be
+retained.
+.Sp
+The formal syntax is given by:
+.Sp
+.Vb 3
+\&        <LOCAL_SECTION_ENTRIES> ::= <SECTION_ENTRY_NAME>[,<LOCAL_SECTION_ENTRIES>]
+\&        <SECTION_ENTRY>         ::= <SECTION_NAME>[=[<LOCAL_SECTION_ENTRIES>]]
+\&        <SECTION_ENTRIES>       ::= <SECTION_ENTRY>[:<SECTION_ENTRIES>]
+.Ve
+.Sp
+For example, to show only the index and type of each stream, and the \s-1PTS\s0
+time, duration time, and stream index of the packets, you can specify
+the argument:
+.Sp
+.Vb 1
+\&        packet=pts_time,duration_time,stream_index : stream=index,codec_type
+.Ve
+.Sp
+To show all the entries in the section \*(L"format\*(R", but only the codec
+type in the section \*(L"stream\*(R", specify the argument:
+.Sp
+.Vb 1
+\&        format : stream=codec_type
+.Ve
+.Sp
+To show all the tags in the stream and format sections:
+.Sp
+.Vb 1
+\&        stream_tags : format_tags
+.Ve
+.Sp
+To show only the \f(CW\*(C`title\*(C'\fR tag (if available) in the stream
+sections:
+.Sp
+.Vb 1
+\&        stream_tags=title
+.Ve
+.IP "\fB\-show_packets\fR" 4
+.IX Item "-show_packets"
+Show information about each packet contained in the input multimedia
+stream.
+.Sp
+The information for each single packet is printed within a dedicated
+section with name \*(L"\s-1PACKET\*(R".\s0
+.IP "\fB\-show_frames\fR" 4
+.IX Item "-show_frames"
+Show information about each frame and subtitle contained in the input
+multimedia stream.
+.Sp
+The information for each single frame is printed within a dedicated
+section with name \*(L"\s-1FRAME\*(R"\s0 or \*(L"\s-1SUBTITLE\*(R".\s0
+.IP "\fB\-show_log\fR \fIloglevel\fR" 4
+.IX Item "-show_log loglevel"
+Show logging information from the decoder about each frame according to
+the value set in \fIloglevel\fR, (see \f(CW\*(C`\-loglevel\*(C'\fR). This option requires \f(CW\*(C`\-show_frames\*(C'\fR.
+.Sp
+The information for each log message is printed within a dedicated
+section with name \*(L"\s-1LOG\*(R".\s0
+.IP "\fB\-show_streams\fR" 4
+.IX Item "-show_streams"
+Show information about each media stream contained in the input
+multimedia stream.
+.Sp
+Each media stream information is printed within a dedicated section
+with name \*(L"\s-1STREAM\*(R".\s0
+.IP "\fB\-show_programs\fR" 4
+.IX Item "-show_programs"
+Show information about programs and their streams contained in the input
+multimedia stream.
+.Sp
+Each media stream information is printed within a dedicated section
+with name \*(L"\s-1PROGRAM_STREAM\*(R".\s0
+.IP "\fB\-show_stream_groups\fR" 4
+.IX Item "-show_stream_groups"
+Show information about stream groups and their streams contained in the
+input multimedia stream.
+.Sp
+Each media stream information is printed within a dedicated section
+with name \*(L"\s-1STREAM_GROUP_STREAM\*(R".\s0
+.IP "\fB\-show_chapters\fR" 4
+.IX Item "-show_chapters"
+Show information about chapters stored in the format.
+.Sp
+Each chapter is printed within a dedicated section with name \*(L"\s-1CHAPTER\*(R".\s0
+.IP "\fB\-count_frames\fR" 4
+.IX Item "-count_frames"
+Count the number of frames per stream and report it in the
+corresponding stream section.
+.IP "\fB\-count_packets\fR" 4
+.IX Item "-count_packets"
+Count the number of packets per stream and report it in the
+corresponding stream section.
+.IP "\fB\-read_intervals\fR \fIread_intervals\fR" 4
+.IX Item "-read_intervals read_intervals"
+Read only the specified intervals. \fIread_intervals\fR must be a
+sequence of interval specifications separated by \*(L",\*(R".
+\&\fBffprobe\fR will seek to the interval starting point, and will
+continue reading from that.
+.Sp
+Each interval is specified by two optional parts, separated by \*(L"%\*(R".
+.Sp
+The first part specifies the interval start position. It is
+interpreted as an absolute position, or as a relative offset from the
+current position if it is preceded by the \*(L"+\*(R" character. If this first
+part is not specified, no seeking will be performed when reading this
+interval.
+.Sp
+The second part specifies the interval end position. It is interpreted
+as an absolute position, or as a relative offset from the current
+position if it is preceded by the \*(L"+\*(R" character. If the offset
+specification starts with \*(L"#\*(R", it is interpreted as the number of
+packets to read (not including the flushing packets) from the interval
+start. If no second part is specified, the program will read until the
+end of the input.
+.Sp
+Note that seeking is not accurate, thus the actual interval start
+point may be different from the specified position. Also, when an
+interval duration is specified, the absolute end time will be computed
+by adding the duration to the interval start point found by seeking
+the file, rather than to the specified start value.
+.Sp
+The formal syntax is given by:
+.Sp
+.Vb 2
+\&        <INTERVAL>  ::= [<START>|+<START_OFFSET>][%[<END>|+<END_OFFSET>]]
+\&        <INTERVALS> ::= <INTERVAL>[,<INTERVALS>]
+.Ve
+.Sp
+A few examples follow.
+.RS 4
+.IP "\(bu" 4
+Seek to time 10, read packets until 20 seconds after the found seek
+point, then seek to position \f(CW\*(C`01:30\*(C'\fR (1 minute and thirty
+seconds) and read packets until position \f(CW\*(C`01:45\*(C'\fR.
+.Sp
+.Vb 1
+\&        10%+20,01:30%01:45
+.Ve
+.IP "\(bu" 4
+Read only 42 packets after seeking to position \f(CW\*(C`01:23\*(C'\fR:
+.Sp
+.Vb 1
+\&        01:23%+#42
+.Ve
+.IP "\(bu" 4
+Read only the first 20 seconds from the start:
+.Sp
+.Vb 1
+\&        %+20
+.Ve
+.IP "\(bu" 4
+Read from the start until position \f(CW\*(C`02:30\*(C'\fR:
+.Sp
+.Vb 1
+\&        %02:30
+.Ve
+.RE
+.RS 4
+.RE
+.IP "\fB\-show_private_data, \-private\fR" 4
+.IX Item "-show_private_data, -private"
+Show private data, that is data depending on the format of the
+particular shown element.
+This option is enabled by default, but you may need to disable it
+for specific uses, for example when creating XSD-compliant \s-1XML\s0 output.
+.IP "\fB\-show_program_version\fR" 4
+.IX Item "-show_program_version"
+Show information related to program version.
+.Sp
+Version information is printed within a section with name
+\&\*(L"\s-1PROGRAM_VERSION\*(R".\s0
+.IP "\fB\-show_library_versions\fR" 4
+.IX Item "-show_library_versions"
+Show information related to library versions.
+.Sp
+Version information for each library is printed within a section with
+name \*(L"\s-1LIBRARY_VERSION\*(R".\s0
+.IP "\fB\-show_versions\fR" 4
+.IX Item "-show_versions"
+Show information related to program and library versions. This is the
+equivalent of setting both \fB\-show_program_version\fR and
+\&\fB\-show_library_versions\fR options.
+.IP "\fB\-show_pixel_formats\fR" 4
+.IX Item "-show_pixel_formats"
+Show information about all pixel formats supported by FFmpeg.
+.Sp
+Pixel format information for each format is printed within a section
+with name \*(L"\s-1PIXEL_FORMAT\*(R".\s0
+.IP "\fB\-show_optional_fields\fR \fIvalue\fR" 4
+.IX Item "-show_optional_fields value"
+Some writers viz. \s-1JSON\s0 and \s-1XML,\s0 omit the printing of fields with invalid or non-applicable values,
+while other writers always print them. This option enables one to control this behaviour.
+Valid values are \f(CW\*(C`always\*(C'\fR/\f(CW1\fR, \f(CW\*(C`never\*(C'\fR/\f(CW0\fR and \f(CW\*(C`auto\*(C'\fR/\f(CW\*(C`\-1\*(C'\fR.
+Default is \fIauto\fR.
+.IP "\fB\-analyze_frames\fR" 4
+.IX Item "-analyze_frames"
+Analyze frames and/or their side data up to the provided read interval,
+providing additional information that may be useful at a stream level.
+Must be paired with the \fB\-show_streams\fR option or it will have no effect.
+.Sp
+Currently, the additional fields provided by this option when enabled are the
+\&\f(CW\*(C`closed_captions\*(C'\fR and \f(CW\*(C`film_grain\*(C'\fR fields.
+.Sp
+For example, to analyze the first 20 seconds and populate these fields:
+.Sp
+.Vb 1
+\&        ffprobe \-show_streams \-analyze_frames \-read_intervals "%+20" INPUT
+.Ve
+.IP "\fB\-bitexact\fR" 4
+.IX Item "-bitexact"
+Force bitexact output, useful to produce output which is not dependent
+on the specific build.
+.IP "\fB\-i\fR \fIinput_url\fR" 4
+.IX Item "-i input_url"
+Read \fIinput_url\fR.
+.IP "\fB\-o\fR \fIoutput_url\fR" 4
+.IX Item "-o output_url"
+Write output to \fIoutput_url\fR. If not specified, the output is sent
+to stdout.
+.IP "\fB\-c:\fR\fImedia_specifier\fR\fB \fR\fIcodec_name\fR" 4
+.IX Item "-c:media_specifier codec_name"
+.PD 0
+.IP "\fB\-codec:\fR\fImedia_specifier\fR\fB \fR\fIcodec_name\fR" 4
+.IX Item "-codec:media_specifier codec_name"
+.PD
+Force a specific decoder implementation for the stream identified by
+\&\fImedia_specifier\fR, which can assume the values \f(CW\*(C`a\*(C'\fR (audio),
+\&\f(CW\*(C`v\*(C'\fR (video), \f(CW\*(C`s\*(C'\fR (subtitle), and \f(CW\*(C`d\*(C'\fR (data).
+.SH "WRITERS"
+.IX Header "WRITERS"
+A writer defines the output format adopted by \fBffprobe\fR, and will be
+used for printing all the parts of the output.
+.PP
+A writer may accept one or more arguments, which specify the options
+to adopt. The options are specified as a list of \fIkey\fR=\fIvalue\fR
+pairs, separated by \*(L":\*(R".
+.PP
+All writers support the following options:
+.IP "\fBstring_validation, sv\fR" 4
+.IX Item "string_validation, sv"
+Set string validation mode.
+.Sp
+The following values are accepted.
+.RS 4
+.IP "\fBfail\fR" 4
+.IX Item "fail"
+The writer will fail immediately in case an invalid string (\s-1UTF\-8\s0)
+sequence or code point is found in the input. This is especially
+useful to validate input metadata.
+.IP "\fBignore\fR" 4
+.IX Item "ignore"
+Any validation error will be ignored. This will result in possibly
+broken output, especially with the json or xml writer.
+.IP "\fBreplace\fR" 4
+.IX Item "replace"
+The writer will substitute invalid \s-1UTF\-8\s0 sequences or code points with
+the string specified with the \fBstring_validation_replacement\fR.
+.RE
+.RS 4
+.Sp
+Default value is \fBreplace\fR.
+.RE
+.IP "\fBstring_validation_replacement, svr\fR" 4
+.IX Item "string_validation_replacement, svr"
+Set replacement string to use in case \fBstring_validation\fR is
+set to \fBreplace\fR.
+.Sp
+In case the option is not specified, the writer will assume the empty
+string, that is it will remove the invalid sequences from the input
+strings.
+.PP
+A description of the currently available writers follows.
+.SS "default"
+.IX Subsection "default"
+Default format.
+.PP
+Print each section in the form:
+.PP
+.Vb 5
+\&        [SECTION]
+\&        key1=val1
+\&        ...
+\&        keyN=valN
+\&        [/SECTION]
+.Ve
+.PP
+Metadata tags are printed as a line in the corresponding \s-1FORMAT, STREAM,
+STREAM_GROUP_STREAM\s0 or \s-1PROGRAM_STREAM\s0 section, and are prefixed by the
+string \*(L"\s-1TAG:\*(R".\s0
+.PP
+A description of the accepted options follows.
+.IP "\fBnokey, nk\fR" 4
+.IX Item "nokey, nk"
+If set to 1 specify not to print the key of each field. Default value
+is 0.
+.IP "\fBnoprint_wrappers, nw\fR" 4
+.IX Item "noprint_wrappers, nw"
+If set to 1 specify not to print the section header and footer.
+Default value is 0.
+.SS "compact, csv"
+.IX Subsection "compact, csv"
+Compact and \s-1CSV\s0 format.
+.PP
+The \f(CW\*(C`csv\*(C'\fR writer is equivalent to \f(CW\*(C`compact\*(C'\fR, but supports
+different defaults.
+.PP
+Each section is printed on a single line.
+If no option is specified, the output has the form:
+.PP
+.Vb 1
+\&        section|key1=val1| ... |keyN=valN
+.Ve
+.PP
+Metadata tags are printed in the corresponding \*(L"format\*(R" or \*(L"stream\*(R"
+section. A metadata tag key, if printed, is prefixed by the string
+\&\*(L"tag:\*(R".
+.PP
+The description of the accepted options follows.
+.IP "\fBitem_sep, s\fR" 4
+.IX Item "item_sep, s"
+Specify the character to use for separating fields in the output line.
+It must be a single printable character, it is \*(L"|\*(R" by default (\*(L",\*(R" for
+the \f(CW\*(C`csv\*(C'\fR writer).
+.IP "\fBnokey, nk\fR" 4
+.IX Item "nokey, nk"
+If set to 1 specify not to print the key of each field. Its default
+value is 0 (1 for the \f(CW\*(C`csv\*(C'\fR writer).
+.IP "\fBescape, e\fR" 4
+.IX Item "escape, e"
+Set the escape mode to use, default to \*(L"c\*(R" (\*(L"csv\*(R" for the \f(CW\*(C`csv\*(C'\fR
+writer).
+.Sp
+It can assume one of the following values:
+.RS 4
+.IP "\fBc\fR" 4
+.IX Item "c"
+Perform C\-like escaping. Strings containing a newline (\fB\en\fR), carriage
+return (\fB\er\fR), a tab (\fB\et\fR), a form feed (\fB\ef\fR), the escaping
+character (\fB\e\fR) or the item separator character \fI\s-1SEP\s0\fR are escaped
+using C\-like fashioned escaping, so that a newline is converted to the
+sequence \fB\en\fR, a carriage return to \fB\er\fR, \fB\e\fR to \fB\e\e\fR and
+the separator \fI\s-1SEP\s0\fR is converted to \fB\e\fR\fI\s-1SEP\s0\fR.
+.IP "\fBcsv\fR" 4
+.IX Item "csv"
+Perform CSV-like escaping, as described in \s-1RFC4180.\s0  Strings
+containing a newline (\fB\en\fR), a carriage return (\fB\er\fR), a double quote
+(\fB"\fR), or \fI\s-1SEP\s0\fR are enclosed in double-quotes.
+.IP "\fBnone\fR" 4
+.IX Item "none"
+Perform no escaping.
+.RE
+.RS 4
+.RE
+.IP "\fBprint_section, p\fR" 4
+.IX Item "print_section, p"
+Print the section name at the beginning of each line if the value is
+\&\f(CW1\fR, disable it with value set to \f(CW0\fR. Default value is
+\&\f(CW1\fR.
+.SS "flat"
+.IX Subsection "flat"
+Flat format.
+.PP
+A free-form output where each line contains an explicit key=value, such as
+\&\*(L"streams.stream.3.tags.foo=bar\*(R". The output is shell escaped, so it can be
+directly embedded in sh scripts as long as the separator character is an
+alphanumeric character or an underscore (see \fIsep_char\fR option).
+.PP
+The description of the accepted options follows.
+.IP "\fBsep_char, s\fR" 4
+.IX Item "sep_char, s"
+Separator character used to separate the chapter, the section name, IDs and
+potential tags in the printed field key.
+.Sp
+Default value is \fB.\fR.
+.IP "\fBhierarchical, h\fR" 4
+.IX Item "hierarchical, h"
+Specify if the section name specification should be hierarchical. If
+set to 1, and if there is more than one section in the current
+chapter, the section name will be prefixed by the name of the
+chapter. A value of 0 will disable this behavior.
+.Sp
+Default value is 1.
+.SS "ini"
+.IX Subsection "ini"
+\&\s-1INI\s0 format output.
+.PP
+Print output in an \s-1INI\s0 based format.
+.PP
+The following conventions are adopted:
+.IP "\(bu" 4
+all key and values are \s-1UTF\-8\s0
+.IP "\(bu" 4
+\&\fB.\fR is the subgroup separator
+.IP "\(bu" 4
+newline, \fB\et\fR, \fB\ef\fR, \fB\eb\fR and the following characters are
+escaped
+.IP "\(bu" 4
+\&\fB\e\fR is the escape character
+.IP "\(bu" 4
+\&\fB#\fR is the comment indicator
+.IP "\(bu" 4
+\&\fB=\fR is the key/value separator
+.IP "\(bu" 4
+\&\fB:\fR is not used but usually parsed as key/value separator
+.PP
+This writer accepts options as a list of \fIkey\fR=\fIvalue\fR pairs,
+separated by \fB:\fR.
+.PP
+The description of the accepted options follows.
+.IP "\fBhierarchical, h\fR" 4
+.IX Item "hierarchical, h"
+Specify if the section name specification should be hierarchical. If
+set to 1, and if there is more than one section in the current
+chapter, the section name will be prefixed by the name of the
+chapter. A value of 0 will disable this behavior.
+.Sp
+Default value is 1.
+.SS "json"
+.IX Subsection "json"
+\&\s-1JSON\s0 based format.
+.PP
+Each section is printed using \s-1JSON\s0 notation.
+.PP
+The description of the accepted options follows.
+.IP "\fBcompact, c\fR" 4
+.IX Item "compact, c"
+If set to 1 enable compact output, that is each section will be
+printed on a single line. Default value is 0.
+.PP
+For more information about \s-1JSON,\s0 see <\fBhttp://www.json.org/\fR>.
+.SS "xml"
+.IX Subsection "xml"
+\&\s-1XML\s0 based format.
+.PP
+The \s-1XML\s0 output is described in the \s-1XML\s0 schema description file
+\&\fIffprobe.xsd\fR installed in the FFmpeg datadir.
+.PP
+An updated version of the schema can be retrieved at the url
+<\fBhttp://www.ffmpeg.org/schema/ffprobe.xsd\fR>, which redirects to the
+latest schema committed into the FFmpeg development source code tree.
+.PP
+Note that the output issued will be compliant to the
+\&\fIffprobe.xsd\fR schema only when no special global output options
+(\fBunit\fR, \fBprefix\fR, \fBbyte_binary_prefix\fR,
+\&\fBsexagesimal\fR etc.) are specified.
+.PP
+The description of the accepted options follows.
+.IP "\fBfully_qualified, q\fR" 4
+.IX Item "fully_qualified, q"
+If set to 1 specify if the output should be fully qualified. Default
+value is 0.
+This is required for generating an \s-1XML\s0 file which can be validated
+through an \s-1XSD\s0 file.
+.IP "\fBxsd_strict, x\fR" 4
+.IX Item "xsd_strict, x"
+If set to 1 perform more checks for ensuring that the output is \s-1XSD\s0
+compliant. Default value is 0.
+This option automatically sets \fBfully_qualified\fR to 1.
+.PP
+For more information about the \s-1XML\s0 format, see
+<\fBhttps://www.w3.org/XML/\fR>.
+.SH "TIMECODE"
+.IX Header "TIMECODE"
+\&\fBffprobe\fR supports Timecode extraction:
+.IP "\(bu" 4
+\&\s-1MPEG1/2\s0 timecode is extracted from the \s-1GOP,\s0 and is available in the video
+stream details (\fB\-show_streams\fR, see \fItimecode\fR).
+.IP "\(bu" 4
+\&\s-1MOV\s0 timecode is extracted from tmcd track, so is available in the tmcd
+stream metadata (\fB\-show_streams\fR, see \fITAG:timecode\fR).
+.IP "\(bu" 4
+\&\s-1DV, GXF\s0 and \s-1AVI\s0 timecodes are available in format metadata
+(\fB\-show_format\fR, see \fITAG:timecode\fR).
+.SH "SEE ALSO"
+.IX Header "SEE ALSO"
+\&\fBffprobe\-all\fR\|(1),
+\&\fBffmpeg\fR\|(1), \fBffplay\fR\|(1),
+\&\fBffmpeg\-utils\fR\|(1), \fBffmpeg\-scaler\fR\|(1), \fBffmpeg\-resampler\fR\|(1),
+\&\fBffmpeg\-codecs\fR\|(1), \fBffmpeg\-bitstream\-filters\fR\|(1), \fBffmpeg\-formats\fR\|(1),
+\&\fBffmpeg\-devices\fR\|(1), \fBffmpeg\-protocols\fR\|(1), \fBffmpeg\-filters\fR\|(1)
+.SH "AUTHORS"
+.IX Header "AUTHORS"
+The FFmpeg developers.
+.PP
+For details about the authorship, see the Git history of the project
+(https://git.ffmpeg.org/ffmpeg), e.g. by typing the command
+\&\fBgit log\fR in the FFmpeg source directory, or browsing the
+online repository at <\fBhttps://git.ffmpeg.org/ffmpeg\fR>.
+.PP
+Maintainers for the specific components are listed in the file
+\&\fI\s-1MAINTAINERS\s0\fR in the source code tree.

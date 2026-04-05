@@ -1,0 +1,163 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_SIGNATURE-ED25519</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#EdDSA-Instances">EdDSA Instances</a></li>
+      <li><a href="#ED25519-and-ED448-Signature-Parameters">ED25519 and ED448 Signature Parameters</a></li>
+    </ul>
+  </li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_SIGNATURE-ED25519, EVP_SIGNATURE-ED448, Ed25519, Ed448 - EVP_PKEY Ed25519 and Ed448 support</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The <b>Ed25519</b> and <b>Ed448</b> EVP_PKEY implementation supports key generation, one-shot digest-sign and digest-verify using the EdDSA signature schemes described in RFC 8032. It has associated private and public key formats compatible with RFC 8410.</p>
+
+<h2 id="EdDSA-Instances">EdDSA Instances</h2>
+
+<p>RFC 8032 describes five EdDSA instances: Ed25519, Ed25519ctx, Ed25519ph, Ed448, Ed448ph.</p>
+
+<p>The instances Ed25519, Ed25519ctx, Ed448 are referred to as <b>PureEdDSA</b> schemes. For these three instances, the sign and verify procedures require access to the complete message (not a digest of the message).</p>
+
+<p>The instances Ed25519ph, Ed448ph are referred to as <b>HashEdDSA</b> schemes. For these two instances, the sign and verify procedures do not require access to the complete message; they operate on a hash of the message. For Ed25519ph, the hash function is SHA512. For Ed448ph, the hash function is SHAKE256 with an output length of 512 bits.</p>
+
+<p>The instances Ed25519ctx, Ed25519ph, Ed448, Ed448ph accept an optional <b>context-string</b> as input to sign and verify operations (and for Ed25519ctx, the context-string must be nonempty). For the Ed25519 instance, a nonempty context-string is not permitted.</p>
+
+<p>These instances can be specified as signature parameters when using <a href="../man3/EVP_DigestSignInit.html">EVP_DigestSignInit(3)</a> and <a href="../man3/EVP_DigestVerifyInit.html">EVP_DigestVerifyInit(3)</a>, see <a href="#ED25519-and-ED448-Signature-Parameters">&quot;ED25519 and ED448 Signature Parameters&quot;</a> below.</p>
+
+<p>These instances are also explicitly fetchable as algorithms using <a href="../man3/EVP_SIGNATURE_fetch.html">EVP_SIGNATURE_fetch(3)</a>, which can be used with <a href="../man3/EVP_PKEY_sign_init_ex2.html">EVP_PKEY_sign_init_ex2(3)</a>, <a href="../man3/EVP_PKEY_verify_init_ex2.html">EVP_PKEY_verify_init_ex2(3)</a>, <a href="../man3/EVP_PKEY_sign_message_init.html">EVP_PKEY_sign_message_init(3)</a> and <a href="../man3/EVP_PKEY_verify_message_init.html">EVP_PKEY_verify_message_init(3)</a>.</p>
+
+<h2 id="ED25519-and-ED448-Signature-Parameters">ED25519 and ED448 Signature Parameters</h2>
+
+<p>Two parameters can be set during signing or verification: the EdDSA <b>instance name</b> and the <b>context-string value</b>. They can be set by passing an OSSL_PARAM array to EVP_DigestSignInit_ex().</p>
+
+<ul>
+
+<li><p>&quot;instance&quot; (<b>OSSL_SIGNATURE_PARAM_INSTANCE</b>) &lt;utf8 string&gt;</p>
+
+<p>One of the five strings &quot;Ed25519&quot;, &quot;Ed25519ctx&quot;, &quot;Ed25519ph&quot;, &quot;Ed448&quot;, &quot;Ed448ph&quot;.</p>
+
+<p>&quot;Ed25519&quot;, &quot;Ed25519ctx&quot;, &quot;Ed25519ph&quot; are valid only for an Ed25519 EVP_PKEY.</p>
+
+<p>&quot;Ed448&quot;, &quot;Ed448ph&quot; are valid only for an Ed448 EVP_PKEY.</p>
+
+</li>
+<li><p>&quot;context-string&quot; (<b>OSSL_SIGNATURE_PARAM_CONTEXT_STRING</b>) &lt;octet string&gt;</p>
+
+<p>A string of octets with length at most 255.</p>
+
+</li>
+</ul>
+
+<p>Both of these parameters are optional.</p>
+
+<p>When using <a href="../man3/EVP_DigestSignInit.html">EVP_DigestSignInit(3)</a> or <a href="../man3/EVP_DigestVerifyInit.html">EVP_DigestVerifyInit(3)</a>, the signature algorithm is derived from the key type name. The key type name (&quot;Ed25519&quot; or &quot;Ed448&quot;) is also the default for the instance, but this can be changed with the &quot;instance&quot; parameter.</p>
+
+<p>Note that a message digest name must <b>NOT</b> be specified when signing or verifying.</p>
+
+<p>When using <a href="../man3/EVP_PKEY_sign_init_ex2.html">EVP_PKEY_sign_init_ex2(3)</a>, <a href="../man3/EVP_PKEY_verify_init_ex2.html">EVP_PKEY_verify_init_ex2(3)</a>, <a href="../man3/EVP_PKEY_sign_message_init.html">EVP_PKEY_sign_message_init(3)</a> or <a href="../man3/EVP_PKEY_verify_message_init.html">EVP_PKEY_verify_message_init(3)</a>, the instance is the explicit signature algorithm name, and may not be changed (trying to give one with the &quot;instance&quot; parameter is therefore an error).</p>
+
+<p>If a context-string is not specified, then an empty context-string is used.</p>
+
+<p>See <a href="../man7/EVP_PKEY-X25519.html">EVP_PKEY-X25519(7)</a> for information related to <b>X25519</b> and <b>X448</b> keys.</p>
+
+<p>The following signature parameters can be retrieved using EVP_PKEY_CTX_get_params().</p>
+
+<ul>
+
+<li><p>&quot;algorithm-id&quot; (<b>OSSL_SIGNATURE_PARAM_ALGORITHM_ID</b>) &lt;octet string&gt;</p>
+
+</li>
+<li><p>&quot;instance&quot; (<b>OSSL_SIGNATURE_PARAM_INSTANCE</b>) &lt;utf8 string&gt;</p>
+
+</li>
+<li><p>&quot;context-string&quot; (<b>OSSL_SIGNATURE_PARAM_CONTEXT_STRING</b>) &lt;octet string&gt;</p>
+
+</li>
+</ul>
+
+<p>The parameters are described in <a href="../man7/provider-signature.html">provider-signature(7)</a>.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The PureEdDSA instances do not support the streaming mechanism of other signature algorithms using, for example, EVP_DigestUpdate(). The message to sign or verify must be passed using the one-shot EVP_DigestSign() and EVP_DigestVerify() functions.</p>
+
+<p>The HashEdDSA instances do not yet support the streaming mechanisms (so the one-shot functions must be used with HashEdDSA as well).</p>
+
+<p>When calling EVP_DigestSignInit() or EVP_DigestVerifyInit(), the digest <i>type</i> parameter <b>MUST</b> be set to NULL.</p>
+
+<p>Applications wishing to sign certificates (or other structures such as CRLs or certificate requests) using Ed25519 or Ed448 can either use X509_sign() or X509_sign_ctx() in the usual way.</p>
+
+<p>Ed25519 or Ed448 private keys can be set directly using <a href="../man3/EVP_PKEY_new_raw_private_key.html">EVP_PKEY_new_raw_private_key(3)</a> or loaded from a PKCS#8 private key file using <a href="../man3/PEM_read_bio_PrivateKey.html">PEM_read_bio_PrivateKey(3)</a> (or similar function). Completely new keys can also be generated (see the example below). Setting a private key also sets the associated public key.</p>
+
+<p>Ed25519 or Ed448 public keys can be set directly using <a href="../man3/EVP_PKEY_new_raw_public_key.html">EVP_PKEY_new_raw_public_key(3)</a> or loaded from a SubjectPublicKeyInfo structure in a PEM file using <a href="../man3/PEM_read_bio_PUBKEY.html">PEM_read_bio_PUBKEY(3)</a> (or similar function).</p>
+
+<p>Ed25519 and Ed448 can be tested with the <a href="../man1/openssl-speed.html">openssl-speed(1)</a> application since version 1.1.1. Valid algorithm names are <b>ed25519</b>, <b>ed448</b> and <b>eddsa</b>. If <b>eddsa</b> is specified, then both Ed25519 and Ed448 are benchmarked.</p>
+
+<p>Since Ed25519ctx is not included in FIPS 186-5, it is not present in the FIPS provider.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>To sign a message using an ED25519 EVP_PKEY structure:</p>
+
+<pre><code>void do_sign(EVP_PKEY *ed_key, unsigned char *msg, size_t msg_len)
+{
+    size_t sig_len;
+    unsigned char *sig = NULL;
+    EVP_MD_CTX *md_ctx = EVP_MD_CTX_new();
+
+    const OSSL_PARAM params[] = {
+        OSSL_PARAM_utf8_string (&quot;instance&quot;, &quot;Ed25519ctx&quot;, 10),
+        OSSL_PARAM_octet_string(&quot;context-string&quot;, (unsigned char *)&quot;A protocol defined context string&quot;, 33),
+        OSSL_PARAM_END
+    };
+
+    /* The input &quot;params&quot; is not needed if default options are acceptable.
+       Use NULL in place of &quot;params&quot; in that case. */
+    EVP_DigestSignInit_ex(md_ctx, NULL, NULL, NULL, NULL, ed_key, params);
+    /* Calculate the required size for the signature by passing a NULL buffer. */
+    EVP_DigestSign(md_ctx, NULL, &amp;sig_len, msg, msg_len);
+    sig = OPENSSL_zalloc(sig_len);
+
+    EVP_DigestSign(md_ctx, sig, &amp;sig_len, msg, msg_len);
+    ...
+    OPENSSL_free(sig);
+    EVP_MD_CTX_free(md_ctx);
+}</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/EVP_PKEY-X25519.html">EVP_PKEY-X25519(7)</a> <a href="../man7/provider-signature.html">provider-signature(7)</a>, <a href="../man3/EVP_DigestSignInit.html">EVP_DigestSignInit(3)</a>, <a href="../man3/EVP_DigestVerifyInit.html">EVP_DigestVerifyInit(3)</a>,</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2017-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

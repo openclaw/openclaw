@@ -1,0 +1,148 @@
+.\" SPDX-License-Identifier: 0BSD
+.\"
+.\" Authors: Lasse Collin
+.\"          Jia Tan
+.\"
+.\" (Note that this file is not based on gzip's zgrep.1.)
+.\"
+.TH XZGREP 1 "2025-03-06" "Tukaani" "XZ Utils"
+.SH NAME
+xzgrep \- search possibly-compressed files for patterns
+.
+.SH SYNOPSIS
+.B xzgrep
+.RI [ option... ]
+.RI [ pattern_list ]
+.RI [ file... ]
+.br
+.B xzegrep
+\&...
+.br
+.B xzfgrep
+\&...
+.br
+.B lzgrep
+\&...
+(DEPRECATED)
+.br
+.B lzegrep
+\&...
+(DEPRECATED)
+.br
+.B lzfgrep
+\&...
+(DEPRECATED)
+.
+.SH DESCRIPTION
+.B xzgrep
+invokes
+.BR grep (1)
+on uncompressed contents of files.
+The formats of the
+.I files
+are determined from the filename suffixes.
+Any
+.I file
+with a suffix supported by
+.BR xz (1),
+.BR gzip (1),
+.BR bzip2 (1),
+.BR lzop (1),
+.BR zstd (1),
+or
+.BR lz4 (1)
+will be decompressed;
+all other files are assumed to be uncompressed.
+.PP
+If no
+.I files
+are specified or
+.I file
+is
+.B \-
+then standard input is read.
+When reading from standard input, only files supported by
+.BR xz (1)
+are decompressed.
+Other files are assumed to be in uncompressed form already.
+.PP
+Most
+.I options
+of
+.BR grep (1)
+are supported.
+However, the following options are not supported:
+.IP "" 4
+.BR \-r ,
+.B \-\-recursive
+.IP "" 4
+.BR \-R ,
+.B \-\-dereference\-recursive
+.IP "" 4
+.BR \-d ,
+.BI \-\-directories= action
+.IP "" 4
+.BR \-Z ,
+.B \-\-null
+.IP "" 4
+.BR \-z ,
+.B \-\-null\-data
+.IP "" 4
+.BI \-\-include= glob
+.IP "" 4
+.BI \-\-exclude= glob
+.IP "" 4
+.BI \-\-exclude\-from= file
+.IP "" 4
+.BI \-\-exclude\-dir= glob
+.PP
+.B xzegrep
+is an alias for
+.BR "xzgrep \-E" .
+.B xzfgrep
+is an alias for
+.BR "xzgrep \-F" .
+.PP
+The commands
+.BR lzgrep ,
+.BR lzegrep ,
+and
+.B lzfgrep
+are provided for backward compatibility with LZMA Utils.
+They are deprecated and will be removed in a future version.
+.
+.SH EXIT STATUS
+.TP
+0
+At least one match was found from at least one of the input files.
+No errors occurred.
+.TP
+1
+No matches were found from any of the input files.
+No errors occurred.
+.TP
+>1
+One or more errors occurred.
+It is unknown if matches were found.
+.
+.SH ENVIRONMENT
+.TP
+.B GREP
+If
+.B GREP
+is set to a non-empty value,
+it is used instead of
+.BR "grep" ,
+.BR "grep \-E" ,
+or
+.BR "grep \-F" .
+.
+.SH "SEE ALSO"
+.BR grep (1),
+.BR xz (1),
+.BR gzip (1),
+.BR bzip2 (1),
+.BR lzop (1),
+.BR zstd (1),
+.BR lz4 (1),
+.BR zgrep (1)

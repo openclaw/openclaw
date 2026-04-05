@@ -1,0 +1,163 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_SKEY</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Selections">Selections</a></li>
+    </ul>
+  </li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_SKEY, EVP_SKEY_generate, EVP_SKEY_import, EVP_SKEY_import_raw_key, EVP_SKEY_import_SKEYMGMT, EVP_SKEY_up_ref, EVP_SKEY_export, EVP_SKEY_get0_raw_key, EVP_SKEY_get0_key_id, EVP_SKEY_get0_skeymgmt_name, EVP_SKEY_get0_provider_name, EVP_SKEY_free, EVP_SKEY_is_a, EVP_SKEY_to_provider - opaque symmetric key allocation and handling functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+
+typedef evp_skey_st EVP_SKEY;
+
+EVP_SKEY *EVP_SKEY_generate(OSSL_LIB_CTX *libctx, const char *skeymgmtname,
+                            const char *propquery, const OSSL_PARAM *params);
+EVP_SKEY *EVP_SKEY_import(OSSL_LIB_CTX *libctx, const char *skeymgmtname,
+                          const char *propquery,
+                          int selection, const OSSL_PARAM *params);
+EVP_SKEY *EVP_SKEY_import_raw_key(OSSL_LIB_CTX *libctx, const char *skeymgmtname,
+                                  unsigned char *key, size_t len,
+                                  const char *propquery);
+EVP_SKEY *EVP_SKEY_import_SKEYMGMT(OSSL_LIB_CTX *libctx, EVP_SKEYMGMT *skeymgmt,
+                                   int selection, const OSSL_PARAM *params);
+int EVP_SKEY_export(const EVP_SKEY *skey, int selection,
+                    OSSL_CALLBACK *export_cb, void *export_cbarg);
+int EVP_SKEY_get0_raw_key(const EVP_SKEY *skey, const unsigned char **key,
+                         size_t *len);
+const char *EVP_SKEY_get0_key_id(const EVP_SKEY *skey);
+
+const char *EVP_SKEY_get0_skeymgmt_name(const EVP_SKEY *skey);
+const char *EVP_SKEY_get0_provider_name(const EVP_SKEY *skey);
+
+int EVP_SKEY_up_ref(EVP_SKEY *key);
+void EVP_SKEY_free(EVP_SKEY *key);
+int EVP_SKEY_is_a(const EVP_SKEY *skey, const char *name);
+EVP_SKEY *EVP_SKEY_to_provider(EVP_SKEY *skey, OSSL_LIB_CTX *libctx,
+                               OSSL_PROVIDER *prov, const char *propquery);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p><b>EVP_SKEY</b> is a generic structure to hold symmetric keys as opaque objects. The keys themselves are often referred to as the &quot;internal key&quot;, and are handled by providers using <a href="../man3/EVP_SKEYMGMT.html">EVP_SKEYMGMT(3)</a>.</p>
+
+<p>Conceptually, an <b>EVP_SKEY</b> internal key may hold a symmetric key, and along with those, key parameters if the key type requires them.</p>
+
+<p>The EVP_SKEY_generate() functions creates a new <b>EVP_SKEY</b> object and initializes it according to the <b>params</b> argument.</p>
+
+<p>The EVP_SKEY_import() function allocates an empty <b>EVP_SKEY</b> structure which is used by OpenSSL to store symmetric keys, assigns the <b>EVP_SKEYMGMT</b> object associated with the key, and initializes the object from the <b>params</b> argument.</p>
+
+<p>The EVP_SKEY_import_raw_key() function is a helper that creates an <b>EVP_SKEY</b> object containing the raw byte representation of the symmetric keys from the buffer <i>key</i> having length <i>len</i>. The <i>skeymgmtname</i> defines the name of the target <b>EVP_SKEYMGMT</b> for the newly created key.</p>
+
+<p>The EVP_SKEY_import_SKEYMGMT() function is a helper that creates an <b>EVP_SKEY</b> object containing the representation of the symmetric keys specific to the particular <b>EVP_SKEYMGMT</b>.</p>
+
+<p>The EVP_SKEY_export() function extracts values from a key <i>skey</i> using the <i>selection</i>. <i>selection</i> is described below. It uses a callback <i>export_cb</i> that gets passed the value of <i>export_cbarg</i>. See <a href="../man7/openssl-core.h.html">openssl-core.h(7)</a> for more information about the callback. Note that the <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> array that is passed to the callback is not persistent after the callback returns.</p>
+
+<p>The EVP_SKEY_get0_raw_key() returns a pointer to a raw key bytes to the passed address and sets the key len. The returned address is managed by the internal key management and shouldn&#39;t be freed explicitly. The operation can fail when the underlying key management doesn&#39;t support export of the secret key.</p>
+
+<p>The EVP_SKEY_get0_key_id() returns a NUL-terminated string providing some human-readable identifier of the key if provided by the underlying key management. The pointer becomes invalid after freeing the EVP_SKEY object.</p>
+
+<p>The EVP_SKEY_get0_skeymgmt_name() and EVP_SKEY_get0_provider_name() return the names of the associated EVP_SKEYMGMT object and its provider correspondingly.</p>
+
+<p>EVP_SKEY_up_ref() increments the reference count of <i>key</i>.</p>
+
+<p>EVP_SKEY_free() decrements the reference count of <i>key</i> and, if the reference count is zero, frees it. If <i>key</i> is NULL, nothing is done.</p>
+
+<p>EVP_SKEY_is_a() checks if the key type of <i>skey</i> is <i>name</i>.</p>
+
+<p>EVP_SKEY_to_provider() simplifies the task of importing a <i>skey</i> into a different provider identified by <i>prov</i>. If <i>prov</i> is NULL, the default provider for the key type identified via <i>skey</i> is used.</p>
+
+<h2 id="Selections">Selections</h2>
+
+<p>The following constants can be used for <i>selection</i>:</p>
+
+<dl>
+
+<dt id="OSSL_SKEYMGMT_SELECT_SECRET_KEY"><b>OSSL_SKEYMGMT_SELECT_SECRET_KEY</b></dt>
+<dd>
+
+<p>Only the raw key representation will be selected.</p>
+
+</dd>
+<dt id="OSSL_SKEYMGMT_SELECT_PARAMETERS"><b>OSSL_SKEYMGMT_SELECT_PARAMETERS</b></dt>
+<dd>
+
+<p>Only the key parameters will be selected. This includes optional key parameters.</p>
+
+</dd>
+<dt id="OSSL_SKEYMGMT_SELECT_ALL"><b>OSSL_SKEYMGMT_SELECT_ALL</b></dt>
+<dd>
+
+<p>All parameters will be selected.</p>
+
+</dd>
+</dl>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The <b>EVP_SKEY</b> structure is used by various OpenSSL functions which require a general symmetric key without reference to any particular algorithm.</p>
+
+<p>The EVP_SKEY_to_provider() function will fail and return NULL if the origin key <i>skey</i> cannot be exported from its provider.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>EVP_SKEY_generate(), EVP_SKEY_import(), EVP_SKEY_import_raw_key(), and EVP_SKEY_import_SKEYMGMT() return either the newly allocated <b>EVP_SKEY</b> structure or NULL if an error occurred.</p>
+
+<p>EVP_SKEY_get0_key_id() returns either a valid pointer or NULL.</p>
+
+<p>EVP_SKEY_up_ref() returns 1 for success and 0 on failure.</p>
+
+<p>EVP_SKEY_export() and EVP_SKEY_get0_raw_key() return 1 for success and 0 on failure.</p>
+
+<p>EVP_SKEY_get0_skeymgmt_name() and EVP_SKEY_get0_provider_name() return the names of the associated EVP_SKEYMGMT object and its provider correspondingly.</p>
+
+<p>EVP_SKEY_is_a() returns 1 if <i>skey</i> has the key type <i>name</i>, otherwise 0.</p>
+
+<p>EVP_SKEY_to_provider() returns a new <b>EVP_SKEY</b> suitable for operations with the <i>prov</i> provider or NULL in case of failure.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_SKEYMGMT.html">EVP_SKEYMGMT(3)</a>, <a href="../man7/provider.html">provider(7)</a>, <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The <b>EVP_SKEY</b> API and functions EVP_SKEY_export(), EVP_SKEY_free(), EVP_SKEY_get0_raw_key(), EVP_SKEY_import(), EVP_SKEY_import_raw_key(), EVP_SKEY_up_ref(), EVP_SKEY_generate(), EVP_SKEY_get0_key_id(), EVP_SKEY_get0_provider_name(), EVP_SKEY_get0_skeymgmt_name(), EVP_SKEY_is_a(), EVP_SKEY_to_provider() were introduced in OpenSSL 3.5.</p>
+
+<p>The EVP_SKEY_import_SKEYMGMT() function was introduced in OpenSSL 4.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2025-2026 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

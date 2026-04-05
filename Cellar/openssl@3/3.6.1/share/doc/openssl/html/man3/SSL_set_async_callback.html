@@ -1,0 +1,107 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_set_async_callback</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_CTX_set_async_callback, SSL_CTX_set_async_callback_arg, SSL_set_async_callback, SSL_set_async_callback_arg, SSL_get_async_status, SSL_async_callback_fn - manage asynchronous operations</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+typedef int (*SSL_async_callback_fn)(SSL *s, void *arg);
+int SSL_CTX_set_async_callback(SSL_CTX *ctx, SSL_async_callback_fn callback);
+int SSL_CTX_set_async_callback_arg(SSL_CTX *ctx, void *arg);
+int SSL_set_async_callback(SSL *s, SSL_async_callback_fn callback);
+int SSL_set_async_callback_arg(SSL *s, void *arg);
+int SSL_get_async_status(SSL *s, int *status);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_CTX_set_async_callback() sets an asynchronous callback function. All <b>SSL</b> objects generated based on this <b>SSL_CTX</b> will get this callback. If an engine supports the callback mechanism, it will be automatically called if <b>SSL_MODE_ASYNC</b> has been set and an asynchronous capable engine completes a cryptography operation to notify the application to resume the paused work flow.</p>
+
+<p>SSL_CTX_set_async_callback_arg() sets the callback argument.</p>
+
+<p>SSL_set_async_callback() allows an application to set a callback in an asynchronous <b>SSL</b> object, so that when an engine completes a cryptography operation, the callback will be called to notify the application to resume the paused work flow.</p>
+
+<p>SSL_set_async_callback_arg() sets an argument for the <b>SSL</b> object when the above callback is called.</p>
+
+<p>SSL_get_async_status() returns the engine status. This function facilitates the communication from the engine to the application. During an SSL session, cryptographic operations are dispatched to an engine. The engine status is very useful for an application to know if the operation has been successfully dispatched. If the engine does not support this additional callback method, <b>ASYNC_STATUS_UNSUPPORTED</b> will be returned. See ASYNC_WAIT_CTX_set_status() for a description of all of the status values.</p>
+
+<p>An example of the above functions would be the following:</p>
+
+<ol>
+
+<li><p>Application sets the async callback and callback data on an SSL connection by calling SSL_set_async_callback().</p>
+
+</li>
+<li><p>Application sets <b>SSL_MODE_ASYNC</b> and makes an asynchronous SSL call</p>
+
+</li>
+<li><p>OpenSSL submits the asynchronous request to the engine. If a retry occurs at this point then the status within the <b>ASYNC_WAIT_CTX</b> would be set and the async callback function would be called (goto Step 7).</p>
+
+</li>
+<li><p>The OpenSSL engine pauses the current job and returns, so that the application can continue processing other connections.</p>
+
+</li>
+<li><p>At a future point in time (probably via a polling mechanism or via an interrupt) the engine will become aware that the asynchronous request has finished processing.</p>
+
+</li>
+<li><p>The engine will call the application&#39;s callback passing the callback data as a parameter.</p>
+
+</li>
+<li><p>The callback function should then run. Note: it is a requirement that the callback function is small and nonblocking as it will be run in the context of a polling mechanism or an interrupt.</p>
+
+</li>
+<li><p>It is the application&#39;s responsibility via the callback function to schedule recalling the OpenSSL asynchronous function and to continue processing.</p>
+
+</li>
+<li><p>The callback function has the option to check the status returned via SSL_get_async_status() to determine whether a retry happened instead of the request being submitted, allowing different processing if required.</p>
+
+</li>
+</ol>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_CTX_set_async_callback(), SSL_set_async_callback(), SSL_CTX_set_async_callback_arg(), SSL_CTX_set_async_callback_arg() and SSL_get_async_status() return 1 on success or 0 on error.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>SSL_CTX_set_async_callback(), SSL_CTX_set_async_callback_arg(), SSL_set_async_callback(), SSL_set_async_callback_arg() and SSL_get_async_status() were first added to OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2019-2020 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

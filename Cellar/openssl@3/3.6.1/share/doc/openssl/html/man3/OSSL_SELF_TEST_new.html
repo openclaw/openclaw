@@ -1,0 +1,176 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OSSL_SELF_TEST_new</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OSSL_SELF_TEST_new, OSSL_SELF_TEST_free, OSSL_SELF_TEST_onbegin, OSSL_SELF_TEST_oncorrupt_byte, OSSL_SELF_TEST_onend - functionality to trigger a callback during a self test</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/self_test.h&gt;
+
+OSSL_SELF_TEST *OSSL_SELF_TEST_new(OSSL_CALLBACK *cb, void *cbarg);
+void OSSL_SELF_TEST_free(OSSL_SELF_TEST *st);
+
+void OSSL_SELF_TEST_onbegin(OSSL_SELF_TEST *st, const char *type,
+                            const char *desc);
+int OSSL_SELF_TEST_oncorrupt_byte(OSSL_SELF_TEST *st, unsigned char *bytes);
+void OSSL_SELF_TEST_onend(OSSL_SELF_TEST *st, int ret);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>These methods are intended for use by provider implementers, to display diagnostic information during self testing.</p>
+
+<p>OSSL_SELF_TEST_new() allocates an opaque <b>OSSL_SELF_TEST</b> object that has a callback and callback argument associated with it.</p>
+
+<p>The callback <i>cb</i> may be triggered multiple times by a self test to indicate different phases.</p>
+
+<p>OSSL_SELF_TEST_free() frees the space allocated by OSSL_SELF_TEST_new(). If the argument is NULL, nothing is done.</p>
+
+<p>OSSL_SELF_TEST_onbegin() may be inserted at the start of a block of self test code. It can be used for diagnostic purposes. If this method is called the callback <i>cb</i> will receive the following <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> object.</p>
+
+<dl>
+
+<dt id="st-phase-OSSL_PROV_PARAM_SELF_TEST_PHASE-UTF8-string">&quot;st-phase&quot; (<b>OSSL_PROV_PARAM_SELF_TEST_PHASE</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+<p>The value is the string &quot;Start&quot;</p>
+
+</dd>
+</dl>
+
+<p>OSSL_SELF_TEST_oncorrupt_byte() may be inserted just after the known answer is calculated, but before the self test compares the result. The first byte in the passed in array of <i>bytes</i> will be corrupted if the callback returns 0, otherwise it leaves the array unaltered. It can be used for failure testing. The <i>type</i> and <i>desc</i> can be used to identify an individual self test to target for failure testing. If this method is called the callback <i>cb</i> will receive the following <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> object.</p>
+
+<dl>
+
+<dt id="st-phase-OSSL_PROV_PARAM_SELF_TEST_PHASE-UTF8-string1">&quot;st-phase&quot; (<b>OSSL_PROV_PARAM_SELF_TEST_PHASE</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+<p>The value is the string &quot;Corrupt&quot;</p>
+
+</dd>
+</dl>
+
+<p>OSSL_SELF_TEST_onend() may be inserted at the end of a block of self test code just before cleanup to indicate if the test passed or failed. It can be used for diagnostic purposes. If this method is called the callback <i>cb</i> will receive the following <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> object.</p>
+
+<dl>
+
+<dt id="st-phase-OSSL_PROV_PARAM_SELF_TEST_PHASE-UTF8-string2">&quot;st-phase&quot; (<b>OSSL_PROV_PARAM_SELF_TEST_PHASE</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+<p>The value of the string is &quot;Pass&quot; if <i>ret</i> is non zero, otherwise it has the value &quot;Fail&quot;.</p>
+
+</dd>
+</dl>
+
+<p>After the callback <i>cb</i> has been called the values that were set by OSSL_SELF_TEST_onbegin() for <i>type</i> and <i>desc</i> are set to the value &quot;None&quot;.</p>
+
+<p>If OSSL_SELF_TEST_onbegin(), OSSL_SELF_TEST_oncorrupt_byte() or OSSL_SELF_TEST_onend() is called the following additional <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> are passed to the callback.</p>
+
+<dl>
+
+<dt id="st-type-OSSL_PROV_PARAM_SELF_TEST_TYPE-UTF8-string">&quot;st-type&quot; (<b>OSSL_PROV_PARAM_SELF_TEST_TYPE</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+<p>The value is setup by the <i>type</i> passed to OSSL_SELF_TEST_onbegin(). This allows the callback to identify the type of test being run.</p>
+
+</dd>
+<dt id="st-desc-OSSL_PROV_PARAM_SELF_TEST_DESC-UTF8-string">&quot;st-desc&quot; (<b>OSSL_PROV_PARAM_SELF_TEST_DESC</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+<p>The value is setup by the <i>type</i> passed to OSSL_SELF_TEST_onbegin(). This allows the callback to identify the sub category of the test being run.</p>
+
+</dd>
+</dl>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>OSSL_SELF_TEST_new() returns the allocated <b>OSSL_SELF_TEST</b> object, or NULL if it fails.</p>
+
+<p>OSSL_SELF_TEST_oncorrupt_byte() returns 1 if corruption occurs, otherwise it returns 0.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>A single self test could be set up in the following way:</p>
+
+<pre><code>  OSSL_SELF_TEST *st = NULL;
+  OSSL_CALLBACK *cb;
+  void *cbarg;
+  int ok = 0;
+  unsigned char out[EVP_MAX_MD_SIZE];
+  unsigned int out_len = 0;
+  EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+  EVP_MD *md = EVP_MD_fetch(libctx, t-&gt;algorithm, NULL);
+
+  /*
+   * Retrieve the callback - will be NULL if not set by the application via
+   * OSSL_SELF_TEST_set_callback().
+   */
+  OSSL_SELF_TEST_get_callback(libctx, &amp;cb, &amp;cbarg);
+
+  st = OSSL_SELF_TEST_new(cb, cb_arg);
+
+  /* Trigger the optional callback */
+  OSSL_SELF_TEST_onbegin(st, OSSL_SELF_TEST_TYPE_KAT_DIGEST,
+                         OSSL_SELF_TEST_DESC_MD_SHA2);
+
+  if (!EVP_DigestInit_ex(ctx, md, NULL)
+      || !EVP_DigestUpdate(ctx, pt, pt_len)
+      || !EVP_DigestFinal(ctx, out, &amp;out_len))
+      goto err;
+
+  /* Optional corruption - If the application callback returns 0 */
+  OSSL_SELF_TEST_oncorrupt_byte(st, out);
+
+  if (out_len != t-&gt;expected_len
+      || memcmp(out, t-&gt;expected, out_len) != 0)
+      goto err;
+  ok = 1;
+err:
+  OSSL_SELF_TEST_onend(st, ok);
+  EVP_MD_free(md);
+  EVP_MD_CTX_free(ctx);</code></pre>
+
+<p>Multiple self test&#39;s can be set up in a similar way by repeating the pattern of OSSL_SELF_TEST_onbegin(), OSSL_SELF_TEST_oncorrupt_byte(), OSSL_SELF_TEST_onend() for each test.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/OSSL_SELF_TEST_set_callback.html">OSSL_SELF_TEST_set_callback(3)</a>, <a href="../man7/openssl-core.h.html">openssl-core.h(7)</a>, <a href="../man7/OSSL_PROVIDER-FIPS.html">OSSL_PROVIDER-FIPS(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The functions described here were added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2020-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

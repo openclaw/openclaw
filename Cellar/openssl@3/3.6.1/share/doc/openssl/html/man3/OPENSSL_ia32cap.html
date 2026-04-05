@@ -1,0 +1,307 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OPENSSL_ia32cap</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Notable-Capability-Bits-for-LV0">Notable Capability Bits for LV0</a></li>
+      <li><a href="#Notable-Capability-Bits-for-LV1">Notable Capability Bits for LV1</a></li>
+      <li><a href="#Notable-Capability-Bits-for-LV2">Notable Capability Bits for LV2</a></li>
+      <li><a href="#Notable-Capability-Bits-for-LV3">Notable Capability Bits for LV3</a></li>
+      <li><a href="#Notable-Capability-Bits-for-LV4">Notable Capability Bits for LV4</a></li>
+      <li><a href="#OPENSSL_ia32cap-environment-variable">OPENSSL_ia32cap environment variable</a></li>
+    </ul>
+  </li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OPENSSL_ia32cap - the x86[_64] processor capabilities vector</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>env OPENSSL_ia32cap=... &lt;application&gt;</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>OpenSSL supports a range of x86[_64] instruction set extensions and features. These extensions are denoted by individual bits or groups of bits stored internally as ten 32-bit capability vectors and for simplicity represented logically below as five 64-bit vectors. This logical vector (LV) representation is used to streamline the definition of the OPENSSL_ia32cap environment variable.</p>
+
+<p>Upon toolkit initialization, the capability vectors are populated through successive executions of the CPUID instruction, after which any OPENSSL_ia32cap environment variable capability bit modifications are applied. After toolkit initialization is complete, populated vectors are then used to choose between different code paths to provide optimal performance across a wide range of x86[_64] based processors.</p>
+
+<p>Further CPUID information can be found in the Intel(R) Architecture Instruction Set Extensions Programming Reference, and the AMD64 Architecture Programmer&#39;s Manual (Volume 3).</p>
+
+<h2 id="Notable-Capability-Bits-for-LV0">Notable Capability Bits for LV0</h2>
+
+<p>The following are notable capability bits from logical vector 0 (LV0) resulting from the following execution of CPUID.(EAX=01H).EDX and CPUID.(EAX=01H).ECX:</p>
+
+<dl>
+
+<dt id="bit-0-4-denoting-presence-of-Time-Stamp-Counter">bit #0+4 denoting presence of Time-Stamp Counter;</dt>
+<dd>
+
+</dd>
+<dt id="bit-0-19-denoting-availability-of-CLFLUSH-instruction">bit #0+19 denoting availability of CLFLUSH instruction;</dt>
+<dd>
+
+</dd>
+<dt id="bit-0-20-reserved-by-Intel-is-used-to-choose-among-RC4-code-paths">bit #0+20, reserved by Intel, is used to choose among RC4 code paths;</dt>
+<dd>
+
+</dd>
+<dt id="bit-0-23-denoting-MMX-support">bit #0+23 denoting MMX support;</dt>
+<dd>
+
+</dd>
+<dt id="bit-0-24-FXSR-bit-denoting-availability-of-XMM-registers">bit #0+24, FXSR bit, denoting availability of XMM registers;</dt>
+<dd>
+
+</dd>
+<dt id="bit-0-25-denoting-SSE-support">bit #0+25 denoting SSE support;</dt>
+<dd>
+
+</dd>
+<dt id="bit-0-26-denoting-SSE2-support">bit #0+26 denoting SSE2 support;</dt>
+<dd>
+
+</dd>
+<dt id="bit-0-28-denoting-Hyperthreading-which-is-used-to-distinguish-cores-with-shared-cache">bit #0+28 denoting Hyperthreading, which is used to distinguish cores with shared cache;</dt>
+<dd>
+
+</dd>
+<dt id="bit-0-30-reserved-by-Intel-denotes-specifically-Intel-CPUs">bit #0+30, reserved by Intel, denotes specifically Intel CPUs;</dt>
+<dd>
+
+</dd>
+<dt id="bit-0-33-denoting-availability-of-PCLMULQDQ-instruction">bit #0+33 denoting availability of PCLMULQDQ instruction;</dt>
+<dd>
+
+</dd>
+<dt id="bit-0-41-denoting-SSSE3-Supplemental-SSE3-support">bit #0+41 denoting SSSE3, Supplemental SSE3, support;</dt>
+<dd>
+
+</dd>
+<dt id="bit-0-43-denoting-AMD-XOP-support-forced-to-zero-on-non-AMD-CPUs">bit #0+43 denoting AMD XOP support (forced to zero on non-AMD CPUs);</dt>
+<dd>
+
+</dd>
+<dt id="bit-0-54-denoting-availability-of-MOVBE-instruction">bit #0+54 denoting availability of MOVBE instruction;</dt>
+<dd>
+
+</dd>
+<dt id="bit-0-57-denoting-AES-NI-instruction-set-extension">bit #0+57 denoting AES-NI instruction set extension;</dt>
+<dd>
+
+</dd>
+<dt id="bit-0-58-XSAVE-bit-lack-of-which-in-combination-with-MOVBE-is-used-to-identify-Atom-Silvermont-core">bit #0+58, XSAVE bit, lack of which in combination with MOVBE is used to identify Atom Silvermont core;</dt>
+<dd>
+
+</dd>
+<dt id="bit-0-59-OSXSAVE-bit-denoting-availability-of-YMM-registers">bit #0+59, OSXSAVE bit, denoting availability of YMM registers;</dt>
+<dd>
+
+</dd>
+<dt id="bit-0-60-denoting-AVX-extension">bit #0+60 denoting AVX extension;</dt>
+<dd>
+
+</dd>
+<dt id="bit-0-62-denoting-availability-of-RDRAND-instruction">bit #0+62 denoting availability of RDRAND instruction;</dt>
+<dd>
+
+</dd>
+</dl>
+
+<h2 id="Notable-Capability-Bits-for-LV1">Notable Capability Bits for LV1</h2>
+
+<p>The following are notable capability bits from logical vector 1 (LV1) resulting from the following execution of CPUID.(EAX=07H,ECX=0H).EBX and CPUID.(EAX=07H,ECX=0H).ECX:</p>
+
+<dl>
+
+<dt id="bit-64-3-denoting-availability-of-BMI1-instructions-e.g.-ANDN">bit #64+3 denoting availability of BMI1 instructions, e.g. ANDN;</dt>
+<dd>
+
+</dd>
+<dt id="bit-64-5-denoting-availability-of-AVX2-instructions">bit #64+5 denoting availability of AVX2 instructions;</dt>
+<dd>
+
+</dd>
+<dt id="bit-64-8-denoting-availability-of-BMI2-instructions-e.g.-MULX-and-RORX">bit #64+8 denoting availability of BMI2 instructions, e.g. MULX and RORX;</dt>
+<dd>
+
+</dd>
+<dt id="bit-64-16-denoting-availability-of-AVX512F-extension">bit #64+16 denoting availability of AVX512F extension;</dt>
+<dd>
+
+</dd>
+<dt id="bit-64-17-denoting-availability-of-AVX512DQ-extension">bit #64+17 denoting availability of AVX512DQ extension;</dt>
+<dd>
+
+</dd>
+<dt id="bit-64-18-denoting-availability-of-RDSEED-instruction">bit #64+18 denoting availability of RDSEED instruction;</dt>
+<dd>
+
+</dd>
+<dt id="bit-64-19-denoting-availability-of-ADCX-and-ADOX-instructions">bit #64+19 denoting availability of ADCX and ADOX instructions;</dt>
+<dd>
+
+</dd>
+<dt id="bit-64-21-denoting-availability-of-AVX512IFMA-extension">bit #64+21 denoting availability of AVX512IFMA extension;</dt>
+<dd>
+
+</dd>
+<dt id="bit-64-29-denoting-availability-of-SHA-extension">bit #64+29 denoting availability of SHA extension;</dt>
+<dd>
+
+</dd>
+<dt id="bit-64-30-denoting-availability-of-AVX512BW-extension">bit #64+30 denoting availability of AVX512BW extension;</dt>
+<dd>
+
+</dd>
+<dt id="bit-64-31-denoting-availability-of-AVX512VL-extension">bit #64+31 denoting availability of AVX512VL extension;</dt>
+<dd>
+
+</dd>
+<dt id="bit-64-41-denoting-availability-of-VAES-extension">bit #64+41 denoting availability of VAES extension;</dt>
+<dd>
+
+</dd>
+<dt id="bit-64-42-denoting-availability-of-VPCLMULQDQ-extension">bit #64+42 denoting availability of VPCLMULQDQ extension;</dt>
+<dd>
+
+</dd>
+</dl>
+
+<h2 id="Notable-Capability-Bits-for-LV2">Notable Capability Bits for LV2</h2>
+
+<p>The following are notable capability bits from logical vector 2 (LV2) resulting from the following execution of CPUID.(EAX=07H,ECX=0H).EDX and CPUID.(EAX=07H,ECX=1H).EAX:</p>
+
+<dl>
+
+<dt id="bit-128-15-denoting-availability-of-Hybrid-CPU">bit #128+15 denoting availability of Hybrid CPU;</dt>
+<dd>
+
+</dd>
+<dt id="bit-128-29-denoting-support-for-IA32_ARCH_CAPABILITIES-MSR">bit #128+29 denoting support for IA32_ARCH_CAPABILITIES MSR;</dt>
+<dd>
+
+</dd>
+<dt id="bit-128-32-denoting-availability-of-SHA512-extension">bit #128+32 denoting availability of SHA512 extension;</dt>
+<dd>
+
+</dd>
+<dt id="bit-128-33-denoting-availability-of-SM3-extension">bit #128+33 denoting availability of SM3 extension;</dt>
+<dd>
+
+</dd>
+<dt id="bit-128-34-denoting-availability-of-SM4-extension">bit #128+34 denoting availability of SM4 extension;</dt>
+<dd>
+
+</dd>
+<dt id="bit-128-55-denoting-availability-of-AVX-IFMA-extension">bit #128+55 denoting availability of AVX-IFMA extension;</dt>
+<dd>
+
+</dd>
+</dl>
+
+<h2 id="Notable-Capability-Bits-for-LV3">Notable Capability Bits for LV3</h2>
+
+<p>The following are notable capability bits from logical vector 3 (LV3) resulting from the following execution of CPUID.(EAX=07H,ECX=1H).EDX and CPUID.(EAX=07H,ECX=1H).EBX:</p>
+
+<dl>
+
+<dt id="bit-192-19-denoting-availability-of-AVX10-Converged-Vector-ISA-extension">bit #192+19 denoting availability of AVX10 Converged Vector ISA extension;</dt>
+<dd>
+
+</dd>
+<dt id="bit-192-21-denoting-availability-of-APX_F-extension">bit #192+21 denoting availability of APX_F extension;</dt>
+<dd>
+
+</dd>
+</dl>
+
+<h2 id="Notable-Capability-Bits-for-LV4">Notable Capability Bits for LV4</h2>
+
+<p>The following are notable capability bits from logical vector 4 (LV4) resulting from the following execution of CPUID.(EAX=07H,ECX=1H).ECX and CPUID.(EAX=24H,ECX=0H).EBX:</p>
+
+<dl>
+
+<dt id="bits-256-32-0:7-denoting-AVX10-Converged-Vector-ISA-Version-8-bits">bits #256+32+[0:7] denoting AVX10 Converged Vector ISA Version (8 bits);</dt>
+<dd>
+
+</dd>
+<dt id="bit-256-48-denoting-AVX10-XMM-support">bit #256+48 denoting AVX10 XMM support;</dt>
+<dd>
+
+</dd>
+<dt id="bit-256-49-denoting-AVX10-YMM-support">bit #256+49 denoting AVX10 YMM support;</dt>
+<dd>
+
+</dd>
+<dt id="bit-256-50-denoting-AVX10-ZMM-support">bit #256+50 denoting AVX10 ZMM support;</dt>
+<dd>
+
+</dd>
+</dl>
+
+<h2 id="OPENSSL_ia32cap-environment-variable">OPENSSL_ia32cap environment variable</h2>
+
+<p>The <b>OPENSSL_ia32cap</b> environment variable provides a mechanism to override the default capability vector values at library initialization time. The variable consists of a series of 64-bit numbers representing each of the logical vectors (LV) described above. Each value is delimited by a &#39;<b>:</b>&#39;. Decimal/Octal/Hexadecimal values representations are supported.</p>
+
+<p><code>env OPENSSL_ia32cap=LV0:LV1:LV2:LV3:LV4</code></p>
+
+<p>Used in this form, each non-null logical vector will *overwrite* the entire corresponding capability vector pair with the provided value. To keep compatibility with the behaviour of the original OPENSSL_ia32cap environment variable &lt;env OPENSSL_ia32cap=LV0:LV1&gt;, the next capability vector pairs will be set to zero.</p>
+
+<p>To illustrate, the following will zero all capability bits in logical vectors 1 and further (disable all post-AVX extensions):</p>
+
+<p><code>env OPENSSL_ia32cap=:0</code></p>
+
+<p>The following will zero all capability bits in logical vectors 2 and further:</p>
+
+<p><code>env OPENSSL_ia32cap=::0</code></p>
+
+<p>The following will zero all capability bits only in logical vector 1: <code>env OPENSSL_ia32cap=:0::::</code></p>
+
+<p>A more likely usage scenario would be to disable specific instruction set extensions. The &#39;<b>~</b>&#39; character is used to specify a bit mask of the extensions to be disabled for a particular logical vector.</p>
+
+<p>To illustrate, the following will disable AVX2 code paths and further extensions:</p>
+
+<p><code>env OPENSSL_ia32cap=:~0x20000000000</code></p>
+
+<p>The following will disable AESNI (LV0 bit 57) and VAES (LV1 bit 41) extensions and therefore any code paths using those extensions but leave the rest of the logical vectors unchanged:</p>
+
+<p><code>env OPENSSL_ia32cap=~0x200000000000000:~0x20000000000:~0x0:~0x0:~0x0</code></p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>Not all capability bits are copied from CPUID output verbatim. An example of this is the somewhat less intuitive clearing of LV0 bit #28, or ~0x10000000 in the &quot;environment variable&quot; terms. It has been adjusted to reflect whether or not the data cache is actually shared between logical cores. This in turn affects the decision on whether or not expensive countermeasures against cache-timing attacks are applied, most notably in AES assembler module.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>Not available.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2004-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

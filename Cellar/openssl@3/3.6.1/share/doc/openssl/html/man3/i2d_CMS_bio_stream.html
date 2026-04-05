@@ -1,0 +1,73 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>i2d_CMS_bio_stream</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#BUGS">BUGS</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>i2d_CMS_bio_stream - output CMS_ContentInfo structure in BER format</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/cms.h&gt;
+
+int i2d_CMS_bio_stream(BIO *out, CMS_ContentInfo *cms, BIO *data, int flags);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>i2d_CMS_bio_stream() outputs a CMS_ContentInfo structure in BER format.</p>
+
+<p>It is otherwise identical to the function SMIME_write_CMS().</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>This function is effectively a version of the i2d_CMS_bio() supporting streaming.</p>
+
+<h1 id="BUGS">BUGS</h1>
+
+<p>The prefix &quot;i2d&quot; is arguably wrong because the function outputs BER format.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>i2d_CMS_bio_stream() returns 1 for success or 0 for failure.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>, <a href="../man3/CMS_sign.html">CMS_sign(3)</a>, <a href="../man3/CMS_verify.html">CMS_verify(3)</a>, <a href="../man3/CMS_encrypt.html">CMS_encrypt(3)</a> <a href="../man3/CMS_decrypt.html">CMS_decrypt(3)</a>, <a href="../man3/SMIME_write_CMS.html">SMIME_write_CMS(3)</a>, <a href="../man3/PEM_write_bio_CMS_stream.html">PEM_write_bio_CMS_stream(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The i2d_CMS_bio_stream() function was added in OpenSSL 1.0.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2008-2016 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

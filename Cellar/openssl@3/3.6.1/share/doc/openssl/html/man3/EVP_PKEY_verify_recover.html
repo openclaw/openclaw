@@ -1,0 +1,130 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_PKEY_verify_recover</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_PKEY_verify_recover_init, EVP_PKEY_verify_recover_init_ex, EVP_PKEY_verify_recover_init_ex2, EVP_PKEY_verify_recover - recover signature using a public key algorithm</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+
+int EVP_PKEY_verify_recover_init(EVP_PKEY_CTX *ctx);
+int EVP_PKEY_verify_recover_init_ex(EVP_PKEY_CTX *ctx,
+                                    const OSSL_PARAM params[]);
+int EVP_PKEY_verify_recover_init_ex2(EVP_PKEY_CTX *ctx, EVP_SIGNATURE *algo,
+                                     const OSSL_PARAM params[]);
+int EVP_PKEY_verify_recover(EVP_PKEY_CTX *ctx,
+                            unsigned char *rout, size_t *routlen,
+                            const unsigned char *sig, size_t siglen);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>EVP_PKEY_verify_recover_init() initializes a public key algorithm context <i>ctx</i> for signing using the algorithm given when the context was created using <a href="../man3/EVP_PKEY_CTX_new.html">EVP_PKEY_CTX_new(3)</a> or variants thereof. The algorithm is used to fetch a <b>EVP_SIGNATURE</b> method implicitly, see <a href="../man7/provider.html">&quot;Implicit fetch&quot; in provider(7)</a> for more information about implicit fetches.</p>
+
+<p>EVP_PKEY_verify_recover_init_ex() is the same as EVP_PKEY_verify_recover_init() but additionally sets the passed parameters <i>params</i> on the context before returning.</p>
+
+<p>EVP_PKEY_verify_recover_init_ex2() is the same as EVP_PKEY_verify_recover_init_ex(), but works with an explicitly fetched <b>EVP_SIGNATURE</b> <i>algo</i>. A context <i>ctx</i> without a pre-loaded key cannot be used with this function. Depending on what algorithm was fetched, certain details revolving around the treatment of the input to EVP_PKEY_verify() may be pre-determined, and in that case, those details may normally not be changed. See <a href="#NOTES">&quot;NOTES&quot;</a> below for a deeper explanation.</p>
+
+<p>The EVP_PKEY_verify_recover() function recovers signed data using <i>ctx</i>. The signature is specified using the <i>sig</i> and <i>siglen</i> parameters. If <i>rout</i> is NULL then the maximum size of the output buffer is written to the <i>routlen</i> parameter. If <i>rout</i> is not NULL then before the call the <i>routlen</i> parameter should contain the length of the <i>rout</i> buffer, if the call is successful recovered data is written to <i>rout</i> and the amount of data written to <i>routlen</i>.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>Normally an application is only interested in whether a signature verification operation is successful in those cases the EVP_verify() function should be used.</p>
+
+<p>Sometimes however it is useful to obtain the data originally signed using a signing operation. Only certain public key algorithms can recover a signature in this way (for example RSA in PKCS padding mode).</p>
+
+<p>After the call to EVP_PKEY_verify_recover_init() algorithm specific control operations can be performed to set any appropriate parameters for the operation.</p>
+
+<p>After the call to EVP_PKEY_verify_recover_init_ex2(), algorithm specific control operations may not be needed if the chosen algorithm implies that those controls pre-set (and immutable).</p>
+
+<p>The function EVP_PKEY_verify_recover() can be called more than once on the same context if several operations are performed using the same parameters.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>EVP_PKEY_verify_recover_init() and EVP_PKEY_verify_recover() return 1 for success and 0 or a negative value for failure. In particular a return value of -2 indicates the operation is not supported by the public key algorithm.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>Recover digest originally signed using PKCS#1 and SHA256 digest:</p>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+#include &lt;openssl/rsa.h&gt;
+
+EVP_PKEY_CTX *ctx;
+unsigned char *rout, *sig;
+size_t routlen, siglen;
+EVP_PKEY *verify_key;
+
+/*
+ * NB: assumes verify_key, sig and siglen are already set up
+ * and that verify_key is an RSA public key
+ */
+ctx = EVP_PKEY_CTX_new(verify_key, NULL /* no engine */);
+if (!ctx)
+    /* Error occurred */
+if (EVP_PKEY_verify_recover_init(ctx) &lt;= 0)
+    /* Error */
+if (EVP_PKEY_CTX_set_rsa_padding(ctx, RSA_PKCS1_PADDING) &lt;= 0)
+    /* Error */
+if (EVP_PKEY_CTX_set_signature_md(ctx, EVP_sha256()) &lt;= 0)
+    /* Error */
+
+/* Determine buffer length */
+if (EVP_PKEY_verify_recover(ctx, NULL, &amp;routlen, sig, siglen) &lt;= 0)
+    /* Error */
+
+rout = OPENSSL_malloc(routlen);
+
+if (!rout)
+    /* malloc failure */
+
+if (EVP_PKEY_verify_recover(ctx, rout, &amp;routlen, sig, siglen) &lt;= 0)
+    /* Error */
+
+/* Recovered data is routlen bytes written to buffer rout */</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_PKEY_CTX_new.html">EVP_PKEY_CTX_new(3)</a>, <a href="../man3/EVP_PKEY_encrypt.html">EVP_PKEY_encrypt(3)</a>, <a href="../man3/EVP_PKEY_decrypt.html">EVP_PKEY_decrypt(3)</a>, <a href="../man3/EVP_PKEY_sign.html">EVP_PKEY_sign(3)</a>, <a href="../man3/EVP_PKEY_verify.html">EVP_PKEY_verify(3)</a>, <a href="../man3/EVP_PKEY_derive.html">EVP_PKEY_derive(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The EVP_PKEY_verify_recover_init() and EVP_PKEY_verify_recover() functions were added in OpenSSL 1.0.0.</p>
+
+<p>The EVP_PKEY_verify_recover_init_ex() function was added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2013-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

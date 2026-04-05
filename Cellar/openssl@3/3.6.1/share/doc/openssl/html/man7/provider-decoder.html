@@ -1,0 +1,293 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>provider-decoder</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Names-and-properties">Names and properties</a></li>
+      <li><a href="#Subset-selections">Subset selections</a></li>
+      <li><a href="#Context-functions">Context functions</a></li>
+      <li><a href="#Export-function">Export function</a></li>
+      <li><a href="#Decoding-functions">Decoding functions</a></li>
+      <li><a href="#Decoder-operation-parameters">Decoder operation parameters</a></li>
+    </ul>
+  </li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>provider-decoder - The OSSL_DECODER library &lt;-&gt; provider functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/core_dispatch.h&gt;
+
+/*
+ * None of these are actual functions, but are displayed like this for
+ * the function signatures for functions that are offered as function
+ * pointers in OSSL_DISPATCH arrays.
+ */
+
+/* Decoder parameter accessor and descriptor */
+const OSSL_PARAM *OSSL_FUNC_decoder_gettable_params(void *provctx);
+int OSSL_FUNC_decoder_get_params(OSSL_PARAM params[]);
+
+/* Functions to construct / destruct / manipulate the decoder context */
+void *OSSL_FUNC_decoder_newctx(void *provctx);
+void OSSL_FUNC_decoder_freectx(void *ctx);
+const OSSL_PARAM *OSSL_FUNC_decoder_settable_ctx_params(void *provctx);
+int OSSL_FUNC_decoder_set_ctx_params(void *ctx, const OSSL_PARAM params[]);
+
+/* Functions to check selection support */
+int OSSL_FUNC_decoder_does_selection(void *provctx, int selection);
+
+/* Functions to decode object data */
+int OSSL_FUNC_decoder_decode(void *ctx, OSSL_CORE_BIO *in,
+                             int selection,
+                             OSSL_CALLBACK *data_cb, void *data_cbarg,
+                             OSSL_PASSPHRASE_CALLBACK *cb, void *cbarg);
+
+/* Functions to export a decoded object */
+int OSSL_FUNC_decoder_export_object(void *ctx,
+                                      const void *objref, size_t objref_sz,
+                                      OSSL_CALLBACK *export_cb,
+                                      void *export_cbarg);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p><i>The term &quot;decode&quot; is used throughout this manual. This includes but is not limited to deserialization as individual decoders can also do decoding into intermediate data formats.</i></p>
+
+<p>The DECODER operation is a generic method to create a provider-native object reference or intermediate decoded data from an encoded form read from the given <b>OSSL_CORE_BIO</b>. If the caller wants to decode data from memory, it should provide a <a href="../man3/BIO_s_mem.html">BIO_s_mem(3)</a> <b>BIO</b>. The decoded data or object reference is passed along with eventual metadata to the <i>metadata_cb</i> as <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> parameters.</p>
+
+<p>The decoder doesn&#39;t need to know more about the <b>OSSL_CORE_BIO</b> pointer than being able to pass it to the appropriate BIO upcalls (see <a href="../man7/provider-base.html">&quot;Core functions&quot; in provider-base(7)</a>).</p>
+
+<p>The DECODER implementation may be part of a chain, where data is passed from one to the next. For example, there may be an implementation to decode an object from PEM to DER, and another one that decodes DER to a provider-native object.</p>
+
+<p>The last decoding step in the decoding chain is usually supposed to create a provider-native object referenced by an object reference. To import that object into a different provider the OSSL_FUNC_decoder_export_object() can be called as the final step of the decoding process.</p>
+
+<p>All &quot;functions&quot; mentioned here are passed as function pointers between <i>libcrypto</i> and the provider in <a href="../man3/OSSL_DISPATCH.html">OSSL_DISPATCH(3)</a> arrays via <a href="../man3/OSSL_ALGORITHM.html">OSSL_ALGORITHM(3)</a> arrays that are returned by the provider&#39;s provider_query_operation() function (see <a href="../man7/provider-base.html">&quot;Provider Functions&quot; in provider-base(7)</a>).</p>
+
+<p>All these &quot;functions&quot; have a corresponding function type definition named <b>OSSL_FUNC_{name}_fn</b>, and a helper function to retrieve the function pointer from an <a href="../man3/OSSL_DISPATCH.html">OSSL_DISPATCH(3)</a> element named <b>OSSL_FUNC_{name}</b>. For example, the &quot;function&quot; OSSL_FUNC_decoder_decode() has these:</p>
+
+<pre><code>typedef int
+    (OSSL_FUNC_decoder_decode_fn)(void *ctx, OSSL_CORE_BIO *in,
+                                  int selection,
+                                  OSSL_CALLBACK *data_cb, void *data_cbarg,
+                                  OSSL_PASSPHRASE_CALLBACK *cb, void *cbarg);
+static ossl_inline OSSL_FUNC_decoder_decode_fn*
+    OSSL_FUNC_decoder_decode(const OSSL_DISPATCH *opf);</code></pre>
+
+<p><a href="../man3/OSSL_DISPATCH.html">OSSL_DISPATCH(3)</a> arrays are indexed by numbers that are provided as macros in <a href="../man7/openssl-core_dispatch.h.html">openssl-core_dispatch.h(7)</a>, as follows:</p>
+
+<pre><code>OSSL_FUNC_decoder_get_params          OSSL_FUNC_DECODER_GET_PARAMS
+OSSL_FUNC_decoder_gettable_params     OSSL_FUNC_DECODER_GETTABLE_PARAMS
+
+OSSL_FUNC_decoder_newctx              OSSL_FUNC_DECODER_NEWCTX
+OSSL_FUNC_decoder_freectx             OSSL_FUNC_DECODER_FREECTX
+OSSL_FUNC_decoder_set_ctx_params      OSSL_FUNC_DECODER_SET_CTX_PARAMS
+OSSL_FUNC_decoder_settable_ctx_params OSSL_FUNC_DECODER_SETTABLE_CTX_PARAMS
+
+OSSL_FUNC_decoder_does_selection      OSSL_FUNC_DECODER_DOES_SELECTION
+
+OSSL_FUNC_decoder_decode              OSSL_FUNC_DECODER_DECODE
+
+OSSL_FUNC_decoder_export_object       OSSL_FUNC_DECODER_EXPORT_OBJECT</code></pre>
+
+<h2 id="Names-and-properties">Names and properties</h2>
+
+<p>The name of an implementation should match the target type of object it decodes. For example, an implementation that decodes an RSA key should be named &quot;RSA&quot;. Likewise, an implementation that decodes DER data from PEM input should be named &quot;DER&quot;.</p>
+
+<p>Properties, as defined in the <a href="../man3/OSSL_ALGORITHM.html">OSSL_ALGORITHM(3)</a> array element of each decoder implementation, can be used to further specify details about an implementation:</p>
+
+<dl>
+
+<dt id="input">input</dt>
+<dd>
+
+<p>This property is used to specify what format of input the implementation can decode.</p>
+
+<p>This property is <i>mandatory</i>.</p>
+
+<p>OpenSSL providers recognize the following input types:</p>
+
+<dl>
+
+<dt id="pem">pem</dt>
+<dd>
+
+<p>An implementation with that input type decodes PEM formatted data.</p>
+
+</dd>
+<dt id="der">der</dt>
+<dd>
+
+<p>An implementation with that input type decodes DER formatted data.</p>
+
+</dd>
+<dt id="msblob">msblob</dt>
+<dd>
+
+<p>An implementation with that input type decodes MSBLOB formatted data.</p>
+
+</dd>
+<dt id="pvk">pvk</dt>
+<dd>
+
+<p>An implementation with that input type decodes PVK formatted data.</p>
+
+</dd>
+</dl>
+
+</dd>
+<dt id="structure">structure</dt>
+<dd>
+
+<p>This property is used to specify the structure that the decoded data is expected to have.</p>
+
+<p>This property is <i>optional</i>.</p>
+
+<p>Structures currently recognised by built-in decoders:</p>
+
+<dl>
+
+<dt id="type-specific">&quot;type-specific&quot;</dt>
+<dd>
+
+<p>Type specific structure.</p>
+
+</dd>
+<dt id="pkcs8">&quot;pkcs8&quot;</dt>
+<dd>
+
+<p>Structure according to the PKCS#8 specification.</p>
+
+</dd>
+<dt id="SubjectPublicKeyInfo">&quot;SubjectPublicKeyInfo&quot;</dt>
+<dd>
+
+<p>Encoding of public keys according to the Subject Public Key Info of RFC 5280.</p>
+
+</dd>
+</dl>
+
+</dd>
+</dl>
+
+<p>The possible values of both these properties is open ended. A provider may very well specify input types and structures that libcrypto doesn&#39;t know anything about.</p>
+
+<h2 id="Subset-selections">Subset selections</h2>
+
+<p>Sometimes, an object has more than one subset of data that is interesting to treat separately or together. It&#39;s possible to specify what subsets are to be decoded, with a set of bits <i>selection</i> that are passed in an <b>int</b>.</p>
+
+<p>This set of bits depend entirely on what kind of provider-side object is to be decoded. For example, those bits are assumed to be the same as those used with <a href="../man7/provider-keymgmt.html">provider-keymgmt(7)</a> (see <a href="../man7/provider-keymgmt.html">&quot;Key Objects&quot; in provider-keymgmt(7)</a>) when the object is an asymmetric keypair - e.g., <b>OSSL_KEYMGMT_SELECT_PRIVATE_KEY</b> if the object to be decoded is supposed to contain private key components.</p>
+
+<p>OSSL_FUNC_decoder_does_selection() should tell if a particular implementation supports any of the combinations given by <i>selection</i>.</p>
+
+<h2 id="Context-functions">Context functions</h2>
+
+<p>OSSL_FUNC_decoder_newctx() returns a context to be used with the rest of the functions.</p>
+
+<p>OSSL_FUNC_decoder_freectx() frees the given <i>ctx</i> as created by OSSL_FUNC_decoder_newctx().</p>
+
+<p>OSSL_FUNC_decoder_set_ctx_params() sets context data according to parameters from <i>params</i> that it recognises. Unrecognised parameters should be ignored. Passing NULL for <i>params</i> should return true.</p>
+
+<p>OSSL_FUNC_decoder_settable_ctx_params() returns a constant <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> array describing the parameters that OSSL_FUNC_decoder_set_ctx_params() can handle.</p>
+
+<p>See <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> for further details on the parameters structure used by OSSL_FUNC_decoder_set_ctx_params() and OSSL_FUNC_decoder_settable_ctx_params().</p>
+
+<h2 id="Export-function">Export function</h2>
+
+<p>When a provider-native object is created by a decoder it would be unsuitable for direct use with a foreign provider. The export function allows for exporting the object into that foreign provider if the foreign provider supports the type of the object and provides an import function.</p>
+
+<p>OSSL_FUNC_decoder_export_object() should export the object of size <i>objref_sz</i> referenced by <i>objref</i> as an <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> array and pass that into the <i>export_cb</i> as well as the given <i>export_cbarg</i>.</p>
+
+<h2 id="Decoding-functions">Decoding functions</h2>
+
+<p>OSSL_FUNC_decoder_decode() should decode the data as read from the <b>OSSL_CORE_BIO</b> <i>in</i> to produce decoded data or an object to be passed as reference in an <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> array along with possible other metadata that was decoded from the input. This <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> array is then passed to the <i>data_cb</i> callback. The <i>selection</i> bits, if relevant, should determine what the input data should contain. The decoding functions also take an <a href="../man3/OSSL_PASSPHRASE_CALLBACK.html">OSSL_PASSPHRASE_CALLBACK(3)</a> function pointer along with a pointer to application data <i>cbarg</i>, which should be used when a pass phrase prompt is needed.</p>
+
+<p>It&#39;s important to understand that the return value from this function is interpreted as follows:</p>
+
+<dl>
+
+<dt id="True-1">True (1)</dt>
+<dd>
+
+<p>This means &quot;carry on the decoding process&quot;, and is meaningful even though this function couldn&#39;t decode the input into anything, because there may be another decoder implementation that can decode it into something.</p>
+
+<p>The <i>data_cb</i> callback should never be called when this function can&#39;t decode the input into anything.</p>
+
+</dd>
+<dt id="False-0">False (0)</dt>
+<dd>
+
+<p>This means &quot;stop the decoding process&quot;, and is meaningful when the input could be decoded into some sort of object that this function understands, but further treatment of that object results into errors that won&#39;t be possible for some other decoder implementation to get a different result.</p>
+
+</dd>
+</dl>
+
+<p>The conditions to stop the decoding process are at the discretion of the implementation.</p>
+
+<h2 id="Decoder-operation-parameters">Decoder operation parameters</h2>
+
+<p>There are currently no operation parameters currently recognised by the built-in decoders.</p>
+
+<p>Parameters currently recognised by the built-in pass phrase callback:</p>
+
+<dl>
+
+<dt id="info-OSSL_PASSPHRASE_PARAM_INFO-UTF8-string">&quot;info&quot; (<b>OSSL_PASSPHRASE_PARAM_INFO</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+<p>A string of information that will become part of the pass phrase prompt. This could be used to give the user information on what kind of object it&#39;s being prompted for.</p>
+
+</dd>
+</dl>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>OSSL_FUNC_decoder_newctx() returns a pointer to a context, or NULL on failure.</p>
+
+<p>OSSL_FUNC_decoder_set_ctx_params() returns 1, unless a recognised parameter was invalid or caused an error, for which 0 is returned.</p>
+
+<p>OSSL_FUNC_decoder_settable_ctx_params() returns a pointer to an array of constant <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> elements.</p>
+
+<p>OSSL_FUNC_decoder_does_selection() returns 1 if the decoder implementation supports any of the <i>selection</i> bits, otherwise 0.</p>
+
+<p>OSSL_FUNC_decoder_decode() returns 1 to signal that the decoding process should continue, or 0 to signal that it should stop.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/provider.html">provider(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The DECODER interface was introduced in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2019-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

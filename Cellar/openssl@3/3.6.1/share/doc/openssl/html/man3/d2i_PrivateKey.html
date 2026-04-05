@@ -1,0 +1,117 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>d2i_PrivateKey</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>d2i_PrivateKey_ex, d2i_PrivateKey, d2i_PublicKey, d2i_KeyParams, d2i_AutoPrivateKey_ex, d2i_AutoPrivateKey, i2d_PrivateKey, i2d_PKCS8PrivateKey, i2d_PublicKey, i2d_KeyParams, i2d_KeyParams_bio, d2i_PrivateKey_ex_bio, d2i_PrivateKey_bio, d2i_PrivateKey_ex_fp, d2i_PrivateKey_fp, d2i_KeyParams_bio, i2d_PrivateKey_bio, i2d_PrivateKey_fp - decode and encode functions for reading and saving EVP_PKEY structures</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+
+EVP_PKEY *d2i_PrivateKey_ex(int type, EVP_PKEY **a, const unsigned char **pp,
+                            long length, OSSL_LIB_CTX *libctx,
+                            const char *propq);
+EVP_PKEY *d2i_PrivateKey(int type, EVP_PKEY **a, const unsigned char **pp,
+                         long length);
+EVP_PKEY *d2i_PublicKey(int type, EVP_PKEY **a, const unsigned char **pp,
+                        long length);
+EVP_PKEY *d2i_KeyParams(int type, EVP_PKEY **a, const unsigned char **pp,
+                        long length);
+EVP_PKEY *d2i_AutoPrivateKey_ex(EVP_PKEY **a, const unsigned char **pp,
+                                long length, OSSL_LIB_CTX *libctx,
+                                const char *propq);
+EVP_PKEY *d2i_AutoPrivateKey(EVP_PKEY **a, const unsigned char **pp,
+                             long length);
+
+int i2d_PrivateKey(const EVP_PKEY *a, unsigned char **pp);
+int i2d_PKCS8PrivateKey(const EVP_PKEY *a, unsigned char **pp);
+int i2d_PublicKey(const EVP_PKEY *a, unsigned char **pp);
+int i2d_KeyParams(const EVP_PKEY *a, unsigned char **pp);
+int i2d_KeyParams_bio(BIO *bp, const EVP_PKEY *pkey);
+EVP_PKEY *d2i_KeyParams_bio(int type, EVP_PKEY **a, BIO *in);
+
+
+#include &lt;openssl/x509.h&gt;
+
+EVP_PKEY *d2i_PrivateKey_ex_bio(BIO *bp, EVP_PKEY **a, OSSL_LIB_CTX *libctx,
+                                const char *propq);
+EVP_PKEY *d2i_PrivateKey_bio(BIO *bp, EVP_PKEY **a);
+EVP_PKEY *d2i_PrivateKey_ex_fp(FILE *fp, EVP_PKEY **a, OSSL_LIB_CTX *libctx,
+                               const char *propq);
+EVP_PKEY *d2i_PrivateKey_fp(FILE *fp, EVP_PKEY **a);
+
+int i2d_PrivateKey_bio(BIO *bp, const EVP_PKEY *pkey);
+int i2d_PrivateKey_fp(FILE *fp, const EVP_PKEY *pkey);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>d2i_PrivateKey_ex() decodes a private key using algorithm <i>type</i>. It attempts to use any key-specific format or PKCS#8 unencrypted PrivateKeyInfo format. The <i>type</i> parameter should be a public key algorithm constant such as <b>EVP_PKEY_RSA</b>. An error occurs if the decoded key does not match <i>type</i>. Some private key decoding implementations may use cryptographic algorithms (for example to automatically derive the public key if it is not explicitly included in the encoding). In this case the supplied library context <i>libctx</i> and property query string <i>propq</i> are used. If successful and the <i>a</i> parameter is not NULL the function assigns the returned <b>EVP_PKEY</b> structure pointer to <i>*a</i>, overwriting any previous value.</p>
+
+<p>d2i_PrivateKey() does the same as d2i_PrivateKey_ex() except that the default library context and property query string are used. d2i_PublicKey() does the same for public keys. d2i_KeyParams() does the same for key parameters.</p>
+
+<p>The d2i_PrivateKey_ex_bio() and d2i_PrivateKey_bio() functions are similar to d2i_PrivateKey_ex() and d2i_PrivateKey() respectively except that they decode the data read from the given BIO. The d2i_PrivateKey_ex_fp() and d2i_PrivateKey_fp() functions are the same except that they read the data from the given FILE.</p>
+
+<p>d2i_AutoPrivateKey_ex() and d2i_AutoPrivateKey() are similar to d2i_PrivateKey_ex() and d2i_PrivateKey() respectively except that they attempt to automatically detect the private key format.</p>
+
+<p>i2d_PrivateKey() encodes <i>a</i>. It uses a key specific format or, if none is defined for that key type, PKCS#8 unencrypted PrivateKeyInfo format. i2d_PKCS8PrivateKey() does the same using only the PKCS#8 unencrypted PrivateKeyInfo format. i2d_PublicKey() does the same for public keys. i2d_KeyParams() does the same for key parameters. These functions are similar to the d2i_X509() functions; see <a href="../man3/d2i_X509.html">d2i_X509(3)</a>. i2d_PrivateKey_bio() and i2d_PrivateKey_fp() do the same thing except that they encode to a <b>BIO</b> or <b>FILE</b> respectively. Again, these work similarly to the functions described in <a href="../man3/d2i_X509.html">d2i_X509(3)</a>.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>All the functions that operate on data in memory update the data pointer <i>*pp</i> after a successful operation, just like the other d2i and i2d functions; see <a href="../man3/d2i_X509.html">d2i_X509(3)</a>.</p>
+
+<p>All these functions use DER format and unencrypted keys. Applications wishing to encrypt or decrypt private keys should use other functions such as d2i_PKCS8PrivateKey() instead.</p>
+
+<p>To decode a key with type <b>EVP_PKEY_EC</b>, d2i_PublicKey() requires <i>*a</i> to be a non-NULL EVP_PKEY structure assigned an EC_KEY structure referencing the proper EC_GROUP.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>The d2i_PrivateKey_ex(), d2i_PrivateKey(), d2i_AutoPrivateKey_ex(), d2i_AutoPrivateKey(), d2i_PrivateKey_ex_bio(), d2i_PrivateKey_bio(), d2i_PrivateKey_ex_fp(), d2i_PrivateKey_fp(), d2i_PublicKey(), d2i_KeyParams() and d2i_KeyParams_bio() functions return a valid <b>EVP_PKEY</b> structure or NULL if an error occurs. The error code can be obtained by calling <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>.</p>
+
+<p>i2d_PrivateKey(), i2d_PKCS8PrivateKey(), i2d_PublicKey() and i2d_KeyParams() return the number of bytes successfully encoded or a negative value if an error occurs. The error code can be obtained by calling <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>.</p>
+
+<p>i2d_PrivateKey_bio(), i2d_PrivateKey_fp() and i2d_KeyParams_bio() return 1 if successfully encoded or zero if an error occurs.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/crypto.html">crypto(7)</a>, <a href="../man3/d2i_PKCS8PrivateKey_bio.html">d2i_PKCS8PrivateKey_bio(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>d2i_PrivateKey_ex(), d2i_PrivateKey_ex_bio(), d2i_PrivateKey_ex_fp(), and d2i_AutoPrivateKey_ex() were added in OpenSSL 3.0.</p>
+
+<p>i2d_PKCS8PrivateKey() was added in OpenSSL 3.6.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2017-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,1308 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+        "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+ <head>
+  <meta name="generator" content="PSPad editor, www.pspad.com" />
+  <meta http-equiv="content-type" content="text/html; charset=UTF-8" />
+  <link rel="stylesheet" type="text/css" href="styles/lame.css" />
+  <title>Detailed command-line switches</title>
+ </head>
+ <body>
+<div id="menu">
+	<ul>
+		<li><a href="index.html">Index page</a></li>
+		<li><a href="about.html">About LAME</a></li>
+		<li><a href="introduction.html">Intro to encoding</a></li>
+		<li><a style="border: 0" href="usage.html">Usage of LAME</a>
+    <div id="submenu">
+    	<ul>
+    	  <li><a href="usage.html">Common switches</a></li>
+    		<li><a style="border: 0" href="detailed.html">Detailed Settings</a></li>
+    	</ul>
+    </div>
+    </li>
+		<li><a href="history.html">Version history</a></li>
+		<li><a href="contributors.html">Coders of LAME</a></li>
+		<li><a href="contact.html">Contact LAME</a></li>
+		<li><a style="border: 0" href="links.html">LAME links</a></li>
+	</ul>
+</div>
+<div id="container">
+<div id="content">
+
+<div align="center">
+	<img src="images/logo.gif" width="358" height="231" alt="LAME Official Logo" />
+	<h2 class="hilight">Detailed command line switches</h2>
+</div>
+
+<h3>Options ordered by feature</h3>
+<table class="settings" cellpadding="4">
+
+<tr><th style="width:20%">Setting</th><th>Brief description</th></tr>
+<tr><th colspan="2">Input options</th></tr>
+<tr><td colspan="2">By default, LAME accepts a PCM audio sample inside a .WAV
+container as the input file, in 8, 16, 24 and 32 bits integer and in IEEE FLOAT.
+If it is compiled with <a href="http://www.mega-nerd.com/libsndfile/">libsndfile</a>,
+then it also supports the extra formats that the library supports.<br/>
+There is also support for RAW PCM data and and piped input</td></tr>
+<tr><td>-</td><td>For piped/streamed Input, use "-" as the input and/or output
+ file name.</td></tr>
+<tr><td>--out-dir path</td><td>If no explicit output file is specified, a file will be written at given path. Ignored when using piped/streamed input</td></tr>
+<tr><td><a href="#mp1input">--mp1input</a><a href="#note1"><sup>1</sup></a></td><td>Input file is an MPEG
+ layer I file. Implicit if extension is .mp1</td></tr>
+<tr><td><a href="#mp2input">--mp2input</a><a href="#note1"><sup>1</sup></a></td><td>Input file is an MPEG
+ layer II file. Implicit if extension is .mp2</td></tr>
+<tr><td><a href="#mp3input">--mp3input</a><a href="#note1"><sup>1</sup></a></td><td>Input file is an MPEG
+ layer III file. Implicit if extension is .mp3</td></tr>
+<tr><td><a href="#scale">--scale</a> number</td><td>Scale input (multiply PCM data) by number.</td></tr>
+<tr><td><a href="#scale-l">--scale-l</a> number</td><td>Scale channel 0 (left) input (multiply PCM data
+) by number</td></tr>
+<tr><td><a href="#scale-r">--scale-r</a> number</td><td>Scale channel 1 (right) input (multiply PCM data)
+ by number</td></tr>
+<tr><td><a href="#gain">--gain</a> number</td><td>apply Gain adjustment in decibels, range -20.0 to +12.0.</td></tr>
+<tr><td>--swap-channel</td><td>Swap Left and Right channels</td></tr>
+<tr><td><a href="#nogap">--nogap</a> file1 file2 ...</td><td>Gapless encoding for a set of contiguous
+ files</td></tr>
+<tr><td><a href="#nogapout">--nogapout</a> dir</td><td>Output dir for gapless encoding (must precede
+ --nogap)</td></tr>
+<tr><td><a href="#nogaptags">--nogaptags</a></td><td>Allow the use of VBR tags in gapless encoding</td></tr>
+
+<tr><th colspan="2">Input options for RAW PCM</th></tr>
+<tr><td><a href="#r">-r</a></td><td>Assume input file is raw PCM.</td></tr>
+<tr><td><a href="#s">-s</a> number</td><td>Input sampling frequency in kHz (Default is 44.1Khz)</td></tr>
+<tr><td><a href="#signed">--signed</a> / <a href="#unsigned">--unsigned</a></td><td> Input is signed (default) or unsigned</td></tr>
+<tr><td><a href="#bitwidth">--bitwidth</a> w</td><td> Input bit width is w (default 16)</td></tr>
+<tr><td><a href="#x">-x</a></td><td> Force byte-swapping of input stream</td></tr>
+<tr><td><a href="#little-endian">--little-endian</a> / <a href="#big-endian">--big-endian</a></td><td> Input is little-endian (default)
+ or big-endian</td></tr>
+<tr><td><a href="#a">-a</a></td><td>Downmix from stereo to mono file for mono encoding. Needed with RAW input for the -mm mode to do the downmix.</td></tr>
+
+<tr><th colspan="2">Constant Bit Rate (CBR)</th></tr>
+<tr><td><a href="#b">-b</a>  number</td><td>Set the bitrate in kbps, default 128 kbps</td></tr>
+<tr><td><a href="#cbr">--cbr</a></td><td>Enforce use of constant bitrate</td></tr>
+<tr><td><a href="#comp">--comp</a> ratio</td><td>Choose bitrate to obtain the specified compression
+ ratio</td></tr>
+<tr><td><a href="#freeformat">--freeformat</a></td><td>Produce a free format bitstream instead of the 
+standard one. Supported bitrates between 8 and 640 kbps. Scarce support by
+decoders.</td></tr>
+
+<tr><th colspan="2">Variable Bit Rate (<a href="abr.html">ABR</a>)</th></tr>
+<tr><td><a href="#abr">--abr</a> number</td><td>Specify average bitrate desired (instead of quality)
+</td></tr>
+
+<tr><th colspan="2">Variable Bit Rate (<a href="vbr.html">VBR</a>)</th></tr>
+<tr><td><a href="#V">-V</a> number</td><td>Quality setting for VBR.  default number=4.<br/>
+                    Decimal values can be specified, like: 4.51<br/>
+                    0=highest quality, bigger files. 9.999=lowest quality,
+                     smaller files</td></tr>
+<tr><td><a href="#vbr-old">--vbr-old</a></td><td>Use old variable bitrate (VBR) routine</td></tr>
+<tr><td><a href="#b">-b</a>  number</td><td>Specify a minimum allowed bitrate. default 32 kbps (See -F setting below)</td></tr>
+<tr><td><a href="#B">-B</a>  number</td><td>Specify a maximum allowed bitrate. default 320 kbps</td></tr>
+<tr><td><a href="#F">-F</a></td><td>Enforce -b option for digital silence frames too, rather than encoding them at 8 or 32 kbps.</td></tr>
+<tr><td><a href="#t">-t</a></td><td>Disable VBR informational tag</td></tr>
+<tr><td><a href="#T">-T</a></td><td>Enable and force writing LAME Tag</td></tr>
+<tr><td><a href="#Y">-Y</a></td><td>Allows -V2, -V1 and -V0 to not to encode the highest frequencies accurately, if doing so causes disproportional increases in bitrate. This is the same that CBR and ABR modes do.</td></tr>
+
+<tr><th colspan="2">Operational options</th></tr>
+<tr><td><a href="#preset">--preset</a> type</td><td>Enables some preconfigured settings. Check below
+for each of the valid values</td></tr>
+<tr><td><a href="#priority">--priority</a> number</td><td>Sets the process priority:<br/>
+                         0,1 = Low priority <br/>
+                         2 = normal priority (default)<br/>
+                         3,4 = High priority </td></tr>
+<tr><td><a href="#flush">--flush</a></td><td>Flush output stream as soon as possible</td></tr>
+<tr><td><a href="#decode">--decode</a></td><td>Input=mp3 file, output=wav</td></tr>
+<tr><td><a href="#decode-mp3delay">--decode-mp3delay</a> samples</td><td>Set the encoder delay to use to decode 
+the input .mp3 file</td></tr>
+<tr><td><a href="#t_deco">-t</a></td><td>Disable writing wav header when using --decode</td></tr>
+<tr><td><a href="#noasm">--noasm</a> type</td><td>Disable assembly optimizations for mmx/3dnow/sse</td></tr>
+
+<tr><th colspan="2">Noise shaping &amp; psycho acoustic algorithms</th></tr>
+<tr><td><a href="#q">-q</a> number</td><td>number = 0...9.  Default  -q 3<br/>
+                    -q 0:  Highest quality, very slow<br/>
+                    -q 9:  Poor quality, but fast<br/>
+					Please, see notes in the detailed description</td></tr>
+<tr><td><a href="#m">-m</a> mode</td><td><b>j</b>oint, <b>s</b>imple, <b>f</b>orce, <b>d</b>ual-mono,
+ <b>m</b>ono, <b>l</b>eft, <b>r</b>ight. default is <b>j</b>.<br/>
+                    joint  = joins the best possible of MS and LR stereo<br/>
+                    simple = force LR stereo on all frames<br/>
+                    force  = force MS stereo on all frames.</td></tr>
+
+<tr><th colspan="2">Filter and resampling options:</th></tr>
+<tr><td><a href="#resample">--resample</a> sfreq</td><td>Sampling frequency of output file(kHz)- 
+default=automatic</td></tr>
+<tr><td><a href="#lowpass">--lowpass</a> number</td><td>Frequency(kHz), lowpass filter cutoff above freq.
+ Range [0.001..50]kHz or [50..50000]Hz</td></tr>
+<tr><td><a href="#lowpass">--lowpass</a>-width number</td><td>Frequency(kHz), lowpass window width. Range [0.001..16]kHz or
+ [16..50000]Hz - (See further restriction in the detailed explanation)</td></tr>
+<tr><td><a href="#highpass">--highpass</a> number</td><td>Frequency(kHz), highpass filter cutoff below freq.  Range [0.001..16]kHz or
+ [16..50000]Hz (See further restriction in the detailed explanation)</td></tr>
+<tr><td><a href="#highpass">--highpass</a>-width number</td><td>Frequency(kHz), highpass window width - (See further restriction in the detailed explanation)</td></tr>
+
+<tr><th colspan="2">ID3 tag Information</th></tr>
+<tr><td><a href="#tt">--tt</a> title</td><td>Audio/song title (max 30 chars for version 1 tag)</td></tr>
+<tr><td><a href="#ta">--ta</a> artist</td><td>Audio/song artist (max 30 chars for version 1 tag)</td></tr>
+<tr><td><a href="#tl">--tl</a> album</td><td>Audio/song album (max 30 chars for version 1 tag)</td></tr>
+<tr><td><a href="#ty">--ty</a> year</td><td>Audio/song year of issue (1 to 9999)</td></tr>
+<tr><td><a href="#tc">--tc</a> comment</td><td>User-defined text (max 30 chars for v1 tag, 28 for v1.1)</td></tr>
+<tr><td><a href="#tn">--tn</a> track[/total]</td><td>Audio/song track number and (optionally) the total
+                           number of tracks on the original recording.<br/> (track
+                           and total each 1 to 255. just the track number
+                           creates v1.1 tag, providing a total forces v2.0).</td></tr>
+<tr><td><a href="#tg">--tg</a> genre</td><td>Audio/song genre (name or number in list)</td></tr>
+<tr><td><a href="#ti">--ti</a> file</td><td>Audio/song albumArt (jpeg/png/gif file, 128KB max, v2.3)</td></tr>
+<tr><td><a href="#tv">--tv</a> id=value</td><td>Text or URL frame specified by id and value (v2.3 tag). User defined frame. Syntax: --tv "TXXX=description=content"</td></tr>
+<tr><td><a href="#add-id3v2">--add-id3v2</a></td><td>Force addition of version 2 tag</td></tr>
+<tr><td><a href="#id3v1-only">--id3v1-only</a></td><td>Add only a version 1 tag</td></tr>
+<tr><td><a href="#id3v2-only">--id3v2-only</a></td><td>Add only a version 2 tag</td></tr>
+<tr><td><a href="#id3v2-latin1">--id3v2-latin1</a></td><td>Add following options in ISO-8859-1 text encoding</td></tr>
+<tr><td><a href="#id3v2-utf16">--id3v2-utf16</a></td><td>Add following options in unicode text encoding</td></tr>
+<tr><td><a href="#space-id3v1">--space-id3v1</a></td><td>Pad version 1 tag with spaces instead of nulls</td></tr>
+<tr><td><a href="#pad-id3v2-size">--pad-id3v2-size</a> n</td><td>Adds ID3v2 tag with n padding bytes</td></tr>
+<tr><td><a href="#genre-list">--genre-list</a></td><td>Print alphabetically sorted ID3 genre list and exit</td></tr>
+<tr><td><a href="#ignore-tag-errors">--ignore-tag-errors</a></td><td>Ignore errors in values passed for tags</td></tr>
+<tr><td colspan="2">
+    Note: A version 2 tag will NOT be added unless one of the input fields
+    won't fit in a version 1 tag (e.g. the title string is longer than 30
+    characters), or the '--add-id3v2' or '--id3v2-only' options are used,
+    or output is redirected to stdout.</td></tr>
+
+<tr><th colspan="2">MP3 header/stream options:</th></tr>
+<tr><td><a href="#e">-e</a> mode</td><td>De-emphasis n/5/c  (obsolete)</td></tr>
+<tr><td><a href="#c">-c</a></td><td>Mark as copyright</td></tr>
+<tr><td><a href="#o">-o</a></td><td>Mark as non-original</td></tr>
+<tr><td><a href="#p">-p</a></td><td>Error detection.  adds 16 bit checksum to every frame
+                    (the checksum is computed correctly)</td></tr>
+<tr><td><a href="#strictly-enforce-ISO">--strictly-enforce-ISO</a></td><td>Comply as much as possible to ISO MPEG spec</td></tr>
+<tr><td><a href="#replaygain-fast">--replaygain-fast</a></td><td>Compute RG fast but slightly inaccurately (default)</td></tr>
+<tr><td><a href="#replaygain-accurate">--replaygain-accurate</a><a href="#note1"><sup>1</sup></a></td><td>Compute RG
+ more accurately and find the peak sample</td></tr>
+<tr><td><a href="#noreplaygain">--noreplaygain</a></td><td>Disable ReplayGain analysis</td></tr>
+<tr><td><a href="#clipdetect">--clipdetect</a><a href="#note1"><sup>1</sup></a></td><td>Enable
+ --replaygain-accurate and print a message whether
+ clipping occurs and how far the waveform is from full scale</td></tr>
+
+<tr><th colspan="2">Verbosity:</th></tr>
+<tr><td><a href="#disptime">--disptime</a> secs</td><td>Print progress report every secs seconds</td></tr>
+<tr><td><a href="#nohist">--nohist</a></td><td>Disable VBR histogram display</td></tr>
+<tr><td><a href="#silent">--silent</a> / <a href="#quiet">--quiet</a></td><td>Don't print anything on screen</td></tr>
+<tr><td><a href="#verbose">--verbose</a></td><td>Print a lot of useful information</td></tr>
+<tr><td><a href="#version">--version</a> / <a href="#license">--license</a></td><td>Print License information</td></tr>
+<tr><td><a href="#help">--help</a> / <a href="#usage">--usage</a></td><td>Shows the common list of switches. Add <i>id3</i> or <i>dev</i> to get help for a specified topic</td></tr>
+<tr><td><a href="#longhelp">--longhelp</a></td><td>Shows the complete list of switches</td></tr>
+
+<tr><th colspan="2">Experimental switches for developers. Only enabled in alpha/debug 
+versions. Can change from version to version</th></tr>
+<tr><td>--nores</td><td>Disables the bit reservour. Each frame will become independent from previous ones, but the quality will be lower.</td></tr>
+<tr><td>--buffer-constraint <i>x</i></td><td>available values for <i>x</i>: default, strict, maximum</td></tr>
+<tr><td>--noath</td><td>turns ATH down to a flat noise floor</td></tr>
+<tr><td>--athshort</td><td>ignore GPSYCHO for short blocks, use ATH only</td></tr>
+<tr><td>--athonly</td><td>ignore GPSYCHO completely, use ATH only</td></tr>
+<tr><td>--athtype x</td><td>selects between different ATH types [0-4]</td></tr>
+<tr><td>--athlower x</td><td>Lower the ATH by x.x dB's</td></tr>
+<tr><td>--athaa-type n</td><td>ATH auto adjust: 0 'no' else 'loudness based'</td></tr>
+<tr><td>--athaa-sensitivity x</td><td>activation offset in -/+ dB for ATH auto-adjustment</td></tr>
+<tr><td>--short</td><td>Allow the use of short blocs (default)</td></tr>
+<tr><td>--noshort</td><td>Disable use of short blocks</td></tr>
+<tr><td>--allshort</td><td>Use only short blocks</td></tr>
+<tr><td>--shortthreshold x[,y]</td><td>short block switching threshold, x for L/R/M channel, y for S channel</td></tr>
+<tr><td>--temporal-masking x</td><td>x=0 disables, x=1 enables temporal masking effect</td></tr>
+<tr><td>--notemp</td><td>Alias of --temporal-masking 0</td></tr>
+<tr><td>--nssafejoint</td><td>M/S switching criterion</td></tr>
+<tr><td>--nsmsfix x</td><td>M/S switching tuning [effective 0-3.5]</td></tr>
+<tr><td>--ns-bass x</td><td>Adjust masking for sfbs  0 -  6 (long)  0 -  5 (short)</td></tr>
+<tr><td>--ns-alto x</td><td>Adjust masking for sfbs  7 - 13 (long)  6 - 10 (short)</td></tr>
+<tr><td>--ns-treble x</td><td>Adjust masking for sfbs 14 - 21 (long) 11 - 12 (short)</td></tr>
+<tr><td>--ns-sfb21 x</td><td>Change ns-treble by x dB for sfb21</td></tr>
+<tr><td>-Z [n]</td><td>always do calculate short block maskings</td></tr>
+<tr><td>--substep</td><td>use pseudo substep noise shaping method types 0-2</td></tr>
+<tr><td>-X n[,m]</td><td>selects between different noise measurements n for long block, m for short. if m is omitted, m = n</td></tr>                    
+<tr><td>--vbr-new</td><td>In LAME 3.98, the new VBR was made default, and this switch may be used for experimental tweaks.</td></tr>
+
+
+<tr><th colspan="2">Aliases and removed settings</th></tr>
+<tr><td>-f</td><td>Alias of <a href="#q">-q 7</a>.</td></tr>
+<tr><td>-h</td><td>Alias of <a href="#q">-q 2</a>.</td></tr>
+<tr><td>-v</td><td>Alias of <a href="#V">-V 4</a></td></tr>
+<tr><td>-S</td><td>Alias of <a href="#silent">--silent</a></td></tr>
+<tr><td>--alt-preset</td><td>Alias of <a href="#preset">--preset</a></td></tr>
+<tr><td>--r3mix</td><td>Alias of <a href="#V">-V 3</a></td></tr>
+<tr><td>--vbr-mtrh</td><td>Alias of LAME 3.98 default vbr mode</td></tr>
+<tr><td>--pad-id3v2</td><td>Alias of <a href="#pad-id3v2-size">--pad-id3v2-size 128</a></td></tr>
+<tr><td>-d</td><td>No longer supported</td></tr>
+<tr><td>-k</td><td>No longer supported</td></tr>
+<tr><td>--cwlimit</td><td>No longer supported</td></tr>
+<tr><td>--ogginput</td><td>No longer supported. Compile with 
+<a href="http://www.mega-nerd.com/libsndfile/">libsndfile</a> instead</td></tr>
+<tr><td>--brief</td><td>Currently unused</td></tr>
+<tr><td>--interch x</td><td>Currently unused</td></tr>
+<tr><td style="border-bottom:0px;">--nspsytune</td><td style="border-bottom:0px;">Currently unused</td></tr>
+</table>
+
+<h3>Detailed description in alphabetical order</h3>
+
+<p class="settingtitle">
+<a name="a"><span class="hilight">-a</span></a> Downmix
+</p>
+<p>  
+mix the stereo input file to mono and encode as mono.<br/>  
+</p>
+<p>
+This option is only needed in the case of raw PCM stereo input 
+(because LAME cannot determine the number of channels in the input file).
+To encode a stereo PCM input file as mono, use "lame -m m -a"<br/>
+</p>
+<p>
+For WAV and AIFF input files, using "-m m" will always produce a
+mono .mp3 file from both mono and stereo input.
+</p>
+
+<p class="settingtitle">
+<a name="abr"><span class="hilight">--abr n</span></a> Average bitrate encoding (aka Safe VBR)
+</p>
+<p>
+turns on encoding with a targeted average bitrate of n kbps, allowing
+to use frames of different sizes.  The allowed range of n is 8...320 
+kbps, you can use any integer value within that range.
+</p>
+
+<p class="settingtitle">
+<a name="add-id3v2"><span class="hilight">--add-id3v2</span></a> Force addition of version 2 tag
+</p>
+<p>
+Tells LAME to add the tag information as id3v2. This implies adding both, a version 1
+and a version 2 tag, if the values fit on a version 1 tag. See --id3v1-only and
+--id3v2-only if you want a more fine-grained control.
+</p>
+
+<p class="settingtitle">
+<a name="b"><span class="hilight">-b n</span></a> Bitrate
+</p>
+<table cellpadding="5">
+<tr><th>Codec</th>
+<th>sample frequencies (kHz)</th>
+<th>bitrates (kbps)</th></tr>
+<tr><td>MPEG-1 layer III </td>  <td>32, 48, 44.1</td>
+<td>32 40 48 56 64 80 96 112 128 160 192 224 256 320</td></tr>
+<tr><td>MPEG-2 layer III</td><td> 16, 24, 22.05</td>
+<td> 8 16 24 32 40 48 56 64 80 96 112 128 144 160</td></tr>
+<tr><td style="border-bottom:0px;">MPEG-2.5 layer III</td>
+<td style="border-bottom:0px;"> 8, 12, 11.025</td>
+<td style="border-bottom:0px;">8 16 24 32 40 48 56 64</td></tr>
+</table>
+<p>
+The bitrate to be used. Default is 128kbps in MPEG1 (64 for mono),
+64kbps in MPEG2 (32 for mono) and 32kbps in MPEG2.5 (16 for mono).
+</p>
+<p>
+When used with variable bitrate encodings (VBR), -b specifies the
+minimum bitrate to use. This is useful only if you need to circumvent
+a buggy hardware device with strange bitrate constrains. (You will need the -F setting too for digital silence).<br/>
+Default for ABR/VBR is the minimum allowed bitrate for the MPEG version. (i.e. no limit)
+</p>
+
+<p class="settingtitle">
+<a name="B"><span class="hilight">-B  n</span></a> Max bitrate
+</p>
+<p>
+see also option "-b" for allowed bitrates.
+</p>
+<p>
+Maximum allowed bitrate when using VBR/ABR.
+</p>
+<p>
+Using -B is NOT RECOMMENDED.  A 128 kbps CBR bitstream, because of the
+bit reservoir, can actually have frames which use as many bits as a
+320 kbps frame.  ABR/VBR modes minimize the use of the bit reservoir, and
+thus need to allow 320 kbps frames to get the same flexibility as CBR
+streams.  This is useful only if you need to circumvent a buggy hardware
+device with strange bitrate constrains.<br/>
+Default value is the maximum allowed bitrate for the MPEG versio (i.e. no limit)
+</p>
+
+<p class="settingtitle">
+<a name="big-endian"><span class="hilight">--big-endian</span></a> Set the byte order to big-endian.
+</p>
+<p>
+This switch tells LAME that the RAW pcm input is encoded in big-endian instead
+of little-endian.
+</p>
+
+<p class="settingtitle">
+<a name="bitwidth"><span class="hilight">--bitwidth</span></a> Sets the bitwidth value
+</p>
+<p>
+With RAW pcm input, this switch lets specify the bitwidth of the same (8 bits,
+ 16 bits...)
+</p>
+
+<p class="settingtitle">
+<a name="c"><span class="hilight">-c</span></a> copyright flag   
+</p>
+<p>
+mark the encoded file as copyrighted
+</p>
+
+<p class="settingtitle">
+<a name="cbr"><span class="hilight">--cbr</span></a> Enforce constant bitrate encoding
+</p>
+<p>This switch disables the VBR encoding. Examples:</p>
+<pre>lame -V 0 --cbr input.wav</pre>
+Will encode at -b 128 (ignore completely -V and encode at default bitrate)
+<pre>lame --preset 160 --cbr</pre>
+Will encode at -b 160 (ignore ABR and use the specified bitrate)
+<pre>lame --abr 200 --cbr</pre>
+Will encode at -b 192 (ignore ABR and use the nearest bitrate to the one specified)
+
+<p class="settingtitle">
+<a name="clipdetect"><span class="hilight">--clipdetect</span></a> Clipping detection
+</p>
+<p>
+Enable --replaygain-accurate and print a message whether clipping 
+occurs and how far in dB the waveform is from full scale.
+</p>
+<p>
+This option is not usable if the MP3 decoder was <b>explicitly</b> disabled 
+in the build of LAME.
+</p>
+<p>
+See also: --replaygain-accurate
+</p>
+
+<p class="settingtitle">
+<a name="comp"><span class="hilight">--comp x</span></a> Indicate a compression ratio instead of a bitrate 
+</p>
+<p>
+Use this in place of the -b setting if you prefer to indicate a compression ratio (integer value).
+The ratio is the value of <sup>original-filesize</sup>/<sub>desired-filesize</sub>
+</p>
+
+<p class="settingtitle">
+<a name="decode"><span class="hilight">--decode</span></a> MP3 decode capability
+</p> 
+<p>
+This uses LAME's HIP<a href="#note2"><sup>2</sup></a> decoder to decode an MP3 (layers 1, 2 and 3) file to a wav file.
+</p>
+<p>
+If -t is used (disable wav header), LAME will output
+raw pcm in native endian format (use -x to swap bytes).
+</p>
+<p>
+This option is not usable if the MP3 decoder was <b>explicitly</b> disabled
+in the build of LAME.
+</p>
+
+<p class="settingtitle">
+<a name="decode-mp3delay"><span class="hilight">--decode-mp3delay x</span></a> Indicate a different encoder delay
+for decoding 
+</p>
+<p>
+When decoding an mp3 file, LAME automatically corrects for the start delay that
+the encoder had to put into it.<br/>
+This setting lets you specify a different delay than LAME's own one, so that it
+is possible to compensate for the delay of mp3's generated with other encoders.
+</p>
+
+<p class="settingtitle">
+<a name="disptime"><span class="hilight">--disptime secs</span></a> Update the display each secs
+</p>
+<p>
+Use this setting to change the frequency that LAME updates the display when
+encoding a file. Allows decimal values (like 0.5)
+</p>
+
+<p class="settingtitle">
+<a name="e"><span class="hilight">-e  n/5/c</span></a> Write the de-emphasis flag
+</p>
+<p>
+  n = (none, default)<br/>
+  5 = 50/15 microseconds<br/>
+  c = ccitt j.17<br/>
+</p>
+<p>
+All this does is set a flag in the bitstream.  If you have a PCM
+input file where one of the above types of (obsolete) emphasis has
+been applied, you can set this flag in LAME.  Then the mp3 decoder
+should de-emphasize the output during playback, although most 
+decoders ignore this flag.
+</p>
+<p>
+A better solution would be to apply the de-emphasis with a standalone
+utility before encoding, and then encode without -e.  
+</p>
+
+<p class="settingtitle">
+<a name="F"><span class="hilight">-F</span></a> Enforce the minimum bitrate
+</p>
+<p>
+Enforces the minimum bitrate. Without this option, passages of analog
+silence will be encoded at the minimum bitrate possible (32 or 8, depending on
+MPEG version).
+</p>
+
+<p class="settingtitle">
+<a name="flush"><span class="hilight">--flush</span></a> Flush the output stream as soon as possible
+</p>
+<p>
+This setting forces a flush of the data written as soon as the operation has
+finished. This is mostly useful in case of streams. With files, it may degrade
+performance, since the OS has to write to disk in smaller chunks. 
+</p>
+
+<p class="settingtitle">
+<a name="freeformat"><span class="hilight">--freeformat</span></a> Encode to freeformat stream
+</p>
+<p>
+LAME will produce a fixed bitrate, free format bitstream.
+User must specify the desired bitrate in kbps, which can
+be any integer between 8 and 640.
+</p>
+<p>
+Not supported by most decoders.  Compliant decoders (of which there
+are few) are only required to support up to 320 kbps.  
+</p>
+<p>
+Decoders knwon to handle free format:
+</p>
+<table cellpadding="4">
+<tr><th></th><th>Supports up to</th></tr>
+<tr><td>MAD</td><td>640 kbps</td></tr>
+<tr><td>"lame --decode"</td><td>640 kbps</td></tr>
+<tr><td style="border-bottom:0px;">l3dec</td><td style="border-bottom:0px;">310 kbps</td></tr>
+</table>
+
+<p class="settingtitle">
+<a name="gain"><span class="hilight">--gain</span></a> Apply gain in decibels.
+</p>
+<p>
+Apply Gain adjustment in decibels, range -20.0 to +12.0. 0dBFS means no amplification.
+</p>
+
+<p class="settingtitle">
+<a name="genre-list"><span class="hilight">--genre-list</span></a> Print alphabetical ordered list of
+known genres
+</p>
+<p>
+Tell LAME to print the list of genres with their index to be used with the --tg
+ setting.
+</p>
+<table cellpadding="4">
+<tr><td style="border-bottom-width:0px;">123 Acappella<br />
+ 34 Acid<br />
+ 74 Acid Jazz<br />
+ 73 Acid Punk<br />
+ 99 Acoustic<br />
+ 20 Alternative<br />
+ 40 Alternative Rock<br />
+ 26 Ambient<br />
+145 Anime<br />
+ 90 Avantgarde<br />
+116 Ballad<br />
+ 41 Bass<br />
+135 Beat<br />
+ 85 Bebob<br />
+ 96 Big Band<br />
+138 Black Metal<br />
+ 89 Bluegrass<br />
+  0 Blues<br />
+107 Booty Bass<br />
+132 BritPop<br />
+ 65 Cabaret<br />
+ 88 Celtic<br />
+104 Chamber Music<br />
+102 Chanson<br />
+ 97 Chorus<br />
+136 Christian Gangsta<br />
+ 61 Christian Rap<br />
+141 Christian Rock<br />
+ 32 Classical<br />
+  1 Classic Rock<br />
+112 Club<br />
+128 Club-House<br />
+ 57 Comedy<br />
+140 Contemporary Christian<br />
+  2 Country<br />
+139 Crossover<br />
+ 58 Cult</td><td style="border-bottom-width:0px;">
+  3 Dance<br />
+125 Dance Hall<br />
+ 50 Darkwave<br />
+ 22 Death Metal<br />
+  4 Disco<br />
+ 55 Dream<br />
+127 Drum &amp; Bass<br />
+122 Drum Solo<br />
+120 Duet<br />
+ 98 Easy Listening<br />
+ 52 Electronic<br />
+ 48 Ethnic<br />
+ 54 Eurodance<br />
+124 Euro-House<br />
+ 25 Euro-Techno<br />
+ 84 Fast Fusion<br />
+ 80 Folk<br />
+115 Folklore<br />
+ 81 Folk-Rock<br />
+119 Freestyle<br />
+  5 Funk<br />
+ 30 Fusion<br />
+ 36 Game<br />
+ 59 Gangsta<br />
+126 Goa<br />
+ 38 Gospel<br />
+ 49 Gothic<br />
+ 91 Gothic Rock<br />
+  6 Grunge<br />
+129 Hardcore<br />
+ 79 Hard Rock<br />
+137 Heavy Metal<br />
+  7 Hip-Hop<br />
+ 35 House<br />
+100 Humour<br />
+131 Indie</td><td style="border-bottom-width:0px;">
+ 19 Industrial<br />
+ 33 Instrumental<br />
+ 46 Instrumental Pop<br />
+ 47 Instrumental Rock<br />
+  8 Jazz<br />
+ 29 Jazz+Funk<br />
+146 JPop<br />
+ 63 Jungle<br />
+ 86 Latin<br />
+ 71 Lo-Fi<br />
+ 45 Meditative<br />
+142 Merengue<br />
+  9 Metal<br />
+ 77 Musical<br />
+ 82 National Folk<br />
+ 64 Native US<br />
+133 Negerpunk<br />
+ 10 New Age<br />
+ 66 New Wave<br />
+ 39 Noise<br />
+ 11 Oldies<br />
+103 Opera<br />
+ 12 Other<br />
+ 75 Polka<br />
+134 Polsk Punk<br />
+ 13 Pop<br />
+ 53 Pop-Folk<br />
+ 62 Pop/Funk<br />
+109 Porn Groove<br />
+117 Power Ballad<br />
+ 23 Pranks<br />
+108 Primus<br />
+ 92 Progressive Rock<br />
+ 67 Psychedelic<br />
+ 93 Psychedelic Rock<br />
+ 43 Punk<br />
+121 Punk Rock</td><td style="border-bottom-width:0px;">
+ 15 Rap<br />
+ 68 Rave<br />
+ 14 R&amp;B<br />
+ 16 Reggae<br />
+ 76 Retro<br />
+ 87 Revival<br />
+118 Rhythmic Soul<br />
+ 17 Rock<br />
+ 78 Rock &amp; Roll<br />
+143 Salsa<br />
+114 Samba<br />
+110 Satire<br />
+ 69 Showtunes<br />
+ 21 Ska<br />
+111 Slow Jam<br />
+ 95 Slow Rock<br />
+105 Sonata<br />
+ 42 Soul<br />
+ 37 Sound Clip<br />
+ 24 Soundtrack<br />
+ 56 Southern Rock<br />
+ 44 Space<br />
+101 Speech<br />
+ 83 Swing<br />
+ 94 Symphonic Rock<br />
+106 Symphony<br />
+147 SynthPop<br />
+113 Tango<br />
+ 18 Techno<br />
+ 51 Techno-Industrial<br />
+130 Terror<br />
+144 Thrash Metal<br />
+ 60 Top 40<br />
+ 70 Trailer<br />
+ 31 Trance<br />
+ 72 Tribal<br />
+ 27 Trip-Hop<br />
+ 28 Vocal</td></tr>
+</table>
+
+<p class="settingtitle">
+<a name="help"><span class="hilight">--help</span></a> Print the command line help.
+</p>
+<p>
+Print the short command line help and exit.
+</p>
+
+<p class="settingtitle">
+<a name="highpass"><span class="hilight">--highpass number</span></a> Use a highpass filter when encoding
+</p>
+<p>
+Enables a highpass filter of the specified frequency when encoding the source.
+Range [0.001..50]kHz or [50..50000]Hz.<br/>
+This is usually not required, and the gains are usually minimal. May be useful to
+remove an interference signal on 50Hz or 60Hz, or a DC offset. (default: disabled)<br/>
+Note: The current implementation has a minimum highpass frequency of (67.5/62)% of the sample rate
+(I.e. 481Hz at 44Khz).
+</p>
+
+<p class="settingtitle">
+<a name="highpass-width"><span class="hilight">--highpass-width width</span></a> Set the width of the decaying curve.
+</p>
+<p>
+Specify the width in Hz of the decaying curve of the highpass. Range [16..50000]Hz<br/>
+The minimum (and default) width is 75% of a band's width (which is 1/64th of the sample rate).<br/>
+Note: See the remark in the --highpass command above.
+</p>
+
+<p class="settingtitle">
+<a name="id3v1-only"><span class="hilight">--id3v1-only</span></a> Disable the use of id3v2.
+</p>
+<p>
+Put it before any tag setting.<br/>
+This setting tells LAME to use ID3 v1 tag only, and not create an ID3v2 even if
+it thinks it should.
+</p>
+
+<p class="settingtitle">
+<a name="id3v2-only"><span class="hilight">--id3v2-only</span></a> Disable the user ov id3v1.
+</p>
+<p>
+Put it before any tag setting.<br/>
+This setting tells LAME to use ID3 v2 tag only. An ID3 v1 tag would not be written.
+</p>
+
+<p class="settingtitle">
+<a name="ignore-tag-errors"><span class="hilight">--ignore-tag-errors</span></a> Ignore tag information errors
+</p>
+<p>
+Put it before any tag setting.<br/>
+This tells lame to ignore the tag information that sees as erroneous and continue
+encoding without those. Without this setting, errors are reported and encoding
+does not start.
+</p>
+
+<p class="settingtitle">
+<a name="license"><span class="hilight">--license</span></a> Print the license page
+</p>
+<p>
+Prints version and license information about LAME encoder.
+</p>
+
+<p class="settingtitle">
+<a name="little-endian"><span class="hilight">--little-endian</span></a> Set the byte order to little-endian.
+</p>
+<p>
+This switch tells LAME that the RAW pcm input is encoded in little-endian. It is
+the default setting.
+</p>
+
+<p class="settingtitle">
+<a name="longhelp"><span class="hilight">--longhelp</span></a> Shows the detailed help 
+</p>
+<p>
+Prints a help page with all of the command-line switches and a brief explanation
+of them.
+</p>
+
+<p class="settingtitle">
+<a name="lowpass"><span class="hilight">--lowpass number</span></a> Use a lowpass filter when encoding
+</p>
+<p>
+Enables a lowpass filter of the specified frequency when encoding the source.
+Range [0.001..50]kHz or [50..50000]Hz<br />
+</p>
+<p>
+Using a lowpass filter helps reducing the amount of data to encode. This is
+important in MP3 due to a limitation in very high frequencies (>16Khz). The
+default value depends on the target bitrate/quality. It is not recommended to
+change it as a general basis.
+</p>
+
+<p class="settingtitle">
+<a name="lowpass-width"><span class="hilight">--lowpass-width width</span></a> Set the width of the decaying curve.
+</p>
+<p>
+Specify the width in Hz of the decaying curve of the lowpass. Range [0.001..16]kHz or [16..50000]Hz <br/>
+The lowpass is in the center of this curve. 
+The minimum (and default) width is 75% of a band's width (which is 1/64th of the sample rate).
+ 
+</p>
+
+<p class="settingtitle">
+<a name="m"><span class="hilight">-m x</span></a> Channel modes
+</p>
+<table cellpadding="4">
+<tr><td width="35px">-m m</td><td>mono</td></tr>
+<tr><td>-m l</td><td>get only the left channel of a stereo signal for a mono output</td></tr>
+<tr><td>-m r</td><td>get only the right channel of a stereo signal for a mono output</td></tr>
+<tr><td>-m s</td><td>forced L/R stereo</td></tr>
+<tr><td>-m j /<br/>-m a</td><td>automatic switch between L/R and M/S stereo</td></tr>
+<tr><td>-m f</td><td>forced mid/side stereo</td></tr>
+<tr><td style="border-bottom:0px;">-m d</td><td style="border-bottom:0px;">dual (independent) channels.</td></tr>
+</table>
+<p>
+MONO is the default mode for mono input files.  If "-m m" is specified
+for a stereo input file, the two channels will be averaged into a mono
+signal.  (Note: See comments about the -a switch for RAW PCM streams)
+</p>
+<p>
+FORCED L/R STEREO encodes the left and the right signals independently, and
+gives more or less bits to each, depending on the currently available. 
+</p>
+<p>
+JOINT STEREO is the default mode of encoding. jstereo means the encoder can use
+(on a frame by frame basis) either L/R stereo or mid/side stereo.
+In mid/side stereo, the mid (L+R) and side (L-R)
+channels are encoded, and more bits are allocated to the mid channel
+than the side channel. When there isn't too much stereo separation, this effectively
+increases the bandwidth, so having higher quality with the same amount of bits.<br/>
+Using mid/side stereo inappropriately can result in audible
+compression artifacts.  Too much switching between mid/side and regular
+stereo can also sound bad.  To determine when to switch to mid/side
+stereo, LAME uses a much more sophisticated algorithm than the one
+described in the ISO documentation.
+</p>
+<p>
+FORCED MID/SIDE STEREO forces all frames to be encoded with mid/side stereo. It 
+should only be used if you are sure every frame of the input file
+has very little stereo seperation.
+</p>
+<p>
+DUAL CHANNEL mode is similar to encode the left and right as two mono signals.
+Its purpose was meant for Dual language streams where only one of them should be decoded.
+Most decoders just decode them as a stereo stream
+</p>
+
+<p class="settingtitle">
+<a name="mp1input"><span class="hilight">--mp1input</span></a>
+ <a name="mp2input"><span class="hilight">--mp2input</span></a>
+ <a name="mp3input"><span class="hilight">--mp3input</span></a> MPEG layer I, II or III input file
+</p>
+<p>
+Assume the input file is an MP1/2/3 file.  LAME will decode the input file
+before re-encoding it.  Since MP3 is a lossy format, this is 
+not recommended in general.  But it is useful for creating low bitrate
+mp3s from high bitrate mp3s.  If the filename ends in ".mp3" LAME will assume
+it is an MP3.  For stdin or MP3 files which don't end in .mp3 you need
+to use this switch.
+</p>
+
+<p class="settingtitle">
+<a name="noasm"><span class="hilight">--noasm value</span></a> Disables the specified assembler 
+instructions
+</p>
+<p>
+When the encoder is compiled with assembler optimizations, this setting allows
+to disable them at runtime (They are only enabled if the CPU supports them).
+The purpose of this setting is to detect problems in those optimizations, and/or
+check the speed difference.
+</p>
+
+<p class="settingtitle">
+<a name="nogap"><span class="hilight">--nogap file1 file2 [...]</span></a> Encodes multiple continuous
+files.
+</p>
+<p>
+Encodes multiple files (ordered by position) which are meant to be played 
+gaplessly.
+</p>
+<p>
+By default, LAME will encode the files with accurate length, but the first and
+last frame may contain a few erroneous samples for signals that don't fade-in/out
+(as is the case of continuous playback).
+</p>
+<p>
+This setting solves that by using the samples from the next/previous file to 
+compute the encoding.
+</p>
+
+<p class="settingtitle">
+<a name="nogapout"><span class="hilight">--nogapout dir</span></a> Specify a directory for the output
+of the files encoded with --nogap
+</p>
+<p>
+This setting should precede --nogap, and is used to specify the alternate 
+directory where to store the encoded files. The default one is the input file
+directory.
+</p>
+
+<p class="settingtitle">
+<a name="nogaptags"><span class="hilight">--nogaptags</span></a> Enables the use of VBR tags with files
+encoded with --nogap
+</p>
+<p>
+Tells LAME to put VBR tags to encoded files if they are encoded in VBR or ABR
+modes. Else, using the --nogap option doesn't generate it.
+</p>
+
+<p class="settingtitle">
+<a name="nohist"><span class="hilight">--nohist</span></a> Disable bitrate Histogram
+</p>
+<p>
+By default, LAME will display a bitrate histogram while producing
+VBR mp3 files.  This will disable that feature.
+</p>
+
+<p class="settingtitle">
+<a name="noreplaygain"><span class="hilight">--noreplaygain</span></a> Disable ReplayGain analysis
+</p>
+<p>
+By default ReplayGain analysis is enabled. This switch disables it.
+</p>
+<p>
+See also: --replaygain-accurate, --replaygain-fast
+</p>
+
+<p class="settingtitle">
+<a name="o"><span class="hilight">-o</span></a> non-original   
+</p>
+<p>
+Mark the encoded file as a copy
+</p>
+
+<p class="settingtitle">
+<a name="p"><span class="hilight">-p</span></a> CRC error detection  
+</p>
+<p>
+Turn on CRC error protection.
+It will add a cyclic redundancy check (CRC) code in each frame, allowing to 
+detect transmission errors that could occur on the MP3 stream. However, it 
+takes 16 bits per frame that would otherwise be used for encoding, and then
+will slightly reduce the sound quality.
+</p>
+
+<p class="settingtitle">
+<a name="pad-id3v2"><span class="hilight">--pad-id3v2</span></a> Pad ID3v2 tag.  
+</p>
+<p>
+Pads the ID3v2 tag with extra 128bytes to allow it to expand. 
+</p>
+
+<p class="settingtitle">
+<a name="preset"><span class="hilight">--preset x</span></a> Enable one of the presets
+</p>
+<table cellpadding="4">
+<tr><th>Setting</th><th>Meaning</th></tr>
+<tr><td>--preset medium</td><td>-V 5 --vbr-old</td></tr>
+<tr><td>--preset standard</td><td>-V 2 --vbr-old</td></tr>
+<tr><td>--preset extreme</td><td>-V 0 --vbr-old</td></tr>
+<tr><td>--preset insane</td><td>-b 320 --vbr-old</td></tr>
+<tr><td>--preset fast xxx</td><td>In versions older than LAME 3.98, "fast" was needed to enable the vbr-new routine. It is no longer needed.</td></tr>
+<tr><td colspan="2">&nbsp;</td></tr>
+<tr><td>--preset number</td><td>--abr number</td></tr>
+<tr><td>--preset cbr number</td><td>-b number</td></tr>
+<tr><th colspan="2">Old compatibility settings. Meaningless</th></tr>
+<tr><td>--preset phone</td><td>-b 16 -m m</td></tr>
+<tr><td>--preset phon+ / lw / mw-eu</td><td>-b 24 -m m</td></tr>
+<tr><td>--preset mw-us</td><td>-b 40 -m m</td></tr>
+<tr><td>--preset voice</td><td>-b 56 -m m</td></tr>
+<tr><td>--preset fm / radio</td><td>-b 112</td></tr>
+<tr><td>--preset hifi</td><td>-b 160</td></tr>
+<tr><td>--preset cd</td><td>-b 192</td></tr>
+<tr><td style="border-bottom:0px;">--preset studio</td><td style="border-bottom:0px;">-b 256</td></tr>
+</table>
+
+<p class="settingtitle">
+<a name="priority"><span class="hilight">--priority value</span></a> Set process priority
+</p>
+<p>
+(Windows and OS/2 only)
+</p>
+<p>
+Sets the process priority for LAME while running under Windows and/or IBM OS/2.
+This can be very useful to avoid the system becoming slow and/or
+unresponsive. By setting LAME to run in a lower priority, you leave
+more time for the system to update basic processing (drawing windows,
+polling keyboard/mouse, etc). The impact in LAME's performance is 
+minimal if you use priority 0 to 2.
+</p>
+<p>
+The valid parameters are:
+</p>
+<table cellpadding="4">
+<thead>
+<tr><th></th><th>Priority</th><th>Windows</th><th>OS/2</th></tr>
+</thead>
+<tbody>
+<tr><td>0</td><td>Low priority </td><td>IDLE_PRIORITY_CLASS</td><td>IDLE, delta = 0</td></tr>
+<tr><td>1</td><td>Medium priority </td><td>IDLE_PRIORITY_CLASS</td><td>IDLE, delta = +31</td></tr>
+<tr><td>2</td><td>Regular priority </td><td>NORMAL_PRIORITY_CLASS</td><td>REGULAR, delta = -31</td></tr>
+<tr><td>3</td><td>High priority </td><td>HIGH_PRIORITY_CLASS</td><td>REGULAR, delta = 0</td></tr>
+<tr><td style="border-bottom:0px;">4</td><td style="border-bottom:0px;">Maximum priority </td><td style="border-bottom:0px;">HIGH_PRIORITY_CLASS</td><td style="border-bottom:0px;">REGULAR, delta = +31</td></tr>
+</tbody>
+</table>
+<p>
+Note that if you call '--priority' without a parameter, then 
+priority 0 will be assumed.
+</p>
+
+<p class="settingtitle">
+<a name="q"><span class="hilight">-q n</span></a> Algorithm quality selection
+</p>  
+<p>
+Bitrate is of course the main influence on quality.  The higher the bitrate,
+the higher the quality.  But for a given bitrate, we have a choice of algorithms
+to determine the best scalefactors and Huffman coding (noise shaping).
+</p>
+<p>
+For CBR, ABR and --vbr-old modes, the following table applies
+</p>
+<table cellpadding="4">
+<tr><td>-q 0</td><td>Use the best algorithms (Best Huffman coding search, full outer loop, and the highest precision of several parameters).</td></tr>
+<tr><td>-q 1 to -q 4</td><td>Similar to -q 0 without the full outer loop and with decreasing precision of parameters the further from -q 0. -q 3 is the default</td></tr>
+<tr><td>-q 5 and -q 6</td><td>Same as -q 7, but enables noise shaping and increases subblock gain</td></tr>
+<tr><td style="border-bottom:0px;">-q 7 to -q 9</td><td style="border-bottom:0px;">Same as -f. Very fast, OK quality. Psychoacoustics are used for pre-echo and mid/side stereo, but no noise-shaping is done.</td></tr>
+</table>
+<p>
+For the default VBR mode since LAME 3.98, the following table applies
+</p>
+<table cellpadding="4">
+<tr><td>-q 0 to -q 4</td><td>include all features of the other modes and additionally use the best search when applying Huffman coding.</td></tr>
+<tr><td>-q 5 and -q 6</td><td> include all features of -q7, calculate and consider actual quantisation noise, and additionally enable subblock gain.</td></tr>
+<tr><td style="border-bottom:0px;">-q 7 to -q 9</td><td style="border-bottom:0px;">This level uses a psymodel but does not calculate quantisation noise when encoding: it takes a quick guess.</td></tr>
+</table>
+<p class="settingtitle">
+<a name="quiet"><span class="hilight">--quiet</span></a> Don't print any output in the screen  
+</p>
+<p>
+Disables the screen output. Useful for job processing or other times where
+screen output is undesirable.
+</p>
+
+<p class="settingtitle">
+<a name="r"><span class="hilight">-r</span></a> Input file is raw pcm  
+</p>
+<p>
+Assume the input file is raw pcm.  Sampling rate and mono/stereo
+must be specified on the command line.  Without -r, LAME will perform
+several fseek()'s on the input file looking for WAV and AIFF headers.
+</p>
+<p>
+Not supported if LAME is compiled to use LIBSNDFILE.
+</p>
+
+<p class="settingtitle">
+<a name="replaygain-accurate"><span class="hilight">--replaygain-accurate</span></a> Slightly more accurate
+ ReplayGain analysis and finding the peak sample
+</p>
+<p>
+Compute "Radio" ReplayGain on the decoded data stream. Find the peak sample
+by decoding on the fly the encoded data stream and store it in the file.
+</p>
+<p>
+ReplayGain analysis does _not_ affect the content of a compressed data
+stream itself, it is a value stored in the header of a sound file. 
+Information on the purpose of ReplayGain and the algorithms used is 
+available from http://www.replaygain.org/
+</p>
+<p>
+By default, LAME performs ReplayGain analysis on the input data (after
+the user-specified volume scaling). This behaviour might give slightly 
+inaccurate results because the data on the output of a lossy 
+compression/decompression sequence differs from the initial input data. 
+When --replaygain-accurate is specified the mp3 stream gets decoded on
+the fly and the analysis is performed on the decoded data stream. 
+Although theoretically this method gives more accurate results, it has
+several disadvantages:
+</p>
+<ul>
+<li>tests have shown that the difference between the ReplayGain values 
+    computed on the input data and decoded data is usually no greater 
+    than 0.5dB, although the minimum volume difference the human ear 
+    can perceive is about 1.0dB
+</li>
+<li>decoding on the fly significantly slows down the encoding process</li>
+</ul>
+The apparent advantage is that:
+<ul>
+  <li> with --replaygain-accurate the peak sample is determined and 
+    stored in the file. The knowledge of the peak sample can be useful
+    to decoders (players) to prevent a negative effect called 'clipping'
+    that introduces distortion into sound.
+  </li>
+</ul>
+<p>    
+Only the "Radio" ReplayGain value is computed. It is stored in the LAME tag. 
+The analysis is performed with the reference volume equal to 89dB. 
+Note: the reference volume has been changed from 83dB on transition
+from version 3.95 to 3.95.1.
+</p>
+<p>
+This option is not usable if the MP3 decoder was _explicitly_ disabled 
+in the build of LAME. (Note: if LAME is compiled without the MP3 decoder, 
+ReplayGain analysis is performed on the input data after user-specified 
+volume scaling).
+</p>
+<p>
+See also: --replaygain-fast, --noreplaygain, --clipdetect
+</p>
+
+<p class="settingtitle">
+<a name="replaygain-fast"><span class="hilight">--replaygain-fast</span></a> Fast ReplayGain analysis
+</p>
+<p>
+Compute "Radio" ReplayGain of the input data stream after user-specified
+volume scaling and/or resampling.
+</p>
+<p>
+ReplayGain analysis does _not_ affect the content of a compressed data
+stream itself, it is a value stored in the header of a sound file. 
+Information on the purpose of ReplayGain and the algorithms used is 
+available from http://www.replaygain.org/
+</p>
+<p>
+Only the "Radio" ReplayGain value is computed. It is stored in the LAME tag. 
+The analysis is performed with the reference volume equal to 89dB. 
+Note: the reference volume has been changed from 83dB on transition
+from version 3.95 to 3.95.1.
+</p>
+<p>
+This switch is enabled by default.
+</p>
+<p>
+See also: --replaygain-accurate, --noreplaygain
+</p>
+
+<p class="settingtitle">
+<a name="resample"><span class="hilight">--resample  n</span></a> Output sampling frequency in kHz
+</p>
+<p>
+where n = 8, 11.025, 12, 16, 22.05, 24, 32, 44.1, 48
+</p>
+<p>
+Output sampling frequency.  Resample the input if necessary.  
+</p>
+<p>
+If not specified, LAME may sometimes resample automatically 
+when faced with extreme compression conditions (like encoding
+a 44.1 kHz input file at 32 kbps).  To disable this automatic
+resampling, you have to use --resample to set the output sample rate
+equal to the input sample rate.  In that case, LAME will not
+perform any extra computations.
+</p>
+
+<p class="settingtitle">
+<a name="s"><span class="hilight">-s  n</span></a> Sampling frequency in kHz
+</p>
+<p>
+where n = sampling rate in kHz.
+</p>
+<p>
+Required for raw PCM input files.  Otherwise it will be determined
+from the header information in the input file.
+</p>
+<p>
+LAME will automatically resample the input file to one of the
+supported MP3 sample rates if necessary.
+</p>
+
+<p class="settingtitle">
+<a name="scale"><span class="hilight">--scale arg</span></a>
+<a name="scale-l"><span class="hilight">--scale-l arg</span></a>
+<a name="scale-r"><span class="hilight">--scale-r arg</span></a> Scale the amplitude of the input file
+</p>
+<p>
+Scales input by arg.  This just multiplies the PCM data
+(after it has been converted to floating point) by arg.
+</p>
+<p>
+arg &gt; 1:  increase volume<br/>
+arg = 1:  no effect<br/>
+arg &lt; 1:  reduce volume<br/>
+</p>
+<p>
+Use with care, since most MP3 decoders will truncate data
+which decodes to values greater than 32768.  
+</p>
+<p>
+The <i>l</i> and <i>r</i> variants apply the scaling only to left (channel 0) or right
+(channel 1) respectively.
+</p>
+
+<p class="settingtitle">
+<a name="signed"><span class="hilight">--signed</span></a> Input RAW uses signed values   
+</p>
+<p>
+Use with RAW pcm to indicate if the data is signed (values centered at zero) or
+unsigned (all positive values). This is the default value.
+</p>
+
+<p class="settingtitle">
+<a name="silent"><span class="hilight">--silent</span></a> Don't print any output in the screen  
+</p>
+<p>
+Disables the screen output. Useful for job processing or other times where
+screen output is undesirable.
+</p>
+
+<p class="settingtitle">
+<a name="space-id3v1"><span class="hilight">--space-id3v1</span></a> Use spaces for padding.  
+</p>
+<p>
+Use spaces instead of null values for padding data in an ID3v1 tag.
+</p>
+
+<p class="settingtitle">
+<a name="strictly-enforce-ISO"><span class="hilight">--strictly-enforce-ISO</span></a> Strict ISO compliance   
+</p>
+<p>
+With this option, LAME will enforce the 7680 bit limitation on
+total frame size. This results in many wasted bits for
+high bitrate encodings. Some decoders need it.
+</p>
+
+<p class="settingtitle">
+<a name="t"><span class="hilight">-t</span></a> Disable VBR tag or disable WAV header            
+</p>
+<p>This setting has two different uses:</p>
+<p>
+When encoding to VBR, this setting disables writing the VBR Tag (also known as XING tag).
+This tag is embedded by default in the frame 0 of the MP3 file. It lets VBR aware players 
+to correctly seek and compute playing times in such files.<br/>
+</p>
+<p>
+When decoding MP3 to WAV using --decode, this flag will 
+disable writing the WAV header.  The output will be raw pcm,
+native endian format.  Use -x to swap bytes.
+</p>
+
+<p class="settingtitle">
+<a name="T"><span class="hilight">-T</span></a> Force the usage of the LAME tag            
+</p>
+<p>
+By default, LAME already adds a LAME tag when encoding.
+This setting overrides the -t setting, and implies --nogaptags.
+</p>
+
+<p class="settingtitle">
+<a name="unsigned"><span class="hilight">--unsigned</span></a> Input RAW uses unsigned values   
+</p>
+<p>
+Use with RAW pcm to indicate if the data is signed (values centered at zero) or
+unsigned (all positive values).
+</p>
+
+<p class="settingtitle">
+<a name="usage"><span class="hilight">--usage</span></a> Print the command line help.
+</p>
+<p>
+Print the short command line help and exit.
+</p>
+
+<p class="settingtitle">
+<a name="V"><span class="hilight">-V n</span></a> Enable VBR encoding
+</p>       
+<p>
+Encodes using the VBR algorithm, at the indicated quality.<br/>
+0=highest quality, bigger files. 9.999=lowest quality, smaller files. Decimal values can be specified, like: 4.51<br/>
+On average, the resulting bitrates are as follows:
+<table cellpadding="4">
+<thead>
+<tr><th>Setting</th><th>Average bitrate (kbps)</th></tr>
+</thead>
+<tbody>
+<tr><td align="right">0</td><td align="right">245</td></tr>
+<tr><td align="right">2</td><td align="right">190</td></tr>
+<tr><td align="right">3</td><td align="right">175</td></tr>
+<tr><td align="right">4</td><td align="right">165</td></tr>
+<tr><td style="border-bottom:0px;" align="right">5</td><td style="border-bottom:0px;" align="right">130</td></tr>
+</tbody>
+</table>
+
+</p>
+<p>
+Using -V 7 or higher (lower quality) is not recommended.  
+ABR usually produces better results.  
+</p>
+
+<p class="settingtitle">
+<a name="vbr-old"><span class="hilight">--vbr-old</span></a> Uses the old VBR method of encoding
+</p>
+<p>
+Tells LAME to encode to VBR using the old (slower) method of encoding.
+</p>
+
+<p class="settingtitle">
+<a name="verbose"><span class="hilight">--verbose</span></a>Program verbosity
+</p>
+<p>
+Print a lot of information on screen. 
+</p>
+
+<p class="settingtitle">
+<a name="version"><span class="hilight">--version</span></a> Prints the license page
+</p>
+<p>
+Prints version and license information about LAME encoder.
+</p>
+
+<p class="settingtitle">
+<a name="x"><span class="hilight">-x</span></a> Swap input bytes
+</p>
+<p>
+swap bytes in the input file (and output file when using --decode).
+For sorting out little endian/big endian type problems.  If your
+encodings sound like static, try this first.
+</p>
+
+<p class="settingtitle">
+<a name="Y"><span class="hilight">-Y</span></a> Ignore noise in sbf21, like CBR mode does
+</p>
+<p>
+Allows -V2, -V1 and -V0 to not encode the highest frequencies accurately,
+if doing so causes disproportional increases in bitrate. This is the same that
+CBR and ABR modes do.<br/>
+Due to the design of the MP3 format, to keep precision in the last scalefactor
+band, an encoder needs to increase the precision in all the bands (not only in
+this one).<br/>
+The consequence is an increase of bitrate (+60kbps in some cases) compared to
+not keeping that precision. Generally, this band should allow for distortions,
+so using this switch shouldn't cause harm.
+</p>
+
+<p>&nbsp;
+</p>
+
+<div id="notes">
+<ol>
+<li><a name="note1"></a>If compiled with decoding capabilities</li>
+<li><a name="note2"></a>HIP stands for Hip Isn't a Player and is based off of
+ Michael Hipp's <a href="http://www.mpg123.de">mpglib 0.2a</a></li>
+
+</ol>
+</div>
+
+</div>
+<div id="footer">
+
+<a href="http://sourceforge.net/projects/lame"><img src="http://sflogo.sourceforge.net/sflogo.php?group_id=290&amp;type=12"
+ alt="Get LAME (Lame Aint an MP3 Encoder) at SourceForge.net. Fast, secure and Free Open Source software downloads"
+ border="0" height="30" width="120" /></a>
+
+<a href="http://validator.w3.org/#validate_by_upload"><img src="images/valid-xhtml10.png"
+ alt="Valid XHTML 1.0 Transitional" border="0" height="31" width="88" /></a>
+
+<a href="http://jigsaw.w3.org/css-validator/"><img src="images/valid-css.png"
+ alt="Valid CSS!" border="0" height="31" width="88" /></a>
+
+<p>HTML markup and design by <a
+href="http://www.rjamorim.com" target="_blank">Roberto Amorim</a> and <a
+href="http://www.maresweb.de" target="_blank">Sebastian Mares</a>. Logo by <a 
+href="http://www.brightercreative.co.uk">Sam Fisher</a>.</p>
+
+</div>
+</div>
+
+ </body>
+</html>

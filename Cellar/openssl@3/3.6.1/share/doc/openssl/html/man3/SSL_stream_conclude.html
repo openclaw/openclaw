@@ -1,0 +1,73 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_stream_conclude</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_stream_conclude - conclude the sending part of a QUIC stream</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+__owur int SSL_stream_conclude(SSL *s, uint64_t flags);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_stream_conclude() signals the normal end-of-stream condition for the send part of a QUIC stream. If called on a QUIC connection SSL object with an associated default stream, it signals the end of the single stream to the peer.</p>
+
+<p>Any data already queued for transmission via a call to SSL_write() will still be written in a reliable manner before the end-of-stream is signalled, assuming the connection remains healthy. This function can be thought of as appending a logical end-of-stream marker after any data which has previously been written to the stream via calls to SSL_write(). Further attempts to call SSL_write() after calling this function will fail.</p>
+
+<p>When calling this on a stream, the receive part of the stream remains unaffected, and the peer may continue to send data until it also signals the end of the stream. Thus, SSL_read() can still be used.</p>
+
+<p><i>flags</i> is reserved and should be set to 0.</p>
+
+<p>Only the first call to this function has any effect for a given stream; subsequent calls are no-ops. This is considered a success case.</p>
+
+<p>This function is not supported on an object other than a QUIC stream SSL object.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>Returns 1 on success and 0 on failure.</p>
+
+<p>Returns 0 if called on an SSL object not representing a QUIC stream.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/openssl-quic.html">openssl-quic(7)</a>, <a href="../man7/ssl.html">ssl(7)</a>, <a href="../man3/SSL_shutdown_ex.html">SSL_shutdown_ex(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The SSL_stream_conclude() function was added in OpenSSL 3.2.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2022-2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

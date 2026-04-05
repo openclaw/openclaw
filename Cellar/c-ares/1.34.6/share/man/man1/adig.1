@@ -1,0 +1,179 @@
+.\"
+.\" Copyright (C) the Massachusetts Institute of Technology.
+.\" Copyright (C) Daniel Stenberg
+.\" SPDX-License-Identifier: MIT
+.\"
+.TH ADIG "1" "Sept 2024" "c-ares utilities"
+.SH NAME
+adig \- print information collected from Domain Name System (DNS) servers
+.SH SYNOPSIS
+\fBadig\fP [\fI@server\fR] [\fI-c class\fR] [\fI-p port#\fR] [\fI-q name\fR]
+[\fI-t type\fR] [\fI-x addr\fR] [\fIname\fR] [\fItype\fR] [\fIclass\fR]
+[\fIqueryopt\fR...]
+
+.SH DESCRIPTION
+.PP
+Send queries to DNS servers about \fUname\fR and print received
+information, where \fIname\fR is a valid DNS name (e.g. www.example.com,
+1.2.3.10.in-addr.arpa).
+.PP
+This utility comes with the \fBc\-ares\fR asynchronous resolver library.
+.PP
+It is possible to specify default arguments for \fBadig\fR via \fB${XDG_CONFIG_HOME}/adigrc\fR.
+.SH ARGS
+.TP
+\fB@server\fR
+Server ip address.  May specify multiple in comma delimited format. May be
+specified in URI format.
+.TP
+\fBname\fR
+Name of the resource record that is to be looked up
+.TP
+\fBtype\fR
+What type of query is required.  e.g. - A, AAAA, MX, TXT, etc.  If not
+specified, A will be used.
+.TP
+\fBclass\fR
+Sets the query class, defaults to IN.  May also be HS or CH.
+
+.SH FLAGS
+.TP
+\fB\-c\fR class
+Sets the query class, defaults to IN.  May also be HS or CH.
+.TP
+\fB\-h\fR
+Prints the help.
+.TP
+\fB\-p\fR port
+Sends query to a port other than 53.  Often recommended to set the port using
+\fI@server\fR instead.
+.TP
+\fB\-q\fR name
+Specifies the domain name to query. Useful to distinguish name from other
+arguments
+.TP
+\fB\-r\fR
+Skip adigrc processing
+.TP
+\fB\-s\fR
+Server (alias for @server syntax), compatibility with old cmdline
+.TP
+\fB\-t\fR type
+Indicates resource record type to query. Useful to distinguish type from other
+arguments
+.TP
+\fB\-x\fR addr
+Simplified reverse lookups.  Sets the type to PTR and forms a valid in-arpa
+query string
+
+.SH QUERY OPTIONS
+.TP
+\fB+[no]aaonly\fR
+Sets the aa flag in the query. Default is off.
+.TP
+\fB+[no]aaflag\fR
+Alias for +[no]aaonly
+.TP
+\fB+[no]additional\fR
+Toggles printing the additional section. On by default.
+.TP
+\fB+[no]adflag\fR
+Sets the ad (authentic data) bit in the query. Default is off.
+.TP
+\fB+[no]aliases\fR
+Whether or not to honor the HOSTALIASES file. Default is on.
+.TP
+\fB+[no]all\fR
+Toggles all of +[no]cmd, +[no]stats, +[no]question, +[no]answer,
++[no]authority, +[no]additional, +[no]comments
+.TP
+\fB+[no]answer\fR
+Toggles printing the answer. On by default.
+.TP
+\fB+[no]authority\fR
+Toggles printing the authority. On by default.
+.TP
+\fB+bufsize=\fR#
+UDP EDNS 0 packet size allowed. Defaults to 1232.
+.TP
+\fB+[no]cdflag\fR
+Sets the CD (checking disabled) bit in the query. Default is off.
+.TP
+\fB+[no]class\fR
+Display the class when printing the record. On by default.
+.TP
+\fB+[no]cmd\fR
+Toggles printing the command requested. On by default.
+.TP
+\fB+[no]comments\fR
+Toggles printing the comments. On by default
+.TP
+\fB+[no]defname\fR
+Alias for +[no]search
+.TP
+\fB+domain=somename\fR
+Sets the search list to a single domain.
+.TP
+\fB+[no]dns0x20\fR
+Whether or not to use DNS 0x20 case randomization when sending queries.
+Default is off.
+.TP
+\fB+[no]edns\fR[=#]
+Enable or disable EDNS.  Only allows a value of 0 if specified. Default is to
+enable EDNS.
+.TP
+\fB+[no]ignore\fR
+Ignore truncation on UDP, by default retried on TCP.
+.TP
+\fB+[no]keepopen\fR
+Whether or not the server connection should be persistent. Default is off.
+.TP
+\fB+ndots\fR=#
+Sets the number of dots that must appear before being considered absolute.
+Defaults to 1.
+.TP
+\fB+[no]primary\fR
+Whether or not to only use a single server if more than one server is available.
+Defaults to using all servers.
+.TP
+\fB+[no]qr\fR
+Toggles printing the request query. Off by default.
+.TP
+\fB+[no]question\fR
+Toggles printing the question. On by default.
+.TP
+\fB+[no]recurse\fR
+Toggles the RD (Recursion Desired) bit. On by default.
+.TP
+\fB+retry\fR=#
+Same as +tries but does not include the initial attempt.
+.TP
+\fB+[no]search\fR
+To use or not use the search list. Search list is not used by default.
+.TP
+\fB+[no]stats\fR
+Toggles printing the statistics. On by default.
+.TP
+\fB+[no]tcp\fR
+Whether to use TCP when querying name servers. Default is UDP.
+.TP
+\fB+tries\fR=#
+Number of query tries. Defaults to 3.
+.TP
+\fB+[no]ttlid\fR
+Display the TTL when printing the record. On by default.
+.TP
+\fB+[no]vc\fR
+Alias for +[no]tcp
+
+.SH FILES
+
+${XDG_CONFIG_HOME}/adigrc
+
+.SH "REPORTING BUGS"
+Report bugs to the c-ares github issues tracker
+.br
+\fBhttps://github.com/c-ares/c-ares/issues\fR
+.SH "SEE ALSO"
+.PP
+ahost(1).

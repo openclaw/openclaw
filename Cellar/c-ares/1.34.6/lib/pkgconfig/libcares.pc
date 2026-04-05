@@ -1,0 +1,23 @@
+#***************************************************************************
+# Project        ___       __ _ _ __ ___  ___ 
+#               / __|____ / _` | '__/ _ \/ __|
+#              | (_|_____| (_| | | |  __/\__ \
+#               \___|     \__,_|_|  \___||___/
+#
+# Copyright (C) The c-ares project and its contributors
+# SPDX-License-Identifier: MIT
+prefix=/opt/homebrew/Cellar/c-ares/1.34.6
+exec_prefix=${prefix}/bin
+libdir=${prefix}/lib
+includedir=${prefix}/include
+
+Name: c-ares
+URL: https://c-ares.org/
+Description: asynchronous DNS lookup library
+Version: 1.34.6
+Requires: 
+Requires.private: 
+Cflags: -I${includedir}
+Cflags.private: -DCARES_STATICLIB
+Libs: -L${libdir} -lcares
+Libs.private:  -lresolv

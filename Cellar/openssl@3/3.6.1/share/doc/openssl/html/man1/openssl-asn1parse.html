@@ -1,0 +1,229 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>openssl-asn1parse</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#OPTIONS">OPTIONS</a>
+    <ul>
+      <li><a href="#Output">Output</a></li>
+    </ul>
+  </li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#BUGS">BUGS</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>openssl-asn1parse - ASN.1 parsing command</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<p><b>openssl</b> <b>asn1parse</b> [<b>-help</b>] [<b>-inform</b> <b>DER</b>|<b>PEM</b>|<b>B64</b>] [<b>-in</b> <i>filename</i>] [<b>-out</b> <i>filename</i>] [<b>-noout</b>] [<b>-offset</b> <i>number</i>] [<b>-length</b> <i>number</i>] [<b>-i</b>] [<b>-oid</b> <i>filename</i>] [<b>-dump</b>] [<b>-dlimit</b> <i>num</i>] [<b>-strparse</b> <i>offset</i>] [<b>-genstr</b> <i>string</i>] [<b>-genconf</b> <i>file</i>] [<b>-strictpem</b>] [<b>-item</b> <i>name</i>]</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>This command is a diagnostic utility that can parse ASN.1 structures. It can also be used to extract data from ASN.1 formatted data.</p>
+
+<h1 id="OPTIONS">OPTIONS</h1>
+
+<dl>
+
+<dt id="help"><b>-help</b></dt>
+<dd>
+
+<p>Print out a usage message.</p>
+
+</dd>
+<dt id="inform-DER-PEM-B64"><b>-inform</b> <b>DER</b>|<b>PEM</b>|<b>B64</b></dt>
+<dd>
+
+<p>The input format; the default is <b>PEM</b>. See <a href="../man1/openssl-format-options.html">openssl-format-options(1)</a> for details.</p>
+
+</dd>
+<dt id="in-filename"><b>-in</b> <i>filename</i></dt>
+<dd>
+
+<p>The input file, default is standard input.</p>
+
+</dd>
+<dt id="out-filename"><b>-out</b> <i>filename</i></dt>
+<dd>
+
+<p>Output file to place the DER encoded data into. If this option is not present then no data will be output. This is most useful when combined with the <b>-strparse</b> option.</p>
+
+</dd>
+<dt id="noout"><b>-noout</b></dt>
+<dd>
+
+<p>Don&#39;t output the parsed version of the input file.</p>
+
+</dd>
+<dt id="offset-number"><b>-offset</b> <i>number</i></dt>
+<dd>
+
+<p>Starting offset to begin parsing, default is start of file.</p>
+
+</dd>
+<dt id="length-number"><b>-length</b> <i>number</i></dt>
+<dd>
+
+<p>Number of bytes to parse, default is until end of file.</p>
+
+</dd>
+<dt id="i"><b>-i</b></dt>
+<dd>
+
+<p>Indents the output according to the &quot;depth&quot; of the structures.</p>
+
+</dd>
+<dt id="oid-filename"><b>-oid</b> <i>filename</i></dt>
+<dd>
+
+<p>A file containing additional OBJECT IDENTIFIERs (OIDs). The format of this file is described in the NOTES section below.</p>
+
+</dd>
+<dt id="dump"><b>-dump</b></dt>
+<dd>
+
+<p>Dump unknown data in hex format.</p>
+
+</dd>
+<dt id="dlimit-num"><b>-dlimit</b> <i>num</i></dt>
+<dd>
+
+<p>Like <b>-dump</b>, but only the first <b>num</b> bytes are output.</p>
+
+</dd>
+<dt id="strparse-offset"><b>-strparse</b> <i>offset</i></dt>
+<dd>
+
+<p>Parse the contents octets of the ASN.1 object starting at <b>offset</b>. This option can be used multiple times to &quot;drill down&quot; into a nested structure.</p>
+
+</dd>
+<dt id="genstr-string--genconf-file"><b>-genstr</b> <i>string</i>, <b>-genconf</b> <i>file</i></dt>
+<dd>
+
+<p>Generate encoded data based on <i>string</i>, <i>file</i> or both using <a href="../man3/ASN1_generate_nconf.html">ASN1_generate_nconf(3)</a> format. If <i>file</i> only is present then the string is obtained from the default section using the name <b>asn1</b>. The encoded data is passed through the ASN1 parser and printed out as though it came from a file, the contents can thus be examined and written to a file using the <b>-out</b> option.</p>
+
+</dd>
+<dt id="strictpem"><b>-strictpem</b></dt>
+<dd>
+
+<p>If this option is used then <b>-inform</b> will be ignored. Without this option any data in a PEM format input file will be treated as being base64 encoded and processed whether it has the normal PEM BEGIN and END markers or not. This option will ignore any data prior to the start of the BEGIN marker, or after an END marker in a PEM file.</p>
+
+</dd>
+<dt id="item-name"><b>-item</b> <i>name</i></dt>
+<dd>
+
+<p>Attempt to decode and print the data as an <b>ASN1_ITEM</b> <i>name</i>. This can be used to print out the fields of any supported ASN.1 structure if the type is known.</p>
+
+</dd>
+</dl>
+
+<h2 id="Output">Output</h2>
+
+<p>The output will typically contain lines like this:</p>
+
+<pre><code>0:d=0  hl=4 l= 681 cons: SEQUENCE</code></pre>
+
+<p>.....</p>
+
+<pre><code>229:d=3  hl=3 l= 141 prim: BIT STRING
+373:d=2  hl=3 l= 162 cons: cont [ 3 ]
+376:d=3  hl=3 l= 159 cons: SEQUENCE
+379:d=4  hl=2 l=  29 cons: SEQUENCE
+381:d=5  hl=2 l=   3 prim: OBJECT            :X509v3 Subject Key Identifier
+386:d=5  hl=2 l=  22 prim: OCTET STRING
+410:d=4  hl=2 l= 112 cons: SEQUENCE
+412:d=5  hl=2 l=   3 prim: OBJECT            :X509v3 Authority Key Identifier
+417:d=5  hl=2 l= 105 prim: OCTET STRING
+524:d=4  hl=2 l=  12 cons: SEQUENCE</code></pre>
+
+<p>.....</p>
+
+<p>This example is part of a self-signed certificate. Each line starts with the offset in decimal. <code>d=XX</code> specifies the current depth. The depth is increased within the scope of any SET or SEQUENCE. <code>hl=XX</code> gives the header length (tag and length octets) of the current type. <code>l=XX</code> gives the length of the contents octets.</p>
+
+<p>The <b>-i</b> option can be used to make the output more readable.</p>
+
+<p>Some knowledge of the ASN.1 structure is needed to interpret the output.</p>
+
+<p>In this example the BIT STRING at offset 229 is the certificate public key. The contents octets of this will contain the public key information. This can be examined using the option <code>-strparse 229</code> to yield:</p>
+
+<pre><code>  0:d=0  hl=3 l= 137 cons: SEQUENCE
+  3:d=1  hl=3 l= 129 prim: INTEGER           :E5D21E1F5C8D208EA7A2166C7FAF9F6BDF2059669C60876DDB70840F1A5AAFA59699FE471F379F1DD6A487E7D5409AB6A88D4A9746E24B91D8CF55DB3521015460C8EDE44EE8A4189F7A7BE77D6CD3A9AF2696F486855CF58BF0EDF2B4068058C7A947F52548DDF7E15E96B385F86422BEA9064A3EE9E1158A56E4A6F47E5897
+135:d=1  hl=2 l=   3 prim: INTEGER           :010001</code></pre>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>If an OID is not part of OpenSSL&#39;s internal table it will be represented in numerical form (for example 1.2.3.4). The file passed to the <b>-oid</b> option allows additional OIDs to be included. Each line consists of three columns, the first column is the OID in numerical format and should be followed by white space. The second column is the &quot;short name&quot; which is a single word followed by whitespace. The final column is the rest of the line and is the &quot;long name&quot;. Example:</p>
+
+<p><code>1.2.3.4 shortName A long name</code></p>
+
+<p>For any OID with an associated short and long name, this command will display the long name.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>Parse a file:</p>
+
+<pre><code>openssl asn1parse -in file.pem</code></pre>
+
+<p>Parse a DER file:</p>
+
+<pre><code>openssl asn1parse -inform DER -in file.der</code></pre>
+
+<p>Generate a simple UTF8String:</p>
+
+<pre><code>openssl asn1parse -genstr &#39;UTF8:Hello World&#39;</code></pre>
+
+<p>Generate and write out a UTF8String, don&#39;t print parsed output:</p>
+
+<pre><code>openssl asn1parse -genstr &#39;UTF8:Hello World&#39; -noout -out utf8.der</code></pre>
+
+<p>Generate using a config file:</p>
+
+<pre><code>openssl asn1parse -genconf asn1.cnf -noout -out asn1.der</code></pre>
+
+<p>Example config file:</p>
+
+<pre><code>asn1=SEQUENCE:seq_sect
+
+[seq_sect]
+
+field1=BOOL:TRUE
+field2=EXP:0, UTF8:some random string</code></pre>
+
+<h1 id="BUGS">BUGS</h1>
+
+<p>There should be options to change the format of output lines. The output of some ASN.1 types is not well handled (if at all).</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man1/openssl.html">openssl(1)</a>, <a href="../man3/ASN1_generate_nconf.html">ASN1_generate_nconf(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

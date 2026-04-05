@@ -1,0 +1,307 @@
+.\" Copyright (C) 2023 The c-ares project and its contributors.
+.\" SPDX-License-Identifier: MIT
+.\"
+.TH ARES_DNS_MAPPINGS 3 "12 November 2023"
+.SH NAME
+ares_dns_class_fromstr, ares_dns_class_tostr, ares_dns_datatype_t, ares_dns_opcode_tostr,
+ares_dns_opt_datatype_t, ares_dns_opt_get_datatype, ares_dns_opt_get_name,
+ares_dns_rcode_tostr, ares_dns_rec_type_fromstr, ares_dns_rr_get_keys,
+ares_dns_rr_key_datatype, ares_dns_rr_key_to_rec_type, ares_dns_rr_key_tostr,
+ares_dns_section_tostr, ares_opt_param_t, ares_svcb_param_t \-
+Helper functions for converting dns record identifiers to and from their
+respective types, as well identifying datatypes for various records.
+.SH SYNOPSIS
+.nf
+#include <ares.h>
+
+const char *ares_dns_rec_type_tostr(ares_dns_rec_type_t type);
+
+const char *ares_dns_class_tostr(ares_dns_class_t qclass);
+
+const char *ares_dns_opcode_tostr(ares_dns_opcode_t opcode);
+
+const char *ares_dns_rr_key_tostr(ares_dns_rr_key_t key);
+
+const char *ares_dns_section_tostr(ares_dns_section_t section);
+
+const char *ares_dns_rcode_tostr(ares_dns_rcode_t rcode);
+
+ares_bool_t ares_dns_class_fromstr(ares_dns_class_t *qclass, const char *str);
+
+ares_bool_t ares_dns_rec_type_fromstr(ares_dns_rec_type_t *qtype,
+                                      const char *str);
+
+const ares_dns_rr_key_t *ares_dns_rr_get_keys(ares_dns_rec_type_t type,
+                                              size_t *cnt);
+
+ares_dns_datatype_t ares_dns_rr_key_datatype(ares_dns_rr_key_t key);
+
+ares_dns_rec_type_t ares_dns_rr_key_to_rec_type(ares_dns_rr_key_t key);
+
+ares_dns_opt_datatype_t ares_dns_opt_get_datatype(ares_dns_rr_key_t key,
+                                                  unsigned short opt);
+
+const char *ares_dns_opt_get_name(ares_dns_rr_key_t key, unsigned short opt);
+
+.fi
+.SH ENUMERATIONS
+.B ares_dns_datatype_t -
+Data types associated with \fIares_dns_rr_key_t\fP:
+.RS 4
+.B ARES_DATATYPE_INADDR
+- IPv4 address as \fIstruct in_addr *\fP. Use \fIares_dns_rr_set_addr(3)\fP to
+set and \fIares_dns_rr_get_addr(3)\fP to get.
+.br
+.B ARES_DATATYPE_INADDR6
+- IPv6 address as \fIstruct ares_in6_addr *\fP. Use \fIares_dns_rr_set_addr6(3)\fP to
+set and \fIares_dns_rr_get_addr6(3)\fP to get.
+.br
+.B ARES_DATATYPE_U8
+- 8bit unsigned integer. Use \fIares_dns_rr_set_u8(3)\fP to
+set and \fIares_dns_rr_get_u8(3)\fP to get.
+.br
+.B ARES_DATATYPE_U16
+- 16bit unsigned integer. Use \fIares_dns_rr_set_u16(3)\fP to
+set and \fIares_dns_rr_get_u16(3)\fP to get.
+.br
+.B ARES_DATATYPE_U32
+- 32bit unsigned integer. Use \fIares_dns_rr_set_u32(3)\fP to
+set and \fIares_dns_rr_get_u32(3)\fP to get.
+.br
+.B ARES_DATATYPE_NAME
+- Null-terminated string of a domain name (series of labels). Use \fIares_dns_rr_set_str(3)\fP to
+set and \fIares_dns_rr_get_str(3)\fP to get.
+.br
+.B ARES_DATATYPE_STR
+- Null-terminated string. Use \fIares_dns_rr_set_str(3)\fP to
+set and \fIares_dns_rr_get_str(3)\fP to get.
+.br
+.B ARES_DATATYPE_BIN
+- Binary Data. Use \fIares_dns_rr_set_bin(3)\fP to
+set and \fIares_dns_rr_get_bin(3)\fP to get.
+.br
+.B ARES_DATATYPE_BINP
+- Officially defined as binary data, but likely printable. Guaranteed to have
+a NULL terminator for convenience (not included in length). Use \fIares_dns_rr_set_bin(3)\fP to
+set and \fIares_dns_rr_get_bin(3)\fP to get.
+.br
+.B ARES_DATATYPE_OPT
+- Array of options.  16bit identifier, Binary data. Use \fIares_dns_rr_set_opt(3)\fP to
+set and \fIares_dns_rr_get_opt(3)\fP to get.
+.br
+.B ARES_DATATYPE_ABINP
+- Array of binary data, but likely printable. Guaranteed to have a NULL terminator
+for convenience (not included in length). Use \fIares_dns_rr_add_abin(3)\fP to
+set and \fIares_dns_rr_get_abin(3)\fP to get.  Can also use
+\fIares_dns_rr_set_bin(3)\fP and \fIares_dns_rr_get_bin(3)\fP if only concatenated
+strings are desired.
+.br
+.RE
+
+.B ares_dns_opt_datatype_t -
+Data types associated with \fIARES_DATATYPE_OPT\fP parameters if known as returned
+by \fIares_dns_opt_get_datatype(3)\fP:
+.RS 4
+.B ARES_OPT_DATATYPE_NONE
+- No value allowed for this parameter
+.br
+.B ARES_OPT_DATATYPE_STR_LIST
+- List of strings, each prefixed with a single octet representing the length as
+defined by RFC 1035. Can use \fIares_expand_string(3)\fP until buffer is consumed.
+.br
+.B ARES_OPT_DATATYPE_U8_LIST
+- List of 8bit unsigned integers, concatenated
+.br
+.B ARES_OPT_DATATYPE_U16
+- 16bit unsigned integer in network byte order
+.br
+.B ARES_OPT_DATATYPE_U16_LIST
+- list of 16bit unsigned integers in network byte order, concatenated.
+.br
+.B ARES_OPT_DATATYPE_U32
+- 32bit unsigned integer in network byte order
+.br
+.B ARES_OPT_DATATYPE_U32_LIST
+- list of 16bit unsigned integers in network byte order, concatenated.
+.br
+.B ARES_OPT_DATATYPE_INADDR4_LIST
+- List of ipv4 addresses in network byte order, concatenated
+.br
+.B ARES_OPT_DATATYPE_INADDR6_LIST
+- List of ipv6 addresses in network byte order, concatenated
+.br
+.B ARES_OPT_DATATYPE_BIN
+- Binary Data
+.br
+.B ARES_OPT_DATATYPE_NAME
+- DNS Domain Name binary format as defined in RFC1035, can use \fIares_expand_name(3)\fP
+.br
+.RE
+
+.B ares_svcb_param_t -
+SVCB (and HTTPS) RR known parameters as returned by \fIares_dns_opt_get_datatype(3)\fP
+with \fIARES_RR_SVCB_PARAMS\fP or \fIARES_RR_HTTPS_PARAMS\fP:
+.RS 4
+.B ARES_SVCB_PARAM_MANDATORY
+- Mandatory keys in this RR (RFC 9460 Section 8). Datatype: \fIARES_OPT_DATATYPE_U16_LIST\fP
+.br
+.B ARES_SVCB_PARAM_ALPN
+- Additional supported protocols (RFC 9460 Section 7.1). Datatype: \fIARES_OPT_DATATYPE_STR_LIST\fP
+.br
+.B ARES_SVCB_PARAM_NO_DEFAULT_ALPN
+- No support for default protocol (RFC 9460 Section 7.1). Datatype: \fIARES_OPT_DATATYPE_NONE\fP
+.br
+.B ARES_SVCB_PARAM_PORT
+- Port for alternative endpoint (RFC 9460 Section 7.2). Datatype: \fIARES_OPT_DATATYPE_U16\fP
+.br
+.B ARES_SVCB_PARAM_IPV4HINT
+- IPv4 address hints (RFC 9460 Section 7.3). Datatype: \fIARES_OPT_DATATYPE_INADDR4_LIST\fP
+.br
+.B ARES_SVCB_PARAM_ECH
+- RESERVED (held for Encrypted ClientHello)
+.br
+.B ARES_SVCB_PARAM_IPV6HINT
+- IPv6 address hints (RFC 9460 Section 7.3). Datatype: \fIARES_OPT_DATATYPE_INADDR6_LIST\fP
+.br
+
+.RE
+
+.B ares_opt_param_t -
+OPT RR known parameters as returned by \fIares_dns_opt_get_datatype(3)\fP
+with \fIARES_RR_OPT_OPTIONS\fB:
+.RS 4
+.B ARES_OPT_PARAM_LLQ
+- RFC 8764. Apple's DNS Long-Lived Queries Protocol. Datatype: \fIARES_OPT_DATATYPE_BIN\fP
+.br
+.B ARES_OPT_PARAM_UL
+- http://files.dns-sd.org/draft-sekar-dns-ul.txt: Update Lease. Datatype: \fIARES_OPT_DATATYPE_U32\fP
+.br
+.B ARES_OPT_PARAM_NSID
+- RFC 5001. Name Server Identification. Datatype: \fIARES_OPT_DATATYPE_BIN\fP
+.br
+.B ARES_OPT_PARAM_DAU
+- RFC 6975. DNSSEC Algorithm Understood. Datatype: \fIARES_OPT_DATATYPE_U8_LIST\fP
+.br
+.B ARES_OPT_PARAM_DHU
+- RFC 6975. DS Hash Understood. Datatype: \fIARES_OPT_DATATYPE_U8_LIST\fP
+.br
+.B ARES_OPT_PARAM_N3U
+- RFC 6975. NSEC3 Hash Understood. Datatype: \fIARES_OPT_DATATYPE_U8_LIST\fP
+.br
+.B ARES_OPT_PARAM_EDNS_CLIENT_SUBNET
+- RFC 7871. Client Subnet. Datatype: \fIARES_OPT_DATATYPE_BIN\fP
+.br
+.B ARES_OPT_PARAM_EDNS_EXPIRE
+- RFC 7314. Expire Timer. Datatype: \fIARES_OPT_DATATYPE_U32\fP
+.br
+.B ARES_OPT_PARAM_COOKIE
+- RFC 7873. Client and Server Cookies. Datatype: \fIARES_OPT_DATATYPE_BIN\fP
+.br
+.B ARES_OPT_PARAM_EDNS_TCP_KEEPALIVE
+- RFC 7828. TCP Keepalive timeout. Datatype: \fIARES_OPT_DATATYPE_U16\fP
+.br
+.B ARES_OPT_PARAM_PADDING
+- RFC 7830. Padding. Datatype: \fIARES_OPT_DATATYPE_BIN\fP
+.br
+.B ARES_OPT_PARAM_CHAIN
+- RFC 7901. Chain query requests. Datatype: \fIARES_OPT_DATATYPE_NAME\fP
+.br
+.B ARES_OPT_PARAM_EDNS_KEY_TAG
+- RFC 8145. Signaling Trust Anchor Knowledge in DNSSEC. Datatype: \fIARES_OPT_DATATYPE_U16_LIST\fP
+.br
+.B ARES_OPT_PARAM_EXTENDED_DNS_ERROR
+- RFC 8914. Extended ERROR code and message. Datatype: \fIARES_OPT_DATATYPE_BIN\fP
+.br
+.RE
+
+.SH DESCRIPTION
+The \fIares_dns_rec_type_tostr(3)\fP function outputs a human readable DNS record
+type from its numeric form passed in
+.IR type .
+
+The \fIares_dns_class_tostr(3)\fP function outputs a human readable DNS class
+from its numeric form passed in
+.IR qclass .
+
+The \fIares_dns_opcode_tostr(3)\fP function outputs a human readable DNS opcode
+from its numeric form in
+.IR opcode .
+
+The \fIares_dns_rr_key_tostr(3)\fP function outputs a human readable DNS Resource
+Record parameter name from its numeric form in
+.IR key .
+
+The \fIares_dns_section_tostr(3)\fP function outputs a human readable DNS
+message section from its numeric form in
+.IR section .
+
+The \fIares_dns_rcode_tostr(3)\fP function outputs a human readable DNS
+response code from its numeric form in
+.IR rcode .
+
+The \fIares_dns_class_fromstr(3)\fP function outputs the DNS class in numeric
+from from its string representation in
+.IR str .
+The result is stored into the variable pointed to by
+.IR qclass .
+
+The \fIares_dns_rec_type_fromstr(3)\fP function outputs the DNS record type in
+numeric from from its string representation in
+.IR str .
+The result is stored into the variable pointed to by
+.IR qtype .
+
+The \fIares_dns_rr_get_keys(3)\fP function retrieves a list of parameters that
+may be set or retrieved for the provided
+.IR type .
+The count of returned keys is stored into the variable pointed to by
+.IR cnt .
+
+The \fIares_dns_rr_key_datatype(3)\fP function retrieves the associated datatype
+for an RR parameter specified by
+.IR key .
+
+The \fIares_dns_rr_key_to_rec_type(3)\fP function dereferences the provided RR
+parameter specified by
+.IR key
+to the DNS Record Type it belongs.
+
+The \fIares_dns_opt_get_datatype(3)\fP function is used in association with
+\fIares_dns_rr_set_opt(3)\fP and \fIares_dns_rr_get_opt(3)\fP to retrieve the
+datatype of an option record contained within an RR as specified in
+.IR key
+if it is known.  The raw option record identifier is provided by
+.IR opt .
+
+The \fIares_dns_opt_get_name(3)\fP function is used in association with
+\fIares_dns_rr_set_opt(3)\fP and \fIares_dns_rr_get_opt(3)\fP to retrieve human
+readable parameter name of an option record contained within an RR as specified
+in
+.IR key
+if it is known.  The raw option record identifier is provided by
+.IR opt .
+
+.SH RETURN VALUES
+\fIares_dns_rec_type_tostr(3)\fP, \fIares_dns_class_tostr(3)\fP,
+\fIares_dns_opcode_tostr(3)\fP, \fIares_dns_rr_key_tostr(3)\fP,
+\fIares_dns_section_tostr(3)\fP, \fIares_dns_rcode_tostr(3)\fP, and
+\fIares_dns_opt_get_name(3)\fP all return a human printable ASCII string, or
+NULL on error.
+
+\fIares_dns_class_fromstr(3)\fP and \fIares_dns_rec_type_fromstr(3)\fP return
+.B ARES_TRUE
+on successful conversion, otherwise
+.B ARES_FALSE.
+
+\fIares_dns_rr_get_keys(3)\fP returns an array of keys or NULL on failure.
+
+\fIares_dns_rr_key_datatype(3)\fP, \fIares_dns_rr_key_to_rec_type(3)\fP, and
+\fIares_dns_opt_get_datatype(3)\fP return their respective integer values, or
+0 on failure.
+
+.SH AVAILABILITY
+These functions were first introduced in c-ares version 1.22.0.
+.SH SEE ALSO
+.BR ares_dns_record (3),
+.BR ares_dns_rr (3),
+.BR ares_init (3)

@@ -1,0 +1,86 @@
+.\"
+.\" Copyright 2010 by Ben Greear <greearb@candelatech.com>
+.\" SPDX-License-Identifier: MIT
+.\"
+.TH ARES_SET_SERVERS 3 "5 March 2010"
+.SH NAME
+ares_set_servers, ares_set_servers_ports \- Initialize name server configuration
+for an ares channel. (deprecated)
+.SH SYNOPSIS
+.nf
+#include <ares.h>
+
+int ares_set_servers(ares_channel_t *\fIchannel\fP,
+                     const struct ares_addr_node *\fIservers\fP)
+
+int ares_set_servers_ports(ares_channel_t *\fIchannel\fP,
+                           const struct ares_addr_port_node *\fIservers\fP)
+.fi
+.SH DESCRIPTION
+The \fBares_set_servers(3)\fP function initializes name servers configuration
+for the channel data identified by
+.IR channel ,
+from a
+.IR servers
+pointer to a linked list of ares_addr_node structs holding name servers
+address data.
+.PP
+The name server linked list pointer argument may be the result of a previous
+call to \fBares_get_servers(3)\fP or a linked list of \fBares_addr_node\fP structs
+set up by other means.
+.PP
+The \fBares_set_servers_ports(3)\fP function also allows the specification of UDP and
+TCP ports to be used for communication on a per-server basis.  The provided
+linked list argument may be the result of a previous call to
+\fBares_get_servers_ports(3)\fP or a linked list of \fBares_addr_port_node\fP structs
+set up by other means.
+.PP
+This function replaces any potentially previously configured name servers
+with the ones given in the linked list. So, in order to configure a channel
+with more than one name server all the desired ones must be specified in a
+single list. Though not recommended, passing NULL will clear all configured
+servers and make an inoperable channel, this may be advantageous for test
+simulation but unlikely to be useful in production.
+.PP
+The function does not take ownership of the linked list argument.
+The caller is responsible for freeing the linked list when no longer needed.
+.PP
+This function is capable of handling IPv4 and IPv6 name server
+addresses simultaneously, rendering \fBares_init_options(3)\fP with
+optmask \fBARES_OPT_SERVERS\fP functionally obsolete except for
+IPv4-only name server usage.
+.PP
+As of v1.22.0 this function can
+be called on an active channel with running queries, previously it would return
+ARES_ENOTIMP.
+
+.SH RETURN VALUES
+.B ares_set_servers(3)
+may return any of the following values:
+.TP 15
+.B ARES_SUCCESS
+The name servers configuration was successfully initialized.
+.TP 15
+.B ARES_ENOMEM
+The process's available memory was exhausted.
+.TP 15
+.B ARES_ENODATA
+The channel data identified by 
+.IR channel
+was invalid.
+.TP 15
+.B ARES_ENOTINITIALIZED
+c-ares library initialization not yet performed.
+.SH SEE ALSO
+.BR ares_set_servers_csv (3),
+.BR ares_get_servers (3),
+.BR ares_init_options (3),
+.BR ares_dup (3)
+
+.SH NOTES
+Deprecated functions as of c-ares 1.24.0 due to inability to set all available
+server options.  Use \fBares_set_servers_csv(3)\fP.
+
+.SH AVAILABILITY
+\fBares_set_servers(3)\fP was added in c-ares 1.7.1;
+\fBares_set_servers_ports(3)\fP was added in c-ares 1.11.0.

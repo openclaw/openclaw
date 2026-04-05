@@ -1,0 +1,231 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>d2i_RSAPrivateKey</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Migration">Migration</a>
+        <ul>
+          <li><a href="#Migrating-i2d-functions-to-OSSL_ENCODER">Migrating i2d functions to OSSL_ENCODER</a></li>
+        </ul>
+      </li>
+    </ul>
+  </li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>d2i_DSAPrivateKey, d2i_DSAPrivateKey_bio, d2i_DSAPrivateKey_fp, d2i_DSAPublicKey, d2i_DSA_PUBKEY, d2i_DSA_PUBKEY_bio, d2i_DSA_PUBKEY_fp, d2i_DSAparams, d2i_RSAPrivateKey, d2i_RSAPrivateKey_bio, d2i_RSAPrivateKey_fp, d2i_RSAPublicKey, d2i_RSAPublicKey_bio, d2i_RSAPublicKey_fp, d2i_RSA_PUBKEY, d2i_RSA_PUBKEY_bio, d2i_RSA_PUBKEY_fp, d2i_DHparams, d2i_DHparams_bio, d2i_DHparams_fp, d2i_ECParameters, d2i_ECPrivateKey, d2i_ECPrivateKey_bio, d2i_ECPrivateKey_fp, d2i_EC_PUBKEY, d2i_EC_PUBKEY_bio, d2i_EC_PUBKEY_fp, i2d_RSAPrivateKey, i2d_RSAPrivateKey_bio, i2d_RSAPrivateKey_fp, i2d_RSAPublicKey, i2d_RSAPublicKey_bio, i2d_RSAPublicKey_fp, i2d_RSA_PUBKEY, i2d_RSA_PUBKEY_bio, i2d_RSA_PUBKEY_fp, i2d_DHparams, i2d_DHparams_bio, i2d_DHparams_fp, i2d_DSAPrivateKey, i2d_DSAPrivateKey_bio, i2d_DSAPrivateKey_fp, i2d_DSAPublicKey, i2d_DSA_PUBKEY, i2d_DSA_PUBKEY_bio, i2d_DSA_PUBKEY_fp, i2d_DSAparams, i2d_ECParameters, i2d_ECPrivateKey, i2d_ECPrivateKey_bio, i2d_ECPrivateKey_fp, i2d_EC_PUBKEY, i2d_EC_PUBKEY_bio, i2d_EC_PUBKEY_fp - DEPRECATED</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>TYPE *d2i_TYPEPrivateKey(TYPE **a, const unsigned char **ppin, long length);
+TYPE *d2i_TYPEPrivateKey_bio(BIO *bp, TYPE **a);
+TYPE *d2i_TYPEPrivateKey_fp(FILE *fp, TYPE **a);
+TYPE *d2i_TYPEPublicKey(TYPE **a, const unsigned char **ppin, long length);
+TYPE *d2i_TYPEPublicKey_bio(BIO *bp, TYPE **a);
+TYPE *d2i_TYPEPublicKey_fp(FILE *fp, TYPE **a);
+TYPE *d2i_TYPEparams(TYPE **a, const unsigned char **ppin, long length);
+TYPE *d2i_TYPEparams_bio(BIO *bp, TYPE **a);
+TYPE *d2i_TYPEparams_fp(FILE *fp, TYPE **a);
+TYPE *d2i_TYPE_PUBKEY(TYPE **a, const unsigned char **ppin, long length);
+TYPE *d2i_TYPE_PUBKEY_bio(BIO *bp, TYPE **a);
+TYPE *d2i_TYPE_PUBKEY_fp(FILE *fp, TYPE **a);
+
+int i2d_TYPEPrivateKey(const TYPE *a, unsigned char **ppout);
+int i2d_TYPEPrivateKey(TYPE *a, unsigned char **ppout);
+int i2d_TYPEPrivateKey_fp(FILE *fp, const TYPE *a);
+int i2d_TYPEPrivateKey_fp(FILE *fp, TYPE *a);
+int i2d_TYPEPrivateKey_bio(BIO *bp, const TYPE *a);
+int i2d_TYPEPrivateKey_bio(BIO *bp, TYPE *a);
+int i2d_TYPEPublicKey(const TYPE *a, unsigned char **ppout);
+int i2d_TYPEPublicKey(TYPE *a, unsigned char **ppout);
+int i2d_TYPEPublicKey_fp(FILE *fp, const TYPE *a);
+int i2d_TYPEPublicKey_fp(FILE *fp, TYPE *a);
+int i2d_TYPEPublicKey_bio(BIO *bp, const TYPE *a);
+int i2d_TYPEPublicKey_bio(BIO *bp, TYPE *a);
+int i2d_TYPEparams(const TYPE *a, unsigned char **ppout);
+int i2d_TYPEparams(TYPE *a, unsigned char **ppout);
+int i2d_TYPEparams_fp(FILE *fp, const TYPE *a);
+int i2d_TYPEparams_fp(FILE *fp, TYPE *a);
+int i2d_TYPEparams_bio(BIO *bp, const TYPE *a);
+int i2d_TYPEparams_bio(BIO *bp, TYPE *a);
+int i2d_TYPE_PUBKEY(const TYPE *a, unsigned char **ppout);
+int i2d_TYPE_PUBKEY(TYPE *a, unsigned char **ppout);
+int i2d_TYPE_PUBKEY_fp(FILE *fp, const TYPE *a);
+int i2d_TYPE_PUBKEY_fp(FILE *fp, TYPE *a);
+int i2d_TYPE_PUBKEY_bio(BIO *bp, const TYPE *a);
+int i2d_TYPE_PUBKEY_bio(BIO *bp, TYPE *a);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>All functions described here are deprecated. Please use <a href="../man3/OSSL_DECODER.html">OSSL_DECODER(3)</a> instead of the <b>d2i</b> functions and <a href="../man3/OSSL_ENCODER.html">OSSL_ENCODER(3)</a> instead of the <b>i2d</b> functions. See <a href="#Migration">&quot;Migration&quot;</a> below.</p>
+
+<p>In the description here, <b><i>TYPE</i></b> is used a placeholder for any of the OpenSSL datatypes, such as <b>RSA</b>. The function parameters <i>ppin</i> and <i>ppout</i> are generally either both named <i>pp</i> in the headers, or <i>in</i> and <i>out</i>.</p>
+
+<p>All the functions here behave the way that&#39;s described in <a href="../man3/d2i_X509.html">d2i_X509(3)</a>.</p>
+
+<p>Please note that not all functions in the synopsis are available for all key types. For example, there are no d2i_RSAparams() or i2d_RSAparams(), because the PKCS#1 <b>RSA</b> structure doesn&#39;t include any key parameters.</p>
+
+<p><b>d2i_<i>TYPE</i>PrivateKey</b>() and derivates thereof decode DER encoded <b><i>TYPE</i></b> private key data organized in a type specific structure.</p>
+
+<p><b>d2i_<i>TYPE</i>PublicKey</b>() and derivates thereof decode DER encoded <b><i>TYPE</i></b> public key data organized in a type specific structure.</p>
+
+<p><b>d2i_<i>TYPE</i>params</b>() and derivates thereof decode DER encoded <b><i>TYPE</i></b> key parameters organized in a type specific structure.</p>
+
+<p><b>d2i_<i>TYPE</i>_PUBKEY</b>() and derivates thereof decode DER encoded <b><i>TYPE</i></b> public key data organized in a <b>SubjectPublicKeyInfo</b> structure.</p>
+
+<p><b>i2d_<i>TYPE</i>PrivateKey</b>() and derivates thereof encode the private key <b><i>TYPE</i></b> data into a type specific DER encoded structure.</p>
+
+<p><b>i2d_<i>TYPE</i>PublicKey</b>() and derivates thereof encode the public key <b><i>TYPE</i></b> data into a type specific DER encoded structure.</p>
+
+<p><b>i2d_<i>TYPE</i>params</b>() and derivates thereof encode the <b><i>TYPE</i></b> key parameters data into a type specific DER encoded structure.</p>
+
+<p><b>i2d_<i>TYPE</i>_PUBKEY</b>() and derivates thereof encode the public key <b><i>TYPE</i></b> data into a DER encoded <b>SubjectPublicKeyInfo</b> structure.</p>
+
+<p>For example, d2i_RSAPrivateKey() and d2i_RSAPublicKey() expects the structure defined by PKCS#1. Similarly, i2d_RSAPrivateKey() and i2d_RSAPublicKey() produce DER encoded string organized according to PKCS#1.</p>
+
+<h2 id="Migration">Migration</h2>
+
+<p>Migration from the diverse <b><i>TYPE</i></b>s requires using corresponding new OpenSSL types. For all <b><i>TYPE</i></b>s described here, the corresponding new type is <b>EVP_PKEY</b>. The rest of this section assumes that this has been done, exactly how to do that is described elsewhere.</p>
+
+<p>There are two migration paths:</p>
+
+<ul>
+
+<li><p>Replace <b>d2i_<i>TYPE</i>PrivateKey()</b> with <a href="../man3/d2i_PrivateKey.html">d2i_PrivateKey(3)</a>, <b>d2i_<i>TYPE</i>PublicKey()</b> with <a href="../man3/d2i_PublicKey.html">d2i_PublicKey(3)</a>, <b>d2i_<i>TYPE</i>params()</b> with <a href="../man3/d2i_KeyParams.html">d2i_KeyParams(3)</a>, <b>d2i_<i>TYPE</i>_PUBKEY()</b> with <a href="../man3/d2i_PUBKEY.html">d2i_PUBKEY(3)</a>, <b>i2d_<i>TYPE</i>PrivateKey()</b> with <a href="../man3/i2d_PrivateKey.html">i2d_PrivateKey(3)</a>, <b>i2d_<i>TYPE</i>PublicKey()</b> with <a href="../man3/i2d_PublicKey.html">i2d_PublicKey(3)</a>, <b>i2d_<i>TYPE</i>params()</b> with <a href="../man3/i2d_KeyParams.html">i2d_KeyParams(3)</a>, <b>i2d_<i>TYPE</i>_PUBKEY()</b> with <a href="../man3/i2d_PUBKEY.html">i2d_PUBKEY(3)</a>. A caveat is that <a href="../man3/i2d_PrivateKey.html">i2d_PrivateKey(3)</a> may output a DER encoded PKCS#8 outermost structure instead of the type specific structure, and that <a href="../man3/d2i_PrivateKey.html">d2i_PrivateKey(3)</a> recognises and unpacks a PKCS#8 structures.</p>
+
+</li>
+<li><p>Use <a href="../man3/OSSL_DECODER.html">OSSL_DECODER(3)</a> and <a href="../man3/OSSL_ENCODER.html">OSSL_ENCODER(3)</a>. How to migrate is described below. All those descriptions assume that the key to be encoded is in the variable <i>pkey</i>.</p>
+
+</li>
+</ul>
+
+<h3 id="Migrating-i2d-functions-to-OSSL_ENCODER">Migrating <b>i2d</b> functions to <b>OSSL_ENCODER</b></h3>
+
+<p>The exact <a href="../man3/OSSL_ENCODER.html">OSSL_ENCODER(3)</a> output is driven by arguments rather than by function names. The sample code to get DER encoded output in a type specific structure is uniform, the only things that vary are the selection of what part of the <b>EVP_PKEY</b> should be output, and the structure. The <b>i2d</b> functions names can therefore be translated into two variables, <i>selection</i> and <i>structure</i> as follows:</p>
+
+<dl>
+
+<dt id="i2d_TYPEPrivateKey-translates-into"><b>i2d_<i>TYPE</i>PrivateKey</b>() translates into:</dt>
+<dd>
+
+<pre><code>int selection = EVP_PKEY_KEYPAIR;
+const char *structure = &quot;type-specific&quot;;</code></pre>
+
+</dd>
+<dt id="i2d_TYPEPublicKey-translates-into"><b>i2d_<i>TYPE</i>PublicKey</b>() translates into:</dt>
+<dd>
+
+<pre><code>int selection = EVP_PKEY_PUBLIC_KEY;
+const char *structure = &quot;type-specific&quot;;</code></pre>
+
+</dd>
+<dt id="i2d_TYPEparams-translates-into"><b>i2d_<i>TYPE</i>params</b>() translates into:</dt>
+<dd>
+
+<pre><code>int selection = EVP_PKEY_PARAMETERS;
+const char *structure = &quot;type-specific&quot;;</code></pre>
+
+</dd>
+<dt id="i2d_TYPE_PUBKEY-translates-into"><b>i2d_<i>TYPE</i>_PUBKEY</b>() translates into:</dt>
+<dd>
+
+<pre><code>int selection = EVP_PKEY_PUBLIC_KEY;
+const char *structure = &quot;SubjectPublicKeyInfo&quot;;</code></pre>
+
+</dd>
+</dl>
+
+<p>The following sample code does the rest of the work:</p>
+
+<pre><code>unsigned char *p = buffer;     /* |buffer| is supplied by the caller */
+size_t len = buffer_size;      /* assumed be the size of |buffer| */
+OSSL_ENCODER_CTX *ctx =
+    OSSL_ENCODER_CTX_new_for_pkey(pkey, selection, &quot;DER&quot;, structure,
+                                  NULL, NULL);
+if (ctx == NULL) {
+    /* fatal error handling */
+}
+if (OSSL_ENCODER_CTX_get_num_encoders(ctx) == 0) {
+    OSSL_ENCODER_CTX_free(ctx);
+    /* non-fatal error handling */
+}
+if (!OSSL_ENCODER_to_data(ctx, &amp;p, &amp;len)) {
+    OSSL_ENCODER_CTX_free(ctx);
+    /* error handling */
+}
+OSSL_ENCODER_CTX_free(ctx);</code></pre>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The letters <b>i</b> and <b>d</b> in <b>i2d_<i>TYPE</i></b>() stand for &quot;internal&quot; (that is, an internal C structure) and &quot;DER&quot; respectively. So <b>i2d_<i>TYPE</i></b>() converts from internal to DER.</p>
+
+<p>The functions can also understand <b>BER</b> forms.</p>
+
+<p>The actual TYPE structure passed to <b>i2d_<i>TYPE</i></b>() must be a valid populated <b><i>TYPE</i></b> structure -- it <b>cannot</b> simply be fed with an empty structure such as that returned by TYPE_new().</p>
+
+<p>The encoded data is in binary form and may contain embedded zeros. Therefore, any FILE pointers or BIOs should be opened in binary mode. Functions such as strlen() will <b>not</b> return the correct length of the encoded structure.</p>
+
+<p>The ways that <i>*ppin</i> and <i>*ppout</i> are incremented after the operation can trap the unwary. See the <b>WARNINGS</b> section in <a href="../man3/d2i_X509.html">d2i_X509(3)</a> for some common errors. The reason for this-auto increment behaviour is to reflect a typical usage of ASN1 functions: after one structure is encoded or decoded another will be processed after it.</p>
+
+<p>The following points about the data types might be useful:</p>
+
+<dl>
+
+<dt id="DSA_PUBKEY"><b>DSA_PUBKEY</b></dt>
+<dd>
+
+<p>Represents a DSA public key using a <b>SubjectPublicKeyInfo</b> structure.</p>
+
+</dd>
+<dt id="DSAPublicKey-DSAPrivateKey"><b>DSAPublicKey</b>, <b>DSAPrivateKey</b></dt>
+<dd>
+
+<p>Use a non-standard OpenSSL format and should be avoided; use <b>DSA_PUBKEY</b>, <a href="../man3/PEM_write_PrivateKey.html">PEM_write_PrivateKey(3)</a>, or similar instead.</p>
+
+</dd>
+</dl>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p><b>d2i_<i>TYPE</i></b>(), <b>d2i_<i>TYPE</i>_bio</b>() and <b>d2i_<i>TYPE</i>_fp</b>() return a valid <b><i>TYPE</i></b> structure or NULL if an error occurs. If the &quot;reuse&quot; capability has been used with a valid structure being passed in via <i>a</i>, then the object is freed in the event of error and <i>*a</i> is set to NULL.</p>
+
+<p><b>i2d_<i>TYPE</i></b>() returns the number of bytes successfully encoded or a negative value if an error occurs.</p>
+
+<p><b>i2d_<i>TYPE</i>_bio</b>() and <b>i2d_<i>TYPE</i>_fp</b>() return 1 for success and 0 if an error occurs.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/OSSL_ENCODER.html">OSSL_ENCODER(3)</a>, <a href="../man3/OSSL_DECODER.html">OSSL_DECODER(3)</a>, <a href="../man3/d2i_PrivateKey.html">d2i_PrivateKey(3)</a>, <a href="../man3/d2i_PublicKey.html">d2i_PublicKey(3)</a>, <a href="../man3/d2i_KeyParams.html">d2i_KeyParams(3)</a>, <a href="../man3/d2i_PUBKEY.html">d2i_PUBKEY(3)</a>, <a href="../man3/i2d_PrivateKey.html">i2d_PrivateKey(3)</a>, <a href="../man3/i2d_PublicKey.html">i2d_PublicKey(3)</a>, <a href="../man3/i2d_KeyParams.html">i2d_KeyParams(3)</a>, <a href="../man3/i2d_PUBKEY.html">i2d_PUBKEY(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2020-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

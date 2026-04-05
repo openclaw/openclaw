@@ -1,0 +1,620 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>openssl-genpkey</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#OPTIONS">OPTIONS</a></li>
+  <li><a href="#KEY-GENERATION-OPTIONS">KEY GENERATION OPTIONS</a>
+    <ul>
+      <li><a href="#RSA-Key-Generation-Options">RSA Key Generation Options</a></li>
+      <li><a href="#RSA-PSS-Key-Generation-Options">RSA-PSS Key Generation Options</a></li>
+      <li><a href="#EC-Key-Generation-Options">EC Key Generation Options</a></li>
+      <li><a href="#ML-DSA-Key-Generation-Options">ML-DSA Key Generation Options</a></li>
+      <li><a href="#ML-KEM-Key-Generation-Options">ML-KEM Key Generation Options</a></li>
+      <li><a href="#DH-Key-Generation-Options">DH Key Generation Options</a></li>
+    </ul>
+  </li>
+  <li><a href="#PARAMETER-GENERATION-OPTIONS">PARAMETER GENERATION OPTIONS</a>
+    <ul>
+      <li><a href="#DSA-Parameter-Generation-Options">DSA Parameter Generation Options</a></li>
+      <li><a href="#DH-Parameter-Generation-Options">DH Parameter Generation Options</a></li>
+      <li><a href="#EC-Parameter-Generation-Options">EC Parameter Generation Options</a></li>
+    </ul>
+  </li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>openssl-genpkey - generate a private key or key pair</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<p><b>openssl</b> <b>genpkey</b> [<b>-help</b>] [<b>-out</b> <i>filename</i>] [<b>-outpubkey</b> <i>filename</i>] [<b>-outform</b> <b>DER</b>|<b>PEM</b>] [<b>-verbose</b>] [<b>-quiet</b>] [<b>-pass</b> <i>arg</i>] [<b>-<i>cipher</i></b>] [<b>-paramfile</b> <i>file</i>] [<b>-algorithm</b> <i>alg</i>] [<b>-pkeyopt</b> <i>opt</i>:<i>value</i>] [<b>-genparam</b>] [<b>-text</b>] [<b>-rand</b> <i>files</i>] [<b>-writerand</b> <i>file</i>] [<b>-engine</b> <i>id</i>]</p>
+
+<p>[<b>-provider</b> <i>name</i>] [<b>-provider-path</b> <i>path</i>] [<b>-provparam</b> <i>[name:]key=value</i>] [<b>-propquery</b> <i>propq</i>] [<b>-config</b> <i>configfile</i>]</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>This command generates a private key or key pair.</p>
+
+<h1 id="OPTIONS">OPTIONS</h1>
+
+<dl>
+
+<dt id="help"><b>-help</b></dt>
+<dd>
+
+<p>Print out a usage message.</p>
+
+</dd>
+<dt id="out-filename"><b>-out</b> <i>filename</i></dt>
+<dd>
+
+<p>Output the private key to the specified file. If this argument is not specified then standard output is used.</p>
+
+</dd>
+<dt id="outpubkey-filename"><b>-outpubkey</b> <i>filename</i></dt>
+<dd>
+
+<p>Output the public key to the specified file. If this argument is not specified then the public key is not output.</p>
+
+</dd>
+<dt id="outform-DER-PEM"><b>-outform</b> <b>DER</b>|<b>PEM</b></dt>
+<dd>
+
+<p>The output format, except when <b>-genparam</b> is given; the default is <b>PEM</b>. See <a href="../man1/openssl-format-options.html">openssl-format-options(1)</a> for details.</p>
+
+<p>When <b>-genparam</b> is given, <b>-outform</b> is ignored.</p>
+
+</dd>
+<dt id="verbose"><b>-verbose</b></dt>
+<dd>
+
+<p>Output &quot;status dots&quot; while generating keys.</p>
+
+</dd>
+<dt id="quiet"><b>-quiet</b></dt>
+<dd>
+
+<p>Do not output &quot;status dots&quot; while generating keys.</p>
+
+</dd>
+<dt id="pass-arg"><b>-pass</b> <i>arg</i></dt>
+<dd>
+
+<p>The output file password source. For more information about the format of <i>arg</i> see <a href="../man1/openssl-passphrase-options.html">openssl-passphrase-options(1)</a>.</p>
+
+</dd>
+<dt id="cipher"><b>-<i>cipher</i></b></dt>
+<dd>
+
+<p>Encrypts the private key using the specified algorithm. The algorithm can be specified using a name that is accepted by the EVP_get_cipherbyname() function. For example, use the syntax <b>-aes-128-cbc</b> to specify the AES encryption algorithm with a 128-bit key in CBC mode.</p>
+
+</dd>
+<dt id="algorithm-alg"><b>-algorithm</b> <i>alg</i></dt>
+<dd>
+
+<p>Public key algorithm to use such as RSA, DSA, DH or DHX. If used this option must precede any <b>-pkeyopt</b> options. The options <b>-paramfile</b> and <b>-algorithm</b> are mutually exclusive. Engines or providers may add algorithms in addition to the standard built-in ones.</p>
+
+<p>Valid built-in algorithm names for private key generation are RSA, RSA-PSS, EC, X25519, X448, ED25519, ED448, ML-DSA and ML-KEM.</p>
+
+<p>Valid built-in algorithm names for parameter generation (see the <b>-genparam</b> option) are DH, DSA and EC.</p>
+
+<p>Note that the algorithm name X9.42 DH may be used as a synonym for DHX keys and PKCS#3 refers to DH Keys. Some options are not shared between DH and DHX keys.</p>
+
+</dd>
+<dt id="pkeyopt-opt:value"><b>-pkeyopt</b> <i>opt</i>:<i>value</i></dt>
+<dd>
+
+<p>Set the public key algorithm option <i>opt</i> to <i>value</i>. The precise set of options supported depends on the public key algorithm used and its implementation. See <a href="#KEY-GENERATION-OPTIONS">&quot;KEY GENERATION OPTIONS&quot;</a> and <a href="#PARAMETER-GENERATION-OPTIONS">&quot;PARAMETER GENERATION OPTIONS&quot;</a> below for more details.</p>
+
+<p>To list the possible <i>opt</i> values for an algorithm use: <b>openssl</b> <b>genpkey</b> -algorithm XXX -help</p>
+
+</dd>
+<dt id="genparam"><b>-genparam</b></dt>
+<dd>
+
+<p>Generate a set of parameters instead of a private key. If used this option must precede any <b>-algorithm</b>, <b>-paramfile</b> or <b>-pkeyopt</b> options.</p>
+
+</dd>
+<dt id="paramfile-filename"><b>-paramfile</b> <i>filename</i></dt>
+<dd>
+
+<p>Some public key algorithms generate a private key based on a set of parameters. They can be supplied using this option. If this option is used the public key algorithm used is determined by the parameters. If used this option must precede any <b>-pkeyopt</b> options. The options <b>-paramfile</b> and <b>-algorithm</b> are mutually exclusive.</p>
+
+</dd>
+<dt id="text"><b>-text</b></dt>
+<dd>
+
+<p>Print an (unencrypted) text representation of private and public keys and parameters along with the PEM or DER structure.</p>
+
+</dd>
+<dt id="rand-files--writerand-file"><b>-rand</b> <i>files</i>, <b>-writerand</b> <i>file</i></dt>
+<dd>
+
+<p>See <a href="../man1/openssl.html">&quot;Random State Options&quot; in openssl(1)</a> for details.</p>
+
+</dd>
+<dt id="engine-id"><b>-engine</b> <i>id</i></dt>
+<dd>
+
+<p>See <a href="../man1/openssl.html">&quot;Engine Options&quot; in openssl(1)</a>. This option is deprecated.</p>
+
+</dd>
+<dt id="provider-name"><b>-provider</b> <i>name</i></dt>
+<dd>
+
+</dd>
+<dt id="provider-path-path"><b>-provider-path</b> <i>path</i></dt>
+<dd>
+
+</dd>
+<dt id="provparam-name:-key-value"><b>-provparam</b> <i>[name:]key=value</i></dt>
+<dd>
+
+</dd>
+<dt id="propquery-propq"><b>-propquery</b> <i>propq</i></dt>
+<dd>
+
+<p>See <a href="../man1/openssl.html">&quot;Provider Options&quot; in openssl(1)</a>, <a href="../man7/provider.html">provider(7)</a>, and <a href="../man7/property.html">property(7)</a>.</p>
+
+</dd>
+<dt id="config-configfile"><b>-config</b> <i>configfile</i></dt>
+<dd>
+
+<p>See <a href="../man1/openssl.html">&quot;Configuration Option&quot; in openssl(1)</a>.</p>
+
+</dd>
+</dl>
+
+<h1 id="KEY-GENERATION-OPTIONS">KEY GENERATION OPTIONS</h1>
+
+<p>The options supported by each algorithm and indeed each implementation of an algorithm can vary. The options for the OpenSSL implementations are detailed below. There are no key generation options defined for the X25519, X448, ED25519 or ED448 algorithms.</p>
+
+<h2 id="RSA-Key-Generation-Options">RSA Key Generation Options</h2>
+
+<dl>
+
+<dt id="rsa_keygen_bits:numbits"><b>rsa_keygen_bits:numbits</b></dt>
+<dd>
+
+<p>The number of bits in the generated key. If not specified 2048 is used.</p>
+
+</dd>
+<dt id="rsa_keygen_primes:numprimes"><b>rsa_keygen_primes:numprimes</b></dt>
+<dd>
+
+<p>The number of primes in the generated key. If not specified 2 is used.</p>
+
+</dd>
+<dt id="rsa_keygen_pubexp:value"><b>rsa_keygen_pubexp:value</b></dt>
+<dd>
+
+<p>The RSA public exponent value. This can be a large decimal or hexadecimal value if preceded by <code>0x</code>. Default value is 65537.</p>
+
+</dd>
+</dl>
+
+<h2 id="RSA-PSS-Key-Generation-Options">RSA-PSS Key Generation Options</h2>
+
+<p>Note: by default an <b>RSA-PSS</b> key has no parameter restrictions.</p>
+
+<dl>
+
+<dt id="rsa_keygen_bits:numbits-rsa_keygen_primes:numprimes-rsa_keygen_pubexp:value"><b>rsa_keygen_bits</b>:<i>numbits</i>, <b>rsa_keygen_primes</b>:<i>numprimes</i>, <b>rsa_keygen_pubexp</b>:<i>value</i></dt>
+<dd>
+
+<p>These options have the same meaning as the <b>RSA</b> algorithm.</p>
+
+</dd>
+<dt id="rsa_pss_keygen_md:digest"><b>rsa_pss_keygen_md</b>:<i>digest</i></dt>
+<dd>
+
+<p>If set the key is restricted and can only use <i>digest</i> for signing.</p>
+
+</dd>
+<dt id="rsa_pss_keygen_mgf1_md:digest"><b>rsa_pss_keygen_mgf1_md</b>:<i>digest</i></dt>
+<dd>
+
+<p>If set the key is restricted and can only use <i>digest</i> as it&#39;s MGF1 parameter.</p>
+
+</dd>
+<dt id="rsa_pss_keygen_saltlen:len"><b>rsa_pss_keygen_saltlen</b>:<i>len</i></dt>
+<dd>
+
+<p>If set the key is restricted and <i>len</i> specifies the minimum salt length.</p>
+
+</dd>
+</dl>
+
+<h2 id="EC-Key-Generation-Options">EC Key Generation Options</h2>
+
+<p>The EC key generation options can also be used for parameter generation.</p>
+
+<dl>
+
+<dt id="ec_paramgen_curve:curve"><b>ec_paramgen_curve</b>:<i>curve</i></dt>
+<dd>
+
+<p>The EC curve to use. OpenSSL supports NIST curve names such as &quot;P-256&quot;.</p>
+
+</dd>
+<dt id="ec_param_enc:encoding"><b>ec_param_enc</b>:<i>encoding</i></dt>
+<dd>
+
+<p>The encoding to use for parameters. The <i>encoding</i> parameter must be either <b>named_curve</b> or <b>explicit</b>. The default value is <b>named_curve</b>.</p>
+
+</dd>
+</dl>
+
+<h2 id="ML-DSA-Key-Generation-Options">ML-DSA Key Generation Options</h2>
+
+<dl>
+
+<dt id="hexseed:seed"><b>hexseed</b>:<i>seed</i></dt>
+<dd>
+
+<p>This specifies the optional ML-DSA <i>seed</i> in hexadecimal form. The seed is 32 bytes, giving 64 hexadecimal digits. When generated from an explicit seed the key is completely determined by the seed value. If other users can see the command-line arguments of the running process, this option may compromise the secret key, it is best avoided, tests-aside.</p>
+
+<p>See <a href="../man7/EVP_PKEY-ML-DSA.html">EVP_PKEY-ML-DSA(7)</a> for more detail.</p>
+
+</dd>
+</dl>
+
+<h2 id="ML-KEM-Key-Generation-Options">ML-KEM Key Generation Options</h2>
+
+<dl>
+
+<dt id="hexseed:seed1"><b>hexseed</b>:<i>seed</i></dt>
+<dd>
+
+<p>This specifies the optional ML-KEM <i>seed</i> in hexadecimal form. The seed is 64 bytes, giving 128 hexadecimal digits. When generated from an explicit seed the key is completely determined by the seed value. If other users can see the command-line arguments of the running process, this option may compromise the secret key, it is best avoided, tests-aside.</p>
+
+<p>See <a href="../man7/EVP_PKEY-ML-KEM.html">EVP_PKEY-ML-KEM(7)</a> for more detail.</p>
+
+</dd>
+</dl>
+
+<h2 id="DH-Key-Generation-Options">DH Key Generation Options</h2>
+
+<dl>
+
+<dt id="group:name"><b>group</b>:<i>name</i></dt>
+<dd>
+
+<p>The <b>paramfile</b> option is not required if a named group is used here. See the <a href="#DH-Parameter-Generation-Options">&quot;DH Parameter Generation Options&quot;</a> section below.</p>
+
+</dd>
+</dl>
+
+<h1 id="PARAMETER-GENERATION-OPTIONS">PARAMETER GENERATION OPTIONS</h1>
+
+<p>The options supported by each algorithm and indeed each implementation of an algorithm can vary. The options for the OpenSSL implementations are detailed below.</p>
+
+<h2 id="DSA-Parameter-Generation-Options">DSA Parameter Generation Options</h2>
+
+<dl>
+
+<dt id="dsa_paramgen_bits:numbits"><b>dsa_paramgen_bits</b>:<i>numbits</i></dt>
+<dd>
+
+<p>The number of bits in the generated prime. If not specified 2048 is used.</p>
+
+</dd>
+<dt id="dsa_paramgen_q_bits:numbits"><b>dsa_paramgen_q_bits</b>:<i>numbits</i></dt>
+<dd>
+
+</dd>
+<dt id="qbits:numbits"><b>qbits</b>:<i>numbits</i></dt>
+<dd>
+
+<p>The number of bits in the q parameter. Must be one of 160, 224 or 256. If not specified 224 is used.</p>
+
+</dd>
+<dt id="dsa_paramgen_md:digest"><b>dsa_paramgen_md</b>:<i>digest</i></dt>
+<dd>
+
+</dd>
+<dt id="digest:digest"><b>digest</b>:<i>digest</i></dt>
+<dd>
+
+<p>The digest to use during parameter generation. Must be one of <b>sha1</b>, <b>sha224</b> or <b>sha256</b>. If set, then the number of bits in <b>q</b> will match the output size of the specified digest and the <b>dsa_paramgen_q_bits</b> parameter will be ignored. If not set, then a digest will be used that gives an output matching the number of bits in <b>q</b>, i.e. <b>sha1</b> if q length is 160, <b>sha224</b> if it 224 or <b>sha256</b> if it is 256.</p>
+
+</dd>
+<dt id="properties:query"><b>properties</b>:<i>query</i></dt>
+<dd>
+
+<p>The <i>digest</i> property <i>query</i> string to use when fetching a digest from a provider.</p>
+
+</dd>
+<dt id="type:type"><b>type</b>:<i>type</i></dt>
+<dd>
+
+<p>The type of generation to use. Set this to 1 to use legacy FIPS186-2 parameter generation. The default of 0 uses FIPS186-4 parameter generation.</p>
+
+</dd>
+<dt id="gindex:index"><b>gindex</b>:<i>index</i></dt>
+<dd>
+
+<p>The index to use for canonical generation and verification of the generator g. Set this to a positive value ranging from 0..255 to use this mode. Larger values will only use the bottom byte. This <i>index</i> must then be reused during key validation to verify the value of g. If this value is not set then g is not verifiable. The default value is -1.</p>
+
+</dd>
+<dt id="hexseed:seed2"><b>hexseed</b>:<i>seed</i></dt>
+<dd>
+
+<p>The seed <i>seed</i> data to use instead of generating a random seed internally. This should be used for testing purposes only. This will either produced fixed values for the generated parameters OR it will fail if the seed did not generate valid primes.</p>
+
+</dd>
+</dl>
+
+<h2 id="DH-Parameter-Generation-Options">DH Parameter Generation Options</h2>
+
+<p>For most use cases it is recommended to use the <b>group</b> option rather than the <b>type</b> options. Note that the <b>group</b> option is not used by default if no parameter generation options are specified.</p>
+
+<dl>
+
+<dt id="group:name1"><b>group</b>:<i>name</i></dt>
+<dd>
+
+</dd>
+<dt id="dh_param:name"><b>dh_param</b>:<i>name</i></dt>
+<dd>
+
+<p>Use a named DH group to select constant values for the DH parameters. All other options will be ignored if this value is set.</p>
+
+<p>Valid values that are associated with the <b>algorithm</b> of <b>&quot;DH&quot;</b> are: &quot;ffdhe2048&quot;, &quot;ffdhe3072&quot;, &quot;ffdhe4096&quot;, &quot;ffdhe6144&quot;, &quot;ffdhe8192&quot;, &quot;modp_1536&quot;, &quot;modp_2048&quot;, &quot;modp_3072&quot;, &quot;modp_4096&quot;, &quot;modp_6144&quot;, &quot;modp_8192&quot;.</p>
+
+<p>Valid values that are associated with the <b>algorithm</b> of <b>&quot;DHX&quot;</b> are the RFC5114 names &quot;dh_1024_160&quot;, &quot;dh_2048_224&quot;, &quot;dh_2048_256&quot;.</p>
+
+</dd>
+<dt id="dh_rfc5114:num"><b>dh_rfc5114</b>:<i>num</i></dt>
+<dd>
+
+<p>If this option is set, then the appropriate RFC5114 parameters are used instead of generating new parameters. The value <i>num</i> can be one of 1, 2 or 3 that are equivalent to using the option <b>group</b> with one of &quot;dh_1024_160&quot;, &quot;dh_2048_224&quot; or &quot;dh_2048_256&quot;. All other options will be ignored if this value is set.</p>
+
+</dd>
+<dt id="pbits:numbits"><b>pbits</b>:<i>numbits</i></dt>
+<dd>
+
+</dd>
+<dt id="dh_paramgen_prime_len:numbits"><b>dh_paramgen_prime_len</b>:<i>numbits</i></dt>
+<dd>
+
+<p>The number of bits in the prime parameter <i>p</i>. The default is 2048.</p>
+
+</dd>
+<dt id="qbits:numbits1"><b>qbits</b>:<i>numbits</i></dt>
+<dd>
+
+</dd>
+<dt id="dh_paramgen_subprime_len:numbits"><b>dh_paramgen_subprime_len</b>:<i>numbits</i></dt>
+<dd>
+
+<p>The number of bits in the sub prime parameter <i>q</i>. The default is 224. Only relevant if used in conjunction with the <b>dh_paramgen_type</b> option to generate DHX parameters.</p>
+
+</dd>
+<dt id="safeprime-generator:value"><b>safeprime-generator</b>:<i>value</i></dt>
+<dd>
+
+</dd>
+<dt id="dh_paramgen_generator:value"><b>dh_paramgen_generator</b>:<i>value</i></dt>
+<dd>
+
+<p>The value to use for the generator <i>g</i>. The default is 2. The <b>algorithm</b> option must be <b>&quot;DH&quot;</b> for this parameter to be used.</p>
+
+</dd>
+<dt id="type:string"><b>type</b>:<i>string</i></dt>
+<dd>
+
+<p>The type name of DH parameters to generate. Valid values are:</p>
+
+<dl>
+
+<dt id="generator">&quot;generator&quot;</dt>
+<dd>
+
+<p>Use a safe prime generator with the option <b>safeprime_generator</b> The <b>algorithm</b> option must be <b>&quot;DH&quot;</b>.</p>
+
+</dd>
+<dt id="fips186_4">&quot;fips186_4&quot;</dt>
+<dd>
+
+<p>FIPS186-4 parameter generation. The <b>algorithm</b> option must be <b>&quot;DHX&quot;</b>.</p>
+
+</dd>
+<dt id="fips186_2">&quot;fips186_2&quot;</dt>
+<dd>
+
+<p>FIPS186-4 parameter generation. The <b>algorithm</b> option must be <b>&quot;DHX&quot;</b>.</p>
+
+</dd>
+<dt id="group">&quot;group&quot;</dt>
+<dd>
+
+<p>Can be used with the option <b>pbits</b> to select one of &quot;ffdhe2048&quot;, &quot;ffdhe3072&quot;, &quot;ffdhe4096&quot;, &quot;ffdhe6144&quot; or &quot;ffdhe8192&quot;. The <b>algorithm</b> option must be <b>&quot;DH&quot;</b>.</p>
+
+</dd>
+<dt id="default">&quot;default&quot;</dt>
+<dd>
+
+<p>Selects a default type based on the <b>algorithm</b>. This is used by the OpenSSL default provider to set the type for backwards compatibility. If <b>algorithm</b> is <b>&quot;DH&quot;</b> then <b>&quot;generator&quot;</b> is used. If <b>algorithm</b> is <b>&quot;DHX&quot;</b> then <b>&quot;fips186_2&quot;</b> is used.</p>
+
+</dd>
+</dl>
+
+</dd>
+<dt id="dh_paramgen_type:value"><b>dh_paramgen_type</b>:<i>value</i></dt>
+<dd>
+
+<p>The type of DH parameters to generate. Valid values are 0, 1, 2 or 3 which correspond to setting the option <b>type</b> to &quot;generator&quot;, &quot;fips186_2&quot;, &quot;fips186_4&quot; or &quot;group&quot;.</p>
+
+</dd>
+<dt id="digest:digest1"><b>digest</b>:<i>digest</i></dt>
+<dd>
+
+<p>The digest to use during parameter generation. Must be one of <b>sha1</b>, <b>sha224</b> or <b>sha256</b>. If set, then the number of bits in <b>qbits</b> will match the output size of the specified digest and the <b>qbits</b> parameter will be ignored. If not set, then a digest will be used that gives an output matching the number of bits in <b>q</b>, i.e. <b>sha1</b> if q length is 160, <b>sha224</b> if it is 224 or <b>sha256</b> if it is 256. This is only used by &quot;fips186_4&quot; and &quot;fips186_2&quot; key generation.</p>
+
+</dd>
+<dt id="properties:query1"><b>properties</b>:<i>query</i></dt>
+<dd>
+
+<p>The <i>digest</i> property <i>query</i> string to use when fetching a digest from a provider. This is only used by &quot;fips186_4&quot; and &quot;fips186_2&quot; key generation.</p>
+
+</dd>
+<dt id="gindex:index1"><b>gindex</b>:<i>index</i></dt>
+<dd>
+
+<p>The index to use for canonical generation and verification of the generator g. Set this to a positive value ranging from 0..255 to use this mode. Larger values will only use the bottom byte. This <i>index</i> must then be reused during key validation to verify the value of g. If this value is not set then g is not verifiable. The default value is -1. This is only used by &quot;fips186_4&quot; and &quot;fips186_2&quot; key generation.</p>
+
+</dd>
+<dt id="hexseed:seed3"><b>hexseed</b>:<i>seed</i></dt>
+<dd>
+
+<p>The seed <i>seed</i> data to use instead of generating a random seed internally. This should be used for testing purposes only. This will either produced fixed values for the generated parameters OR it will fail if the seed did not generate valid primes. This is only used by &quot;fips186_4&quot; and &quot;fips186_2&quot; key generation.</p>
+
+</dd>
+</dl>
+
+<h2 id="EC-Parameter-Generation-Options">EC Parameter Generation Options</h2>
+
+<p>The EC parameter generation options are the same as for key generation. See <a href="#EC-Key-Generation-Options">&quot;EC Key Generation Options&quot;</a> above.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The use of the genpkey program is encouraged over the algorithm specific utilities because additional algorithm options and ENGINE provided algorithms can be used.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>Generate an RSA private key using default parameters:</p>
+
+<pre><code>openssl genpkey -algorithm RSA -out key.pem</code></pre>
+
+<p>Encrypt output private key using 128 bit AES and the passphrase &quot;hello&quot;:</p>
+
+<pre><code>openssl genpkey -algorithm RSA -out key.pem -aes-128-cbc -pass pass:hello</code></pre>
+
+<p>Generate a 2048 bit RSA key using 3 as the public exponent:</p>
+
+<pre><code>openssl genpkey -algorithm RSA -out key.pem \
+    -pkeyopt rsa_keygen_bits:2048 -pkeyopt rsa_keygen_pubexp:3</code></pre>
+
+<p>Generate 2048 bit DSA parameters that can be validated: The output values for gindex and seed are required for key validation purposes and are not saved to the output pem file).</p>
+
+<pre><code>openssl genpkey -genparam -algorithm DSA -out dsap.pem -pkeyopt pbits:2048 \
+    -pkeyopt qbits:224 -pkeyopt digest:SHA256 -pkeyopt gindex:1 -text</code></pre>
+
+<p>Generate DSA key from parameters:</p>
+
+<pre><code>openssl genpkey -paramfile dsap.pem -out dsakey.pem</code></pre>
+
+<p>Generate 4096 bit DH Key using safe prime group ffdhe4096:</p>
+
+<pre><code>openssl genpkey -algorithm DH -out dhkey.pem -pkeyopt group:ffdhe4096</code></pre>
+
+<p>Generate 2048 bit X9.42 DH key with 256 bit subgroup using RFC5114 group3:</p>
+
+<pre><code>openssl genpkey -algorithm DHX -out dhkey.pem -pkeyopt dh_rfc5114:3</code></pre>
+
+<p>Generate a DH key using a DH parameters file:</p>
+
+<pre><code>openssl genpkey -paramfile dhp.pem -out dhkey.pem</code></pre>
+
+<p>Output DH parameters for safe prime group ffdhe2048:</p>
+
+<pre><code>openssl genpkey -genparam -algorithm DH -out dhp.pem -pkeyopt group:ffdhe2048</code></pre>
+
+<p>Output 2048 bit X9.42 DH parameters with 224 bit subgroup using RFC5114 group2:</p>
+
+<pre><code>openssl genpkey -genparam -algorithm DHX -out dhp.pem -pkeyopt dh_rfc5114:2</code></pre>
+
+<p>Output 2048 bit X9.42 DH parameters with 224 bit subgroup using FIP186-4 keygen:</p>
+
+<pre><code>openssl genpkey -genparam -algorithm DHX -out dhp.pem -text \
+    -pkeyopt pbits:2048 -pkeyopt qbits:224 -pkeyopt digest:SHA256 \
+    -pkeyopt gindex:1 -pkeyopt dh_paramgen_type:2</code></pre>
+
+<p>Output 1024 bit X9.42 DH parameters with 160 bit subgroup using FIP186-2 keygen:</p>
+
+<pre><code>openssl genpkey -genparam -algorithm DHX -out dhp.pem -text \
+    -pkeyopt pbits:1024 -pkeyopt qbits:160 -pkeyopt digest:SHA1 \
+    -pkeyopt gindex:1 -pkeyopt dh_paramgen_type:1</code></pre>
+
+<p>Output 2048 bit DH parameters:</p>
+
+<pre><code>openssl genpkey -genparam -algorithm DH -out dhp.pem \
+    -pkeyopt dh_paramgen_prime_len:2048</code></pre>
+
+<p>Output 2048 bit DH parameters using a generator:</p>
+
+<pre><code>openssl genpkey -genparam -algorithm DH -out dhpx.pem \
+    -pkeyopt dh_paramgen_prime_len:2048 \
+    -pkeyopt dh_paramgen_type:1</code></pre>
+
+<p>Generate EC parameters:</p>
+
+<pre><code>openssl genpkey -genparam -algorithm EC -out ecp.pem \
+       -pkeyopt ec_paramgen_curve:secp384r1 \
+       -pkeyopt ec_param_enc:named_curve</code></pre>
+
+<p>Generate EC key from parameters:</p>
+
+<pre><code>openssl genpkey -paramfile ecp.pem -out eckey.pem</code></pre>
+
+<p>Generate EC key directly:</p>
+
+<pre><code>openssl genpkey -algorithm EC -out eckey.pem \
+       -pkeyopt ec_paramgen_curve:P-384 \
+       -pkeyopt ec_param_enc:named_curve</code></pre>
+
+<p>Generate an X25519 private key:</p>
+
+<pre><code>openssl genpkey -algorithm X25519 -out xkey.pem</code></pre>
+
+<p>Generate an ED448 private key:</p>
+
+<pre><code>openssl genpkey -algorithm ED448 -out xkey.pem</code></pre>
+
+<p>Generate an ML-DSA-65 private key:</p>
+
+<pre><code>openssl genpkey -algorithm ML-DSA-65 -out ml-dsa-key.pem</code></pre>
+
+<p>Generate an ML-KEM-768 private key:</p>
+
+<pre><code>openssl genpkey -algorithm ML-KEM-768 -out ml-kem-key.pem</code></pre>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The ability to use NIST curve names, and to generate an EC key directly, were added in OpenSSL 1.0.2. The ability to generate X25519 keys was added in OpenSSL 1.1.0. The ability to generate X448, ED25519 and ED448 keys was added in OpenSSL 1.1.1.</p>
+
+<p>The <b>-engine</b> option was deprecated in OpenSSL 3.0.</p>
+
+<p>Support for <b>ML-DSA</b> and <b>ML-KEM</b> was added in OpenSSL 3.5.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2006-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

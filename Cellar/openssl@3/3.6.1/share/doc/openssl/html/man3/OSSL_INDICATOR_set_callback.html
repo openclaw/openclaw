@@ -1,0 +1,91 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OSSL_INDICATOR_set_callback</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OSSL_INDICATOR_set_callback, OSSL_INDICATOR_get_callback - specify a callback for FIPS indicators</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/indicator.h&gt;</code></pre>
+
+<p>typedef int (OSSL_INDICATOR_CALLBACK)(const char *type, const char *desc, const OSSL_PARAM params[]);</p>
+
+<pre><code>void OSSL_INDICATOR_set_callback(OSSL_LIB_CTX *libctx,
+                                 OSSL_INDICATOR_CALLBACK *cb);
+void OSSL_INDICATOR_get_callback(OSSL_LIB_CTX *libctx,
+                                 OSSL_INDICATOR_CALLBACK **cb);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>OSSL_INDICATOR_set_callback() sets a user callback <i>cb</i> associated with a <i>libctx</i> that will be called when a non approved FIPS operation is detected.</p>
+
+<p>The user&#39;s callback may be triggered multiple times during an algorithm operation to indicate different approved mode checks have failed.</p>
+
+<p>Non approved operations may only occur if the user has deliberately chosen to do so (either by setting a global FIPS configuration option or via an option in an algorithm&#39;s operation context).</p>
+
+<p>The user&#39;s callback <b>OSSL_INDICATOR_CALLBACK</b> <i>type</i> and <i>desc</i> contain the algorithm type and operation that is not approved. <i>params</i> is not currently used.</p>
+
+<p>If the user callback returns 0, an error will occur in the caller. This can be used for testing purposes.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>OSSL_INDICATOR_get_callback() returns the callback that has been set via OSSL_INDICATOR_set_callback() for the given library context <i>libctx</i>, or NULL if no callback is currently set.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>A simple indicator callback to log non approved FIPS operations</p>
+
+<pre><code> static int indicator_cb(const char *type, const char *desc,
+                         const OSSL_PARAM params[])
+ {
+     if (type != NULL &amp;&amp; desc != NULL)
+         fprintf(stdout, &quot;%s %s is not approved\n&quot;, type, desc);
+end:
+     /* For Testing purposes you could return 0 here to cause an error */
+     return 1;
+ }
+
+ OSSL_INDICATOR_set_callback(libctx, indicator_cb);</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/openssl-core.h.html">openssl-core.h(7)</a>, <a href="../man7/OSSL_PROVIDER-FIPS.html">OSSL_PROVIDER-FIPS(7)</a> <a href="../man3/OSSL_LIB_CTX.html">OSSL_LIB_CTX(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The functions described here were added in OpenSSL 3.4.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

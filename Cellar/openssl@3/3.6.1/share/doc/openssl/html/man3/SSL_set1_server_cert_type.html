@@ -1,0 +1,183 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_set1_server_cert_type</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_set1_client_cert_type, SSL_set1_server_cert_type, SSL_CTX_set1_client_cert_type, SSL_CTX_set1_server_cert_type, SSL_get0_client_cert_type, SSL_get0_server_cert_type, SSL_CTX_get0_client_cert_type, SSL_CTX_get0_server_cert_type - certificate type (RFC7250) support</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+int SSL_set1_client_cert_type(SSL *s, const unsigned char *val, size_t len);
+int SSL_set1_server_cert_type(SSL *s, const unsigned char *val, size_t len);
+int SSL_CTX_set1_client_cert_type(SSL_CTX *ctx, const unsigned char *val, size_t len);
+int SSL_CTX_set1_server_cert_type(SSL_CTX *ctx, const unsigned char *val, size_t len);
+int SSL_get0_client_cert_type(const SSL *s, unsigned char **val, size_t *len);
+int SSL_get0_server_cert_type(const SSL *s, unsigned char **val, size_t *len);
+int SSL_CTX_get0_client_cert_type(const SSL_CTX *ctx, unsigned char **val, size_t *len);
+int SSL_CTX_get0_server_cert_type(const SSL_CTX *s, unsigned char **val, size_t *len);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The SSL_set1_client_cert_type() and SSL_CTX_set1_client_cert_type() functions set the values for the client certificate type extension. The SSL_get0_client_cert_type() and SSL_CTX_get0_client_cert_type() functions retrieve the local values to be used in the client certificate type extension.</p>
+
+<p>The SSL_set1_server_cert_type() and SSL_CTX_set1_server_cert_type() functions set the values for the server certificate type extension. The SSL_get0_server_cert_type() and SSL_CTX_get0_server_cert_type() functions retrieve the local values to be used in the server certificate type extension.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The certificate type extensions are used to negotiate the certificate type to be used in the handshake. These extensions let each side know what its peer is able to accept.</p>
+
+<p>The client certificate type is sent from the client to the server to indicate what certificate types the client is able to present. Values are configured in preference order. On the server, this setting determines which certificate types the server is willing to accept. The server ultimately chooses what type to request (if any) from the values that are mutually supported. By default (if no explicit settings are specified), only X.509 certificates are supported.</p>
+
+<p>The server certificate type is sent from the client to the server to indicate what certificate types the client accepts. Values are configured in preference order. On the server, this setting determines which certificate types the server is willing to present. The server ultimately chooses what type to use from the values that are mutually supported. By default (if no explicit settings are specified), only X.509 certificates are supported.</p>
+
+<p>Having RPK specified first means that side will attempt to send (or request) RPKs if its peer also supports RPKs, otherwise X.509 certificate will be used if both have specified that (or have not configured these options).</p>
+
+<p>The two supported values in the <b>val</b> array are:</p>
+
+<dl>
+
+<dt id="TLSEXT_cert_type_x509">TLSEXT_cert_type_x509</dt>
+<dd>
+
+<p>Which corresponds to an X.509 certificate normally used in TLS.</p>
+
+</dd>
+<dt id="TLSEXT_cert_type_rpk">TLSEXT_cert_type_rpk</dt>
+<dd>
+
+<p>Which corresponds to a raw public key.</p>
+
+</dd>
+</dl>
+
+<p>If <b>val</b> is set to a non-NULL value, then the extension is sent in the handshake. If <b>val</b> is set to a NULL value (and <b>len</b> is 0), then the extension is disabled. The default value is NULL, meaning the extension is not sent, and X.509 certificates are used in the handshake.</p>
+
+<p>Raw public keys may be used in place of certificates when specified in the certificate type and negotiated. Raw public keys have no subject, issuer, validity dates or digital signature.</p>
+
+<p>Use the <a href="../man3/SSL_get_negotiated_client_cert_type.html">SSL_get_negotiated_client_cert_type(3)</a> and <a href="../man3/SSL_get_negotiated_server_cert_type.html">SSL_get_negotiated_server_cert_type(3)</a> functions to get the negotiated cert type values (at the conclusion of the handshake, or in callbacks that happen after the TLS ServerHello has been processed).</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>All functions return 1 on success and 0 on failure.</p>
+
+<p>The memory returned from the get0 functions must not be freed.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>To use raw public keys on the server, set up the SSL_CTX and SSL as follows:</p>
+
+<pre><code>SSL_CTX *ctx;
+SSL *ssl;
+unsigned char cert_type[] = { TLSEXT_cert_type_rpk, TLSEXT_cert_type_x509 };
+EVP_PKEY *rpk;
+
+/* Assign rpk to an EVP_PKEY from a file or other means */
+
+if ((ctx = SSL_CTX_new(TLS_server_method())) == NULL)
+    /* error */
+if ((ssl = SSL_new(ctx)) == NULL)
+    /* error */
+if (!SSL_set1_server_cert_type(ssl, cert_type, sizeof(cert_type)))
+    /* error */
+
+/* A certificate does not need to be specified when using raw public keys */
+if (!SSL_use_PrivateKey(ssl, rpk))
+    /* error */
+
+/* Perform SSL_accept() operations */</code></pre>
+
+<p>To connect to this server, set the client SSL_CTX and SSL as follows:</p>
+
+<pre><code>/* Connect function */
+
+SSL_CTX *ctx;
+SSL *ssl;
+const char *dane_tlsa_domain = &quot;smtp.example.com&quot;;
+unsigned char cert_type[] = { TLSEXT_cert_type_rpk, TLSEXT_cert_type_x509 };
+EVP_PKEY *rpk;
+int verify_result;
+
+/* Assign rpk to an EVP_PKEY from a file or other means */
+
+if ((ctx = SSL_CTX_new(TLS_client_method())) == NULL)
+    /* error */
+if (SSL_CTX_dane_enable(ctx) &lt;= 0)
+    /* error */
+if ((ssl = SSL_new(ctx)) == NULL)
+    /* error */
+/*
+ * The `dane_tlsa_domain` arguments sets the default SNI hostname.
+ * It may be set to NULL when enabling DANE on the server side.
+ */
+if (SSL_dane_enable(ssl, dane_tlsa_domain) &lt;= 0)
+    /* error */
+if (!SSL_set1_server_cert_type(ssl, cert_type, sizeof(cert_type)))
+    /* error */
+if (!SSL_add_expected_rpk(ssl, rpk))
+    /* error */
+
+/* Do SSL_connect() handshake and handle errors here */
+
+/* Optional: verify the peer RPK */
+verify_result = SSL_get_verify_result(ssl);
+if (verify_result == X509_V_OK) {
+    /* The server&#39;s raw public key matched the TLSA record */
+} else if (verify_result == X509_V_ERR_DANE_NO_MATCH) {
+    /*
+     * The server&#39;s raw public key, or public key in certificate, did not
+     * match the TLSA record
+     */
+} else if (verify_result == X509_V_ERR_RPK_UNTRUSTED) {
+    /*
+     * No TLSA records of the correct type are available to verify the
+     * server&#39;s raw public key. This would not happen in this example,
+     * as a TLSA record is configured.
+     */
+} else {
+    /* Some other verify error */
+}</code></pre>
+
+<p>To validate client raw public keys, code from the client example may need to be incorporated into the server side.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/SSL_get0_peer_rpk.html">SSL_get0_peer_rpk(3)</a>, <a href="../man3/SSL_get_negotiated_client_cert_type.html">SSL_get_negotiated_client_cert_type(3)</a>, <a href="../man3/SSL_get_negotiated_server_cert_type.html">SSL_get_negotiated_server_cert_type(3)</a>, <a href="../man3/SSL_use_certificate.html">SSL_use_certificate(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>These functions were added in OpenSSL 3.2.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2023-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+
+</body>
+
+</html>
+
+

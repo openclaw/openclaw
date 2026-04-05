@@ -1,0 +1,71 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OPENSSL_fork_prepare</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OPENSSL_fork_prepare, OPENSSL_fork_parent, OPENSSL_fork_child - OpenSSL fork handlers</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/crypto.h&gt;</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>void OPENSSL_fork_prepare(void);
+void OPENSSL_fork_parent(void);
+void OPENSSL_fork_child(void);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>These methods are currently unused, and as such, no replacement methods are required or planned.</p>
+
+<p>OpenSSL has state that should be reset when a process forks. For example, the entropy pool used to generate random numbers (and therefore encryption keys) should not be shared across multiple programs. The OPENSSL_fork_prepare(), OPENSSL_fork_parent(), and OPENSSL_fork_child() functions are used to reset this internal state.</p>
+
+<p>Platforms without fork(2) will probably not need to use these functions. Platforms with fork(2) but without pthread_atfork(3) will probably need to call them manually, as described in the following paragraph. Platforms such as Linux that have both functions will normally not need to call these functions as the OpenSSL library will do so automatically.</p>
+
+<p><a href="../man3/OPENSSL_init_crypto.html">OPENSSL_init_crypto(3)</a> will register these functions with the appropriate handler, when the <b>OPENSSL_INIT_ATFORK</b> flag is used. For other applications, these functions can be called directly. They should be used according to the calling sequence described by the pthread_atfork(3) documentation, which is summarized here. OPENSSL_fork_prepare() should be called before a fork() is done. After the fork() returns, the parent process should call OPENSSL_fork_parent() and the child process should call OPENSSL_fork_child().</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>OPENSSL_fork_prepare(), OPENSSL_fork_parent() and OPENSSL_fork_child() do not return values.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/OPENSSL_init_crypto.html">OPENSSL_init_crypto(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>These functions were added in OpenSSL 1.1.1.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2017-2020 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,82 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OCSP_request_add1_nonce</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OCSP_request_add1_nonce, OCSP_basic_add1_nonce, OCSP_check_nonce, OCSP_copy_nonce - OCSP nonce functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ocsp.h&gt;
+
+int OCSP_request_add1_nonce(OCSP_REQUEST *req, unsigned char *val, int len);
+int OCSP_basic_add1_nonce(OCSP_BASICRESP *resp, unsigned char *val, int len);
+int OCSP_copy_nonce(OCSP_BASICRESP *resp, OCSP_REQUEST *req);
+int OCSP_check_nonce(OCSP_REQUEST *req, OCSP_BASICRESP *resp);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>OCSP_request_add1_nonce() adds a nonce of value <b>val</b> and length <b>len</b> to OCSP request <b>req</b>. If <b>val</b> is <b>NULL</b> a random nonce is used. If <b>len</b> is zero or negative a default length will be used (currently 16 bytes).</p>
+
+<p>OCSP_basic_add1_nonce() is identical to OCSP_request_add1_nonce() except it adds a nonce to OCSP basic response <b>resp</b>.</p>
+
+<p>OCSP_check_nonce() compares the nonce value in <b>req</b> and <b>resp</b>.</p>
+
+<p>OCSP_copy_nonce() copies any nonce value present in <b>req</b> to <b>resp</b>.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>OCSP_request_add1_nonce() and OCSP_basic_add1_nonce() return 1 for success and 0 for failure.</p>
+
+<p>OCSP_copy_nonce() returns 1 if a nonce was successfully copied, 2 if no nonce was present in <b>req</b> and 0 if an error occurred.</p>
+
+<p>OCSP_check_nonce() returns the result of the nonce comparison between <b>req</b> and <b>resp</b>. The return value indicates the result of the comparison. If nonces are present and equal 1 is returned. If the nonces are absent 2 is returned. If a nonce is present in the response only 3 is returned. If nonces are present and unequal 0 is returned. If the nonce is present in the request only then -1 is returned.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>For most purposes the nonce value in a request is set to a random value so the <b>val</b> parameter in OCSP_request_add1_nonce() is usually NULL.</p>
+
+<p>An OCSP nonce is typically added to an OCSP request to thwart replay attacks by checking the same nonce value appears in the response.</p>
+
+<p>Some responders may include a nonce in all responses even if one is not supplied.</p>
+
+<p>Some responders cache OCSP responses and do not sign each response for performance reasons. As a result they do not support nonces.</p>
+
+<p>The return values of OCSP_check_nonce() can be checked to cover each case. A positive return value effectively indicates success: nonces are both present and match, both absent or present in the response only. A nonzero return additionally covers the case where the nonce is present in the request only: this will happen if the responder doesn&#39;t support nonces. A zero return value indicates present and mismatched nonces: this should be treated as an error condition.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/crypto.html">crypto(7)</a>, <a href="../man3/OCSP_cert_to_id.html">OCSP_cert_to_id(3)</a>, <a href="../man3/OCSP_REQUEST_new.html">OCSP_REQUEST_new(3)</a>, <a href="../man3/OCSP_resp_find_status.html">OCSP_resp_find_status(3)</a>, <a href="../man3/OCSP_response_status.html">OCSP_response_status(3)</a>, <a href="../man3/OCSP_sendreq_new.html">OCSP_sendreq_new(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2015-2020 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

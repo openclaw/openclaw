@@ -1,0 +1,83 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>evp</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>evp - high-level cryptographic functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/evp.h&gt;</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The EVP library provides a high-level interface to cryptographic functions.</p>
+
+<p>The <a href="../man3/EVP_SealInit.html"><b>EVP_Seal</b><i>XXX</i></a> and <a href="../man3/EVP_OpenInit.html"><b>EVP_Open</b><i>XXX</i></a> functions provide public key encryption and decryption to implement digital &quot;envelopes&quot;.</p>
+
+<p>The <a href="../man3/EVP_DigestSignInit.html"><b>EVP_DigestSign</b><i>XXX</i></a> and <a href="../man3/EVP_DigestVerifyInit.html"><b>EVP_DigestVerify</b><i>XXX</i></a> functions implement digital signatures and Message Authentication Codes (MACs). Also see the older <a href="../man3/EVP_SignInit.html"><b>EVP_Sign</b><i>XXX</i></a> and <a href="../man3/EVP_VerifyInit.html"><b>EVP_Verify</b><i>XXX</i></a> functions.</p>
+
+<p>Symmetric encryption is available with the <a href="../man3/EVP_EncryptInit.html"><b>EVP_Encrypt</b><i>XXX</i></a> functions. The <a href="../man3/EVP_DigestInit.html"><b>EVP_Digest</b><i>XXX</i></a> functions provide message digests.</p>
+
+<p>The <b>EVP_PKEY</b><i>XXX</i> functions provide a high-level interface to asymmetric algorithms. To create a new EVP_PKEY see <a href="../man3/EVP_PKEY_new.html">EVP_PKEY_new(3)</a>. EVP_PKEYs can be associated with a private key of a particular algorithm by using the functions described on the <a href="../man3/EVP_PKEY_fromdata.html">EVP_PKEY_fromdata(3)</a> page, or new keys can be generated using <a href="../man3/EVP_PKEY_keygen.html">EVP_PKEY_keygen(3)</a>. EVP_PKEYs can be compared using <a href="../man3/EVP_PKEY_eq.html">EVP_PKEY_eq(3)</a>, or printed using <a href="../man3/EVP_PKEY_print_private.html">EVP_PKEY_print_private(3)</a>. <a href="../man3/EVP_PKEY_todata.html">EVP_PKEY_todata(3)</a> can be used to convert a key back into an <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> array.</p>
+
+<p>The EVP_PKEY functions support the full range of asymmetric algorithm operations:</p>
+
+<dl>
+
+<dt id="For-key-agreement-see-EVP_PKEY_derive-3">For key agreement see <a href="../man3/EVP_PKEY_derive.html">EVP_PKEY_derive(3)</a></dt>
+<dd>
+
+</dd>
+<dt id="For-signing-and-verifying-see-EVP_PKEY_sign-3-EVP_PKEY_verify-3-and-EVP_PKEY_verify_recover-3-.-However-note-that-these-functions-do-not-perform-a-digest-of-the-data-to-be-signed.-Therefore-normally-you-would-use-the-EVP_DigestSignInit-3-functions-for-this-purpose">For signing and verifying see <a href="../man3/EVP_PKEY_sign.html">EVP_PKEY_sign(3)</a>, <a href="../man3/EVP_PKEY_verify.html">EVP_PKEY_verify(3)</a> and <a href="../man3/EVP_PKEY_verify_recover.html">EVP_PKEY_verify_recover(3)</a>. However, note that these functions do not perform a digest of the data to be signed. Therefore, normally you would use the <a href="../man3/EVP_DigestSignInit.html">EVP_DigestSignInit(3)</a> functions for this purpose.</dt>
+<dd>
+
+</dd>
+<dt id="For-encryption-and-decryption-see-EVP_PKEY_encrypt-3-and-EVP_PKEY_decrypt-3-respectively.-However-note-that-these-functions-perform-encryption-and-decryption-only.-As-public-key-encryption-is-an-expensive-operation-normally-you-would-wrap-an-encrypted-message-in-a-digital-envelope-using-the-EVP_SealInit-3-and-EVP_OpenInit-3-functions">For encryption and decryption see <a href="../man3/EVP_PKEY_encrypt.html">EVP_PKEY_encrypt(3)</a> and <a href="../man3/EVP_PKEY_decrypt.html">EVP_PKEY_decrypt(3)</a> respectively. However, note that these functions perform encryption and decryption only. As public key encryption is an expensive operation, normally you would wrap an encrypted message in a &quot;digital envelope&quot; using the <a href="../man3/EVP_SealInit.html">EVP_SealInit(3)</a> and <a href="../man3/EVP_OpenInit.html">EVP_OpenInit(3)</a> functions.</dt>
+<dd>
+
+</dd>
+</dl>
+
+<p>The <a href="../man3/EVP_BytesToKey.html">EVP_BytesToKey(3)</a> function provides some limited support for password based encryption. Careful selection of the parameters will provide a PKCS#5 PBKDF1 compatible implementation. However, new applications should not typically use this (preferring, for example, PBKDF2 from PCKS#5).</p>
+
+<p>The <a href="../man3/EVP_EncodeInit.html"><b>EVP_Encode</b><i>XXX</i></a> and <a href="../man3/EVP_EncodeInit.html"><b>EVP_Decode</b><i>XXX</i></a> functions implement base64 encoding and decoding.</p>
+
+<p>All the symmetric algorithms (ciphers), digests and asymmetric algorithms (public key algorithms) can be replaced by ENGINE modules providing alternative implementations. If ENGINE implementations of ciphers or digests are registered as defaults, then the various EVP functions will automatically use those implementations automatically in preference to built in software implementations. For more information, consult the engine(3) man page.</p>
+
+<p>Although low-level algorithm specific functions exist for many algorithms their use is discouraged. They cannot be used with an ENGINE and ENGINE versions of new algorithms cannot be accessed using the low-level functions. Also makes code harder to adapt to new algorithms and some options are not cleanly supported at the low-level and some operations are more efficient using the high-level interface.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_DigestInit.html">EVP_DigestInit(3)</a>, <a href="../man3/EVP_EncryptInit.html">EVP_EncryptInit(3)</a>, <a href="../man3/EVP_OpenInit.html">EVP_OpenInit(3)</a>, <a href="../man3/EVP_SealInit.html">EVP_SealInit(3)</a>, <a href="../man3/EVP_DigestSignInit.html">EVP_DigestSignInit(3)</a>, <a href="../man3/EVP_SignInit.html">EVP_SignInit(3)</a>, <a href="../man3/EVP_VerifyInit.html">EVP_VerifyInit(3)</a>, <a href="../man3/EVP_EncodeInit.html">EVP_EncodeInit(3)</a>, <a href="../man3/EVP_PKEY_new.html">EVP_PKEY_new(3)</a>, <a href="../man3/EVP_PKEY_fromdata.html">EVP_PKEY_fromdata(3)</a>, <a href="../man3/EVP_PKEY_todata.html">EVP_PKEY_todata(3)</a>, <a href="../man3/EVP_PKEY_keygen.html">EVP_PKEY_keygen(3)</a>, <a href="../man3/EVP_PKEY_print_private.html">EVP_PKEY_print_private(3)</a>, <a href="../man3/EVP_PKEY_decrypt.html">EVP_PKEY_decrypt(3)</a>, <a href="../man3/EVP_PKEY_encrypt.html">EVP_PKEY_encrypt(3)</a>, <a href="../man3/EVP_PKEY_sign.html">EVP_PKEY_sign(3)</a>, <a href="../man3/EVP_PKEY_verify.html">EVP_PKEY_verify(3)</a>, <a href="../man3/EVP_PKEY_verify_recover.html">EVP_PKEY_verify_recover(3)</a>, <a href="../man3/EVP_PKEY_derive.html">EVP_PKEY_derive(3)</a>, <a href="../man3/EVP_BytesToKey.html">EVP_BytesToKey(3)</a>, <a href="../man3/ENGINE_by_id.html">ENGINE_by_id(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

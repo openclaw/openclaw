@@ -1,0 +1,69 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>BIO_f_readbuffer</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>BIO_f_readbuffer - read only buffering BIO that supports BIO_tell() and BIO_seek()</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/bio.h&gt;
+
+const BIO_METHOD *BIO_f_readbuffer(void);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>BIO_f_readbuffer() returns the read buffering BIO method.</p>
+
+<p>This BIO filter can be inserted on top of BIO&#39;s that do not support BIO_tell() or BIO_seek() (e.g. A file BIO that uses stdin).</p>
+
+<p>Data read from a read buffering BIO comes from an internal buffer which is filled from the next BIO in the chain.</p>
+
+<p>BIO_gets() is supported for read buffering BIOs. Writing data to a read buffering BIO is not supported.</p>
+
+<p>Calling BIO_reset() on a read buffering BIO does not clear any buffered data.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>Read buffering BIOs implement BIO_read_ex() by using BIO_read_ex() operations on the next BIO (e.g. a file BIO) in the chain and storing the result in an internal buffer, from which bytes are given back to the caller as appropriate for the call. BIO_read_ex() is guaranteed to give the caller the number of bytes it asks for, unless there&#39;s an error or end of communication is reached in the next BIO. The internal buffer can grow to cache the entire contents of the next BIO in the chain. BIO_seek() uses the internal buffer, so that it can only seek into data that is already read.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>BIO_f_readbuffer() returns the read buffering BIO method.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/bio.html">bio(7)</a>, <a href="../man3/BIO_read.html">BIO_read(3)</a>, <a href="../man3/BIO_gets.html">BIO_gets(3)</a>, <a href="../man3/BIO_reset.html">BIO_reset(3)</a>, <a href="../man3/BIO_ctrl.html">BIO_ctrl(3)</a>.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

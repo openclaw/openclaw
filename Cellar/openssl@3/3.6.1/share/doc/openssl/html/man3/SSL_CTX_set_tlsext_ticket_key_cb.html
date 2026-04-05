@@ -1,0 +1,213 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_CTX_set_tlsext_ticket_key_cb</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_CTX_set_tlsext_ticket_key_evp_cb, SSL_CTX_set_tlsext_ticket_key_cb - set a callback for session ticket processing</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/tls1.h&gt;
+
+int SSL_CTX_set_tlsext_ticket_key_evp_cb(SSL_CTX sslctx,
+    int (*cb)(SSL *s, unsigned char key_name[16],
+              unsigned char iv[EVP_MAX_IV_LENGTH],
+              EVP_CIPHER_CTX *ctx, EVP_MAC_CTX *hctx, int enc));</code></pre>
+
+<p>The following function has been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>int SSL_CTX_set_tlsext_ticket_key_cb(SSL_CTX sslctx,
+    int (*cb)(SSL *s, unsigned char key_name[16],
+              unsigned char iv[EVP_MAX_IV_LENGTH],
+              EVP_CIPHER_CTX *ctx, HMAC_CTX *hctx, int enc));</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_CTX_set_tlsext_ticket_key_evp_cb() sets a callback function <i>cb</i> for handling session tickets for the ssl context <i>sslctx</i>. Session tickets, defined in RFC5077 provide an enhanced session resumption capability where the server implementation is not required to maintain per session state. It only applies to TLS and there is no SSLv3 implementation.</p>
+
+<p>The callback function <i>cb</i> will be called for every client instigated TLS session when session ticket extension is presented in the TLS hello message. It is the responsibility of this function to create or retrieve the cryptographic parameters and to maintain their state.</p>
+
+<p>The OpenSSL library uses your callback function to help implement a common TLS ticket construction state according to RFC5077 Section 4 such that per session state is unnecessary and a small set of cryptographic variables needs to be maintained by the callback function implementation.</p>
+
+<p>In order to reuse a session, a TLS client must send the session ticket extension to the server. The client must send exactly one session ticket. The server, through the callback function, either agrees to reuse the session ticket information or it starts a full TLS handshake to create a new session ticket.</p>
+
+<p>Before the callback function is started <i>ctx</i> and <i>hctx</i> have been initialised with <a href="../man3/EVP_CIPHER_CTX_reset.html">EVP_CIPHER_CTX_reset(3)</a> and <a href="../man3/EVP_MAC_CTX_new.html">EVP_MAC_CTX_new(3)</a> respectively.</p>
+
+<p>For new sessions tickets, when the client doesn&#39;t present a session ticket, or an attempted retrieval of the ticket failed, or a renew option was indicated, the callback function will be called with <i>enc</i> equal to 1. The OpenSSL library expects that the function will set an arbitrary <i>name</i>, initialize <i>iv</i>, and set the cipher context <i>ctx</i> and the hash context <i>hctx</i>.</p>
+
+<p>The <i>name</i> is 16 characters long and is used as a key identifier.</p>
+
+<p>The <i>iv</i> length is the length of the IV of the corresponding cipher. The maximum IV length is <b>EVP_MAX_IV_LENGTH</b> bytes defined in <i>&lt;openssl/evp.h&gt;</i>.</p>
+
+<p>The initialization vector <i>iv</i> should be a random value. The cipher context <i>ctx</i> should use the initialisation vector <i>iv</i>. The cipher context can be set using <a href="../man3/EVP_EncryptInit_ex.html">EVP_EncryptInit_ex(3)</a>. The hmac context and digest can be set using <a href="../man3/EVP_MAC_CTX_set_params.html">EVP_MAC_CTX_set_params(3)</a> with the <b>OSSL_MAC_PARAM_KEY</b> and <b>OSSL_MAC_PARAM_DIGEST</b> parameters respectively.</p>
+
+<p>When the client presents a session ticket, the callback function with be called with <i>enc</i> set to 0 indicating that the <i>cb</i> function should retrieve a set of parameters. In this case <i>name</i> and <i>iv</i> have already been parsed out of the session ticket. The OpenSSL library expects that the <i>name</i> will be used to retrieve a cryptographic parameters and that the cryptographic context <i>ctx</i> will be set with the retrieved parameters and the initialization vector <i>iv</i>. using a function like <a href="../man3/EVP_DecryptInit_ex.html">EVP_DecryptInit_ex(3)</a>. The key material and digest for <i>hctx</i> need to be set using <a href="../man3/EVP_MAC_CTX_set_params.html">EVP_MAC_CTX_set_params(3)</a> with the <b>OSSL_MAC_PARAM_KEY</b> and <b>OSSL_MAC_PARAM_DIGEST</b> parameters respectively.</p>
+
+<p>If the <i>name</i> is still valid but a renewal of the ticket is required the callback function should return 2. The library will call the callback again with an argument of enc equal to 1 to set the new ticket.</p>
+
+<p>The return value of the <i>cb</i> function is used by OpenSSL to determine what further processing will occur. The following return values have meaning:</p>
+
+<dl>
+
+<dt id="pod2">2</dt>
+<dd>
+
+<p>This indicates that the <i>ctx</i> and <i>hctx</i> have been set and the session can continue on those parameters. Additionally it indicates that the session ticket is in a renewal period and should be replaced. The OpenSSL library will call <i>cb</i> again with an enc argument of 1 to set the new ticket (see RFC5077 3.3 paragraph 2).</p>
+
+</dd>
+<dt id="pod1">1</dt>
+<dd>
+
+<p>This indicates that the <i>ctx</i> and <i>hctx</i> have been set and the session can continue on those parameters.</p>
+
+</dd>
+<dt id="pod0">0</dt>
+<dd>
+
+<p>This indicates that it was not possible to set/retrieve a session ticket and the SSL/TLS session will continue by negotiating a set of cryptographic parameters or using the alternate SSL/TLS resumption mechanism, session ids.</p>
+
+<p>If called with enc equal to 0 the library will call the <i>cb</i> again to get a new set of parameters.</p>
+
+</dd>
+<dt id="less-than-0">less than 0</dt>
+<dd>
+
+<p>This indicates an error.</p>
+
+</dd>
+</dl>
+
+<p>The SSL_CTX_set_tlsext_ticket_key_cb() function is identical to SSL_CTX_set_tlsext_ticket_key_evp_cb() except that it takes a deprecated HMAC_CTX pointer instead of an EVP_MAC_CTX one. Before this callback function is started <i>hctx</i> will have been initialised with <a href="../man3/EVP_MAC_CTX_new.html">EVP_MAC_CTX_new(3)</a> and the digest set with <a href="../man3/EVP_MAC_CTX_set_params.html">EVP_MAC_CTX_set_params(3)</a>. The <i>hctx</i> key material can be set using <a href="../man3/HMAC_Init_ex.html">HMAC_Init_ex(3)</a>.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>Session resumption shortcuts the TLS handshake so that the client certificate negotiation doesn&#39;t occur. It makes up for this by storing the client certificate and all other negotiated state information encrypted within the ticket. In a resumed session the applications will have all this state information available exactly as if a full negotiation had occurred.</p>
+
+<p>If an attacker can obtain the key used to encrypt a session ticket, they can obtain the master secret for any ticket using that key and decrypt any traffic using that session: even if the cipher suite supports forward secrecy. As a result applications may wish to use multiple keys and avoid using long term keys stored in files.</p>
+
+<p>Applications can use longer keys to maintain a consistent level of security. For example if a cipher suite uses 256 bit ciphers but only a 128 bit ticket key the overall security is only 128 bits because breaking the ticket key will enable an attacker to obtain the session keys.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>Returns 1 to indicate the callback function was set and 0 otherwise.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>Reference Implementation:</p>
+
+<pre><code>SSL_CTX_set_tlsext_ticket_key_evp_cb(SSL, ssl_tlsext_ticket_key_cb);
+...
+
+static int ssl_tlsext_ticket_key_cb(SSL *s, unsigned char key_name[16],
+                                    unsigned char *iv, EVP_CIPHER_CTX *ctx,
+                                    EVP_MAC_CTX *hctx, int enc)
+{
+    OSSL_PARAM params[3];
+    your_type_t *key; /* something that you need to implement */
+
+    if (enc) { /* create new session */
+        if (RAND_bytes(iv, EVP_MAX_IV_LENGTH) &lt;= 0)
+            return -1; /* insufficient random */
+
+        key = currentkey(); /* something that you need to implement */
+        if (key == NULL) {
+            /* current key doesn&#39;t exist or isn&#39;t valid */
+            key = createkey(); /*
+                                * Something that you need to implement.
+                                * createkey needs to initialise a name,
+                                * an aes_key, a hmac_key and optionally
+                                * an expire time.
+                                */
+            if (key == NULL) /* key couldn&#39;t be created */
+                return 0;
+        }
+        memcpy(key_name, key-&gt;name, 16);
+
+        if (EVP_EncryptInit_ex(&amp;ctx, EVP_aes_256_cbc(), NULL, key-&gt;aes_key,
+                               iv) == 0)
+           return -1; /* error in cipher initialisation */
+
+        params[0] = OSSL_PARAM_construct_octet_string(OSSL_MAC_PARAM_KEY,
+                                                      key-&gt;hmac_key, 32);
+        params[1] = OSSL_PARAM_construct_utf8_string(OSSL_MAC_PARAM_DIGEST,
+                                                     &quot;sha256&quot;, 0);
+        params[2] = OSSL_PARAM_construct_end();
+        if (EVP_MAC_CTX_set_params(hctx, params) == 0)
+           return -1; /* error in mac initialisation */
+
+        return 1;
+
+    } else { /* retrieve session */
+        time_t t = time(NULL);
+        key = findkey(key_name); /* something that you need to implement */
+
+        if (key == NULL || key-&gt;expire &lt; t)
+            return 0;
+
+        params[0] = OSSL_PARAM_construct_octet_string(OSSL_KDF_PARAM_KEY,
+                                                      key-&gt;hmac_key, 32);
+        params[1] = OSSL_PARAM_construct_utf8_string(OSSL_MAC_PARAM_DIGEST,
+                                                     &quot;sha256&quot;, 0);
+        params[2] = OSSL_PARAM_construct_end();
+        if (EVP_MAC_CTX_set_params(hctx, params) == 0)
+           return -1; /* error in mac initialisation */
+
+        if (EVP_DecryptInit_ex(&amp;ctx, EVP_aes_256_cbc(), NULL, key-&gt;aes_key,
+                               iv) == 0)
+           return -1; /* error in cipher initialisation */
+
+        if (key-&gt;expire &lt; t - RENEW_TIME) { /* RENEW_TIME: implement */
+            /*
+             * return 2 - This session will get a new ticket even though the
+             * current one is still valid.
+             */
+            return 2;
+        }
+        return 1;
+    }
+}</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a>, <a href="../man3/SSL_set_session.html">SSL_set_session(3)</a>, <a href="../man3/SSL_session_reused.html">SSL_session_reused(3)</a>, <a href="../man3/SSL_CTX_add_session.html">SSL_CTX_add_session(3)</a>, <a href="../man3/SSL_CTX_sess_number.html">SSL_CTX_sess_number(3)</a>, <a href="../man3/SSL_CTX_sess_set_get_cb.html">SSL_CTX_sess_set_get_cb(3)</a>, <a href="../man3/SSL_CTX_set_session_id_context.html">SSL_CTX_set_session_id_context(3)</a>,</p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The SSL_CTX_set_tlsext_ticket_key_cb() function was deprecated in OpenSSL 3.0.</p>
+
+<p>The SSL_CTX_set_tlsext_ticket_key_evp_cb() function was introduced in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2014-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

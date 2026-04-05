@@ -1,0 +1,66 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>BN_security_bits</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>BN_security_bits - returns bits of security based on given numbers</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/bn.h&gt;
+
+int BN_security_bits(int L, int N);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>BN_security_bits() returns the number of bits of security provided by a specific algorithm and a particular key size. The bits of security is defined in NIST SP800-57. Currently, BN_security_bits() support two types of asymmetric algorithms: the FFC (Finite Field Cryptography) and IFC (Integer Factorization Cryptography). For FFC, e.g., DSA and DH, both parameters <b>L</b> and <b>N</b> are used to decide the bits of security, where <b>L</b> is the size of the public key and <b>N</b> is the size of the private key. For IFC, e.g., RSA, only <b>L</b> is used and it&#39;s commonly considered to be the key size (modulus).</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>Number of security bits.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>ECC (Elliptic Curve Cryptography) is not covered by the BN_security_bits() function. The symmetric algorithms are not covered neither.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/DH_security_bits.html">DH_security_bits(3)</a>, <a href="../man3/DSA_security_bits.html">DSA_security_bits(3)</a>, <a href="../man3/RSA_security_bits.html">RSA_security_bits(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The BN_security_bits() function was added in OpenSSL 1.1.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2017-2019 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,127 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OSSL_CMP_ITAV_set0</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OSSL_CMP_ITAV_create, OSSL_CMP_ITAV_set0, OSSL_CMP_ITAV_get0_type, OSSL_CMP_ITAV_get0_value, OSSL_CMP_ITAV_push0_stack_item, OSSL_CMP_ITAV_new0_certProfile, OSSL_CMP_ITAV_get0_certProfile - OSSL_CMP_ITAV utility functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/cmp.h&gt;
+
+OSSL_CMP_ITAV *OSSL_CMP_ITAV_create(ASN1_OBJECT *type, ASN1_TYPE *value);
+void OSSL_CMP_ITAV_set0(OSSL_CMP_ITAV *itav, ASN1_OBJECT *type,
+                        ASN1_TYPE *value);
+ASN1_OBJECT *OSSL_CMP_ITAV_get0_type(const OSSL_CMP_ITAV *itav);
+ASN1_TYPE *OSSL_CMP_ITAV_get0_value(const OSSL_CMP_ITAV *itav);
+int OSSL_CMP_ITAV_push0_stack_item(STACK_OF(OSSL_CMP_ITAV) **itav_sk_p,
+                                   OSSL_CMP_ITAV *itav);
+OSSL_CMP_ITAV
+*OSSL_CMP_ITAV_new0_certProfile(STACK_OF(ASN1_UTF8STRING) *certProfile);
+int OSSL_CMP_ITAV_get0_certProfile(const OSSL_CMP_ITAV *itav,
+                                   STACK_OF(ASN1_UTF8STRING) **out);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>ITAV is short for InfoTypeAndValue. This type is defined in RFC 9810 section 5.3.19 and Appendix F. It is used at various places in CMP messages, e.g., in the generalInfo PKIHeader field, to hold a key-value pair.</p>
+
+<p>OSSL_CMP_ITAV_create() creates a new <b>OSSL_CMP_ITAV</b> structure and fills it in. It combines OSSL_CMP_ITAV_new() and OSSL_CMP_ITAV_set0().</p>
+
+<p>OSSL_CMP_ITAV_set0() sets the <i>itav</i> with an infoType of <i>type</i> and an infoValue of <i>value</i>. This function uses the pointers <i>type</i> and <i>value</i> internally, so they must <b>not</b> be freed up after the call.</p>
+
+<p>OSSL_CMP_ITAV_get0_type() returns a direct pointer to the infoType in the <i>itav</i>.</p>
+
+<p>OSSL_CMP_ITAV_get0_value() returns a direct pointer to the infoValue in the <i>itav</i> as generic <b>ASN1_TYPE</b> pointer.</p>
+
+<p>OSSL_CMP_ITAV_push0_stack_item() pushes <i>itav</i> to the stack pointed to by <i>*itav_sk_p</i>. It creates a new stack if <i>*itav_sk_p</i> points to NULL.</p>
+
+<p>OSSL_CMP_ITAV_new0_certProfile() creates a new <b>OSSL_CMP_ITAV</b> structure of type <b>certProfile</b> that includes the optionally given list of profile names. On success, ownership of the list is with the new <b>OSSL_CMP_ITAV</b> structure.</p>
+
+<p>OSSL_CMP_ITAV_get0_certProfile() on success assigns to <i>*out</i> an internal pointer to the list of certificate profile names contained in the infoValue field of <i>itav</i>. The pointer may be NULL if no profile name is included. It is an error if the infoType of <i>itav</i> is not <b>certProfile</b>.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>CMP is defined in RFC 9810.</p>
+
+<p>OIDs to use as types in <b>OSSL_CMP_ITAV</b> can be found at <a href="https://datatracker.ietf.org/doc/html/rfc9480#section-4.2.2">https://datatracker.ietf.org/doc/html/rfc9480#section-4.2.2</a>. The respective OpenSSL NIDs, such as <b>NID_id_it_certProfile</b>, are defined in the <i>&lt;openssl/obj_mac.h&gt;</i> header file.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>OSSL_CMP_ITAV_create() and OSSL_CMP_ITAV_new0_certProfile() return a pointer to an ITAV structure on success, or NULL on error.</p>
+
+<p>OSSL_CMP_ITAV_set0() does not return a value.</p>
+
+<p>OSSL_CMP_ITAV_get0_type() and OSSL_CMP_ITAV_get0_value() return the respective pointer or NULL if their input is NULL.</p>
+
+<p>OSSL_CMP_ITAV_push0_stack_item() and OSSL_CMP_ITAV_get0_certProfile() return 1 on success, 0 on error.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>The following code creates and sets a structure representing a generic InfoTypeAndValue sequence, using an OID created from text as type, and an integer as value. Afterwards, it is pushed to the <b>OSSL_CMP_CTX</b> to be later included in the requests&#39; PKIHeader&#39;s genInfo field.</p>
+
+<pre><code>ASN1_OBJECT *type = OBJ_txt2obj(&quot;1.2.3.4.5&quot;, 1);
+if (type == NULL) ...
+
+ASN1_INTEGER *asn1int = ASN1_INTEGER_new();
+if (asn1int == NULL || !ASN1_INTEGER_set(asn1int, 12345)) ...
+
+ASN1_TYPE *val = ASN1_TYPE_new();
+if (val == NULL) ...
+ASN1_TYPE_set(val, V_ASN1_INTEGER, asn1int);
+
+OSSL_CMP_ITAV *itav = OSSL_CMP_ITAV_create(type, val);
+if (itav == NULL) ...
+
+if (!OSSL_CMP_CTX_push0_geninfo_ITAV(ctx, itav)) {
+    OSSL_CMP_ITAV_free(itav); /* also frees type and val */
+    ...
+}
+
+...
+
+OSSL_CMP_CTX_free(ctx); /* also frees itav */</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/OSSL_CMP_CTX_new.html">OSSL_CMP_CTX_new(3)</a>, <a href="../man3/OSSL_CMP_CTX_free.html">OSSL_CMP_CTX_free(3)</a>, <a href="../man3/ASN1_TYPE_set.html">ASN1_TYPE_set(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The OpenSSL CMP support was added in OpenSSL 3.0.</p>
+
+<p>OSSL_CMP_ITAV_new0_certProfile() and OSSL_CMP_ITAV_get0_certProfile() were added in OpenSSL 3.3.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2007-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

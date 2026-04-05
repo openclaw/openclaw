@@ -1,0 +1,95 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_CTX_set_session_id_context</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#WARNINGS">WARNINGS</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_CTX_set_session_id_context, SSL_set_session_id_context - set context within which session can be reused (server side only)</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+int SSL_CTX_set_session_id_context(SSL_CTX *ctx, const unsigned char *sid_ctx,
+                                   unsigned int sid_ctx_len);
+int SSL_set_session_id_context(SSL *ssl, const unsigned char *sid_ctx,
+                               unsigned int sid_ctx_len);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_CTX_set_session_id_context() sets the context <b>sid_ctx</b> of length <b>sid_ctx_len</b> within which a session can be reused for the <b>ctx</b> object.</p>
+
+<p>SSL_set_session_id_context() sets the context <b>sid_ctx</b> of length <b>sid_ctx_len</b> within which a session can be reused for the <b>ssl</b> object.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>Sessions are generated within a certain context. When exporting/importing sessions with <b>i2d_SSL_SESSION</b>/<b>d2i_SSL_SESSION</b> it would be possible, to re-import a session generated from another context (e.g. another application), which might lead to malfunctions. Therefore, each application must set its own session id context <b>sid_ctx</b> which is used to distinguish the contexts and is stored in exported sessions. The <b>sid_ctx</b> can be any kind of binary data with a given length, it is therefore possible to use e.g. the name of the application and/or the hostname and/or service name ...</p>
+
+<p>The session id context becomes part of the session. The session id context is set by the SSL/TLS server. The SSL_CTX_set_session_id_context() and SSL_set_session_id_context() functions are therefore only useful on the server side.</p>
+
+<p>OpenSSL clients will check the session id context returned by the server when reusing a session.</p>
+
+<p>The maximum length of the <b>sid_ctx</b> is limited to <b>SSL_MAX_SID_CTX_LENGTH</b>.</p>
+
+<h1 id="WARNINGS">WARNINGS</h1>
+
+<p>If the session id context is not set on an SSL/TLS server and client certificates are used, stored sessions will not be reused but a fatal error will be flagged and the handshake will fail.</p>
+
+<p>If a server returns a different session id context to an OpenSSL client when reusing a session, an error will be flagged and the handshake will fail. OpenSSL servers will always return the correct session id context, as an OpenSSL server checks the session id context itself before reusing a session as described above.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_CTX_set_session_id_context() and SSL_set_session_id_context() return the following values:</p>
+
+<dl>
+
+<dt id="pod0">0</dt>
+<dd>
+
+<p>The length <b>sid_ctx_len</b> of the session id context <b>sid_ctx</b> exceeded the maximum allowed length of <b>SSL_MAX_SID_CTX_LENGTH</b>. The error is logged to the error stack.</p>
+
+</dd>
+<dt id="pod1">1</dt>
+<dd>
+
+<p>The operation succeeded.</p>
+
+</dd>
+</dl>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2001-2020 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

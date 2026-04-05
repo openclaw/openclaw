@@ -1,0 +1,190 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>X509_get_extension_flags</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>X509_get0_subject_key_id, X509_get0_authority_key_id, X509_get0_authority_issuer, X509_get0_authority_serial, X509_get_pathlen, X509_get_extension_flags, X509_get_key_usage, X509_get_extended_key_usage, X509_set_proxy_flag, X509_set_proxy_pathlen, X509_get_proxy_pathlen - retrieve certificate extension data</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/x509v3.h&gt;
+
+long X509_get_pathlen(X509 *x);
+uint32_t X509_get_extension_flags(X509 *x);
+uint32_t X509_get_key_usage(X509 *x);
+uint32_t X509_get_extended_key_usage(X509 *x);
+const ASN1_OCTET_STRING *X509_get0_subject_key_id(X509 *x);
+const ASN1_OCTET_STRING *X509_get0_authority_key_id(X509 *x);
+const GENERAL_NAMES *X509_get0_authority_issuer(X509 *x);
+const ASN1_INTEGER *X509_get0_authority_serial(X509 *x);
+void X509_set_proxy_flag(X509 *x);
+void X509_set_proxy_pathlen(int l);
+long X509_get_proxy_pathlen(X509 *x);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>These functions retrieve information related to commonly used certificate extensions.</p>
+
+<p>X509_get_pathlen() retrieves the path length extension from a certificate. This extension is used to limit the length of a cert chain that may be issued from that CA.</p>
+
+<p>X509_get_extension_flags() retrieves general information about a certificate, it will return one or more of the following flags ored together.</p>
+
+<dl>
+
+<dt id="EXFLAG_V1"><b>EXFLAG_V1</b></dt>
+<dd>
+
+<p>The certificate is an obsolete version 1 certificate.</p>
+
+</dd>
+<dt id="EXFLAG_BCONS"><b>EXFLAG_BCONS</b></dt>
+<dd>
+
+<p>The certificate contains a basic constraints extension.</p>
+
+</dd>
+<dt id="EXFLAG_CA"><b>EXFLAG_CA</b></dt>
+<dd>
+
+<p>The certificate contains basic constraints and asserts the CA flag.</p>
+
+</dd>
+<dt id="EXFLAG_PROXY"><b>EXFLAG_PROXY</b></dt>
+<dd>
+
+<p>The certificate is a valid proxy certificate.</p>
+
+</dd>
+<dt id="EXFLAG_SI"><b>EXFLAG_SI</b></dt>
+<dd>
+
+<p>The certificate is self issued (that is subject and issuer names match).</p>
+
+</dd>
+<dt id="EXFLAG_SS"><b>EXFLAG_SS</b></dt>
+<dd>
+
+<p>The subject and issuer names match and extension values imply it is self signed.</p>
+
+</dd>
+<dt id="EXFLAG_FRESHEST"><b>EXFLAG_FRESHEST</b></dt>
+<dd>
+
+<p>The freshest CRL extension is present in the certificate.</p>
+
+</dd>
+<dt id="EXFLAG_CRITICAL"><b>EXFLAG_CRITICAL</b></dt>
+<dd>
+
+<p>The certificate contains an unhandled critical extension.</p>
+
+</dd>
+<dt id="EXFLAG_INVALID"><b>EXFLAG_INVALID</b></dt>
+<dd>
+
+<p>Some certificate extension values are invalid or inconsistent. The certificate should be rejected. This bit may also be raised after an out-of-memory error while processing the X509 object, so it may not be related to the processed ASN1 object itself.</p>
+
+</dd>
+<dt id="EXFLAG_NO_FINGERPRINT"><b>EXFLAG_NO_FINGERPRINT</b></dt>
+<dd>
+
+<p>Failed to compute the internal SHA1 hash value of the certificate or CRL. This may be due to malloc failure or because no SHA1 implementation was found.</p>
+
+</dd>
+<dt id="EXFLAG_INVALID_POLICY"><b>EXFLAG_INVALID_POLICY</b></dt>
+<dd>
+
+<p>The NID_certificate_policies certificate extension is invalid or inconsistent. The certificate should be rejected. This bit may also be raised after an out-of-memory error while processing the X509 object, so it may not be related to the processed ASN1 object itself.</p>
+
+</dd>
+<dt id="EXFLAG_KUSAGE"><b>EXFLAG_KUSAGE</b></dt>
+<dd>
+
+<p>The certificate contains a key usage extension. The value can be retrieved using X509_get_key_usage().</p>
+
+</dd>
+<dt id="EXFLAG_XKUSAGE"><b>EXFLAG_XKUSAGE</b></dt>
+<dd>
+
+<p>The certificate contains an extended key usage extension. The value can be retrieved using X509_get_extended_key_usage().</p>
+
+</dd>
+</dl>
+
+<p>X509_get_key_usage() returns the value of the key usage extension. If key usage is present will return zero or more of the flags: <b>KU_DIGITAL_SIGNATURE</b>, <b>KU_NON_REPUDIATION</b>, <b>KU_KEY_ENCIPHERMENT</b>, <b>KU_DATA_ENCIPHERMENT</b>, <b>KU_KEY_AGREEMENT</b>, <b>KU_KEY_CERT_SIGN</b>, <b>KU_CRL_SIGN</b>, <b>KU_ENCIPHER_ONLY</b> or <b>KU_DECIPHER_ONLY</b> corresponding to individual key usage bits. If key usage is absent then <b>UINT32_MAX</b> is returned.</p>
+
+<p>X509_get_extended_key_usage() returns the value of the extended key usage extension. If extended key usage is present it will return zero or more of the flags: <b>XKU_SSL_SERVER</b>, <b>XKU_SSL_CLIENT</b>, <b>XKU_SMIME</b>, <b>XKU_CODE_SIGN</b> <b>XKU_OCSP_SIGN</b>, <b>XKU_TIMESTAMP</b>, <b>XKU_DVCS</b> or <b>XKU_ANYEKU</b>. These correspond to the OIDs <b>id-kp-serverAuth</b>, <b>id-kp-clientAuth</b>, <b>id-kp-emailProtection</b>, <b>id-kp-codeSigning</b>, <b>id-kp-OCSPSigning</b>, <b>id-kp-timeStamping</b>, <b>id-kp-dvcs</b> and <b>anyExtendedKeyUsage</b> respectively. Additionally <b>XKU_SGC</b> is set if either Netscape or Microsoft SGC OIDs are present.</p>
+
+<p>X509_get0_subject_key_id() returns an internal pointer to the subject key identifier of <b>x</b> as an <b>ASN1_OCTET_STRING</b> or <b>NULL</b> if the extension is not present or cannot be parsed.</p>
+
+<p>X509_get0_authority_key_id() returns an internal pointer to the authority key identifier of <b>x</b> as an <b>ASN1_OCTET_STRING</b> or <b>NULL</b> if the extension is not present or cannot be parsed.</p>
+
+<p>X509_get0_authority_issuer() returns an internal pointer to the authority certificate issuer of <b>x</b> as a stack of <b>GENERAL_NAME</b> structures or <b>NULL</b> if the extension is not present or cannot be parsed.</p>
+
+<p>X509_get0_authority_serial() returns an internal pointer to the authority certificate serial number of <b>x</b> as an <b>ASN1_INTEGER</b> or <b>NULL</b> if the extension is not present or cannot be parsed.</p>
+
+<p>X509_set_proxy_flag() marks the certificate with the <b>EXFLAG_PROXY</b> flag. This is for the users who need to mark non-RFC3820 proxy certificates as such, as OpenSSL only detects RFC3820 compliant ones.</p>
+
+<p>X509_set_proxy_pathlen() sets the proxy certificate path length for the given certificate <b>x</b>. This is for the users who need to mark non-RFC3820 proxy certificates as such, as OpenSSL only detects RFC3820 compliant ones.</p>
+
+<p>X509_get_proxy_pathlen() returns the proxy certificate path length for the given certificate <b>x</b> if it is a proxy certificate.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The value of the flags correspond to extension values which are cached in the <b>X509</b> structure. If the flags returned do not provide sufficient information an application should examine extension values directly for example using X509_get_ext_d2i().</p>
+
+<p>If the key usage or extended key usage extension is absent then typically usage is unrestricted. For this reason X509_get_key_usage() and X509_get_extended_key_usage() return <b>UINT32_MAX</b> when the corresponding extension is absent. Applications can additionally check the return value of X509_get_extension_flags() and take appropriate action is an extension is absent.</p>
+
+<p>If X509_get0_subject_key_id() returns <b>NULL</b> then the extension may be absent or malformed. Applications can determine the precise reason using X509_get_ext_d2i().</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>X509_get_pathlen() returns the path length value, or -1 if the extension is not present.</p>
+
+<p>X509_get_extension_flags(), X509_get_key_usage() and X509_get_extended_key_usage() return sets of flags corresponding to the certificate extension values.</p>
+
+<p>X509_get0_subject_key_id() returns the subject key identifier as a pointer to an <b>ASN1_OCTET_STRING</b> structure or <b>NULL</b> if the extension is absent or an error occurred during parsing.</p>
+
+<p>X509_get_proxy_pathlen() returns the path length value if the given certificate is a proxy one and has a path length set, and -1 otherwise.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/X509_check_purpose.html">X509_check_purpose(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>X509_get_pathlen(), X509_set_proxy_flag(), X509_set_proxy_pathlen() and X509_get_proxy_pathlen() were added in OpenSSL 1.1.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2015-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,70 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>CMS_digest_create</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>CMS_digest_create_ex, CMS_digest_create - Create CMS DigestedData object</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/cms.h&gt;
+
+CMS_ContentInfo *CMS_digest_create_ex(BIO *in, const EVP_MD *md,
+                                      unsigned int flags, OSSL_LIB_CTX *ctx,
+                                      const char *propq);
+
+CMS_ContentInfo *CMS_digest_create(BIO *in, const EVP_MD *md,
+                                   unsigned int flags);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>CMS_digest_create_ex() creates a <b>CMS_ContentInfo</b> structure with a type <b>NID_pkcs7_digest</b>. The data supplied via the <i>in</i> BIO is digested using <i>md</i>. The library context <i>libctx</i> and the property query <i>propq</i> are used when retrieving algorithms from providers. The <i>flags</i> field supports the <b>CMS_DETACHED</b> and <b>CMS_STREAM</b> flags, Internally CMS_final() is called unless <b>CMS_STREAM</b> is specified.</p>
+
+<p>The <b>CMS_ContentInfo</b> structure can be freed using <a href="../man3/CMS_ContentInfo_free.html">CMS_ContentInfo_free(3)</a>.</p>
+
+<p>CMS_digest_create() is similar to CMS_digest_create_ex() but uses default values of NULL for the library context <i>libctx</i> and the property query <i>propq</i>.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>If the allocation fails, CMS_digest_create_ex() and CMS_digest_create() return NULL and set an error code that can be obtained by <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>. Otherwise they return a pointer to the newly allocated structure.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>, <a href="../man3/CMS_final.html">CMS_final(3)</a>&gt;</p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The CMS_digest_create_ex() method was added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2020-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

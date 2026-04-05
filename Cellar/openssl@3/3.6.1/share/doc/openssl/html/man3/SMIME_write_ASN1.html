@@ -1,0 +1,82 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SMIME_write_ASN1</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SMIME_write_ASN1_ex, SMIME_write_ASN1 - convert structure to S/MIME format</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/asn1.h&gt;
+
+int SMIME_write_ASN1_ex(BIO *out, ASN1_VALUE *val, BIO *data, int flags,
+                        int ctype_nid, int econt_nid,
+                        STACK_OF(X509_ALGOR) *mdalgs, const ASN1_ITEM *it,
+                        OSSL_LIB_CTX *libctx, const char *propq);
+
+int SMIME_write_ASN1(BIO *out,
+    ASN1_VALUE *val, BIO *data, int flags, int ctype_nid, int econt_nid,
+    STACK_OF(X509_ALGOR) *mdalgs, const ASN1_ITEM *it);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SMIME_write_ASN1_ex() adds the appropriate MIME headers to an object structure to produce an S/MIME message.</p>
+
+<p><i>out</i> is the BIO to write the data to. <i>value</i> is the appropriate ASN1_VALUE structure (either CMS_ContentInfo or PKCS7). If streaming is enabled then the content must be supplied via <i>data</i>. <i>flags</i> is an optional set of flags. <i>ctype_nid</i> is the NID of the content type, <i>econt_nid</i> is the NID of the embedded content type and <i>mdalgs</i> is a list of signed data digestAlgorithms. Valid values that can be used by the ASN.1 structure <i>it</i> are ASN1_ITEM_rptr(PKCS7) or ASN1_ITEM_rptr(CMS_ContentInfo). The library context <i>libctx</i> and the property query <i>propq</i> are used when retrieving algorithms from providers.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The higher level functions <a href="../man3/SMIME_write_CMS.html">SMIME_write_CMS(3)</a> and <a href="../man3/SMIME_write_PKCS7.html">SMIME_write_PKCS7(3)</a> should be used instead of SMIME_write_ASN1().</p>
+
+<p>The following flags can be passed in the <b>flags</b> parameter.</p>
+
+<p>If <b>CMS_DETACHED</b> is set then cleartext signing will be used, this option only makes sense for SignedData where <b>CMS_DETACHED</b> is also set when the sign() method is called.</p>
+
+<p>If the <b>CMS_TEXT</b> flag is set MIME headers for type <b>text/plain</b> are added to the content, this only makes sense if <b>CMS_DETACHED</b> is also set.</p>
+
+<p>If the <b>CMS_STREAM</b> flag is set streaming is performed. This flag should only be set if <b>CMS_STREAM</b> was also set in the previous call to a CMS_ContentInfo or PKCS7 creation function.</p>
+
+<p>If cleartext signing is being used and <b>CMS_STREAM</b> not set then the data must be read twice: once to compute the signature in sign method and once to output the S/MIME message.</p>
+
+<p>If streaming is performed the content is output in BER format using indefinite length constructed encoding except in the case of signed data with detached content where the content is absent and DER format is used.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SMIME_write_ASN1_ex() and SMIME_write_ASN1() return 1 for success or 0 for failure.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>, <a href="../man3/SMIME_write_CMS.html">SMIME_write_CMS(3)</a>, <a href="../man3/SMIME_write_PKCS7.html">SMIME_write_PKCS7(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2020 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

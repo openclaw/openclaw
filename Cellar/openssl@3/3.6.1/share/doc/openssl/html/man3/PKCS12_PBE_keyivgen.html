@@ -1,0 +1,108 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>PKCS12_PBE_keyivgen</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#CONFORMING-TO">CONFORMING TO</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>PKCS12_PBE_keyivgen, PKCS12_PBE_keyivgen_ex, PKCS12_pbe_crypt, PKCS12_pbe_crypt_ex - PKCS#12 Password based encryption</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+
+int PKCS12_PBE_keyivgen(EVP_CIPHER_CTX *ctx, const char *pass, int passlen,
+                        ASN1_TYPE *param, const EVP_CIPHER *cipher,
+                        const EVP_MD *md_type, int en_de);
+int PKCS12_PBE_keyivgen_ex(EVP_CIPHER_CTX *ctx, const char *pass, int passlen,
+                           ASN1_TYPE *param, const EVP_CIPHER *cipher,
+                           const EVP_MD *md_type, int en_de,
+                           OSSL_LIB_CTX *libctx, const char *propq);
+unsigned char *PKCS12_pbe_crypt(const X509_ALGOR *algor,
+                                const char *pass, int passlen,
+                                const unsigned char *in, int inlen,
+                                unsigned char **data, int *datalen,
+                                int en_de);
+unsigned char *PKCS12_pbe_crypt_ex(const X509_ALGOR *algor,
+                                   const char *pass, int passlen,
+                                   const unsigned char *in, int inlen,
+                                   unsigned char **data, int *datalen,
+                                   int en_de, OSSL_LIB_CTX *libctx,
+                                   const char *propq);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>PKCS12_PBE_keyivgen() and PKCS12_PBE_keyivgen_ex() take a password <i>pass</i> of length <i>passlen</i>, parameters <i>param</i> and a message digest function <i>md_type</i> and perform a key derivation according to PKCS#12. The resulting key is then used to initialise the cipher context <i>ctx</i> with a cipher <i>cipher</i> for encryption (<i>en_de</i>=1) or decryption (<i>en_de</i>=0).</p>
+
+<p>PKCS12_PBE_keyivgen_ex() also allows the application to specify a library context <i>libctx</i> and property query <i>propq</i> to select appropriate algorithm implementations.</p>
+
+<p>PKCS12_pbe_crypt() and PKCS12_pbe_crypt_ex() will encrypt or decrypt a buffer based on the algorithm in <i>algor</i> and password <i>pass</i> of length <i>passlen</i>. The input is from <i>in</i> of length <i>inlen</i> and output is into a malloc&#39;d buffer returned in <i>*data</i> of length <i>datalen</i>. The operation is determined by <i>en_de</i>, encryption (<i>en_de</i>=1) or decryption (<i>en_de</i>=0).</p>
+
+<p>PKCS12_pbe_crypt_ex() allows the application to specify a library context <i>libctx</i> and property query <i>propq</i> to select appropriate algorithm implementations.</p>
+
+<p><i>pass</i> is the password used in the derivation of length <i>passlen</i>. <i>pass</i> is an optional parameter and can be NULL. If <i>passlen</i> is -1, then the function will calculate the length of <i>pass</i> using strlen().</p>
+
+<p><i>salt</i> is the salt used in the derivation of length <i>saltlen</i>. If the <i>salt</i> is NULL, then <i>saltlen</i> must be 0. The function will not attempt to calculate the length of the <i>salt</i> because it is not assumed to be NULL terminated.</p>
+
+<p><i>iter</i> is the iteration count and its value should be greater than or equal to 1. RFC 2898 suggests an iteration count of at least 1000. Any <i>iter</i> less than 1 is treated as a single iteration.</p>
+
+<p><i>digest</i> is the message digest function used in the derivation.</p>
+
+<p>Functions ending in _ex() take optional parameters <i>libctx</i> and <i>propq</i> which are used to select appropriate algorithm implementations.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The functions are typically used in PKCS#12 to encrypt objects.</p>
+
+<p>These functions make no assumption regarding the given password. It will simply be treated as a byte sequence.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>PKCS12_PBE_keyivgen(), PKCS12_PBE_keyivgen_ex() return 1 on success or 0 on error.</p>
+
+<p>PKCS12_pbe_crypt() and PKCS12_pbe_crypt_ex() return a buffer containing the output or NULL if an error occurred.</p>
+
+<h1 id="CONFORMING-TO">CONFORMING TO</h1>
+
+<p>IETF RFC 7292 (<a href="https://tools.ietf.org/html/rfc7292">https://tools.ietf.org/html/rfc7292</a>)</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_PBE_CipherInit_ex.html">EVP_PBE_CipherInit_ex(3)</a>, <a href="../man3/PKCS8_encrypt_ex.html">PKCS8_encrypt_ex(3)</a>, <a href="../man7/passphrase-encoding.html">passphrase-encoding(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>PKCS12_PBE_keyivgen_ex() and PKCS12_pbe_crypt_ex() were added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2014-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

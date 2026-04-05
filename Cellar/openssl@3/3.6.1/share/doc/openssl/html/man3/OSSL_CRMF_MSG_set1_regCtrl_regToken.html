@@ -1,0 +1,116 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OSSL_CRMF_MSG_set1_regCtrl_regToken</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OSSL_CRMF_MSG_get0_regCtrl_regToken, OSSL_CRMF_MSG_set1_regCtrl_regToken, OSSL_CRMF_MSG_get0_regCtrl_authenticator, OSSL_CRMF_MSG_set1_regCtrl_authenticator, OSSL_CRMF_MSG_PKIPublicationInfo_push0_SinglePubInfo, OSSL_CRMF_MSG_set0_SinglePubInfo, OSSL_CRMF_MSG_set_PKIPublicationInfo_action, OSSL_CRMF_MSG_get0_regCtrl_pkiPublicationInfo, OSSL_CRMF_MSG_set1_regCtrl_pkiPublicationInfo, OSSL_CRMF_MSG_get0_regCtrl_protocolEncrKey, OSSL_CRMF_MSG_set1_regCtrl_protocolEncrKey, OSSL_CRMF_MSG_get0_regCtrl_oldCertID, OSSL_CRMF_MSG_set1_regCtrl_oldCertID, OSSL_CRMF_CERTID_gen - functions getting or setting CRMF Registration Controls</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/crmf.h&gt;
+
+ASN1_UTF8STRING
+   *OSSL_CRMF_MSG_get0_regCtrl_regToken(const OSSL_CRMF_MSG *msg);
+int OSSL_CRMF_MSG_set1_regCtrl_regToken(OSSL_CRMF_MSG *msg,
+                                        const ASN1_UTF8STRING *tok);
+ASN1_UTF8STRING
+   *OSSL_CRMF_MSG_get0_regCtrl_authenticator(const OSSL_CRMF_MSG *msg);
+int OSSL_CRMF_MSG_set1_regCtrl_authenticator(OSSL_CRMF_MSG *msg,
+                                             const ASN1_UTF8STRING *auth);
+int OSSL_CRMF_MSG_PKIPublicationInfo_push0_SinglePubInfo(
+                                 OSSL_CRMF_PKIPUBLICATIONINFO *pi,
+                                 OSSL_CRMF_SINGLEPUBINFO *spi);
+int OSSL_CRMF_MSG_set0_SinglePubInfo(OSSL_CRMF_SINGLEPUBINFO *spi,
+                                     int method, GENERAL_NAME *nm);
+int OSSL_CRMF_MSG_set_PKIPublicationInfo_action(
+                                 OSSL_CRMF_PKIPUBLICATIONINFO *pi, int action);
+OSSL_CRMF_PKIPUBLICATIONINFO
+   *OSSL_CRMF_MSG_get0_regCtrl_pkiPublicationInfo(const OSSL_CRMF_MSG *msg);
+int OSSL_CRMF_MSG_set1_regCtrl_pkiPublicationInfo(OSSL_CRMF_MSG *msg,
+                                       const OSSL_CRMF_PKIPUBLICATIONINFO *pi);
+X509_PUBKEY
+   *OSSL_CRMF_MSG_get0_regCtrl_protocolEncrKey(const OSSL_CRMF_MSG *msg);
+int OSSL_CRMF_MSG_set1_regCtrl_protocolEncrKey(OSSL_CRMF_MSG *msg,
+                                               const X509_PUBKEY *pubkey);
+OSSL_CRMF_CERTID
+   *OSSL_CRMF_MSG_get0_regCtrl_oldCertID(const OSSL_CRMF_MSG *msg);
+int OSSL_CRMF_MSG_set1_regCtrl_oldCertID(OSSL_CRMF_MSG *msg,
+                                         const OSSL_CRMF_CERTID *cid);
+OSSL_CRMF_CERTID *OSSL_CRMF_CERTID_gen(const X509_NAME *issuer,
+                                       const ASN1_INTEGER *serial);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>Each of the OSSL_CRMF_MSG_get0_regCtrl_X() functions returns the respective control X in the given <i>msg</i>, if present.</p>
+
+<p>OSSL_CRMF_MSG_set1_regCtrl_regToken() sets the regToken control in the given <i>msg</i> copying the given <i>tok</i> as value. See RFC 4211, section 6.1.</p>
+
+<p>OSSL_CRMF_MSG_set1_regCtrl_authenticator() sets the authenticator control in the given <i>msg</i> copying the given <i>auth</i> as value. See RFC 4211, section 6.2.</p>
+
+<p>OSSL_CRMF_MSG_PKIPublicationInfo_push0_SinglePubInfo() pushes the given <i>spi</i> to <i>si</i>. Consumes the <i>spi</i> pointer.</p>
+
+<p>OSSL_CRMF_MSG_set0_SinglePubInfo() sets in the given SinglePubInfo <i>spi</i> the <i>method</i> and publication location, in the form of a GeneralName, <i>nm</i>. The publication location is optional, and therefore <i>nm</i> may be NULL. The function consumes the <i>nm</i> pointer if present. Available methods are: # define OSSL_CRMF_PUB_METHOD_DONTCARE 0 # define OSSL_CRMF_PUB_METHOD_X500 1 # define OSSL_CRMF_PUB_METHOD_WEB 2 # define OSSL_CRMF_PUB_METHOD_LDAP 3</p>
+
+<p>OSSL_CRMF_MSG_set_PKIPublicationInfo_action() sets the action in the given <i>pi</i> using the given <i>action</i> as value. See RFC 4211, section 6.3. Available actions are: # define OSSL_CRMF_PUB_ACTION_DONTPUBLISH 0 # define OSSL_CRMF_PUB_ACTION_PLEASEPUBLISH 1</p>
+
+<p>OSSL_CRMF_MSG_set1_regCtrl_pkiPublicationInfo() sets the pkiPublicationInfo control in the given <i>msg</i> copying the given <i>tok</i> as value. See RFC 4211, section 6.3.</p>
+
+<p>OSSL_CRMF_MSG_set1_regCtrl_protocolEncrKey() sets the protocolEncrKey control in the given <i>msg</i> copying the given <i>pubkey</i> as value. See RFC 4211 section 6.6.</p>
+
+<p>OSSL_CRMF_MSG_set1_regCtrl_oldCertID() sets the <b>oldCertID</b> regToken control in the given <i>msg</i> copying the given <i>cid</i> as value. See RFC 4211, section 6.5.</p>
+
+<p>OSSL_CRMF_CERTID_gen produces an OSSL_CRMF_CERTID_gen structure copying the given <i>issuer</i> name and <i>serial</i> number.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>All OSSL_CRMF_MSG_get0_*() functions return the respective pointer value or NULL if not present and on error.</p>
+
+<p>All OSSL_CRMF_MSG_set1_*() functions return 1 on success, 0 on error.</p>
+
+<p>OSSL_CRMF_CERTID_gen() returns a pointer to the resulting structure or NULL on error.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>A function OSSL_CRMF_MSG_set1_regCtrl_pkiArchiveOptions() for setting an Archive Options Control is not yet implemented due to missing features to create the needed OSSL_CRMF_PKIARCHIVEOPTINS content.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p>RFC 4211</p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The OpenSSL CRMF support was added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2007-2022 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,116 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>ERR_get_error</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>ERR_get_error, ERR_peek_error, ERR_peek_last_error, ERR_get_error_line, ERR_peek_error_line, ERR_peek_last_error_line, ERR_peek_error_func, ERR_peek_last_error_func, ERR_peek_error_data, ERR_peek_last_error_data, ERR_get_error_all, ERR_peek_error_all, ERR_peek_last_error_all, ERR_get_error_line_data, ERR_peek_error_line_data, ERR_peek_last_error_line_data - obtain error code and data</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/err.h&gt;
+
+unsigned long ERR_get_error(void);
+unsigned long ERR_peek_error(void);
+unsigned long ERR_peek_last_error(void);
+
+unsigned long ERR_peek_error_line(const char **file, int *line);
+unsigned long ERR_peek_last_error_line(const char **file, int *line);
+
+unsigned long ERR_peek_error_func(const char **func);
+unsigned long ERR_peek_last_error_func(const char **func);
+
+unsigned long ERR_peek_error_data(const char **data, int *flags);
+unsigned long ERR_peek_last_error_data(const char **data, int *flags);
+
+unsigned long ERR_get_error_all(const char **file, int *line,
+                                const char **func,
+                                const char **data, int *flags);
+unsigned long ERR_peek_error_all(const char **file, int *line,
+                                 const char **func,
+                                 const char **data, int *flags);
+unsigned long ERR_peek_last_error_all(const char **file, int *line,
+                                      const char *func,
+                                      const char **data, int *flags);</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>unsigned long ERR_get_error_line(const char **file, int *line);
+unsigned long ERR_get_error_line_data(const char **file, int *line,
+                                      const char **data, int *flags);
+unsigned long ERR_peek_error_line_data(const char **file, int *line,
+                                       const char **data, int *flags);
+unsigned long ERR_peek_last_error_line_data(const char **file, int *line,
+                                            const char **data, int *flags);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>ERR_get_error() returns the earliest error code from the thread&#39;s error queue and removes the entry. This function can be called repeatedly until there are no more error codes to return.</p>
+
+<p>ERR_peek_error() returns the earliest error code from the thread&#39;s error queue without modifying it.</p>
+
+<p>ERR_peek_last_error() returns the latest error code from the thread&#39;s error queue without modifying it.</p>
+
+<p>See <a href="../man3/ERR_GET_LIB.html">ERR_GET_LIB(3)</a> for obtaining further specific information such as the reason of the error, and <a href="../man3/ERR_error_string.html">ERR_error_string(3)</a> for human-readable error messages.</p>
+
+<p>ERR_get_error_all() is the same as ERR_get_error(), but on success it additionally stores the filename, line number and function where the error occurred in *<i>file</i>, *<i>line</i> and *<i>func</i>, and also extra text and flags in *<i>data</i>, *<i>flags</i>. If any of those parameters are NULL, it will not be changed. An unset filename is indicated as &quot;&quot;, i.e. an empty string. An unset line number is indicated as 0. An unset function name is indicated as &quot;&quot;, i.e. an empty string.</p>
+
+<p>A pointer returned this way by these functions and the ones below is valid until the respective entry is overwritten in the error queue.</p>
+
+<p>ERR_peek_error_line() and ERR_peek_last_error_line() are the same as ERR_peek_error() and ERR_peek_last_error(), but on success they additionally store the filename and line number where the error occurred in *<i>file</i> and *<i>line</i>, as far as they are not NULL. An unset filename is indicated as &quot;&quot;, i.e., an empty string. An unset line number is indicated as 0.</p>
+
+<p>ERR_peek_error_func() and ERR_peek_last_error_func() are the same as ERR_peek_error() and ERR_peek_last_error(), but on success they additionally store the name of the function where the error occurred in *<i>func</i>, unless it is NULL. An unset function name is indicated as &quot;&quot;.</p>
+
+<p>ERR_peek_error_data() and ERR_peek_last_error_data() are the same as ERR_peek_error() and ERR_peek_last_error(), but on success they additionally store additional data and flags associated with the error code in *<i>data</i> and *<i>flags</i>, as far as they are not NULL. Unset data is indicated as &quot;&quot;. In this case the value given for the flag is irrelevant (and equals 0). *<i>data</i> contains a string if *<i>flags</i>&amp;<b>ERR_TXT_STRING</b> is true.</p>
+
+<p>ERR_peek_error_all() and ERR_peek_last_error_all() are combinations of all of the above.</p>
+
+<p>ERR_get_error_line(), ERR_get_error_line_data(), ERR_peek_error_line_data() and ERR_peek_last_error_line_data() are older variants of ERR_get_error_all(), ERR_peek_error_all() and ERR_peek_last_error_all(), and may give confusing results. They should no longer be used and are therefore deprecated.</p>
+
+<p>An application <b>MUST NOT</b> free the *<i>data</i> pointer (or any other pointers returned by these functions) with OPENSSL_free() as freeing is handled automatically by the error library.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>The error code, or 0 if there is no error in the queue.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ERR_error_string.html">ERR_error_string(3)</a>, <a href="../man3/ERR_GET_LIB.html">ERR_GET_LIB(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>ERR_peek_error_func(), ERR_peek_last_error_func(), ERR_peek_error_data(), ERR_peek_last_error_data(), ERR_peek_error_all() and ERR_peek_last_error_all() were added in OpenSSL 3.0.</p>
+
+<p>ERR_get_error_line(), ERR_get_error_line_data(), ERR_peek_error_line_data() and ERR_peek_last_error_line_data() became deprecated in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2022 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

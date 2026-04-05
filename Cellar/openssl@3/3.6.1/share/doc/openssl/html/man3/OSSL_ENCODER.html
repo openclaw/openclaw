@@ -1,0 +1,119 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OSSL_ENCODER</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OSSL_ENCODER, OSSL_ENCODER_fetch, OSSL_ENCODER_up_ref, OSSL_ENCODER_free, OSSL_ENCODER_get0_provider, OSSL_ENCODER_get0_properties, OSSL_ENCODER_is_a, OSSL_ENCODER_get0_name, OSSL_ENCODER_get0_description, OSSL_ENCODER_do_all_provided, OSSL_ENCODER_names_do_all, OSSL_ENCODER_gettable_params, OSSL_ENCODER_get_params - Encoder method routines</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/encoder.h&gt;
+
+typedef struct ossl_encoder_st OSSL_ENCODER;
+
+OSSL_ENCODER *OSSL_ENCODER_fetch(OSSL_LIB_CTX *ctx, const char *name,
+                                 const char *properties);
+int OSSL_ENCODER_up_ref(OSSL_ENCODER *encoder);
+void OSSL_ENCODER_free(OSSL_ENCODER *encoder);
+const OSSL_PROVIDER *OSSL_ENCODER_get0_provider(const OSSL_ENCODER *encoder);
+const char *OSSL_ENCODER_get0_properties(const OSSL_ENCODER *encoder);
+int OSSL_ENCODER_is_a(const OSSL_ENCODER *encoder, const char *name);
+const char *OSSL_ENCODER_get0_name(const OSSL_ENCODER *encoder);
+const char *OSSL_ENCODER_get0_description(const OSSL_ENCODER *encoder);
+void OSSL_ENCODER_do_all_provided(OSSL_LIB_CTX *libctx,
+                                  void (*fn)(OSSL_ENCODER *encoder, void *arg),
+                                  void *arg);
+int OSSL_ENCODER_names_do_all(const OSSL_ENCODER *encoder,
+                              void (*fn)(const char *name, void *data),
+                              void *data);
+const OSSL_PARAM *OSSL_ENCODER_gettable_params(OSSL_ENCODER *encoder);
+int OSSL_ENCODER_get_params(OSSL_ENCODER_CTX *ctx, const OSSL_PARAM params[]);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p><b>OSSL_ENCODER</b> is a method for encoders, which know how to encode an object of some kind to a encoded form, such as PEM, DER, or even human readable text.</p>
+
+<p>OSSL_ENCODER_fetch() looks for an algorithm within the provider that has been loaded into the <b>OSSL_LIB_CTX</b> given by <i>ctx</i>, having the name given by <i>name</i> and the properties given by <i>properties</i>. The <i>name</i> determines what type of object the fetched encoder method is expected to be able to encode, and the properties are used to determine the expected output type. For known properties and the values they may have, please have a look in <a href="../man7/provider-encoder.html">&quot;Names and properties&quot; in provider-encoder(7)</a>.</p>
+
+<p>OSSL_ENCODER_up_ref() increments the reference count for the given <i>encoder</i>.</p>
+
+<p>OSSL_ENCODER_free() decrements the reference count for the given <i>encoder</i>, and when the count reaches zero, frees it. If the argument is NULL, nothing is done.</p>
+
+<p>OSSL_ENCODER_get0_provider() returns the provider of the given <i>encoder</i>.</p>
+
+<p>OSSL_ENCODER_get0_properties() returns the property definition associated with the given <i>encoder</i>.</p>
+
+<p>OSSL_ENCODER_is_a() checks if <i>encoder</i> is an implementation of an algorithm that&#39;s identifiable with <i>name</i>.</p>
+
+<p>OSSL_ENCODER_get0_name() returns the name used to fetch the given <i>encoder</i>.</p>
+
+<p>OSSL_ENCODER_get0_description() returns a description of the <i>loader</i>, meant for display and human consumption. The description is at the discretion of the <i>loader</i> implementation.</p>
+
+<p>OSSL_ENCODER_names_do_all() traverses all names for the given <i>encoder</i>, and calls <i>fn</i> with each name and <i>data</i> as arguments.</p>
+
+<p>OSSL_ENCODER_do_all_provided() traverses all encoder implementations by all activated providers in the library context <i>libctx</i>, and for each of the implementations, calls <i>fn</i> with the implementation method and <i>arg</i> as arguments.</p>
+
+<p>OSSL_ENCODER_gettable_params() returns an <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> array of parameter descriptors.</p>
+
+<p>OSSL_ENCODER_get_params() attempts to get parameters specified with an <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> array <i>params</i>. Parameters that the implementation doesn&#39;t recognise should be ignored.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>OSSL_ENCODER_fetch() returns a pointer to the key management implementation represented by an OSSL_ENCODER object, or NULL on error.</p>
+
+<p>OSSL_ENCODER_up_ref() returns 1 on success, or 0 on error.</p>
+
+<p>OSSL_ENCODER_free() doesn&#39;t return any value.</p>
+
+<p>OSSL_ENCODER_get0_provider() returns a pointer to a provider object, or NULL on error.</p>
+
+<p>OSSL_ENCODER_get0_properties() returns a pointer to a property definition string, or NULL on error.</p>
+
+<p>OSSL_ENCODER_is_a() returns 1 of <i>encoder</i> was identifiable, otherwise 0.</p>
+
+<p>OSSL_ENCODER_get0_name() returns the algorithm name from the provided implementation for the given <i>encoder</i>. Note that the <i>encoder</i> may have multiple synonyms associated with it. In this case the first name from the algorithm definition is returned. Ownership of the returned string is retained by the <i>encoder</i> object and should not be freed by the caller.</p>
+
+<p>OSSL_ENCODER_get0_description() returns a pointer to a description, or NULL if there isn&#39;t one.</p>
+
+<p>OSSL_ENCODER_names_do_all() returns 1 if the callback was called for all names. A return value of 0 means that the callback was not called for any names.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/provider.html">provider(7)</a>, <a href="../man3/OSSL_ENCODER_CTX.html">OSSL_ENCODER_CTX(3)</a>, <a href="../man3/OSSL_ENCODER_to_bio.html">OSSL_ENCODER_to_bio(3)</a>, <a href="../man3/OSSL_ENCODER_CTX_new_for_pkey.html">OSSL_ENCODER_CTX_new_for_pkey(3)</a>, <a href="../man3/OSSL_LIB_CTX.html">OSSL_LIB_CTX(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The functions described here were added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2019-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

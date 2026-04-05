@@ -1,0 +1,92 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SRP_Calc_B</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SRP_Calc_server_key, SRP_Calc_A, SRP_Calc_B_ex, SRP_Calc_B, SRP_Calc_u_ex, SRP_Calc_u, SRP_Calc_x_ex, SRP_Calc_x, SRP_Calc_client_key_ex, SRP_Calc_client_key - SRP authentication primitives</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/srp.h&gt;</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>/* server side .... */
+BIGNUM *SRP_Calc_server_key(const BIGNUM *A, const BIGNUM *v, const BIGNUM *u,
+                            const BIGNUM *b, const BIGNUM *N);
+BIGNUM *SRP_Calc_B_ex(const BIGNUM *b, const BIGNUM *N, const BIGNUM *g,
+                      const BIGNUM *v, OSSL_LIB_CTX *libctx, const char *propq);
+BIGNUM *SRP_Calc_B(const BIGNUM *b, const BIGNUM *N, const BIGNUM *g,
+                  const BIGNUM *v);
+
+BIGNUM *SRP_Calc_u_ex(const BIGNUM *A, const BIGNUM *B, const BIGNUM *N,
+                      OSSL_LIB_CTX *libctx, const char *propq);
+BIGNUM *SRP_Calc_u(const BIGNUM *A, const BIGNUM *B, const BIGNUM *N);
+
+/* client side .... */
+BIGNUM *SRP_Calc_client_key_ex(const BIGNUM *N, const BIGNUM *B, const BIGNUM *g,
+                            const BIGNUM *x, const BIGNUM *a, const BIGNUM *u,
+                            OSSL_LIB_CTX *libctx, const char *propq);
+BIGNUM *SRP_Calc_client_key(const BIGNUM *N, const BIGNUM *B, const BIGNUM *g,
+                            const BIGNUM *x, const BIGNUM *a, const BIGNUM *u);
+BIGNUM *SRP_Calc_x_ex(const BIGNUM *s, const char *user, const char *pass,
+                      OSSL_LIB_CTX *libctx, const char *propq);
+BIGNUM *SRP_Calc_x(const BIGNUM *s, const char *user, const char *pass);
+BIGNUM *SRP_Calc_A(const BIGNUM *a, const BIGNUM *N, const BIGNUM *g);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>All of the functions described on this page are deprecated. There are no available replacement functions at this time.</p>
+
+<p>The SRP functions described on this page are used to calculate various parameters and keys used by SRP as defined in RFC2945. The server key and <i>B</i> and <i>u</i> parameters are used on the server side and are calculated via SRP_Calc_server_key(), SRP_Calc_B_ex(), SRP_Calc_B(), SRP_Calc_u_ex() and SRP_Calc_u(). The client key and <b>x</b> and <b>A</b> parameters are used on the client side and are calculated via the functions SRP_Calc_client_key_ex(), SRP_Calc_client_key(), SRP_Calc_x_ex(), SRP_Calc_x() and SRP_Calc_A(). See RFC2945 for a detailed description of their usage and the meaning of the various BIGNUM parameters to these functions.</p>
+
+<p>Most of these functions come in two forms. Those that take a <i>libctx</i> and <i>propq</i> parameter, and those that don&#39;t. Any cryptogrpahic functions that are fetched and used during the calculation use the provided <i>libctx</i> and <i>propq</i>. See <a href="../man7/crypto.html">&quot;ALGORITHM FETCHING&quot; in crypto(7)</a> for more details. The variants that do not take a <i>libctx</i> and <i>propq</i> parameter use the default library context and property query string. The SRP_Calc_server_key() and SRP_Calc_A() functions do not have a form that takes <i>libctx</i> or <i>propq</i> parameters because they do not need to fetch any cryptographic algorithms.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>All these functions return the calculated key or parameter, or NULL on error.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man1/openssl-srp.html">openssl-srp(1)</a>, <a href="../man3/SRP_VBASE_new.html">SRP_VBASE_new(3)</a>, <a href="../man3/SRP_user_pwd_new.html">SRP_user_pwd_new(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>SRP_Calc_B_ex, SRP_Calc_u_ex, SRP_Calc_client_key_ex and SRP_Calc_x_ex were introduced in OpenSSL 3.0.</p>
+
+<p>All of the other functions were added in OpenSSL 1.0.1.</p>
+
+<p>All of these functions were deprecated in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2020-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

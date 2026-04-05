@@ -1,0 +1,68 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SCT_print</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SCT_print, SCT_LIST_print, SCT_validation_status_string - Prints Signed Certificate Timestamps in a human-readable way</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ct.h&gt;
+
+void SCT_print(const SCT *sct, BIO *out, int indent, const CTLOG_STORE *logs);
+void SCT_LIST_print(const STACK_OF(SCT) *sct_list, BIO *out, int indent,
+                    const char *separator, const CTLOG_STORE *logs);
+const char *SCT_validation_status_string(const SCT *sct);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SCT_print() prints a single Signed Certificate Timestamp (SCT) to a <b>BIO</b> in a human-readable format. SCT_LIST_print() prints an entire list of SCTs in a similar way. A separator can be specified to delimit each SCT in the output.</p>
+
+<p>The output can be indented by a specified number of spaces. If a <b>CTLOG_STORE</b> is provided, it will be used to print the description of the CT log that issued each SCT (if that log is in the CTLOG_STORE). Alternatively, NULL can be passed as the CTLOG_STORE parameter to disable this feature.</p>
+
+<p>SCT_validation_status_string() will return the validation status of an SCT as a human-readable string. Call SCT_validate() or SCT_LIST_validate() beforehand in order to set the validation status of an SCT first.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SCT_validation_status_string() returns a NUL-terminated string representing the validation status of an <b>SCT</b> object.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ct.html">ct(7)</a>, <a href="../man7/bio.html">bio(7)</a>, <a href="../man3/CTLOG_STORE_new.html">CTLOG_STORE_new(3)</a>, <a href="../man3/SCT_validate.html">SCT_validate(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>These functions were added in OpenSSL 1.1.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2016-2018 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

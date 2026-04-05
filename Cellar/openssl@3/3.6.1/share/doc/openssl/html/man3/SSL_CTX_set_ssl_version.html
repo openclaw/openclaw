@@ -1,0 +1,100 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_CTX_set_ssl_version</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_CTX_set_ssl_version, SSL_CTX_get_ssl_method, SSL_set_ssl_method, SSL_get_ssl_method - choose a new TLS/SSL method</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+int SSL_CTX_set_ssl_version(SSL_CTX *ctx, const SSL_METHOD *method);
+const SSL_METHOD *SSL_CTX_get_ssl_method(const SSL_CTX *ctx);
+
+int SSL_set_ssl_method(SSL *s, const SSL_METHOD *method);
+const SSL_METHOD *SSL_get_ssl_method(const SSL *ssl);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_CTX_set_ssl_version() sets a new default TLS/SSL <b>method</b> for SSL objects newly created from this <b>ctx</b>. Most of the configuration attached to the SSL_CTX object is retained, with the exception of the configured TLS ciphers, which are reset to the default values. SSL objects already created from this SSL_CTX with <a href="../man3/SSL_new.html">SSL_new(3)</a> are not affected, except when <a href="../man3/SSL_clear.html">SSL_clear(3)</a> is being called, as described below.</p>
+
+<p>SSL_CTX_get_ssl_method() returns the SSL_METHOD which was used to construct the SSL_CTX.</p>
+
+<p>SSL_set_ssl_method() sets a new TLS/SSL <b>method</b> for a particular <b>ssl</b> object. It may be reset, when SSL_clear() is called.</p>
+
+<p>SSL_get_ssl_method() returns a pointer to the TLS/SSL method set in <b>ssl</b>.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The available <b>method</b> choices are described in <a href="../man3/SSL_CTX_new.html">SSL_CTX_new(3)</a>.</p>
+
+<p>When <a href="../man3/SSL_clear.html">SSL_clear(3)</a> is called and no session is connected to an SSL object, the method of the SSL object is reset to the method currently set in the corresponding SSL_CTX object.</p>
+
+<p>SSL_CTX_set_version() has unusual semantics and no clear use case; it would usually be preferable to create a new SSL_CTX object than to try to reuse an existing one in this fashion. Its usage is considered deprecated.</p>
+
+<p>SSL_set_ssl_method() cannot be used to change a non-QUIC SSL object to a QUIC SSL object or vice versa, or change a QUIC SSL object from one QUIC method to another.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>The following return values can occur for SSL_CTX_set_ssl_version() and SSL_set_ssl_method():</p>
+
+<dl>
+
+<dt id="pod0">0</dt>
+<dd>
+
+<p>The new choice failed, check the error stack to find out the reason.</p>
+
+</dd>
+<dt id="pod1">1</dt>
+<dd>
+
+<p>The operation succeeded.</p>
+
+</dd>
+</dl>
+
+<p>SSL_CTX_get_ssl_method() and SSL_get_ssl_method() always return non-NULL pointers.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/SSL_CTX_new.html">SSL_CTX_new(3)</a>, <a href="../man3/SSL_new.html">SSL_new(3)</a>, <a href="../man3/SSL_clear.html">SSL_clear(3)</a>, <a href="../man7/ssl.html">ssl(7)</a>, <a href="../man3/SSL_set_connect_state.html">SSL_set_connect_state(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>SSL_CTX_set_ssl_version() was deprecated in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

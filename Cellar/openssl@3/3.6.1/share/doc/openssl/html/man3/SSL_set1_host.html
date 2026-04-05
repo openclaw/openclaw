@@ -1,0 +1,100 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_set1_host</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_set1_host, SSL_add1_host, SSL_set_hostflags, SSL_get0_peername - SSL server verification parameters</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+int SSL_set1_host(SSL *s, const char *host);
+int SSL_add1_host(SSL *s, const char *host);
+void SSL_set_hostflags(SSL *s, unsigned int flags);
+const char *SSL_get0_peername(SSL *s);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>These functions configure server hostname checks in the SSL client.</p>
+
+<p>SSL_set1_host() sets in the verification parameters of <i>s</i> the expected DNS hostname or IP address to <i>host</i>, clearing any previously specified IP address and hostnames. If <i>host</i> is NULL or the empty string, IP address and hostname checks are not performed on the peer certificate. When a nonempty <i>host</i> is specified, certificate verification automatically checks the peer hostname via <a href="../man3/X509_check_host.html">X509_check_host(3)</a> with <i>flags</i> as specified via SSL_set_hostflags(). Clients that enable DANE TLSA authentication via <a href="../man3/SSL_dane_enable.html">SSL_dane_enable(3)</a> should leave it to that function to set the primary reference identifier of the peer, and should not call SSL_set1_host().</p>
+
+<p>SSL_add1_host() adds <i>host</i> as an additional reference identifier that can match the peer&#39;s certificate. Any previous hostnames set via SSL_set1_host() or SSL_add1_host() are retained. Adding an IP address is allowed only if no IP address has been set before. No change is made if <i>host</i> is NULL or empty. When an IP address and/or multiple hostnames are configured, the peer is considered verified when any of these matches. This function is required for DANE TLSA in the presence of service name indirection via CNAME, MX or SRV records as specified in RFCs 7671, 7672, and 7673.</p>
+
+<p>TLS clients are recommended to use SSL_set1_host() or SSL_add1_host() for server hostname or IP address validation, as well as <a href="../man3/SSL_set_tlsext_host_name.html">SSL_set_tlsext_host_name(3)</a> for Server Name Indication (SNI), which may be crucial also for correct routing of the connection request.</p>
+
+<p>SSL_set_hostflags() sets the <i>flags</i> that will be passed to <a href="../man3/X509_check_host.html">X509_check_host(3)</a> when name checks are applicable, by default the <i>flags</i> value is 0. See <a href="../man3/X509_check_host.html">X509_check_host(3)</a> for the list of available flags and their meaning.</p>
+
+<p>SSL_get0_peername() returns the DNS hostname or subject CommonName from the peer certificate that matched one of the reference identifiers. When wildcard matching is not disabled, the name matched in the peer certificate may be a wildcard name. When one of the reference identifiers configured via SSL_set1_host() or SSL_add1_host() starts with &quot;.&quot;, which indicates a parent domain prefix rather than a fixed name, the matched peer name may be a sub-domain of the reference identifier. The returned string is allocated by the library and is no longer valid once the associated <i>ssl</i> handle is cleared or freed, or a renegotiation takes place. Applications must not free the return value.</p>
+
+<p>SSL clients are advised to use these functions in preference to explicitly calling <a href="../man3/X509_check_host.html">X509_check_host(3)</a>. Hostname checks may be out of scope with the RFC 7671 DANE-EE(3) certificate usage, and the internal check will be suppressed as appropriate when DANE is enabled.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_set1_host() and SSL_add1_host() return 1 for success and 0 for failure.</p>
+
+<p>SSL_set_hostflags() returns nothing at all.</p>
+
+<p>SSL_get0_peername() returns NULL if peername verification is not applicable (as with RFC 7671 DANE-EE(3)), or no trusted peername was matched. Otherwise, it returns the matched peername. To determine whether verification succeeded call <a href="../man3/SSL_get_verify_result.html">SSL_get_verify_result(3)</a>.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>Suppose &quot;smtp.example.com&quot; is the MX host of the domain &quot;example.com&quot;. The calls below will arrange to match either the MX hostname or the destination domain name in the SMTP server certificate. Wildcards are supported, but must match the entire label. The actual name matched in the certificate (which might be a wildcard) is retrieved, and must be copied by the application if it is to be retained beyond the lifetime of the SSL connection.</p>
+
+<pre><code>SSL_set_hostflags(ssl, X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
+if (!SSL_set1_host(ssl, &quot;smtp.example.com&quot;))
+    /* error */
+if (!SSL_add1_host(ssl, &quot;example.com&quot;))
+    /* error */
+
+/* XXX: Perform SSL_connect() handshake and handle errors here */
+
+if (SSL_get_verify_result(ssl) == X509_V_OK) {
+    const char *peername = SSL_get0_peername(ssl);
+
+    if (peername != NULL)
+        /* Name checks were in scope and matched the peername */
+}</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a>, <a href="../man3/X509_check_host.html">X509_check_host(3)</a>, <a href="../man3/SSL_set_tlsext_host_name.html">SSL_set_tlsext_host_name(3)</a>, <a href="../man3/SSL_get_verify_result.html">SSL_get_verify_result(3)</a>, <a href="../man3/SSL_dane_enable.html">SSL_dane_enable(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>These functions were added in OpenSSL 1.1.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2016-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

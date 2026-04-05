@@ -1,0 +1,81 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>PKCS12_parse</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#BUGS">BUGS</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>PKCS12_parse - parse a PKCS#12 structure</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/pkcs12.h&gt;
+
+int PKCS12_parse(PKCS12 *p12, const char *pass, EVP_PKEY **pkey, X509 **cert,
+                 STACK_OF(X509) **ca);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>PKCS12_parse() parses a PKCS12 structure.</p>
+
+<p><b>p12</b> is the <b>PKCS12</b> structure to parse. <b>pass</b> is the passphrase to use. If successful the private key will be written to <b>*pkey</b>, the corresponding certificate to <b>*cert</b> and any additional certificates to <b>*ca</b>.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>Each of the parameters <b>pkey</b>, <b>cert</b>, and <b>ca</b> can be NULL in which case the private key, the corresponding certificate, or the additional certificates, respectively, will be discarded. If any of <b>pkey</b> and <b>cert</b> is non-NULL the variable it points to is initialized. If <b>ca</b> is non-NULL and <b>*ca</b> is NULL a new STACK will be allocated. If <b>ca</b> is non-NULL and <b>*ca</b> is a valid STACK then additional certificates are appended in the given order to <b>*ca</b>.</p>
+
+<p>The <b>friendlyName</b> and <b>localKeyID</b> attributes (if present) on each certificate will be stored in the <b>alias</b> and <b>keyid</b> attributes of the <b>X509</b> structure.</p>
+
+<p>The parameter <b>pass</b> is interpreted as a string in the UTF-8 encoding. If it is not valid UTF-8, then it is assumed to be ISO8859-1 instead.</p>
+
+<p>In particular, this means that passwords in the locale character set (or code page on Windows) must potentially be converted to UTF-8 before use. This may include passwords from local text files, or input from the terminal or command line. Refer to the documentation of <a href="../man3/UI_OpenSSL.html">UI_OpenSSL(3)</a>, for example.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>PKCS12_parse() returns 1 for success and zero if an error occurred.</p>
+
+<p>The error can be obtained from <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a></p>
+
+<h1 id="BUGS">BUGS</h1>
+
+<p>Only a single private key and corresponding certificate is returned by this function. More complex PKCS#12 files with multiple private keys will only return the first match.</p>
+
+<p>Only <b>friendlyName</b> and <b>localKeyID</b> attributes are currently stored in certificates. Other attributes are discarded.</p>
+
+<p>Attributes currently cannot be stored in the private key <b>EVP_PKEY</b> structure.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/d2i_PKCS12.html">d2i_PKCS12(3)</a>, <a href="../man7/passphrase-encoding.html">passphrase-encoding(7)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2002-2020 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,9 @@
+prefix=/opt/homebrew/Cellar/dav1d/1.5.3
+includedir=${prefix}/include
+libdir=${prefix}/lib
+
+Name: libdav1d
+Description: AV1 decoding library
+Version: 1.5.3
+Libs: -L${libdir} -ldav1d
+Cflags: -I${includedir}

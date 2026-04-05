@@ -1,0 +1,287 @@
+.\" Hey, Emacs! This is -*-nroff-*- you know...
+.\"
+.\" icu-config.1: manual page for the icu-config utility
+.\"
+.\" Copyright (C) 2016 and later: Unicode, Inc. and others.
+.\" License & terms of use: http://www.unicode.org/copyright.html
+.\" Copyright (C) 2002-2008 IBM, Inc. and others.
+.\"
+.\" Based on  Yves Arrouye's pkgdata page <yves@arrouye.net>
+.\" Modified by Steven R. Loomis <srl@jtcsv.com>.
+.\" With help from http://www.igpm.rwth-aachen.de/~albrecht/manpage.html
+
+.TH ICU-CONFIG 1 "17 May 2004" "ICU MANPAGE" "ICU 78.3 Manual"
+.\".Dd "17 May 2004"
+.\".Dt ICU-CONFIG 1
+.\".Os 
+
+.SH NAME
+.B icu-config
+\- output ICU build options 
+.SH SYNOPSIS
+.B icu-config
+[
+.BI "\-\-bindir"
+]
+[
+.BI "\-\-cc"
+]
+[
+.BI "\-\-cflags"
+]
+[
+.BI "\-\-cppflags"
+]
+[
+.BI "\-\-cppflags\-searchpath"
+]
+[
+.BI "\-\-cxx"
+]
+[
+.BI "\-\-cxxflags"
+]
+[
+.BI "\-\-detect\-prefix"
+]
+[
+.BI "\-\-exec\-prefix"
+]
+[
+.BI "\-\-exists"
+]
+[
+.BI "\-\-help\fP, \fB\-?\fP,\fB"
+.BI "\-\-usage"
+]
+[
+.BI "\-\-icudata"
+]
+[
+.BI "\-\-icudata\-install\-dir"
+]
+[
+.BI "\-\-icudata\-mode"
+]
+[
+.BI "\-\-icudatadir"
+]
+[
+.BI "\-\-invoke"
+]
+[
+.BI "\-\-invoke=" "prog"
+]
+[
+.BI "\-\-ldflags"
+]
+[
+.BI "\-\-ldflags\-libsonly"
+]
+[
+.BI "\-\-ldflags\-searchpath"
+]
+[
+.BI "\-\-ldflags\-system"
+]
+[
+.BI "\-\-ldflags\-icuio"
+]
+[
+.BI "\-\-mandir"
+]
+[
+.BI "\-\-prefix"
+]
+[
+.BI "\-\-prefix=" "prefix"
+]
+[
+.BI "\-\-sbindir"
+]
+[
+.BI "\-\-shared\-datadir"
+]
+[
+.BI "\-\-sysconfdir"
+]
+[
+.BI "\-\-unicode\-version"
+]
+[
+.BI "\-\-version"
+]
+[
+.BI "\-\-incfile"
+]
+
+
+
+.SH DESCRIPTION
+.B icu-config
+simplifies the task of building and linking against ICU as compared to
+manually configuring user makefiles or equivalent.  Because 
+.B icu-config
+is an executable script, it also solves the problem of locating the ICU
+libraries and headers, by allowing the system PATH to locate it. 
+.SH EXAMPLES
+.B icu-config
+can be used without a makefile. The command line below is sufficient for
+building a single-file c++ program against ICU. (For example, \fBicu/source/samples/props/props.cpp\fR)
+.PP
+.RS
+`icu-config --cxx --cxxflags --cppflags --ldflags` -o props props.cpp
+.RE
+.PP
+More commonly,
+.B icu-config
+will be called from within a makefile, and used to set up variables. The
+following example also builds the \fIprops\fR example.
+.PP
+.RS
+CC=$(shell icu-config --cc)
+
+CXX=$(shell icu-config --cxx)
+
+CPPFLAGS=$(shell icu-config --cppflags)
+
+CXXFLAGS=$(shell icu-config --cxxflags)
+
+LDFLAGS =$(shell icu-config --ldflags)
+
+all: props
+
+props.o: props.cpp
+.RE
+.PP
+make(1) will automatically use the above variables.
+.SH OPTIONS
+.TP
+.BI "\-\-bindir"
+Prints the binary (executable) directory path. Normally equivalent to 'bin'.
+ICU user-executable applications and scripts are found here.
+.TP
+.BI "\-\-cc"
+Print the C compiler used.  Equivalent to the $(CC) Makefile variable.
+.TP
+.BI "\-\-cflags"
+Print the C compiler flags. Equivalent to the $(CFLAGS) Makefile variable.
+Does NOT include preprocessor directives such as include path or defined symbols. Examples include debugging (\-g) and optimization flags
+.TP
+.BI "\-\-cppflags"
+Print the C preprocessor flags. Equivalent to the $(CPPFLAGS) Makefile variable. Examples are \-I include paths  and \-D define directives.
+.TP
+.BI "\-\-cppflags\-searchpath"
+Print the C preprocessor flags, as above but only \-I search paths.
+.TP
+.BI "\-\-cxx"
+Print the C++ compiler. Equivalent to the $(CXX) Makefile variable.
+.TP
+.BI "\-\-cxxflags"
+Print the C++ compiler flags. Equivalent to the $(CXXFLAGS) Makefile variable.
+.TP
+.BI "\-\-detect\-prefix"
+If ICU has been moved from its installed location, prepending this flag to
+other 
+.B icu-config
+calls will attempt to locate ICU relative to where the
+.B icu-config
+script has been located. Can be used as a last-chance effort if the ICU
+install has been damaged.
+.TP
+.BI "\-\-exec\-prefix"
+Print the prefix used for executable program directories (such as bin, sbin, etc). Normally the same as the prefix.
+.TP
+.BI "\-\-exists"
+Script will return with a successful (0) status if ICU seems to be installed
+and located correctly, otherwise an error message and nonzero status will
+be displayed.
+.TP
+.BI "\-\-help\fP, \fB\-?\fP,\fB\-\-usage"
+Print a help and usage message.
+.TP
+.BI "\-\-icudata"
+Print the \fIshortname\fP of the ICU data file. This does not include any suffix such as .dat, .dll, .so, .lib, .a, etc nor does it include prefixes such as 'lib'.  It may be in the form \fBicudt21b\fP
+.TP
+.BI "\-\-icudata\-install\-dir"
+Print the directory where ICU packaged data should 
+be installed.   Can use as pkgdata(1)'s --install option.
+.TP
+.BI "\-\-icudata\-mode"
+Print the default ICU pkgdata mode, such as dll or common.  Can use as pkgdata(1)'s --mode option.
+.TP
+.BI "\-\-icudatadir"
+Print the path to packaged archive data.  (should be where $ICU_DATA 
+or equivalent default path points.)  Will NOT point to the libdir.
+.TP
+.BI "\-\-invoke"
+If ICU is not installed in a location where the operating system will locate 
+its shared libraries, this option will print out commands so as to set the
+appropriate environment variables to load ICU's shared libraries. For example,
+on many systems a variable named LD_LIBRARY_PATH or equivalent must be set.
+.TP
+.BI "\-\-invoke=" "prog"
+Same as the \fB\-\-invoke\fP option, except includes options for invoking 
+a program named \fIprog\fP.  If \fIprog\fP is the name of an ICU tool, 
+such as genrb(1), then \fBicu-config\fP will also include the full path
+to that tool. 
+.TP
+.BI "\-\-ldflags"
+Print any flags which should be passed to the linker. These may include 
+-L for library search paths, and -l for including ICU libraries. By default, 
+this option will attempt to link in the "common" (libicuuc) and "i18n" 
+(libicui18n) libraries, as well as the data library. If additional libraries
+are required, any of the following two flags may be added in conjunction with this one,
+for example "\-\-ldflags \-\-ldflags-icuio" if the icuio library is required
+in addition to the standard ICU libraries.
+Equivalent to the $(LDFLAGS) Makefile variable.
+.TP
+.BI "\-\-ldflags\-layout"
+Prints the link option for the ICU layout library.
+.TP
+.BI "\-\-ldflags\-icuio"
+Prints the link option to add the ICU I/O package
+.TP
+.BI "\-\-ldflags\-libsonly"
+Similar to \fI\-\-ldflags\fP but only includes the \-l options.
+.TP
+.BI "\-\-ldflags\-searchpath"
+Similar to \fI\-\-ldflags\fP but only includes the \-L search path options.
+.TP
+.BI "\-\-ldflags\-system"
+Similar to \fI\-\-ldflags\fP but only includes system libraries (such as pthreads)
+.BI "\-\-mandir"
+Prints the location of the installed ICU man pages. Normally (man)
+.TP
+.BI "\-\-prefix"
+Prints the prefix (base directory) under which the installed ICU resides. 
+.TP
+.BI "\-\-prefix=" "prefix"
+Sets the ICU prefix to \fIprefix\fP for the remainder of this command line.  
+Does test whether the new prefix is valid.
+.TP
+.BI "\-\-sbindir"
+Prints the location of ICU system binaries, normally (sbin)
+.TP
+.BI "\-\-shared\-datadir"
+Prints the location of ICU shared data, normally (share)
+.TP
+.BI "\-\-sysconfdir"
+Prints the location of ICU system configuration data, normally (etc)
+.TP
+.BI "\-\-unicode\-version"
+Prints the Version of the Unicode Standard which the current ICU uses.
+.TP
+.BI "\-\-version"
+Prints the current version of ICU.
+.TP
+.BI "\-\-incfile"
+Prints the 'Makefile.inc' path, suitable for use with pkgdata(1)'s \-O option.
+.PP
+.SH AUTHORS
+Steven Loomis
+.SH VERSION
+78.3
+.SH COPYRIGHT
+Copyright (C) 2002-2004 IBM, Inc. and others.
+

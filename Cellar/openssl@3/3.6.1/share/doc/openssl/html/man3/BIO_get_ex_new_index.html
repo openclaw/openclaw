@@ -1,0 +1,114 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>BIO_get_ex_new_index</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>BIO_get_ex_new_index, BIO_set_ex_data, BIO_get_ex_data, BIO_set_app_data, BIO_get_app_data, DH_get_ex_new_index, DH_set_ex_data, DH_get_ex_data, DSA_get_ex_new_index, DSA_set_ex_data, DSA_get_ex_data, EC_KEY_get_ex_new_index, EC_KEY_set_ex_data, EC_KEY_get_ex_data, ENGINE_get_ex_new_index, ENGINE_set_ex_data, ENGINE_get_ex_data, EVP_PKEY_get_ex_new_index, EVP_PKEY_set_ex_data, EVP_PKEY_get_ex_data, RSA_get_ex_new_index, RSA_set_ex_data, RSA_get_ex_data, RSA_set_app_data, RSA_get_app_data, SSL_get_ex_new_index, SSL_set_ex_data, SSL_get_ex_data, SSL_set_app_data, SSL_get_app_data, SSL_CTX_get_ex_new_index, SSL_CTX_set_ex_data, SSL_CTX_get_ex_data, SSL_CTX_set_app_data, SSL_CTX_get_app_data, SSL_SESSION_get_ex_new_index, SSL_SESSION_set_ex_data, SSL_SESSION_get_ex_data, SSL_SESSION_set_app_data, SSL_SESSION_get_app_data, UI_get_ex_new_index, UI_set_ex_data, UI_get_ex_data, UI_set_app_data, UI_get_app_data, X509_STORE_CTX_get_ex_new_index, X509_STORE_CTX_set_ex_data, X509_STORE_CTX_get_ex_data, X509_STORE_CTX_set_app_data, X509_STORE_CTX_get_app_data, X509_STORE_get_ex_new_index, X509_STORE_set_ex_data, X509_STORE_get_ex_data, X509_get_ex_new_index, X509_set_ex_data, X509_get_ex_data - application-specific data</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/x509.h&gt;
+
+int TYPE_get_ex_new_index(long argl, void *argp,
+                          CRYPTO_EX_new *new_func,
+                          CRYPTO_EX_dup *dup_func,
+                          CRYPTO_EX_free *free_func);
+
+int TYPE_set_ex_data(TYPE *d, int idx, void *arg);
+
+void *TYPE_get_ex_data(const TYPE *d, int idx);
+
+#define TYPE_set_app_data(TYPE *d, void *arg)
+#define TYPE_get_app_data(TYPE *d)</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>int DH_get_ex_new_index(long argl, void *argp, CRYPTO_EX_new *new_func,
+                        CRYPTO_EX_dup *dup_func, CRYPTO_EX_free *free_func);
+int DH_set_ex_data(DH *type, int idx, void *arg);
+void *DH_get_ex_data(DH *type, int idx);
+int DSA_get_ex_new_index(long argl, void *argp, CRYPTO_EX_new *new_func,
+                         CRYPTO_EX_dup *dup_func, CRYPTO_EX_free *free_func);
+int DSA_set_ex_data(DSA *type, int idx, void *arg);
+void *DSA_get_ex_data(DSA *type, int idx);
+int EC_KEY_get_ex_new_index(long argl, void *argp, CRYPTO_EX_new *new_func,
+                            CRYPTO_EX_dup *dup_func, CRYPTO_EX_free *free_func);
+int EC_KEY_set_ex_data(EC_KEY *type, int idx, void *arg);
+void *EC_KEY_get_ex_data(EC_KEY *type, int idx);
+int RSA_get_ex_new_index(long argl, void *argp, CRYPTO_EX_new *new_func,
+                         CRYPTO_EX_dup *dup_func, CRYPTO_EX_free *free_func);
+int RSA_set_ex_data(RSA *type, int idx, void *arg);
+void *RSA_get_ex_data(RSA *type, int idx);
+int RSA_set_app_data(RSA *type, void *arg);
+void *RSA_get_app_data(RSA *type);
+int ENGINE_get_ex_new_index(long argl, void *argp, CRYPTO_EX_new *new_func,
+                            CRYPTO_EX_dup *dup_func, CRYPTO_EX_free *free_func);
+int ENGINE_set_ex_data(ENGINE *type, int idx, void *arg);
+void *ENGINE_get_ex_data(ENGINE *type, int idx);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>In the description here, <i>TYPE</i> is used a placeholder for any of the OpenSSL datatypes listed in <a href="../man3/CRYPTO_get_ex_new_index.html">CRYPTO_get_ex_new_index(3)</a>.</p>
+
+<p>All functions with a <i>TYPE</i> of <b>DH</b>, <b>DSA</b>, <b>RSA</b> and <b>EC_KEY</b> are deprecated. Applications should instead use EVP_PKEY_set_ex_data(), EVP_PKEY_get_ex_data() and EVP_PKEY_get_ex_new_index().</p>
+
+<p>All functions with a <i>TYPE</i> of <b>ENGINE</b> are deprecated. Applications using engines should be replaced by providers.</p>
+
+<p>These functions handle application-specific data for OpenSSL data structures.</p>
+
+<p>TYPE_get_ex_new_index() is a macro that calls CRYPTO_get_ex_new_index() with the correct <b>index</b> value.</p>
+
+<p>TYPE_set_ex_data() is a function that calls CRYPTO_set_ex_data() with an offset into the opaque exdata part of the TYPE object. <i>d</i> <b>MUST NOT</b> be NULL.</p>
+
+<p>TYPE_get_ex_data() is a function that calls CRYPTO_get_ex_data() with an offset into the opaque exdata part of the TYPE object. <i>d</i> <b>MUST NOT</b> be NULL.</p>
+
+<p>For compatibility with previous releases, the exdata index of zero is reserved for &quot;application data.&quot; There are two convenience functions for this. TYPE_set_app_data() is a macro that invokes TYPE_set_ex_data() with <b>idx</b> set to zero. TYPE_get_app_data() is a macro that invokes TYPE_get_ex_data() with <b>idx</b> set to zero.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>TYPE_get_ex_new_index() returns a new index on success or -1 on error.</p>
+
+<p>TYPE_set_ex_data() returns 1 on success or 0 on error.</p>
+
+<p>TYPE_get_ex_data() returns the application data or NULL if an error occurred.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/CRYPTO_get_ex_new_index.html">CRYPTO_get_ex_new_index(3)</a>.</p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The functions DH_get_ex_new_index(), DH_set_ex_data(), DH_get_ex_data(), DSA_get_ex_new_index(), DSA_set_ex_data(), DSA_get_ex_data(), EC_KEY_get_ex_new_index(), EC_KEY_set_ex_data(), EC_KEY_get_ex_data(), ENGINE_get_ex_new_index(), ENGINE_set_ex_data(), ENGINE_get_ex_data(), RSA_get_ex_new_index(), RSA_set_ex_data(), RSA_get_ex_data(), RSA_set_app_data() and RSA_get_app_data() were deprecated in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2015-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

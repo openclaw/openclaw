@@ -1,0 +1,170 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>CMS_signed_get_attr</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>CMS_signed_get_attr_count, CMS_signed_get_attr_by_NID, CMS_signed_get_attr_by_OBJ, CMS_signed_get_attr, CMS_signed_delete_attr, CMS_signed_add1_attr, CMS_signed_add1_attr_by_OBJ, CMS_signed_add1_attr_by_NID, CMS_signed_add1_attr_by_txt, CMS_signed_get0_data_by_OBJ, CMS_unsigned_get_attr_count, CMS_unsigned_get_attr_by_NID, CMS_unsigned_get_attr_by_OBJ, CMS_unsigned_get_attr, CMS_unsigned_delete_attr, CMS_unsigned_add1_attr, CMS_unsigned_add1_attr_by_OBJ, CMS_unsigned_add1_attr_by_NID, CMS_unsigned_add1_attr_by_txt, CMS_unsigned_get0_data_by_OBJ - CMS signed and unsigned attribute functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/cms.h&gt;
+
+int CMS_signed_get_attr_count(const CMS_SignerInfo *si);
+int CMS_signed_get_attr_by_NID(const CMS_SignerInfo *si, int nid,
+                               int lastpos);
+int CMS_signed_get_attr_by_OBJ(const CMS_SignerInfo *si, const ASN1_OBJECT *obj,
+                               int lastpos);
+X509_ATTRIBUTE *CMS_signed_get_attr(const CMS_SignerInfo *si, int loc);
+X509_ATTRIBUTE *CMS_signed_delete_attr(CMS_SignerInfo *si, int loc);
+int CMS_signed_add1_attr(CMS_SignerInfo *si, X509_ATTRIBUTE *attr);
+int CMS_signed_add1_attr_by_OBJ(CMS_SignerInfo *si,
+                                const ASN1_OBJECT *obj, int type,
+                                const void *bytes, int len);
+int CMS_signed_add1_attr_by_NID(CMS_SignerInfo *si,
+                                int nid, int type,
+                                const void *bytes, int len);
+int CMS_signed_add1_attr_by_txt(CMS_SignerInfo *si,
+                                const char *attrname, int type,
+                                const void *bytes, int len);
+void *CMS_signed_get0_data_by_OBJ(const CMS_SignerInfo *si,
+                                  const ASN1_OBJECT *oid,
+                                  int lastpos, int type);
+
+int CMS_unsigned_get_attr_count(const CMS_SignerInfo *si);
+int CMS_unsigned_get_attr_by_NID(const CMS_SignerInfo *si, int nid,
+                                 int lastpos);
+int CMS_unsigned_get_attr_by_OBJ(const CMS_SignerInfo *si,
+                                 const ASN1_OBJECT *obj, int lastpos);
+X509_ATTRIBUTE *CMS_unsigned_get_attr(const CMS_SignerInfo *si, int loc);
+X509_ATTRIBUTE *CMS_unsigned_delete_attr(CMS_SignerInfo *si, int loc);
+int CMS_unsigned_add1_attr(CMS_SignerInfo *si, X509_ATTRIBUTE *attr);
+int CMS_unsigned_add1_attr_by_OBJ(CMS_SignerInfo *si,
+                                  const ASN1_OBJECT *obj, int type,
+                                  const void *bytes, int len);
+int CMS_unsigned_add1_attr_by_NID(CMS_SignerInfo *si,
+                                  int nid, int type,
+                                  const void *bytes, int len);
+int CMS_unsigned_add1_attr_by_txt(CMS_SignerInfo *si,
+                                  const char *attrname, int type,
+                                  const void *bytes, int len);
+void *CMS_unsigned_get0_data_by_OBJ(CMS_SignerInfo *si, ASN1_OBJECT *oid,
+                                    int lastpos, int type);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>CMS_signerInfo contains separate attribute lists for signed and unsigned attributes. Each CMS_signed_XXX() function is used for signed attributes, and each CMS_unsigned_XXX() function is used for unsigned attributes. Since the CMS_unsigned_XXX() functions work in the same way as the CMS_signed_XXX() equivalents, only the CMS_signed_XXX() functions are described below.</p>
+
+<p>CMS_signed_get_attr_by_OBJ() finds the location of the first matching object <i>obj</i> in the SignerInfo&#39;s <i>si</i> signed attribute list. The search starts at the position after <i>lastpos</i>. If the returned value is positive then it can be used on the next call to CMS_signed_get_attr_by_OBJ() as the value of <i>lastpos</i> in order to iterate through the remaining attributes. <i>lastpos</i> can be set to any negative value on the first call, in order to start searching from the start of the signed attribute list.</p>
+
+<p>CMS_signed_get_attr_by_NID() is similar to CMS_signed_get_attr_by_OBJ() except that it passes the numerical identifier (NID) <i>nid</i> associated with the object. See &lt;openssl/obj_mac.h&gt; for a list of NID_*.</p>
+
+<p>CMS_signed_get_attr() returns the <b>X509_ATTRIBUTE</b> object at index <i>loc</i> in the <i>si</i> signed attribute list. <i>loc</i> should be in the range from 0 to CMS_signed_get_attr_count() - 1.</p>
+
+<p>CMS_signed_delete_attr() removes the <b>X509_ATTRIBUTE</b> object at index <i>loc</i> in the <i>si</i> signed attribute list. An error occurs if the <i>si</i> attribute list is NULL.</p>
+
+<p>CMS_signed_add1_attr() pushes a copy of the passed in <b>X509_ATTRIBUTE</b> object to the <i>si</i> signed attribute list. A new signed attribute list is created if required. An error occurs if <i>attr</i> is NULL.</p>
+
+<p>CMS_signed_add1_attr_by_OBJ() creates a new signed <b>X509_ATTRIBUTE</b> using X509_ATTRIBUTE_set1_object() and X509_ATTRIBUTE_set1_data() to assign a new <i>obj</i> with type <i>type</i> and data <i>bytes</i> of length <i>len</i> and then pushes it to the <i>key</i> object&#39;s attribute list.</p>
+
+<p>CMS_signed_add1_attr_by_NID() is similar to CMS_signed_add1_attr_by_OBJ() except that it passes the numerical identifier (NID) <i>nid</i> associated with the object. See &lt;openssl/obj_mac.h&gt; for a list of NID_*.</p>
+
+<p>CMS_signed_add1_attr_by_txt() is similar to CMS_signed_add1_attr_by_OBJ() except that it passes a name <i>attrname</i> associated with the object. See &lt;openssl/obj_mac.h&gt; for a list of SN_* names.</p>
+
+<p>CMS_signed_get0_data_by_OBJ() finds the first attribute in a <i>si</i> signed attributes list that matches the <i>obj</i> starting at index <i>lastpos</i> and returns the data retrieved from the found attributes first <b>ASN1_TYPE</b> object. An error will occur if the attribute type <i>type</i> does not match the type of the <b>ASN1_TYPE</b> object OR if <i>type</i> is either <b>V_ASN1_BOOLEAN</b> or <b>V_ASN1_NULL</b> OR the attribute is not found. If <i>lastpos</i> is less than -1 then an error will occur if there are multiple objects in the signed attribute list that match <i>obj</i>. If <i>lastpos</i> is less than -2 then an error will occur if there is more than one <b>ASN1_TYPE</b> object in the found signed attribute.</p>
+
+<p>Refer to <a href="../man3/X509_ATTRIBUTE.html">X509_ATTRIBUTE(3)</a> for information related to attributes.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>The CMS_unsigned_XXX() functions return values are similar to those of the equivalent CMS_signed_XXX() functions.</p>
+
+<p>CMS_signed_get_attr_count() returns the number of signed attributes in the SignerInfo <i>si</i>, or -1 if the signed attribute list is NULL.</p>
+
+<p>CMS_signed_get_attr_by_OBJ() returns -1 if either the signed attribute list of <i>si</i> is empty OR if <i>obj</i> is not found, otherwise it returns the location of the <i>obj</i> in the SignerInfo&#39;s <i>si</i> signed attribute list.</p>
+
+<p>CMS_signed_get_attr_by_NID() is similar to CMS_signed_get_attr_by_OBJ() except that it returns -2 if the <i>nid</i> is not known by OpenSSL.</p>
+
+<p>CMS_signed_get_attr() returns either a signed <b>X509_ATTRIBUTE</b> or NULL on error.</p>
+
+<p>CMS_signed_delete_attr() returns either the removed signed <b>X509_ATTRIBUTE</b> or NULL if there is a error.</p>
+
+<p>CMS_signed_add1_attr(), CMS_signed_add1_attr_by_OBJ(), CMS_signed_add1_attr_by_NID(), CMS_signed_add1_attr_by_txt(), return 1 on success or 0 on error.</p>
+
+<p>CMS_signed_get0_data_by_OBJ() returns the data retrieved from the found signed attributes first <b>ASN1_TYPE</b> object, or NULL if an error occurs.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>Some attributes are added automatically during the signing process.</p>
+
+<p>Calling CMS_SignerInfo_sign() adds the NID_pkcs9_signingTime signed attribute.</p>
+
+<p>Calling CMS_final(), CMS_final_digest() or CMS_dataFinal() adds the NID_pkcs9_messageDigest signed attribute.</p>
+
+<p>The NID_pkcs9_contentType signed attribute is always added if the NID_pkcs9_signingTime attribute is added.</p>
+
+<p>Calling CMS_sign_ex(), CMS_sign_receipt() or CMS_add1_signer() may add attributes depending on the flags parameter. See <a href="../man3/CMS_add1_signer.html">CMS_add1_signer(3)</a> for more information.</p>
+
+<p>OpenSSL applies special rules for the following attribute NIDs:</p>
+
+<dl>
+
+<dt id="CMS-Signed-Attributes">CMS Signed Attributes</dt>
+<dd>
+
+<p>NID_pkcs9_contentType NID_pkcs9_messageDigest NID_pkcs9_signingTime</p>
+
+</dd>
+<dt id="ESS-Signed-Attributes">ESS Signed Attributes</dt>
+<dd>
+
+<p>NID_id_smime_aa_signingCertificate NID_id_smime_aa_signingCertificateV2 NID_id_smime_aa_receiptRequest</p>
+
+</dd>
+<dt id="CMS-Unsigned-Attributes">CMS Unsigned Attributes</dt>
+<dd>
+
+<p>NID_pkcs9_countersignature</p>
+
+</dd>
+</dl>
+
+<p>CMS_signed_add1_attr(), CMS_signed_add1_attr_by_OBJ(), CMS_signed_add1_attr_by_NID(), CMS_signed_add1_attr_by_txt() and the equivalent CMS_unsigned_add1_attrXXX() functions allow duplicate attributes to be added. The attribute rules are not checked during these function calls, and are deferred until the sign or verify process (i.e. during calls to any of CMS_sign_ex(), CMS_sign(), CMS_sign_receipt(), CMS_add1_signer(), CMS_Final(), CMS_dataFinal(), CMS_final_digest(), CMS_verify(), CMS_verify_receipt() or CMS_SignedData_verify()).</p>
+
+<p>For CMS attribute rules see RFC 5652 Section 11. For ESS attribute rules see RFC 2634 Section 1.3.4 and RFC 5035 Section 5.4.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/X509_ATTRIBUTE.html">X509_ATTRIBUTE(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2023-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

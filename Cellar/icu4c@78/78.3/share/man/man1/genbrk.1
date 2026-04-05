@@ -1,0 +1,114 @@
+.\" Hey, Emacs! This is -*-nroff-*- you know...
+.\"
+.\" genbrk.1: manual page for the genbrk utility
+.\"
+.\" Copyright (C) 2016 and later: Unicode, Inc. and others.
+.\" License & terms of use: http://www.unicode.org/copyright.html
+.\" Copyright (C) 2005-2006 International Business Machines Corporation and others
+.\"
+.TH GENBRK 1 "2 December 2005" "ICU MANPAGE" "ICU 78.3 Manual"
+.SH NAME
+.B genbrk
+\- Compiles ICU break iteration rules source files into binary data files
+.SH SYNOPSIS
+.B genbrk
+[
+.BR "\-h\fP, \fB\-?\fP, \fB\-\-help"
+]
+[
+.BR "\-V\fP, \fB\-\-version"
+]
+[
+.BR "\-c\fP, \fB\-\-copyright"
+]
+[
+.BR "\-v\fP, \fB\-\-verbose"
+]
+[
+.BI "\-d\fP, \fB\-\-destdir" " destination"
+]
+[
+.BI "\-i\fP, \fB\-\-icudatadir" " directory"
+]
+.BI "\-r\fP, \fB\-\-rules" " rule\-file"
+.BI "\-o\fP, \fB\-\-out" " output\-file"
+.SH DESCRIPTION
+.B genbrk
+reads the break (boundary) rule source code from
+.I rule-file
+and creates a break iteration data file. Normally this data file has the 
+.B .brk
+extension.
+.PP
+The details of the rule syntax can be found in ICU's User Guide.
+.SH OPTIONS
+.TP
+.BR "\-h\fP, \fB\-?\fP, \fB\-\-help"
+Print help about usage and exit.
+.TP
+.BR "\-V\fP, \fB\-\-version"
+Print the version of
+.B genbrk
+and exit.
+.TP
+.BR "\-c\fP, \fB\-\-copyright"
+Embeds the standard ICU copyright into the
+.IR output-file .
+.TP
+.BR "\-v\fP, \fB\-\-verbose"
+Display extra informative messages during execution.
+.TP
+.BI "\-d\fP, \fB\-\-destdir" " destination"
+Set the destination directory of the
+.IR output-file
+to
+.IR destination .
+.TP
+.BI "\-i\fP, \fB\-\-icudatadir" " directory"
+Look for any necessary ICU data files in
+.IR directory .
+For example, the file
+.B pnames.icu
+must be located when ICU's data is not built as a shared library.
+The default ICU data directory is specified by the environment variable
+.BR ICU_DATA .
+Most configurations of ICU do not require this argument.
+.TP
+.BI "\-r\fP, \fB\-\-rules" " rule\-file"
+The source file to read.
+.TP
+.BI "\-o\fP, \fB\-\-out" " output\-file"
+The output data file to write.
+.SH CAVEATS
+When the
+.IR rule-file
+contains a byte order mark (BOM) at the beginning of the file, which is the Unicode character
+.B U+FEFF,
+then the
+.IR rule-file
+is interpreted as Unicode. Without the BOM,
+the file is interpreted in the current operating system default codepage.
+In order to eliminate any ambiguity of the encoding for how the
+.IR rule-file
+was written, it is recommended that you write this file in UTF-8
+with the BOM.
+.SH ENVIRONMENT
+.TP 10
+.B ICU_DATA
+Specifies the directory containing ICU data. Defaults to
+.BR ${prefix}/share/icu/78.3/ .
+Some tools in ICU depend on the presence of the trailing slash. It is thus
+important to make sure that it is present if
+.B ICU_DATA
+is set.
+.SH AUTHORS
+George Rhoten
+.br
+Andy Heninger
+.SH VERSION
+1.0
+.SH COPYRIGHT
+Copyright (C) 2005 International Business Machines Corporation and others
+.SH SEE ALSO
+.BR http://www.icu-project.org/userguide/boundaryAnalysis.html
+

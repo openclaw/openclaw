@@ -1,0 +1,138 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OSSL_ENCODER_to_bio</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OSSL_ENCODER_to_data, OSSL_ENCODER_to_bio, OSSL_ENCODER_to_fp - Routines to perform an encoding</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/encoder.h&gt;
+
+int OSSL_ENCODER_to_data(OSSL_ENCODER_CTX *ctx, unsigned char **pdata,
+                         size_t *pdata_len);
+int OSSL_ENCODER_to_bio(OSSL_ENCODER_CTX *ctx, BIO *out);
+int OSSL_ENCODER_to_fp(OSSL_ENCODER_CTX *ctx, FILE *fp);</code></pre>
+
+<p>Feature availability macros:</p>
+
+<dl>
+
+<dt id="OSSL_ENCODER_to_fp-is-only-available-when-OPENSSL_NO_STDIO-is-undefined">OSSL_ENCODER_to_fp() is only available when <b>OPENSSL_NO_STDIO</b> is undefined.</dt>
+<dd>
+
+</dd>
+</dl>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>OSSL_ENCODER_to_data() runs the encoding process for the context <i>ctx</i>, with the output going to the <i>*pdata</i> and <i>*pdata_len</i>. If <i>*pdata</i> is NULL when OSSL_ENCODER_to_data() is called, a buffer will be allocated using <a href="../man3/OPENSSL_zalloc.html">OPENSSL_zalloc(3)</a>, and <i>*pdata</i> will be set to point at the start of that buffer, and <i>*pdata_len</i> will be assigned its length when OSSL_ENCODER_to_data() returns. If <i>*pdata</i> is non-NULL when OSSL_ENCODER_to_data() is called, <i>*pdata_len</i> is assumed to have its size. In this case, <i>*pdata</i> will be set to point after the encoded bytes, and <i>*pdata_len</i> will be assigned the number of remaining bytes.</p>
+
+<p>OSSL_ENCODER_to_bio() runs the encoding process for the context <i>ctx</i>, with the output going to the <b>BIO</b> <i>out</i>.</p>
+
+<p>OSSL_ENCODER_to_fp() does the same thing as OSSL_ENCODER_to_bio(), except that the output is going to the <b>FILE</b> <i>fp</i>.</p>
+
+<p>For OSSL_ENCODER_to_bio() and OSSL_ENCODER_to_fp(), the application is required to set up the <b>BIO</b> or <b>FILE</b> properly, for example to have it in text or binary mode as is appropriate for the encoder output type.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>OSSL_ENCODER_to_bio(), OSSL_ENCODER_to_fp() and OSSL_ENCODER_to_data() return 1 on success, or 0 on failure.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>To encode a pkey as PKCS#8 with PEM format into a bio:</p>
+
+<pre><code>OSSL_ENCODER_CTX *ectx;
+const char *format = &quot;PEM&quot;;
+const char *structure = &quot;PrivateKeyInfo&quot;; /* PKCS#8 structure */
+const unsigned char *pass = &quot;my password&quot;;
+
+ectx = OSSL_ENCODER_CTX_new_for_pkey(pkey,
+                                     OSSL_KEYMGMT_SELECT_KEYPAIR
+                                     | OSSL_KEYMGMT_SELECT_DOMAIN_PARAMETERS,
+                                     format, structure,
+                                     NULL);
+if (ectx == NULL) {
+    /* error: no suitable potential encoders found */
+}
+if (pass != NULL)
+    OSSL_ENCODER_CTX_set_passphrase(ectx, pass, strlen(pass));
+if (OSSL_ENCODER_to_bio(ectx, bio)) {
+    /* pkey was successfully encoded into the bio */
+} else {
+    /* encoding failure */
+}
+OSSL_ENCODER_CTX_free(ectx);</code></pre>
+
+<p>To encode a pkey as PKCS#8 with DER format encrypted with AES-256-CBC into a buffer:</p>
+
+<pre><code>OSSL_ENCODER_CTX *ectx;
+const char *format = &quot;DER&quot;;
+const char *structure = &quot;PrivateKeyInfo&quot;; /* PKCS#8 structure */
+const unsigned char *pass = &quot;my password&quot;;
+unsigned char *data = NULL;
+size_t datalen;
+
+ectx = OSSL_ENCODER_CTX_new_for_pkey(pkey,
+                                     OSSL_KEYMGMT_SELECT_KEYPAIR
+                                     | OSSL_KEYMGMT_SELECT_DOMAIN_PARAMETERS,
+                                     format, structure,
+                                     NULL);
+if (ectx == NULL) {
+    /* error: no suitable potential encoders found */
+}
+if (pass != NULL) {
+    OSSL_ENCODER_CTX_set_passphrase(ectx, pass, strlen(pass));
+    OSSL_ENCODER_CTX_set_cipher(ctx, &quot;AES-256-CBC&quot;, NULL);
+}
+if (OSSL_ENCODER_to_data(ectx, &amp;data, &amp;datalen)) {
+    /*
+     * pkey was successfully encoded into a newly allocated
+     * data buffer
+     */
+} else {
+    /* encoding failure */
+}
+OSSL_ENCODER_CTX_free(ectx);</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/provider.html">provider(7)</a>, <a href="../man3/OSSL_ENCODER_CTX.html">OSSL_ENCODER_CTX(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The functions described here were added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2019-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

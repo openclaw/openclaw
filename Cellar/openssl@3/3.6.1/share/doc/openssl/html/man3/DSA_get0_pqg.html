@@ -1,0 +1,102 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>DSA_get0_pqg</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>DSA_get0_pqg, DSA_set0_pqg, DSA_get0_key, DSA_set0_key, DSA_get0_p, DSA_get0_q, DSA_get0_g, DSA_get0_pub_key, DSA_get0_priv_key, DSA_clear_flags, DSA_test_flags, DSA_set_flags, DSA_get0_engine - Routines for getting and setting data in a DSA object</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/dsa.h&gt;</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>void DSA_get0_pqg(const DSA *d,
+                  const BIGNUM **p, const BIGNUM **q, const BIGNUM **g);
+int DSA_set0_pqg(DSA *d, BIGNUM *p, BIGNUM *q, BIGNUM *g);
+void DSA_get0_key(const DSA *d,
+                  const BIGNUM **pub_key, const BIGNUM **priv_key);
+int DSA_set0_key(DSA *d, BIGNUM *pub_key, BIGNUM *priv_key);
+const BIGNUM *DSA_get0_p(const DSA *d);
+const BIGNUM *DSA_get0_q(const DSA *d);
+const BIGNUM *DSA_get0_g(const DSA *d);
+const BIGNUM *DSA_get0_pub_key(const DSA *d);
+const BIGNUM *DSA_get0_priv_key(const DSA *d);
+void DSA_clear_flags(DSA *d, int flags);
+int DSA_test_flags(const DSA *d, int flags);
+void DSA_set_flags(DSA *d, int flags);
+ENGINE *DSA_get0_engine(DSA *d);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>All of the functions described on this page are deprecated. Applications should instead use <a href="../man3/EVP_PKEY_get_bn_param.html">EVP_PKEY_get_bn_param(3)</a>.</p>
+
+<p>A DSA object contains the parameters <b>p</b>, <b>q</b> and <b>g</b>. It also contains a public key (<b>pub_key</b>) and (optionally) a private key (<b>priv_key</b>).</p>
+
+<p>The <b>p</b>, <b>q</b> and <b>g</b> parameters can be obtained by calling DSA_get0_pqg(). If the parameters have not yet been set then <b>*p</b>, <b>*q</b> and <b>*g</b> will be set to NULL. Otherwise they are set to pointers to their respective values. These point directly to the internal representations of the values and therefore should not be freed directly.</p>
+
+<p>The <b>p</b>, <b>q</b> and <b>g</b> values can be set by calling DSA_set0_pqg() and passing the new values for <b>p</b>, <b>q</b> and <b>g</b> as parameters to the function. Calling this function transfers the memory management of the values to the DSA object, and therefore the values that have been passed in should not be freed directly after this function has been called.</p>
+
+<p>To get the public and private key values use the DSA_get0_key() function. A pointer to the public key will be stored in <b>*pub_key</b>, and a pointer to the private key will be stored in <b>*priv_key</b>. Either may be NULL if they have not been set yet, although if the private key has been set then the public key must be. The values point to the internal representation of the public key and private key values. This memory should not be freed directly.</p>
+
+<p>The public and private key values can be set using DSA_set0_key(). The public key must be non-NULL the first time this function is called on a given DSA object. The private key may be NULL. On subsequent calls, either may be NULL, which means the corresponding DSA field is left untouched. As for DSA_set0_pqg() this function transfers the memory management of the key values to the DSA object, and therefore they should not be freed directly after this function has been called.</p>
+
+<p>Any of the values <b>p</b>, <b>q</b>, <b>g</b>, <b>priv_key</b>, and <b>pub_key</b> can also be retrieved separately by the corresponding function DSA_get0_p(), DSA_get0_q(), DSA_get0_g(), DSA_get0_priv_key(), and DSA_get0_pub_key(), respectively.</p>
+
+<p>DSA_set_flags() sets the flags in the <b>flags</b> parameter on the DSA object. Multiple flags can be passed in one go (bitwise ORed together). Any flags that are already set are left set. DSA_test_flags() tests to see whether the flags passed in the <b>flags</b> parameter are currently set in the DSA object. Multiple flags can be tested in one go. All flags that are currently set are returned, or zero if none of the flags are set. DSA_clear_flags() clears the specified flags within the DSA object.</p>
+
+<p>DSA_get0_engine() returns a handle to the ENGINE that has been set for this DSA object, or NULL if no such ENGINE has been set.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>Values retrieved with DSA_get0_key() are owned by the DSA object used in the call and may therefore <i>not</i> be passed to DSA_set0_key(). If needed, duplicate the received value using BN_dup() and pass the duplicate. The same applies to DSA_get0_pqg() and DSA_set0_pqg().</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>DSA_set0_pqg() and DSA_set0_key() return 1 on success or 0 on failure.</p>
+
+<p>DSA_test_flags() returns the current state of the flags in the DSA object.</p>
+
+<p>DSA_get0_engine() returns the ENGINE set for the DSA object or NULL if no ENGINE has been set.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_PKEY_get_bn_param.html">EVP_PKEY_get_bn_param(3)</a>, <a href="../man3/DSA_new.html">DSA_new(3)</a>, <a href="../man3/DSA_new.html">DSA_new(3)</a>, <a href="../man3/DSA_generate_parameters.html">DSA_generate_parameters(3)</a>, <a href="../man3/DSA_generate_key.html">DSA_generate_key(3)</a>, <a href="../man3/DSA_dup_DH.html">DSA_dup_DH(3)</a>, <a href="../man3/DSA_do_sign.html">DSA_do_sign(3)</a>, <a href="../man3/DSA_set_method.html">DSA_set_method(3)</a>, <a href="../man3/DSA_SIG_new.html">DSA_SIG_new(3)</a>, <a href="../man3/DSA_sign.html">DSA_sign(3)</a>, <a href="../man3/DSA_size.html">DSA_size(3)</a>, <a href="../man3/DSA_meth_new.html">DSA_meth_new(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The functions described here were added in OpenSSL 1.1.0 and deprecated in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2016-2018 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

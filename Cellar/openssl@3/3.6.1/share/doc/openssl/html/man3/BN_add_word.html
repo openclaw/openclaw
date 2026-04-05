@@ -1,0 +1,78 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>BN_add_word</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>BN_add_word, BN_sub_word, BN_mul_word, BN_div_word, BN_mod_word - arithmetic functions on BIGNUMs with integers</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/bn.h&gt;
+
+int BN_add_word(BIGNUM *a, BN_ULONG w);
+
+int BN_sub_word(BIGNUM *a, BN_ULONG w);
+
+int BN_mul_word(BIGNUM *a, BN_ULONG w);
+
+BN_ULONG BN_div_word(BIGNUM *a, BN_ULONG w);
+
+BN_ULONG BN_mod_word(const BIGNUM *a, BN_ULONG w);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>These functions perform arithmetic operations on BIGNUMs with unsigned integers. They are much more efficient than the normal BIGNUM arithmetic operations.</p>
+
+<p>BN_add_word() adds <b>w</b> to <b>a</b> (<code>a+=w</code>).</p>
+
+<p>BN_sub_word() subtracts <b>w</b> from <b>a</b> (<code>a-=w</code>).</p>
+
+<p>BN_mul_word() multiplies <b>a</b> and <b>w</b> (<code>a*=w</code>).</p>
+
+<p>BN_div_word() divides <b>a</b> by <b>w</b> (<code>a/=w</code>) and returns the remainder.</p>
+
+<p>BN_mod_word() returns the remainder of <b>a</b> divided by <b>w</b> (<code>a%w</code>).</p>
+
+<p>For BN_div_word() and BN_mod_word(), <b>w</b> must not be 0.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>BN_add_word(), BN_sub_word() and BN_mul_word() return 1 for success, 0 on error. The error codes can be obtained by <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>.</p>
+
+<p>BN_mod_word() and BN_div_word() return <b>a</b>%<b>w</b> on success and <b>(BN_ULONG)-1</b> if an error occurred.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>, <a href="../man3/BN_add.html">BN_add(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2017 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

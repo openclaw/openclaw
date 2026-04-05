@@ -1,0 +1,74 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>ERR_set_mark</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>ERR_set_mark, ERR_clear_last_mark, ERR_pop_to_mark, ERR_count_to_mark, ERR_pop - set mark, clear mark, pop errors until mark and pop last error</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/err.h&gt;
+
+int ERR_set_mark(void);
+int ERR_pop_to_mark(void);
+int ERR_clear_last_mark(void);
+int ERR_count_to_mark(void);
+int ERR_pop(void);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>ERR_set_mark() sets a mark on the current topmost error record if there is one.</p>
+
+<p>ERR_pop_to_mark() will pop the top of the error stack until a mark is found. The mark is then removed. If there is no mark, the whole stack is removed.</p>
+
+<p>ERR_clear_last_mark() removes the last mark added if there is one.</p>
+
+<p>ERR_count_to_mark() returns the number of entries on the error stack above the most recently marked entry, not including that entry. If there is no mark in the error stack, the number of entries in the error stack is returned.</p>
+
+<p>ERR_pop() unconditionally pops a single error entry from the top of the error stack (which is the entry obtainable via <a href="../man3/ERR_peek_last_error.html">ERR_peek_last_error(3)</a>).</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>ERR_set_mark() returns 0 if the error stack is empty, otherwise 1.</p>
+
+<p>ERR_clear_last_mark() and ERR_pop_to_mark() return 0 if there was no mark in the error stack, which implies that the stack became empty, otherwise 1.</p>
+
+<p>ERR_count_to_mark() returns the number of error stack entries found above the most recent mark, if any, or the total number of error stack entries.</p>
+
+<p>ERR_pop() returns 1 if an error was popped or 0 if the error stack was empty.</p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>ERR_count_to_mark() was added in OpenSSL 3.2. ERR_pop() was added in OpenSSL 3.3.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2003-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

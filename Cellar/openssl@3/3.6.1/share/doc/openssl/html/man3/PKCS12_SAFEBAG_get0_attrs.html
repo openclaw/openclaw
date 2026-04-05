@@ -1,0 +1,65 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>PKCS12_SAFEBAG_get0_attrs</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>PKCS12_SAFEBAG_get0_attrs, PKCS12_get_attr_gen - Retrieve attributes from a PKCS#12 safeBag</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/pkcs12.h&gt;
+
+const STACK_OF(X509_ATTRIBUTE) *PKCS12_SAFEBAG_get0_attrs(const PKCS12_SAFEBAG *bag);
+
+ASN1_TYPE *PKCS12_get_attr_gen(const STACK_OF(X509_ATTRIBUTE) *attrs,
+                               int attr_nid);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>PKCS12_SAFEBAG_get0_attrs() retrieves the stack of <b>X509_ATTRIBUTE</b>s from a PKCS#12 safeBag. <i>bag</i> is the <b>PKCS12_SAFEBAG</b> to retrieve the attributes from.</p>
+
+<p>PKCS12_get_attr_gen() retrieves an attribute by NID from a stack of <b>X509_ATTRIBUTE</b>s. <i>attr_nid</i> is the NID of the attribute to retrieve.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>PKCS12_SAFEBAG_get0_attrs() returns the stack of <b>X509_ATTRIBUTE</b>s from a PKCS#12 safeBag, which could be empty.</p>
+
+<p>PKCS12_get_attr_gen() returns an <b>ASN1_TYPE</b> object containing the attribute, or NULL if the attribute was either not present or an error occurred.</p>
+
+<p>PKCS12_get_attr_gen() does not allocate a new attribute. The returned attribute is still owned by the <b>PKCS12_SAFEBAG</b> in which it resides.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/PKCS12_get_friendlyname.html">PKCS12_get_friendlyname(3)</a>, <a href="../man3/PKCS12_add_friendlyname_asc.html">PKCS12_add_friendlyname_asc(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2019-2020 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,57 @@
+{
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "spdxVersion": "SPDX-2.3",
+  "name": "SBOM-SPDX-gogcli-0.12.0",
+  "creationInfo": {
+    "created": "2026-04-01T16:15:45Z",
+    "creators": ["Tool: https://github.com/Homebrew/brew@5.1.3"]
+  },
+  "dataLicense": "CC0-1.0",
+  "documentNamespace": "https://formulae.brew.sh/spdx/gogcli-0.12.0.json",
+  "documentDescribes": ["SPDXRef-Archive-gogcli-src", "SPDXRef-Compiler"],
+  "files": [],
+  "packages": [
+    {
+      "SPDXID": "SPDXRef-Archive-gogcli-src",
+      "name": "gogcli",
+      "versionInfo": "0.12.0",
+      "filesAnalyzed": false,
+      "licenseDeclared": "NOASSERTION",
+      "builtDate": "2026-03-09 05:54:28 UTC",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "https://github.com/steipete/gogcli/releases/download/v0.12.0/gogcli_0.12.0_darwin_arm64.tar.gz",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [],
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "d3716649bf6d6a3f05e94be8704991c69dc686acfc84d35f1f28812fd24f1151"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Compiler",
+      "name": "clang",
+      "versionInfo": "26.3",
+      "filesAnalyzed": false,
+      "licenseDeclared": "NOASSERTION",
+      "licenseConcluded": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "checksums": [],
+      "externalRefs": []
+    }
+  ],
+  "relationships": [
+    {
+      "spdxElementId": "SPDXRef-File-gogcli",
+      "relationshipType": "PACKAGE_OF",
+      "relatedSpdxElement": "SPDXRef-Archive-gogcli-src"
+    },
+    {
+      "spdxElementId": "SPDXRef-Compiler",
+      "relationshipType": "BUILD_TOOL_OF",
+      "relatedSpdxElement": "SPDXRef-Package-gogcli-src"
+    }
+  ]
+}

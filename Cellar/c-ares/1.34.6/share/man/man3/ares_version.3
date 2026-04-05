@@ -1,0 +1,24 @@
+.\"
+.\" Copyright 2004 by Daniel Stenberg
+.\" SPDX-License-Identifier: MIT
+.\"
+.TH ARES_VERSION 3 "29 January 2004"
+.SH NAME
+ares_version \- Get the version number of the library
+.SH SYNOPSIS
+.nf
+#include <ares.h>
+
+const char *ares_version(int *\fIversion\fP)
+.fi
+.SH DESCRIPTION
+The \fBares_version(3)\fP function gets the library version as a string and
+optionally as an integer stored in the \fIversion\fP argument. If you pass a
+NULL, no integer is attempted to be returned.
+
+The integer is built up as 24bit number, with 8 separate bits used for major
+number, minor number and patch number. This makes a version string such as
+1.2.3 will be returned as the hexadecimal number 0x010203 (decimal 66051).
+.SH "SEE ALSO"
+.BR ares_init (3),
+.BR ares_library_init (3)

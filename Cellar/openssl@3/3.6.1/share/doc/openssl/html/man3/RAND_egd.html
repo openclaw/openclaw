@@ -1,0 +1,67 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>RAND_egd</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>RAND_egd, RAND_egd_bytes, RAND_query_egd_bytes - query entropy gathering daemon</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/rand.h&gt;
+
+int RAND_egd_bytes(const char *path, int num);
+int RAND_egd(const char *path);
+
+int RAND_query_egd_bytes(const char *path, unsigned char *buf, int num);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>On older platforms without a good source of randomness such as <code>/dev/urandom</code>, it is possible to query an Entropy Gathering Daemon (EGD) over a local socket to obtain randomness and seed the OpenSSL RNG. The protocol used is defined by the EGDs available at <a href="http://egd.sourceforge.net/">http://egd.sourceforge.net/</a> or <a href="http://prngd.sourceforge.net">http://prngd.sourceforge.net</a>.</p>
+
+<p>RAND_egd_bytes() requests <b>num</b> bytes of randomness from an EGD at the specified socket <b>path</b>, and passes the data it receives into RAND_add(). RAND_egd() is equivalent to RAND_egd_bytes() with <b>num</b> set to 255.</p>
+
+<p>RAND_query_egd_bytes() requests <b>num</b> bytes of randomness from an EGD at the specified socket <b>path</b>, where <b>num</b> must be less than 256. If <b>buf</b> is <b>NULL</b>, it is equivalent to RAND_egd_bytes(). If <b>buf</b> is not <b>NULL</b>, then the data is copied to the buffer and RAND_add() is not called.</p>
+
+<p>OpenSSL can be configured at build time to try to use the EGD for seeding automatically.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>RAND_egd() and RAND_egd_bytes() return the number of bytes read from the daemon on success, or -1 if the connection failed or the daemon did not return enough data to fully seed the PRNG.</p>
+
+<p>RAND_query_egd_bytes() returns the number of bytes read from the daemon on success, or -1 if the connection failed.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/RAND_add.html">RAND_add(3)</a>, <a href="../man3/RAND_bytes.html">RAND_bytes(3)</a>, <a href="../man7/RAND.html">RAND(7)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2018 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

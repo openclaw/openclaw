@@ -1,0 +1,163 @@
+.\"
+.\" Copyright 2010 by Ben Greear <greearb@candelatech.com>
+.\" SPDX-License-Identifier: MIT
+.\"
+.TH ARES_SET_SERVERS_CSV 3 "5 Dec 2023"
+.SH NAME
+ares_set_servers_csv, ares_set_servers_ports_csv, ares_get_servers_csv \- Set
+or Get a list of DNS servers used for queries.
+.SH SYNOPSIS
+.nf
+#include <ares.h>
+
+int ares_set_servers_csv(ares_channel_t *\fIchannel\fP, const char* \fIservers\fP)
+
+int ares_set_servers_ports_csv(ares_channel_t *\fIchannel\fP, const char* \fIservers\fP)
+
+char *ares_get_servers_csv(const ares_channel_t *\fIchannel\fP)
+.fi
+.SH DESCRIPTION
+The \fBares_set_servers_csv\fP and \fBares_set_servers_ports_csv\fP functions set
+the list of DNS servers that c-ares will query.  As of v1.22.0 this function can
+be called on an active channel with running queries, previously it would return
+ARES_ENOTIMP.
+
+Though not recommended, passing NULL for servers will clear all configured
+servers and make an inoperable channel, this may be advantageous for test
+simulation but unlikely to be useful in production.
+
+The \fBares_get_servers_csv\fP retrieves the list of servers in comma delimited
+format.
+
+The input and output format is a comma separated list of servers.  Two formats
+are available, the typical \fBresolv.conf(5)\fP \fInameserver\fP format, as
+well as a \fIURI\fP format.  Both formats can be used at the same time in the
+provided CSV string.
+
+The \fInameserver\fP format is:
+.nf
+
+ip[:port][%iface]
+
+.fi
+.RS 4
+The \fBip\fP may be encapsulated in square brackets ([ ]), and must be if
+using ipv6 and also specifying a port.
+
+The \fBport\fP is optional, and will default to 53 or the value specified in
+\fBares_init_options(3)\fP.
+
+The \fBiface\fP is specific to IPv6 link-local servers (fe80::/10) and should
+not otherwise be used.
+.RE
+
+\fInameserver\fP format examples:
+.nf
+
+192.168.1.100
+192.168.1.101:53
+[1:2:3::4]:53
+[fe80::1]:53%eth0
+
+.fi
+.PP
+
+The \fIURI\fP format is is made up of these defined schemes:
+.RS 4
+\fIdns://\fP - Normal DNS server (UDP + TCP). We need to be careful not to
+conflict with query params defined in RFC4501 since we'd technically be
+extending this URI scheme. Port defaults to 53.
+
+\fIdns+tls://\fP - DNS over TLS. Port defaults to 853.
+
+\fIdns+https://\fP - DNS over HTTPS. Port defaults to 443.
+.RE
+
+.PP
+Query parameters are defined as below.  Additional parameters may be defined
+in the future.
+
+.RS 4
+\fItcpport\fP - TCP port to use, only for \fIdns://\fP scheme. The port
+specified as part of the authority component of the URI will be used for both
+UDP and TCP by default, this option will override the TCP port.
+
+\fIipaddr\fP - Only for \fIdns+tls://\fP and \fIdns+https://\fP. If the
+authority component of the URI contains a hostname, this is used to specify the
+ip address of the hostname. If not specified, will need to use a non-secure
+server to perform a DNS lookup to retrieve this information. It is always
+recommended to have both the ip address and fully qualified domain name
+specified.
+
+\fIhostname\fP - Only for \fIdns+tls://\fP and \fIdns+https://\fP. If the
+authority component of the URI contains an ip address, this is used to specify
+the fully qualified domain name of the server. If not specified, will need to
+use a non-secure server to perform a DNS reverse lookup to retrieve this
+information. It is always recommended to have both the ip address and fully
+qualified domain name specified.
+
+\fIdomain\fP - If specified, this server is a domain-specific server. Any
+queries for this domain will be routed to this server. Multiple servers may be
+tagged with the same domain.
+.RE
+
+\fIURI\fP format Examples:
+.nf
+
+dns://8.8.8.8
+dns://[2001:4860:4860::8888]
+dns://[fe80::b542:84df:1719:65e3%en0]
+dns://192.168.1.1:55
+dns://192.168.1.1?tcpport=1153
+dns://10.0.1.1?domain=myvpn.com
+dns+tls://8.8.8.8?hostname=dns.google
+dns+tls://one.one.one.one?ipaddr=1.1.1.1
+
+.fi
+
+\fBNOTE\fP: While we are defining the scheme for things like domain-specific
+servers, DNS over TLS and DNS over HTTPS, the underlying implementations for
+those features do not yet exist and therefore will result in errors if they are
+attempted to be used.
+
+.PP
+As of c-ares 1.24.0, \fBares_set_servers_csv\fP and \fBares_set_servers_ports_csv\fP
+are identical.  Prior versions would simply omit ports in \fBares_set_servers_csv\fP
+but due to the addition of link local interface support, this difference was
+removed.
+
+.SH EXAMPLE
+.nf
+192.168.1.100,[fe80::1]:53%eth0,dns://192.168.1.1?tcpport=1153
+.fi
+
+.SH RETURN VALUES
+.B ares_set_servers_csv(3)
+and
+.B ares_set_servers_ports_csv(3)
+may return any of the following values:
+.TP 15
+.B ARES_SUCCESS
+The name servers configuration was successfully initialized.
+.TP 15
+.B ARES_ENOMEM
+The process's available memory was exhausted.
+.TP 15
+.B ARES_ENODATA
+The channel data identified by
+.IR channel
+was invalid.
+.TP 15
+.B ARES_ENOTINITIALIZED
+c-ares library initialization not yet performed.
+.PP
+.B ares_get_servers_csv(3)
+returns a string representing the servers configured which must be freed with
+\fBares_free_string(3)\fP.  If it returns NULL, this is an out of memory condition.
+.SH SEE ALSO
+.BR ares_set_servers (3)
+.SH AVAILABILITY
+\fBares_set_servers_csv\fP was added in c-ares 1.7.2
+\fBares_set_servers_ports_csv\fP was added in c-ares 1.11.0.
+\fBares_get_servers_csv\fP was added in c-ares 1.24.0.
+\fIURI\fP support was added in c-ares 1.34.0.

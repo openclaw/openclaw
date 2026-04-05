@@ -1,0 +1,85 @@
+## -*-makefile-*-
+## Copyright (C) 2016 and later: Unicode, Inc. and others.
+## License & terms of use: http://www.unicode.org/copyright.html
+## Darwin-specific setup (Darwin is the Mac OS X developer preview, successor
+## to Rhapsody, aka Mac OS X Server)
+## Copyright (c) 1999-2012 International Business Machines Corporation and
+## others. All Rights Reserved.
+
+## Flags for position independent code
+SHAREDLIBCFLAGS = -dynamic
+SHAREDLIBCXXFLAGS = -dynamic
+SHAREDLIBCPPFLAGS =
+
+# Do not export internal methods by default
+LIBCFLAGS += -fvisibility=hidden
+LIBCXXFLAGS += -fvisibility=hidden
+
+# Pad out the paths to the maximum possible length
+LD_FLAGS += -headerpad_max_install_names
+
+# We do not need to see the stderr message that the archive was made.
+ARFLAGS += -c
+
+## Commands to compile
+COMPILE.c=	$(CC) $(DEFS) $(CPPFLAGS) $(CFLAGS) -fno-common -c
+COMPILE.cc=	$(CXX) $(DEFS) $(CPPFLAGS) $(CXXFLAGS) -fno-common -c
+
+## Commands to make a shared library
+SHLIB.c=	$(CC) -dynamiclib -dynamic $(CFLAGS) $(LDFLAGS) $(LD_SOOPTIONS)
+SHLIB.cc=	$(CXX) -dynamiclib -dynamic $(CXXFLAGS) $(LDFLAGS) $(LD_SOOPTIONS)
+
+## Compiler switches to embed a library name and version information
+ifeq ($(ENABLE_RPATH),YES)
+LD_SONAME = -Wl,-compatibility_version -Wl,$(SO_TARGET_VERSION_MAJOR) -Wl,-current_version -Wl,$(SO_TARGET_VERSION) -install_name $(libdir)/$(notdir $(MIDDLE_SO_TARGET))
+else
+LD_SONAME = -Wl,-compatibility_version -Wl,$(SO_TARGET_VERSION_MAJOR) -Wl,-current_version -Wl,$(SO_TARGET_VERSION) -install_name $(notdir $(MIDDLE_SO_TARGET)) $(PKGDATA_TRAILING_SPACE)
+endif
+
+## Compiler switch to embed a runtime search path
+LD_RPATH=
+LD_RPATH_PRE= -Wl,-rpath,
+
+## Environment variable to set a runtime search path
+LDLIBRARYPATH_ENVVAR = DYLD_LIBRARY_PATH
+
+GENCCODE_ASSEMBLY=-a gcc-darwin
+
+## Shared object suffix
+SO=		dylib
+## Non-shared intermediate object suffix
+STATIC_O = ao
+
+## Override Versioned target for a shared library.
+FINAL_SO_TARGET=  $(basename $(SO_TARGET)).$(SO_TARGET_VERSION).$(SO)
+MIDDLE_SO_TARGET= $(basename $(SO_TARGET)).$(SO_TARGET_VERSION_MAJOR).$(SO)
+
+## Compilation and dependency rules
+%.$(STATIC_O): $(srcdir)/%.c
+	$(call SILENT_COMPILE,$(strip $(COMPILE.c) $(STATICCPPFLAGS) $(STATICCFLAGS)) -MMD -MT "$*.d $*.o $*.$(STATIC_O)" -o $@ $<)
+%.o: $(srcdir)/%.c
+	$(call SILENT_COMPILE,$(strip $(COMPILE.c) $(DYNAMICCPPFLAGS) $(DYNAMICCFLAGS)) -MMD -MT "$*.d $*.o $*.$(STATIC_O)" -o $@ $<)
+
+%.$(STATIC_O): $(srcdir)/%.cpp
+	$(call SILENT_COMPILE,$(strip $(COMPILE.cc) $(STATICCPPFLAGS) $(STATICCXXFLAGS)) -MMD -MT "$*.d $*.o $*.$(STATIC_O)" -o $@ $<)
+%.o: $(srcdir)/%.cpp
+	$(call SILENT_COMPILE,$(strip $(COMPILE.cc) $(DYNAMICCPPFLAGS) $(DYNAMICCXXFLAGS)) -MMD -MT "$*.d $*.o $*.$(STATIC_O)" -o $@ $<)
+
+## Versioned libraries rules
+
+%.$(SO_TARGET_VERSION_MAJOR).$(SO): %.$(SO_TARGET_VERSION).$(SO)
+	$(RM) $@ && ln -s ${<F} $@
+%.$(SO): %.$(SO_TARGET_VERSION_MAJOR).$(SO)
+	$(RM) $@ && ln -s ${*F}.$(SO_TARGET_VERSION).$(SO) $@
+
+# tzcode option
+TZORIG_EXTRA_CFLAGS=-DSTD_INSPIRED
+
+# genren opts
+GENREN_PL_OPTS=-x Mach-O -n '-g' -p '| c++filt'
+
+## Remove shared library 's'
+STATIC_PREFIX_WHEN_USED = 
+STATIC_PREFIX = 
+
+## End Darwin-specific setup

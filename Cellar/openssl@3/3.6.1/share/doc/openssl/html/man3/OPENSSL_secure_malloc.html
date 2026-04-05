@@ -1,0 +1,128 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OPENSSL_secure_malloc</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>CRYPTO_secure_malloc_init, CRYPTO_secure_malloc_initialized, CRYPTO_secure_malloc_done, OPENSSL_secure_malloc, CRYPTO_secure_malloc, OPENSSL_secure_zalloc, CRYPTO_secure_zalloc, OPENSSL_secure_malloc_array, CRYPTO_secure_malloc_array, OPENSSL_secure_calloc, CRYPTO_secure_calloc, OPENSSL_secure_free, CRYPTO_secure_free, OPENSSL_secure_clear_free, CRYPTO_secure_clear_free, OPENSSL_secure_actual_size, CRYPTO_secure_allocated, CRYPTO_secure_used - secure heap storage</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/crypto.h&gt;
+
+int CRYPTO_secure_malloc_init(size_t size, size_t minsize);
+
+int CRYPTO_secure_malloc_initialized();
+
+int CRYPTO_secure_malloc_done();
+
+void *OPENSSL_secure_malloc(size_t num);
+void *CRYPTO_secure_malloc(size_t num, const char *file, int line);
+
+void *OPENSSL_secure_zalloc(size_t num);
+void *CRYPTO_secure_zalloc(size_t num, const char *file, int line);
+
+void *OPENSSL_secure_malloc_array(size_t num, size_t size);
+void *CRYPTO_secure_malloc_array(size_t num, size_t size,
+                                 const char *file, int line);
+
+void *OPENSSL_secure_calloc(size_t num, size_t size);
+void *CRYPTO_secure_calloc(size_t num, size_t size,
+                           const char *file, int line);
+
+void OPENSSL_secure_free(void* ptr);
+void CRYPTO_secure_free(void *ptr, const char *, int);
+
+void OPENSSL_secure_clear_free(void* ptr, size_t num);
+void CRYPTO_secure_clear_free(void *ptr, size_t num, const char *, int);
+
+size_t OPENSSL_secure_actual_size(const void *ptr);
+
+int CRYPTO_secure_allocated(const void *ptr);
+size_t CRYPTO_secure_used();</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>In order to help protect applications (particularly long-running servers) from pointer overruns or underruns that could return arbitrary data from the program&#39;s dynamic memory area, where keys and other sensitive information might be stored, OpenSSL supports the concept of a &quot;secure heap.&quot; The level and type of security guarantees depend on the operating system. It is a good idea to review the code and see if it addresses your threat model and concerns. It should be noted that the secure heap uses a single read/write lock, and therefore any operations that involve allocation or freeing of secure heap memory are serialised, blocking other threads. With that in mind, highly concurrent applications should enable the secure heap with caution and be aware of the performance implications for multi-threaded code.</p>
+
+<p>If a secure heap is used, then private key <b>BIGNUM</b> values are stored there. This protects long-term storage of private keys, but will not necessarily put all intermediate values and computations there.</p>
+
+<p>CRYPTO_secure_malloc_init() creates the secure heap, with the specified <code>size</code> in bytes. The <code>minsize</code> parameter is the minimum size to allocate from the heap or zero to use a reasonable default value. Both <code>size</code> and, if specified, <code>minsize</code> must be a power of two and <code>minsize</code> should generally be small, for example 16 or 32. <code>minsize</code> must be less than a quarter of <code>size</code> in any case.</p>
+
+<p>CRYPTO_secure_malloc_initialized() indicates whether or not the secure heap as been initialized and is available.</p>
+
+<p>CRYPTO_secure_malloc_done() releases the heap and makes the memory unavailable to the process if all secure memory has been freed. It can take noticeably long to complete.</p>
+
+<p>OPENSSL_secure_malloc() allocates <code>num</code> bytes from the heap. If CRYPTO_secure_malloc_init() is not called, this is equivalent to calling OPENSSL_malloc(). It is a macro that expands to CRYPTO_secure_malloc() and adds the <code>__FILE__</code> and <code>__LINE__</code> parameters.</p>
+
+<p>OPENSSL_secure_zalloc() and CRYPTO_secure_zalloc() are like OPENSSL_secure_malloc() and CRYPTO_secure_malloc(), respectively, except that they call memset() to zero the memory before returning.</p>
+
+<p>OPENSSL_secure_malloc_array(), CRYPTO_secure_malloc_array(), OPENSSL_secure_calloc(), and CRYPTO_secure_calloc() are variants of OPENSSL_secure_malloc(), CRYPTO_secure_malloc(), OPENSSL_secure_zalloc(), and CRYPTO_secure_zalloc(), respectively, that accept an additional parameter, <b>size</b>, which enables memory allocation operations for an array of <b>num</b> members <b>size</b> bytes each; these functions return an error if multiplication of <b>num</b> and <b>size</b> leads to an integer overflow, thus preventing allocations of an incorrect size.</p>
+
+<p>OPENSSL_secure_free() releases the memory at <code>ptr</code> back to the heap. It must be called with a value previously obtained from OPENSSL_secure_malloc(). If CRYPTO_secure_malloc_init() is not called, this is equivalent to calling OPENSSL_free(). It exists for consistency with OPENSSL_secure_malloc() , and is a macro that expands to CRYPTO_secure_free() and adds the <code>__FILE__</code> and <code>__LINE__</code> parameters.. If the argument to OPENSSL_secure_free() is NULL, nothing is done.</p>
+
+<p>OPENSSL_secure_clear_free() is similar to OPENSSL_secure_free() except that it has an additional <code>num</code> parameter which is used to clear the memory if it was not allocated from the secure heap. If CRYPTO_secure_malloc_init() is not called, this is equivalent to calling OPENSSL_clear_free(). If the argument to OPENSSL_secure_clear_free() is NULL, nothing is done.</p>
+
+<p>OPENSSL_secure_actual_size() tells the actual size allocated to the pointer; implementations may allocate more space than initially requested, in order to &quot;round up&quot; and reduce secure heap fragmentation.</p>
+
+<p>OPENSSL_secure_allocated() tells if a pointer is allocated in the secure heap.</p>
+
+<p>CRYPTO_secure_used() returns the number of bytes allocated in the secure heap.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>CRYPTO_secure_malloc_init() returns 0 on failure, 1 if successful, and 2 if successful but the heap could not be protected by memory mapping.</p>
+
+<p>CRYPTO_secure_malloc_initialized() returns 1 if the secure heap is available (that is, if CRYPTO_secure_malloc_init() has been called, but CRYPTO_secure_malloc_done() has not been called or failed) or 0 if not.</p>
+
+<p>OPENSSL_secure_malloc(), CRYPTO_secure_malloc(), OPENSSL_secure_zalloc(), CRYPTO_secure_zalloc(), OPENSSL_secure_malloc_array(), CRYPTO_secure_malloc_array(), OPENSSL_secure_calloc(), and CRYPTO_secure_calloc() return a pointer into the secure heap of the requested size, if it is initialised, a pointer returned by the underlying OPENSSL_malloc() call, if it is not, or <code>NULL</code> on error.</p>
+
+<p>CRYPTO_secure_allocated() returns 1 if the pointer is in the secure heap, or 0 if not.</p>
+
+<p>CRYPTO_secure_malloc_done() returns 1 if the secure memory area is released, or 0 if not.</p>
+
+<p>OPENSSL_secure_free() and OPENSSL_secure_clear_free() return no values.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/OPENSSL_malloc.html">OPENSSL_malloc(3)</a>, <a href="../man3/BN_new.html">BN_new(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The OPENSSL_secure_clear_free() function was added in OpenSSL 1.1.0g.</p>
+
+<p>The second argument to CRYPTO_secure_malloc_init() was changed from an <b>int</b> to a <b>size_t</b> in OpenSSL 3.0.</p>
+
+<p>The OPENSSL_secure_malloc_array(), CRYPTO_secure_malloc_array(), OPENSSL_secure_calloc(), and CRYPTO_secure_calloc() functions were added in OpenSSL 3.6.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2015-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

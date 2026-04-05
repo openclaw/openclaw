@@ -1,0 +1,93 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>RSA_private_encrypt</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>RSA_private_encrypt, RSA_public_decrypt - low-level signature operations</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/rsa.h&gt;</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>int RSA_private_encrypt(int flen, unsigned char *from,
+                        unsigned char *to, RSA *rsa, int padding);
+
+int RSA_public_decrypt(int flen, unsigned char *from,
+                       unsigned char *to, RSA *rsa, int padding);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>Both of the functions described on this page are deprecated. Applications should instead use <a href="../man3/EVP_PKEY_sign_init_ex.html">EVP_PKEY_sign_init_ex(3)</a>, <a href="../man3/EVP_PKEY_sign.html">EVP_PKEY_sign(3)</a>, <a href="../man3/EVP_PKEY_verify_recover_init.html">EVP_PKEY_verify_recover_init(3)</a>, and <a href="../man3/EVP_PKEY_verify_recover.html">EVP_PKEY_verify_recover(3)</a>.</p>
+
+<p>These functions handle RSA signatures at a low-level.</p>
+
+<p>RSA_private_encrypt() signs the <b>flen</b> bytes at <b>from</b> (usually a message digest with an algorithm identifier) using the private key <b>rsa</b> and stores the signature in <b>to</b>. <b>to</b> must point to <b>RSA_size(rsa)</b> bytes of memory.</p>
+
+<p><b>padding</b> denotes one of the following modes:</p>
+
+<dl>
+
+<dt id="RSA_PKCS1_PADDING">RSA_PKCS1_PADDING</dt>
+<dd>
+
+<p>PKCS #1 v1.5 padding. This function does not handle the <b>algorithmIdentifier</b> specified in PKCS #1. When generating or verifying PKCS #1 signatures, <a href="../man3/RSA_sign.html">RSA_sign(3)</a> and <a href="../man3/RSA_verify.html">RSA_verify(3)</a> should be used.</p>
+
+</dd>
+<dt id="RSA_NO_PADDING">RSA_NO_PADDING</dt>
+<dd>
+
+<p>Raw RSA signature. This mode should <i>only</i> be used to implement cryptographically sound padding modes in the application code. Signing user data directly with RSA is insecure.</p>
+
+</dd>
+</dl>
+
+<p>RSA_public_decrypt() recovers the message digest from the <b>flen</b> bytes long signature at <b>from</b> using the signer&#39;s public key <b>rsa</b>. <b>to</b> must point to a memory section large enough to hold the message digest (which is smaller than <b>RSA_size(rsa) - 11</b>). <b>padding</b> is the padding mode that was used to sign the data.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>RSA_private_encrypt() returns the size of the signature (i.e., RSA_size(rsa)). RSA_public_decrypt() returns the size of the recovered message digest.</p>
+
+<p>On error, -1 is returned; the error codes can be obtained by <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>, <a href="../man3/RSA_sign.html">RSA_sign(3)</a>, <a href="../man3/RSA_verify.html">RSA_verify(3)</a>, <a href="../man3/EVP_PKEY_sign.html">EVP_PKEY_sign(3)</a>, <a href="../man3/EVP_PKEY_verify_recover.html">EVP_PKEY_verify_recover(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>Both of these functions were deprecated in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

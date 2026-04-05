@@ -1,0 +1,104 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>BN_rand</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>BN_rand_ex, BN_rand, BN_priv_rand_ex, BN_priv_rand, BN_pseudo_rand, BN_rand_range_ex, BN_rand_range, BN_priv_rand_range_ex, BN_priv_rand_range, BN_pseudo_rand_range - generate pseudo-random number</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/bn.h&gt;
+
+int BN_rand_ex(BIGNUM *rnd, int bits, int top, int bottom,
+               unsigned int strength, BN_CTX *ctx);
+int BN_rand(BIGNUM *rnd, int bits, int top, int bottom);
+
+int BN_priv_rand_ex(BIGNUM *rnd, int bits, int top, int bottom,
+                    unsigned int strength, BN_CTX *ctx);
+int BN_priv_rand(BIGNUM *rnd, int bits, int top, int bottom);
+
+int BN_rand_range_ex(BIGNUM *rnd, const BIGNUM *range, unsigned int strength,
+                     BN_CTX *ctx);
+int BN_rand_range(BIGNUM *rnd, const BIGNUM *range);
+
+int BN_priv_rand_range_ex(BIGNUM *rnd, const BIGNUM *range, unsigned int strength,
+                          BN_CTX *ctx);
+int BN_priv_rand_range(BIGNUM *rnd, const BIGNUM *range);</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>int BN_pseudo_rand(BIGNUM *rnd, int bits, int top, int bottom);
+int BN_pseudo_rand_range(BIGNUM *rnd, const BIGNUM *range);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>BN_rand_ex() generates a cryptographically strong pseudo-random number of <i>bits</i> in length and security strength at least <i>strength</i> bits using the random number generator for the library context associated with <i>ctx</i>. The function stores the generated data in <i>rnd</i>. The parameter <i>ctx</i> may be NULL in which case the default library context is used. If <i>bits</i> is less than zero, or too small to accommodate the requirements specified by the <i>top</i> and <i>bottom</i> parameters, an error is returned. The <i>top</i> parameters specifies requirements on the most significant bit of the generated number. If it is <b>BN_RAND_TOP_ANY</b>, there is no constraint. If it is <b>BN_RAND_TOP_ONE</b>, the top bit must be one. If it is <b>BN_RAND_TOP_TWO</b>, the two most significant bits of the number will be set to 1, so that the product of two such random numbers will always have 2*<i>bits</i> length. If <i>bottom</i> is <b>BN_RAND_BOTTOM_ODD</b>, the number will be odd; if it is <b>BN_RAND_BOTTOM_ANY</b> it can be odd or even. If <i>bits</i> is 1 then <i>top</i> cannot also be <b>BN_RAND_TOP_TWO</b>.</p>
+
+<p>BN_rand() is the same as BN_rand_ex() except that the default library context is always used.</p>
+
+<p>BN_rand_range_ex() generates a cryptographically strong pseudo-random number <i>rnd</i>, of security strength at least <i>strength</i> bits, in the range 0 &lt;= <i>rnd</i> &lt; <i>range</i> using the random number generator for the library context associated with <i>ctx</i>. The parameter <i>ctx</i> may be NULL in which case the default library context is used.</p>
+
+<p>BN_rand_range() is the same as BN_rand_range_ex() except that the default library context is always used.</p>
+
+<p>BN_priv_rand_ex(), BN_priv_rand(), BN_priv_rand_rand_ex() and BN_priv_rand_range() have the same semantics as BN_rand_ex(), BN_rand(), BN_rand_range_ex() and BN_rand_range() respectively. They are intended to be used for generating values that should remain private, and mirror the same difference between <a href="../man3/RAND_bytes.html">RAND_bytes(3)</a> and <a href="../man3/RAND_priv_bytes.html">RAND_priv_bytes(3)</a>.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>Always check the error return value of these functions and do not take randomness for granted: an error occurs if the CSPRNG has not been seeded with enough randomness to ensure an unpredictable byte sequence.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>The functions return 1 on success, 0 on error. The error codes can be obtained by <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>, <a href="../man3/RAND_add.html">RAND_add(3)</a>, <a href="../man3/RAND_bytes.html">RAND_bytes(3)</a>, <a href="../man3/RAND_priv_bytes.html">RAND_priv_bytes(3)</a>, <a href="../man7/RAND.html">RAND(7)</a>, <a href="../man7/EVP_RAND.html">EVP_RAND(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<ul>
+
+<li><p>Starting with OpenSSL release 1.1.0, BN_pseudo_rand() has been identical to BN_rand() and BN_pseudo_rand_range() has been identical to BN_rand_range(). The BN_pseudo_rand() and BN_pseudo_rand_range() functions were deprecated in OpenSSL 3.0.</p>
+
+</li>
+<li><p>The BN_priv_rand() and BN_priv_rand_range() functions were added in OpenSSL 1.1.1.</p>
+
+</li>
+<li><p>The BN_rand_ex(), BN_priv_rand_ex(), BN_rand_range_ex() and BN_priv_rand_range_ex() functions were added in OpenSSL 3.0.</p>
+
+</li>
+</ul>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2022 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

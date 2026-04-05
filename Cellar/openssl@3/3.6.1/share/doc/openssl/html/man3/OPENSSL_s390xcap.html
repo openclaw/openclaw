@@ -1,0 +1,220 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OPENSSL_s390xcap</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OPENSSL_s390xcap - the IBM z processor capabilities vector</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>env OPENSSL_s390xcap=... &lt;application&gt;</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>libcrypto supports z/Architecture instruction set extensions. These extensions are denoted by individual bits in the capabilities vector. When libcrypto is initialized, the bits returned by the STFLE instruction and by the QUERY functions are stored in the vector.</p>
+
+<p>To change the set of instructions available to an application, you can set the <b>OPENSSL_s390xcap</b> environment variable before you start the application. After initialization, the capability vector is ANDed bitwise with a mask which is derived from the environment variable.</p>
+
+<p>The environment variable is a semicolon-separated list of tokens which is processed from left to right (whitespace is ignored):</p>
+
+<pre><code>OPENSSL_s390xcap=&quot;&lt;tok1&gt;;&lt;tok2&gt;;...&quot;</code></pre>
+
+<p>There are four types of tokens:</p>
+
+<dl>
+
+<dt id="string">&lt;string&gt;</dt>
+<dd>
+
+<p>The name of a processor generation. A bit in the environment variable&#39;s mask is set to one if and only if the specified processor generation implements the corresponding instruction set extension. Possible values are <b>z900</b>, <b>z990</b>, <b>z9</b>, <b>z10</b>, <b>z196</b>, <b>zEC12</b>, <b>z13</b>, <b>z14</b>, <b>z15</b>, <b>z16</b>, and <b>z17</b>.</p>
+
+</dd>
+<dt id="string:mask:mask">&lt;string&gt;:&lt;mask&gt;:&lt;mask&gt;</dt>
+<dd>
+
+<p>The name of an instruction followed by two 64-bit masks. The part of the environment variable&#39;s mask corresponding to the specified instruction is set to the specified 128-bit mask. Possible values are <b>kimd</b>, <b>klmd</b>, <b>km</b>, <b>kmc</b>, <b>kmac</b>, <b>kmctr</b>, <b>kmo</b>, <b>kmf</b>, <b>prno</b>, <b>kma</b>, <b>pcc</b> and <b>kdsa</b>.</p>
+
+</dd>
+<dt id="stfle:mask:mask:mask">stfle:&lt;mask&gt;:&lt;mask&gt;:&lt;mask&gt;</dt>
+<dd>
+
+<p>Store-facility-list-extended (stfle) followed by three 64-bit masks. The part of the environment variable&#39;s mask corresponding to the stfle instruction is set to the specified 192-bit mask.</p>
+
+</dd>
+<dt id="nocex">nocex</dt>
+<dd>
+
+<p>Deactivate modular exponentiation and CRT operation offloading to Crypto Express Adapters.</p>
+
+</dd>
+</dl>
+
+<p>The 64-bit masks are specified in hexadecimal notation. The 0x prefix is optional. Prefix a mask with a tilde, <code>~</code>, to denote a bitwise NOT operation.</p>
+
+<p>The following is a list of significant bits for each instruction. Colon rows separate the individual 64-bit masks. The bit numbers in the first column are consistent with [1], that is, 0 denotes the leftmost bit and the numbering is continuous across 64-bit mask boundaries.</p>
+
+<pre><code>     Bit     Mask     Facility/Function
+
+stfle:
+     # 17    1&lt;&lt;46    message-security assist
+     # 25    1&lt;&lt;38    store-clock-fast facility
+     :
+     # 76    1&lt;&lt;51    message-security assist extension 3
+     # 77    1&lt;&lt;50    message-security assist extension 4
+     # 86    1&lt;&lt;41    message-security-assist extension 12
+     :
+     #129    1&lt;&lt;62    vector facility
+     #134    1&lt;&lt;57    vector packed decimal facility
+     #135    1&lt;&lt;56    vector enhancements facility 1
+     #146    1&lt;&lt;45    message-security assist extension 8
+     #155    1&lt;&lt;36    message-security assist extension 9
+
+kimd :
+     #  1    1&lt;&lt;62    KIMD-SHA-1
+     #  2    1&lt;&lt;61    KIMD-SHA-256
+     #  3    1&lt;&lt;60    KIMD-SHA-512
+     # 32    1&lt;&lt;31    KIMD-SHA3-224
+     # 33    1&lt;&lt;30    KIMD-SHA3-256
+     # 34    1&lt;&lt;29    KIMD-SHA3-384
+     # 35    1&lt;&lt;28    KIMD-SHA3-512
+     # 36    1&lt;&lt;27    KIMD-SHAKE-128
+     # 37    1&lt;&lt;26    KIMD-SHAKE-256
+     :
+     # 65    1&lt;&lt;62    KIMD-GHASH
+
+klmd :
+     # 32    1&lt;&lt;31    KLMD-SHA3-224
+     # 33    1&lt;&lt;30    KLMD-SHA3-256
+     # 34    1&lt;&lt;29    KLMD-SHA3-384
+     # 35    1&lt;&lt;28    KLMD-SHA3-512
+     # 36    1&lt;&lt;27    KLMD-SHAKE-128
+     # 37    1&lt;&lt;26    KLMD-SHAKE-256
+     :
+
+km   :
+     # 18    1&lt;&lt;45    KM-AES-128
+     # 19    1&lt;&lt;44    KM-AES-192
+     # 20    1&lt;&lt;43    KM-AES-256
+     # 50    1&lt;&lt;13    KM-XTS-AES-128
+     # 52    1&lt;&lt;11    KM-XTS-AES-256
+     :
+     # 82    1&lt;&lt;45    KM-XTS-AES-128-MSA10
+     # 84    1&lt;&lt;43    KM-XTS-AES-256-MSA10
+
+kmc  :
+     # 18    1&lt;&lt;45    KMC-AES-128
+     # 19    1&lt;&lt;44    KMC-AES-192
+     # 20    1&lt;&lt;43    KMC-AES-256
+     :
+
+kmac :
+     # 18    1&lt;&lt;45    KMAC-AES-128
+     # 19    1&lt;&lt;44    KMAC-AES-192
+     # 20    1&lt;&lt;43    KMAC-AES-256
+     :
+     # 112   1&lt;&lt;15    KMAC-SHA-224
+     # 113   1&lt;&lt;14    KMAC-SHA-256
+     # 114   1&lt;&lt;13    KMAC-SHA-384
+     # 115   1&lt;&lt;12    KMAC-SHA-512
+
+kmctr:
+     :
+
+kmo  :
+     # 18    1&lt;&lt;45    KMO-AES-128
+     # 19    1&lt;&lt;44    KMO-AES-192
+     # 20    1&lt;&lt;43    KMO-AES-256
+     :
+
+kmf  :
+     # 18    1&lt;&lt;45    KMF-AES-128
+     # 19    1&lt;&lt;44    KMF-AES-192
+     # 20    1&lt;&lt;43    KMF-AES-256
+     :
+
+prno :
+     :
+
+kma  :
+     # 18    1&lt;&lt;45    KMA-GCM-AES-128
+     # 19    1&lt;&lt;44    KMA-GCM-AES-192
+     # 20    1&lt;&lt;43    KMA-GCM-AES-256
+     :
+
+pcc  :
+     :
+     # 64    1&lt;&lt;63    PCC-Scalar-Multiply-P256
+     # 65    1&lt;&lt;62    PCC-Scalar-Multiply-P384
+     # 66    1&lt;&lt;61    PCC-Scalar-Multiply-P521
+     # 72    1&lt;&lt;55    PCC-Scalar-Multiply-Ed25519
+     # 73    1&lt;&lt;54    PCC-Scalar-Multiply-Ed448
+     # 80    1&lt;&lt;47    PCC-Scalar-Multiply-X25519
+     # 81    1&lt;&lt;46    PCC-Scalar-Multiply-X448
+
+kdsa :
+     #  1    1&lt;&lt;62    KDSA-ECDSA-Verify-P256
+     #  2    1&lt;&lt;61    KDSA-ECDSA-Verify-P384
+     #  3    1&lt;&lt;60    KDSA-ECDSA-Verify-P521
+     #  9    1&lt;&lt;54    KDSA-ECDSA-Sign-P256
+     # 10    1&lt;&lt;53    KDSA-ECDSA-Sign-P384
+     # 11    1&lt;&lt;52    KDSA-ECDSA-Sign-P521
+     # 32    1&lt;&lt;31    KDSA-EdDSA-Verify-Ed25519
+     # 36    1&lt;&lt;27    KDSA-EdDSA-Verify-Ed448
+     # 40    1&lt;&lt;23    KDSA-EdDSA-Sign-Ed25519
+     # 44    1&lt;&lt;19    KDSA-EdDSA-Sign-Ed448
+     :</code></pre>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>Not available.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>Disables all instruction set extensions which the z196 processor does not implement:</p>
+
+<pre><code>OPENSSL_s390xcap=&quot;z196&quot;</code></pre>
+
+<p>Disables the vector facility:</p>
+
+<pre><code>OPENSSL_s390xcap=&quot;stfle:~0:~0:~0x4000000000000000&quot;</code></pre>
+
+<p>Disables the KM-XTS-AES and the KIMD-SHAKE function codes:</p>
+
+<pre><code>OPENSSL_s390xcap=&quot;km:~0x2800:~0;kimd:~0xc000000:~0&quot;</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p>[1] z/Architecture Principles of Operation, SA22-7832-12</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2018-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

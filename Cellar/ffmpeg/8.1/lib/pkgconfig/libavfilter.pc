@@ -1,0 +1,14 @@
+prefix=/opt/homebrew/Cellar/ffmpeg/8.1
+exec_prefix=${prefix}
+libdir=/opt/homebrew/Cellar/ffmpeg/8.1/lib
+includedir=/opt/homebrew/Cellar/ffmpeg/8.1/include
+
+Name: libavfilter
+Description: FFmpeg audio/video filtering library
+Version: 11.14.100
+Requires: 
+Requires.private: libswscale >= 9.5.100, libavformat >= 62.12.100, libavcodec >= 62.28.100, libswresample >= 6.3.100, libavutil >= 60.26.100
+Conflicts:
+Libs: -L${libdir}  -lavfilter 
+Libs.private: -framework OpenGL -framework OpenGL -pthread -lm -lz -framework Metal -framework VideoToolbox -framework CoreImage -framework AppKit -framework CoreFoundation -framework CoreMedia -framework CoreVideo -framework CoreServices
+Cflags: -I${includedir}

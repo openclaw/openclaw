@@ -1,0 +1,1538 @@
+.\"
+.\" Standard preamble:
+.\" ========================================================================
+.de Sp \" Vertical space (when we can't use .PP)
+.if t .sp .5v
+.if n .sp
+..
+.de Vb \" Begin verbatim text
+.ft CW
+.nf
+.ne \\$1
+..
+.de Ve \" End verbatim text
+.ft R
+.fi
+..
+.\" Set up some character translations and predefined strings.  \*(-- will
+.\" give an unbreakable dash, \*(PI will give pi, \*(L" will give a left
+.\" double quote, and \*(R" will give a right double quote.  \*(C+ will
+.\" give a nicer C++.  Capital omega is used to do unbreakable dashes and
+.\" therefore won't be available.  \*(C` and \*(C' expand to `' in nroff,
+.\" nothing in troff, for use with C<>.
+.tr \(*W-
+.ds C+ C\v'-.1v'\h'-1p'\s-2+\h'-1p'+\s0\v'.1v'\h'-1p'
+.ie n \{\
+.    ds -- \(*W-
+.    ds PI pi
+.    if (\n(.H=4u)&(1m=24u) .ds -- \(*W\h'-12u'\(*W\h'-12u'-\" diablo 10 pitch
+.    if (\n(.H=4u)&(1m=20u) .ds -- \(*W\h'-12u'\(*W\h'-8u'-\"  diablo 12 pitch
+.    ds L" ""
+.    ds R" ""
+.    ds C` ""
+.    ds C' ""
+'br\}
+.el\{\
+.    ds -- \|\(em\|
+.    ds PI \(*p
+.    ds L" ``
+.    ds R" ''
+.    ds C`
+.    ds C'
+'br\}
+.\"
+.\" Escape single quotes in literal strings from groff's Unicode transform.
+.ie \n(.g .ds Aq \(aq
+.el       .ds Aq '
+.\"
+.\" If the F register is >0, we'll generate index entries on stderr for
+.\" titles (.TH), headers (.SH), subsections (.SS), items (.Ip), and index
+.\" entries marked with X<> in POD.  Of course, you'll have to process the
+.\" output yourself in some meaningful fashion.
+.\"
+.\" Avoid warning from groff about undefined register 'F'.
+.de IX
+..
+.nr rF 0
+.if \n(.g .if rF .nr rF 1
+.if (\n(rF:(\n(.g==0)) \{\
+.    if \nF \{\
+.        de IX
+.        tm Index:\\$1\t\\n%\t"\\$2"
+..
+.        if !\nF==2 \{\
+.            nr % 0
+.            nr F 2
+.        \}
+.    \}
+.\}
+.rr rF
+.\"
+.\" Accent mark definitions (@(#)ms.acc 1.5 88/02/08 SMI; from UCB 4.2).
+.\" Fear.  Run.  Save yourself.  No user-serviceable parts.
+.    \" fudge factors for nroff and troff
+.if n \{\
+.    ds #H 0
+.    ds #V .8m
+.    ds #F .3m
+.    ds #[ \f1
+.    ds #] \fP
+.\}
+.if t \{\
+.    ds #H ((1u-(\\\\n(.fu%2u))*.13m)
+.    ds #V .6m
+.    ds #F 0
+.    ds #[ \&
+.    ds #] \&
+.\}
+.    \" simple accents for nroff and troff
+.if n \{\
+.    ds ' \&
+.    ds ` \&
+.    ds ^ \&
+.    ds , \&
+.    ds ~ ~
+.    ds /
+.\}
+.if t \{\
+.    ds ' \\k:\h'-(\\n(.wu*8/10-\*(#H)'\'\h"|\\n:u"
+.    ds ` \\k:\h'-(\\n(.wu*8/10-\*(#H)'\`\h'|\\n:u'
+.    ds ^ \\k:\h'-(\\n(.wu*10/11-\*(#H)'^\h'|\\n:u'
+.    ds , \\k:\h'-(\\n(.wu*8/10)',\h'|\\n:u'
+.    ds ~ \\k:\h'-(\\n(.wu-\*(#H-.1m)'~\h'|\\n:u'
+.    ds / \\k:\h'-(\\n(.wu*8/10-\*(#H)'\z\(sl\h'|\\n:u'
+.\}
+.    \" troff and (daisy-wheel) nroff accents
+.ds : \\k:\h'-(\\n(.wu*8/10-\*(#H+.1m+\*(#F)'\v'-\*(#V'\z.\h'.2m+\*(#F'.\h'|\\n:u'\v'\*(#V'
+.ds 8 \h'\*(#H'\(*b\h'-\*(#H'
+.ds o \\k:\h'-(\\n(.wu+\w'\(de'u-\*(#H)/2u'\v'-.3n'\*(#[\z\(de\v'.3n'\h'|\\n:u'\*(#]
+.ds d- \h'\*(#H'\(pd\h'-\w'~'u'\v'-.25m'\f2\(hy\fP\v'.25m'\h'-\*(#H'
+.ds D- D\\k:\h'-\w'D'u'\v'-.11m'\z\(hy\v'.11m'\h'|\\n:u'
+.ds th \*(#[\v'.3m'\s+1I\s-1\v'-.3m'\h'-(\w'I'u*2/3)'\s-1o\s+1\*(#]
+.ds Th \*(#[\s+2I\s-2\h'-\w'I'u*3/5'\v'-.3m'o\v'.3m'\*(#]
+.ds ae a\h'-(\w'a'u*4/10)'e
+.ds Ae A\h'-(\w'A'u*4/10)'E
+.    \" corrections for vroff
+.if v .ds ~ \\k:\h'-(\\n(.wu*9/10-\*(#H)'\s-2\u~\d\s+2\h'|\\n:u'
+.if v .ds ^ \\k:\h'-(\\n(.wu*10/11-\*(#H)'\v'-.4m'^\v'.4m'\h'|\\n:u'
+.    \" for low resolution devices (crt and lpr)
+.if \n(.H>23 .if \n(.V>19 \
+\{\
+.    ds : e
+.    ds 8 ss
+.    ds o a
+.    ds d- d\h'-1'\(ga
+.    ds D- D\h'-1'\(hy
+.    ds th \o'bp'
+.    ds Th \o'LP'
+.    ds ae ae
+.    ds Ae AE
+.\}
+.rm #[ #] #H #V #F C
+.\" ========================================================================
+.\"
+.IX Title "FFMPEG-UTILS 1"
+.TH FFMPEG-UTILS 1 " " " " " "
+.\" For nroff, turn off justification.  Always turn off hyphenation; it makes
+.\" way too many mistakes in technical documents.
+.if n .ad l
+.nh
+.SH "NAME"
+ffmpeg\-utils \- FFmpeg utilities
+.SH "DESCRIPTION"
+.IX Header "DESCRIPTION"
+This document describes some generic features and utilities provided
+by the libavutil library.
+.SH "SYNTAX"
+.IX Header "SYNTAX"
+This section documents the syntax and formats employed by the FFmpeg
+libraries and tools.
+.SS "Quoting and escaping"
+.IX Subsection "Quoting and escaping"
+FFmpeg adopts the following quoting and escaping mechanism, unless
+explicitly specified. The following rules are applied:
+.IP "\(bu" 4
+\&\fB'\fR and \fB\e\fR are special characters (respectively used for
+quoting and escaping). In addition to them, there might be other
+special characters depending on the specific syntax where the escaping
+and quoting are employed.
+.IP "\(bu" 4
+A special character is escaped by prefixing it with a \fB\e\fR.
+.IP "\(bu" 4
+All characters enclosed between \fB''\fR are included literally in the
+parsed string. The quote character \fB'\fR itself cannot be quoted,
+so you may need to close the quote and escape it.
+.IP "\(bu" 4
+Leading and trailing whitespaces, unless escaped or quoted, are
+removed from the parsed string.
+.PP
+Note that you may need to add a second level of escaping when using
+the command line or a script, which depends on the syntax of the
+adopted shell language.
+.PP
+The function \f(CW\*(C`av_get_token\*(C'\fR defined in
+\&\fIlibavutil/avstring.h\fR can be used to parse a token quoted or
+escaped according to the rules defined above.
+.PP
+The tool \fItools/ffescape\fR in the FFmpeg source tree can be used
+to automatically quote or escape a string in a script.
+.PP
+\fIExamples\fR
+.IX Subsection "Examples"
+.IP "\(bu" 4
+Escape the string \f(CW\*(C`Crime d\*(AqAmour\*(C'\fR containing the \f(CW\*(C`\*(Aq\*(C'\fR special
+character:
+.Sp
+.Vb 1
+\&        Crime d\e\*(AqAmour
+.Ve
+.IP "\(bu" 4
+The string above contains a quote, so the \f(CW\*(C`\*(Aq\*(C'\fR needs to be escaped
+when quoting it:
+.Sp
+.Vb 1
+\&        \*(AqCrime d\*(Aq\e\*(Aq\*(AqAmour\*(Aq
+.Ve
+.IP "\(bu" 4
+Include leading or trailing whitespaces using quoting:
+.Sp
+.Vb 1
+\&        \*(Aq  this string starts and ends with whitespaces  \*(Aq
+.Ve
+.IP "\(bu" 4
+Escaping and quoting can be mixed together:
+.Sp
+.Vb 1
+\&        \*(Aq The string \*(Aq\e\*(Aqstring\e\*(Aq\*(Aq is a string \*(Aq
+.Ve
+.IP "\(bu" 4
+To include a literal \fB\e\fR you can use either escaping or quoting:
+.Sp
+.Vb 1
+\&        \*(Aqc:\efoo\*(Aq can be written as c:\e\efoo
+.Ve
+.SS "Date"
+.IX Subsection "Date"
+The accepted syntax is:
+.PP
+.Vb 2
+\&        [(YYYY\-MM\-DD|YYYYMMDD)[T|t| ]]((HH:MM:SS[.m...]]])|(HHMMSS[.m...]]]))[Z]
+\&        now
+.Ve
+.PP
+If the value is \*(L"now\*(R" it takes the current time.
+.PP
+Time is local time unless Z is appended, in which case it is
+interpreted as \s-1UTC.\s0
+If the year-month-day part is not specified it takes the current
+year-month-day.
+.SS "Time duration"
+.IX Subsection "Time duration"
+There are two accepted syntaxes for expressing time duration.
+.PP
+.Vb 1
+\&        [\-][<HH>:]<MM>:<SS>[.<m>...]
+.Ve
+.PP
+\&\fI\s-1HH\s0\fR expresses the number of hours, \fI\s-1MM\s0\fR the number of minutes
+for a maximum of 2 digits, and \fI\s-1SS\s0\fR the number of seconds for a
+maximum of 2 digits. The \fIm\fR at the end expresses decimal value for
+\&\fI\s-1SS\s0\fR.
+.PP
+\&\fIor\fR
+.PP
+.Vb 1
+\&        [\-]<S>+[.<m>...][s|ms|us]
+.Ve
+.PP
+\&\fIS\fR expresses the number of seconds, with the optional decimal part
+\&\fIm\fR.  The optional literal suffixes \fBs\fR, \fBms\fR or \fBus\fR
+indicate to interpret the value as seconds, milliseconds or microseconds,
+respectively.
+.PP
+In both expressions, the optional \fB\-\fR indicates negative duration.
+.PP
+\fIExamples\fR
+.IX Subsection "Examples"
+.PP
+The following examples are all valid time duration:
+.IP "\fB55\fR" 4
+.IX Item "55"
+55 seconds
+.IP "\fB0.2\fR" 4
+.IX Item "0.2"
+0.2 seconds
+.IP "\fB200ms\fR" 4
+.IX Item "200ms"
+200 milliseconds, that's 0.2s
+.IP "\fB200000us\fR" 4
+.IX Item "200000us"
+200000 microseconds, that's 0.2s
+.IP "\fB12:03:45\fR" 4
+.IX Item "12:03:45"
+12 hours, 03 minutes and 45 seconds
+.IP "\fB23.189\fR" 4
+.IX Item "23.189"
+23.189 seconds
+.SS "Video size"
+.IX Subsection "Video size"
+Specify the size of the sourced video, it may be a string of the form
+\&\fIwidth\fRx\fIheight\fR, or the name of a size abbreviation.
+.PP
+The following abbreviations are recognized:
+.IP "\fBntsc\fR" 4
+.IX Item "ntsc"
+720x480
+.IP "\fBpal\fR" 4
+.IX Item "pal"
+720x576
+.IP "\fBqntsc\fR" 4
+.IX Item "qntsc"
+352x240
+.IP "\fBqpal\fR" 4
+.IX Item "qpal"
+352x288
+.IP "\fBsntsc\fR" 4
+.IX Item "sntsc"
+640x480
+.IP "\fBspal\fR" 4
+.IX Item "spal"
+768x576
+.IP "\fBfilm\fR" 4
+.IX Item "film"
+352x240
+.IP "\fBntsc-film\fR" 4
+.IX Item "ntsc-film"
+352x240
+.IP "\fBsqcif\fR" 4
+.IX Item "sqcif"
+128x96
+.IP "\fBqcif\fR" 4
+.IX Item "qcif"
+176x144
+.IP "\fBcif\fR" 4
+.IX Item "cif"
+352x288
+.IP "\fB4cif\fR" 4
+.IX Item "4cif"
+704x576
+.IP "\fB16cif\fR" 4
+.IX Item "16cif"
+1408x1152
+.IP "\fBqqvga\fR" 4
+.IX Item "qqvga"
+160x120
+.IP "\fBqvga\fR" 4
+.IX Item "qvga"
+320x240
+.IP "\fBvga\fR" 4
+.IX Item "vga"
+640x480
+.IP "\fBsvga\fR" 4
+.IX Item "svga"
+800x600
+.IP "\fBxga\fR" 4
+.IX Item "xga"
+1024x768
+.IP "\fBuxga\fR" 4
+.IX Item "uxga"
+1600x1200
+.IP "\fBqxga\fR" 4
+.IX Item "qxga"
+2048x1536
+.IP "\fBsxga\fR" 4
+.IX Item "sxga"
+1280x1024
+.IP "\fBqsxga\fR" 4
+.IX Item "qsxga"
+2560x2048
+.IP "\fBhsxga\fR" 4
+.IX Item "hsxga"
+5120x4096
+.IP "\fBwvga\fR" 4
+.IX Item "wvga"
+852x480
+.IP "\fBwxga\fR" 4
+.IX Item "wxga"
+1366x768
+.IP "\fBwsxga\fR" 4
+.IX Item "wsxga"
+1600x1024
+.IP "\fBwuxga\fR" 4
+.IX Item "wuxga"
+1920x1200
+.IP "\fBwoxga\fR" 4
+.IX Item "woxga"
+2560x1600
+.IP "\fBwqsxga\fR" 4
+.IX Item "wqsxga"
+3200x2048
+.IP "\fBwquxga\fR" 4
+.IX Item "wquxga"
+3840x2400
+.IP "\fBwhsxga\fR" 4
+.IX Item "whsxga"
+6400x4096
+.IP "\fBwhuxga\fR" 4
+.IX Item "whuxga"
+7680x4800
+.IP "\fBcga\fR" 4
+.IX Item "cga"
+320x200
+.IP "\fBega\fR" 4
+.IX Item "ega"
+640x350
+.IP "\fBhd480\fR" 4
+.IX Item "hd480"
+852x480
+.IP "\fBhd720\fR" 4
+.IX Item "hd720"
+1280x720
+.IP "\fBhd1080\fR" 4
+.IX Item "hd1080"
+1920x1080
+.IP "\fB2k\fR" 4
+.IX Item "2k"
+2048x1080
+.IP "\fB2kflat\fR" 4
+.IX Item "2kflat"
+1998x1080
+.IP "\fB2kscope\fR" 4
+.IX Item "2kscope"
+2048x858
+.IP "\fB4k\fR" 4
+.IX Item "4k"
+4096x2160
+.IP "\fB4kflat\fR" 4
+.IX Item "4kflat"
+3996x2160
+.IP "\fB4kscope\fR" 4
+.IX Item "4kscope"
+4096x1716
+.IP "\fBnhd\fR" 4
+.IX Item "nhd"
+640x360
+.IP "\fBhqvga\fR" 4
+.IX Item "hqvga"
+240x160
+.IP "\fBwqvga\fR" 4
+.IX Item "wqvga"
+400x240
+.IP "\fBfwqvga\fR" 4
+.IX Item "fwqvga"
+432x240
+.IP "\fBhvga\fR" 4
+.IX Item "hvga"
+480x320
+.IP "\fBqhd\fR" 4
+.IX Item "qhd"
+960x540
+.IP "\fB2kdci\fR" 4
+.IX Item "2kdci"
+2048x1080
+.IP "\fB4kdci\fR" 4
+.IX Item "4kdci"
+4096x2160
+.IP "\fBuhd2160\fR" 4
+.IX Item "uhd2160"
+3840x2160
+.IP "\fBuhd4320\fR" 4
+.IX Item "uhd4320"
+7680x4320
+.SS "Video rate"
+.IX Subsection "Video rate"
+Specify the frame rate of a video, expressed as the number of frames
+generated per second. It has to be a string in the format
+\&\fIframe_rate_num\fR/\fIframe_rate_den\fR, an integer number, a float
+number or a valid video frame rate abbreviation.
+.PP
+The following abbreviations are recognized:
+.IP "\fBntsc\fR" 4
+.IX Item "ntsc"
+30000/1001
+.IP "\fBpal\fR" 4
+.IX Item "pal"
+25/1
+.IP "\fBqntsc\fR" 4
+.IX Item "qntsc"
+30000/1001
+.IP "\fBqpal\fR" 4
+.IX Item "qpal"
+25/1
+.IP "\fBsntsc\fR" 4
+.IX Item "sntsc"
+30000/1001
+.IP "\fBspal\fR" 4
+.IX Item "spal"
+25/1
+.IP "\fBfilm\fR" 4
+.IX Item "film"
+24/1
+.IP "\fBntsc-film\fR" 4
+.IX Item "ntsc-film"
+24000/1001
+.SS "Ratio"
+.IX Subsection "Ratio"
+A ratio can be expressed as an expression, or in the form
+\&\fInumerator\fR:\fIdenominator\fR.
+.PP
+Note that a ratio with infinite (1/0) or negative value is
+considered valid, so you should check on the returned value if you
+want to exclude those values.
+.PP
+The undefined value can be expressed using the \*(L"0:0\*(R" string.
+.SS "Color"
+.IX Subsection "Color"
+It can be the name of a color as defined below (case insensitive match) or a
+\&\f(CW\*(C`[0x|#]RRGGBB[AA]\*(C'\fR sequence, possibly followed by @ and a string
+representing the alpha component.
+.PP
+The alpha component may be a string composed by \*(L"0x\*(R" followed by an
+hexadecimal number or a decimal number between 0.0 and 1.0, which
+represents the opacity value (\fB0x00\fR or \fB0.0\fR means completely
+transparent, \fB0xff\fR or \fB1.0\fR completely opaque). If the alpha
+component is not specified then \fB0xff\fR is assumed.
+.PP
+The string \fBrandom\fR will result in a random color.
+.PP
+The following names of colors are recognized:
+.IP "\fBAliceBlue\fR" 4
+.IX Item "AliceBlue"
+0xF0F8FF
+.IP "\fBAntiqueWhite\fR" 4
+.IX Item "AntiqueWhite"
+0xFAEBD7
+.IP "\fBAqua\fR" 4
+.IX Item "Aqua"
+0x00FFFF
+.IP "\fBAquamarine\fR" 4
+.IX Item "Aquamarine"
+0x7FFFD4
+.IP "\fBAzure\fR" 4
+.IX Item "Azure"
+0xF0FFFF
+.IP "\fBBeige\fR" 4
+.IX Item "Beige"
+0xF5F5DC
+.IP "\fBBisque\fR" 4
+.IX Item "Bisque"
+0xFFE4C4
+.IP "\fBBlack\fR" 4
+.IX Item "Black"
+0x000000
+.IP "\fBBlanchedAlmond\fR" 4
+.IX Item "BlanchedAlmond"
+0xFFEBCD
+.IP "\fBBlue\fR" 4
+.IX Item "Blue"
+0x0000FF
+.IP "\fBBlueViolet\fR" 4
+.IX Item "BlueViolet"
+0x8A2BE2
+.IP "\fBBrown\fR" 4
+.IX Item "Brown"
+0xA52A2A
+.IP "\fBBurlyWood\fR" 4
+.IX Item "BurlyWood"
+0xDEB887
+.IP "\fBCadetBlue\fR" 4
+.IX Item "CadetBlue"
+0x5F9EA0
+.IP "\fBChartreuse\fR" 4
+.IX Item "Chartreuse"
+0x7FFF00
+.IP "\fBChocolate\fR" 4
+.IX Item "Chocolate"
+0xD2691E
+.IP "\fBCoral\fR" 4
+.IX Item "Coral"
+0xFF7F50
+.IP "\fBCornflowerBlue\fR" 4
+.IX Item "CornflowerBlue"
+0x6495ED
+.IP "\fBCornsilk\fR" 4
+.IX Item "Cornsilk"
+0xFFF8DC
+.IP "\fBCrimson\fR" 4
+.IX Item "Crimson"
+0xDC143C
+.IP "\fBCyan\fR" 4
+.IX Item "Cyan"
+0x00FFFF
+.IP "\fBDarkBlue\fR" 4
+.IX Item "DarkBlue"
+0x00008B
+.IP "\fBDarkCyan\fR" 4
+.IX Item "DarkCyan"
+0x008B8B
+.IP "\fBDarkGoldenRod\fR" 4
+.IX Item "DarkGoldenRod"
+0xB8860B
+.IP "\fBDarkGray\fR" 4
+.IX Item "DarkGray"
+0xA9A9A9
+.IP "\fBDarkGreen\fR" 4
+.IX Item "DarkGreen"
+0x006400
+.IP "\fBDarkKhaki\fR" 4
+.IX Item "DarkKhaki"
+0xBDB76B
+.IP "\fBDarkMagenta\fR" 4
+.IX Item "DarkMagenta"
+0x8B008B
+.IP "\fBDarkOliveGreen\fR" 4
+.IX Item "DarkOliveGreen"
+0x556B2F
+.IP "\fBDarkorange\fR" 4
+.IX Item "Darkorange"
+0xFF8C00
+.IP "\fBDarkOrchid\fR" 4
+.IX Item "DarkOrchid"
+0x9932CC
+.IP "\fBDarkRed\fR" 4
+.IX Item "DarkRed"
+0x8B0000
+.IP "\fBDarkSalmon\fR" 4
+.IX Item "DarkSalmon"
+0xE9967A
+.IP "\fBDarkSeaGreen\fR" 4
+.IX Item "DarkSeaGreen"
+0x8FBC8F
+.IP "\fBDarkSlateBlue\fR" 4
+.IX Item "DarkSlateBlue"
+0x483D8B
+.IP "\fBDarkSlateGray\fR" 4
+.IX Item "DarkSlateGray"
+0x2F4F4F
+.IP "\fBDarkTurquoise\fR" 4
+.IX Item "DarkTurquoise"
+0x00CED1
+.IP "\fBDarkViolet\fR" 4
+.IX Item "DarkViolet"
+0x9400D3
+.IP "\fBDeepPink\fR" 4
+.IX Item "DeepPink"
+0xFF1493
+.IP "\fBDeepSkyBlue\fR" 4
+.IX Item "DeepSkyBlue"
+0x00BFFF
+.IP "\fBDimGray\fR" 4
+.IX Item "DimGray"
+0x696969
+.IP "\fBDodgerBlue\fR" 4
+.IX Item "DodgerBlue"
+0x1E90FF
+.IP "\fBFireBrick\fR" 4
+.IX Item "FireBrick"
+0xB22222
+.IP "\fBFloralWhite\fR" 4
+.IX Item "FloralWhite"
+0xFFFAF0
+.IP "\fBForestGreen\fR" 4
+.IX Item "ForestGreen"
+0x228B22
+.IP "\fBFuchsia\fR" 4
+.IX Item "Fuchsia"
+0xFF00FF
+.IP "\fBGainsboro\fR" 4
+.IX Item "Gainsboro"
+0xDCDCDC
+.IP "\fBGhostWhite\fR" 4
+.IX Item "GhostWhite"
+0xF8F8FF
+.IP "\fBGold\fR" 4
+.IX Item "Gold"
+0xFFD700
+.IP "\fBGoldenRod\fR" 4
+.IX Item "GoldenRod"
+0xDAA520
+.IP "\fBGray\fR" 4
+.IX Item "Gray"
+0x808080
+.IP "\fBGreen\fR" 4
+.IX Item "Green"
+0x008000
+.IP "\fBGreenYellow\fR" 4
+.IX Item "GreenYellow"
+0xADFF2F
+.IP "\fBHoneyDew\fR" 4
+.IX Item "HoneyDew"
+0xF0FFF0
+.IP "\fBHotPink\fR" 4
+.IX Item "HotPink"
+0xFF69B4
+.IP "\fBIndianRed\fR" 4
+.IX Item "IndianRed"
+0xCD5C5C
+.IP "\fBIndigo\fR" 4
+.IX Item "Indigo"
+0x4B0082
+.IP "\fBIvory\fR" 4
+.IX Item "Ivory"
+0xFFFFF0
+.IP "\fBKhaki\fR" 4
+.IX Item "Khaki"
+0xF0E68C
+.IP "\fBLavender\fR" 4
+.IX Item "Lavender"
+0xE6E6FA
+.IP "\fBLavenderBlush\fR" 4
+.IX Item "LavenderBlush"
+0xFFF0F5
+.IP "\fBLawnGreen\fR" 4
+.IX Item "LawnGreen"
+0x7CFC00
+.IP "\fBLemonChiffon\fR" 4
+.IX Item "LemonChiffon"
+0xFFFACD
+.IP "\fBLightBlue\fR" 4
+.IX Item "LightBlue"
+0xADD8E6
+.IP "\fBLightCoral\fR" 4
+.IX Item "LightCoral"
+0xF08080
+.IP "\fBLightCyan\fR" 4
+.IX Item "LightCyan"
+0xE0FFFF
+.IP "\fBLightGoldenRodYellow\fR" 4
+.IX Item "LightGoldenRodYellow"
+0xFAFAD2
+.IP "\fBLightGreen\fR" 4
+.IX Item "LightGreen"
+0x90EE90
+.IP "\fBLightGrey\fR" 4
+.IX Item "LightGrey"
+0xD3D3D3
+.IP "\fBLightPink\fR" 4
+.IX Item "LightPink"
+0xFFB6C1
+.IP "\fBLightSalmon\fR" 4
+.IX Item "LightSalmon"
+0xFFA07A
+.IP "\fBLightSeaGreen\fR" 4
+.IX Item "LightSeaGreen"
+0x20B2AA
+.IP "\fBLightSkyBlue\fR" 4
+.IX Item "LightSkyBlue"
+0x87CEFA
+.IP "\fBLightSlateGray\fR" 4
+.IX Item "LightSlateGray"
+0x778899
+.IP "\fBLightSteelBlue\fR" 4
+.IX Item "LightSteelBlue"
+0xB0C4DE
+.IP "\fBLightYellow\fR" 4
+.IX Item "LightYellow"
+0xFFFFE0
+.IP "\fBLime\fR" 4
+.IX Item "Lime"
+0x00FF00
+.IP "\fBLimeGreen\fR" 4
+.IX Item "LimeGreen"
+0x32CD32
+.IP "\fBLinen\fR" 4
+.IX Item "Linen"
+0xFAF0E6
+.IP "\fBMagenta\fR" 4
+.IX Item "Magenta"
+0xFF00FF
+.IP "\fBMaroon\fR" 4
+.IX Item "Maroon"
+0x800000
+.IP "\fBMediumAquaMarine\fR" 4
+.IX Item "MediumAquaMarine"
+0x66CDAA
+.IP "\fBMediumBlue\fR" 4
+.IX Item "MediumBlue"
+0x0000CD
+.IP "\fBMediumOrchid\fR" 4
+.IX Item "MediumOrchid"
+0xBA55D3
+.IP "\fBMediumPurple\fR" 4
+.IX Item "MediumPurple"
+0x9370D8
+.IP "\fBMediumSeaGreen\fR" 4
+.IX Item "MediumSeaGreen"
+0x3CB371
+.IP "\fBMediumSlateBlue\fR" 4
+.IX Item "MediumSlateBlue"
+0x7B68EE
+.IP "\fBMediumSpringGreen\fR" 4
+.IX Item "MediumSpringGreen"
+0x00FA9A
+.IP "\fBMediumTurquoise\fR" 4
+.IX Item "MediumTurquoise"
+0x48D1CC
+.IP "\fBMediumVioletRed\fR" 4
+.IX Item "MediumVioletRed"
+0xC71585
+.IP "\fBMidnightBlue\fR" 4
+.IX Item "MidnightBlue"
+0x191970
+.IP "\fBMintCream\fR" 4
+.IX Item "MintCream"
+0xF5FFFA
+.IP "\fBMistyRose\fR" 4
+.IX Item "MistyRose"
+0xFFE4E1
+.IP "\fBMoccasin\fR" 4
+.IX Item "Moccasin"
+0xFFE4B5
+.IP "\fBNavajoWhite\fR" 4
+.IX Item "NavajoWhite"
+0xFFDEAD
+.IP "\fBNavy\fR" 4
+.IX Item "Navy"
+0x000080
+.IP "\fBOldLace\fR" 4
+.IX Item "OldLace"
+0xFDF5E6
+.IP "\fBOlive\fR" 4
+.IX Item "Olive"
+0x808000
+.IP "\fBOliveDrab\fR" 4
+.IX Item "OliveDrab"
+0x6B8E23
+.IP "\fBOrange\fR" 4
+.IX Item "Orange"
+0xFFA500
+.IP "\fBOrangeRed\fR" 4
+.IX Item "OrangeRed"
+0xFF4500
+.IP "\fBOrchid\fR" 4
+.IX Item "Orchid"
+0xDA70D6
+.IP "\fBPaleGoldenRod\fR" 4
+.IX Item "PaleGoldenRod"
+0xEEE8AA
+.IP "\fBPaleGreen\fR" 4
+.IX Item "PaleGreen"
+0x98FB98
+.IP "\fBPaleTurquoise\fR" 4
+.IX Item "PaleTurquoise"
+0xAFEEEE
+.IP "\fBPaleVioletRed\fR" 4
+.IX Item "PaleVioletRed"
+0xD87093
+.IP "\fBPapayaWhip\fR" 4
+.IX Item "PapayaWhip"
+0xFFEFD5
+.IP "\fBPeachPuff\fR" 4
+.IX Item "PeachPuff"
+0xFFDAB9
+.IP "\fBPeru\fR" 4
+.IX Item "Peru"
+0xCD853F
+.IP "\fBPink\fR" 4
+.IX Item "Pink"
+0xFFC0CB
+.IP "\fBPlum\fR" 4
+.IX Item "Plum"
+0xDDA0DD
+.IP "\fBPowderBlue\fR" 4
+.IX Item "PowderBlue"
+0xB0E0E6
+.IP "\fBPurple\fR" 4
+.IX Item "Purple"
+0x800080
+.IP "\fBRed\fR" 4
+.IX Item "Red"
+0xFF0000
+.IP "\fBRosyBrown\fR" 4
+.IX Item "RosyBrown"
+0xBC8F8F
+.IP "\fBRoyalBlue\fR" 4
+.IX Item "RoyalBlue"
+0x4169E1
+.IP "\fBSaddleBrown\fR" 4
+.IX Item "SaddleBrown"
+0x8B4513
+.IP "\fBSalmon\fR" 4
+.IX Item "Salmon"
+0xFA8072
+.IP "\fBSandyBrown\fR" 4
+.IX Item "SandyBrown"
+0xF4A460
+.IP "\fBSeaGreen\fR" 4
+.IX Item "SeaGreen"
+0x2E8B57
+.IP "\fBSeaShell\fR" 4
+.IX Item "SeaShell"
+0xFFF5EE
+.IP "\fBSienna\fR" 4
+.IX Item "Sienna"
+0xA0522D
+.IP "\fBSilver\fR" 4
+.IX Item "Silver"
+0xC0C0C0
+.IP "\fBSkyBlue\fR" 4
+.IX Item "SkyBlue"
+0x87CEEB
+.IP "\fBSlateBlue\fR" 4
+.IX Item "SlateBlue"
+0x6A5ACD
+.IP "\fBSlateGray\fR" 4
+.IX Item "SlateGray"
+0x708090
+.IP "\fBSnow\fR" 4
+.IX Item "Snow"
+0xFFFAFA
+.IP "\fBSpringGreen\fR" 4
+.IX Item "SpringGreen"
+0x00FF7F
+.IP "\fBSteelBlue\fR" 4
+.IX Item "SteelBlue"
+0x4682B4
+.IP "\fBTan\fR" 4
+.IX Item "Tan"
+0xD2B48C
+.IP "\fBTeal\fR" 4
+.IX Item "Teal"
+0x008080
+.IP "\fBThistle\fR" 4
+.IX Item "Thistle"
+0xD8BFD8
+.IP "\fBTomato\fR" 4
+.IX Item "Tomato"
+0xFF6347
+.IP "\fBTurquoise\fR" 4
+.IX Item "Turquoise"
+0x40E0D0
+.IP "\fBViolet\fR" 4
+.IX Item "Violet"
+0xEE82EE
+.IP "\fBWheat\fR" 4
+.IX Item "Wheat"
+0xF5DEB3
+.IP "\fBWhite\fR" 4
+.IX Item "White"
+0xFFFFFF
+.IP "\fBWhiteSmoke\fR" 4
+.IX Item "WhiteSmoke"
+0xF5F5F5
+.IP "\fBYellow\fR" 4
+.IX Item "Yellow"
+0xFFFF00
+.IP "\fBYellowGreen\fR" 4
+.IX Item "YellowGreen"
+0x9ACD32
+.SS "Channel Layout"
+.IX Subsection "Channel Layout"
+A channel layout specifies the spatial disposition of the channels in
+a multi-channel audio stream. To specify a channel layout, FFmpeg
+makes use of a special syntax.
+.PP
+Individual channels are identified by an id, as given by the table
+below:
+.IP "\fB\s-1FL\s0\fR" 4
+.IX Item "FL"
+front left
+.IP "\fB\s-1FR\s0\fR" 4
+.IX Item "FR"
+front right
+.IP "\fB\s-1FC\s0\fR" 4
+.IX Item "FC"
+front center
+.IP "\fB\s-1LFE\s0\fR" 4
+.IX Item "LFE"
+low frequency
+.IP "\fB\s-1BL\s0\fR" 4
+.IX Item "BL"
+back left
+.IP "\fB\s-1BR\s0\fR" 4
+.IX Item "BR"
+back right
+.IP "\fB\s-1FLC\s0\fR" 4
+.IX Item "FLC"
+front left-of-center
+.IP "\fB\s-1FRC\s0\fR" 4
+.IX Item "FRC"
+front right-of-center
+.IP "\fB\s-1BC\s0\fR" 4
+.IX Item "BC"
+back center
+.IP "\fB\s-1SL\s0\fR" 4
+.IX Item "SL"
+side left
+.IP "\fB\s-1SR\s0\fR" 4
+.IX Item "SR"
+side right
+.IP "\fB\s-1TC\s0\fR" 4
+.IX Item "TC"
+top center
+.IP "\fB\s-1TFL\s0\fR" 4
+.IX Item "TFL"
+top front left
+.IP "\fB\s-1TFC\s0\fR" 4
+.IX Item "TFC"
+top front center
+.IP "\fB\s-1TFR\s0\fR" 4
+.IX Item "TFR"
+top front right
+.IP "\fB\s-1TBL\s0\fR" 4
+.IX Item "TBL"
+top back left
+.IP "\fB\s-1TBC\s0\fR" 4
+.IX Item "TBC"
+top back center
+.IP "\fB\s-1TBR\s0\fR" 4
+.IX Item "TBR"
+top back right
+.IP "\fB\s-1DL\s0\fR" 4
+.IX Item "DL"
+downmix left
+.IP "\fB\s-1DR\s0\fR" 4
+.IX Item "DR"
+downmix right
+.IP "\fB\s-1WL\s0\fR" 4
+.IX Item "WL"
+wide left
+.IP "\fB\s-1WR\s0\fR" 4
+.IX Item "WR"
+wide right
+.IP "\fB\s-1SDL\s0\fR" 4
+.IX Item "SDL"
+surround direct left
+.IP "\fB\s-1SDR\s0\fR" 4
+.IX Item "SDR"
+surround direct right
+.IP "\fB\s-1LFE2\s0\fR" 4
+.IX Item "LFE2"
+low frequency 2
+.PP
+Standard channel layout compositions can be specified by using the
+following identifiers:
+.IP "\fBmono\fR" 4
+.IX Item "mono"
+\&\s-1FC\s0
+.IP "\fBstereo\fR" 4
+.IX Item "stereo"
+\&\s-1FL+FR\s0
+.IP "\fB2.1\fR" 4
+.IX Item "2.1"
+\&\s-1FL+FR+LFE\s0
+.IP "\fB3.0\fR" 4
+.IX Item "3.0"
+\&\s-1FL+FR+FC\s0
+.IP "\fB3.0(back)\fR" 4
+.IX Item "3.0(back)"
+\&\s-1FL+FR+BC\s0
+.IP "\fB4.0\fR" 4
+.IX Item "4.0"
+\&\s-1FL+FR+FC+BC\s0
+.IP "\fBquad\fR" 4
+.IX Item "quad"
+\&\s-1FL+FR+BL+BR\s0
+.IP "\fBquad(side)\fR" 4
+.IX Item "quad(side)"
+\&\s-1FL+FR+SL+SR\s0
+.IP "\fB3.1\fR" 4
+.IX Item "3.1"
+\&\s-1FL+FR+FC+LFE\s0
+.IP "\fB5.0\fR" 4
+.IX Item "5.0"
+\&\s-1FL+FR+FC+BL+BR\s0
+.IP "\fB5.0(side)\fR" 4
+.IX Item "5.0(side)"
+\&\s-1FL+FR+FC+SL+SR\s0
+.IP "\fB4.1\fR" 4
+.IX Item "4.1"
+\&\s-1FL+FR+FC+LFE+BC\s0
+.IP "\fB5.1\fR" 4
+.IX Item "5.1"
+\&\s-1FL+FR+FC+LFE+BL+BR\s0
+.IP "\fB5.1(side)\fR" 4
+.IX Item "5.1(side)"
+\&\s-1FL+FR+FC+LFE+SL+SR\s0
+.IP "\fB6.0\fR" 4
+.IX Item "6.0"
+\&\s-1FL+FR+FC+BC+SL+SR\s0
+.IP "\fB6.0(front)\fR" 4
+.IX Item "6.0(front)"
+\&\s-1FL+FR+FLC+FRC+SL+SR\s0
+.IP "\fB3.1.2\fR" 4
+.IX Item "3.1.2"
+\&\s-1FL+FR+FC+LFE+TFL+TFR\s0
+.IP "\fBhexagonal\fR" 4
+.IX Item "hexagonal"
+\&\s-1FL+FR+FC+BL+BR+BC\s0
+.IP "\fB6.1\fR" 4
+.IX Item "6.1"
+\&\s-1FL+FR+FC+LFE+BC+SL+SR\s0
+.IP "\fB6.1\fR" 4
+.IX Item "6.1"
+\&\s-1FL+FR+FC+LFE+BL+BR+BC\s0
+.IP "\fB6.1(front)\fR" 4
+.IX Item "6.1(front)"
+\&\s-1FL+FR+LFE+FLC+FRC+SL+SR\s0
+.IP "\fB7.0\fR" 4
+.IX Item "7.0"
+\&\s-1FL+FR+FC+BL+BR+SL+SR\s0
+.IP "\fB7.0(front)\fR" 4
+.IX Item "7.0(front)"
+\&\s-1FL+FR+FC+FLC+FRC+SL+SR\s0
+.IP "\fB7.1\fR" 4
+.IX Item "7.1"
+\&\s-1FL+FR+FC+LFE+BL+BR+SL+SR\s0
+.IP "\fB7.1(wide)\fR" 4
+.IX Item "7.1(wide)"
+\&\s-1FL+FR+FC+LFE+BL+BR+FLC+FRC\s0
+.IP "\fB7.1(wide\-side)\fR" 4
+.IX Item "7.1(wide-side)"
+\&\s-1FL+FR+FC+LFE+FLC+FRC+SL+SR\s0
+.IP "\fB5.1.2\fR" 4
+.IX Item "5.1.2"
+\&\s-1FL+FR+FC+LFE+BL+BR+TFL+TFR\s0
+.IP "\fBoctagonal\fR" 4
+.IX Item "octagonal"
+\&\s-1FL+FR+FC+BL+BR+BC+SL+SR\s0
+.IP "\fBcube\fR" 4
+.IX Item "cube"
+\&\s-1FL+FR+BL+BR+TFL+TFR+TBL+TBR\s0
+.IP "\fB5.1.4\fR" 4
+.IX Item "5.1.4"
+\&\s-1FL+FR+FC+LFE+BL+BR+TFL+TFR+TBL+TBR\s0
+.IP "\fB7.1.2\fR" 4
+.IX Item "7.1.2"
+\&\s-1FL+FR+FC+LFE+BL+BR+SL+SR+TFL+TFR\s0
+.IP "\fB7.1.4\fR" 4
+.IX Item "7.1.4"
+\&\s-1FL+FR+FC+LFE+BL+BR+SL+SR+TFL+TFR+TBL+TBR\s0
+.IP "\fB7.2.3\fR" 4
+.IX Item "7.2.3"
+\&\s-1FL+FR+FC+LFE+BL+BR+SL+SR+TFL+TFR+TBC+LFE2\s0
+.IP "\fB9.1.4\fR" 4
+.IX Item "9.1.4"
+\&\s-1FL+FR+FC+LFE+BL+BR+FLC+FRC+SL+SR+TFL+TFR+TBL+TBR\s0
+.IP "\fB9.1.6\fR" 4
+.IX Item "9.1.6"
+\&\s-1FL+FR+FC+LFE+BL+BR+FLC+FRC+SL+SR+TFL+TFR+TBL+TBR+TSL+TSR\s0
+.IP "\fBhexadecagonal\fR" 4
+.IX Item "hexadecagonal"
+\&\s-1FL+FR+FC+BL+BR+BC+SL+SR+WL+WR+TBL+TBR+TBC+TFC+TFL+TFR\s0
+.IP "\fBbinaural\fR" 4
+.IX Item "binaural"
+\&\s-1BIL+BIR\s0
+.IP "\fBdownmix\fR" 4
+.IX Item "downmix"
+\&\s-1DL+DR\s0
+.IP "\fB22.2\fR" 4
+.IX Item "22.2"
+\&\s-1FL+FR+FC+LFE+BL+BR+FLC+FRC+BC+SL+SR+TC+TFL+TFC+TFR+TBL+TBC+TBR+LFE2+TSL+TSR+BFC+BFL+BFR\s0
+.PP
+A custom channel layout can be specified as a sequence of terms, separated by '+'.
+Each term can be:
+.IP "\(bu" 4
+the name of a single channel (e.g. \fB\s-1FL\s0\fR, \fB\s-1FR\s0\fR, \fB\s-1FC\s0\fR, \fB\s-1LFE\s0\fR, etc.),
+each optionally containing a custom name after a '@', (e.g. \fBFL@Left\fR,
+\&\fBFR@Right\fR, \fBFC@Center\fR, \fBLFE@Low_Frequency\fR, etc.)
+.PP
+A standard channel layout can be specified by the following:
+.IP "\(bu" 4
+the name of a single channel (e.g. \fB\s-1FL\s0\fR, \fB\s-1FR\s0\fR, \fB\s-1FC\s0\fR, \fB\s-1LFE\s0\fR, etc.)
+.IP "\(bu" 4
+the name of a standard channel layout (e.g. \fBmono\fR,
+\&\fBstereo\fR, \fB4.0\fR, \fBquad\fR, \fB5.0\fR, etc.)
+.IP "\(bu" 4
+a number of channels, in decimal, followed by 'c', yielding the default channel
+layout for that number of channels (see the function
+\&\f(CW\*(C`av_channel_layout_default\*(C'\fR). Note that not all channel counts have a
+default layout.
+.IP "\(bu" 4
+a number of channels, in decimal, followed by 'C', yielding an unknown channel
+layout with the specified number of channels. Note that not all channel layout
+specification strings support unknown channel layouts.
+.IP "\(bu" 4
+a channel layout mask, in hexadecimal starting with \*(L"0x\*(R" (see the
+\&\f(CW\*(C`AV_CH_*\*(C'\fR macros in \fIlibavutil/channel_layout.h\fR.
+.PP
+Before libavutil version 53 the trailing character \*(L"c\*(R" to specify a number of
+channels was optional, but now it is required, while a channel layout mask can
+also be specified as a decimal number (if and only if not followed by \*(L"c\*(R" or \*(L"C\*(R").
+.PP
+See also the function \f(CW\*(C`av_channel_layout_from_string\*(C'\fR defined in
+\&\fIlibavutil/channel_layout.h\fR.
+.SH "EXPRESSION EVALUATION"
+.IX Header "EXPRESSION EVALUATION"
+When evaluating an arithmetic expression, FFmpeg uses an internal
+formula evaluator, implemented through the \fIlibavutil/eval.h\fR
+interface.
+.PP
+An expression may contain unary, binary operators, constants, and
+functions.
+.PP
+Two expressions \fIexpr1\fR and \fIexpr2\fR can be combined to form
+another expression "\fIexpr1\fR;\fIexpr2\fR".
+\&\fIexpr1\fR and \fIexpr2\fR are evaluated in turn, and the new
+expression evaluates to the value of \fIexpr2\fR.
+.PP
+The following binary operators are available: \f(CW\*(C`+\*(C'\fR, \f(CW\*(C`\-\*(C'\fR,
+\&\f(CW\*(C`*\*(C'\fR, \f(CW\*(C`/\*(C'\fR, \f(CW\*(C`^\*(C'\fR.
+.PP
+The following unary operators are available: \f(CW\*(C`+\*(C'\fR, \f(CW\*(C`\-\*(C'\fR.
+.PP
+Some internal variables can be used to store and load intermediary
+results. They can be accessed using the \f(CW\*(C`ld\*(C'\fR and \f(CW\*(C`st\*(C'\fR
+functions with an index argument varying from 0 to 9 to specify which
+internal variable to access.
+.PP
+The following functions are available:
+.IP "\fBabs(x)\fR" 4
+.IX Item "abs(x)"
+Compute absolute value of \fIx\fR.
+.IP "\fBacos(x)\fR" 4
+.IX Item "acos(x)"
+Compute arccosine of \fIx\fR.
+.IP "\fBasin(x)\fR" 4
+.IX Item "asin(x)"
+Compute arcsine of \fIx\fR.
+.IP "\fBatan(x)\fR" 4
+.IX Item "atan(x)"
+Compute arctangent of \fIx\fR.
+.IP "\fBatan2(y, x)\fR" 4
+.IX Item "atan2(y, x)"
+Compute principal value of the arc tangent of \fIy\fR/\fIx\fR.
+.IP "\fBbetween(x, min, max)\fR" 4
+.IX Item "between(x, min, max)"
+Return 1 if \fIx\fR is greater than or equal to \fImin\fR and lesser than or
+equal to \fImax\fR, 0 otherwise.
+.IP "\fBbitand(x, y)\fR" 4
+.IX Item "bitand(x, y)"
+.PD 0
+.IP "\fBbitor(x, y)\fR" 4
+.IX Item "bitor(x, y)"
+.PD
+Compute bitwise and/or operation on \fIx\fR and \fIy\fR.
+.Sp
+The results of the evaluation of \fIx\fR and \fIy\fR are converted to
+integers before executing the bitwise operation.
+.Sp
+Note that both the conversion to integer and the conversion back to
+floating point can lose precision. Beware of unexpected results for
+large numbers (usually 2^53 and larger).
+.IP "\fBceil(expr)\fR" 4
+.IX Item "ceil(expr)"
+Round the value of expression \fIexpr\fR upwards to the nearest
+integer. For example, \*(L"ceil(1.5)\*(R" is \*(L"2.0\*(R".
+.IP "\fBclip(x, min, max)\fR" 4
+.IX Item "clip(x, min, max)"
+Return the value of \fIx\fR clipped between \fImin\fR and \fImax\fR.
+.IP "\fBcos(x)\fR" 4
+.IX Item "cos(x)"
+Compute cosine of \fIx\fR.
+.IP "\fBcosh(x)\fR" 4
+.IX Item "cosh(x)"
+Compute hyperbolic cosine of \fIx\fR.
+.IP "\fBeq(x, y)\fR" 4
+.IX Item "eq(x, y)"
+Return 1 if \fIx\fR and \fIy\fR are equivalent, 0 otherwise.
+.IP "\fBexp(x)\fR" 4
+.IX Item "exp(x)"
+Compute exponential of \fIx\fR (with base \f(CW\*(C`e\*(C'\fR, the Euler's number).
+.IP "\fBfloor(expr)\fR" 4
+.IX Item "floor(expr)"
+Round the value of expression \fIexpr\fR downwards to the nearest
+integer. For example, \*(L"floor(\-1.5)\*(R" is \*(L"\-2.0\*(R".
+.IP "\fBgauss(x)\fR" 4
+.IX Item "gauss(x)"
+Compute Gauss function of \fIx\fR, corresponding to
+\&\f(CW\*(C`exp(\-x*x/2) / sqrt(2*PI)\*(C'\fR.
+.IP "\fBgcd(x, y)\fR" 4
+.IX Item "gcd(x, y)"
+Return the greatest common divisor of \fIx\fR and \fIy\fR. If both \fIx\fR and
+\&\fIy\fR are 0 or either or both are less than zero then behavior is undefined.
+.IP "\fBgt(x, y)\fR" 4
+.IX Item "gt(x, y)"
+Return 1 if \fIx\fR is greater than \fIy\fR, 0 otherwise.
+.IP "\fBgte(x, y)\fR" 4
+.IX Item "gte(x, y)"
+Return 1 if \fIx\fR is greater than or equal to \fIy\fR, 0 otherwise.
+.IP "\fBhypot(x, y)\fR" 4
+.IX Item "hypot(x, y)"
+This function is similar to the C function with the same name; it returns
+"sqrt(\fIx\fR*\fIx\fR + \fIy\fR*\fIy\fR)", the length of the hypotenuse of a
+right triangle with sides of length \fIx\fR and \fIy\fR, or the distance of the
+point (\fIx\fR, \fIy\fR) from the origin.
+.IP "\fBif(x, y)\fR" 4
+.IX Item "if(x, y)"
+Evaluate \fIx\fR, and if the result is non-zero return the result of
+the evaluation of \fIy\fR, return 0 otherwise.
+.IP "\fBif(x, y, z)\fR" 4
+.IX Item "if(x, y, z)"
+Evaluate \fIx\fR, and if the result is non-zero return the evaluation
+result of \fIy\fR, otherwise the evaluation result of \fIz\fR.
+.IP "\fBifnot(x, y)\fR" 4
+.IX Item "ifnot(x, y)"
+Evaluate \fIx\fR, and if the result is zero return the result of the
+evaluation of \fIy\fR, return 0 otherwise.
+.IP "\fBifnot(x, y, z)\fR" 4
+.IX Item "ifnot(x, y, z)"
+Evaluate \fIx\fR, and if the result is zero return the evaluation
+result of \fIy\fR, otherwise the evaluation result of \fIz\fR.
+.IP "\fBisinf(x)\fR" 4
+.IX Item "isinf(x)"
+Return 1.0 if \fIx\fR is +/\-INFINITY, 0.0 otherwise.
+.IP "\fBisnan(x)\fR" 4
+.IX Item "isnan(x)"
+Return 1.0 if \fIx\fR is \s-1NAN, 0.0\s0 otherwise.
+.IP "\fBld(idx)\fR" 4
+.IX Item "ld(idx)"
+Load the value of the internal variable with index \fIidx\fR, which was
+previously stored with st(\fIidx\fR, \fIexpr\fR).
+The function returns the loaded value.
+.IP "\fBlerp(x, y, z)\fR" 4
+.IX Item "lerp(x, y, z)"
+Return linear interpolation between \fIx\fR and \fIy\fR by amount of \fIz\fR.
+.IP "\fBlog(x)\fR" 4
+.IX Item "log(x)"
+Compute natural logarithm of \fIx\fR.
+.IP "\fBlt(x, y)\fR" 4
+.IX Item "lt(x, y)"
+Return 1 if \fIx\fR is lesser than \fIy\fR, 0 otherwise.
+.IP "\fBlte(x, y)\fR" 4
+.IX Item "lte(x, y)"
+Return 1 if \fIx\fR is lesser than or equal to \fIy\fR, 0 otherwise.
+.IP "\fBmax(x, y)\fR" 4
+.IX Item "max(x, y)"
+Return the maximum between \fIx\fR and \fIy\fR.
+.IP "\fBmin(x, y)\fR" 4
+.IX Item "min(x, y)"
+Return the minimum between \fIx\fR and \fIy\fR.
+.IP "\fBmod(x, y)\fR" 4
+.IX Item "mod(x, y)"
+Compute the remainder of division of \fIx\fR by \fIy\fR.
+.IP "\fBnot(expr)\fR" 4
+.IX Item "not(expr)"
+Return 1.0 if \fIexpr\fR is zero, 0.0 otherwise.
+.IP "\fBpow(x, y)\fR" 4
+.IX Item "pow(x, y)"
+Compute the power of \fIx\fR elevated \fIy\fR, it is equivalent to
+"(\fIx\fR)^(\fIy\fR)".
+.IP "\fBprint(t)\fR" 4
+.IX Item "print(t)"
+.PD 0
+.IP "\fBprint(t, l)\fR" 4
+.IX Item "print(t, l)"
+.PD
+Print the value of expression \fIt\fR with loglevel \fIl\fR. If \fIl\fR is not
+specified then a default log level is used.
+Return the value of the expression printed.
+.IP "\fBrandom(idx)\fR" 4
+.IX Item "random(idx)"
+Return a pseudo random value between 0.0 and 1.0. \fIidx\fR is the
+index of the internal variable used to save the seed/state, which can be
+previously stored with \f(CW\*(C`st(idx)\*(C'\fR.
+.Sp
+To initialize the seed, you need to store the seed value as a 64\-bit
+unsigned integer in the internal variable with index \fIidx\fR.
+.Sp
+For example, to store the seed with value \f(CW42\fR in the internal
+variable with index \f(CW0\fR and print a few random values:
+.Sp
+.Vb 1
+\&        st(0,42); print(random(0)); print(random(0)); print(random(0))
+.Ve
+.IP "\fBrandomi(idx, min, max)\fR" 4
+.IX Item "randomi(idx, min, max)"
+Return a pseudo random value in the interval between \fImin\fR and
+\&\fImax\fR. \fIidx\fR is the index of the internal variable which will be used to
+save the seed/state, which can be previously stored with \f(CW\*(C`st(idx)\*(C'\fR.
+.Sp
+To initialize the seed, you need to store the seed value as a 64\-bit
+unsigned integer in the internal variable with index \fIidx\fR.
+.IP "\fBroot(expr, max)\fR" 4
+.IX Item "root(expr, max)"
+Find an input value for which the function represented by \fIexpr\fR
+with argument \fI\f(BIld\fI\|(0)\fR is 0 in the interval 0..\fImax\fR.
+.Sp
+The expression in \fIexpr\fR must denote a continuous function or the
+result is undefined.
+.Sp
+\&\fI\f(BIld\fI\|(0)\fR is used to represent the function input value, which means that the
+given expression will be evaluated multiple times with various input values that
+the expression can access through \f(CWld(0)\fR. When the expression evaluates to
+0 then the corresponding input value will be returned.
+.IP "\fBround(expr)\fR" 4
+.IX Item "round(expr)"
+Round the value of expression \fIexpr\fR to the nearest integer. For example,
+\&\*(L"round(1.5)\*(R" is \*(L"2.0\*(R".
+.IP "\fBsgn(x)\fR" 4
+.IX Item "sgn(x)"
+Compute sign of \fIx\fR.
+.IP "\fBsin(x)\fR" 4
+.IX Item "sin(x)"
+Compute sine of \fIx\fR.
+.IP "\fBsinh(x)\fR" 4
+.IX Item "sinh(x)"
+Compute hyperbolic sine of \fIx\fR.
+.IP "\fBsqrt(expr)\fR" 4
+.IX Item "sqrt(expr)"
+Compute the square root of \fIexpr\fR. This is equivalent to
+"(\fIexpr\fR)^.5".
+.IP "\fBsquish(x)\fR" 4
+.IX Item "squish(x)"
+Compute expression \f(CW\*(C`1/(1 + exp(4*x))\*(C'\fR.
+.IP "\fBst(idx, expr)\fR" 4
+.IX Item "st(idx, expr)"
+Store the value of the expression \fIexpr\fR in an internal
+variable. \fIidx\fR specifies the index of the variable where to store
+the value, and it is a value ranging from 0 to 9. The function returns
+the value stored in the internal variable.
+.Sp
+The stored value can be retrieved with \f(CW\*(C`ld(var)\*(C'\fR.
+.Sp
+Note: variables are currently not shared between expressions.
+.IP "\fBtan(x)\fR" 4
+.IX Item "tan(x)"
+Compute tangent of \fIx\fR.
+.IP "\fBtanh(x)\fR" 4
+.IX Item "tanh(x)"
+Compute hyperbolic tangent of \fIx\fR.
+.IP "\fBtaylor(expr, x)\fR" 4
+.IX Item "taylor(expr, x)"
+.PD 0
+.IP "\fBtaylor(expr, x, idx)\fR" 4
+.IX Item "taylor(expr, x, idx)"
+.PD
+Evaluate a Taylor series at \fIx\fR, given an expression representing
+the \f(CW\*(C`ld(idx)\*(C'\fR\-th derivative of a function at 0.
+.Sp
+When the series does not converge the result is undefined.
+.Sp
+\&\fIld(idx)\fR is used to represent the derivative order in \fIexpr\fR,
+which means that the given expression will be evaluated multiple times
+with various input values that the expression can access through
+\&\f(CW\*(C`ld(idx)\*(C'\fR. If \fIidx\fR is not specified then 0 is assumed.
+.Sp
+Note, when you have the derivatives at y instead of 0,
+\&\f(CW\*(C`taylor(expr, x\-y)\*(C'\fR can be used.
+.IP "\fB\fBtime\fB\|(0)\fR" 4
+.IX Item "time"
+Return the current (wallclock) time in seconds.
+.IP "\fBtrunc(expr)\fR" 4
+.IX Item "trunc(expr)"
+Round the value of expression \fIexpr\fR towards zero to the nearest
+integer. For example, \*(L"trunc(\-1.5)\*(R" is \*(L"\-1.0\*(R".
+.IP "\fBwhile(cond, expr)\fR" 4
+.IX Item "while(cond, expr)"
+Evaluate expression \fIexpr\fR while the expression \fIcond\fR is
+non-zero, and returns the value of the last \fIexpr\fR evaluation, or
+\&\s-1NAN\s0 if \fIcond\fR was always false.
+.PP
+The following constants are available:
+.IP "\fB\s-1PI\s0\fR" 4
+.IX Item "PI"
+area of the unit disc, approximately 3.14
+.IP "\fBE\fR" 4
+.IX Item "E"
+\&\fBexp\fR\|(1) (Euler's number), approximately 2.718
+.IP "\fB\s-1PHI\s0\fR" 4
+.IX Item "PHI"
+golden ratio (1+\fBsqrt\fR\|(5))/2, approximately 1.618
+.PP
+Assuming that an expression is considered \*(L"true\*(R" if it has a non-zero
+value, note that:
+.PP
+\&\f(CW\*(C`*\*(C'\fR works like \s-1AND\s0
+.PP
+\&\f(CW\*(C`+\*(C'\fR works like \s-1OR\s0
+.PP
+For example the construct:
+.PP
+.Vb 1
+\&        if (A AND B) then C
+.Ve
+.PP
+is equivalent to:
+.PP
+.Vb 1
+\&        if(A*B, C)
+.Ve
+.PP
+In your C code, you can extend the list of unary and binary functions,
+and define recognized constants, so that they are available for your
+expressions.
+.PP
+The evaluator also recognizes the International System unit prefixes.
+If 'i' is appended after the prefix, binary prefixes are used, which
+are based on powers of 1024 instead of powers of 1000.
+The 'B' postfix multiplies the value by 8, and can be appended after a
+unit prefix or used alone. This allows using for example '\s-1KB\s0', 'MiB',
+\&'G' and 'B' as number postfix.
+.PP
+The list of available International System prefixes follows, with
+indication of the corresponding powers of 10 and of 2.
+.IP "\fBy\fR" 4
+.IX Item "y"
+10^\-24 / 2^\-80
+.IP "\fBz\fR" 4
+.IX Item "z"
+10^\-21 / 2^\-70
+.IP "\fBa\fR" 4
+.IX Item "a"
+10^\-18 / 2^\-60
+.IP "\fBf\fR" 4
+.IX Item "f"
+10^\-15 / 2^\-50
+.IP "\fBp\fR" 4
+.IX Item "p"
+10^\-12 / 2^\-40
+.IP "\fBn\fR" 4
+.IX Item "n"
+10^\-9 / 2^\-30
+.IP "\fBu\fR" 4
+.IX Item "u"
+10^\-6 / 2^\-20
+.IP "\fBm\fR" 4
+.IX Item "m"
+10^\-3 / 2^\-10
+.IP "\fBc\fR" 4
+.IX Item "c"
+10^\-2
+.IP "\fBd\fR" 4
+.IX Item "d"
+10^\-1
+.IP "\fBh\fR" 4
+.IX Item "h"
+10^2
+.IP "\fBk\fR" 4
+.IX Item "k"
+10^3 / 2^10
+.IP "\fBK\fR" 4
+.IX Item "K"
+10^3 / 2^10
+.IP "\fBM\fR" 4
+.IX Item "M"
+10^6 / 2^20
+.IP "\fBG\fR" 4
+.IX Item "G"
+10^9 / 2^30
+.IP "\fBT\fR" 4
+.IX Item "T"
+10^12 / 2^40
+.IP "\fBP\fR" 4
+.IX Item "P"
+10^15 / 2^50
+.IP "\fBE\fR" 4
+.IX Item "E"
+10^18 / 2^60
+.IP "\fBZ\fR" 4
+.IX Item "Z"
+10^21 / 2^70
+.IP "\fBY\fR" 4
+.IX Item "Y"
+10^24 / 2^80
+.SH "SEE ALSO"
+.IX Header "SEE ALSO"
+\&\fBffmpeg\fR\|(1), \fBffplay\fR\|(1), \fBffprobe\fR\|(1), \fBlibavutil\fR\|(3)
+.SH "AUTHORS"
+.IX Header "AUTHORS"
+The FFmpeg developers.
+.PP
+For details about the authorship, see the Git history of the project
+(https://git.ffmpeg.org/ffmpeg), e.g. by typing the command
+\&\fBgit log\fR in the FFmpeg source directory, or browsing the
+online repository at <\fBhttps://git.ffmpeg.org/ffmpeg\fR>.
+.PP
+Maintainers for the specific components are listed in the file
+\&\fI\s-1MAINTAINERS\s0\fR in the source code tree.

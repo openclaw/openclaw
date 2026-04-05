@@ -1,0 +1,207 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OSSL_PARAM_allocate_from_text</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#The-use-of-key-and-value-in-detail">The use of key and value in detail</a></li>
+    </ul>
+  </li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OSSL_PARAM_allocate_from_text - OSSL_PARAM construction utilities</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/params.h&gt;
+
+int OSSL_PARAM_allocate_from_text(OSSL_PARAM *to,
+                                  const OSSL_PARAM *paramdefs,
+                                  const char *key, const char *value,
+                                  size_t value_n,
+                                  int *found);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>With OpenSSL before version 3.0, parameters were passed down to or retrieved from algorithm implementations via control functions. Some of these control functions existed in variants that took string parameters, for example <a href="../man3/EVP_PKEY_CTX_ctrl_str.html">EVP_PKEY_CTX_ctrl_str(3)</a>.</p>
+
+<p>OpenSSL 3.0 introduces a new mechanism to do the same thing with an array of parameters that contain name, value, value type and value size (see <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> for more information).</p>
+
+<p>OSSL_PARAM_allocate_from_text() uses <i>key</i> to look up an item in <i>paramdefs</i>. If an item was found, it converts <i>value</i> to something suitable for that item&#39;s <i>data_type</i>, and stores the result in <i>to-&gt;data</i> as well as its size in <i>to-&gt;data_size</i>. <i>to-&gt;key</i> and <i>to-&gt;data_type</i> are assigned the corresponding values from the item that was found, and <i>to-&gt;return_size</i> is set to zero.</p>
+
+<p><i>to-&gt;data</i> is always allocated using <a href="../man3/OPENSSL_zalloc.html">OPENSSL_zalloc(3)</a> and needs to be freed by the caller when it&#39;s not useful any more, using <a href="../man3/OPENSSL_free.html">OPENSSL_free(3)</a>.</p>
+
+<p>If <i>found</i> is not NULL, <i>*found</i> is set to 1 if <i>key</i> could be located in <i>paramdefs</i>, and to 0 otherwise.</p>
+
+<h2 id="The-use-of-key-and-value-in-detail">The use of <i>key</i> and <i>value</i> in detail</h2>
+
+<p>OSSL_PARAM_allocate_from_text() takes note if <i>key</i> starts with &quot;hex&quot;, and will only use the rest of <i>key</i> to look up an item in <i>paramdefs</i> in that case. As an example, if <i>key</i> is &quot;hexid&quot;, &quot;id&quot; will be looked up in <i>paramdefs</i>.</p>
+
+<p>When an item in <i>paramdefs</i> has been found, <i>value</i> is converted depending on that item&#39;s <i>data_type</i>, as follows:</p>
+
+<dl>
+
+<dt id="OSSL_PARAM_INTEGER-and-OSSL_PARAM_UNSIGNED_INTEGER"><b>OSSL_PARAM_INTEGER</b> and <b>OSSL_PARAM_UNSIGNED_INTEGER</b></dt>
+<dd>
+
+<p>If <i>key</i> didn&#39;t start with &quot;hex&quot;, <i>value</i> is assumed to contain <i>value_n</i> decimal characters, which are decoded, and the resulting bytes become the number stored in the <i>to-&gt;data</i> storage.</p>
+
+<p>If <i>value</i> starts with &quot;0x&quot;, it is assumed to contain <i>value_n</i> hexadecimal characters.</p>
+
+<p>If <i>key</i> started with &quot;hex&quot;, <i>value</i> is assumed to contain <i>value_n</i> hexadecimal characters without the &quot;0x&quot; prefix.</p>
+
+<p>If <i>value</i> contains characters that couldn&#39;t be decoded as hexadecimal or decimal characters, OSSL_PARAM_allocate_from_text() considers that an error.</p>
+
+</dd>
+<dt id="OSSL_PARAM_UTF8_STRING"><b>OSSL_PARAM_UTF8_STRING</b></dt>
+<dd>
+
+<p>If <i>key</i> started with &quot;hex&quot;, OSSL_PARAM_allocate_from_text() considers that an error.</p>
+
+<p>Otherwise, <i>value</i> is considered a C string and is copied to the <i>to-&gt;data</i> storage. On systems where the native character encoding is EBCDIC, the bytes in <i>to-&gt;data</i> are converted to ASCII.</p>
+
+</dd>
+<dt id="OSSL_PARAM_OCTET_STRING"><b>OSSL_PARAM_OCTET_STRING</b></dt>
+<dd>
+
+<p>If <i>key</i> started with &quot;hex&quot;, <i>value</i> is assumed to contain <i>value_n</i> hexadecimal characters, which are decoded, and the resulting bytes are stored in the <i>to-&gt;data</i> storage. If <i>value</i> contains characters that couldn&#39;t be decoded as hexadecimal or decimal characters, OSSL_PARAM_allocate_from_text() considers that an error.</p>
+
+<p>If <i>key</i> didn&#39;t start with &quot;hex&quot;, <i>value_n</i> bytes from <i>value</i> are copied to the <i>to-&gt;data</i> storage.</p>
+
+</dd>
+</dl>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>OSSL_PARAM_allocate_from_text() returns 1 if <i>key</i> was found in <i>paramdefs</i> and there was no other failure, otherwise 0.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The parameter descriptor array comes from functions dedicated to return them. The following <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> attributes are used:</p>
+
+<dl>
+
+<dt id="key"><i>key</i></dt>
+<dd>
+
+</dd>
+<dt id="data_type"><i>data_type</i></dt>
+<dd>
+
+</dd>
+<dt id="data_size"><i>data_size</i></dt>
+<dd>
+
+</dd>
+</dl>
+
+<p>All other attributes are ignored.</p>
+
+<p>The <i>data_size</i> attribute can be zero, meaning that the parameter it describes expects arbitrary length data.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>Code that looked like this:</p>
+
+<pre><code>int mac_ctrl_string(EVP_PKEY_CTX *ctx, const char *value)
+{
+    int rv;
+    char *stmp, *vtmp = NULL;
+
+    stmp = OPENSSL_strdup(value);
+    if (stmp == NULL)
+        return -1;
+    vtmp = strchr(stmp, &#39;:&#39;);
+    if (vtmp != NULL)
+        *vtmp++ = &#39;\0&#39;;
+    rv = EVP_MAC_ctrl_str(ctx, stmp, vtmp);
+    OPENSSL_free(stmp);
+    return rv;
+}
+
+...
+
+
+for (i = 0; i &lt; sk_OPENSSL_STRING_num(macopts); i++) {
+    char *macopt = sk_OPENSSL_STRING_value(macopts, i);
+
+    if (pkey_ctrl_string(mac_ctx, macopt) &lt;= 0) {
+        BIO_printf(bio_err,
+                   &quot;MAC parameter error \&quot;%s\&quot;\n&quot;, macopt);
+        ERR_print_errors(bio_err);
+        goto mac_end;
+    }
+}</code></pre>
+
+<p>Can be written like this instead:</p>
+
+<pre><code> OSSL_PARAM *params =
+     OPENSSL_zalloc(sizeof(*params)
+                    * (sk_OPENSSL_STRING_num(opts) + 1));
+ const OSSL_PARAM *paramdefs = EVP_MAC_settable_ctx_params(mac);
+ size_t params_n;
+ char *opt = &quot;&lt;unknown&gt;&quot;;
+
+ for (params_n = 0; params_n &lt; (size_t)sk_OPENSSL_STRING_num(opts);
+      params_n++) {
+     char *stmp, *vtmp = NULL;
+
+     opt = sk_OPENSSL_STRING_value(opts, (int)params_n);
+     if ((stmp = OPENSSL_strdup(opt)) == NULL
+             || (vtmp = strchr(stmp, &#39;:&#39;)) == NULL)
+         goto err;
+
+     *vtmp++ = &#39;\0&#39;;
+     if (!OSSL_PARAM_allocate_from_text(&amp;params[params_n],
+                                        paramdefs, stmp,
+                                        vtmp, strlen(vtmp), NULL))
+         goto err;
+ }
+ params[params_n] = OSSL_PARAM_construct_end();
+ if (!EVP_MAC_CTX_set_params(ctx, params))
+     goto err;
+ while (params_n-- &gt; 0)
+     OPENSSL_free(params[params_n].data);
+ OPENSSL_free(params);
+ /* ... */
+ return;
+
+err:
+ BIO_printf(bio_err, &quot;MAC parameter error &#39;%s&#39;\n&quot;, opt);
+ ERR_print_errors(bio_err);</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a>, <a href="../man3/OSSL_PARAM_int.html">OSSL_PARAM_int(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2019-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

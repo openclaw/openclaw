@@ -1,0 +1,123 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>openssl_user_macros</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#The-macros">The macros</a></li>
+    </ul>
+  </li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>openssl_user_macros, OPENSSL_API_COMPAT, OPENSSL_NO_DEPRECATED - User defined macros</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>User defined macros allow the programmer to control certain aspects of what is exposed by the OpenSSL headers.</p>
+
+<p><b>NOTE:</b> to be effective, a user defined macro <i>must be defined before including any header file that depends on it</i>, either in the compilation command (<code>cc -DMACRO=value</code>) or by defining the macro in source before including any headers.</p>
+
+<p>Other manual pages may refer to this page when declarations depend on user defined macros.</p>
+
+<h2 id="The-macros">The macros</h2>
+
+<dl>
+
+<dt id="OPENSSL_API_COMPAT"><b>OPENSSL_API_COMPAT</b></dt>
+<dd>
+
+<p>The value is a version number, given in one of the following two forms:</p>
+
+<dl>
+
+<dt id="xMNNFF000L"><code>0xMNNFF000L</code></dt>
+<dd>
+
+<p>This is the form supported for all versions up to 1.1.x, where <code>M</code> represents the major number, <code>NN</code> represents the minor number, and <code>FF</code> represents the fix number, as a hexadecimal number. For version 1.1.0, that&#39;s <code>0x10100000L</code>.</p>
+
+<p>Any version number may be given, but these numbers are the current known major deprecation points, making them the most meaningful:</p>
+
+<dl>
+
+<dt id="x00908000L-version-0.9.8"><code>0x00908000L</code> (version 0.9.8)</dt>
+<dd>
+
+</dd>
+<dt id="x10000000L-version-1.0.0"><code>0x10000000L</code> (version 1.0.0)</dt>
+<dd>
+
+</dd>
+<dt id="x10100000L-version-1.1.0"><code>0x10100000L</code> (version 1.1.0)</dt>
+<dd>
+
+</dd>
+</dl>
+
+<p>For convenience, higher numbers are accepted as well, as long as feasible. For example, <code>0x60000000L</code> will work as expected. However, it is recommended to start using the second form instead:</p>
+
+</dd>
+<dt id="mmnnpp"><code>mmnnpp</code></dt>
+<dd>
+
+<p>This form is a simple decimal number calculated with this formula:</p>
+
+<p><i>major</i> * 10000 + <i>minor</i> * 100 + <i>patch</i></p>
+
+<p>where <i>major</i>, <i>minor</i> and <i>patch</i> are the desired major, minor and patch components of the version number. For example:</p>
+
+<dl>
+
+<dt id="corresponds-to-version-3.0.0">30000 corresponds to version 3.0.0</dt>
+<dd>
+
+</dd>
+<dt id="corresponds-to-version-1.0.2">10002 corresponds to version 1.0.2</dt>
+<dd>
+
+</dd>
+<dt id="corresponds-to-version-42.1.1">420101 corresponds to version 42.1.1</dt>
+<dd>
+
+</dd>
+</dl>
+
+</dd>
+</dl>
+
+<p>If <b>OPENSSL_API_COMPAT</b> is undefined, this default value is used in its place: <code>30600</code></p>
+
+</dd>
+<dt id="OPENSSL_NO_DEPRECATED"><b>OPENSSL_NO_DEPRECATED</b></dt>
+<dd>
+
+<p>If this macro is defined, all deprecated public symbols in all OpenSSL versions up to and including the version given by <b>OPENSSL_API_COMPAT</b> (or the default value given above, when <b>OPENSSL_API_COMPAT</b> isn&#39;t defined) will be hidden.</p>
+
+</dd>
+</dl>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2018-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

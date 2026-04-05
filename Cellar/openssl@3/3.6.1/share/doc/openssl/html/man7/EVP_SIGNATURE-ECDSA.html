@@ -1,0 +1,163 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_SIGNATURE-ECDSA</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Algorithm-Names">Algorithm Names</a></li>
+      <li><a href="#ECDSA-Signature-Parameters">ECDSA Signature Parameters</a></li>
+    </ul>
+  </li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_SIGNATURE-ECDSA - The EVP_PKEY ECDSA signature implementation.</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>Support for computing ECDSA signatures. See <a href="../man7/EVP_PKEY-EC.html">EVP_PKEY-EC(7)</a> for information related to EC keys.</p>
+
+<h2 id="Algorithm-Names">Algorithm Names</h2>
+
+<p>In this list, names are grouped together to signify that they are the same algorithm having multiple names. This also includes the OID in canonical decimal form (which means that they are possible to fetch if the caller has a mere OID which came out in this form after a call to <a href="../man3/OBJ_obj2txt.html">OBJ_obj2txt(3)</a>).</p>
+
+<dl>
+
+<dt id="ECDSA">&quot;ECDSA&quot;</dt>
+<dd>
+
+<p>The base signature algorithm, supported explicitly fetched with <a href="../man3/EVP_PKEY_sign_init_ex2.html">EVP_PKEY_sign_init_ex2(3)</a>, and implicitly fetched (through <a href="../man7/EVP_PKEY-EC.html">EC keys</a>) with <a href="../man3/EVP_DigestSignInit.html">EVP_DigestSignInit(3)</a> and <a href="../man3/EVP_DigestVerifyInit.html">EVP_DigestVerifyInit(3)</a>.</p>
+
+<p>It can&#39;t be used with <a href="../man3/EVP_PKEY_sign_message_init.html">EVP_PKEY_sign_message_init(3)</a></p>
+
+</dd>
+<dt id="ECDSA-SHA1-ECDSA-SHA-1-ecdsa-with-SHA1-1.2.840.10045.4.1">&quot;ECDSA-SHA1&quot;, &quot;ECDSA-SHA-1&quot;, &quot;ecdsa-with-SHA1&quot;, &quot;1.2.840.10045.4.1&quot;</dt>
+<dd>
+
+</dd>
+<dt id="ECDSA-SHA2-224-ECDSA-SHA224-ecdsa-with-SHA224-1.2.840.10045.4.3.1">&quot;ECDSA-SHA2-224&quot;, &quot;ECDSA-SHA224&quot;, &quot;ecdsa-with-SHA224&quot;, &quot;1.2.840.10045.4.3.1&quot;</dt>
+<dd>
+
+</dd>
+<dt id="ECDSA-SHA2-256-ECDSA-SHA256-ecdsa-with-SHA256-1.2.840.10045.4.3.2">&quot;ECDSA-SHA2-256&quot;, &quot;ECDSA-SHA256&quot;, &quot;ecdsa-with-SHA256&quot;, &quot;1.2.840.10045.4.3.2&quot;</dt>
+<dd>
+
+</dd>
+<dt id="ECDSA-SHA2-384-ECDSA-SHA384-ecdsa-with-SHA384-1.2.840.10045.4.3.3">&quot;ECDSA-SHA2-384&quot;, &quot;ECDSA-SHA384&quot;, &quot;ecdsa-with-SHA384&quot;, &quot;1.2.840.10045.4.3.3&quot;</dt>
+<dd>
+
+</dd>
+<dt id="ECDSA-SHA2-512-ECDSA-SHA512-ecdsa-with-SHA512-1.2.840.10045.4.3.4">&quot;ECDSA-SHA2-512&quot;, &quot;ECDSA-SHA512&quot;, &quot;ecdsa-with-SHA512&quot;, &quot;1.2.840.10045.4.3.4&quot;</dt>
+<dd>
+
+</dd>
+<dt id="ECDSA-SHA3-224-ecdsa_with_SHA3-224-id-ecdsa-with-sha3-224-2.16.840.1.101.3.4.3.9">&quot;ECDSA-SHA3-224&quot;, &quot;ecdsa_with_SHA3-224&quot;, &quot;id-ecdsa-with-sha3-224&quot;, &quot;2.16.840.1.101.3.4.3.9&quot;</dt>
+<dd>
+
+</dd>
+<dt id="ECDSA-SHA3-256-ecdsa_with_SHA3-256-id-ecdsa-with-sha3-256-2.16.840.1.101.3.4.3.10">&quot;ECDSA-SHA3-256&quot;, &quot;ecdsa_with_SHA3-256&quot;, &quot;id-ecdsa-with-sha3-256&quot;, &quot;2.16.840.1.101.3.4.3.10&quot;</dt>
+<dd>
+
+</dd>
+<dt id="ECDSA-SHA3-384-ecdsa_with_SHA3-384-id-ecdsa-with-sha3-384-2.16.840.1.101.3.4.3.11">&quot;ECDSA-SHA3-384&quot;, &quot;ecdsa_with_SHA3-384&quot;, &quot;id-ecdsa-with-sha3-384&quot;, &quot;2.16.840.1.101.3.4.3.11&quot;</dt>
+<dd>
+
+</dd>
+<dt id="ECDSA-SHA3-512-ecdsa_with_SHA3-512-id-ecdsa-with-sha3-512-2.16.840.1.101.3.4.3.12">&quot;ECDSA-SHA3-512&quot;, &quot;ecdsa_with_SHA3-512&quot;, &quot;id-ecdsa-with-sha3-512&quot;, &quot;2.16.840.1.101.3.4.3.12&quot;</dt>
+<dd>
+
+<p>ECDSA signature schemes with diverse message digest algorithms. They are all supported explicitly fetched with <a href="../man3/EVP_PKEY_sign_init_ex2.html">EVP_PKEY_sign_init_ex2(3)</a> and <a href="../man3/EVP_PKEY_sign_message_init.html">EVP_PKEY_sign_message_init(3)</a>.</p>
+
+</dd>
+</dl>
+
+<h2 id="ECDSA-Signature-Parameters">ECDSA Signature Parameters</h2>
+
+<p>The following signature parameters can be set using EVP_PKEY_CTX_set_params(). This may be called after EVP_PKEY_sign_init() or EVP_PKEY_verify_init(), and before calling EVP_PKEY_sign() or EVP_PKEY_verify().</p>
+
+<dl>
+
+<dt id="digest-OSSL_SIGNATURE_PARAM_DIGEST-UTF8-string">&quot;digest&quot; (<b>OSSL_SIGNATURE_PARAM_DIGEST</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+</dd>
+<dt id="properties-OSSL_SIGNATURE_PARAM_PROPERTIES-UTF8-string">&quot;properties&quot; (<b>OSSL_SIGNATURE_PARAM_PROPERTIES</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+<p>These two are not supported with the ECDSA signature schemes that already include a message digest algorithm, See <a href="#Algorithm-Names">&quot;Algorithm Names&quot;</a> above.</p>
+
+</dd>
+<dt id="nonce-type-OSSL_SIGNATURE_PARAM_NONCE_TYPE-unsigned-integer">&quot;nonce-type&quot; (<b>OSSL_SIGNATURE_PARAM_NONCE_TYPE</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+</dd>
+<dt id="key-check-OSSL_SIGNATURE_PARAM_FIPS_KEY_CHECK-integer">&quot;key-check&quot; (<b>OSSL_SIGNATURE_PARAM_FIPS_KEY_CHECK</b>) &lt;integer&gt;</dt>
+<dd>
+
+</dd>
+<dt id="digest-check-OSSL_SIGNATURE_PARAM_FIPS_DIGEST_CHECK-integer">&quot;digest-check&quot; (<b>OSSL_SIGNATURE_PARAM_FIPS_DIGEST_CHECK</b>) &lt;integer&gt;</dt>
+<dd>
+
+<p>These parameters are described in <a href="../man7/provider-signature.html">provider-signature(7)</a>.</p>
+
+</dd>
+</dl>
+
+<p>The following signature parameters can be retrieved using EVP_PKEY_CTX_get_params().</p>
+
+<dl>
+
+<dt id="algorithm-id-OSSL_SIGNATURE_PARAM_ALGORITHM_ID-octet-string">&quot;algorithm-id&quot; (<b>OSSL_SIGNATURE_PARAM_ALGORITHM_ID</b>) &lt;octet string&gt;</dt>
+<dd>
+
+</dd>
+<dt id="digest-OSSL_SIGNATURE_PARAM_DIGEST-UTF8-string1">&quot;digest&quot; (<b>OSSL_SIGNATURE_PARAM_DIGEST</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+</dd>
+<dt id="nonce-type-OSSL_SIGNATURE_PARAM_NONCE_TYPE-unsigned-integer1">&quot;nonce-type&quot; (<b>OSSL_SIGNATURE_PARAM_NONCE_TYPE</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+</dd>
+<dt id="fips-indicator-OSSL_SIGNATURE_PARAM_FIPS_APPROVED_INDICATOR-integer">&quot;fips-indicator&quot; (<b>OSSL_SIGNATURE_PARAM_FIPS_APPROVED_INDICATOR</b>) &lt;integer&gt;</dt>
+<dd>
+
+</dd>
+<dt id="verify-message-OSSL_SIGNATURE_PARAM_FIPS_VERIFY_MESSAGE-integer">&quot;verify-message&quot; (<b>OSSL_SIGNATURE_PARAM_FIPS_VERIFY_MESSAGE</b> &lt;integer&gt;</dt>
+<dd>
+
+<p>The parameters are described in <a href="../man7/provider-signature.html">provider-signature(7)</a>.</p>
+
+</dd>
+</dl>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_PKEY_CTX_set_params.html">EVP_PKEY_CTX_set_params(3)</a>, <a href="../man3/EVP_PKEY_sign.html">EVP_PKEY_sign(3)</a>, <a href="../man3/EVP_PKEY_verify.html">EVP_PKEY_verify(3)</a>, <a href="../man7/provider-signature.html">provider-signature(7)</a>,</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2020-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

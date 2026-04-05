@@ -1,0 +1,143 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>HMAC</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#CONFORMING-TO">CONFORMING TO</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>HMAC, HMAC_CTX_new, HMAC_CTX_reset, HMAC_CTX_free, HMAC_Init, HMAC_Init_ex, HMAC_Update, HMAC_Final, HMAC_CTX_copy, HMAC_CTX_set_flags, HMAC_CTX_get_md, HMAC_size - HMAC message authentication code</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/hmac.h&gt;
+
+unsigned char *HMAC(const EVP_MD *evp_md, const void *key, int key_len,
+                    const unsigned char *data, size_t data_len,
+                    unsigned char *md, unsigned int *md_len);</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>HMAC_CTX *HMAC_CTX_new(void);
+int HMAC_CTX_reset(HMAC_CTX *ctx);
+
+int HMAC_Init_ex(HMAC_CTX *ctx, const void *key, int key_len,
+                 const EVP_MD *md, ENGINE *impl);
+int HMAC_Update(HMAC_CTX *ctx, const unsigned char *data, size_t len);
+int HMAC_Final(HMAC_CTX *ctx, unsigned char *md, unsigned int *len);
+
+void HMAC_CTX_free(HMAC_CTX *ctx);
+
+int HMAC_CTX_copy(HMAC_CTX *dctx, HMAC_CTX *sctx);
+void HMAC_CTX_set_flags(HMAC_CTX *ctx, unsigned long flags);
+const EVP_MD *HMAC_CTX_get_md(const HMAC_CTX *ctx);
+
+size_t HMAC_size(const HMAC_CTX *e);</code></pre>
+
+<p>The following function has been deprecated since OpenSSL 1.1.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>int HMAC_Init(HMAC_CTX *ctx, const void *key, int key_len,
+              const EVP_MD *md);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>HMAC is a MAC (message authentication code), i.e. a keyed hash function used for message authentication, which is based on a hash function.</p>
+
+<p>HMAC() computes the message authentication code of the <i>data_len</i> bytes at <i>data</i> using the hash function <i>evp_md</i> and the key <i>key</i> which is <i>key_len</i> bytes long. The <i>key</i> may also be NULL with <i>key_len</i> being 0.</p>
+
+<p>It places the result in <i>md</i> (which must have space for the output of the hash function, which is no more than <b>EVP_MAX_MD_SIZE</b> bytes). If <i>md</i> is NULL, the digest is placed in a static array. The size of the output is placed in <i>md_len</i>, unless it is NULL. Note: passing a NULL value for <i>md</i> to use the static array is not thread safe.</p>
+
+<p><i>evp_md</i> is a message digest such as EVP_sha1(), EVP_ripemd160() etc. HMAC does not support variable output length digests such as EVP_shake128() and EVP_shake256().</p>
+
+<p>HMAC() uses the default <b>OSSL_LIB_CTX</b>. Use <a href="../man3/EVP_Q_mac.html">EVP_Q_mac(3)</a> instead if a library context is required.</p>
+
+<p>All of the functions described below are deprecated. Applications should instead use <a href="../man3/EVP_MAC_CTX_new.html">EVP_MAC_CTX_new(3)</a>, <a href="../man3/EVP_MAC_CTX_free.html">EVP_MAC_CTX_free(3)</a>, <a href="../man3/EVP_MAC_init.html">EVP_MAC_init(3)</a>, <a href="../man3/EVP_MAC_update.html">EVP_MAC_update(3)</a> and <a href="../man3/EVP_MAC_final.html">EVP_MAC_final(3)</a> or the &#39;quick&#39; single-shot MAC function <a href="../man3/EVP_Q_mac.html">EVP_Q_mac(3)</a>.</p>
+
+<p>HMAC_CTX_new() creates a new HMAC_CTX in heap memory.</p>
+
+<p>HMAC_CTX_reset() clears an existing <b>HMAC_CTX</b> and associated resources, making it suitable for new computations as if it was newly created with HMAC_CTX_new().</p>
+
+<p>HMAC_CTX_free() erases the key and other data from the <b>HMAC_CTX</b>, releases any associated resources and finally frees the <b>HMAC_CTX</b> itself. If the argument is NULL, nothing is done.</p>
+
+<p>The following functions may be used if the message is not completely stored in memory:</p>
+
+<p>HMAC_Init_ex() initializes or reuses a <b>HMAC_CTX</b> structure to use the hash function <i>evp_md</i> and key <i>key</i>. If both are NULL, or if <i>key</i> is NULL and <i>evp_md</i> is the same as the previous call, then the existing key is reused. <i>ctx</i> must have been created with HMAC_CTX_new() before the first use of an <b>HMAC_CTX</b> in this function.</p>
+
+<p>If HMAC_Init_ex() is called with <i>key</i> NULL and <i>evp_md</i> is not the same as the previous digest used by <i>ctx</i> then an error is returned because reuse of an existing key with a different digest is not supported.</p>
+
+<p>HMAC_Init() initializes a <b>HMAC_CTX</b> structure to use the hash function <i>evp_md</i> and the key <i>key</i> which is <i>key_len</i> bytes long.</p>
+
+<p>HMAC_Update() can be called repeatedly with chunks of the message to be authenticated (<i>len</i> bytes at <i>data</i>).</p>
+
+<p>HMAC_Final() places the message authentication code in <i>md</i>, which must have space for the hash function output.</p>
+
+<p>HMAC_CTX_copy() copies all of the internal state from <i>sctx</i> into <i>dctx</i>.</p>
+
+<p>HMAC_CTX_set_flags() applies the specified flags to the internal EVP_MD_CTXs. These flags have the same meaning as for <a href="../man3/EVP_MD_CTX_set_flags.html">EVP_MD_CTX_set_flags(3)</a>.</p>
+
+<p>HMAC_CTX_get_md() returns the EVP_MD that has previously been set for the supplied HMAC_CTX.</p>
+
+<p>HMAC_size() returns the length in bytes of the underlying hash function output.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>HMAC() returns a pointer to the message authentication code or NULL if an error occurred.</p>
+
+<p>HMAC_CTX_new() returns a pointer to a new <b>HMAC_CTX</b> on success or NULL if an error occurred.</p>
+
+<p>HMAC_CTX_reset(), HMAC_Init_ex(), HMAC_Update(), HMAC_Final() and HMAC_CTX_copy() return 1 for success or 0 if an error occurred.</p>
+
+<p>HMAC_CTX_get_md() return the EVP_MD previously set for the supplied HMAC_CTX or NULL if no EVP_MD has been set.</p>
+
+<p>HMAC_size() returns the length in bytes of the underlying hash function output or zero on error.</p>
+
+<h1 id="CONFORMING-TO">CONFORMING TO</h1>
+
+<p>RFC 2104</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/SHA1.html">SHA1(3)</a>, EVP_Q_mac(3), <a href="../man7/evp.html">evp(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>All functions except for HMAC() were deprecated in OpenSSL 3.0.</p>
+
+<p>HMAC_CTX_init() was replaced with HMAC_CTX_reset() in OpenSSL 1.1.0.</p>
+
+<p>HMAC_CTX_cleanup() existed in OpenSSL before version 1.1.0.</p>
+
+<p>HMAC_CTX_new(), HMAC_CTX_free() and HMAC_CTX_get_md() are new in OpenSSL 1.1.0.</p>
+
+<p>HMAC_Init_ex(), HMAC_Update() and HMAC_Final() did not return values in OpenSSL before version 1.0.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

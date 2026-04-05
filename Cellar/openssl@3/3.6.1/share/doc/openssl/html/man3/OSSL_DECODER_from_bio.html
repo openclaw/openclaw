@@ -1,0 +1,134 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OSSL_DECODER_from_bio</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OSSL_DECODER_from_data, OSSL_DECODER_from_bio, OSSL_DECODER_from_fp - Routines to perform a decoding</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/decoder.h&gt;
+
+int OSSL_DECODER_from_bio(OSSL_DECODER_CTX *ctx, BIO *in);
+int OSSL_DECODER_from_fp(OSSL_DECODER_CTX *ctx, FILE *fp);
+int OSSL_DECODER_from_data(OSSL_DECODER_CTX *ctx, const unsigned char **pdata,
+                           size_t *pdata_len);</code></pre>
+
+<p>Feature availability macros:</p>
+
+<dl>
+
+<dt id="OSSL_DECODER_from_fp-is-only-available-when-OPENSSL_NO_STDIO-is-undefined">OSSL_DECODER_from_fp() is only available when <b>OPENSSL_NO_STDIO</b> is undefined.</dt>
+<dd>
+
+</dd>
+</dl>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>OSSL_DECODER_from_data() runs the decoding process for the context <i>ctx</i>, with input coming from <i>*pdata</i>, <i>*pdata_len</i> bytes long. Both <i>*pdata</i> and <i>*pdata_len</i> must be non-NULL. When OSSL_DECODER_from_data() returns, <i>*pdata</i> is updated to point at the location after what has been decoded, and <i>*pdata_len</i> to have the number of remaining bytes.</p>
+
+<p>OSSL_DECODER_from_bio() runs the decoding process for the context <i>ctx</i>, with the input coming from the <b>BIO</b> <i>in</i>. Should it make a difference, it&#39;s recommended to have the BIO set in binary mode rather than text mode.</p>
+
+<p>OSSL_DECODER_from_fp() does the same thing as OSSL_DECODER_from_bio(), except that the input is coming from the <b>FILE</b> <i>fp</i>.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>OSSL_DECODER_from_bio(), OSSL_DECODER_from_data() and OSSL_DECODER_from_fp() return 1 on success, or 0 on failure.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>To decode an RSA key encoded with PEM from a bio:</p>
+
+<pre><code>OSSL_DECODER_CTX *dctx;
+EVP_PKEY *pkey = NULL;
+const char *format = &quot;PEM&quot;;   /* NULL for any format */
+const char *structure = NULL; /* any structure */
+const char *keytype = &quot;RSA&quot;;  /* NULL for any key */
+const unsigned char *pass = &quot;my password&quot;;
+
+dctx = OSSL_DECODER_CTX_new_for_pkey(&amp;pkey, format, structure,
+                                     keytype,
+                                     OSSL_KEYMGMT_SELECT_KEYPAIR,
+                                     NULL, NULL);
+if (dctx == NULL) {
+    /* error: no suitable potential decoders found */
+}
+if (pass != NULL)
+    OSSL_DECODER_CTX_set_passphrase(dctx, pass, strlen(pass));
+if (OSSL_DECODER_from_bio(dctx, bio)) {
+    /* pkey is created with the decoded data from the bio */
+} else {
+    /* decoding failure */
+}
+OSSL_DECODER_CTX_free(dctx);</code></pre>
+
+<p>To decode an EC key encoded with DER from a buffer:</p>
+
+<pre><code>OSSL_DECODER_CTX *dctx;
+EVP_PKEY *pkey = NULL;
+const char *format = &quot;DER&quot;;   /* NULL for any format */
+const char *structure = NULL; /* any structure */
+const char *keytype = &quot;EC&quot;;   /* NULL for any key */
+const unsigned char *pass = NULL
+const unsigned char *data = buffer;
+size_t datalen = sizeof(buffer);
+
+dctx = OSSL_DECODER_CTX_new_for_pkey(&amp;pkey, format, structure,
+                                     keytype,
+                                     OSSL_KEYMGMT_SELECT_KEYPAIR
+                                     | OSSL_KEYMGMT_SELECT_DOMAIN_PARAMETERS,
+                                     NULL, NULL);
+if (dctx == NULL) {
+    /* error: no suitable potential decoders found */
+}
+if (pass != NULL)
+    OSSL_DECODER_CTX_set_passphrase(dctx, pass, strlen(pass));
+if (OSSL_DECODER_from_data(dctx, &amp;data, &amp;datalen)) {
+    /* pkey is created with the decoded data from the buffer */
+} else {
+    /* decoding failure */
+}
+OSSL_DECODER_CTX_free(dctx);</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/provider.html">provider(7)</a>, <a href="../man3/OSSL_DECODER_CTX.html">OSSL_DECODER_CTX(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The functions described here were added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2020-2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

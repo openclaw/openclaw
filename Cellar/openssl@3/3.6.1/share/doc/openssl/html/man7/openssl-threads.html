@@ -1,0 +1,69 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>openssl-threads</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#BUGS">BUGS</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>openssl-threads - Overview of thread safety in OpenSSL</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>In this man page, we use the term <b>thread-safe</b> to indicate that an object or function can be used by multiple threads at the same time.</p>
+
+<p>OpenSSL can be built with or without threads support. The most important use of this support is so that OpenSSL itself can use a single consistent API, as shown in <a href="../man3/CRYPTO_THREAD_run_once.html">&quot;EXAMPLES&quot; in CRYPTO_THREAD_run_once(3)</a>. Multi-platform applications can also use this API.</p>
+
+<p>In particular, being configured for threads support does not imply that all OpenSSL objects are thread-safe. To emphasize: <i>most objects are not safe for simultaneous use</i>. Exceptions to this should be documented on the specific manual pages, and some general high-level guidance is given here.</p>
+
+<p>One major use of the OpenSSL thread API is to implement reference counting. Many objects within OpenSSL are reference-counted, so resources are not released, until the last reference is removed. References are often increased automatically (such as when an <b>X509</b> certificate object is added into an <b>X509_STORE</b> trust store). There is often an <b><i>object</i>_up_ref</b>() function that can be used to increase the reference count. Failure to match <b><i>object</i>_up_ref</b>() calls with the right number of <b><i>object</i>_free</b>() calls is a common source of memory leaks when a program exits.</p>
+
+<p>Many objects have set and get API&#39;s to set attributes in the object. A <code>set0</code> passes ownership from the caller to the object and a <code>get0</code> returns a pointer but the attribute ownership remains with the object and a reference to it is returned. A <code>set1</code> or <code>get1</code> function does not change the ownership, but instead updates the attribute&#39;s reference count so that the object is shared between the caller and the object; the caller must free the returned attribute when finished. Functions that involve attributes that have reference counts themselves, but are named with just <code>set</code> or <code>get</code> are historical; and the documentation must state how the references are handled. Get methods are often thread-safe as long as the ownership requirements are met and shared objects are not modified. Set methods, or modifying shared objects, are generally not thread-safe as discussed below.</p>
+
+<p>Objects are thread-safe as long as the API&#39;s being invoked don&#39;t modify the object; in this case the parameter is usually marked in the API as <code>const</code>. Not all parameters are marked this way. Note that a <code>const</code> declaration does not mean immutable; for example <a href="../man3/X509_cmp.html">X509_cmp(3)</a> takes pointers to <code>const</code> objects, but the implementation uses a C cast to remove that so it can lock objects, generate and cache a DER encoding, and so on.</p>
+
+<p>Another instance of thread-safety is when updates to an object&#39;s internal state, such as cached values, are done with locks. One example of this is the reference counting API&#39;s described above.</p>
+
+<p>In all cases, however, it is generally not safe for one thread to mutate an object, such as setting elements of a private or public key, while another thread is using that object, such as verifying a signature.</p>
+
+<p>The same API&#39;s can usually be used simultaneously on different objects without interference. For example, two threads can calculate a signature using two different <b>EVP_PKEY_CTX</b> objects.</p>
+
+<p>For implicit global state or singletons, thread-safety depends on the facility. The <a href="../man3/CRYPTO_secure_malloc.html">CRYPTO_secure_malloc(3)</a> and related API&#39;s have their own lock, while <a href="../man3/CRYPTO_malloc.html">CRYPTO_malloc(3)</a> assumes the underlying platform allocation will do any necessary locking. Some API&#39;s, such as <a href="../man3/NCONF_load.html">NCONF_load(3)</a> and related do no locking at all; this can be considered a bug.</p>
+
+<p>A separate, although related, issue is modifying &quot;factory&quot; objects when other objects have been created from that. For example, an <b>SSL_CTX</b> object created by <a href="../man3/SSL_CTX_new.html">SSL_CTX_new(3)</a> is used to create per-connection <b>SSL</b> objects by calling <a href="../man3/SSL_new.html">SSL_new(3)</a>. In this specific case, and probably for factory methods in general, it is not safe to modify the factory object after it has been used to create other objects.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p>CRYPTO_THREAD_run_once(3), local system threads documentation.</p>
+
+<h1 id="BUGS">BUGS</h1>
+
+<p>This page is admittedly very incomplete.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

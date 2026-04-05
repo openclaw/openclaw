@@ -1,0 +1,52 @@
+.\"
+.\" Copyright 2024 by the c-ares project and its contributors
+.\" SPDX-License-Identifier: MIT
+.\"
+.TH ARES_QUEUE 3 "16 February 2024"
+.SH NAME
+ares_queue_wait_empty, ares_queue_active_queries \- Functions for checking the
+c-ares queue status
+.SH SYNOPSIS
+.nf
+#include <ares.h>
+
+size_t ares_queue_active_queries(const ares_channel_t *channel);
+
+ares_status_t ares_queue_wait_empty(ares_channel_t *channel,
+                                    int timeout_ms);
+.fi
+.SH DESCRIPTION
+The \fBares_queue_active_queries(3)\fP function retrieves the total number of
+active queries pending answers from servers. Some c-ares requests may spawn
+multiple queries, such as \fIares_getaddrinfo(3)\fP when using \fIAF_UNSPEC\fP,
+which will be reflected in this number. The \fBchannel\fP parameter must be set
+to an initialized channel.
+
+The \fBares_queue_wait_empty(3)\fP function blocks until notified that there are
+no longer any queries in queue, or the specified timeout has expired. The
+\fBchannel\fP parameter must be set to an initialized channel. The
+\fBtimeout_ms\fP parameter is the number of milliseconds to wait for the queue
+to be empty or -1 for Infinite.
+
+.SH RETURN VALUES
+\fIares_queue_active_queries(3)\fP returns the active query count.
+
+\fIares_queue_wait_empty(3)\fP can return any of the following values:
+.TP 14
+.B ARES_ENOTIMP
+if not built with threading support
+.TP 14
+.B ARES_ETIMEOUT
+if requested timeout expired
+.TP 14
+.B ARES_SUCCESS
+when queue is empty.
+.TP 14
+
+.SH AVAILABILITY
+This function was first introduced in c-ares version 1.27.0, and requires the
+c-ares library to be built with threading support.
+
+.SH SEE ALSO
+.BR ares_init_options (3),
+.BR ares_threadsafety (3)

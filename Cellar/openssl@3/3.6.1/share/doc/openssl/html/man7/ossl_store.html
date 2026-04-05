@@ -1,0 +1,110 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>ossl_store</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#General">General</a></li>
+      <li><a href="#URI-schemes-and-loaders">URI schemes and loaders</a></li>
+      <li><a href="#UI_METHOD-and-pass-phrases">UI_METHOD and pass phrases</a></li>
+    </ul>
+  </li>
+  <li><a href="#EXAMPLES">EXAMPLES</a>
+    <ul>
+      <li><a href="#A-generic-call">A generic call</a></li>
+    </ul>
+  </li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>ossl_store - Store retrieval functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<p>#include &lt;openssl/store.h&gt;</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<h2 id="General">General</h2>
+
+<p>A STORE is a layer of functionality to retrieve a number of supported objects from a repository of any kind, addressable as a filename or as a URI.</p>
+
+<p>The functionality supports the pattern &quot;open a channel to the repository&quot;, &quot;loop and retrieve one object at a time&quot;, and &quot;finish up by closing the channel&quot;.</p>
+
+<p>The retrieved objects are returned as a wrapper type <b>OSSL_STORE_INFO</b>, from which an OpenSSL type can be retrieved.</p>
+
+<h2 id="URI-schemes-and-loaders">URI schemes and loaders</h2>
+
+<p>Support for a URI scheme is called a STORE &quot;loader&quot;, and can be added dynamically from the calling application or from a loadable engine.</p>
+
+<p>Support for the &#39;file&#39; scheme is built into <code>libcrypto</code>. See <a href="../man7/ossl_store-file.html">ossl_store-file(7)</a> for more information.</p>
+
+<h2 id="UI_METHOD-and-pass-phrases">UI_METHOD and pass phrases</h2>
+
+<p>The <b>OSS_STORE</b> API does nothing to enforce any specific format or encoding on the pass phrase that the <b>UI_METHOD</b> provides. However, the pass phrase is expected to be UTF-8 encoded. The result of any other encoding is undefined.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<h2 id="A-generic-call">A generic call</h2>
+
+<pre><code>#include &lt;openssl/ui.h&gt; /* for UI_get_default_method */
+#include &lt;openssl/store.h&gt;
+
+OSSL_STORE_CTX *ctx = OSSL_STORE_open(&quot;file:/foo/bar/data.pem&quot;,
+                       UI_get_default_method(), NULL, NULL, NULL);
+
+/*
+ * OSSL_STORE_eof() simulates file semantics for any repository to signal
+ * that no more data can be expected
+ */
+while (!OSSL_STORE_eof(ctx)) {
+    OSSL_STORE_INFO *info = OSSL_STORE_load(ctx);
+
+    /*
+     * Do whatever is necessary with the OSSL_STORE_INFO,
+     * here just one example
+     */
+    switch (OSSL_STORE_INFO_get_type(info)) {
+    case OSSL_STORE_INFO_CERT:
+        /* Print the X.509 certificate text */
+        X509_print_fp(stdout, OSSL_STORE_INFO_get0_CERT(info));
+        /* Print the X.509 certificate PEM output */
+        PEM_write_X509(stdout, OSSL_STORE_INFO_get0_CERT(info));
+        break;
+    }
+    OSSL_STORE_INFO_free(info);
+}
+
+OSSL_STORE_close(ctx);</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/OSSL_STORE_INFO.html">OSSL_STORE_INFO(3)</a>, <a href="../man3/OSSL_STORE_LOADER.html">OSSL_STORE_LOADER(3)</a>, <a href="../man3/OSSL_STORE_open.html">OSSL_STORE_open(3)</a>, <a href="../man3/OSSL_STORE_expect.html">OSSL_STORE_expect(3)</a>, <a href="../man3/OSSL_STORE_SEARCH.html">OSSL_STORE_SEARCH(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2016-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

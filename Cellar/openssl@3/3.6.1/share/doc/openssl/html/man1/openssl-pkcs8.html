@@ -1,0 +1,292 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>openssl-pkcs8</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#OPTIONS">OPTIONS</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#PKCS-5-V1.5-AND-PKCS-12-ALGORITHMS">PKCS#5 V1.5 AND PKCS#12 ALGORITHMS</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#STANDARDS">STANDARDS</a></li>
+  <li><a href="#BUGS">BUGS</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>openssl-pkcs8 - PKCS#8 format private key conversion command</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<p><b>openssl</b> <b>pkcs8</b> [<b>-help</b>] [<b>-topk8</b>] [<b>-inform</b> <b>DER</b>|<b>PEM</b>] [<b>-outform</b> <b>DER</b>|<b>PEM</b>] [<b>-in</b> <i>filename</i>] [<b>-passin</b> <i>arg</i>] [<b>-out</b> <i>filename</i>] [<b>-passout</b> <i>arg</i>] [<b>-iter</b> <i>count</i>] [<b>-noiter</b>] [<b>-nocrypt</b>] [<b>-traditional</b>] [<b>-v2</b> <i>alg</i>] [<b>-v2prf</b> <i>alg</i>] [<b>-v1</b> <i>alg</i>] [<b>-scrypt</b>] [<b>-scrypt_N</b> <i>N</i>] [<b>-scrypt_r</b> <i>r</i>] [<b>-scrypt_p</b> <i>p</i>] [<b>-saltlen</b> <i>size</i>] [<b>-rand</b> <i>files</i>] [<b>-writerand</b> <i>file</i>] [<b>-engine</b> <i>id</i>] [<b>-provider</b> <i>name</i>] [<b>-provider-path</b> <i>path</i>] [<b>-provparam</b> <i>[name:]key=value</i>] [<b>-propquery</b> <i>propq</i>]</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>This command processes private keys in PKCS#8 format. It can handle both unencrypted PKCS#8 PrivateKeyInfo format and EncryptedPrivateKeyInfo format with a variety of PKCS#5 (v1.5 and v2.0) and PKCS#12 algorithms.</p>
+
+<h1 id="OPTIONS">OPTIONS</h1>
+
+<dl>
+
+<dt id="help"><b>-help</b></dt>
+<dd>
+
+<p>Print out a usage message.</p>
+
+</dd>
+<dt id="topk8"><b>-topk8</b></dt>
+<dd>
+
+<p>Normally a PKCS#8 private key is expected on input and a private key will be written to the output file. With the <b>-topk8</b> option the situation is reversed: it reads a private key and writes a PKCS#8 format key.</p>
+
+</dd>
+<dt id="inform-DER-PEM--outform-DER-PEM"><b>-inform</b> <b>DER</b>|<b>PEM</b>, <b>-outform</b> <b>DER</b>|<b>PEM</b></dt>
+<dd>
+
+<p>The input and formats; the default is <b>PEM</b>. See <a href="../man1/openssl-format-options.html">openssl-format-options(1)</a> for details.</p>
+
+<p>If a key is being converted from PKCS#8 form (i.e. the <b>-topk8</b> option is not used) then the input file must be in PKCS#8 format. An encrypted key is expected unless <b>-nocrypt</b> is included.</p>
+
+<p>If <b>-topk8</b> is not used and <b>PEM</b> mode is set the output file will be an unencrypted private key in PKCS#8 format. If the <b>-traditional</b> option is used then a traditional format private key is written instead.</p>
+
+<p>If <b>-topk8</b> is not used and <b>DER</b> mode is set the output file will be an unencrypted private key in traditional DER format.</p>
+
+<p>If <b>-topk8</b> is used then any supported private key can be used for the input file in a format specified by <b>-inform</b>. The output file will be encrypted PKCS#8 format using the specified encryption parameters unless <b>-nocrypt</b> is included.</p>
+
+</dd>
+<dt id="traditional"><b>-traditional</b></dt>
+<dd>
+
+<p>When this option is present and <b>-topk8</b> is not a traditional format private key is written.</p>
+
+</dd>
+<dt id="in-filename"><b>-in</b> <i>filename</i></dt>
+<dd>
+
+<p>This specifies the input file to read a key from or standard input if this option is not specified. If the key is encrypted a pass phrase will be prompted for unless <b>-passin</b> is given.</p>
+
+</dd>
+<dt id="passin-arg--passout-arg"><b>-passin</b> <i>arg</i>, <b>-passout</b> <i>arg</i></dt>
+<dd>
+
+<p>The password source for the input and output file. For more information about the format of <b>arg</b> see <a href="../man1/openssl-passphrase-options.html">openssl-passphrase-options(1)</a>.</p>
+
+</dd>
+<dt id="out-filename"><b>-out</b> <i>filename</i></dt>
+<dd>
+
+<p>This specifies the output file to write a key to or standard output by default. The output filename can be the same as the input filename, which leads to replacing the file contents. Note that file I/O is not atomic. The output file is truncated and then written.</p>
+
+<p>If any encryption options are set and <b>-passout</b> is not given then a pass phrase will be prompted for. When password input is interrupted, the output file is not touched.</p>
+
+</dd>
+<dt id="iter-count"><b>-iter</b> <i>count</i></dt>
+<dd>
+
+<p>When creating new PKCS#8 containers, use a given number of iterations on the password in deriving the encryption key for the PKCS#8 output. High values increase the time required to brute-force a PKCS#8 container.</p>
+
+</dd>
+<dt id="noiter"><b>-noiter</b></dt>
+<dd>
+
+<p>When creating new PKCS#8 containers, use 1 as iteration count.</p>
+
+</dd>
+<dt id="nocrypt"><b>-nocrypt</b></dt>
+<dd>
+
+<p>PKCS#8 keys generated or input are normally PKCS#8 EncryptedPrivateKeyInfo structures using an appropriate password based encryption algorithm. With this option an unencrypted PrivateKeyInfo structure is expected or output. This option does not encrypt private keys at all and should only be used when absolutely necessary. Certain software such as some versions of Java code signing software used unencrypted private keys.</p>
+
+</dd>
+<dt id="v2-alg"><b>-v2</b> <i>alg</i></dt>
+<dd>
+
+<p>This option sets the PKCS#5 v2.0 algorithm.</p>
+
+<p>The <i>alg</i> argument is the encryption algorithm to use, valid values include <b>aes128</b>, <b>aes256</b> and <b>des3</b>. If this option isn&#39;t specified then <b>aes256</b> is used.</p>
+
+</dd>
+<dt id="v2prf-alg"><b>-v2prf</b> <i>alg</i></dt>
+<dd>
+
+<p>This option sets the PRF algorithm to use with PKCS#5 v2.0. A typical valid value would be <b>hmacWithSHA256</b>. If this option isn&#39;t set then the default for the cipher is used or <b>hmacWithSHA256</b> if there is no default.</p>
+
+<p>Some implementations may not support custom PRF algorithms and may require the <b>hmacWithSHA1</b> option to work.</p>
+
+</dd>
+<dt id="v1-alg"><b>-v1</b> <i>alg</i></dt>
+<dd>
+
+<p>This option indicates a PKCS#5 v1.5 or PKCS#12 algorithm should be used. Some older implementations may not support PKCS#5 v2.0 and may require this option. If not specified PKCS#5 v2.0 form is used.</p>
+
+</dd>
+<dt id="scrypt"><b>-scrypt</b></dt>
+<dd>
+
+<p>Uses the <b>scrypt</b> algorithm for private key encryption using default parameters: currently N=16384, r=8 and p=1 and AES in CBC mode with a 256 bit key. These parameters can be modified using the <b>-scrypt_N</b>, <b>-scrypt_r</b>, <b>-scrypt_p</b> and <b>-v2</b> options.</p>
+
+</dd>
+<dt id="scrypt_N-N--scrypt_r-r--scrypt_p-p"><b>-scrypt_N</b> <i>N</i>, <b>-scrypt_r</b> <i>r</i>, <b>-scrypt_p</b> <i>p</i></dt>
+<dd>
+
+<p>Sets the scrypt <i>N</i>, <i>r</i> or <i>p</i> parameters.</p>
+
+</dd>
+<dt id="saltlen"><b>-saltlen</b></dt>
+<dd>
+
+<p>Sets the length (in bytes) of the salt to use for the PBE algorithm. If this value is not specified, the default for PBES2 is 16 (128 bits) and 8 (64 bits) for PBES1.</p>
+
+</dd>
+<dt id="rand-files--writerand-file"><b>-rand</b> <i>files</i>, <b>-writerand</b> <i>file</i></dt>
+<dd>
+
+<p>See <a href="../man1/openssl.html">&quot;Random State Options&quot; in openssl(1)</a> for details.</p>
+
+</dd>
+<dt id="engine-id"><b>-engine</b> <i>id</i></dt>
+<dd>
+
+<p>See <a href="../man1/openssl.html">&quot;Engine Options&quot; in openssl(1)</a>. This option is deprecated.</p>
+
+</dd>
+<dt id="provider-name"><b>-provider</b> <i>name</i></dt>
+<dd>
+
+</dd>
+<dt id="provider-path-path"><b>-provider-path</b> <i>path</i></dt>
+<dd>
+
+</dd>
+<dt id="provparam-name:-key-value"><b>-provparam</b> <i>[name:]key=value</i></dt>
+<dd>
+
+</dd>
+<dt id="propquery-propq"><b>-propquery</b> <i>propq</i></dt>
+<dd>
+
+<p>See <a href="../man1/openssl.html">&quot;Provider Options&quot; in openssl(1)</a>, <a href="../man7/provider.html">provider(7)</a>, and <a href="../man7/property.html">property(7)</a>.</p>
+
+</dd>
+</dl>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>By default, when converting a key to PKCS#8 format, PKCS#5 v2.0 using 256 bit AES with HMAC and SHA256 is used.</p>
+
+<p>Some older implementations do not support PKCS#5 v2.0 format and require the older PKCS#5 v1.5 form instead, possibly also requiring insecure weak encryption algorithms such as 56 bit DES.</p>
+
+<p>Private keys encrypted using PKCS#5 v2.0 algorithms and high iteration counts are more secure that those encrypted using the traditional SSLeay compatible formats. So if additional security is considered important the keys should be converted.</p>
+
+<p>It is possible to write out DER encoded encrypted private keys in PKCS#8 format because the encryption details are included at an ASN1 level whereas the traditional format includes them at a PEM level.</p>
+
+<h1 id="PKCS-5-V1.5-AND-PKCS-12-ALGORITHMS">PKCS#5 V1.5 AND PKCS#12 ALGORITHMS</h1>
+
+<p>Various algorithms can be used with the <b>-v1</b> command line option, including PKCS#5 v1.5 and PKCS#12. These are described in more detail below.</p>
+
+<dl>
+
+<dt id="PBE-MD2-DES-PBE-MD5-DES"><b>PBE-MD2-DES PBE-MD5-DES</b></dt>
+<dd>
+
+<p>These algorithms were included in the original PKCS#5 v1.5 specification. They only offer 56 bits of protection since they both use DES.</p>
+
+</dd>
+<dt id="PBE-SHA1-RC2-64-PBE-MD2-RC2-64-PBE-MD5-RC2-64-PBE-SHA1-DES"><b>PBE-SHA1-RC2-64</b>, <b>PBE-MD2-RC2-64</b>, <b>PBE-MD5-RC2-64</b>, <b>PBE-SHA1-DES</b></dt>
+<dd>
+
+<p>These algorithms are not mentioned in the original PKCS#5 v1.5 specification but they use the same key derivation algorithm and are supported by some software. They are mentioned in PKCS#5 v2.0. They use either 64 bit RC2 or 56 bit DES.</p>
+
+</dd>
+<dt id="PBE-SHA1-RC4-128-PBE-SHA1-RC4-40-PBE-SHA1-3DES-PBE-SHA1-2DES-PBE-SHA1-RC2-128-PBE-SHA1-RC2-40"><b>PBE-SHA1-RC4-128</b>, <b>PBE-SHA1-RC4-40</b>, <b>PBE-SHA1-3DES</b>, <b>PBE-SHA1-2DES</b>, <b>PBE-SHA1-RC2-128</b>, <b>PBE-SHA1-RC2-40</b></dt>
+<dd>
+
+<p>These algorithms use the PKCS#12 password based encryption algorithm and allow strong encryption algorithms like triple DES or 128 bit RC2 to be used.</p>
+
+</dd>
+</dl>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>Convert a private key to PKCS#8 format using default parameters (AES with 256 bit key and <b>hmacWithSHA256</b>):</p>
+
+<pre><code>openssl pkcs8 -in key.pem -topk8 -out enckey.pem</code></pre>
+
+<p>Convert a private key to PKCS#8 unencrypted format:</p>
+
+<pre><code>openssl pkcs8 -in key.pem -topk8 -nocrypt -out enckey.pem</code></pre>
+
+<p>Convert a private key to PKCS#5 v2.0 format using triple DES:</p>
+
+<pre><code>openssl pkcs8 -in key.pem -topk8 -v2 des3 -out enckey.pem</code></pre>
+
+<p>Convert a private key to PKCS#5 v2.0 format using AES with 256 bits in CBC mode and <b>hmacWithSHA512</b> PRF:</p>
+
+<pre><code>openssl pkcs8 -in key.pem -topk8 -v2 aes-256-cbc -v2prf hmacWithSHA512 -out enckey.pem</code></pre>
+
+<p>Convert a private key to PKCS#8 using a PKCS#5 1.5 compatible algorithm (DES):</p>
+
+<pre><code>openssl pkcs8 -in key.pem -topk8 -v1 PBE-MD5-DES -out enckey.pem</code></pre>
+
+<p>Convert a private key to PKCS#8 using a PKCS#12 compatible algorithm (3DES):</p>
+
+<pre><code>openssl pkcs8 -in key.pem -topk8 -out enckey.pem -v1 PBE-SHA1-3DES</code></pre>
+
+<p>Read a DER unencrypted PKCS#8 format private key:</p>
+
+<pre><code>openssl pkcs8 -inform DER -nocrypt -in key.der -out key.pem</code></pre>
+
+<p>Convert a private key from any PKCS#8 encrypted format to traditional format:</p>
+
+<pre><code>openssl pkcs8 -in pk8.pem -traditional -out key.pem</code></pre>
+
+<p>Convert a private key to PKCS#8 format, encrypting with AES-256 and with one million iterations of the password:</p>
+
+<pre><code>openssl pkcs8 -in key.pem -topk8 -v2 aes-256-cbc -iter 1000000 -out pk8.pem</code></pre>
+
+<h1 id="STANDARDS">STANDARDS</h1>
+
+<p>Test vectors from this PKCS#5 v2.0 implementation were posted to the pkcs-tng mailing list using triple DES, DES and RC2 with high iteration counts, several people confirmed that they could decrypt the private keys produced and therefore, it can be assumed that the PKCS#5 v2.0 implementation is reasonably accurate at least as far as these algorithms are concerned.</p>
+
+<p>The format of PKCS#8 DSA (and other) private keys is not well documented: it is hidden away in PKCS#11 v2.01, section 11.9. OpenSSL&#39;s default DSA PKCS#8 private key format complies with this standard.</p>
+
+<h1 id="BUGS">BUGS</h1>
+
+<p>There should be an option that prints out the encryption algorithm in use and other details such as the iteration count.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man1/openssl.html">openssl(1)</a>, <a href="../man1/openssl-dsa.html">openssl-dsa(1)</a>, <a href="../man1/openssl-rsa.html">openssl-rsa(1)</a>, <a href="../man1/openssl-genrsa.html">openssl-genrsa(1)</a>, <a href="../man1/openssl-gendsa.html">openssl-gendsa(1)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The <b>-iter</b> option was added in OpenSSL 1.1.0.</p>
+
+<p>The <b>-engine</b> option was deprecated in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

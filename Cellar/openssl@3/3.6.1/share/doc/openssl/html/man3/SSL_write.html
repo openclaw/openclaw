@@ -1,0 +1,154 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_write</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#WARNINGS">WARNINGS</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_write_ex2, SSL_write_ex, SSL_write, SSL_sendfile, SSL_WRITE_FLAG_CONCLUDE - write bytes to a TLS/SSL connection</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+#define SSL_WRITE_FLAG_CONCLUDE
+
+ossl_ssize_t SSL_sendfile(SSL *s, int fd, off_t offset, size_t size, int flags);
+int SSL_write_ex2(SSL *s, const void *buf, size_t num,
+                  uint64_t flags,
+                  size_t *written);
+int SSL_write_ex(SSL *s, const void *buf, size_t num, size_t *written);
+int SSL_write(SSL *ssl, const void *buf, int num);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_write_ex() and SSL_write() write <b>num</b> bytes from the buffer <b>buf</b> into the specified <b>ssl</b> connection. On success SSL_write_ex() will store the number of bytes written in <b>*written</b>.</p>
+
+<p>SSL_write_ex2() functions similarly to SSL_write_ex() but can also accept optional flags which modify its behaviour. Calling SSL_write_ex2() with a <i>flags</i> argument of 0 is exactly equivalent to calling SSL_write_ex().</p>
+
+<p>SSL_sendfile() writes <b>size</b> bytes from offset <b>offset</b> in the file descriptor <b>fd</b> to the specified SSL connection <b>s</b>. This function provides efficient zero-copy semantics. SSL_sendfile() is available only when Kernel TLS is enabled, which can be checked by calling BIO_get_ktls_send(). It is provided here to allow users to maintain the same interface. The meaning of <b>flags</b> is platform dependent. Currently, under Linux it is ignored.</p>
+
+<p>The <i>flags</i> argument to SSL_write_ex2() can accept zero or more of the following flags. Note that which flags are supported will depend on the kind of SSL object and underlying protocol being used:</p>
+
+<dl>
+
+<dt id="SSL_WRITE_FLAG_CONCLUDE"><b>SSL_WRITE_FLAG_CONCLUDE</b></dt>
+<dd>
+
+<p>This flag is only supported on QUIC stream SSL objects (or QUIC connection SSL objects with a default stream attached).</p>
+
+<p>If this flag is set, and the call to SSL_write_ex2() succeeds, and all of the data passed to the call is written (meaning that <code>*written == num</code>), the relevant QUIC stream&#39;s send part is concluded automatically as though <a href="../man3/SSL_stream_conclude.html">SSL_stream_conclude(3)</a> was called (causing transmission of a FIN for the stream).</p>
+
+<p>While using this flag is semantically equivalent to calling <a href="../man3/SSL_stream_conclude.html">SSL_stream_conclude(3)</a> after a successful call to this function, using this flag enables greater efficiency than making these two API calls separately, as it enables the written stream data and the FIN flag indicating the end of the stream to be scheduled as part of the same QUIC STREAM frame and QUIC packet.</p>
+
+<p>Setting this flag does not cause a stream&#39;s send part to be concluded if not all of the data passed to the call was consumed.</p>
+
+</dd>
+</dl>
+
+<p>A call to SSL_write_ex2() fails if a flag is passed which is not supported or understood by the given SSL object. An application should determine if a flag is supported (for example, for <b>SSL_WRITE_FLAG_CONCLUDE</b>, that a QUIC stream SSL object is being used) before attempting to use it.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>In the paragraphs below a &quot;write function&quot; is defined as one of either SSL_write_ex(), or SSL_write().</p>
+
+<p>If necessary, a write function will negotiate a TLS/SSL session, if not already explicitly performed by <a href="../man3/SSL_connect.html">SSL_connect(3)</a> or <a href="../man3/SSL_accept.html">SSL_accept(3)</a>. If the peer requests a re-negotiation, it will be performed transparently during the write function operation. The behaviour of the write functions depends on the underlying BIO.</p>
+
+<p>For the transparent negotiation to succeed, the <b>ssl</b> must have been initialized to client or server mode. This is being done by calling <a href="../man3/SSL_set_connect_state.html">SSL_set_connect_state(3)</a> or SSL_set_accept_state() before the first call to a write function.</p>
+
+<p>If the underlying BIO is <b>blocking</b>, the write functions will only return, once the write operation has been finished or an error occurred.</p>
+
+<p>If the underlying BIO is <b>nonblocking</b> the write functions will also return when the underlying BIO could not satisfy the needs of the function to continue the operation. In this case a call to <a href="../man3/SSL_get_error.html">SSL_get_error(3)</a> with the return value of the write function will yield <b>SSL_ERROR_WANT_READ</b> or <b>SSL_ERROR_WANT_WRITE</b>. As at any time a re-negotiation is possible, a call to a write function can also cause read operations! The calling process then must repeat the call after taking appropriate action to satisfy the needs of the write function. The action depends on the underlying BIO. When using a nonblocking socket, nothing is to be done, but select() can be used to check for the required condition. When using a buffering BIO, like a BIO pair, data must be written into or retrieved out of the BIO before being able to continue.</p>
+
+<p>The write functions will only return with success when the complete contents of <b>buf</b> of length <b>num</b> has been written. This default behaviour can be changed with the SSL_MODE_ENABLE_PARTIAL_WRITE option of <a href="../man3/SSL_CTX_set_mode.html">SSL_CTX_set_mode(3)</a>. When this flag is set the write functions will also return with success when a partial write has been successfully completed. In this case the write function operation is considered completed. The bytes are sent and a new write call with a new buffer (with the already sent bytes removed) must be started. A partial write is performed with the size of a message block, which is 16kB.</p>
+
+<p>When used with a QUIC SSL object, calling an I/O function such as SSL_write() allows internal network event processing to be performed. It is important that this processing is performed regularly. If an application is not using thread assisted mode, an application should ensure that an I/O function such as SSL_write() is called regularly, or alternatively ensure that SSL_handle_events() is called regularly. See <a href="../man7/openssl-quic.html">openssl-quic(7)</a> and <a href="../man3/SSL_handle_events.html">SSL_handle_events(3)</a> for more information.</p>
+
+<h1 id="WARNINGS">WARNINGS</h1>
+
+<p>When a write function call has to be repeated because <a href="../man3/SSL_get_error.html">SSL_get_error(3)</a> returned <b>SSL_ERROR_WANT_READ</b> or <b>SSL_ERROR_WANT_WRITE</b>, it must be repeated with the same arguments. The data that was passed might have been partially processed. When <b>SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER</b> was set using <a href="../man3/SSL_CTX_set_mode.html">SSL_CTX_set_mode(3)</a> the pointer can be different, but the data and length should still be the same.</p>
+
+<p>You should not call SSL_write() with num=0, it will return an error. SSL_write_ex() can be called with num=0, but will not send application data to the peer.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_write_ex() and SSL_write_ex2() return 1 for success or 0 for failure. Success means that all requested application data bytes have been written to the SSL connection or, if SSL_MODE_ENABLE_PARTIAL_WRITE is in use, at least 1 application data byte has been written to the SSL connection. Failure means that not all the requested bytes have been written yet (if SSL_MODE_ENABLE_PARTIAL_WRITE is not in use) or no bytes could be written to the SSL connection (if SSL_MODE_ENABLE_PARTIAL_WRITE is in use). Failures can be retryable (e.g. the network write buffer has temporarily filled up) or non-retryable (e.g. a fatal network error). In the event of a failure call <a href="../man3/SSL_get_error.html">SSL_get_error(3)</a> to find out the reason which indicates whether the call is retryable or not.</p>
+
+<p>For SSL_write() the following return values can occur:</p>
+
+<dl>
+
+<dt id="pod0">&gt; 0</dt>
+<dd>
+
+<p>The write operation was successful, the return value is the number of bytes actually written to the TLS/SSL connection.</p>
+
+</dd>
+<dt id="pod-0">&lt;= 0</dt>
+<dd>
+
+<p>The write operation was not successful, because either the connection was closed, an error occurred or action must be taken by the calling process. Call SSL_get_error() with the return value <b>ret</b> to find out the reason.</p>
+
+<p>Old documentation indicated a difference between 0 and -1, and that -1 was retryable. You should instead call SSL_get_error() to find out if it&#39;s retryable.</p>
+
+</dd>
+</dl>
+
+<p>For SSL_sendfile(), the following return values can occur:</p>
+
+<dl>
+
+<dt id="pod-01">&gt;= 0</dt>
+<dd>
+
+<p>The write operation was successful, the return value is the number of bytes of the file written to the TLS/SSL connection. The return value can be less than <b>size</b> for a partial write.</p>
+
+</dd>
+<dt id="pod01">&lt; 0</dt>
+<dd>
+
+<p>The write operation was not successful, because either the connection was closed, an error occurred or action must be taken by the calling process. Call SSL_get_error() with the return value to find out the reason.</p>
+
+</dd>
+</dl>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/SSL_get_error.html">SSL_get_error(3)</a>, <a href="../man3/SSL_read_ex.html">SSL_read_ex(3)</a>, <a href="../man3/SSL_read.html">SSL_read(3)</a> <a href="../man3/SSL_CTX_set_mode.html">SSL_CTX_set_mode(3)</a>, <a href="../man3/SSL_CTX_new.html">SSL_CTX_new(3)</a>, <a href="../man3/SSL_connect.html">SSL_connect(3)</a>, <a href="../man3/SSL_accept.html">SSL_accept(3)</a> <a href="../man3/SSL_set_connect_state.html">SSL_set_connect_state(3)</a>, <a href="../man3/BIO_ctrl.html">BIO_ctrl(3)</a>, <a href="../man7/ssl.html">ssl(7)</a>, <a href="../man7/bio.html">bio(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The SSL_write_ex() function was added in OpenSSL 1.1.1. The SSL_sendfile() function was added in OpenSSL 3.0. The SSL_write_ex2() function was added in OpenSSL 3.3.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

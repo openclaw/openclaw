@@ -1,0 +1,115 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>X509_NAME_get_index_by_NID</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>X509_NAME_get_index_by_NID, X509_NAME_get_index_by_OBJ, X509_NAME_get_entry, X509_NAME_entry_count, X509_NAME_get_text_by_NID, X509_NAME_get_text_by_OBJ - X509_NAME lookup and enumeration functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/x509.h&gt;
+
+int X509_NAME_get_index_by_NID(const X509_NAME *name, int nid, int lastpos);
+int X509_NAME_get_index_by_OBJ(const X509_NAME *name,
+                               const ASN1_OBJECT *obj, int lastpos);
+
+int X509_NAME_entry_count(const X509_NAME *name);
+X509_NAME_ENTRY *X509_NAME_get_entry(const X509_NAME *name, int loc);
+
+int X509_NAME_get_text_by_NID(const X509_NAME *name, int nid,
+                              char *buf, int len);
+int X509_NAME_get_text_by_OBJ(const X509_NAME *name, const ASN1_OBJECT *obj,
+                              char *buf, int len);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>These functions allow an <b>X509_NAME</b> structure to be examined. The <b>X509_NAME</b> structure is the same as the <b>Name</b> type defined in RFC 5280 (and elsewhere) and used for example in certificate subject and issuer names.</p>
+
+<p>X509_NAME_get_index_by_NID() and X509_NAME_get_index_by_OBJ() retrieve the next index matching <b>nid</b> or <b>obj</b> after <b>lastpos</b>. <b>lastpos</b> should initially be set to -1. If there are no more entries -1 is returned. If <b>nid</b> is invalid (doesn&#39;t correspond to a valid OID) then -2 is returned.</p>
+
+<p>X509_NAME_entry_count() returns the total number of entries in <b>name</b>.</p>
+
+<p>X509_NAME_get_entry() retrieves the <b>X509_NAME_ENTRY</b> from <b>name</b> corresponding to index <b>loc</b>. Acceptable values for <b>loc</b> run from 0 to (X509_NAME_entry_count(name) - 1). The value returned is an internal pointer which must not be freed.</p>
+
+<p>X509_NAME_get_text_by_NID(), X509_NAME_get_text_by_OBJ() retrieve the &quot;text&quot; from the first entry in <b>name</b> which matches <b>nid</b> or <b>obj</b>, if no such entry exists -1 is returned. At most <b>len</b> bytes will be written and the text written to <b>buf</b> will be null terminated. The length of the output string written is returned excluding the terminating null. If <b>buf</b> is &lt;NULL&gt; then the amount of space needed in <b>buf</b> (excluding the final null) is returned.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>X509_NAME_get_text_by_NID() and X509_NAME_get_text_by_OBJ() should be considered deprecated because they have various limitations which make them of minimal use in practice. They can only find the first matching entry and will copy the contents of the field verbatim: this can be highly confusing if the target is a multicharacter string type like a BMPString or a UTF8String.</p>
+
+<p>For a more general solution X509_NAME_get_index_by_NID() or X509_NAME_get_index_by_OBJ() should be used followed by X509_NAME_get_entry() on any matching indices and then the various <b>X509_NAME_ENTRY</b> utility functions on the result.</p>
+
+<p>The list of all relevant <b>NID_*</b> and <b>OBJ_* codes</b> can be found in the source code header files <i>&lt;openssl/obj_mac.h&gt;</i> and/or <i>&lt;openssl/objects.h&gt;</i>.</p>
+
+<p>Applications which could pass invalid NIDs to X509_NAME_get_index_by_NID() should check for the return value of -2. Alternatively the NID validity can be determined first by checking OBJ_nid2obj(nid) is not NULL.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>X509_NAME_get_index_by_NID() and X509_NAME_get_index_by_OBJ() return the index of the next matching entry or -1 if not found. X509_NAME_get_index_by_NID() can also return -2 if the supplied NID is invalid.</p>
+
+<p>X509_NAME_entry_count() returns the total number of entries, and 0 for failure.</p>
+
+<p>X509_NAME_get_entry() returns an <b>X509_NAME</b> pointer to the requested entry or <b>NULL</b> if the index is invalid.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>Process all entries:</p>
+
+<pre><code>int i;
+X509_NAME_ENTRY *e;
+
+for (i = 0; i &lt; X509_NAME_entry_count(nm); i++) {
+    e = X509_NAME_get_entry(nm, i);
+    /* Do something with e */
+}</code></pre>
+
+<p>Process all commonName entries:</p>
+
+<pre><code>int lastpos = -1;
+X509_NAME_ENTRY *e;
+
+for (;;) {
+    lastpos = X509_NAME_get_index_by_NID(nm, NID_commonName, lastpos);
+    if (lastpos == -1)
+        break;
+    e = X509_NAME_get_entry(nm, lastpos);
+    /* Do something with e */
+}</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>, <a href="../man3/d2i_X509_NAME.html">d2i_X509_NAME(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2002-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

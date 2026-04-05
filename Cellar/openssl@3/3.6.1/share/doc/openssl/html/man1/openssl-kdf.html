@@ -1,0 +1,258 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>openssl-kdf</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#OPTIONS">OPTIONS</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>openssl-kdf - perform Key Derivation Function operations</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<p><b>openssl kdf</b> [<b>-help</b>] [<b>-cipher</b>] [<b>-digest</b>] [<b>-mac</b>] [<b>-kdfopt</b> <i>nm</i>:<i>v</i>] [<b>-keylen</b> <i>num</i>] [<b>-out</b> <i>filename</i>] [<b>-binary</b>] [<b>-provider</b> <i>name</i>] [<b>-provider-path</b> <i>path</i>] [<b>-provparam</b> <i>[name:]key=value</i>] [<b>-propquery</b> <i>propq</i>] <i>kdf_name</i></p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The key derivation functions generate a derived key from either a secret or password.</p>
+
+<h1 id="OPTIONS">OPTIONS</h1>
+
+<dl>
+
+<dt id="help"><b>-help</b></dt>
+<dd>
+
+<p>Print a usage message.</p>
+
+</dd>
+<dt id="keylen-num"><b>-keylen</b> <i>num</i></dt>
+<dd>
+
+<p>The output size of the derived key. This field is required.</p>
+
+</dd>
+<dt id="out-filename"><b>-out</b> <i>filename</i></dt>
+<dd>
+
+<p>Filename to output to, or standard output by default.</p>
+
+</dd>
+<dt id="binary"><b>-binary</b></dt>
+<dd>
+
+<p>Output the derived key in binary form. Uses hexadecimal text format if not specified.</p>
+
+</dd>
+<dt id="cipher-name"><b>-cipher</b> <i>name</i></dt>
+<dd>
+
+<p>Specify the cipher to be used by the KDF. Not all KDFs require a cipher and it is an error to use this option in such cases.</p>
+
+</dd>
+<dt id="digest-name"><b>-digest</b> <i>name</i></dt>
+<dd>
+
+<p>Specify the digest to be used by the KDF. Not all KDFs require a digest and it is an error to use this option in such cases. To see the list of supported digests, use <code>openssl list -digest-commands</code>.</p>
+
+</dd>
+<dt id="mac-name"><b>-mac</b> <i>name</i></dt>
+<dd>
+
+<p>Specify the MAC to be used by the KDF. Not all KDFs require a MAC and it is an error to use this option in such cases.</p>
+
+</dd>
+<dt id="kdfopt-nm:v"><b>-kdfopt</b> <i>nm</i>:<i>v</i></dt>
+<dd>
+
+<p>Passes options to the KDF algorithm. A comprehensive list of parameters can be found in <a href="../man3/EVP_KDF.html">&quot;PARAMETERS&quot; in EVP_KDF(3)</a>. Common parameter names used by EVP_KDF_CTX_set_params() are:</p>
+
+<dl>
+
+<dt id="key:string"><b>key:</b><i>string</i></dt>
+<dd>
+
+<p>Specifies the secret key as an alphanumeric string (use if the key contains printable characters only). The string length must conform to any restrictions of the KDF algorithm. A key must be specified for most KDF algorithms.</p>
+
+</dd>
+<dt id="hexkey:string"><b>hexkey:</b><i>string</i></dt>
+<dd>
+
+<p>Alternative to the <b>key:</b> option where the secret key is specified in hexadecimal form (two hex digits per byte).</p>
+
+</dd>
+<dt id="pass:string"><b>pass:</b><i>string</i></dt>
+<dd>
+
+<p>Specifies the password as an alphanumeric string (use if the password contains printable characters only). The password must be specified for PBKDF2 and scrypt.</p>
+
+</dd>
+<dt id="hexpass:string"><b>hexpass:</b><i>string</i></dt>
+<dd>
+
+<p>Alternative to the <b>pass:</b> option where the password is specified in hexadecimal form (two hex digits per byte).</p>
+
+</dd>
+<dt id="salt:string"><b>salt:</b><i>string</i></dt>
+<dd>
+
+<p>Specifies a non-secret unique cryptographic salt as an alphanumeric string (use if it contains printable characters only). The length must conform to any restrictions of the KDF algorithm. A salt parameter is required for several KDF algorithms, such as <a href="../man7/EVP_KDF-PBKDF2.html">EVP_KDF-PBKDF2(7)</a>.</p>
+
+</dd>
+<dt id="hexsalt:string"><b>hexsalt:</b><i>string</i></dt>
+<dd>
+
+<p>Alternative to the <b>salt:</b> option where the salt is specified in hexadecimal form (two hex digits per byte).</p>
+
+</dd>
+<dt id="info:string"><b>info:</b><i>string</i></dt>
+<dd>
+
+<p>Some KDF implementations, such as <a href="../man7/EVP_KDF-HKDF.html">EVP_KDF-HKDF(7)</a>, take an &#39;info&#39; parameter for binding the derived key material to application- and context-specific information. Specifies the info, fixed info, other info or shared info argument as an alphanumeric string (use if it contains printable characters only). The length must conform to any restrictions of the KDF algorithm.</p>
+
+</dd>
+<dt id="hexinfo:string"><b>hexinfo:</b><i>string</i></dt>
+<dd>
+
+<p>Alternative to the <b>info:</b> option where the info is specified in hexadecimal form (two hex digits per byte).</p>
+
+</dd>
+<dt id="digest:string"><b>digest:</b><i>string</i></dt>
+<dd>
+
+<p>This option is identical to the <b>-digest</b> option.</p>
+
+</dd>
+<dt id="cipher:string"><b>cipher:</b><i>string</i></dt>
+<dd>
+
+<p>This option is identical to the <b>-cipher</b> option.</p>
+
+</dd>
+<dt id="mac:string"><b>mac:</b><i>string</i></dt>
+<dd>
+
+<p>This option is identical to the <b>-mac</b> option.</p>
+
+</dd>
+</dl>
+
+</dd>
+<dt id="provider-name"><b>-provider</b> <i>name</i></dt>
+<dd>
+
+</dd>
+<dt id="provider-path-path"><b>-provider-path</b> <i>path</i></dt>
+<dd>
+
+</dd>
+<dt id="provparam-name:-key-value"><b>-provparam</b> <i>[name:]key=value</i></dt>
+<dd>
+
+</dd>
+<dt id="propquery-propq"><b>-propquery</b> <i>propq</i></dt>
+<dd>
+
+<p>See <a href="../man1/openssl.html">&quot;Provider Options&quot; in openssl(1)</a>, <a href="../man7/provider.html">provider(7)</a>, and <a href="../man7/property.html">property(7)</a>.</p>
+
+</dd>
+<dt id="kdf_name"><i>kdf_name</i></dt>
+<dd>
+
+<p>Specifies the name of a supported KDF algorithm which will be used. The supported algorithms names include TLS1-PRF, HKDF, SSKDF, PBKDF2, SSHKDF, X942KDF-ASN1, X942KDF-CONCAT, X963KDF and SCRYPT.</p>
+
+</dd>
+</dl>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>Use TLS1-PRF to create a hex-encoded derived key from a secret key and seed:</p>
+
+<pre><code>openssl kdf -keylen 16 -kdfopt digest:SHA2-256 -kdfopt key:secret \
+            -kdfopt seed:seed TLS1-PRF</code></pre>
+
+<p>Use HKDF to create a hex-encoded derived key from a secret key, salt and info:</p>
+
+<pre><code>openssl kdf -keylen 10 -kdfopt digest:SHA2-256 -kdfopt key:secret \
+            -kdfopt salt:salt -kdfopt info:label HKDF</code></pre>
+
+<p>Use SSKDF with KMAC to create a hex-encoded derived key from a secret key, salt and info:</p>
+
+<pre><code>openssl kdf -keylen 64 -kdfopt mac:KMAC-128 -kdfopt maclen:20 \
+            -kdfopt hexkey:b74a149a161545 -kdfopt hexinfo:348a37a2 \
+            -kdfopt hexsalt:3638271ccd68a2 SSKDF</code></pre>
+
+<p>Use SSKDF with HMAC to create a hex-encoded derived key from a secret key, salt and info:</p>
+
+<pre><code>openssl kdf -keylen 16 -kdfopt mac:HMAC -kdfopt digest:SHA2-256 \
+            -kdfopt hexkey:b74a149a -kdfopt hexinfo:348a37a2 \
+            -kdfopt hexsalt:3638271c SSKDF</code></pre>
+
+<p>Use SSKDF with Hash to create a hex-encoded derived key from a secret key, salt and info:</p>
+
+<pre><code>openssl kdf -keylen 14 -kdfopt digest:SHA2-256 \
+            -kdfopt hexkey:6dbdc23f045488 \
+            -kdfopt hexinfo:a1b2c3d4 SSKDF</code></pre>
+
+<p>Use SSHKDF to create a hex-encoded derived key from a secret key, hash and session_id:</p>
+
+<pre><code>openssl kdf -keylen 16 -kdfopt digest:SHA2-256 \
+            -kdfopt hexkey:0102030405 \
+            -kdfopt hexxcghash:06090A \
+            -kdfopt hexsession_id:01020304 \
+            -kdfopt type:A SSHKDF</code></pre>
+
+<p>Use PBKDF2 to create a hex-encoded derived key from a password and salt:</p>
+
+<pre><code>openssl kdf -keylen 32 -kdfopt digest:SHA256 -kdfopt pass:password \
+            -kdfopt salt:salt -kdfopt iter:2 PBKDF2</code></pre>
+
+<p>Use scrypt to create a hex-encoded derived key from a password and salt:</p>
+
+<pre><code>openssl kdf -keylen 64 -kdfopt pass:password -kdfopt salt:NaCl \
+            -kdfopt n:1024 -kdfopt r:8 -kdfopt p:16 \
+            -kdfopt maxmem_bytes:10485760 SCRYPT</code></pre>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The KDF mechanisms that are available will depend on the options used when building OpenSSL.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man1/openssl.html">openssl(1)</a>, <a href="../man1/openssl-pkeyutl.html">openssl-pkeyutl(1)</a>, <a href="../man3/EVP_KDF.html">EVP_KDF(3)</a>, <a href="../man7/EVP_KDF-SCRYPT.html">EVP_KDF-SCRYPT(7)</a>, <a href="../man7/EVP_KDF-TLS1_PRF.html">EVP_KDF-TLS1_PRF(7)</a>, <a href="../man7/EVP_KDF-PBKDF2.html">EVP_KDF-PBKDF2(7)</a>, <a href="../man7/EVP_KDF-HKDF.html">EVP_KDF-HKDF(7)</a>, <a href="../man7/EVP_KDF-SS.html">EVP_KDF-SS(7)</a>, <a href="../man7/EVP_KDF-SSHKDF.html">EVP_KDF-SSHKDF(7)</a>, <a href="../man7/EVP_KDF-X942-ASN1.html">EVP_KDF-X942-ASN1(7)</a>, <a href="../man7/EVP_KDF-X942-CONCAT.html">EVP_KDF-X942-CONCAT(7)</a>, <a href="../man7/EVP_KDF-X963.html">EVP_KDF-X963(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>Added in OpenSSL 3.0</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2019-2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

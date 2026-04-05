@@ -1,0 +1,156 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OCSP_resp_find_status</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OCSP_resp_find_status, OCSP_resp_count, OCSP_resp_get0, OCSP_resp_find, OCSP_single_get0_status, OCSP_resp_get0_produced_at, OCSP_resp_get0_signature, OCSP_resp_get0_tbs_sigalg, OCSP_resp_get0_respdata, OCSP_resp_get0_certs, OCSP_resp_get0_signer, OCSP_resp_get0_id, OCSP_resp_get1_id, OCSP_check_validity, OCSP_basic_verify - OCSP response utility functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ocsp.h&gt;
+
+int OCSP_resp_find_status(OCSP_BASICRESP *bs, OCSP_CERTID *id, int *status,
+                          int *reason,
+                          ASN1_GENERALIZEDTIME **revtime,
+                          ASN1_GENERALIZEDTIME **thisupd,
+                          ASN1_GENERALIZEDTIME **nextupd);
+
+int OCSP_resp_count(OCSP_BASICRESP *bs);
+OCSP_SINGLERESP *OCSP_resp_get0(OCSP_BASICRESP *bs, int idx);
+int OCSP_resp_find(OCSP_BASICRESP *bs, OCSP_CERTID *id, int last);
+int OCSP_single_get0_status(OCSP_SINGLERESP *single, int *reason,
+                            ASN1_GENERALIZEDTIME **revtime,
+                            ASN1_GENERALIZEDTIME **thisupd,
+                            ASN1_GENERALIZEDTIME **nextupd);
+
+const ASN1_GENERALIZEDTIME *OCSP_resp_get0_produced_at(
+                            const OCSP_BASICRESP* single);
+
+const ASN1_OCTET_STRING *OCSP_resp_get0_signature(const OCSP_BASICRESP *bs);
+const X509_ALGOR *OCSP_resp_get0_tbs_sigalg(const OCSP_BASICRESP *bs);
+const OCSP_RESPDATA *OCSP_resp_get0_respdata(const OCSP_BASICRESP *bs);
+const STACK_OF(X509) *OCSP_resp_get0_certs(const OCSP_BASICRESP *bs);
+
+int OCSP_resp_get0_signer(OCSP_BASICRESP *bs, X509 **signer,
+                          STACK_OF(X509) *extra_certs);
+
+int OCSP_resp_get0_id(const OCSP_BASICRESP *bs,
+                      const ASN1_OCTET_STRING **pid,
+                      const X509_NAME **pname);
+int OCSP_resp_get1_id(const OCSP_BASICRESP *bs,
+                      ASN1_OCTET_STRING **pid,
+                      X509_NAME **pname);
+
+int OCSP_check_validity(ASN1_GENERALIZEDTIME *thisupd,
+                        ASN1_GENERALIZEDTIME *nextupd,
+                        long sec, long maxsec);
+
+int OCSP_basic_verify(OCSP_BASICRESP *bs, STACK_OF(X509) *certs,
+                     X509_STORE *st, unsigned long flags);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>OCSP_resp_find_status() searches <i>bs</i> for an OCSP response for <i>id</i>. If it is successful the fields of the response are returned in <i>*status</i>, <i>*reason</i>, <i>*revtime</i>, <i>*thisupd</i> and <i>*nextupd</i>. The <i>*status</i> value will be one of <b>V_OCSP_CERTSTATUS_GOOD</b>, <b>V_OCSP_CERTSTATUS_REVOKED</b> or <b>V_OCSP_CERTSTATUS_UNKNOWN</b>. The <i>*reason</i> and <i>*revtime</i> fields are only set if the status is <b>V_OCSP_CERTSTATUS_REVOKED</b>. If set the <i>*reason</i> field will be set to the revocation reason which will be one of <b>OCSP_REVOKED_STATUS_NOSTATUS</b>, <b>OCSP_REVOKED_STATUS_UNSPECIFIED</b>, <b>OCSP_REVOKED_STATUS_KEYCOMPROMISE</b>, <b>OCSP_REVOKED_STATUS_CACOMPROMISE</b>, <b>OCSP_REVOKED_STATUS_AFFILIATIONCHANGED</b>, <b>OCSP_REVOKED_STATUS_SUPERSEDED</b>, <b>OCSP_REVOKED_STATUS_CESSATIONOFOPERATION</b>, <b>OCSP_REVOKED_STATUS_CERTIFICATEHOLD</b> or <b>OCSP_REVOKED_STATUS_REMOVEFROMCRL</b>.</p>
+
+<p>OCSP_resp_count() returns the number of <b>OCSP_SINGLERESP</b> structures in <i>bs</i>.</p>
+
+<p>OCSP_resp_get0() returns the <b>OCSP_SINGLERESP</b> structure in <i>bs</i> corresponding to index <i>idx</i>, where <i>idx</i> runs from 0 to OCSP_resp_count(bs) - 1.</p>
+
+<p>OCSP_resp_find() searches <i>bs</i> for <i>id</i> and returns the index of the first matching entry after <i>last</i> or starting from the beginning if <i>last</i> is -1.</p>
+
+<p>OCSP_single_get0_status() extracts the fields of <i>single</i> in <i>*reason</i>, <i>*revtime</i>, <i>*thisupd</i> and <i>*nextupd</i>.</p>
+
+<p>OCSP_resp_get0_produced_at() extracts the <b>producedAt</b> field from the single response <i>bs</i>.</p>
+
+<p>OCSP_resp_get0_signature() returns the signature from <i>bs</i>.</p>
+
+<p>OCSP_resp_get0_tbs_sigalg() returns the <b>signatureAlgorithm</b> from <i>bs</i>.</p>
+
+<p>OCSP_resp_get0_respdata() returns the <b>tbsResponseData</b> from <i>bs</i>.</p>
+
+<p>OCSP_resp_get0_certs() returns any certificates included in <i>bs</i>.</p>
+
+<p>OCSP_resp_get0_signer() attempts to retrieve the certificate that directly signed <i>bs</i>. The OCSP protocol does not require that this certificate is included in the <b>certs</b> field of the response, so additional certificates can be supplied via the <i>extra_certs</i> if the certificates that may have signed the response are known via some out-of-band mechanism.</p>
+
+<p>OCSP_resp_get0_id() gets the responder id of <i>bs</i>. If the responder ID is a name then &lt;*pname&gt; is set to the name and <i>*pid</i> is set to NULL. If the responder ID is by key ID then <i>*pid</i> is set to the key ID and <i>*pname</i> is set to NULL.</p>
+
+<p>OCSP_resp_get1_id() is the same as OCSP_resp_get0_id() but leaves ownership of <i>*pid</i> and <i>*pname</i> with the caller, who is responsible for freeing them unless the function returns 0.</p>
+
+<p>OCSP_check_validity() checks the validity of its <i>thisupd</i> and <i>nextupd</i> arguments, which will be typically obtained from OCSP_resp_find_status() or OCSP_single_get0_status(). If <i>sec</i> is nonzero it indicates how many seconds leeway should be allowed in the check. If <i>maxsec</i> is positive it indicates the maximum age of <i>thisupd</i> in seconds.</p>
+
+<p>OCSP_basic_verify() checks that the basic response message <i>bs</i> is correctly signed and that the signer certificate can be validated. It takes <i>st</i> as the trusted store and <i>certs</i> as a set of untrusted intermediate certificates. The function first tries to find the signer certificate of the response in <i>certs</i>. It then searches the certificates the responder may have included in <i>bs</i> unless <i>flags</i> contains <b>OCSP_NOINTERN</b>. It fails if the signer certificate cannot be found. Next, unless <i>flags</i> contains <b>OCSP_NOSIGS</b>, the function checks the signature of <i>bs</i> and fails on error. Then the function already returns success if <i>flags</i> contains <b>OCSP_NOVERIFY</b> or if the signer certificate was found in <i>certs</i> and <i>flags</i> contains <b>OCSP_TRUSTOTHER</b>. Otherwise the function continues by validating the signer certificate. If <i>flags</i> contains <b>OCSP_PARTIAL_CHAIN</b> it takes intermediate CA certificates in <i>st</i> as trust anchors. For more details, see the description of <b>X509_V_FLAG_PARTIAL_CHAIN</b> in <a href="../man3/X509_VERIFY_PARAM_set_flags.html">&quot;VERIFICATION FLAGS&quot; in X509_VERIFY_PARAM_set_flags(3)</a>. If <i>flags</i> contains <b>OCSP_NOCHAIN</b> it ignores all certificates in <i>certs</i> and in <i>bs</i>, else it takes them as untrusted intermediate CA certificates and uses them for constructing the validation path for the signer certificate. Certificate revocation status checks using CRLs is disabled during path validation if the signer certificate contains the <b>id-pkix-ocsp-no-check</b> extension. After successful path validation the function returns success if the <b>OCSP_NOCHECKS</b> flag is set. Otherwise it verifies that the signer certificate meets the OCSP issuer criteria including potential delegation. If this does not succeed and the <b>OCSP_NOEXPLICIT</b> flag is not set the function checks for explicit trust for OCSP signing in the root CA certificate.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>OCSP_resp_find_status() returns 1 if <i>id</i> is found in <i>bs</i> and 0 otherwise.</p>
+
+<p>OCSP_resp_count() returns the total number of <b>OCSP_SINGLERESP</b> fields in <i>bs</i> or -1 on error.</p>
+
+<p>OCSP_resp_get0() returns a pointer to an <b>OCSP_SINGLERESP</b> structure or NULL on error, such as <i>idx</i> being out of range.</p>
+
+<p>OCSP_resp_find() returns the index of <i>id</i> in <i>bs</i> (which may be 0) or -1 on error, such as when <i>id</i> was not found.</p>
+
+<p>OCSP_single_get0_status() returns the status of <i>single</i> or -1 if an error occurred.</p>
+
+<p>OCSP_resp_get0_produced_at() returns the <b>producedAt</b> field from <i>bs</i>.</p>
+
+<p>OCSP_resp_get0_signature() returns the signature from <i>bs</i>.</p>
+
+<p>OCSP_resp_get0_tbs_sigalg() returns the <b>signatureAlgorithm</b> field from <i>bs</i>.</p>
+
+<p>OCSP_resp_get0_respdata() returns the <b>tbsResponseData</b> field from <i>bs</i>.</p>
+
+<p>OCSP_resp_get0_certs() returns any certificates included in <i>bs</i>.</p>
+
+<p>OCSP_resp_get0_signer() returns 1 if the signing certificate was located, or 0 if not found or on error.</p>
+
+<p>OCSP_resp_get0_id() and OCSP_resp_get1_id() return 1 on success, 0 on failure.</p>
+
+<p>OCSP_check_validity() returns 1 if <i>thisupd</i> and <i>nextupd</i> are valid time values and the current time + <i>sec</i> is not before <i>thisupd</i> and, if <i>maxsec</i> &gt;= 0, the current time - <i>maxsec</i> is not past <i>nextupd</i>. Otherwise it returns 0 to indicate an error.</p>
+
+<p>OCSP_basic_verify() returns 1 on success, 0 on verification not successful, or -1 on a fatal error such as malloc failure.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>Applications will typically call OCSP_resp_find_status() using the certificate ID of interest and then check its validity using OCSP_check_validity(). They can then take appropriate action based on the status of the certificate.</p>
+
+<p>An OCSP response for a certificate contains <b>thisUpdate</b> and <b>nextUpdate</b> fields. Normally the current time should be between these two values. To account for clock skew the <i>maxsec</i> field can be set to nonzero in OCSP_check_validity(). Some responders do not set the <b>nextUpdate</b> field, this would otherwise mean an ancient response would be considered valid: the <i>maxsec</i> parameter to OCSP_check_validity() can be used to limit the permitted age of responses.</p>
+
+<p>The values written to <i>*revtime</i>, <i>*thisupd</i> and <i>*nextupd</i> by OCSP_resp_find_status() and OCSP_single_get0_status() are internal pointers which MUST NOT be freed up by the calling application. Any or all of these parameters can be set to NULL if their value is not required.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/crypto.html">crypto(7)</a>, <a href="../man3/OCSP_cert_to_id.html">OCSP_cert_to_id(3)</a>, <a href="../man3/OCSP_request_add1_nonce.html">OCSP_request_add1_nonce(3)</a>, <a href="../man3/OCSP_REQUEST_new.html">OCSP_REQUEST_new(3)</a>, <a href="../man3/OCSP_response_status.html">OCSP_response_status(3)</a>, <a href="../man3/OCSP_sendreq_new.html">OCSP_sendreq_new(3)</a>, <a href="../man3/X509_VERIFY_PARAM_set_flags.html">X509_VERIFY_PARAM_set_flags(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2015-2022 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

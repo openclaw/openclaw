@@ -1,0 +1,91 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>PKCS12_add_cert</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#CONFORMING-TO">CONFORMING TO</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>PKCS12_add_cert, PKCS12_add_key, PKCS12_add_key_ex, PKCS12_add_secret - Add an object to a set of PKCS#12 safeBags</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/pkcs12.h&gt;
+
+PKCS12_SAFEBAG *PKCS12_add_cert(STACK_OF(PKCS12_SAFEBAG) **pbags, X509 *cert);
+PKCS12_SAFEBAG *PKCS12_add_key(STACK_OF(PKCS12_SAFEBAG) **pbags,
+                              EVP_PKEY *key, int key_usage, int iter,
+                              int key_nid, const char *pass);
+PKCS12_SAFEBAG *PKCS12_add_key_ex(STACK_OF(PKCS12_SAFEBAG) **pbags,
+                                  EVP_PKEY *key, int key_usage, int iter,
+                                  int key_nid, const char *pass,
+                                  OSSL_LIB_CTX *ctx, const char *propq);
+
+PKCS12_SAFEBAG *PKCS12_add_secret(STACK_OF(PKCS12_SAFEBAG) **pbags,
+                                 int nid_type, const unsigned char *value, int len);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>These functions create a new <b>PKCS12_SAFEBAG</b> and add it to the set of safeBags in <i>pbags</i>.</p>
+
+<p>PKCS12_add_cert() creates a PKCS#12 certBag containing the supplied certificate and adds this to the set of PKCS#12 safeBags.</p>
+
+<p>PKCS12_add_key() creates a PKCS#12 keyBag (unencrypted) or a pkcs8shroudedKeyBag (encrypted) containing the supplied <b>EVP_PKEY</b> and adds this to the set of PKCS#12 safeBags. If <i>key_nid</i> is not -1 then the key is encrypted with the supplied algorithm, using <i>pass</i> as the passphrase and <i>iter</i> as the iteration count. If <i>iter</i> is zero then a default value for iteration count of 2048 is used.</p>
+
+<p>PKCS12_add_key_ex() is identical to PKCS12_add_key() but allows for a library context <i>ctx</i> and property query <i>propq</i> to be used to select algorithm implementations.</p>
+
+<p>PKCS12_add_secret() creates a PKCS#12 secretBag with an OID corresponding to the supplied <i>nid_type</i> containing the supplied value as an ASN1 octet string. This is then added to the set of PKCS#12 safeBags.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>If a certificate contains an <i>alias</i> or a <i>keyid</i> then this will be used for the corresponding <b>friendlyName</b> or <b>localKeyID</b> in the PKCS12 structure.</p>
+
+<p>PKCS12_add_key() makes assumptions regarding the encoding of the given pass phrase. See <a href="../man7/passphrase-encoding.html">passphrase-encoding(7)</a> for more information.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>A valid <b>PKCS12_SAFEBAG</b> structure or NULL if an error occurred.</p>
+
+<h1 id="CONFORMING-TO">CONFORMING TO</h1>
+
+<p>IETF RFC 7292 (<a href="https://tools.ietf.org/html/rfc7292">https://tools.ietf.org/html/rfc7292</a>)</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/PKCS12_create.html">PKCS12_create(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>PKCS12_add_secret() and PKCS12_add_key_ex() were added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2020-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

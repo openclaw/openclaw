@@ -1,0 +1,863 @@
+V1.5.7 (Feb 2025)
+fix: compression bug in 32-bit mode associated with long-lasting sessions
+api: new method `ZSTD_compressSequencesAndLiterals()` (#4217, #4232)
+api: `ZSTD_getFrameHeader()` works on skippable frames (#4228)
+perf: substantial compression speed improvements (up to +30%) on small data, by @TocarIP (#4144) and @cyan4973 (#4165)
+perf: improved compression speed (~+5%) for dictionary compression at low levels (#4170)
+perf: much faster speed for `--patch-from` at high compression levels (#4276)
+perf: higher `--patch-from` compression ratios, notably at high levels (#4288)
+perf: better speed for binaries on Windows (@pps83) and when compiled with Visual Studio (@MessyHack)
+perf: slight compression ratio improvement thanks to better block boundaries (#4136, #4176, #4178)
+perf: slight compression ratio improvement for `dfast`, aka levels 3 and 4 (#4171)
+perf: runtime bmi2 detection enabled on x86 32-bit mode (#4251)
+cli: multi-threading as default CLI setting, by @daniellerozenblit
+cli: new `--max` command (#4290)
+build: improve `msbuild` version autodetection, support VS2022, by @ManuelBlanc
+build: fix `meson` build by @artem and @Victor-C-Zhang, and on Windows by @bgilbert
+build: compatibility with Apple Framework, by @Treata11
+build: improve icc/icx compatibility, by @josepho0918 and @luau-project
+build: improve compatibility with Android NDK, by Adenilson Cavalcanti
+portability: linux kernel branch, with improved support for Sequence producers (@embg, @gcabiddu, @cyan4973)
+portability: improved qnx compatibility, suggested by @rainbowball
+portability: improved install script for FreeBSD, by @sunpoet
+portability: fixed test suite compatibility with gnu hurd, by @diegonc
+doc: clarify specification, by @elasota
+misc: improved tests/decodecorpus validation tool (#4102), by antmicro
+
+V1.5.6 (Mar 2024)
+api: Promote `ZSTD_c_targetCBlockSize` to Stable API by @felixhandte
+api: new `ZSTD_d_maxBlockSize` experimental parameter, to reduce streaming decompression memory, by @terrelln
+perf: improve performance of param `ZSTD_c_targetCBlockSize`, by @Cyan4973
+perf: improved compression of arrays of integers at high compression, by @Cyan4973
+lib: reduce binary size with selective build-time exclusion, by @felixhandte
+lib: improved huffman speed on small data and linux kernel, by @terrelln
+lib: accept dictionaries with partial literal tables, by @terrelln
+lib: fix CCtx size estimation with external sequence producer, by @embg
+lib: fix corner case decoder behaviors, by @Cyan4973 and @aimuz
+lib: fix zdict prototype mismatch in static_only mode, by @ldv-alt
+lib: fix several bugs in magicless-format decoding, by @embg
+cli: add common compressed file types to `--exclude-compressed`` by @daniellerozenblit
+cli: fix mixing `-c` and `-o` commands with `--rm`, by @Cyan4973
+cli: fix erroneous exclusion of hidden files with `--output-dir-mirror` by @felixhandte
+cli: improved time accuracy on BSD, by @felixhandte
+cli: better errors on argument parsing, by @KapJI
+tests: better compatibility with older versions of `grep`, by @Cyan4973
+tests: lorem ipsum generator as default backup content, by @Cyan4973
+build: cmake improvements by @terrelln, @sighingnow, @gjasny, @JohanMabille, @Saverio976, @gruenich, @teo-tsirpanis
+build: bazel support, by @jondo2010
+build: fix cross-compiling for AArch64 with lld by @jcelerier
+build: fix Apple platform compatibility, by @nidhijaju
+build: fix Visual 2012 and lower compatibility, by @Cyan4973
+build: improve win32 support, by @DimitriPapadopoulos
+build: better C90 compliance for zlibWrapper, by @emaste
+port: make: fat binaries on macos, by @mredig
+port: ARM64EC compatibility for Windows, by @dunhor
+port: QNX support by @klausholstjacobsen
+port: MSYS2 and Cygwin makefile installation and test support, by @QBos07
+port: risc-v support validation in CI, by @Cyan4973
+port: sparc64 support validation in CI, by @Cyan4973
+port: AIX compatibility, by @likema
+port: HP-UX compatibility, by @likema
+doc: Improved specification accuracy, by @elasota
+bug: Fix and deprecate ZSTD_generateSequences (#3981)
+
+v1.5.5 (Apr 2023)
+fix: fix rare corruption bug affecting the high compression mode, reported by @danlark1 (#3517, @terrelln)
+perf: improve mid-level compression speed (#3529, #3533, #3543, @yoniko and #3552, @terrelln)
+lib: deprecated bufferless block-level API (#3534) by @terrelln
+cli: mmap large dictionaries to save memory, by @daniellerozenblit
+cli: improve speed of --patch-from mode (~+50%) (#3545) by @daniellerozenblit
+cli: improve i/o speed (~+10%) when processing lots of small files (#3479) by @felixhandte
+cli: zstd no longer crashes when requested to write into write-protected directory (#3541) by @felixhandte
+cli: fix decompression into block device using -o, reported by @georgmu (#3583)
+build: fix zstd CLI compiled with lzma support but not zlib support (#3494) by @Hello71
+build: fix cmake does no longer require 3.18 as minimum version (#3510) by @kou
+build: fix MSVC+ClangCL linking issue (#3569) by @tru
+build: fix zstd-dll, version of zstd CLI that links to the dynamic library (#3496) by @yoniko
+build: fix MSVC warnings (#3495) by @embg
+doc: updated zstd specification to clarify corner cases, by @Cyan4973
+doc: document how to create fat binaries for macos (#3568) by @rickmark
+misc: improve seekable format ingestion speed (~+100%) for very small chunk sizes (#3544) by @Cyan4973
+misc: tests/fullbench can benchmark multiple files (#3516) by @dloidolt
+
+v1.5.4 (Feb 2023)
+perf: +20% faster huffman decompression for targets that can't compile x64 assembly (#3449, @terrelln)
+perf: up to +10% faster streaming compression at levels 1-2 (#3114, @embg)
+perf: +4-13% for levels 5-12 by optimizing function generation (#3295, @terrelln)
+pref: +3-11% compression speed for `arm` target (#3199, #3164, #3145, #3141, #3138, @JunHe77 and #3139, #3160, @danlark1)
+perf: +5-30% faster dictionary compression at levels 1-4 (#3086, #3114, #3152, @embg)
+perf: +10-20% cold dict compression speed by prefetching CDict tables (#3177, @embg)
+perf: +1% faster compression by removing a branch in ZSTD_fast_noDict (#3129, @felixhandte)
+perf: Small compression ratio improvements in high compression mode (#2983, #3391, @Cyan4973 and #3285, #3302, @daniellerozenblit)
+perf: small speed improvement by better detecting `STATIC_BMI2` for `clang` (#3080, @TocarIP)
+perf: Improved streaming performance when `ZSTD_c_stableInBuffer` is set (#2974, @Cyan4973)
+cli: Asynchronous I/O for improved cli speed (#2975, #2985, #3021, #3022, @yoniko)
+cli: Change `zstdless` behavior to align with `zless` (#2909, @binhdvo)
+cli: Keep original file if `-c` or `--stdout` is given (#3052, @dirkmueller)
+cli: Keep original files when result is concatenated into a single output with `-o` (#3450, @Cyan4973)
+cli: Preserve Permissions and Ownership of regular files (#3432, @felixhandte)
+cli: Print zlib/lz4/lzma library versions with `-vv` (#3030, @terrelln)
+cli: Print checksum value for single frame files with `-lv`  (#3332, @Cyan4973)
+cli: Print `dictID` when present with `-lv` (#3184, @htnhan)
+cli: when `stderr` is *not* the console, disable status updates, but preserve final summary (#3458, @Cyan4973)
+cli: support `--best` and `--no-name` in `gzip` compatibility mode (#3059, @dirkmueller)
+cli: support for `posix` high resolution timer `clock_gettime()`, for improved benchmark accuracy (#3423, @Cyan4973)
+cli: improved help/usage (`-h`,  `-H`) formatting (#3094, @dirkmueller and #3385, @jonpalmisc)
+cli: Fix better handling of bogus numeric values (#3268, @ctkhanhly)
+cli: Fix input consists of multiple files _and_ `stdin` (#3222, @yoniko)
+cli: Fix tiny files passthrough (#3215, @cgbur)
+cli: Fix for `-r` on empty directory (#3027, @brailovich)
+cli: Fix empty string as argument for `--output-dir-*` (#3220, @embg)
+cli: Fix decompression memory usage reported by `-vv --long` (#3042, @u1f35c, and #3232, @zengyijing)
+cli: Fix infinite loop when empty input is passed to trainer (#3081, @terrelln)
+cli: Fix `--adapt` doesn't work when `--no-progress` is also set (#3354, @terrelln)
+api: Support for Block-Level Sequence Producer (#3333, @embg)
+api: Support for in-place decompression (#3432, @terrelln)
+api: New  `ZSTD_CCtx_setCParams()`  function, set all parameters defined in a  `ZSTD_compressionParameters`  structure (#3403, @Cyan4973)
+api: Streaming decompression detects incorrect header ID sooner (#3175, @Cyan4973)
+api: Window size resizing optimization for edge case (#3345, @daniellerozenblit)
+api: More accurate error codes for busy-loop scenarios (#3413, #3455, @Cyan4973)
+api: Fix limit overflow in `compressBound` and `decompressBound` (#3362, #3373, Cyan4973) reported by @nigeltao
+api: Deprecate several advanced experimental functions: streaming (#3408, @embg), copy (#3196, @mileshu)
+bug: Fix corruption that rarely occurs in 32-bit mode with wlog=25 (#3361, @terrelln)
+bug: Fix for block-splitter (#3033, @Cyan4973)
+bug: Fixes for Sequence Compression API (#3023, #3040, @Cyan4973)
+bug: Fix leaking thread handles on Windows (#3147, @animalize)
+bug: Fix timing issues with cmake/meson builds (#3166, #3167, #3170, @Cyan4973)
+build: Allow user to select legacy level for cmake (#3050, @shadchin)
+build: Enable legacy support by default in cmake (#3079, @niamster)
+build: Meson build script improvements (#3039, #3120, #3122, #3327, #3357, @eli-schwartz and #3276, @neheb)
+build: Add aarch64 to supported architectures for zstd_trace (#3054, @ooosssososos)
+build: support AIX architecture (#3219, @qiongsiwu)
+build: Fix `ZSTD_LIB_MINIFY` build macro, which now reduces static library size by half (#3366, @terrelln)
+build: Fix Windows issues with Multithreading translation layer (#3364, #3380, @yoniko) and ARM64 target (#3320, @cwoffenden)
+build: Fix `cmake` script (#3382, #3392, @terrelln and #3252 @Tachi107 and #3167 @Cyan4973)
+doc: Updated man page, providing more details for `--train` mode (#3112, @Cyan4973)
+doc: Add decompressor errata document (#3092, @terrelln)
+misc: Enable Intel CET (#2992, #2994, @hjl-tools)
+misc: Fix `contrib/` seekable format (#3058, @yhoogstrate and #3346, @daniellerozenblit)
+misc: Improve speed of the one-file library generator (#3241, @wahern and #3005, @cwoffenden)
+
+v1.5.3 (dev version, unpublished)
+
+v1.5.2 (Jan, 2022)
+perf: Regain Minimal memset()-ing During Reuse of Compression Contexts (@Cyan4973, #2969)
+build: Build Zstd with `noexecstack` on All Architectures (@felixhandte, #2964)
+doc: Clarify Licensing (@terrelln, #2981)
+
+v1.5.1 (Dec, 2021)
+perf: rebalanced compression levels, to better match the intended speed/level curve, by @senhuang42
+perf: faster huffman decoder, using x64 assembly, by @terrelln
+perf: slightly faster high speed modes (strategies fast & dfast), by @felixhandte
+perf: improved binary size and faster compilation times, by @terrelln
+perf: new row64 mode, used notably in level 12, by @senhuang42
+perf: faster mid-level compression speed in presence of highly repetitive patterns, by @senhuang42
+perf: minor compression ratio improvements for small data at high levels, by @cyan4973
+perf: reduced stack usage (mostly useful for Linux Kernel), by @terrelln
+perf: faster compression speed on incompressible data, by @bindhvo
+perf: on-demand reduced ZSTD_DCtx state size, using build macro ZSTD_DECODER_INTERNAL_BUFFER, at a small cost of performance, by @bindhvo
+build: allows hiding static symbols in the dynamic library, using build macro, by @skitt
+build: support for m68k (Motorola 68000's), by @cyan4973
+build: improved AIX support, by @Helflym
+build: improved meson unofficial build, by @eli-schwartz
+cli : custom memory limit when training dictionary (#2925), by @embg
+cli : report advanced parameters information when compressing in very verbose mode (`-vv`), by @Svetlitski-FB
+
+v1.5.0  (May 11, 2021)
+api: Various functions promoted from experimental to stable API: (#2579-2581, @senhuang42)
+  `ZSTD_defaultCLevel()`
+  `ZSTD_getDictID_fromCDict()`
+api: Several experimental functions have been deprecated and will emit a compiler warning (#2582, @senhuang42)
+  `ZSTD_compress_advanced()`
+  `ZSTD_compress_usingCDict_advanced()`
+  `ZSTD_compressBegin_advanced()`
+  `ZSTD_compressBegin_usingCDict_advanced()`
+  `ZSTD_initCStream_srcSize()`
+  `ZSTD_initCStream_usingDict()`
+  `ZSTD_initCStream_usingCDict()`
+  `ZSTD_initCStream_advanced()`
+  `ZSTD_initCStream_usingCDict_advanced()`
+  `ZSTD_resetCStream()`
+api: ZSTDMT_NBWORKERS_MAX reduced to 64 for 32-bit environments (@Cyan4973)
+perf: Significant speed improvements for middle compression levels (#2494, @senhuang42 @terrelln)
+perf: Block splitter to improve compression ratio, enabled by default for high compression levels (#2447, @senhuang42)
+perf: Decompression loop refactor, speed improvements on `clang` and for `--long` modes (#2614 #2630, @Cyan4973)
+perf: Reduced stack usage during compression and decompression entropy stage (#2522 #2524, @terrelln)
+bug: Improve setting permissions of created files (#2525, @felixhandte)
+bug: Fix large dictionary non-determinism (#2607, @terrelln)
+bug: Fix non-determinism test failures on Linux i686 (#2606, @terrelln)
+bug: Fix various dedicated dictionary search bugs (#2540 #2586, @senhuang42 @felixhandte)
+bug: Ensure `ZSTD_estimateCCtxSize*() `monotonically increases with compression level (#2538, @senhuang42)
+bug: Fix --patch-from mode parameter bound bug with small files (#2637, @occivink)
+bug: Fix UBSAN error in decompression (#2625, @terrelln)
+bug: Fix superblock compression divide by zero bug (#2592, @senhuang42)
+bug: Make the number of physical CPU cores detection more robust (#2517, @PaulBone)
+doc: Improve `zdict.h` dictionary training API documentation (#2622, @terrelln)
+doc: Note that public `ZSTD_free*()` functions accept NULL pointers (#2521, @animalize)
+doc: Add style guide docs for open source contributors (#2626, @Cyan4973)
+tests: Better regression test coverage for different dictionary modes (#2559, @senhuang42)
+tests: Better test coverage of index reduction (#2603, @terrelln)
+tests: OSS-Fuzz coverage for seekable format (#2617, @senhuang42)
+tests: Test coverage for ZSTD threadpool API (#2604, @senhuang42)
+build: Dynamic library built multithreaded by default (#2584, @senhuang42)
+build: Move  `zstd_errors.h`  and  `zdict.h`  to  `lib/`  root (#2597, @terrelln)
+build: Allow `ZSTDMT_JOBSIZE_MIN` to be configured at compile-time, reduce default to 512KB (#2611, @Cyan4973)
+build: Single file library build script moved to `build/` directory (#2618, @felixhandte)
+build: `ZBUFF_*()` is no longer built by default (#2583, @senhuang42)
+build: Fixed Meson build (#2548, @SupervisedThinking @kloczek)
+build: Fix excessive compiler warnings with clang-cl and CMake (#2600, @nickhutchinson)
+build: Detect presence of `md5` on Darwin (#2609, @felixhandte)
+build: Avoid SIGBUS on armv6 (#2633, @bmwiedmann)
+cli: `--progress` flag added to always display progress bar (#2595, @senhuang42)
+cli: Allow reading from block devices with `--force` (#2613, @felixhandte)
+cli: Fix CLI filesize display bug (#2550, @Cyan4973)
+cli: Fix windows CLI `--filelist` end-of-line bug (#2620, @Cyan4973)
+contrib: Various fixes for linux kernel patch (#2539, @terrelln)
+contrib: Seekable format - Decompression hanging edge case fix (#2516, @senhuang42)
+contrib: Seekable format - New seek table-only API  (#2113 #2518, @mdittmer @Cyan4973)
+contrib: Seekable format - Fix seek table descriptor check when loading (#2534, @foxeng)
+contrib: Seekable format - Decompression fix for large offsets, (#2594, @azat)
+misc: Automatically published release tarballs available on Github (#2535, @felixhandte)
+
+v1.4.9  (Mar 1, 2021)
+bug: Use `umask()` to Constrain Created File Permissions (#2495, @felixhandte)
+bug: Make Simple Single-Pass Functions Ignore Advanced Parameters (#2498, @terrelln)
+api: Add (De)Compression Tracing Functionality (#2482, @terrelln)
+api: Support References to Multiple DDicts (#2446, @senhuang42)
+api: Add Function to Generate Skippable Frame (#2439, @senhuang42)
+perf: New Algorithms for the Long Distance Matcher (#2483, @mpu)
+perf: Performance Improvements for Long Distance Matcher (#2464, @mpu)
+perf: Don't Shrink Window Log when Streaming with a Dictionary (#2451, @terrelln)
+cli: Fix `--output-dir-mirror` rejection of `..` -containing paths (#2512, @felixhandte)
+cli: Allow Input From Console When `-f`/`--force` is Passed (#2466, @felixhandte)
+cli: Improve Help Message (#2500, @senhuang42)
+tests: Remove Flaky Tests (#2455, #2486, #2445, @Cyan4973)
+tests: Correctly Invoke md5 Utility on NetBSD (#2492, @niacat)
+tests: Avoid Using `stat -c` on NetBSD (#2513, @felixhandte)
+build: Zstd CLI Can Now be Linked to Dynamic `libzstd` (#2457, #2454 @Cyan4973)
+build: Hide and Avoid Using Static-Only Symbols (#2501, #2504, @skitt)
+build: CMake: Enable Only C for lib/ and programs/ Projects (#2498, @concatime)
+build: CMake: Use `configure_file()` to Create the `.pc` File (#2462, @lazka)
+build: Fix Fuzzer Compiler Detection & Update UBSAN Flags (#2503, @terrelln)
+build: Add Guards for `_LARGEFILE_SOURCE` and `_LARGEFILE64_SOURCE` (#2444, @indygreg)
+build: Improve `zlibwrapper` Makefile (#2437, @Cyan4973)
+contrib: Add `recover_directory` Program (#2473, @terrelln)
+doc: Change License Year to 2021 (#2452 & #2465, @terrelln & @senhuang42)
+doc: Fix Typos (#2459, @ThomasWaldmann)
+
+v1.4.8  (Dec 18, 2020)
+hotfix: wrong alignment of an internal buffer
+
+v1.4.7  (Dec 16, 2020)
+perf: stronger --long mode at high compression levels, by @senhuang42
+perf: stronger --patch-from at high compression levels, thanks to --long improvements
+perf: faster dictionary compression at medium compression levels, by @felixhandte
+perf: small speed & memory usage improvements for ZSTD_compress2(), by @terrelln
+perf: improved fast compression speeds with Visual Studio, by @animalize
+cli : Set nb of threads with environment variable ZSTD_NBTHREADS, by @senhuang42
+cli : accept decompressing files with *.zstd suffix
+cli : provide a condensed summary by default when processing multiple files
+cli : fix : stdin input no longer confused as user prompt
+cli : improve accuracy of several error messages
+api : new sequence ingestion API, by @senhuang42
+api : shared thread pool: control total nb of threads used by multiple compression jobs, by @marxin
+api : new ZSTD_getDictID_fromCDict(), by @LuAPi
+api : zlibWrapper only uses public API, and is compatible with dynamic library, by @terrelln
+api : fix : multithreaded compression has predictable output even in special cases (see #2327) (issue not accessible from cli)
+api : fix : dictionary compression correctly respects dictionary compression level (see #2303) (issue not accessible from cli)
+build: fix cmake script when using path with spaces, by @terrelln
+build: improved compile-time detection of aarch64/neon platforms, by @bsdimp
+build: Fix building on AIX 5.1, by @likema
+build: compile paramgrill with cmake on Windows, requested by @mirh
+doc : clarify repcode updates in format specification, by @felixhandte
+
+v1.4.6
+fix : Always return dstSize_tooSmall when that is the case
+fix : Fix ZSTD_initCStream_advanced() with static allocation and no dictionary
+perf: Improve small block decompression speed by 20%+, by @terrelln
+perf: Reduce compression stack usage by 1 KB, by @terrelln
+perf: Improve decompression speed by improving ZSTD_wildcopy, by @helloguo (#2252, #2256)
+perf: Improve histogram construction, by @cyan4973 (#2253)
+cli : Add --output-dir-mirror option, by @xxie24 (#2219)
+cli : Warn when (de)compressing multiple files into a single output, by @senhuang42 (#2279)
+cli : Improved progress bar and status summary when (de)compressing multiple files, by @senhuang42 (#2283)
+cli : Call stat less often, by @felixhandte (#2262)
+cli : Allow --patch-from XXX and --filelist XXX in addition to --patch-from=XXX and --filelist=XXX, by @cyan4973 (#2250)
+cli : Allow --patch-from to compress stdin with --stream-size, by @bimbashrestha (#2206)
+api : Do not install zbuff.h, since it has long been deprecated, by @cyan4973 (#2166).
+api : Fix ZSTD_CCtx_setParameter() with ZSTD_c_compressionLevel to make 0 mean default level, by @i-do-cpp (#2291)
+api : Rename ZSTDMT_NBTHREADS_MAX to ZSTDMT_NBWORKERS_MAX, by @marxin (#2228).
+build: Install pkg-config file with CMake and MinGW, by @tonytheodore (#2183)
+build: Install DLL with CMake on Windows, by @BioDataAnalysis (#2221)
+build: Fix DLL install location with CMake, by @xantares and @bimbashrestha (#2186)
+build: Add ZSTD_NO_UNUSED_FUNCTIONS macro to hide unused functions
+build: Add ZSTD_NO_INTRINSICS macro to avoid explicit intrinsics
+build: Add STATIC_BMI2 macro for compile time detection of BMI2 on MSVC, by @Niadb (#2258)
+build: Fix -Wcomma warnings, by @cwoffenden
+build: Remove distutils requirement for meson build, by @neheb (#2197)
+build: Fix cli compilation with uclibc
+build: Fix cli compilation without st_mtime, by @ffontaine (#2246)
+build: Fix shadowing warnings in library
+build: Fix single file library compilation with Enscripten, by @yoshihitoh (#2227)
+misc: Improve single file library and include dictBuilder, by @cwoffenden
+misc: Allow compression dictionaries with missing symbols
+misc: Add freestanding translation script in contrib/freestanding_lib
+misc: Collect all of zstd's libc dependencies into zstd_deps.h
+doc : Add ZSTD_versionString() to manual, by @animalize
+doc : Fix documentation for ZSTD_CCtxParams_setParameter(), by @felixhandte (#2270)
+
+v1.4.5  (May 22, 2020)
+fix : Compression ratio regression on huge files (> 3 GB) using high levels (--ultra) and multithreading, by @terrelln
+perf: Improved decompression speed: x64 : +10% (clang) / +5% (gcc); ARM : from +15% to +50%, depending on SoC, by @terrelln
+perf: Automatically downsizes ZSTD_DCtx when too large for too long (#2069, by @bimbashreshta)
+perf: Improved fast compression speed on aarch64 (#2040, ~+3%, by @caoyzh)
+perf: Small level 1 compression speed gains (depending on compiler)
+cli : New --patch-from command, create and apply patches from files, by @bimbashreshta
+cli : New --filelist= : Provide a list of files to operate upon from a file
+cli : -b -d command can now benchmark decompression on multiple files
+cli : New --no-content-size command
+cli : New --show-default-cparams information command
+api : ZDICT_finalizeDictionary() is promoted to stable (#2111)
+api : new experimental parameter ZSTD_d_stableOutBuffer (#2094)
+build: Generate a single-file libzstd library (#2065, by @cwoffenden)
+build: Relative includes no longer require -I compiler flags for zstd lib subdirs (#2103, by @felixhandte)
+build: zstd now compiles cleanly under -pedantic (#2099)
+build: zstd now compiles with make-4.3
+build: Support mingw cross-compilation from Linux, by @Ericson2314
+build: Meson multi-thread build fix on windows
+build: Some misc icc fixes backed by new ci test on travis
+misc: bitflip analyzer tool, by @felixhandte
+misc: Extend largeNbDicts benchmark to compression
+misc: Edit-distance match finder in contrib/
+doc : Improved beginner CONTRIBUTING.md docs
+doc : New issue templates for zstd
+
+v1.4.4  (Nov 6, 2019)
+perf: Improved decompression speed, by > 10%, by @terrelln
+perf: Better compression speed when re-using a context, by @felixhandte
+perf: Fix compression ratio when compressing large files with small dictionary, by @senhuang42
+perf: zstd reference encoder can generate RLE blocks, by @bimbashrestha
+perf: minor generic speed optimization, by @davidbolvansky
+api: new ability to extract sequences from the parser for analysis, by @bimbashrestha
+api: fixed decoding of magic-less frames, by @terrelln
+api: fixed ZSTD_initCStream_advanced() performance with fast modes, reported by @QrczakMK
+cli: Named pipes support, by @bimbashrestha
+cli: short tar's extension support, by @stokito
+cli: command --output-dir-flat= , generates target files into requested directory, by @senhuang42
+cli: commands --stream-size=# and --size-hint=#, by @nmagerko
+cli: command --exclude-compressed, by @shashank0791
+cli: faster `-t` test mode
+cli: improved some error messages, by @vangyzen
+cli: fix command `-D dictionary` on Windows, reported by @artyompetrov
+cli: fix rare deadlock condition within dictionary builder, by @terrelln
+build: single-file decoder with emscripten compilation script, by @cwoffenden
+build: fixed zlibWrapper compilation on Visual Studio, reported by @bluenlive
+build: fixed deprecation warning for certain gcc version, reported by @jasonma163
+build: fix compilation on old gcc versions, by @cemeyer
+build: improved installation directories for cmake script, by Dmitri Shubin
+pack: modified pkgconfig, for better integration into openwrt, requested by @neheb
+misc: Improved documentation : ZSTD_CLEVEL, DYNAMIC_BMI2, ZSTD_CDict, function deprecation, zstd format
+misc: fixed educational decoder : accept larger literals section, and removed UNALIGNED() macro
+
+v1.4.3  (Aug 20, 2019)
+bug: Fix Dictionary Compression Ratio Regression by @cyan4973 (#1709)
+bug: Fix Buffer Overflow in legacy v0.3 decompression by @felixhandte (#1722)
+build: Add support for IAR C/C++ Compiler for Arm by @joseph0918 (#1705)
+
+v1.4.2  (Jul 26, 2019)
+bug: Fix bug in zstd-0.5 decoder by @terrelln (#1696)
+bug: Fix seekable decompression in-memory API by @iburinoc (#1695)
+misc: Validate blocks are smaller than size limit by @vivekmg (#1685)
+misc: Restructure source files by @ephiepark (#1679)
+
+v1.4.1  (Jul 20, 2019)
+bug: Fix data corruption in niche use cases by @terrelln (#1659)
+bug: Fuzz legacy modes, fix uncovered bugs by @terrelln (#1593, #1594, #1595)
+bug: Fix out of bounds read by @terrelln (#1590)
+perf: Improve decode speed by ~7% @mgrice (#1668)
+perf: Slightly improved compression ratio of level 3 and 4 (ZSTD_dfast) by @cyan4973 (#1681)
+perf: Slightly faster compression speed when re-using a context by @cyan4973 (#1658)
+perf: Improve compression ratio for small windowLog by @cyan4973 (#1624)
+perf: Faster compression speed in high compression mode for repetitive data by @terrelln (#1635)
+api: Add parameter to generate smaller dictionaries by @tyler-tran (#1656)
+cli: Recognize symlinks when built in C99 mode by @felixhandte (#1640)
+cli: Expose cpu load indicator for each file on -vv mode by @ephiepark (#1631)
+cli: Restrict read permissions on destination files by @chungy (#1644)
+cli: zstdgrep: handle -f flag by @felixhandte (#1618)
+cli: zstdcat: follow symlinks by @vejnar (#1604)
+doc: Remove extra size limit on compressed blocks by @felixhandte (#1689)
+doc: Fix typo by @yk-tanigawa (#1633)
+doc: Improve documentation on streaming buffer sizes by @cyan4973 (#1629)
+build: CMake: support building with LZ4 @leeyoung624 (#1626)
+build: CMake: install zstdless and zstdgrep by @leeyoung624 (#1647)
+build: CMake: respect existing uninstall target by @j301scott (#1619)
+build: Make: skip multithread tests when built without support by @michaelforney (#1620)
+build: Make: Fix examples/ test target by @sjnam (#1603)
+build: Meson: rename options out of deprecated namespace by @lzutao (#1665)
+build: Meson: fix build by @lzutao (#1602)
+build: Visual Studio: don't export symbols in static lib by @scharan (#1650)
+build: Visual Studio: fix linking by @absotively (#1639)
+build: Fix MinGW-W64 build by @myzhang1029 (#1600)
+misc: Expand decodecorpus coverage by @ephiepark (#1664)
+
+v1.4.0  (Apr 17, 2019)
+perf: Improve level 1 compression speed in most scenarios by 6% by @gbtucker and @terrelln
+api: Move the advanced API, including all functions in the staging section, to the stable section
+api: Make ZSTD_e_flush and ZSTD_e_end block for maximum forward progress
+api: Rename ZSTD_CCtxParam_getParameter to ZSTD_CCtxParams_getParameter
+api: Rename ZSTD_CCtxParam_setParameter to ZSTD_CCtxParams_setParameter
+api: Don't export ZSTDMT functions from the shared library by default
+api: Require ZSTD_MULTITHREAD to be defined to use ZSTDMT
+api: Add ZSTD_decompressBound() to provide an upper bound on decompressed size by @shakeelrao
+api: Fix ZSTD_decompressDCtx() corner cases with a dictionary
+api: Move ZSTD_getDictID_*() functions to the stable section
+api: Add ZSTD_c_literalCompressionMode flag to enable or disable literal compression by @terrelln
+api: Allow compression parameters to be set when a dictionary is used
+api: Allow setting parameters before or after ZSTD_CCtx_loadDictionary() is called
+api: Fix ZSTD_estimateCStreamSize_usingCCtxParams()
+api: Setting ZSTD_d_maxWindowLog to 0 means use the default
+cli: Ensure that a dictionary is not used to compress itself by @shakeelrao
+cli: Add --[no-]compress-literals flag to enable or disable literal compression
+doc: Update the examples to use the advanced API
+doc: Explain how to transition from old streaming functions to the advanced API in the header
+build: Improve the Windows release packages
+build: Improve CMake build by @hjmjohnson
+build: Build fixes for FreeBSD by @lwhsu
+build: Remove redundant warnings by @thatsafunnyname
+build: Fix tests on OpenBSD by @bket
+build: Extend fuzzer build system to work with the new clang engine
+build: CMake now creates the libzstd.so.1 symlink
+build: Improve Menson build by @lzutao
+misc: Fix symbolic link detection on FreeBSD
+misc: Use physical core count for -T0 on FreeBSD by @cemeyer
+misc: Fix zstd --list on truncated files by @kostmo
+misc: Improve logging in debug mode by @felixhandte
+misc: Add CirrusCI tests by @lwhsu
+misc: Optimize dictionary memory usage in corner cases
+misc: Improve the dictionary builder on small or homogeneous data
+misc: Fix spelling across the repo by @jsoref
+
+v1.3.8  (Dec 28, 2018)
+perf: better decompression speed on large files (+7%) and cold dictionaries (+15%)
+perf: slightly better compression ratio at high compression modes
+api : finalized advanced API, last stage before "stable" status
+api : new --rsyncable mode, by @terrelln
+api : support decompression of empty frames into NULL (used to be an error) (#1385)
+build: new set of macros to build a minimal size decoder, by @felixhandte
+build: fix compilation on MIPS32, reported by @clbr (#1441)
+build: fix compilation with multiple -arch flags, by @ryandesign
+build: highly upgraded meson build, by @lzutao
+build: improved buck support, by @obelisk
+build: fix cmake script : can create debug build, by @pitrou
+build: Makefile : grep works on both colored consoles and systems without color support
+build: fixed zstd-pgo, by @bmwiedemann
+cli : support ZSTD_CLEVEL environment variable, by @yijinfb (#1423)
+cli : --no-progress flag, preserving final summary (#1371), by @terrelln
+cli : ensure destination file is not source file (#1422)
+cli : clearer error messages, especially when input file not present
+doc : clarified zstd_compression_format.md, by @ulikunitz
+misc: fixed zstdgrep, returns 1 on failure, by @lzutao
+misc: NEWS renamed as CHANGELOG, in accordance with fboss
+
+v1.3.7  (Oct 20, 2018)
+perf: slightly better decompression speed on clang (depending on hardware target)
+fix : performance of dictionary compression for small input < 4 KB at levels 9 and 10
+build: no longer build backtrace by default in release mode; restrict further automatic mode
+build: control backtrace support through build macro BACKTRACE
+misc: added man pages for zstdless and zstdgrep, by @samrussell
+
+v1.3.6  (Oct 6, 2018)
+perf: much faster dictionary builder, by @jenniferliu
+perf: faster dictionary compression on small data when using multiple contexts, by @felixhandte
+perf: faster dictionary decompression when using a very large number of dictionaries simultaneously
+cli : fix : does no longer overwrite destination when source does not exist (#1082)
+cli : new command --adapt, for automatic compression level adaptation
+api : fix : block api can be streamed with > 4 GB, reported by @catid
+api : reduced ZSTD_DDict size by 2 KB
+api : minimum negative compression level is defined, and can be queried using ZSTD_minCLevel().
+build: support Haiku target, by @korli
+build: Read Legacy format is limited to v0.5+ by default. Can be changed at compile time with macro ZSTD_LEGACY_SUPPORT.
+doc : zstd_compression_format.md updated to match wording in IETF RFC 8478
+misc: tests/paramgrill, a parameter optimizer, by @GeorgeLu97
+
+v1.3.5  (Jun 29, 2018)
+perf: much faster dictionary compression, by @felixhandte
+perf: small quality improvement for dictionary generation, by @terrelln
+perf: slightly improved high compression levels (notably level 19)
+mem : automatic memory release for long duration contexts
+cli : fix : overlapLog can be manually set
+cli : fix : decoding invalid lz4 frames
+api : fix : performance degradation for dictionary compression when using advanced API, by @terrelln
+api : change : clarify ZSTD_CCtx_reset() vs ZSTD_CCtx_resetParameters(), by @terrelln
+build: select custom libzstd scope through control macros, by @GeorgeLu97
+build: OpenBSD patch, by @bket
+build: make and make all are compatible with -j
+doc : clarify zstd_compression_format.md, updated for IETF RFC process
+misc: pzstd compatible with reproducible compilation, by @lamby
+
+v1.3.4  (Mar 27, 2018)
+perf: faster speed (especially decoding speed) on recent cpus (haswell+)
+perf: much better performance associating --long with multi-threading, by @terrelln
+perf: better compression at levels 13-15
+cli : asynchronous compression by default, for faster experience (use --single-thread for former behavior)
+cli : smoother status report in multi-threading mode
+cli : added command --fast=#, for faster compression modes
+cli : fix crash when not overwriting existing files, by Pádraig Brady (@pixelb)
+api : `nbThreads` becomes `nbWorkers` : 1 triggers asynchronous mode
+api : compression levels can be negative, for even more speed
+api : ZSTD_getFrameProgression() : get precise progress status of ZSTDMT anytime
+api : ZSTDMT can accept new compression parameters during compression
+api : implemented all advanced dictionary decompression prototypes
+build: improved meson recipe, by Shawn Landden (@shawnl)
+build: VS2017 scripts, by @HaydnTrigg
+misc: all /contrib projects fixed
+misc: added /contrib/docker script by @gyscos
+
+v1.3.3  (Dec 21, 2017)
+perf: faster zstd_opt strategy (levels 16-19)
+fix : bug #944 : multithreading with shared dictionary and large data, reported by @gsliepen
+cli : fix : content size written in header by default
+cli : fix : improved LZ4 format support, by @felixhandte
+cli : new : hidden command `-S`, to benchmark multiple files while generating one result per file
+api : fix : support large skippable frames, by @terrelln
+api : fix : streaming interface was adding a useless 3-bytes null block to small frames
+api : change : when setting `pledgedSrcSize`, use `ZSTD_CONTENTSIZE_UNKNOWN` macro value to mean "unknown"
+build: fix : compilation under rhel6 and centos6, reported by @pixelb
+build: added `check` target
+
+v1.3.2  (Oct 10, 2017)
+new : long range mode, using --long command, by Stella Lau (@stellamplau)
+new : ability to generate and decode magicless frames (#591)
+changed : maximum nb of threads reduced to 200, to avoid address space exhaustion in 32-bits mode
+fix : multi-threading compression works with custom allocators
+fix : ZSTD_sizeof_CStream() was over-evaluating memory usage
+fix : a rare compression bug when compression generates very large distances and bunch of other conditions (only possible at --ultra -22)
+fix : 32-bits build can now decode large offsets (levels 21+)
+cli : added LZ4 frame support by default, by Felix Handte (@felixhandte)
+cli : improved --list output
+cli : new : can split input file for dictionary training, using command -B#
+cli : new : clean operation artefact on Ctrl-C interruption
+cli : fix : do not change /dev/null permissions when using command -t with root access, reported by @mike155 (#851)
+cli : fix : write file size in header in multiple-files mode
+api : added macro ZSTD_COMPRESSBOUND() for static allocation
+api : experimental : new advanced decompression API
+api : fix : sizeof_CCtx() used to over-estimate
+build: fix : no-multithread variant compiles without pool.c dependency, reported by Mitchell Blank Jr (@mitchblank) (#819)
+build: better compatibility with reproducible builds, by Bernhard M. Wiedemann (@bmwiedemann) (#818)
+example : added streaming_memory_usage
+license : changed /examples license to BSD + GPLv2
+license : fix a few header files to reflect new license (#825)
+
+v1.3.1  (Aug 21, 2017)
+New license : BSD + GPLv2
+perf: substantially decreased memory usage in Multi-threading mode, thanks to reports by Tino Reichardt (@mcmilk)
+perf: Multi-threading supports up to 256 threads. Cap at 256 when more are requested (#760)
+cli : improved and fixed --list command, by @ib (#772)
+cli : command -vV to list supported formats, by @ib (#771)
+build : fixed binary variants, reported by @svenha (#788)
+build : fix Visual compilation for non x86/x64 targets, reported by Greg Slazinski (@GregSlazinski) (#718)
+API exp : breaking change : ZSTD_getframeHeader() provides more information
+API exp : breaking change : pinned down values of error codes
+doc : fixed huffman example, by Ulrich Kunitz (@ulikunitz)
+new : contrib/adaptive-compression, I/O driven compression strength, by Paul Cruz (@paulcruz74)
+new : contrib/long_distance_matching, statistics by Stella Lau (@stellamplau)
+updated : contrib/linux-kernel, by Nick Terrell (@terrelln)
+
+v1.3.0  (Jul 6, 2017)
+cli : new : `--list` command, by Paul Cruz
+cli : changed : xz/lzma support enabled by default
+cli : changed : `-t *` continue processing list after a decompression error
+API : added : ZSTD_versionString()
+API : promoted to stable status : ZSTD_getFrameContentSize(), by Sean Purcell
+API exp : new advanced API : ZSTD_compress_generic(), ZSTD_CCtx_setParameter()
+API exp : new : API for static or external allocation : ZSTD_initStatic?Ctx()
+API exp : added : ZSTD_decompressBegin_usingDDict(), requested by Guy Riddle (#700)
+API exp : clarified memory estimation / measurement functions.
+API exp : changed : strongest strategy renamed ZSTD_btultra, fastest strategy ZSTD_fast set to 1
+tools : decodecorpus can generate random dictionary-compressed samples, by Paul Cruz
+new : contrib/seekable_format, demo and API, by Sean Purcell
+changed : contrib/linux-kernel, updated version and license, by Nick Terrell
+
+v1.2.0  (May 5, 2017)
+cli : changed : Multithreading enabled by default (use target zstd-nomt or HAVE_THREAD=0 to disable)
+cli : new : command -T0 means "detect and use nb of cores", by Sean Purcell
+cli : new : zstdmt symlink hardwired to `zstd -T0`
+cli : new : command --threads=# (#671)
+cli : changed : cover dictionary builder by default, for improved quality, by Nick Terrell
+cli : new : commands --train-cover and --train-legacy, to select dictionary algorithm and parameters
+cli : experimental targets `zstd4` and `xzstd4`, with support for lz4 format, by Sean Purcell
+cli : fix : does not output compressed data on console
+cli : fix : ignore symbolic links unless --force specified,
+API : breaking change : ZSTD_createCDict_advanced(), only use compressionParameters as argument
+API : added : prototypes ZSTD_*_usingCDict_advanced(), for direct control over frameParameters.
+API : improved: ZSTDMT_compressCCtx() reduced memory usage
+API : fix : ZSTDMT_compressCCtx() now provides srcSize in header (#634)
+API : fix : src size stored in frame header is controlled at end of frame
+API : fix : enforced consistent rules for pledgedSrcSize==0 (#641)
+API : fix : error code "GENERIC" replaced by "dstSizeTooSmall" when appropriate
+build: improved cmake script, by @Majlen
+build: enabled Multi-threading support for *BSD, by Baptiste Daroussin
+tools: updated Paramgrill. Command -O# provides best parameters for sample and speed target.
+new : contrib/linux-kernel version, by Nick Terrell
+
+v1.1.4  (Mar 18, 2017)
+cli : new : can compress in *.gz format, using --format=gzip command, by Przemyslaw Skibinski
+cli : new : advanced benchmark command --priority=rt
+cli : fix : write on sparse-enabled file systems in 32-bits mode, by @ds77
+cli : fix : --rm remains silent when input is stdin
+cli : experimental : xzstd, with support for xz/lzma decoding, by Przemyslaw Skibinski
+speed : improved decompression speed in streaming mode for single shot scenarios (+5%)
+memory: DDict (decompression dictionary) memory usage down from 150 KB to 20 KB
+arch: 32-bits variant able to generate and decode very long matches (>32 MB), by Sean Purcell
+API : new : ZSTD_findFrameCompressedSize(), ZSTD_getFrameContentSize(), ZSTD_findDecompressedSize()
+API : changed : dropped support of legacy versions <= v0.3 (can be changed by modifying ZSTD_LEGACY_SUPPORT value)
+build : new: meson build system in contrib/meson, by Dima Krasner
+build : improved cmake script, by @Majlen
+build : added -Wformat-security flag, as recommended by Padraig Brady
+doc : new : educational decoder, by Sean Purcell
+
+v1.1.3  (Feb 7, 2017)
+cli : zstd can decompress .gz files (can be disabled with `make zstd-nogz` or `make HAVE_ZLIB=0`)
+cli : new : experimental target `make zstdmt`, with multi-threading support
+cli : new : improved dictionary builder "cover" (experimental), by Nick Terrell, based on prior work by Giuseppe Ottaviano.
+cli : new : advanced commands for detailed parameters, by Przemyslaw Skibinski
+cli : fix zstdless on Mac OS-X, by Andrew Janke
+cli : fix #232 "compress non-files"
+dictBuilder : improved dictionary generation quality, thanks to Nick Terrell
+API : new : lib/compress/ZSTDMT_compress.h multithreading API (experimental)
+API : new : ZSTD_create?Dict_byReference(), requested by Bartosz Taudul
+API : new : ZDICT_finalizeDictionary()
+API : fix : ZSTD_initCStream_usingCDict() properly writes dictID into frame header, by Gregory Szorc (#511)
+API : fix : all symbols properly exposed in libzstd, by Nick Terrell
+build : support for Solaris target, by Przemyslaw Skibinski
+doc : clarified specification, by Sean Purcell
+
+v1.1.2  (Dec 15, 2016)
+API : streaming : decompression : changed : automatic implicit reset when chain-decoding new frames without init
+API : experimental : added : dictID retrieval functions, and ZSTD_initCStream_srcSize()
+API : zbuff : changed : prototypes now generate deprecation warnings
+lib : improved : faster decompression speed at ultra compression settings and 32-bits mode
+lib : changed : only public ZSTD_ symbols are now exposed
+lib : changed : reduced usage  of stack memory
+lib : fixed : several corner case bugs, by Nick Terrell
+cli : new : gzstd, experimental version able to decode .gz files, by Przemyslaw Skibinski
+cli : new : preserve file attributes
+cli : new : added zstdless and zstdgrep tools
+cli : fixed : status displays total amount decoded, even for file consisting of multiple frames (like pzstd)
+cli : fixed : zstdcat
+zlib_wrapper : added support for gz* functions, by Przemyslaw Skibinski
+install : better compatibility with FreeBSD, by Dimitry Andric
+source tree : changed : zbuff source files moved to lib/deprecated
+
+v1.1.1  (Nov 2, 2016)
+New : command -M#, --memory=, --memlimit=, --memlimit-decompress= to limit allowed memory consumption
+New : doc/zstd_manual.html, by Przemyslaw Skibinski
+Improved : slightly better compression ratio at --ultra levels (>= 20)
+Improved : better memory usage when using streaming compression API, thanks to @Rogier-5 report
+Added : API : ZSTD_initCStream_usingCDict(), ZSTD_initDStream_usingDDict() (experimental section)
+Added : example/multiple_streaming_compression.c
+Changed : zstd_errors.h is now installed within /include (and replaces errors_public.h)
+Updated man page
+Fixed : zstd-small, zstd-compress and zstd-decompress compilation targets
+
+v1.1.0  (Sep 28, 2016)
+New : contrib/pzstd, parallel version of zstd, by Nick Terrell
+added : NetBSD install target (#338)
+Improved : speed for batches of small files
+Improved : speed of zlib wrapper, by Przemyslaw Skibinski
+Changed : libzstd on Windows supports legacy formats, by Christophe Chevalier
+Fixed : CLI -d output to stdout by default when input is stdin (#322)
+Fixed : CLI correctly detects console on Mac OS-X
+Fixed : CLI supports recursive mode `-r` on Mac OS-X
+Fixed : Legacy decoders use unified error codes, reported by benrg (#341), fixed by Przemyslaw Skibinski
+Fixed : compatibility with OpenBSD, reported by Juan Francisco Cantero Hurtado (#319)
+Fixed : compatibility with Hurd, by Przemyslaw Skibinski (#365)
+Fixed : zstd-pgo, reported by octoploid (#329)
+
+v1.0.0  (Sep 1, 2016)
+Change Licensing, all project is now BSD, Copyright Facebook
+Small decompression speed improvement
+API : Streaming API supports legacy format
+API : ZDICT_getDictID(), ZSTD_sizeof_{CCtx, DCtx, CStream, DStream}(), ZSTD_setDStreamParameter()
+CLI supports legacy formats v0.4+
+Fixed : compression fails on certain huge files, reported by Jesse McGrew
+Enhanced documentation, by Przemyslaw Skibinski
+
+v0.8.1  (Aug 18, 2016)
+New streaming API
+Changed : --ultra now enables levels beyond 19
+Changed : -i# now selects benchmark time in second
+Fixed : ZSTD_compress* can now compress > 4 GB in a single pass, reported by Nick Terrell
+Fixed : speed regression on specific patterns (#272)
+Fixed : support for Z_SYNC_FLUSH, by Dmitry Krot (#291)
+Fixed : ICC compilation, by Przemyslaw Skibinski
+
+v0.8.0  (Aug 2, 2016)
+Improved : better speed on clang and gcc -O2, thanks to Eric Biggers
+New : Build on FreeBSD and DragonFly, thanks to JrMarino
+Changed : modified API : ZSTD_compressEnd()
+Fixed : legacy mode with ZSTD_HEAPMODE=0, by Christopher Bergqvist
+Fixed : premature end of frame when zero-sized raw block, reported by Eric Biggers
+Fixed : large dictionaries (> 384 KB), reported by Ilona Papava
+Fixed : checksum correctly checked in single-pass mode
+Fixed : combined --test amd --rm, reported by Andreas M. Nilsson
+Modified : minor compression level adaptations
+Updated : compression format specification to v0.2.0
+changed : zstd.h moved to /lib directory
+
+v0.7.5  (Aug 1, 2016)
+Transition version, supporting decoding of v0.8.x
+
+v0.7.4  (Jul 17, 2016)
+Added : homebrew for Mac, by Daniel Cade
+Added : more examples
+Fixed : segfault when using small dictionaries, reported by Felix Handte
+Modified : default compression level for CLI is now 3
+Updated : specification, to v0.1.1
+
+v0.7.3  (Jul 9, 2016)
+New : compression format specification
+New : `--` separator, stating that all following arguments are file names. Suggested by Chip Turner.
+New : `ZSTD_getDecompressedSize()`
+New : OpenBSD target, by Juan Francisco Cantero Hurtado
+New : `examples` directory
+fixed : dictBuilder using HC levels, reported by Bartosz Taudul
+fixed : legacy support from ZSTD_decompress_usingDDict(), reported by Felix Handte
+fixed : multi-blocks decoding with intermediate uncompressed blocks, reported by Greg Slazinski
+modified : removed "mem.h" and "error_public.h" dependencies from "zstd.h" (experimental section)
+modified : legacy functions no longer need magic number
+
+v0.7.2  (Jul 4, 2016)
+fixed : ZSTD_decompressBlock() using multiple consecutive blocks. Reported by Greg Slazinski.
+fixed : potential segfault on very large files (many gigabytes). Reported by Chip Turner.
+fixed : CLI displays system error message when destination file cannot be created (#231). Reported by Chip Turner.
+
+v0.7.1  (Jun 23, 2016)
+fixed : ZBUFF_compressEnd() called multiple times with too small `dst` buffer, reported by Christophe Chevalier
+fixed : dictBuilder fails if first sample is too small, reported by Руслан Ковалёв
+fixed : corruption issue, reported by cj
+modified : checksum enabled by default in command line mode
+
+v0.7.0  (Jun 17, 2016)
+New : Support for directory compression, using `-r`, thanks to Przemyslaw Skibinski
+New : Command `--rm`, to remove source file after successful de/compression
+New : Visual build scripts, by Christophe Chevalier
+New : Support for Sparse File-systems (do not use space for zero-filled sectors)
+New : Frame checksum support
+New : Support pass-through mode (when using `-df`)
+API : more efficient Dictionary API : `ZSTD_compress_usingCDict()`, `ZSTD_decompress_usingDDict()`
+API : create dictionary files from custom content, by Giuseppe Ottaviano
+API : support for custom malloc/free functions
+New : controllable Dictionary ID
+New : Support for skippable frames
+
+v0.6.1  (May 13, 2016)
+New : zlib wrapper API, thanks to Przemyslaw Skibinski
+New : Ability to compile compressor / decompressor separately
+Changed : new lib directory structure
+Fixed : Legacy codec v0.5 compatible with dictionary decompression
+Fixed : Decoder corruption error (#173)
+Fixed : null-string roundtrip (#176)
+New : benchmark mode can select directory as input
+Experimental : midipix support, VMS support
+
+v0.6.0  (Apr 13, 2016)
+Stronger high compression modes, thanks to Przemyslaw Skibinski
+API : ZSTD_getFrameParams() provides size of decompressed content
+New : highest compression modes require `--ultra` command to fully unleash their capacity
+Fixed : zstd cli return error code > 0 and removes dst file artifact when decompression fails, thanks to Chip Turner
+
+v0.5.1  (Feb 18, 2016)
+New : Optimal parsing => Very high compression modes, thanks to Przemyslaw Skibinski
+Changed : Dictionary builder integrated into libzstd and zstd cli
+Changed (!) : zstd cli now uses "multiple input files" as default mode. See `zstd -h`.
+Fix : high compression modes for big-endian platforms
+New : zstd cli : `-t` | `--test` command
+
+v0.5.0  (Feb 5, 2016)
+New : dictionary builder utility
+Changed : streaming & dictionary API
+Improved : better compression of small data
+
+v0.4.7  (Jan 22, 2016)
+Improved : small compression speed improvement in HC mode
+Changed : `zstd_decompress.c` has ZSTD_LEGACY_SUPPORT to 0 by default
+fix : bt search bug
+
+v0.4.6  (Jan 13, 2016)
+fix : fast compression mode on Windows
+New : cmake configuration file, thanks to Artyom Dymchenko
+Improved : high compression mode on repetitive data
+New : block-level API
+New : ZSTD_duplicateCCtx()
+
+v0.4.5  (Dec 18, 2015)
+new : -m/--multiple : compress/decompress multiple files
+
+v0.4.4  (Dec 14, 2015)
+Fixed : high compression modes for Windows 32 bits
+new : external dictionary API extended to buffered mode and accessible through command line
+new : windows DLL project, thanks to Christophe Chevalier
+
+v0.4.3  (Dec 7, 2015)
+new : external dictionary API
+new : zstd-frugal
+
+v0.4.2  (Dec 2, 2015)
+Generic minor improvements for small blocks
+Fixed : big-endian compatibility, by Peter Harris (#85)
+
+v0.4.1  (Dec 1, 2015)
+Fixed : ZSTD_LEGACY_SUPPORT=0 build mode (reported by Luben)
+removed `zstd.c`
+
+v0.4.0  (Nov 29, 2015)
+Command line utility compatible with high compression levels
+Removed zstdhc => merged into zstd
+Added : ZBUFF API (see zstd_buffered.h)
+Rolling buffer support
+
+v0.3.6  (Nov 10, 2015)
+small blocks params
+
+v0.3.5  (Nov 9, 2015)
+minor generic compression improvements
+
+v0.3.4  (Nov 6, 2015)
+Faster fast cLevels
+
+v0.3.3  (Nov 5, 2015)
+Small compression ratio improvement
+
+v0.3.2  (Nov 2, 2015)
+Fixed Visual Studio
+
+v0.3.1  (Nov 2, 2015)
+Small compression ratio improvement
+
+v0.3  (Oct 30, 2015)
+HC mode : compression levels 2-26
+
+v0.2.2  (Oct 28, 2015)
+Fix : Visual Studio 2013 & 2015 release compilation, by Christophe Chevalier
+
+v0.2.1  (Oct 24, 2015)
+Fix : Read errors, advanced fuzzer tests, by Hanno Böck
+
+v0.2.0  (Oct 22, 2015)
+**Breaking format change**
+Faster decompression speed
+Can still decode v0.1 format
+
+v0.1.3  (Oct 15, 2015)
+fix uninitialization warning, reported by Evan Nemerson
+
+v0.1.2  (Sep 11, 2015)
+frame concatenation support
+
+v0.1.1  (Aug 27, 2015)
+fix compression bug
+detects write-flush errors
+
+v0.1.0  (Aug 25, 2015)
+first release

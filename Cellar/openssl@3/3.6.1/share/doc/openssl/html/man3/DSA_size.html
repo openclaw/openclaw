@@ -1,0 +1,77 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>DSA_size</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>DSA_size, DSA_bits, DSA_security_bits - get DSA signature size, key bits or security bits</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/dsa.h&gt;</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>int DSA_bits(const DSA *dsa);
+
+int DSA_size(const DSA *dsa);
+
+int DSA_security_bits(const DSA *dsa);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>All of the functions described on this page are deprecated. Applications should instead use <a href="../man3/EVP_PKEY_get_bits.html">EVP_PKEY_get_bits(3)</a>, <a href="../man3/EVP_PKEY_get_security_bits.html">EVP_PKEY_get_security_bits(3)</a> and <a href="../man3/EVP_PKEY_get_size.html">EVP_PKEY_get_size(3)</a>.</p>
+
+<p>DSA_bits() returns the number of bits in key <i>dsa</i>: this is the number of bits in the <i>p</i> parameter.</p>
+
+<p>DSA_size() returns the maximum size of an ASN.1 encoded DSA signature for key <i>dsa</i> in bytes. It can be used to determine how much memory must be allocated for a DSA signature.</p>
+
+<p>DSA_security_bits() returns the number of security bits of the given <i>dsa</i> key. See <a href="../man3/BN_security_bits.html">BN_security_bits(3)</a>.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>DSA_security_bits() returns the number of security bits in the key, or -1 if <i>dsa</i> doesn&#39;t hold any key parameters.</p>
+
+<p>DSA_bits() returns the number of bits in the key, or -1 if <i>dsa</i> doesn&#39;t hold any key parameters.</p>
+
+<p>DSA_size() returns the signature size in bytes, or -1 if <i>dsa</i> doesn&#39;t hold any key parameters.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_PKEY_get_bits.html">EVP_PKEY_get_bits(3)</a>, <a href="../man3/EVP_PKEY_get_security_bits.html">EVP_PKEY_get_security_bits(3)</a>, <a href="../man3/EVP_PKEY_get_size.html">EVP_PKEY_get_size(3)</a>, <a href="../man3/DSA_new.html">DSA_new(3)</a>, <a href="../man3/DSA_sign.html">DSA_sign(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>All of these functions were deprecated in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

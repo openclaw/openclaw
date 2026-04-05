@@ -1,0 +1,129 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_CTX_set_cipher_list</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_CTX_set_cipher_list, SSL_set_cipher_list, SSL_CTX_set_ciphersuites, SSL_set_ciphersuites, OSSL_default_cipher_list, OSSL_default_ciphersuites - choose list of available SSL_CIPHERs</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+int SSL_CTX_set_cipher_list(SSL_CTX *ctx, const char *str);
+int SSL_set_cipher_list(SSL *ssl, const char *str);
+
+int SSL_CTX_set_ciphersuites(SSL_CTX *ctx, const char *str);
+int SSL_set_ciphersuites(SSL *s, const char *str);
+
+const char *OSSL_default_cipher_list(void);
+const char *OSSL_default_ciphersuites(void);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_CTX_set_cipher_list() sets the list of available ciphers (TLSv1.2 and below) for <b>ctx</b> using the control string <b>str</b>. The format of the string is described in <a href="../man1/openssl-ciphers.html">openssl-ciphers(1)</a>. The list of ciphers is inherited by all <b>ssl</b> objects created from <b>ctx</b>. This function does not impact TLSv1.3 ciphersuites. Use SSL_CTX_set_ciphersuites() to configure those. <b>ctx</b> <b>MUST NOT</b> be NULL.</p>
+
+<p>SSL_set_cipher_list() sets the list of ciphers (TLSv1.2 and below) only for <b>ssl</b>.</p>
+
+<p>SSL_CTX_set_ciphersuites() is used to configure the available TLSv1.3 ciphersuites for <b>ctx</b>. This is a simple colon (&quot;:&quot;) separated list of TLSv1.3 ciphersuite names in order of preference. Valid TLSv1.3 ciphersuite names are:</p>
+
+<dl>
+
+<dt id="TLS_AES_128_GCM_SHA256">TLS_AES_128_GCM_SHA256</dt>
+<dd>
+
+</dd>
+<dt id="TLS_AES_256_GCM_SHA384">TLS_AES_256_GCM_SHA384</dt>
+<dd>
+
+</dd>
+<dt id="TLS_CHACHA20_POLY1305_SHA256">TLS_CHACHA20_POLY1305_SHA256</dt>
+<dd>
+
+</dd>
+<dt id="TLS_AES_128_CCM_SHA256">TLS_AES_128_CCM_SHA256</dt>
+<dd>
+
+</dd>
+<dt id="TLS_AES_128_CCM_8_SHA256">TLS_AES_128_CCM_8_SHA256</dt>
+<dd>
+
+</dd>
+<dt id="TLS_SHA384_SHA384---integrity-only">TLS_SHA384_SHA384 - integrity-only</dt>
+<dd>
+
+</dd>
+<dt id="TLS_SHA256_SHA256---integrity-only">TLS_SHA256_SHA256 - integrity-only</dt>
+<dd>
+
+</dd>
+</dl>
+
+<p>An empty list is permissible. The default value for this setting is:</p>
+
+<p>&quot;TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256&quot;</p>
+
+<p>SSL_set_ciphersuites() is the same as SSL_CTX_set_ciphersuites() except it configures the ciphersuites for <b>ssl</b>.</p>
+
+<p>OSSL_default_cipher_list() returns the default cipher string for TLSv1.2 (and earlier) ciphers. OSSL_default_ciphersuites() returns the default cipher string for TLSv1.3 ciphersuites.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The control string <b>str</b> for SSL_CTX_set_cipher_list(), SSL_set_cipher_list(), SSL_CTX_set_ciphersuites() and SSL_set_ciphersuites() should be universally usable and not depend on details of the library configuration (ciphers compiled in). Thus no syntax checking takes place. Items that are not recognized, because the corresponding ciphers are not compiled in or because they are mistyped, are simply ignored. Failure is only flagged if no ciphers could be collected at all.</p>
+
+<p>It should be noted, that inclusion of a cipher to be used into the list is a necessary condition. On the client side, the inclusion into the list is also sufficient unless the security level excludes it. On the server side, additional restrictions apply. All ciphers have additional requirements. ADH ciphers don&#39;t need a certificate, but DH-parameters must have been set. All other ciphers need a corresponding certificate and key.</p>
+
+<p>An RSA cipher can only be chosen, when an RSA certificate is available. RSA ciphers using DHE need a certificate and key and additional DH-parameters (see <a href="../man3/SSL_CTX_set_tmp_dh_callback.html">SSL_CTX_set_tmp_dh_callback(3)</a>).</p>
+
+<p>A DSA cipher can only be chosen, when a DSA certificate is available. DSA ciphers always use DH key exchange and therefore need DH-parameters (see <a href="../man3/SSL_CTX_set_tmp_dh_callback.html">SSL_CTX_set_tmp_dh_callback(3)</a>).</p>
+
+<p>When these conditions are not met for any cipher in the list (e.g. a client only supports export RSA ciphers with an asymmetric key length of 512 bits and the server is not configured to use temporary RSA keys), the &quot;no shared cipher&quot; (SSL_R_NO_SHARED_CIPHER) error is generated and the handshake will fail.</p>
+
+<p>OSSL_default_cipher_list() and OSSL_default_ciphersuites() replace SSL_DEFAULT_CIPHER_LIST and TLS_DEFAULT_CIPHERSUITES, respectively. The cipher list defines are deprecated as of 3.0.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_CTX_set_cipher_list() and SSL_set_cipher_list() return 1 if any cipher could be selected and 0 on complete failure.</p>
+
+<p>SSL_CTX_set_ciphersuites() and SSL_set_ciphersuites() return 1 if the requested ciphersuite list was configured, and 0 otherwise.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a>, <a href="../man3/SSL_get_ciphers.html">SSL_get_ciphers(3)</a>, <a href="../man3/SSL_CTX_use_certificate.html">SSL_CTX_use_certificate(3)</a>, <a href="../man3/SSL_CTX_set_tmp_dh_callback.html">SSL_CTX_set_tmp_dh_callback(3)</a>, <a href="../man1/openssl-ciphers.html">openssl-ciphers(1)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>OSSL_default_cipher_list() and OSSL_default_ciphersites() are new in 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

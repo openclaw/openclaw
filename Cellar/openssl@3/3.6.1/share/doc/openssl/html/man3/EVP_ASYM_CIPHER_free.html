@@ -1,0 +1,103 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_ASYM_CIPHER_free</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_ASYM_CIPHER_fetch, EVP_ASYM_CIPHER_free, EVP_ASYM_CIPHER_up_ref, EVP_ASYM_CIPHER_is_a, EVP_ASYM_CIPHER_get0_provider, EVP_ASYM_CIPHER_do_all_provided, EVP_ASYM_CIPHER_names_do_all, EVP_ASYM_CIPHER_get0_name, EVP_ASYM_CIPHER_get0_description, EVP_ASYM_CIPHER_gettable_ctx_params, EVP_ASYM_CIPHER_settable_ctx_params - Functions to manage EVP_ASYM_CIPHER algorithm objects</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+
+EVP_ASYM_CIPHER *EVP_ASYM_CIPHER_fetch(OSSL_LIB_CTX *ctx, const char *algorithm,
+                                       const char *properties);
+void EVP_ASYM_CIPHER_free(EVP_ASYM_CIPHER *cipher);
+int EVP_ASYM_CIPHER_up_ref(EVP_ASYM_CIPHER *cipher);
+const char *EVP_ASYM_CIPHER_get0_name(const EVP_ASYM_CIPHER *cipher);
+int EVP_ASYM_CIPHER_is_a(const EVP_ASYM_CIPHER *cipher, const char *name);
+OSSL_PROVIDER *EVP_ASYM_CIPHER_get0_provider(const EVP_ASYM_CIPHER *cipher);
+void EVP_ASYM_CIPHER_do_all_provided(OSSL_LIB_CTX *libctx,
+                                     void (*fn)(EVP_ASYM_CIPHER *cipher,
+                                                void *arg),
+                                     void *arg);
+int EVP_ASYM_CIPHER_names_do_all(const EVP_ASYM_CIPHER *cipher,
+                                 void (*fn)(const char *name, void *data),
+                                 void *data);
+const char *EVP_ASYM_CIPHER_get0_description(const EVP_ASYM_CIPHER *cipher);
+const OSSL_PARAM *EVP_ASYM_CIPHER_gettable_ctx_params(const EVP_ASYM_CIPHER *cip);
+const OSSL_PARAM *EVP_ASYM_CIPHER_settable_ctx_params(const EVP_ASYM_CIPHER *cip);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>EVP_ASYM_CIPHER_fetch() fetches the implementation for the given <b>algorithm</b> from any provider offering it, within the criteria given by the <b>properties</b> and in the scope of the given library context <b>ctx</b> (see <a href="../man3/OSSL_LIB_CTX.html">OSSL_LIB_CTX(3)</a>). The algorithm will be one offering functions for performing asymmetric cipher related tasks such as asymmetric encryption and decryption. See <a href="../man7/crypto.html">&quot;ALGORITHM FETCHING&quot; in crypto(7)</a> for further information.</p>
+
+<p>The returned value must eventually be freed with EVP_ASYM_CIPHER_free().</p>
+
+<p>EVP_ASYM_CIPHER_free() decrements the reference count for the <b>EVP_ASYM_CIPHER</b> structure. Typically this structure will have been obtained from an earlier call to EVP_ASYM_CIPHER_fetch(). If the reference count drops to 0 then the structure is freed. If the argument is NULL, nothing is done.</p>
+
+<p>EVP_ASYM_CIPHER_up_ref() increments the reference count for an <b>EVP_ASYM_CIPHER</b> structure.</p>
+
+<p>EVP_ASYM_CIPHER_is_a() returns 1 if <i>cipher</i> is an implementation of an algorithm that&#39;s identifiable with <i>name</i>, otherwise 0.</p>
+
+<p>EVP_ASYM_CIPHER_get0_provider() returns the provider that <i>cipher</i> was fetched from.</p>
+
+<p>EVP_ASYM_CIPHER_do_all_provided() traverses all EVP_ASYM_CIPHERs implemented by all activated providers in the given library context <i>libctx</i>, and for each of the implementations, calls the given function <i>fn</i> with the implementation method and the given <i>arg</i> as argument.</p>
+
+<p>EVP_ASYM_CIPHER_get0_name() returns the algorithm name from the provided implementation for the given <i>cipher</i>. Note that the <i>cipher</i> may have multiple synonyms associated with it. In this case the first name from the algorithm definition is returned. Ownership of the returned string is retained by the <i>cipher</i> object and should not be freed by the caller.</p>
+
+<p>EVP_ASYM_CIPHER_names_do_all() traverses all names for <i>cipher</i>, and calls <i>fn</i> with each name and <i>data</i>.</p>
+
+<p>EVP_ASYM_CIPHER_get0_description() returns a description of the <i>cipher</i>, meant for display and human consumption. The description is at the discretion of the <i>cipher</i> implementation.</p>
+
+<p>EVP_ASYM_CIPHER_gettable_ctx_params() and EVP_ASYM_CIPHER_settable_ctx_params() return a constant <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> array that describes the names and types of key parameters that can be retrieved or set by a key encryption algorithm using <a href="../man3/EVP_PKEY_CTX_get_params.html">EVP_PKEY_CTX_get_params(3)</a> and <a href="../man3/EVP_PKEY_CTX_set_params.html">EVP_PKEY_CTX_set_params(3)</a>.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>EVP_ASYM_CIPHER_fetch() returns a pointer to an <b>EVP_ASYM_CIPHER</b> for success or <b>NULL</b> for failure.</p>
+
+<p>EVP_ASYM_CIPHER_up_ref() returns 1 for success or 0 otherwise.</p>
+
+<p>EVP_ASYM_CIPHER_names_do_all() returns 1 if the callback was called for all names. A return value of 0 means that the callback was not called for any names.</p>
+
+<p>EVP_ASYM_CIPHER_gettable_ctx_params() and EVP_ASYM_CIPHER_settable_ctx_params() return a constant <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> array or NULL on error.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/crypto.html">&quot;ALGORITHM FETCHING&quot; in crypto(7)</a>, <a href="../man3/OSSL_PROVIDER.html">OSSL_PROVIDER(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The functions described here were added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2019-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,82 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>CMS_add0_cert</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>CMS_add0_cert, CMS_add1_cert, CMS_get1_certs, CMS_add0_crl, CMS_add1_crl, CMS_get1_crls - CMS certificate and CRL utility functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/cms.h&gt;
+
+int CMS_add0_cert(CMS_ContentInfo *cms, X509 *cert);
+int CMS_add1_cert(CMS_ContentInfo *cms, X509 *cert);
+STACK_OF(X509) *CMS_get1_certs(CMS_ContentInfo *cms);
+
+int CMS_add0_crl(CMS_ContentInfo *cms, X509_CRL *crl);
+int CMS_add1_crl(CMS_ContentInfo *cms, X509_CRL *crl);
+STACK_OF(X509_CRL) *CMS_get1_crls(CMS_ContentInfo *cms);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>CMS_add0_cert() and CMS_add1_cert() add certificate <i>cert</i> to <i>cms</i> unless it is already present. This is used by <a href="../man3/CMS_sign_ex.html">CMS_sign_ex(3)</a> and <a href="../man3/CMS_sign.html">CMS_sign(3)</a> and may be used before calling <a href="../man3/CMS_verify.html">CMS_verify(3)</a> to help chain building in certificate validation. As the 0 implies, CMS_add0_cert() adds <i>cert</i> internally to <i>cms</i> and on success it must not be freed up by the caller. In contrast, the caller of CMS_add1_cert() must free <i>cert</i>. <i>cms</i> must be of type signed data or (authenticated) enveloped data. For signed data, such a certificate can be used when signing or verifying to fill in the signer certificate or to provide an extra CA certificate that may be needed for chain building in certificate validation.</p>
+
+<p>CMS_get1_certs() returns all certificates in <i>cms</i>.</p>
+
+<p>CMS_add0_crl() and CMS_add1_crl() add CRL <i>crl</i> to <i>cms</i>. <i>cms</i> must be of type signed data or (authenticated) enveloped data. For signed data, such a CRL may be used in certificate validation with <a href="../man3/CMS_verify.html">CMS_verify(3)</a>. It may be given both for inclusion when signing a CMS message and when verifying a signed CMS message.</p>
+
+<p>CMS_get1_crls() returns all CRLs in <i>cms</i>.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The CMS_ContentInfo structure <i>cms</i> must be of type signed data or enveloped data or authenticated enveloped data or an error will be returned.</p>
+
+<p>For signed data, certificates and CRLs are added to the <i>certificates</i> and <i>crls</i> fields of SignedData structure. For enveloped data they are added to <b>OriginatorInfo</b>.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>CMS_add0_cert(), CMS_add1_cert() and CMS_add0_crl() and CMS_add1_crl() return 1 for success and 0 for failure.</p>
+
+<p>CMS_get1_certs() and CMS_get1_crls() return the STACK of certificates or CRLs or NULL if there are none or an error occurs. Besides out-of-memory, the only error which will occur in practice is if the <i>cms</i> type is invalid.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>, <a href="../man3/CMS_sign.html">CMS_sign(3)</a>, <a href="../man3/CMS_sign_ex.html">CMS_sign_ex(3)</a>, <a href="../man3/CMS_verify.html">CMS_verify(3)</a>, <a href="../man3/CMS_encrypt.html">CMS_encrypt(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>CMS_add0_cert() and CMS_add1_cert() have been changed in OpenSSL 3.2 not to throw an error if a certificate to be added is already present.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2008-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

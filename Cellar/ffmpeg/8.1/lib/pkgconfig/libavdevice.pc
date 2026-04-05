@@ -1,0 +1,14 @@
+prefix=/opt/homebrew/Cellar/ffmpeg/8.1
+exec_prefix=${prefix}
+libdir=/opt/homebrew/Cellar/ffmpeg/8.1/lib
+includedir=/opt/homebrew/Cellar/ffmpeg/8.1/include
+
+Name: libavdevice
+Description: FFmpeg device handling library
+Version: 62.3.100
+Requires: 
+Requires.private: libavfilter >= 11.14.100, libswscale >= 9.5.100, libavformat >= 62.12.100, libavcodec >= 62.28.100, libswresample >= 6.3.100, libavutil >= 60.26.100
+Conflicts:
+Libs: -L${libdir}  -lavdevice 
+Libs.private: -framework Foundation -framework AudioToolbox -framework CoreAudio -lm -framework AVFoundation -framework CoreVideo -framework CoreMedia -framework CoreGraphics -framework AudioToolbox -pthread
+Cflags: -I${includedir}

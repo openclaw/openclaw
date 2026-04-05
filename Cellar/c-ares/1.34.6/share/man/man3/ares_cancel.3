@@ -1,0 +1,33 @@
+.\"
+.\" Copyright 1998 by the Massachusetts Institute of Technology.
+.\" SPDX-License-Identifier: MIT
+.\"
+.TH ARES_CANCEL 3 "31 March 2004"
+.SH NAME
+ares_cancel \- Cancel a resolve
+.SH SYNOPSIS
+.nf
+#include <ares.h>
+
+void ares_cancel(ares_channel_t *\fIchannel\fP)
+.fi
+.SH DESCRIPTION
+The \fBares_cancel(3)\fP function cancels all lookups/requests made on the the
+name service channel identified by \fIchannel\fP.  \fBares_cancel(3)\fP
+invokes the callbacks for each pending query on the channel, passing a status
+of
+.BR ARES_ECANCELLED .
+These calls give the callbacks a chance to clean up any state which might have
+been stored in their arguments. If such a callback invocation adds a new
+request to the channel, that request will \fInot\fP be cancelled by the
+current invocation of \fBares_cancel(3)\fP.
+.SH SEE ALSO
+.BR ares_init (3)
+.BR ares_destroy (3)
+.SH NOTES
+This function was added in c-ares 1.2.0
+
+c-ares 1.6.0 and earlier pass a status of
+.BR ARES_ETIMEOUT
+instead of
+.BR ARES_ECANCELLED .

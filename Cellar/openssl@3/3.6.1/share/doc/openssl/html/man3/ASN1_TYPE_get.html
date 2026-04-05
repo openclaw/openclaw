@@ -1,0 +1,89 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>ASN1_TYPE_get</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>ASN1_TYPE_get, ASN1_TYPE_set, ASN1_TYPE_set1, ASN1_TYPE_cmp, ASN1_TYPE_unpack_sequence, ASN1_TYPE_pack_sequence - ASN1_TYPE utility functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/asn1.h&gt;
+
+int ASN1_TYPE_get(const ASN1_TYPE *a);
+void ASN1_TYPE_set(ASN1_TYPE *a, int type, void *value);
+int ASN1_TYPE_set1(ASN1_TYPE *a, int type, const void *value);
+int ASN1_TYPE_cmp(const ASN1_TYPE *a, const ASN1_TYPE *b);
+
+void *ASN1_TYPE_unpack_sequence(const ASN1_ITEM *it, const ASN1_TYPE *t);
+ASN1_TYPE *ASN1_TYPE_pack_sequence(const ASN1_ITEM *it, void *s,
+                                   ASN1_TYPE **t);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>These functions allow an <b>ASN1_TYPE</b> structure to be manipulated. The <b>ASN1_TYPE</b> structure can contain any ASN.1 type or constructed type such as a SEQUENCE: it is effectively equivalent to the ASN.1 ANY type.</p>
+
+<p>ASN1_TYPE_get() returns the type of <i>a</i> or 0 if it fails.</p>
+
+<p>ASN1_TYPE_set() sets the value of <i>a</i> to <i>type</i> and <i>value</i>. This function uses the pointer <i>value</i> internally so it must <b>not</b> be freed up after the call.</p>
+
+<p>ASN1_TYPE_set1() sets the value of <i>a</i> to <i>type</i> a copy of <i>value</i>.</p>
+
+<p>ASN1_TYPE_cmp() compares ASN.1 types <i>a</i> and <i>b</i> and returns 0 if they are identical and nonzero otherwise.</p>
+
+<p>ASN1_TYPE_unpack_sequence() attempts to parse the SEQUENCE present in <i>t</i> using the ASN.1 structure <i>it</i>. If successful it returns a pointer to the ASN.1 structure corresponding to <i>it</i> which must be freed by the caller. If it fails it return NULL.</p>
+
+<p>ASN1_TYPE_pack_sequence() attempts to encode the ASN.1 structure <i>s</i> corresponding to <i>it</i> into an <b>ASN1_TYPE</b>. If successful the encoded <b>ASN1_TYPE</b> is returned. If <i>t</i> and <i>*t</i> are not NULL the encoded type is written to <i>t</i> overwriting any existing data. If <i>t</i> is not NULL but <i>*t</i> is NULL the returned <b>ASN1_TYPE</b> is written to <i>*t</i>.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The type and meaning of the <i>value</i> parameter for ASN1_TYPE_set() and ASN1_TYPE_set1() is determined by the <i>type</i> parameter. If <i>type</i> is <b>V_ASN1_NULL</b> <i>value</i> is ignored. If <i>type</i> is <b>V_ASN1_BOOLEAN</b> then the boolean is set to TRUE if <i>value</i> is not NULL. If <i>type</i> is <b>V_ASN1_OBJECT</b> then value is an <b>ASN1_OBJECT</b> structure. Otherwise <i>type</i> is and <b>ASN1_STRING</b> structure. If <i>type</i> corresponds to a primitive type (or a string type) then the contents of the <b>ASN1_STRING</b> contain the content octets of the type. If <i>type</i> corresponds to a constructed type or a tagged type (<b>V_ASN1_SEQUENCE</b>, <b>V_ASN1_SET</b> or <b>V_ASN1_OTHER</b>) then the <b>ASN1_STRING</b> contains the entire ASN.1 encoding verbatim (including tag and length octets).</p>
+
+<p>ASN1_TYPE_cmp() may not return zero if two types are equivalent but have different encodings. For example the single content octet of the boolean TRUE value under BER can have any nonzero encoding but ASN1_TYPE_cmp() will only return zero if the values are the same.</p>
+
+<p>If either or both of the parameters passed to ASN1_TYPE_cmp() is NULL the return value is nonzero. Technically if both parameters are NULL the two types could be absent OPTIONAL fields and so should match, however, passing NULL values could also indicate a programming error (for example an unparsable type which returns NULL) for types which do <b>not</b> match. So applications should handle the case of two absent values separately.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>ASN1_TYPE_get() returns the type of the <b>ASN1_TYPE</b> argument.</p>
+
+<p>ASN1_TYPE_set() does not return a value.</p>
+
+<p>ASN1_TYPE_set1() returns 1 for success and 0 for failure.</p>
+
+<p>ASN1_TYPE_cmp() returns 0 if the types are identical and nonzero otherwise.</p>
+
+<p>ASN1_TYPE_unpack_sequence() returns a pointer to an ASN.1 structure or NULL on failure.</p>
+
+<p>ASN1_TYPE_pack_sequence() return an <b>ASN1_TYPE</b> structure if it succeeds or NULL on failure.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2015-2020 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

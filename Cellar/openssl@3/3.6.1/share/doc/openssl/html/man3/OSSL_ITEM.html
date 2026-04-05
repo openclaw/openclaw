@@ -1,0 +1,62 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OSSL_ITEM</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OSSL_ITEM - OpenSSL Core type for generic itemized data</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/core.h&gt;
+
+typedef struct ossl_item_st OSSL_ITEM;
+struct ossl_item_st {
+    unsigned int id;
+    void *ptr;
+};</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>This type is a tuple of integer and pointer. It&#39;s a generic type used as a generic descriptor, its exact meaning being defined by how it&#39;s used. Arrays of this type are passed between the OpenSSL libraries and the providers, and must be terminated with a tuple where the integer is zero and the pointer NULL.</p>
+
+<p>This is currently mainly used for the return value of the provider&#39;s error reason strings array, see <a href="../man7/provider-base.html">&quot;Provider Functions&quot; in provider-base(7)</a>.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/crypto.html">crypto(7)</a>, <a href="../man7/provider-base.html">provider-base(7)</a>, <a href="../man7/openssl-core.h.html">openssl-core.h(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p><b>OSSL_ITEM</b> was added in OpenSSL 3.0</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2022 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

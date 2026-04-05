@@ -1,0 +1,73 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>UI_UTIL_read_pw</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>UI_UTIL_read_pw_string, UI_UTIL_read_pw, UI_UTIL_wrap_read_pem_callback - user interface utilities</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ui.h&gt;
+
+int UI_UTIL_read_pw_string(char *buf, int length, const char *prompt,
+                           int verify);
+int UI_UTIL_read_pw(char *buf, char *buff, int size, const char *prompt,
+                    int verify);
+UI_METHOD *UI_UTIL_wrap_read_pem_callback(pem_password_cb *cb, int rwflag);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>UI_UTIL_read_pw_string() asks for a passphrase, using <b>prompt</b> as a prompt, and stores it in <b>buf</b>. The maximum allowed size is given with <b>length</b>, including the terminating NUL byte. If <b>verify</b> is nonzero, the password will be verified as well.</p>
+
+<p>UI_UTIL_read_pw() does the same as UI_UTIL_read_pw_string(), the difference is that you can give it an external buffer <b>buff</b> for the verification passphrase.</p>
+
+<p>UI_UTIL_wrap_read_pem_callback() can be used to create a temporary <b>UI_METHOD</b> that wraps a given PEM password callback <b>cb</b>. <b>rwflag</b> is used to specify if this method will be used for passphrase entry without (0) or with (1) verification. When not used any more, the returned method should be freed with UI_destroy_method().</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>UI_UTIL_read_pw_string() and UI_UTIL_read_pw() use default <b>UI_METHOD</b>. See <a href="../man3/UI_get_default_method.html">UI_get_default_method(3)</a> and friends for more information.</p>
+
+<p>The result from the <b>UI_METHOD</b> created by UI_UTIL_wrap_read_pem_callback() will generate password strings in the encoding that the given password callback generates. The default password prompting functions (apart from UI_UTIL_read_pw_string() and UI_UTIL_read_pw(), there is PEM_def_callback(), EVP_read_pw_string() and EVP_read_pw_string_min()) all use the default <b>UI_METHOD</b>.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>UI_UTIL_read_pw_string() and UI_UTIL_read_pw() return 0 on success or a negative value on error.</p>
+
+<p>UI_UTIL_wrap_read_pem_callback() returns a valid <b>UI_METHOD</b> structure or NULL if an error occurred.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/UI_get_default_method.html">UI_get_default_method(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2001-2018 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

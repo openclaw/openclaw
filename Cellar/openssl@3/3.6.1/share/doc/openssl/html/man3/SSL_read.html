@@ -1,0 +1,108 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_read</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_read_ex, SSL_read, SSL_peek_ex, SSL_peek - read bytes from a TLS/SSL connection</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+int SSL_read_ex(SSL *ssl, void *buf, size_t num, size_t *readbytes);
+int SSL_read(SSL *ssl, void *buf, int num);
+
+int SSL_peek_ex(SSL *ssl, void *buf, size_t num, size_t *readbytes);
+int SSL_peek(SSL *ssl, void *buf, int num);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_read_ex() and SSL_read() try to read <b>num</b> bytes from the specified <b>ssl</b> into the buffer <b>buf</b>. On success SSL_read_ex() will store the number of bytes actually read in <b>*readbytes</b>.</p>
+
+<p>SSL_peek_ex() and SSL_peek() are identical to SSL_read_ex() and SSL_read() respectively except no bytes are actually removed from the underlying BIO during the read, so that a subsequent call to SSL_read_ex() or SSL_read() will yield at least the same bytes.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>In the paragraphs below a &quot;read function&quot; is defined as one of SSL_read_ex(), SSL_read(), SSL_peek_ex() or SSL_peek().</p>
+
+<p>If necessary, a read function will negotiate a TLS/SSL session, if not already explicitly performed by <a href="../man3/SSL_connect.html">SSL_connect(3)</a> or <a href="../man3/SSL_accept.html">SSL_accept(3)</a>. If the peer requests a re-negotiation, it will be performed transparently during the read function operation. The behaviour of the read functions depends on the underlying BIO.</p>
+
+<p>For the transparent negotiation to succeed, the <b>ssl</b> must have been initialized to client or server mode. This is being done by calling <a href="../man3/SSL_set_connect_state.html">SSL_set_connect_state(3)</a> or SSL_set_accept_state() before the first invocation of a read function.</p>
+
+<p>The read functions work based on the SSL/TLS records. The data are received in records (with a maximum record size of 16kB). Only when a record has been completely received, can it be processed (decryption and check of integrity). Therefore, data that was not retrieved at the last read call can still be buffered inside the SSL layer and will be retrieved on the next read call. If <b>num</b> is higher than the number of bytes buffered then the read functions will return with the bytes buffered. If no more bytes are in the buffer, the read functions will trigger the processing of the next record. Only when the record has been received and processed completely will the read functions return reporting success. At most the contents of one record will be returned. As the size of an SSL/TLS record may exceed the maximum packet size of the underlying transport (e.g. TCP), it may be necessary to read several packets from the transport layer before the record is complete and the read call can succeed.</p>
+
+<p>If <b>SSL_MODE_AUTO_RETRY</b> has been switched off and a non-application data record has been processed, the read function can return and set the error to <b>SSL_ERROR_WANT_READ</b>. In this case there might still be unprocessed data available in the <b>BIO</b>. If read ahead was set using <a href="../man3/SSL_CTX_set_read_ahead.html">SSL_CTX_set_read_ahead(3)</a>, there might also still be unprocessed data available in the <b>SSL</b>. This behaviour can be controlled using the <a href="../man3/SSL_CTX_set_mode.html">SSL_CTX_set_mode(3)</a> call.</p>
+
+<p>If the underlying BIO is <b>blocking</b>, a read function will only return once the read operation has been finished or an error occurred, except when a non-application data record has been processed and <b>SSL_MODE_AUTO_RETRY</b> is not set. Note that if <b>SSL_MODE_AUTO_RETRY</b> is set and only non-application data is available the call will hang.</p>
+
+<p>If the underlying BIO is <b>nonblocking</b>, a read function will also return when the underlying BIO could not satisfy the needs of the function to continue the operation. In this case a call to <a href="../man3/SSL_get_error.html">SSL_get_error(3)</a> with the return value of the read function will yield <b>SSL_ERROR_WANT_READ</b> or <b>SSL_ERROR_WANT_WRITE</b>. As at any time it&#39;s possible that non-application data needs to be sent, a read function can also cause write operations. The calling process then must repeat the call after taking appropriate action to satisfy the needs of the read function. The action depends on the underlying BIO. When using a nonblocking socket, nothing is to be done, but select() can be used to check for the required condition. When using a buffering BIO, like a BIO pair, data must be written into or retrieved out of the BIO before being able to continue.</p>
+
+<p><a href="../man3/SSL_pending.html">SSL_pending(3)</a> can be used to find out whether there are buffered bytes available for immediate retrieval. In this case the read function can be called without blocking or actually receiving new data from the underlying socket.</p>
+
+<p>When used with a QUIC SSL object, calling an I/O function such as SSL_read() allows internal network event processing to be performed. It is important that this processing is performed regularly. If an application is not using thread assisted mode, an application should ensure that an I/O function such as SSL_read() is called regularly, or alternatively ensure that SSL_handle_events() is called regularly. See <a href="../man7/openssl-quic.html">openssl-quic(7)</a> and <a href="../man3/SSL_handle_events.html">SSL_handle_events(3)</a> for more information.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_read_ex() and SSL_peek_ex() will return 1 for success or 0 for failure. Success means that 1 or more application data bytes have been read from the SSL connection. Failure means that no bytes could be read from the SSL connection. Failures can be retryable (e.g. we are waiting for more bytes to be delivered by the network) or non-retryable (e.g. a fatal network error). In the event of a failure call <a href="../man3/SSL_get_error.html">SSL_get_error(3)</a> to find out the reason which indicates whether the call is retryable or not.</p>
+
+<p>For SSL_read() and SSL_peek() the following return values can occur:</p>
+
+<dl>
+
+<dt id="pod0">&gt; 0</dt>
+<dd>
+
+<p>The read operation was successful. The return value is the number of bytes actually read from the TLS/SSL connection.</p>
+
+</dd>
+<dt id="pod-0">&lt;= 0</dt>
+<dd>
+
+<p>The read operation was not successful, because either the connection was closed, an error occurred or action must be taken by the calling process. Call <a href="../man3/SSL_get_error.html">SSL_get_error(3)</a> with the return value <b>ret</b> to find out the reason.</p>
+
+<p>Old documentation indicated a difference between 0 and -1, and that -1 was retryable. You should instead call SSL_get_error() to find out if it&#39;s retryable.</p>
+
+</dd>
+</dl>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/SSL_get_error.html">SSL_get_error(3)</a>, <a href="../man3/SSL_write_ex.html">SSL_write_ex(3)</a>, <a href="../man3/SSL_CTX_set_mode.html">SSL_CTX_set_mode(3)</a>, <a href="../man3/SSL_CTX_new.html">SSL_CTX_new(3)</a>, <a href="../man3/SSL_connect.html">SSL_connect(3)</a>, <a href="../man3/SSL_accept.html">SSL_accept(3)</a> <a href="../man3/SSL_set_connect_state.html">SSL_set_connect_state(3)</a>, <a href="../man3/SSL_pending.html">SSL_pending(3)</a>, <a href="../man3/SSL_shutdown.html">SSL_shutdown(3)</a>, <a href="../man3/SSL_set_shutdown.html">SSL_set_shutdown(3)</a>, <a href="../man7/ssl.html">ssl(7)</a>, <a href="../man7/bio.html">bio(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The SSL_read_ex() and SSL_peek_ex() functions were added in OpenSSL 1.1.1.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

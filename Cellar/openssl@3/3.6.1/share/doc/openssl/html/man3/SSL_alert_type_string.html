@@ -1,0 +1,255 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_alert_type_string</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_alert_type_string, SSL_alert_type_string_long, SSL_alert_desc_string, SSL_alert_desc_string_long - get textual description of alert information</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+const char *SSL_alert_type_string(int value);
+const char *SSL_alert_type_string_long(int value);
+
+const char *SSL_alert_desc_string(int value);
+const char *SSL_alert_desc_string_long(int value);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_alert_type_string() returns a one letter string indicating the type of the alert specified by <b>value</b>.</p>
+
+<p>SSL_alert_type_string_long() returns a string indicating the type of the alert specified by <b>value</b>.</p>
+
+<p>SSL_alert_desc_string() returns a two letter string as a short form describing the reason of the alert specified by <b>value</b>.</p>
+
+<p>SSL_alert_desc_string_long() returns a string describing the reason of the alert specified by <b>value</b>.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>When one side of an SSL/TLS communication wants to inform the peer about a special situation, it sends an alert. The alert is sent as a special message and does not influence the normal data stream (unless its contents results in the communication being canceled).</p>
+
+<p>A warning alert is sent, when a non-fatal error condition occurs. The &quot;close notify&quot; alert is sent as a warning alert. Other examples for non-fatal errors are certificate errors (&quot;certificate expired&quot;, &quot;unsupported certificate&quot;), for which a warning alert may be sent. (The sending party may however decide to send a fatal error.) The receiving side may cancel the connection on reception of a warning alert on it discretion.</p>
+
+<p>Several alert messages must be sent as fatal alert messages as specified by the TLS RFC. A fatal alert always leads to a connection abort.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>The following strings can occur for SSL_alert_type_string() or SSL_alert_type_string_long():</p>
+
+<dl>
+
+<dt id="W-warning">&quot;W&quot;/&quot;warning&quot;</dt>
+<dd>
+
+</dd>
+<dt id="F-fatal">&quot;F&quot;/&quot;fatal&quot;</dt>
+<dd>
+
+</dd>
+<dt id="U-unknown">&quot;U&quot;/&quot;unknown&quot;</dt>
+<dd>
+
+<p>This indicates that no support is available for this alert type. Probably <b>value</b> does not contain a correct alert message.</p>
+
+</dd>
+</dl>
+
+<p>The following strings can occur for SSL_alert_desc_string() or SSL_alert_desc_string_long():</p>
+
+<dl>
+
+<dt id="CN-close-notify">&quot;CN&quot;/&quot;close notify&quot;</dt>
+<dd>
+
+<p>The connection shall be closed. This is a warning alert.</p>
+
+</dd>
+<dt id="UM-unexpected-message">&quot;UM&quot;/&quot;unexpected message&quot;</dt>
+<dd>
+
+<p>An inappropriate message was received. This alert is always fatal and should never be observed in communication between proper implementations.</p>
+
+</dd>
+<dt id="BM-bad-record-mac">&quot;BM&quot;/&quot;bad record mac&quot;</dt>
+<dd>
+
+<p>This alert is returned if a record is received with an incorrect MAC. This message is always fatal.</p>
+
+</dd>
+<dt id="DF-decompression-failure">&quot;DF&quot;/&quot;decompression failure&quot;</dt>
+<dd>
+
+<p>The decompression function received improper input (e.g. data that would expand to excessive length). This message is always fatal.</p>
+
+</dd>
+<dt id="HF-handshake-failure">&quot;HF&quot;/&quot;handshake failure&quot;</dt>
+<dd>
+
+<p>Reception of a handshake_failure alert message indicates that the sender was unable to negotiate an acceptable set of security parameters given the options available. This is a fatal error.</p>
+
+</dd>
+<dt id="NC-no-certificate">&quot;NC&quot;/&quot;no certificate&quot;</dt>
+<dd>
+
+<p>A client, that was asked to send a certificate, does not send a certificate (SSLv3 only).</p>
+
+</dd>
+<dt id="BC-bad-certificate">&quot;BC&quot;/&quot;bad certificate&quot;</dt>
+<dd>
+
+<p>A certificate was corrupt, contained signatures that did not verify correctly, etc</p>
+
+</dd>
+<dt id="UC-unsupported-certificate">&quot;UC&quot;/&quot;unsupported certificate&quot;</dt>
+<dd>
+
+<p>A certificate was of an unsupported type.</p>
+
+</dd>
+<dt id="CR-certificate-revoked">&quot;CR&quot;/&quot;certificate revoked&quot;</dt>
+<dd>
+
+<p>A certificate was revoked by its signer.</p>
+
+</dd>
+<dt id="CE-certificate-expired">&quot;CE&quot;/&quot;certificate expired&quot;</dt>
+<dd>
+
+<p>A certificate has expired or is not currently valid.</p>
+
+</dd>
+<dt id="CU-certificate-unknown">&quot;CU&quot;/&quot;certificate unknown&quot;</dt>
+<dd>
+
+<p>Some other (unspecified) issue arose in processing the certificate, rendering it unacceptable.</p>
+
+</dd>
+<dt id="IP-illegal-parameter">&quot;IP&quot;/&quot;illegal parameter&quot;</dt>
+<dd>
+
+<p>A field in the handshake was out of range or inconsistent with other fields. This is always fatal.</p>
+
+</dd>
+<dt id="DC-decryption-failed">&quot;DC&quot;/&quot;decryption failed&quot;</dt>
+<dd>
+
+<p>A TLSCiphertext decrypted in an invalid way: either it wasn&#39;t an even multiple of the block length or its padding values, when checked, weren&#39;t correct. This message is always fatal.</p>
+
+</dd>
+<dt id="RO-record-overflow">&quot;RO&quot;/&quot;record overflow&quot;</dt>
+<dd>
+
+<p>A TLSCiphertext record was received which had a length more than 2^14+2048 bytes, or a record decrypted to a TLSCompressed record with more than 2^14+1024 bytes. This message is always fatal.</p>
+
+</dd>
+<dt id="CA-unknown-CA">&quot;CA&quot;/&quot;unknown CA&quot;</dt>
+<dd>
+
+<p>A valid certificate chain or partial chain was received, but the certificate was not accepted because the CA certificate could not be located or couldn&#39;t be matched with a known, trusted CA. This message is always fatal.</p>
+
+</dd>
+<dt id="AD-access-denied">&quot;AD&quot;/&quot;access denied&quot;</dt>
+<dd>
+
+<p>A valid certificate was received, but when access control was applied, the sender decided not to proceed with negotiation. This message is always fatal.</p>
+
+</dd>
+<dt id="DE-decode-error">&quot;DE&quot;/&quot;decode error&quot;</dt>
+<dd>
+
+<p>A message could not be decoded because some field was out of the specified range or the length of the message was incorrect. This message is always fatal.</p>
+
+</dd>
+<dt id="CY-decrypt-error">&quot;CY&quot;/&quot;decrypt error&quot;</dt>
+<dd>
+
+<p>A handshake cryptographic operation failed, including being unable to correctly verify a signature, decrypt a key exchange, or validate a finished message.</p>
+
+</dd>
+<dt id="ER-export-restriction">&quot;ER&quot;/&quot;export restriction&quot;</dt>
+<dd>
+
+<p>A negotiation not in compliance with export restrictions was detected; for example, attempting to transfer a 1024 bit ephemeral RSA key for the RSA_EXPORT handshake method. This message is always fatal.</p>
+
+</dd>
+<dt id="PV-protocol-version">&quot;PV&quot;/&quot;protocol version&quot;</dt>
+<dd>
+
+<p>The protocol version the client has attempted to negotiate is recognized, but not supported. (For example, old protocol versions might be avoided for security reasons). This message is always fatal.</p>
+
+</dd>
+<dt id="IS-insufficient-security">&quot;IS&quot;/&quot;insufficient security&quot;</dt>
+<dd>
+
+<p>Returned instead of handshake_failure when a negotiation has failed specifically because the server requires ciphers more secure than those supported by the client. This message is always fatal.</p>
+
+</dd>
+<dt id="IE-internal-error">&quot;IE&quot;/&quot;internal error&quot;</dt>
+<dd>
+
+<p>An internal error unrelated to the peer or the correctness of the protocol makes it impossible to continue (such as a memory allocation failure). This message is always fatal.</p>
+
+</dd>
+<dt id="US-user-canceled">&quot;US&quot;/&quot;user canceled&quot;</dt>
+<dd>
+
+<p>This handshake is being canceled for some reason unrelated to a protocol failure. If the user cancels an operation after the handshake is complete, just closing the connection by sending a close_notify is more appropriate. This alert should be followed by a close_notify. This message is generally a warning.</p>
+
+</dd>
+<dt id="NR-no-renegotiation">&quot;NR&quot;/&quot;no renegotiation&quot;</dt>
+<dd>
+
+<p>Sent by the client in response to a hello request or by the server in response to a client hello after initial handshaking. Either of these would normally lead to renegotiation; when that is not appropriate, the recipient should respond with this alert; at that point, the original requester can decide whether to proceed with the connection. One case where this would be appropriate would be where a server has spawned a process to satisfy a request; the process might receive security parameters (key length, authentication, etc.) at startup and it might be difficult to communicate changes to these parameters after that point. This message is always a warning.</p>
+
+</dd>
+<dt id="UP-unknown-PSK-identity">&quot;UP&quot;/&quot;unknown PSK identity&quot;</dt>
+<dd>
+
+<p>Sent by the server to indicate that it does not recognize a PSK identity or an SRP identity.</p>
+
+</dd>
+<dt id="UK-unknown">&quot;UK&quot;/&quot;unknown&quot;</dt>
+<dd>
+
+<p>This indicates that no description is available for this alert type. Probably <b>value</b> does not contain a correct alert message.</p>
+
+</dd>
+</dl>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a>, <a href="../man3/SSL_CTX_set_info_callback.html">SSL_CTX_set_info_callback(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2001-2016 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

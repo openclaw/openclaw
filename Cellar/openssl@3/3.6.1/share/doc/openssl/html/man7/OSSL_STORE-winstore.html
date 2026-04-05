@@ -1,0 +1,101 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OSSL_STORE-winstore</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Supported-URIs">Supported URIs</a></li>
+      <li><a href="#Supported-OSSL_STORE_SEARCH-operations">Supported OSSL_STORE_SEARCH operations</a></li>
+      <li><a href="#Windows-certificate-store-features">Windows certificate store features</a></li>
+    </ul>
+  </li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OSSL_STORE-winstore - OpenSSL built in OSSL_STORE for Windows</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The OSSL_STORE implementation for Windows provides access to Windows&#39; system <code>ROOT</code> certificate store through URIs, using the URI scheme <code>org.openssl.winstore</code>.</p>
+
+<h2 id="Supported-URIs">Supported URIs</h2>
+
+<p>There is only one supported URI:</p>
+
+<pre><code>org.openssl.winstore:</code></pre>
+
+<p>No authority (host, etc), no path, no query, no fragment.</p>
+
+<h2 id="Supported-OSSL_STORE_SEARCH-operations">Supported OSSL_STORE_SEARCH operations</h2>
+
+<dl>
+
+<dt id="OSSL_STORE_SEARCH_by_name-3"><a href="../man3/OSSL_STORE_SEARCH_by_name.html">OSSL_STORE_SEARCH_by_name(3)</a></dt>
+<dd>
+
+<p>As a matter of fact, this must be used. It is not possible to enumerate all available certificates in the store.</p>
+
+</dd>
+</dl>
+
+<h2 id="Windows-certificate-store-features">Windows certificate store features</h2>
+
+<p>Apart from diverse constraints present in the certificates themselves, the Windows certificate store also has the ability to associate additional constraining properties alongside a certificate in the store. This includes both documented and undocumented capabilities:</p>
+
+<ul>
+
+<li><p>The documented capability to override EKU</p>
+
+</li>
+<li><p>The undocumented capability to add name constraints</p>
+
+</li>
+<li><p>The undocumented capability to override the certificate expiry date</p>
+
+</li>
+</ul>
+
+<p><i>Such constraints are not checked by this OSSL_STORE implementation, and thereby not honoured</i>.</p>
+
+<p>However, once extracted with <a href="../man3/OSSL_STORE_load.html">OSSL_STORE_load(3)</a>, certificates that have constraints in their X.509 extensions will go through the usual constraint checks when used by OpenSSL, and are thereby honoured.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ossl_store.html">ossl_store(7)</a>, <a href="../man3/OSSL_STORE_open_ex.html">OSSL_STORE_open_ex(3)</a>, <a href="../man3/OSSL_STORE_SEARCH.html">OSSL_STORE_SEARCH(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The winstore (<code>org.openssl.winstore</code>) implementation was added in OpenSSL 3.2.0.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>OpenSSL uses <a href="../man3/OSSL_DECODER.html">OSSL_DECODER(3)</a> implementations under the hood. To influence what <a href="../man3/OSSL_DECODER.html">OSSL_DECODER(3)</a> implementations are used, it&#39;s advisable to use <a href="../man3/OSSL_STORE_open_ex.html">OSSL_STORE_open_ex(3)</a> and set the <i>propq</i> argument.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

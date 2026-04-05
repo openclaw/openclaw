@@ -1,0 +1,110 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>PKCS7_sign</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#BUGS">BUGS</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>PKCS7_sign_ex, PKCS7_sign - create a PKCS#7 signedData structure</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/pkcs7.h&gt;
+
+PKCS7 *PKCS7_sign_ex(X509 *signcert, EVP_PKEY *pkey, STACK_OF(X509) *certs,
+                     BIO *data, int flags, OSSL_LIB_CTX *libctx,
+                     const char *propq);
+PKCS7 *PKCS7_sign(X509 *signcert, EVP_PKEY *pkey, STACK_OF(X509) *certs,
+                  BIO *data, int flags);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>PKCS7_sign_ex() creates and returns a PKCS#7 signedData structure. <i>signcert</i> is the certificate to sign with, <i>pkey</i> is the corresponding private key. <i>certs</i> is an optional set of extra certificates to include in the PKCS#7 structure (for example any intermediate CAs in the chain). The library context <i>libctx</i> and property query <i>propq</i> are used when retrieving algorithms from providers.</p>
+
+<p>The data to be signed is read from BIO <i>data</i>.</p>
+
+<p><i>flags</i> is an optional set of flags.</p>
+
+<p>Any of the following flags (ored together) can be passed in the <i>flags</i> parameter.</p>
+
+<p>Many S/MIME clients expect the signed content to include valid MIME headers. If the <b>PKCS7_TEXT</b> flag is set MIME headers for type <code>text/plain</code> are prepended to the data.</p>
+
+<p>If <b>PKCS7_NOCERTS</b> is set the signer&#39;s certificate and the extra <i>certs</i> will not be included in the PKCS7 structure. The signer&#39;s certificate must still be supplied in the <i>signcert</i> parameter though. This can reduce the size of the signatures if the signer&#39;s certificates can be obtained by other means: for example a previously signed message.</p>
+
+<p>The data being signed is included in the PKCS7 structure, unless <b>PKCS7_DETACHED</b> is set in which case it is omitted. This is used for PKCS7 detached signatures which are used in S/MIME plaintext signed messages for example.</p>
+
+<p>Normally the supplied content is translated into MIME canonical format (as required by the S/MIME specifications) if <b>PKCS7_BINARY</b> is set no translation occurs. This option should be used if the supplied data is in binary format otherwise the translation will corrupt it.</p>
+
+<p>The signedData structure includes several PKCS#7 authenticatedAttributes including the signing time, the PKCS#7 content type and the supported list of ciphers in an SMIMECapabilities attribute. If <b>PKCS7_NOATTR</b> is set then no authenticatedAttributes will be used. If <b>PKCS7_NOSMIMECAP</b> is set then just the SMIMECapabilities are omitted.</p>
+
+<p>If present the SMIMECapabilities attribute indicates support for the following algorithms: triple DES, 128 bit RC2, 64 bit RC2, DES and 40 bit RC2. If any of these algorithms is disabled then it will not be included.</p>
+
+<p>If the flags <b>PKCS7_STREAM</b> is set then the returned <b>PKCS7</b> structure is just initialized ready to perform the signing operation. The signing is however <b>not</b> performed and the data to be signed is not read from the <i>data</i> parameter. Signing is deferred until after the data has been written. In this way data can be signed in a single pass.</p>
+
+<p>If the <b>PKCS7_PARTIAL</b> flag is set a partial <b>PKCS7</b> structure is output to which additional signers and capabilities can be added before finalization.</p>
+
+<p>If the flag <b>PKCS7_STREAM</b> is set the returned <b>PKCS7</b> structure is <b>not</b> complete and outputting its contents via a function that does not properly finalize the <b>PKCS7</b> structure will give unpredictable results.</p>
+
+<p>Several functions including SMIME_write_PKCS7(), i2d_PKCS7_bio_stream(), PEM_write_bio_PKCS7_stream() finalize the structure. Alternatively finalization can be performed by obtaining the streaming ASN1 <b>BIO</b> directly using BIO_new_PKCS7().</p>
+
+<p>If a signer is specified it will use the default digest for the signing algorithm. This is <b>SHA256</b> for both RSA and DSA keys.</p>
+
+<p>The <i>certs</i>, <i>signcert</i> and <i>pkey</i> parameters can all be NULL if the <b>PKCS7_PARTIAL</b> flag is set. One or more signers can be added using the function PKCS7_sign_add_signer(). PKCS7_final() must also be called to finalize the structure if streaming is not enabled. Alternative signing digests can also be specified using this method.</p>
+
+<p>If <i>signcert</i> and <i>pkey</i> are NULL then a certificates only PKCS#7 structure is output.</p>
+
+<p>In versions of OpenSSL before 1.0.0 the <i>signcert</i> and <i>pkey</i> parameters must not be NULL.</p>
+
+<p>PKCS7_sign() is like PKCS7_sign_ex() except that it uses default values of NULL for the library context <i>libctx</i> and the property query <i>propq</i>. This is retained for API backward compatibility.</p>
+
+<h1 id="BUGS">BUGS</h1>
+
+<p>Some advanced attributes such as counter signatures are not supported.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>PKCS7_sign_ex() and PKCS7_sign() return either a valid PKCS7 structure or NULL if an error occurred. The error can be obtained from ERR_get_error(3).</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>, <a href="../man3/PKCS7_verify.html">PKCS7_verify(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The function PKCS7_sign_ex() was added in OpenSSL 3.0.</p>
+
+<p>The <b>PKCS7_PARTIAL</b> flag, and the ability for <i>certs</i>, <i>signcert</i>, and <i>pkey</i> parameters to be NULL were added in OpenSSL 1.0.0.</p>
+
+<p>The <b>PKCS7_STREAM</b> flag was added in OpenSSL 1.0.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2002-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

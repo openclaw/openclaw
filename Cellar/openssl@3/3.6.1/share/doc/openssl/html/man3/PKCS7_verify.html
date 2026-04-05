@@ -1,0 +1,110 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>PKCS7_verify</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#VERIFY-PROCESS">VERIFY PROCESS</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#BUGS">BUGS</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>PKCS7_verify, PKCS7_get0_signers - verify a PKCS#7 signedData structure</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/pkcs7.h&gt;
+
+int PKCS7_verify(PKCS7 *p7, STACK_OF(X509) *certs, X509_STORE *store,
+                 BIO *indata, BIO *out, int flags);
+
+STACK_OF(X509) *PKCS7_get0_signers(PKCS7 *p7, STACK_OF(X509) *certs, int flags);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>PKCS7_verify() is very similar to <a href="../man3/CMS_verify.html">CMS_verify(3)</a>. It verifies a PKCS#7 signedData structure given in <i>p7</i>. The optional <i>certs</i> parameter refers to a set of certificates in which to search for signer&#39;s certificates. It is also used as a source of untrusted intermediate CA certificates for chain building. <i>p7</i> may contain extra untrusted CA certificates that may be used for chain building as well as CRLs that may be used for certificate validation. <i>store</i> may be NULL or point to the trusted certificate store to use for chain verification. <i>indata</i> refers to the signed data if the content is detached from <i>p7</i>. Otherwise <i>indata</i> should be NULL, and then the signed data must be in <i>p7</i>. The content is written to the BIO <i>out</i> unless it is NULL. <i>flags</i> is an optional set of flags, which can be used to modify the operation.</p>
+
+<p>PKCS7_get0_signers() retrieves the signer&#39;s certificates from <i>p7</i>, it does <b>not</b> check their validity or whether any signatures are valid. The <i>certs</i> and <i>flags</i> parameters have the same meanings as in PKCS7_verify().</p>
+
+<h1 id="VERIFY-PROCESS">VERIFY PROCESS</h1>
+
+<p>Normally the verify process proceeds as follows.</p>
+
+<p>Initially some sanity checks are performed on <i>p7</i>. The type of <i>p7</i> must be SignedData. There must be at least one signature on the data and if the content is detached <i>indata</i> cannot be NULL. If the content is not detached and <i>indata</i> is not NULL then the structure has both embedded and external content. To treat this as an error, use the flag <b>PKCS7_NO_DUAL_CONTENT</b>. The default behavior allows this, for compatibility with older versions of OpenSSL.</p>
+
+<p>An attempt is made to locate all the signer&#39;s certificates, first looking in the <i>certs</i> parameter (if it is not NULL). Then they are looked up in any certificates contained in the <i>p7</i> structure unless <b>PKCS7_NOINTERN</b> is set. If any signer&#39;s certificates cannot be located the operation fails.</p>
+
+<p>Each signer&#39;s certificate is chain verified using the <b>smimesign</b> purpose and using the trusted certificate store <i>store</i> if supplied. Any internal certificates in the message, which may have been added using <a href="../man3/PKCS7_add_certificate.html">PKCS7_add_certificate(3)</a>, are used as untrusted CAs unless <b>PKCS7_NOCHAIN</b> is set. If CRL checking is enabled in <i>store</i> and <b>PKCS7_NOCRL</b> is not set, any internal CRLs, which may have been added using <a href="../man3/PKCS7_add_crl.html">PKCS7_add_crl(3)</a>, are used in addition to attempting to look them up in <i>store</i>. If <i>store</i> is not NULL and any chain verify fails an error code is returned.</p>
+
+<p>Finally the signed content is read (and written to <i>out</i> unless it is NULL) and the signature is checked.</p>
+
+<p>If all signatures verify correctly then the function is successful.</p>
+
+<p>Any of the following flags (ored together) can be passed in the <i>flags</i> parameter to change the default verify behaviour. Only the flag <b>PKCS7_NOINTERN</b> is meaningful to PKCS7_get0_signers().</p>
+
+<p>If <b>PKCS7_NOINTERN</b> is set the certificates in the message itself are not searched when locating the signer&#39;s certificates. This means that all the signer&#39;s certificates must be in the <i>certs</i> parameter.</p>
+
+<p>If <b>PKCS7_NOCRL</b> is set and CRL checking is enabled in <i>store</i> then any CRLs in the message itself are ignored.</p>
+
+<p>If the <b>PKCS7_TEXT</b> flag is set MIME headers for type <code>text/plain</code> are deleted from the content. If the content is not of type <code>text/plain</code> then an error is returned.</p>
+
+<p>If <b>PKCS7_NOVERIFY</b> is set the signer&#39;s certificates are not chain verified.</p>
+
+<p>If <b>PKCS7_NOCHAIN</b> is set then the certificates contained in the message are not used as untrusted CAs. This means that the whole verify chain (apart from the signer&#39;s certificates) must be contained in the trusted store.</p>
+
+<p>If <b>PKCS7_NOSIGS</b> is set then the signatures on the data are not checked.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>One application of <b>PKCS7_NOINTERN</b> is to only accept messages signed by a small number of certificates. The acceptable certificates would be passed in the <i>certs</i> parameter. In this case if the signer&#39;s certificate is not one of the certificates supplied in <i>certs</i> then the verify will fail because the signer cannot be found.</p>
+
+<p>Care should be taken when modifying the default verify behaviour, for example setting <code>PKCS7_NOVERIFY|PKCS7_NOSIGS</code> will totally disable all verification and any signed message will be considered valid. This combination is however useful if one merely wishes to write the content to <i>out</i> and its validity is not considered important.</p>
+
+<p>Chain verification should arguably be performed using the signing time rather than the current time. However, since the signing time is supplied by the signer it cannot be trusted without additional evidence (such as a trusted timestamp).</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>PKCS7_verify() returns 1 for a successful verification and 0 if an error occurs.</p>
+
+<p>PKCS7_get0_signers() returns all signers or NULL if an error occurred.</p>
+
+<p>The error can be obtained from <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>.</p>
+
+<h1 id="BUGS">BUGS</h1>
+
+<p>The trusted certificate store is not searched for the signer&#39;s certificates. This is primarily due to the inadequacies of the current <b>X509_STORE</b> functionality.</p>
+
+<p>The lack of single pass processing means that the signed content must all be held in memory if it is not detached.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/CMS_verify.html">CMS_verify(3)</a>, <a href="../man3/PKCS7_add_certificate.html">PKCS7_add_certificate(3)</a>, <a href="../man3/PKCS7_add_crl.html">PKCS7_add_crl(3)</a>, <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>, <a href="../man3/PKCS7_sign.html">PKCS7_sign(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2002-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

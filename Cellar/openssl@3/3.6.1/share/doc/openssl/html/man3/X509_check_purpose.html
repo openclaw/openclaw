@@ -1,0 +1,188 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>X509_check_purpose</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#BUGS">BUGS</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>X509_check_purpose, X509_PURPOSE_get_count, X509_PURPOSE_get_unused_id, X509_PURPOSE_get_by_sname, X509_PURPOSE_get_by_id, X509_PURPOSE_add, X509_PURPOSE_cleanup, X509_PURPOSE_get0, X509_PURPOSE_get_id, X509_PURPOSE_get0_name, X509_PURPOSE_get0_sname, X509_PURPOSE_get_trust, X509_PURPOSE_set - functions related to checking the purpose of a certificate</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/x509v3.h&gt;
+
+int X509_check_purpose(X509 *x, int id, int ca);
+
+int X509_PURPOSE_get_count(void);
+int X509_PURPOSE_get_unused_id(OSSL_LIB_CTX *libctx);
+int X509_PURPOSE_get_by_sname(const char *sname);
+int X509_PURPOSE_get_by_id(int id);
+int X509_PURPOSE_add(int id, int trust, int flags,
+                     int (*ck) (const X509_PURPOSE *, const X509 *, int),
+                     const char *name, const char *sname, void *arg);
+void X509_PURPOSE_cleanup(void);
+
+X509_PURPOSE *X509_PURPOSE_get0(int idx);
+int X509_PURPOSE_get_id(const X509_PURPOSE *);
+char *X509_PURPOSE_get0_name(const X509_PURPOSE *xp);
+char *X509_PURPOSE_get0_sname(const X509_PURPOSE *xp);
+int X509_PURPOSE_get_trust(const X509_PURPOSE *xp);
+int X509_PURPOSE_set(int *p, int purpose);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>X509_check_purpose() checks if certificate <i>x</i> was created with the purpose represented by <i>id</i>. If <i>ca</i> is nonzero, then certificate <i>x</i> is checked to determine if it&#39;s a possible CA with various levels of certainty possibly returned. The certificate <i>x</i> must be a complete certificate otherwise the function returns an error.</p>
+
+<p>Below are the potential ID&#39;s that can be checked:</p>
+
+<pre><code># define X509_PURPOSE_SSL_CLIENT        1
+# define X509_PURPOSE_SSL_SERVER        2
+# define X509_PURPOSE_NS_SSL_SERVER     3
+# define X509_PURPOSE_SMIME_SIGN        4
+# define X509_PURPOSE_SMIME_ENCRYPT     5
+# define X509_PURPOSE_CRL_SIGN          6
+# define X509_PURPOSE_ANY               7
+# define X509_PURPOSE_OCSP_HELPER       8
+# define X509_PURPOSE_TIMESTAMP_SIGN    9
+# define X509_PURPOSE_CODE_SIGN        10</code></pre>
+
+<p>The checks performed take into account the X.509 extensions keyUsage, extendedKeyUsage, and basicConstraints.</p>
+
+<p>X509_PURPOSE_get_count() returns the number of currently defined purposes.</p>
+
+<p>X509_PURPOSE_get_unused_id() returns the smallest purpose id not yet used, which is guaranteed to be unique and larger than <b>X509_PURPOSE_MAX</b>. The <i>libctx</i> parameter should be used to provide the library context. It is currently ignored as the purpose mapping table is global.</p>
+
+<p>X509_PURPOSE_get_by_sname() returns the index of the purpose with the given short name or -1 if not found.</p>
+
+<p>X509_PURPOSE_get_by_id() returns the index of the purpose with the given id or -1 if not found.</p>
+
+<p>X509_PURPOSE_add() adds or modifies a purpose entry identified by <i>sname</i>. Unless the id stays the same for an existing entry, <i>id</i> must be fresh, which can be achieved by using the result of X509_PURPOSE_get_unused_id(). The function also sets in the entry the trust id <i>trust</i>, the given <i>flags</i>, the purpose (long) name <i>name</i>, the short name <i>sname</i>, the purpose checking function <i>ck</i> of type <b>int (*) (const X509_PURPOSE *, const X509 *, int)</b>, and its user data <i>arg</i> which may be retrieved via the <b>X509_PURPOSE</b> pointer.</p>
+
+<p>X509_PURPOSE_cleanup() removes all purposes that are not pre-defined.</p>
+
+<p>X509_PURPOSE_get0() returns an <b>X509_PURPOSE</b> pointer or NULL on error.</p>
+
+<p>X509_PURPOSE_get_id() returns the id of the given <b>X509_PURPOSE</b> structure.</p>
+
+<p>X509_PURPOSE_get0_name() returns the (long) name of the given <b>X509_PURPOSE</b>.</p>
+
+<p>X509_PURPOSE_get0_sname() returns the short name of the given <b>X509_PURPOSE</b>.</p>
+
+<p>X509_PURPOSE_get_trust() returns the trust id of the given <b>X509_PURPOSE</b>.</p>
+
+<p>X509_PURPOSE_set() assigns the given <i>purpose</i> id to the location pointed at by <i>p</i>. This resets to the any purpose if <i>purpose</i> is <b>X509_PURPOSE_DEFAULT_ANY</b>.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>X509_check_purpose() returns the following values. For non-CA checks</p>
+
+<dl>
+
+<dt id="an-error-condition-has-occurred">-1 an error condition has occurred</dt>
+<dd>
+
+</dd>
+<dt id="if-the-certificate-was-created-to-perform-the-purpose-represented-by-id"> 1 if the certificate was created to perform the purpose represented by <i>id</i></dt>
+<dd>
+
+</dd>
+<dt id="if-the-certificate-was-not-created-to-perform-the-purpose-represented-by-id"> 0 if the certificate was not created to perform the purpose represented by <i>id</i></dt>
+<dd>
+
+</dd>
+</dl>
+
+<p>For CA checks the below integers could be returned with the following meanings:</p>
+
+<dl>
+
+<dt id="an-error-condition-has-occurred1">-1 an error condition has occurred</dt>
+<dd>
+
+</dd>
+<dt id="not-a-CA-or-does-not-have-the-purpose-represented-by-id"> 0 not a CA or does not have the purpose represented by <i>id</i></dt>
+<dd>
+
+</dd>
+<dt id="is-a-CA"> 1 is a CA.</dt>
+<dd>
+
+</dd>
+<dt id="Only-possible-in-old-versions-of-openSSL-when-basicConstraints-are-absent.-New-versions-will-not-return-this-value.-May-be-a-CA"> 2 Only possible in old versions of openSSL when basicConstraints are absent. New versions will not return this value. May be a CA</dt>
+<dd>
+
+</dd>
+<dt id="basicConstraints-absent-but-self-signed-V1"> 3 basicConstraints absent but self signed V1.</dt>
+<dd>
+
+</dd>
+<dt id="basicConstraints-absent-but-keyUsage-present-and-keyCertSign-asserted"> 4 basicConstraints absent but keyUsage present and keyCertSign asserted.</dt>
+<dd>
+
+</dd>
+<dt id="legacy-Netscape-specific-CA-Flags-present"> 5 legacy Netscape specific CA Flags present</dt>
+<dd>
+
+</dd>
+</dl>
+
+<p>X509_PURPOSE_get_count() returns the number of currently defined purposes.</p>
+
+<p>X509_PURPOSE_get_unused_id() returns the smallest purpose id not yet used.</p>
+
+<p>X509_PURPOSE_get_by_sname() returns the index of the purpose with the given short name or -1 if not found.</p>
+
+<p>X509_PURPOSE_get_by_id() returns the index of the purpose with the given id or -1 if not found.</p>
+
+<p>int X509_PURPOSE_add() returns 1 on success, 0 on error.</p>
+
+<p>X509_PURPOSE_cleanup() does not return anything.</p>
+
+<p>X509_PURPOSE_get0() returns an <b>X509_PURPOSE</b> pointer or NULL on error.</p>
+
+<p>X509_PURPOSE_get_id() returns the id of the given <b>X509_PURPOSE</b> structure.</p>
+
+<p>X509_PURPOSE_get0_name() returns the (long) name of the given <b>X509_PURPOSE</b>.</p>
+
+<p>X509_PURPOSE_get0_sname() returns the short name of the given <b>X509_PURPOSE</b>.</p>
+
+<p>X509_PURPOSE_get_trust() returns the trust id of the given <b>X509_PURPOSE</b>.</p>
+
+<p>X509_PURPOSE_set() returns 1 on success, 0 on error.</p>
+
+<h1 id="BUGS">BUGS</h1>
+
+<p>The X509_PURPOSE implementation so far is not thread-safe. There may be race conditions retrieving purpose information while X509_PURPOSE_add() or X509_PURPOSE_cleanup(void) is being called.</p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>X509_PURPOSE_get_unused_id() was added in OpensSL 3.5.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2019-2025 The OpenSSL Project Authors. All Rights Reserved. Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,21 @@
+.\"
+.\" Copyright 2010 by Ben Greear <greearb@candelatech.com>
+.\" SPDX-License-Identifier: MIT
+.\"
+.TH ARES_SET_LOCAL_IP4 3 "30 June 2010"
+.SH NAME
+ares_set_local_ip4 \- Set local IPv4 address outgoing requests.
+.SH SYNOPSIS
+.nf
+#include <ares.h>
+
+void ares_set_local_ip4(ares_channel_t *\fIchannel\fP, unsigned int \fIlocal_ip\fP)
+.fi
+.SH DESCRIPTION
+The \fBares_set_local_ip4\fP function sets the IP address for outbound
+requests.  The parameter \fIlocal_ip\fP is specified in host byte order.  This
+allows users to specify outbound interfaces when used on multi-homed systems.
+.SH SEE ALSO
+.BR ares_set_local_ip6 (3)
+.SH NOTES
+This function was added in c-ares 1.7.4

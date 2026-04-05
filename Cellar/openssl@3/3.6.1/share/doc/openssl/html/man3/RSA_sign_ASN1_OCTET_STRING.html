@@ -1,0 +1,84 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>RSA_sign_ASN1_OCTET_STRING</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#BUGS">BUGS</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>RSA_sign_ASN1_OCTET_STRING, RSA_verify_ASN1_OCTET_STRING - RSA signatures</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/rsa.h&gt;</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>int RSA_sign_ASN1_OCTET_STRING(int dummy, unsigned char *m,
+                               unsigned int m_len, unsigned char *sigret,
+                               unsigned int *siglen, RSA *rsa);
+
+int RSA_verify_ASN1_OCTET_STRING(int dummy, unsigned char *m,
+                                 unsigned int m_len, unsigned char *sigbuf,
+                                 unsigned int siglen, RSA *rsa);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>All of the functions described on this page are deprecated. Applications should instead use EVP PKEY APIs.</p>
+
+<p>RSA_sign_ASN1_OCTET_STRING() signs the octet string <b>m</b> of size <b>m_len</b> using the private key <b>rsa</b> represented in DER using PKCS #1 padding. It stores the signature in <b>sigret</b> and the signature size in <b>siglen</b>. <b>sigret</b> must point to <b>RSA_size(rsa)</b> bytes of memory.</p>
+
+<p><b>dummy</b> is ignored.</p>
+
+<p>The random number generator must be seeded when calling RSA_sign_ASN1_OCTET_STRING(). If the automatic seeding or reseeding of the OpenSSL CSPRNG fails due to external circumstances (see <a href="../man7/RAND.html">RAND(7)</a>), the operation will fail.</p>
+
+<p>RSA_verify_ASN1_OCTET_STRING() verifies that the signature <b>sigbuf</b> of size <b>siglen</b> is the DER representation of a given octet string <b>m</b> of size <b>m_len</b>. <b>dummy</b> is ignored. <b>rsa</b> is the signer&#39;s public key.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>RSA_sign_ASN1_OCTET_STRING() returns 1 on success, 0 otherwise. RSA_verify_ASN1_OCTET_STRING() returns 1 on successful verification, 0 otherwise.</p>
+
+<p>The error codes can be obtained by <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>.</p>
+
+<h1 id="BUGS">BUGS</h1>
+
+<p>These functions serve no recognizable purpose.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>, <a href="../man3/RAND_bytes.html">RAND_bytes(3)</a>, <a href="../man3/RSA_sign.html">RSA_sign(3)</a>, <a href="../man3/RSA_verify.html">RSA_verify(3)</a>, <a href="../man7/RAND.html">RAND(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>All of these functions were deprecated in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2020 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,4131 @@
+.\"
+.\" Standard preamble:
+.\" ========================================================================
+.de Sp \" Vertical space (when we can't use .PP)
+.if t .sp .5v
+.if n .sp
+..
+.de Vb \" Begin verbatim text
+.ft CW
+.nf
+.ne \\$1
+..
+.de Ve \" End verbatim text
+.ft R
+.fi
+..
+.\" Set up some character translations and predefined strings.  \*(-- will
+.\" give an unbreakable dash, \*(PI will give pi, \*(L" will give a left
+.\" double quote, and \*(R" will give a right double quote.  \*(C+ will
+.\" give a nicer C++.  Capital omega is used to do unbreakable dashes and
+.\" therefore won't be available.  \*(C` and \*(C' expand to `' in nroff,
+.\" nothing in troff, for use with C<>.
+.tr \(*W-
+.ds C+ C\v'-.1v'\h'-1p'\s-2+\h'-1p'+\s0\v'.1v'\h'-1p'
+.ie n \{\
+.    ds -- \(*W-
+.    ds PI pi
+.    if (\n(.H=4u)&(1m=24u) .ds -- \(*W\h'-12u'\(*W\h'-12u'-\" diablo 10 pitch
+.    if (\n(.H=4u)&(1m=20u) .ds -- \(*W\h'-12u'\(*W\h'-8u'-\"  diablo 12 pitch
+.    ds L" ""
+.    ds R" ""
+.    ds C` ""
+.    ds C' ""
+'br\}
+.el\{\
+.    ds -- \|\(em\|
+.    ds PI \(*p
+.    ds L" ``
+.    ds R" ''
+.    ds C`
+.    ds C'
+'br\}
+.\"
+.\" Escape single quotes in literal strings from groff's Unicode transform.
+.ie \n(.g .ds Aq \(aq
+.el       .ds Aq '
+.\"
+.\" If the F register is >0, we'll generate index entries on stderr for
+.\" titles (.TH), headers (.SH), subsections (.SS), items (.Ip), and index
+.\" entries marked with X<> in POD.  Of course, you'll have to process the
+.\" output yourself in some meaningful fashion.
+.\"
+.\" Avoid warning from groff about undefined register 'F'.
+.de IX
+..
+.nr rF 0
+.if \n(.g .if rF .nr rF 1
+.if (\n(rF:(\n(.g==0)) \{\
+.    if \nF \{\
+.        de IX
+.        tm Index:\\$1\t\\n%\t"\\$2"
+..
+.        if !\nF==2 \{\
+.            nr % 0
+.            nr F 2
+.        \}
+.    \}
+.\}
+.rr rF
+.\"
+.\" Accent mark definitions (@(#)ms.acc 1.5 88/02/08 SMI; from UCB 4.2).
+.\" Fear.  Run.  Save yourself.  No user-serviceable parts.
+.    \" fudge factors for nroff and troff
+.if n \{\
+.    ds #H 0
+.    ds #V .8m
+.    ds #F .3m
+.    ds #[ \f1
+.    ds #] \fP
+.\}
+.if t \{\
+.    ds #H ((1u-(\\\\n(.fu%2u))*.13m)
+.    ds #V .6m
+.    ds #F 0
+.    ds #[ \&
+.    ds #] \&
+.\}
+.    \" simple accents for nroff and troff
+.if n \{\
+.    ds ' \&
+.    ds ` \&
+.    ds ^ \&
+.    ds , \&
+.    ds ~ ~
+.    ds /
+.\}
+.if t \{\
+.    ds ' \\k:\h'-(\\n(.wu*8/10-\*(#H)'\'\h"|\\n:u"
+.    ds ` \\k:\h'-(\\n(.wu*8/10-\*(#H)'\`\h'|\\n:u'
+.    ds ^ \\k:\h'-(\\n(.wu*10/11-\*(#H)'^\h'|\\n:u'
+.    ds , \\k:\h'-(\\n(.wu*8/10)',\h'|\\n:u'
+.    ds ~ \\k:\h'-(\\n(.wu-\*(#H-.1m)'~\h'|\\n:u'
+.    ds / \\k:\h'-(\\n(.wu*8/10-\*(#H)'\z\(sl\h'|\\n:u'
+.\}
+.    \" troff and (daisy-wheel) nroff accents
+.ds : \\k:\h'-(\\n(.wu*8/10-\*(#H+.1m+\*(#F)'\v'-\*(#V'\z.\h'.2m+\*(#F'.\h'|\\n:u'\v'\*(#V'
+.ds 8 \h'\*(#H'\(*b\h'-\*(#H'
+.ds o \\k:\h'-(\\n(.wu+\w'\(de'u-\*(#H)/2u'\v'-.3n'\*(#[\z\(de\v'.3n'\h'|\\n:u'\*(#]
+.ds d- \h'\*(#H'\(pd\h'-\w'~'u'\v'-.25m'\f2\(hy\fP\v'.25m'\h'-\*(#H'
+.ds D- D\\k:\h'-\w'D'u'\v'-.11m'\z\(hy\v'.11m'\h'|\\n:u'
+.ds th \*(#[\v'.3m'\s+1I\s-1\v'-.3m'\h'-(\w'I'u*2/3)'\s-1o\s+1\*(#]
+.ds Th \*(#[\s+2I\s-2\h'-\w'I'u*3/5'\v'-.3m'o\v'.3m'\*(#]
+.ds ae a\h'-(\w'a'u*4/10)'e
+.ds Ae A\h'-(\w'A'u*4/10)'E
+.    \" corrections for vroff
+.if v .ds ~ \\k:\h'-(\\n(.wu*9/10-\*(#H)'\s-2\u~\d\s+2\h'|\\n:u'
+.if v .ds ^ \\k:\h'-(\\n(.wu*10/11-\*(#H)'\v'-.4m'^\v'.4m'\h'|\\n:u'
+.    \" for low resolution devices (crt and lpr)
+.if \n(.H>23 .if \n(.V>19 \
+\{\
+.    ds : e
+.    ds 8 ss
+.    ds o a
+.    ds d- d\h'-1'\(ga
+.    ds D- D\h'-1'\(hy
+.    ds th \o'bp'
+.    ds Th \o'LP'
+.    ds ae ae
+.    ds Ae AE
+.\}
+.rm #[ #] #H #V #F C
+.\" ========================================================================
+.\"
+.IX Title "FFMPEG 1"
+.TH FFMPEG 1 " " " " " "
+.\" For nroff, turn off justification.  Always turn off hyphenation; it makes
+.\" way too many mistakes in technical documents.
+.if n .ad l
+.nh
+.SH "NAME"
+ffmpeg \- ffmpeg media converter
+.SH "SYNOPSIS"
+.IX Header "SYNOPSIS"
+ffmpeg [\fIglobal_options\fR] {[\fIinput_file_options\fR] \-i \fIinput_url\fR} ... {[\fIoutput_file_options\fR] \fIoutput_url\fR} ...
+.SH "DESCRIPTION"
+.IX Header "DESCRIPTION"
+\&\fBffmpeg\fR is a universal media converter. It can read a wide variety of
+inputs \- including live grabbing/recording devices \- filter, and transcode them
+into a plethora of output formats.
+.PP
+\&\fBffmpeg\fR reads from an arbitrary number of inputs (which can be regular
+files, pipes, network streams, grabbing devices, etc.), specified by the
+\&\f(CW\*(C`\-i\*(C'\fR option, and writes to an arbitrary number of outputs, which are
+specified by a plain output url. Anything found on the command line which cannot
+be interpreted as an option is considered to be an output url.
+.PP
+Each input or output can, in principle, contain any number of elementary streams
+of different types (video/audio/subtitle/attachment/data), though the allowed
+stream counts and/or types may be limited by the container format. Selecting
+which streams from which inputs will go into which output is either done
+automatically or with the \f(CW\*(C`\-map\*(C'\fR option (see the \fBStream selection\fR
+chapter).
+.PP
+To refer to inputs/outputs in options, you must use their indices (0\-based).
+E.g. the first input is \f(CW0\fR, the second is \f(CW1\fR, etc. Similarly,
+streams within an input/output are referred to by their indices. E.g. \f(CW\*(C`2:3\*(C'\fR
+refers to the fourth stream in the third input or output. Also see the
+\&\fBStream specifiers\fR chapter.
+.PP
+As a general rule, options are applied to the next specified
+file. Therefore, order is important, and you can have the same
+option on the command line multiple times. Each occurrence is
+then applied to the next input or output file.
+Exceptions from this rule are the global options (e.g. verbosity level),
+which should be specified first.
+.PP
+Do not mix input and output files \*(-- first specify all input files, then all
+output files. Also do not mix options which belong to different files. All
+options apply \s-1ONLY\s0 to the next input or output file and are reset between files.
+.PP
+Some simple examples follow.
+.IP "\(bu" 4
+Convert an input media file to a different format, by re-encoding media streams:
+.Sp
+.Vb 1
+\&        ffmpeg \-i input.avi output.mp4
+.Ve
+.IP "\(bu" 4
+Set the video bitrate of the output file to 64 kbit/s:
+.Sp
+.Vb 1
+\&        ffmpeg \-i input.avi \-b:v 64k \-bufsize 64k output.mp4
+.Ve
+.IP "\(bu" 4
+Force the frame rate of the output file to 24 fps:
+.Sp
+.Vb 1
+\&        ffmpeg \-i input.avi \-r 24 output.mp4
+.Ve
+.IP "\(bu" 4
+Force the frame rate of the input file (valid for raw formats only) to 1 fps and
+the frame rate of the output file to 24 fps:
+.Sp
+.Vb 1
+\&        ffmpeg \-r 1 \-i input.m2v \-r 24 output.mp4
+.Ve
+.PP
+The format option may be needed for raw input files.
+.SH "DETAILED DESCRIPTION"
+.IX Header "DETAILED DESCRIPTION"
+\&\fBffmpeg\fR builds a transcoding pipeline out of the components listed
+below. The program's operation then consists of input data chunks flowing from
+the sources down the pipes towards the sinks, while being transformed by the
+components they encounter along the way.
+.PP
+The following kinds of components are available:
+.IP "\(bu" 4
+\&\fIDemuxers\fR (short for \*(L"demultiplexers\*(R") read an input source in order to
+extract
+.RS 4
+.IP "\(bu" 4
+global properties such as metadata or chapters;
+.IP "\(bu" 4
+list of input elementary streams and their properties
+.RE
+.RS 4
+.Sp
+One demuxer instance is created for each \fB\-i\fR option, and sends encoded
+\&\fIpackets\fR to \fIdecoders\fR or \fImuxers\fR.
+.Sp
+In other literature, demuxers are sometimes called \fIsplitters\fR, because
+their main function is splitting a file into elementary streams (though some
+files only contain one elementary stream).
+.Sp
+A schematic representation of a demuxer looks like this:
+.Sp
+.Vb 10
+\&        XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+\&        X demuxer  X                       X packets for stream 0
+\&        XXXXXXXXXXXX elementary stream 0   XXXXXXXXXXXXXXXXXXXXXXXX
+\&        X          X                       X
+\&        X  global  XXXXXXXXXXXXXXXXXXXXXXXXX
+\&        XpropertiesX                       X packets for stream 1
+\&        X   and    X elementary stream 1   XXXXXXXXXXXXXXXXXXXXXXXX
+\&        X metadata X                       X
+\&        X          XXXXXXXXXXXXXXXXXXXXXXXXX
+\&        X          X                       X
+\&        X          X     ...........       X
+\&        X          X                       X
+\&        X          XXXXXXXXXXXXXXXXXXXXXXXXX
+\&        X          X                       X packets for stream N
+\&        X          X elementary stream N   XXXXXXXXXXXXXXXXXXXXXXXX
+\&        X          X                       X
+\&        XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+\&             X
+\&             X
+\&             X read from file, network stream,
+\&             X     grabbing device, etc.
+\&             X
+.Ve
+.RE
+.IP "\(bu" 4
+\&\fIDecoders\fR receive encoded (compressed) \fIpackets\fR for an audio, video,
+or subtitle elementary stream, and decode them into raw \fIframes\fR (arrays of
+pixels for video, \s-1PCM\s0 for audio). A decoder is typically associated with (and
+receives its input from) an elementary stream in a \fIdemuxer\fR, but sometimes
+may also exist on its own (see \fBLoopback decoders\fR).
+.Sp
+A schematic representation of a decoder looks like this:
+.Sp
+.Vb 5
+\&                  XXXXXXXXXXX
+\&         packets  X         X raw frames
+\&        XXXXXXXXXXX decoder XXXXXXXXXXXXXX
+\&                  X         X
+\&                  XXXXXXXXXXX
+.Ve
+.IP "\(bu" 4
+\&\fIFiltergraphs\fR process and transform raw audio or video \fIframes\fR. A
+filtergraph consists of one or more individual \fIfilters\fR linked into a
+graph. Filtergraphs come in two flavors \- \fIsimple\fR and \fIcomplex\fR,
+configured with the \fB\-filter\fR and \fB\-filter_complex\fR options,
+respectively.
+.Sp
+A simple filtergraph is associated with an \fIoutput elementary stream\fR; it
+receives the input to be filtered from a \fIdecoder\fR and sends filtered
+output to that output stream's \fIencoder\fR.
+.Sp
+A simple video filtergraph that performs deinterlacing (using the \f(CW\*(C`yadif\*(C'\fR
+deinterlacer) followed by resizing (using the \f(CW\*(C`scale\*(C'\fR filter) can look like
+this:
+.Sp
+.Vb 7
+\&                     XXXXXXXXXXXXXXXXXXXXXXXXXX
+\&                     X  simple filtergraph    X
+\&         frames from XXXXXXXXXXXXXXXXXXXXXXXXXX frames for
+\&         a decoder   X  XXXXXXXXX  XXXXXXXXX  X an encoder
+\&        XXXXXXXXXXXXXXXXX yadif XXXX scale XXXXXXXXXXXXXXXXX
+\&                     X  XXXXXXXXX  XXXXXXXXX  X
+\&                     XXXXXXXXXXXXXXXXXXXXXXXXXX
+.Ve
+.Sp
+A complex filtergraph is standalone and not associated with any specific stream.
+It may have multiple (or zero) inputs, potentially of different types (audio or
+video), each of which receiving data either from a decoder or another complex
+filtergraph's output. It also has one or more outputs that feed either an
+encoder or another complex filtergraph's input.
+.Sp
+The following example diagram represents a complex filtergraph with 3 inputs and
+2 outputs (all video):
+.Sp
+.Vb 10
+\&                  XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+\&                  X               complex filtergraph               X
+\&                  XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+\&         frames   XXXXXXXXX  XXXXXXXXXXX      XXXXXXXXXXX  XXXXXXXXXX frames
+\&        XXXXXXXXXXXinput 0XXXX overlay XXXXXXXX overlay XXXXoutput 0XXXXXXXXXX
+\&                  XXXXXXXXX  X         X      X         X  XXXXXXXXXX
+\&         frames   XXXXXXXXXXXX         X    XXX         X           X
+\&        XXXXXXXXXXXinput 1XX XXXXXXXXXXX    X XXXXXXXXXXX           X
+\&                  XXXXXXXXX                 X                       X
+\&         frames   XXXXXXXXX XXXXXXX XXXXXXXXX              XXXXXXXXXX frames
+\&        XXXXXXXXXXXinput 2XXXscaleXXXsplitXXXXXXXXXXXXXXXXXXoutput 1XXXXXXXXXX
+\&                  XXXXXXXXX XXXXXXX XXXXXXX                XXXXXXXXXX
+\&                  XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+.Ve
+.Sp
+Frames from second input are overlaid over those from the first. Frames from the
+third input are rescaled, then the duplicated into two identical streams. One of
+them is overlaid over the combined first two inputs, with the result exposed as
+the filtergraph's first output. The other duplicate ends up being the
+filtergraph's second output.
+.IP "\(bu" 4
+\&\fIEncoders\fR receive raw audio, video, or subtitle \fIframes\fR and encode
+them into encoded \fIpackets\fR. The encoding (compression) process is
+typically \fIlossy\fR \- it degrades stream quality to make the output smaller;
+some encoders are \fIlossless\fR, but at the cost of much higher output size. A
+video or audio encoder receives its input from some filtergraph's output,
+subtitle encoders receive input from a decoder (since subtitle filtering is not
+supported yet). Every encoder is associated with some muxer's \fIoutput
+elementary stream\fR and sends its output to that muxer.
+.Sp
+A schematic representation of an encoder looks like this:
+.Sp
+.Vb 5
+\&                     XXXXXXXXXXX
+\&         raw frames  X         X packets
+\&        XXXXXXXXXXXXXX encoder XXXXXXXXXXX
+\&                     X         X
+\&                     XXXXXXXXXXX
+.Ve
+.IP "\(bu" 4
+\&\fIMuxers\fR (short for \*(L"multiplexers\*(R") receive encoded \fIpackets\fR for
+their elementary streams from encoders (the \fItranscoding\fR path) or directly
+from demuxers (the \fIstreamcopy\fR path), interleave them (when there is more
+than one elementary stream), and write the resulting bytes into the output file
+(or pipe, network stream, etc.).
+.Sp
+A schematic representation of a muxer looks like this:
+.Sp
+.Vb 10
+\&                               XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+\&         packets for stream 0  X                      X   muxer   X
+\&        XXXXXXXXXXXXXXXXXXXXXXXX  elementary stream 0 XXXXXXXXXXXXX
+\&                               X                      X           X
+\&                               XXXXXXXXXXXXXXXXXXXXXXXX  global   X
+\&         packets for stream 1  X                      Xproperties X
+\&        XXXXXXXXXXXXXXXXXXXXXXXX  elementary stream 1 X   and     X
+\&                               X                      X metadata  X
+\&                               XXXXXXXXXXXXXXXXXXXXXXXX           X
+\&                               X                      X           X
+\&                               X     ...........      X           X
+\&                               X                      X           X
+\&                               XXXXXXXXXXXXXXXXXXXXXXXX           X
+\&         packets for stream N  X                      X           X
+\&        XXXXXXXXXXXXXXXXXXXXXXXX  elementary stream N X           X
+\&                               X                      X           X
+\&                               XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+\&                                                            X
+\&                             write to file, network stream, X
+\&                                 grabbing device, etc.      X
+\&                                                            X
+\&                                                            X
+.Ve
+.SS "Streamcopy"
+.IX Subsection "Streamcopy"
+The simplest pipeline in \fBffmpeg\fR is single-stream
+\&\fIstreamcopy\fR, that is copying one \fIinput elementary stream\fR's packets
+without decoding, filtering, or encoding them. As an example, consider an input
+file called \fI\s-1INPUT\s0.mkv\fR with 3 elementary streams, from which we take the
+second and write it to file \fI\s-1OUTPUT\s0.mp4\fR. A schematic representation of
+such a pipeline looks like this:
+.PP
+.Vb 10
+\&        XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+\&        X demuxer  X                     X unused
+\&        XXXXXXXXXXXX elementary stream 0 XXXXXXXXXX
+\&        X          X                     X
+\&        XINPUT.mkv XXXXXXXXXXXXXXXXXXXXXXX          XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+\&        X          X                     X packets  X                      X   muxer   X
+\&        X          X elementary stream 1 XXXXXXXXXXXX  elementary stream 0 XXXXXXXXXXXXX
+\&        X          X                     X          X                      XOUTPUT.mp4 X
+\&        X          XXXXXXXXXXXXXXXXXXXXXXX          XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+\&        X          X                     X unused
+\&        X          X elementary stream 2 XXXXXXXXXX
+\&        X          X                     X
+\&        XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+.Ve
+.PP
+The above pipeline can be constructed with the following commandline:
+.PP
+.Vb 1
+\&        ffmpeg \-i INPUT.mkv \-map 0:1 \-c copy OUTPUT.mp4
+.Ve
+.PP
+In this commandline
+.IP "\(bu" 4
+there is a single input \fI\s-1INPUT\s0.mkv\fR;
+.IP "\(bu" 4
+there are no input options for this input;
+.IP "\(bu" 4
+there is a single output \fI\s-1OUTPUT\s0.mp4\fR;
+.IP "\(bu" 4
+there are two output options for this output:
+.RS 4
+.IP "\(bu" 4
+\&\f(CW\*(C`\-map 0:1\*(C'\fR selects the input stream to be used \- from input with index 0
+(i.e. the first one) the stream with index 1 (i.e. the second one);
+.IP "\(bu" 4
+\&\f(CW\*(C`\-c copy\*(C'\fR selects the \f(CW\*(C`copy\*(C'\fR encoder, i.e. streamcopy with no decoding
+or encoding.
+.RE
+.RS 4
+.RE
+.PP
+Streamcopy is useful for changing the elementary stream count, container format,
+or modifying container-level metadata. Since there is no decoding or encoding,
+it is very fast and there is no quality loss. However, it might not work in some
+cases because of a variety of factors (e.g. certain information required by the
+target container is not available in the source). Applying filters is obviously
+also impossible, since filters work on decoded frames.
+.PP
+More complex streamcopy scenarios can be constructed \- e.g. combining streams
+from two input files into a single output:
+.PP
+.Vb 10
+\&        XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX         XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+\&        X demuxer 0X                    X packets X                    X   muxer   X
+\&        XXXXXXXXXXXXelementary stream 0 XXXXXXXXXXXelementary stream 0 XXXXXXXXXXXXX
+\&        XINPUT0.mkvX                    X         X                    XOUTPUT.mp4 X
+\&        XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX         XXXXXXXXXXXXXXXXXXXXXX           X
+\&        XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX         X                    X           X
+\&        X demuxer 1X                    X packets Xelementary stream 1 X           X
+\&        XXXXXXXXXXXXelementary stream 0 XXXXXXXXXXX                    X           X
+\&        XINPUT1.aacX                    X         XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+\&        XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+.Ve
+.PP
+that can be built by the commandline
+.PP
+.Vb 1
+\&        ffmpeg \-i INPUT0.mkv \-i INPUT1.aac \-map 0:0 \-map 1:0 \-c copy OUTPUT.mp4
+.Ve
+.PP
+The output \fB\-map\fR option is used twice here, creating two streams in the
+output file \- one fed by the first input and one by the second. The single
+instance of the \fB\-c\fR option selects streamcopy for both of those streams.
+You could also use multiple instances of this option together with
+\&\fBStream specifiers\fR to apply different values to each stream, as will be
+demonstrated in following sections.
+.PP
+A converse scenario is splitting multiple streams from a single input into
+multiple outputs:
+.PP
+.Vb 10
+\&        XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX          XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+\&        X demuxer  X                     X packets  X                   X muxer 0   X
+\&        XXXXXXXXXXXX elementary stream 0 XXXXXXXXXXXXelementary stream 0XXXXXXXXXXXXX
+\&        X          X                     X          X                   XOUTPUT0.mp4X
+\&        XINPUT.mkv XXXXXXXXXXXXXXXXXXXXXXX          XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+\&        X          X                     X packets  XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+\&        X          X elementary stream 1 XXXXXXXXXXXX                   X muxer 1   X
+\&        X          X                     X          Xelementary stream 0XXXXXXXXXXXXX
+\&        XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX          X                   XOUTPUT1.mp4X
+\&                                                    XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+.Ve
+.PP
+built with
+.PP
+.Vb 1
+\&        ffmpeg \-i INPUT.mkv \-map 0:0 \-c copy OUTPUT0.mp4 \-map 0:1 \-c copy OUTPUT1.mp4
+.Ve
+.PP
+Note how a separate instance of the \fB\-c\fR option is needed for every
+output file even though their values are the same. This is because non-global
+options (which is most of them) only apply in the context of the file before
+which they are placed.
+.PP
+These  examples can of course be further generalized into arbitrary remappings
+of any number of inputs into any number of outputs.
+.SS "Transcoding"
+.IX Subsection "Transcoding"
+\&\fITranscoding\fR is the process of decoding a stream and then encoding it
+again. Since encoding tends to be computationally expensive and in most cases
+degrades the stream quality (i.e. it is \fIlossy\fR), you should only transcode
+when you need to and perform streamcopy otherwise. Typical reasons to transcode
+are:
+.IP "\(bu" 4
+applying filters \- e.g. resizing, deinterlacing, or overlaying video; resampling
+or mixing audio;
+.IP "\(bu" 4
+you want to feed the stream to something that cannot decode the original codec.
+.PP
+Note that \fBffmpeg\fR will transcode all audio, video, and subtitle streams
+unless you specify \fB\-c copy\fR for them.
+.PP
+Consider an example pipeline that reads an input file with one audio and one
+video stream, transcodes the video and copies the audio into a single output
+file. This can be schematically represented as follows
+.PP
+.Vb 10
+\&        XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+\&        X demuxer  X                     X       audio packets
+\&        XXXXXXXXXXXX stream 0 (audio)    XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+\&        X          X                     X                                     X
+\&        XINPUT.mkv XXXXXXXXXXXXXXXXXXXXXXX video    XXXXXXXXXXX     raw        X
+\&        X          X                     X packets  X  video  X video frames   X
+\&        X          X stream 1 (video)    XXXXXXXXXXXX decoder XXXXXXXXXXXXXXXX X
+\&        X          X                     X          X         X              X X
+\&        XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX          XXXXXXXXXXX              X X
+\&                                                                             X X
+\&                                                                             X X
+\&        XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX video    XXXXXXXXXXX              X X
+\&        X muxer    X                     X packets  X  video  X              X X
+\&        XXXXXXXXXXXX stream 0 (video)    XXXXXXXXXXXX encoder XXXXXXXXXXXXXXXX X
+\&        X          X                     X          X(libx264)X                X
+\&        XOUTPUT.mp4XXXXXXXXXXXXXXXXXXXXXXX          XXXXXXXXXXX                X
+\&        X          X                     X                                     X
+\&        X          X stream 1 (audio)    XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+\&        X          X                     X
+\&        XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+.Ve
+.PP
+and implemented with the following commandline:
+.PP
+.Vb 1
+\&        ffmpeg \-i INPUT.mkv \-map 0:v \-map 0:a \-c:v libx264 \-c:a copy OUTPUT.mp4
+.Ve
+.PP
+Note how it uses stream specifiers \f(CW\*(C`:v\*(C'\fR and \f(CW\*(C`:a\*(C'\fR to select input
+streams and apply different values of the \fB\-c\fR option to them; see the
+\&\fBStream specifiers\fR section for more details.
+.SS "Filtering"
+.IX Subsection "Filtering"
+When transcoding, audio and video streams can be filtered before encoding, with
+either a \fIsimple\fR or \fIcomplex\fR filtergraph.
+.PP
+\fISimple filtergraphs\fR
+.IX Subsection "Simple filtergraphs"
+.PP
+Simple filtergraphs are those that have exactly one input and output, both of
+the same type (audio or video). They are configured with the per-stream
+\&\fB\-filter\fR option (with \fB\-vf\fR and \fB\-af\fR aliases for
+\&\fB\-filter:v\fR (video) and \fB\-filter:a\fR (audio) respectively). Note
+that simple filtergraphs are tied to their output stream, so e.g. if you have
+multiple audio streams, \fB\-af\fR will create a separate filtergraph for each
+one.
+.PP
+Taking the transcoding example from above, adding filtering (and omitting audio,
+for clarity) makes it look like this:
+.PP
+.Vb 10
+\&        XXXXXXXXXXXXXXXXXXXXXXXXXXXX
+\&        X demuxer  X               X          XXXXXXXXXXX
+\&        XXXXXXXXXXXX video stream  X packets  X  video  X frames
+\&        XINPUT.mkv X               XXXXXXXXXXXX decoder XXXXXXXXXXX
+\&        X          X               X          XXXXXXXXXXX         X
+\&        XXXXXXXXXXXXXXXXXXXXXXXXXXXX                              X
+\&                                          XXXXXXXXXXXXXXXXXXXXXXXXX
+\&                                          X   XXXXXXXXXXXXXXXXXXXXXXXXXX
+\&                                          X   X  simple filtergraph    X
+\&                                          X   XXXXXXXXXXXXXXXXXXXXXXXXXX
+\&                                          X   X  XXXXXXXXX  XXXXXXXXX  X
+\&                                          XXXXXXXX yadif XXXX scale XXXXX
+\&                                              X  XXXXXXXXX  XXXXXXXXX  XX
+\&                                              XXXXXXXXXXXXXXXXXXXXXXXXXXX
+\&                                                                        X
+\&                                                                        X
+\&        XXXXXXXXXXXXXXXXXXXXXXXXXXXX video    XXXXXXXXXXX               X
+\&        X muxer    X               X packets  X  video  X               X
+\&        XXXXXXXXXXXX video stream  XXXXXXXXXXXX encoder XXXXXXXXXXXXXXXXX
+\&        XOUTPUT.mp4X               X          X         X
+\&        X          X               X          XXXXXXXXXXX
+\&        XXXXXXXXXXXXXXXXXXXXXXXXXXXX
+.Ve
+.PP
+\fIComplex filtergraphs\fR
+.IX Subsection "Complex filtergraphs"
+.PP
+Complex filtergraphs are those which cannot be described as simply a linear
+processing chain applied to one stream. This is the case, for example, when the
+graph has more than one input and/or output, or when output stream type is
+different from input. Complex filtergraphs are configured with the
+\&\fB\-filter_complex\fR option. Note that this option is global, since a
+complex filtergraph, by its nature, cannot be unambiguously associated with a
+single stream or file. Each instance of \fB\-filter_complex\fR creates a new
+complex filtergraph, and there can be any number of them.
+.PP
+A trivial example of a complex filtergraph is the \f(CW\*(C`overlay\*(C'\fR filter, which
+has two video inputs and one video output, containing one video overlaid on top
+of the other. Its audio counterpart is the \f(CW\*(C`amix\*(C'\fR filter.
+.SS "Loopback decoders"
+.IX Subsection "Loopback decoders"
+While decoders are normally associated with demuxer streams, it is also possible
+to create \*(L"loopback\*(R" decoders that decode the output from some encoder and allow
+it to be fed back to complex filtergraphs. This is done with the \f(CW\*(C`\-dec\*(C'\fR
+directive, which takes as a parameter the index of the output stream that should
+be decoded. Every such directive creates a new loopback decoder, indexed with
+successive integers starting at zero. These indices should then be used to refer
+to loopback decoders in complex filtergraph link labels, as described in the
+documentation for \fB\-filter_complex\fR.
+.PP
+Decoding AVOptions can be passed to loopback decoders by placing them before
+\&\f(CW\*(C`\-dec\*(C'\fR, analogously to input/output options.
+.PP
+E.g. the following example:
+.PP
+.Vb 5
+\&        ffmpeg \-i INPUT                                        \e
+\&          \-map 0:v:0 \-c:v libx264 \-crf 45 \-f null \-            \e
+\&          \-threads 3 \-dec 0:0                                  \e
+\&          \-filter_complex \*(Aq[0:v][dec:0]hstack[stack]\*(Aq          \e
+\&          \-map \*(Aq[stack]\*(Aq \-c:v ffv1 OUTPUT
+.Ve
+.PP
+reads an input video and
+.IP "\(bu" 4
+(line 2) encodes it with \f(CW\*(C`libx264\*(C'\fR at low quality;
+.IP "\(bu" 4
+(line 3) decodes this encoded stream using 3 threads;
+.IP "\(bu" 4
+(line 4) places decoded video side by side with the original input video;
+.IP "\(bu" 4
+(line 5) combined video is then losslessly encoded and written into
+\&\fI\s-1OUTPUT\s0\fR.
+.PP
+Such a transcoding pipeline can be represented with the following diagram:
+.PP
+.Vb 10
+\&        XXXXXXXXXXXXXXXXXXXXXXXXXXXX
+\&        X demuxer  X               X   XXXXXXXXXXX            XXXXXXXXXXX    XXXXXXXXXXXXXXXXXXXXXX
+\&        XXXXXXXXXXXX video stream  X   X  video  X            X  video  X    X null muxer         X
+\&        X   INPUT  X               XXXXX decoder XXXXXXXXXXXXXX encoder XXXXXX(discards its input)X
+\&        X          X               X   XXXXXXXXXXX  X         X(libx264)X X  XXXXXXXXXXXXXXXXXXXXXX
+\&        XXXXXXXXXXXXXXXXXXXXXXXXXXXX                X         XXXXXXXXXXX X
+\&                                         XXXXXXXXXXXX   XXXXXXXXXXX       X
+\&                                         X              Xloopback X       X
+\&                                         X XXXXXXXXXXXXXX decoder XXXXXXXXX
+\&                                         X X            XXXXXXXXXXX
+\&                                         X X
+\&                                         X X
+\&                                         X X  XXXXXXXXXXXXXXXXXXXXX
+\&                                         X X  Xcomplex filtergraphX
+\&                                         X X  XXXXXXXXXXXXXXXXXXXXX
+\&                                         X X  X  XXXXXXXXXXXXXXX  X
+\&                                         XXXXXXXXX   hstack    XXXXX
+\&                                           XXXXXXX             X  XX
+\&                                              X  XXXXXXXXXXXXXXX  XX
+\&                                              XXXXXXXXXXXXXXXXXXXXXX
+\&                                                                   X
+\&        XXXXXXXXXXXXXXXXXXXXXXXXXXXX  XXXXXXXXXXX                  X
+\&        X muxer    X               X  X  video  X                  X
+\&        XXXXXXXXXXXX video stream  XXXX encoder XXXXXXXXXXXXXXXXXXXX
+\&        X  OUTPUT  X               X  X (ffv1)  X
+\&        X          X               X  XXXXXXXXXXX
+\&        XXXXXXXXXXXXXXXXXXXXXXXXXXXX
+.Ve
+.SH "STREAM SELECTION"
+.IX Header "STREAM SELECTION"
+\&\fBffmpeg\fR provides the \f(CW\*(C`\-map\*(C'\fR option for manual control of stream selection in each
+output file. Users can skip \f(CW\*(C`\-map\*(C'\fR and let ffmpeg perform automatic stream selection as
+described below. The \f(CW\*(C`\-vn / \-an / \-sn / \-dn\*(C'\fR options can be used to skip inclusion of
+video, audio, subtitle and data streams respectively, whether manually mapped or automatically
+selected, except for those streams which are outputs of complex filtergraphs.
+.SS "Description"
+.IX Subsection "Description"
+The sub-sections that follow describe the various rules that are involved in stream selection.
+The examples that follow next show how these rules are applied in practice.
+.PP
+While every effort is made to accurately reflect the behavior of the program, FFmpeg is under
+continuous development and the code may have changed since the time of this writing.
+.PP
+\fIAutomatic stream selection\fR
+.IX Subsection "Automatic stream selection"
+.PP
+In the absence of any map options for a particular output file, ffmpeg inspects the output
+format to check which type of streams can be included in it, viz. video, audio and/or
+subtitles. For each acceptable stream type, ffmpeg will pick one stream, when available,
+from among all the inputs.
+.PP
+It will select that stream based upon the following criteria:
+.IP "\(bu" 4
+for video, it is the stream with the highest resolution,
+.IP "\(bu" 4
+for audio, it is the stream with the most channels,
+.IP "\(bu" 4
+for subtitles, it is the first subtitle stream found but there's a caveat.
+The output format's default subtitle encoder can be either text-based or image-based,
+and only a subtitle stream of the same type will be chosen.
+.PP
+In the case where several streams of the same type rate equally, the stream with the lowest
+index is chosen.
+.PP
+Data or attachment streams are not automatically selected and can only be included
+using \f(CW\*(C`\-map\*(C'\fR.
+.PP
+\fIManual stream selection\fR
+.IX Subsection "Manual stream selection"
+.PP
+When \f(CW\*(C`\-map\*(C'\fR is used, only user-mapped streams are included in that output file,
+with one possible exception for filtergraph outputs described below.
+.PP
+\fIComplex filtergraphs\fR
+.IX Subsection "Complex filtergraphs"
+.PP
+If there are any complex filtergraph output streams with unlabeled pads, they will be added
+to the first output file. This will lead to a fatal error if the stream type is not supported
+by the output format. In the absence of the map option, the inclusion of these streams leads
+to the automatic stream selection of their types being skipped. If map options are present,
+these filtergraph streams are included in addition to the mapped streams.
+.PP
+Complex filtergraph output streams with labeled pads must be mapped once and exactly once.
+.PP
+\fIStream handling\fR
+.IX Subsection "Stream handling"
+.PP
+Stream handling is independent of stream selection, with an exception for subtitles described
+below. Stream handling is set via the \f(CW\*(C`\-codec\*(C'\fR option addressed to streams within a
+specific \fIoutput\fR file. In particular, codec options are applied by ffmpeg after the
+stream selection process and thus do not influence the latter. If no \f(CW\*(C`\-codec\*(C'\fR option is
+specified for a stream type, ffmpeg will select the default encoder registered by the output
+file muxer.
+.PP
+An exception exists for subtitles. If a subtitle encoder is specified for an output file, the
+first subtitle stream found of any type, text or image, will be included. ffmpeg does not validate
+if the specified encoder can convert the selected stream or if the converted stream is acceptable
+within the output format. This applies generally as well: when the user sets an encoder manually,
+the stream selection process cannot check if the encoded stream can be muxed into the output file.
+If it cannot, ffmpeg will abort and \fIall\fR output files will fail to be processed.
+.SS "Examples"
+.IX Subsection "Examples"
+The following examples illustrate the behavior, quirks and limitations of ffmpeg's stream
+selection methods.
+.PP
+They assume the following three input files.
+.PP
+.Vb 3
+\&        input file \*(AqA.avi\*(Aq
+\&              stream 0: video 640x360
+\&              stream 1: audio 2 channels
+\&        
+\&        input file \*(AqB.mp4\*(Aq
+\&              stream 0: video 1920x1080
+\&              stream 1: audio 2 channels
+\&              stream 2: subtitles (text)
+\&              stream 3: audio 5.1 channels
+\&              stream 4: subtitles (text)
+\&        
+\&        input file \*(AqC.mkv\*(Aq
+\&              stream 0: video 1280x720
+\&              stream 1: audio 2 channels
+\&              stream 2: subtitles (image)
+.Ve
+.PP
+Example: automatic stream selection
+.IX Subsection "Example: automatic stream selection"
+.PP
+.Vb 1
+\&        ffmpeg \-i A.avi \-i B.mp4 out1.mkv out2.wav \-map 1:a \-c:a copy out3.mov
+.Ve
+.PP
+There are three output files specified, and for the first two, no \f(CW\*(C`\-map\*(C'\fR options
+are set, so ffmpeg will select streams for these two files automatically.
+.PP
+\&\fIout1.mkv\fR is a Matroska container file and accepts video, audio and subtitle streams,
+so ffmpeg will try to select one of each type.For video, it will select \f(CW\*(C`stream 0\*(C'\fR from \fIB.mp4\fR, which has the highest
+resolution among all the input video streams.For audio, it will select \f(CW\*(C`stream 3\*(C'\fR from \fIB.mp4\fR, since it has the greatest
+number of channels.For subtitles, it will select \f(CW\*(C`stream 2\*(C'\fR from \fIB.mp4\fR, which is the first subtitle
+stream from among \fIA.avi\fR and \fIB.mp4\fR.
+.PP
+\&\fIout2.wav\fR accepts only audio streams, so only \f(CW\*(C`stream 3\*(C'\fR from \fIB.mp4\fR is
+selected.
+.PP
+For \fIout3.mov\fR, since a \f(CW\*(C`\-map\*(C'\fR option is set, no automatic stream selection will
+occur. The \f(CW\*(C`\-map 1:a\*(C'\fR option will select all audio streams from the second input
+\&\fIB.mp4\fR. No other streams will be included in this output file.
+.PP
+For the first two outputs, all included streams will be transcoded. The encoders chosen will
+be the default ones registered by each output format, which may not match the codec of the
+selected input streams.
+.PP
+For the third output, codec option for audio streams has been set
+to \f(CW\*(C`copy\*(C'\fR, so no decoding-filtering-encoding operations will occur, or \fIcan\fR occur.
+Packets of selected streams shall be conveyed from the input file and muxed within the output
+file.
+.PP
+Example: automatic subtitles selection
+.IX Subsection "Example: automatic subtitles selection"
+.PP
+.Vb 1
+\&        ffmpeg \-i C.mkv out1.mkv \-c:s dvdsub \-an out2.mkv
+.Ve
+.PP
+Although \fIout1.mkv\fR is a Matroska container file which accepts subtitle streams, only a
+video and audio stream shall be selected. The subtitle stream of \fIC.mkv\fR is image-based
+and the default subtitle encoder of the Matroska muxer is text-based, so a transcode operation
+for the subtitles is expected to fail and hence the stream isn't selected. However, in
+\&\fIout2.mkv\fR, a subtitle encoder is specified in the command and so, the subtitle stream is
+selected, in addition to the video stream. The presence of \f(CW\*(C`\-an\*(C'\fR disables audio stream
+selection for \fIout2.mkv\fR.
+.PP
+Example: unlabeled filtergraph outputs
+.IX Subsection "Example: unlabeled filtergraph outputs"
+.PP
+.Vb 1
+\&        ffmpeg \-i A.avi \-i C.mkv \-i B.mp4 \-filter_complex "overlay" out1.mp4 out2.srt
+.Ve
+.PP
+A filtergraph is setup here using the \f(CW\*(C`\-filter_complex\*(C'\fR option and consists of a single
+video filter. The \f(CW\*(C`overlay\*(C'\fR filter requires exactly two video inputs, but none are
+specified, so the first two available video streams are used, those of \fIA.avi\fR and
+\&\fIC.mkv\fR. The output pad of the filter has no label and so is sent to the first output file
+\&\fIout1.mp4\fR. Due to this, automatic selection of the video stream is skipped, which would
+have selected the stream in \fIB.mp4\fR. The audio stream with most channels viz. \f(CW\*(C`stream 3\*(C'\fR
+in \fIB.mp4\fR, is chosen automatically. No subtitle stream is chosen however, since the \s-1MP4\s0
+format has no default subtitle encoder registered, and the user hasn't specified a subtitle encoder.
+.PP
+The 2nd output file, \fIout2.srt\fR, only accepts text-based subtitle streams. So, even though
+the first subtitle stream available belongs to \fIC.mkv\fR, it is image-based and hence skipped.
+The selected stream, \f(CW\*(C`stream 2\*(C'\fR in \fIB.mp4\fR, is the first text-based subtitle stream.
+.PP
+Example: labeled filtergraph outputs
+.IX Subsection "Example: labeled filtergraph outputs"
+.PP
+.Vb 4
+\&        ffmpeg \-i A.avi \-i B.mp4 \-i C.mkv \-filter_complex "[1:v]hue=s=0[outv];overlay;aresample" \e
+\&               \-map \*(Aq[outv]\*(Aq \-an        out1.mp4 \e
+\&                                        out2.mkv \e
+\&               \-map \*(Aq[outv]\*(Aq \-map 1:a:0 out3.mkv
+.Ve
+.PP
+The above command will fail, as the output pad labelled \f(CW\*(C`[outv]\*(C'\fR has been mapped twice.
+None of the output files shall be processed.
+.PP
+.Vb 4
+\&        ffmpeg \-i A.avi \-i B.mp4 \-i C.mkv \-filter_complex "[1:v]hue=s=0[outv];overlay;aresample" \e
+\&               \-an        out1.mp4 \e
+\&                          out2.mkv \e
+\&               \-map 1:a:0 out3.mkv
+.Ve
+.PP
+This command above will also fail as the hue filter output has a label, \f(CW\*(C`[outv]\*(C'\fR,
+and hasn't been mapped anywhere.
+.PP
+The command should be modified as follows,
+.PP
+.Vb 4
+\&        ffmpeg \-i A.avi \-i B.mp4 \-i C.mkv \-filter_complex "[1:v]hue=s=0,split=2[outv1][outv2];overlay;aresample" \e
+\&                \-map \*(Aq[outv1]\*(Aq \-an        out1.mp4 \e
+\&                                          out2.mkv \e
+\&                \-map \*(Aq[outv2]\*(Aq \-map 1:a:0 out3.mkv
+.Ve
+.PP
+The video stream from \fIB.mp4\fR is sent to the hue filter, whose output is cloned once using
+the split filter, and both outputs labelled. Then a copy each is mapped to the first and third
+output files.
+.PP
+The overlay filter, requiring two video inputs, uses the first two unused video streams. Those
+are the streams from \fIA.avi\fR and \fIC.mkv\fR. The overlay output isn't labelled, so it is
+sent to the first output file \fIout1.mp4\fR, regardless of the presence of the \f(CW\*(C`\-map\*(C'\fR option.
+.PP
+The aresample filter is sent the first unused audio stream, that of \fIA.avi\fR. Since this filter
+output is also unlabelled, it too is mapped to the first output file. The presence of \f(CW\*(C`\-an\*(C'\fR
+only suppresses automatic or manual stream selection of audio streams, not outputs sent from
+filtergraphs. Both these mapped streams shall be ordered before the mapped stream in \fIout1.mp4\fR.
+.PP
+The video, audio and subtitle streams mapped to \f(CW\*(C`out2.mkv\*(C'\fR are entirely determined by
+automatic stream selection.
+.PP
+\&\fIout3.mkv\fR consists of the cloned video output from the hue filter and the first audio
+stream from \fIB.mp4\fR.
+.SH "OPTIONS"
+.IX Header "OPTIONS"
+All the numerical options, if not specified otherwise, accept a string
+representing a number as input, which may be followed by one of the \s-1SI\s0
+unit prefixes, for example: 'K', 'M', or 'G'.
+.PP
+If 'i' is appended to the \s-1SI\s0 unit prefix, the complete prefix will be
+interpreted as a unit prefix for binary multiples, which are based on
+powers of 1024 instead of powers of 1000. Appending 'B' to the \s-1SI\s0 unit
+prefix multiplies the value by 8. This allows using, for example:
+\&'\s-1KB\s0', 'MiB', 'G' and 'B' as number suffixes.
+.PP
+Options which do not take arguments are boolean options, and set the
+corresponding value to true. They can be set to false by prefixing
+the option name with \*(L"no\*(R". For example using \*(L"\-nofoo\*(R"
+will set the boolean option with name \*(L"foo\*(R" to false.
+.PP
+Options that take arguments support a special syntax where the argument given on
+the command line is interpreted as a path to the file from which the actual
+argument value is loaded. To use this feature, add a forward slash '/'
+immediately before the option name (after the leading dash). E.g.
+.PP
+.Vb 1
+\&        ffmpeg \-i INPUT \-/filter:v filter.script OUTPUT
+.Ve
+.PP
+will load a filtergraph description from the file named \fIfilter.script\fR.
+.SS "Stream specifiers"
+.IX Subsection "Stream specifiers"
+Some options are applied per-stream, e.g. bitrate or codec. Stream specifiers
+are used to precisely specify which stream(s) a given option belongs to.
+.PP
+A stream specifier is a string generally appended to the option name and
+separated from it by a colon. E.g. \f(CW\*(C`\-codec:a:1 ac3\*(C'\fR contains the
+\&\f(CW\*(C`a:1\*(C'\fR stream specifier, which matches the second audio stream. Therefore, it
+would select the ac3 codec for the second audio stream.
+.PP
+A stream specifier can match several streams, so that the option is applied to all
+of them. E.g. the stream specifier in \f(CW\*(C`\-b:a 128k\*(C'\fR matches all audio
+streams.
+.PP
+An empty stream specifier matches all streams. For example, \f(CW\*(C`\-codec copy\*(C'\fR
+or \f(CW\*(C`\-codec: copy\*(C'\fR would copy all the streams without reencoding.
+.PP
+Possible forms of stream specifiers are:
+.IP "\fIstream_index\fR" 4
+.IX Item "stream_index"
+Matches the stream with this index. E.g. \f(CW\*(C`\-threads:1 4\*(C'\fR would set the
+thread count for the second stream to 4. If \fIstream_index\fR is used as an
+additional stream specifier (see below), then it selects stream number
+\&\fIstream_index\fR from the matching streams. Stream numbering is based on the
+order of the streams as detected by libavformat except when a stream group
+specifier or program \s-1ID\s0 is also specified. In this case it is based on the
+ordering of the streams in the group or program.
+.IP "\fIstream_type\fR\fB[:\fR\fIadditional_stream_specifier\fR\fB]\fR" 4
+.IX Item "stream_type[:additional_stream_specifier]"
+\&\fIstream_type\fR is one of following: 'v' or 'V' for video, 'a' for audio, 's'
+for subtitle, 'd' for data, and 't' for attachments. 'v' matches all video
+streams, 'V' only matches video streams which are not attached pictures, video
+thumbnails or cover arts. If \fIadditional_stream_specifier\fR is used, then
+it matches streams which both have this type and match the
+\&\fIadditional_stream_specifier\fR. Otherwise, it matches all streams of the
+specified type.
+.IP "\fBg:\fR\fIgroup_specifier\fR\fB[:\fR\fIadditional_stream_specifier\fR\fB]\fR" 4
+.IX Item "g:group_specifier[:additional_stream_specifier]"
+Matches streams which are in the group with the specifier \fIgroup_specifier\fR.
+if \fIadditional_stream_specifier\fR is used, then it matches streams which both
+are part of the group and match the \fIadditional_stream_specifier\fR.
+\&\fIgroup_specifier\fR may be one of the following:
+.RS 4
+.IP "\fIgroup_index\fR" 4
+.IX Item "group_index"
+Match the stream with this group index.
+.IP "\fB#\fR\fIgroup_id\fR \fBor i:\fR\fIgroup_id\fR" 4
+.IX Item "#group_id or i:group_id"
+Match the stream with this group id.
+.RE
+.RS 4
+.RE
+.IP "\fBp:\fR\fIprogram_id\fR\fB[:\fR\fIadditional_stream_specifier\fR\fB]\fR" 4
+.IX Item "p:program_id[:additional_stream_specifier]"
+Matches streams which are in the program with the id \fIprogram_id\fR. If
+\&\fIadditional_stream_specifier\fR is used, then it matches streams which both
+are part of the program and match the \fIadditional_stream_specifier\fR.
+.IP "\fB#\fR\fIstream_id\fR \fBor i:\fR\fIstream_id\fR" 4
+.IX Item "#stream_id or i:stream_id"
+Match the stream by stream id (e.g. \s-1PID\s0 in MPEG-TS container).
+.IP "\fBm:\fR\fIkey\fR\fB[:\fR\fIvalue\fR\fB]\fR" 4
+.IX Item "m:key[:value]"
+Matches streams with the metadata tag \fIkey\fR having the specified value. If
+\&\fIvalue\fR is not given, matches streams that contain the given tag with any
+value. The colon character ':' in \fIkey\fR or \fIvalue\fR needs to be
+backslash-escaped.
+.IP "\fBdisp:\fR\fIdispositions\fR\fB[:\fR\fIadditional_stream_specifier\fR\fB]\fR" 4
+.IX Item "disp:dispositions[:additional_stream_specifier]"
+Matches streams with the given disposition(s). \fIdispositions\fR is a list of
+one or more dispositions (as printed by the \fB\-dispositions\fR option)
+joined with '+'.
+.IP "\fBu\fR" 4
+.IX Item "u"
+Matches streams with usable configuration, the codec must be defined and the
+essential information such as video dimension or audio sample rate must be present.
+.Sp
+Note that in \fBffmpeg\fR, matching by metadata will only work properly for
+input files.
+.SS "Generic options"
+.IX Subsection "Generic options"
+These options are shared amongst the ff* tools.
+.IP "\fB\-L, \-license\fR" 4
+.IX Item "-L, -license"
+Show license.
+.IP "\fB\-h, \-?, \-help, \-\-help [\fR\fIarg\fR\fB]\fR" 4
+.IX Item "-h, -?, -help, --help [arg]"
+Show help. An optional parameter may be specified to print help about a specific
+item. If no argument is specified, only basic (non advanced) tool
+options are shown.
+.Sp
+Possible values of \fIarg\fR are:
+.RS 4
+.IP "\fBlong\fR" 4
+.IX Item "long"
+Print advanced tool options in addition to the basic tool options.
+.IP "\fBfull\fR" 4
+.IX Item "full"
+Print complete list of options, including shared and private options
+for encoders, decoders, demuxers, muxers, filters, etc.
+.IP "\fBdecoder=\fR\fIdecoder_name\fR" 4
+.IX Item "decoder=decoder_name"
+Print detailed information about the decoder named \fIdecoder_name\fR. Use the
+\&\fB\-decoders\fR option to get a list of all decoders.
+.IP "\fBencoder=\fR\fIencoder_name\fR" 4
+.IX Item "encoder=encoder_name"
+Print detailed information about the encoder named \fIencoder_name\fR. Use the
+\&\fB\-encoders\fR option to get a list of all encoders.
+.IP "\fBdemuxer=\fR\fIdemuxer_name\fR" 4
+.IX Item "demuxer=demuxer_name"
+Print detailed information about the demuxer named \fIdemuxer_name\fR. Use the
+\&\fB\-formats\fR option to get a list of all demuxers and muxers.
+.IP "\fBmuxer=\fR\fImuxer_name\fR" 4
+.IX Item "muxer=muxer_name"
+Print detailed information about the muxer named \fImuxer_name\fR. Use the
+\&\fB\-formats\fR option to get a list of all muxers and demuxers.
+.IP "\fBfilter=\fR\fIfilter_name\fR" 4
+.IX Item "filter=filter_name"
+Print detailed information about the filter named \fIfilter_name\fR. Use the
+\&\fB\-filters\fR option to get a list of all filters.
+.IP "\fBbsf=\fR\fIbitstream_filter_name\fR" 4
+.IX Item "bsf=bitstream_filter_name"
+Print detailed information about the bitstream filter named \fIbitstream_filter_name\fR.
+Use the \fB\-bsfs\fR option to get a list of all bitstream filters.
+.IP "\fBprotocol=\fR\fIprotocol_name\fR" 4
+.IX Item "protocol=protocol_name"
+Print detailed information about the protocol named \fIprotocol_name\fR.
+Use the \fB\-protocols\fR option to get a list of all protocols.
+.RE
+.RS 4
+.RE
+.IP "\fB\-version\fR" 4
+.IX Item "-version"
+Show version.
+.IP "\fB\-buildconf\fR" 4
+.IX Item "-buildconf"
+Show the build configuration, one option per line.
+.IP "\fB\-formats\fR" 4
+.IX Item "-formats"
+Show available formats (including devices).
+.IP "\fB\-demuxers\fR" 4
+.IX Item "-demuxers"
+Show available demuxers.
+.IP "\fB\-muxers\fR" 4
+.IX Item "-muxers"
+Show available muxers.
+.IP "\fB\-devices\fR" 4
+.IX Item "-devices"
+Show available devices.
+.IP "\fB\-codecs\fR" 4
+.IX Item "-codecs"
+Show all codecs known to libavcodec.
+.Sp
+Note that the term 'codec' is used throughout this documentation as a shortcut
+for what is more correctly called a media bitstream format.
+.IP "\fB\-decoders\fR" 4
+.IX Item "-decoders"
+Show available decoders.
+.IP "\fB\-encoders\fR" 4
+.IX Item "-encoders"
+Show all available encoders.
+.IP "\fB\-bsfs\fR" 4
+.IX Item "-bsfs"
+Show available bitstream filters.
+.IP "\fB\-protocols\fR" 4
+.IX Item "-protocols"
+Show available protocols.
+.IP "\fB\-filters\fR" 4
+.IX Item "-filters"
+Show available libavfilter filters.
+.IP "\fB\-pix_fmts\fR" 4
+.IX Item "-pix_fmts"
+Show available pixel formats.
+.IP "\fB\-sample_fmts\fR" 4
+.IX Item "-sample_fmts"
+Show available sample formats.
+.IP "\fB\-layouts\fR" 4
+.IX Item "-layouts"
+Show channel names and standard channel layouts.
+.IP "\fB\-dispositions\fR" 4
+.IX Item "-dispositions"
+Show stream dispositions.
+.IP "\fB\-colors\fR" 4
+.IX Item "-colors"
+Show recognized color names.
+.IP "\fB\-sources\fR \fIdevice\fR\fB[,\fR\fIopt1\fR\fB=\fR\fIval1\fR\fB[,\fR\fIopt2\fR\fB=\fR\fIval2\fR\fB]...]\fR" 4
+.IX Item "-sources device[,opt1=val1[,opt2=val2]...]"
+Show autodetected sources of the input device.
+Some devices may provide system-dependent source names that cannot be autodetected.
+The returned list cannot be assumed to be always complete.
+.Sp
+.Vb 1
+\&        ffmpeg \-sources pulse,server=192.168.0.4
+.Ve
+.IP "\fB\-sinks\fR \fIdevice\fR\fB[,\fR\fIopt1\fR\fB=\fR\fIval1\fR\fB[,\fR\fIopt2\fR\fB=\fR\fIval2\fR\fB]...]\fR" 4
+.IX Item "-sinks device[,opt1=val1[,opt2=val2]...]"
+Show autodetected sinks of the output device.
+Some devices may provide system-dependent sink names that cannot be autodetected.
+The returned list cannot be assumed to be always complete.
+.Sp
+.Vb 1
+\&        ffmpeg \-sinks pulse,server=192.168.0.4
+.Ve
+.IP "\fB\-loglevel [\fR\fIflags\fR\fB+]\fR\fIloglevel\fR \fB| \-v [\fR\fIflags\fR\fB+]\fR\fIloglevel\fR" 4
+.IX Item "-loglevel [flags+]loglevel | -v [flags+]loglevel"
+Set logging level and flags used by the library.
+.Sp
+The optional \fIflags\fR prefix can consist of the following values:
+.RS 4
+.IP "\fBrepeat\fR" 4
+.IX Item "repeat"
+Indicates that repeated log output should not be compressed to the first line
+and the \*(L"Last message repeated n times\*(R" line will be omitted.
+.IP "\fBlevel\fR" 4
+.IX Item "level"
+Indicates that log output should add a \f(CW\*(C`[level]\*(C'\fR prefix to each message
+line. This can be used as an alternative to log coloring, e.g. when dumping the
+log to file.
+.IP "\fBtime\fR" 4
+.IX Item "time"
+Indicates that log lines should be prefixed with time information.
+.IP "\fBdatetime\fR" 4
+.IX Item "datetime"
+Indicates that log lines should be prefixed with date and time information.
+.RE
+.RS 4
+.Sp
+Flags can also be used alone by adding a '+'/'\-' prefix to set/reset a single
+flag without affecting other \fIflags\fR or changing \fIloglevel\fR. When
+setting both \fIflags\fR and \fIloglevel\fR, a '+' separator is expected
+between the last \fIflags\fR value and before \fIloglevel\fR.
+.Sp
+\&\fIloglevel\fR is a string or a number containing one of the following values:
+.IP "\fBquiet, \-8\fR" 4
+.IX Item "quiet, -8"
+Show nothing at all; be silent.
+.IP "\fBpanic, 0\fR" 4
+.IX Item "panic, 0"
+Only show fatal errors which could lead the process to crash, such as
+an assertion failure. This is not currently used for anything.
+.IP "\fBfatal, 8\fR" 4
+.IX Item "fatal, 8"
+Only show fatal errors. These are errors after which the process absolutely
+cannot continue.
+.IP "\fBerror, 16\fR" 4
+.IX Item "error, 16"
+Show all errors, including ones which can be recovered from.
+.IP "\fBwarning, 24\fR" 4
+.IX Item "warning, 24"
+Show all warnings and errors. Any message related to possibly
+incorrect or unexpected events will be shown.
+.IP "\fBinfo, 32\fR" 4
+.IX Item "info, 32"
+Show informative messages during processing. This is in addition to
+warnings and errors. This is the default value.
+.IP "\fBverbose, 40\fR" 4
+.IX Item "verbose, 40"
+Same as \f(CW\*(C`info\*(C'\fR, except more verbose.
+.IP "\fBdebug, 48\fR" 4
+.IX Item "debug, 48"
+Show everything, including debugging information.
+.IP "\fBtrace, 56\fR" 4
+.IX Item "trace, 56"
+.RE
+.RS 4
+.Sp
+For example to enable repeated log output, add the \f(CW\*(C`level\*(C'\fR prefix, and set
+\&\fIloglevel\fR to \f(CW\*(C`verbose\*(C'\fR:
+.Sp
+.Vb 1
+\&        ffmpeg \-loglevel repeat+level+verbose \-i input output
+.Ve
+.Sp
+Another example that enables repeated log output without affecting current
+state of \f(CW\*(C`level\*(C'\fR prefix flag or \fIloglevel\fR:
+.Sp
+.Vb 1
+\&        ffmpeg [...] \-loglevel +repeat
+.Ve
+.Sp
+By default the program logs to stderr. If coloring is supported by the
+terminal, colors are used to mark errors and warnings. Log coloring
+can be disabled setting the environment variable
+\&\fB\s-1AV_LOG_FORCE_NOCOLOR\s0\fR, or can be forced setting
+the environment variable \fB\s-1AV_LOG_FORCE_COLOR\s0\fR.
+.RE
+.IP "\fB\-report\fR" 4
+.IX Item "-report"
+Dump full command line and log output to a file named
+\&\f(CW\*(C`\f(CIprogram\f(CW\-\f(CIYYYYMMDD\f(CW\-\f(CIHHMMSS\f(CW.log\*(C'\fR in the current
+directory.
+This file can be useful for bug reports.
+It also implies \f(CW\*(C`\-loglevel debug\*(C'\fR.
+.Sp
+Setting the environment variable \fB\s-1FFREPORT\s0\fR to any value has the
+same effect. If the value is a ':'\-separated key=value sequence, these
+options will affect the report; option values must be escaped if they
+contain special characters or the options delimiter ':' (see the
+``Quoting and escaping'' section in the ffmpeg-utils manual).
+.Sp
+The following options are recognized:
+.RS 4
+.IP "\fBfile\fR" 4
+.IX Item "file"
+set the file name to use for the report; \f(CW%p\fR is expanded to the name
+of the program, \f(CW%t\fR is expanded to a timestamp, \f(CW\*(C`%%\*(C'\fR is expanded
+to a plain \f(CW\*(C`%\*(C'\fR
+.IP "\fBlevel\fR" 4
+.IX Item "level"
+set the log verbosity level using a numerical value (see \f(CW\*(C`\-loglevel\*(C'\fR).
+.RE
+.RS 4
+.Sp
+For example, to output a report to a file named \fIffreport.log\fR
+using a log level of \f(CW32\fR (alias for log level \f(CW\*(C`info\*(C'\fR):
+.Sp
+.Vb 1
+\&        FFREPORT=file=ffreport.log:level=32 ffmpeg \-i input output
+.Ve
+.Sp
+Errors in parsing the environment variable are not fatal, and will not
+appear in the report.
+.RE
+.IP "\fB\-hide_banner\fR" 4
+.IX Item "-hide_banner"
+Suppress printing banner.
+.Sp
+All FFmpeg tools will normally show a copyright notice, build options
+and library versions. This option can be used to suppress printing
+this information.
+.IP "\fB\-cpuflags flags (\fR\fIglobal\fR\fB)\fR" 4
+.IX Item "-cpuflags flags (global)"
+Allows setting and clearing cpu flags. This option is intended
+for testing. Do not use it unless you know what you're doing.
+.Sp
+.Vb 3
+\&        ffmpeg \-cpuflags \-sse+mmx ...
+\&        ffmpeg \-cpuflags mmx ...
+\&        ffmpeg \-cpuflags 0 ...
+.Ve
+.Sp
+Possible flags for this option are:
+.RS 4
+.IP "\fBx86\fR" 4
+.IX Item "x86"
+.RS 4
+.PD 0
+.IP "\fBmmx\fR" 4
+.IX Item "mmx"
+.IP "\fBmmxext\fR" 4
+.IX Item "mmxext"
+.IP "\fBsse\fR" 4
+.IX Item "sse"
+.IP "\fBsse2\fR" 4
+.IX Item "sse2"
+.IP "\fBsse2slow\fR" 4
+.IX Item "sse2slow"
+.IP "\fBsse3\fR" 4
+.IX Item "sse3"
+.IP "\fBsse3slow\fR" 4
+.IX Item "sse3slow"
+.IP "\fBssse3\fR" 4
+.IX Item "ssse3"
+.IP "\fBatom\fR" 4
+.IX Item "atom"
+.IP "\fBsse4.1\fR" 4
+.IX Item "sse4.1"
+.IP "\fBsse4.2\fR" 4
+.IX Item "sse4.2"
+.IP "\fBavx\fR" 4
+.IX Item "avx"
+.IP "\fBavx2\fR" 4
+.IX Item "avx2"
+.IP "\fBxop\fR" 4
+.IX Item "xop"
+.IP "\fBfma3\fR" 4
+.IX Item "fma3"
+.IP "\fBfma4\fR" 4
+.IX Item "fma4"
+.IP "\fB3dnow\fR" 4
+.IX Item "3dnow"
+.IP "\fB3dnowext\fR" 4
+.IX Item "3dnowext"
+.IP "\fBbmi1\fR" 4
+.IX Item "bmi1"
+.IP "\fBbmi2\fR" 4
+.IX Item "bmi2"
+.IP "\fBcmov\fR" 4
+.IX Item "cmov"
+.RE
+.RS 4
+.RE
+.IP "\fB\s-1ARM\s0\fR" 4
+.IX Item "ARM"
+.RS 4
+.IP "\fBarmv5te\fR" 4
+.IX Item "armv5te"
+.IP "\fBarmv6\fR" 4
+.IX Item "armv6"
+.IP "\fBarmv6t2\fR" 4
+.IX Item "armv6t2"
+.IP "\fBvfp\fR" 4
+.IX Item "vfp"
+.IP "\fBvfpv3\fR" 4
+.IX Item "vfpv3"
+.IP "\fBneon\fR" 4
+.IX Item "neon"
+.IP "\fBsetend\fR" 4
+.IX Item "setend"
+.RE
+.RS 4
+.RE
+.IP "\fBAArch64\fR" 4
+.IX Item "AArch64"
+.RS 4
+.IP "\fBarmv8\fR" 4
+.IX Item "armv8"
+.IP "\fBvfp\fR" 4
+.IX Item "vfp"
+.IP "\fBneon\fR" 4
+.IX Item "neon"
+.RE
+.RS 4
+.RE
+.IP "\fBPowerPC\fR" 4
+.IX Item "PowerPC"
+.RS 4
+.IP "\fBaltivec\fR" 4
+.IX Item "altivec"
+.RE
+.RS 4
+.RE
+.IP "\fBSpecific Processors\fR" 4
+.IX Item "Specific Processors"
+.RS 4
+.IP "\fBpentium2\fR" 4
+.IX Item "pentium2"
+.IP "\fBpentium3\fR" 4
+.IX Item "pentium3"
+.IP "\fBpentium4\fR" 4
+.IX Item "pentium4"
+.IP "\fBk6\fR" 4
+.IX Item "k6"
+.IP "\fBk62\fR" 4
+.IX Item "k62"
+.IP "\fBathlon\fR" 4
+.IX Item "athlon"
+.IP "\fBathlonxp\fR" 4
+.IX Item "athlonxp"
+.IP "\fBk8\fR" 4
+.IX Item "k8"
+.RE
+.RS 4
+.RE
+.RE
+.RS 4
+.RE
+.IP "\fB\-cpucount\fR \fIcount\fR \fB(\fR\fIglobal\fR\fB)\fR" 4
+.IX Item "-cpucount count (global)"
+.PD
+Override detection of \s-1CPU\s0 count. This option is intended
+for testing. Do not use it unless you know what you're doing.
+.Sp
+.Vb 1
+\&        ffmpeg \-cpucount 2
+.Ve
+.IP "\fB\-max_alloc\fR \fIbytes\fR" 4
+.IX Item "-max_alloc bytes"
+Set the maximum size limit for allocating a block on the heap by ffmpeg's
+family of malloc functions. Exercise \fBextreme caution\fR when using
+this option. Don't use if you do not understand the full consequence of doing so.
+Default is \s-1INT_MAX.\s0
+.SS "AVOptions"
+.IX Subsection "AVOptions"
+These options are provided directly by the libavformat, libavdevice and
+libavcodec libraries. To see the list of available AVOptions, use the
+\&\fB\-help\fR option. They are separated into two categories:
+.IP "\fBgeneric\fR" 4
+.IX Item "generic"
+These options can be set for any container, codec or device. Generic options
+are listed under AVFormatContext options for containers/devices and under
+AVCodecContext options for codecs.
+.IP "\fBprivate\fR" 4
+.IX Item "private"
+These options are specific to the given container, device or codec. Private
+options are listed under their corresponding containers/devices/codecs.
+.PP
+For example to write an ID3v2.3 header instead of a default ID3v2.4 to
+an \s-1MP3\s0 file, use the \fBid3v2_version\fR private option of the \s-1MP3\s0
+muxer:
+.PP
+.Vb 1
+\&        ffmpeg \-i input.flac \-id3v2_version 3 out.mp3
+.Ve
+.PP
+All codec AVOptions are per-stream, and thus a stream specifier
+should be attached to them:
+.PP
+.Vb 1
+\&        ffmpeg \-i multichannel.mxf \-map 0:v:0 \-map 0:a:0 \-map 0:a:0 \-c:a:0 ac3 \-b:a:0 640k \-ac:a:1 2 \-c:a:1 aac \-b:2 128k out.mp4
+.Ve
+.PP
+In the above example, a multichannel audio stream is mapped twice for output.
+The first instance is encoded with codec ac3 and bitrate 640k.
+The second instance is downmixed to 2 channels and encoded with codec aac. A bitrate of 128k is specified for it using
+absolute index of the output stream.
+.PP
+Note: the \fB\-nooption\fR syntax cannot be used for boolean
+AVOptions, use \fB\-option 0\fR/\fB\-option 1\fR.
+.PP
+Note: the old undocumented way of specifying per-stream AVOptions by
+prepending v/a/s to the options name is now obsolete and will be
+removed soon.
+.SS "Main options"
+.IX Subsection "Main options"
+.IP "\fB\-f\fR \fIfmt\fR \fB(\fR\fIinput/output\fR\fB)\fR" 4
+.IX Item "-f fmt (input/output)"
+Force input or output file format. The format is normally auto detected for input
+files and guessed from the file extension for output files, so this option is not
+needed in most cases.
+.IP "\fB\-i\fR \fIurl\fR \fB(\fR\fIinput\fR\fB)\fR" 4
+.IX Item "-i url (input)"
+input file url
+.IP "\fB\-y (\fR\fIglobal\fR\fB)\fR" 4
+.IX Item "-y (global)"
+Overwrite output files without asking.
+.IP "\fB\-n (\fR\fIglobal\fR\fB)\fR" 4
+.IX Item "-n (global)"
+Do not overwrite output files, and exit immediately if a specified
+output file already exists.
+.IP "\fB\-stream_loop\fR \fInumber\fR \fB(\fR\fIinput\fR\fB)\fR" 4
+.IX Item "-stream_loop number (input)"
+Set number of times input stream shall be looped. Loop 0 means no loop,
+loop \-1 means infinite loop.
+.IP "\fB\-recast_media (\fR\fIglobal\fR\fB)\fR" 4
+.IX Item "-recast_media (global)"
+Allow forcing a decoder of a different media type than the one
+detected or designated by the demuxer. Useful for decoding media
+data muxed as data streams.
+.IP "\fB\-c[:\fR\fIstream_specifier\fR\fB]\fR \fIcodec\fR \fB(\fR\fIinput/output,per\-stream\fR\fB)\fR" 4
+.IX Item "-c[:stream_specifier] codec (input/output,per-stream)"
+.PD 0
+.IP "\fB\-codec[:\fR\fIstream_specifier\fR\fB]\fR \fIcodec\fR \fB(\fR\fIinput/output,per\-stream\fR\fB)\fR" 4
+.IX Item "-codec[:stream_specifier] codec (input/output,per-stream)"
+.PD
+Select an encoder (when used before an output file) or a decoder (when used
+before an input file) for one or more streams. \fIcodec\fR is the name of a
+decoder/encoder or a special value \f(CW\*(C`copy\*(C'\fR (output only) to indicate that
+the stream is not to be re-encoded.
+.Sp
+For example
+.Sp
+.Vb 1
+\&        ffmpeg \-i INPUT \-map 0 \-c:v libx264 \-c:a copy OUTPUT
+.Ve
+.Sp
+encodes all video streams with libx264 and copies all audio streams.
+.Sp
+For each stream, the last matching \f(CW\*(C`c\*(C'\fR option is applied, so
+.Sp
+.Vb 1
+\&        ffmpeg \-i INPUT \-map 0 \-c copy \-c:v:1 libx264 \-c:a:137 libvorbis OUTPUT
+.Ve
+.Sp
+will copy all the streams except the second video, which will be encoded with
+libx264, and the 138th audio, which will be encoded with libvorbis.
+.IP "\fB\-t\fR \fIduration\fR \fB(\fR\fIinput/output\fR\fB)\fR" 4
+.IX Item "-t duration (input/output)"
+When used as an input option (before \f(CW\*(C`\-i\*(C'\fR), limit the \fIduration\fR of
+data read from the input file.
+.Sp
+When used as an output option (before an output url), stop writing the
+output after its duration reaches \fIduration\fR.
+.Sp
+\&\fIduration\fR must be a time duration specification,
+see \fBthe Time duration section in the \fBffmpeg\-utils\fB\|(1) manual\fR.
+.Sp
+\&\-to and \-t are mutually exclusive and \-t has priority.
+.IP "\fB\-to\fR \fIposition\fR \fB(\fR\fIinput/output\fR\fB)\fR" 4
+.IX Item "-to position (input/output)"
+Stop writing the output or reading the input at \fIposition\fR.
+\&\fIposition\fR must be a time duration specification,
+see \fBthe Time duration section in the \fBffmpeg\-utils\fB\|(1) manual\fR.
+.Sp
+\&\-to and \-t are mutually exclusive and \-t has priority.
+.IP "\fB\-fs\fR \fIlimit_size\fR \fB(\fR\fIoutput\fR\fB)\fR" 4
+.IX Item "-fs limit_size (output)"
+Set the file size limit, expressed in bytes. No further chunk of bytes is written
+after the limit is exceeded. The size of the output file is slightly more than the
+requested file size.
+.IP "\fB\-ss\fR \fIposition\fR \fB(\fR\fIinput/output\fR\fB)\fR" 4
+.IX Item "-ss position (input/output)"
+When used as an input option (before \f(CW\*(C`\-i\*(C'\fR), seeks in this input file to
+\&\fIposition\fR. Note that in most formats it is not possible to seek exactly,
+so \fBffmpeg\fR will seek to the closest seek point before \fIposition\fR.
+When transcoding and \fB\-accurate_seek\fR is enabled (the default), this
+extra segment between the seek point and \fIposition\fR will be decoded and
+discarded. When doing stream copy or when \fB\-noaccurate_seek\fR is used, it
+will be preserved.
+.Sp
+When used as an output option (before an output url), decodes but discards
+input until the timestamps reach \fIposition\fR.
+.Sp
+\&\fIposition\fR must be a time duration specification,
+see \fBthe Time duration section in the \fBffmpeg\-utils\fB\|(1) manual\fR.
+.IP "\fB\-sseof\fR \fIposition\fR \fB(\fR\fIinput\fR\fB)\fR" 4
+.IX Item "-sseof position (input)"
+Like the \f(CW\*(C`\-ss\*(C'\fR option but relative to the \*(L"end of file\*(R". That is negative
+values are earlier in the file, 0 is at \s-1EOF.\s0
+.IP "\fB\-isync\fR \fIinput_index\fR \fB(\fR\fIinput\fR\fB)\fR" 4
+.IX Item "-isync input_index (input)"
+Assign an input as a sync source.
+.Sp
+This will take the difference between the start times of the target and reference inputs and
+offset the timestamps of the target file by that difference. The source timestamps of the two
+inputs should derive from the same clock source for expected results. If \f(CW\*(C`copyts\*(C'\fR is set
+then \f(CW\*(C`start_at_zero\*(C'\fR must also be set. If either of the inputs has no starting timestamp
+then no sync adjustment is made.
+.Sp
+Acceptable values are those that refer to a valid ffmpeg input index. If the sync reference is
+the target index itself or \fI\-1\fR, then no adjustment is made to target timestamps. A sync
+reference may not itself be synced to any other input.
+.Sp
+Default value is \fI\-1\fR.
+.IP "\fB\-itsoffset\fR \fIoffset\fR \fB(\fR\fIinput\fR\fB)\fR" 4
+.IX Item "-itsoffset offset (input)"
+Set the input time offset.
+.Sp
+\&\fIoffset\fR must be a time duration specification,
+see \fBthe Time duration section in the \fBffmpeg\-utils\fB\|(1) manual\fR.
+.Sp
+The offset is added to the timestamps of the input files. Specifying
+a positive offset means that the corresponding streams are delayed by
+the time duration specified in \fIoffset\fR.
+.IP "\fB\-itsscale\fR \fIscale\fR \fB(\fR\fIinput,per\-stream\fR\fB)\fR" 4
+.IX Item "-itsscale scale (input,per-stream)"
+Rescale input timestamps. \fIscale\fR should be a floating point number.
+.IP "\fB\-timestamp\fR \fIdate\fR \fB(\fR\fIoutput\fR\fB)\fR" 4
+.IX Item "-timestamp date (output)"
+Set the recording timestamp in the container.
+.Sp
+\&\fIdate\fR must be a date specification,
+see \fBthe Date section in the \fBffmpeg\-utils\fB\|(1) manual\fR.
+.IP "\fB\-metadata[:metadata_specifier]\fR \fIkey\fR\fB=\fR\fIvalue\fR \fB(\fR\fIoutput,per\-metadata\fR\fB)\fR" 4
+.IX Item "-metadata[:metadata_specifier] key=value (output,per-metadata)"
+Set a metadata key/value pair.
+.Sp
+An optional \fImetadata_specifier\fR may be given to set metadata
+on streams, chapters or programs. See \f(CW\*(C`\-map_metadata\*(C'\fR
+documentation for details.
+.Sp
+This option overrides metadata set with \f(CW\*(C`\-map_metadata\*(C'\fR. It is
+also possible to delete metadata by using an empty value.
+.Sp
+For example, for setting the title in the output file:
+.Sp
+.Vb 1
+\&        ffmpeg \-i in.avi \-metadata title="my title" out.flv
+.Ve
+.Sp
+To set the language of the first audio stream:
+.Sp
+.Vb 1
+\&        ffmpeg \-i INPUT \-metadata:s:a:0 language=eng OUTPUT
+.Ve
+.IP "\fB\-disposition[:stream_specifier]\fR \fIvalue\fR \fB(\fR\fIoutput,per\-stream\fR\fB)\fR" 4
+.IX Item "-disposition[:stream_specifier] value (output,per-stream)"
+Sets the disposition flags for a stream.
+.Sp
+Default value: by default, all disposition flags are copied from the input stream,
+unless the output stream this option applies to is fed by a complex filtergraph
+\&\- in that case no disposition flags are set by default.
+.Sp
+\&\fIvalue\fR is a sequence of disposition flags separated by '+' or '\-'. A '+'
+prefix adds the given disposition, '\-' removes it. If the first flag is also
+prefixed with '+' or '\-', the resulting disposition is the default value
+updated by \fIvalue\fR. If the first flag is not prefixed, the resulting
+disposition is \fIvalue\fR. It is also possible to clear the disposition by
+setting it to 0.
+.Sp
+If no \f(CW\*(C`\-disposition\*(C'\fR options were specified for an output file, ffmpeg will
+automatically set the 'default' disposition flag on the first stream of each type,
+when there are multiple streams of this type in the output file and no stream of
+that type is already marked as default.
+.Sp
+The \f(CW\*(C`\-dispositions\*(C'\fR option lists the known disposition flags.
+.Sp
+For example, to make the second audio stream the default stream:
+.Sp
+.Vb 1
+\&        ffmpeg \-i in.mkv \-c copy \-disposition:a:1 default out.mkv
+.Ve
+.Sp
+To make the second subtitle stream the default stream and remove the default
+disposition from the first subtitle stream:
+.Sp
+.Vb 1
+\&        ffmpeg \-i in.mkv \-c copy \-disposition:s:0 0 \-disposition:s:1 default out.mkv
+.Ve
+.Sp
+To add an embedded cover/thumbnail:
+.Sp
+.Vb 1
+\&        ffmpeg \-i in.mp4 \-i IMAGE \-map 0 \-map 1 \-c copy \-c:v:1 png \-disposition:v:1 attached_pic out.mp4
+.Ve
+.Sp
+To add the 'original' and remove the 'comment' disposition flag from the first
+audio stream without removing its other disposition flags:
+.Sp
+.Vb 1
+\&        ffmpeg \-i in.mkv \-c copy \-disposition:a:0 +original\-comment out.mkv
+.Ve
+.Sp
+To remove the 'original' and add the 'comment' disposition flag to the first
+audio stream without removing its other disposition flags:
+.Sp
+.Vb 1
+\&        ffmpeg \-i in.mkv \-c copy \-disposition:a:0 \-original+comment out.mkv
+.Ve
+.Sp
+To set only the 'original' and 'comment' disposition flags on the first audio
+stream (and remove its other disposition flags):
+.Sp
+.Vb 1
+\&        ffmpeg \-i in.mkv \-c copy \-disposition:a:0 original+comment out.mkv
+.Ve
+.Sp
+To remove all disposition flags from the first audio stream:
+.Sp
+.Vb 1
+\&        ffmpeg \-i in.mkv \-c copy \-disposition:a:0 0 out.mkv
+.Ve
+.Sp
+Not all muxers support embedded thumbnails, and those who do, only support a few formats, like \s-1JPEG\s0 or \s-1PNG.\s0
+.IP "\fB\-program [title=\fR\fItitle\fR\fB:][program_num=\fR\fIprogram_num\fR\fB:]st=\fR\fIstream\fR\fB[:st=\fR\fIstream\fR\fB...] (\fR\fIoutput\fR\fB)\fR" 4
+.IX Item "-program [title=title:][program_num=program_num:]st=stream[:st=stream...] (output)"
+Creates a program with the specified \fItitle\fR, \fIprogram_num\fR and adds the specified
+\&\fIstream\fR(s) to it.
+.IP "\fB\-stream_group [map=\fR\fIinput_file_id\fR\fB=\fR\fIstream_group\fR\fB][type=\fR\fItype\fR\fB:]st=\fR\fIstream\fR\fB[:st=\fR\fIstream\fR\fB][:stg=\fR\fIstream_group\fR\fB][:id=\fR\fIstream_group_id\fR\fB...] (\fR\fIoutput\fR\fB)\fR" 4
+.IX Item "-stream_group [map=input_file_id=stream_group][type=type:]st=stream[:st=stream][:stg=stream_group][:id=stream_group_id...] (output)"
+Creates a stream group of the specified \fItype\fR and \fIstream_group_id\fR, or by
+\&\fImap\fRping an input group, adding the specified \fIstream\fR(s) and/or previously
+defined \fIstream_group\fR(s) to it.
+.Sp
+\&\fItype\fR can be one of the following:
+.RS 4
+.IP "\fBiamf_audio_element\fR" 4
+.IX Item "iamf_audio_element"
+Groups \fIstream\fRs that belong to the same \s-1IAMF\s0 Audio Element
+.Sp
+For this group \fItype\fR, the following options are available
+.RS 4
+.IP "\fBaudio_element_type\fR" 4
+.IX Item "audio_element_type"
+The Audio Element type. The following values are supported:
+.RS 4
+.IP "\fBchannel\fR" 4
+.IX Item "channel"
+Scalable channel audio representation
+.IP "\fBscene\fR" 4
+.IX Item "scene"
+Ambisonics representation
+.RE
+.RS 4
+.RE
+.IP "\fBdemixing\fR" 4
+.IX Item "demixing"
+Demixing information used to reconstruct a scalable channel audio representation.
+This option must be separated from the rest with a ',', and takes the following
+key=value options
+.RS 4
+.IP "\fBparameter_id\fR" 4
+.IX Item "parameter_id"
+An identifier parameters blocks in frames may refer to
+.IP "\fBdmixp_mode\fR" 4
+.IX Item "dmixp_mode"
+A pre-defined combination of demixing parameters
+.RE
+.RS 4
+.RE
+.IP "\fBrecon_gain\fR" 4
+.IX Item "recon_gain"
+Recon gain information used to reconstruct a scalable channel audio representation.
+This option must be separated from the rest with a ',', and takes the following
+key=value options
+.RS 4
+.IP "\fBparameter_id\fR" 4
+.IX Item "parameter_id"
+An identifier parameters blocks in frames may refer to
+.RE
+.RS 4
+.RE
+.IP "\fBlayer\fR" 4
+.IX Item "layer"
+A layer defining a Channel Layout in the Audio Element.
+This option must be separated from the rest with a ','. Several ',' separated entries
+can be defined, and at least one must be set.
+.Sp
+It takes the following \*(L":\*(R"\-separated key=value options
+.RS 4
+.IP "\fBch_layout\fR" 4
+.IX Item "ch_layout"
+The layer's channel layout
+.IP "\fBflags\fR" 4
+.IX Item "flags"
+The following flags are available:
+.RS 4
+.IP "\fBrecon_gain\fR" 4
+.IX Item "recon_gain"
+Whether to signal if recon_gain is present as metadata in parameter blocks within frames
+.RE
+.RS 4
+.RE
+.IP "\fBoutput_gain\fR" 4
+.IX Item "output_gain"
+.PD 0
+.IP "\fBoutput_gain_flags\fR" 4
+.IX Item "output_gain_flags"
+.PD
+Which channels output_gain applies to. The following flags are available:
+.RS 4
+.IP "\fB\s-1FL\s0\fR" 4
+.IX Item "FL"
+.PD 0
+.IP "\fB\s-1FR\s0\fR" 4
+.IX Item "FR"
+.IP "\fB\s-1BL\s0\fR" 4
+.IX Item "BL"
+.IP "\fB\s-1BR\s0\fR" 4
+.IX Item "BR"
+.IP "\fB\s-1TFL\s0\fR" 4
+.IX Item "TFL"
+.IP "\fB\s-1TFR\s0\fR" 4
+.IX Item "TFR"
+.RE
+.RS 4
+.RE
+.IP "\fBambisonics_mode\fR" 4
+.IX Item "ambisonics_mode"
+.PD
+The ambisonics mode. This has no effect if audio_element_type is set to channel.
+.Sp
+The following values are supported:
+.RS 4
+.IP "\fBmono\fR" 4
+.IX Item "mono"
+Each ambisonics channel is coded as an individual mono stream in the group
+.RE
+.RS 4
+.RE
+.RE
+.RS 4
+.RE
+.IP "\fBdefault_w\fR" 4
+.IX Item "default_w"
+Default weight value
+.RE
+.RS 4
+.RE
+.IP "\fBiamf_mix_presentation\fR" 4
+.IX Item "iamf_mix_presentation"
+Groups \fIstream\fRs that belong to all \s-1IAMF\s0 Audio Element the same
+\&\s-1IAMF\s0 Mix Presentation references
+.Sp
+For this group \fItype\fR, the following options are available
+.RS 4
+.IP "\fBsubmix\fR" 4
+.IX Item "submix"
+A sub-mix within the Mix Presentation.
+This option must be separated from the rest with a ','. Several ',' separated entries
+can be defined, and at least one must be set.
+.Sp
+It takes the following \*(L":\*(R"\-separated key=value options
+.RS 4
+.IP "\fBparameter_id\fR" 4
+.IX Item "parameter_id"
+An identifier parameters blocks in frames may refer to, for post-processing the mixed
+audio signal to generate the audio signal for playback
+.IP "\fBparameter_rate\fR" 4
+.IX Item "parameter_rate"
+The sample rate duration fields in parameters blocks in frames that refer to this
+\&\fIparameter_id\fR are expressed as
+.IP "\fBdefault_mix_gain\fR" 4
+.IX Item "default_mix_gain"
+Default mix gain value to apply when there are no parameter blocks sharing the same
+\&\fIparameter_id\fR for a given frame
+.IP "\fBelement\fR" 4
+.IX Item "element"
+References an Audio Element used in this Mix Presentation to generate the final output
+audio signal for playback.
+This option must be separated from the rest with a '|'. Several '|' separated entries
+can be defined, and at least one must be set.
+.Sp
+It takes the following \*(L":\*(R"\-separated key=value options:
+.RS 4
+.IP "\fBstg\fR" 4
+.IX Item "stg"
+The \fIstream_group_id\fR for an Audio Element which this sub-mix refers to
+.IP "\fBparameter_id\fR" 4
+.IX Item "parameter_id"
+An identifier parameters blocks in frames may refer to, for applying any processing to
+the referenced and rendered Audio Element before being summed with other processed Audio
+Elements
+.IP "\fBparameter_rate\fR" 4
+.IX Item "parameter_rate"
+The sample rate duration fields in parameters blocks in frames that refer to this
+\&\fIparameter_id\fR are expressed as
+.IP "\fBdefault_mix_gain\fR" 4
+.IX Item "default_mix_gain"
+Default mix gain value to apply when there are no parameter blocks sharing the same
+\&\fIparameter_id\fR for a given frame
+.IP "\fBannotations\fR" 4
+.IX Item "annotations"
+A key=value string describing the sub-mix element where \*(L"key\*(R" is a string conforming to
+\&\s-1BCP\-47\s0 that specifies the language for the \*(L"value\*(R" string. \*(L"key\*(R" must be the same as the
+one in the mix's \fIannotations\fR
+.IP "\fBheadphones_rendering_mode\fR" 4
+.IX Item "headphones_rendering_mode"
+Indicates whether the input channel-based Audio Element is rendered to stereo loudspeakers
+or spatialized with a binaural renderer when played back on headphones.
+This has no effect if the referenced Audio Element's \fIaudio_element_type\fR is set to
+channel.
+.Sp
+The following values are supported:
+.RS 4
+.IP "\fBstereo\fR" 4
+.IX Item "stereo"
+.PD 0
+.IP "\fBbinaural\fR" 4
+.IX Item "binaural"
+.RE
+.RS 4
+.RE
+.RE
+.RS 4
+.RE
+.IP "\fBlayout\fR" 4
+.IX Item "layout"
+.PD
+Specifies the layouts for this sub-mix on which the loudness information was measured.
+This option must be separated from the rest with a '|'. Several '|' separated entries
+can be defined, and at least one must be set.
+.Sp
+It takes the following \*(L":\*(R"\-separated key=value options:
+.RS 4
+.IP "\fBlayout_type\fR" 4
+.IX Item "layout_type"
+.RS 4
+.PD 0
+.IP "\fBloudspeakers\fR" 4
+.IX Item "loudspeakers"
+.PD
+The layout follows the loudspeaker sound system convention of \s-1ITU\-2051\-3.\s0
+.IP "\fBbinaural\fR" 4
+.IX Item "binaural"
+The layout is binaural.
+.RE
+.RS 4
+.RE
+.IP "\fBsound_system\fR" 4
+.IX Item "sound_system"
+Channel layout matching one of Sound Systems A to J of \s-1ITU\-2051\-3,\s0 plus 7.1.2 and 3.1.2
+This has no effect if \fIlayout_type\fR is set to binaural.
+.IP "\fBintegrated_loudness\fR" 4
+.IX Item "integrated_loudness"
+The program integrated loudness information, as defined in \s-1ITU\-1770\-4.\s0
+.IP "\fBdigital_peak\fR" 4
+.IX Item "digital_peak"
+The digital (sampled) peak value of the audio signal, as defined in \s-1ITU\-1770\-4.\s0
+.IP "\fBtrue_peak\fR" 4
+.IX Item "true_peak"
+The true peak of the audio signal, as defined in \s-1ITU\-1770\-4.\s0
+.IP "\fBdialog_anchored_loudness\fR" 4
+.IX Item "dialog_anchored_loudness"
+The Dialogue loudness information, as defined in \s-1ITU\-1770\-4.\s0
+.IP "\fBalbum_anchored_loudness\fR" 4
+.IX Item "album_anchored_loudness"
+The Album loudness information, as defined in \s-1ITU\-1770\-4.\s0
+.RE
+.RS 4
+.RE
+.RE
+.RS 4
+.RE
+.IP "\fBannotations\fR" 4
+.IX Item "annotations"
+A key=value string string describing the mix where \*(L"key\*(R" is a string conforming to \s-1BCP\-47\s0
+that specifies the language for the \*(L"value\*(R" string. \*(L"key\*(R" must be the same as the ones in
+all sub-mix element's \fIannotations\fRs
+.RE
+.RS 4
+.RE
+.RE
+.RS 4
+.Sp
+E.g. to create an scalable 5.1 \s-1IAMF\s0 file from several \s-1WAV\s0 input files
+.Sp
+.Vb 10
+\&        ffmpeg \-i front.wav \-i back.wav \-i center.wav \-i lfe.wav
+\&        \-map 0:0 \-map 1:0 \-map 2:0 \-map 3:0 \-c:a opus
+\&        \-stream_group type=iamf_audio_element:id=1:st=0:st=1:st=2:st=3,
+\&        demixing=parameter_id=998,
+\&        recon_gain=parameter_id=101,
+\&        layer=ch_layout=stereo,
+\&        layer=ch_layout=5.1(side),
+\&        \-stream_group type=iamf_mix_presentation:id=2:stg=0:annotations=en\-us=Mix_Presentation,
+\&        submix=parameter_id=100:parameter_rate=48000|element=stg=0:parameter_id=100:annotations=en\-us=Scalable_Submix|layout=sound_system=stereo|layout=sound_system=5.1(side)
+\&        \-streamid 0:0 \-streamid 1:1 \-streamid 2:2 \-streamid 3:3 output.iamf
+.Ve
+.Sp
+To copy the two stream groups (Audio Element and Mix Presentation) from an input \s-1IAMF\s0 file with four
+streams into an mp4 output
+.Sp
+.Vb 2
+\&        ffmpeg \-i input.iamf \-c:a copy \-stream_group map=0=0:st=0:st=1:st=2:st=3 \-stream_group map=0=1:stg=0
+\&        \-streamid 0:0 \-streamid 1:1 \-streamid 2:2 \-streamid 3:3 output.mp4
+.Ve
+.RE
+.IP "\fB\-target\fR \fItype\fR \fB(\fR\fIoutput\fR\fB)\fR" 4
+.IX Item "-target type (output)"
+Specify target file type (\f(CW\*(C`vcd\*(C'\fR, \f(CW\*(C`svcd\*(C'\fR, \f(CW\*(C`dvd\*(C'\fR, \f(CW\*(C`dv\*(C'\fR,
+\&\f(CW\*(C`dv50\*(C'\fR). \fItype\fR may be prefixed with \f(CW\*(C`pal\-\*(C'\fR, \f(CW\*(C`ntsc\-\*(C'\fR or
+\&\f(CW\*(C`film\-\*(C'\fR to use the corresponding standard. All the format options
+(bitrate, codecs, buffer sizes) are then set automatically. You can just type:
+.Sp
+.Vb 1
+\&        ffmpeg \-i myfile.avi \-target vcd /tmp/vcd.mpg
+.Ve
+.Sp
+Nevertheless you can specify additional options as long as you know
+they do not conflict with the standard, as in:
+.Sp
+.Vb 1
+\&        ffmpeg \-i myfile.avi \-target vcd \-bf 2 /tmp/vcd.mpg
+.Ve
+.Sp
+The parameters set for each target are as follows.
+.Sp
+\&\fB\s-1VCD\s0\fR
+.Sp
+.Vb 6
+\&        <pal>:
+\&        \-f vcd \-muxrate 1411200 \-muxpreload 0.44 \-packetsize 2324
+\&        \-s 352x288 \-r 25
+\&        \-codec:v mpeg1video \-g 15 \-b:v 1150k \-maxrate:v 1150k \-minrate:v 1150k \-bufsize:v 327680
+\&        \-ar 44100 \-ac 2
+\&        \-codec:a mp2 \-b:a 224k
+\&        
+\&        <ntsc>:
+\&        \-f vcd \-muxrate 1411200 \-muxpreload 0.44 \-packetsize 2324
+\&        \-s 352x240 \-r 30000/1001
+\&        \-codec:v mpeg1video \-g 18 \-b:v 1150k \-maxrate:v 1150k \-minrate:v 1150k \-bufsize:v 327680
+\&        \-ar 44100 \-ac 2
+\&        \-codec:a mp2 \-b:a 224k
+\&        
+\&        <film>:
+\&        \-f vcd \-muxrate 1411200 \-muxpreload 0.44 \-packetsize 2324
+\&        \-s 352x240 \-r 24000/1001
+\&        \-codec:v mpeg1video \-g 18 \-b:v 1150k \-maxrate:v 1150k \-minrate:v 1150k \-bufsize:v 327680
+\&        \-ar 44100 \-ac 2
+\&        \-codec:a mp2 \-b:a 224k
+.Ve
+.Sp
+\&\fB\s-1SVCD\s0\fR
+.Sp
+.Vb 6
+\&        <pal>:
+\&        \-f svcd \-packetsize 2324
+\&        \-s 480x576 \-pix_fmt yuv420p \-r 25
+\&        \-codec:v mpeg2video \-g 15 \-b:v 2040k \-maxrate:v 2516k \-minrate:v 0 \-bufsize:v 1835008 \-scan_offset 1
+\&        \-ar 44100
+\&        \-codec:a mp2 \-b:a 224k
+\&        
+\&        <ntsc>:
+\&        \-f svcd \-packetsize 2324
+\&        \-s 480x480 \-pix_fmt yuv420p \-r 30000/1001
+\&        \-codec:v mpeg2video \-g 18 \-b:v 2040k \-maxrate:v 2516k \-minrate:v 0 \-bufsize:v 1835008 \-scan_offset 1
+\&        \-ar 44100
+\&        \-codec:a mp2 \-b:a 224k
+\&        
+\&        <film>:
+\&        \-f svcd \-packetsize 2324
+\&        \-s 480x480 \-pix_fmt yuv420p \-r 24000/1001
+\&        \-codec:v mpeg2video \-g 18 \-b:v 2040k \-maxrate:v 2516k \-minrate:v 0 \-bufsize:v 1835008 \-scan_offset 1
+\&        \-ar 44100
+\&        \-codec:a mp2 \-b:a 224k
+.Ve
+.Sp
+\&\fB\s-1DVD\s0\fR
+.Sp
+.Vb 6
+\&        <pal>:
+\&        \-f dvd \-muxrate 10080k \-packetsize 2048
+\&        \-s 720x576 \-pix_fmt yuv420p \-r 25
+\&        \-codec:v mpeg2video \-g 15 \-b:v 6000k \-maxrate:v 9000k \-minrate:v 0 \-bufsize:v 1835008
+\&        \-ar 48000
+\&        \-codec:a ac3 \-b:a 448k
+\&        
+\&        <ntsc>:
+\&        \-f dvd \-muxrate 10080k \-packetsize 2048
+\&        \-s 720x480 \-pix_fmt yuv420p \-r 30000/1001
+\&        \-codec:v mpeg2video \-g 18 \-b:v 6000k \-maxrate:v 9000k \-minrate:v 0 \-bufsize:v 1835008
+\&        \-ar 48000
+\&        \-codec:a ac3 \-b:a 448k
+\&        
+\&        <film>:
+\&        \-f dvd \-muxrate 10080k \-packetsize 2048
+\&        \-s 720x480 \-pix_fmt yuv420p \-r 24000/1001
+\&        \-codec:v mpeg2video \-g 18 \-b:v 6000k \-maxrate:v 9000k \-minrate:v 0 \-bufsize:v 1835008
+\&        \-ar 48000
+\&        \-codec:a ac3 \-b:a 448k
+.Ve
+.Sp
+\&\fB\s-1DV\s0\fR
+.Sp
+.Vb 4
+\&        <pal>:
+\&        \-f dv
+\&        \-s 720x576 \-pix_fmt yuv420p \-r 25
+\&        \-ar 48000 \-ac 2
+\&        
+\&        <ntsc>:
+\&        \-f dv
+\&        \-s 720x480 \-pix_fmt yuv411p \-r 30000/1001
+\&        \-ar 48000 \-ac 2
+\&        
+\&        <film>:
+\&        \-f dv
+\&        \-s 720x480 \-pix_fmt yuv411p \-r 24000/1001
+\&        \-ar 48000 \-ac 2
+.Ve
+.Sp
+The \f(CW\*(C`dv50\*(C'\fR target is identical to the \f(CW\*(C`dv\*(C'\fR target except that the pixel format set is \f(CW\*(C`yuv422p\*(C'\fR for all three standards.
+.Sp
+Any user-set value for a parameter above will override the target preset value. In that case, the output may
+not comply with the target standard.
+.IP "\fB\-dn (\fR\fIinput/output\fR\fB)\fR" 4
+.IX Item "-dn (input/output)"
+As an input option, blocks all data streams of a file from being filtered or
+being automatically selected or mapped for any output. See \f(CW\*(C`\-discard\*(C'\fR
+option to disable streams individually.
+.Sp
+As an output option, disables data recording i.e. automatic selection or
+mapping of any data stream. For full manual control see the \f(CW\*(C`\-map\*(C'\fR
+option.
+.IP "\fB\-dframes\fR \fInumber\fR \fB(\fR\fIoutput\fR\fB)\fR" 4
+.IX Item "-dframes number (output)"
+Set the number of data frames to output. This is an obsolete alias for
+\&\f(CW\*(C`\-frames:d\*(C'\fR, which you should use instead.
+.IP "\fB\-frames[:\fR\fIstream_specifier\fR\fB]\fR \fIframecount\fR \fB(\fR\fIoutput,per\-stream\fR\fB)\fR" 4
+.IX Item "-frames[:stream_specifier] framecount (output,per-stream)"
+Stop writing to the stream after \fIframecount\fR frames.
+.IP "\fB\-q[:\fR\fIstream_specifier\fR\fB]\fR \fIq\fR \fB(\fR\fIoutput,per\-stream\fR\fB)\fR" 4
+.IX Item "-q[:stream_specifier] q (output,per-stream)"
+.PD 0
+.IP "\fB\-qscale[:\fR\fIstream_specifier\fR\fB]\fR \fIq\fR \fB(\fR\fIoutput,per\-stream\fR\fB)\fR" 4
+.IX Item "-qscale[:stream_specifier] q (output,per-stream)"
+.PD
+Use fixed quality scale (\s-1VBR\s0). The meaning of \fIq\fR/\fIqscale\fR is
+codec-dependent.
+If \fIqscale\fR is used without a \fIstream_specifier\fR then it applies only
+to the video stream, this is to maintain compatibility with previous behavior
+and as specifying the same codec specific value to 2 different codecs that is
+audio and video generally is not what is intended when no stream_specifier is
+used.
+.IP "\fB\-filter[:\fR\fIstream_specifier\fR\fB]\fR \fIfiltergraph\fR \fB(\fR\fIoutput,per\-stream\fR\fB)\fR" 4
+.IX Item "-filter[:stream_specifier] filtergraph (output,per-stream)"
+Create the filtergraph specified by \fIfiltergraph\fR and use it to
+filter the stream.
+.Sp
+\&\fIfiltergraph\fR is a description of the filtergraph to apply to
+the stream, and must have a single input and a single output of the
+same type of the stream. In the filtergraph, the input is associated
+to the label \f(CW\*(C`in\*(C'\fR, and the output to the label \f(CW\*(C`out\*(C'\fR. See
+the ffmpeg-filters manual for more information about the filtergraph
+syntax.
+.Sp
+See the \fB\-filter_complex option\fR if you
+want to create filtergraphs with multiple inputs and/or outputs.
+.IP "\fB\-reinit_filter[:\fR\fIstream_specifier\fR\fB]\fR \fIinteger\fR \fB(\fR\fIinput,per\-stream\fR\fB)\fR" 4
+.IX Item "-reinit_filter[:stream_specifier] integer (input,per-stream)"
+This boolean option determines if the filtergraph(s) to which this stream is fed gets
+reinitialized when input frame parameters change mid-stream. This option is enabled by
+default as most video and all audio filters cannot handle deviation in input frame properties.
+Upon reinitialization, existing filter state is lost, like e.g. the frame count \f(CW\*(C`n\*(C'\fR
+reference available in some filters. Any frames buffered at time of reinitialization are lost.
+The properties where a change triggers reinitialization are,
+for video, frame resolution or pixel format;
+for audio, sample format, sample rate, channel count or channel layout.
+.IP "\fB\-drop_changed[:\fR\fIstream_specifier\fR\fB]\fR \fIinteger\fR \fB(\fR\fIinput,per\-stream\fR\fB)\fR" 4
+.IX Item "-drop_changed[:stream_specifier] integer (input,per-stream)"
+This boolean option determines whether a frame with differing frame parameters mid-stream
+gets dropped instead of leading to filtergraph reinitialization, as that would lead to loss
+of filter state. Generally useful to avoid corrupted yet decodable packets in live streaming
+inputs. Default is false.
+.IP "\fB\-filter_threads\fR \fInb_threads\fR \fB(\fR\fIglobal\fR\fB)\fR" 4
+.IX Item "-filter_threads nb_threads (global)"
+Defines how many threads are used to process a filter pipeline. Each pipeline
+will produce a thread pool with this many threads available for parallel processing.
+The default is the number of available CPUs.
+.IP "\fB\-filter_buffered_frames\fR \fInb_frames\fR \fB(\fR\fIglobal\fR\fB)\fR" 4
+.IX Item "-filter_buffered_frames nb_frames (global)"
+Defines the maximum number of buffered frames allowed in a filtergraph. Under
+normal circumstances, a filtergraph should not buffer more than a few frames,
+especially if frames are being fed to it and read from it in a balanced way
+(which is the intended behavior in ffmpeg). That said, this option allows you
+to limit the total number of frames buffered across all links in a filtergraph.
+If more frames are generated, filtering is aborted and an error is returned.
+The default value is 0, which means no limit.
+.IP "\fB\-pre[:\fR\fIstream_specifier\fR\fB]\fR \fIpreset_name\fR \fB(\fR\fIoutput,per\-stream\fR\fB)\fR" 4
+.IX Item "-pre[:stream_specifier] preset_name (output,per-stream)"
+Specify the preset for matching stream(s).
+.IP "\fB\-stats (\fR\fIglobal\fR\fB)\fR" 4
+.IX Item "-stats (global)"
+Log encoding progress/statistics as \*(L"info\*(R"\-level log (see \f(CW\*(C`\-loglevel\*(C'\fR).
+It is on by default, to explicitly disable it you need to specify \f(CW\*(C`\-nostats\*(C'\fR.
+.IP "\fB\-stats_period\fR \fItime\fR \fB(\fR\fIglobal\fR\fB)\fR" 4
+.IX Item "-stats_period time (global)"
+Set period at which encoding progress/statistics are updated. Default is 0.5 seconds.
+.IP "\fB\-print_graphs (\fR\fIglobal\fR\fB)\fR" 4
+.IX Item "-print_graphs (global)"
+Prints execution graph details to stderr in the format set via \-print_graphs_format.
+.IP "\fB\-print_graphs_file\fR \fIfilename\fR \fB(\fR\fIglobal\fR\fB)\fR" 4
+.IX Item "-print_graphs_file filename (global)"
+Writes execution graph details to the specified file in the format set via \-print_graphs_format.
+.IP "\fB\-print_graphs_format\fR \fIformat\fR \fB(\fR\fIglobal\fR\fB)\fR" 4
+.IX Item "-print_graphs_format format (global)"
+Sets the output format (available formats are: default, compact, csv, flat, ini, json, xml, mermaid, mermaidhtml)
+The default format is json.
+.IP "\fB\-progress\fR \fIurl\fR \fB(\fR\fIglobal\fR\fB)\fR" 4
+.IX Item "-progress url (global)"
+Send program-friendly progress information to \fIurl\fR.
+.Sp
+Progress information is written periodically and at the end of
+the encoding process. It is made of "\fIkey\fR=\fIvalue\fR" lines. \fIkey\fR
+consists of only alphanumeric characters. The last key of a sequence of
+progress information is always \*(L"progress\*(R" with the value \*(L"continue\*(R" or \*(L"end\*(R".
+.Sp
+The update period is set using \f(CW\*(C`\-stats_period\*(C'\fR.
+.Sp
+For example, log progress information to stdout:
+.Sp
+.Vb 1
+\&        ffmpeg \-progress pipe:1 \-i in.mkv out.mkv
+.Ve
+.IP "\fB\-stdin\fR" 4
+.IX Item "-stdin"
+Enable interaction on standard input. On by default unless standard input is
+used as an input. To explicitly disable interaction you need to specify
+\&\f(CW\*(C`\-nostdin\*(C'\fR.
+.Sp
+Disabling interaction on standard input is useful, for example, if
+ffmpeg is in the background process group. Roughly the same result can
+be achieved with \f(CW\*(C`ffmpeg ... < /dev/null\*(C'\fR but it requires a
+shell.
+.IP "\fB\-debug_ts (\fR\fIglobal\fR\fB)\fR" 4
+.IX Item "-debug_ts (global)"
+Print timestamp/latency information. It is off by default. This option is
+mostly useful for testing and debugging purposes, and the output
+format may change from one version to another, so it should not be
+employed by portable scripts.
+.Sp
+See also the option \f(CW\*(C`\-fdebug ts\*(C'\fR.
+.IP "\fB\-attach\fR \fIfilename\fR \fB(\fR\fIoutput\fR\fB)\fR" 4
+.IX Item "-attach filename (output)"
+Add an attachment to the output file. This is supported by a few formats
+like Matroska for e.g. fonts used in rendering subtitles. Attachments
+are implemented as a specific type of stream, so this option will add
+a new stream to the file. It is then possible to use per-stream options
+on this stream in the usual way. Attachment streams created with this
+option will be created after all the other streams (i.e. those created
+with \f(CW\*(C`\-map\*(C'\fR or automatic mappings).
+.Sp
+Note that for Matroska you also have to set the mimetype metadata tag:
+.Sp
+.Vb 1
+\&        ffmpeg \-i INPUT \-attach DejaVuSans.ttf \-metadata:s:2 mimetype=application/x\-truetype\-font out.mkv
+.Ve
+.Sp
+(assuming that the attachment stream will be third in the output file).
+.IP "\fB\-dump_attachment[:\fR\fIstream_specifier\fR\fB]\fR \fIfilename\fR \fB(\fR\fIinput,per\-stream\fR\fB)\fR" 4
+.IX Item "-dump_attachment[:stream_specifier] filename (input,per-stream)"
+Extract the matching attachment stream into a file named \fIfilename\fR. If
+\&\fIfilename\fR is empty, then the value of the \f(CW\*(C`filename\*(C'\fR metadata tag
+will be used.
+.Sp
+E.g. to extract the first attachment to a file named 'out.ttf':
+.Sp
+.Vb 1
+\&        ffmpeg \-dump_attachment:t:0 out.ttf \-i INPUT
+.Ve
+.Sp
+To extract all attachments to files determined by the \f(CW\*(C`filename\*(C'\fR tag:
+.Sp
+.Vb 1
+\&        ffmpeg \-dump_attachment:t "" \-i INPUT
+.Ve
+.Sp
+Technical note \*(-- attachments are implemented as codec extradata, so this
+option can actually be used to extract extradata from any stream, not just
+attachments.
+.SS "Video Options"
+.IX Subsection "Video Options"
+.IP "\fB\-vframes\fR \fInumber\fR \fB(\fR\fIoutput\fR\fB)\fR" 4
+.IX Item "-vframes number (output)"
+Set the number of video frames to output. This is an obsolete alias for
+\&\f(CW\*(C`\-frames:v\*(C'\fR, which you should use instead.
+.IP "\fB\-r[:\fR\fIstream_specifier\fR\fB]\fR \fIfps\fR \fB(\fR\fIinput/output,per\-stream\fR\fB)\fR" 4
+.IX Item "-r[:stream_specifier] fps (input/output,per-stream)"
+Set frame rate (Hz value, fraction or abbreviation).
+.Sp
+As an input option, ignore any timestamps stored in the file and instead
+generate timestamps assuming constant frame rate \fIfps\fR.
+This is not the same as the \fB\-framerate\fR option used for some input formats
+like image2 or v4l2 (it used to be the same in older versions of FFmpeg).
+If in doubt use \fB\-framerate\fR instead of the input option \fB\-r\fR.
+.Sp
+As an output option:
+.RS 4
+.IP "\fBvideo encoding\fR" 4
+.IX Item "video encoding"
+Duplicate or drop frames right before encoding them to achieve constant output
+frame rate \fIfps\fR.
+.IP "\fBvideo streamcopy\fR" 4
+.IX Item "video streamcopy"
+Indicate to the muxer that \fIfps\fR is the stream frame rate. No data is
+dropped or duplicated in this case. This may produce invalid files if \fIfps\fR
+does not match the actual stream frame rate as determined by packet timestamps.
+See also the \f(CW\*(C`setts\*(C'\fR bitstream filter.
+.RE
+.RS 4
+.RE
+.IP "\fB\-fpsmax[:\fR\fIstream_specifier\fR\fB]\fR \fIfps\fR \fB(\fR\fIoutput,per\-stream\fR\fB)\fR" 4
+.IX Item "-fpsmax[:stream_specifier] fps (output,per-stream)"
+Set maximum frame rate (Hz value, fraction or abbreviation).
+.Sp
+Clamps output frame rate when output framerate is auto-set and is higher than this value.
+Useful in batch processing or when input framerate is wrongly detected as very high.
+It cannot be set together with \f(CW\*(C`\-r\*(C'\fR. It is ignored during streamcopy.
+.IP "\fB\-s[:\fR\fIstream_specifier\fR\fB]\fR \fIsize\fR \fB(\fR\fIinput/output,per\-stream\fR\fB)\fR" 4
+.IX Item "-s[:stream_specifier] size (input/output,per-stream)"
+Set frame size.
+.Sp
+As an input option, this is a shortcut for the \fBvideo_size\fR private
+option, recognized by some demuxers for which the frame size is either not
+stored in the file or is configurable \*(-- e.g. raw video or video grabbers.
+.Sp
+As an output option, this inserts the \f(CW\*(C`scale\*(C'\fR video filter to the
+\&\fIend\fR of the corresponding filtergraph. Please use the \f(CW\*(C`scale\*(C'\fR filter
+directly to insert it at the beginning or some other place.
+.Sp
+The format is \fBwxh\fR (default \- same as source).
+.IP "\fB\-aspect[:\fR\fIstream_specifier\fR\fB]\fR \fIaspect\fR \fB(\fR\fIoutput,per\-stream\fR\fB)\fR" 4
+.IX Item "-aspect[:stream_specifier] aspect (output,per-stream)"
+Set the video display aspect ratio specified by \fIaspect\fR.
+.Sp
+\&\fIaspect\fR can be a floating point number string, or a string of the
+form \fInum\fR:\fIden\fR, where \fInum\fR and \fIden\fR are the
+numerator and denominator of the aspect ratio. For example \*(L"4:3\*(R",
+\&\*(L"16:9\*(R", \*(L"1.3333\*(R", and \*(L"1.7777\*(R" are valid argument values.
+.Sp
+If used together with \fB\-vcodec copy\fR, it will affect the aspect ratio
+stored at container level, but not the aspect ratio stored in encoded
+frames, if it exists.
+.IP "\fB\-display_rotation[:\fR\fIstream_specifier\fR\fB]\fR \fIrotation\fR \fB(\fR\fIinput,per\-stream\fR\fB)\fR" 4
+.IX Item "-display_rotation[:stream_specifier] rotation (input,per-stream)"
+Set video rotation metadata.
+.Sp
+\&\fIrotation\fR is a decimal number specifying the amount in degree by
+which the video should be rotated counter-clockwise before being
+displayed.
+.Sp
+This option overrides the rotation/display transform metadata stored in
+the file, if any. When the video is being transcoded (rather than
+copied) and \f(CW\*(C`\-autorotate\*(C'\fR is enabled, the video will be rotated at
+the filtering stage. Otherwise, the metadata will be written into the
+output file if the muxer supports it.
+.Sp
+If the \f(CW\*(C`\-display_hflip\*(C'\fR and/or \f(CW\*(C`\-display_vflip\*(C'\fR options are
+given, they are applied after the rotation specified by this option.
+.IP "\fB\-display_hflip[:\fR\fIstream_specifier\fR\fB] (\fR\fIinput,per\-stream\fR\fB)\fR" 4
+.IX Item "-display_hflip[:stream_specifier] (input,per-stream)"
+Set whether on display the image should be horizontally flipped.
+.Sp
+See the \f(CW\*(C`\-display_rotation\*(C'\fR option for more details.
+.IP "\fB\-display_vflip[:\fR\fIstream_specifier\fR\fB] (\fR\fIinput,per\-stream\fR\fB)\fR" 4
+.IX Item "-display_vflip[:stream_specifier] (input,per-stream)"
+Set whether on display the image should be vertically flipped.
+.Sp
+See the \f(CW\*(C`\-display_rotation\*(C'\fR option for more details.
+.IP "\fB\-vn (\fR\fIinput/output\fR\fB)\fR" 4
+.IX Item "-vn (input/output)"
+As an input option, blocks all video streams of a file from being filtered or
+being automatically selected or mapped for any output. See \f(CW\*(C`\-discard\*(C'\fR
+option to disable streams individually.
+.Sp
+As an output option, disables video recording i.e. automatic selection or
+mapping of any video stream. For full manual control see the \f(CW\*(C`\-map\*(C'\fR
+option.
+.IP "\fB\-vcodec\fR \fIcodec\fR \fB(\fR\fIoutput\fR\fB)\fR" 4
+.IX Item "-vcodec codec (output)"
+Set the video codec. This is an alias for \f(CW\*(C`\-codec:v\*(C'\fR.
+.IP "\fB\-pass[:\fR\fIstream_specifier\fR\fB]\fR \fIn\fR \fB(\fR\fIoutput,per\-stream\fR\fB)\fR" 4
+.IX Item "-pass[:stream_specifier] n (output,per-stream)"
+Select the pass number (1 or 2). It is used to do two-pass
+video encoding. The statistics of the video are recorded in the first
+pass into a log file (see also the option \-passlogfile),
+and in the second pass that log file is used to generate the video
+at the exact requested bitrate.
+On pass 1, you may just deactivate audio and set output to null,
+examples for Windows and Unix:
+.Sp
+.Vb 2
+\&        ffmpeg \-i foo.mov \-c:v libxvid \-pass 1 \-an \-f rawvideo \-y NUL
+\&        ffmpeg \-i foo.mov \-c:v libxvid \-pass 1 \-an \-f rawvideo \-y /dev/null
+.Ve
+.IP "\fB\-passlogfile[:\fR\fIstream_specifier\fR\fB]\fR \fIprefix\fR \fB(\fR\fIoutput,per\-stream\fR\fB)\fR" 4
+.IX Item "-passlogfile[:stream_specifier] prefix (output,per-stream)"
+Set two-pass log file name prefix to \fIprefix\fR, the default file name
+prefix is ``ffmpeg2pass''. The complete file name will be
+\&\fI\s-1PREFIX\-N\s0.log\fR, where N is a number specific to the output
+stream
+.IP "\fB\-vf\fR \fIfiltergraph\fR \fB(\fR\fIoutput\fR\fB)\fR" 4
+.IX Item "-vf filtergraph (output)"
+Create the filtergraph specified by \fIfiltergraph\fR and use it to
+filter the stream.
+.Sp
+This is an alias for \f(CW\*(C`\-filter:v\*(C'\fR, see the \fB\-filter option\fR.
+.IP "\fB\-autorotate\fR" 4
+.IX Item "-autorotate"
+Automatically rotate the video according to file metadata. Enabled by
+default, use \fB\-noautorotate\fR to disable it.
+.IP "\fB\-autoscale\fR" 4
+.IX Item "-autoscale"
+Automatically scale the video according to the resolution of first frame.
+Enabled by default, use \fB\-noautoscale\fR to disable it. When autoscale is
+disabled, all output frames of filter graph might not be in the same resolution
+and may be inadequate for some encoder/muxer. Therefore, it is not recommended
+to disable it unless you really know what you are doing.
+Disable autoscale at your own risk.
+.SS "Advanced Video options"
+.IX Subsection "Advanced Video options"
+.IP "\fB\-pix_fmt[:\fR\fIstream_specifier\fR\fB]\fR \fIformat\fR \fB(\fR\fIinput/output,per\-stream\fR\fB)\fR" 4
+.IX Item "-pix_fmt[:stream_specifier] format (input/output,per-stream)"
+Set pixel format. Use \f(CW\*(C`\-pix_fmts\*(C'\fR to show all the supported
+pixel formats.
+If the selected pixel format can not be selected, ffmpeg will print a
+warning and select the best pixel format supported by the encoder.
+If \fIpix_fmt\fR is prefixed by a \f(CW\*(C`+\*(C'\fR, ffmpeg will exit with an error
+if the requested pixel format can not be selected, and automatic conversions
+inside filtergraphs are disabled.
+If \fIpix_fmt\fR is a single \f(CW\*(C`+\*(C'\fR, ffmpeg selects the same pixel format
+as the input (or graph output) and automatic conversions are disabled.
+.IP "\fB\-sws_flags\fR \fIflags\fR \fB(\fR\fIinput/output\fR\fB)\fR" 4
+.IX Item "-sws_flags flags (input/output)"
+Set default flags for the libswscale library. These flags are used by
+automatically inserted \f(CW\*(C`scale\*(C'\fR filters and those within simple
+filtergraphs, if not overridden within the filtergraph definition.
+.Sp
+See the \fBffmpeg-scaler manual\fR for a list
+of scaler options.
+.IP "\fB\-rc_override[:\fR\fIstream_specifier\fR\fB]\fR \fIoverride\fR \fB(\fR\fIoutput,per\-stream\fR\fB)\fR" 4
+.IX Item "-rc_override[:stream_specifier] override (output,per-stream)"
+Rate control override for specific intervals, formatted as \*(L"int,int,int\*(R"
+list separated with slashes. Two first values are the beginning and
+end frame numbers, last one is quantizer to use if positive, or quality
+factor if negative.
+.IP "\fB\-vstats\fR" 4
+.IX Item "-vstats"
+Dump video coding statistics to \fIvstats_HHMMSS.log\fR. See the
+\&\fBvstats file format\fR section for the format description.
+.IP "\fB\-vstats_file\fR \fIfile\fR" 4
+.IX Item "-vstats_file file"
+Dump video coding statistics to \fIfile\fR. See the
+\&\fBvstats file format\fR section for the format description.
+.IP "\fB\-vstats_version\fR \fIfile\fR" 4
+.IX Item "-vstats_version file"
+Specify which version of the vstats format to use. Default is \f(CW2\fR. See the
+\&\fBvstats file format\fR section for the format description.
+.IP "\fB\-vtag\fR \fIfourcc/tag\fR \fB(\fR\fIoutput\fR\fB)\fR" 4
+.IX Item "-vtag fourcc/tag (output)"
+Force video tag/fourcc. This is an alias for \f(CW\*(C`\-tag:v\*(C'\fR.
+.IP "\fB\-force_key_frames[:\fR\fIstream_specifier\fR\fB]\fR \fItime\fR\fB[,\fR\fItime\fR\fB...] (\fR\fIoutput,per\-stream\fR\fB)\fR" 4
+.IX Item "-force_key_frames[:stream_specifier] time[,time...] (output,per-stream)"
+.PD 0
+.IP "\fB\-force_key_frames[:\fR\fIstream_specifier\fR\fB] expr:\fR\fIexpr\fR \fB(\fR\fIoutput,per\-stream\fR\fB)\fR" 4
+.IX Item "-force_key_frames[:stream_specifier] expr:expr (output,per-stream)"
+.IP "\fB\-force_key_frames[:\fR\fIstream_specifier\fR\fB] source (\fR\fIoutput,per\-stream\fR\fB)\fR" 4
+.IX Item "-force_key_frames[:stream_specifier] source (output,per-stream)"
+.IP "\fB\-force_key_frames[:\fR\fIstream_specifier\fR\fB] scd_metadata (\fR\fIoutput,per\-stream\fR\fB)\fR" 4
+.IX Item "-force_key_frames[:stream_specifier] scd_metadata (output,per-stream)"
+.PD
+\&\fIforce_key_frames\fR can take arguments of the following form:
+.RS 4
+.IP "\fItime\fR\fB[,\fR\fItime\fR\fB...]\fR" 4
+.IX Item "time[,time...]"
+If the argument consists of timestamps, ffmpeg will round the specified times to the nearest
+output timestamp as per the encoder time base and force a keyframe at the first frame having
+timestamp equal or greater than the computed timestamp. Note that if the encoder time base is too
+coarse, then the keyframes may be forced on frames with timestamps lower than the specified time.
+The default encoder time base is the inverse of the output framerate but may be set otherwise
+via \f(CW\*(C`\-enc_time_base\*(C'\fR.
+.Sp
+If one of the times is "\f(CW\*(C`chapters\*(C'\fR[\fIdelta\fR]", it is expanded into
+the time of the beginning of all chapters in the file, shifted by
+\&\fIdelta\fR, expressed as a time in seconds.
+This option can be useful to ensure that a seek point is present at a
+chapter mark or any other designated place in the output file.
+.Sp
+For example, to insert a key frame at 5 minutes, plus key frames 0.1 second
+before the beginning of every chapter:
+.Sp
+.Vb 1
+\&        \-force_key_frames 0:05:00,chapters\-0.1
+.Ve
+.IP "\fBexpr:\fR\fIexpr\fR" 4
+.IX Item "expr:expr"
+If the argument is prefixed with \f(CW\*(C`expr:\*(C'\fR, the string \fIexpr\fR
+is interpreted like an expression and is evaluated for each frame. A
+key frame is forced in case the evaluation is non-zero.
+.Sp
+The expression in \fIexpr\fR can contain the following constants:
+.RS 4
+.IP "\fBn\fR" 4
+.IX Item "n"
+the number of current processed frame, starting from 0
+.IP "\fBn_forced\fR" 4
+.IX Item "n_forced"
+the number of forced frames
+.IP "\fBprev_forced_n\fR" 4
+.IX Item "prev_forced_n"
+the number of the previous forced frame, it is \f(CW\*(C`NAN\*(C'\fR when no
+keyframe was forced yet
+.IP "\fBprev_forced_t\fR" 4
+.IX Item "prev_forced_t"
+the time of the previous forced frame, it is \f(CW\*(C`NAN\*(C'\fR when no
+keyframe was forced yet
+.IP "\fBt\fR" 4
+.IX Item "t"
+the time of the current processed frame
+.RE
+.RS 4
+.Sp
+For example to force a key frame every 5 seconds, you can specify:
+.Sp
+.Vb 1
+\&        \-force_key_frames expr:gte(t,n_forced*5)
+.Ve
+.Sp
+To force a key frame 5 seconds after the time of the last forced one,
+starting from second 13:
+.Sp
+.Vb 1
+\&        \-force_key_frames expr:if(isnan(prev_forced_t),gte(t,13),gte(t,prev_forced_t+5))
+.Ve
+.RE
+.IP "\fBsource\fR" 4
+.IX Item "source"
+If the argument is \f(CW\*(C`source\*(C'\fR, ffmpeg will force a key frame if
+the current frame being encoded is marked as a key frame in its source.
+In cases where this particular source frame has to be dropped,
+enforce the next available frame to become a key frame instead.
+.IP "\fBscd_metadata\fR" 4
+.IX Item "scd_metadata"
+If the argument is \f(CW\*(C`scd_metadata\*(C'\fR, ffmpeg will force a key frame if
+the current frame contains a metadata entry with the key \f(CW\*(C`lavfi.scd.time\*(C'\fR.
+The metadata can be added by filters like \f(CW\*(C`scdet\*(C'\fR and \f(CW\*(C`scdet_vulkan\*(C'\fR.
+Avoid inserting filters that duplicate frames after \f(CW\*(C`scdet\*(C'\fR, as this can
+cause duplicate metadata for multiple frames and repeated insertion of key
+frames.
+.RE
+.RS 4
+.Sp
+Note that forcing too many keyframes is very harmful for the lookahead
+algorithms of certain encoders: using fixed-GOP options or similar
+would be more efficient.
+.RE
+.IP "\fB\-apply_cropping[:\fR\fIstream_specifier\fR\fB]\fR \fIsource\fR \fB(\fR\fIinput,per\-stream\fR\fB)\fR" 4
+.IX Item "-apply_cropping[:stream_specifier] source (input,per-stream)"
+Automatically crop the video after decoding according to file metadata.
+Default is \fIall\fR.
+.RS 4
+.IP "\fBnone (0)\fR" 4
+.IX Item "none (0)"
+Don't apply any cropping metadata.
+.IP "\fBall (1)\fR" 4
+.IX Item "all (1)"
+Apply both codec and container level croppping. This is the default mode.
+.IP "\fBcodec (2)\fR" 4
+.IX Item "codec (2)"
+Apply codec level croppping.
+.IP "\fBcontainer (3)\fR" 4
+.IX Item "container (3)"
+Apply container level croppping.
+.RE
+.RS 4
+.RE
+.IP "\fB\-copyinkf[:\fR\fIstream_specifier\fR\fB] (\fR\fIoutput,per\-stream\fR\fB)\fR" 4
+.IX Item "-copyinkf[:stream_specifier] (output,per-stream)"
+When doing stream copy, copy also non-key frames found at the
+beginning.
+.IP "\fB\-init_hw_device\fR \fItype\fR\fB[=\fR\fIname\fR\fB][:\fR\fIdevice\fR\fB[,\fR\fIkey=value\fR\fB...]]\fR" 4
+.IX Item "-init_hw_device type[=name][:device[,key=value...]]"
+Initialise a new hardware device of type \fItype\fR called \fIname\fR, using the
+given device parameters.
+If no name is specified it will receive a default name of the form "\fItype\fR\f(CW%d\fR".
+.Sp
+The meaning of \fIdevice\fR and the following arguments depends on the
+device type:
+.RS 4
+.IP "\fBcuda\fR" 4
+.IX Item "cuda"
+\&\fIdevice\fR is the number of the \s-1CUDA\s0 device.
+.Sp
+The following options are recognized:
+.RS 4
+.IP "\fBprimary_ctx\fR" 4
+.IX Item "primary_ctx"
+If set to 1, uses the primary device context instead of creating a new one.
+.RE
+.RS 4
+.Sp
+Examples:
+.IP "\fI\-init_hw_device cuda:1\fR" 4
+.IX Item "-init_hw_device cuda:1"
+Choose the second device on the system.
+.IP "\fI\-init_hw_device cuda:0,primary_ctx=1\fR" 4
+.IX Item "-init_hw_device cuda:0,primary_ctx=1"
+Choose the first device and use the primary device context.
+.RE
+.RS 4
+.RE
+.IP "\fBdxva2\fR" 4
+.IX Item "dxva2"
+\&\fIdevice\fR is the number of the Direct3D 9 display adapter.
+.IP "\fBd3d11va\fR" 4
+.IX Item "d3d11va"
+\&\fIdevice\fR is the number of the Direct3D 11 display adapter.
+If not specified, it will attempt to use the default Direct3D 11 display adapter
+or the first Direct3D 11 display adapter whose hardware VendorId is specified
+by \fBvendor_id\fR.
+.Sp
+Examples:
+.RS 4
+.IP "\fI\-init_hw_device d3d11va\fR" 4
+.IX Item "-init_hw_device d3d11va"
+Create a d3d11va device on the default Direct3D 11 display adapter.
+.IP "\fI\-init_hw_device d3d11va:1\fR" 4
+.IX Item "-init_hw_device d3d11va:1"
+Create a d3d11va device on the Direct3D 11 display adapter specified by index 1.
+.IP "\fI\-init_hw_device d3d11va:,vendor_id=0x8086\fR" 4
+.IX Item "-init_hw_device d3d11va:,vendor_id=0x8086"
+Create a d3d11va device on the first Direct3D 11 display adapter whose hardware VendorId is 0x8086.
+.RE
+.RS 4
+.RE
+.IP "\fBvaapi\fR" 4
+.IX Item "vaapi"
+\&\fIdevice\fR is either an X11 display name, a \s-1DRM\s0 render node or a DirectX adapter index.
+If not specified, it will attempt to open the default X11 display (\fI\f(CI$DISPLAY\fI\fR)
+and then the first \s-1DRM\s0 render node (\fI/dev/dri/renderD128\fR), or the default
+DirectX adapter on Windows.
+.Sp
+The following options are recognized:
+.RS 4
+.IP "\fBkernel_driver\fR" 4
+.IX Item "kernel_driver"
+When \fIdevice\fR is not specified, use this option to specify the name of the kernel
+driver associated with the desired device. This option is available only when
+the hardware acceleration method \fIdrm\fR and \fIvaapi\fR are enabled.
+.IP "\fBvendor_id\fR" 4
+.IX Item "vendor_id"
+When \fIdevice\fR and \fIkernel_driver\fR are not specified, use this option to specify
+the vendor id associated with the desired device. This option is available only when the
+hardware acceleration method \fIdrm\fR and \fIvaapi\fR are enabled and \fIkernel_driver\fR
+is not specified.
+.RE
+.RS 4
+.Sp
+Examples:
+.IP "\fI\-init_hw_device vaapi\fR" 4
+.IX Item "-init_hw_device vaapi"
+Create a vaapi device on the default device.
+.IP "\fI\-init_hw_device vaapi:/dev/dri/renderD129\fR" 4
+.IX Item "-init_hw_device vaapi:/dev/dri/renderD129"
+Create a vaapi device on \s-1DRM\s0 render node \fI/dev/dri/renderD129\fR.
+.IP "\fI\-init_hw_device vaapi:1\fR" 4
+.IX Item "-init_hw_device vaapi:1"
+Create a vaapi device on DirectX adapter 1.
+.IP "\fI\-init_hw_device vaapi:,kernel_driver=i915\fR" 4
+.IX Item "-init_hw_device vaapi:,kernel_driver=i915"
+Create a vaapi device on a device associated with kernel driver \fBi915\fR.
+.IP "\fI\-init_hw_device vaapi:,vendor_id=0x8086\fR" 4
+.IX Item "-init_hw_device vaapi:,vendor_id=0x8086"
+Create a vaapi device on a device associated with vendor id \fB0x8086\fR.
+.RE
+.RS 4
+.RE
+.IP "\fBvdpau\fR" 4
+.IX Item "vdpau"
+\&\fIdevice\fR is an X11 display name.
+If not specified, it will attempt to open the default X11 display (\fI\f(CI$DISPLAY\fI\fR).
+.IP "\fBqsv\fR" 4
+.IX Item "qsv"
+\&\fIdevice\fR selects a value in \fBMFX_IMPL_*\fR. Allowed values are:
+.RS 4
+.IP "\fBauto\fR" 4
+.IX Item "auto"
+.PD 0
+.IP "\fBsw\fR" 4
+.IX Item "sw"
+.IP "\fBhw\fR" 4
+.IX Item "hw"
+.IP "\fBauto_any\fR" 4
+.IX Item "auto_any"
+.IP "\fBhw_any\fR" 4
+.IX Item "hw_any"
+.IP "\fBhw2\fR" 4
+.IX Item "hw2"
+.IP "\fBhw3\fR" 4
+.IX Item "hw3"
+.IP "\fBhw4\fR" 4
+.IX Item "hw4"
+.RE
+.RS 4
+.PD
+.Sp
+If not specified, \fBauto_any\fR is used.
+(Note that it may be easier to achieve the desired result for \s-1QSV\s0 by creating the
+platform-appropriate subdevice (\fBdxva2\fR or \fBd3d11va\fR or \fBvaapi\fR) and then deriving a
+\&\s-1QSV\s0 device from that.)
+.Sp
+The following options are recognized:
+.IP "\fBchild_device\fR" 4
+.IX Item "child_device"
+Specify a \s-1DRM\s0 render node on Linux or DirectX adapter on Windows.
+.IP "\fBchild_device_type\fR" 4
+.IX Item "child_device_type"
+Choose platform-appropriate subdevice type. On Windows \fBd3d11va\fR is used
+as default subdevice type when \f(CW\*(C`\-\-enable\-libvpl\*(C'\fR is specified at configuration time,
+\&\fBdxva2\fR is used as default subdevice type when \f(CW\*(C`\-\-enable\-libmfx\*(C'\fR is specified at
+configuration time. On Linux user can use \fBvaapi\fR only as subdevice type.
+.RE
+.RS 4
+.Sp
+Examples:
+.IP "\fI\-init_hw_device qsv:hw,child_device=/dev/dri/renderD129\fR" 4
+.IX Item "-init_hw_device qsv:hw,child_device=/dev/dri/renderD129"
+Create a \s-1QSV\s0 device with \fB\s-1MFX_IMPL_HARDWARE\s0\fR on \s-1DRM\s0 render node \fI/dev/dri/renderD129\fR.
+.IP "\fI\-init_hw_device qsv:hw,child_device=1\fR" 4
+.IX Item "-init_hw_device qsv:hw,child_device=1"
+Create a \s-1QSV\s0 device with \fB\s-1MFX_IMPL_HARDWARE\s0\fR on DirectX adapter 1.
+.IP "\fI\-init_hw_device qsv:hw,child_device_type=d3d11va\fR" 4
+.IX Item "-init_hw_device qsv:hw,child_device_type=d3d11va"
+Choose the \s-1GPU\s0 subdevice with type \fBd3d11va\fR and create \s-1QSV\s0 device with \fB\s-1MFX_IMPL_HARDWARE\s0\fR.
+.IP "\fI\-init_hw_device qsv:hw,child_device_type=dxva2\fR" 4
+.IX Item "-init_hw_device qsv:hw,child_device_type=dxva2"
+Choose the \s-1GPU\s0 subdevice with type \fBdxva2\fR and create \s-1QSV\s0 device with \fB\s-1MFX_IMPL_HARDWARE\s0\fR.
+.IP "\fI\-init_hw_device qsv:hw,child_device=1,child_device_type=d3d11va\fR" 4
+.IX Item "-init_hw_device qsv:hw,child_device=1,child_device_type=d3d11va"
+Create a \s-1QSV\s0 device with \fB\s-1MFX_IMPL_HARDWARE\s0\fR on DirectX adapter 1 with subdevice type \fBd3d11va\fR.
+.IP "\fI\-init_hw_device vaapi=va:/dev/dri/renderD129 \-init_hw_device qsv=hw1@\fIva\fI\fR" 4
+.IX Item "-init_hw_device vaapi=va:/dev/dri/renderD129 -init_hw_device qsv=hw1@va"
+Create a \s-1VAAPI\s0 device called \fBva\fR on \fI/dev/dri/renderD129\fR, then derive a \s-1QSV\s0 device called \fBhw1\fR
+from device \fBva\fR.
+.RE
+.RS 4
+.RE
+.IP "\fBopencl\fR" 4
+.IX Item "opencl"
+\&\fIdevice\fR selects the platform and device as \fIplatform_index.device_index\fR.
+.Sp
+The set of devices can also be filtered using the key-value pairs to find only
+devices matching particular platform or device strings.
+.Sp
+The strings usable as filters are:
+.RS 4
+.IP "\fBplatform_profile\fR" 4
+.IX Item "platform_profile"
+.PD 0
+.IP "\fBplatform_version\fR" 4
+.IX Item "platform_version"
+.IP "\fBplatform_name\fR" 4
+.IX Item "platform_name"
+.IP "\fBplatform_vendor\fR" 4
+.IX Item "platform_vendor"
+.IP "\fBplatform_extensions\fR" 4
+.IX Item "platform_extensions"
+.IP "\fBdevice_name\fR" 4
+.IX Item "device_name"
+.IP "\fBdevice_vendor\fR" 4
+.IX Item "device_vendor"
+.IP "\fBdriver_version\fR" 4
+.IX Item "driver_version"
+.IP "\fBdevice_version\fR" 4
+.IX Item "device_version"
+.IP "\fBdevice_profile\fR" 4
+.IX Item "device_profile"
+.IP "\fBdevice_extensions\fR" 4
+.IX Item "device_extensions"
+.IP "\fBdevice_type\fR" 4
+.IX Item "device_type"
+.RE
+.RS 4
+.PD
+.Sp
+The indices and filters must together uniquely select a device.
+.Sp
+Examples:
+.IP "\fI\-init_hw_device opencl:0.1\fR" 4
+.IX Item "-init_hw_device opencl:0.1"
+Choose the second device on the first platform.
+.IP "\fI\-init_hw_device opencl:,device_name=Foo9000\fR" 4
+.IX Item "-init_hw_device opencl:,device_name=Foo9000"
+Choose the device with a name containing the string \fIFoo9000\fR.
+.IP "\fI\-init_hw_device opencl:1,device_type=gpu,device_extensions=cl_khr_fp16\fR" 4
+.IX Item "-init_hw_device opencl:1,device_type=gpu,device_extensions=cl_khr_fp16"
+Choose the \s-1GPU\s0 device on the second platform supporting the \fIcl_khr_fp16\fR
+extension.
+.RE
+.RS 4
+.RE
+.IP "\fBvulkan\fR" 4
+.IX Item "vulkan"
+If \fIdevice\fR is an integer, it selects the device by its index in a
+system-dependent list of devices.  If \fIdevice\fR is any other string, it
+selects the first device with a name containing that string as a substring.
+.Sp
+The following options are recognized:
+.RS 4
+.IP "\fBdebug\fR" 4
+.IX Item "debug"
+If set to 1, enables the validation layer, if installed.
+.IP "\fBlinear_images\fR" 4
+.IX Item "linear_images"
+If set to 1, images allocated by the hwcontext will be linear and locally mappable.
+.IP "\fBinstance_extensions\fR" 4
+.IX Item "instance_extensions"
+A plus separated list of additional instance extensions to enable.
+.IP "\fBdevice_extensions\fR" 4
+.IX Item "device_extensions"
+A plus separated list of additional device extensions to enable.
+.RE
+.RS 4
+.Sp
+Examples:
+.IP "\fI\-init_hw_device vulkan:1\fR" 4
+.IX Item "-init_hw_device vulkan:1"
+Choose the second device on the system.
+.IP "\fI\-init_hw_device vulkan:RADV\fR" 4
+.IX Item "-init_hw_device vulkan:RADV"
+Choose the first device with a name containing the string \fI\s-1RADV\s0\fR.
+.IP "\fI\-init_hw_device vulkan:0,instance_extensions=VK_KHR_wayland_surface+VK_KHR_xcb_surface\fR" 4
+.IX Item "-init_hw_device vulkan:0,instance_extensions=VK_KHR_wayland_surface+VK_KHR_xcb_surface"
+Choose the first device and enable the Wayland and \s-1XCB\s0 instance extensions.
+.RE
+.RS 4
+.RE
+.RE
+.RS 4
+.RE
+.IP "\fB\-init_hw_device\fR \fItype\fR\fB[=\fR\fIname\fR\fB]@\fR\fIsource\fR" 4
+.IX Item "-init_hw_device type[=name]@source"
+Initialise a new hardware device of type \fItype\fR called \fIname\fR,
+deriving it from the existing device with the name \fIsource\fR.
+.IP "\fB\-init_hw_device list\fR" 4
+.IX Item "-init_hw_device list"
+List all hardware device types supported in this build of ffmpeg.
+.IP "\fB\-filter_hw_device\fR \fIname\fR" 4
+.IX Item "-filter_hw_device name"
+Pass the hardware device called \fIname\fR to all filters in any filter graph.
+This can be used to set the device to upload to with the \f(CW\*(C`hwupload\*(C'\fR filter,
+or the device to map to with the \f(CW\*(C`hwmap\*(C'\fR filter.  Other filters may also
+make use of this parameter when they require a hardware device.  Note that this
+is typically only required when the input is not already in hardware frames \-
+when it is, filters will derive the device they require from the context of the
+frames they receive as input.
+.Sp
+This is a global setting, so all filters will receive the same device.
+.IP "\fB\-hwaccel[:\fR\fIstream_specifier\fR\fB]\fR \fIhwaccel\fR \fB(\fR\fIinput,per\-stream\fR\fB)\fR" 4
+.IX Item "-hwaccel[:stream_specifier] hwaccel (input,per-stream)"
+Use hardware acceleration to decode the matching stream(s). The allowed values
+of \fIhwaccel\fR are:
+.RS 4
+.IP "\fBnone\fR" 4
+.IX Item "none"
+Do not use any hardware acceleration (the default).
+.IP "\fBauto\fR" 4
+.IX Item "auto"
+Automatically select the hardware acceleration method.
+.IP "\fBvdpau\fR" 4
+.IX Item "vdpau"
+Use \s-1VDPAU\s0 (Video Decode and Presentation \s-1API\s0 for Unix) hardware acceleration.
+.IP "\fBdxva2\fR" 4
+.IX Item "dxva2"
+Use \s-1DXVA2\s0 (DirectX Video Acceleration) hardware acceleration.
+.IP "\fBd3d11va\fR" 4
+.IX Item "d3d11va"
+Use D3D11VA (DirectX Video Acceleration) hardware acceleration.
+.IP "\fBvaapi\fR" 4
+.IX Item "vaapi"
+Use \s-1VAAPI\s0 (Video Acceleration \s-1API\s0) hardware acceleration.
+.IP "\fBqsv\fR" 4
+.IX Item "qsv"
+Use the Intel QuickSync Video acceleration for video transcoding.
+.Sp
+Unlike most other values, this option does not enable accelerated decoding (that
+is used automatically whenever a qsv decoder is selected), but accelerated
+transcoding, without copying the frames into the system memory.
+.Sp
+For it to work, both the decoder and the encoder must support \s-1QSV\s0 acceleration
+and no filters must be used.
+.IP "\fBvideotoolbox\fR" 4
+.IX Item "videotoolbox"
+Use Video Toolbox hardware acceleration.
+.RE
+.RS 4
+.Sp
+This option has no effect if the selected hwaccel is not available or not
+supported by the chosen decoder.
+.Sp
+Note that most acceleration methods are intended for playback and will not be
+faster than software decoding on modern CPUs. Additionally, \fBffmpeg\fR
+will usually need to copy the decoded frames from the \s-1GPU\s0 memory into the system
+memory, resulting in further performance loss. This option is thus mainly
+useful for testing.
+.RE
+.IP "\fB\-hwaccel_device[:\fR\fIstream_specifier\fR\fB]\fR \fIhwaccel_device\fR \fB(\fR\fIinput,per\-stream\fR\fB)\fR" 4
+.IX Item "-hwaccel_device[:stream_specifier] hwaccel_device (input,per-stream)"
+Select a device to use for hardware acceleration.
+.Sp
+This option only makes sense when the \fB\-hwaccel\fR option is also specified.
+It can either refer to an existing device created with \fB\-init_hw_device\fR
+by name, or it can create a new device as if
+\&\fB\-init_hw_device\fR \fItype\fR:\fIhwaccel_device\fR
+were called immediately before.
+.IP "\fB\-hwaccels\fR" 4
+.IX Item "-hwaccels"
+List all hardware acceleration components enabled in this build of ffmpeg.
+Actual runtime availability depends on the hardware and its suitable driver
+being installed.
+.IP "\fB\-fix_sub_duration_heartbeat[:\fR\fIstream_specifier\fR\fB]\fR" 4
+.IX Item "-fix_sub_duration_heartbeat[:stream_specifier]"
+Set a specific output video stream as the heartbeat stream according to which
+to split and push through currently in-progress subtitle upon receipt of a
+random access packet.
+.Sp
+This lowers the latency of subtitles for which the end packet or the following
+subtitle has not yet been received. As a drawback, this will most likely lead
+to duplication of subtitle events in order to cover the full duration, so
+when dealing with use cases where latency of when the subtitle event is passed
+on to output is not relevant this option should not be utilized.
+.Sp
+Requires \fB\-fix_sub_duration\fR to be set for the relevant input subtitle
+stream for this to have any effect, as well as for the input subtitle stream
+having to be directly mapped to the same output in which the heartbeat stream
+resides.
+.SS "Audio Options"
+.IX Subsection "Audio Options"
+.IP "\fB\-aframes\fR \fInumber\fR \fB(\fR\fIoutput\fR\fB)\fR" 4
+.IX Item "-aframes number (output)"
+Set the number of audio frames to output. This is an obsolete alias for
+\&\f(CW\*(C`\-frames:a\*(C'\fR, which you should use instead.
+.IP "\fB\-ar[:\fR\fIstream_specifier\fR\fB]\fR \fIfreq\fR \fB(\fR\fIinput/output,per\-stream\fR\fB)\fR" 4
+.IX Item "-ar[:stream_specifier] freq (input/output,per-stream)"
+Set the audio sampling frequency. For output streams it is set by
+default to the frequency of the corresponding input stream. For input
+streams this option only makes sense for audio grabbing devices and raw
+demuxers and is mapped to the corresponding demuxer options.
+.IP "\fB\-aq\fR \fIq\fR \fB(\fR\fIoutput\fR\fB)\fR" 4
+.IX Item "-aq q (output)"
+Set the audio quality (codec-specific, \s-1VBR\s0). This is an alias for \-q:a.
+.IP "\fB\-ac[:\fR\fIstream_specifier\fR\fB]\fR \fIchannels\fR \fB(\fR\fIinput/output,per\-stream\fR\fB)\fR" 4
+.IX Item "-ac[:stream_specifier] channels (input/output,per-stream)"
+Set the number of audio channels. For output streams it is set by
+default to the number of input audio channels. For input streams
+this option only makes sense for audio grabbing devices and raw demuxers
+and is mapped to the corresponding demuxer options.
+.IP "\fB\-an (\fR\fIinput/output\fR\fB)\fR" 4
+.IX Item "-an (input/output)"
+As an input option, blocks all audio streams of a file from being filtered or
+being automatically selected or mapped for any output. See \f(CW\*(C`\-discard\*(C'\fR
+option to disable streams individually.
+.Sp
+As an output option, disables audio recording i.e. automatic selection or
+mapping of any audio stream. For full manual control see the \f(CW\*(C`\-map\*(C'\fR
+option.
+.IP "\fB\-acodec\fR \fIcodec\fR \fB(\fR\fIinput/output\fR\fB)\fR" 4
+.IX Item "-acodec codec (input/output)"
+Set the audio codec. This is an alias for \f(CW\*(C`\-codec:a\*(C'\fR.
+.IP "\fB\-sample_fmt[:\fR\fIstream_specifier\fR\fB]\fR \fIsample_fmt\fR \fB(\fR\fIoutput,per\-stream\fR\fB)\fR" 4
+.IX Item "-sample_fmt[:stream_specifier] sample_fmt (output,per-stream)"
+Set the audio sample format. Use \f(CW\*(C`\-sample_fmts\*(C'\fR to get a list
+of supported sample formats.
+.IP "\fB\-af\fR \fIfiltergraph\fR \fB(\fR\fIoutput\fR\fB)\fR" 4
+.IX Item "-af filtergraph (output)"
+Create the filtergraph specified by \fIfiltergraph\fR and use it to
+filter the stream.
+.Sp
+This is an alias for \f(CW\*(C`\-filter:a\*(C'\fR, see the \fB\-filter option\fR.
+.SS "Advanced Audio options"
+.IX Subsection "Advanced Audio options"
+.IP "\fB\-atag\fR \fIfourcc/tag\fR \fB(\fR\fIoutput\fR\fB)\fR" 4
+.IX Item "-atag fourcc/tag (output)"
+Force audio tag/fourcc. This is an alias for \f(CW\*(C`\-tag:a\*(C'\fR.
+.IP "\fB\-ch_layout[:\fR\fIstream_specifier\fR\fB]\fR \fIlayout\fR \fB(\fR\fIinput/output,per\-stream\fR\fB)\fR" 4
+.IX Item "-ch_layout[:stream_specifier] layout (input/output,per-stream)"
+Alias for \f(CW\*(C`\-channel_layout\*(C'\fR.
+.IP "\fB\-channel_layout[:\fR\fIstream_specifier\fR\fB]\fR \fIlayout\fR \fB(\fR\fIinput/output,per\-stream\fR\fB)\fR" 4
+.IX Item "-channel_layout[:stream_specifier] layout (input/output,per-stream)"
+Set the audio channel layout. For output streams it is set by default to the
+input channel layout. For input streams it overrides the channel layout of the
+input. Not all decoders respect the overridden channel layout. This option
+also sets the channel layout for audio grabbing devices and raw demuxers
+and is mapped to the corresponding demuxer option.
+.IP "\fB\-guess_layout_max\fR \fIchannels\fR \fB(\fR\fIinput,per\-stream\fR\fB)\fR" 4
+.IX Item "-guess_layout_max channels (input,per-stream)"
+If some input channel layout is not known, try to guess only if it
+corresponds to at most the specified number of channels. For example, 2
+tells to \fBffmpeg\fR to recognize 1 channel as mono and 2 channels as
+stereo but not 6 channels as 5.1. The default is to always try to guess. Use
+0 to disable all guessing. Using the \f(CW\*(C`\-channel_layout\*(C'\fR option to
+explicitly specify an input layout also disables guessing.
+.SS "Subtitle options"
+.IX Subsection "Subtitle options"
+.IP "\fB\-scodec\fR \fIcodec\fR \fB(\fR\fIinput/output\fR\fB)\fR" 4
+.IX Item "-scodec codec (input/output)"
+Set the subtitle codec. This is an alias for \f(CW\*(C`\-codec:s\*(C'\fR.
+.IP "\fB\-sn (\fR\fIinput/output\fR\fB)\fR" 4
+.IX Item "-sn (input/output)"
+As an input option, blocks all subtitle streams of a file from being filtered or
+being automatically selected or mapped for any output. See \f(CW\*(C`\-discard\*(C'\fR
+option to disable streams individually.
+.Sp
+As an output option, disables subtitle recording i.e. automatic selection or
+mapping of any subtitle stream. For full manual control see the \f(CW\*(C`\-map\*(C'\fR
+option.
+.SS "Advanced Subtitle options"
+.IX Subsection "Advanced Subtitle options"
+.IP "\fB\-fix_sub_duration\fR" 4
+.IX Item "-fix_sub_duration"
+Fix subtitles durations. For each subtitle, wait for the next packet in the
+same stream and adjust the duration of the first to avoid overlap. This is
+necessary with some subtitles codecs, especially \s-1DVB\s0 subtitles, because the
+duration in the original packet is only a rough estimate and the end is
+actually marked by an empty subtitle frame. Failing to use this option when
+necessary can result in exaggerated durations or muxing failures due to
+non-monotonic timestamps.
+.Sp
+Note that this option will delay the output of all data until the next
+subtitle packet is decoded: it may increase memory consumption and latency a
+lot.
+.IP "\fB\-canvas_size\fR \fIsize\fR" 4
+.IX Item "-canvas_size size"
+Set the size of the canvas used to render subtitles.
+.SS "Advanced options"
+.IX Subsection "Advanced options"
+.IP "\fB\-map [\-]\fR\fIinput_file_id\fR\fB[:\fR\fIstream_specifier\fR\fB][:\fR\fIview_specifier\fR\fB][:?] |\fR \fI[linklabel]\fR \fB(\fR\fIoutput\fR\fB)\fR" 4
+.IX Item "-map [-]input_file_id[:stream_specifier][:view_specifier][:?] | [linklabel] (output)"
+Create one or more streams in the output file. This option has two forms for
+specifying the data source(s): the first selects one or more streams from some
+input file (specified with \f(CW\*(C`\-i\*(C'\fR), the second takes an output from some
+complex filtergraph (specified with \f(CW\*(C`\-filter_complex\*(C'\fR).
+.Sp
+In the first form, an output stream is created for every stream from the input
+file with the index \fIinput_file_id\fR. If \fIstream_specifier\fR is given,
+only those streams that match the specifier are used (see the
+\&\fBStream specifiers\fR section for the \fIstream_specifier\fR syntax).
+.Sp
+A \f(CW\*(C`\-\*(C'\fR character before the stream identifier creates a \*(L"negative\*(R" mapping.
+It disables matching streams from already created mappings.
+.Sp
+An optional \fIview_specifier\fR may be given after the stream specifier, which
+for multiview video specifies the view to be used. The view specifier may have
+one of the following formats:
+.RS 4
+.IP "\fBview:\fR\fIview_id\fR" 4
+.IX Item "view:view_id"
+select a view by its \s-1ID\s0; \fIview_id\fR may be set to 'all' to use all the views
+interleaved into one stream;
+.IP "\fBvidx:\fR\fIview_idx\fR" 4
+.IX Item "vidx:view_idx"
+select a view by its index; i.e. 0 is the base view, 1 is the first non-base
+view, etc.
+.IP "\fBvpos:\fR\fIposition\fR" 4
+.IX Item "vpos:position"
+select a view by its display position; \fIposition\fR may be \f(CW\*(C`left\*(C'\fR or
+\&\f(CW\*(C`right\*(C'\fR
+.RE
+.RS 4
+.Sp
+The default for transcoding is to only use the base view, i.e. the equivalent of
+\&\f(CW\*(C`vidx:0\*(C'\fR. For streamcopy, view specifiers are not supported and all views
+are always copied.
+.Sp
+A trailing \f(CW\*(C`?\*(C'\fR after the stream index will allow the map to be
+optional: if the map matches no streams the map will be ignored instead
+of failing. Note the map will still fail if an invalid input file index
+is used; such as if the map refers to a non-existent input.
+.Sp
+An alternative \fI[linklabel]\fR form will map outputs from complex filter
+graphs (see the \fB\-filter_complex\fR option) to the output file.
+\&\fIlinklabel\fR must correspond to a defined output link label in the graph.
+.Sp
+This option may be specified multiple times, each adding more streams to the
+output file. Any given input stream may also be mapped any number of times as a
+source for different output streams, e.g. in order to use different encoding
+options and/or filters. The streams are created in the output in the same order
+in which the \f(CW\*(C`\-map\*(C'\fR options are given on the commandline.
+.Sp
+Using this option disables the default mappings for this output file.
+.Sp
+Examples:
+.IP "\fImap everything\fR" 4
+.IX Item "map everything"
+To map \s-1ALL\s0 streams from the first input file to output
+.Sp
+.Vb 1
+\&        ffmpeg \-i INPUT \-map 0 output
+.Ve
+.IP "\fIselect specific stream\fR" 4
+.IX Item "select specific stream"
+If you have two audio streams in the first input file, these streams are
+identified by \fI0:0\fR and \fI0:1\fR. You can use \f(CW\*(C`\-map\*(C'\fR to select which
+streams to place in an output file. For example:
+.Sp
+.Vb 1
+\&        ffmpeg \-i INPUT \-map 0:1 out.wav
+.Ve
+.Sp
+will map the second input stream in \fI\s-1INPUT\s0\fR to the (single) output stream
+in \fIout.wav\fR.
+.IP "\fIcreate multiple streams\fR" 4
+.IX Item "create multiple streams"
+To select the stream with index 2 from input file \fIa.mov\fR (specified by the
+identifier \fI0:2\fR), and stream with index 6 from input \fIb.mov\fR
+(specified by the identifier \fI1:6\fR), and copy them to the output file
+\&\fIout.mov\fR:
+.Sp
+.Vb 1
+\&        ffmpeg \-i a.mov \-i b.mov \-c copy \-map 0:2 \-map 1:6 out.mov
+.Ve
+.IP "\fIcreate multiple streams 2\fR" 4
+.IX Item "create multiple streams 2"
+To select all video and the third audio stream from an input file:
+.Sp
+.Vb 1
+\&        ffmpeg \-i INPUT \-map 0:v \-map 0:a:2 OUTPUT
+.Ve
+.IP "\fInegative map\fR" 4
+.IX Item "negative map"
+To map all the streams except the second audio, use negative mappings
+.Sp
+.Vb 1
+\&        ffmpeg \-i INPUT \-map 0 \-map \-0:a:1 OUTPUT
+.Ve
+.IP "\fIoptional map\fR" 4
+.IX Item "optional map"
+To map the video and audio streams from the first input, and using the
+trailing \f(CW\*(C`?\*(C'\fR, ignore the audio mapping if no audio streams exist in
+the first input:
+.Sp
+.Vb 1
+\&        ffmpeg \-i INPUT \-map 0:v \-map 0:a? OUTPUT
+.Ve
+.IP "\fImap by language\fR" 4
+.IX Item "map by language"
+To pick the English audio stream:
+.Sp
+.Vb 1
+\&        ffmpeg \-i INPUT \-map 0:m:language:eng OUTPUT
+.Ve
+.RE
+.RS 4
+.RE
+.IP "\fB\-ignore_unknown\fR" 4
+.IX Item "-ignore_unknown"
+Ignore input streams with unknown type instead of failing if copying
+such streams is attempted.
+.IP "\fB\-copy_unknown\fR" 4
+.IX Item "-copy_unknown"
+Allow input streams with unknown type to be copied instead of failing if copying
+such streams is attempted.
+.IP "\fB\-map_metadata[:\fR\fImetadata_spec_out\fR\fB]\fR \fIinfile\fR\fB[:\fR\fImetadata_spec_in\fR\fB] (\fR\fIoutput,per\-metadata\fR\fB)\fR" 4
+.IX Item "-map_metadata[:metadata_spec_out] infile[:metadata_spec_in] (output,per-metadata)"
+Set metadata information of the next output file from \fIinfile\fR. Note that
+those are file indices (zero-based), not filenames.
+Optional \fImetadata_spec_in/out\fR parameters specify, which metadata to copy.
+A metadata specifier can have the following forms:
+.RS 4
+.IP "\fIg\fR" 4
+.IX Item "g"
+global metadata, i.e. metadata that applies to the whole file
+.IP "\fIs\fR\fB[:\fR\fIstream_spec\fR\fB]\fR" 4
+.IX Item "s[:stream_spec]"
+per-stream metadata. \fIstream_spec\fR is a stream specifier as described
+in the \fBStream specifiers\fR chapter. In an input metadata specifier, the first
+matching stream is copied from. In an output metadata specifier, all matching
+streams are copied to.
+.IP "\fIc\fR\fB:\fR\fIchapter_index\fR" 4
+.IX Item "c:chapter_index"
+per-chapter metadata. \fIchapter_index\fR is the zero-based chapter index.
+.IP "\fIp\fR\fB:\fR\fIprogram_index\fR" 4
+.IX Item "p:program_index"
+per-program metadata. \fIprogram_index\fR is the zero-based program index.
+.RE
+.RS 4
+.Sp
+If metadata specifier is omitted, it defaults to global.
+.Sp
+By default, global metadata is copied from the first input file,
+per-stream and per-chapter metadata is copied along with streams/chapters. These
+default mappings are disabled by creating any mapping of the relevant type. A negative
+file index can be used to create a dummy mapping that just disables automatic copying.
+.Sp
+For example to copy metadata from the first stream of the input file to global metadata
+of the output file:
+.Sp
+.Vb 1
+\&        ffmpeg \-i in.ogg \-map_metadata 0:s:0 out.mp3
+.Ve
+.Sp
+To do the reverse, i.e. copy global metadata to all audio streams:
+.Sp
+.Vb 1
+\&        ffmpeg \-i in.mkv \-map_metadata:s:a 0:g out.mkv
+.Ve
+.Sp
+Note that simple \f(CW0\fR would work as well in this example, since global
+metadata is assumed by default.
+.RE
+.IP "\fB\-map_chapters\fR \fIinput_file_index\fR \fB(\fR\fIoutput\fR\fB)\fR" 4
+.IX Item "-map_chapters input_file_index (output)"
+Copy chapters from input file with index \fIinput_file_index\fR to the next
+output file. If no chapter mapping is specified, then chapters are copied from
+the first input file with at least one chapter. Use a negative file index to
+disable any chapter copying.
+.IP "\fB\-benchmark (\fR\fIglobal\fR\fB)\fR" 4
+.IX Item "-benchmark (global)"
+Show benchmarking information at the end of an encode.
+Shows real, system and user time used and maximum memory consumption.
+Maximum memory consumption is not supported on all systems,
+it will usually display as 0 if not supported.
+.IP "\fB\-benchmark_all (\fR\fIglobal\fR\fB)\fR" 4
+.IX Item "-benchmark_all (global)"
+Show benchmarking information during the encode.
+Shows real, system and user time used in various steps (audio/video encode/decode).
+.IP "\fB\-timelimit\fR \fIduration\fR \fB(\fR\fIglobal\fR\fB)\fR" 4
+.IX Item "-timelimit duration (global)"
+Exit after ffmpeg has been running for \fIduration\fR seconds in \s-1CPU\s0 user time.
+.IP "\fB\-dump (\fR\fIglobal\fR\fB)\fR" 4
+.IX Item "-dump (global)"
+Dump each input packet to stderr.
+.IP "\fB\-hex (\fR\fIglobal\fR\fB)\fR" 4
+.IX Item "-hex (global)"
+When dumping packets, also dump the payload.
+.IP "\fB\-readrate\fR \fIspeed\fR \fB(\fR\fIinput\fR\fB)\fR" 4
+.IX Item "-readrate speed (input)"
+Limit input read speed.
+.Sp
+Its value is a floating-point positive number which represents the maximum duration of
+media, in seconds, that should be ingested in one second of wallclock time.
+Default value is zero and represents no imposed limitation on speed of ingestion.
+Value \f(CW1\fR represents real-time speed and is equivalent to \f(CW\*(C`\-re\*(C'\fR.
+.Sp
+Mainly used to simulate a capture device or live input stream (e.g. when reading from a file).
+Should not be used with a low value when input is an actual capture device or live stream as
+it may cause packet loss.
+.Sp
+It is useful for when flow speed of output packets is important, such as live streaming.
+.IP "\fB\-re (\fR\fIinput\fR\fB)\fR" 4
+.IX Item "-re (input)"
+Read input at native frame rate. This is equivalent to setting \f(CW\*(C`\-readrate 1\*(C'\fR.
+.IP "\fB\-readrate_initial_burst\fR \fIseconds\fR" 4
+.IX Item "-readrate_initial_burst seconds"
+Set an initial read burst time, in seconds, after which \fB\-re/\-readrate\fR
+will be enforced.
+.IP "\fB\-readrate_catchup\fR \fIspeed\fR \fB(\fR\fIinput\fR\fB)\fR" 4
+.IX Item "-readrate_catchup speed (input)"
+If either the input or output is blocked leading to actual read speed falling behind the
+specified readrate, then this rate takes effect till the input catches up with the
+specified readrate. Must not be lower than the primary readrate.
+.IP "\fB\-vsync\fR \fIparameter\fR \fB(\fR\fIglobal\fR\fB)\fR" 4
+.IX Item "-vsync parameter (global)"
+.PD 0
+.IP "\fB\-fps_mode[:\fR\fIstream_specifier\fR\fB]\fR \fIparameter\fR \fB(\fR\fIoutput,per\-stream\fR\fB)\fR" 4
+.IX Item "-fps_mode[:stream_specifier] parameter (output,per-stream)"
+.PD
+Set video sync method / framerate mode. vsync is applied to all output video streams
+but can be overridden for a stream by setting fps_mode. vsync is deprecated and will be
+removed in the future.
+.Sp
+For compatibility reasons some of the values for vsync can be specified as numbers (shown
+in parentheses in the following table).
+.RS 4
+.IP "\fBpassthrough (0)\fR" 4
+.IX Item "passthrough (0)"
+Each frame is passed with its timestamp from the demuxer to the muxer.
+.IP "\fBcfr (1)\fR" 4
+.IX Item "cfr (1)"
+Frames will be duplicated and dropped to achieve exactly the requested
+constant frame rate.
+.IP "\fBvfr (2)\fR" 4
+.IX Item "vfr (2)"
+Frames are passed through with their timestamp or dropped so as to
+prevent 2 frames from having the same timestamp.
+.IP "\fBauto (\-1)\fR" 4
+.IX Item "auto (-1)"
+Chooses between cfr and vfr depending on muxer capabilities. This is the
+default method.
+.RE
+.RS 4
+.Sp
+Note that the timestamps may be further modified by the muxer, after this.
+For example, in the case that the format option \fBavoid_negative_ts\fR
+is enabled.
+.Sp
+With \-map you can select from which stream the timestamps should be
+taken. You can leave either video or audio unchanged and sync the
+remaining stream(s) to the unchanged one.
+.RE
+.IP "\fB\-frame_drop_threshold\fR \fIparameter\fR" 4
+.IX Item "-frame_drop_threshold parameter"
+Frame drop threshold, which specifies how much behind video frames can
+be before they are dropped. In frame rate units, so 1.0 is one frame.
+The default is \-1.1. One possible usecase is to avoid framedrops in case
+of noisy timestamps or to increase frame drop precision in case of exact
+timestamps.
+.IP "\fB\-apad\fR \fIparameters\fR \fB(\fR\fIoutput,per\-stream\fR\fB)\fR" 4
+.IX Item "-apad parameters (output,per-stream)"
+Pad the output audio stream(s). This is the same as applying \f(CW\*(C`\-af apad\*(C'\fR.
+Argument is a string of filter parameters composed the same as with the \f(CW\*(C`apad\*(C'\fR filter.
+\&\f(CW\*(C`\-shortest\*(C'\fR must be set for this output for the option to take effect.
+.IP "\fB\-copyts\fR" 4
+.IX Item "-copyts"
+Do not process input timestamps, but keep their values without trying
+to sanitize them. In particular, do not remove the initial start time
+offset value.
+.Sp
+Note that, depending on the \fBvsync\fR option or on specific muxer
+processing (e.g. in case the format option \fBavoid_negative_ts\fR
+is enabled) the output timestamps may mismatch with the input
+timestamps even when this option is selected.
+.IP "\fB\-start_at_zero\fR" 4
+.IX Item "-start_at_zero"
+When used with \fBcopyts\fR, shift input timestamps so they start at zero.
+.Sp
+This means that using e.g. \f(CW\*(C`\-ss 50\*(C'\fR will make output timestamps start at
+50 seconds, regardless of what timestamp the input file started at.
+.IP "\fB\-copytb\fR \fImode\fR" 4
+.IX Item "-copytb mode"
+Specify how to set the encoder timebase when stream copying.  \fImode\fR is an
+integer numeric value, and can assume one of the following values:
+.RS 4
+.IP "\fB1\fR" 4
+.IX Item "1"
+Use the demuxer timebase.
+.Sp
+The time base is copied to the output encoder from the corresponding input
+demuxer. This is sometimes required to avoid non monotonically increasing
+timestamps when copying video streams with variable frame rate.
+.IP "\fB0\fR" 4
+.IX Item "0"
+Use the decoder timebase.
+.Sp
+The time base is copied to the output encoder from the corresponding input
+decoder.
+.IP "\fB\-1\fR" 4
+.IX Item "-1"
+Try to make the choice automatically, in order to generate a sane output.
+.RE
+.RS 4
+.Sp
+Default value is \-1.
+.RE
+.IP "\fB\-enc_time_base[:\fR\fIstream_specifier\fR\fB]\fR \fItimebase\fR \fB(\fR\fIoutput,per\-stream\fR\fB)\fR" 4
+.IX Item "-enc_time_base[:stream_specifier] timebase (output,per-stream)"
+Set the encoder timebase. \fItimebase\fR can assume one of the following values:
+.RS 4
+.IP "\fB0\fR" 4
+.IX Item "0"
+Assign a default value according to the media type.
+.Sp
+For video \- use 1/framerate, for audio \- use 1/samplerate.
+.IP "\fBdemux\fR" 4
+.IX Item "demux"
+Use the timebase from the demuxer.
+.IP "\fBfilter\fR" 4
+.IX Item "filter"
+Use the timebase from the filtergraph.
+.IP "\fBa positive number\fR" 4
+.IX Item "a positive number"
+Use the provided number as the timebase.
+.Sp
+This field can be provided as a ratio of two integers (e.g. 1:24, 1:48000)
+or as a decimal number (e.g. 0.04166, 2.0833e\-5)
+.RE
+.RS 4
+.Sp
+Default value is 0.
+.RE
+.IP "\fB\-bitexact (\fR\fIinput/output\fR\fB)\fR" 4
+.IX Item "-bitexact (input/output)"
+Enable bitexact mode for (de)muxer and (de/en)coder
+.IP "\fB\-shortest (\fR\fIoutput\fR\fB)\fR" 4
+.IX Item "-shortest (output)"
+Finish encoding when the shortest output stream ends.
+.Sp
+Note that this option may require buffering frames, which introduces extra
+latency. The maximum amount of this latency may be controlled with the
+\&\f(CW\*(C`\-shortest_buf_duration\*(C'\fR option.
+.IP "\fB\-shortest_buf_duration\fR \fIduration\fR \fB(\fR\fIoutput\fR\fB)\fR" 4
+.IX Item "-shortest_buf_duration duration (output)"
+The \f(CW\*(C`\-shortest\*(C'\fR option may require buffering potentially large amounts
+of data when at least one of the streams is \*(L"sparse\*(R" (i.e. has large gaps
+between frames X this is typically the case for subtitles).
+.Sp
+This option controls the maximum duration of buffered frames in seconds.
+Larger values may allow the \f(CW\*(C`\-shortest\*(C'\fR option to produce more accurate
+results, but increase memory use and latency.
+.Sp
+The default value is 10 seconds.
+.IP "\fB\-dts_delta_threshold\fR \fIthreshold\fR" 4
+.IX Item "-dts_delta_threshold threshold"
+Timestamp discontinuity delta threshold, expressed as a decimal number
+of seconds.
+.Sp
+The timestamp discontinuity correction enabled by this option is only
+applied to input formats accepting timestamp discontinuity (for which
+the \f(CW\*(C`AVFMT_TS_DISCONT\*(C'\fR flag is enabled), e.g. MPEG-TS and \s-1HLS,\s0 and
+is automatically disabled when employing the \f(CW\*(C`\-copyts\*(C'\fR option
+(unless wrapping is detected).
+.Sp
+If a timestamp discontinuity is detected whose absolute value is
+greater than \fIthreshold\fR, ffmpeg will remove the discontinuity by
+decreasing/increasing the current \s-1DTS\s0 and \s-1PTS\s0 by the corresponding
+delta value.
+.Sp
+The default value is 10.
+.IP "\fB\-dts_error_threshold\fR \fIthreshold\fR" 4
+.IX Item "-dts_error_threshold threshold"
+Timestamp error delta threshold, expressed as a decimal number of
+seconds.
+.Sp
+The timestamp correction enabled by this option is only applied to
+input formats not accepting timestamp discontinuity (for which the
+\&\f(CW\*(C`AVFMT_TS_DISCONT\*(C'\fR flag is not enabled).
+.Sp
+If a timestamp discontinuity is detected whose absolute value is
+greater than \fIthreshold\fR, ffmpeg will drop the \s-1PTS/DTS\s0 timestamp
+value.
+.Sp
+The default value is \f(CW\*(C`3600*30\*(C'\fR (30 hours), which is arbitrarily
+picked and quite conservative.
+.IP "\fB\-muxdelay\fR \fIseconds\fR \fB(\fR\fIoutput\fR\fB)\fR" 4
+.IX Item "-muxdelay seconds (output)"
+Set the maximum demux-decode delay.
+.IP "\fB\-muxpreload\fR \fIseconds\fR \fB(\fR\fIoutput\fR\fB)\fR" 4
+.IX Item "-muxpreload seconds (output)"
+Set the initial demux-decode delay.
+.IP "\fB\-streamid\fR \fIoutput-stream-index\fR\fB:\fR\fInew-value\fR \fB(\fR\fIoutput\fR\fB)\fR" 4
+.IX Item "-streamid output-stream-index:new-value (output)"
+Assign a new stream-id value to an output stream. This option should be
+specified prior to the output filename to which it applies.
+For the situation where multiple output files exist, a streamid
+may be reassigned to a different value.
+.Sp
+For example, to set the stream 0 \s-1PID\s0 to 33 and the stream 1 \s-1PID\s0 to 36 for
+an output mpegts file:
+.Sp
+.Vb 1
+\&        ffmpeg \-i inurl \-streamid 0:33 \-streamid 1:36 out.ts
+.Ve
+.IP "\fB\-bsf[:\fR\fIstream_specifier\fR\fB]\fR \fIbitstream_filters\fR \fB(\fR\fIinput/output,per\-stream\fR\fB)\fR" 4
+.IX Item "-bsf[:stream_specifier] bitstream_filters (input/output,per-stream)"
+Apply bitstream filters to matching streams. The filters are applied to each
+packet as it is received from the demuxer (when used as an input option) or
+before it is sent to the muxer (when used as an output option).
+.Sp
+\&\fIbitstream_filters\fR is a comma-separated list of bitstream filter
+specifications, each of the form
+.Sp
+.Vb 1
+\&        <filter>[=<optname0>=<optval0>:<optname1>=<optval1>:...]
+.Ve
+.Sp
+Any of the ',=:' characters that are to be a part of an option value need to be
+escaped with a backslash.
+.Sp
+Use the \f(CW\*(C`\-bsfs\*(C'\fR option to get the list of bitstream filters.
+.Sp
+E.g.
+.Sp
+.Vb 1
+\&        ffmpeg \-bsf:v h264_mp4toannexb \-i h264.mp4 \-c:v copy \-an out.h264
+.Ve
+.Sp
+applies the \f(CW\*(C`h264_mp4toannexb\*(C'\fR bitstream filter (which converts
+MP4\-encapsulated H.264 stream to Annex B) to the \fIinput\fR video stream.
+.Sp
+On the other hand,
+.Sp
+.Vb 1
+\&        ffmpeg \-i file.mov \-an \-vn \-bsf:s mov2textsub \-c:s copy \-f rawvideo sub.txt
+.Ve
+.Sp
+applies the \f(CW\*(C`mov2textsub\*(C'\fR bitstream filter (which extracts text from \s-1MOV\s0
+subtitles) to the \fIoutput\fR subtitle stream. Note, however, that since both
+examples use \f(CW\*(C`\-c copy\*(C'\fR, it matters little whether the filters are applied
+on input or output \- that would change if transcoding was happening.
+.IP "\fB\-tag[:\fR\fIstream_specifier\fR\fB]\fR \fIcodec_tag\fR \fB(\fR\fIinput/output,per\-stream\fR\fB)\fR" 4
+.IX Item "-tag[:stream_specifier] codec_tag (input/output,per-stream)"
+Force a tag/fourcc for matching streams.
+.IP "\fB\-timecode\fR \fIhh\fR\fB:\fR\fImm\fR\fB:\fR\fIss\fR\fB\s-1SEP\s0\fR\fIff\fR" 4
+.IX Item "-timecode hh:mm:ssSEPff"
+Specify Timecode for writing. \fI\s-1SEP\s0\fR is ':' for non drop timecode and ';'
+(or '.') for drop.
+.Sp
+.Vb 1
+\&        ffmpeg \-i input.mpg \-timecode 01:02:03.04 \-r 30000/1001 \-s ntsc output.mpg
+.Ve
+.IP "\fB\-filter_complex\fR \fIfiltergraph\fR \fB(\fR\fIglobal\fR\fB)\fR" 4
+.IX Item "-filter_complex filtergraph (global)"
+Define a complex filtergraph, i.e. one with arbitrary number of inputs and/or
+outputs. For simple graphs \*(-- those with one input and one output of the same
+type \*(-- see the \fB\-filter\fR options. \fIfiltergraph\fR is a description of
+the filtergraph, as described in the ``Filtergraph syntax'' section of the
+ffmpeg-filters manual. This option may be specified multiple times \- each use
+creates a new complex filtergraph.
+.Sp
+Inputs to a complex filtergraph may come from different source types,
+distinguished by the format of the corresponding link label:
+.RS 4
+.IP "\(bu" 4
+To connect an input stream, use \f(CW\*(C`[file_index:stream_specifier]\*(C'\fR (i.e. the
+same syntax as \fB\-map\fR). If \fIstream_specifier\fR matches multiple
+streams, the first one will be used. For multiview video, the stream specifier
+may be followed by the view specifier, see documentation for the \fB\-map\fR
+option for its syntax.
+.IP "\(bu" 4
+To connect a loopback decoder use [dec:\fIdec_idx\fR], where \fIdec_idx\fR is
+the index of the loopback decoder to be connected to given input. For multiview
+video, the decoder index may be followed by the view specifier, see
+documentation for the \fB\-map\fR option for its syntax.
+.IP "\(bu" 4
+To connect an output from another complex filtergraph, use its link label. E.g
+the following example:
+.Sp
+.Vb 6
+\&        ffmpeg \-i input.mkv \e
+\&          \-filter_complex \*(Aq[0:v]scale=size=hd1080,split=outputs=2[for_enc][orig_scaled]\*(Aq \e
+\&          \-c:v libx264 \-map \*(Aq[for_enc]\*(Aq output.mkv \e
+\&          \-dec 0:0 \e
+\&          \-filter_complex \*(Aq[dec:0][orig_scaled]hstack[stacked]\*(Aq \e
+\&          \-map \*(Aq[stacked]\*(Aq \-c:v ffv1 comparison.mkv
+.Ve
+.Sp
+reads an input video and
+.RS 4
+.IP "\(bu" 4
+(line 2) uses a complex filtergraph with one input and two outputs
+to scale the video to 1920x1080 and duplicate the result to both
+outputs;
+.IP "\(bu" 4
+(line 3) encodes one scaled output with \f(CW\*(C`libx264\*(C'\fR and writes the result to
+\&\fIoutput.mkv\fR;
+.IP "\(bu" 4
+(line 4) decodes this encoded stream with a loopback decoder;
+.IP "\(bu" 4
+(line 5) places the output of the loopback decoder (i.e. the
+\&\f(CW\*(C`libx264\*(C'\fR\-encoded video) side by side with the scaled original input;
+.IP "\(bu" 4
+(line 6) combined video is then losslessly encoded and written into
+\&\fIcomparison.mkv\fR.
+.RE
+.RS 4
+.Sp
+Note that the two filtergraphs cannot be combined into one, because then there
+would be a cycle in the transcoding pipeline (filtergraph output goes to
+encoding, from there to decoding, then back to the same graph), and such cycles
+are not allowed.
+.RE
+.RE
+.RS 4
+.Sp
+An unlabeled input will be connected to the first unused input stream of the
+matching type.
+.Sp
+Output link labels are referred to with \fB\-map\fR. Unlabeled outputs are
+added to the first output file.
+.Sp
+Note that with this option it is possible to use only lavfi sources without
+normal input files.
+.Sp
+For example, to overlay an image over video
+.Sp
+.Vb 2
+\&        ffmpeg \-i video.mkv \-i image.png \-filter_complex \*(Aq[0:v][1:v]overlay[out]\*(Aq \-map
+\&        \*(Aq[out]\*(Aq out.mkv
+.Ve
+.Sp
+Here \f(CW\*(C`[0:v]\*(C'\fR refers to the first video stream in the first input file,
+which is linked to the first (main) input of the overlay filter. Similarly the
+first video stream in the second input is linked to the second (overlay) input
+of overlay.
+.Sp
+Assuming there is only one video stream in each input file, we can omit input
+labels, so the above is equivalent to
+.Sp
+.Vb 2
+\&        ffmpeg \-i video.mkv \-i image.png \-filter_complex \*(Aqoverlay[out]\*(Aq \-map
+\&        \*(Aq[out]\*(Aq out.mkv
+.Ve
+.Sp
+Furthermore we can omit the output label and the single output from the filter
+graph will be added to the output file automatically, so we can simply write
+.Sp
+.Vb 1
+\&        ffmpeg \-i video.mkv \-i image.png \-filter_complex \*(Aqoverlay\*(Aq out.mkv
+.Ve
+.Sp
+As a special exception, you can use a bitmap subtitle stream as input: it
+will be converted into a video with the same size as the largest video in
+the file, or 720x576 if no video is present. Note that this is an
+experimental and temporary solution. It will be removed once libavfilter has
+proper support for subtitles.
+.Sp
+For example, to hardcode subtitles on top of a DVB-T recording stored in
+MPEG-TS format, delaying the subtitles by 1 second:
+.Sp
+.Vb 3
+\&        ffmpeg \-i input.ts \-filter_complex \e
+\&          \*(Aq[#0x2ef] setpts=PTS+1/TB [sub] ; [#0x2d0] [sub] overlay\*(Aq \e
+\&          \-sn \-map \*(Aq#0x2dc\*(Aq output.mkv
+.Ve
+.Sp
+(0x2d0, 0x2dc and 0x2ef are the MPEG-TS PIDs of respectively the video,
+audio and subtitles streams; 0:0, 0:3 and 0:7 would have worked too)
+.Sp
+To generate 5 seconds of pure red video using lavfi \f(CW\*(C`color\*(C'\fR source:
+.Sp
+.Vb 1
+\&        ffmpeg \-filter_complex \*(Aqcolor=c=red\*(Aq \-t 5 out.mkv
+.Ve
+.RE
+.IP "\fB\-filter_complex_threads\fR \fInb_threads\fR \fB(\fR\fIglobal\fR\fB)\fR" 4
+.IX Item "-filter_complex_threads nb_threads (global)"
+Defines how many threads are used to process a filter_complex graph.
+Similar to filter_threads but used for \f(CW\*(C`\-filter_complex\*(C'\fR graphs only.
+The default is the number of available CPUs.
+.IP "\fB\-lavfi\fR \fIfiltergraph\fR \fB(\fR\fIglobal\fR\fB)\fR" 4
+.IX Item "-lavfi filtergraph (global)"
+Define a complex filtergraph, i.e. one with arbitrary number of inputs and/or
+outputs. Equivalent to \fB\-filter_complex\fR.
+.IP "\fB\-accurate_seek (\fR\fIinput\fR\fB)\fR" 4
+.IX Item "-accurate_seek (input)"
+This option enables or disables accurate seeking in input files with the
+\&\fB\-ss\fR option. It is enabled by default, so seeking is accurate when
+transcoding. Use \fB\-noaccurate_seek\fR to disable it, which may be useful
+e.g. when copying some streams and transcoding the others.
+.IP "\fB\-seek_timestamp (\fR\fIinput\fR\fB)\fR" 4
+.IX Item "-seek_timestamp (input)"
+This option enables or disables seeking by timestamp in input files with the
+\&\fB\-ss\fR option. It is disabled by default. If enabled, the argument
+to the \fB\-ss\fR option is considered an actual timestamp, and is not
+offset by the start time of the file. This matters only for files which do
+not start from timestamp 0, such as transport streams.
+.IP "\fB\-thread_queue_size\fR \fIsize\fR \fB(\fR\fIinput/output\fR\fB)\fR" 4
+.IX Item "-thread_queue_size size (input/output)"
+For input, this option sets the maximum number of queued packets when reading
+from the file or device. With low latency / high rate live streams, packets may
+be discarded if they are not read in a timely manner; setting this value can
+force ffmpeg to use a separate input thread and read packets as soon as they
+arrive. By default ffmpeg only does this if multiple inputs are specified.
+.Sp
+For output, this option specified the maximum number of packets that may be
+queued to each muxing thread.
+.IP "\fB\-sdp_file\fR \fIfile\fR \fB(\fR\fIglobal\fR\fB)\fR" 4
+.IX Item "-sdp_file file (global)"
+Print sdp information for an output stream to \fIfile\fR.
+This allows dumping sdp information when at least one output isn't an
+rtp stream. (Requires at least one of the output formats to be rtp).
+.IP "\fB\-discard (\fR\fIinput\fR\fB)\fR" 4
+.IX Item "-discard (input)"
+Allows discarding specific streams or frames from streams.
+Any input stream can be fully discarded, using value \f(CW\*(C`all\*(C'\fR whereas
+selective discarding of frames from a stream occurs at the demuxer
+and is not supported by all demuxers.
+.RS 4
+.IP "\fBnone\fR" 4
+.IX Item "none"
+Discard no frame.
+.IP "\fBdefault\fR" 4
+.IX Item "default"
+Default, which discards no frames.
+.IP "\fBnoref\fR" 4
+.IX Item "noref"
+Discard all non-reference frames.
+.IP "\fBbidir\fR" 4
+.IX Item "bidir"
+Discard all bidirectional frames.
+.IP "\fBnokey\fR" 4
+.IX Item "nokey"
+Discard all frames excepts keyframes.
+.IP "\fBall\fR" 4
+.IX Item "all"
+Discard all frames.
+.RE
+.RS 4
+.RE
+.IP "\fB\-abort_on\fR \fIflags\fR \fB(\fR\fIglobal\fR\fB)\fR" 4
+.IX Item "-abort_on flags (global)"
+Stop and abort on various conditions. The following flags are available:
+.RS 4
+.IP "\fBempty_output\fR" 4
+.IX Item "empty_output"
+No packets were passed to the muxer, the output is empty.
+.IP "\fBempty_output_stream\fR" 4
+.IX Item "empty_output_stream"
+No packets were passed to the muxer in some of the output streams.
+.RE
+.RS 4
+.RE
+.IP "\fB\-max_error_rate (\fR\fIglobal\fR\fB)\fR" 4
+.IX Item "-max_error_rate (global)"
+Set fraction of decoding frame failures across all inputs which when crossed
+ffmpeg will return exit code 69. Crossing this threshold does not terminate
+processing. Range is a floating-point number between 0 to 1. Default is 2/3.
+.IP "\fB\-xerror (\fR\fIglobal\fR\fB)\fR" 4
+.IX Item "-xerror (global)"
+Stop and exit on error
+.IP "\fB\-max_muxing_queue_size\fR \fIpackets\fR \fB(\fR\fIoutput,per\-stream\fR\fB)\fR" 4
+.IX Item "-max_muxing_queue_size packets (output,per-stream)"
+When transcoding audio and/or video streams, ffmpeg will not begin writing into
+the output until it has one packet for each such stream. While waiting for that
+to happen, packets for other streams are buffered. This option sets the size of
+this buffer, in packets, for the matching output stream.
+.Sp
+The default value of this option should be high enough for most uses, so only
+touch this option if you are sure that you need it.
+.IP "\fB\-muxing_queue_data_threshold\fR \fIbytes\fR \fB(\fR\fIoutput,per\-stream\fR\fB)\fR" 4
+.IX Item "-muxing_queue_data_threshold bytes (output,per-stream)"
+This is a minimum threshold until which the muxing queue size is not taken into
+account. Defaults to 50 megabytes per stream, and is based on the overall size
+of packets passed to the muxer.
+.IP "\fB\-auto_conversion_filters (\fR\fIglobal\fR\fB)\fR" 4
+.IX Item "-auto_conversion_filters (global)"
+Enable automatically inserting format conversion filters in all filter
+graphs, including those defined by \fB\-vf\fR, \fB\-af\fR,
+\&\fB\-filter_complex\fR and \fB\-lavfi\fR. If filter format negotiation
+requires a conversion, the initialization of the filters will fail.
+Conversions can still be performed by inserting the relevant conversion
+filter (scale, aresample) in the graph.
+On by default, to explicitly disable it you need to specify
+\&\f(CW\*(C`\-noauto_conversion_filters\*(C'\fR.
+.IP "\fB\-bits_per_raw_sample[:\fR\fIstream_specifier\fR\fB]\fR \fIvalue\fR \fB(\fR\fIoutput,per\-stream\fR\fB)\fR" 4
+.IX Item "-bits_per_raw_sample[:stream_specifier] value (output,per-stream)"
+Declare the number of bits per raw sample in the given output stream to be
+\&\fIvalue\fR. Note that this option sets the information provided to the
+encoder/muxer, it does not change the stream to conform to this value. Setting
+values that do not match the stream properties may result in encoding failures
+or invalid output files.
+.IP "\fB\-stats_enc_pre[:\fR\fIstream_specifier\fR\fB]\fR \fIpath\fR \fB(\fR\fIoutput,per\-stream\fR\fB)\fR" 4
+.IX Item "-stats_enc_pre[:stream_specifier] path (output,per-stream)"
+.PD 0
+.IP "\fB\-stats_enc_post[:\fR\fIstream_specifier\fR\fB]\fR \fIpath\fR \fB(\fR\fIoutput,per\-stream\fR\fB)\fR" 4
+.IX Item "-stats_enc_post[:stream_specifier] path (output,per-stream)"
+.IP "\fB\-stats_mux_pre[:\fR\fIstream_specifier\fR\fB]\fR \fIpath\fR \fB(\fR\fIoutput,per\-stream\fR\fB)\fR" 4
+.IX Item "-stats_mux_pre[:stream_specifier] path (output,per-stream)"
+.PD
+Write per-frame encoding information about the matching streams into the file
+given by \fIpath\fR.
+.Sp
+\&\fB\-stats_enc_pre\fR writes information about raw video or audio frames right
+before they are sent for encoding, while \fB\-stats_enc_post\fR writes
+information about encoded packets as they are received from the encoder.
+\&\fB\-stats_mux_pre\fR writes information about packets just as they are about to
+be sent to the muxer. Every frame or packet produces one line in the specified
+file. The format of this line is controlled by \fB\-stats_enc_pre_fmt\fR /
+\&\fB\-stats_enc_post_fmt\fR / \fB\-stats_mux_pre_fmt\fR.
+.Sp
+When stats for multiple streams are written into a single file, the lines
+corresponding to different streams will be interleaved. The precise order of
+this interleaving is not specified and not guaranteed to remain stable between
+different invocations of the program, even with the same options.
+.IP "\fB\-stats_enc_pre_fmt[:\fR\fIstream_specifier\fR\fB]\fR \fIformat_spec\fR \fB(\fR\fIoutput,per\-stream\fR\fB)\fR" 4
+.IX Item "-stats_enc_pre_fmt[:stream_specifier] format_spec (output,per-stream)"
+.PD 0
+.IP "\fB\-stats_enc_post_fmt[:\fR\fIstream_specifier\fR\fB]\fR \fIformat_spec\fR \fB(\fR\fIoutput,per\-stream\fR\fB)\fR" 4
+.IX Item "-stats_enc_post_fmt[:stream_specifier] format_spec (output,per-stream)"
+.IP "\fB\-stats_mux_pre_fmt[:\fR\fIstream_specifier\fR\fB]\fR \fIformat_spec\fR \fB(\fR\fIoutput,per\-stream\fR\fB)\fR" 4
+.IX Item "-stats_mux_pre_fmt[:stream_specifier] format_spec (output,per-stream)"
+.PD
+Specify the format for the lines written with \fB\-stats_enc_pre\fR /
+\&\fB\-stats_enc_post\fR / \fB\-stats_mux_pre\fR.
+.Sp
+\&\fIformat_spec\fR is a string that may contain directives of the form
+\&\fI{fmt}\fR. \fIformat_spec\fR is backslash-escaped \-\-\- use \e{, \e}, and \e\e
+to write a literal {, }, or \e, respectively, into the output.
+.Sp
+The directives given with \fIfmt\fR may be one of the following:
+.RS 4
+.IP "\fBfidx\fR" 4
+.IX Item "fidx"
+Index of the output file.
+.IP "\fBsidx\fR" 4
+.IX Item "sidx"
+Index of the output stream in the file.
+.IP "\fBn\fR" 4
+.IX Item "n"
+Frame number. Pre-encoding: number of frames sent to the encoder so far.
+Post-encoding: number of packets received from the encoder so far.
+Muxing: number of packets submitted to the muxer for this stream so far.
+.IP "\fBni\fR" 4
+.IX Item "ni"
+Input frame number. Index of the input frame (i.e. output by a decoder) that
+corresponds to this output frame or packet. \-1 if unavailable.
+.IP "\fBtb\fR" 4
+.IX Item "tb"
+Timebase in which this frame/packet's timestamps are expressed, as a rational
+number \fInum/den\fR. Note that encoder and muxer may use different timebases.
+.IP "\fBtbi\fR" 4
+.IX Item "tbi"
+Timebase for \fIptsi\fR, as a rational number \fInum/den\fR. Available when
+\&\fIptsi\fR is available, \fI0/1\fR otherwise.
+.IP "\fBpts\fR" 4
+.IX Item "pts"
+Presentation timestamp of the frame or packet, as an integer. Should be
+multiplied by the timebase to compute presentation time.
+.IP "\fBptsi\fR" 4
+.IX Item "ptsi"
+Presentation timestamp of the input frame (see \fIni\fR), as an integer. Should
+be multiplied by \fItbi\fR to compute presentation time. Printed as
+(2^63 \- 1 = 9223372036854775807) when not available.
+.IP "\fBt\fR" 4
+.IX Item "t"
+Presentation time of the frame or packet, as a decimal number. Equal to
+\&\fIpts\fR multiplied by \fItb\fR.
+.IP "\fBti\fR" 4
+.IX Item "ti"
+Presentation time of the input frame (see \fIni\fR), as a decimal number. Equal
+to \fIptsi\fR multiplied by \fItbi\fR. Printed as inf when not available.
+.IP "\fBdts (\fR\fIpacket\fR\fB)\fR" 4
+.IX Item "dts (packet)"
+Decoding timestamp of the packet, as an integer. Should be multiplied by the
+timebase to compute presentation time.
+.IP "\fBdt (\fR\fIpacket\fR\fB)\fR" 4
+.IX Item "dt (packet)"
+Decoding time of the frame or packet, as a decimal number. Equal to
+\&\fIdts\fR multiplied by \fItb\fR.
+.IP "\fBsn (\fR\fIframe,audio\fR\fB)\fR" 4
+.IX Item "sn (frame,audio)"
+Number of audio samples sent to the encoder so far.
+.IP "\fBsamp (\fR\fIframe,audio\fR\fB)\fR" 4
+.IX Item "samp (frame,audio)"
+Number of audio samples in the frame.
+.IP "\fBsize (\fR\fIpacket\fR\fB)\fR" 4
+.IX Item "size (packet)"
+Size of the encoded packet in bytes.
+.IP "\fBbr (\fR\fIpacket\fR\fB)\fR" 4
+.IX Item "br (packet)"
+Current bitrate in bits per second.
+.IP "\fBabr (\fR\fIpacket\fR\fB)\fR" 4
+.IX Item "abr (packet)"
+Average bitrate for the whole stream so far, in bits per second, \-1 if it cannot
+be determined at this point.
+.IP "\fBkey (\fR\fIpacket\fR\fB)\fR" 4
+.IX Item "key (packet)"
+Character 'K' if the packet contains a keyframe, character 'N' otherwise.
+.RE
+.RS 4
+.Sp
+Directives tagged with \fIpacket\fR may only be used with
+\&\fB\-stats_enc_post_fmt\fR and \fB\-stats_mux_pre_fmt\fR.
+.Sp
+Directives tagged with \fIframe\fR may only be used with
+\&\fB\-stats_enc_pre_fmt\fR.
+.Sp
+Directives tagged with \fIaudio\fR may only be used with audio streams.
+.Sp
+The default format strings are:
+.IP "\fBpre-encoding\fR" 4
+.IX Item "pre-encoding"
+{fidx} {sidx} {n} {t}
+.IP "\fBpost-encoding\fR" 4
+.IX Item "post-encoding"
+{fidx} {sidx} {n} {t}
+.RE
+.RS 4
+.Sp
+In the future, new items may be added to the end of the default formatting
+strings. Users who depend on the format staying exactly the same, should
+prescribe it manually.
+.Sp
+Note that stats for different streams written into the same file may have
+different formats.
+.RE
+.SS "Preset files"
+.IX Subsection "Preset files"
+A preset file contains a sequence of \fIoption\fR=\fIvalue\fR pairs,
+one for each line, specifying a sequence of options which would be
+awkward to specify on the command line. Lines starting with the hash
+('#') character are ignored and are used to provide comments. Check
+the \fIpresets\fR directory in the FFmpeg source tree for examples.
+.PP
+There are two types of preset files: ffpreset and avpreset files.
+.PP
+\fIffpreset files\fR
+.IX Subsection "ffpreset files"
+.PP
+ffpreset files are specified with the \f(CW\*(C`vpre\*(C'\fR, \f(CW\*(C`apre\*(C'\fR,
+\&\f(CW\*(C`spre\*(C'\fR, and \f(CW\*(C`fpre\*(C'\fR options. The \f(CW\*(C`fpre\*(C'\fR option takes the
+filename of the preset instead of a preset name as input and can be
+used for any kind of codec. For the \f(CW\*(C`vpre\*(C'\fR, \f(CW\*(C`apre\*(C'\fR, and
+\&\f(CW\*(C`spre\*(C'\fR options, the options specified in a preset file are
+applied to the currently selected codec of the same type as the preset
+option.
+.PP
+The argument passed to the \f(CW\*(C`vpre\*(C'\fR, \f(CW\*(C`apre\*(C'\fR, and \f(CW\*(C`spre\*(C'\fR
+preset options identifies the preset file to use according to the
+following rules:
+.PP
+First ffmpeg searches for a file named \fIarg\fR.ffpreset in the
+directories \fI\f(CI$FFMPEG_DATADIR\fI\fR (if set), and \fI\f(CI$HOME\fI/.ffmpeg\fR, and in
+the datadir defined at configuration time (usually \fIPREFIX/share/ffmpeg\fR)
+or in a \fIffpresets\fR folder along the executable on win32,
+in that order. For example, if the argument is \f(CW\*(C`libvpx\-1080p\*(C'\fR, it will
+search for the file \fIlibvpx\-1080p.ffpreset\fR.
+.PP
+If no such file is found, then ffmpeg will search for a file named
+\&\fIcodec_name\fR\-\fIarg\fR.ffpreset in the above-mentioned
+directories, where \fIcodec_name\fR is the name of the codec to which
+the preset file options will be applied. For example, if you select
+the video codec with \f(CW\*(C`\-vcodec libvpx\*(C'\fR and use \f(CW\*(C`\-vpre 1080p\*(C'\fR,
+then it will search for the file \fIlibvpx\-1080p.ffpreset\fR.
+.PP
+\fIavpreset files\fR
+.IX Subsection "avpreset files"
+.PP
+avpreset files are specified with the \f(CW\*(C`pre\*(C'\fR option. They work similar to
+ffpreset files, but they only allow encoder\- specific options. Therefore, an
+\&\fIoption\fR=\fIvalue\fR pair specifying an encoder cannot be used.
+.PP
+When the \f(CW\*(C`pre\*(C'\fR option is specified, ffmpeg will look for files with the
+suffix .avpreset in the directories \fI\f(CI$AVCONV_DATADIR\fI\fR (if set), and
+\&\fI\f(CI$HOME\fI/.avconv\fR, and in the datadir defined at configuration time (usually
+\&\fIPREFIX/share/ffmpeg\fR), in that order.
+.PP
+First ffmpeg searches for a file named \fIcodec_name\fR\-\fIarg\fR.avpreset in
+the above-mentioned directories, where \fIcodec_name\fR is the name of the codec
+to which the preset file options will be applied. For example, if you select the
+video codec with \f(CW\*(C`\-vcodec libvpx\*(C'\fR and use \f(CW\*(C`\-pre 1080p\*(C'\fR, then it will
+search for the file \fIlibvpx\-1080p.avpreset\fR.
+.PP
+If no such file is found, then ffmpeg will search for a file named
+\&\fIarg\fR.avpreset in the same directories.
+.SS "vstats file format"
+.IX Subsection "vstats file format"
+The \f(CW\*(C`\-vstats\*(C'\fR and \f(CW\*(C`\-vstats_file\*(C'\fR options enable generation of a file
+containing statistics about the generated video outputs.
+.PP
+The \f(CW\*(C`\-vstats_version\*(C'\fR option controls the format version of the generated
+file.
+.PP
+With version \f(CW1\fR the format is:
+.PP
+.Vb 1
+\&        frame= <FRAME> q= <FRAME_QUALITY> PSNR= <PSNR> f_size= <FRAME_SIZE> s_size= <STREAM_SIZE>kB time= <TIMESTAMP> br= <BITRATE>kbits/s avg_br= <AVERAGE_BITRATE>kbits/s
+.Ve
+.PP
+With version \f(CW2\fR the format is:
+.PP
+.Vb 1
+\&        out= <OUT_FILE_INDEX> st= <OUT_FILE_STREAM_INDEX> frame= <FRAME_NUMBER> q= <FRAME_QUALITY>f PSNR= <PSNR> f_size= <FRAME_SIZE> s_size= <STREAM_SIZE>kB time= <TIMESTAMP> br= <BITRATE>kbits/s avg_br= <AVERAGE_BITRATE>kbits/s
+.Ve
+.PP
+The value corresponding to each key is described below:
+.IP "\fBavg_br\fR" 4
+.IX Item "avg_br"
+average bitrate expressed in Kbits/s
+.IP "\fBbr\fR" 4
+.IX Item "br"
+bitrate expressed in Kbits/s
+.IP "\fBframe\fR" 4
+.IX Item "frame"
+number of encoded frame
+.IP "\fBout\fR" 4
+.IX Item "out"
+out file index
+.IP "\fB\s-1PSNR\s0\fR" 4
+.IX Item "PSNR"
+Peak Signal to Noise Ratio
+.IP "\fBq\fR" 4
+.IX Item "q"
+quality of the frame
+.IP "\fBf_size\fR" 4
+.IX Item "f_size"
+encoded packet size expressed as number of bytes
+.IP "\fBs_size\fR" 4
+.IX Item "s_size"
+stream size expressed in KiB
+.IP "\fBst\fR" 4
+.IX Item "st"
+out file stream index
+.IP "\fBtime\fR" 4
+.IX Item "time"
+time of the packet
+.IP "\fBtype\fR" 4
+.IX Item "type"
+picture type
+.PP
+See also the \fB\-stats_enc options\fR for an alternative way
+to show encoding statistics.
+.SH "EXAMPLES"
+.IX Header "EXAMPLES"
+.SS "Video and Audio grabbing"
+.IX Subsection "Video and Audio grabbing"
+If you specify the input format and device then ffmpeg can grab video
+and audio directly.
+.PP
+.Vb 1
+\&        ffmpeg \-f oss \-i /dev/dsp \-f video4linux2 \-i /dev/video0 /tmp/out.mpg
+.Ve
+.PP
+Or with an \s-1ALSA\s0 audio source (mono input, card id 1) instead of \s-1OSS:\s0
+.PP
+.Vb 1
+\&        ffmpeg \-f alsa \-ac 1 \-i hw:1 \-f video4linux2 \-i /dev/video0 /tmp/out.mpg
+.Ve
+.PP
+Note that you must activate the right video source and channel before
+launching ffmpeg with any \s-1TV\s0 viewer such as
+<\fBhttp://linux.bytesex.org/xawtv/\fR> by Gerd Knorr. You also
+have to set the audio recording levels correctly with a
+standard mixer.
+.SS "X11 grabbing"
+.IX Subsection "X11 grabbing"
+Grab the X11 display with ffmpeg via
+.PP
+.Vb 1
+\&        ffmpeg \-f x11grab \-video_size cif \-framerate 25 \-i :0.0 /tmp/out.mpg
+.Ve
+.PP
+0.0 is display.screen number of your X11 server, same as
+the \s-1DISPLAY\s0 environment variable.
+.PP
+.Vb 1
+\&        ffmpeg \-f x11grab \-video_size cif \-framerate 25 \-i :0.0+10,20 /tmp/out.mpg
+.Ve
+.PP
+0.0 is display.screen number of your X11 server, same as the \s-1DISPLAY\s0 environment
+variable. 10 is the x\-offset and 20 the y\-offset for the grabbing.
+.SS "Video and Audio file format conversion"
+.IX Subsection "Video and Audio file format conversion"
+Any supported file format and protocol can serve as input to ffmpeg:
+.PP
+Examples:
+.IP "\(bu" 4
+You can use \s-1YUV\s0 files as input:
+.Sp
+.Vb 1
+\&        ffmpeg \-i /tmp/test%d.Y /tmp/out.mpg
+.Ve
+.Sp
+It will use the files:
+.Sp
+.Vb 2
+\&        /tmp/test0.Y, /tmp/test0.U, /tmp/test0.V,
+\&        /tmp/test1.Y, /tmp/test1.U, /tmp/test1.V, etc...
+.Ve
+.Sp
+The Y files use twice the resolution of the U and V files. They are
+raw files, without header. They can be generated by all decent video
+decoders. You must specify the size of the image with the \fB\-s\fR option
+if ffmpeg cannot guess it.
+.IP "\(bu" 4
+You can input from a raw \s-1YUV420P\s0 file:
+.Sp
+.Vb 1
+\&        ffmpeg \-i /tmp/test.yuv /tmp/out.avi
+.Ve
+.Sp
+test.yuv is a file containing raw \s-1YUV\s0 planar data. Each frame is composed
+of the Y plane followed by the U and V planes at half vertical and
+horizontal resolution.
+.IP "\(bu" 4
+You can output to a raw \s-1YUV420P\s0 file:
+.Sp
+.Vb 1
+\&        ffmpeg \-i mydivx.avi hugefile.yuv
+.Ve
+.IP "\(bu" 4
+You can set several input files and output files:
+.Sp
+.Vb 1
+\&        ffmpeg \-i /tmp/a.wav \-s 640x480 \-i /tmp/a.yuv /tmp/a.mpg
+.Ve
+.Sp
+Converts the audio file a.wav and the raw \s-1YUV\s0 video file a.yuv
+to \s-1MPEG\s0 file a.mpg.
+.IP "\(bu" 4
+You can also do audio and video conversions at the same time:
+.Sp
+.Vb 1
+\&        ffmpeg \-i /tmp/a.wav \-ar 22050 /tmp/a.mp2
+.Ve
+.Sp
+Converts a.wav to \s-1MPEG\s0 audio at 22050 Hz sample rate.
+.IP "\(bu" 4
+You can encode to several formats at the same time and define a
+mapping from input stream to output streams:
+.Sp
+.Vb 1
+\&        ffmpeg \-i /tmp/a.wav \-map 0:a \-b:a 64k /tmp/a.mp2 \-map 0:a \-b:a 128k /tmp/b.mp2
+.Ve
+.Sp
+Converts a.wav to a.mp2 at 64 kbits and to b.mp2 at 128 kbits. '\-map
+file:index' specifies which input stream is used for each output
+stream, in the order of the definition of output streams.
+.IP "\(bu" 4
+You can transcode decrypted VOBs:
+.Sp
+.Vb 1
+\&        ffmpeg \-i snatch_1.vob \-f avi \-c:v mpeg4 \-b:v 800k \-g 300 \-bf 2 \-c:a libmp3lame \-b:a 128k snatch.avi
+.Ve
+.Sp
+This is a typical \s-1DVD\s0 ripping example; the input is a \s-1VOB\s0 file, the
+output an \s-1AVI\s0 file with \s-1MPEG\-4\s0 video and \s-1MP3\s0 audio. Note that in this
+command we use B\-frames so the \s-1MPEG\-4\s0 stream is DivX5 compatible, and
+\&\s-1GOP\s0 size is 300 which means one intra frame every 10 seconds for 29.97fps
+input video. Furthermore, the audio stream is MP3\-encoded so you need
+to enable \s-1LAME\s0 support by passing \f(CW\*(C`\-\-enable\-libmp3lame\*(C'\fR to configure.
+The mapping is particularly useful for \s-1DVD\s0 transcoding
+to get the desired audio language.
+.Sp
+\&\s-1NOTE:\s0 To see the supported input formats, use \f(CW\*(C`ffmpeg \-demuxers\*(C'\fR.
+.IP "\(bu" 4
+You can extract images from a video, or create a video from many images:
+.Sp
+For extracting images from a video:
+.Sp
+.Vb 1
+\&        ffmpeg \-i foo.avi \-r 1 \-s WxH \-f image2 foo\-%03d.jpeg
+.Ve
+.Sp
+This will extract one video frame per second from the video and will
+output them in files named \fIfoo\-001.jpeg\fR, \fIfoo\-002.jpeg\fR,
+etc. Images will be rescaled to fit the new WxH values.
+.Sp
+If you want to extract just a limited number of frames, you can use the
+above command in combination with the \f(CW\*(C`\-frames:v\*(C'\fR or \f(CW\*(C`\-t\*(C'\fR option,
+or in combination with \-ss to start extracting from a certain point in time.
+.Sp
+For creating a video from many images:
+.Sp
+.Vb 1
+\&        ffmpeg \-f image2 \-framerate 12 \-i foo\-%03d.jpeg \-s WxH foo.avi
+.Ve
+.Sp
+The syntax \f(CW\*(C`foo\-%03d.jpeg\*(C'\fR specifies to use a decimal number
+composed of three digits padded with zeroes to express the sequence
+number. It is the same syntax supported by the C printf function, but
+only formats accepting a normal integer are suitable.
+.Sp
+When importing an image sequence, \-i also supports expanding
+shell-like wildcard patterns (globbing) internally, by selecting the
+image2\-specific \f(CW\*(C`\-pattern_type glob\*(C'\fR option.
+.Sp
+For example, for creating a video from filenames matching the glob pattern
+\&\f(CW\*(C`foo\-*.jpeg\*(C'\fR:
+.Sp
+.Vb 1
+\&        ffmpeg \-f image2 \-pattern_type glob \-framerate 12 \-i \*(Aqfoo\-*.jpeg\*(Aq \-s WxH foo.avi
+.Ve
+.IP "\(bu" 4
+You can put many streams of the same type in the output:
+.Sp
+.Vb 1
+\&        ffmpeg \-i test1.avi \-i test2.avi \-map 1:1 \-map 1:0 \-map 0:1 \-map 0:0 \-c copy \-y test12.nut
+.Ve
+.Sp
+The resulting output file \fItest12.nut\fR will contain the first four streams
+from the input files in reverse order.
+.IP "\(bu" 4
+To force \s-1CBR\s0 video output:
+.Sp
+.Vb 1
+\&        ffmpeg \-i myfile.avi \-b 4000k \-minrate 4000k \-maxrate 4000k \-bufsize 1835k out.m2v
+.Ve
+.IP "\(bu" 4
+The four options lmin, lmax, mblmin and mblmax use 'lambda' units,
+but you may use the \s-1QP2LAMBDA\s0 constant to easily convert from 'q' units:
+.Sp
+.Vb 1
+\&        ffmpeg \-i src.ext \-lmax 21*QP2LAMBDA dst.ext
+.Ve
+.SH "SEE ALSO"
+.IX Header "SEE ALSO"
+\&\fBffmpeg\-all\fR\|(1),
+\&\fBffplay\fR\|(1), \fBffprobe\fR\|(1),
+\&\fBffmpeg\-utils\fR\|(1), \fBffmpeg\-scaler\fR\|(1), \fBffmpeg\-resampler\fR\|(1),
+\&\fBffmpeg\-codecs\fR\|(1), \fBffmpeg\-bitstream\-filters\fR\|(1), \fBffmpeg\-formats\fR\|(1),
+\&\fBffmpeg\-devices\fR\|(1), \fBffmpeg\-protocols\fR\|(1), \fBffmpeg\-filters\fR\|(1)
+.SH "AUTHORS"
+.IX Header "AUTHORS"
+The FFmpeg developers.
+.PP
+For details about the authorship, see the Git history of the project
+(https://git.ffmpeg.org/ffmpeg), e.g. by typing the command
+\&\fBgit log\fR in the FFmpeg source directory, or browsing the
+online repository at <\fBhttps://git.ffmpeg.org/ffmpeg\fR>.
+.PP
+Maintainers for the specific components are listed in the file
+\&\fI\s-1MAINTAINERS\s0\fR in the source code tree.

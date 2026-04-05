@@ -1,0 +1,138 @@
+1.  bug in resample code:  downsampling from 44101 to 44100 causes
+    a seg fault.  Workaround in place for now:  resampling disabled 
+    if input/output samplerates agree to 4 digits.  
+
+
+2.  high bitrate encodings have trouble on some hardware players.
+    Track this down.  Probably caused by --strictly-enforce-ISO and
+    IXMAX_VAL.  Try setting IXMAX_VAL back to 8191 and/or
+    maxmp3buf=8*960 to see if there is a working combination.
+
+    note: one of the decoder bugs was identified. It is caused by using
+    different block sizes on both channels. A parameter need to be
+    added to Lame to handle workarounds.
+
+
+3   frontend: code is a complete mess. But it has so many debugged
+    features it will be a lot of work to re-write.
+
+
+4.  MSVC project files.  It would be nice to create a working
+    MSVC6 workspace, which included all the projects as possible
+    targets:
+          lame.exe
+          mp3x.exe   (require GTK libs)
+          lame_enc.dll   
+          ACM codec
+          directshow codec
+
+    I think the only MSVC5 project that we need to preserve is
+    for lame_enc.dll, since Albert Faber (still?) doesn't use VC6?
+    But no reason we cant have VC5 and VC6 project files for the dll.
+
+
+5.  NOGAP encoding:
+
+    -nogap:  more testing, fix options, test id3 tags?
+    Can we change id3 tags without reseting the encoder??
+    At the end of encoding 1.wav, call lame_get_mf_samples_to_encode()
+    to find the number of non encoded buffered PCM samples.  Then
+    encode samples from 2.wav until these PCM samples have been
+    encoded, *THEN* call lame_encode_flush_nogap() and close
+    out file 1.mp3.
+    
+    
+    NOGAP decoding:  
+    lame --decode --nogap file1.mp3 file2.mp3 file3.mp3
+    should also work.  What needs to be done:
+    get_audio.c:  We need a way to open a second mp3 file, without
+                  calling lame_decode_init() and reinitializing mpglib.
+                  And the mpglib needs to know to look for new Xing
+                  tags at the beginning of file2.mp3 and file3.mp3.
+
+
+6.  Does stdin work when LAME is compiled to use libsndfile? 
+    (new version of libsndfile will support this - try this out)
+
+
+7.  LAME has problems with pure DC input.  i.e. a square wave with
+    a frequency well below 20 Hz.  Not very important, but it should
+    be fixed.
+
+
+8.  mgplib has bugs with i-stereo.  flag denoting invalid
+    i-stereo value (= frame is m/s stereo) is not correct.  
+
+
+9.  lowpass filter: for M/S stereo, use more filtering for the side
+    channel, less filtering for mid channel.  We need to first replace
+    the polyphase filter with an FIR lowpass filter with finer frequency
+    resolution before implementing this. 
+
+
+10. LAME has a 31 point FIR filter used for resampling, which
+    can also be used as a lowpass.  When resampling is done, 
+    use that filter to also lowpass instead of the polyphase filter.
+
+
+11. Even when resampling is not needed, should we use an FIR filter
+    for the lowpass?  If it is not too much slower, yes.  If it
+    is slower, then it should be an option since it will produce
+    higher quality.  
+
+
+12. We should consider moving the experts options from the *long
+    help* text into an *experts only* help text. The average Joe gets
+    knocked down by the huge number of possibilities to setup lame.
+
+
+
+50. Better tonality estimation.
+    Gpsycho uses predictability, and so needs a delay to detect the tonality
+    of a sound.
+    Nspsytune seems to miss tonals when several of them are too narrow.
+    We would probably need the best of both.
+
+
+
+60. Different ATH handling for sfb21. We are using the minimum value of ath
+    in each whole sfb. in sfb21 this leads to very high bitrates.
+    We could perhaps use 2 or 3 ath partitions in sfb21
+
+    note: partially done
+
+
+
+70. Use mixed blocks.
+
+
+
+90. Use intensity stereo. This is a must-have for low bitrates, but if the
+    algorythm is very good it could also be used in every case.
+    Note: mpg123 (and all derivatives, like xmms and lame/mpglib)
+    have bugs in the intensity stereo decoding.  Bugs have been there
+    for years since there are very few intensity stereo mp3's out there.
+
+
+
+95. Merge GOGO's fast assembler routines.
+
+
+
+96. It would be nice to save some information whilst encoding
+    a: wave -> mp3
+        a RIFF/wave can contain LIST chunks with information
+        about author, title, etc. 
+        ==> could go into TAG fields of resulting mp3
+    b: mp3 -> mp3
+        ==> we could copy the TAG directly
+    c: mp3 -> wave
+        ==> copy TAG into LIST chunk
+
+
+
+97. Integrate plusV extensions
+
+
+
+99. To be able to encode as fast as FastEnc

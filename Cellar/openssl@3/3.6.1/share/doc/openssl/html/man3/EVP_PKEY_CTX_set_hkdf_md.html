@@ -1,0 +1,156 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_PKEY_CTX_set_hkdf_md</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#STRING-CTRLS">STRING CTRLS</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#CONFORMING-TO">CONFORMING TO</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_PKEY_CTX_set_hkdf_md, EVP_PKEY_CTX_set1_hkdf_salt, EVP_PKEY_CTX_set1_hkdf_key, EVP_PKEY_CTX_add1_hkdf_info, EVP_PKEY_CTX_set_hkdf_mode - HMAC-based Extract-and-Expand key derivation algorithm</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/kdf.h&gt;
+
+int EVP_PKEY_CTX_set_hkdf_mode(EVP_PKEY_CTX *pctx, int mode);
+
+int EVP_PKEY_CTX_set_hkdf_md(EVP_PKEY_CTX *pctx, const EVP_MD *md);
+
+int EVP_PKEY_CTX_set1_hkdf_salt(EVP_PKEY_CTX *pctx, unsigned char *salt,
+                                int saltlen);
+
+int EVP_PKEY_CTX_set1_hkdf_key(EVP_PKEY_CTX *pctx, unsigned char *key,
+                               int keylen);
+
+int EVP_PKEY_CTX_add1_hkdf_info(EVP_PKEY_CTX *pctx, unsigned char *info,
+                                int infolen);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The EVP_PKEY_HKDF algorithm implements the HKDF key derivation function. HKDF follows the &quot;extract-then-expand&quot; paradigm, where the KDF logically consists of two modules. The first stage takes the input keying material and &quot;extracts&quot; from it a fixed-length pseudorandom key K. The second stage &quot;expands&quot; the key K into several additional pseudorandom keys (the output of the KDF).</p>
+
+<p>EVP_PKEY_CTX_set_hkdf_mode() sets the mode for the HKDF operation. There are three modes that are currently defined:</p>
+
+<dl>
+
+<dt id="EVP_PKEY_HKDEF_MODE_EXTRACT_AND_EXPAND">EVP_PKEY_HKDEF_MODE_EXTRACT_AND_EXPAND</dt>
+<dd>
+
+<p>This is the default mode. Calling <a href="../man3/EVP_PKEY_derive.html">EVP_PKEY_derive(3)</a> on an EVP_PKEY_CTX set up for HKDF will perform an extract followed by an expand operation in one go. The derived key returned will be the result after the expand operation. The intermediate fixed-length pseudorandom key K is not returned.</p>
+
+<p>In this mode the digest, key, salt and info values must be set before a key is derived or an error occurs.</p>
+
+</dd>
+<dt id="EVP_PKEY_HKDEF_MODE_EXTRACT_ONLY">EVP_PKEY_HKDEF_MODE_EXTRACT_ONLY</dt>
+<dd>
+
+<p>In this mode calling <a href="../man3/EVP_PKEY_derive.html">EVP_PKEY_derive(3)</a> will just perform the extract operation. The value returned will be the intermediate fixed-length pseudorandom key K.</p>
+
+<p>The digest, key and salt values must be set before a key is derived or an error occurs.</p>
+
+</dd>
+<dt id="EVP_PKEY_HKDEF_MODE_EXPAND_ONLY">EVP_PKEY_HKDEF_MODE_EXPAND_ONLY</dt>
+<dd>
+
+<p>In this mode calling <a href="../man3/EVP_PKEY_derive.html">EVP_PKEY_derive(3)</a> will just perform the expand operation. The input key should be set to the intermediate fixed-length pseudorandom key K returned from a previous extract operation.</p>
+
+<p>The digest, key and info values must be set before a key is derived or an error occurs.</p>
+
+</dd>
+</dl>
+
+<p>EVP_PKEY_CTX_set_hkdf_md() sets the message digest associated with the HKDF.</p>
+
+<p>EVP_PKEY_CTX_set1_hkdf_salt() sets the salt to <b>saltlen</b> bytes of the buffer <b>salt</b>. Any existing value is replaced.</p>
+
+<p>EVP_PKEY_CTX_set1_hkdf_key() sets the key to <b>keylen</b> bytes of the buffer <b>key</b>. Any existing value is replaced.</p>
+
+<p>EVP_PKEY_CTX_add1_hkdf_info() sets the info value to <b>infolen</b> bytes of the buffer <b>info</b>. If a value is already set, it is appended to the existing value.</p>
+
+<h1 id="STRING-CTRLS">STRING CTRLS</h1>
+
+<p>HKDF also supports string based control operations via <a href="../man3/EVP_PKEY_CTX_ctrl_str.html">EVP_PKEY_CTX_ctrl_str(3)</a>. The <b>type</b> parameter &quot;md&quot; uses the supplied <b>value</b> as the name of the digest algorithm to use. The <b>type</b> parameter &quot;mode&quot; uses the values &quot;EXTRACT_AND_EXPAND&quot;, &quot;EXTRACT_ONLY&quot; and &quot;EXPAND_ONLY&quot; to determine the mode to use. The <b>type</b> parameters &quot;salt&quot;, &quot;key&quot; and &quot;info&quot; use the supplied <b>value</b> parameter as a <b>seed</b>, <b>key</b> or <b>info</b> value. The names &quot;hexsalt&quot;, &quot;hexkey&quot; and &quot;hexinfo&quot; are similar except they take a hex string which is converted to binary.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>A context for HKDF can be obtained by calling:</p>
+
+<pre><code>EVP_PKEY_CTX *pctx = EVP_PKEY_CTX_new_id(EVP_PKEY_HKDF, NULL);</code></pre>
+
+<p>The total length of the info buffer cannot exceed 2048 bytes in length: this should be more than enough for any normal use of HKDF.</p>
+
+<p>The output length of an HKDF expand operation is specified via the length parameter to the <a href="../man3/EVP_PKEY_derive.html">EVP_PKEY_derive(3)</a> function. Since the HKDF output length is variable, passing a <b>NULL</b> buffer as a means to obtain the requisite length is not meaningful with HKDF in any mode that performs an expand operation. Instead, the caller must allocate a buffer of the desired length, and pass that buffer to <a href="../man3/EVP_PKEY_derive.html">EVP_PKEY_derive(3)</a> along with (a pointer initialized to) the desired length. Passing a <b>NULL</b> buffer to obtain the length is allowed when using EVP_PKEY_HKDEF_MODE_EXTRACT_ONLY.</p>
+
+<p>Optimised versions of HKDF can be implemented in an ENGINE.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>All these functions return 1 for success and 0 or a negative value for failure. In particular a return value of -2 indicates the operation is not supported by the public key algorithm.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>This example derives 10 bytes using SHA-256 with the secret key &quot;secret&quot;, salt value &quot;salt&quot; and info value &quot;label&quot;:</p>
+
+<pre><code>EVP_PKEY_CTX *pctx;
+unsigned char out[10];
+size_t outlen = sizeof(out);
+pctx = EVP_PKEY_CTX_new_id(EVP_PKEY_HKDF, NULL);
+
+if (EVP_PKEY_derive_init(pctx) &lt;= 0)
+    /* Error */
+if (EVP_PKEY_CTX_set_hkdf_md(pctx, EVP_sha256()) &lt;= 0)
+    /* Error */
+if (EVP_PKEY_CTX_set1_hkdf_salt(pctx, &quot;salt&quot;, 4) &lt;= 0)
+    /* Error */
+if (EVP_PKEY_CTX_set1_hkdf_key(pctx, &quot;secret&quot;, 6) &lt;= 0)
+    /* Error */
+if (EVP_PKEY_CTX_add1_hkdf_info(pctx, &quot;label&quot;, 5) &lt;= 0)
+    /* Error */
+if (EVP_PKEY_derive(pctx, out, &amp;outlen) &lt;= 0)
+    /* Error */</code></pre>
+
+<h1 id="CONFORMING-TO">CONFORMING TO</h1>
+
+<p>RFC 5869</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_PKEY_CTX_new.html">EVP_PKEY_CTX_new(3)</a>, <a href="../man3/EVP_PKEY_CTX_ctrl_str.html">EVP_PKEY_CTX_ctrl_str(3)</a>, <a href="../man3/EVP_PKEY_derive.html">EVP_PKEY_derive(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>All of the functions described here were converted from macros to functions in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2016-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

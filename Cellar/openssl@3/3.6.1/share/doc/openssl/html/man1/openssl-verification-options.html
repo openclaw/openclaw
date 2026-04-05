@@ -1,0 +1,589 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>openssl-verification-options</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Trust-Anchors">Trust Anchors</a></li>
+      <li><a href="#Certification-Path-Building">Certification Path Building</a></li>
+      <li><a href="#Certification-Path-Validation">Certification Path Validation</a></li>
+    </ul>
+  </li>
+  <li><a href="#OPTIONS">OPTIONS</a>
+    <ul>
+      <li><a href="#Trusted-Certificate-Options">Trusted Certificate Options</a></li>
+      <li><a href="#Verification-Options">Verification Options</a></li>
+      <li><a href="#Extended-Verification-Options">Extended Verification Options</a></li>
+      <li><a href="#Certificate-Extensions">Certificate Extensions</a>
+        <ul>
+          <li><a href="#Basic-Constraints">Basic Constraints</a></li>
+          <li><a href="#Key-Usage">Key Usage</a></li>
+          <li><a href="#Extended-Key-Usage">Extended Key Usage</a></li>
+          <li><a href="#Checks-Implied-by-Specific-Predefined-Policies">Checks Implied by Specific Predefined Policies</a></li>
+        </ul>
+      </li>
+    </ul>
+  </li>
+  <li><a href="#BUGS">BUGS</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>openssl-verification-options - generic X.509 certificate verification options</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<p><b>openssl</b> <i>command</i> [ <i>options</i> ... ] [ <i>parameters</i> ... ]</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>There are many situations where X.509 certificates are verified within the OpenSSL libraries and in various OpenSSL commands.</p>
+
+<p>Certificate verification is implemented by <a href="../man3/X509_verify_cert.html">X509_verify_cert(3)</a>. It is a complicated process consisting of a number of steps and depending on numerous options. The most important of them are detailed in the following sections.</p>
+
+<p>In a nutshell, a valid chain of certificates needs to be built up and verified starting from the <i>target certificate</i> that is to be verified and ending in a certificate that due to some policy is trusted. Certificate validation can be performed in the context of a <i>purpose</i>, which is a high-level specification of the intended use of the target certificate, such as <code>sslserver</code> for TLS servers, or (by default) for any purpose.</p>
+
+<p>The details of how each OpenSSL command handles errors are documented on the specific command page.</p>
+
+<p>DANE support is documented in <a href="../man1/openssl-s_client.html">openssl-s_client(1)</a>, <a href="../man3/SSL_CTX_dane_enable.html">SSL_CTX_dane_enable(3)</a>, <a href="../man3/SSL_set1_host.html">SSL_set1_host(3)</a>, <a href="../man3/X509_VERIFY_PARAM_set_flags.html">X509_VERIFY_PARAM_set_flags(3)</a>, and <a href="../man3/X509_check_host.html">X509_check_host(3)</a>.</p>
+
+<h2 id="Trust-Anchors">Trust Anchors</h2>
+
+<p>In general, according to RFC 4158 and RFC 5280, a <i>trust anchor</i> is any public key and related subject distinguished name (DN) that for some reason is considered trusted and thus is acceptable as the root of a chain of certificates.</p>
+
+<p>In practice, trust anchors are given in the form of certificates, where their essential fields are the public key and the subject DN. In addition to the requirements in RFC 5280, OpenSSL checks the validity period of such certificates and makes use of some further fields. In particular, the subject key identifier extension, if present, is used for matching trust anchors during chain building.</p>
+
+<p>In the most simple and common case, trust anchors are by default all self-signed &quot;root&quot; CA certificates that are placed in the <i>trust store</i>, which is a collection of certificates that are trusted for certain uses. This is akin to what is used in the trust stores of Mozilla Firefox, or Apple&#39;s and Microsoft&#39;s certificate stores, ...</p>
+
+<p>From the OpenSSL perspective, a trust anchor is a certificate that should be augmented with an explicit designation for which uses of a target certificate the certificate may serve as a trust anchor. In PEM encoding, this is indicated by the <code>TRUSTED CERTIFICATE</code> string. Such a designation provides a set of positive trust attributes explicitly stating trust for the listed purposes and/or a set of negative trust attributes explicitly rejecting the use for the listed purposes. The purposes are encoded using the values defined for the extended key usages (EKUs) that may be given in X.509 extensions of end-entity certificates. See also the <a href="#Extended-Key-Usage">&quot;Extended Key Usage&quot;</a> section below.</p>
+
+<p>The currently recognized uses are <b>clientAuth</b> (SSL client use), <b>serverAuth</b> (SSL server use), <b>emailProtection</b> (S/MIME email use), <b>codeSigning</b> (object signer use), <b>OCSPSigning</b> (OCSP responder use), <b>OCSP</b> (OCSP request use), <b>timeStamping</b> (TSA server use), and <b>anyExtendedKeyUsage</b>. As of OpenSSL 1.1.0, the last of these blocks all uses when rejected or enables all uses when trusted.</p>
+
+<p>A certificate, which may be CA certificate or an end-entity certificate, is considered a trust anchor for the given use if and only if all the following conditions hold:</p>
+
+<ul>
+
+<li><p>It is an an element of the trust store.</p>
+
+</li>
+<li><p>It does not have a negative trust attribute rejecting the given use.</p>
+
+</li>
+<li><p>It has a positive trust attribute accepting the given use or (by default) one of the following compatibility conditions apply: It is self-signed or the <b>-partial_chain</b> option is given (which corresponds to the <b>X509_V_FLAG_PARTIAL_CHAIN</b> flag being set).</p>
+
+</li>
+</ul>
+
+<h2 id="Certification-Path-Building">Certification Path Building</h2>
+
+<p>First, a certificate chain is built up starting from the target certificate and ending in a trust anchor.</p>
+
+<p>The chain is built up iteratively, looking up in turn a certificate with suitable key usage that matches as an issuer of the current &quot;subject&quot; certificate as described below. If there is such a certificate, the first one found that is currently valid is taken, otherwise the one that expired most recently of all such certificates. For efficiency, no backtracking is performed, thus any further candidate issuer certificates that would match equally are ignored.</p>
+
+<p>When a self-signed certificate has been added, chain construction stops. In this case it must fully match a trust anchor, otherwise chain building fails.</p>
+
+<p>A candidate issuer certificate matches a subject certificate if all of the following conditions hold:</p>
+
+<ul>
+
+<li><p>Its subject name matches the issuer name of the subject certificate.</p>
+
+</li>
+<li><p>If the subject certificate has an authority key identifier extension, each of its sub-fields equals the corresponding subject key identifier, serial number, and issuer field of the candidate issuer certificate, as far as the respective fields are present in both certificates.</p>
+
+</li>
+<li><p>The certificate signature algorithm used to sign the subject certificate is supported and equals the public key algorithm of the candidate issuer certificate.</p>
+
+</li>
+</ul>
+
+<p>The lookup first searches for issuer certificates in the trust store. If it does not find a match there it consults the list of untrusted (&quot;intermediate&quot; CA) certificates, if provided.</p>
+
+<h2 id="Certification-Path-Validation">Certification Path Validation</h2>
+
+<p>When the certificate chain building process was successful the chain components and their links are checked thoroughly.</p>
+
+<p>The first step is to check that each certificate is well-formed. Part of these checks are enabled only if the <b>-x509_strict</b> option is given.</p>
+
+<p>The second step is to check the X.509v3 extensions of every certificate for consistency with the intended specific purpose, if any. If the <b>-purpose</b> option is not given then no such checks are done except for CMS signature checking, where by default <code>smimesign</code> is checked, and SSL/(D)TLS connection setup, where by default <code>sslserver</code> or <code>sslclient</code> are checked. The X.509v3 extensions of the target or &quot;leaf&quot; certificate must be compatible with the specified purpose. All other certificates down the chain are checked to be valid CA certificates, and possibly also further non-standard checks are performed. The precise extensions required are described in detail in the <a href="#Certificate-Extensions">&quot;Certificate Extensions&quot;</a> section below.</p>
+
+<p>The third step is to check the trust settings on the last certificate (which typically is a self-signed root CA certificate). It must be trusted for the given use. For compatibility with previous versions of OpenSSL, a self-signed certificate with no trust attributes is considered to be valid for all uses.</p>
+
+<p>The fourth, and final, step is to check the validity of the certificate chain. For each element in the chain, including the root CA certificate, the validity period as specified by the <code>notBefore</code> and <code>notAfter</code> fields is checked against the current system time. The <b>-attime</b> flag may be used to use a reference time other than &quot;now.&quot; The certificate signature is checked as well (except for the signature of the typically self-signed root CA certificate, which is verified only if the <b>-check_ss_sig</b> option is given). When verifying a certificate signature the keyUsage extension (if present) of the candidate issuer certificate is checked to permit digitalSignature for signing proxy certificates or to permit keyCertSign for signing other certificates, respectively. If all operations complete successfully then certificate is considered valid. If any operation fails then the certificate is not valid.</p>
+
+<h1 id="OPTIONS">OPTIONS</h1>
+
+<h2 id="Trusted-Certificate-Options">Trusted Certificate Options</h2>
+
+<p>The following options specify how to supply the certificates that can be used as trust anchors for certain uses. As mentioned, a collection of such certificates is called a <i>trust store</i>.</p>
+
+<p>Note that OpenSSL does not provide a default set of trust anchors. Many Linux distributions include a system default and configure OpenSSL to point to that. Mozilla maintains an influential trust store that can be found at <a href="https://www.mozilla.org/en-US/about/governance/policies/security-group/certs/">https://www.mozilla.org/en-US/about/governance/policies/security-group/certs/</a>.</p>
+
+<p>The certificates to add to the trust store can be specified using following options.</p>
+
+<dl>
+
+<dt id="CAfile-file"><b>-CAfile</b> <i>file</i></dt>
+<dd>
+
+<p>Load the specified file which contains a trusted certificate in DER format or potentially several of them in case the input is in PEM format. PEM-encoded certificates may also have trust attributes set.</p>
+
+</dd>
+<dt id="no-CAfile"><b>-no-CAfile</b></dt>
+<dd>
+
+<p>Do not load the default file of trusted certificates.</p>
+
+</dd>
+<dt id="CApath-dir"><b>-CApath</b> <i>dir</i></dt>
+<dd>
+
+<p>Use the specified directory as a collection of trusted certificates, i.e., a trust store. Files should be named with the hash value of the X.509 SubjectName of each certificate. This is so that the library can extract the IssuerName, hash it, and directly lookup the file to get the issuer certificate. See <a href="../man1/openssl-rehash.html">openssl-rehash(1)</a> for information on creating this type of directory.</p>
+
+</dd>
+<dt id="no-CApath"><b>-no-CApath</b></dt>
+<dd>
+
+<p>Do not use the default directory of trusted certificates.</p>
+
+</dd>
+<dt id="CAstore-uri"><b>-CAstore</b> <i>uri</i></dt>
+<dd>
+
+<p>Use <i>uri</i> as a store of CA certificates. The URI may indicate a single certificate, as well as a collection of them. With URIs in the <code>file:</code> scheme, this acts as <b>-CAfile</b> or <b>-CApath</b>, depending on if the URI indicates a single file or directory. See <a href="../man7/ossl_store-file.html">ossl_store-file(7)</a> for more information on the <code>file:</code> scheme.</p>
+
+<p>These certificates are also used when building the server certificate chain (for example with <a href="../man1/openssl-s_server.html">openssl-s_server(1)</a>) or client certificate chain (for example with <a href="../man1/openssl-s_time.html">openssl-s_time(1)</a>).</p>
+
+</dd>
+<dt id="no-CAstore"><b>-no-CAstore</b></dt>
+<dd>
+
+<p>Do not use the default store of trusted CA certificates.</p>
+
+</dd>
+</dl>
+
+<h2 id="Verification-Options">Verification Options</h2>
+
+<p>The certificate verification can be fine-tuned with the following flags.</p>
+
+<dl>
+
+<dt id="verbose"><b>-verbose</b></dt>
+<dd>
+
+<p>Print extra information about the operations being performed.</p>
+
+</dd>
+<dt id="attime-timestamp"><b>-attime</b> <i>timestamp</i></dt>
+<dd>
+
+<p>Perform validation checks using time specified by <i>timestamp</i> and not current system time. <i>timestamp</i> is the number of seconds since January 1, 1970 (i.e., the Unix Epoch).</p>
+
+</dd>
+<dt id="no_check_time"><b>-no_check_time</b></dt>
+<dd>
+
+<p>This option suppresses checking the validity period of certificates and CRLs against the current time. If option <b>-attime</b> is used to specify a verification time, the check is not suppressed.</p>
+
+</dd>
+<dt id="x509_strict"><b>-x509_strict</b></dt>
+<dd>
+
+<p>This disables non-compliant workarounds for broken certificates. Thus errors are thrown on certificates not compliant with RFC 5280.</p>
+
+<p>When this option is set, among others, the following certificate well-formedness conditions are checked:</p>
+
+<ul>
+
+<li><p>The basicConstraints of CA certificates must be marked critical.</p>
+
+</li>
+<li><p>CA certificates must explicitly include the keyUsage extension.</p>
+
+</li>
+<li><p>If a pathlenConstraint is given the key usage keyCertSign must be allowed.</p>
+
+</li>
+<li><p>The pathlenConstraint must not be given for non-CA certificates.</p>
+
+</li>
+<li><p>The issuer name of any certificate must not be empty.</p>
+
+</li>
+<li><p>The subject name of CA certs, certs with keyUsage crlSign, and certs without subjectAlternativeName must not be empty.</p>
+
+</li>
+<li><p>If a subjectAlternativeName extension is given it must not be empty.</p>
+
+</li>
+<li><p>The signatureAlgorithm field and the cert signature must be consistent.</p>
+
+</li>
+<li><p>Any given authorityKeyIdentifier and any given subjectKeyIdentifier must not be marked critical.</p>
+
+</li>
+<li><p>The authorityKeyIdentifier must be given for X.509v3 certs unless they are self-signed.</p>
+
+</li>
+<li><p>The subjectKeyIdentifier must be given for all X.509v3 CA certs.</p>
+
+</li>
+</ul>
+
+</dd>
+<dt id="ignore_critical"><b>-ignore_critical</b></dt>
+<dd>
+
+<p>Normally if an unhandled critical extension is present that is not supported by OpenSSL the certificate is rejected (as required by RFC5280). If this option is set critical extensions are ignored.</p>
+
+</dd>
+<dt id="issuer_checks"><b>-issuer_checks</b></dt>
+<dd>
+
+<p>Ignored.</p>
+
+</dd>
+<dt id="crl_check"><b>-crl_check</b></dt>
+<dd>
+
+<p>Checks end entity certificate validity by attempting to look up a valid CRL. If a valid CRL cannot be found an error occurs.</p>
+
+</dd>
+<dt id="crl_check_all"><b>-crl_check_all</b></dt>
+<dd>
+
+<p>Checks the validity of <b>all</b> certificates in the chain by attempting to look up valid CRLs.</p>
+
+</dd>
+<dt id="use_deltas"><b>-use_deltas</b></dt>
+<dd>
+
+<p>Enable support for delta CRLs.</p>
+
+</dd>
+<dt id="extended_crl"><b>-extended_crl</b></dt>
+<dd>
+
+<p>Enable extended CRL features such as indirect CRLs and alternate CRL signing keys.</p>
+
+</dd>
+<dt id="suiteB_128_only--suiteB_128--suiteB_192"><b>-suiteB_128_only</b>, <b>-suiteB_128</b>, <b>-suiteB_192</b></dt>
+<dd>
+
+<p>Enable the Suite B mode operation at 128 bit Level of Security, 128 bit or 192 bit, or only 192 bit Level of Security respectively. See RFC6460 for details. In particular the supported signature algorithms are reduced to support only ECDSA and SHA256 or SHA384 and only the elliptic curves P-256 and P-384.</p>
+
+</dd>
+<dt id="auth_level-level"><b>-auth_level</b> <i>level</i></dt>
+<dd>
+
+<p>Set the certificate chain authentication security level to <i>level</i>. The authentication security level determines the acceptable signature and public key strength when verifying certificate chains. For a certificate chain to validate, the public keys of all the certificates must meet the specified security <i>level</i>. The signature algorithm security level is enforced for all the certificates in the chain except for the chain&#39;s <i>trust anchor</i>, which is either directly trusted or validated by means other than its signature. See <a href="../man3/SSL_CTX_set_security_level.html">SSL_CTX_set_security_level(3)</a> for the definitions of the available levels. The default security level is -1, or &quot;not set&quot;. At security level 0 or lower all algorithms are acceptable. Security level 1 requires at least 80-bit-equivalent security and is broadly interoperable, though it will, for example, reject MD5 signatures or RSA keys shorter than 1024 bits.</p>
+
+</dd>
+<dt id="partial_chain"><b>-partial_chain</b></dt>
+<dd>
+
+<p>Allow verification to succeed if an incomplete chain can be built. That is, a chain ending in a certificate that normally would not be trusted (because it has no matching positive trust attributes and is not self-signed) but is an element of the trust store. This certificate may be self-issued or belong to an intermediate CA.</p>
+
+</dd>
+<dt id="check_ss_sig"><b>-check_ss_sig</b></dt>
+<dd>
+
+<p>Verify the signature of the last certificate in a chain if the certificate is supposedly self-signed. This is prohibited and will result in an error if it is a non-conforming CA certificate with key usage restrictions not including the keyCertSign bit. This verification is disabled by default because it doesn&#39;t add any security.</p>
+
+</dd>
+<dt id="allow_proxy_certs"><b>-allow_proxy_certs</b></dt>
+<dd>
+
+<p>Allow the verification of proxy certificates.</p>
+
+</dd>
+<dt id="trusted_first"><b>-trusted_first</b></dt>
+<dd>
+
+<p>As of OpenSSL 1.1.0 this option is on by default and cannot be disabled.</p>
+
+<p>When constructing the certificate chain, the trusted certificates specified via <b>-CAfile</b>, <b>-CApath</b>, <b>-CAstore</b> or <b>-trusted</b> are always used before any certificates specified via <b>-untrusted</b>.</p>
+
+</dd>
+<dt id="no_alt_chains"><b>-no_alt_chains</b></dt>
+<dd>
+
+<p>As of OpenSSL 1.1.0, since <b>-trusted_first</b> always on, this option has no effect.</p>
+
+</dd>
+<dt id="trusted-file"><b>-trusted</b> <i>file</i></dt>
+<dd>
+
+<p>Parse <i>file</i> as a set of one or more certificates. Each of them qualifies as trusted if has a suitable positive trust attribute or it is self-signed or the <b>-partial_chain</b> option is specified. This option implies the <b>-no-CAfile</b>, <b>-no-CApath</b>, and <b>-no-CAstore</b> options and it cannot be used with the <b>-CAfile</b>, <b>-CApath</b> or <b>-CAstore</b> options, so only certificates specified using the <b>-trusted</b> option are trust anchors. This option may be used multiple times.</p>
+
+</dd>
+<dt id="untrusted-file"><b>-untrusted</b> <i>file</i></dt>
+<dd>
+
+<p>Parse <i>file</i> as a set of one or more certificates. All certificates (typically of intermediate CAs) are considered untrusted and may be used to construct a certificate chain from the target certificate to a trust anchor. This option may be used multiple times.</p>
+
+</dd>
+<dt id="policy-arg"><b>-policy</b> <i>arg</i></dt>
+<dd>
+
+<p>Enable policy processing and add <i>arg</i> to the user-initial-policy-set (see RFC5280). The policy <i>arg</i> can be an object name or an OID in numeric form. This argument can appear more than once.</p>
+
+</dd>
+<dt id="explicit_policy"><b>-explicit_policy</b></dt>
+<dd>
+
+<p>Set policy variable require-explicit-policy (see RFC5280).</p>
+
+</dd>
+<dt id="policy_check"><b>-policy_check</b></dt>
+<dd>
+
+<p>Enables certificate policy processing.</p>
+
+</dd>
+<dt id="policy_print"><b>-policy_print</b></dt>
+<dd>
+
+<p>Print out diagnostics related to policy processing.</p>
+
+</dd>
+<dt id="inhibit_any"><b>-inhibit_any</b></dt>
+<dd>
+
+<p>Set policy variable inhibit-any-policy (see RFC5280).</p>
+
+</dd>
+<dt id="inhibit_map"><b>-inhibit_map</b></dt>
+<dd>
+
+<p>Set policy variable inhibit-policy-mapping (see RFC5280).</p>
+
+</dd>
+<dt id="purpose-purpose"><b>-purpose</b> <i>purpose</i></dt>
+<dd>
+
+<p>A high-level specification of the intended use of the target certificate. Currently predefined purposes are <code>sslclient</code>, <code>sslserver</code>, <code>nssslserver</code>, <code>smimesign</code>, <code>smimeencrypt</code>, <code>crlsign</code>, <code>ocsphelper</code>, <code>timestampsign</code>, <code>codesign</code> and <code>any</code>. If peer certificate verification is enabled, by default the TLS implementation and thus the commands <a href="../man1/openssl-s_client.html">openssl-s_client(1)</a> and <a href="../man1/openssl-s_server.html">openssl-s_server(1)</a> check for consistency with TLS server (<code>sslserver</code>) or TLS client use (<code>sslclient</code>), respectively. By default, CMS signature validation, which can be done via <a href="../man1/openssl-cms.html">openssl-cms(1)</a>, checks for consistency with S/MIME signing use (<code>smimesign</code>).</p>
+
+<p>While IETF RFC 5280 says that <b>id-kp-serverAuth</b> and <b>id-kp-clientAuth</b> are only for WWW use, in practice they are used for all kinds of TLS clients and servers, and this is what OpenSSL assumes as well.</p>
+
+</dd>
+<dt id="verify_depth-num"><b>-verify_depth</b> <i>num</i></dt>
+<dd>
+
+<p>Limit the certificate chain to <i>num</i> intermediate CA certificates. A maximal depth chain can have up to <i>num</i>+2 certificates, since neither the end-entity certificate nor the trust-anchor certificate count against the <b>-verify_depth</b> limit.</p>
+
+</dd>
+<dt id="verify_email-email"><b>-verify_email</b> <i>email</i></dt>
+<dd>
+
+<p>Verify if <i>email</i> matches the email address in Subject Alternative Name or the email in the subject Distinguished Name.</p>
+
+</dd>
+<dt id="verify_hostname-hostname"><b>-verify_hostname</b> <i>hostname</i></dt>
+<dd>
+
+<p>Verify if <i>hostname</i> matches DNS name in Subject Alternative Name or Common Name in the subject certificate.</p>
+
+</dd>
+<dt id="verify_ip-ip"><b>-verify_ip</b> <i>ip</i></dt>
+<dd>
+
+<p>Verify if <i>ip</i> matches the IP address in Subject Alternative Name of the subject certificate.</p>
+
+</dd>
+<dt id="verify_name-name"><b>-verify_name</b> <i>name</i></dt>
+<dd>
+
+<p>Use a set of verification parameters, also known as verification method, identified by <i>name</i>. The currently predefined methods are named <code>ssl_client</code>, <code>ssl_server</code>, <code>smime_sign</code> with alias <code>pkcs7</code>, <code>code_sign</code>, and <code>default</code>. These mimic the combinations of purpose and trust settings used in SSL/(D)TLS, CMS/PKCS7 (including S/MIME), and code signing.</p>
+
+<p>The verification parameters include the trust model, various flags that can partly be set also via other command-line options, and the verification purpose, which in turn implies certificate key usage and extended key usage requirements.</p>
+
+<p>The trust model determines which auxiliary trust or reject OIDs are applicable to verifying the given certificate chain. They can be given using the <b>-addtrust</b> and <b>-addreject</b> options for <a href="../man1/openssl-x509.html">openssl-x509(1)</a>.</p>
+
+</dd>
+</dl>
+
+<h2 id="Extended-Verification-Options">Extended Verification Options</h2>
+
+<p>Sometimes there may be more than one certificate chain leading to an end-entity certificate. This usually happens when a root or intermediate CA signs a certificate for another a CA in other organization. Another reason is when a CA might have intermediates that use two different signature formats, such as a SHA-1 and a SHA-256 digest.</p>
+
+<p>The following options can be used to provide data that will allow the OpenSSL command to generate an alternative chain.</p>
+
+<dl>
+
+<dt id="xkey-infile--xcert-infile--xchain"><b>-xkey</b> <i>infile</i>, <b>-xcert</b> <i>infile</i>, <b>-xchain</b></dt>
+<dd>
+
+<p>Specify an extra certificate, private key and certificate chain. These behave in the same manner as the <b>-cert</b>, <b>-key</b> and <b>-cert_chain</b> options. When specified, the callback returning the first valid chain will be in use by the client.</p>
+
+</dd>
+<dt id="xchain_build"><b>-xchain_build</b></dt>
+<dd>
+
+<p>Specify whether the application should build the certificate chain to be provided to the server for the extra certificates via the <b>-xkey</b>, <b>-xcert</b>, and <b>-xchain</b> options.</p>
+
+</dd>
+<dt id="xcertform-DER-PEM-P12"><b>-xcertform</b> <b>DER</b>|<b>PEM</b>|<b>P12</b></dt>
+<dd>
+
+<p>The input format for the extra certificate. This option has no effect and is retained for backward compatibility only.</p>
+
+</dd>
+<dt id="xkeyform-DER-PEM-P12"><b>-xkeyform</b> <b>DER</b>|<b>PEM</b>|<b>P12</b></dt>
+<dd>
+
+<p>The input format for the extra key. This option has no effect and is retained for backward compatibility only.</p>
+
+</dd>
+</dl>
+
+<h2 id="Certificate-Extensions">Certificate Extensions</h2>
+
+<p>Options like <b>-purpose</b> and <b>-verify_name</b> trigger the processing of specific certificate extensions, which determine what certificates can be used for.</p>
+
+<h3 id="Basic-Constraints">Basic Constraints</h3>
+
+<p>The basicConstraints extension CA flag is used to determine whether the certificate can be used as a CA. If the CA flag is true then it is a CA, if the CA flag is false then it is not a CA. <b>All</b> CAs should have the CA flag set to true.</p>
+
+<p>If the basicConstraints extension is absent, which includes the case that it is an X.509v1 certificate, then the certificate is considered to be a &quot;possible CA&quot; and other extensions are checked according to the intended use of the certificate. The treatment of certificates without basicConstraints as a CA is presently supported, but this could change in the future.</p>
+
+<h3 id="Key-Usage">Key Usage</h3>
+
+<p>If the keyUsage extension is present then additional restraints are made on the uses of the certificate. A CA certificate <b>must</b> have the keyCertSign bit set if the keyUsage extension is present.</p>
+
+<h3 id="Extended-Key-Usage">Extended Key Usage</h3>
+
+<p>The extKeyUsage (EKU) extension places additional restrictions on certificate use. If this extension is present (whether critical or not) in an end-entity certificate, the key is allowed only for the uses specified, while the special EKU <b>anyExtendedKeyUsage</b> allows for all uses.</p>
+
+<p>Note that according to RFC 5280 section 4.2.1.12, the Extended Key Usage extension will appear only in end-entity certificates, and consequently the standard certification path validation described in its section 6 does not include EKU checks for CA certificates. The CA/Browser Forum requires for TLS server, S/MIME, and code signing use the presence of respective EKUs in subordinate CA certificates (while excluding them for root CA certificates), while taking over from RFC 5280 the certificate validity concept and certificate path validation.</p>
+
+<p>For historic reasons, OpenSSL has its own way of interpreting and checking EKU extensions on CA certificates, which may change in the future. It does not require the presence of EKU extensions in CA certificates, but in case the verification purpose is <code>sslclient</code>, <code>nssslserver</code>, <code>sslserver</code>, <code>smimesign</code>, or <code>smimeencrypt</code>, it checks that any present EKU extension (that does not contain <b>anyExtendedKeyUsage</b>) contains the respective EKU as detailed below. Moreover, it does these checks even for trust anchor certificates.</p>
+
+<h3 id="Checks-Implied-by-Specific-Predefined-Policies">Checks Implied by Specific Predefined Policies</h3>
+
+<p>A specific description of each check is given below. The comments about basicConstraints and keyUsage and X.509v1 certificates above apply to <b>all</b> CA certificates.</p>
+
+<dl>
+
+<dt id="D-TLS-Client-sslclient"><b>(D)TLS Client</b> (<code>sslclient</code>)</dt>
+<dd>
+
+<p>Any given extended key usage extension must allow for <code>clientAuth</code> (&quot;TLS WWW client authentication&quot;).</p>
+
+<p>For target certificates, the key usage must allow for <code>digitalSignature</code> and/or <code>keyAgreement</code>. The Netscape certificate type must be absent or have the SSL client bit set.</p>
+
+<p>For all other certificates the normal CA checks apply. In addition, the Netscape certificate type must be absent or have the SSL CA bit set. This is used as a workaround if the basicConstraints extension is absent.</p>
+
+</dd>
+<dt id="D-TLS-Server-sslserver"><b>(D)TLS Server</b> (<code>sslserver</code>)</dt>
+<dd>
+
+<p>Any given extended key usage extension must allow for <code>serverAuth</code> (&quot;TLS WWW server authentication&quot;) and/or include one of the SGC OIDs.</p>
+
+<p>For target certificates, the key usage must allow for <code>digitalSignature</code>, <code>keyEncipherment</code>, and/or <code>keyAgreement</code>. The Netscape certificate type must be absent or have the SSL server bit set.</p>
+
+<p>For all other certificates the normal CA checks apply. In addition, the Netscape certificate type must be absent or have the SSL CA bit set. This is used as a workaround if the basicConstraints extension is absent.</p>
+
+</dd>
+<dt id="Netscape-SSL-Server-nssslserver"><b>Netscape SSL Server</b> (<code>nssslserver</code>)</dt>
+<dd>
+
+<p>In addition to what has been described for <b>sslserver</b>, for a Netscape SSL client to connect to an SSL server, its EE certificate must have the <b>keyEncipherment</b> bit set if the keyUsage extension is present. This isn&#39;t always valid because some cipher suites use the key for digital signing. Otherwise it is the same as a normal SSL server.</p>
+
+</dd>
+<dt id="Common-S-MIME-Checks"><b>Common S/MIME Checks</b></dt>
+<dd>
+
+<p>Any given extended key usage extension must allow for <code>emailProtection</code>.</p>
+
+<p>For target certificates, the Netscape certificate type must be absent or should have the S/MIME bit set. If the S/MIME bit is not set in the Netscape certificate type then the SSL client bit is tolerated as an alternative but a warning is shown. This is because some Verisign certificates don&#39;t set the S/MIME bit.</p>
+
+<p>For all other certificates the normal CA checks apply. In addition, the Netscape certificate type must be absent or have the S/MIME CA bit set. This is used as a workaround if the basicConstraints extension is absent.</p>
+
+</dd>
+<dt id="S-MIME-Signing-smimesign"><b>S/MIME Signing</b> (<code>smimesign</code>)</dt>
+<dd>
+
+<p>In addition to the common S/MIME checks, for target certificates the key usage must allow for <code>digitalSignature</code> and/or <b>nonRepudiation</b> (or its alias name <b>contentCommitment</b>).</p>
+
+</dd>
+<dt id="S-MIME-Encryption-smimeencrypt"><b>S/MIME Encryption</b> (<code>smimeencrypt</code>)</dt>
+<dd>
+
+<p>In addition to the common S/MIME checks, for target certificates the key usage must allow for <code>keyEncipherment</code>.</p>
+
+</dd>
+<dt id="CRL-Signing-crlsign"><b>CRL Signing</b> (<code>crlsign</code>)</dt>
+<dd>
+
+<p>For target certificates, the key usage must allow for <code>cRLSign</code>.</p>
+
+<p>For all other certificates the normal CA checks apply. Except in this case the basicConstraints extension must be present.</p>
+
+</dd>
+<dt id="OCSP-Helper-ocsphelper"><b>OCSP Helper</b> (<code>ocsphelper</code>)</dt>
+<dd>
+
+<p>For target certificates, no checks are performed at this stage, but special checks apply; see <a href="../man3/OCSP_basic_verify.html">OCSP_basic_verify(3)</a>.</p>
+
+<p>For all other certificates the normal CA checks apply.</p>
+
+</dd>
+<dt id="Timestamp-Signing-timestampsign"><b>Timestamp Signing</b> (<code>timestampsign</code>)</dt>
+<dd>
+
+<p>For target certificates, if the key usage extension is present, it must include <code>digitalSignature</code> and/or <code>nonRepudiation</code> (or its alias name <code>contentCommitment</code>) and must not include other bits. The EKU extension must be present and contain <code>timeStamping</code> only. Moreover, it must be marked as critical.</p>
+
+<p>For all other certificates the normal CA checks apply.</p>
+
+</dd>
+<dt id="Code-Signing-codesign"><b>Code Signing</b> (<code>codesign</code>)</dt>
+<dd>
+
+<p>For target certificates, the key usage extension must be present and marked critical and include &lt;digitalSignature&gt;, but must not include <code>keyCertSign</code> nor <code>cRLSign</code>. The EKU extension must be present and contain <code>codeSign</code>, but must not include <code>anyExtendedKeyUsage</code> nor <code>serverAuth</code>.</p>
+
+<p>For all other certificates the normal CA checks apply.</p>
+
+</dd>
+</dl>
+
+<h1 id="BUGS">BUGS</h1>
+
+<p>The issuer checks still suffer from limitations in the underlying X509_LOOKUP API. One consequence of this is that trusted certificates with matching subject name must appear in a file (as specified by the <b>-CAfile</b> option), a directory (as specified by <b>-CApath</b>), or a store (as specified by <b>-CAstore</b>). If there are multiple such matches, possibly in multiple locations, only the first one (in the mentioned order of locations) is recognised.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/X509_verify_cert.html">X509_verify_cert(3)</a>, <a href="../man3/OCSP_basic_verify.html">OCSP_basic_verify(3)</a>, <a href="../man1/openssl-verify.html">openssl-verify(1)</a>, <a href="../man1/openssl-ocsp.html">openssl-ocsp(1)</a>, <a href="../man1/openssl-ts.html">openssl-ts(1)</a>, <a href="../man1/openssl-s_client.html">openssl-s_client(1)</a>, <a href="../man1/openssl-s_server.html">openssl-s_server(1)</a>, <a href="../man1/openssl-smime.html">openssl-smime(1)</a>, <a href="../man1/openssl-cmp.html">openssl-cmp(1)</a>, <a href="../man1/openssl-cms.html">openssl-cms(1)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The checks enabled by <b>-x509_strict</b> have been extended in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

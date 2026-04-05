@@ -1,0 +1,117 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_PKEY_encrypt</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_PKEY_encrypt_init_ex, EVP_PKEY_encrypt_init, EVP_PKEY_encrypt - encrypt using a public key algorithm</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+
+int EVP_PKEY_encrypt_init(EVP_PKEY_CTX *ctx);
+int EVP_PKEY_encrypt_init_ex(EVP_PKEY_CTX *ctx, const OSSL_PARAM params[]);
+int EVP_PKEY_encrypt(EVP_PKEY_CTX *ctx,
+                     unsigned char *out, size_t *outlen,
+                     const unsigned char *in, size_t inlen);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The EVP_PKEY_encrypt_init() function initializes a public key algorithm context using key <b>pkey</b> for an encryption operation.</p>
+
+<p>The EVP_PKEY_encrypt_init_ex() function initializes a public key algorithm context using key <b>pkey</b> for an encryption operation and sets the algorithm specific <b>params</b>.</p>
+
+<p>The EVP_PKEY_encrypt() function performs a public key encryption operation using <b>ctx</b>. The data to be encrypted is specified using the <b>in</b> and <b>inlen</b> parameters. If <b>out</b> is <b>NULL</b> then the maximum size of the output buffer is written to the <b>outlen</b> parameter. If <b>out</b> is not <b>NULL</b> then before the call the <b>outlen</b> parameter should contain the length of the <b>out</b> buffer, if the call is successful the encrypted data is written to <b>out</b> and the amount of data written to <b>outlen</b>.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>After the call to EVP_PKEY_encrypt_init() algorithm specific control operations can be performed to set any appropriate parameters for the operation. These operations can be included in the EVP_PKEY_encrypt_init_ex() call.</p>
+
+<p>The function EVP_PKEY_encrypt() can be called more than once on the same context if several operations are performed using the same parameters.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>EVP_PKEY_encrypt_init(), EVP_PKEY_encrypt_init_ex() and EVP_PKEY_encrypt() return 1 for success and 0 or a negative value for failure. In particular a return value of -2 indicates the operation is not supported by the public key algorithm.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>Encrypt data using OAEP (for RSA keys). See also <a href="../man3/PEM_read_PUBKEY.html">PEM_read_PUBKEY(3)</a> or <a href="../man3/d2i_X509.html">d2i_X509(3)</a> for means to load a public key. You may also simply set &#39;eng = NULL;&#39; to start with the default OpenSSL RSA implementation:</p>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+#include &lt;openssl/rsa.h&gt;
+#include &lt;openssl/engine.h&gt;
+
+EVP_PKEY_CTX *ctx;
+ENGINE *eng;
+unsigned char *out, *in;
+size_t outlen, inlen;
+EVP_PKEY *key;
+
+/*
+ * NB: assumes eng, key, in, inlen are already set up,
+ * and that key is an RSA public key
+ */
+ctx = EVP_PKEY_CTX_new(key, eng);
+if (!ctx)
+    /* Error occurred */
+if (EVP_PKEY_encrypt_init(ctx) &lt;= 0)
+    /* Error */
+if (EVP_PKEY_CTX_set_rsa_padding(ctx, RSA_PKCS1_OAEP_PADDING) &lt;= 0)
+    /* Error */
+
+/* Determine buffer length */
+if (EVP_PKEY_encrypt(ctx, NULL, &amp;outlen, in, inlen) &lt;= 0)
+    /* Error */
+
+out = OPENSSL_malloc(outlen);
+
+if (!out)
+    /* malloc failure */
+
+if (EVP_PKEY_encrypt(ctx, out, &amp;outlen, in, inlen) &lt;= 0)
+    /* Error */
+
+/* Encrypted data is outlen bytes written to buffer out */</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/d2i_X509.html">d2i_X509(3)</a>, <a href="../man3/ENGINE_by_id.html">ENGINE_by_id(3)</a>, <a href="../man3/EVP_PKEY_CTX_new.html">EVP_PKEY_CTX_new(3)</a>, <a href="../man3/EVP_PKEY_decrypt.html">EVP_PKEY_decrypt(3)</a>, <a href="../man3/EVP_PKEY_sign.html">EVP_PKEY_sign(3)</a>, <a href="../man3/EVP_PKEY_verify.html">EVP_PKEY_verify(3)</a>, <a href="../man3/EVP_PKEY_verify_recover.html">EVP_PKEY_verify_recover(3)</a>, <a href="../man3/EVP_PKEY_derive.html">EVP_PKEY_derive(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>These functions were added in OpenSSL 1.0.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2006-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

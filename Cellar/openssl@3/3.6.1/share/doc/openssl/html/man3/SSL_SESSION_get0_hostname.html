@@ -1,0 +1,80 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_SESSION_get0_hostname</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_SESSION_get0_hostname, SSL_SESSION_set1_hostname, SSL_SESSION_get0_alpn_selected, SSL_SESSION_set1_alpn_selected - get and set SNI and ALPN data associated with a session</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+const char *SSL_SESSION_get0_hostname(const SSL_SESSION *s);
+int SSL_SESSION_set1_hostname(SSL_SESSION *s, const char *hostname);
+
+void SSL_SESSION_get0_alpn_selected(const SSL_SESSION *s,
+                                    const unsigned char **alpn,
+                                    size_t *len);
+int SSL_SESSION_set1_alpn_selected(SSL_SESSION *s, const unsigned char *alpn,
+                                   size_t len);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_SESSION_get0_hostname() retrieves the Server Name Indication (SNI) value that was sent by the client when the session was created if the server acknowledged the client&#39;s SNI extension by including an empty SNI extension in response. Otherwise NULL is returned.</p>
+
+<p>The value returned is a pointer to memory maintained within <b>s</b> and should not be free&#39;d.</p>
+
+<p>SSL_SESSION_set1_hostname() sets the SNI value for the hostname to a copy of the string provided in hostname.</p>
+
+<p>SSL_SESSION_get0_alpn_selected() retrieves the selected ALPN protocol for this session and its associated length in bytes. The returned value of <b>*alpn</b> is a pointer to memory maintained within <b>s</b> and should not be free&#39;d.</p>
+
+<p>SSL_SESSION_set1_alpn_selected() sets the ALPN protocol for this session to the value in <b>alpn</b> which should be of length <b>len</b> bytes. A copy of the input value is made, and the caller retains ownership of the memory pointed to by <b>alpn</b>.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_SESSION_get0_hostname() returns the SNI string if available, or NULL if not.</p>
+
+<p>SSL_SESSION_set1_hostname() returns 1 on success or 0 on error.</p>
+
+<p>SSL_SESSION_set1_alpn_selected() returns 1 on success or 0 on error.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a>, <a href="../man3/d2i_SSL_SESSION.html">d2i_SSL_SESSION(3)</a>, <a href="../man3/SSL_SESSION_get_time.html">SSL_SESSION_get_time(3)</a>, <a href="../man3/SSL_SESSION_free.html">SSL_SESSION_free(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The SSL_SESSION_set1_hostname(), SSL_SESSION_get0_alpn_selected() and SSL_SESSION_set1_alpn_selected() functions were added in OpenSSL 1.1.1.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2016-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

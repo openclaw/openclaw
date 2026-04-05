@@ -1,0 +1,78 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>X509_ACERT_add_attr_nconf</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>X509_ACERT_add_attr_nconf - Add attributes to X509_ACERT from configuration section</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/x509_acert.h&gt;
+
+int X509_ACERT_add_attr_nconf(CONF *conf, const char *section,
+                              X509_ACERT *acert);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>X509_ACERT_add_attr_nconf() adds one or more <b>X509_ATTRIBUTE</b>s to the existing <b>X509_ACERT</b> structure <i>acert</i>. The attributes are read from a <i>section</i> of the <i>conf</i> object.</p>
+
+<p>The give <i>section</i> of the configuration should contain attribute descriptions of the form:</p>
+
+<pre><code>attribute_name = value</code></pre>
+
+<p>The format of <b>value</b> will vary depending on the <b>attribute_name</b>. <b>value</b> can either be a string value or an <b>ASN1_TYPE</b> object.</p>
+
+<p>To encode an <b>ASN1_TYPE</b> object, use the prefix &quot;ASN1:&quot; followed by the object description that uses the same syntax as <a href="../man3/ASN1_generate_nconf.html">ASN1_generate_nconf(3)</a>. For example:</p>
+
+<pre><code>id-aca-group = ASN1:SEQUENCE:ietfattr
+
+[ietfattr]
+values = SEQUENCE:groups
+
+[groups]
+1.string = UTF8:mygroup1</code></pre>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>X509_ACERT_add_attr_nconf() returns 1 for success and 0 for failure.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ASN1_generate_nconf.html">ASN1_generate_nconf(3)</a>.</p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The function X509_ACERT_add_attr_nconf() was added in OpenSSL 3.4.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2023-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

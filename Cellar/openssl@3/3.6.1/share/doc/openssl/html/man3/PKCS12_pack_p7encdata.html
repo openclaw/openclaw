@@ -1,0 +1,74 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>PKCS12_pack_p7encdata</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#CONFORMING-TO">CONFORMING TO</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>PKCS12_pack_p7encdata, PKCS12_pack_p7encdata_ex - Pack a set of PKCS#12 safeBags into a PKCS#7 encrypted data object</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/pkcs12.h&gt;
+
+PKCS7 *PKCS12_pack_p7encdata(int pbe_nid, const char *pass, int passlen,
+                             unsigned char *salt, int saltlen, int iter,
+                             STACK_OF(PKCS12_SAFEBAG) *bags);
+PKCS7 *PKCS12_pack_p7encdata_ex(int pbe_nid, const char *pass, int passlen,
+                                unsigned char *salt, int saltlen, int iter,
+                                STACK_OF(PKCS12_SAFEBAG) *bags,
+                                OSSL_LIB_CTX *ctx, const char *propq);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>PKCS12_pack_p7encdata() generates a PKCS#7 ContentInfo object of encrypted-data type from the set of safeBags <i>bags</i>. The algorithm ID in <i>pbe_nid</i> can be a PKCS#12 or PKCS#5 password based encryption algorithm, or a cipher algorithm. If a cipher algorithm is passed, the PKCS#5 PBES2 algorithm will be used with this cipher as a parameter. The password <i>pass</i> of length <i>passlen</i>, salt <i>salt</i> of length <i>saltlen</i> and iteration count <i>iter</i> are inputs into the encryption operation.</p>
+
+<p>PKCS12_pack_p7encdata_ex() operates similar to the above but allows for a library context <i>ctx</i> and property query <i>propq</i> to be used to select the algorithm implementation.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>A <b>PKCS7</b> object if successful, or NULL if an error occurred.</p>
+
+<h1 id="CONFORMING-TO">CONFORMING TO</h1>
+
+<p>IETF RFC 2315 (<a href="https://tools.ietf.org/html/rfc2315">https://tools.ietf.org/html/rfc2315</a>)</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/PKCS12_pbe_crypt_ex.html">PKCS12_pbe_crypt_ex(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>PKCS12_pack_p7encdata_ex() was added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

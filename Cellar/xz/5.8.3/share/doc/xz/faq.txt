@@ -1,0 +1,244 @@
+
+XZ Utils FAQ
+============
+
+Q:  What do the letters XZ mean?
+
+A:  Nothing. They are just two letters, which come from the file format
+    suffix .xz. The .xz suffix was selected, because it seemed to be
+    pretty much unused. It has no deeper meaning.
+
+
+Q:  What are LZMA and LZMA2?
+
+A:  LZMA stands for Lempel-Ziv-Markov chain-Algorithm. It is the name
+    of the compression algorithm designed by Igor Pavlov for 7-Zip.
+    LZMA is based on LZ77 and range encoding.
+
+    LZMA2 is an updated version of the original LZMA to fix a couple of
+    practical issues. In context of XZ Utils, LZMA is called LZMA1 to
+    emphasize that LZMA is not the same thing as LZMA2. LZMA2 is the
+    primary compression algorithm in the .xz file format.
+
+
+Q:  There are many LZMA related projects. How does XZ Utils relate to them?
+
+A:  7-Zip and LZMA SDK are the original projects. LZMA SDK is roughly
+    a subset of the 7-Zip source tree.
+
+    p7zip is 7-Zip's command-line tools ported to POSIX-like systems.
+
+    LZMA Utils provide a gzip-like lzma tool for POSIX-like systems.
+    LZMA Utils are based on LZMA SDK. XZ Utils are the successor to
+    LZMA Utils.
+
+    There are several other projects using LZMA. Most are more or less
+    based on LZMA SDK. See <https://7-zip.org/links.html>.
+
+
+Q:  Why is liblzma named liblzma if its primary file format is .xz?
+    Shouldn't it be e.g. libxz?
+
+A:  When the designing of the .xz format began, the idea was to replace
+    the .lzma format and use the same .lzma suffix. It would have been
+    quite OK to reuse the suffix when there were very few .lzma files
+    around. However, the old .lzma format became popular before the
+    new format was finished. The new format was renamed to .xz but the
+    name of liblzma wasn't changed.
+
+
+Q:  Do XZ Utils support the .7z format?
+
+A:  No. Use 7-Zip (Windows) or p7zip (POSIX-like systems) to handle .7z
+    files.
+
+
+Q:  I have many .tar.7z files. Can I convert them to .tar.xz without
+    spending hours recompressing the data?
+
+A:  In the "extra" directory, there is a script named 7z2lzma.bash which
+    is able to convert some .7z files to the .lzma format (not .xz). It
+    needs the 7za (or 7z) command from p7zip. The script may silently
+    produce corrupt output if certain assumptions are not met, so
+    decompress the resulting .lzma file and compare it against the
+    original before deleting the original file!
+
+
+Q:  I have many .lzma files. Can I quickly convert them to the .xz format?
+
+A:  For now, no. Since XZ Utils supports the .lzma format, it's usually
+    not too bad to keep the old files in the old format. If you want to
+    do the conversion anyway, you need to decompress the .lzma files and
+    then recompress to the .xz format.
+
+    Technically, there is a way to make the conversion relatively fast
+    (roughly twice the time that normal decompression takes). Writing
+    such a tool would take quite a bit of time though, and would probably
+    be useful to only a few people. If you really want such a conversion
+    tool, contact Lasse Collin and offer some money.
+
+
+Q:  I have installed xz, but my tar doesn't recognize .tar.xz files.
+    How can I extract .tar.xz files?
+
+A:  xz -dc foo.tar.xz | tar xf -
+
+
+Q:  Can I recover parts of a broken .xz file (e.g. a corrupted CD-R)?
+
+A:  It may be possible if the file consists of multiple blocks, which
+    typically is not the case if the file was created in single-threaded
+    mode. There is no recovery program yet.
+
+
+Q:  Is (some part of) XZ Utils patented?
+
+A:  Lasse Collin is not aware of any patents that could affect XZ Utils.
+    However, due to the nature of software patents, it's not possible to
+    guarantee that XZ Utils isn't affected by any third party patent(s).
+
+
+Q:  Where can I find documentation about the file format and algorithms?
+
+A:  The .xz format is documented in xz-file-format.txt. It is a container
+    format only, and doesn't include descriptions of any non-trivial
+    filters.
+
+    Documenting LZMA and LZMA2 is planned, but for now, there is no other
+    documentation than the source code. Before you begin, you should know
+    the basics of LZ77 and range-coding algorithms. LZMA is based on LZ77,
+    but LZMA is a lot more complex. Range coding is used to compress
+    the final bitstream like Huffman coding is used in Deflate.
+
+
+Q:  I cannot find BCJ and BCJ2 filters. Don't they exist in liblzma?
+
+A:  BCJ filter is called "x86" in liblzma. BCJ2 is not included,
+    because it requires using more than one encoded output stream.
+
+
+Q:  I need to use a script that runs "xz -9". On a system with 256 MiB
+    of RAM, xz says that it cannot allocate memory. Can I make the
+    script work without modifying it?
+
+A:  Set a default memory usage limit for compression. You can do it e.g.
+    in a shell initialization script such as ~/.bashrc or /etc/profile:
+
+        XZ_DEFAULTS=--memlimit-compress=150MiB
+        export XZ_DEFAULTS
+
+    xz will then scale the compression settings down so that the given
+    memory usage limit is not reached. This way xz shouldn't run out
+    of memory.
+
+    Check also that memory-related resource limits are high enough.
+    On most systems, "ulimit -a" will show the current resource limits.
+
+
+Q:  How do I create files that can be decompressed with XZ Embedded?
+
+A:  See the documentation in XZ Embedded. In short, something like
+    this is a good start:
+
+        xz --check=crc32 --lzma2=preset=6e,dict=64KiB
+
+    Or if a BCJ filter is needed too, e.g. if compressing
+    a kernel image for PowerPC:
+
+        xz --check=crc32 --powerpc --lzma2=preset=6e,dict=64KiB
+
+    Adjust the dictionary size to get a good compromise between
+    compression ratio and decompressor memory usage. Note that
+    in single-call decompression mode of XZ Embedded, a big
+    dictionary doesn't increase memory usage.
+
+
+Q:  How is multi-threaded compression implemented in XZ Utils?
+
+A:  The simplest method is splitting the uncompressed data into blocks
+    and compressing them in parallel independent from each other.
+    This is currently the only threading method supported in XZ Utils.
+    Since the blocks are compressed independently, they can also be
+    decompressed independently. Together with the index feature in .xz,
+    this allows using threads to create .xz files for random-access
+    reading. This also makes threaded decompression possible.
+
+    The independent blocks method has a couple of disadvantages too. It
+    will compress worse than a single-block method. Often the difference
+    is not too big (maybe 1-2 %) but sometimes it can be too big. Also,
+    the memory usage of the compressor increases linearly when adding
+    threads.
+
+    At least two other threading methods are possible but these haven't
+    been implemented in XZ Utils:
+
+    Match finder parallelization has been in 7-Zip for ages. It doesn't
+    affect compression ratio or memory usage significantly. Among the
+    three threading methods, only this is useful when compressing small
+    files (files that are not significantly bigger than the dictionary).
+    Unfortunately this method scales only to about two CPU cores.
+
+    The third method is pigz-style threading (I use that name, because
+    pigz <https://www.zlib.net/pigz/> uses that method). It doesn't
+    affect compression ratio significantly and scales to many cores.
+    The memory usage scales linearly when threads are added. This isn't
+    significant with pigz, because Deflate uses only a 32 KiB dictionary,
+    but with LZMA2 the memory usage will increase dramatically just like
+    with the independent-blocks method. There is also a constant
+    computational overhead, which may make pigz-method a bit dull on
+    dual-core compared to the parallel match finder method, but with more
+    cores the overhead is not a big deal anymore.
+
+    Combining the threading methods will be possible and also useful.
+    For example, combining match finder parallelization with pigz-style
+    threading or independent-blocks-threading can cut the memory usage
+    by 50 %.
+
+
+Q:  I told xz to use many threads but it is using only one or two
+    processor cores. What is wrong?
+
+A:  Since multi-threaded compression is done by splitting the data into
+    blocks that are compressed individually, if the input file is too
+    small for the block size, then many threads cannot be used. The
+    default block size increases when the compression level is
+    increased. For example, xz -6 uses 8 MiB LZMA2 dictionary and
+    24 MiB blocks, and xz -9 uses 64 MiB LZMA dictionary and 192 MiB
+    blocks. If the input file is 100 MiB, xz -6 can use five threads
+    of which one will finish quickly as it has only 4 MiB to compress.
+    However, for the same file, xz -9 can only use one thread.
+
+    One can adjust block size with --block-size=SIZE but making the
+    block size smaller than LZMA2 dictionary is waste of RAM: using
+    xz -9 with 6 MiB blocks isn't any better than using xz -6 with
+    6 MiB blocks. The default settings use a block size bigger than
+    the LZMA2 dictionary size because this was seen as a reasonable
+    compromise between RAM usage and compression ratio.
+
+    When decompressing, the ability to use threads depends on how the
+    file was created. If it was created in multi-threaded mode then
+    it can be decompressed in multi-threaded mode too if there are
+    multiple blocks in the file.
+
+
+Q:  How do I build a program that needs liblzmadec (lzmadec.h)?
+
+A:  liblzmadec is part of LZMA Utils. XZ Utils has liblzma, but no
+    liblzmadec. The code using liblzmadec should be ported to use
+    liblzma instead. If you cannot or don't want to do that, download
+    LZMA Utils from <https://tukaani.org/lzma/>.
+
+
+Q:  The default build of liblzma is too big. How can I make it smaller?
+
+A:  Give --enable-small to the configure script. Use also appropriate
+    --enable or --disable options to include only those filter encoders
+    and decoders and integrity checks that you actually need. Use
+    CFLAGS=-Os (with GCC) or equivalent to tell your compiler to optimize
+    for size. See INSTALL for information about configure options.
+
+    If the result is still too big, take a look at XZ Embedded. It is
+    a separate project, which provides a limited but significantly
+    smaller XZ decoder implementation than XZ Utils. You can find it
+    at <https://tukaani.org/xz/embedded.html>.
+

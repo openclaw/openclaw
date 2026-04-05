@@ -1,0 +1,70 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_PKEY_get_default_digest_nid</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_PKEY_get_default_digest_nid, EVP_PKEY_get_default_digest_name - get default signature digest</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+
+int EVP_PKEY_get_default_digest_name(EVP_PKEY *pkey,
+                                     char *mdname, size_t mdname_sz);
+int EVP_PKEY_get_default_digest_nid(EVP_PKEY *pkey, int *pnid);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>EVP_PKEY_get_default_digest_name() fills in the default message digest name for the public key signature operations associated with key <i>pkey</i> into <i>mdname</i>, up to at most <i>mdname_sz</i> bytes including the ending NUL byte. The name could be <code>&quot;UNDEF&quot;</code>, signifying that a digest must (for return value 2) or may (for return value 1) be left unspecified.</p>
+
+<p>EVP_PKEY_get_default_digest_nid() sets <i>pnid</i> to the default message digest NID for the public key signature operations associated with key <i>pkey</i>. Note that some signature algorithms (i.e. Ed25519 and Ed448) do not use a digest during signing. In this case <i>pnid</i> will be set to NID_undef. This function is only reliable for legacy keys, which are keys with a <b>EVP_PKEY_ASN1_METHOD</b>; these keys have typically been loaded from engines, or created with <a href="../man3/EVP_PKEY_assign_RSA.html">EVP_PKEY_assign_RSA(3)</a> or similar.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>For all current standard OpenSSL public key algorithms SHA256 is returned.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>EVP_PKEY_get_default_digest_name() and EVP_PKEY_get_default_digest_nid() both return 1 if the message digest is advisory (that is other digests can be used) and 2 if it is mandatory (other digests can not be used). They return 0 or a negative value for failure. In particular a return value of -2 indicates the operation is not supported by the public key algorithm.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_PKEY_CTX_new.html">EVP_PKEY_CTX_new(3)</a>, <a href="../man3/EVP_PKEY_sign.html">EVP_PKEY_sign(3)</a>, <a href="../man3/EVP_PKEY_digestsign_supports_digest.html">EVP_PKEY_digestsign_supports_digest(3)</a>, <a href="../man3/EVP_PKEY_verify.html">EVP_PKEY_verify(3)</a>, <a href="../man3/EVP_PKEY_verify_recover.html">EVP_PKEY_verify_recover(3)</a>,</p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>This function was added in OpenSSL 1.0.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2006-2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

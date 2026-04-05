@@ -1,0 +1,89 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_CTX_set_stateless_cookie_generate_cb</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_CTX_set_stateless_cookie_generate_cb, SSL_CTX_set_stateless_cookie_verify_cb, SSL_CTX_set_cookie_generate_cb, SSL_CTX_set_cookie_verify_cb - Callback functions for stateless TLS1.3 cookies</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+void SSL_CTX_set_stateless_cookie_generate_cb(
+    SSL_CTX *ctx,
+    int (*gen_stateless_cookie_cb) (SSL *ssl,
+                                    unsigned char *cookie,
+                                    size_t *cookie_len));
+void SSL_CTX_set_stateless_cookie_verify_cb(
+    SSL_CTX *ctx,
+    int (*verify_stateless_cookie_cb) (SSL *ssl,
+                                       const unsigned char *cookie,
+                                       size_t cookie_len));
+
+void SSL_CTX_set_cookie_generate_cb(SSL_CTX *ctx,
+                                    int (*app_gen_cookie_cb) (SSL *ssl,
+                                                              unsigned char
+                                                              *cookie,
+                                                              unsigned int
+                                                              *cookie_len));
+void SSL_CTX_set_cookie_verify_cb(SSL_CTX *ctx,
+                                  int (*app_verify_cookie_cb) (SSL *ssl,
+                                                               const unsigned
+                                                               char *cookie,
+                                                               unsigned int
+                                                               cookie_len));</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_CTX_set_stateless_cookie_generate_cb() sets the callback used by <a href="../man3/SSL_stateless.html">SSL_stateless(3)</a> to generate the application-controlled portion of the cookie provided to clients in the HelloRetryRequest transmitted as a response to a ClientHello with a missing or invalid cookie. gen_stateless_cookie_cb() must write at most SSL_COOKIE_LENGTH bytes into <b>cookie</b>, and must write the number of bytes written to <b>cookie_len</b>. If a cookie cannot be generated, a zero return value can be used to abort the handshake.</p>
+
+<p>SSL_CTX_set_stateless_cookie_verify_cb() sets the callback used by <a href="../man3/SSL_stateless.html">SSL_stateless(3)</a> to determine whether the application-controlled portion of a ClientHello cookie is valid. The cookie data is pointed to by <b>cookie</b> and is of length <b>cookie_len</b>. A nonzero return value from verify_stateless_cookie_cb() communicates that the cookie is valid. The integrity of the entire cookie, including the application-controlled portion, is automatically verified by HMAC before verify_stateless_cookie_cb() is called.</p>
+
+<p>SSL_CTX_set_cookie_generate_cb() sets the callback used by <a href="../man3/DTLSv1_listen.html">DTLSv1_listen(3)</a> to generate the cookie provided to clients in the HelloVerifyRequest transmitted as a response to a ClientHello with a missing or invalid cookie. app_gen_cookie_cb() must write at most DTLS1_COOKIE_LENGTH bytes into <b>cookie</b>, and must write the number of bytes written to <b>cookie_len</b>. If a cookie cannot be generated, a zero return value can be used to abort the handshake.</p>
+
+<p>SSL_CTX_set_cookie_verify_cb() sets the callback used by <a href="../man3/DTLSv1_listen.html">DTLSv1_listen(3)</a> to determine whether the cookie in a ClientHello is valid. The cookie data is pointed to by <b>cookie</b> and is of length <b>cookie_len</b>. A nonzero return value from app_verify_cookie_cb() communicates that the cookie is valid. The integrity of the cookie is not verified by OpenSSL. This is an application responsibility.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>Neither function returns a value.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a>, <a href="../man3/SSL_stateless.html">SSL_stateless(3)</a>, <a href="../man3/DTLSv1_listen.html">DTLSv1_listen(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>SSL_CTX_set_stateless_cookie_generate_cb() and SSL_CTX_set_stateless_cookie_verify_cb() were added in OpenSSL 1.1.1.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2018 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

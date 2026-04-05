@@ -1,0 +1,139 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_SIGNATURE-ML-DSA</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#ML-DSA-Signature-Parameters">ML-DSA Signature Parameters</a></li>
+    </ul>
+  </li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_SIGNATURE-ML-DSA, EVP_SIGNATURE-ML-DSA-44, EVP_SIGNATURE-ML-DSA-65, EVP_SIGNATURE-ML-DSA-87, - EVP_SIGNATURE ML-DSA support</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The <b>ML-DSA-44</b>, <b>ML-DSA-65</b> and <b>ML-DSA-87</b> EVP_PKEY implementations support key generation, and one-shot sign and verify using the ML-DSA signature schemes described in <a href="https://csrc.nist.gov/pubs/fips/204/final">FIPS 204</a>.</p>
+
+<p>The different algorithms names correspond to the parameter sets defined in <a href="https://csrc.nist.gov/pubs/fips/204/final">FIPS 204</a> Section 4 Table 1. (The signatures range in size from ~2.5K to ~4.5K depending on the type chosen). There are 3 different security categories also depending on the type.</p>
+
+<p><a href="../man3/EVP_SIGNATURE_fetch.html">EVP_SIGNATURE_fetch(3)</a> can be used to explicitly fetch one of the 3 algorithms which can then be used with <a href="../man3/EVP_PKEY_sign_message_init.html">EVP_PKEY_sign_message_init(3)</a>, <a href="../man3/EVP_PKEY_sign.html">EVP_PKEY_sign(3)</a>, <a href="../man3/EVP_PKEY_verify_message_init.html">EVP_PKEY_verify_message_init(3)</a>, and <a href="../man3/EVP_PKEY_verify.html">EVP_PKEY_verify(3)</a> to perform one-shot message signing or signature verification.</p>
+
+<p>The normal signing process (called Pure ML-DSA Signature Generation) encodes the message internally as 0x00 || len(ctx) || ctx || message. where <b>ctx</b> is some optional value of size 0x00..0xFF. This process is defined in <a href="https://csrc.nist.gov/pubs/fips/204/final">FIPS 204</a> Algorithm 2 step 10 and Algorithm 3 step 5. OpenSSL also allows the message to not be encoded which is required for testing. OpenSSL does not support Pre Hash ML-DSA Signature Generation, but this may be done by the user by doing Pre hash encoding externally and then choosing the option to not encode the message.</p>
+
+<h2 id="ML-DSA-Signature-Parameters">ML-DSA Signature Parameters</h2>
+
+<p>The following parameter can be used for both signing and verification. it may be set by passing an OSSL_PARAM array to <a href="../man3/EVP_PKEY_sign_message_init.html">EVP_PKEY_sign_message_init(3)</a> or <a href="../man3/EVP_PKEY_verify_message_init.html">EVP_PKEY_verify_message_init(3)</a></p>
+
+<dl>
+
+<dt id="context-string-OSSL_SIGNATURE_PARAM_CONTEXT_STRING-octet-string">&quot;context-string&quot; (<b>OSSL_SIGNATURE_PARAM_CONTEXT_STRING</b>) &lt;octet string&gt;</dt>
+<dd>
+
+<p>A string of octets with length at most 255. By default it is the empty string.</p>
+
+</dd>
+</dl>
+
+<p>The following parameters can be used when signing: They can be set by passing an OSSL_PARAM array to <a href="../man3/EVP_PKEY_sign_init_ex2.html">EVP_PKEY_sign_init_ex2(3)</a>.</p>
+
+<dl>
+
+<dt id="message-encoding-OSSL_SIGNATURE_PARAM_MESSAGE_ENCODING-integer">&quot;message-encoding&quot; (<b>OSSL_SIGNATURE_PARAM_MESSAGE_ENCODING</b>) &lt;integer&gt;</dt>
+<dd>
+
+<p>The default value of 1 uses &#39;Pure ML-DSA Signature Generation&#39; as described above. Setting it to 0 does not encode the message, which is used for testing. The message encoding steps are defined in <a href="https://csrc.nist.gov/pubs/fips/204/final">FIPS 204</a> Algorithm 2 step 10 and Algorithm 3 step 5.</p>
+
+</dd>
+<dt id="test-entropy-OSSL_SIGNATURE_PARAM_TEST_ENTROPY-octet-string">&quot;test-entropy&quot; (<b>OSSL_SIGNATURE_PARAM_TEST_ENTROPY</b>) &lt;octet string&gt;</dt>
+<dd>
+
+<p>Used for testing to pass an optional deterministic per message random value. If set the size must be 32 bytes.</p>
+
+</dd>
+<dt id="deterministic-OSSL_SIGNATURE_PARAM_DETERMINISTIC-integer">&quot;deterministic&quot; (<b>OSSL_SIGNATURE_PARAM_DETERMINISTIC</b>) &lt;integer&gt;</dt>
+<dd>
+
+<p>The default value of 0 causes the per message randomness to be randomly generated using a DRBG. Setting this to 1 causes the per message randomness to be set to 32 bytes of zeros. This value is ignored if &quot;test-entropy&quot; is set.</p>
+
+</dd>
+<dt id="mu-OSSL_SIGNATURE_PARAM_MU-integer">&quot;mu&quot; (<b>OSSL_SIGNATURE_PARAM_MU</b>) &lt;integer&gt;</dt>
+<dd>
+
+<p>The default value of 0 causes sign and verify operations to process a raw message. Setting this to 1 causes those operations to assume the input is the <code>mu</code> value from <a href="https://csrc.nist.gov/pubs/fips/204/final">FIPS 204</a> Algorithm 7 step 6 and Algorithm 8 step 7.</p>
+
+<p>Note that the message encoding steps from <a href="https://csrc.nist.gov/pubs/fips/204/final">FIPS 204</a> Algorithm 2 step 10 and Algorithm 3 step 5 are omitted when this setting is 1.</p>
+
+</dd>
+</dl>
+
+<p>See <a href="../man7/EVP_PKEY-ML-DSA.html">EVP_PKEY-ML-DSA(7)</a> for information related to <b>ML-DSA</b> keys.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>For backwards compatibility reasons EVP_DigestSignInit_ex(), EVP_DigestSign(), EVP_DigestVerifyInit_ex() and EVP_DigestVerify() may also be used, but the digest passed in <i>mdname</i> must be NULL.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>To sign a message using an ML-DSA EVP_PKEY structure:</p>
+
+<pre><code>void do_sign(EVP_PKEY *key, unsigned char *msg, size_t msg_len)
+{
+    size_t sig_len;
+    unsigned char *sig = NULL;
+    const OSSL_PARAM params[] = {
+        OSSL_PARAM_octet_string(&quot;context-string&quot;, (unsigned char *)&quot;A context string&quot;, 16),
+        OSSL_PARAM_END
+    };
+    EVP_PKEY_CTX *sctx = EVP_PKEY_CTX_new_from_pkey(NULL, pkey, NULL);
+    EVP_SIGNATURE *sig_alg = EVP_SIGNATURE_fetch(NULL, &quot;ML-DSA-65&quot;, NULL);
+
+    EVP_PKEY_sign_message_init(sctx, sig_alg, params);
+    /* Calculate the required size for the signature by passing a NULL buffer. */
+    EVP_PKEY_sign(sctx, NULL, &amp;sig_len, msg, msg_len);
+    sig = OPENSSL_zalloc(sig_len);
+    EVP_PKEY_sign(sctx, sig, &amp;sig_len, msg, msg_len);
+    ...
+    OPENSSL_free(sig);
+    EVP_SIGNATURE_free(sig_alg);
+    EVP_PKEY_CTX_free(sctx);
+}</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/EVP_PKEY-ML-DSA.html">EVP_PKEY-ML-DSA(7)</a> <a href="../man7/provider-signature.html">provider-signature(7)</a>, <a href="../man3/EVP_PKEY_sign.html">EVP_PKEY_sign(3)</a>, <a href="../man3/EVP_PKEY_verify.html">EVP_PKEY_verify(3)</a>, <a href="https://csrc.nist.gov/pubs/fips/204/final">FIPS 204</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>This functionality was added in OpenSSL 3.5.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,64 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>DH_new_by_nid</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>DH_new_by_nid, DH_get_nid - create or get DH named parameters</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/dh.h&gt;</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>DH *DH_new_by_nid(int nid);
+
+int DH_get_nid(const DH *dh);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>DH_new_by_nid() creates and returns a DH structure containing named parameters <b>nid</b>. Currently <b>nid</b> must be <b>NID_ffdhe2048</b>, <b>NID_ffdhe3072</b>, <b>NID_ffdhe4096</b>, <b>NID_ffdhe6144</b>, <b>NID_ffdhe8192</b>, <b>NID_modp_1536</b>, <b>NID_modp_2048</b>, <b>NID_modp_3072</b>, <b>NID_modp_4096</b>, <b>NID_modp_6144</b> or <b>NID_modp_8192</b>.</p>
+
+<p>DH_get_nid() determines if the parameters contained in <b>dh</b> match any named safe prime group. It returns the NID corresponding to the matching parameters or <b>NID_undef</b> if there is no match. This function is deprecated.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>DH_new_by_nid() returns a set of DH parameters or <b>NULL</b> if an error occurred.</p>
+
+<p>DH_get_nid() returns the NID of the matching set of parameters for p and g and optionally q, otherwise it returns <b>NID_undef</b> if there is no match.</p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>All of these functions were deprecated in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2017-2020 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

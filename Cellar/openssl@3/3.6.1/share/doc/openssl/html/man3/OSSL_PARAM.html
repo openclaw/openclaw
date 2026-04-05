@@ -1,0 +1,314 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OSSL_PARAM</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Functional-support">Functional support</a></li>
+      <li><a href="#OSSL_PARAM-fields">OSSL_PARAM fields</a></li>
+      <li><a href="#Supported-types">Supported types</a></li>
+    </ul>
+  </li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a>
+    <ul>
+      <li>
+        <ul>
+          <li><a href="#Example-1">Example 1</a></li>
+          <li><a href="#Example-2">Example 2</a></li>
+        </ul>
+      </li>
+    </ul>
+  </li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OSSL_PARAM - a structure to pass or request object parameters</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/core.h&gt;
+
+typedef struct ossl_param_st OSSL_PARAM;
+struct ossl_param_st {
+    const char *key;             /* the name of the parameter */
+    unsigned int data_type;      /* declare what kind of content is in data */
+    void *data;                  /* value being passed in or out */
+    size_t data_size;            /* data size */
+    size_t return_size;          /* returned size */
+};</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p><b>OSSL_PARAM</b> is a type that allows passing arbitrary data for some object between two parties that have no or very little shared knowledge about their respective internal structures for that object.</p>
+
+<p>A typical usage example could be an application that wants to set some parameters for an object, or wants to find out some parameters of an object.</p>
+
+<p>Arrays of this type can be used for the following purposes:</p>
+
+<ul>
+
+<li><p>Setting parameters for some object</p>
+
+<p>The caller sets up the <b>OSSL_PARAM</b> array and calls some function (the <i>setter</i>) that has intimate knowledge about the object that can take the data from the <b>OSSL_PARAM</b> array and assign them in a suitable form for the internal structure of the object.</p>
+
+</li>
+<li><p>Request parameters of some object</p>
+
+<p>The caller (the <i>requester</i>) sets up the <b>OSSL_PARAM</b> array and calls some function (the <i>responder</i>) that has intimate knowledge about the object, which can take the internal data of the object and copy (possibly convert) that to the memory prepared by the <i>requester</i> and pointed at with the <b>OSSL_PARAM</b> <i>data</i>.</p>
+
+</li>
+<li><p>Request parameter descriptors</p>
+
+<p>The caller gets an array of constant <b>OSSL_PARAM</b>, which describe available parameters and some of their properties; name, data type and expected data size. For a detailed description of each field for this use, see the field descriptions below.</p>
+
+<p>The caller may then use the information from this descriptor array to build up its own <b>OSSL_PARAM</b> array to pass down to a <i>setter</i> or <i>responder</i>.</p>
+
+</li>
+</ul>
+
+<p>Normally, the order of the an <b>OSSL_PARAM</b> array is not relevant. However, if the <i>responder</i> can handle multiple elements with the same key, those elements must be handled in the order they are in.</p>
+
+<p>An <b>OSSL_PARAM</b> array must have a terminating element, where <i>key</i> is NULL. The usual full terminating template is:</p>
+
+<pre><code>{ NULL, 0, NULL, 0, 0 }</code></pre>
+
+<p>This can also be specified using <a href="../man3/OSSL_PARAM_END.html">OSSL_PARAM_END(3)</a>.</p>
+
+<h2 id="Functional-support">Functional support</h2>
+
+<p>Libcrypto offers a limited set of helper functions to handle <b>OSSL_PARAM</b> items and arrays, please see <a href="../man3/OSSL_PARAM_get_int.html">OSSL_PARAM_get_int(3)</a>. Developers are free to extend or replace those as they see fit.</p>
+
+<h2 id="OSSL_PARAM-fields"><b>OSSL_PARAM</b> fields</h2>
+
+<dl>
+
+<dt id="key"><i>key</i></dt>
+<dd>
+
+<p>The identity of the parameter in the form of a string.</p>
+
+<p>In an <b>OSSL_PARAM</b> array, an item with this field set to NULL is considered a terminating item.</p>
+
+</dd>
+<dt id="data_type"><i>data_type</i></dt>
+<dd>
+
+<p>The <i>data_type</i> is a value that describes the type and organization of the data. See <a href="#Supported-types">&quot;Supported types&quot;</a> below for a description of the types.</p>
+
+</dd>
+<dt id="data"><i>data</i></dt>
+<dd>
+
+</dd>
+<dt id="data_size"><i>data_size</i></dt>
+<dd>
+
+<p><i>data</i> is a pointer to the memory where the parameter data is (when setting parameters) or shall (when requesting parameters) be stored, and <i>data_size</i> is its size in bytes. The organization of the data depends on the parameter type and flag.</p>
+
+<p>The <i>data_size</i> needs special attention with the parameter type <b>OSSL_PARAM_UTF8_STRING</b> in relation to C strings. When setting parameters, the size should be set to the length of the string, not counting the terminating NUL byte. When requesting parameters, the size should be set to the size of the buffer to be populated, which should accommodate enough space for a terminating NUL byte.</p>
+
+<p>When <i>requesting parameters</i>, it&#39;s acceptable for <i>data</i> to be NULL. This can be used by the <i>requester</i> to figure out dynamically exactly how much buffer space is needed to store the parameter data. In this case, <i>data_size</i> is ignored.</p>
+
+<p>When the <b>OSSL_PARAM</b> is used as a parameter descriptor, <i>data</i> should be ignored. If <i>data_size</i> is zero, it means that an arbitrary data size is accepted, otherwise it specifies the maximum size allowed.</p>
+
+</dd>
+<dt id="return_size"><i>return_size</i></dt>
+<dd>
+
+<p>When an array of <b>OSSL_PARAM</b> is used to request data, the <i>responder</i> must set this field to indicate size of the parameter data, including padding as the case may be. In case the <i>data_size</i> is an unsuitable size for the data, the <i>responder</i> must still set this field to indicate the minimum data size required. (further notes on this in <a href="#NOTES">&quot;NOTES&quot;</a> below).</p>
+
+<p>When the <b>OSSL_PARAM</b> is used as a parameter descriptor, <i>return_size</i> should be ignored.</p>
+
+</dd>
+</dl>
+
+<p><b>NOTE:</b></p>
+
+<p>The key names and associated types are defined by the entity that offers these parameters, i.e. names for parameters provided by the OpenSSL libraries are defined by the libraries, and names for parameters provided by providers are defined by those providers, except for the pointer form of strings (see data type descriptions below). Entities that want to set or request parameters need to know what those keys are and of what type, any functionality between those two entities should remain oblivious and just pass the <b>OSSL_PARAM</b> array along.</p>
+
+<h2 id="Supported-types">Supported types</h2>
+
+<p>The <i>data_type</i> field can be one of the following types:</p>
+
+<dl>
+
+<dt id="OSSL_PARAM_INTEGER"><b>OSSL_PARAM_INTEGER</b></dt>
+<dd>
+
+</dd>
+<dt id="OSSL_PARAM_UNSIGNED_INTEGER"><b>OSSL_PARAM_UNSIGNED_INTEGER</b></dt>
+<dd>
+
+<p>The parameter data is an integer (signed or unsigned) of arbitrary length, organized in native form, i.e. most significant byte first on Big-Endian systems, and least significant byte first on Little-Endian systems.</p>
+
+</dd>
+<dt id="OSSL_PARAM_REAL"><b>OSSL_PARAM_REAL</b></dt>
+<dd>
+
+<p>The parameter data is a floating point value in native form.</p>
+
+</dd>
+<dt id="OSSL_PARAM_UTF8_STRING"><b>OSSL_PARAM_UTF8_STRING</b></dt>
+<dd>
+
+<p>The parameter data is a printable string.</p>
+
+</dd>
+<dt id="OSSL_PARAM_OCTET_STRING"><b>OSSL_PARAM_OCTET_STRING</b></dt>
+<dd>
+
+<p>The parameter data is an arbitrary string of bytes.</p>
+
+</dd>
+<dt id="OSSL_PARAM_UTF8_PTR"><b>OSSL_PARAM_UTF8_PTR</b></dt>
+<dd>
+
+<p>The parameter data is a pointer to a printable string.</p>
+
+<p>The difference between this and <b>OSSL_PARAM_UTF8_STRING</b> is that <i>data</i> doesn&#39;t point directly at the data, but to a pointer that points to the data.</p>
+
+<p>If there is any uncertainty about which to use, <b>OSSL_PARAM_UTF8_STRING</b> is almost certainly the correct choice.</p>
+
+<p>This is used to indicate that constant data is or will be passed, and there is therefore no need to copy the data that is passed, just the pointer to it.</p>
+
+<p><i>data_size</i> must be set to the size of the data, not the size of the pointer to the data. If this is used in a parameter request, <i>data_size</i> is not relevant. However, the <i>responder</i> will set <i>return_size</i> to the size of the data.</p>
+
+<p>Note that the use of this type is <b>fragile</b> and can only be safely used for data that remains constant and in a constant location for a long enough duration (such as the life-time of the entity that offers these parameters).</p>
+
+</dd>
+<dt id="OSSL_PARAM_OCTET_PTR"><b>OSSL_PARAM_OCTET_PTR</b></dt>
+<dd>
+
+<p>The parameter data is a pointer to an arbitrary string of bytes.</p>
+
+<p>The difference between this and <b>OSSL_PARAM_OCTET_STRING</b> is that <i>data</i> doesn&#39;t point directly at the data, but to a pointer that points to the data.</p>
+
+<p>If there is any uncertainty about which to use, <b>OSSL_PARAM_OCTET_STRING</b> is almost certainly the correct choice.</p>
+
+<p>This is used to indicate that constant data is or will be passed, and there is therefore no need to copy the data that is passed, just the pointer to it.</p>
+
+<p><i>data_size</i> must be set to the size of the data, not the size of the pointer to the data. If this is used in a parameter request, <i>data_size</i> is not relevant. However, the <i>responder</i> will set <i>return_size</i> to the size of the data.</p>
+
+<p>Note that the use of this type is <b>fragile</b> and can only be safely used for data that remains constant and in a constant location for a long enough duration (such as the life-time of the entity that offers these parameters).</p>
+
+</dd>
+</dl>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>Both when setting and requesting parameters, the functions that are called will have to decide what is and what is not an error. The recommended behaviour is:</p>
+
+<ul>
+
+<li><p>Keys that a <i>setter</i> or <i>responder</i> doesn&#39;t recognise should simply be ignored. That in itself isn&#39;t an error.</p>
+
+</li>
+<li><p>If the keys that a called <i>setter</i> recognises form a consistent enough set of data, that call should succeed.</p>
+
+</li>
+<li><p>Apart from the <i>return_size</i>, a <i>responder</i> must never change the fields of an <b>OSSL_PARAM</b>. To return a value, it should change the contents of the memory that <i>data</i> points at.</p>
+
+</li>
+<li><p>If the data type for a key that it&#39;s associated with is incorrect, the called function may return an error.</p>
+
+<p>The called function may also try to convert the data to a suitable form (for example, it&#39;s plausible to pass a large number as an octet string, so even though a given key is defined as an <b>OSSL_PARAM_UNSIGNED_INTEGER</b>, is plausible to pass the value as an <b>OSSL_PARAM_OCTET_STRING</b>), but this is in no way mandatory.</p>
+
+</li>
+<li><p>If <i>data</i> for a <b>OSSL_PARAM_OCTET_STRING</b> or a <b>OSSL_PARAM_UTF8_STRING</b> is NULL, the <i>responder</i> should set <i>return_size</i> to the size of the item to be returned and return success. Later the responder will be called again with <i>data</i> pointing at the place for the value to be put.</p>
+
+</li>
+<li><p>If a <i>responder</i> finds that some data sizes are too small for the requested data, it must set <i>return_size</i> for each such <b>OSSL_PARAM</b> item to the minimum required size, and eventually return an error.</p>
+
+</li>
+<li><p>For the integer type parameters (<b>OSSL_PARAM_UNSIGNED_INTEGER</b> and <b>OSSL_PARAM_INTEGER</b>), a <i>responder</i> may choose to return an error if the <i>data_size</i> isn&#39;t a suitable size (even if <i>data_size</i> is bigger than needed). If the <i>responder</i> finds the size suitable, it must fill all <i>data_size</i> bytes and ensure correct padding for the native endianness, and set <i>return_size</i> to the same value as <i>data_size</i>.</p>
+
+</li>
+</ul>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>A couple of examples to just show how <b>OSSL_PARAM</b> arrays could be set up.</p>
+
+<h3 id="Example-1">Example 1</h3>
+
+<p>This example is for setting parameters on some object:</p>
+
+<pre><code>#include &lt;openssl/core.h&gt;
+
+const char *foo = &quot;some string&quot;;
+size_t foo_l = strlen(foo);
+const char bar[] = &quot;some other string&quot;;
+OSSL_PARAM set[] = {
+    { &quot;foo&quot;, OSSL_PARAM_UTF8_PTR, &amp;foo, foo_l, 0 },
+    { &quot;bar&quot;, OSSL_PARAM_UTF8_STRING, (void *)&amp;bar, sizeof(bar) - 1, 0 },
+    { NULL, 0, NULL, 0, 0 }
+};</code></pre>
+
+<h3 id="Example-2">Example 2</h3>
+
+<p>This example is for requesting parameters on some object:</p>
+
+<pre><code>const char *foo = NULL;
+size_t foo_l;
+char bar[1024];
+size_t bar_l;
+OSSL_PARAM request[] = {
+    { &quot;foo&quot;, OSSL_PARAM_UTF8_PTR, &amp;foo, 0 /*irrelevant*/, 0 },
+    { &quot;bar&quot;, OSSL_PARAM_UTF8_STRING, &amp;bar, sizeof(bar), 0 },
+    { NULL, 0, NULL, 0, 0 }
+};</code></pre>
+
+<p>A <i>responder</i> that receives this array (as <i>params</i> in this example) could fill in the parameters like this:</p>
+
+<pre><code>/* OSSL_PARAM *params */
+
+int i;
+
+for (i = 0; params[i].key != NULL; i++) {
+    if (strcmp(params[i].key, &quot;foo&quot;) == 0) {
+        *(char **)params[i].data = &quot;foo value&quot;;
+        params[i].return_size = 9; /* length of &quot;foo value&quot; string */
+    } else if (strcmp(params[i].key, &quot;bar&quot;) == 0) {
+        memcpy(params[i].data, &quot;bar value&quot;, 10);
+        params[i].return_size = 9; /* length of &quot;bar value&quot; string */
+    }
+    /* Ignore stuff we don&#39;t know */
+}</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/openssl-core.h.html">openssl-core.h(7)</a>, <a href="../man3/OSSL_PARAM_get_int.html">OSSL_PARAM_get_int(3)</a>, <a href="../man3/OSSL_PARAM_dup.html">OSSL_PARAM_dup(3)</a>, <a href="../man3/OSSL_PARAM_construct_utf8_string.html">OSSL_PARAM_construct_utf8_string(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p><b>OSSL_PARAM</b> was added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2019-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

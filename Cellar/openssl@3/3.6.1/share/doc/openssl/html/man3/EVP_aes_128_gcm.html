@@ -1,0 +1,113 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_aes_128_gcm</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_aes_128_cbc, EVP_aes_192_cbc, EVP_aes_256_cbc, EVP_aes_128_cfb, EVP_aes_192_cfb, EVP_aes_256_cfb, EVP_aes_128_cfb1, EVP_aes_192_cfb1, EVP_aes_256_cfb1, EVP_aes_128_cfb8, EVP_aes_192_cfb8, EVP_aes_256_cfb8, EVP_aes_128_cfb128, EVP_aes_192_cfb128, EVP_aes_256_cfb128, EVP_aes_128_ctr, EVP_aes_192_ctr, EVP_aes_256_ctr, EVP_aes_128_ecb, EVP_aes_192_ecb, EVP_aes_256_ecb, EVP_aes_128_ofb, EVP_aes_192_ofb, EVP_aes_256_ofb, EVP_aes_128_cbc_hmac_sha1, EVP_aes_256_cbc_hmac_sha1, EVP_aes_128_cbc_hmac_sha256, EVP_aes_256_cbc_hmac_sha256, EVP_aes_128_ccm, EVP_aes_192_ccm, EVP_aes_256_ccm, EVP_aes_128_gcm, EVP_aes_192_gcm, EVP_aes_256_gcm, EVP_aes_128_ocb, EVP_aes_192_ocb, EVP_aes_256_ocb, EVP_aes_128_wrap, EVP_aes_192_wrap, EVP_aes_256_wrap, EVP_aes_128_wrap_pad, EVP_aes_192_wrap_pad, EVP_aes_256_wrap_pad, EVP_aes_128_xts, EVP_aes_256_xts - EVP AES cipher</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+
+const EVP_CIPHER *EVP_ciphername(void)</code></pre>
+
+<p><i>EVP_ciphername</i> is used a placeholder for any of the described cipher functions, such as <i>EVP_aes_128_cbc</i>.</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The AES encryption algorithm for EVP.</p>
+
+<dl>
+
+<dt id="EVP_aes_128_cbc-EVP_aes_192_cbc-EVP_aes_256_cbc-EVP_aes_128_cfb-EVP_aes_192_cfb-EVP_aes_256_cfb-EVP_aes_128_cfb1-EVP_aes_192_cfb1-EVP_aes_256_cfb1-EVP_aes_128_cfb8-EVP_aes_192_cfb8-EVP_aes_256_cfb8-EVP_aes_128_cfb128-EVP_aes_192_cfb128-EVP_aes_256_cfb128-EVP_aes_128_ctr-EVP_aes_192_ctr-EVP_aes_256_ctr-EVP_aes_128_ecb-EVP_aes_192_ecb-EVP_aes_256_ecb-EVP_aes_128_ofb-EVP_aes_192_ofb-EVP_aes_256_ofb">EVP_aes_128_cbc(), EVP_aes_192_cbc(), EVP_aes_256_cbc(), EVP_aes_128_cfb(), EVP_aes_192_cfb(), EVP_aes_256_cfb(), EVP_aes_128_cfb1(), EVP_aes_192_cfb1(), EVP_aes_256_cfb1(), EVP_aes_128_cfb8(), EVP_aes_192_cfb8(), EVP_aes_256_cfb8(), EVP_aes_128_cfb128(), EVP_aes_192_cfb128(), EVP_aes_256_cfb128(), EVP_aes_128_ctr(), EVP_aes_192_ctr(), EVP_aes_256_ctr(), EVP_aes_128_ecb(), EVP_aes_192_ecb(), EVP_aes_256_ecb(), EVP_aes_128_ofb(), EVP_aes_192_ofb(), EVP_aes_256_ofb()</dt>
+<dd>
+
+<p>AES for 128, 192 and 256 bit keys in the following modes: CBC, CFB with 128-bit shift, CFB with 1-bit shift, CFB with 8-bit shift, CTR, ECB, and OFB.</p>
+
+</dd>
+<dt id="EVP_aes_128_cbc_hmac_sha1-EVP_aes_256_cbc_hmac_sha1">EVP_aes_128_cbc_hmac_sha1(), EVP_aes_256_cbc_hmac_sha1()</dt>
+<dd>
+
+<p>Authenticated encryption with AES in CBC mode using SHA-1 as HMAC, with keys of 128 and 256 bits length respectively. The authentication tag is 160 bits long.</p>
+
+<p>WARNING: this is not intended for usage outside of TLS and requires calling of some undocumented ctrl functions. These ciphers do not conform to the EVP AEAD interface.</p>
+
+</dd>
+<dt id="EVP_aes_128_cbc_hmac_sha256-EVP_aes_256_cbc_hmac_sha256">EVP_aes_128_cbc_hmac_sha256(), EVP_aes_256_cbc_hmac_sha256()</dt>
+<dd>
+
+<p>Authenticated encryption with AES in CBC mode using SHA256 (SHA-2, 256-bits) as HMAC, with keys of 128 and 256 bits length respectively. The authentication tag is 256 bits long.</p>
+
+<p>WARNING: this is not intended for usage outside of TLS and requires calling of some undocumented ctrl functions. These ciphers do not conform to the EVP AEAD interface.</p>
+
+</dd>
+<dt id="EVP_aes_128_ccm-EVP_aes_192_ccm-EVP_aes_256_ccm-EVP_aes_128_gcm-EVP_aes_192_gcm-EVP_aes_256_gcm-EVP_aes_128_ocb-EVP_aes_192_ocb-EVP_aes_256_ocb">EVP_aes_128_ccm(), EVP_aes_192_ccm(), EVP_aes_256_ccm(), EVP_aes_128_gcm(), EVP_aes_192_gcm(), EVP_aes_256_gcm(), EVP_aes_128_ocb(), EVP_aes_192_ocb(), EVP_aes_256_ocb()</dt>
+<dd>
+
+<p>AES for 128, 192 and 256 bit keys in CBC-MAC Mode (CCM), Galois Counter Mode (GCM) and OCB Mode respectively. These ciphers require additional control operations to function correctly, see the <a href="../man3/EVP_EncryptInit.html">&quot;AEAD INTERFACE&quot; in EVP_EncryptInit(3)</a> section for details.</p>
+
+</dd>
+<dt id="EVP_aes_128_wrap-EVP_aes_192_wrap-EVP_aes_256_wrap-EVP_aes_128_wrap_pad-EVP_aes_192_wrap_pad-EVP_aes_256_wrap_pad">EVP_aes_128_wrap(), EVP_aes_192_wrap(), EVP_aes_256_wrap(), EVP_aes_128_wrap_pad(), EVP_aes_192_wrap_pad(), EVP_aes_256_wrap_pad()</dt>
+<dd>
+
+<p>AES key wrap with 128, 192 and 256 bit keys, as according to RFC 3394 section 2.2.1 (&quot;wrap&quot;) and RFC 5649 section 4.1 (&quot;wrap with padding&quot;) respectively.</p>
+
+</dd>
+<dt id="EVP_aes_128_xts-EVP_aes_256_xts">EVP_aes_128_xts(), EVP_aes_256_xts()</dt>
+<dd>
+
+<p>AES XTS mode (XTS-AES) is standardized in IEEE Std. 1619-2007 and described in NIST SP 800-38E. The XTS (XEX-based tweaked-codebook mode with ciphertext stealing) mode was designed by Prof. Phillip Rogaway of University of California, Davis, intended for encrypting data on a storage device.</p>
+
+<p>XTS-AES provides confidentiality but not authentication of data. It also requires a key of double-length for protection of a certain key size. In particular, XTS-AES-128 (<b>EVP_aes_128_xts</b>) takes input of a 256-bit key to achieve AES 128-bit security, and XTS-AES-256 (<b>EVP_aes_256_xts</b>) takes input of a 512-bit key to achieve AES 256-bit security.</p>
+
+<p>The XTS implementation in OpenSSL does not support streaming. That is there must only be one <a href="../man3/EVP_EncryptUpdate.html">EVP_EncryptUpdate(3)</a> call per <a href="../man3/EVP_EncryptInit_ex.html">EVP_EncryptInit_ex(3)</a> call (and similarly with the &quot;Decrypt&quot; functions).</p>
+
+<p>The <i>iv</i> parameter to <a href="../man3/EVP_EncryptInit_ex.html">EVP_EncryptInit_ex(3)</a> or <a href="../man3/EVP_DecryptInit_ex.html">EVP_DecryptInit_ex(3)</a> is the XTS &quot;tweak&quot; value.</p>
+
+</dd>
+</dl>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>Developers should be aware of the negative performance implications of calling these functions multiple times and should consider using <a href="../man3/EVP_CIPHER_fetch.html">EVP_CIPHER_fetch(3)</a> with <a href="../man7/EVP_CIPHER-AES.html">EVP_CIPHER-AES(7)</a> instead. See <a href="../man7/crypto.html">&quot;Performance&quot; in crypto(7)</a> for further information.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>These functions return an <b>EVP_CIPHER</b> structure that contains the implementation of the symmetric cipher. See <a href="../man3/EVP_CIPHER_meth_new.html">EVP_CIPHER_meth_new(3)</a> for details of the <b>EVP_CIPHER</b> structure.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/evp.html">evp(7)</a>, <a href="../man3/EVP_EncryptInit.html">EVP_EncryptInit(3)</a>, <a href="../man3/EVP_CIPHER_meth_new.html">EVP_CIPHER_meth_new(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2017-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

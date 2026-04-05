@@ -1,0 +1,94 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OCSP_cert_to_id</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OCSP_cert_to_id, OCSP_cert_id_new, OCSP_CERTID_free, OCSP_id_issuer_cmp, OCSP_id_cmp, OCSP_id_get0_info - OCSP certificate ID utility functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ocsp.h&gt;
+
+OCSP_CERTID *OCSP_cert_to_id(const EVP_MD *dgst,
+                             X509 *subject, X509 *issuer);
+
+OCSP_CERTID *OCSP_cert_id_new(const EVP_MD *dgst,
+                              X509_NAME *issuerName,
+                              ASN1_BIT_STRING *issuerKey,
+                              ASN1_INTEGER *serialNumber);
+
+void OCSP_CERTID_free(OCSP_CERTID *id);
+
+int OCSP_id_issuer_cmp(const OCSP_CERTID *a, const OCSP_CERTID *b);
+int OCSP_id_cmp(const OCSP_CERTID *a, const OCSP_CERTID *b);
+
+int OCSP_id_get0_info(ASN1_OCTET_STRING **piNameHash, ASN1_OBJECT **pmd,
+                      ASN1_OCTET_STRING **pikeyHash,
+                      ASN1_INTEGER **pserial, OCSP_CERTID *cid);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>OCSP_cert_to_id() creates and returns a new <b>OCSP_CERTID</b> structure using message digest <b>dgst</b> for certificate <b>subject</b> with issuer <b>issuer</b>. If <b>dgst</b> is <b>NULL</b> then SHA1 is used.</p>
+
+<p>OCSP_cert_id_new() creates and returns a new <b>OCSP_CERTID</b> using <b>dgst</b> and issuer name <b>issuerName</b>, issuer key hash <b>issuerKey</b> and serial number <b>serialNumber</b>.</p>
+
+<p>OCSP_CERTID_free() frees up <b>id</b>. If the argument is NULL, nothing is done.</p>
+
+<p>OCSP_id_cmp() compares <b>OCSP_CERTID</b> <b>a</b> and <b>b</b>.</p>
+
+<p>OCSP_id_issuer_cmp() compares only the issuer name of <b>OCSP_CERTID</b> <b>a</b> and <b>b</b>.</p>
+
+<p>OCSP_id_get0_info() returns the issuer name hash, hash OID, issuer key hash and serial number contained in <b>cid</b>. If any of the values are not required the corresponding parameter can be set to <b>NULL</b>.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>OCSP_cert_to_id() and OCSP_cert_id_new() return either a pointer to a valid <b>OCSP_CERTID</b> structure or <b>NULL</b> if an error occurred.</p>
+
+<p>OCSP_id_cmp() and OCSP_id_issuer_cmp() returns zero for a match and nonzero otherwise.</p>
+
+<p>OCSP_CERTID_free() does not return a value.</p>
+
+<p>OCSP_id_get0_info() returns 1 for success and 0 for failure.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>OCSP clients will typically only use OCSP_cert_to_id() or OCSP_cert_id_new(): the other functions are used by responder applications.</p>
+
+<p>The values returned by OCSP_id_get0_info() are internal pointers and <b>MUST NOT</b> be freed up by an application: they will be freed when the corresponding <b>OCSP_CERTID</b> structure is freed.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/crypto.html">crypto(7)</a>, <a href="../man3/OCSP_request_add1_nonce.html">OCSP_request_add1_nonce(3)</a>, <a href="../man3/OCSP_REQUEST_new.html">OCSP_REQUEST_new(3)</a>, <a href="../man3/OCSP_resp_find_status.html">OCSP_resp_find_status(3)</a>, <a href="../man3/OCSP_response_status.html">OCSP_response_status(3)</a>, <a href="../man3/OCSP_sendreq_new.html">OCSP_sendreq_new(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2015-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

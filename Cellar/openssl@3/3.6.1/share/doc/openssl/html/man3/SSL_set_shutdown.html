@@ -1,0 +1,99 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_set_shutdown</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_set_shutdown, SSL_get_shutdown - manipulate shutdown state of an SSL connection</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+void SSL_set_shutdown(SSL *ssl, int mode);
+
+int SSL_get_shutdown(const SSL *ssl);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_set_shutdown() sets the shutdown state of <b>ssl</b> to <b>mode</b>.</p>
+
+<p>SSL_get_shutdown() returns the shutdown mode of <b>ssl</b>.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The shutdown state of an ssl connection is a bit-mask of:</p>
+
+<dl>
+
+<dt id="pod0">0</dt>
+<dd>
+
+<p>No shutdown setting, yet.</p>
+
+</dd>
+<dt id="SSL_SENT_SHUTDOWN">SSL_SENT_SHUTDOWN</dt>
+<dd>
+
+<p>A close_notify shutdown alert was sent to the peer, the connection is being considered closed and the session is closed and correct.</p>
+
+</dd>
+<dt id="SSL_RECEIVED_SHUTDOWN">SSL_RECEIVED_SHUTDOWN</dt>
+<dd>
+
+<p>A shutdown alert was received form the peer, either a normal close_notify or a fatal error.</p>
+
+</dd>
+</dl>
+
+<p>SSL_SENT_SHUTDOWN and SSL_RECEIVED_SHUTDOWN can be set at the same time.</p>
+
+<p>The shutdown state of the connection is used to determine the state of the ssl session. If the session is still open, when <a href="../man3/SSL_clear.html">SSL_clear(3)</a> or <a href="../man3/SSL_free.html">SSL_free(3)</a> is called, it is considered bad and removed according to RFC2246. The actual condition for a correctly closed session is SSL_SENT_SHUTDOWN (according to the TLS RFC, it is acceptable to only send the close_notify alert but to not wait for the peer&#39;s answer, when the underlying connection is closed). SSL_set_shutdown() can be used to set this state without sending a close alert to the peer (see <a href="../man3/SSL_shutdown.html">SSL_shutdown(3)</a>).</p>
+
+<p>If a close_notify was received, SSL_RECEIVED_SHUTDOWN will be set, for setting SSL_SENT_SHUTDOWN the application must however still call <a href="../man3/SSL_shutdown.html">SSL_shutdown(3)</a> or SSL_set_shutdown() itself.</p>
+
+<p>SSL_set_shutdown() is not supported for QUIC SSL objects.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_set_shutdown() does not return diagnostic information.</p>
+
+<p>SSL_get_shutdown() returns the current shutdown state as set or based on the actual connection state.</p>
+
+<p>SSL_get_shutdown() returns 0 if called on a QUIC stream SSL object. If it is called on a QUIC connection SSL object, it returns a value with SSL_SENT_SHUTDOWN set if CONNECTION_CLOSE has been sent to the peer and it returns a value with SSL_RECEIVED_SHUTDOWN set if CONNECTION_CLOSE has been received from the peer or the QUIC connection is fully terminated for other reasons.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a>, <a href="../man3/SSL_shutdown.html">SSL_shutdown(3)</a>, <a href="../man3/SSL_CTX_set_quiet_shutdown.html">SSL_CTX_set_quiet_shutdown(3)</a>, <a href="../man3/SSL_clear.html">SSL_clear(3)</a>, <a href="../man3/SSL_free.html">SSL_free(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2001-2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

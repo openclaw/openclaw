@@ -1,0 +1,213 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>provider-cipher</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Context-Management-Functions">Context Management Functions</a></li>
+      <li><a href="#Encryption-Decryption-Functions">Encryption/Decryption Functions</a></li>
+      <li><a href="#Cipher-Parameters">Cipher Parameters</a></li>
+    </ul>
+  </li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>provider-cipher - The cipher library &lt;-&gt; provider functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/core_dispatch.h&gt;
+#include &lt;openssl/core_names.h&gt;
+
+/*
+ * None of these are actual functions, but are displayed like this for
+ * the function signatures for functions that are offered as function
+ * pointers in OSSL_DISPATCH arrays.
+ */
+
+/* Context management */
+void *OSSL_FUNC_cipher_newctx(void *provctx);
+void OSSL_FUNC_cipher_freectx(void *cctx);
+void *OSSL_FUNC_cipher_dupctx(void *cctx);
+
+/* Encryption/decryption */
+int OSSL_FUNC_cipher_encrypt_init(void *cctx, const unsigned char *key,
+                                  size_t keylen, const unsigned char *iv,
+                                  size_t ivlen, const OSSL_PARAM params[]);
+int OSSL_FUNC_cipher_decrypt_init(void *cctx, const unsigned char *key,
+                                  size_t keylen, const unsigned char *iv,
+                                  size_t ivlen, const OSSL_PARAM params[]);
+int OSSL_FUNC_cipher_encrypt_skey_init(void *cctx, void *skeydata,
+                                       const unsigned char *iv, size_t ivlen,
+                                       const OSSL_PARAM params[]);
+int OSSL_FUNC_cipher_encrypt_skey_init(void *cctx, void *skeydata,
+                                       const unsigned char *iv, size_t ivlen,
+                                       const OSSL_PARAM params[]);
+int OSSL_FUNC_cipher_update(void *cctx, unsigned char *out, size_t *outl,
+                            size_t outsize, const unsigned char *in, size_t inl);
+int OSSL_FUNC_cipher_final(void *cctx, unsigned char *out, size_t *outl,
+                           size_t outsize);
+int OSSL_FUNC_cipher_cipher(void *cctx, unsigned char *out, size_t *outl,
+                            size_t outsize, const unsigned char *in, size_t inl);
+
+/* Encryption/decryption using cipher pipeline */
+int OSSL_FUNC_cipher_pipeline_encrypt_init(void *cctx, const unsigned char *key,
+                                           size_t keylen, size_t numpipes,
+                                           const unsigned char **iv, size_t ivlen,
+                                           const OSSL_PARAM params[]))
+int OSSL_FUNC_cipher_pipeline_decrypt_init(void *cctx, const unsigned char *key,
+                                           size_t keylen, size_t numpipes,
+                                           const unsigned char **iv, size_t ivlen,
+                                           const OSSL_PARAM params[]))
+int OSSL_FUNC_cipher_pipeline_update(void *cctx, size_t numpipes,
+                                     unsigned char **out, size_t *outl,
+                                     const size_t *outsize,
+                                     const unsigned char **in, const size_t *inl))
+int OSSL_FUNC_cipher_pipeline_final(void *cctx, size_t numpipes,
+                                    unsigned char **out, size_t *outl,
+                                    const size_t *outsize))
+
+/* Cipher parameter descriptors */
+const OSSL_PARAM *OSSL_FUNC_cipher_gettable_params(void *provctx);
+
+/* Cipher operation parameter descriptors */
+const OSSL_PARAM *OSSL_FUNC_cipher_gettable_ctx_params(void *cctx,
+                                                       void *provctx);
+const OSSL_PARAM *OSSL_FUNC_cipher_settable_ctx_params(void *cctx,
+                                                       void *provctx);
+
+/* Cipher parameters */
+int OSSL_FUNC_cipher_get_params(OSSL_PARAM params[]);
+
+/* Cipher operation parameters */
+int OSSL_FUNC_cipher_get_ctx_params(void *cctx, OSSL_PARAM params[]);
+int OSSL_FUNC_cipher_set_ctx_params(void *cctx, const OSSL_PARAM params[]);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>This documentation is primarily aimed at provider authors. See <a href="../man7/provider.html">provider(7)</a> for further information.</p>
+
+<p>The CIPHER operation enables providers to implement cipher algorithms and make them available to applications via the API functions <a href="../man3/EVP_EncryptInit_ex.html">EVP_EncryptInit_ex(3)</a>, <a href="../man3/EVP_EncryptUpdate.html">EVP_EncryptUpdate(3)</a> and <a href="../man3/EVP_EncryptFinal.html">EVP_EncryptFinal(3)</a> (as well as the decrypt equivalents and other related functions).</p>
+
+<p>All &quot;functions&quot; mentioned here are passed as function pointers between <i>libcrypto</i> and the provider in <a href="../man3/OSSL_DISPATCH.html">OSSL_DISPATCH(3)</a> arrays via <a href="../man3/OSSL_ALGORITHM.html">OSSL_ALGORITHM(3)</a> arrays that are returned by the provider&#39;s provider_query_operation() function (see <a href="../man7/provider-base.html">&quot;Provider Functions&quot; in provider-base(7)</a>).</p>
+
+<p>All these &quot;functions&quot; have a corresponding function type definition named <b>OSSL_FUNC_{name}_fn</b>, and a helper function to retrieve the function pointer from an <a href="../man3/OSSL_DISPATCH.html">OSSL_DISPATCH(3)</a> element named <b>OSSL_FUNC_{name}</b>. For example, the &quot;function&quot; OSSL_FUNC_cipher_newctx() has these:</p>
+
+<pre><code>typedef void *(OSSL_FUNC_cipher_newctx_fn)(void *provctx);
+static ossl_inline OSSL_FUNC_cipher_newctx_fn
+    OSSL_FUNC_cipher_newctx(const OSSL_DISPATCH *opf);</code></pre>
+
+<p><a href="../man3/OSSL_DISPATCH.html">OSSL_DISPATCH(3)</a> arrays are indexed by numbers that are provided as macros in <a href="../man7/openssl-core_dispatch.h.html">openssl-core_dispatch.h(7)</a>, as follows:</p>
+
+<pre><code>OSSL_FUNC_cipher_newctx                    OSSL_FUNC_CIPHER_NEWCTX
+OSSL_FUNC_cipher_freectx                   OSSL_FUNC_CIPHER_FREECTX
+OSSL_FUNC_cipher_dupctx                    OSSL_FUNC_CIPHER_DUPCTX
+
+OSSL_FUNC_cipher_encrypt_init              OSSL_FUNC_CIPHER_ENCRYPT_INIT
+OSSL_FUNC_cipher_decrypt_init              OSSL_FUNC_CIPHER_DECRYPT_INIT
+OSSL_FUNC_cipher_encrypt_skey_init         OSSL_FUNC_CIPHER_ENCRYPT_SKEY_INIT
+OSSL_FUNC_cipher_decrypt_skey_init         OSSL_FUNC_CIPHER_DECRYPT_SKEY_INIT
+OSSL_FUNC_cipher_update                    OSSL_FUNC_CIPHER_UPDATE
+OSSL_FUNC_cipher_final                     OSSL_FUNC_CIPHER_FINAL
+OSSL_FUNC_cipher_cipher                    OSSL_FUNC_CIPHER_CIPHER
+
+OSSL_FUNC_cipher_pipeline_encrypt_init     OSSL_FUNC_CIPHER_PIPELINE_ENCRYPT_INIT
+OSSL_FUNC_cipher_pipeline_decrypt_init     OSSL_FUNC_CIPHER_PIPELINE_DECRYPT_INIT
+OSSL_FUNC_cipher_pipeline_update           OSSL_FUNC_CIPHER_PIPELINE_UPDATE
+OSSL_FUNC_cipher_pipeline_final            OSSL_FUNC_CIPHER_PIPELINE_FINAL
+
+OSSL_FUNC_cipher_get_params                OSSL_FUNC_CIPHER_GET_PARAMS
+OSSL_FUNC_cipher_get_ctx_params            OSSL_FUNC_CIPHER_GET_CTX_PARAMS
+OSSL_FUNC_cipher_set_ctx_params            OSSL_FUNC_CIPHER_SET_CTX_PARAMS
+
+OSSL_FUNC_cipher_gettable_params           OSSL_FUNC_CIPHER_GETTABLE_PARAMS
+OSSL_FUNC_cipher_gettable_ctx_params       OSSL_FUNC_CIPHER_GETTABLE_CTX_PARAMS
+OSSL_FUNC_cipher_settable_ctx_params       OSSL_FUNC_CIPHER_SETTABLE_CTX_PARAMS</code></pre>
+
+<p>A cipher algorithm implementation may not implement all of these functions. In order to be a consistent set of functions there must at least be a complete set of &quot;encrypt&quot; functions, or a complete set of &quot;decrypt&quot; functions, or a single &quot;cipher&quot; function. Similarly, there can be a complete set of pipeline &quot;encrypt&quot; functions, and/or a complete set of pipeline &quot;decrypt&quot; functions. In all cases the OSSL_FUNC_cipher_get_params and both OSSL_FUNC_cipher_newctx and OSSL_FUNC_cipher_freectx functions must be present. All other functions are optional.</p>
+
+<h2 id="Context-Management-Functions">Context Management Functions</h2>
+
+<p>OSSL_FUNC_cipher_newctx() should create and return a pointer to a provider side structure for holding context information during a cipher operation. A pointer to this context will be passed back in a number of the other cipher operation function calls. The parameter <i>provctx</i> is the provider context generated during provider initialisation (see <a href="../man7/provider.html">provider(7)</a>).</p>
+
+<p>OSSL_FUNC_cipher_freectx() is passed a pointer to the provider side cipher context in the <i>cctx</i> parameter. This function should free any resources associated with that context.</p>
+
+<p>OSSL_FUNC_cipher_dupctx() should duplicate the provider side cipher context in the <i>cctx</i> parameter and return the duplicate copy.</p>
+
+<h2 id="Encryption-Decryption-Functions">Encryption/Decryption Functions</h2>
+
+<p>OSSL_FUNC_cipher_encrypt_init() initialises a cipher operation for encryption given a newly created provider side cipher context in the <i>cctx</i> parameter. The key to be used is given in <i>key</i> which is <i>keylen</i> bytes long. The IV to be used is given in <i>iv</i> which is <i>ivlen</i> bytes long. The <i>params</i>, if not NULL, should be set on the context in a manner similar to using OSSL_FUNC_cipher_set_ctx_params().</p>
+
+<p>OSSL_FUNC_cipher_decrypt_init() is the same as OSSL_FUNC_cipher_encrypt_init() except that it initialises the context for a decryption operation.</p>
+
+<p>OSSL_FUNC_cipher_encrypt_skey_init() and OSSL_FUNC_cipher_decrypt_skey_init() are variants of OSSL_FUNC_cipher_encrypt_init() and OSSL_FUNC_cipher_decrypt_init() for working with opaque objects containing provider-specific key handles instead of raw bytes.</p>
+
+<p>OSSL_FUNC_cipher_update() is called to supply data to be encrypted/decrypted as part of a previously initialised cipher operation. The <i>cctx</i> parameter contains a pointer to a previously initialised provider side context. OSSL_FUNC_cipher_update() should encrypt/decrypt <i>inl</i> bytes of data at the location pointed to by <i>in</i>. The encrypted data should be stored in <i>out</i> and the amount of data written to <i>*outl</i> which should not exceed <i>outsize</i> bytes. OSSL_FUNC_cipher_update() may be called multiple times for a single cipher operation. It is the responsibility of the cipher implementation to handle input lengths that are not multiples of the block length. In such cases a cipher implementation will typically cache partial blocks of input data until a complete block is obtained. The pointers <i>out</i> and <i>in</i> may point to the same location, in which case the encryption must be done in-place. If <i>out</i> and <i>in</i> point to different locations, the requirements of <a href="../man3/EVP_EncryptUpdate.html">EVP_EncryptUpdate(3)</a> and <a href="../man3/EVP_DecryptUpdate.html">EVP_DecryptUpdate(3)</a> guarantee that the two buffers are disjoint. Similarly, the requirements of <a href="../man3/EVP_EncryptUpdate.html">EVP_EncryptUpdate(3)</a> and <a href="../man3/EVP_DecryptUpdate.html">EVP_DecryptUpdate(3)</a> ensure that the buffer pointed to by <i>out</i> contains sufficient room for the operation being performed.</p>
+
+<p>OSSL_FUNC_cipher_final() completes an encryption or decryption started through previous OSSL_FUNC_cipher_encrypt_init() or OSSL_FUNC_cipher_decrypt_init(), and OSSL_FUNC_cipher_update() calls. The <i>cctx</i> parameter contains a pointer to the provider side context. Any final encryption/decryption output should be written to <i>out</i> and the amount of data written to <i>*outl</i> which should not exceed <i>outsize</i> bytes. The same expectations apply to <i>outsize</i> as documented for <a href="../man3/EVP_EncryptFinal.html">EVP_EncryptFinal(3)</a> and <a href="../man3/EVP_DecryptFinal.html">EVP_DecryptFinal(3)</a>.</p>
+
+<p>OSSL_FUNC_cipher_cipher() performs encryption/decryption using the provider side cipher context in the <i>cctx</i> parameter that should have been previously initialised via a call to OSSL_FUNC_cipher_encrypt_init() or OSSL_FUNC_cipher_decrypt_init(). This should call the raw underlying cipher function without any padding. This will be invoked in the provider as a result of the application calling <a href="../man3/EVP_Cipher.html">EVP_Cipher(3)</a>. The application is responsible for ensuring that the input is a multiple of the block length. The data to be encrypted/decrypted will be in <i>in</i>, and it will be <i>inl</i> bytes in length. The output from the encryption/decryption should be stored in <i>out</i> and the amount of data stored should be put in <i>*outl</i> which should be no more than <i>outsize</i> bytes.</p>
+
+<p>OSSL_FUNC_cipher_pipeline_encrypt_init(), OSSL_FUNC_cipher_pipeline_decrypt_init() OSSL_FUNC_cipher_pipeline_update(), and OSSL_FUNC_cipher_pipeline_final() are similar to the non-pipeline variants, but are used when the application is using cipher pipelining. The <i>numpipes</i> parameter is the number of pipes in the pipeline. The <i>iv</i> parameter is an array of buffers with IVs, each <i>ivlen</i> bytes long. The <i>in</i> and <i>out</i> are arrays of buffer pointers. The <i>inl</i> and <i>outl</i>, <i>outsize</i> are arrays of size_t representing corresponding buffer length as similar to the non-pipeline variants. All arrays are of length <i>numpipes</i>. See <a href="../man3/EVP_CipherPipelineEncryptInit.html">EVP_CipherPipelineEncryptInit(3)</a> for more information.</p>
+
+<h2 id="Cipher-Parameters">Cipher Parameters</h2>
+
+<p>See <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> for further details on the parameters structure used by these functions.</p>
+
+<p>OSSL_FUNC_cipher_get_params() gets details of the algorithm implementation and stores them in <i>params</i>.</p>
+
+<p>OSSL_FUNC_cipher_set_ctx_params() sets cipher operation parameters for the provider side cipher context <i>cctx</i> to <i>params</i>. Any parameter settings are additional to any that were previously set. Passing NULL for <i>params</i> should return true.</p>
+
+<p>OSSL_FUNC_cipher_get_ctx_params() gets cipher operation details details from the given provider side cipher context <i>cctx</i> and stores them in <i>params</i>. Passing NULL for <i>params</i> should return true.</p>
+
+<p>OSSL_FUNC_cipher_gettable_params(), OSSL_FUNC_cipher_gettable_ctx_params(), and OSSL_FUNC_cipher_settable_ctx_params() all return constant <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> arrays as descriptors of the parameters that OSSL_FUNC_cipher_get_params(), OSSL_FUNC_cipher_get_ctx_params(), and OSSL_FUNC_cipher_set_ctx_params() can handle, respectively. OSSL_FUNC_cipher_gettable_ctx_params() and OSSL_FUNC_cipher_settable_ctx_params() will return the parameters associated with the provider side context <i>cctx</i> in its current state if it is not NULL. Otherwise, they return the parameters associated with the provider side algorithm <i>provctx</i>.</p>
+
+<p>Parameters currently recognised by built-in ciphers are listed in <a href="../man3/EVP_EncryptInit.html">&quot;PARAMETERS&quot; in EVP_EncryptInit(3)</a>. Not all parameters are relevant to, or are understood by all ciphers.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>OSSL_FUNC_cipher_newctx() and OSSL_FUNC_cipher_dupctx() should return the newly created provider side cipher context, or NULL on failure.</p>
+
+<p>OSSL_FUNC_cipher_encrypt_init(), OSSL_FUNC_cipher_decrypt_init(), OSSL_FUNC_cipher_update(), OSSL_FUNC_cipher_final(), OSSL_FUNC_cipher_cipher(), OSSL_FUNC_cipher_encrypt_skey_init(), OSSL_FUNC_cipher_decrypt_skey_init(), OSSL_FUNC_cipher_pipeline_encrypt_init(), OSSL_FUNC_cipher_pipeline_decrypt_init(), OSSL_FUNC_cipher_pipeline_update(), OSSL_FUNC_cipher_pipeline_final(), OSSL_FUNC_cipher_get_params(), OSSL_FUNC_cipher_get_ctx_params() and OSSL_FUNC_cipher_set_ctx_params() should return 1 for success or 0 on error.</p>
+
+<p>OSSL_FUNC_cipher_gettable_params(), OSSL_FUNC_cipher_gettable_ctx_params() and OSSL_FUNC_cipher_settable_ctx_params() should return a constant <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> array, or NULL if none is offered.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/provider.html">provider(7)</a>, <a href="../man7/OSSL_PROVIDER-FIPS.html">OSSL_PROVIDER-FIPS(7)</a>, <a href="../man7/OSSL_PROVIDER-default.html">OSSL_PROVIDER-default(7)</a>, <a href="../man7/OSSL_PROVIDER-legacy.html">OSSL_PROVIDER-legacy(7)</a>, <a href="../man7/EVP_CIPHER-AES.html">EVP_CIPHER-AES(7)</a>, <a href="../man7/EVP_CIPHER-ARIA.html">EVP_CIPHER-ARIA(7)</a>, <a href="../man7/EVP_CIPHER-BLOWFISH.html">EVP_CIPHER-BLOWFISH(7)</a>, <a href="../man7/EVP_CIPHER-CAMELLIA.html">EVP_CIPHER-CAMELLIA(7)</a>, <a href="../man7/EVP_CIPHER-CAST.html">EVP_CIPHER-CAST(7)</a>, <a href="../man7/EVP_CIPHER-CHACHA.html">EVP_CIPHER-CHACHA(7)</a>, <a href="../man7/EVP_CIPHER-DES.html">EVP_CIPHER-DES(7)</a>, <a href="../man7/EVP_CIPHER-IDEA.html">EVP_CIPHER-IDEA(7)</a>, <a href="../man7/EVP_CIPHER-RC2.html">EVP_CIPHER-RC2(7)</a>, <a href="../man7/EVP_CIPHER-RC4.html">EVP_CIPHER-RC4(7)</a>, <a href="../man7/EVP_CIPHER-RC5.html">EVP_CIPHER-RC5(7)</a>, <a href="../man7/EVP_CIPHER-SEED.html">EVP_CIPHER-SEED(7)</a>, <a href="../man7/EVP_CIPHER-SM4.html">EVP_CIPHER-SM4(7)</a>, <a href="../man7/EVP_CIPHER-NULL.html">EVP_CIPHER-NULL(7)</a>, <a href="../man7/life_cycle-cipher.html">life_cycle-cipher(7)</a>, <a href="../man3/EVP_EncryptInit.html">EVP_EncryptInit(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The provider CIPHER interface was introduced in OpenSSL 3.0.</p>
+
+<p>The OSSL_FUNC_cipher_encrypt_skey_init() and OSSL_FUNC_cipher_decrypt_skey_init() were introduced in OpenSSL 3.5.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2019-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,96 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_KEM-EC</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#EC-KEM-parameters">EC KEM parameters</a></li>
+    </ul>
+  </li>
+  <li><a href="#CONFORMING-TO">CONFORMING TO</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_KEM-EC - EVP_KEM EC keytype and algorithm support</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The <b>EC</b> keytype and its parameters are described in <a href="../man7/EVP_PKEY-EC.html">EVP_PKEY-EC(7)</a>. See <a href="../man3/EVP_PKEY_encapsulate.html">EVP_PKEY_encapsulate(3)</a> and <a href="../man3/EVP_PKEY_decapsulate.html">EVP_PKEY_decapsulate(3)</a> for more info.</p>
+
+<h2 id="EC-KEM-parameters">EC KEM parameters</h2>
+
+<dl>
+
+<dt id="operation-OSSL_KEM_PARAM_OPERATION-UTF8-string">&quot;operation&quot; (<b>OSSL_KEM_PARAM_OPERATION</b>)&lt;UTF8 string&gt;</dt>
+<dd>
+
+<p>The OpenSSL EC Key Encapsulation Mechanisms only supports the following default operation (operating mode):</p>
+
+<dl>
+
+<dt id="DHKEM-OSSL_KEM_PARAM_OPERATION_DHKEM">&quot;DHKEM&quot; (<b>OSSL_KEM_PARAM_OPERATION_DHKEM</b>)</dt>
+<dd>
+
+<p>The encapsulate function generates an ephemeral keypair. It produces keymaterial by doing an ECDH key exchange using the ephemeral private key and a supplied recipient public key. A HKDF operation using the keymaterial and a kem context then produces a shared secret. The shared secret and the ephemeral public key are returned. The decapsulate function uses the recipient private key and the ephemeral public key to produce the same keymaterial, which can then be used to produce the same shared secret. See <a href="https://www.rfc-editor.org/rfc/rfc9180.html#name-dh-based-kem-dhkem">https://www.rfc-editor.org/rfc/rfc9180.html#name-dh-based-kem-dhkem</a></p>
+
+</dd>
+</dl>
+
+<p>This can be set using either EVP_PKEY_CTX_set_kem_op() or EVP_PKEY_CTX_set_params().</p>
+
+</dd>
+<dt id="ikme-OSSL_KEM_PARAM_IKME-octet-string">&quot;ikme&quot; (<b>OSSL_KEM_PARAM_IKME</b>) &lt;octet string&gt;</dt>
+<dd>
+
+<p>Used to specify the key material used for generation of the ephemeral key. This value should not be reused for other purposes. It can only be used for the curves &quot;P-256&quot;, &quot;P-384&quot; and &quot;P-521&quot; and should have a length of at least the size of the encoded private key (i.e. 32, 48 and 66 for the listed curves). If this value is not set, then a random ikm is used.</p>
+
+</dd>
+</dl>
+
+<h1 id="CONFORMING-TO">CONFORMING TO</h1>
+
+<dl>
+
+<dt id="RFC9180">RFC9180</dt>
+<dd>
+
+</dd>
+</dl>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_PKEY_CTX_set_kem_op.html">EVP_PKEY_CTX_set_kem_op(3)</a>, <a href="../man3/EVP_PKEY_encapsulate.html">EVP_PKEY_encapsulate(3)</a>, <a href="../man3/EVP_PKEY_decapsulate.html">EVP_PKEY_decapsulate(3)</a> <a href="../man3/EVP_KEYMGMT.html">EVP_KEYMGMT(3)</a>, <a href="../man3/EVP_PKEY.html">EVP_PKEY(3)</a>, <a href="../man7/provider-keymgmt.html">provider-keymgmt(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>This functionality was added in OpenSSL 3.2.</p>
+
+<p>The <code>operation</code> (operating mode) was a required parameter prior to OpenSSL 3.5. As of OpenSSL 3.5, <code>DHKEM</code> is the default operating mode, and no explicit value need be specified.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2022-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

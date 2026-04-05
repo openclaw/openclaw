@@ -1,0 +1,127 @@
+.\"
+.\" Copyright (C) 2017 by John Schember
+.\" SPDX-License-Identifier: MIT
+.\"
+.TH ARES_LIBRARY_INIT_ANDROID 3 "13 Sept 2017"
+.SH NAME
+ares_library_init_android \- c-ares library Android initialization
+.SH SYNOPSIS
+.nf
+#include <ares.h>
+
+int ares_library_init_android(jobject \fIconnectivity_manager\fP)
+
+int ares_library_android_initialized();
+
+void ares_library_init_jvm(JavaVM *\fIjvm\fP)
+
+.fi
+.SH DESCRIPTION
+The \fIares_library_init_android(3)\fP function performs initializations
+internally required by the c-ares library when used on Android. This can take
+place anytime after \fIares_library_init(3)\fP. It must take place after
+\fIares_library_init_jvm\fP. ares_library_init_android must be called before
+DNS resolution will work on Android 8 (Oreo) or newer when targetSdkVersion is
+set to 26+.
+
+As of Android 8 (API level 26) getting DNS server information has
+becomei more restrictive and can only be accessed using the
+Connectivity Manager. It is necessary to pass the connectivity
+manager to c-ares via JNI. Also, the ACCESS_NETWORK_STATE permission
+must be present in the Android application.
+
+Android older than 8 do not need to to be initialized as they
+are less restrictive. However, this is a run time not compile time
+limitation. Proper Android initialization should take place regardless
+of the targeted Android version.
+
+Deinitialization will take place though \fIares_library_cleanup(3)\fP.
+
+The \fBares_library_init_jvm\fP function allows the caller to register the JVM
+with c-ares.  It's meant to be called during JNI_OnLoad because you're
+guaranteed to have the JVM in that function. The JVM is required in order to
+use the Connectivity Manager registered using
+\fIares_library_init_android(3)\fP. This must be call before
+\fIares_library_init_android(3)\fP.
+
+The \fBares_library_android_initialized\fP function can be used to check
+whether c-ares has been initialized for use with Android.
+.SH RETURN VALUES
+ARES_SUCCESS will be returned on success otherwise an error code will be
+returned.
+.SH THREAD SAFETY
+.B These init functions are not thread safe.
+You have to call it once the program has started, but this call must be done
+before the program starts any other thread. This is required to avoid
+potential race conditions in library initialization, and also due to the fact
+these might call functions from other libraries that
+are thread unsafe, and could conflict with any other thread that is already
+using these other libraries.
+.SH JNI
+Accessing the Connectivity Manager though Java:
+
+Register the \fIares_library_android_init\fP.
+.nf
+  static JNINativeMethod funcs[] = {
+  { "initialize_native",     "(Landroid/net/ConnectivityManager;)I",
+    (void *)&ares_library_init_android}
+  };
+
+  JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved)
+  {
+    JNIEnv *env = NULL;
+    jclass  cls = NULL;
+    jint    res;
+  
+    if ((*vm)->GetEnv(vm, (void **)&env, JNI_VERSION_1_6) != JNI_OK)
+      return -1;
+  
+    cls = (*env)->FindClass(env, JNIT_CLASS);
+    if (cls == NULL)
+      return -1;
+  
+    res = (*env)->RegisterNatives(env, cls, funcs, sizeof(funcs)/sizeof(funcs[0]));
+    if (res != 0)
+      return -1;
+  
+    ares_library_init_jvm(vm);
+    return JNI_VERSION_1_6;
+  }
+.fi
+Calling the registered function from Java:
+.nf
+  public class MyObject {
+    static {
+      System.loadLibrary("cares");
+    }
+  
+    private static native boolean initialize_native(ConnectivityManager
+      connectivity_manager);
+  
+    public static boolean initialize(Context context) {
+      initialize_native((ConnectivityManager)context.getSystemService(Context.CONNECTIVITY_SERVICE));
+    }
+  }
+.fi
+Initializing the Connectivity Manager in JNI directly using an Android
+Context. It is assumed the JVM has already been registered through
+\fIJNI_OnLoad\fP.
+.nf
+  void initialize(jobject android_context)
+  {
+    jclass obj_cls = jni_get_class(env, "android/content/Context");
+    jmethodID obj_mid = jni_get_method_id(env, obj_cls, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;");
+    jfieldID fid = (*env)->GetStaticFieldID(env, obj_cls, "CONNECTIVITY_SERVICE", "Ljava/lang/String;");
+    jstring str = (*env)->GetStaticObjectField(env, obj_cls, fid);
+    connectivity_manager = (*env)->CallObjectMethod(env, android_context, obj_mid, str);
+    if (connectivity_manager == NULL)
+      return;
+    ares_library_init_android(connectivity_manager);
+  }
+.fi
+.SH AVAILABILITY
+This function was first introduced in c-ares version 1.15.0.
+.SH SEE ALSO
+.BR ares_library_init (3),
+.BR ares_library_cleanup (3),
+

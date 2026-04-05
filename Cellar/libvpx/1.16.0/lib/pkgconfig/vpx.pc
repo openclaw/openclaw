@@ -1,0 +1,14 @@
+# pkg-config file from libvpx v1.16.0
+prefix=/opt/homebrew/Cellar/libvpx/1.16.0
+exec_prefix=${prefix}
+libdir=${prefix}/lib
+includedir=${prefix}/include
+
+Name: vpx
+Description: WebM Project VPx codec implementation
+Version: 1.16.0
+Requires:
+Conflicts:
+Libs: -L${libdir} -lvpx -lm
+Libs.private: -lm -lpthread
+Cflags: -I${includedir}

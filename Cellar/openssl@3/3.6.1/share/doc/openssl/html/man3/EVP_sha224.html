@@ -1,0 +1,83 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_sha224</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#CONFORMING-TO">CONFORMING TO</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_sha224, EVP_sha256, EVP_sha512_224, EVP_sha512_256, EVP_sha384, EVP_sha512 - SHA-2 For EVP</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+
+const EVP_MD *EVP_sha224(void);
+const EVP_MD *EVP_sha256(void);
+const EVP_MD *EVP_sha512_224(void);
+const EVP_MD *EVP_sha512_256(void);
+const EVP_MD *EVP_sha384(void);
+const EVP_MD *EVP_sha512(void);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SHA-2 (Secure Hash Algorithm 2) is a family of cryptographic hash functions standardized in NIST FIPS 180-4, first published in 2001.</p>
+
+<dl>
+
+<dt id="EVP_sha224-EVP_sha256-EVP_sha512_224-EVP_sha512_256-EVP_sha384-EVP_sha512">EVP_sha224(), EVP_sha256(), EVP_sha512_224, EVP_sha512_256, EVP_sha384(), EVP_sha512()</dt>
+<dd>
+
+<p>The SHA-2 SHA-224, SHA-256, SHA-512/224, SHA512/256, SHA-384 and SHA-512 algorithms, which generate 224, 256, 224, 256, 384 and 512 bits respectively of output from a given input.</p>
+
+<p>The two algorithms: SHA-512/224 and SHA512/256 are truncated forms of the SHA-512 algorithm. They are distinct from SHA-224 and SHA-256 even though their outputs are of the same size.</p>
+
+</dd>
+</dl>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>Developers should be aware of the negative performance implications of calling these functions multiple times and should consider using <a href="../man3/EVP_MD_fetch.html">EVP_MD_fetch(3)</a> with <a href="../man7/EVP_MD-SHA2.html">EVP_MD-SHA2(7)</a>instead. See <a href="../man7/crypto.html">&quot;Performance&quot; in crypto(7)</a> for further information.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>These functions return a <b>EVP_MD</b> structure that contains the implementation of the message digest. See <a href="../man3/EVP_MD_meth_new.html">EVP_MD_meth_new(3)</a> for details of the <b>EVP_MD</b> structure.</p>
+
+<h1 id="CONFORMING-TO">CONFORMING TO</h1>
+
+<p>NIST FIPS 180-4.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/evp.html">evp(7)</a>, <a href="../man3/EVP_DigestInit.html">EVP_DigestInit(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2017-2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

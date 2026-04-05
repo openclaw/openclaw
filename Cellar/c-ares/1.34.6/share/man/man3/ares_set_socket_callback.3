@@ -1,0 +1,34 @@
+.\"
+.\" Copyright (C) Daniel Stenberg
+.\" SPDX-License-Identifier: MIT
+.\"
+.TH ARES_SET_SOCKET_CALLBACK 3 "20 Nov 2009"
+.SH NAME
+ares_set_socket_callback \- Set a socket creation callback
+.SH SYNOPSIS
+.nf
+#include <ares.h>
+
+typedef int (*ares_sock_create_callback)(ares_socket_t \fIsocket_fd\fP,
+                                         int \fItype\fP,
+                                         void *\fIuserdata\fP)
+
+void ares_set_socket_callback(ares_channel_t *\fIchannel\fP,
+                              ares_sock_create_callback \fIcallback\fP,
+                              void *\fIuserdata\fP)
+.PP
+.B cc file.c -lcares
+.fi
+.SH DESCRIPTION
+.PP
+This function sets a \fIcallback\fP in the given ares channel handle. This
+callback function will be invoked after the socket has been created, and
+connected to the remote server. The callback must return ARES_SUCCESS if
+things are fine, or return -1 to signal an error. A returned error will
+abort the ares operation.
+.SH SEE ALSO
+.BR ares_init_options (3),
+.BR ares_set_socket_configure_callback (3)
+.SH AVAILABILITY
+ares_set_socket_callback(3) was added in c-ares 1.6.0
+

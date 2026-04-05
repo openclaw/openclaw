@@ -1,0 +1,62 @@
+.\"
+.\" Copyright 1998 by the Massachusetts Institute of Technology.
+.\" SPDX-License-Identifier: MIT
+.\"
+.TH ARES_PARSE_URI_REPLY 3 "14 August 2020"
+.SH NAME
+ares_parse_uri_reply \- Parse a reply to a DNS query of type URI
+.SH SYNOPSIS
+.nf
+#include <ares.h>
+
+int ares_parse_uri_reply(const unsigned char* \fIabuf\fP, int \fIalen\fP,
+                         struct ares_uri_reply** \fIuri_out\fP);
+.fi
+.SH DESCRIPTION
+The \fIares_parse_uri_reply(3)\fP function parses the response to a query of
+type URI into a linked list of
+.I struct ares_uri_reply 
+The parameters
+.I abuf
+and
+.I alen
+give the contents of the response.  The result is stored in allocated
+memory and a pointer to it stored into the variable pointed to by
+.IR uri_out .
+It is the caller's responsibility to free the resulting
+.IR uri_out
+structure when it is no longer needed using the function
+\fBares_free_data(3)\fP.
+
+The structure 
+.I ares_uri_reply
+contains the following fields:
+.nf
+struct ares_uri_reply {
+    struct ares_uri_reply       *next;
+    unsigned short              weight;
+    unsigned short              priority;
+    char                        *uri;
+    int                         ttl;
+};
+.fi
+.SH RETURN VALUES
+.B ares_parse_uri_reply
+can return any of the following values:
+.TP 15
+.B ARES_SUCCESS
+The response was successfully parsed.
+.TP 15
+.B ARES_EBADRESP
+The response was malformatted.
+.TP 15
+.B ARES_ENODATA
+The response did not contain an answer to the query.
+.TP 15
+.B ARES_ENOMEM
+Memory was exhausted.
+.SH AVAILABILITY
+
+.SH SEE ALSO
+.BR ares_query (3)
+.BR ares_free_data (3)

@@ -1,0 +1,119 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_EncodeInit</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_ENCODE_CTX_new, EVP_ENCODE_CTX_free, EVP_ENCODE_CTX_copy, EVP_ENCODE_CTX_num, EVP_EncodeInit, EVP_EncodeUpdate, EVP_EncodeFinal, EVP_EncodeBlock, EVP_DecodeInit, EVP_DecodeUpdate, EVP_DecodeFinal, EVP_DecodeBlock - EVP base64 encode/decode routines</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+
+EVP_ENCODE_CTX *EVP_ENCODE_CTX_new(void);
+void EVP_ENCODE_CTX_free(EVP_ENCODE_CTX *ctx);
+int EVP_ENCODE_CTX_copy(EVP_ENCODE_CTX *dctx, EVP_ENCODE_CTX *sctx);
+int EVP_ENCODE_CTX_num(EVP_ENCODE_CTX *ctx);
+void EVP_EncodeInit(EVP_ENCODE_CTX *ctx);
+int EVP_EncodeUpdate(EVP_ENCODE_CTX *ctx, unsigned char *out, int *outl,
+                     const unsigned char *in, int inl);
+void EVP_EncodeFinal(EVP_ENCODE_CTX *ctx, unsigned char *out, int *outl);
+int EVP_EncodeBlock(unsigned char *t, const unsigned char *f, int n);
+
+void EVP_DecodeInit(EVP_ENCODE_CTX *ctx);
+int EVP_DecodeUpdate(EVP_ENCODE_CTX *ctx, unsigned char *out, int *outl,
+                     const unsigned char *in, int inl);
+int EVP_DecodeFinal(EVP_ENCODE_CTX *ctx, unsigned char *out, int *outl);
+int EVP_DecodeBlock(unsigned char *t, const unsigned char *f, int n);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The EVP encode routines provide a high-level interface to base64 encoding and decoding. Base64 encoding converts binary data into a printable form that uses the characters A-Z, a-z, 0-9, &quot;+&quot; and &quot;/&quot; to represent the data. For every 3 bytes of binary data provided 4 bytes of base64 encoded data will be produced plus some occasional newlines (see below). If the input data length is not a multiple of 3 then the output data will be padded at the end using the &quot;=&quot; character.</p>
+
+<p>EVP_ENCODE_CTX_new() allocates, initializes and returns a context to be used for the encode/decode functions.</p>
+
+<p>EVP_ENCODE_CTX_free() cleans up an encode/decode context <b>ctx</b> and frees up the space allocated to it. If the argument is NULL, nothing is done.</p>
+
+<p>Encoding of binary data is performed in blocks of 48 input bytes (or less for the final block). For each 48 byte input block encoded 64 bytes of base64 data is output plus an additional newline character (i.e. 65 bytes in total). The final block (which may be less than 48 bytes) will output 4 bytes for every 3 bytes of input. If the data length is not divisible by 3 then a full 4 bytes is still output for the final 1 or 2 bytes of input. Similarly a newline character will also be output.</p>
+
+<p>EVP_EncodeInit() initialises <b>ctx</b> for the start of a new encoding operation.</p>
+
+<p>EVP_EncodeUpdate() encode <b>inl</b> bytes of data found in the buffer pointed to by <b>in</b>. The output is stored in the buffer <b>out</b> and the number of bytes output is stored in <b>*outl</b>. It is the caller&#39;s responsibility to ensure that the buffer at <b>out</b> is sufficiently large to accommodate the output data. Only full blocks of data (48 bytes) will be immediately processed and output by this function. Any remainder is held in the <b>ctx</b> object and will be processed by a subsequent call to EVP_EncodeUpdate() or EVP_EncodeFinal(). To calculate the required size of the output buffer add together the value of <b>inl</b> with the amount of unprocessed data held in <b>ctx</b> and divide the result by 48 (ignore any remainder). This gives the number of blocks of data that will be processed. Ensure the output buffer contains 65 bytes of storage for each block, plus an additional byte for a NUL terminator. EVP_EncodeUpdate() may be called repeatedly to process large amounts of input data. In the event of an error EVP_EncodeUpdate() will set <b>*outl</b> to 0 and return 0. On success 1 will be returned.</p>
+
+<p>EVP_EncodeFinal() must be called at the end of an encoding operation. It will process any partial block of data remaining in the <b>ctx</b> object. The output data will be stored in <b>out</b> and the length of the data written will be stored in <b>*outl</b>. It is the caller&#39;s responsibility to ensure that <b>out</b> is sufficiently large to accommodate the output data which will never be more than 65 bytes plus an additional NUL terminator (i.e. 66 bytes in total).</p>
+
+<p>EVP_ENCODE_CTX_copy() can be used to copy a context <b>sctx</b> to a context <b>dctx</b>. <b>dctx</b> must be initialized before calling this function.</p>
+
+<p>EVP_ENCODE_CTX_num() will return the number of as yet unprocessed bytes still to be encoded or decoded that are pending in the <b>ctx</b> object.</p>
+
+<p>EVP_EncodeBlock() encodes a full block of input data in <b>f</b> and of length <b>n</b> and stores it in <b>t</b>. For every 3 bytes of input provided 4 bytes of output data will be produced. If <b>n</b> is not divisible by 3 then the block is encoded as a final block of data and the output is padded such that it is always divisible by 4. Additionally a NUL terminator character will be added. For example if 16 bytes of input data is provided then 24 bytes of encoded data is created plus 1 byte for a NUL terminator (i.e. 25 bytes in total). The length of the data generated <i>without</i> the NUL terminator is returned from the function.</p>
+
+<p>EVP_DecodeInit() initialises <b>ctx</b> for the start of a new decoding operation.</p>
+
+<p>EVP_DecodeUpdate() decodes <b>inl</b> characters of data found in the buffer pointed to by <b>in</b>. The output is stored in the buffer <b>out</b> and the number of bytes output is stored in <b>*outl</b>. It is the caller&#39;s responsibility to ensure that the buffer at <b>out</b> is sufficiently large to accommodate the output data. This function will attempt to decode as much data as possible in chunks of up to 80 base64 characters at a time. Residual input shorter than the internal chunk size will be buffered in <b>ctx</b> if its length is not a multiple of 4 (including any padding), to be processed in future calls to EVP_DecodeUpdate() or EVP_DecodeFinal(). If the final chunk length is a multiple of 4, it is decoded immediately and not buffered.</p>
+
+<p>Any whitespace, newline or carriage return characters are ignored. For compatibility with <b>PEM</b>, the <b>-</b> (hyphen) character is treated as a soft end-of-input, subsequent bytes are not buffered, and the return value will be 0 to indicate that the end of the base64 input has been detected. The soft end-of-input, if present, MUST occur after a multiple of 4 valid base64 input bytes. The soft end-of-input condition is not remembered in <b>ctx</b>, it is up to the caller to avoid further calls to EVP_DecodeUpdate() after a 0 or negative (error) return.</p>
+
+<p>If any invalid base64 characters are encountered or if the base64 padding character (<b>=</b>) is encountered in the middle of the data then EVP_DecodeUpdate() returns -1 to indicate an error. A return value of 0 or 1 indicates successful processing of the data. A return value of 0 additionally indicates that the last 4 bytes processed ended with base64 padding (<b>=</b>), or that the next 4 byte group starts with the soft end-of-input (<b>-</b>) character, and therefore no more input data is expected to be processed.</p>
+
+<p>For every 4 valid base64 bytes processed (ignoring whitespace, carriage returns and line feeds), 3 bytes of binary output data will be produced (except at the end of data terminated with one or two padding characters).</p>
+
+<p>EVP_DecodeFinal() should be called at the end of a decoding operation, but it will never decode additional data. If there is no residual data it will return 1 to indicate success. If there is residual data, its length is not a multiple of 4, i.e. it was not properly padded, -1 is is returned in that case to indicate an error.</p>
+
+<p>EVP_DecodeBlock() will decode the block of <b>n</b> characters of base64 data contained in <b>f</b> and store the result in <b>t</b>. Any leading whitespace will be trimmed as will any trailing whitespace, newlines, carriage returns or EOF characters. Internal whitespace MUST NOT be present. After trimming the data in <b>f</b> MUST consist entirely of valid base64 characters or padding (only at the tail of the input) and its length MUST be divisible by 4. For every 4 input bytes exactly 3 output bytes will be produced. Padding bytes (<b>=</b>) (even if internal) are decoded to 6 zero bits, the caller is responsible for taking trailing padding into account, by ignoring as many bytes at the tail of the returned output. EVP_DecodeBlock() will return the length of the data decoded or -1 on error.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>EVP_ENCODE_CTX_new() returns a pointer to the newly allocated EVP_ENCODE_CTX object or NULL on error.</p>
+
+<p>EVP_ENCODE_CTX_num() returns the number of bytes pending encoding or decoding in <b>ctx</b>.</p>
+
+<p>EVP_EncodeUpdate() returns 0 on error or 1 on success.</p>
+
+<p>EVP_EncodeBlock() returns the number of bytes encoded excluding the NUL terminator.</p>
+
+<p>EVP_DecodeUpdate() returns -1 on error and 0 or 1 on success. If 0 is returned then no more non-padding base64 characters are expected.</p>
+
+<p>EVP_DecodeFinal() returns -1 on error or 1 on success.</p>
+
+<p>EVP_DecodeBlock() returns the length of the data decoded or -1 on error.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/evp.html">evp(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The EVP_DecodeUpdate() function was fixed in OpenSSL 3.5, so now it produces the number of bytes specified in <b>outl*</b> and does not decode padding bytes (<b>=</b>) to 6 zero bits.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2016-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

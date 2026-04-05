@@ -1,0 +1,81 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>X509_STORE_get0_param</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>X509_STORE_get0_param, X509_STORE_set1_param, X509_STORE_get1_objects, X509_STORE_get0_objects, X509_STORE_get1_all_certs - X509_STORE setter and getter functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/x509_vfy.h&gt;
+
+X509_VERIFY_PARAM *X509_STORE_get0_param(const X509_STORE *xs);
+int X509_STORE_set1_param(X509_STORE *xs, const X509_VERIFY_PARAM *pm);
+STACK_OF(X509_OBJECT) *X509_STORE_get1_objects(X509_STORE *xs);
+STACK_OF(X509_OBJECT) *X509_STORE_get0_objects(const X509_STORE *xs);
+STACK_OF(X509) *X509_STORE_get1_all_certs(X509_STORE *xs);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>X509_STORE_set1_param() sets the verification parameters to <i>pm</i> for <i>xs</i>.</p>
+
+<p>X509_STORE_get0_param() retrieves an internal pointer to the verification parameters for <i>xs</i>. The returned pointer must not be freed by the calling application</p>
+
+<p>X509_STORE_get1_objects() returns a snapshot of all objects in the store&#39;s X509 cache. The cache contains <b>X509</b> and <b>X509_CRL</b> objects. The caller is responsible for freeing the returned list, using sk_X509_OBJECT_pop_free(sk, X509_OBJECT_free).</p>
+
+<p>X509_STORE_get0_objects() retrieves an internal pointer to the store&#39;s X509 object cache. The cache contains <b>X509</b> and <b>X509_CRL</b> objects. The returned pointer must not be freed by the calling application. If the store is shared across multiple threads, it is not safe to use the result of this function. Use X509_STORE_get1_objects() instead, which avoids this problem.</p>
+
+<p>X509_STORE_get1_all_certs() returns a list of all certificates in the store. The caller is responsible for freeing the returned list with OSSL_STACK_OF_X509_free().</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>X509_STORE_get0_param() returns a pointer to an <b>X509_VERIFY_PARAM</b> structure.</p>
+
+<p>X509_STORE_set1_param() returns 1 for success and 0 for failure.</p>
+
+<p>X509_STORE_get1_objects() returns a pointer to a stack of the retrieved objects on success, else NULL.</p>
+
+<p>X509_STORE_get0_objects() returns a pointer to a stack of <b>X509_OBJECT</b>.</p>
+
+<p>X509_STORE_get1_all_certs() returns a pointer to a stack of the retrieved certificates on success, else NULL.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/DEFINE_STACK_OF.html">DEFINE_STACK_OF(3)</a>, <a href="../man3/X509_STORE_new.html">X509_STORE_new(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p><b>X509_STORE_get0_param</b> and <b>X509_STORE_get0_objects</b> were added in OpenSSL 1.1.0. <b>X509_STORE_get1_certs</b> was added in OpenSSL 3.0. <b>X509_STORE_get1_objects</b> was added in OpenSSL 3.3.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2016-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

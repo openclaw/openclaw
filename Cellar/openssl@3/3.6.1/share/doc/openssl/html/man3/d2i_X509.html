@@ -1,0 +1,256 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>d2i_X509</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#WARNINGS">WARNINGS</a></li>
+  <li><a href="#BUGS">BUGS</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>d2i_ACCESS_DESCRIPTION, d2i_ADMISSIONS, d2i_ADMISSION_SYNTAX, d2i_ASIdOrRange, d2i_ASIdentifierChoice, d2i_ASIdentifiers, d2i_ASN1_BIT_STRING, d2i_ASN1_BMPSTRING, d2i_ASN1_ENUMERATED, d2i_ASN1_GENERALIZEDTIME, d2i_ASN1_GENERALSTRING, d2i_ASN1_IA5STRING, d2i_ASN1_INTEGER, d2i_ASN1_NULL, d2i_ASN1_OBJECT, d2i_ASN1_OCTET_STRING, d2i_ASN1_PRINTABLE, d2i_ASN1_PRINTABLESTRING, d2i_ASN1_SEQUENCE_ANY, d2i_ASN1_SET_ANY, d2i_ASN1_T61STRING, d2i_ASN1_TIME, d2i_ASN1_TYPE, d2i_ASN1_UINTEGER, d2i_ASN1_UNIVERSALSTRING, d2i_ASN1_UTCTIME, d2i_ASN1_UTF8STRING, d2i_ASN1_VISIBLESTRING, d2i_ASRange, d2i_AUTHORITY_INFO_ACCESS, d2i_AUTHORITY_KEYID, d2i_BASIC_CONSTRAINTS, d2i_CERTIFICATEPOLICIES, d2i_CMS_ContentInfo, d2i_CMS_ReceiptRequest, d2i_CMS_bio, d2i_CRL_DIST_POINTS, d2i_DHxparams, d2i_DIRECTORYSTRING, d2i_DISPLAYTEXT, d2i_DIST_POINT, d2i_DIST_POINT_NAME, d2i_DSA_SIG, d2i_ECDSA_SIG, d2i_ECPKParameters, d2i_EDIPARTYNAME, d2i_ESS_CERT_ID, d2i_ESS_CERT_ID_V2, d2i_ESS_ISSUER_SERIAL, d2i_ESS_SIGNING_CERT, d2i_ESS_SIGNING_CERT_V2, d2i_EXTENDED_KEY_USAGE, d2i_GENERAL_NAME, d2i_GENERAL_NAMES, d2i_IPAddressChoice, d2i_IPAddressFamily, d2i_IPAddressOrRange, d2i_IPAddressRange, d2i_ISSUER_SIGN_TOOL, d2i_ISSUING_DIST_POINT, d2i_NAMING_AUTHORITY, d2i_NETSCAPE_CERT_SEQUENCE, d2i_NETSCAPE_SPKAC, d2i_NETSCAPE_SPKI, d2i_NOTICEREF, d2i_OCSP_BASICRESP, d2i_OCSP_CERTID, d2i_OCSP_CERTSTATUS, d2i_OCSP_CRLID, d2i_OCSP_ONEREQ, d2i_OCSP_REQINFO, d2i_OCSP_REQUEST, d2i_OCSP_RESPBYTES, d2i_OCSP_RESPDATA, d2i_OCSP_RESPID, d2i_OCSP_RESPONSE, d2i_OCSP_REVOKEDINFO, d2i_OCSP_SERVICELOC, d2i_OCSP_SIGNATURE, d2i_OCSP_SINGLERESP, d2i_OSSL_AA_DIST_POINT, d2i_OSSL_ALLOWED_ATTRIBUTES_CHOICE, d2i_OSSL_ALLOWED_ATTRIBUTES_ITEM, d2i_OSSL_ALLOWED_ATTRIBUTES_SYNTAX, d2i_OSSL_ATAV, d2i_OSSL_ATTRIBUTE_DESCRIPTOR, d2i_OSSL_ATTRIBUTE_MAPPING, d2i_OSSL_ATTRIBUTE_MAPPINGS, d2i_OSSL_ATTRIBUTE_TYPE_MAPPING, d2i_OSSL_ATTRIBUTE_VALUE_MAPPING, d2i_OSSL_ATTRIBUTES_SYNTAX, d2i_OSSL_AUTHORITY_ATTRIBUTE_ID_SYNTAX, d2i_OSSL_BASIC_ATTR_CONSTRAINTS, d2i_OSSL_CMP_ATAVS, d2i_OSSL_CMP_MSG, d2i_OSSL_CMP_PKIHEADER, d2i_OSSL_CMP_PKISI, d2i_OSSL_CRMF_CERTID, d2i_OSSL_CRMF_CERTTEMPLATE, d2i_OSSL_CRMF_ENCRYPTEDKEY, d2i_OSSL_CRMF_ENCRYPTEDVALUE, d2i_OSSL_CRMF_MSG, d2i_OSSL_CRMF_MSGS, d2i_OSSL_CRMF_PBMPARAMETER, d2i_OSSL_CRMF_PKIPUBLICATIONINFO, d2i_OSSL_CRMF_SINGLEPUBINFO, d2i_OSSL_DAY_TIME, d2i_OSSL_DAY_TIME_BAND, d2i_OSSL_HASH, d2i_OSSL_IETF_ATTR_SYNTAX, d2i_OSSL_INFO_SYNTAX, d2i_OSSL_INFO_SYNTAX_POINTER, d2i_OSSL_ISSUER_SERIAL, d2i_OSSL_NAMED_DAY, d2i_OSSL_OBJECT_DIGEST_INFO, d2i_OSSL_PRIVILEGE_POLICY_ID, d2i_OSSL_ROLE_SPEC_CERT_ID, d2i_OSSL_ROLE_SPEC_CERT_ID_SYNTAX, d2i_OSSL_TARGET_CERT, d2i_OSSL_TARGET, d2i_OSSL_TARGETING_INFORMATION, d2i_OSSL_TARGETS, d2i_OSSL_TIME_PERIOD, d2i_OSSL_TIME_SPEC, d2i_OSSL_TIME_SPEC_ABSOLUTE, d2i_OSSL_TIME_SPEC_DAY, d2i_OSSL_TIME_SPEC_MONTH, d2i_OSSL_TIME_SPEC_TIME, d2i_OSSL_TIME_SPEC_WEEKS, d2i_OSSL_TIME_SPEC_X_DAY_OF, d2i_OSSL_USER_NOTICE_SYNTAX, d2i_OTHERNAME, d2i_PBE2PARAM, d2i_PBEPARAM, d2i_PBKDF2PARAM, d2i_PBMAC1PARAM, d2i_PKCS12, d2i_PKCS12_BAGS, d2i_PKCS12_MAC_DATA, d2i_PKCS12_SAFEBAG, d2i_PKCS12_bio, d2i_PKCS12_fp, d2i_PKCS7, d2i_PKCS7_DIGEST, d2i_PKCS7_ENCRYPT, d2i_PKCS7_ENC_CONTENT, d2i_PKCS7_ENVELOPE, d2i_PKCS7_ISSUER_AND_SERIAL, d2i_PKCS7_RECIP_INFO, d2i_PKCS7_SIGNED, d2i_PKCS7_SIGNER_INFO, d2i_PKCS7_SIGN_ENVELOPE, d2i_PKCS7_bio, d2i_PKCS7_fp, d2i_PKCS8_PRIV_KEY_INFO, d2i_PKCS8_PRIV_KEY_INFO_bio, d2i_PKCS8_PRIV_KEY_INFO_fp, d2i_PKCS8_bio, d2i_PKCS8_fp, d2i_PKEY_USAGE_PERIOD, d2i_POLICYINFO, d2i_POLICYQUALINFO, d2i_PROFESSION_INFO, d2i_PROXY_CERT_INFO_EXTENSION, d2i_PROXY_POLICY, d2i_RSA_OAEP_PARAMS, d2i_RSA_PSS_PARAMS, d2i_SCRYPT_PARAMS, d2i_SCT_LIST, d2i_SXNET, d2i_SXNETID, d2i_TS_ACCURACY, d2i_TS_MSG_IMPRINT, d2i_TS_MSG_IMPRINT_bio, d2i_TS_MSG_IMPRINT_fp, d2i_TS_REQ, d2i_TS_REQ_bio, d2i_TS_REQ_fp, d2i_TS_RESP, d2i_TS_RESP_bio, d2i_TS_RESP_fp, d2i_TS_STATUS_INFO, d2i_TS_TST_INFO, d2i_TS_TST_INFO_bio, d2i_TS_TST_INFO_fp, d2i_USERNOTICE, d2i_X509, d2i_X509_bio, d2i_X509_fp, d2i_X509_ACERT, d2i_X509_ACERT_bio, d2i_X509_ACERT_fp, d2i_X509_ALGOR, d2i_X509_ALGORS, d2i_X509_ATTRIBUTE, d2i_X509_CERT_AUX, d2i_X509_CINF, d2i_X509_CRL, d2i_X509_CRL_INFO, d2i_X509_CRL_bio, d2i_X509_CRL_fp, d2i_X509_EXTENSION, d2i_X509_EXTENSIONS, d2i_X509_NAME, d2i_X509_NAME_ENTRY, d2i_X509_PUBKEY, d2i_X509_PUBKEY_bio, d2i_X509_PUBKEY_fp, d2i_X509_REQ, d2i_X509_REQ_INFO, d2i_X509_REQ_bio, d2i_X509_REQ_fp, d2i_X509_REVOKED, d2i_X509_SIG, d2i_X509_VAL, i2d_ACCESS_DESCRIPTION, i2d_ADMISSIONS, i2d_ADMISSION_SYNTAX, i2d_ASIdOrRange, i2d_ASIdentifierChoice, i2d_ASIdentifiers, i2d_ASN1_BIT_STRING, i2d_ASN1_BMPSTRING, i2d_ASN1_ENUMERATED, i2d_ASN1_GENERALIZEDTIME, i2d_ASN1_GENERALSTRING, i2d_ASN1_IA5STRING, i2d_ASN1_INTEGER, i2d_ASN1_NULL, i2d_ASN1_OBJECT, i2d_ASN1_OCTET_STRING, i2d_ASN1_PRINTABLE, i2d_ASN1_PRINTABLESTRING, i2d_ASN1_SEQUENCE_ANY, i2d_ASN1_SET_ANY, i2d_ASN1_T61STRING, i2d_ASN1_TIME, i2d_ASN1_TYPE, i2d_ASN1_UNIVERSALSTRING, i2d_ASN1_UTCTIME, i2d_ASN1_UTF8STRING, i2d_ASN1_VISIBLESTRING, i2d_ASN1_bio_stream, i2d_ASRange, i2d_AUTHORITY_INFO_ACCESS, i2d_AUTHORITY_KEYID, i2d_BASIC_CONSTRAINTS, i2d_CERTIFICATEPOLICIES, i2d_CMS_ContentInfo, i2d_CMS_ReceiptRequest, i2d_CMS_bio, i2d_CRL_DIST_POINTS, i2d_DHxparams, i2d_DIRECTORYSTRING, i2d_DISPLAYTEXT, i2d_DIST_POINT, i2d_DIST_POINT_NAME, i2d_DSA_SIG, i2d_ECDSA_SIG, i2d_ECPKParameters, i2d_EDIPARTYNAME, i2d_ESS_CERT_ID, i2d_ESS_CERT_ID_V2, i2d_ESS_ISSUER_SERIAL, i2d_ESS_SIGNING_CERT, i2d_ESS_SIGNING_CERT_V2, i2d_EXTENDED_KEY_USAGE, i2d_GENERAL_NAME, i2d_GENERAL_NAMES, i2d_IPAddressChoice, i2d_IPAddressFamily, i2d_IPAddressOrRange, i2d_IPAddressRange, i2d_ISSUER_SIGN_TOOL, i2d_ISSUING_DIST_POINT, i2d_NAMING_AUTHORITY, i2d_NETSCAPE_CERT_SEQUENCE, i2d_NETSCAPE_SPKAC, i2d_NETSCAPE_SPKI, i2d_NOTICEREF, i2d_OCSP_BASICRESP, i2d_OCSP_CERTID, i2d_OCSP_CERTSTATUS, i2d_OCSP_CRLID, i2d_OCSP_ONEREQ, i2d_OCSP_REQINFO, i2d_OCSP_REQUEST, i2d_OCSP_RESPBYTES, i2d_OCSP_RESPDATA, i2d_OCSP_RESPID, i2d_OCSP_RESPONSE, i2d_OCSP_REVOKEDINFO, i2d_OCSP_SERVICELOC, i2d_OCSP_SIGNATURE, i2d_OCSP_SINGLERESP, i2d_OSSL_AA_DIST_POINT, i2d_OSSL_ALLOWED_ATTRIBUTES_CHOICE, i2d_OSSL_ALLOWED_ATTRIBUTES_ITEM, i2d_OSSL_ALLOWED_ATTRIBUTES_SYNTAX, i2d_OSSL_ATAV, i2d_OSSL_ATTRIBUTE_DESCRIPTOR, i2d_OSSL_ATTRIBUTE_MAPPING, i2d_OSSL_ATTRIBUTE_MAPPINGS, i2d_OSSL_ATTRIBUTE_TYPE_MAPPING, i2d_OSSL_ATTRIBUTE_VALUE_MAPPING, i2d_OSSL_ATTRIBUTES_SYNTAX, i2d_OSSL_AUTHORITY_ATTRIBUTE_ID_SYNTAX, i2d_OSSL_BASIC_ATTR_CONSTRAINTS, i2d_OSSL_CMP_ATAVS, i2d_OSSL_CMP_MSG, i2d_OSSL_CMP_PKIHEADER, i2d_OSSL_CMP_PKISI, i2d_OSSL_CRMF_CERTID, i2d_OSSL_CRMF_CERTTEMPLATE, i2d_OSSL_CRMF_ENCRYPTEDKEY, i2d_OSSL_CRMF_ENCRYPTEDVALUE, i2d_OSSL_CRMF_MSG, i2d_OSSL_CRMF_MSGS, i2d_OSSL_CRMF_PBMPARAMETER, i2d_OSSL_CRMF_PKIPUBLICATIONINFO, i2d_OSSL_CRMF_SINGLEPUBINFO, i2d_OSSL_HASH, i2d_OSSL_DAY_TIME, i2d_OSSL_DAY_TIME_BAND, i2d_OSSL_IETF_ATTR_SYNTAX, i2d_OSSL_INFO_SYNTAX, i2d_OSSL_INFO_SYNTAX_POINTER, i2d_OSSL_ISSUER_SERIAL, i2d_OSSL_NAMED_DAY, i2d_OSSL_OBJECT_DIGEST_INFO, i2d_OSSL_PRIVILEGE_POLICY_ID, i2d_OSSL_ROLE_SPEC_CERT_ID, i2d_OSSL_ROLE_SPEC_CERT_ID_SYNTAX, i2d_OSSL_TARGET_CERT, i2d_OSSL_TARGET, i2d_OSSL_TARGETING_INFORMATION, i2d_OSSL_TARGETS, i2d_OSSL_TIME_PERIOD, i2d_OSSL_TIME_SPEC, i2d_OSSL_TIME_SPEC_ABSOLUTE, i2d_OSSL_TIME_SPEC_DAY, i2d_OSSL_TIME_SPEC_MONTH, i2d_OSSL_TIME_SPEC_TIME, i2d_OSSL_TIME_SPEC_WEEKS, i2d_OSSL_TIME_SPEC_X_DAY_OF, i2d_OSSL_USER_NOTICE_SYNTAX, i2d_OTHERNAME, i2d_PBE2PARAM, i2d_PBEPARAM, i2d_PBKDF2PARAM, i2d_PBMAC1PARAM, i2d_PKCS12, i2d_PKCS12_BAGS, i2d_PKCS12_MAC_DATA, i2d_PKCS12_SAFEBAG, i2d_PKCS12_bio, i2d_PKCS12_fp, i2d_PKCS7, i2d_PKCS7_DIGEST, i2d_PKCS7_ENCRYPT, i2d_PKCS7_ENC_CONTENT, i2d_PKCS7_ENVELOPE, i2d_PKCS7_ISSUER_AND_SERIAL, i2d_PKCS7_NDEF, i2d_PKCS7_RECIP_INFO, i2d_PKCS7_SIGNED, i2d_PKCS7_SIGNER_INFO, i2d_PKCS7_SIGN_ENVELOPE, i2d_PKCS7_bio, i2d_PKCS7_fp, i2d_PKCS8PrivateKeyInfo_bio, i2d_PKCS8PrivateKeyInfo_fp, i2d_PKCS8_PRIV_KEY_INFO, i2d_PKCS8_PRIV_KEY_INFO_bio, i2d_PKCS8_PRIV_KEY_INFO_fp, i2d_PKCS8_bio, i2d_PKCS8_fp, i2d_PKEY_USAGE_PERIOD, i2d_POLICYINFO, i2d_POLICYQUALINFO, i2d_PROFESSION_INFO, i2d_PROXY_CERT_INFO_EXTENSION, i2d_PROXY_POLICY, i2d_RSA_OAEP_PARAMS, i2d_RSA_PSS_PARAMS, i2d_SCRYPT_PARAMS, i2d_SCT_LIST, i2d_SXNET, i2d_SXNETID, i2d_TS_ACCURACY, i2d_TS_MSG_IMPRINT, i2d_TS_MSG_IMPRINT_bio, i2d_TS_MSG_IMPRINT_fp, i2d_TS_REQ, i2d_TS_REQ_bio, i2d_TS_REQ_fp, i2d_TS_RESP, i2d_TS_RESP_bio, i2d_TS_RESP_fp, i2d_TS_STATUS_INFO, i2d_TS_TST_INFO, i2d_TS_TST_INFO_bio, i2d_TS_TST_INFO_fp, i2d_USERNOTICE, i2d_X509, i2d_X509_bio, i2d_X509_fp, i2d_X509_ACERT, i2d_X509_ACERT_bio, i2d_X509_ACERT_fp, i2d_X509_ALGOR, i2d_X509_ALGORS, i2d_X509_ATTRIBUTE, i2d_X509_CERT_AUX, i2d_X509_CINF, i2d_X509_CRL, i2d_X509_CRL_INFO, i2d_X509_CRL_bio, i2d_X509_CRL_fp, i2d_X509_EXTENSION, i2d_X509_EXTENSIONS, i2d_X509_NAME, i2d_X509_NAME_ENTRY, i2d_X509_PUBKEY, i2d_X509_PUBKEY_bio, i2d_X509_PUBKEY_fp, i2d_X509_REQ, i2d_X509_REQ_INFO, i2d_X509_REQ_bio, i2d_X509_REQ_fp, i2d_X509_REVOKED, i2d_X509_SIG, i2d_X509_VAL, - convert objects from/to ASN.1/DER representation</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>TYPE *d2i_TYPE(TYPE **a, const unsigned char **ppin, long length);
+TYPE *d2i_TYPE_bio(BIO *bp, TYPE **a);
+TYPE *d2i_TYPE_fp(FILE *fp, TYPE **a);
+
+int i2d_TYPE(const TYPE *a, unsigned char **ppout);
+int i2d_TYPE(TYPE *a, unsigned char **ppout);
+int i2d_TYPE_fp(FILE *fp, const TYPE *a);
+int i2d_TYPE_fp(FILE *fp, TYPE *a);
+int i2d_TYPE_bio(BIO *bp, const TYPE *a);
+int i2d_TYPE_bio(BIO *bp, TYPE *a);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>In the description here, <b><i>TYPE</i></b> is used a placeholder for any of the OpenSSL datatypes, such as <b>X509_CRL</b>. The function parameters <i>ppin</i> and <i>ppout</i> are generally either both named <i>pp</i> in the headers, or <i>in</i> and <i>out</i>.</p>
+
+<p>These functions convert OpenSSL objects to and from their ASN.1/DER encoding. Unlike the C structures which can have pointers to sub-objects within, the DER is a serialized encoding, suitable for sending over the network, writing to a file, and so on.</p>
+
+<p><b>d2i_<i>TYPE</i></b>() attempts to decode <i>len</i> bytes at <i>*ppin</i>. If successful a pointer to the <b><i>TYPE</i></b> structure is returned and <i>*ppin</i> is incremented to the byte following the parsed data. If <i>a</i> is not NULL then a pointer to the returned structure is also written to <i>*a</i>. If an error occurred then NULL is returned. The caller retains ownership of the returned object and needs to free it when it is no longer needed, e.g. using X509_free() for X509 objects or DSA_SIG_free() for DSA_SIG objects.</p>
+
+<p>On a successful return, if <i>*a</i> is not NULL then it is assumed that <i>*a</i> contains a valid <b><i>TYPE</i></b> structure and an attempt is made to reuse it. For <b><i>TYPE</i></b> structures where it matters it is possible to set up a library context on the decoded structure this way (see the <b>EXAMPLES</b> section). However using the &quot;reuse&quot; capability for other purposes is <b>strongly discouraged</b> (see <b>BUGS</b> below, and the discussion in the <b>RETURN VALUES</b> section).</p>
+
+<p><b>d2i_<i>TYPE</i>_bio</b>() is similar to <b>d2i_<i>TYPE</i></b>() except it attempts to parse data from BIO <i>bp</i>.</p>
+
+<p><b>d2i_<i>TYPE</i>_fp</b>() is similar to <b>d2i_<i>TYPE</i></b>() except it attempts to parse data from FILE pointer <i>fp</i>.</p>
+
+<p><b>i2d_<i>TYPE</i></b>() encodes the structure pointed to by <i>a</i> into DER format. If <i>ppout</i> is not NULL, it writes the DER encoded data to the buffer at <i>*ppout</i>, and increments it to point after the data just written. If the return value is negative an error occurred, otherwise it returns the length of the encoded data.</p>
+
+<p>If <i>*ppout</i> is NULL memory will be allocated for a buffer and the encoded data written to it. In this case <i>*ppout</i> is not incremented and it points to the start of the data just written.</p>
+
+<p><b>i2d_<i>TYPE</i>_bio</b>() is similar to <b>i2d_<i>TYPE</i></b>() except it writes the encoding of the structure <i>a</i> to BIO <i>bp</i> and it returns 1 for success and 0 for failure.</p>
+
+<p><b>i2d_<i>TYPE</i>_fp</b>() is similar to <b>i2d_<i>TYPE</i></b>() except it writes the encoding of the structure <i>a</i> to FILE pointer <i>fp</i> and it returns 1 for success and 0 for failure.</p>
+
+<p>These routines do not encrypt private keys and therefore offer no security; use <a href="../man3/PEM_write_PrivateKey.html">PEM_write_PrivateKey(3)</a> or similar for writing to files.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The letters <b>i</b> and <b>d</b> in <b>i2d_<i>TYPE</i></b>() stand for &quot;internal&quot; (that is, an internal C structure) and &quot;DER&quot; respectively. So <b>i2d_<i>TYPE</i></b>() converts from internal to DER.</p>
+
+<p>The functions can also understand <b>BER</b> forms.</p>
+
+<p>The actual TYPE structure passed to <b>i2d_<i>TYPE</i></b>() must be a valid populated <b><i>TYPE</i></b> structure -- it <b>cannot</b> simply be fed with an empty structure such as that returned by TYPE_new().</p>
+
+<p>The encoded data is in binary form and may contain embedded zeros. Therefore, any FILE pointers or BIOs should be opened in binary mode. Functions such as strlen() will <b>not</b> return the correct length of the encoded structure.</p>
+
+<p>The ways that <i>*ppin</i> and <i>*ppout</i> are incremented after the operation can trap the unwary. See the <b>WARNINGS</b> section for some common errors. The reason for this-auto increment behaviour is to reflect a typical usage of ASN1 functions: after one structure is encoded or decoded another will be processed after it.</p>
+
+<p>The following points about the data types might be useful:</p>
+
+<dl>
+
+<dt id="ASN1_OBJECT"><b>ASN1_OBJECT</b></dt>
+<dd>
+
+<p>Represents an ASN1 OBJECT IDENTIFIER.</p>
+
+</dd>
+<dt id="DHparams"><b>DHparams</b></dt>
+<dd>
+
+<p>Represents a PKCS#3 DH parameters structure.</p>
+
+</dd>
+<dt id="DHxparams"><b>DHxparams</b></dt>
+<dd>
+
+<p>Represents an ANSI X9.42 DH parameters structure.</p>
+
+</dd>
+<dt id="ECDSA_SIG"><b>ECDSA_SIG</b></dt>
+<dd>
+
+<p>Represents an ECDSA signature.</p>
+
+</dd>
+<dt id="X509_ALGOR"><b>X509_ALGOR</b></dt>
+<dd>
+
+<p>Represents an <b>AlgorithmIdentifier</b> structure as used in IETF RFC 6960 and elsewhere.</p>
+
+</dd>
+<dt id="X509_NAME"><b>X509_NAME</b></dt>
+<dd>
+
+<p>Represents a <b>Name</b> type as used for subject and issuer names in IETF RFC 6960 and elsewhere.</p>
+
+</dd>
+<dt id="X509_REQ"><b>X509_REQ</b></dt>
+<dd>
+
+<p>Represents a PKCS#10 certificate request.</p>
+
+</dd>
+<dt id="X509_SIG"><b>X509_SIG</b></dt>
+<dd>
+
+<p>Represents the <b>DigestInfo</b> structure defined in PKCS#1 and PKCS#7.</p>
+
+</dd>
+</dl>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p><b>d2i_<i>TYPE</i></b>(), <b>d2i_<i>TYPE</i>_bio</b>() and <b>d2i_<i>TYPE</i>_fp</b>() return a valid <b><i>TYPE</i></b> structure or NULL if an error occurs. If the &quot;reuse&quot; capability has been used with a valid structure being passed in via <i>a</i>, then the object is freed in the event of error and <i>*a</i> is set to NULL.</p>
+
+<p><b>i2d_<i>TYPE</i></b>() returns the number of bytes successfully encoded or a negative value if an error occurs.</p>
+
+<p><b>i2d_<i>TYPE</i>_bio</b>() and <b>i2d_<i>TYPE</i>_fp</b>(), as well as i2d_ASN1_bio_stream(), return 1 for success and 0 if an error occurs.</p>
+
+<p>On error, these functions may record the error in the OpenSSL error queue. That error queue can be inspected with the <b>ERR</b> family of functions, such as <a href="../man3/ERR_print_errors.html">ERR_print_errors(3)</a> and <a href="../man3/ERR_peek_last_error_all.html">ERR_peek_last_error_all(3)</a>.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>Allocate and encode the DER encoding of an X509 structure:</p>
+
+<pre><code>int len;
+unsigned char *buf;
+
+buf = NULL;
+len = i2d_X509(x, &amp;buf);
+if (len &lt; 0)
+    /* error */</code></pre>
+
+<p>Attempt to decode a buffer:</p>
+
+<pre><code>X509 *x;
+unsigned char *buf;
+const unsigned char *p;
+int len;
+
+/* Set up buf and len to point to the input buffer. */
+p = buf;
+x = d2i_X509(NULL, &amp;p, len);
+if (x == NULL)
+    /* error */</code></pre>
+
+<p>Alternative technique:</p>
+
+<pre><code>X509 *x;
+unsigned char *buf;
+const unsigned char *p;
+int len;
+
+/* Set up buf and len to point to the input buffer. */
+p = buf;
+x = NULL;
+
+if (d2i_X509(&amp;x, &amp;p, len) == NULL)
+    /* error */</code></pre>
+
+<p>Setting up a library context and property query:</p>
+
+<pre><code>X509 *x;
+unsigned char *buf;
+const unsigned char *p;
+int len;
+OSSL_LIB_CTX *libctx = ....;
+const char *propq = ....;
+
+/* Set up buf and len to point to the input buffer. */
+p = buf;
+x = X509_new_ex(libctx, propq);
+
+if (d2i_X509(&amp;x, &amp;p, len) == NULL)
+    /* error, x was freed and NULL assigned to it (see RETURN VALUES) */</code></pre>
+
+<h1 id="WARNINGS">WARNINGS</h1>
+
+<p>Using a temporary variable is mandatory. A common mistake is to attempt to use a buffer directly as follows:</p>
+
+<pre><code>int len;
+unsigned char *buf;
+
+len = i2d_X509(x, NULL);
+buf = OPENSSL_malloc(len);
+...
+i2d_X509(x, &amp;buf);
+...
+OPENSSL_free(buf);</code></pre>
+
+<p>This code will result in <i>buf</i> apparently containing garbage because it was incremented after the call to point after the data just written. Also <i>buf</i> will no longer contain the pointer allocated by OPENSSL_malloc() and the subsequent call to OPENSSL_free() is likely to crash.</p>
+
+<p>Another trap to avoid is misuse of the <i>a</i> argument to <b>d2i_<i>TYPE</i></b>():</p>
+
+<pre><code>X509 *x;
+
+if (d2i_X509(&amp;x, &amp;p, len) == NULL)
+    /* error */</code></pre>
+
+<p>This will probably crash somewhere in d2i_X509(). The reason for this is that the variable <i>x</i> is uninitialized and an attempt will be made to interpret its (invalid) value as an <b>X509</b> structure, typically causing a segmentation violation. If <i>x</i> is set to NULL first then this will not happen.</p>
+
+<h1 id="BUGS">BUGS</h1>
+
+<p>In some versions of OpenSSL the &quot;reuse&quot; behaviour of <b>d2i_<i>TYPE</i></b>() when <i>*a</i> is valid is broken and some parts of the reused structure may persist if they are not present in the new one. Additionally, in versions of OpenSSL prior to 1.1.0, when the &quot;reuse&quot; behaviour is used and an error occurs the behaviour is inconsistent. Some functions behaved as described here, while some did not free <i>*a</i> on error and did not set <i>*a</i> to NULL.</p>
+
+<p>As a result of the above issues the &quot;reuse&quot; behaviour is strongly discouraged.</p>
+
+<p><b>i2d_<i>TYPE</i></b>() will not return an error in many versions of OpenSSL, if mandatory fields are not initialized due to a programming error then the encoded structure may contain invalid data or omit the fields entirely and will not be parsed by <b>d2i_<i>TYPE</i></b>(). This may be fixed in future so code should not assume that <b>i2d_<i>TYPE</i></b>() will always succeed.</p>
+
+<p>Any function which encodes a structure (<b>i2d_<i>TYPE</i></b>(), <b>i2d_<i>TYPE</i>_bio</b>() or <b>i2d_<i>TYPE</i>_fp</b>()) may return a stale encoding if the structure has been modified after deserialization or previous serialization. This is because some objects cache the encoding for efficiency reasons.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p>ERR_print_errors(3), ERR_peek_last_error_all(3)</p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>d2i_OSSL_ATTRIBUTES_SYNTAX(), d2i_OSSL_BASIC_ATTR_CONSTRAINTS(), d2i_OSSL_CMP_ATAVS(), d2i_OSSL_IETF_ATTR_SYNTAX(), d2i_OSSL_TARGET(), d2i_OSSL_TARGETING_INFORMATION(), d2i_OSSL_TARGETS(), d2i_OSSL_USER_NOTICE_SYNTAX(), d2i_PBMAC1PARAM(), d2i_X509_ACERT(), d2i_X509_ACERT_bio(), d2i_X509_ACERT_fp(), i2d_OSSL_ATTRIBUTES_SYNTAX(), i2d_OSSL_BASIC_ATTR_CONSTRAINTS(), i2d_OSSL_CMP_ATAVS(), i2d_OSSL_IETF_ATTR_SYNTAX(), i2d_OSSL_TARGET(), i2d_OSSL_TARGETING_INFORMATION(), i2d_OSSL_TARGETS(), i2d_OSSL_USER_NOTICE_SYNTAX(), i2d_PBMAC1PARAM(), i2d_X509_ACERT(), i2d_X509_ACERT_bio(), i2d_X509_ACERT_fp() were added in OpenSSL 3.4.</p>
+
+<p>d2i_OSSL_AA_DIST_POINT(), d2i_OSSL_ALLOWED_ATTRIBUTES_CHOICE(), d2i_OSSL_ALLOWED_ATTRIBUTES_ITEM(), d2i_OSSL_ALLOWED_ATTRIBUTES_SYNTAX(), d2i_OSSL_ATAV(), d2i_OSSL_ATTRIBUTE_DESCRIPTOR(), d2i_OSSL_ATTRIBUTE_MAPPING(), d2i_OSSL_ATTRIBUTE_MAPPINGS(), d2i_OSSL_ATTRIBUTE_TYPE_MAPPING(), d2i_OSSL_ATTRIBUTE_VALUE_MAPPING(), d2i_OSSL_AUTHORITY_ATTRIBUTE_ID_SYNTAX(), d2i_OSSL_HASH(), d2i_OSSL_INFO_SYNTAX(), d2i_OSSL_INFO_SYNTAX_POINTER(), d2i_OSSL_PRIVILEGE_POLICY_ID(), d2i_OSSL_ROLE_SPEC_CERT_ID(), d2i_OSSL_ROLE_SPEC_CERT_ID_SYNTAX(), i2d_OSSL_AA_DIST_POINT(), i2d_OSSL_ALLOWED_ATTRIBUTES_CHOICE(), i2d_OSSL_ALLOWED_ATTRIBUTES_ITEM(), i2d_OSSL_ALLOWED_ATTRIBUTES_SYNTAX(), i2d_OSSL_ATAV(), i2d_OSSL_ATTRIBUTE_DESCRIPTOR(), i2d_OSSL_ATTRIBUTE_MAPPING(), i2d_OSSL_ATTRIBUTE_MAPPINGS(), i2d_OSSL_ATTRIBUTE_TYPE_MAPPING(), i2d_OSSL_ATTRIBUTE_VALUE_MAPPING(), i2d_OSSL_AUTHORITY_ATTRIBUTE_ID_SYNTAX(), i2d_OSSL_HASH(), i2d_OSSL_INFO_SYNTAX(), i2d_OSSL_INFO_SYNTAX_POINTER(), i2d_OSSL_PRIVILEGE_POLICY_ID(), i2d_OSSL_ROLE_SPEC_CERT_ID(), i2d_OSSL_ROLE_SPEC_CERT_ID_SYNTAX(), d2i_OSSL_CRMF_ENCRYPTEDKEY(), i2d_OSSL_CRMF_ENCRYPTEDKEY(), d2i_OSSL_DAY_TIME(), d2i_OSSL_DAY_TIME_BAND(), d2i_OSSL_NAMED_DAY(), d2i_OSSL_TIME_PERIOD(), d2i_OSSL_TIME_SPEC(), d2i_OSSL_TIME_SPEC_ABSOLUTE(), d2i_OSSL_TIME_SPEC_DAY(), d2i_OSSL_TIME_SPEC_MONTH(), d2i_OSSL_TIME_SPEC_TIME(), d2i_OSSL_TIME_SPEC_WEEKS(), d2i_OSSL_TIME_SPEC_X_DAY_OF(), i2d_OSSL_DAY_TIME(), i2d_OSSL_DAY_TIME_BAND(), i2d_OSSL_NAMED_DAY(), i2d_OSSL_TIME_PERIOD(), i2d_OSSL_TIME_SPEC(), i2d_OSSL_TIME_SPEC_ABSOLUTE(), i2d_OSSL_TIME_SPEC_DAY(), i2d_OSSL_TIME_SPEC_MONTH(), i2d_OSSL_TIME_SPEC_TIME(), i2d_OSSL_TIME_SPEC_WEEKS(), i2d_OSSL_TIME_SPEC_X_DAY_OF() were added in OpenSSL 3.5.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 1998-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

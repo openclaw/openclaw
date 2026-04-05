@@ -1,0 +1,130 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_CTX_set0_CA_list</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_CTX_set_client_CA_list, SSL_set_client_CA_list, SSL_get_client_CA_list, SSL_CTX_get_client_CA_list, SSL_CTX_add_client_CA, SSL_add_client_CA, SSL_set0_CA_list, SSL_CTX_set0_CA_list, SSL_get0_CA_list, SSL_CTX_get0_CA_list, SSL_add1_to_CA_list, SSL_CTX_add1_to_CA_list, SSL_get0_peer_CA_list - get or set CA list</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+void SSL_CTX_set_client_CA_list(SSL_CTX *ctx, STACK_OF(X509_NAME) *list);
+void SSL_set_client_CA_list(SSL *s, STACK_OF(X509_NAME) *list);
+STACK_OF(X509_NAME) *SSL_get_client_CA_list(const SSL *s);
+STACK_OF(X509_NAME) *SSL_CTX_get_client_CA_list(const SSL_CTX *ctx);
+int SSL_CTX_add_client_CA(SSL_CTX *ctx, X509 *cacert);
+int SSL_add_client_CA(SSL *ssl, X509 *cacert);
+
+void SSL_CTX_set0_CA_list(SSL_CTX *ctx, STACK_OF(X509_NAME) *name_list);
+void SSL_set0_CA_list(SSL *s, STACK_OF(X509_NAME) *name_list);
+const STACK_OF(X509_NAME) *SSL_CTX_get0_CA_list(const SSL_CTX *ctx);
+const STACK_OF(X509_NAME) *SSL_get0_CA_list(const SSL *s);
+int SSL_CTX_add1_to_CA_list(SSL_CTX *ctx, const X509 *x);
+int SSL_add1_to_CA_list(SSL *ssl, const X509 *x);
+
+const STACK_OF(X509_NAME) *SSL_get0_peer_CA_list(const SSL *s);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The functions described here set and manage the list of CA names that are sent between two communicating peers.</p>
+
+<p>For TLS versions 1.2 and earlier the list of CA names is only sent from the server to the client when requesting a client certificate. So any list of CA names set is never sent from client to server and the list of CA names retrieved by SSL_get0_peer_CA_list() is always <b>NULL</b>.</p>
+
+<p>For TLS 1.3 the list of CA names is sent using the <b>certificate_authorities</b> extension and may be sent by a client (in the ClientHello message) or by a server (when requesting a certificate).</p>
+
+<p>In most cases it is not necessary to set CA names on the client side. The list of CA names that are acceptable to the client will be sent in plaintext to the server. This has privacy implications and may also have performance implications if the list is large. This optional capability was introduced as part of TLSv1.3 and therefore setting CA names on the client side will have no impact if that protocol version has been disabled. Most servers do not need this and so this should be avoided unless required.</p>
+
+<p>The &quot;client CA list&quot; functions below only have an effect when called on the server side.</p>
+
+<p>SSL_CTX_set_client_CA_list() sets the <b>list</b> of CAs sent to the client when requesting a client certificate for <b>ctx</b>. Ownership of <b>list</b> is transferred to <b>ctx</b> and it should not be freed by the caller.</p>
+
+<p>SSL_set_client_CA_list() sets the <b>list</b> of CAs sent to the client when requesting a client certificate for the chosen <b>ssl</b>, overriding the setting valid for <b>ssl</b>&#39;s SSL_CTX object. Ownership of <b>list</b> is transferred to <b>s</b> and it should not be freed by the caller.</p>
+
+<p>SSL_CTX_get_client_CA_list() returns the list of client CAs explicitly set for <b>ctx</b> using SSL_CTX_set_client_CA_list(). The returned list should not be freed by the caller.</p>
+
+<p>SSL_get_client_CA_list() returns the list of client CAs explicitly set for <b>ssl</b> using SSL_set_client_CA_list() or <b>ssl</b>&#39;s SSL_CTX object with SSL_CTX_set_client_CA_list(), when in server mode. In client mode, SSL_get_client_CA_list returns the list of client CAs sent from the server, if any. The returned list should not be freed by the caller.</p>
+
+<p>SSL_CTX_add_client_CA() adds the CA name extracted from <b>cacert</b> to the list of CAs sent to the client when requesting a client certificate for <b>ctx</b>.</p>
+
+<p>SSL_add_client_CA() adds the CA name extracted from <b>cacert</b> to the list of CAs sent to the client when requesting a client certificate for the chosen <b>ssl</b>, overriding the setting valid for <b>ssl</b>&#39;s SSL_CTX object.</p>
+
+<p>SSL_get0_peer_CA_list() retrieves the list of CA names (if any) the peer has sent. This can be called on either the server or the client side. The returned list should not be freed by the caller.</p>
+
+<p>The &quot;generic CA list&quot; functions below are very similar to the &quot;client CA list&quot; functions except that they have an effect on both the server and client sides. The lists of CA names managed are separate - so you cannot (for example) set CA names using the &quot;client CA list&quot; functions and then get them using the &quot;generic CA list&quot; functions. Where a mix of the two types of functions has been used on the server side then the &quot;client CA list&quot; functions take precedence. Typically, on the server side, the &quot;client CA list &quot; functions should be used in preference. As noted above in most cases it is not necessary to set CA names on the client side.</p>
+
+<p>SSL_CTX_set0_CA_list() sets the list of CAs to be sent to the peer to <b>name_list</b>. Ownership of <b>name_list</b> is transferred to <b>ctx</b> and it should not be freed by the caller.</p>
+
+<p>SSL_set0_CA_list() sets the list of CAs to be sent to the peer to <b>name_list</b> overriding any list set in the parent <b>SSL_CTX</b> of <b>s</b>. Ownership of <b>name_list</b> is transferred to <b>s</b> and it should not be freed by the caller.</p>
+
+<p>SSL_CTX_get0_CA_list() retrieves any previously set list of CAs set for <b>ctx</b>. The returned list should not be freed by the caller.</p>
+
+<p>SSL_get0_CA_list() retrieves any previously set list of CAs set for <b>s</b> or if none are set the list from the parent <b>SSL_CTX</b> is retrieved. The returned list should not be freed by the caller.</p>
+
+<p>SSL_CTX_add1_to_CA_list() appends the CA subject name extracted from <b>x</b> to the list of CAs sent to peer for <b>ctx</b>.</p>
+
+<p>SSL_add1_to_CA_list() appends the CA subject name extracted from <b>x</b> to the list of CAs sent to the peer for <b>s</b>, overriding the setting in the parent <b>SSL_CTX</b>.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>When a TLS/SSL server requests a client certificate (see <b>SSL_CTX_set_verify(3)</b>), it sends a list of CAs, for which it will accept certificates, to the client.</p>
+
+<p>This list must explicitly be set using SSL_CTX_set_client_CA_list() or SSL_CTX_set0_CA_list() for <b>ctx</b> and SSL_set_client_CA_list() or SSL_set0_CA_list() for the specific <b>ssl</b>. The list specified overrides the previous setting. The CAs listed do not become trusted (<b>list</b> only contains the names, not the complete certificates); use <a href="../man3/SSL_CTX_load_verify_locations.html">SSL_CTX_load_verify_locations(3)</a> to additionally load them for verification.</p>
+
+<p>If the list of acceptable CAs is compiled in a file, the <a href="../man3/SSL_load_client_CA_file.html">SSL_load_client_CA_file(3)</a> function can be used to help to import the necessary data.</p>
+
+<p>SSL_CTX_add_client_CA(), SSL_CTX_add1_to_CA_list(), SSL_add_client_CA() and SSL_add1_to_CA_list() can be used to add additional items the list of CAs. If no list was specified before using SSL_CTX_set_client_CA_list(), SSL_CTX_set0_CA_list(), SSL_set_client_CA_list() or SSL_set0_CA_list(), a new CA list for <b>ctx</b> or <b>ssl</b> (as appropriate) is opened.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_CTX_set_client_CA_list(), SSL_set_client_CA_list(), SSL_CTX_set_client_CA_list(), SSL_set_client_CA_list(), SSL_CTX_set0_CA_list() and SSL_set0_CA_list() do not return a value.</p>
+
+<p>SSL_CTX_get_client_CA_list(), SSL_get_client_CA_list(), SSL_CTX_get0_CA_list() and SSL_get0_CA_list() return a stack of CA names or <b>NULL</b> is no CA names are set.</p>
+
+<p>SSL_CTX_add_client_CA(),SSL_add_client_CA(), SSL_CTX_add1_to_CA_list() and SSL_add1_to_CA_list() return 1 for success and 0 for failure.</p>
+
+<p>SSL_get0_peer_CA_list() returns a stack of CA names sent by the peer or <b>NULL</b> or an empty stack if no list was sent.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>Scan all certificates in <b>CAfile</b> and list them as acceptable CAs:</p>
+
+<pre><code>SSL_CTX_set_client_CA_list(ctx, SSL_load_client_CA_file(CAfile));</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a>, <a href="../man3/SSL_load_client_CA_file.html">SSL_load_client_CA_file(3)</a>, <a href="../man3/SSL_CTX_load_verify_locations.html">SSL_CTX_load_verify_locations(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2018 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,214 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>des_modes</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#OVERVIEW">OVERVIEW</a>
+    <ul>
+      <li><a href="#Electronic-Codebook-Mode-ECB">Electronic Codebook Mode (ECB)</a></li>
+      <li><a href="#Cipher-Block-Chaining-Mode-CBC">Cipher Block Chaining Mode (CBC)</a></li>
+      <li><a href="#Cipher-Feedback-Mode-CFB">Cipher Feedback Mode (CFB)</a></li>
+      <li><a href="#Output-Feedback-Mode-OFB">Output Feedback Mode (OFB)</a></li>
+      <li><a href="#Triple-ECB-Mode">Triple ECB Mode</a></li>
+      <li><a href="#Triple-CBC-Mode">Triple CBC Mode</a></li>
+    </ul>
+  </li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>des_modes - the variants of DES and other crypto algorithms of OpenSSL</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>Several crypto algorithms for OpenSSL can be used in a number of modes. Those are used for using block ciphers in a way similar to stream ciphers, among other things.</p>
+
+<h1 id="OVERVIEW">OVERVIEW</h1>
+
+<h2 id="Electronic-Codebook-Mode-ECB">Electronic Codebook Mode (ECB)</h2>
+
+<p>Normally, this is found as the function <i>algorithm</i>_ecb_encrypt().</p>
+
+<ul>
+
+<li><p>64 bits are enciphered at a time.</p>
+
+</li>
+<li><p>The order of the blocks can be rearranged without detection.</p>
+
+</li>
+<li><p>The same plaintext block always produces the same ciphertext block (for the same key) making it vulnerable to a &#39;dictionary attack&#39;.</p>
+
+</li>
+<li><p>An error will only affect one ciphertext block.</p>
+
+</li>
+</ul>
+
+<h2 id="Cipher-Block-Chaining-Mode-CBC">Cipher Block Chaining Mode (CBC)</h2>
+
+<p>Normally, this is found as the function <i>algorithm</i>_cbc_encrypt(). Be aware that des_cbc_encrypt() is not really DES CBC (it does not update the IV); use des_ncbc_encrypt() instead.</p>
+
+<ul>
+
+<li><p>a multiple of 64 bits are enciphered at a time.</p>
+
+</li>
+<li><p>The CBC mode produces the same ciphertext whenever the same plaintext is encrypted using the same key and starting variable.</p>
+
+</li>
+<li><p>The chaining operation makes the ciphertext blocks dependent on the current and all preceding plaintext blocks and therefore blocks can not be rearranged.</p>
+
+</li>
+<li><p>The use of different starting variables prevents the same plaintext enciphering to the same ciphertext.</p>
+
+</li>
+<li><p>An error will affect the current and the following ciphertext blocks.</p>
+
+</li>
+</ul>
+
+<h2 id="Cipher-Feedback-Mode-CFB">Cipher Feedback Mode (CFB)</h2>
+
+<p>Normally, this is found as the function <i>algorithm</i>_cfb_encrypt().</p>
+
+<ul>
+
+<li><p>a number of bits (j) &lt;= 64 are enciphered at a time.</p>
+
+</li>
+<li><p>The CFB mode produces the same ciphertext whenever the same plaintext is encrypted using the same key and starting variable.</p>
+
+</li>
+<li><p>The chaining operation makes the ciphertext variables dependent on the current and all preceding variables and therefore j-bit variables are chained together and can not be rearranged.</p>
+
+</li>
+<li><p>The use of different starting variables prevents the same plaintext enciphering to the same ciphertext.</p>
+
+</li>
+<li><p>The strength of the CFB mode depends on the size of k (maximal if j == k). In my implementation this is always the case.</p>
+
+</li>
+<li><p>Selection of a small value for j will require more cycles through the encipherment algorithm per unit of plaintext and thus cause greater processing overheads.</p>
+
+</li>
+<li><p>Only multiples of j bits can be enciphered.</p>
+
+</li>
+<li><p>An error will affect the current and the following ciphertext variables.</p>
+
+</li>
+</ul>
+
+<h2 id="Output-Feedback-Mode-OFB">Output Feedback Mode (OFB)</h2>
+
+<p>Normally, this is found as the function <i>algorithm</i>_ofb_encrypt().</p>
+
+<ul>
+
+<li><p>a number of bits (j) &lt;= 64 are enciphered at a time.</p>
+
+</li>
+<li><p>The OFB mode produces the same ciphertext whenever the same plaintext enciphered using the same key and starting variable. More over, in the OFB mode the same key stream is produced when the same key and start variable are used. Consequently, for security reasons a specific start variable should be used only once for a given key.</p>
+
+</li>
+<li><p>The absence of chaining makes the OFB more vulnerable to specific attacks.</p>
+
+</li>
+<li><p>The use of different start variables values prevents the same plaintext enciphering to the same ciphertext, by producing different key streams.</p>
+
+</li>
+<li><p>Selection of a small value for j will require more cycles through the encipherment algorithm per unit of plaintext and thus cause greater processing overheads.</p>
+
+</li>
+<li><p>Only multiples of j bits can be enciphered.</p>
+
+</li>
+<li><p>OFB mode of operation does not extend ciphertext errors in the resultant plaintext output. Every bit error in the ciphertext causes only one bit to be in error in the deciphered plaintext.</p>
+
+</li>
+<li><p>OFB mode is not self-synchronizing. If the two operation of encipherment and decipherment get out of synchronism, the system needs to be re-initialized.</p>
+
+</li>
+<li><p>Each re-initialization should use a value of the start variable different from the start variable values used before with the same key. The reason for this is that an identical bit stream would be produced each time from the same parameters. This would be susceptible to a &#39;known plaintext&#39; attack.</p>
+
+</li>
+</ul>
+
+<h2 id="Triple-ECB-Mode">Triple ECB Mode</h2>
+
+<p>Normally, this is found as the function <i>algorithm</i>_ecb3_encrypt().</p>
+
+<ul>
+
+<li><p>Encrypt with key1, decrypt with key2 and encrypt with key3 again.</p>
+
+</li>
+<li><p>As for ECB encryption but increases the key length to 168 bits. There are theoretic attacks that can be used that make the effective key length 112 bits, but this attack also requires 2^56 blocks of memory, not very likely, even for the NSA.</p>
+
+</li>
+<li><p>If both keys are the same it is equivalent to encrypting once with just one key.</p>
+
+</li>
+<li><p>If the first and last key are the same, the key length is 112 bits. There are attacks that could reduce the effective key strength to only slightly more than 56 bits, but these require a lot of memory.</p>
+
+</li>
+<li><p>If all 3 keys are the same, this is effectively the same as normal ecb mode.</p>
+
+</li>
+</ul>
+
+<h2 id="Triple-CBC-Mode">Triple CBC Mode</h2>
+
+<p>Normally, this is found as the function <i>algorithm</i>_ede3_cbc_encrypt().</p>
+
+<ul>
+
+<li><p>Encrypt with key1, decrypt with key2 and then encrypt with key3.</p>
+
+</li>
+<li><p>As for CBC encryption but increases the key length to 168 bits with the same restrictions as for triple ecb mode.</p>
+
+</li>
+</ul>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>This text was been written in large parts by Eric Young in his original documentation for SSLeay, the predecessor of OpenSSL. In turn, he attributed it to:</p>
+
+<pre><code>AS 2805.5.2
+Australian Standard
+Electronic funds transfer - Requirements for interfaces,
+Part 5.2: Modes of operation for an n-bit block cipher algorithm
+Appendix A</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/BF_encrypt.html">BF_encrypt(3)</a>, <a href="../man3/DES_crypt.html">DES_crypt(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2017 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

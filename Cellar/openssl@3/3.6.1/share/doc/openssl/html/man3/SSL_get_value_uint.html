@@ -1,0 +1,280 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_get_value_uint</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#CONFIGURABLE-VALUES-FOR-QUIC-OBJECTS">CONFIGURABLE VALUES FOR QUIC OBJECTS</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_get_value_uint, SSL_set_value_uint, SSL_get_generic_value_uint, SSL_set_generic_value_uint, SSL_get_feature_request_uint, SSL_set_feature_request_uint, SSL_get_feature_peer_request_uint, SSL_get_feature_negotiated_uint, SSL_get_quic_stream_bidi_local_avail, SSL_get_quic_stream_bidi_remote_avail, SSL_get_quic_stream_uni_local_avail, SSL_get_quic_stream_uni_remote_avail, SSL_VALUE_CLASS_GENERIC, SSL_VALUE_CLASS_FEATURE_REQUEST, SSL_VALUE_CLASS_FEATURE_PEER_REQUEST, SSL_VALUE_CLASS_FEATURE_NEGOTIATED, SSL_VALUE_QUIC_STREAM_BIDI_LOCAL_AVAIL, SSL_VALUE_QUIC_STREAM_BIDI_REMOTE_AVAIL, SSL_VALUE_QUIC_STREAM_UNI_LOCAL_AVAIL, SSL_VALUE_QUIC_STREAM_UNI_REMOTE_AVAIL, SSL_VALUE_QUIC_IDLE_TIMEOUT, SSL_VALUE_EVENT_HANDLING_MODE, SSL_VALUE_EVENT_HANDLING_MODE_INHERIT, SSL_VALUE_EVENT_HANDLING_MODE_EXPLICIT, SSL_VALUE_EVENT_HANDLING_MODE_IMPLICIT, SSL_get_event_handling_mode, SSL_set_event_handling_mode, SSL_VALUE_STREAM_WRITE_BUF_SIZE, SSL_get_stream_write_buf_size, SSL_VALUE_STREAM_WRITE_BUF_USED, SSL_get_stream_write_buf_used, SSL_VALUE_STREAM_WRITE_BUF_AVAIL, SSL_get_stream_write_buf_avail - manage negotiable features and configuration values for an SSL object</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+int SSL_get_value_uint(SSL *ssl, uint32_t class_, uint32_t id,
+                       uint64_t *value);
+int SSL_set_value_uint(SSL *ssl, uint32_t class_, uint32_t id,
+                       uint64_t value);
+
+#define SSL_VALUE_CLASS_GENERIC
+#define SSL_VALUE_CLASS_FEATURE_REQUEST
+#define SSL_VALUE_CLASS_FEATURE_PEER_REQUEST
+#define SSL_VALUE_CLASS_FEATURE_NEGOTIATED
+
+#define SSL_VALUE_QUIC_STREAM_BIDI_LOCAL_AVAIL
+#define SSL_VALUE_QUIC_STREAM_BIDI_REMOTE_AVAIL
+#define SSL_VALUE_QUIC_STREAM_UNI_LOCAL_AVAIL
+#define SSL_VALUE_QUIC_STREAM_UNI_REMOTE_AVAIL
+#define SSL_VALUE_QUIC_IDLE_TIMEOUT
+
+#define SSL_VALUE_EVENT_HANDLING_MODE
+#define SSL_VALUE_EVENT_HANDLING_MODE_INHERIT
+#define SSL_VALUE_EVENT_HANDLING_MODE_EXPLICIT
+#define SSL_VALUE_EVENT_HANDLING_MODE_IMPLICIT
+
+#define SSL_VALUE_STREAM_WRITE_BUF_SIZE
+#define SSL_VALUE_STREAM_WRITE_BUF_USED
+#define SSL_VALUE_STREAM_WRITE_BUF_AVAIL</code></pre>
+
+<p>The following convenience macros can also be used:</p>
+
+<pre><code>int SSL_get_generic_value_uint(SSL *ssl, uint32_t id, uint64_t *value);
+int SSL_set_generic_value_uint(SSL *ssl, uint32_t id, uint64_t value);
+
+int SSL_get_feature_request_uint(SSL *ssl, uint32_t id, uint64_t *value);
+int SSL_set_feature_request_uint(SSL *ssl, uint32_t id, uint64_t value);
+
+int SSL_get_feature_peer_request_uint(SSL *ssl, uint32_t id, uint64_t *value);
+int SSL_get_feature_negotiated_uint(SSL *ssl, uint32_t id, uint64_t *value);
+
+int SSL_get_quic_stream_bidi_local_avail(SSL *ssl, uint64_t *value);
+int SSL_get_quic_stream_bidi_remote_avail(SSL *ssl, uint64_t *value);
+int SSL_get_quic_stream_uni_local_avail(SSL *ssl, uint64_t *value);
+int SSL_get_quic_stream_uni_remote_avail(SSL *ssl, uint64_t *value);
+
+int SSL_get_event_handling_mode(SSL *ssl, uint64_t *value);
+int SSL_set_event_handling_mode(SSL *ssl, uint64_t value);
+
+int SSL_get_stream_write_buf_size(SSL *ssl, uint64_t *value);
+int SSL_get_stream_write_buf_avail(SSL *ssl, uint64_t *value);
+int SSL_get_stream_write_buf_used(SSL *ssl, uint64_t *value);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_get_value_uint() and SSL_set_value_uint() provide access to configurable parameters for a given SSL object. Amongst other things, they are used to provide control over the feature negotiation process during establishment of a connection, and access to statistics about that connection.</p>
+
+<p>SSL_get_value_uint() and SSL_set_value_uint() get and set configurable values within a given value class. The value classes are enumerated by <b>SSL_VALUE_CLASS</b> and are as follows:</p>
+
+<dl>
+
+<dt id="SSL_VALUE_CLASS_GENERIC"><b>SSL_VALUE_CLASS_GENERIC</b></dt>
+<dd>
+
+<p>Values in this class do not participate in the feature negotiation process. They may represent connection parameters which do not participate in explicit negotiation or provide connection statistics. Values in this class might be read-write or read-only.</p>
+
+<p>You can access values in this class using the convenience macros SSL_get_generic_value_uint() and SSL_set_generic_value_uint() for brevity.</p>
+
+</dd>
+<dt id="SSL_VALUE_CLASS_FEATURE_REQUEST"><b>SSL_VALUE_CLASS_FEATURE_REQUEST</b></dt>
+<dd>
+
+<p>Values in this class are read-write, and represent what the local party is requesting during feature negotiation. Such a request will not necessarily be honoured; see <b>SSL_VALUE_CLASS_FEATURE_NEGOTIATED</b>.</p>
+
+<p>A value in this class may become read-only in certain circumstances; for example, after a connection has been established, for a value which cannot be renegotiated after connection establishment. Setting a value in this class after connection establishment represents a request for online renegotiation of the specified feature.</p>
+
+<p>You can access values in this class using the convenience macros SSL_get_feature_request_uint() and SSL_set_feature_request_uint() for brevity.</p>
+
+</dd>
+<dt id="SSL_VALUE_CLASS_FEATURE_PEER_REQUEST"><b>SSL_VALUE_CLASS_FEATURE_PEER_REQUEST</b></dt>
+<dd>
+
+<p>Values in this value class are read-only, and represent what was requested by a peer during feature negotiation. Such a request has not necessarily been honoured; see <b>SSL_VALUE_CLASS_FEATURE_NEGOTIATED</b>.</p>
+
+<p>You can access values in this class using the convenience macro SSL_get_feature_peer_request_uint() for brevity.</p>
+
+</dd>
+<dt id="SSL_VALUE_CLASS_FEATURE_NEGOTIATED"><b>SSL_VALUE_CLASS_FEATURE_NEGOTIATED</b></dt>
+<dd>
+
+<p>Values in this value class are read-only, and represent the value which was actually negotiated based on both local and peer input during feature negotiation. This is the effective value in actual use.</p>
+
+<p>Attempting to read a value in this class will generally fail if the feature negotiation process has not yet completed and the value is therefore currently unknown, unless the nature of the feature in question causes a provisional value to be used prior to completion of feature negotiation, in which case that value may be returned. If an online (post-handshake) renegotiation of a feature is in progress, retrieving the negotiated value will continue to retrieve the previous negotiated value until that process is completed. See the documentation of specific values for full details of its behaviour.</p>
+
+<p>You can access values in this class using the convenience macro SSL_get_feature_negotiated_uint() for brevity.</p>
+
+</dd>
+</dl>
+
+<h1 id="CONFIGURABLE-VALUES-FOR-QUIC-OBJECTS">CONFIGURABLE VALUES FOR QUIC OBJECTS</h1>
+
+<p>The following configurable values are supported for QUIC SSL objects. Whether a value is supported for a QUIC connection SSL object or a QUIC stream SSL object is indicated in the heading for each value. Values supported for QUIC stream SSL objects are also supported on QUIC connection SSL objects if they have a default stream attached.</p>
+
+<p>SSL_get_value() does not cause internal event processing to occur unless the documentation for a specific value specifies otherwise.</p>
+
+<dl>
+
+<dt id="SSL_VALUE_QUIC_IDLE_TIMEOUT-connection-object"><b>SSL_VALUE_QUIC_IDLE_TIMEOUT</b> (connection object)</dt>
+<dd>
+
+<p>Negotiated feature value. This configures the desired QUIC idle timeout in milliseconds, where 0 represents a lack of an idle timeout. This feature can only be configured prior to connection establishment and cannot be subsequently changed.</p>
+
+<p>This release of OpenSSL uses a default value of 30 seconds. This default value may change between releases of OpenSSL.</p>
+
+</dd>
+<dt id="SSL_VALUE_QUIC_STREAM_BIDI_LOCAL_AVAIL-connection-object"><b>SSL_VALUE_QUIC_STREAM_BIDI_LOCAL_AVAIL</b> (connection object)</dt>
+<dd>
+
+<p>Generic read-only statistical value. The number of bidirectional, locally-initiated streams available to be created (but not yet created). For example, a value of 100 would mean that <a href="../man3/SSL_new_stream.html">SSL_new_stream(3)</a> could be called 100 times to create 100 bidirectional streams before <a href="../man3/SSL_new_stream.html">SSL_new_stream(3)</a> would block or fail due to backpressure.</p>
+
+<p>Can be queried using the convenience macro SSL_get_quic_stream_bidi_local_avail().</p>
+
+</dd>
+<dt id="SSL_VALUE_QUIC_STREAM_UNI_LOCAL_AVAIL-connection-object"><b>SSL_VALUE_QUIC_STREAM_UNI_LOCAL_AVAIL</b> (connection object)</dt>
+<dd>
+
+<p>As above, but provides the number of unidirectional, locally-initiated streams available to be created (but not yet created).</p>
+
+<p>Can be queried using the convenience macro SSL_get_quic_stream_uni_local_avail().</p>
+
+</dd>
+<dt id="SSL_VALUE_QUIC_STREAM_BIDI_REMOTE_AVAIL-connection-object"><b>SSL_VALUE_QUIC_STREAM_BIDI_REMOTE_AVAIL</b> (connection object)</dt>
+<dd>
+
+<p>As above, but provides the number of bidirectional, remotely-initiated streams available to be created (but not yet created) by the peer. This represents the number of streams the local endpoint has authorised the peer to create in terms of QUIC stream creation flow control.</p>
+
+<p>Can be queried using the convenience macro SSL_get_quic_stream_bidi_remote_avail().</p>
+
+</dd>
+<dt id="SSL_VALUE_QUIC_STREAM_UNI_REMOTE_AVAIL-connection-object"><b>SSL_VALUE_QUIC_STREAM_UNI_REMOTE_AVAIL</b> (connection object)</dt>
+<dd>
+
+<p>As above, but provides the number of unidirectional, remotely-initiated streams available to be created (but not yet created).</p>
+
+<p>Can be queried using the convenience macro SSL_get_quic_stream_uni_remote_avail().</p>
+
+</dd>
+<dt id="SSL_VALUE_EVENT_HANDLING_MODE-connection-or-stream-object"><b>SSL_VALUE_EVENT_HANDLING_MODE</b> (connection or stream object)</dt>
+<dd>
+
+<p>Generic value. This is an integer value which takes one of the following values, and determines the event handling mode in use:</p>
+
+<dl>
+
+<dt id="SSL_VALUE_EVENT_HANDLING_MODE_INHERIT"><b>SSL_VALUE_EVENT_HANDLING_MODE_INHERIT</b></dt>
+<dd>
+
+<p>When set, the event handling mode used is inherited from the value set on the parent connection (for a stream), or, for a connection, defaults to the implicit event handling model.</p>
+
+<p>When a new connection is created, or a new stream is created or accepted, it defaults to this setting.</p>
+
+</dd>
+<dt id="SSL_VALUE_EVENT_HANDLING_MODE_IMPLICIT-Implicit-event-handling"><b>SSL_VALUE_EVENT_HANDLING_MODE_IMPLICIT</b> (Implicit event handling)</dt>
+<dd>
+
+<p>If set to this value, the implicit event handling model is used. Under this model, QUIC objects will automatically perform background event processing (equivalent to a call to <a href="../man3/SSL_handle_events.html">SSL_handle_events(3)</a>) when calls to I/O functions such as <a href="../man3/SSL_read_ex.html">SSL_read_ex(3)</a> or <a href="../man3/SSL_write_ex.html">SSL_write_ex(3)</a> are made on a QUIC SSL object. This helps to maintain the health of the QUIC connection and ensures that incoming datagrams and timeout events are processed.</p>
+
+</dd>
+<dt id="SSL_VALUE_EVENT_HANDLING_MODE_EXPLICIT-Explicit-event-handling"><b>SSL_VALUE_EVENT_HANDLING_MODE_EXPLICIT</b> (Explicit event handling)</dt>
+<dd>
+
+<p>If set to this value, the explicit event handling model is used. Under this model, <b>nonblocking</b> calls to I/O functions such as <a href="../man3/SSL_read_ex.html">SSL_read_ex(3)</a> or <a href="../man3/SSL_write_ex.html">SSL_write_ex(3)</a> do not result in the automatic processing of QUIC events. Any new incoming network traffic is not handled; no new outgoing network traffic is generated, and pending timeout events are not processed. This allows an application to obtain greater control over the circumstances in which QUIC event processing occurs. If this event handling model is used, it is the application&#39;s responsibility to call <a href="../man3/SSL_handle_events.html">SSL_handle_events(3)</a> as and when called for by the QUIC implementation; see the <a href="../man3/SSL_get_rpoll_descriptor.html">SSL_get_rpoll_descriptor(3)</a> man page for more information.</p>
+
+<p>Selecting this model does not affect the operation of blocking I/O calls, which will continue to use the implicit event handling model. Therefore, applications using this model will generally want to disable blocking operation using <a href="../man3/SSL_set_blocking_mode.html">SSL_set_blocking_mode(3)</a>.</p>
+
+</dd>
+</dl>
+
+<p>Can be configured using the convenience macros SSL_get_event_handling_mode() and SSL_set_event_handling_mode().</p>
+
+<p>A call to SSL_set_value_uint() which causes this value to switch back to the implicit event handling model does not in itself cause implicit event handling to occur; such handling will occur on the next I/O API call. Equally, a call to SSL_set_value_uint() which causes this value to switch to the explicit event handling model will not cause event handling to occur before making that transition.</p>
+
+<p>This value controls whether implicit event handling occurs when making an I/O API call on the SSL object it is set on. However, event processing is not confined to state which relates to only that object. For example, if you configure explicit event handling on QUIC stream SSL object &quot;A&quot; and configure implicit event handling on QUIC stream SSL object &quot;B&quot;, a call to an I/O function on &quot;B&quot; may result in state changes to &quot;A&quot;. In other words, if event handling does happen as a result of an API call to an object related to a connection, processing of background events (for example, received QUIC network traffic) may also affect the state of any other object related to a connection.</p>
+
+</dd>
+<dt id="SSL_VALUE_STREAM_WRITE_BUF_SIZE-stream-object"><b>SSL_VALUE_STREAM_WRITE_BUF_SIZE</b> (stream object)</dt>
+<dd>
+
+<p>Generic read-only statistical value. The size of the write buffer allocated to hold data written to a stream with <a href="../man3/SSL_write_ex.html">SSL_write_ex(3)</a> until it is transmitted and subsequently acknowledged by the peer. This value may change at any time, as buffer sizes are optimised in response to network conditions to optimise throughput.</p>
+
+<p>Can be queried using the convenience macro SSL_get_stream_write_buf_size().</p>
+
+</dd>
+<dt id="SSL_VALUE_STREAM_WRITE_BUF_USED-stream-object"><b>SSL_VALUE_STREAM_WRITE_BUF_USED</b> (stream object)</dt>
+<dd>
+
+<p>Generic read-only statistical value. The number of bytes currently consumed in the write buffer which have yet to be acknowledged by the peer. Successful calls to <a href="../man3/SSL_write_ex.html">SSL_write_ex(3)</a> which accept data cause this number to increase. This number will then decrease as data is acknowledged by the peer.</p>
+
+<p>Can be queried using the convenience macro SSL_get_stream_write_buf_used().</p>
+
+</dd>
+<dt id="SSL_VALUE_STREAM_WRITE_BUF_AVAIL-stream-object"><b>SSL_VALUE_STREAM_WRITE_BUF_AVAIL</b> (stream object)</dt>
+<dd>
+
+<p>Generic read-only statistical value. The number of bytes available in the write buffer which have yet to be consumed by calls to <a href="../man3/SSL_write_ex.html">SSL_write_ex(3)</a>. Successful calls to <a href="../man3/SSL_write_ex.html">SSL_write_ex(3)</a> which accept data cause this number to decrease. This number will increase as data is acknowledged by the peer. It may also change if the buffer is resized automatically to optimise throughput.</p>
+
+<p>Can be queried using the convenience macro SSL_get_stream_write_buf_avail().</p>
+
+</dd>
+</dl>
+
+<p>No configurable values are currently defined for non-QUIC SSL objects.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>Returns 1 on success or 0 on failure. This function can fail for a number of reasons:</p>
+
+<ul>
+
+<li><p>An argument is invalid (e.g. NULL pointer or invalid class).</p>
+
+</li>
+<li><p>The given value is not supported by the SSL object on which it was called.</p>
+
+</li>
+<li><p>The given operation (get or set) is not supported by the specified configurable value.</p>
+
+</li>
+<li><p>You are trying to modify the given value and the value is not modifiable at this time.</p>
+
+</li>
+</ul>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/SSL_ctrl.html">SSL_ctrl(3)</a>, <a href="../man3/SSL_get_accept_stream_queue_len.html">SSL_get_accept_stream_queue_len(3)</a>, <a href="../man3/SSL_get_stream_read_state.html">SSL_get_stream_read_state(3)</a>, <a href="../man3/SSL_get_stream_write_state.html">SSL_get_stream_write_state(3)</a>, <a href="../man3/SSL_get_stream_read_error_code.html">SSL_get_stream_read_error_code(3)</a>, <a href="../man3/SSL_get_stream_write_error_code.html">SSL_get_stream_write_error_code(3)</a>, <a href="../man3/SSL_set_default_stream_mode.html">SSL_set_default_stream_mode(3)</a>, <a href="../man3/SSL_set_incoming_stream_policy.html">SSL_set_incoming_stream_policy(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>These functions were added in OpenSSL 3.3.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2002-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

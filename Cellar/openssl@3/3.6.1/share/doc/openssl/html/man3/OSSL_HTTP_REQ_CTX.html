@@ -1,0 +1,176 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OSSL_HTTP_REQ_CTX</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#WARNINGS">WARNINGS</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OSSL_HTTP_REQ_CTX, OSSL_HTTP_REQ_CTX_new, OSSL_HTTP_REQ_CTX_free, OSSL_HTTP_REQ_CTX_set_request_line, OSSL_HTTP_REQ_CTX_add1_header, OSSL_HTTP_REQ_CTX_set_expected, OSSL_HTTP_REQ_CTX_set1_req, OSSL_HTTP_REQ_CTX_nbio, OSSL_HTTP_REQ_CTX_nbio_d2i, OSSL_HTTP_REQ_CTX_exchange, OSSL_HTTP_REQ_CTX_get0_mem_bio, OSSL_HTTP_REQ_CTX_get_resp_len, OSSL_HTTP_REQ_CTX_set_max_response_length, OSSL_HTTP_REQ_CTX_set_max_response_hdr_lines, OSSL_HTTP_is_alive - HTTP client low-level functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/http.h&gt;
+
+typedef struct ossl_http_req_ctx_st OSSL_HTTP_REQ_CTX;
+
+OSSL_HTTP_REQ_CTX *OSSL_HTTP_REQ_CTX_new(BIO *wbio, BIO *rbio, int buf_size);
+void OSSL_HTTP_REQ_CTX_free(OSSL_HTTP_REQ_CTX *rctx);
+
+int OSSL_HTTP_REQ_CTX_set_request_line(OSSL_HTTP_REQ_CTX *rctx, int method_POST,
+                                       const char *server, const char *port,
+                                       const char *path);
+int OSSL_HTTP_REQ_CTX_add1_header(OSSL_HTTP_REQ_CTX *rctx,
+                                  const char *name, const char *value);
+
+int OSSL_HTTP_REQ_CTX_set_expected(OSSL_HTTP_REQ_CTX *rctx,
+                                   const char *expected_content_type, int expect_asn1,
+                                   int timeout, int keep_alive);
+int OSSL_HTTP_REQ_CTX_set1_req(OSSL_HTTP_REQ_CTX *rctx, const char *content_type,
+                               const ASN1_ITEM *it, const ASN1_VALUE *req);
+int OSSL_HTTP_REQ_CTX_nbio(OSSL_HTTP_REQ_CTX *rctx);
+int OSSL_HTTP_REQ_CTX_nbio_d2i(OSSL_HTTP_REQ_CTX *rctx,
+                               ASN1_VALUE **pval, const ASN1_ITEM *it);
+BIO *OSSL_HTTP_REQ_CTX_exchange(OSSL_HTTP_REQ_CTX *rctx);
+
+BIO *OSSL_HTTP_REQ_CTX_get0_mem_bio(const OSSL_HTTP_REQ_CTX *rctx);
+size_t OSSL_HTTP_REQ_CTX_get_resp_len(const OSSL_HTTP_REQ_CTX *rctx);
+void OSSL_HTTP_REQ_CTX_set_max_response_length(OSSL_HTTP_REQ_CTX *rctx,
+                                               unsigned long len);
+void OSSL_HTTP_REQ_CTX_set_max_response_hdr_lines(OSSL_HTTP_REQ_CTX *rctx,
+                                                  size_t count);
+
+int OSSL_HTTP_is_alive(const OSSL_HTTP_REQ_CTX *rctx);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p><b>OSSL_HTTP_REQ_CTX</b> is a context structure for an HTTP request and response, used to collect all the necessary data to perform that request.</p>
+
+<p>This file documents low-level HTTP functions rarely used directly. High-level HTTP client functions like <a href="../man3/OSSL_HTTP_get.html">OSSL_HTTP_get(3)</a> and <a href="../man3/OSSL_HTTP_transfer.html">OSSL_HTTP_transfer(3)</a> should be preferred.</p>
+
+<p>OSSL_HTTP_REQ_CTX_new() allocates a new HTTP request context structure, which gets populated with the <b>BIO</b> to write/send the request to (<i>wbio</i>), the <b>BIO</b> to read/receive the response from (<i>rbio</i>, which may be equal to <i>wbio</i>), and the maximum expected response header line length <i>buf_size</i>. A value &lt;= 0 indicates that the <b>OSSL_HTTP_DEFAULT_MAX_LINE_LEN</b> of 4KiB should be used. <i>buf_size</i> is also used as the number of content bytes that are read at a time. The allocated context structure includes an internal memory <b>BIO</b>, which collects the HTTP request header lines.</p>
+
+<p>OSSL_HTTP_REQ_CTX_free() frees up the HTTP request context <i>rctx</i>. The <i>rbio</i> is not free&#39;d, <i>wbio</i> will be free&#39;d if <i>free_wbio</i> is set. If the argument is NULL, nothing is done.</p>
+
+<p>OSSL_HTTP_REQ_CTX_set_request_line() adds the 1st HTTP request line to <i>rctx</i>. The HTTP method is determined by <i>method_POST</i>, which should be 1 to indicate <code>POST</code> or 0 to indicate <code>GET</code>. <i>server</i> and <i>port</i> may be set to give the server and the optional port that an HTTP proxy shall forward the request to, otherwise they must be left NULL. <i>path</i> provides the HTTP request path; if left NULL, <code>/</code> is used. For backward compatibility, <i>path</i> may begin with <code>http://</code> and thus convey an absoluteURI. In this case it indicates HTTP proxy use and provides also the server (and optionally the port) that the proxy shall forward the request to. In this case the <i>server</i> and <i>port</i> arguments must be NULL.</p>
+
+<p>OSSL_HTTP_REQ_CTX_add1_header() adds header <i>name</i> with value <i>value</i> to the context <i>rctx</i>. It can be called more than once to add multiple header lines. For example, to add a <code>Host</code> header for <code>example.com</code> you would call:</p>
+
+<pre><code>OSSL_HTTP_REQ_CTX_add1_header(ctx, &quot;Host&quot;, &quot;example.com&quot;);</code></pre>
+
+<p>OSSL_HTTP_REQ_CTX_set_expected() optionally sets in <i>rctx</i> some expectations of the HTTP client on the response. Due to the structure of an HTTP request, if the <i>keep_alive</i> argument is nonzero the function must be used before calling OSSL_HTTP_REQ_CTX_set1_req().</p>
+
+<p>If the <i>expected_content_type</i> argument is not NULL, the client will check in a case-insensitive way that the specified <code>Content-Type</code> string value is included in the HTTP header of the response and return an error if not. In the <code>Content-Type</code> header line the specified string should be present either as a whole, or in case the specified string does not include a <code>;</code> character, it is sufficient that the specified string appears as a prefix in the header line, followed by a <code>;</code> character and any further text. For instance, if the <i>expected_content_type</i> argument specifies <code>text/html</code>, this is matched by <code>Text/HTML</code>, <code>text/html; charset=UTF-8</code>, etc.</p>
+
+<p>If the <i>expect_asn1</i> parameter is nonzero a structure in ASN.1 encoding will be expected as the response content and input streaming is disabled. This means that an ASN.1 sequence header is required, its length field is checked, and OSSL_HTTP_REQ_CTX_get0_mem_bio() should be used to get the buffered response. Otherwise (by default) any input format is allowed, with body length checks being performed on error messages only. In this case the BIO given as <i>rbio</i> argument to OSSL_HTTP_REQ_CTX_new() should be used directly to read the response contents, which may support streaming.</p>
+
+<p>If the <i>timeout</i> parameter is &gt; 0 this indicates the maximum number of seconds the subsequent HTTP transfer (sending the request and receiving a response) is allowed to take. <i>timeout</i> == 0 enables waiting indefinitely, i.e., no timeout can occur. This is the default. <i>timeout</i> &lt; 0 takes over any value set via the <i>overall_timeout</i> argument of <a href="../man3/OSSL_HTTP_open.html">OSSL_HTTP_open(3)</a> with the default being 0, which means no timeout.</p>
+
+<p>If the <i>keep_alive</i> parameter is 0, which is the default, the connection is not kept open after receiving a response. This is the default behavior for HTTP 1.0. If the value is 1 or 2 then a persistent connection is requested. If the value is 2 then a persistent connection is required, i.e., an error occurs in case the server does not grant it.</p>
+
+<p>OSSL_HTTP_REQ_CTX_set1_req() finalizes the HTTP request context. It is needed if the <i>method_POST</i> parameter in the OSSL_HTTP_REQ_CTX_set_request_line() call was 1 and an ASN.1-encoded request should be sent. It must also be used when requesting &quot;keep-alive&quot;, even if a GET request is going to be sent, in which case <i>req</i> must be NULL. Unless <i>req</i> is NULL, the function adds the DER encoding of <i>req</i> using the ASN.1 template <i>it</i> to do the encoding (which does not support streaming). The HTTP header <code>Content-Length</code> is filled out with the length of the request. <i>content_type</i> must be NULL if <i>req</i> is NULL. If <i>content_type</i> isn&#39;t NULL, the HTTP header <code>Content-Type</code> is also added with the given string value. The header lines are added to the internal memory <b>BIO</b> for the request header.</p>
+
+<p>OSSL_HTTP_REQ_CTX_nbio() attempts to send the request prepared in <i>rctx</i> and to gather the response via HTTP, using the <i>wbio</i> and <i>rbio</i> that were given when calling OSSL_HTTP_REQ_CTX_new(). The function may need to be called again if its result is -1, which indicates <a href="../man3/BIO_should_retry.html">BIO_should_retry(3)</a>. In such a case it is advisable to sleep a little in between, using <a href="../man3/BIO_wait.html">BIO_wait(3)</a> on the read BIO to prevent a busy loop. See OSSL_HTTP_REQ_CTX_set_expected() how the response content type, the response body, the HTTP transfer timeout, and &quot;keep-alive&quot; are treated. Any error message body is consumed if a <code>Content-Type</code> header is not included or its value starts with <code>text/</code>. This is used for tracing the body contents if HTTP tracing is enabled. If the <code>Content-Length</code> header is present in the response and its value exceeds the maximum allowed response content length or the response is an error message with its body length exceeding this value or the content is an ASN.1-encoded structure with a length exceeding this value or both length indications are present but disagree then an error occurs.</p>
+
+<p>OSSL_HTTP_REQ_CTX_nbio_d2i() is like OSSL_HTTP_REQ_CTX_nbio() but on success in addition parses the response, which must be a DER-encoded ASN.1 structure, using the ASN.1 template <i>it</i> and places the result in <i>*pval</i>.</p>
+
+<p>OSSL_HTTP_REQ_CTX_exchange() calls OSSL_HTTP_REQ_CTX_nbio() as often as needed in order to exchange a request and response or until a timeout is reached. On success it returns a pointer to the BIO that can be used to read the result. If an ASN.1-encoded response was expected, this is the BIO returned by OSSL_HTTP_REQ_CTX_get0_mem_bio() when called after the exchange. This memory BIO does not support streaming. Otherwise the returned BIO is the <i>rbio</i> given to OSSL_HTTP_REQ_CTX_new(), which may support streaming. When this BIO is returned, it has been read past the end of the response header, such that the actual response body can be read from it. The returned BIO pointer MUST NOT be freed by the caller.</p>
+
+<p>OSSL_HTTP_REQ_CTX_get0_mem_bio() returns the internal memory <b>BIO</b>. Before the HTTP request is sent, this could be used to adapt its header lines. <i>Use with caution!</i> After receiving a response via HTTP, the BIO represents the current state of reading the response header. If the response was expected to be ASN.1 encoded, its contents can be read via this BIO, which does not support streaming. The returned BIO pointer must not be freed by the caller.</p>
+
+<p>OSSL_HTTP_REQ_CTX_get_resp_len() returns the size of the response contents in <i>rctx</i> if provided by the server as <code>Content-Length</code> header field, else 0.</p>
+
+<p>OSSL_HTTP_REQ_CTX_set_max_response_length() sets the maximum allowed response content length for <i>rctx</i> to <i>len</i>. If not set or <i>len</i> is 0 then the <b>OSSL_HTTP_DEFAULT_MAX_RESP_LEN</b> is used, which currently is 100 KiB.</p>
+
+<p>OSSL_HTTP_REQ_CTX_set_max_response_hdr_lines() changes the limit for the number of HTTP header lines allowed to be received in a response. The default limit is <b>OSSL_HTTP_DEFAULT_MAX_RESP_HDR_LINES</b>, currently 256. If the limit is not 0 and the number of lines exceeds the limit, then the HTTP_R_RESPONSE_TOO_MANY_HDRLINES error is indicated. Setting the limit to 0 disables the check.</p>
+
+<p>OSSL_HTTP_is_alive() can be used to query if the HTTP connection given by <i>rctx</i> is still alive, i.e., has not been closed. It returns 0 if <i>rctx</i> is NULL.</p>
+
+<p>If the client application requested or required a persistent connection and this was granted by the server, it can keep <i>rctx</i> as long as it wants to send further requests and OSSL_HTTP_is_alive() returns nonzero, else it should call <i>OSSL_HTTP_REQ_CTX_free(rctx)</i> or <a href="../man3/OSSL_HTTP_close.html">OSSL_HTTP_close(3)</a>. In case the client application keeps <i>rctx</i> but the connection then dies for any reason at the server side, it will notice this obtaining an I/O error when trying to send the next request via <i>rctx</i>.</p>
+
+<h1 id="WARNINGS">WARNINGS</h1>
+
+<p>The server&#39;s response may be unexpected if the hostname that was used to create the <i>wbio</i>, any <code>Host</code> header, and the host specified in the request URL do not match.</p>
+
+<p>Many of these functions must be called in a certain order.</p>
+
+<p>First, the HTTP request context must be allocated: OSSL_HTTP_REQ_CTX_new().</p>
+
+<p>Then, the HTTP request must be prepared with request data:</p>
+
+<ol>
+
+<li><p>Calling OSSL_HTTP_REQ_CTX_set_request_line().</p>
+
+</li>
+<li><p>Adding extra header lines with OSSL_HTTP_REQ_CTX_add1_header(). This is optional and may be done multiple times with different names.</p>
+
+</li>
+<li><p>Finalize the request using OSSL_HTTP_REQ_CTX_set1_req(). This may be omitted if the GET method is used and &quot;keep-alive&quot; is not requested.</p>
+
+</li>
+</ol>
+
+<p>When the request context is fully prepared, the HTTP exchange may be performed with OSSL_HTTP_REQ_CTX_nbio() or OSSL_HTTP_REQ_CTX_exchange().</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>When built with tracing enabled, OSSL_HTTP_REQ_CTX_nbio() and all functions using it, such as OSSL_HTTP_REQ_CTX_exchange() and <a href="../man3/OSSL_HTTP_transfer.html">OSSL_HTTP_transfer(3)</a>, may be traced using <b>OSSL_TRACE_CATEGORY_HTTP</b>. See also <a href="../man3/OSSL_trace_enabled.html">OSSL_trace_enabled(3)</a> and <a href="../man7/openssl-env.html">openssl-env(7)</a>.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>OSSL_HTTP_REQ_CTX_new() returns a pointer to a <b>OSSL_HTTP_REQ_CTX</b>, or NULL on error.</p>
+
+<p>OSSL_HTTP_REQ_CTX_free(), OSSL_HTTP_REQ_CTX_set_max_response_length(), and OSSL_HTTP_REQ_CTX_set_max_response_hdr_lines() do not return values.</p>
+
+<p>OSSL_HTTP_REQ_CTX_set_request_line(), OSSL_HTTP_REQ_CTX_add1_header(), OSSL_HTTP_REQ_CTX_set1_req(), and OSSL_HTTP_REQ_CTX_set_expected() return 1 for success and 0 for failure.</p>
+
+<p>OSSL_HTTP_REQ_CTX_nbio() and OSSL_HTTP_REQ_CTX_nbio_d2i() return 1 for success, 0 on error or redirection, -1 if retry is needed.</p>
+
+<p>OSSL_HTTP_REQ_CTX_exchange() and OSSL_HTTP_REQ_CTX_get0_mem_bio() return a pointer to a <b>BIO</b> on success as described above or NULL on failure. The returned BIO must not be freed by the caller.</p>
+
+<p>OSSL_HTTP_REQ_CTX_get_resp_len() returns the size of the response contents or 0 if not available or an error occurred.</p>
+
+<p>OSSL_HTTP_is_alive() returns 1 if its argument is non-NULL and the client requested a persistent connection and the server did not disagree on keeping the connection open, else 0.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/BIO_should_retry.html">BIO_should_retry(3)</a>, <a href="../man3/BIO_wait.html">BIO_wait(3)</a>, <a href="../man3/ASN1_item_d2i_bio.html">ASN1_item_d2i_bio(3)</a>, <a href="../man3/ASN1_item_i2d_mem_bio.html">ASN1_item_i2d_mem_bio(3)</a>, <a href="../man3/OSSL_HTTP_open.html">OSSL_HTTP_open(3)</a>, <a href="../man3/OSSL_HTTP_get.html">OSSL_HTTP_get(3)</a>, <a href="../man3/OSSL_HTTP_transfer.html">OSSL_HTTP_transfer(3)</a>, <a href="../man3/OSSL_HTTP_close.html">OSSL_HTTP_close(3)</a>, <a href="../man3/OSSL_trace_enabled.html">OSSL_trace_enabled(3)</a>, and <a href="../man7/openssl-env.html">openssl-env(7)</a>.</p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>OSSL_HTTP_REQ_CTX_set_max_response_hdr_lines() was added in OpenSSL 3.3.</p>
+
+<p>All other functions described here were added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2015-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

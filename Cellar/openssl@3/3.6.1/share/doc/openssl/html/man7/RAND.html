@@ -1,0 +1,61 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>RAND</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#DEFAULT-SETUP">DEFAULT SETUP</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>RAND - the OpenSSL random generator</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>Random numbers are a vital part of cryptography, they are needed to provide unpredictability for tasks like key generation, creating salts, and many more. Software-based generators must be seeded with external randomness before they can be used as a cryptographically-secure pseudo-random number generator (CSPRNG). The availability of common hardware with special instructions and modern operating systems, which may use items such as interrupt jitter and network packet timings, can be reasonable sources of seeding material.</p>
+
+<p>OpenSSL comes with a default implementation of the RAND API which is based on the deterministic random bit generator (DRBG) model as described in [NIST SP 800-90A Rev. 1]. The default random generator will initialize automatically on first use and will be fully functional without having to be initialized (&#39;seeded&#39;) explicitly. It seeds and reseeds itself automatically using trusted random sources provided by the operating system.</p>
+
+<p>As a normal application developer, you do not have to worry about any details, just use <a href="../man3/RAND_bytes.html">RAND_bytes(3)</a> to obtain random data. Having said that, there is one important rule to obey: Always check the error return value of <a href="../man3/RAND_bytes.html">RAND_bytes(3)</a> and do not take randomness for granted. Although (re-)seeding is automatic, it can fail because no trusted random source is available or the trusted source(s) temporarily fail to provide sufficient random seed material. In this case the CSPRNG enters an error state and ceases to provide output, until it is able to recover from the error by reseeding itself. For more details on reseeding and error recovery, see <a href="../man7/EVP_RAND.html">EVP_RAND(7)</a>.</p>
+
+<p>For values that should remain secret, you can use <a href="../man3/RAND_priv_bytes.html">RAND_priv_bytes(3)</a> instead. This method does not provide &#39;better&#39; randomness, it uses the same type of CSPRNG. The intention behind using a dedicated CSPRNG exclusively for private values is that none of its output should be visible to an attacker (e.g., used as salt value), in order to reveal as little information as possible about its internal state, and that a compromise of the &quot;public&quot; CSPRNG instance will not affect the secrecy of these private values.</p>
+
+<p>In the rare case where the default implementation does not satisfy your special requirements, the default RAND internals can be replaced by your own <a href="../man3/EVP_RAND.html">EVP_RAND(3)</a> objects.</p>
+
+<p>Changing the default random generator should be necessary only in exceptional cases and is not recommended, unless you have a profound knowledge of cryptographic principles and understand the implications of your changes.</p>
+
+<p>Finally, it is possible for a provider to bypass the default RAND setup for <a href="../man3/RAND_bytes.html">RAND_bytes(3)</a> and associated functions. A provider can be specified as the single randomness source via the <a href="../man3/RAND_set1_random_provider.html">RAND_set1_random_provider(3)</a> function or via configuration using the <b>random_provider</b> option in <a href="../man5/config.html">config(5)</a>. Once specified, the nominated provider will be used directly when calling the <a href="../man3/RAND_bytes.html">RAND_bytes(3)</a> family of functions.</p>
+
+<h1 id="DEFAULT-SETUP">DEFAULT SETUP</h1>
+
+<p>The default OpenSSL RAND method is based on the EVP_RAND deterministic random bit generator (DRBG) classes. A DRBG is a certain type of cryptographically-secure pseudo-random number generator (CSPRNG), which is described in [NIST SP 800-90A Rev. 1].</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/RAND_bytes.html">RAND_bytes(3)</a>, <a href="../man3/RAND_priv_bytes.html">RAND_priv_bytes(3)</a>, <a href="../man3/EVP_RAND.html">EVP_RAND(3)</a>, <a href="../man3/RAND_get0_primary.html">RAND_get0_primary(3)</a>, <a href="../man5/config.html">config(5)</a>, <a href="../man7/EVP_RAND.html">EVP_RAND(7)</a>, <a href="../man3/RAND_set1_random_provider.html">RAND_set1_random_provider(3)</a>.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2018-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

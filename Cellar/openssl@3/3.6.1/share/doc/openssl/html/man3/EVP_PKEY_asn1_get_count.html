@@ -1,0 +1,85 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_PKEY_asn1_get_count</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_PKEY_asn1_find, EVP_PKEY_asn1_find_str, EVP_PKEY_asn1_get_count, EVP_PKEY_asn1_get0, EVP_PKEY_asn1_get0_info - enumerate public key ASN.1 methods</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<p>The following functions have been deprecated since OpenSSL 3.6, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>; use the provider API instead.</p>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+
+int EVP_PKEY_asn1_get_count(void);
+const EVP_PKEY_ASN1_METHOD *EVP_PKEY_asn1_get0(int idx);
+const EVP_PKEY_ASN1_METHOD *EVP_PKEY_asn1_find(ENGINE **pe, int type);
+const EVP_PKEY_ASN1_METHOD *EVP_PKEY_asn1_find_str(ENGINE **pe,
+                                                   const char *str, int len);
+int EVP_PKEY_asn1_get0_info(int *ppkey_id, int *pkey_base_id,
+                            int *ppkey_flags, const char **pinfo,
+                            const char **ppem_str,
+                            const EVP_PKEY_ASN1_METHOD *ameth);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>EVP_PKEY_asn1_count() returns a count of the number of public key ASN.1 methods available: it includes standard methods and any methods added by the application.</p>
+
+<p>EVP_PKEY_asn1_get0() returns the public key ASN.1 method <b>idx</b>. The value of <b>idx</b> must be between zero and EVP_PKEY_asn1_get_count() - 1.</p>
+
+<p>EVP_PKEY_asn1_find() looks up the <b>EVP_PKEY_ASN1_METHOD</b> with NID <b>type</b>. If <b>pe</b> isn&#39;t <b>NULL</b>, then it will look up an engine implementing a <b>EVP_PKEY_ASN1_METHOD</b> for the NID <b>type</b> and return that instead, and also set <b>*pe</b> to point at the engine that implements it.</p>
+
+<p>EVP_PKEY_asn1_find_str() looks up the <b>EVP_PKEY_ASN1_METHOD</b> with PEM type string <b>str</b>. Just like EVP_PKEY_asn1_find(), if <b>pe</b> isn&#39;t <b>NULL</b>, then it will look up an engine implementing a <b>EVP_PKEY_ASN1_METHOD</b> for the NID <b>type</b> and return that instead, and also set <b>*pe</b> to point at the engine that implements it.</p>
+
+<p>EVP_PKEY_asn1_get0_info() returns the public key ID, base public key ID (both NIDs), any flags, the method description and PEM type string associated with the public key ASN.1 method <b>*ameth</b>.</p>
+
+<p>EVP_PKEY_asn1_count(), EVP_PKEY_asn1_get0(), EVP_PKEY_asn1_find() and EVP_PKEY_asn1_find_str() are not thread safe, but as long as all <b>EVP_PKEY_ASN1_METHOD</b> objects are added before the application gets threaded, using them is safe. See <a href="../man3/EVP_PKEY_asn1_add0.html">EVP_PKEY_asn1_add0(3)</a>.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>EVP_PKEY_asn1_count() returns the number of available public key methods.</p>
+
+<p>EVP_PKEY_asn1_get0() return a public key method or <b>NULL</b> if <b>idx</b> is out of range.</p>
+
+<p>EVP_PKEY_asn1_get0_info() returns 0 on failure, 1 on success.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_PKEY_asn1_new.html">EVP_PKEY_asn1_new(3)</a>, <a href="../man3/EVP_PKEY_asn1_add0.html">EVP_PKEY_asn1_add0(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>These functions were deprecated in OpenSSL 3.6.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2017-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

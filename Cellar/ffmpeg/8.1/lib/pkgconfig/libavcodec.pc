@@ -1,0 +1,14 @@
+prefix=/opt/homebrew/Cellar/ffmpeg/8.1
+exec_prefix=${prefix}
+libdir=/opt/homebrew/Cellar/ffmpeg/8.1/lib
+includedir=/opt/homebrew/Cellar/ffmpeg/8.1/include
+
+Name: libavcodec
+Description: FFmpeg codec library
+Version: 62.28.100
+Requires: 
+Requires.private: libswresample >= 6.3.100, libavutil >= 60.26.100
+Conflicts:
+Libs: -L${libdir}  -lavcodec 
+Libs.private: -L/opt/homebrew/Cellar/libvpx/1.16.0/lib -lvpx -lm -L/opt/homebrew/Cellar/libvpx/1.16.0/lib -lvpx -lm -L/opt/homebrew/Cellar/libvpx/1.16.0/lib -lvpx -lm -L/opt/homebrew/Cellar/libvpx/1.16.0/lib -lvpx -lm -liconv -lm -L/opt/homebrew/Cellar/dav1d/1.5.3/lib -ldav1d -framework AudioToolbox -lmp3lame -lm -L/opt/homebrew/Cellar/opus/1.6.1/lib -lopus -L/opt/homebrew/Cellar/svt-av1/4.0.1/lib -lSvtAv1Enc -L/opt/homebrew/Cellar/x264/r3222/lib -lx264 -L/opt/homebrew/Cellar/x265/4.1/lib -lx265 -pthread -lz -framework VideoToolbox -framework CoreFoundation -framework CoreMedia -framework CoreVideo -framework CoreServices
+Cflags: -I${includedir}

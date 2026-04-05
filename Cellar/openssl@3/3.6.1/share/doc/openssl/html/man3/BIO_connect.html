@@ -1,0 +1,127 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>BIO_connect</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#FLAGS">FLAGS</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>BIO_socket, BIO_bind, BIO_connect, BIO_listen, BIO_accept_ex, BIO_closesocket - BIO socket communication setup routines</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/bio.h&gt;
+
+int BIO_socket(int domain, int socktype, int protocol, int options);
+int BIO_bind(int sock, const BIO_ADDR *addr, int options);
+int BIO_connect(int sock, const BIO_ADDR *addr, int options);
+int BIO_listen(int sock, const BIO_ADDR *addr, int options);
+int BIO_accept_ex(int accept_sock, BIO_ADDR *peer, int options);
+int BIO_closesocket(int sock);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>BIO_socket() creates a socket in the domain <b>domain</b>, of type <b>socktype</b> and <b>protocol</b>. Socket <b>options</b> are currently unused, but is present for future use.</p>
+
+<p>BIO_bind() binds the source address and service to a socket and may be useful before calling BIO_connect(). The options may include <b>BIO_SOCK_REUSEADDR</b>, which is described in <a href="#FLAGS">&quot;FLAGS&quot;</a> below.</p>
+
+<p>BIO_connect() connects <b>sock</b> to the address and service given by <b>addr</b>. Connection <b>options</b> may be zero or any combination of <b>BIO_SOCK_KEEPALIVE</b>, <b>BIO_SOCK_NONBLOCK</b> and <b>BIO_SOCK_NODELAY</b>. The flags are described in <a href="#FLAGS">&quot;FLAGS&quot;</a> below.</p>
+
+<p>BIO_listen() has <b>sock</b> start listening on the address and service given by <b>addr</b>. Connection <b>options</b> may be zero or any combination of <b>BIO_SOCK_KEEPALIVE</b>, <b>BIO_SOCK_NONBLOCK</b>, <b>BIO_SOCK_NODELAY</b>, <b>BIO_SOCK_REUSEADDR</b> and <b>BIO_SOCK_V6_ONLY</b>. The flags are described in <a href="#FLAGS">&quot;FLAGS&quot;</a> below.</p>
+
+<p>BIO_accept_ex() waits for an incoming connections on the given socket <b>accept_sock</b>. When it gets a connection, the address and port of the peer gets stored in <b>peer</b> if that one is non-NULL. Accept <b>options</b> may be zero or <b>BIO_SOCK_NONBLOCK</b>, and is applied on the accepted socket. The flags are described in <a href="#FLAGS">&quot;FLAGS&quot;</a> below.</p>
+
+<p>BIO_closesocket() closes <b>sock</b>.</p>
+
+<h1 id="FLAGS">FLAGS</h1>
+
+<dl>
+
+<dt id="BIO_SOCK_KEEPALIVE">BIO_SOCK_KEEPALIVE</dt>
+<dd>
+
+<p>Enables regular sending of keep-alive messages.</p>
+
+</dd>
+<dt id="BIO_SOCK_NONBLOCK">BIO_SOCK_NONBLOCK</dt>
+<dd>
+
+<p>Sets the socket to nonblocking mode.</p>
+
+</dd>
+<dt id="BIO_SOCK_NODELAY">BIO_SOCK_NODELAY</dt>
+<dd>
+
+<p>Corresponds to <b>TCP_NODELAY</b>, and disables the Nagle algorithm. With this set, any data will be sent as soon as possible instead of being buffered until there&#39;s enough for the socket to send out in one go.</p>
+
+</dd>
+<dt id="BIO_SOCK_REUSEADDR">BIO_SOCK_REUSEADDR</dt>
+<dd>
+
+<p>Try to reuse the address and port combination for a recently closed port.</p>
+
+</dd>
+<dt id="BIO_SOCK_V6_ONLY">BIO_SOCK_V6_ONLY</dt>
+<dd>
+
+<p>When creating an IPv6 socket, make it only listen for IPv6 addresses and not IPv4 addresses mapped to IPv6.</p>
+
+</dd>
+<dt id="BIO_SOCK_TFO">BIO_SOCK_TFO</dt>
+<dd>
+
+<p>Enables TCP Fast Open on the socket. Uses appropriate APIs on supported operating systems, including Linux, macOS and FreeBSD. Can be used with BIO_connect(), BIO_set_conn_mode(), BIO_set_bind_mode(), and BIO_listen(). On Linux kernels before 4.14, use BIO_set_conn_address() to specify the peer address before starting the TLS handshake.</p>
+
+</dd>
+</dl>
+
+<p>These flags are bit flags, so they are to be combined with the <code>|</code> operator, for example:</p>
+
+<pre><code>BIO_connect(sock, addr, BIO_SOCK_KEEPALIVE | BIO_SOCK_NONBLOCK);</code></pre>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>BIO_socket() returns the socket number on success or <b>INVALID_SOCKET</b> (-1) on error. When an error has occurred, the OpenSSL error stack will hold the error data and errno has the system error.</p>
+
+<p>BIO_bind(), BIO_connect() and BIO_listen() return 1 on success or 0 on error. When an error has occurred, the OpenSSL error stack will hold the error data and errno has the system error.</p>
+
+<p>BIO_accept_ex() returns the accepted socket on success or <b>INVALID_SOCKET</b> (-1) on error. When an error has occurred, the OpenSSL error stack will hold the error data and errno has the system error.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/BIO_ADDR.html">BIO_ADDR(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>BIO_gethostname(), BIO_get_port(), BIO_get_host_ip(), BIO_get_accept_socket() and BIO_accept() were deprecated in OpenSSL 1.1.0. Use the functions described above instead.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2016-2022 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

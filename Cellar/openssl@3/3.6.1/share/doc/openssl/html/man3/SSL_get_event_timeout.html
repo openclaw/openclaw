@@ -1,0 +1,90 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_get_event_timeout</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_get_event_timeout - determine when an SSL object next needs to have events handled</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+int SSL_get_event_timeout(SSL *s, struct timeval *tv, int *is_infinite);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_get_event_timeout() determines when the SSL object next needs to perform internal processing due to the passage of time.</p>
+
+<p>All arguments are required; <i>tv</i> and <i>is_infinite</i> must be non-NULL.</p>
+
+<p>Upon the successful return of SSL_get_event_timeout(), one of the following cases applies:</p>
+
+<ul>
+
+<li><p>The SSL object has events which need to be handled immediately; The fields of <i>*tv</i> are set to 0 and <i>*is_infinite</i> is set to 0.</p>
+
+</li>
+<li><p>The SSL object has events which need to be handled after some amount of time (relative to the time at which SSL_get_event_timeout() was called). <i>*tv</i> is set to the amount of time after which <a href="../man3/SSL_handle_events.html">SSL_handle_events(3)</a> should be called and <i>*is_infinite</i> is set to 0.</p>
+
+</li>
+<li><p>There are currently no timer events which require handling in the future. The value of <i>*tv</i> is unspecified and <i>*is_infinite</i> is set to 1.</p>
+
+</li>
+</ul>
+
+<p>This function is currently applicable only to DTLS and QUIC connection SSL objects. If it is called on any other kind of SSL object, it always outputs infinity. This is considered a success condition.</p>
+
+<p>For DTLS, this function can be used instead of the older <a href="../man3/DTLSv1_get_timeout.html">DTLSv1_get_timeout(3)</a> function. Note that this function differs from <a href="../man3/DTLSv1_get_timeout.html">DTLSv1_get_timeout(3)</a> in that the case where no timeout is active is considered a success condition.</p>
+
+<p>Note that the value output by a call to SSL_get_event_timeout() may change as a result of other calls to the SSL object.</p>
+
+<p>Once the timeout expires, <a href="../man3/SSL_handle_events.html">SSL_handle_events(3)</a> should be called to handle any internal processing which is due; for more information, see <a href="../man3/SSL_handle_events.html">SSL_handle_events(3)</a>.</p>
+
+<p>Note that SSL_get_event_timeout() supersedes the older <a href="../man3/DTLSv1_get_timeout.html">DTLSv1_get_timeout(3)</a> function for all use cases.</p>
+
+<p>If the call to SSL_get_event_timeout() fails, the values of <i>*tv</i> and <i>*is_infinite</i> may still be changed and their values become unspecified.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>Returns 1 on success and 0 on failure.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/SSL_handle_events.html">SSL_handle_events(3)</a>, <a href="../man3/DTLSv1_get_timeout.html">DTLSv1_get_timeout(3)</a>, <a href="../man7/ssl.html">ssl(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The SSL_get_event_timeout() function was added in OpenSSL 3.2.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2022-2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

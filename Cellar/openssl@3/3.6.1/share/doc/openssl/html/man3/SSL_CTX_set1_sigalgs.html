@@ -1,0 +1,111 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_CTX_set1_sigalgs</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_CTX_set1_sigalgs, SSL_set1_sigalgs, SSL_CTX_set1_sigalgs_list, SSL_set1_sigalgs_list, SSL_CTX_set1_client_sigalgs, SSL_set1_client_sigalgs, SSL_CTX_set1_client_sigalgs_list, SSL_set1_client_sigalgs_list - set supported signature algorithms</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+long SSL_CTX_set1_sigalgs(SSL_CTX *ctx, const int *slist, long slistlen);
+long SSL_set1_sigalgs(SSL *ssl, const int *slist, long slistlen);
+long SSL_CTX_set1_sigalgs_list(SSL_CTX *ctx, const char *str);
+long SSL_set1_sigalgs_list(SSL *ssl, const char *str);
+
+long SSL_CTX_set1_client_sigalgs(SSL_CTX *ctx, const int *slist, long slistlen);
+long SSL_set1_client_sigalgs(SSL *ssl, const int *slist, long slistlen);
+long SSL_CTX_set1_client_sigalgs_list(SSL_CTX *ctx, const char *str);
+long SSL_set1_client_sigalgs_list(SSL *ssl, const char *str);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_CTX_set1_sigalgs() and SSL_set1_sigalgs() set the supported signature algorithms for <b>ctx</b> or <b>ssl</b>. The array <b>slist</b> of length <b>slistlen</b> must consist of pairs of NIDs corresponding to digest and public key algorithms.</p>
+
+<p>SSL_CTX_set1_sigalgs_list() and SSL_set1_sigalgs_list() set the supported signature algorithms for <b>ctx</b> or <b>ssl</b>. The <b>str</b> parameter must be a null terminated string consisting of a colon separated list of elements, where each element is either a combination of a public key algorithm and a digest separated by <b>+</b>, or a TLS 1.3-style named SignatureScheme such as rsa_pss_pss_sha256. Signature scheme names and public key algorithm names (but not the digest names) in the <b>algorithm+hash</b> form are case-insensitive. If a list entry is preceded with the <code>?</code> character, it will be ignored if an implementation is missing.</p>
+
+<p>SSL_CTX_set1_client_sigalgs(), SSL_set1_client_sigalgs(), SSL_CTX_set1_client_sigalgs_list() and SSL_set1_client_sigalgs_list() set signature algorithms related to client authentication, otherwise they are identical to SSL_CTX_set1_sigalgs(), SSL_set1_sigalgs(), SSL_CTX_set1_sigalgs_list() and SSL_set1_sigalgs_list().</p>
+
+<p>All these functions are implemented as macros. The signature algorithm parameter (integer array or string) is not freed: the application should free it, if necessary.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>If an application wishes to allow the setting of signature algorithms as one of many user configurable options it should consider using the more flexible SSL_CONF API instead.</p>
+
+<p>The signature algorithms set by a client are used directly in the supported signature algorithm in the client hello message.</p>
+
+<p>The supported signature algorithms set by a server are not sent to the client but are used to determine the set of shared signature algorithms and (if server preferences are set with SSL_OP_SERVER_PREFERENCE) their order.</p>
+
+<p>The client authentication signature algorithms set by a server are sent in a certificate request message if client authentication is enabled, otherwise they are unused.</p>
+
+<p>Similarly client authentication signature algorithms set by a client are used to determined the set of client authentication shared signature algorithms.</p>
+
+<p>Signature algorithms will neither be advertised nor used if the security level prohibits them (for example SHA1 if the security level is 4 or more).</p>
+
+<p>Currently the NID_md5, NID_sha1, NID_sha224, NID_sha256, NID_sha384 and NID_sha512 digest NIDs are supported and the public key algorithm NIDs EVP_PKEY_RSA, EVP_PKEY_RSA_PSS, EVP_PKEY_DSA and EVP_PKEY_EC.</p>
+
+<p>The short or long name values for digests can be used in a string (for example &quot;MD5&quot;, &quot;SHA1&quot;, &quot;SHA224&quot;, &quot;SHA256&quot;, &quot;SHA384&quot;, &quot;SHA512&quot;) and the public key algorithm strings &quot;RSA&quot;, &quot;RSA-PSS&quot;, &quot;DSA&quot; or &quot;ECDSA&quot;.</p>
+
+<p>The TLS 1.3 signature scheme names (such as &quot;rsa_pss_pss_sha256&quot;) can also be used with the <b>_list</b> forms of the API.</p>
+
+<p>The use of MD5 as a digest is strongly discouraged due to security weaknesses.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>All these functions return 1 for success and 0 for failure.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>Set supported signature algorithms to SHA256 with ECDSA and SHA256 with RSA using an array:</p>
+
+<pre><code>const int slist[] = {NID_sha256, EVP_PKEY_EC, NID_sha256, EVP_PKEY_RSA};
+
+SSL_CTX_set1_sigalgs(ctx, slist, 4);</code></pre>
+
+<p>Set supported signature algorithms to SHA256 with ECDSA and SHA256 with RSA using a string:</p>
+
+<pre><code>SSL_CTX_set1_sigalgs_list(ctx, &quot;ECDSA+SHA256:RSA+SHA256&quot;);</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a>, <a href="../man3/SSL_get_shared_sigalgs.html">SSL_get_shared_sigalgs(3)</a>, <a href="../man3/SSL_CONF_CTX_new.html">SSL_CONF_CTX_new(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>Support for ignoring unknown signature algorithms in SSL_CTX_set1_sigalgs_list(), SSL_set1_sigalgs_list(), SSL_CTX_set1_client_sigalgs_list() and SSL_set1_client_sigalgs_list() was added in OpenSSL 3.3.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2015-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

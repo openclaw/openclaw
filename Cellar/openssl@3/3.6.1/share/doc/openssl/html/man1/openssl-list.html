@@ -1,0 +1,380 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>openssl-list</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#OPTIONS">OPTIONS</a>
+    <ul>
+      <li><a href="#Display-of-algorithm-names">Display of algorithm names</a></li>
+    </ul>
+  </li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>openssl-list - list algorithms and features</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<p><b>openssl list</b> [<b>-help</b>] [<b>-verbose</b>] [<b>-select</b> <i>name</i>] [<b>-1</b>] [<b>-all-algorithms</b>] [<b>-commands</b>] [<b>-standard-commands</b>] [<b>-digest-algorithms</b>] [<b>-digest-commands</b>] [<b>-kdf-algorithms</b>] [<b>-mac-algorithms</b>] [<b>-random-instances</b>] [<b>-random-generators</b>] [<b>-cipher-algorithms</b>] [<b>-cipher-commands</b>] [<b>-encoders</b>] [<b>-decoders</b>] [<b>-key-managers</b>] [<b>-skey-managers</b>] [<b>-key-exchange-algorithms</b>] [<b>-kem-algorithms</b>] [<b>-tls-groups</b>] [<b>-all-tls-groups</b>] [<b>-tls1_2</b>] [<b>-tls1_3</b>] [<b>-signature-algorithms</b>] [<b>-tls-signature-algorithms</b>] [<b>-asymcipher-algorithms</b>] [<b>-public-key-algorithms</b>] [<b>-public-key-methods</b>] [<b>-store-loaders</b>] [<b>-providers</b>] [<b>-engines</b>] [<b>-disabled</b>] [<b>-objects</b>] [<b>-options</b> <i>command</i>] [<b>-provider</b> <i>name</i>] [<b>-provider-path</b> <i>path</i>] [<b>-provparam</b> <i>[name:]key=value</i>] [<b>-propquery</b> <i>propq</i>]</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>This command is used to generate list of algorithms or disabled features.</p>
+
+<h1 id="OPTIONS">OPTIONS</h1>
+
+<dl>
+
+<dt id="help"><b>-help</b></dt>
+<dd>
+
+<p>Display a usage message.</p>
+
+</dd>
+<dt id="verbose"><b>-verbose</b></dt>
+<dd>
+
+<p>Displays extra information. The options below where verbosity applies say a bit more about what that means.</p>
+
+</dd>
+<dt id="select-name"><b>-select</b> <i>name</i></dt>
+<dd>
+
+<p>Only list algorithms that match this name.</p>
+
+</dd>
+<dt id="pod-1"><b>-1</b></dt>
+<dd>
+
+<p>List the commands, digest-commands, or cipher-commands in a single column. If used, this option must be given first.</p>
+
+</dd>
+<dt id="all-algorithms"><b>-all-algorithms</b></dt>
+<dd>
+
+<p>Display lists of all algorithms. These include:</p>
+
+<dl>
+
+<dt id="Asymmetric-ciphers">Asymmetric ciphers</dt>
+<dd>
+
+</dd>
+<dt id="Decoders">Decoders</dt>
+<dd>
+
+</dd>
+<dt id="Digests">Digests</dt>
+<dd>
+
+</dd>
+<dt id="Encoders">Encoders</dt>
+<dd>
+
+</dd>
+<dt id="Key-derivation-algorithms-KDF">Key derivation algorithms (KDF)</dt>
+<dd>
+
+</dd>
+<dt id="Key-encapsulation-methods-KEM">Key encapsulation methods (KEM)</dt>
+<dd>
+
+</dd>
+<dt id="Key-exchange-algorithms-KEX">Key exchange algorithms (KEX)</dt>
+<dd>
+
+</dd>
+<dt id="Key-managers">Key managers</dt>
+<dd>
+
+</dd>
+<dt id="Symmetric-key-managers">Symmetric key managers</dt>
+<dd>
+
+</dd>
+<dt id="Message-authentication-code-algorithms-MAC">Message authentication code algorithms (MAC)</dt>
+<dd>
+
+</dd>
+<dt id="Random-number-generators-RNG-DRBG">Random number generators (RNG, DRBG)</dt>
+<dd>
+
+</dd>
+<dt id="Signature-algorithms">Signature algorithms</dt>
+<dd>
+
+</dd>
+<dt id="Store-loaders">Store loaders</dt>
+<dd>
+
+</dd>
+<dt id="Symmetric-ciphers">Symmetric ciphers</dt>
+<dd>
+
+</dd>
+</dl>
+
+</dd>
+<dt id="commands"><b>-commands</b></dt>
+<dd>
+
+<p>Display a list of standard commands.</p>
+
+</dd>
+<dt id="standard-commands"><b>-standard-commands</b></dt>
+<dd>
+
+<p>List of standard commands.</p>
+
+</dd>
+<dt id="digest-commands"><b>-digest-commands</b></dt>
+<dd>
+
+<p>This option is deprecated. Use <b>digest-algorithms</b> instead.</p>
+
+<p>Display a list of message digest commands, which are typically used as input to the <a href="../man1/openssl-dgst.html">openssl-dgst(1)</a> or <a href="../man1/openssl-speed.html">openssl-speed(1)</a> commands.</p>
+
+</dd>
+<dt id="cipher-commands"><b>-cipher-commands</b></dt>
+<dd>
+
+<p>This option is deprecated. Use <b>cipher-algorithms</b> instead.</p>
+
+<p>Display a list of cipher commands, which are typically used as input to the <a href="../man1/openssl-enc.html">openssl-enc(1)</a> or <a href="../man1/openssl-speed.html">openssl-speed(1)</a> commands.</p>
+
+</dd>
+<dt id="cipher-algorithms--digest-algorithms--kdf-algorithms--mac-algorithms"><b>-cipher-algorithms</b>, <b>-digest-algorithms</b>, <b>-kdf-algorithms</b>, <b>-mac-algorithms</b>,</dt>
+<dd>
+
+<p>Display a list of symmetric cipher, digest, kdf and mac algorithms. See <a href="#Display-of-algorithm-names">&quot;Display of algorithm names&quot;</a> for a description of how names are displayed.</p>
+
+<p>In verbose mode, the algorithms provided by a provider will get additional information on what parameters each implementation supports.</p>
+
+</dd>
+<dt id="random-instances"><b>-random-instances</b></dt>
+<dd>
+
+<p>List the primary, public and private random number generator details.</p>
+
+</dd>
+<dt id="random-generators"><b>-random-generators</b></dt>
+<dd>
+
+<p>Display a list of random number generators. See <a href="#Display-of-algorithm-names">&quot;Display of algorithm names&quot;</a> for a description of how names are displayed.</p>
+
+</dd>
+<dt id="encoders"><b>-encoders</b></dt>
+<dd>
+
+<p>Display a list of encoders. See <a href="#Display-of-algorithm-names">&quot;Display of algorithm names&quot;</a> for a description of how names are displayed.</p>
+
+<p>In verbose mode, the algorithms provided by a provider will get additional information on what parameters each implementation supports.</p>
+
+</dd>
+<dt id="decoders"><b>-decoders</b></dt>
+<dd>
+
+<p>Display a list of decoders. See <a href="#Display-of-algorithm-names">&quot;Display of algorithm names&quot;</a> for a description of how names are displayed.</p>
+
+<p>In verbose mode, the algorithms provided by a provider will get additional information on what parameters each implementation supports.</p>
+
+</dd>
+<dt id="public-key-algorithms"><b>-public-key-algorithms</b></dt>
+<dd>
+
+<p>Display a list of public key algorithms, with each algorithm as a block of multiple lines, all but the first are indented. The options <b>key-exchange-algorithms</b>, <b>kem-algorithms</b>, <b>signature-algorithms</b>, and <b>asymcipher-algorithms</b> will display similar info.</p>
+
+</dd>
+<dt id="public-key-methods"><b>-public-key-methods</b></dt>
+<dd>
+
+<p>Display a list of public key methods.</p>
+
+</dd>
+<dt id="key-managers"><b>-key-managers</b></dt>
+<dd>
+
+<p>Display a list of key managers.</p>
+
+</dd>
+<dt id="skey-managers"><b>-skey-managers</b></dt>
+<dd>
+
+<p>Display a list of symmetric key managers.</p>
+
+</dd>
+<dt id="key-exchange-algorithms"><b>-key-exchange-algorithms</b></dt>
+<dd>
+
+<p>Display a list of key exchange algorithms.</p>
+
+</dd>
+<dt id="kem-algorithms"><b>-kem-algorithms</b></dt>
+<dd>
+
+<p>Display a list of key encapsulation algorithms.</p>
+
+</dd>
+<dt id="tls-groups"><b>-tls-groups</b></dt>
+<dd>
+
+<p>Display a list of the IANA names of all available (implemented) TLS groups. By default the listed groups are those compatible with TLS 1.3.</p>
+
+</dd>
+<dt id="all-tls-groups"><b>-all-tls-groups</b></dt>
+<dd>
+
+<p>Display a list of the names of all available (implemented) TLS groups, including any aliases. Some groups are known under multiple names, for example, <b>secp256r1</b> is also known as <b>P-256</b>. By default the listed groups are those compatible with TLS 1.3.</p>
+
+</dd>
+<dt id="tls1_2"><b>-tls1_2</b></dt>
+<dd>
+
+<p>When listing TLS groups, list those compatible with TLS 1.2</p>
+
+</dd>
+<dt id="tls1_3"><b>-tls1_3</b></dt>
+<dd>
+
+<p>When listing TLS groups, output those compatible with TLS 1.3. TLS 1.3 is the current default protocol version, but the default version is subject to change, so best to specify the version explicitly.</p>
+
+</dd>
+<dt id="signature-algorithms"><b>-signature-algorithms</b></dt>
+<dd>
+
+<p>Display a list of signature algorithms.</p>
+
+</dd>
+<dt id="tls-signature-algorithms"><b>-tls-signature-algorithms</b></dt>
+<dd>
+
+<p>Display the list of signature algorithms available for TLS handshakes made available by all currently active providers. The output format is colon delimited in a form directly usable in <a href="../man3/SSL_CONF_cmd.html">SSL_CONF_cmd(3)</a> specifying SignatureAlgorithms.</p>
+
+</dd>
+<dt id="asymcipher-algorithms"><b>-asymcipher-algorithms</b></dt>
+<dd>
+
+<p>Display a list of asymmetric cipher algorithms.</p>
+
+</dd>
+<dt id="store-loaders"><b>-store-loaders</b></dt>
+<dd>
+
+<p>Display a list of store loaders.</p>
+
+</dd>
+<dt id="providers"><b>-providers</b></dt>
+<dd>
+
+<p>Display a list of all loaded providers with their names, version and status.</p>
+
+<p>In verbose mode, the full version and all provider parameters will additionally be displayed.</p>
+
+</dd>
+<dt id="engines"><b>-engines</b></dt>
+<dd>
+
+<p>This option is deprecated.</p>
+
+<p>Display a list of loaded engines.</p>
+
+</dd>
+<dt id="disabled"><b>-disabled</b></dt>
+<dd>
+
+<p>Display a list of disabled features, those that were compiled out of the installation.</p>
+
+</dd>
+<dt id="objects"><b>-objects</b></dt>
+<dd>
+
+<p>Display a list of built in objects, i.e. OIDs with names. They&#39;re listed in the format described in <a href="../man5/config.html">&quot;ASN1 Object Configuration Module&quot; in config(5)</a>.</p>
+
+</dd>
+<dt id="options-command"><b>-options</b> <i>command</i></dt>
+<dd>
+
+<p>Output a two-column list of the options accepted by the specified <i>command</i>. The first is the option name, and the second is a one-character indication of what type of parameter it takes, if any. This is an internal option, used for checking that the documentation is complete.</p>
+
+</dd>
+<dt id="provider-name"><b>-provider</b> <i>name</i></dt>
+<dd>
+
+</dd>
+<dt id="provider-path-path"><b>-provider-path</b> <i>path</i></dt>
+<dd>
+
+</dd>
+<dt id="provparam-name:-key-value"><b>-provparam</b> <i>[name:]key=value</i></dt>
+<dd>
+
+</dd>
+<dt id="propquery-propq"><b>-propquery</b> <i>propq</i></dt>
+<dd>
+
+<p>See <a href="../man1/openssl.html">&quot;Provider Options&quot; in openssl(1)</a>, <a href="../man7/provider.html">provider(7)</a>, and <a href="../man7/property.html">property(7)</a>.</p>
+
+</dd>
+</dl>
+
+<h2 id="Display-of-algorithm-names">Display of algorithm names</h2>
+
+<p>Algorithm names may be displayed in one of two manners:</p>
+
+<dl>
+
+<dt id="Legacy-implementations">Legacy implementations</dt>
+<dd>
+
+<p>Legacy implementations will simply display the main name of the algorithm on a line of its own, or in the form <code>&lt;foo </code> bar&gt;&gt; to show that <code>foo</code> is an alias for the main name, <code>bar</code></p>
+
+</dd>
+<dt id="Provided-implementations">Provided implementations</dt>
+<dd>
+
+<p>Implementations from a provider are displayed like this if the implementation is labeled with a single name:</p>
+
+<pre><code>foo @ bar</code></pre>
+
+<p>or like this if it&#39;s labeled with multiple names:</p>
+
+<pre><code>{ foo1, foo2 } @bar</code></pre>
+
+<p>In both cases, <code>bar</code> is the name of the provider.</p>
+
+</dd>
+</dl>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The <b>-engines</b>, <b>-digest-commands</b>, and <b>-cipher-commands</b> options were deprecated in OpenSSL 3.0.</p>
+
+<p>The <b>-skey-managers</b> option was added in OpenSSL 3.5.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2016-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,80 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>RSA_sign</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#CONFORMING-TO">CONFORMING TO</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>RSA_sign, RSA_verify - RSA signatures</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/rsa.h&gt;</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>int RSA_sign(int type, const unsigned char *m, unsigned int m_len,
+             unsigned char *sigret, unsigned int *siglen, RSA *rsa);
+
+int RSA_verify(int type, const unsigned char *m, unsigned int m_len,
+               unsigned char *sigbuf, unsigned int siglen, RSA *rsa);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>All of the functions described on this page are deprecated. Applications should instead use <a href="../man3/EVP_PKEY_sign_init.html">EVP_PKEY_sign_init(3)</a>, <a href="../man3/EVP_PKEY_sign.html">EVP_PKEY_sign(3)</a>, <a href="../man3/EVP_PKEY_verify_init.html">EVP_PKEY_verify_init(3)</a> and <a href="../man3/EVP_PKEY_verify.html">EVP_PKEY_verify(3)</a>.</p>
+
+<p>RSA_sign() signs the message digest <b>m</b> of size <b>m_len</b> using the private key <b>rsa</b> using RSASSA-PKCS1-v1_5 as specified in RFC 3447. It stores the signature in <b>sigret</b> and the signature size in <b>siglen</b>. <b>sigret</b> must point to RSA_size(<b>rsa</b>) bytes of memory. Note that PKCS #1 adds meta-data, placing limits on the size of the key that can be used. See <a href="../man3/RSA_private_encrypt.html">RSA_private_encrypt(3)</a> for lower-level operations.</p>
+
+<p><b>type</b> denotes the message digest algorithm that was used to generate <b>m</b>. If <b>type</b> is <b>NID_md5_sha1</b>, an SSL signature (MD5 and SHA1 message digests with PKCS #1 padding and no algorithm identifier) is created.</p>
+
+<p>RSA_verify() verifies that the signature <b>sigbuf</b> of size <b>siglen</b> matches a given message digest <b>m</b> of size <b>m_len</b>. <b>type</b> denotes the message digest algorithm that was used to generate the signature. <b>rsa</b> is the signer&#39;s public key.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>RSA_sign() returns 1 on success and 0 for failure. RSA_verify() returns 1 on successful verification and 0 for failure.</p>
+
+<p>The error codes can be obtained by <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>.</p>
+
+<h1 id="CONFORMING-TO">CONFORMING TO</h1>
+
+<p>SSL, PKCS #1 v2.0</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>, <a href="../man3/RSA_private_encrypt.html">RSA_private_encrypt(3)</a>, <a href="../man3/RSA_public_decrypt.html">RSA_public_decrypt(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>All of these functions were deprecated in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2020 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

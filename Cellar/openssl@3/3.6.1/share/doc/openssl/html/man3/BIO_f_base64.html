@@ -1,0 +1,119 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>BIO_f_base64</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#BUGS">BUGS</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>BIO_f_base64 - base64 BIO filter</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/bio.h&gt;
+#include &lt;openssl/evp.h&gt;
+
+const BIO_METHOD *BIO_f_base64(void);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>BIO_f_base64() returns the base64 BIO method. This is a filter BIO that base64 encodes any data written through it and decodes any data read through it.</p>
+
+<p>Base64 BIOs do not support BIO_gets() or BIO_puts().</p>
+
+<p>For writing, by default output is divided to lines of length 64 characters and there is a newline at the end of output. This behavior can be changed with <b>BIO_FLAGS_BASE64_NO_NL</b> flag.</p>
+
+<p>For reading, the first line of base64 content should be at most 1024 bytes long including newline unless the flag <b>BIO_FLAGS_BASE64_NO_NL</b> is set. Subsequent input lines can be of any length (i.e., newlines may appear anywhere in the input) and a newline at the end of input is not needed.</p>
+
+<p>Also when reading, unless the flag <b>BIO_FLAGS_BASE64_NO_NL</b> is set, initial lines that contain non-base64 content (whitespace is tolerated and ignored) are skipped, as are lines longer than 1024 bytes. Decoding starts with the first line that is shorter than 1024 bytes (including the newline) and consists of only (at least one) valid base64 characters plus optional whitespace. Decoding stops when base64 padding is encountered, a soft end-of-input character (<b>-</b>, see <a href="../man3/EVP_DecodeUpdate.html">EVP_DecodeUpdate(3)</a>) occurs as the first byte after a complete group of 4 valid base64 characters is decoded, or when an error occurs (e.g. due to input characters other than valid base64 or whitespace).</p>
+
+<p>If decoding stops as a result of an error, the first <a href="../man3/BIO_read.html">BIO_read(3)</a> that returns no decoded data will typically return a negative result, rather than 0 (which indicates normal end of input). However, a negative return value can also occur if the underlying BIO supports retries, see <a href="../man3/BIO_should_read.html">BIO_should_read(3)</a> and <a href="../man3/BIO_set_mem_eof_return.html">BIO_set_mem_eof_return(3)</a>.</p>
+
+<p>BIO_flush() on a base64 BIO that is being written through is used to signal that no more data is to be encoded: this is used to flush the final block through the BIO.</p>
+
+<p>The flag <b>BIO_FLAGS_BASE64_NO_NL</b> can be set with BIO_set_flags(). For writing, it causes all data to be written on one line without newline at the end. For reading, it removes all expectations on newlines in the input data.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>Because of the format of base64 encoding the end of the encoded block cannot always be reliably determined.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>BIO_f_base64() returns the base64 BIO method.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>Base64 encode the string &quot;Hello World\n&quot; and write the result to standard output:</p>
+
+<pre><code>BIO *bio, *b64;
+char message[] = &quot;Hello World \n&quot;;
+
+b64 = BIO_new(BIO_f_base64());
+bio = BIO_new_fp(stdout, BIO_NOCLOSE);
+BIO_push(b64, bio);
+BIO_write(b64, message, strlen(message));
+BIO_flush(b64);
+
+BIO_free_all(b64);</code></pre>
+
+<p>Read base64 encoded data from standard input and write the decoded data to standard output:</p>
+
+<pre><code>BIO *bio, *b64, *bio_out;
+char inbuf[512];
+int inlen;
+
+b64 = BIO_new(BIO_f_base64());
+bio = BIO_new_fp(stdin, BIO_NOCLOSE);
+bio_out = BIO_new_fp(stdout, BIO_NOCLOSE);
+BIO_push(b64, bio);
+while ((inlen = BIO_read(b64, inbuf, 512)) &gt; 0)
+    BIO_write(bio_out, inbuf, inlen);
+
+BIO_flush(bio_out);
+BIO_free_all(b64);</code></pre>
+
+<h1 id="BUGS">BUGS</h1>
+
+<p>The hyphen character (<b>-</b>) is treated as an ad hoc soft end-of-input character when it occurs at the start of a base64 group of 4 encoded characters.</p>
+
+<p>This heuristic works to detect the ends of base64 blocks in PEM or multi-part MIME, provided there are no stray hyphens in the middle input. But it is just a heuristic, and sufficiently unusual input could produce unexpected results.</p>
+
+<p>There should perhaps be some way of specifying a test that the BIO can perform to reliably determine EOF (for example a MIME boundary).</p>
+
+<p>It may be possible for <a href="../man3/BIO_read.html">BIO_read(3)</a> to return zero, rather than -1, even if an error has been detected, more tests are needed to cover all the potential error paths.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/BIO_read.html">BIO_read(3)</a>, <a href="../man3/BIO_should_read.html">BIO_should_read(3)</a>, <a href="../man3/BIO_set_mem_eof_return.html">BIO_set_mem_eof_return(3)</a>, <a href="../man3/EVP_DecodeUpdate.html">EVP_DecodeUpdate(3)</a>.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

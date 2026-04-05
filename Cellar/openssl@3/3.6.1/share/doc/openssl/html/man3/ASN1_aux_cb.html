@@ -1,0 +1,307 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>ASN1_aux_cb</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>ASN1_AUX, ASN1_PRINT_ARG, ASN1_STREAM_ARG, ASN1_aux_cb, ASN1_aux_const_cb - ASN.1 auxiliary data</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/asn1t.h&gt;
+
+struct ASN1_AUX_st {
+    void *app_data;
+    int flags;
+    int ref_offset;             /* Offset of reference value */
+    int ref_lock;               /* Offset to an CRYPTO_RWLOCK */
+    ASN1_aux_cb *asn1_cb;
+    int enc_offset;             /* Offset of ASN1_ENCODING structure */
+    ASN1_aux_const_cb *asn1_const_cb; /* for ASN1_OP_I2D_ and ASN1_OP_PRINT_ */
+};
+typedef struct ASN1_AUX_st ASN1_AUX;
+
+struct ASN1_PRINT_ARG_st {
+    BIO *out;
+    int indent;
+    const ASN1_PCTX *pctx;
+};
+typedef struct ASN1_PRINT_ARG_st ASN1_PRINT_ARG;
+
+struct ASN1_STREAM_ARG_st {
+    BIO *out;
+    BIO *ndef_bio;
+    unsigned char **boundary;
+};
+typedef struct ASN1_STREAM_ARG_st ASN1_STREAM_ARG;
+
+typedef int ASN1_aux_cb(int operation, ASN1_VALUE **in, const ASN1_ITEM *it,
+                        void *exarg);
+typedef int ASN1_aux_const_cb(int operation, const ASN1_VALUE **in,
+                              const ASN1_ITEM *it, void *exarg);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>ASN.1 data structures can be associated with an <b>ASN1_AUX</b> object to supply additional information about the ASN.1 structure. An <b>ASN1_AUX</b> structure is associated with the structure during the definition of the ASN.1 template. For example an <b>ASN1_AUX</b> structure will be associated by using one of the various ASN.1 template definition macros that supply auxiliary information such as ASN1_SEQUENCE_enc(), ASN1_SEQUENCE_ref(), ASN1_SEQUENCE_cb_const_cb(), ASN1_SEQUENCE_const_cb(), ASN1_SEQUENCE_cb() or ASN1_NDEF_SEQUENCE_cb().</p>
+
+<p>An <b>ASN1_AUX</b> structure contains the following information.</p>
+
+<dl>
+
+<dt id="app_data"><i>app_data</i></dt>
+<dd>
+
+<p>Arbitrary application data</p>
+
+</dd>
+<dt id="flags"><i>flags</i></dt>
+<dd>
+
+<p>Flags which indicate the auxiliarly functionality supported.</p>
+
+<p>The <b>ASN1_AFLG_REFCOUNT</b> flag indicates that objects support reference counting.</p>
+
+<p>The <b>ASN1_AFLG_ENCODING</b> flag indicates that the original encoding of the object will be saved.</p>
+
+<p>The <b>ASN1_AFLG_BROKEN</b> flag is a work around for broken encoders where the sequence length value may not be correct. This should generally not be used.</p>
+
+<p>The <b>ASN1_AFLG_CONST_CB</b> flag indicates that the &quot;const&quot; form of the <b>ASN1_AUX</b> callback should be used in preference to the non-const form.</p>
+
+</dd>
+<dt id="ref_offset"><i>ref_offset</i></dt>
+<dd>
+
+<p>If the <b>ASN1_AFLG_REFCOUNT</b> flag is set then this value is assumed to be an offset into the <b>ASN1_VALUE</b> structure where a <b>CRYPTO_REF_COUNT</b> may be found for the purposes of reference counting.</p>
+
+</dd>
+<dt id="ref_lock"><i>ref_lock</i></dt>
+<dd>
+
+<p>If the <b>ASN1_AFLG_REFCOUNT</b> flag is set then this value is assumed to be an offset into the <b>ASN1_VALUE</b> structure where a <b>CRYPTO_RWLOCK</b> may be found for the purposes of reference counting.</p>
+
+</dd>
+<dt id="asn1_cb"><i>asn1_cb</i></dt>
+<dd>
+
+<p>A callback that will be invoked at various points during the processing of the <b>ASN1_VALUE</b>. See below for further details.</p>
+
+</dd>
+<dt id="enc_offset"><i>enc_offset</i></dt>
+<dd>
+
+<p>Offset into the <b>ASN1_VALUE</b> object where the original encoding of the object will be saved if the <b>ASN1_AFLG_ENCODING</b> flag has been set.</p>
+
+</dd>
+<dt id="asn1_const_cb"><i>asn1_const_cb</i></dt>
+<dd>
+
+<p>A callback that will be invoked at various points during the processing of the <b>ASN1_VALUE</b>. This is used in preference to the <i>asn1_cb</i> callback if the <b>ASN1_AFLG_CONST_CB</b> flag is set. See below for further details.</p>
+
+</dd>
+</dl>
+
+<p>During the processing of an <b>ASN1_VALUE</b> object the callbacks set via <i>asn1_cb</i> or <i>asn1_const_cb</i> will be invoked as a result of various events indicated via the <i>operation</i> parameter. The value of <i>*in</i> will be the <b>ASN1_VALUE</b> object being processed based on the template in <i>it</i>. An additional operation specific parameter may be passed in <i>exarg</i>. The currently supported operations are as follows. The callbacks should return a positive value on success or zero on error, unless otherwise noted below.</p>
+
+<dl>
+
+<dt id="ASN1_OP_NEW_PRE"><b>ASN1_OP_NEW_PRE</b></dt>
+<dd>
+
+<p>Invoked when processing a <b>CHOICE</b>, <b>SEQUENCE</b> or <b>NDEF_SEQUENCE</b> structure prior to an <b>ASN1_VALUE</b> object being allocated. The callback may allocate the <b>ASN1_VALUE</b> itself and store it in <i>*pval</i>. If it does so it should return 2 from the callback. On error it should return 0.</p>
+
+</dd>
+<dt id="ASN1_OP_NEW_POST"><b>ASN1_OP_NEW_POST</b></dt>
+<dd>
+
+<p>Invoked when processing a <b>CHOICE</b>, <b>SEQUENCE</b> or <b>NDEF_SEQUENCE</b> structure after an <b>ASN1_VALUE</b> object has been allocated. The allocated object is in <i>*pval</i>.</p>
+
+</dd>
+<dt id="ASN1_OP_FREE_PRE"><b>ASN1_OP_FREE_PRE</b></dt>
+<dd>
+
+<p>Invoked when processing a <b>CHOICE</b>, <b>SEQUENCE</b> or <b>NDEF_SEQUENCE</b> structure immediately before an <b>ASN1_VALUE</b> is freed. If the callback originally constructed the <b>ASN1_VALUE</b> via <b>ASN1_OP_NEW_PRE</b> then it should free it at this point and return 2 from the callback. Otherwise it should return 1 for success or 0 on error.</p>
+
+</dd>
+<dt id="ASN1_OP_FREE_POST"><b>ASN1_OP_FREE_POST</b></dt>
+<dd>
+
+<p>Invoked when processing a <b>CHOICE</b>, <b>SEQUENCE</b> or <b>NDEF_SEQUENCE</b> structure immediately after <b>ASN1_VALUE</b> sub-structures are freed.</p>
+
+</dd>
+<dt id="ASN1_OP_D2I_PRE"><b>ASN1_OP_D2I_PRE</b></dt>
+<dd>
+
+<p>Invoked when processing a <b>CHOICE</b>, <b>SEQUENCE</b> or <b>NDEF_SEQUENCE</b> structure immediately before a &quot;d2i&quot; operation for the <b>ASN1_VALUE</b>.</p>
+
+</dd>
+<dt id="ASN1_OP_D2I_POST"><b>ASN1_OP_D2I_POST</b></dt>
+<dd>
+
+<p>Invoked when processing a <b>CHOICE</b>, <b>SEQUENCE</b> or <b>NDEF_SEQUENCE</b> structure immediately after a &quot;d2i&quot; operation for the <b>ASN1_VALUE</b>.</p>
+
+</dd>
+<dt id="ASN1_OP_I2D_PRE"><b>ASN1_OP_I2D_PRE</b></dt>
+<dd>
+
+<p>Invoked when processing a <b>CHOICE</b>, <b>SEQUENCE</b> or <b>NDEF_SEQUENCE</b> structure immediately before a &quot;i2d&quot; operation for the <b>ASN1_VALUE</b>.</p>
+
+</dd>
+<dt id="ASN1_OP_I2D_POST"><b>ASN1_OP_I2D_POST</b></dt>
+<dd>
+
+<p>Invoked when processing a <b>CHOICE</b>, <b>SEQUENCE</b> or <b>NDEF_SEQUENCE</b> structure immediately after a &quot;i2d&quot; operation for the <b>ASN1_VALUE</b>.</p>
+
+</dd>
+<dt id="ASN1_OP_PRINT_PRE"><b>ASN1_OP_PRINT_PRE</b></dt>
+<dd>
+
+<p>Invoked when processing a <b>SEQUENCE</b> or <b>NDEF_SEQUENCE</b> structure immediately before printing the <b>ASN1_VALUE</b>. The <i>exarg</i> argument will be a pointer to an <b>ASN1_PRINT_ARG</b> structure (see below).</p>
+
+</dd>
+<dt id="ASN1_OP_PRINT_POST"><b>ASN1_OP_PRINT_POST</b></dt>
+<dd>
+
+<p>Invoked when processing a <b>SEQUENCE</b> or <b>NDEF_SEQUENCE</b> structure immediately after printing the <b>ASN1_VALUE</b>. The <i>exarg</i> argument will be a pointer to an <b>ASN1_PRINT_ARG</b> structure (see below).</p>
+
+</dd>
+<dt id="ASN1_OP_STREAM_PRE"><b>ASN1_OP_STREAM_PRE</b></dt>
+<dd>
+
+<p>Invoked immediately prior to streaming the <b>ASN1_VALUE</b> data using indefinite length encoding. The <i>exarg</i> argument will be a pointer to a <b>ASN1_STREAM_ARG</b> structure (see below).</p>
+
+</dd>
+<dt id="ASN1_OP_STREAM_POST"><b>ASN1_OP_STREAM_POST</b></dt>
+<dd>
+
+<p>Invoked immediately after streaming the <b>ASN1_VALUE</b> data using indefinite length encoding. The <i>exarg</i> argument will be a pointer to a <b>ASN1_STREAM_ARG</b> structure (see below).</p>
+
+</dd>
+<dt id="ASN1_OP_DETACHED_PRE"><b>ASN1_OP_DETACHED_PRE</b></dt>
+<dd>
+
+<p>Invoked immediately prior to processing the <b>ASN1_VALUE</b> data as a &quot;detached&quot; value (as used in CMS and PKCS7). The <i>exarg</i> argument will be a pointer to a <b>ASN1_STREAM_ARG</b> structure (see below).</p>
+
+</dd>
+<dt id="ASN1_OP_DETACHED_POST"><b>ASN1_OP_DETACHED_POST</b></dt>
+<dd>
+
+<p>Invoked immediately after processing the <b>ASN1_VALUE</b> data as a &quot;detached&quot; value (as used in CMS and PKCS7). The <i>exarg</i> argument will be a pointer to a <b>ASN1_STREAM_ARG</b> structure (see below).</p>
+
+</dd>
+<dt id="ASN1_OP_DUP_PRE"><b>ASN1_OP_DUP_PRE</b></dt>
+<dd>
+
+<p>Invoked immediate prior to an ASN1_VALUE being duplicated via a call to ASN1_item_dup().</p>
+
+</dd>
+<dt id="ASN1_OP_DUP_POST"><b>ASN1_OP_DUP_POST</b></dt>
+<dd>
+
+<p>Invoked immediate after to an ASN1_VALUE has been duplicated via a call to ASN1_item_dup().</p>
+
+</dd>
+<dt id="ASN1_OP_GET0_LIBCTX"><b>ASN1_OP_GET0_LIBCTX</b></dt>
+<dd>
+
+<p>Invoked in order to obtain the <b>OSSL_LIB_CTX</b> associated with an <b>ASN1_VALUE</b> if any. A pointer to an <b>OSSL_LIB_CTX</b> should be stored in <i>*exarg</i> if such a value exists.</p>
+
+</dd>
+<dt id="ASN1_OP_GET0_PROPQ"><b>ASN1_OP_GET0_PROPQ</b></dt>
+<dd>
+
+<p>Invoked in order to obtain the property query string associated with an <b>ASN1_VALUE</b> if any. A pointer to the property query string should be stored in <i>*exarg</i> if such a value exists.</p>
+
+</dd>
+</dl>
+
+<p>An <b>ASN1_PRINT_ARG</b> object is used during processing of <b>ASN1_OP_PRINT_PRE</b> and <b>ASN1_OP_PRINT_POST</b> callback operations. It contains the following information.</p>
+
+<dl>
+
+<dt id="out"><i>out</i></dt>
+<dd>
+
+<p>The <b>BIO</b> being used to print the data out.</p>
+
+</dd>
+<dt id="ndef_bio"><i>ndef_bio</i></dt>
+<dd>
+
+<p>The current number of indent spaces that should be used for printing this data.</p>
+
+</dd>
+<dt id="pctx"><i>pctx</i></dt>
+<dd>
+
+<p>The context for the <b>ASN1_PCTX</b> operation.</p>
+
+</dd>
+</dl>
+
+<p>An <b>ASN1_STREAM_ARG</b> object is used during processing of <b>ASN1_OP_STREAM_PRE</b>, <b>ASN1_OP_STREAM_POST</b>, <b>ASN1_OP_DETACHED_PRE</b> and <b>ASN1_OP_DETACHED_POST</b> callback operations. It contains the following information.</p>
+
+<dl>
+
+<dt id="out1"><i>out</i></dt>
+<dd>
+
+<p>The <b>BIO</b> to stream through</p>
+
+</dd>
+<dt id="ndef_bio1"><i>ndef_bio</i></dt>
+<dd>
+
+<p>The <b>BIO</b> with filters appended</p>
+
+</dd>
+<dt id="boundary"><i>boundary</i></dt>
+<dd>
+
+<p>The streaming I/O boundary.</p>
+
+</dd>
+</dl>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>The callbacks return 0 on error and a positive value on success. Some operations require specific positive success values as noted above.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ASN1_item_new_ex.html">ASN1_item_new_ex(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The ASN1_aux_const_cb() callback and the <b>ASN1_OP_GET0_LIBCTX</b> and <b>ASN1_OP_GET0_PROPQ</b> operation types were added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2021-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

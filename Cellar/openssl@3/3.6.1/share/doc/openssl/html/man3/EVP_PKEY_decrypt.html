@@ -1,0 +1,125 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_PKEY_decrypt</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#WARNINGS">WARNINGS</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_PKEY_decrypt_init, EVP_PKEY_decrypt_init_ex, EVP_PKEY_decrypt - decrypt using a public key algorithm</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+
+int EVP_PKEY_decrypt_init(EVP_PKEY_CTX *ctx);
+int EVP_PKEY_decrypt_init_ex(EVP_PKEY_CTX *ctx, const OSSL_PARAM params[]);
+int EVP_PKEY_decrypt(EVP_PKEY_CTX *ctx,
+                     unsigned char *out, size_t *outlen,
+                     const unsigned char *in, size_t inlen);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The EVP_PKEY_decrypt_init() function initializes a public key algorithm context using key <i>pkey</i> for a decryption operation.</p>
+
+<p>The EVP_PKEY_decrypt_init_ex() function initializes a public key algorithm context using key <i>pkey</i> for a decryption operation and sets the algorithm specific <i>params</i>.</p>
+
+<p>The EVP_PKEY_decrypt() function performs a public key decryption operation using <i>ctx</i>. The data to be decrypted is specified using the <i>in</i> and <i>inlen</i> parameters. If <i>out</i> is NULL then the minimum required size of the output buffer is written to the <i>*outlen</i> parameter.</p>
+
+<p>If <i>out</i> is not NULL then before the call the <i>*outlen</i> parameter must contain the length of the <i>out</i> buffer. If the call is successful the decrypted data is written to <i>out</i> and the amount of the decrypted data written to <i>*outlen</i>, otherwise an error is returned.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>After the call to EVP_PKEY_decrypt_init() algorithm specific control operations can be performed to set any appropriate parameters for the operation. These operations can be included in the EVP_PKEY_decrypt_init_ex() call.</p>
+
+<p>The function EVP_PKEY_decrypt() can be called more than once on the same context if several operations are performed using the same parameters.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>EVP_PKEY_decrypt_init(), EVP_PKEY_decrypt_init_ex() and EVP_PKEY_decrypt() return 1 for success and 0 or a negative value for failure. In particular a return value of -2 indicates the operation is not supported by the public key algorithm.</p>
+
+<h1 id="WARNINGS">WARNINGS</h1>
+
+<p>In OpenSSL versions before 3.2.0, when used in PKCS#1 v1.5 padding, both the return value from the EVP_PKEY_decrypt() and the <b>outlen</b> provided information useful in mounting a Bleichenbacher attack against the used private key. They had to be processed in a side-channel free way.</p>
+
+<p>Since version 3.2.0, the EVP_PKEY_decrypt() method when used with PKCS#1 v1.5 padding as implemented in the <b>default</b> provider implements the implicit rejection mechanism (see <b>OSSL_ASYM_CIPHER_PARAM_IMPLICIT_REJECTION</b> in <a href="../man7/provider-asym_cipher.html">provider-asym_cipher(7)</a>). That means it doesn&#39;t return an error when it detects an error in padding, instead it returns a pseudo-randomly generated message, removing the need of side-channel secure code from applications using OpenSSL. If OpenSSL is configured to use a provider that doesn&#39;t implement implicit rejection, the code still needs to handle the returned values using side-channel free code. Side-channel free handling of the error stack can be performed using either a pair of unconditional <a href="../man3/ERR_set_mark.html">ERR_set_mark(3)</a> and <a href="../man3/ERR_pop_to_mark.html">ERR_pop_to_mark(3)</a> calls or by using the <a href="../man3/ERR_clear_error.html">ERR_clear_error(3)</a> call.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>Decrypt data using OAEP (for RSA keys):</p>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+#include &lt;openssl/rsa.h&gt;
+
+EVP_PKEY_CTX *ctx;
+ENGINE *eng;
+unsigned char *out, *in;
+size_t outlen, inlen;
+EVP_PKEY *key;
+
+/*
+ * NB: assumes key, eng, in, inlen are already set up
+ * and that key is an RSA private key
+ */
+ctx = EVP_PKEY_CTX_new(key, eng);
+if (!ctx)
+    /* Error occurred */
+if (EVP_PKEY_decrypt_init(ctx) &lt;= 0)
+    /* Error */
+if (EVP_PKEY_CTX_set_rsa_padding(ctx, RSA_PKCS1_OAEP_PADDING) &lt;= 0)
+    /* Error */
+
+/* Determine buffer length */
+if (EVP_PKEY_decrypt(ctx, NULL, &amp;outlen, in, inlen) &lt;= 0)
+    /* Error */
+
+out = OPENSSL_malloc(outlen);
+
+if (!out)
+    /* malloc failure */
+
+if (EVP_PKEY_decrypt(ctx, out, &amp;outlen, in, inlen) &lt;= 0)
+    /* Error */
+
+/* Decrypted data is outlen bytes written to buffer out */</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_PKEY_CTX_new.html">EVP_PKEY_CTX_new(3)</a>, <a href="../man3/EVP_PKEY_encrypt.html">EVP_PKEY_encrypt(3)</a>, <a href="../man3/EVP_PKEY_sign.html">EVP_PKEY_sign(3)</a>, <a href="../man3/EVP_PKEY_verify.html">EVP_PKEY_verify(3)</a>, <a href="../man3/EVP_PKEY_verify_recover.html">EVP_PKEY_verify_recover(3)</a>, <a href="../man3/EVP_PKEY_derive.html">EVP_PKEY_derive(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>These functions were added in OpenSSL 1.0.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2006-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,12 @@
+prefix=/opt/homebrew/Cellar/brotli/1.2.0
+exec_prefix=/opt/homebrew/Cellar/brotli/1.2.0
+libdir=${prefix}/lib
+includedir=${prefix}/include
+
+Name: libbrotlienc
+URL: https://github.com/google/brotli
+Description: Brotli encoder library
+Version: 1.2.0
+Libs: -L${libdir} -lbrotlienc
+Requires.private: libbrotlicommon >= 1.2.0
+Cflags: -I${includedir}

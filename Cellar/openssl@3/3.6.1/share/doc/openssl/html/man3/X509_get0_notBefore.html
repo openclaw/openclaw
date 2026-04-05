@@ -1,0 +1,103 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>X509_get0_notBefore</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>X509_get0_notBefore, X509_getm_notBefore, X509_get0_notAfter, X509_getm_notAfter, X509_set1_notBefore, X509_set1_notAfter, X509_ACERT_get0_notBefore, X509_ACERT_get0_notAfter, X509_ACERT_set1_notBefore, X509_ACERT_set1_notAfter, X509_CRL_get0_lastUpdate, X509_CRL_get0_nextUpdate, X509_CRL_set1_lastUpdate, X509_CRL_set1_nextUpdate - get or set certificate or CRL dates</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/x509.h&gt;
+
+const ASN1_TIME *X509_get0_notBefore(const X509 *x);
+const ASN1_TIME *X509_get0_notAfter(const X509 *x);
+
+ASN1_TIME *X509_getm_notBefore(const X509 *x);
+ASN1_TIME *X509_getm_notAfter(const X509 *x);
+
+int X509_set1_notBefore(X509 *x, const ASN1_TIME *tm);
+int X509_set1_notAfter(X509 *x, const ASN1_TIME *tm);
+
+const ASN1_GENERALIZEDTIME *X509_ACERT_get0_notBefore(const X509 *x);
+const ASN1_GENERALIZEDTIME *X509_ACERT_get0_notAfter(const X509 *x);
+
+int X509_ACERT_set1_notBefore(X509_ACERT *x, const ASN1_GENERALIZEDTIME *tm);
+int X509_ACERT_set1_notAfter(X509_ACERT *x, const ASN1_GENERALIZEDTIME *tm);
+
+const ASN1_TIME *X509_CRL_get0_lastUpdate(const X509_CRL *crl);
+const ASN1_TIME *X509_CRL_get0_nextUpdate(const X509_CRL *crl);
+
+int X509_CRL_set1_lastUpdate(X509_CRL *x, const ASN1_TIME *tm);
+int X509_CRL_set1_nextUpdate(X509_CRL *x, const ASN1_TIME *tm);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>X509_get0_notBefore() and X509_get0_notAfter() return the <b>notBefore</b> and <b>notAfter</b> fields of certificate <i>x</i> respectively. The value returned is an internal pointer which must not be freed up after the call. <i>x</i> <b>MUST NOT</b> be NULL.</p>
+
+<p>X509_getm_notBefore() and X509_getm_notAfter() are similar to X509_get0_notBefore() and X509_get0_notAfter() except they return non-constant mutable references to the associated date field of the certificate.</p>
+
+<p>X509_set1_notBefore() and X509_set1_notAfter() set the <b>notBefore</b> and <b>notAfter</b> fields of <i>x</i> to <i>tm</i>. Ownership of the passed parameter <i>tm</i> is not transferred by these functions so it must be freed up after the call.</p>
+
+<p>X509_ACERT_get0_notBefore() and X509_ACERT_get0_notAfter() return the <b>notBefore</b> and <b>notAfter</b> fields of certificate <b>x</b> respectively. returned is an internal pointer which must not be freed up after the call.</p>
+
+<p>X509_ACERT_set1_notBefore() and X509_ACERT_set1_notAfter() set the <b>notBefore</b> and <b>notAfter</b> fields of <b>x</b> to <b>tm</b>. Ownership of the passed parameter <b>tm</b> is not transferred by these functions so it must be freed up after the call.</p>
+
+<p>X509_CRL_get0_lastUpdate() and X509_CRL_get0_nextUpdate() return the <b>lastUpdate</b> and <b>nextUpdate</b> fields of <i>crl</i>. The value returned is an internal pointer which must not be freed up after the call. If the <b>nextUpdate</b> field is absent from <i>crl</i> then NULL is returned.</p>
+
+<p>X509_CRL_set1_lastUpdate() and X509_CRL_set1_nextUpdate() set the <b>lastUpdate</b> and <b>nextUpdate</b> fields of <i>crl</i> to <i>tm</i>. Ownership of the passed parameter <i>tm</i> is not transferred by these functions so it must be freed up after the call. For X509_CRL_set1_nextUpdate() the <i>tm</i> argument may be NULL, which implies removal of the optional <b>nextUpdate</b> field.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>X509_get0_notBefore(), X509_get0_notAfter() and X509_CRL_get0_lastUpdate() return a pointer to an <b>ASN1_TIME</b> structure.</p>
+
+<p>X509_CRL_get0_lastUpdate() return a pointer to an <b>ASN1_TIME</b> structure or NULL if the <b>lastUpdate</b> field is absent.</p>
+
+<p>X509_set1_notBefore(), X509_set1_notAfter(), X509_CRL_set1_lastUpdate() and X509_CRL_set1_nextUpdate() return 1 for success or 0 for failure.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>Unlike the <b>X509</b> and <b>X509_CRL</b> routines, the <b>X509_ACERT</b> routines use the ASN1_GENERALIZEDTIME format instead of ASN1_TIME for holding time data.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/d2i_X509.html">d2i_X509(3)</a>, <a href="../man3/ASN1_GENERALIZEDTIME_check.html">ASN1_GENERALIZEDTIME_check(3)</a> <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>, <a href="../man3/X509_CRL_get0_by_serial.html">X509_CRL_get0_by_serial(3)</a>, <a href="../man3/X509_get0_signature.html">X509_get0_signature(3)</a>, <a href="../man3/X509_get_ext_d2i.html">X509_get_ext_d2i(3)</a>, <a href="../man3/X509_get_extension_flags.html">X509_get_extension_flags(3)</a>, <a href="../man3/X509_get_pubkey.html">X509_get_pubkey(3)</a>, <a href="../man3/X509_get_subject_name.html">X509_get_subject_name(3)</a>, <a href="../man3/X509_NAME_add_entry_by_txt.html">X509_NAME_add_entry_by_txt(3)</a>, <a href="../man3/X509_NAME_ENTRY_get_object.html">X509_NAME_ENTRY_get_object(3)</a>, <a href="../man3/X509_NAME_get_index_by_NID.html">X509_NAME_get_index_by_NID(3)</a>, <a href="../man3/X509_NAME_print_ex.html">X509_NAME_print_ex(3)</a>, <a href="../man3/X509_new.html">X509_new(3)</a>, <a href="../man3/X509_sign.html">X509_sign(3)</a>, <a href="../man3/X509V3_get_d2i.html">X509V3_get_d2i(3)</a>, <a href="../man3/X509_verify_cert.html">X509_verify_cert(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>X509_get_notBefore() and X509_get_notAfter() were deprecated in OpenSSL 1.1.0.</p>
+
+<p>X509_ACERT_get0_notBefore(), X509_ACERT_get0_notAfter(), X509_ACERT_set1_notBefore(), X509_ACERT_set1_notAfter() were added in OpenSSL 3.4.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2016-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

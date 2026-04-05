@@ -1,0 +1,198 @@
+.\" Hey, Emacs! This is -*-nroff-*- you know...
+.\"
+.\" derb.1: manual page for the derb utility
+.\"
+.\" Copyright (C) 2016 and later: Unicode, Inc. and others.
+.\" License & terms of use: http://www.unicode.org/copyright.html
+.\" Copyright (C) 2000-2014 IBM, Inc. and others.
+.\"
+.TH DERB 1 "7 Mar 2014" "ICU MANPAGE" "ICU 78.3 Manual"
+.SH NAME
+.B derb
+\- disassemble a resource bundle
+.SH SYNOPSIS
+.B derb
+[
+.BR "\-h\fP, \fB\-?\fP, \fB\-\-help"
+]
+[
+.BR "\-V\fP, \fB\-\-version"
+]
+[
+.BR "\-v\fP, \fB\-\-verbose"
+]
+[
+.BI "\-e\fP, \fB\-\-encoding" " encoding"
+]
+[
+.BI "\-\-bom"
+]
+[
+.BI "\-t\fP, \fB\-\-truncate" " \fR[ \fPsize\fR ]\fP"
+]
+[
+.BI "\-s\fP, \fB\-\-sourcedir" " source"
+]
+[
+.BI "\-d\fP, \fB\-\-destdir" " destination"
+]
+[
+.BI "\-i\fP, \fB\-\-icudatadir" " directory"
+]
+[
+.BI "\-c\fP, \fB\-\-to\-stdout"
+]
+.IR bundle " \.\.\."
+.SH DESCRIPTION
+.B derb
+reads the compiled resource
+.I bundle
+files passed on the command line and write them back in text form.
+The resulting text files have a
+.B .txt
+extension while compiled resource bundle source files typically have a 
+.B .res
+extension.
+.PP
+It is customary to name the resource bundles by their locale name,
+i.e. to use a local identifier for the
+.I bundle
+filename, e.g.
+.B ja_JP.res
+for Japanese (Japan) data, or
+.B root.res
+for the root bundle.
+This is especially important for
+.B derb
+since the locale name is not accessible directly from the compiled
+resource bundle, and to know which locale to ask for when opening
+the bundle.
+.B derb
+will produce a file whose base name is the base name of the compiled resource file itself.
+If the
+.BI "\-\-to\-stdout\fP, \fB\-c\fP"
+option is used, however, the text will be written on the standard output.
+.SH OPTIONS
+.TP
+.BR "\-h\fP, \fB\-?\fP, \fB\-\-help"
+Print help about usage and exit.
+.TP
+.BR "\-V\fP, \fB\-\-version"
+Print the version of
+.B derb
+and exit.
+.TP
+.BR "\-v\fP, \fB\-\-verbose"
+Display extra informative messages during execution.
+.TP
+.BR "\-A\fP, \fB\-\-suppressAliases"
+Don't follow aliases when producing output.
+.TP
+.BI "\-e\fP, \fB\-\-encoding" " encoding"
+Set the encoding used to write output files to
+.IR encoding .
+The default encoding is the invariant (subset of ASCII or EBCDIC)
+codepage for the system (see section
+.BR "INVARIANT CHARACTERS" ).
+The choice of the encoding does not affect the data, just their
+representation. Characters that cannot be represented in the
+.I encoding
+will be represented using
+.BI \eu "hhhh"
+escape sequences.
+.TP
+.BI "\-\-bom"
+Write a byte order mark (BOM) at the beginning of the file.
+.TP
+.BI "\-l\fP, \fB\-\-locale" " locale"
+Set the
+.I locale
+for the resource bundle, which is used both in the generated text and
+as the base name of the output file.
+.TP
+.BI "\-t\fP, \fB\-\-truncate" " \fR[ \fPsize\fR ]\fP"
+Truncate individual resources (strings or binary data) to
+.I size
+bytes. The default if
+.I size
+is not specified is
+.B 80
+bytes.
+.TP
+.BI "\-s\fP, \fB\-\-sourcedir" " source"
+Set the source directory to
+.IR source .
+The default source directory is the current directory.
+If 
+.B -
+is passed for
+.IR source ,
+then the
+.I bundle
+will be looked for in its default location, specified by
+the 
+.B ICU_DATA
+environment variable (or defaulting to
+the location set when ICU was built if 
+.B ICU_DATA
+is not set).
+.TP
+.BI "\-d\fP, \fB\-\-destdir" " destination"
+Set the destination directory to
+.IR destination .
+The default destination directory is specified by the environment variable
+.BR ICU_DATA
+or is the location set when ICU was built if 
+.B ICU_DATA
+is not set.
+.TP
+.BI "\-i\fP, \fB\-\-icudatadir" " directory"
+Look for any necessary ICU data files in
+.IR directory .
+For example, when processing collation overrides, the file
+.B ucadata.dat
+must be located.
+The default ICU data directory is specified by the environment variable
+.BR ICU_DATA .
+.TP
+.BI "\-c\fP, \fB\-\-to\-stdout"
+Write the disassembled
+.I bundle
+on standard output instead of into a file.
+.SH CAVEATS
+When the option
+.BI \-\-bom
+is used, the character
+.B U+FEFF
+is written in the destination
+.I encoding
+regardless of whether it is a Unicode transformation format (UTF) or not.
+This option should only be used with an UTF encoding, as byte order marks
+are not meaningful for other encodings.
+.SH INVARIANT CHARACTERS
+The
+.B invariant character set
+consists of the following set of characters, expressed as a standard POSIX
+regular expression:
+.BR "[a-z]|[A-Z]|[0-9]|_| |+|-|*|/" .
+This is the set which is guaranteed to be available regardless of code page.
+.SH ENVIRONMENT
+.TP 10
+.B ICU_DATA
+Specifies the directory containing ICU data. Defaults to
+.BR ${prefix}/share/icu/78.3/ .
+Some tools in ICU depend on the presence of the trailing slash. It is thus
+important to make sure that it is present if
+.B ICU_DATA
+is set.
+.SH AUTHORS
+Vladimir Weinstein
+.br
+Yves Arrouye
+.SH VERSION
+1.0
+.SH COPYRIGHT
+Copyright (C) 2002 IBM, Inc. and others.
+.SH SEE ALSO
+.BR genrb (1)
+

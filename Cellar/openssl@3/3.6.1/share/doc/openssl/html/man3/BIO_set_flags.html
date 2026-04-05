@@ -1,0 +1,165 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>BIO_set_flags</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>BIO_set_flags, BIO_clear_flags, BIO_test_flags, BIO_get_flags, BIO_set_retry_read, BIO_set_retry_write, BIO_set_retry_special, BIO_clear_retry_flags, BIO_get_retry_flags - manipulate and interpret BIO flags</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/bio.h&gt;
+
+void BIO_set_flags(BIO *b, int flags);
+void BIO_clear_flags(BIO *b, int flags);
+int  BIO_test_flags(const BIO *b, int flags);
+int  BIO_get_flags(const BIO *b);
+
+void BIO_set_retry_read(BIO *b);
+void BIO_set_retry_write(BIO *b);
+void BIO_set_retry_special(BIO *b);
+void BIO_clear_retry_flags(BIO *b);
+int  BIO_get_retry_flags(BIO *b);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>A <b>BIO</b> has an internal set of bit flags that describe its state. These functions and macros are used primarily by <b>BIO</b> implementations and by code that builds <b>BIO</b> chains to manipulate those flags.</p>
+
+<p>BIO_set_flags() sets the bits given in <i>flags</i> in the <b>BIO</b> <i>b</i>. Any bits already set in the <b>BIO</b>&#39;s flag word remain set.</p>
+
+<p>BIO_clear_flags() clears the bits given in <i>flags</i> from the <b>BIO</b> <i>b</i>. Any other bits in the flag word are left unchanged.</p>
+
+<p>BIO_test_flags() tests the bits given in <i>flags</i> in the <b>BIO</b> <i>b</i> and returns a nonzero value if any of them are currently set and zero otherwise.</p>
+
+<p>BIO_get_flags() returns the current flag word from the <b>BIO</b> <i>b</i>. This is equivalent to testing for all bits and returning the result.</p>
+
+<p>The following convenience macros are built on top of these primitives and are used to maintain the retry state of a BIO:</p>
+
+<p>BIO_set_retry_read() marks the <b>BIO</b> <i>b</i> as being in a retryable state by setting the <b>BIO_FLAGS_SHOULD_RETRY</b> flag. In addition, it sets the <b>BIO_FLAGS_READ</b> flag to indicate that the retry condition is associated with a read operation.</p>
+
+<p>BIO_set_retry_write() marks the <b>BIO</b> <i>b</i> as being in a retryable state by setting the <b>BIO_FLAGS_SHOULD_RETRY</b> flag. In addition, it sets the <b>BIO_FLAGS_WRITE</b> flag to indicate that the retry condition is associated with a write operation.</p>
+
+<p>BIO_set_retry_special() marks the <b>BIO</b> <i>b</i> as being in a retryable state by setting the <b>BIO_FLAGS_SHOULD_RETRY</b> flag. In addition, it sets the <b>BIO_FLAGS_IO_SPECIAL</b> flag to indicate that the retry condition is associated with a read operation some &quot;special&quot; condition. The precise meaning of this condition depends on the <b>BIO</b> type.</p>
+
+<p>BIO_clear_retry_flags() clears all retry-related bits from <i>b</i>, i.e. <b>BIO_FLAGS_READ</b>, <b>BIO_FLAGS_WRITE</b>, <b>BIO_FLAGS_IO_SPECIAL</b>, and <b>BIO_FLAGS_SHOULD_RETRY</b>.</p>
+
+<p>BIO_get_retry_flags() returns retry-related bits that are currently set in <i>b</i>. The result is a subset of <b>BIO_FLAGS_RWS|BIO_FLAGS_SHOULD_RETRY</b>.</p>
+
+<p>The retry bits are interpreted by the higher level macros BIO_should_read(), BIO_should_write(), BIO_should_io_special(), BIO_retry_type() and BIO_should_retry(), as documented in <a href="../man3/BIO_should_retry.html">BIO_should_retry(3)</a>. Application code will typically use those macros rather than manipulate the underlying flags directly.</p>
+
+<p>The following flag bits are currently defined for use with BIO_set_flags(), BIO_clear_flags() and BIO_test_flags():</p>
+
+<dl>
+
+<dt id="BIO_FLAGS_READ"><b>BIO_FLAGS_READ</b></dt>
+<dd>
+
+<p>The last I/O operation should be retried when the <b>BIO</b> becomes readable. This flag is normally set by the <b>BIO</b> implementation via BIO_set_retry_read() after a failed read operation.</p>
+
+</dd>
+<dt id="BIO_FLAGS_WRITE"><b>BIO_FLAGS_WRITE</b></dt>
+<dd>
+
+<p>The last I/O operation should be retried when the <b>BIO</b> becomes writable. This flag is normally set by the <b>BIO</b> implementation via BIO_set_retry_write() after a failed write operation.</p>
+
+</dd>
+<dt id="BIO_FLAGS_IO_SPECIAL"><b>BIO_FLAGS_IO_SPECIAL</b></dt>
+<dd>
+
+<p>The last I/O operation should be retried when some &quot;special&quot; condition becomes true. The precise meaning of this condition depends on the <b>BIO</b> type and is usually obtained via BIO_get_retry_BIO() and BIO_get_retry_reason() as described in <a href="../man3/BIO_should_retry.html">BIO_should_retry(3)</a>. This flag is normally set by the <b>BIO</b> implementation via BIO_set_retry_special().</p>
+
+</dd>
+<dt id="BIO_FLAGS_RWS"><b>BIO_FLAGS_RWS</b></dt>
+<dd>
+
+<p>The bitwise OR of <b>BIO_FLAGS_READ</b>, <b>BIO_FLAGS_WRITE</b> and <b>BIO_FLAGS_IO_SPECIAL</b>. This mask is used when clearing or extracting the retry-direction bits.</p>
+
+</dd>
+<dt id="BIO_FLAGS_SHOULD_RETRY"><b>BIO_FLAGS_SHOULD_RETRY</b></dt>
+<dd>
+
+<p>Set if the last I/O operation on the <b>BIO</b> should be retried at a later time. If this bit is not set then the condition is treated as an error. This flag is normally set by the <b>BIO</b> implementation.</p>
+
+</dd>
+<dt id="BIO_FLAGS_BASE64_NO_NL"><b>BIO_FLAGS_BASE64_NO_NL</b></dt>
+<dd>
+
+<p>When set on a base64 filter <b>BIO</b> this flag disables the generation of newline characters in the encoded output and causes newlines to be ignored in the input. See also <a href="../man3/BIO_f_base64.html">BIO_f_base64(3)</a>. The flag has no effect on any other built-in <b>BIO</b> types.</p>
+
+</dd>
+<dt id="BIO_FLAGS_MEM_RDONLY"><b>BIO_FLAGS_MEM_RDONLY</b></dt>
+<dd>
+
+<p>When set on a memory <b>BIO</b> this flag indicates that the underlying buffer is read only. Attempts to write to such a <b>BIO</b> will fail. The flag has no effect on any other built-in <b>BIO</b> types.</p>
+
+</dd>
+<dt id="BIO_FLAGS_NONCLEAR_RST"><b>BIO_FLAGS_NONCLEAR_RST</b></dt>
+<dd>
+
+<p>On a memory <b>BIO</b> this flag modifies the behaviour of BIO_reset(). When it is set, resetting the <b>BIO</b> does not clear the underlying buffer but only resets the current read position. The flag has no effect on any other built-in <b>BIO</b> types.</p>
+
+</dd>
+<dt id="BIO_FLAGS_IN_EOF"><b>BIO_FLAGS_IN_EOF</b></dt>
+<dd>
+
+<p>This flag may be used by a <b>BIO</b> implementation to indicate that the end of the input stream has been reached. However, <b>BIO</b> types are not required to use this flag to signal end-of-file conditions; they may rely on other mechanisms such as system calls or by querying the next <b>BIO</b> in a chain. Applications must therefore not test this flag directly to determine whether EOF has been reached, and must use BIO_eof() instead.</p>
+
+</dd>
+</dl>
+
+<p>A range of additional flag values is reserved for internal use by OpenSSL to track kernel TLS (KTLS) state. This range and the corresponding flag macros are not part of the public API and must not be used by applications.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>BIO_get_flags() returns a bit mask of the flags currently set on the <b>BIO</b>.</p>
+
+<p>BIO_test_flags() returns a bit mask consisting of those flags from the argument that are currently set in the <b>BIO</b>. Consequently, it returns a nonzero value if and only if at least one of the requested flags is set.</p>
+
+<p>BIO_get_retry_flags() returns a bit mask consisting of those flags from <b>BIO_FLAGS_READ</b>, <b>BIO_FLAGS_WRITE</b>, <b>BIO_FLAGS_IO_SPECIAL</b>, and <b>BIO_FLAGS_SHOULD_RETRY</b> that are currently set in the <i>BIO</i>.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>Ordinary application code will rarely need to call BIO_set_flags(), BIO_clear_flags() or BIO_test_flags() directly. They are intended for <b>BIO</b> implementations and for code that forwards retry state from one <b>BIO</b> in a chain to another. After a failed I/O operation, applications should normally use BIO_should_retry() and related macros as described in <a href="../man3/BIO_should_retry.html">BIO_should_retry(3)</a> instead of inspecting the flags directly.</p>
+
+<p>These functions and macros are not thread-safe. If a single <b>BIO</b> is accessed from multiple threads, the caller must provide appropriate external synchronisation.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/BIO_should_retry.html">BIO_should_retry(3)</a>, <a href="../man3/BIO_f_base64.html">BIO_f_base64(3)</a>, <a href="../man7/bio.html">bio(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The functions and macros described here have been available in OpenSSL since at least 1.1.0 (<b>BIO_FLAGS_IN_EOF</b> since 1.1.1).</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

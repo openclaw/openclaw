@@ -1,0 +1,75 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_OpenInit</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_OpenInit, EVP_OpenUpdate, EVP_OpenFinal - EVP envelope decryption</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+
+int EVP_OpenInit(EVP_CIPHER_CTX *ctx, EVP_CIPHER *type, unsigned char *ek,
+                 int ekl, unsigned char *iv, EVP_PKEY *priv);
+int EVP_OpenUpdate(EVP_CIPHER_CTX *ctx, unsigned char *out,
+                   int *outl, unsigned char *in, int inl);
+int EVP_OpenFinal(EVP_CIPHER_CTX *ctx, unsigned char *out, int *outl);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The EVP envelope routines are a high-level interface to envelope decryption. They decrypt a public key encrypted symmetric key and then decrypt data using it.</p>
+
+<p>EVP_OpenInit() initializes a cipher context <b>ctx</b> for decryption with cipher <b>type</b>. It decrypts the encrypted symmetric key of length <b>ekl</b> bytes passed in the <b>ek</b> parameter using the private key <b>priv</b>. The IV is supplied in the <b>iv</b> parameter.</p>
+
+<p>EVP_OpenUpdate() and EVP_OpenFinal() have exactly the same properties as the EVP_DecryptUpdate() and EVP_DecryptFinal() routines, as documented on the <a href="../man3/EVP_EncryptInit.html">EVP_EncryptInit(3)</a> manual page.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>It is possible to call EVP_OpenInit() twice in the same way as EVP_DecryptInit(). The first call should have <b>priv</b> set to NULL and (after setting any cipher parameters) it should be called again with <b>type</b> set to NULL.</p>
+
+<p>If the cipher passed in the <b>type</b> parameter is a variable length cipher then the key length will be set to the value of the recovered key length. If the cipher is a fixed length cipher then the recovered key length must match the fixed cipher length.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>EVP_OpenInit() returns 0 on error or a non zero integer (actually the recovered secret key size) if successful.</p>
+
+<p>EVP_OpenUpdate() returns 1 for success or 0 for failure.</p>
+
+<p>EVP_OpenFinal() returns 0 if the decrypt failed or 1 for success.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/evp.html">evp(7)</a>, <a href="../man3/RAND_bytes.html">RAND_bytes(3)</a>, <a href="../man3/EVP_EncryptInit.html">EVP_EncryptInit(3)</a>, <a href="../man3/EVP_SealInit.html">EVP_SealInit(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2020 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

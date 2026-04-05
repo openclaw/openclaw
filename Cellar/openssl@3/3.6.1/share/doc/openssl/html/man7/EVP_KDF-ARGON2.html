@@ -1,0 +1,216 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_KDF-ARGON2</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Supported-parameters">Supported parameters</a></li>
+    </ul>
+  </li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#CONFORMING-TO">CONFORMING TO</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_KDF-ARGON2 - The Argon2 EVP KDF implementation</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>Support for computing the <b>argon2</b> password-based KDF through the <b>EVP_KDF</b> API.</p>
+
+<p>The EVP_KDF-ARGON2 algorithm implements the Argon2 password-based key derivation function, as described in IETF RFC 9106. It is memory-hard in the sense that it deliberately requires a significant amount of RAM for efficient computation. The intention of this is to render brute forcing of passwords on systems that lack large amounts of main memory (such as GPUs or ASICs) computationally infeasible.</p>
+
+<p>Argon2d (Argon2i) uses data-dependent (data-independent) memory access and primary seek to address trade-off (side-channel) attacks.</p>
+
+<p>Argon2id is a hybrid construction which, in the first two slices of the first pass, generates reference addresses data-independently as in Argon2i, whereas in later slices and next passes it generates them data-dependently as in Argon2d.</p>
+
+<p>Sbox-hardened version Argon2ds is not supported.</p>
+
+<p>For more information, please refer to RFC 9106.</p>
+
+<h2 id="Supported-parameters">Supported parameters</h2>
+
+<p>The supported parameters are:</p>
+
+<dl>
+
+<dt id="pass-OSSL_KDF_PARAM_PASSWORD-octet-string">&quot;pass&quot; (<b>OSSL_KDF_PARAM_PASSWORD</b>) &lt;octet string&gt;</dt>
+<dd>
+
+</dd>
+<dt id="salt-OSSL_KDF_PARAM_SALT-octet-string">&quot;salt&quot; (<b>OSSL_KDF_PARAM_SALT</b>) &lt;octet string&gt;</dt>
+<dd>
+
+</dd>
+<dt id="secret-OSSL_KDF_PARAM_SECRET-octet-string">&quot;secret&quot; (<b>OSSL_KDF_PARAM_SECRET</b>) &lt;octet string&gt;</dt>
+<dd>
+
+</dd>
+<dt id="iter-OSSL_KDF_PARAM_ITER-unsigned-integer">&quot;iter&quot; (<b>OSSL_KDF_PARAM_ITER</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+</dd>
+<dt id="size-OSSL_KDF_PARAM_SIZE-unsigned-integer">&quot;size&quot; (<b>OSSL_KDF_PARAM_SIZE</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+</dd>
+<dt id="properties-OSSL_KDF_PARAM_PROPERTIES-UTF8-string">&quot;properties&quot; (<b>OSSL_KDF_PARAM_PROPERTIES</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+<p>These parameters work as described in <a href="../man3/EVP_KDF.html">&quot;PARAMETERS&quot; in EVP_KDF(3)</a>.</p>
+
+<p>Note that RFC 9106 recommends 128 bits salt for most applications, or 64 bits salt in the case of space constraints. At least 128 bits output length is recommended.</p>
+
+<p>Note that secret (or pepper) is an optional secret data used along the password.</p>
+
+</dd>
+<dt id="threads-OSSL_KDF_PARAM_THREADS-unsigned-integer">&quot;threads&quot; (<b>OSSL_KDF_PARAM_THREADS</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+<p>The number of threads, bounded above by the number of lanes.</p>
+
+<p>This can only be used with built-in thread support. Threading must be explicitly enabled. See EXAMPLES section for more information.</p>
+
+</dd>
+<dt id="ad-OSSL_KDF_PARAM_ARGON2_AD-octet-string">&quot;ad&quot; (<b>OSSL_KDF_PARAM_ARGON2_AD</b>) &lt;octet string&gt;</dt>
+<dd>
+
+<p>Optional associated data, may be used to &quot;tag&quot; a group of keys, or tie them to a particular public key, without having to modify salt.</p>
+
+</dd>
+<dt id="lanes-OSSL_KDF_PARAM_ARGON2_LANES-unsigned-integer">&quot;lanes&quot; (<b>OSSL_KDF_PARAM_ARGON2_LANES</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+<p>Argon2 splits the requested memory size into lanes, each of which is designed to be processed in parallel. For example, on a system with p cores, it&#39;s recommended to use p lanes.</p>
+
+<p>The number of lanes is used to derive the key. It is possible to specify more lanes than the number of available computational threads. This is especially encouraged if multi-threading is disabled.</p>
+
+</dd>
+<dt id="memcost-OSSL_KDF_PARAM_ARGON2_MEMCOST-unsigned-integer">&quot;memcost&quot; (<b>OSSL_KDF_PARAM_ARGON2_MEMCOST</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+<p>Memory cost parameter (the number of 1k memory blocks used).</p>
+
+</dd>
+<dt id="version-OSSL_KDF_PARAM_ARGON2_VERSION-unsigned-integer">&quot;version&quot; (<b>OSSL_KDF_PARAM_ARGON2_VERSION</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+<p>Argon2 version. Supported values: 0x10, 0x13 (default).</p>
+
+</dd>
+<dt id="early_clean-OSSL_KDF_PARAM_EARLY_CLEAN-unsigned-integer">&quot;early_clean&quot; (<b>OSSL_KDF_PARAM_EARLY_CLEAN</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+<p>If set (nonzero), password and secret stored in Argon2 context are zeroed early during initial hash computation, as soon as they are not needed. Otherwise, they are zeroed along the rest of Argon2 context data on clear, free, reset.</p>
+
+<p>This can be useful if, for example, multiple keys with different ad value are to be generated from a single password and secret.</p>
+
+</dd>
+</dl>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>This example uses Argon2d with password &quot;1234567890&quot;, salt &quot;saltsalt&quot;, using 2 lanes, 2 threads, and memory cost of 65536:</p>
+
+<pre><code>#include &lt;string.h&gt;                 /* strlen               */
+#include &lt;openssl/core_names.h&gt;     /* OSSL_KDF_*           */
+#include &lt;openssl/params.h&gt;         /* OSSL_PARAM_*         */
+#include &lt;openssl/thread.h&gt;         /* OSSL_set_max_threads */
+#include &lt;openssl/kdf.h&gt;            /* EVP_KDF_*            */
+
+int main(void)
+{
+    int retval = 1;
+
+    EVP_KDF *kdf = NULL;
+    EVP_KDF_CTX *kctx = NULL;
+    OSSL_PARAM params[6], *p = params;
+
+    /* argon2 params, please refer to RFC9106 for recommended defaults */
+    uint32_t lanes = 2, threads = 2, memcost = 65536;
+    char pwd[] = &quot;1234567890&quot;, salt[] = &quot;saltsalt&quot;;
+
+    /* derive result */
+    size_t outlen = 128;
+    unsigned char result[outlen];
+
+    /* required if threads &gt; 1 */
+    if (OSSL_set_max_threads(NULL, threads) != 1)
+        goto fail;
+
+    p = params;
+    *p++ = OSSL_PARAM_construct_uint32(OSSL_KDF_PARAM_THREADS, &amp;threads);
+    *p++ = OSSL_PARAM_construct_uint32(OSSL_KDF_PARAM_ARGON2_LANES,
+                                       &amp;lanes);
+    *p++ = OSSL_PARAM_construct_uint32(OSSL_KDF_PARAM_ARGON2_MEMCOST,
+                                       &amp;memcost);
+    *p++ = OSSL_PARAM_construct_octet_string(OSSL_KDF_PARAM_SALT,
+                                             salt,
+                                             strlen((const char *)salt));
+    *p++ = OSSL_PARAM_construct_octet_string(OSSL_KDF_PARAM_PASSWORD,
+                                             pwd,
+                                             strlen((const char *)pwd));
+    *p++ = OSSL_PARAM_construct_end();
+
+    if ((kdf = EVP_KDF_fetch(NULL, &quot;ARGON2D&quot;, NULL)) == NULL)
+        goto fail;
+    if ((kctx = EVP_KDF_CTX_new(kdf)) == NULL)
+        goto fail;
+    if (EVP_KDF_derive(kctx, &amp;result[0], outlen, params) != 1)
+        goto fail;
+
+    printf(&quot;Output = %s\n&quot;, OPENSSL_buf2hexstr(result, outlen));
+    retval = 0;
+
+fail:
+    EVP_KDF_free(kdf);
+    EVP_KDF_CTX_free(kctx);
+    OSSL_set_max_threads(NULL, 0);
+
+    return retval;
+}</code></pre>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>&quot;ARGON2I&quot;, &quot;ARGON2D&quot;, and &quot;ARGON2ID&quot; are the names for this implementation; it can be used with the EVP_KDF_fetch() function.</p>
+
+<h1 id="CONFORMING-TO">CONFORMING TO</h1>
+
+<p>RFC 9106 Argon2, see <a href="https://www.rfc-editor.org/rfc/rfc9106.txt">https://www.rfc-editor.org/rfc/rfc9106.txt</a>.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_KDF.html">EVP_KDF(3)</a>, <a href="../man3/EVP_KDF_CTX_new.html">EVP_KDF_CTX_new(3)</a>, <a href="../man3/EVP_KDF_CTX_free.html">EVP_KDF_CTX_free(3)</a>, <a href="../man3/EVP_KDF_CTX_set_params.html">EVP_KDF_CTX_set_params(3)</a>, <a href="../man3/EVP_KDF_derive.html">EVP_KDF_derive(3)</a>, <a href="../man3/EVP_KDF.html">&quot;PARAMETERS&quot; in EVP_KDF(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>This functionality was added to OpenSSL 3.2.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2022-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

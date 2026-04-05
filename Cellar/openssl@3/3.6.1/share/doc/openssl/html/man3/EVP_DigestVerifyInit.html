@@ -1,0 +1,174 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_DigestVerifyInit</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_DigestVerifyInit_ex, EVP_DigestVerifyInit, EVP_DigestVerifyUpdate, EVP_DigestVerifyFinal, EVP_DigestVerify - EVP signature verification functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+
+int EVP_DigestVerifyInit_ex(EVP_MD_CTX *ctx, EVP_PKEY_CTX **pctx,
+                            const char *mdname, OSSL_LIB_CTX *libctx,
+                            const char *props, EVP_PKEY *pkey,
+                            const OSSL_PARAM params[]);
+int EVP_DigestVerifyInit(EVP_MD_CTX *ctx, EVP_PKEY_CTX **pctx,
+                         const EVP_MD *type, ENGINE *e, EVP_PKEY *pkey);
+int EVP_DigestVerifyUpdate(EVP_MD_CTX *ctx, const void *d, size_t cnt);
+int EVP_DigestVerifyFinal(EVP_MD_CTX *ctx, const unsigned char *sig,
+                          size_t siglen);
+int EVP_DigestVerify(EVP_MD_CTX *ctx, const unsigned char *sig,
+                     size_t siglen, const unsigned char *tbs, size_t tbslen);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The EVP signature routines are a high-level interface to digital signatures. Input data is digested first before the signature verification takes place.</p>
+
+<p>EVP_DigestVerifyInit_ex() sets up verification context <b>ctx</b> to use a digest with the name <b>mdname</b> and public key <b>pkey</b>. The name of the digest to be used is passed to the provider of the signature algorithm in use. How that provider interprets the digest name is provider specific. The provider may implement that digest directly itself or it may (optionally) choose to fetch it (which could result in a digest from a different provider being selected). If the provider supports fetching the digest then it may use the <b>props</b> argument for the properties to be used during the fetch. Finally, the passed parameters <i>params</i>, if not NULL, are set on the context before returning.</p>
+
+<p>The <i>pkey</i> algorithm is used to fetch a <b>EVP_SIGNATURE</b> method implicitly, to be used for the actual signing. See <a href="../man7/provider.html">&quot;Implicit fetch&quot; in provider(7)</a> for more information about implicit fetches.</p>
+
+<p>The OpenSSL default and legacy providers support fetching digests and can fetch those digests from any available provider. The OpenSSL FIPS provider also supports fetching digests but will only fetch digests that are themselves implemented inside the FIPS provider.</p>
+
+<p><b>ctx</b> must be created with EVP_MD_CTX_new() before calling this function. If <b>pctx</b> is not NULL, the EVP_PKEY_CTX of the verification operation will be written to <b>*pctx</b>: this can be used to set alternative verification options. Note that any existing value in <b>*pctx</b> is overwritten. The EVP_PKEY_CTX value returned must not be freed directly by the application if <b>ctx</b> is not assigned an EVP_PKEY_CTX value before being passed to EVP_DigestVerifyInit_ex() (which means the EVP_PKEY_CTX is created inside EVP_DigestVerifyInit_ex() and it will be freed automatically when the EVP_MD_CTX is freed). If the EVP_PKEY_CTX to be used is created by EVP_DigestVerifyInit_ex then it will use the <b>OSSL_LIB_CTX</b> specified in <i>libctx</i> and the property query string specified in <i>props</i>.</p>
+
+<p>No <b>EVP_PKEY_CTX</b> will be created by EVP_DigestVerifyInit_ex() if the passed <b>ctx</b> has already been assigned one via <a href="../man3/EVP_MD_CTX_set_pkey_ctx.html">EVP_MD_CTX_set_pkey_ctx(3)</a>. See also <a href="../man7/SM2.html">SM2(7)</a>.</p>
+
+<p>Not all digests can be used for all key types. The following combinations apply.</p>
+
+<dl>
+
+<dt id="DSA">DSA</dt>
+<dd>
+
+<p>Supports SHA1, SHA224, SHA256, SHA384 and SHA512</p>
+
+</dd>
+<dt id="ECDSA">ECDSA</dt>
+<dd>
+
+<p>Supports SHA1, SHA224, SHA256, SHA384, SHA512 and SM3</p>
+
+</dd>
+<dt id="RSA-with-no-padding">RSA with no padding</dt>
+<dd>
+
+<p>Supports no digests (the digest <b>type</b> must be NULL)</p>
+
+</dd>
+<dt id="RSA-with-X931-padding">RSA with X931 padding</dt>
+<dd>
+
+<p>Supports SHA1, SHA256, SHA384 and SHA512</p>
+
+</dd>
+<dt id="All-other-RSA-padding-types">All other RSA padding types</dt>
+<dd>
+
+<p>Support SHA1, SHA224, SHA256, SHA384, SHA512, MD5, MD5_SHA1, MD2, MD4, MDC2, SHA3-224, SHA3-256, SHA3-384, SHA3-512</p>
+
+</dd>
+<dt id="Ed25519-and-Ed448">Ed25519 and Ed448</dt>
+<dd>
+
+<p>Support no digests (the digest <b>type</b> must be NULL)</p>
+
+</dd>
+<dt id="HMAC">HMAC</dt>
+<dd>
+
+<p>Supports any digest</p>
+
+</dd>
+<dt id="CMAC-Poly1305-and-Siphash">CMAC, Poly1305 and Siphash</dt>
+<dd>
+
+<p>Will ignore any digest provided.</p>
+
+</dd>
+</dl>
+
+<p>If RSA-PSS is used and restrictions apply then the digest must match.</p>
+
+<p>EVP_DigestVerifyInit() works in the same way as EVP_DigestVerifyInit_ex() except that the <b>mdname</b> parameter will be inferred from the supplied digest <b>type</b>, and <b>props</b> will be NULL. Where supplied the ENGINE <b>e</b> will be used for the signature verification and digest algorithm implementations. <b>e</b> may be NULL.</p>
+
+<p>EVP_DigestVerifyUpdate() hashes <b>cnt</b> bytes of data at <b>d</b> into the verification context <b>ctx</b>. This function can be called several times on the same <b>ctx</b> to include additional data.</p>
+
+<p>EVP_DigestVerifyFinal() verifies the data in <b>ctx</b> against the signature in <b>sig</b> of length <b>siglen</b>.</p>
+
+<p>EVP_DigestVerify() verifies <b>tbslen</b> bytes at <b>tbs</b> against the signature in <b>sig</b> of length <b>siglen</b>.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>EVP_DigestVerifyInit() and EVP_DigestVerifyUpdate() return 1 for success and 0 for failure.</p>
+
+<p>EVP_DigestVerifyFinal() and EVP_DigestVerify() return 1 for success; any other value indicates failure. A return value of zero indicates that the signature did not verify successfully (that is, <b>tbs</b> did not match the original data or the signature had an invalid form), while other values indicate a more serious error (and sometimes also indicate an invalid signature form).</p>
+
+<p>The error codes can be obtained from <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The <b>EVP</b> interface to digital signatures should almost always be used in preference to the low-level interfaces. This is because the code then becomes transparent to the algorithm used and much more flexible.</p>
+
+<p>EVP_DigestVerify() is a one shot operation which verifies a single block of data in one function. For algorithms that support streaming it is equivalent to calling EVP_DigestVerifyUpdate() and EVP_DigestVerifyFinal(). For algorithms which do not support streaming (e.g. PureEdDSA) it is the only way to verify data.</p>
+
+<p>In previous versions of OpenSSL there was a link between message digest types and public key algorithms. This meant that &quot;clone&quot; digests such as EVP_dss1() needed to be used to sign using SHA1 and DSA. This is no longer necessary and the use of clone digest is now discouraged.</p>
+
+<p>For some key types and parameters the random number generator must be seeded. If the automatic seeding or reseeding of the OpenSSL CSPRNG fails due to external circumstances (see <a href="../man7/RAND.html">RAND(7)</a>), the operation will fail.</p>
+
+<p>The call to EVP_DigestVerifyFinal() internally finalizes a copy of the digest context. This means that EVP_VerifyUpdate() and EVP_VerifyFinal() can be called later to digest and verify additional data. Applications may disable this behavior by setting the EVP_MD_CTX_FLAG_FINALISE context flag via <a href="../man3/EVP_MD_CTX_set_flags.html">EVP_MD_CTX_set_flags(3)</a>.</p>
+
+<p>Note that not all providers support continuation, in case the selected provider does not allow to duplicate contexts EVP_DigestVerifyFinal() will finalize the digest context and attempting to process additional data via EVP_DigestVerifyUpdate() will result in an error.</p>
+
+<p>EVP_DigestVerifyInit() and EVP_DigestVerifyInit_ex() functions can be called multiple times on a context and the parameters set by previous calls should be preserved if the <i>pkey</i> parameter is NULL. The call then just resets the state of the <i>ctx</i>.</p>
+
+<p>EVP_DigestVerify() can only be called once, and cannot be used again without reinitialising the <b>EVP_MD_CTX</b> by calling EVP_DigestVerifyInit_ex().</p>
+
+<p>Ignoring failure returns of EVP_DigestVerifyInit() and EVP_DigestVerifyInit_ex() functions can lead to subsequent undefined behavior when calling EVP_DigestVerifyUpdate(), EVP_DigestVerifyFinal(), or EVP_DigestVerify().</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_DigestSignInit.html">EVP_DigestSignInit(3)</a>, <a href="../man3/EVP_DigestInit.html">EVP_DigestInit(3)</a>, <a href="../man7/evp.html">evp(7)</a>, <a href="../man3/HMAC.html">HMAC(3)</a>, <a href="../man3/MD2.html">MD2(3)</a>, <a href="../man3/MD5.html">MD5(3)</a>, <a href="../man3/MDC2.html">MDC2(3)</a>, <a href="../man3/RIPEMD160.html">RIPEMD160(3)</a>, <a href="../man3/SHA1.html">SHA1(3)</a>, <a href="../man1/openssl-dgst.html">openssl-dgst(1)</a>, <a href="../man7/RAND.html">RAND(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>EVP_DigestVerifyInit(), EVP_DigestVerifyUpdate() and EVP_DigestVerifyFinal() were added in OpenSSL 1.0.0.</p>
+
+<p>EVP_DigestVerifyInit_ex() was added in OpenSSL 3.0.</p>
+
+<p>EVP_DigestVerifyUpdate() was converted from a macro to a function in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2006-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

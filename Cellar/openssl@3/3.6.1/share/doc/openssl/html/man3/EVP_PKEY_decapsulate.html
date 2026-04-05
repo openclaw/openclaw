@@ -1,0 +1,123 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_PKEY_decapsulate</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_PKEY_decapsulate_init, EVP_PKEY_auth_decapsulate_init, EVP_PKEY_decapsulate - Key decapsulation using a KEM algorithm with a private key</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+
+int EVP_PKEY_decapsulate_init(EVP_PKEY_CTX *ctx, const OSSL_PARAM params[]);
+int EVP_PKEY_auth_decapsulate_init(EVP_PKEY_CTX *ctx, EVP_PKEY *authpub,
+                                  const OSSL_PARAM params[]);
+int EVP_PKEY_decapsulate(EVP_PKEY_CTX *ctx,
+                         unsigned char *unwrapped, size_t *unwrappedlen,
+                         const unsigned char *wrapped, size_t wrappedlen);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The EVP_PKEY_decapsulate_init() function initializes a private key algorithm context <i>ctx</i> for a decapsulation operation and then sets the <i>params</i> on the context in the same way as calling <a href="../man3/EVP_PKEY_CTX_set_params.html">EVP_PKEY_CTX_set_params(3)</a>. Note that <i>ctx</i> usually is produced using <a href="../man3/EVP_PKEY_CTX_new_from_pkey.html">EVP_PKEY_CTX_new_from_pkey(3)</a>, specifying the private key to use.</p>
+
+<p>The EVP_PKEY_auth_decapsulate_init() function is similar to EVP_PKEY_decapsulate_init() but also passes an <i>authpub</i> authentication public key that is used during decapsulation.</p>
+
+<p>The EVP_PKEY_decapsulate() function performs a private key decapsulation operation using <i>ctx</i>. The data to be decapsulated is specified using the <i>wrapped</i> and <i>wrappedlen</i> parameters (which must both non-NULL).</p>
+
+<p>The <i>wrapped</i> parameter is an output argument, to which the decapsulated shared secret is written. The shared secret may not match the peer&#39;s value even when decapsulation returns success. Instead, the shared secret must be used to derive a key that is used to authenticate data subsequently received from the peer. If <i>unwrapped</i> is NULL then the size of the output shared secret buffer is written to <i>*unwrappedlen</i> and no decapsulation is performed, this makes it possible to determine the required buffer size at run time. Otherwise, the decapsulated secret data is written to <i>unwrapped</i> and the length of shared secret is written to <i>*unwrappedlen</i>.</p>
+
+<p>Note that the value pointed to by <i>unwrappedlen</i> (which must NOT be <b>NULL</b>) must be initialised to the length of <i>unwrapped</i>, so that the call can validate it is of sufficient size to hold the result of the operation.</p>
+
+<p>Absent detailed prior knowledge of the internals of the specific KEM algorithm, callers SHOULD NOT assume that the returned shared secret is necessarily of the maximum possible length. The length returned via <i>*unwrappedlen</i> SHOULD be used to determine the actual length of the output.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>After the call to EVP_PKEY_decapsulate_init() algorithm-specific parameters for the operation may be set or modified using <a href="../man3/EVP_PKEY_CTX_set_params.html">EVP_PKEY_CTX_set_params(3)</a>.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>EVP_PKEY_decapsulate_init(), EVP_PKEY_auth_decapsulate_init() and EVP_PKEY_decapsulate() return 1 for success and 0 or a negative value for failure. In particular a return value of -2 indicates the operation is not supported by the private key algorithm.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>Decapsulate data using RSA:</p>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+
+/*
+ * NB: assumes rsa_priv_key is an RSA private key,
+ * and that in, inlen are already set up to contain encapsulated data.
+ */
+
+EVP_PKEY_CTX *ctx = NULL;
+size_t secretlen = 0;
+unsigned char *secret = NULL;;
+
+ctx = EVP_PKEY_CTX_new_from_pkey(libctx, rsa_priv_key, NULL);
+if (ctx == NULL)
+    /* Error */
+if (EVP_PKEY_decapsulate_init(ctx, NULL) &lt;= 0)
+    /* Error */
+
+/* Set the mode - only &#39;RSASVE&#39; is currently supported */
+if (EVP_PKEY_CTX_set_kem_op(ctx, &quot;RSASVE&quot;) &lt;= 0)
+    /* Error */
+
+/* Determine buffer length */
+if (EVP_PKEY_decapsulate(ctx, NULL, &amp;secretlen, in, inlen) &lt;= 0)
+    /* Error */
+
+secret = OPENSSL_malloc(secretlen);
+if (secret == NULL)
+    /* malloc failure */
+
+/* Decapsulated secret data is secretlen bytes long */
+if (EVP_PKEY_decapsulate(ctx, secret, &amp;secretlen, in, inlen) &lt;= 0)
+    /* Error */</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_PKEY_CTX_new_from_pkey.html">EVP_PKEY_CTX_new_from_pkey(3)</a>, <a href="../man3/EVP_PKEY_encapsulate.html">EVP_PKEY_encapsulate(3)</a>, <a href="../man7/EVP_KEM-RSA.html">EVP_KEM-RSA(7)</a>, <a href="../man7/EVP_KEM-X25519.html">EVP_KEM-X25519(7)</a>, <a href="../man7/EVP_KEM-EC.html">EVP_KEM-EC(7)</a>, <a href="../man7/EVP_KEM-ML-KEM-512.html">EVP_KEM-ML-KEM-512(7)</a>, <a href="../man7/EVP_KEM-ML-KEM-768.html">EVP_KEM-ML-KEM-768(7)</a>, <a href="../man7/EVP_KEM-ML-KEM-1024.html">EVP_KEM-ML-KEM-1024(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The functions EVP_PKEY_decapsulate_init() and EVP_PKEY_decapsulate() were added in OpenSSL 3.0.</p>
+
+<p>The function EVP_PKEY_auth_decapsulate_init() was added in OpenSSL 3.2.</p>
+
+<p>Support for <b>ML-KEM</b> was added in OpenSSL 3.5.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2020-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,977 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>openssl-s_client</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#OPTIONS">OPTIONS</a></li>
+  <li><a href="#CONNECTED-COMMANDS-BASIC">CONNECTED COMMANDS (BASIC)</a></li>
+  <li><a href="#CONNECTED-COMMANDS-ADVANCED">CONNECTED COMMANDS (ADVANCED)</a></li>
+  <li><a href="#NOTES">NOTES</a>
+    <ul>
+      <li><a href="#Note-on-Non-Interactive-Use">Note on Non-Interactive Use</a></li>
+    </ul>
+  </li>
+  <li><a href="#BUGS">BUGS</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>openssl-s_client - SSL/TLS client program</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<p><b>openssl</b> <b>s_client</b> [<b>-help</b>] [<b>-ssl_config</b> <i>section</i>] [<b>-connect</b> <i>host</i>:<i>port</i>] [<b>-host</b> <i>hostname</i>] [<b>-port</b> <i>port</i>] [<b>-bind</b> <i>host</i>:<i>port</i>] [<b>-proxy</b> <i>host</i>:<i>port</i>] [<b>-proxy_user</b> <i>userid</i>] [<b>-proxy_pass</b> <i>arg</i>] [<b>-unix</b> <i>path</i>] [<b>-4</b>] [<b>-6</b>] [<b>-quic</b>] [<b>-servername</b> <i>name</i>] [<b>-noservername</b>] [<b>-verify</b> <i>depth</i>] [<b>-verify_return_error</b>] [<b>-verify_quiet</b>] [<b>-verifyCAfile</b> <i>filename</i>] [<b>-verifyCApath</b> <i>dir</i>] [<b>-verifyCAstore</b> <i>uri</i>] [<b>-cert</b> <i>filename</i>] [<b>-certform</b> <b>DER</b>|<b>PEM</b>|<b>P12</b>] [<b>-cert_chain</b> <i>filename</i>] [<b>-build_chain</b>] [<b>-CRL</b> <i>filename</i>] [<b>-CRLform</b> <b>DER</b>|<b>PEM</b>] [<b>-crl_download</b>] [<b>-key</b> <i>filename</i>|<i>uri</i>] [<b>-keyform</b> <b>DER</b>|<b>PEM</b>|<b>P12</b>|<b>ENGINE</b>] [<b>-pass</b> <i>arg</i>] [<b>-chainCAfile</b> <i>filename</i>] [<b>-chainCApath</b> <i>directory</i>] [<b>-chainCAstore</b> <i>uri</i>] [<b>-requestCAfile</b> <i>filename</i>] [<b>-dane_tlsa_domain</b> <i>domain</i>] [<b>-dane_tlsa_rrdata</b> <i>rrdata</i>] [<b>-dane_ee_no_namechecks</b>] [<b>-reconnect</b>] [<b>-showcerts</b>] [<b>-prexit</b>] [<b>-no-interactive</b>] [<b>-debug</b>] [<b>-trace</b>] [<b>-nocommands</b>] [<b>-adv</b>] [<b>-security_debug</b>] [<b>-security_debug_verbose</b>] [<b>-msg</b>] [<b>-timeout</b>] [<b>-mtu</b> <i>size</i>] [<b>-no_ems</b>] [<b>-keymatexport</b> <i>label</i>] [<b>-keymatexportlen</b> <i>len</i>] [<b>-msgfile</b> <i>filename</i>] [<b>-nbio_test</b>] [<b>-state</b>] [<b>-nbio</b>] [<b>-crlf</b>] [<b>-ign_eof</b>] [<b>-no_ign_eof</b>] [<b>-psk_identity</b> <i>identity</i>] [<b>-psk</b> <i>key</i>] [<b>-psk_session</b> <i>file</i>] [<b>-quiet</b>] [<b>-sctp</b>] [<b>-sctp_label_bug</b>] [<b>-fallback_scsv</b>] [<b>-async</b>] [<b>-maxfraglen</b> <i>len</i>] [<b>-max_send_frag</b>] [<b>-split_send_frag</b>] [<b>-max_pipelines</b>] [<b>-read_buf</b>] [<b>-ignore_unexpected_eof</b>] [<b>-no_tx_cert_comp</b>] [<b>-no_rx_cert_comp</b>] [<b>-brief</b>] [<b>-starttls</b> <i>protocol</i>] [<b>-xmpphost</b> <i>hostname</i>] [<b>-name</b> <i>hostname</i>] [<b>-tlsextdebug</b>] [<b>-sess_out</b> <i>filename</i>] [<b>-sess_in</b> <i>filename</i>] [<b>-serverinfo</b> <i>types</i>] [<b>-status</b>] [<b>-ocsp_check_leaf</b>] [<b>-ocsp_check_all</b>] [<b>-alpn</b> <i>protocols</i>] [<b>-nextprotoneg</b> <i>protocols</i>] [<b>-ct</b>] [<b>-noct</b>] [<b>-ctlogfile</b>] [<b>-keylogfile</b> <i>file</i>] [<b>-early_data</b> <i>file</i>] [<b>-enable_pha</b>] [<b>-use_srtp</b> <i>value</i>] [<b>-srpuser</b> <i>value</i>] [<b>-srppass</b> <i>value</i>] [<b>-srp_lateuser</b>] [<b>-srp_moregroups</b>] [<b>-srp_strength</b> <i>number</i>] [<b>-ktls</b>] [<b>-tfo</b>] [<b>-nameopt</b> <i>option</i>] [<b>-no_ssl3</b>] [<b>-no_tls1</b>] [<b>-no_tls1_1</b>] [<b>-no_tls1_2</b>] [<b>-no_tls1_3</b>] [<b>-ssl3</b>] [<b>-tls1</b>] [<b>-tls1_1</b>] [<b>-tls1_2</b>] [<b>-tls1_3</b>] [<b>-dtls</b>] [<b>-dtls1</b>] [<b>-dtls1_2</b>] [<b>-xkey</b> <i>infile</i>] [<b>-xcert</b> <i>file</i>] [<b>-xchain</b> <i>file</i>] [<b>-xchain_build</b> <i>file</i>] [<b>-xcertform</b> <b>DER</b>|<b>PEM</b>]&gt; [<b>-xkeyform</b> <b>DER</b>|<b>PEM</b>]&gt; [<b>-CAfile</b> <i>file</i>] [<b>-no-CAfile</b>] [<b>-CApath</b> <i>dir</i>] [<b>-no-CApath</b>] [<b>-CAstore</b> <i>uri</i>] [<b>-no-CAstore</b>] [<b>-bugs</b>] [<b>-no_comp</b>] [<b>-comp</b>] [<b>-no_ticket</b>] [<b>-serverpref</b>] [<b>-client_renegotiation</b>] [<b>-legacy_renegotiation</b>] [<b>-no_renegotiation</b>] [<b>-no_resumption_on_reneg</b>] [<b>-legacy_server_connect</b>] [<b>-no_legacy_server_connect</b>] [<b>-no_etm</b>] [<b>-allow_no_dhe_kex</b>] [<b>-prefer_no_dhe_kex</b>] [<b>-prioritize_chacha</b>] [<b>-strict</b>] [<b>-sigalgs</b> <i>algs</i>] [<b>-client_sigalgs</b> <i>algs</i>] [<b>-groups</b> <i>groups</i>] [<b>-curves</b> <i>curves</i>] [<b>-named_curve</b> <i>curve</i>] [<b>-cipher</b> <i>ciphers</i>] [<b>-ciphersuites</b> <i>1.3ciphers</i>] [<b>-min_protocol</b> <i>minprot</i>] [<b>-max_protocol</b> <i>maxprot</i>] [<b>-record_padding</b> <i>padding</i>] [<b>-debug_broken_protocol</b>] [<b>-no_middlebox</b>] [<b>-rand</b> <i>files</i>] [<b>-writerand</b> <i>file</i>] [<b>-provider</b> <i>name</i>] [<b>-provider-path</b> <i>path</i>] [<b>-provparam</b> <i>[name:]key=value</i>] [<b>-propquery</b> <i>propq</i>] [<b>-engine</b> <i>id</i>] [<b>-ssl_client_engine</b> <i>id</i>] [<b>-allow_proxy_certs</b>] [<b>-attime</b> <i>timestamp</i>] [<b>-no_check_time</b>] [<b>-check_ss_sig</b>] [<b>-crl_check</b>] [<b>-crl_check_all</b>] [<b>-explicit_policy</b>] [<b>-extended_crl</b>] [<b>-ignore_critical</b>] [<b>-inhibit_any</b>] [<b>-inhibit_map</b>] [<b>-partial_chain</b>] [<b>-policy</b> <i>arg</i>] [<b>-policy_check</b>] [<b>-policy_print</b>] [<b>-purpose</b> <i>purpose</i>] [<b>-suiteB_128</b>] [<b>-suiteB_128_only</b>] [<b>-suiteB_192</b>] [<b>-trusted_first</b>] [<b>-no_alt_chains</b>] [<b>-use_deltas</b>] [<b>-auth_level</b> <i>num</i>] [<b>-verify_depth</b> <i>num</i>] [<b>-verify_email</b> <i>email</i>] [<b>-verify_hostname</b> <i>hostname</i>] [<b>-verify_ip</b> <i>ip</i>] [<b>-verify_name</b> <i>name</i>] [<b>-x509_strict</b>] [<b>-issuer_checks</b>] [<b>-enable_server_rpk</b>] [<b>-enable_client_rpk</b>] [<i>host</i>:<i>port</i>]</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>This command implements a generic SSL/TLS client which connects to a remote host using SSL/TLS. It is a <i>very</i> useful diagnostic tool for SSL servers.</p>
+
+<h1 id="OPTIONS">OPTIONS</h1>
+
+<p>In addition to the options below, this command also supports the common and client only options documented in the &quot;Supported Command Line Commands&quot; section of the <a href="../man3/SSL_CONF_cmd.html">SSL_CONF_cmd(3)</a> manual page.</p>
+
+<dl>
+
+<dt id="help"><b>-help</b></dt>
+<dd>
+
+<p>Print out a usage message.</p>
+
+</dd>
+<dt id="ssl_config-section"><b>-ssl_config</b> <i>section</i></dt>
+<dd>
+
+<p>Use the specified section of the configuration file to configure the <b>SSL_CTX</b> object.</p>
+
+</dd>
+<dt id="connect-host:port"><b>-connect</b> <i>host</i>:<i>port</i></dt>
+<dd>
+
+<p>This specifies the host and optional port to connect to. It is possible to select the host and port using the optional target positional argument instead. If neither this nor the target positional argument are specified then an attempt is made to connect to the local host on port 4433. If the host string is an IPv6 address, it must be enclosed in <code>[</code> and <code>]</code>.</p>
+
+</dd>
+<dt id="host-hostname"><b>-host</b> <i>hostname</i></dt>
+<dd>
+
+<p>Host to connect to; use <b>-connect</b> instead.</p>
+
+</dd>
+<dt id="port-port"><b>-port</b> <i>port</i></dt>
+<dd>
+
+<p>Connect to the specified port; use <b>-connect</b> instead.</p>
+
+</dd>
+<dt id="bind-host:port"><b>-bind</b> <i>host</i>:<i>port</i></dt>
+<dd>
+
+<p>This specifies the host address and or port to bind as the source for the connection. For Unix-domain sockets the port is ignored and the host is used as the source socket address. If the host string is an IPv6 address, it must be enclosed in <code>[</code> and <code>]</code>.</p>
+
+</dd>
+<dt id="proxy-host:port"><b>-proxy</b> <i>host</i>:<i>port</i></dt>
+<dd>
+
+<p>When used with the <b>-connect</b> flag, the program uses the host and port specified with this flag and issues an HTTP CONNECT command to connect to the desired server. If the host string is an IPv6 address, it must be enclosed in <code>[</code> and <code>]</code>.</p>
+
+</dd>
+<dt id="proxy_user-userid"><b>-proxy_user</b> <i>userid</i></dt>
+<dd>
+
+<p>When used with the <b>-proxy</b> flag, the program will attempt to authenticate with the specified proxy using basic (base64) authentication. NB: Basic authentication is insecure; the credentials are sent to the proxy in easily reversible base64 encoding before any TLS/SSL session is established. Therefore, these credentials are easily recovered by anyone able to sniff/trace the network. Use with caution.</p>
+
+</dd>
+<dt id="proxy_pass-arg"><b>-proxy_pass</b> <i>arg</i></dt>
+<dd>
+
+<p>The proxy password source, used with the <b>-proxy_user</b> flag. For more information about the format of <b>arg</b> see <a href="../man1/openssl-passphrase-options.html">openssl-passphrase-options(1)</a>.</p>
+
+</dd>
+<dt id="unix-path"><b>-unix</b> <i>path</i></dt>
+<dd>
+
+<p>Connect over the specified Unix-domain socket.</p>
+
+</dd>
+<dt id="pod-4"><b>-4</b></dt>
+<dd>
+
+<p>Use IPv4 only.</p>
+
+</dd>
+<dt id="pod-6"><b>-6</b></dt>
+<dd>
+
+<p>Use IPv6 only.</p>
+
+</dd>
+<dt id="quic"><b>-quic</b></dt>
+<dd>
+
+<p>Connect using the QUIC protocol. If specified then the <b>-alpn</b> option must also be provided.</p>
+
+</dd>
+<dt id="servername-name"><b>-servername</b> <i>name</i></dt>
+<dd>
+
+<p>Set the TLS SNI (Server Name Indication) extension in the ClientHello message to the given value. If <b>-servername</b> is not provided, the TLS SNI extension will be populated with the name given to <b>-connect</b> if it follows a DNS name format. If <b>-connect</b> is not provided either, the SNI is set to &quot;localhost&quot;. This is the default since OpenSSL 1.1.1.</p>
+
+<p>Even though SNI should normally be a DNS name and not an IP address, if <b>-servername</b> is provided then that name will be sent, regardless of whether it is a DNS name or not.</p>
+
+<p>This option cannot be used in conjunction with <b>-noservername</b>.</p>
+
+</dd>
+<dt id="noservername"><b>-noservername</b></dt>
+<dd>
+
+<p>Suppresses sending of the SNI (Server Name Indication) extension in the ClientHello message. Cannot be used in conjunction with the <b>-servername</b> or <b>-dane_tlsa_domain</b> options.</p>
+
+</dd>
+<dt id="cert-filename"><b>-cert</b> <i>filename</i></dt>
+<dd>
+
+<p>The client certificate to use, if one is requested by the server. The default is not to use a certificate.</p>
+
+<p>The chain for the client certificate may be specified using <b>-cert_chain</b>.</p>
+
+</dd>
+<dt id="certform-DER-PEM-P12"><b>-certform</b> <b>DER</b>|<b>PEM</b>|<b>P12</b></dt>
+<dd>
+
+<p>The client certificate file format to use; unspecified by default. See <a href="../man1/openssl-format-options.html">openssl-format-options(1)</a> for details.</p>
+
+</dd>
+<dt id="cert_chain"><b>-cert_chain</b></dt>
+<dd>
+
+<p>A file or URI of untrusted certificates to use when attempting to build the certificate chain related to the certificate specified via the <b>-cert</b> option. The input can be in PEM, DER, or PKCS#12 format.</p>
+
+</dd>
+<dt id="build_chain"><b>-build_chain</b></dt>
+<dd>
+
+<p>Specify whether the application should build the client certificate chain to be provided to the server.</p>
+
+</dd>
+<dt id="CRL-filename"><b>-CRL</b> <i>filename</i></dt>
+<dd>
+
+<p>CRL file to use to check the server&#39;s certificate.</p>
+
+</dd>
+<dt id="CRLform-DER-PEM"><b>-CRLform</b> <b>DER</b>|<b>PEM</b></dt>
+<dd>
+
+<p>The CRL file format; unspecified by default. See <a href="../man1/openssl-format-options.html">openssl-format-options(1)</a> for details.</p>
+
+</dd>
+<dt id="crl_download"><b>-crl_download</b></dt>
+<dd>
+
+<p>Download CRL from distribution points in the certificate. Note that this option is ignored if <b>-crl_check</b> option is not provided. Note that the maximum size of CRL is limited by <a href="../man3/X509_CRL_load_http.html">X509_CRL_load_http(3)</a> function.</p>
+
+</dd>
+<dt id="key-filename-uri"><b>-key</b> <i>filename</i>|<i>uri</i></dt>
+<dd>
+
+<p>The client private key to use. If not specified then the certificate file will be used to read also the key.</p>
+
+</dd>
+<dt id="keyform-DER-PEM-P12-ENGINE"><b>-keyform</b> <b>DER</b>|<b>PEM</b>|<b>P12</b>|<b>ENGINE</b></dt>
+<dd>
+
+<p>The key format; unspecified by default. See <a href="../man1/openssl-format-options.html">openssl-format-options(1)</a> for details.</p>
+
+</dd>
+<dt id="pass-arg"><b>-pass</b> <i>arg</i></dt>
+<dd>
+
+<p>the private key and certificate file password source. For more information about the format of <i>arg</i> see <a href="../man1/openssl-passphrase-options.html">openssl-passphrase-options(1)</a>.</p>
+
+</dd>
+<dt id="verify-depth"><b>-verify</b> <i>depth</i></dt>
+<dd>
+
+<p>The verify depth to use. This specifies the maximum length of the server certificate chain and turns on server certificate verification. Unless the <b>-verify_return_error</b> option is given, the verify operation continues after errors so all the problems with a certificate chain can be seen. As a side effect the connection will never fail due to a server certificate verify failure.</p>
+
+<p>By default, validation of server certificates and their chain is done w.r.t. the (D)TLS Server (<code>sslserver</code>) purpose. For details see <a href="../man1/openssl-verification-options.html">&quot;Certificate Extensions&quot; in openssl-verification-options(1)</a>.</p>
+
+</dd>
+<dt id="verify_return_error"><b>-verify_return_error</b></dt>
+<dd>
+
+<p>Turns on server certificate verification, like with <b>-verify</b>, but returns verification errors instead of continuing. This will typically abort the handshake with a fatal error.</p>
+
+</dd>
+<dt id="verify_quiet"><b>-verify_quiet</b></dt>
+<dd>
+
+<p>Limit verify output to only errors.</p>
+
+</dd>
+<dt id="verifyCAfile-filename"><b>-verifyCAfile</b> <i>filename</i></dt>
+<dd>
+
+<p>A file in PEM format containing trusted certificates to use for verifying the server&#39;s certificate.</p>
+
+</dd>
+<dt id="verifyCApath-dir"><b>-verifyCApath</b> <i>dir</i></dt>
+<dd>
+
+<p>A directory containing trusted certificates to use for verifying the server&#39;s certificate. This directory must be in &quot;hash format&quot;, see <a href="../man1/openssl-verify.html">openssl-verify(1)</a> for more information.</p>
+
+</dd>
+<dt id="verifyCAstore-uri"><b>-verifyCAstore</b> <i>uri</i></dt>
+<dd>
+
+<p>The URI of a store containing trusted certificates to use for verifying the server&#39;s certificate.</p>
+
+</dd>
+<dt id="chainCAfile-file"><b>-chainCAfile</b> <i>file</i></dt>
+<dd>
+
+<p>A file in PEM format containing trusted certificates to use when attempting to build the client certificate chain.</p>
+
+</dd>
+<dt id="chainCApath-directory"><b>-chainCApath</b> <i>directory</i></dt>
+<dd>
+
+<p>A directory containing trusted certificates to use for building the client certificate chain provided to the server. This directory must be in &quot;hash format&quot;, see <a href="../man1/openssl-verify.html">openssl-verify(1)</a> for more information.</p>
+
+</dd>
+<dt id="chainCAstore-uri"><b>-chainCAstore</b> <i>uri</i></dt>
+<dd>
+
+<p>The URI of a store containing trusted certificates to use when attempting to build the client certificate chain. The URI may indicate a single certificate, as well as a collection of them. With URIs in the <code>file:</code> scheme, this acts as <b>-chainCAfile</b> or <b>-chainCApath</b>, depending on if the URI indicates a directory or a single file. See <a href="../man7/ossl_store-file.html">ossl_store-file(7)</a> for more information on the <code>file:</code> scheme.</p>
+
+</dd>
+<dt id="requestCAfile-file"><b>-requestCAfile</b> <i>file</i></dt>
+<dd>
+
+<p>A file containing a list of certificates whose subject names will be sent to the server in the <b>certificate_authorities</b> extension. Only supported for TLS 1.3</p>
+
+</dd>
+<dt id="dane_tlsa_domain-domain"><b>-dane_tlsa_domain</b> <i>domain</i></dt>
+<dd>
+
+<p>Enable RFC6698/RFC7671 DANE TLSA authentication and specify the TLSA base domain which becomes the default SNI hint and the primary reference identifier for hostname checks. This must be used in combination with at least one instance of the <b>-dane_tlsa_rrdata</b> option below.</p>
+
+<p>When DANE authentication succeeds, the diagnostic output will include the lowest (closest to 0) depth at which a TLSA record authenticated a chain certificate. When that TLSA record is a &quot;2 1 0&quot; trust anchor public key that signed (rather than matched) the top-most certificate of the chain, the result is reported as &quot;TA public key verified&quot;. Otherwise, either the TLSA record &quot;matched TA certificate&quot; at a positive depth or else &quot;matched EE certificate&quot; at depth 0.</p>
+
+</dd>
+<dt id="dane_tlsa_rrdata-rrdata"><b>-dane_tlsa_rrdata</b> <i>rrdata</i></dt>
+<dd>
+
+<p>Use one or more times to specify the RRDATA fields of the DANE TLSA RRset associated with the target service. The <i>rrdata</i> value is specified in &quot;presentation form&quot;, that is four whitespace separated fields that specify the usage, selector, matching type and associated data, with the last of these encoded in hexadecimal. Optional whitespace is ignored in the associated data field. For example:</p>
+
+<pre><code>$ openssl s_client -brief -starttls smtp \
+  -connect smtp.example.com:25 \
+  -dane_tlsa_domain smtp.example.com \
+  -dane_tlsa_rrdata &quot;2 1 1
+    B111DD8A1C2091A89BD4FD60C57F0716CCE50FEEFF8137CDBEE0326E 02CF362B&quot; \
+  -dane_tlsa_rrdata &quot;2 1 1
+    60B87575447DCBA2A36B7D11AC09FB24A9DB406FEE12D2CC90180517 616E8A18&quot;
+...
+Verification: OK
+Verified peername: smtp.example.com
+DANE TLSA 2 1 1 ...ee12d2cc90180517616e8a18 matched TA certificate at depth 1
+...</code></pre>
+
+</dd>
+<dt id="dane_ee_no_namechecks"><b>-dane_ee_no_namechecks</b></dt>
+<dd>
+
+<p>This disables server name checks when authenticating via DANE-EE(3) TLSA records. For some applications, primarily web browsers, it is not safe to disable name checks due to &quot;unknown key share&quot; attacks, in which a malicious server can convince a client that a connection to a victim server is instead a secure connection to the malicious server. The malicious server may then be able to violate cross-origin scripting restrictions. Thus, despite the text of RFC7671, name checks are by default enabled for DANE-EE(3) TLSA records, and can be disabled in applications where it is safe to do so. In particular, SMTP and XMPP clients should set this option as SRV and MX records already make it possible for a remote domain to redirect client connections to any server of its choice, and in any case SMTP and XMPP clients do not execute scripts downloaded from remote servers.</p>
+
+</dd>
+<dt id="reconnect"><b>-reconnect</b></dt>
+<dd>
+
+<p>Reconnects to the same server 5 times using the same session ID, this can be used as a test that session caching is working.</p>
+
+</dd>
+<dt id="showcerts"><b>-showcerts</b></dt>
+<dd>
+
+<p>Displays the server certificate list as sent by the server: it only consists of certificates the server has sent (in the order the server has sent them). It is <b>not</b> a verified chain.</p>
+
+</dd>
+<dt id="prexit"><b>-prexit</b></dt>
+<dd>
+
+<p>Print session information when the program exits. This will always attempt to print out information even if the connection fails. Normally information will only be printed out once if the connection succeeds. This option is useful because the cipher in use may be renegotiated or the connection may fail because a client certificate is required or is requested only after an attempt is made to access a certain URL. Note: the output produced by this option is not always accurate because a connection might never have been established.</p>
+
+</dd>
+<dt id="no-interactive"><b>-no-interactive</b></dt>
+<dd>
+
+<p>This flag can be used to run the client in a non-interactive mode.</p>
+
+</dd>
+<dt id="state"><b>-state</b></dt>
+<dd>
+
+<p>Prints out the SSL session states.</p>
+
+</dd>
+<dt id="debug"><b>-debug</b></dt>
+<dd>
+
+<p>Print extensive debugging information including a hex dump of all traffic.</p>
+
+</dd>
+<dt id="nocommands"><b>-nocommands</b></dt>
+<dd>
+
+<p>Do not use interactive command letters.</p>
+
+</dd>
+<dt id="adv"><b>-adv</b></dt>
+<dd>
+
+<p>Use advanced command mode.</p>
+
+</dd>
+<dt id="security_debug"><b>-security_debug</b></dt>
+<dd>
+
+<p>Enable security debug messages.</p>
+
+</dd>
+<dt id="security_debug_verbose"><b>-security_debug_verbose</b></dt>
+<dd>
+
+<p>Output more security debug output.</p>
+
+</dd>
+<dt id="msg"><b>-msg</b></dt>
+<dd>
+
+<p>Show protocol messages.</p>
+
+</dd>
+<dt id="timeout"><b>-timeout</b></dt>
+<dd>
+
+<p>Enable send/receive timeout on DTLS connections.</p>
+
+</dd>
+<dt id="mtu-size"><b>-mtu</b> <i>size</i></dt>
+<dd>
+
+<p>Set MTU of the link layer to the specified size.</p>
+
+</dd>
+<dt id="no_ems"><b>-no_ems</b></dt>
+<dd>
+
+<p>Disable Extended master secret negotiation.</p>
+
+</dd>
+<dt id="keymatexport-label"><b>-keymatexport</b> <i>label</i></dt>
+<dd>
+
+<p>Export keying material using the specified label.</p>
+
+</dd>
+<dt id="keymatexportlen-len"><b>-keymatexportlen</b> <i>len</i></dt>
+<dd>
+
+<p>Export the specified number of bytes of keying material; default is 20.</p>
+
+<p>Show all protocol messages with hex dump.</p>
+
+</dd>
+<dt id="trace"><b>-trace</b></dt>
+<dd>
+
+<p>Show verbose trace output of protocol messages.</p>
+
+</dd>
+<dt id="msgfile-filename"><b>-msgfile</b> <i>filename</i></dt>
+<dd>
+
+<p>File to send output of <b>-msg</b> or <b>-trace</b> to, default standard output.</p>
+
+</dd>
+<dt id="nbio_test"><b>-nbio_test</b></dt>
+<dd>
+
+<p>Tests nonblocking I/O</p>
+
+</dd>
+<dt id="nbio"><b>-nbio</b></dt>
+<dd>
+
+<p>Turns on nonblocking I/O</p>
+
+</dd>
+<dt id="crlf"><b>-crlf</b></dt>
+<dd>
+
+<p>This option translated a line feed from the terminal into CR+LF as required by some servers.</p>
+
+</dd>
+<dt id="ign_eof"><b>-ign_eof</b></dt>
+<dd>
+
+<p>Inhibit shutting down the connection when end of file is reached in the input. This implicitly turns on <b>-nocommands</b> as well.</p>
+
+</dd>
+<dt id="quiet"><b>-quiet</b></dt>
+<dd>
+
+<p>Inhibit printing of session and certificate information. This implicitly turns on <b>-ign_eof</b> and <b>-nocommands</b> as well.</p>
+
+</dd>
+<dt id="no_ign_eof"><b>-no_ign_eof</b></dt>
+<dd>
+
+<p>Shut down the connection when end of file is reached in the input. Can be used to override the implicit <b>-ign_eof</b> after <b>-quiet</b>.</p>
+
+</dd>
+<dt id="psk_identity-identity"><b>-psk_identity</b> <i>identity</i></dt>
+<dd>
+
+<p>Use the PSK identity <i>identity</i> when using a PSK cipher suite. The default value is &quot;Client_identity&quot; (without the quotes).</p>
+
+</dd>
+<dt id="psk-key"><b>-psk</b> <i>key</i></dt>
+<dd>
+
+<p>Use the PSK key <i>key</i> when using a PSK cipher suite. The key is given as a hexadecimal number without leading 0x, for example -psk 1a2b3c4d. This option must be provided in order to use a PSK cipher.</p>
+
+</dd>
+<dt id="psk_session-file"><b>-psk_session</b> <i>file</i></dt>
+<dd>
+
+<p>Use the pem encoded SSL_SESSION data stored in <i>file</i> as the basis of a PSK. Note that this will only work if TLSv1.3 is negotiated.</p>
+
+</dd>
+<dt id="sctp"><b>-sctp</b></dt>
+<dd>
+
+<p>Use SCTP for the transport protocol instead of UDP in DTLS. Must be used in conjunction with <b>-dtls</b>, <b>-dtls1</b> or <b>-dtls1_2</b>. This option is only available where OpenSSL has support for SCTP enabled.</p>
+
+</dd>
+<dt id="sctp_label_bug"><b>-sctp_label_bug</b></dt>
+<dd>
+
+<p>Use the incorrect behaviour of older OpenSSL implementations when computing endpoint-pair shared secrets for DTLS/SCTP. This allows communication with older broken implementations but breaks interoperability with correct implementations. Must be used in conjunction with <b>-sctp</b>. This option is only available where OpenSSL has support for SCTP enabled.</p>
+
+</dd>
+<dt id="fallback_scsv"><b>-fallback_scsv</b></dt>
+<dd>
+
+<p>Send TLS_FALLBACK_SCSV in the ClientHello.</p>
+
+</dd>
+<dt id="async"><b>-async</b></dt>
+<dd>
+
+<p>Switch on asynchronous mode. Cryptographic operations will be performed asynchronously. This will only have an effect if an asynchronous capable engine is also used via the <b>-engine</b> option. For test purposes the dummy async engine (dasync) can be used (if available).</p>
+
+</dd>
+<dt id="maxfraglen-len"><b>-maxfraglen</b> <i>len</i></dt>
+<dd>
+
+<p>Enable Maximum Fragment Length Negotiation; allowed values are <code>512</code>, <code>1024</code>, <code>2048</code>, and <code>4096</code>.</p>
+
+</dd>
+<dt id="max_send_frag-int"><b>-max_send_frag</b> <i>int</i></dt>
+<dd>
+
+<p>The maximum size of data fragment to send. See <a href="../man3/SSL_CTX_set_max_send_fragment.html">SSL_CTX_set_max_send_fragment(3)</a> for further information.</p>
+
+</dd>
+<dt id="split_send_frag-int"><b>-split_send_frag</b> <i>int</i></dt>
+<dd>
+
+<p>The size used to split data for encrypt pipelines. If more data is written in one go than this value then it will be split into multiple pipelines, up to the maximum number of pipelines defined by max_pipelines. This only has an effect if a suitable cipher suite has been negotiated, an engine that supports pipelining has been loaded, and max_pipelines is greater than 1. See <a href="../man3/SSL_CTX_set_split_send_fragment.html">SSL_CTX_set_split_send_fragment(3)</a> for further information.</p>
+
+</dd>
+<dt id="max_pipelines-int"><b>-max_pipelines</b> <i>int</i></dt>
+<dd>
+
+<p>The maximum number of encrypt/decrypt pipelines to be used. This will only have an effect if an engine has been loaded that supports pipelining (e.g. the dasync engine) and a suitable cipher suite has been negotiated. The default value is 1. See <a href="../man3/SSL_CTX_set_max_pipelines.html">SSL_CTX_set_max_pipelines(3)</a> for further information.</p>
+
+</dd>
+<dt id="read_buf-int"><b>-read_buf</b> <i>int</i></dt>
+<dd>
+
+<p>The default read buffer size to be used for connections. This will only have an effect if the buffer size is larger than the size that would otherwise be used and pipelining is in use (see <a href="../man3/SSL_CTX_set_default_read_buffer_len.html">SSL_CTX_set_default_read_buffer_len(3)</a> for further information).</p>
+
+</dd>
+<dt id="ignore_unexpected_eof"><b>-ignore_unexpected_eof</b></dt>
+<dd>
+
+<p>Some TLS implementations do not send the mandatory close_notify alert on shutdown. If the application tries to wait for the close_notify alert but the peer closes the connection without sending it, an error is generated. When this option is enabled the peer does not need to send the close_notify alert and a closed connection will be treated as if the close_notify alert was received. For more information on shutting down a connection, see <a href="../man3/SSL_shutdown.html">SSL_shutdown(3)</a>.</p>
+
+</dd>
+<dt id="no_tx_cert_comp"><b>-no_tx_cert_comp</b></dt>
+<dd>
+
+<p>Disables support for sending TLSv1.3 compressed certificates.</p>
+
+</dd>
+<dt id="no_rx_cert_comp"><b>-no_rx_cert_comp</b></dt>
+<dd>
+
+<p>Disables support for receiving TLSv1.3 compressed certificate.</p>
+
+</dd>
+<dt id="brief"><b>-brief</b></dt>
+<dd>
+
+<p>Only provide a brief summary of connection parameters instead of the normal verbose output.</p>
+
+</dd>
+<dt id="starttls-protocol"><b>-starttls</b> <i>protocol</i></dt>
+<dd>
+
+<p>Send the protocol-specific message(s) to switch to TLS for communication. <i>protocol</i> is a keyword for the intended protocol. Currently, the only supported keywords are &quot;smtp&quot;, &quot;pop3&quot;, &quot;imap&quot;, &quot;ftp&quot;, &quot;xmpp&quot;, &quot;xmpp-server&quot;, &quot;irc&quot;, &quot;postgres&quot;, &quot;mysql&quot;, &quot;lmtp&quot;, &quot;nntp&quot;, &quot;sieve&quot; and &quot;ldap&quot;.</p>
+
+</dd>
+<dt id="xmpphost-hostname"><b>-xmpphost</b> <i>hostname</i></dt>
+<dd>
+
+<p>This option, when used with &quot;-starttls xmpp&quot; or &quot;-starttls xmpp-server&quot;, specifies the host for the &quot;to&quot; attribute of the stream element. If this option is not specified, then the host specified with &quot;-connect&quot; will be used.</p>
+
+<p>This option is an alias of the <b>-name</b> option for &quot;xmpp&quot; and &quot;xmpp-server&quot;.</p>
+
+</dd>
+<dt id="name-hostname"><b>-name</b> <i>hostname</i></dt>
+<dd>
+
+<p>This option is used to specify hostname information for various protocols used with <b>-starttls</b> option. Currently only &quot;xmpp&quot;, &quot;xmpp-server&quot;, &quot;smtp&quot; and &quot;lmtp&quot; can utilize this <b>-name</b> option.</p>
+
+<p>If this option is used with &quot;-starttls xmpp&quot; or &quot;-starttls xmpp-server&quot;, if specifies the host for the &quot;to&quot; attribute of the stream element. If this option is not specified, then the host specified with &quot;-connect&quot; will be used.</p>
+
+<p>If this option is used with &quot;-starttls lmtp&quot; or &quot;-starttls smtp&quot;, it specifies the name to use in the &quot;LMTP LHLO&quot; or &quot;SMTP EHLO&quot; message, respectively. If this option is not specified, then &quot;mail.example.com&quot; will be used.</p>
+
+</dd>
+<dt id="tlsextdebug"><b>-tlsextdebug</b></dt>
+<dd>
+
+<p>Print out a hex dump of any TLS extensions received from the server.</p>
+
+</dd>
+<dt id="sess_out-filename"><b>-sess_out</b> <i>filename</i></dt>
+<dd>
+
+<p>Output SSL session to <i>filename</i>.</p>
+
+</dd>
+<dt id="sess_in-filename"><b>-sess_in</b> <i>filename</i></dt>
+<dd>
+
+<p>Load SSL session from <i>filename</i>. The client will attempt to resume a connection from this session.</p>
+
+</dd>
+<dt id="serverinfo-types"><b>-serverinfo</b> <i>types</i></dt>
+<dd>
+
+<p>A list of comma-separated TLS Extension Types (numbers between 0 and 65535). Each type will be sent as an empty ClientHello TLS Extension. The server&#39;s response (if any) will be encoded and displayed as a PEM file.</p>
+
+</dd>
+<dt id="status"><b>-status</b></dt>
+<dd>
+
+<p>Sends a certificate status request to the server (OCSP stapling). The server response (if any) is printed out.</p>
+
+</dd>
+<dt id="ocsp_check_leaf"><b>-ocsp_check_leaf</b></dt>
+<dd>
+
+<p>Require performing server (end-entity) certificate status checking, where any OCSP response provided in the TLS handshake (by so-called &quot;OCSP stapling&quot;) is tried first. If no valid and conclusive OCSP response can be found, CRL-based checking is attempted as fallback if enabled, otherwise the status check fails.</p>
+
+<p>This implies <b>-status</b>.</p>
+
+</dd>
+<dt id="ocsp_check_all"><b>-ocsp_check_all</b></dt>
+<dd>
+
+<p>As the option before, but require performing certificate status checking also for the issuer chain of the server certificate (i.e., intermediate CA certificates, excluding the trust anchor).</p>
+
+<p>This implies the <b>-status</b> and <b>-ocsp_check_leaf</b>.</p>
+
+</dd>
+<dt id="alpn-protocols--nextprotoneg-protocols"><b>-alpn</b> <i>protocols</i>, <b>-nextprotoneg</b> <i>protocols</i></dt>
+<dd>
+
+<p>These flags enable the Enable the Application-Layer Protocol Negotiation or Next Protocol Negotiation (NPN) extension, respectively. ALPN is the IETF standard and replaces NPN. The <i>protocols</i> list is a comma-separated list of protocol names that the client should advertise support for. The list should contain the most desirable protocols first. Protocol names are printable ASCII strings, for example &quot;http/1.1&quot; or &quot;spdy/3&quot;. An empty list of protocols is treated specially and will cause the client to advertise support for the TLS extension but disconnect just after receiving ServerHello with a list of server supported protocols. The flag <b>-nextprotoneg</b> cannot be specified if <b>-tls1_3</b> is used.</p>
+
+</dd>
+<dt id="ct--noct"><b>-ct</b>, <b>-noct</b></dt>
+<dd>
+
+<p>Use one of these two options to control whether Certificate Transparency (CT) is enabled (<b>-ct</b>) or disabled (<b>-noct</b>). If CT is enabled, signed certificate timestamps (SCTs) will be requested from the server and reported at handshake completion.</p>
+
+<p>Enabling CT also enables OCSP stapling, as this is one possible delivery method for SCTs.</p>
+
+</dd>
+<dt id="ctlogfile"><b>-ctlogfile</b></dt>
+<dd>
+
+<p>A file containing a list of known Certificate Transparency logs. See <a href="../man3/SSL_CTX_set_ctlog_list_file.html">SSL_CTX_set_ctlog_list_file(3)</a> for the expected file format.</p>
+
+</dd>
+<dt id="keylogfile-file"><b>-keylogfile</b> <i>file</i></dt>
+<dd>
+
+<p>Appends TLS secrets to the specified keylog file such that external programs (like Wireshark) can decrypt TLS connections.</p>
+
+</dd>
+<dt id="early_data-file"><b>-early_data</b> <i>file</i></dt>
+<dd>
+
+<p>Reads the contents of the specified file and attempts to send it as early data to the server. This will only work with resumed sessions that support early data and when the server accepts the early data.</p>
+
+</dd>
+<dt id="enable_pha"><b>-enable_pha</b></dt>
+<dd>
+
+<p>For TLSv1.3 only, send the Post-Handshake Authentication extension. This will happen whether or not a certificate has been provided via <b>-cert</b>.</p>
+
+</dd>
+<dt id="use_srtp-value"><b>-use_srtp</b> <i>value</i></dt>
+<dd>
+
+<p>Offer SRTP key management, where <b>value</b> is a colon-separated profile list.</p>
+
+</dd>
+<dt id="srpuser-value"><b>-srpuser</b> <i>value</i></dt>
+<dd>
+
+<p>Set the SRP username to the specified value. This option is deprecated.</p>
+
+</dd>
+<dt id="srppass-value"><b>-srppass</b> <i>value</i></dt>
+<dd>
+
+<p>Set the SRP password to the specified value. This option is deprecated.</p>
+
+</dd>
+<dt id="srp_lateuser"><b>-srp_lateuser</b></dt>
+<dd>
+
+<p>SRP username for the second ClientHello message. This option is deprecated.</p>
+
+</dd>
+<dt id="srp_moregroups-This-option-is-deprecated"><b>-srp_moregroups</b> This option is deprecated.</dt>
+<dd>
+
+<p>Tolerate other than the known <b>g</b> and <b>N</b> values.</p>
+
+</dd>
+<dt id="srp_strength-number"><b>-srp_strength</b> <i>number</i></dt>
+<dd>
+
+<p>Set the minimal acceptable length, in bits, for <b>N</b>. This option is deprecated.</p>
+
+</dd>
+<dt id="ktls"><b>-ktls</b></dt>
+<dd>
+
+<p>Enable Kernel TLS for sending and receiving. This option was introduced in OpenSSL 3.2.0. Kernel TLS is off by default as of OpenSSL 3.2.0.</p>
+
+</dd>
+<dt id="tfo"><b>-tfo</b></dt>
+<dd>
+
+<p>Enable creation of connections via TCP fast open (RFC7413).</p>
+
+</dd>
+<dt id="no_ssl3--no_tls1--no_tls1_1--no_tls1_2--no_tls1_3--ssl3--tls1--tls1_1--tls1_2--tls1_3"><b>-no_ssl3</b>, <b>-no_tls1</b>, <b>-no_tls1_1</b>, <b>-no_tls1_2</b>, <b>-no_tls1_3</b>, <b>-ssl3</b>, <b>-tls1</b>, <b>-tls1_1</b>, <b>-tls1_2</b>, <b>-tls1_3</b></dt>
+<dd>
+
+<p>See <a href="../man1/openssl.html">&quot;TLS Version Options&quot; in openssl(1)</a>.</p>
+
+</dd>
+<dt id="dtls--dtls1--dtls1_2"><b>-dtls</b>, <b>-dtls1</b>, <b>-dtls1_2</b></dt>
+<dd>
+
+<p>These specify the use of DTLS instead of TLS. See <a href="../man1/openssl.html">&quot;TLS Version Options&quot; in openssl(1)</a>.</p>
+
+</dd>
+<dt id="nameopt-option"><b>-nameopt</b> <i>option</i></dt>
+<dd>
+
+<p>This specifies how the subject or issuer names are displayed. See <a href="../man1/openssl-namedisplay-options.html">openssl-namedisplay-options(1)</a> for details.</p>
+
+</dd>
+<dt id="xkey-infile--xcert-file--xchain-file--xchain_build-file--xcertform-DER-PEM--xkeyform-DER-PEM"><b>-xkey</b> <i>infile</i>, <b>-xcert</b> <i>file</i>, <b>-xchain</b> <i>file</i>, <b>-xchain_build</b> <i>file</i>, <b>-xcertform</b> <b>DER</b>|<b>PEM</b>, <b>-xkeyform</b> <b>DER</b>|<b>PEM</b></dt>
+<dd>
+
+<p>Set extended certificate verification options. See <a href="../man1/openssl-verification-options.html">&quot;Extended Verification Options&quot; in openssl-verification-options(1)</a> for details.</p>
+
+</dd>
+<dt id="CAfile-file--no-CAfile--CApath-dir--no-CApath--CAstore-uri--no-CAstore"><b>-CAfile</b> <i>file</i>, <b>-no-CAfile</b>, <b>-CApath</b> <i>dir</i>, <b>-no-CApath</b>, <b>-CAstore</b> <i>uri</i>, <b>-no-CAstore</b></dt>
+<dd>
+
+<p>See <a href="../man1/openssl-verification-options.html">&quot;Trusted Certificate Options&quot; in openssl-verification-options(1)</a> for details.</p>
+
+</dd>
+<dt id="bugs--comp--no_comp--no_ticket--serverpref--client_renegotiation--legacy_renegotiation--no_renegotiation--no_resumption_on_reneg--legacy_server_connect--no_legacy_server_connect--no_etm--allow_no_dhe_kex--prefer_no_dhe_kex--prioritize_chacha--strict--sigalgs-algs--client_sigalgs-algs--groups-groups--curves-curves--named_curve-curve--cipher-ciphers--ciphersuites-1.3ciphers--min_protocol-minprot--max_protocol-maxprot--record_padding-padding--debug_broken_protocol--no_middlebox"><b>-bugs</b>, <b>-comp</b>, <b>-no_comp</b>, <b>-no_ticket</b>, <b>-serverpref</b>, <b>-client_renegotiation</b>, <b>-legacy_renegotiation</b>, <b>-no_renegotiation</b>, <b>-no_resumption_on_reneg</b>, <b>-legacy_server_connect</b>, <b>-no_legacy_server_connect</b>, <b>-no_etm</b> <b>-allow_no_dhe_kex</b>, <b>-prefer_no_dhe_kex</b>, <b>-prioritize_chacha</b>, <b>-strict</b>, <b>-sigalgs</b> <i>algs</i>, <b>-client_sigalgs</b> <i>algs</i>, <b>-groups</b> <i>groups</i>, <b>-curves</b> <i>curves</i>, <b>-named_curve</b> <i>curve</i>, <b>-cipher</b> <i>ciphers</i>, <b>-ciphersuites</b> <i>1.3ciphers</i>, <b>-min_protocol</b> <i>minprot</i>, <b>-max_protocol</b> <i>maxprot</i>, <b>-record_padding</b> <i>padding</i>, <b>-debug_broken_protocol</b>, <b>-no_middlebox</b></dt>
+<dd>
+
+<p>See <a href="../man3/SSL_CONF_cmd.html">&quot;SUPPORTED COMMAND LINE COMMANDS&quot; in SSL_CONF_cmd(3)</a> for details.</p>
+
+</dd>
+<dt id="rand-files--writerand-file"><b>-rand</b> <i>files</i>, <b>-writerand</b> <i>file</i></dt>
+<dd>
+
+<p>See <a href="../man1/openssl.html">&quot;Random State Options&quot; in openssl(1)</a> for details.</p>
+
+</dd>
+<dt id="provider-name"><b>-provider</b> <i>name</i></dt>
+<dd>
+
+</dd>
+<dt id="provider-path-path"><b>-provider-path</b> <i>path</i></dt>
+<dd>
+
+</dd>
+<dt id="provparam-name:-key-value"><b>-provparam</b> <i>[name:]key=value</i></dt>
+<dd>
+
+</dd>
+<dt id="propquery-propq"><b>-propquery</b> <i>propq</i></dt>
+<dd>
+
+<p>See <a href="../man1/openssl.html">&quot;Provider Options&quot; in openssl(1)</a>, <a href="../man7/provider.html">provider(7)</a>, and <a href="../man7/property.html">property(7)</a>.</p>
+
+</dd>
+<dt id="engine-id"><b>-engine</b> <i>id</i></dt>
+<dd>
+
+<p>See <a href="../man1/openssl.html">&quot;Engine Options&quot; in openssl(1)</a>. This option is deprecated.</p>
+
+</dd>
+<dt id="ssl_client_engine-id"><b>-ssl_client_engine</b> <i>id</i></dt>
+<dd>
+
+<p>Specify engine to be used for client certificate operations.</p>
+
+</dd>
+<dt id="allow_proxy_certs--attime--no_check_time--check_ss_sig--crl_check--crl_check_all--explicit_policy--extended_crl--ignore_critical--inhibit_any--inhibit_map--no_alt_chains--partial_chain--policy--policy_check--policy_print--purpose--suiteB_128--suiteB_128_only--suiteB_192--trusted_first--use_deltas--auth_level--verify_depth--verify_email--verify_hostname--verify_ip--verify_name--x509_strict--issuer_checks"><b>-allow_proxy_certs</b>, <b>-attime</b>, <b>-no_check_time</b>, <b>-check_ss_sig</b>, <b>-crl_check</b>, <b>-crl_check_all</b>, <b>-explicit_policy</b>, <b>-extended_crl</b>, <b>-ignore_critical</b>, <b>-inhibit_any</b>, <b>-inhibit_map</b>, <b>-no_alt_chains</b>, <b>-partial_chain</b>, <b>-policy</b>, <b>-policy_check</b>, <b>-policy_print</b>, <b>-purpose</b>, <b>-suiteB_128</b>, <b>-suiteB_128_only</b>, <b>-suiteB_192</b>, <b>-trusted_first</b>, <b>-use_deltas</b>, <b>-auth_level</b>, <b>-verify_depth</b>, <b>-verify_email</b>, <b>-verify_hostname</b>, <b>-verify_ip</b>, <b>-verify_name</b>, <b>-x509_strict</b> <b>-issuer_checks</b></dt>
+<dd>
+
+<p>Set various options of certificate chain verification. See <a href="../man1/openssl-verification-options.html">&quot;Verification Options&quot; in openssl-verification-options(1)</a> for details.</p>
+
+<p>Verification errors are displayed, for debugging, but the command will proceed unless the <b>-verify_return_error</b> option is used.</p>
+
+</dd>
+<dt id="enable_server_rpk"><b>-enable_server_rpk</b></dt>
+<dd>
+
+<p>Enable support for receiving raw public keys (RFC7250) from the server. Use of X.509 certificates by the server becomes optional, and servers that support raw public keys may elect to use them. Servers that don&#39;t support raw public keys or prefer to use X.509 certificates can still elect to send X.509 certificates as usual.</p>
+
+</dd>
+<dt id="enable_client_rpk"><b>-enable_client_rpk</b></dt>
+<dd>
+
+<p>Enable support for sending raw public keys (RFC7250) to the server. A raw public key will be sent by the client, if solicited by the server, provided a suitable key and public certificate pair is configured. Some servers may nevertheless not request any client credentials, or may request a certificate.</p>
+
+</dd>
+<dt id="host:port"><i>host</i>:<i>port</i></dt>
+<dd>
+
+<p>Rather than providing <b>-connect</b>, the target host and optional port may be provided as a single positional argument after all options. If neither this nor <b>-connect</b> are provided, falls back to attempting to connect to <i>localhost</i> on port <i>4433</i>. If the host string is an IPv6 address, it must be enclosed in <code>[</code> and <code>]</code>.</p>
+
+</dd>
+</dl>
+
+<h1 id="CONNECTED-COMMANDS-BASIC">CONNECTED COMMANDS (BASIC)</h1>
+
+<p>If a connection is established with an SSL/TLS server then any data received from the server is displayed and any key presses will be sent to the server. If end of file is reached then the connection will be closed down.</p>
+
+<p>When used interactively (which means neither <b>-quiet</b> nor <b>-ign_eof</b> have been given), and neither of <b>-adv</b> or <b>-nocommands</b> are given then &quot;Basic&quot; command mode is entered. In this mode certain commands are recognized which perform special operations. These commands are a letter which must appear at the start of a line. All further data after the initial letter on the line is ignored. The commands are listed below.</p>
+
+<dl>
+
+<dt id="Q"><b>Q</b></dt>
+<dd>
+
+<p>End the current SSL connection and exit.</p>
+
+</dd>
+<dt id="R"><b>R</b></dt>
+<dd>
+
+<p>Renegotiate the SSL session (TLSv1.2 and below only).</p>
+
+</dd>
+<dt id="C"><b>C</b></dt>
+<dd>
+
+<p>Attempt to reconnect to the server using a resumption handshake.</p>
+
+</dd>
+<dt id="k"><b>k</b></dt>
+<dd>
+
+<p>Send a key update message to the server (TLSv1.3 only)</p>
+
+</dd>
+<dt id="K"><b>K</b></dt>
+<dd>
+
+<p>Send a key update message to the server and request one back (TLSv1.3 only)</p>
+
+</dd>
+</dl>
+
+<h1 id="CONNECTED-COMMANDS-ADVANCED">CONNECTED COMMANDS (ADVANCED)</h1>
+
+<p>If <b>-adv</b> has been given then &quot;advanced&quot; command mode is entered. As with basic mode, if a connection is established with an SSL/TLS server then any data received from the server is displayed and any key presses will be sent to the server. If end of file is reached then the connection will be closed down.</p>
+
+<p>Special commands can be supplied by enclosing them in braces, e.g. &quot;{help}&quot; or &quot;{quit}&quot;. These commands can appear anywhere in the text entered into s_client, but they are not sent to the server. Some commands can take an argument by ending the command name with &quot;:&quot; and then providing the argument, e.g. &quot;{keyup:req}&quot;. Some commands are only available when certain protocol versions have been negotiated.</p>
+
+<p>If a newline appears at the end of a line entered into s_client then this is also sent to the server. If a command appears on a line on its own with no other text on the same line, then the newline is suppressed and not sent to the server.</p>
+
+<p>The following commands are recognised.</p>
+
+<dl>
+
+<dt id="help1"><b>help</b></dt>
+<dd>
+
+<p>Prints out summary help text about the available commands.</p>
+
+</dd>
+<dt id="quit"><b>quit</b></dt>
+<dd>
+
+<p>Close the connection to the peer</p>
+
+</dd>
+<dt id="reconnect1"><b>reconnect</b></dt>
+<dd>
+
+<p>Reconnect to the peer and attempt a resumption handshake</p>
+
+</dd>
+<dt id="keyup"><b>keyup</b></dt>
+<dd>
+
+<p>Send a Key Update message. TLSv1.3 only. This command takes an optional argument. If the argument &quot;req&quot; is supplied then the peer is also requested to update its keys. Otherwise if &quot;noreq&quot; is supplied the peer is not requested to update its keys. The default is &quot;req&quot;.</p>
+
+</dd>
+<dt id="reneg"><b>reneg</b></dt>
+<dd>
+
+<p>Initiate a renegotiation with the server. (D)TLSv1.2 or below only.</p>
+
+</dd>
+<dt id="fin"><b>fin</b></dt>
+<dd>
+
+<p>Indicate FIN on the current stream. QUIC only. Once FIN has been sent any further text entered for this stream is ignored.</p>
+
+</dd>
+</dl>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>This command can be used to debug SSL servers. To connect to an SSL HTTP server the command:</p>
+
+<pre><code>openssl s_client -connect servername:443</code></pre>
+
+<p>would typically be used (https uses port 443). If the connection succeeds then an HTTP command can be given such as &quot;GET /&quot; to retrieve a web page.</p>
+
+<p>If the handshake fails then there are several possible causes, if it is nothing obvious like no client certificate then the <b>-bugs</b>, <b>-ssl3</b>, <b>-tls1</b>, <b>-no_ssl3</b>, <b>-no_tls1</b> options can be tried in case it is a buggy server. In particular you should play with these options <b>before</b> submitting a bug report to an OpenSSL mailing list.</p>
+
+<p>A frequent problem when attempting to get client certificates working is that a web client complains it has no certificates or gives an empty list to choose from. This is normally because the server is not sending the clients certificate authority in its &quot;acceptable CA list&quot; when it requests a certificate. By using this command, the CA list can be viewed and checked. However, some servers only request client authentication after a specific URL is requested. To obtain the list in this case it is necessary to use the <b>-prexit</b> option and send an HTTP request for an appropriate page.</p>
+
+<p>If a certificate is specified on the command line using the <b>-cert</b> option it will not be used unless the server specifically requests a client certificate. Therefore, merely including a client certificate on the command line is no guarantee that the certificate works.</p>
+
+<p>If there are problems verifying a server certificate then the <b>-showcerts</b> option can be used to show all the certificates sent by the server.</p>
+
+<p>This command is a test tool and is designed to continue the handshake after any certificate verification errors. As a result it will accept any certificate chain (trusted or not) sent by the peer. Non-test applications should <b>not</b> do this as it makes them vulnerable to a MITM attack. This behaviour can be changed by with the <b>-verify_return_error</b> option: any verify errors are then returned aborting the handshake.</p>
+
+<p>The <b>-bind</b> option may be useful if the server or a firewall requires connections to come from some particular address and or port.</p>
+
+<h2 id="Note-on-Non-Interactive-Use">Note on Non-Interactive Use</h2>
+
+<p>When <b>s_client</b> is run in a non-interactive environment (e.g., a cron job or a script without a valid <i>stdin</i>), it may close the connection prematurely, especially with TLS 1.3. To prevent this, you can use the <b>-ign_eof</b> flag, which keeps <b>s_client</b> running even after reaching EOF from <i>stdin</i>.</p>
+
+<p>For example:</p>
+
+<pre><code>openssl s_client -connect &lt;server address&gt;:443 -tls1_3
+                 -sess_out /path/to/tls_session_params_file
+                 -ign_eof &lt;/dev/null</code></pre>
+
+<p>However, relying solely on <b>-ign_eof</b> can lead to issues if the server keeps the connection open, expecting the client to close first. In such cases, the client may hang indefinitely. This behavior is not uncommon, particularly with protocols where the server waits for a graceful disconnect from the client.</p>
+
+<p>For example, when connecting to an SMTP server, the session may pause if the server expects a QUIT command before closing:</p>
+
+<pre><code>$ openssl s_client -brief -ign_eof -starttls smtp
+                   -connect &lt;server address&gt;:25 &lt;/dev/null
+CONNECTION ESTABLISHED
+Protocol version: TLSv1.3
+Ciphersuite: TLS_AES_256_GCM_SHA384
+...
+250 CHUNKING
+[long pause]</code></pre>
+
+<p>To avoid such hangs, it&#39;s better to use an application-level command to initiate a clean disconnect. For SMTP, you can send a QUIT command:</p>
+
+<pre><code>printf &#39;QUIT\r\n&#39; | openssl s_client -connect &lt;server address&gt;:25
+                                     -starttls smtp -brief -ign_eof</code></pre>
+
+<p>Similarly, for HTTP/1.1 connections, including a `Connection: close` header ensures the server closes the connection after responding:</p>
+
+<pre><code>printf &#39;GET / HTTP/1.1\r\nHost: &lt;server address&gt;\r\nConnection: close\r\n\r\n&#39;
+    | openssl s_client -connect &lt;server address&gt;:443 -brief</code></pre>
+
+<p>These approaches help manage the connection closure gracefully and prevent hangs caused by the server waiting for the client to initiate the disconnect.</p>
+
+<h1 id="BUGS">BUGS</h1>
+
+<p>Because this program has a lot of options and also because some of the techniques used are rather old, the C source for this command is rather hard to read and not a model of how things should be done. A typical SSL client program would be much simpler.</p>
+
+<p>The <b>-prexit</b> option is a bit of a hack. We should really report information whenever a session is renegotiated.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man1/openssl.html">openssl(1)</a>, <a href="../man1/openssl-sess_id.html">openssl-sess_id(1)</a>, <a href="../man1/openssl-s_server.html">openssl-s_server(1)</a>, <a href="../man1/openssl-ciphers.html">openssl-ciphers(1)</a>, <a href="../man3/SSL_CONF_cmd.html">SSL_CONF_cmd(3)</a>, <a href="../man3/SSL_CTX_set_max_send_fragment.html">SSL_CTX_set_max_send_fragment(3)</a>, <a href="../man3/SSL_CTX_set_split_send_fragment.html">SSL_CTX_set_split_send_fragment(3)</a>, <a href="../man3/SSL_CTX_set_max_pipelines.html">SSL_CTX_set_max_pipelines(3)</a>, <a href="../man7/ossl_store-file.html">ossl_store-file(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The <b>-no_alt_chains</b> option was added in OpenSSL 1.1.0. The <b>-name</b> option was added in OpenSSL 1.1.1.</p>
+
+<p>The <b>-certform</b> option has become obsolete in OpenSSL 3.0.0 and has no effect.</p>
+
+<p>The <b>-engine</b> option was deprecated in OpenSSL 3.0.</p>
+
+<p>The <b>-enable_client_rpk</b>, <b>-enable_server_rpk</b>, <b>-no_rx_cert_comp</b>, <b>-no_tx_cert_comp</b>, and <b>-tfo</b> options were added in OpenSSL 3.2.</p>
+
+<p>The &lt;-ocsp_check_leaf&gt; and <b>-ocsp_check_all</b> options were added in OpenSSL 3.6.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

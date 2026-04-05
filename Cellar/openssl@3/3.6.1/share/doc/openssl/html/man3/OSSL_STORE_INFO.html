@@ -1,0 +1,187 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OSSL_STORE_INFO</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Types">Types</a></li>
+      <li><a href="#Functions">Functions</a></li>
+    </ul>
+  </li>
+  <li><a href="#SUPPORTED-OBJECTS">SUPPORTED OBJECTS</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OSSL_STORE_INFO, OSSL_STORE_INFO_get_type, OSSL_STORE_INFO_get0_NAME, OSSL_STORE_INFO_get0_NAME_description, OSSL_STORE_INFO_get0_PARAMS, OSSL_STORE_INFO_get0_PUBKEY, OSSL_STORE_INFO_get0_PKEY, OSSL_STORE_INFO_get0_CERT, OSSL_STORE_INFO_get0_CRL, OSSL_STORE_INFO_get1_NAME, OSSL_STORE_INFO_get1_NAME_description, OSSL_STORE_INFO_get1_PARAMS, OSSL_STORE_INFO_get1_PUBKEY, OSSL_STORE_INFO_get1_PKEY, OSSL_STORE_INFO_get1_CERT, OSSL_STORE_INFO_get1_CRL, OSSL_STORE_INFO_type_string, OSSL_STORE_INFO_free, OSSL_STORE_INFO_new_NAME, OSSL_STORE_INFO_set0_NAME_description, OSSL_STORE_INFO_new_PARAMS, OSSL_STORE_INFO_new_PUBKEY, OSSL_STORE_INFO_new_PKEY, OSSL_STORE_INFO_new_CERT, OSSL_STORE_INFO_new_CRL, OSSL_STORE_INFO_new, OSSL_STORE_INFO_get0_data - Functions to manipulate OSSL_STORE_INFO objects</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/store.h&gt;
+
+typedef struct ossl_store_info_st OSSL_STORE_INFO;
+
+int OSSL_STORE_INFO_get_type(const OSSL_STORE_INFO *store_info);
+const char *OSSL_STORE_INFO_get0_NAME(const OSSL_STORE_INFO *store_info);
+char *OSSL_STORE_INFO_get1_NAME(const OSSL_STORE_INFO *store_info);
+const char *OSSL_STORE_INFO_get0_NAME_description(const OSSL_STORE_INFO
+                                                  *store_info);
+char *OSSL_STORE_INFO_get1_NAME_description(const OSSL_STORE_INFO *store_info);
+EVP_PKEY *OSSL_STORE_INFO_get0_PARAMS(const OSSL_STORE_INFO *store_info);
+EVP_PKEY *OSSL_STORE_INFO_get1_PARAMS(const OSSL_STORE_INFO *store_info);
+EVP_PKEY *OSSL_STORE_INFO_get0_PUBKEY(const OSSL_STORE_INFO *info);
+EVP_PKEY *OSSL_STORE_INFO_get1_PUBKEY(const OSSL_STORE_INFO *info);
+EVP_PKEY *OSSL_STORE_INFO_get0_PKEY(const OSSL_STORE_INFO *store_info);
+EVP_PKEY *OSSL_STORE_INFO_get1_PKEY(const OSSL_STORE_INFO *store_info);
+X509 *OSSL_STORE_INFO_get0_CERT(const OSSL_STORE_INFO *store_info);
+X509 *OSSL_STORE_INFO_get1_CERT(const OSSL_STORE_INFO *store_info);
+X509_CRL *OSSL_STORE_INFO_get0_CRL(const OSSL_STORE_INFO *store_info);
+X509_CRL *OSSL_STORE_INFO_get1_CRL(const OSSL_STORE_INFO *store_info);
+
+const char *OSSL_STORE_INFO_type_string(int type);
+
+void OSSL_STORE_INFO_free(OSSL_STORE_INFO *store_info);
+
+OSSL_STORE_INFO *OSSL_STORE_INFO_new_NAME(char *name);
+int OSSL_STORE_INFO_set0_NAME_description(OSSL_STORE_INFO *info, char *desc);
+OSSL_STORE_INFO *OSSL_STORE_INFO_new_PARAMS(DSA *dsa_params);
+OSSL_STORE_INFO *OSSL_STORE_INFO_new_PUBKEY(EVP_PKEY *pubkey);
+OSSL_STORE_INFO *OSSL_STORE_INFO_new_PKEY(EVP_PKEY *pkey);
+OSSL_STORE_INFO *OSSL_STORE_INFO_new_CERT(X509 *x509);
+OSSL_STORE_INFO *OSSL_STORE_INFO_new_CRL(X509_CRL *crl);
+
+OSSL_STORE_INFO *OSSL_STORE_INFO_new(int type, void *data);
+void *OSSL_STORE_INFO_get0_data(int type, const OSSL_STORE_INFO *info);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>These functions are primarily useful for applications to retrieve supported objects from <b>OSSL_STORE_INFO</b> objects and for scheme specific loaders to create <b>OSSL_STORE_INFO</b> holders.</p>
+
+<h2 id="Types">Types</h2>
+
+<p><b>OSSL_STORE_INFO</b> is an opaque type that&#39;s just an intermediary holder for the objects that have been retrieved by OSSL_STORE_load() and similar functions. Supported OpenSSL type object can be extracted using one of STORE_INFO_get0_&lt;TYPE&gt;() where &lt;TYPE&gt; can be NAME, PARAMS, PKEY, CERT, or CRL. The life time of this extracted object is as long as the life time of the <b>OSSL_STORE_INFO</b> it was extracted from, so care should be taken not to free the latter too early. As an alternative, STORE_INFO_get1_&lt;TYPE&gt;() extracts a duplicate (or the same object with its reference count increased), which can be used after the containing <b>OSSL_STORE_INFO</b> has been freed. The object returned by STORE_INFO_get1_&lt;TYPE&gt;() must be freed separately by the caller. See <a href="#SUPPORTED-OBJECTS">&quot;SUPPORTED OBJECTS&quot;</a> for more information on the types that are supported.</p>
+
+<h2 id="Functions">Functions</h2>
+
+<p>OSSL_STORE_INFO_get_type() takes a <b>OSSL_STORE_INFO</b> and returns the STORE type number for the object inside.</p>
+
+<p>STORE_INFO_get_type_string() takes a STORE type number and returns a short string describing it.</p>
+
+<p>OSSL_STORE_INFO_get0_NAME(), OSSL_STORE_INFO_get0_NAME_description(), OSSL_STORE_INFO_get0_PARAMS(), OSSL_STORE_INFO_get0_PUBKEY(), OSSL_STORE_INFO_get0_PKEY(), OSSL_STORE_INFO_get0_CERT(), OSSL_STORE_INFO_get0_CRL() all take a <b>OSSL_STORE_INFO</b> and return the object it holds if the <b>OSSL_STORE_INFO</b> type (as returned by OSSL_STORE_INFO_get_type()) matches the function, otherwise NULL.</p>
+
+<p>OSSL_STORE_INFO_get1_NAME(), OSSL_STORE_INFO_get1_NAME_description(), OSSL_STORE_INFO_get1_PARAMS(), OSSL_STORE_INFO_get1_PUBKEY(), OSSL_STORE_INFO_get1_PKEY(), OSSL_STORE_INFO_get1_CERT() and OSSL_STORE_INFO_get1_CRL() all take a <b>OSSL_STORE_INFO</b> and return a duplicate the object it holds if the <b>OSSL_STORE_INFO</b> type (as returned by OSSL_STORE_INFO_get_type()) matches the function, otherwise NULL.</p>
+
+<p>OSSL_STORE_INFO_free() frees a <b>OSSL_STORE_INFO</b> and its contained type. If the argument is NULL, nothing is done.</p>
+
+<p>OSSL_STORE_INFO_new_NAME() , OSSL_STORE_INFO_new_PARAMS(), , OSSL_STORE_INFO_new_PUBKEY(), OSSL_STORE_INFO_new_PKEY(), OSSL_STORE_INFO_new_CERT() and OSSL_STORE_INFO_new_CRL() create a <b>OSSL_STORE_INFO</b> object to hold the given input object. On success the input object is consumed.</p>
+
+<p>Additionally, for <b>OSSL_STORE_INFO_NAME</b> objects, OSSL_STORE_INFO_set0_NAME_description() can be used to add an extra description. This description is meant to be human readable and should be used for information printout.</p>
+
+<p>OSSL_STORE_INFO_new() creates a <b>OSSL_STORE_INFO</b> with an arbitrary <i>type</i> number and <i>data</i> structure. It&#39;s the responsibility of the caller to define type numbers other than the ones defined by <i>&lt;openssl/store.h&gt;</i>, and to handle freeing the associated data structure on their own. <i>Using type numbers that are defined by <i>&lt;openssl/store.h&gt;</i> may cause undefined behaviours, including crashes</i>.</p>
+
+<p>OSSL_STORE_INFO_get0_data() returns the data pointer that was passed to OSSL_STORE_INFO_new() if <i>type</i> matches the type number in <i>info</i>.</p>
+
+<p>OSSL_STORE_INFO_new() and OSSL_STORE_INFO_get0_data() may be useful for applications that define their own STORE data, but must be used with care.</p>
+
+<h1 id="SUPPORTED-OBJECTS">SUPPORTED OBJECTS</h1>
+
+<p>Currently supported object types are:</p>
+
+<dl>
+
+<dt id="OSSL_STORE_INFO_NAME">OSSL_STORE_INFO_NAME</dt>
+<dd>
+
+<p>A name is exactly that, a name. It&#39;s like a name in a directory, but formatted as a complete URI. For example, the path in URI <code>file:/foo/bar/</code> could include a file named <code>cookie.pem</code>, and in that case, the returned <b>OSSL_STORE_INFO_NAME</b> object would have the URI <code>file:/foo/bar/cookie.pem</code>, which can be used by the application to get the objects in that file. This can be applied to all schemes that can somehow support a listing of object URIs.</p>
+
+<p>For <code>file:</code> URIs that are used without the explicit scheme, the returned name will be the path of each object, so if <code>/foo/bar</code> was given and that path has the file <code>cookie.pem</code>, the name <code>/foo/bar/cookie.pem</code> will be returned.</p>
+
+<p>The returned URI is considered canonical and must be unique and permanent for the storage where the object (or collection of objects) resides. Each loader is responsible for ensuring that it only returns canonical URIs. However, it&#39;s possible that certain schemes allow an object (or collection thereof) to be reached with alternative URIs; just because one URI is canonical doesn&#39;t mean that other variants can&#39;t be used.</p>
+
+<p>At the discretion of the loader that was used to get these names, an extra description may be attached as well.</p>
+
+</dd>
+<dt id="OSSL_STORE_INFO_PARAMS">OSSL_STORE_INFO_PARAMS</dt>
+<dd>
+
+<p>Key parameters.</p>
+
+</dd>
+<dt id="OSSL_STORE_INFO_PKEY">OSSL_STORE_INFO_PKEY</dt>
+<dd>
+
+<p>A keypair or just a private key (possibly with key parameters).</p>
+
+</dd>
+<dt id="OSSL_STORE_INFO_PUBKEY">OSSL_STORE_INFO_PUBKEY</dt>
+<dd>
+
+<p>A public key (possibly with key parameters).</p>
+
+</dd>
+<dt id="OSSL_STORE_INFO_CERT">OSSL_STORE_INFO_CERT</dt>
+<dd>
+
+<p>An X.509 certificate.</p>
+
+</dd>
+<dt id="OSSL_STORE_INFO_CRL">OSSL_STORE_INFO_CRL</dt>
+<dd>
+
+<p>A X.509 certificate revocation list.</p>
+
+</dd>
+</dl>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>OSSL_STORE_INFO_get_type() returns the STORE type number of the given <b>OSSL_STORE_INFO</b>. There is no error value.</p>
+
+<p>OSSL_STORE_INFO_get0_NAME(), OSSL_STORE_INFO_get0_NAME_description(), OSSL_STORE_INFO_get0_PARAMS(), OSSL_STORE_INFO_get0_PKEY(), OSSL_STORE_INFO_get0_CERT() and OSSL_STORE_INFO_get0_CRL() all return a pointer to the OpenSSL object on success, NULL otherwise.</p>
+
+<p>OSSL_STORE_INFO_get1_NAME(), OSSL_STORE_INFO_get1_NAME_description(), OSSL_STORE_INFO_get1_PARAMS(), OSSL_STORE_INFO_get1_PKEY(), OSSL_STORE_INFO_get1_CERT() and OSSL_STORE_INFO_get1_CRL() all return a pointer to a duplicate of the OpenSSL object on success, NULL otherwise.</p>
+
+<p>OSSL_STORE_INFO_type_string() returns a string on success, or NULL on failure.</p>
+
+<p>OSSL_STORE_INFO_new_NAME(), OSSL_STORE_INFO_new_PARAMS(), OSSL_STORE_INFO_new_PKEY(), OSSL_STORE_INFO_new_CERT() and OSSL_STORE_INFO_new_CRL() return a <b>OSSL_STORE_INFO</b> pointer on success, or NULL on failure.</p>
+
+<p>OSSL_STORE_INFO_set0_NAME_description() returns 1 on success, or 0 on failure.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ossl_store.html">ossl_store(7)</a>, <a href="../man3/OSSL_STORE_open.html">OSSL_STORE_open(3)</a>, <a href="../man3/OSSL_STORE_register_loader.html">OSSL_STORE_register_loader(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The OSSL_STORE API was added in OpenSSL 1.1.1.</p>
+
+<p>The OSSL_STORE_INFO_PUBKEY object type was added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2016-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

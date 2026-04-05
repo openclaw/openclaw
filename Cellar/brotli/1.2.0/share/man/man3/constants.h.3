@@ -1,0 +1,47 @@
+.TH "constants.h" 3 "August 2021" "Brotli" \" -*- nroff -*-
+.ad l
+.nh
+.SH NAME
+constants.h \- Common constants used in decoder and encoder API\&.  
+
+.SH SYNOPSIS
+.br
+.PP
+.SS "Macros"
+
+.in +1c
+.ti -1c
+.RI "#define \fBBROTLI_LARGE_MAX_DISTANCE_BITS\fP   62U"
+.br
+.RI "\fIThe theoretical maximum number of distance bits specified for large window brotli, for 64-bit encoders and decoders\&. \fP"
+.ti -1c
+.RI "#define \fBBROTLI_LARGE_MAX_WBITS\fP   30"
+.br
+.RI "\fIThe maximum supported large brotli window bits by the encoder and decoder\&. \fP"
+.ti -1c
+.RI "#define \fBBROTLI_MAX_NPOSTFIX\fP   3"
+.br
+.RI "\fIMaximal number of 'postfix' bits\&. \fP"
+.in -1c
+.SH "Detailed Description"
+.PP 
+Common constants used in decoder and encoder API\&. 
+
+
+.SH "Macro Definition Documentation"
+.PP 
+.SS "#define BROTLI_LARGE_MAX_DISTANCE_BITS   62U"
+
+.PP
+The theoretical maximum number of distance bits specified for large window brotli, for 64-bit encoders and decoders\&. Even when in practice 32-bit encoders and decoders only support up to 30 max distance bits, the value is set to 62 because it affects the large window brotli file format\&. Specifically, it affects the encoding of simple huffman tree for distances, see Specification RFC 7932 chapter 3\&.4\&. 
+.SS "#define BROTLI_LARGE_MAX_WBITS   30"
+
+.PP
+The maximum supported large brotli window bits by the encoder and decoder\&. Large window brotli allows up to 62 bits, however the current encoder and decoder, designed for 32-bit integers, only support up to 30 bits maximum\&. 
+.SS "#define BROTLI_MAX_NPOSTFIX   3"
+
+.PP
+Maximal number of 'postfix' bits\&. Number of 'postfix' bits is stored as 2 bits in meta-block header\&. 
+.SH "Author"
+.PP 
+Generated automatically by Doxygen for Brotli from the source code\&.

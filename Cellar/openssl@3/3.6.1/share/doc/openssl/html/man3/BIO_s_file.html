@@ -1,0 +1,159 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>BIO_s_file</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#BUGS">BUGS</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>BIO_s_file, BIO_new_file, BIO_new_fp, BIO_set_fp, BIO_get_fp, BIO_read_filename, BIO_write_filename, BIO_append_filename, BIO_rw_filename - FILE bio</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/bio.h&gt;
+
+const BIO_METHOD *BIO_s_file(void);
+BIO *BIO_new_file(const char *filename, const char *mode);
+BIO *BIO_new_fp(FILE *stream, int flags);
+
+BIO_set_fp(BIO *b, FILE *fp, int flags);
+BIO_get_fp(BIO *b, FILE **fpp);
+
+int BIO_read_filename(BIO *b, char *name);
+int BIO_write_filename(BIO *b, char *name);
+int BIO_append_filename(BIO *b, char *name);
+int BIO_rw_filename(BIO *b, char *name);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>BIO_s_file() returns the BIO file method. As its name implies it is a wrapper round the stdio FILE structure and it is a source/sink BIO.</p>
+
+<p>Calls to BIO_read_ex() and BIO_write_ex() read and write data to the underlying stream. BIO_gets() and BIO_puts() are supported on file BIOs.</p>
+
+<p>BIO_flush() on a file BIO calls the fflush() function on the wrapped stream.</p>
+
+<p>BIO_reset() attempts to change the file pointer to the start of file using fseek(stream, 0, 0).</p>
+
+<p>BIO_seek() sets the file pointer to position <b>ofs</b> from start of file using fseek(stream, ofs, 0).</p>
+
+<p>BIO_eof() calls feof().</p>
+
+<p>Setting the BIO_CLOSE flag calls fclose() on the stream when the BIO is freed.</p>
+
+<p>BIO_new_file() creates a new file BIO with mode <b>mode</b> the meaning of <b>mode</b> is the same as the stdio function fopen(). The BIO_CLOSE flag is set on the returned BIO.</p>
+
+<p>BIO_new_fp() creates a file BIO wrapping <b>stream</b>. Flags can be: BIO_CLOSE, BIO_NOCLOSE (the close flag) BIO_FP_TEXT (sets the underlying stream to text mode, default is binary: this only has any effect under Win32).</p>
+
+<p>BIO_set_fp() sets the fp of a file BIO to <b>fp</b>. <b>flags</b> has the same meaning as in BIO_new_fp(), it is a macro.</p>
+
+<p>BIO_get_fp() retrieves the fp of a file BIO, it is a macro.</p>
+
+<p>BIO_seek() is a macro that sets the position pointer to <b>offset</b> bytes from the start of file.</p>
+
+<p>BIO_tell() returns the value of the position pointer.</p>
+
+<p>BIO_read_filename(), BIO_write_filename(), BIO_append_filename() and BIO_rw_filename() set the file BIO <b>b</b> to use file <b>name</b> for reading, writing, append or read write respectively.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>When wrapping stdout, stdin or stderr the underlying stream should not normally be closed so the BIO_NOCLOSE flag should be set.</p>
+
+<p>Because the file BIO calls the underlying stdio functions any quirks in stdio behaviour will be mirrored by the corresponding BIO.</p>
+
+<p>On Windows BIO_new_files reserves for the filename argument to be UTF-8 encoded. In other words if you have to make it work in multi- lingual environment, encode filenames in UTF-8.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>BIO_s_file() returns the file BIO method.</p>
+
+<p>BIO_new_file() and BIO_new_fp() return a file BIO or NULL if an error occurred.</p>
+
+<p>BIO_set_fp() and BIO_get_fp() return 1 for success or &lt;=0 for failure (although the current implementation never return 0).</p>
+
+<p>BIO_seek() returns 0 for success or negative values for failure.</p>
+
+<p>BIO_tell() returns the current file position or negative values for failure.</p>
+
+<p>BIO_read_filename(), BIO_write_filename(), BIO_append_filename() and BIO_rw_filename() return 1 for success or &lt;=0 for failure. An error is also returned if the file does not exist.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>File BIO &quot;hello world&quot;:</p>
+
+<pre><code>BIO *bio_out;
+
+bio_out = BIO_new_fp(stdout, BIO_NOCLOSE);
+BIO_printf(bio_out, &quot;Hello World\n&quot;);</code></pre>
+
+<p>Alternative technique:</p>
+
+<pre><code>BIO *bio_out;
+
+bio_out = BIO_new(BIO_s_file());
+if (bio_out == NULL)
+    /* Error */
+if (BIO_set_fp(bio_out, stdout, BIO_NOCLOSE) &lt;= 0)
+    /* Error */
+BIO_printf(bio_out, &quot;Hello World\n&quot;);</code></pre>
+
+<p>Write to a file:</p>
+
+<pre><code>BIO *out;
+
+out = BIO_new_file(&quot;filename.txt&quot;, &quot;w&quot;);
+if (!out)
+    /* Error */
+BIO_printf(out, &quot;Hello World\n&quot;);
+BIO_free(out);</code></pre>
+
+<p>Alternative technique:</p>
+
+<pre><code>BIO *out;
+
+out = BIO_new(BIO_s_file());
+if (out == NULL)
+    /* Error */
+if (BIO_write_filename(out, &quot;filename.txt&quot;) &lt;= 0)
+    /* Error */
+BIO_printf(out, &quot;Hello World\n&quot;);
+BIO_free(out);</code></pre>
+
+<h1 id="BUGS">BUGS</h1>
+
+<p>BIO_reset() and BIO_seek() are implemented using fseek() on the underlying stream. The return value for fseek() is 0 for success or -1 if an error occurred this differs from other types of BIO which will typically return 1 for success and a non positive value if an error occurred.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/BIO_seek.html">BIO_seek(3)</a>, <a href="../man3/BIO_tell.html">BIO_tell(3)</a>, <a href="../man3/BIO_reset.html">BIO_reset(3)</a>, <a href="../man3/BIO_flush.html">BIO_flush(3)</a>, <a href="../man3/BIO_read_ex.html">BIO_read_ex(3)</a>, <a href="../man3/BIO_write_ex.html">BIO_write_ex(3)</a>, <a href="../man3/BIO_puts.html">BIO_puts(3)</a>, <a href="../man3/BIO_gets.html">BIO_gets(3)</a>, <a href="../man3/BIO_printf.html">BIO_printf(3)</a>, <a href="../man3/BIO_set_close.html">BIO_set_close(3)</a>, <a href="../man3/BIO_get_close.html">BIO_get_close(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2020 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

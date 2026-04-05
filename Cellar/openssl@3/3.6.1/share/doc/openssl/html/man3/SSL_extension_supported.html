@@ -1,0 +1,266 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_extension_supported</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#EXTENSION-CALLBACKS">EXTENSION CALLBACKS</a></li>
+  <li><a href="#EXTENSION-CONTEXTS">EXTENSION CONTEXTS</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_extension_supported, SSL_custom_ext_add_cb_ex, SSL_custom_ext_free_cb_ex, SSL_custom_ext_parse_cb_ex, SSL_CTX_add_custom_ext, SSL_CTX_add_client_custom_ext, SSL_CTX_add_server_custom_ext, custom_ext_add_cb, custom_ext_free_cb, custom_ext_parse_cb - custom TLS extension handling</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+typedef int (*SSL_custom_ext_add_cb_ex)(SSL *s, unsigned int ext_type,
+                                        unsigned int context,
+                                        const unsigned char **out,
+                                        size_t *outlen, X509 *x,
+                                        size_t chainidx, int *al,
+                                        void *add_arg);
+
+typedef void (*SSL_custom_ext_free_cb_ex)(SSL *s, unsigned int ext_type,
+                                          unsigned int context,
+                                          const unsigned char *out,
+                                          void *add_arg);
+
+typedef int (*SSL_custom_ext_parse_cb_ex)(SSL *s, unsigned int ext_type,
+                                          unsigned int context,
+                                          const unsigned char *in,
+                                          size_t inlen, X509 *x,
+                                          size_t chainidx, int *al,
+                                          void *parse_arg);
+
+int SSL_CTX_add_custom_ext(SSL_CTX *ctx, unsigned int ext_type,
+                           unsigned int context,
+                           SSL_custom_ext_add_cb_ex add_cb,
+                           SSL_custom_ext_free_cb_ex free_cb,
+                           void *add_arg,
+                           SSL_custom_ext_parse_cb_ex parse_cb,
+                           void *parse_arg);
+
+typedef int (*custom_ext_add_cb)(SSL *s, unsigned int ext_type,
+                                 const unsigned char **out,
+                                 size_t *outlen, int *al,
+                                 void *add_arg);
+
+typedef void (*custom_ext_free_cb)(SSL *s, unsigned int ext_type,
+                                   const unsigned char *out,
+                                   void *add_arg);
+
+typedef int (*custom_ext_parse_cb)(SSL *s, unsigned int ext_type,
+                                   const unsigned char *in,
+                                   size_t inlen, int *al,
+                                   void *parse_arg);
+
+int SSL_CTX_add_client_custom_ext(SSL_CTX *ctx, unsigned int ext_type,
+                                  custom_ext_add_cb add_cb,
+                                  custom_ext_free_cb free_cb, void *add_arg,
+                                  custom_ext_parse_cb parse_cb,
+                                  void *parse_arg);
+
+int SSL_CTX_add_server_custom_ext(SSL_CTX *ctx, unsigned int ext_type,
+                                  custom_ext_add_cb add_cb,
+                                  custom_ext_free_cb free_cb, void *add_arg,
+                                  custom_ext_parse_cb parse_cb,
+                                  void *parse_arg);
+
+int SSL_extension_supported(unsigned int ext_type);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_CTX_add_custom_ext() adds a custom extension for a TLS/DTLS client or server for all supported protocol versions with extension type <b>ext_type</b> and callbacks <b>add_cb</b>, <b>free_cb</b> and <b>parse_cb</b> (see the <a href="#EXTENSION-CALLBACKS">&quot;EXTENSION CALLBACKS&quot;</a> section below). The <b>context</b> value determines which messages and under what conditions the extension will be added/parsed (see the <a href="#EXTENSION-CONTEXTS">&quot;EXTENSION CONTEXTS&quot;</a> section below).</p>
+
+<p>SSL_CTX_add_client_custom_ext() adds a custom extension for a TLS/DTLS client with extension type <b>ext_type</b> and callbacks <b>add_cb</b>, <b>free_cb</b> and <b>parse_cb</b>. This function is similar to SSL_CTX_add_custom_ext() except it only applies to clients, uses the older style of callbacks, and implicitly sets the <b>context</b> value to:</p>
+
+<pre><code>SSL_EXT_TLS1_2_AND_BELOW_ONLY | SSL_EXT_CLIENT_HELLO
+| SSL_EXT_TLS1_2_SERVER_HELLO | SSL_EXT_IGNORE_ON_RESUMPTION</code></pre>
+
+<p>SSL_CTX_add_server_custom_ext() adds a custom extension for a TLS/DTLS server with extension type <b>ext_type</b> and callbacks <b>add_cb</b>, <b>free_cb</b> and <b>parse_cb</b>. This function is similar to SSL_CTX_add_custom_ext() except it only applies to servers, uses the older style of callbacks, and implicitly sets the <b>context</b> value to the same as for SSL_CTX_add_client_custom_ext() above.</p>
+
+<p>The <b>ext_type</b> parameter corresponds to the <b>extension_type</b> field of RFC5246 et al. It is <b>not</b> a NID. In all cases the extension type must not be handled by OpenSSL internally or an error occurs.</p>
+
+<p>SSL_extension_supported() returns 1 if the extension <b>ext_type</b> is handled internally by OpenSSL and 0 otherwise.</p>
+
+<h1 id="EXTENSION-CALLBACKS">EXTENSION CALLBACKS</h1>
+
+<p>The callback <b>add_cb</b> is called to send custom extension data to be included in various TLS messages. The <b>ext_type</b> parameter is set to the extension type which will be added and <b>add_arg</b> to the value set when the extension handler was added. When using the new style callbacks the <b>context</b> parameter will indicate which message is currently being constructed e.g. for the ClientHello it will be set to <b>SSL_EXT_CLIENT_HELLO</b>.</p>
+
+<p>If the application wishes to include the extension <b>ext_type</b> it should set <b>*out</b> to the extension data, set <b>*outlen</b> to the length of the extension data and return 1.</p>
+
+<p>If the <b>add_cb</b> does not wish to include the extension it must return 0.</p>
+
+<p>If <b>add_cb</b> returns -1 a fatal handshake error occurs using the TLS alert value specified in <b>*al</b>.</p>
+
+<p>When constructing the ClientHello, if <b>add_cb</b> is set to NULL a zero length extension is added for <b>ext_type</b>. For all other messages if <b>add_cb</b> is set to NULL then no extension is added.</p>
+
+<p>When constructing a Certificate message the callback will be called for each certificate in the message. The <b>x</b> parameter will indicate the current certificate and the <b>chainidx</b> parameter will indicate the position of the certificate in the message. The first certificate is always the end entity certificate and has a <b>chainidx</b> value of 0. The certificates are in the order that they were received in the Certificate message.</p>
+
+<p>For all messages except the ServerHello and EncryptedExtensions every registered <b>add_cb</b> is always called to see if the application wishes to add an extension (as long as all requirements of the specified <b>context</b> are met).</p>
+
+<p>For the ServerHello and EncryptedExtension messages every registered <b>add_cb</b> is called once if and only if the requirements of the specified <b>context</b> are met and the corresponding extension was received in the ClientHello. That is, if no corresponding extension was received in the ClientHello then <b>add_cb</b> will not be called.</p>
+
+<p>If an extension is added (that is <b>add_cb</b> returns 1) <b>free_cb</b> is called (if it is set) with the value of <b>out</b> set by the add callback. It can be used to free up any dynamic extension data set by <b>add_cb</b>. Since <b>out</b> is constant (to permit use of constant data in <b>add_cb</b>) applications may need to cast away const to free the data.</p>
+
+<p>The callback <b>parse_cb</b> receives data for TLS extensions. The callback is only called if the extension is present and relevant for the context (see <a href="#EXTENSION-CONTEXTS">&quot;EXTENSION CONTEXTS&quot;</a> below).</p>
+
+<p>The extension data consists of <b>inlen</b> bytes in the buffer <b>in</b> for the extension <b>ext_type</b>.</p>
+
+<p>If the message being parsed is a TLSv1.3 compatible Certificate message then <b>parse_cb</b> will be called for each certificate contained within the message. The <b>x</b> parameter will indicate the current certificate and the <b>chainidx</b> parameter will indicate the position of the certificate in the message. The first certificate is always the end entity certificate and has a <b>chainidx</b> value of 0.</p>
+
+<p>If the <b>parse_cb</b> considers the extension data acceptable it must return 1. If it returns 0 or a negative value a fatal handshake error occurs using the TLS alert value specified in <b>*al</b>.</p>
+
+<p>The buffer <b>in</b> is a temporary internal buffer which will not be valid after the callback returns.</p>
+
+<h1 id="EXTENSION-CONTEXTS">EXTENSION CONTEXTS</h1>
+
+<p>An extension context defines which messages and under which conditions an extension should be added or expected. The context is built up by performing a bitwise OR of multiple pre-defined values together. The valid context values are:</p>
+
+<dl>
+
+<dt id="SSL_EXT_TLS_ONLY">SSL_EXT_TLS_ONLY</dt>
+<dd>
+
+<p>The extension is only allowed in TLS</p>
+
+</dd>
+<dt id="SSL_EXT_DTLS_ONLY">SSL_EXT_DTLS_ONLY</dt>
+<dd>
+
+<p>The extension is only allowed in DTLS</p>
+
+</dd>
+<dt id="SSL_EXT_TLS_IMPLEMENTATION_ONLY">SSL_EXT_TLS_IMPLEMENTATION_ONLY</dt>
+<dd>
+
+<p>The extension is allowed in DTLS, but there is only a TLS implementation available (so it is ignored in DTLS).</p>
+
+</dd>
+<dt id="SSL_EXT_SSL3_ALLOWED">SSL_EXT_SSL3_ALLOWED</dt>
+<dd>
+
+<p>Extensions are not typically defined for SSLv3. Setting this value will allow the extension in SSLv3. Applications will not typically need to use this.</p>
+
+</dd>
+<dt id="SSL_EXT_TLS1_2_AND_BELOW_ONLY">SSL_EXT_TLS1_2_AND_BELOW_ONLY</dt>
+<dd>
+
+<p>The extension is only defined for TLSv1.2/DTLSv1.2 and below. Servers will ignore this extension if it is present in the ClientHello and TLSv1.3 is negotiated.</p>
+
+</dd>
+<dt id="SSL_EXT_TLS1_3_ONLY">SSL_EXT_TLS1_3_ONLY</dt>
+<dd>
+
+<p>The extension is only defined for TLS1.3 and above. Servers will ignore this extension if it is present in the ClientHello and TLSv1.2 or below is negotiated.</p>
+
+</dd>
+<dt id="SSL_EXT_IGNORE_ON_RESUMPTION">SSL_EXT_IGNORE_ON_RESUMPTION</dt>
+<dd>
+
+<p>The extension will be ignored during parsing if a previous session is being successfully resumed.</p>
+
+</dd>
+<dt id="SSL_EXT_CLIENT_HELLO">SSL_EXT_CLIENT_HELLO</dt>
+<dd>
+
+<p>The extension may be present in the ClientHello message.</p>
+
+</dd>
+<dt id="SSL_EXT_TLS1_2_SERVER_HELLO">SSL_EXT_TLS1_2_SERVER_HELLO</dt>
+<dd>
+
+<p>The extension may be present in a TLSv1.2 or below compatible ServerHello message.</p>
+
+</dd>
+<dt id="SSL_EXT_TLS1_3_SERVER_HELLO">SSL_EXT_TLS1_3_SERVER_HELLO</dt>
+<dd>
+
+<p>The extension may be present in a TLSv1.3 compatible ServerHello message.</p>
+
+</dd>
+<dt id="SSL_EXT_TLS1_3_ENCRYPTED_EXTENSIONS">SSL_EXT_TLS1_3_ENCRYPTED_EXTENSIONS</dt>
+<dd>
+
+<p>The extension may be present in an EncryptedExtensions message.</p>
+
+</dd>
+<dt id="SSL_EXT_TLS1_3_HELLO_RETRY_REQUEST">SSL_EXT_TLS1_3_HELLO_RETRY_REQUEST</dt>
+<dd>
+
+<p>The extension may be present in a HelloRetryRequest message.</p>
+
+</dd>
+<dt id="SSL_EXT_TLS1_3_CERTIFICATE">SSL_EXT_TLS1_3_CERTIFICATE</dt>
+<dd>
+
+<p>The extension may be present in a TLSv1.3 compatible Certificate message.</p>
+
+</dd>
+<dt id="SSL_EXT_TLS1_3_NEW_SESSION_TICKET">SSL_EXT_TLS1_3_NEW_SESSION_TICKET</dt>
+<dd>
+
+<p>The extension may be present in a TLSv1.3 compatible NewSessionTicket message.</p>
+
+</dd>
+<dt id="SSL_EXT_TLS1_3_CERTIFICATE_REQUEST">SSL_EXT_TLS1_3_CERTIFICATE_REQUEST</dt>
+<dd>
+
+<p>The extension may be present in a TLSv1.3 compatible CertificateRequest message.</p>
+
+</dd>
+</dl>
+
+<p>The context must include at least one message value (otherwise the extension will never be used).</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The <b>add_arg</b> and <b>parse_arg</b> parameters can be set to arbitrary values which will be passed to the corresponding callbacks. They can, for example, be used to store the extension data received in a convenient structure or pass the extension data to be added or freed when adding extensions.</p>
+
+<p>If the same custom extension type is received multiple times a fatal <b>decode_error</b> alert is sent and the handshake aborts. If a custom extension is received in a ServerHello/EncryptedExtensions message which was not sent in the ClientHello a fatal <b>unsupported_extension</b> alert is sent and the handshake is aborted. The ServerHello/EncryptedExtensions <b>add_cb</b> callback is only called if the corresponding extension was received in the ClientHello. This is compliant with the TLS specifications. This behaviour ensures that each callback is called at most once and that an application can never send unsolicited extensions.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_CTX_add_custom_ext(), SSL_CTX_add_client_custom_ext() and SSL_CTX_add_server_custom_ext() return 1 for success and 0 for failure. A failure can occur if an attempt is made to add the same <b>ext_type</b> more than once, if an attempt is made to use an extension type handled internally by OpenSSL or if an internal error occurs (for example a memory allocation failure).</p>
+
+<p>SSL_extension_supported() returns 1 if the extension <b>ext_type</b> is handled internally by OpenSSL and 0 otherwise.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The SSL_CTX_add_custom_ext() function was added in OpenSSL 1.1.1.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2014-2020 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,26 @@
+.
+.TH "ZSTDGREP" "1" "March 2024" "zstd 1.5.6" "User Commands"
+.
+.SH "NAME"
+\fBzstdgrep\fR \- print lines matching a pattern in zstandard\-compressed files
+.
+.SH "SYNOPSIS"
+\fBzstdgrep\fR [\fIgrep\-flags\fR] [\-\-] \fIpattern\fR [\fIfiles\fR \.\.\.]
+.
+.SH "DESCRIPTION"
+\fBzstdgrep\fR runs \fBgrep\fR(1) on files, or \fBstdin\fR if no files argument is given, after decompressing them with \fBzstdcat\fR(1)\.
+.
+.P
+The \fIgrep\-flags\fR and \fIpattern\fR arguments are passed on to \fBgrep\fR(1)\. If an \fB\-e\fR flag is found in the \fIgrep\-flags\fR, \fBzstdgrep\fR will not look for a \fIpattern\fR argument\.
+.
+.P
+Note that modern \fBgrep\fR alternatives such as \fBripgrep\fR (\fBrg\fR(1)) support \fBzstd\fR\-compressed files out of the box, and can prove better alternatives than \fBzstdgrep\fR notably for unsupported complex pattern searches\. Note though that such alternatives may also feature some minor command line differences\.
+.
+.SH "EXIT STATUS"
+In case of missing arguments or missing pattern, 1 will be returned, otherwise 0\.
+.
+.SH "SEE ALSO"
+\fBzstd\fR(1)
+.
+.SH "AUTHORS"
+Thomas Klausner \fIwiz@NetBSD\.org\fR

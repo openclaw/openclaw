@@ -1,0 +1,430 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>provider-keymgmt</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Key-Objects">Key Objects</a></li>
+      <li><a href="#Constructing-and-Destructing-Functions">Constructing and Destructing Functions</a></li>
+      <li><a href="#Key-Object-Information-Functions">Key Object Information Functions</a></li>
+      <li><a href="#Key-Object-Checking-Functions">Key Object Checking Functions</a></li>
+      <li><a href="#Key-Object-Import-Export-and-Duplication-Functions">Key Object Import, Export and Duplication Functions</a></li>
+      <li><a href="#Common-Information-Parameters">Common Information Parameters</a></li>
+    </ul>
+  </li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>provider-keymgmt - The KEYMGMT library &lt;-&gt; provider functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/core_dispatch.h&gt;
+
+/*
+ * None of these are actual functions, but are displayed like this for
+ * the function signatures for functions that are offered as function
+ * pointers in OSSL_DISPATCH arrays.
+ */
+
+/* Key object (keydata) creation and destruction */
+void *OSSL_FUNC_keymgmt_new(void *provctx);
+void OSSL_FUNC_keymgmt_free(void *keydata);
+
+/* Generation, a more complex constructor */
+void *OSSL_FUNC_keymgmt_gen_init(void *provctx, int selection,
+                                 const OSSL_PARAM params[]);
+int OSSL_FUNC_keymgmt_gen_set_template(void *genctx, void *template);
+int OSSL_FUNC_keymgmt_gen_get_params(void *genctx, OSSL_PARAM params[]);
+int OSSL_FUNC_keymgmt_gen_set_params(void *genctx, const OSSL_PARAM params[]);
+const OSSL_PARAM *OSSL_FUNC_keymgmt_gen_gettable_params(void *genctx,
+                                                        void *provctx);
+const OSSL_PARAM *OSSL_FUNC_keymgmt_gen_settable_params(void *genctx,
+                                                        void *provctx);
+void *OSSL_FUNC_keymgmt_gen(void *genctx, OSSL_CALLBACK *cb, void *cbarg);
+void OSSL_FUNC_keymgmt_gen_cleanup(void *genctx);
+
+/* Key loading by object reference, also a constructor */
+void *OSSL_FUNC_keymgmt_load(const void *reference, size_t reference_sz);
+
+/* Key object information */
+int OSSL_FUNC_keymgmt_get_params(void *keydata, OSSL_PARAM params[]);
+const OSSL_PARAM *OSSL_FUNC_keymgmt_gettable_params(void *provctx);
+int OSSL_FUNC_keymgmt_set_params(void *keydata, const OSSL_PARAM params[]);
+const OSSL_PARAM *OSSL_FUNC_keymgmt_settable_params(void *provctx);
+
+/* Key object content checks */
+int OSSL_FUNC_keymgmt_has(const void *keydata, int selection);
+int OSSL_FUNC_keymgmt_match(const void *keydata1, const void *keydata2,
+                            int selection);
+
+/* Discovery of supported operations */
+const char *OSSL_FUNC_keymgmt_query_operation_name(int operation_id);
+
+/* Key object import and export functions */
+int OSSL_FUNC_keymgmt_import(void *keydata, int selection, const OSSL_PARAM params[]);
+const OSSL_PARAM *OSSL_FUNC_keymgmt_import_types(int selection);
+const OSSL_PARAM *OSSL_FUNC_keymgmt_import_types_ex(void *provctx, int selection);
+int OSSL_FUNC_keymgmt_export(void *keydata, int selection,
+                             OSSL_CALLBACK *param_cb, void *cbarg);
+const OSSL_PARAM *OSSL_FUNC_keymgmt_export_types(int selection);
+const OSSL_PARAM *OSSL_FUNC_keymgmt_export_types_ex(void *provctx, int selection);
+
+/* Key object duplication, a constructor */
+void *OSSL_FUNC_keymgmt_dup(const void *keydata_from, int selection);
+
+/* Key object validation */
+int OSSL_FUNC_keymgmt_validate(const void *keydata, int selection, int checktype);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The KEYMGMT operation doesn&#39;t have much public visibility in OpenSSL libraries, it&#39;s rather an internal operation that&#39;s designed to work in tandem with operations that use private/public key pairs.</p>
+
+<p>Because the KEYMGMT operation shares knowledge with the operations it works with in tandem, they must belong to the same provider. The OpenSSL libraries will ensure that they do.</p>
+
+<p>The primary responsibility of the KEYMGMT operation is to hold the provider side key data for the OpenSSL library EVP_PKEY structure.</p>
+
+<p>All &quot;functions&quot; mentioned here are passed as function pointers between <i>libcrypto</i> and the provider in <a href="../man3/OSSL_DISPATCH.html">OSSL_DISPATCH(3)</a> arrays via <a href="../man3/OSSL_ALGORITHM.html">OSSL_ALGORITHM(3)</a> arrays that are returned by the provider&#39;s provider_query_operation() function (see <a href="../man7/provider-base.html">&quot;Provider Functions&quot; in provider-base(7)</a>).</p>
+
+<p>All these &quot;functions&quot; have a corresponding function type definition named <b>OSSL_FUNC_{name}_fn</b>, and a helper function to retrieve the function pointer from a <a href="../man3/OSSL_DISPATCH.html">OSSL_DISPATCH(3)</a> element named <b>OSSL_FUNC_{name}</b>. For example, the &quot;function&quot; OSSL_FUNC_keymgmt_new() has these:</p>
+
+<pre><code>typedef void *(OSSL_FUNC_keymgmt_new_fn)(void *provctx);
+static ossl_inline OSSL_FUNC_keymgmt_new_fn
+    OSSL_FUNC_keymgmt_new(const OSSL_DISPATCH *opf);</code></pre>
+
+<p><a href="../man3/OSSL_DISPATCH.html">OSSL_DISPATCH(3)</a> arrays are indexed by numbers that are provided as macros in <a href="../man7/openssl-core_dispatch.h.html">openssl-core_dispatch.h(7)</a>, as follows:</p>
+
+<pre><code>OSSL_FUNC_keymgmt_new                  OSSL_FUNC_KEYMGMT_NEW
+OSSL_FUNC_keymgmt_free                 OSSL_FUNC_KEYMGMT_FREE
+
+OSSL_FUNC_keymgmt_gen_init             OSSL_FUNC_KEYMGMT_GEN_INIT
+OSSL_FUNC_keymgmt_gen_set_template     OSSL_FUNC_KEYMGMT_GEN_SET_TEMPLATE
+OSSL_FUNC_keymgmt_gen_get_params       OSSL_FUNC_KEYMGMT_GEN_GET_PARAMS
+OSSL_FUNC_keymgmt_gen_gettable_params  OSSL_FUNC_KEYMGMT_GEN_GETTABLE_PARAMS
+OSSL_FUNC_keymgmt_gen_set_params       OSSL_FUNC_KEYMGMT_GEN_SET_PARAMS
+OSSL_FUNC_keymgmt_gen_settable_params  OSSL_FUNC_KEYMGMT_GEN_SETTABLE_PARAMS
+OSSL_FUNC_keymgmt_gen                  OSSL_FUNC_KEYMGMT_GEN
+OSSL_FUNC_keymgmt_gen_cleanup          OSSL_FUNC_KEYMGMT_GEN_CLEANUP
+
+OSSL_FUNC_keymgmt_load                 OSSL_FUNC_KEYMGMT_LOAD
+
+OSSL_FUNC_keymgmt_get_params           OSSL_FUNC_KEYMGMT_GET_PARAMS
+OSSL_FUNC_keymgmt_gettable_params      OSSL_FUNC_KEYMGMT_GETTABLE_PARAMS
+OSSL_FUNC_keymgmt_set_params           OSSL_FUNC_KEYMGMT_SET_PARAMS
+OSSL_FUNC_keymgmt_settable_params      OSSL_FUNC_KEYMGMT_SETTABLE_PARAMS
+
+OSSL_FUNC_keymgmt_query_operation_name OSSL_FUNC_KEYMGMT_QUERY_OPERATION_NAME
+
+OSSL_FUNC_keymgmt_has                  OSSL_FUNC_KEYMGMT_HAS
+OSSL_FUNC_keymgmt_validate             OSSL_FUNC_KEYMGMT_VALIDATE
+OSSL_FUNC_keymgmt_match                OSSL_FUNC_KEYMGMT_MATCH
+
+OSSL_FUNC_keymgmt_import               OSSL_FUNC_KEYMGMT_IMPORT
+OSSL_FUNC_keymgmt_import_types         OSSL_FUNC_KEYMGMT_IMPORT_TYPES
+OSSL_FUNC_keymgmt_import_types_ex      OSSL_FUNC_KEYMGMT_IMPORT_TYPES_EX
+OSSL_FUNC_keymgmt_export               OSSL_FUNC_KEYMGMT_EXPORT
+OSSL_FUNC_keymgmt_export_types         OSSL_FUNC_KEYMGMT_EXPORT_TYPES
+OSSL_FUNC_keymgmt_export_types_ex      OSSL_FUNC_KEYMGMT_EXPORT_TYPES_EX
+
+OSSL_FUNC_keymgmt_dup                  OSSL_FUNC_KEYMGMT_DUP</code></pre>
+
+<h2 id="Key-Objects">Key Objects</h2>
+
+<p>A key object is a collection of data for an asymmetric key, and is represented as <i>keydata</i> in this manual.</p>
+
+<p>The exact contents of a key object are defined by the provider, and it is assumed that different operations in one and the same provider use the exact same structure to represent this collection of data, so that for example, a key object that has been created using the KEYMGMT interface that we document here can be passed as is to other provider operations, such as OP_signature_sign_init() (see <a href="../man7/provider-signature.html">provider-signature(7)</a>).</p>
+
+<p>With some of the KEYMGMT functions, it&#39;s possible to select a specific subset of data to handle, governed by the bits in a <i>selection</i> indicator. The bits are:</p>
+
+<dl>
+
+<dt id="OSSL_KEYMGMT_SELECT_PRIVATE_KEY"><b>OSSL_KEYMGMT_SELECT_PRIVATE_KEY</b></dt>
+<dd>
+
+<p>Indicating that the private key data in a key object should be considered.</p>
+
+</dd>
+<dt id="OSSL_KEYMGMT_SELECT_PUBLIC_KEY"><b>OSSL_KEYMGMT_SELECT_PUBLIC_KEY</b></dt>
+<dd>
+
+<p>Indicating that the public key data in a key object should be considered.</p>
+
+</dd>
+<dt id="OSSL_KEYMGMT_SELECT_DOMAIN_PARAMETERS"><b>OSSL_KEYMGMT_SELECT_DOMAIN_PARAMETERS</b></dt>
+<dd>
+
+<p>Indicating that the domain parameters in a key object should be considered.</p>
+
+</dd>
+<dt id="OSSL_KEYMGMT_SELECT_OTHER_PARAMETERS"><b>OSSL_KEYMGMT_SELECT_OTHER_PARAMETERS</b></dt>
+<dd>
+
+<p>Indicating that other parameters in a key object should be considered.</p>
+
+<p>Other parameters are key parameters that don&#39;t fit any other classification. In other words, this particular selector bit works as a last resort bit bucket selector.</p>
+
+</dd>
+</dl>
+
+<p>Some selector bits have also been combined for easier use:</p>
+
+<dl>
+
+<dt id="OSSL_KEYMGMT_SELECT_ALL_PARAMETERS"><b>OSSL_KEYMGMT_SELECT_ALL_PARAMETERS</b></dt>
+<dd>
+
+<p>Indicating that all key object parameters should be considered, regardless of their more granular classification.</p>
+
+<p>This is a combination of <b>OSSL_KEYMGMT_SELECT_DOMAIN_PARAMETERS</b> and <b>OSSL_KEYMGMT_SELECT_OTHER_PARAMETERS</b>.</p>
+
+</dd>
+<dt id="OSSL_KEYMGMT_SELECT_KEYPAIR"><b>OSSL_KEYMGMT_SELECT_KEYPAIR</b></dt>
+<dd>
+
+<p>Indicating that both the whole key pair in a key object should be considered, i.e. the combination of public and private key.</p>
+
+<p>This is a combination of <b>OSSL_KEYMGMT_SELECT_PRIVATE_KEY</b> and <b>OSSL_KEYMGMT_SELECT_PUBLIC_KEY</b>.</p>
+
+</dd>
+<dt id="OSSL_KEYMGMT_SELECT_ALL"><b>OSSL_KEYMGMT_SELECT_ALL</b></dt>
+<dd>
+
+<p>Indicating that everything in a key object should be considered.</p>
+
+</dd>
+</dl>
+
+<p>The exact interpretation of those bits or how they combine is left to each function where you can specify a selector.</p>
+
+<p>It&#39;s left to the provider implementation to decide what is reasonable to do with regards to received selector bits and how to do it. Among others, an implementation of OSSL_FUNC_keymgmt_match() might opt to not compare the private half if it has compared the public half, since a match of one half implies a match of the other half.</p>
+
+<h2 id="Constructing-and-Destructing-Functions">Constructing and Destructing Functions</h2>
+
+<p>OSSL_FUNC_keymgmt_new() should create a provider side key object. The provider context <i>provctx</i> is passed and may be incorporated in the key object, but that is not mandatory.</p>
+
+<p>OSSL_FUNC_keymgmt_free() should free the passed <i>keydata</i>.</p>
+
+<p>OSSL_FUNC_keymgmt_gen_init(), OSSL_FUNC_keymgmt_gen_set_template(), OSSL_FUNC_keymgmt_gen_get_params(), OSSL_FUNC_keymgmt_gen_gettable_params(), OSSL_FUNC_keymgmt_gen_set_params(), OSSL_FUNC_keymgmt_gen_settable_params(), OSSL_FUNC_keymgmt_gen() and OSSL_FUNC_keymgmt_gen_cleanup() work together as a more elaborate context based key object constructor.</p>
+
+<p>OSSL_FUNC_keymgmt_gen_init() should create the key object generation context and initialize it with <i>selections</i>, which will determine what kind of contents the key object to be generated should get. The <i>params</i>, if not NULL, should be set on the context in a manner similar to using OSSL_FUNC_keymgmt_set_params().</p>
+
+<p>OSSL_FUNC_keymgmt_gen_set_template() should add <i>template</i> to the context <i>genctx</i>. The <i>template</i> is assumed to be a key object constructed with the same KEYMGMT, and from which content that the implementation chooses can be used as a template for the key object to be generated. Typically, the generation of a DSA or DH key would get the domain parameters from this <i>template</i>.</p>
+
+<p>OSSL_FUNC_keymgmt_gen_get_params() should retrieve parameters into <i>params</i> in the key object generation context <i>genctx</i>.</p>
+
+<p>OSSL_FUNC_keymgmt_gen_gettable_params() should return a constant array of descriptor <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a>, for parameters that OSSL_FUNC_keymgmt_gen_get_params() can handle.</p>
+
+<p>OSSL_FUNC_keymgmt_gen_set_params() should set additional parameters from <i>params</i> in the key object generation context <i>genctx</i>.</p>
+
+<p>OSSL_FUNC_keymgmt_gen_settable_params() should return a constant array of descriptor <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a>, for parameters that OSSL_FUNC_keymgmt_gen_set_params() can handle.</p>
+
+<p>OSSL_FUNC_keymgmt_gen() should perform the key object generation itself, and return the result. The callback <i>cb</i> should be called at regular intervals with indications on how the key object generation progresses.</p>
+
+<p>OSSL_FUNC_keymgmt_gen_cleanup() should clean up and free the key object generation context <i>genctx</i></p>
+
+<p>OSSL_FUNC_keymgmt_load() creates a provider side key object based on a <i>reference</i> object with a size of <i>reference_sz</i> bytes, that only the provider knows how to interpret, but that may come from other operations. Outside the provider, this reference is simply an array of bytes.</p>
+
+<p>At least one of OSSL_FUNC_keymgmt_new(), OSSL_FUNC_keymgmt_gen() and OSSL_FUNC_keymgmt_load() are mandatory, as well as OSSL_FUNC_keymgmt_free() and OSSL_FUNC_keymgmt_has(). Additionally, if OSSL_FUNC_keymgmt_gen() is present, OSSL_FUNC_keymgmt_gen_init() and OSSL_FUNC_keymgmt_gen_cleanup() must be present as well.</p>
+
+<h2 id="Key-Object-Information-Functions">Key Object Information Functions</h2>
+
+<p>OSSL_FUNC_keymgmt_get_params() should extract information data associated with the given <i>keydata</i>, see <a href="#Common-Information-Parameters">&quot;Common Information Parameters&quot;</a>.</p>
+
+<p>OSSL_FUNC_keymgmt_gettable_params() should return a constant array of descriptor <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a>, for parameters that OSSL_FUNC_keymgmt_get_params() can handle.</p>
+
+<p>If OSSL_FUNC_keymgmt_gettable_params() is present, OSSL_FUNC_keymgmt_get_params() must also be present, and vice versa.</p>
+
+<p>OSSL_FUNC_keymgmt_set_params() should update information data associated with the given <i>keydata</i>, see <a href="#Common-Information-Parameters">&quot;Common Information Parameters&quot;</a>.</p>
+
+<p>OSSL_FUNC_keymgmt_settable_params() should return a constant array of descriptor <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a>, for parameters that OSSL_FUNC_keymgmt_set_params() can handle.</p>
+
+<p>If OSSL_FUNC_keymgmt_settable_params() is present, OSSL_FUNC_keymgmt_set_params() must also be present, and vice versa.</p>
+
+<h2 id="Key-Object-Checking-Functions">Key Object Checking Functions</h2>
+
+<p>OSSL_FUNC_keymgmt_query_operation_name() should return the name of the supported algorithm for the operation <i>operation_id</i>. This is similar to provider_query_operation() (see <a href="../man7/provider-base.html">provider-base(7)</a>), but only works as an advisory. If this function is not present, or returns NULL, the caller is free to assume that there&#39;s an algorithm from the same provider, of the same name as the one used to fetch the keymgmt and try to use that.</p>
+
+<p>OSSL_FUNC_keymgmt_has() should check whether the given <i>keydata</i> contains the subsets of data indicated by the <i>selector</i>. A combination of several selector bits must consider all those subsets, not just one. An implementation is, however, free to consider an empty subset of data to still be a valid subset. For algorithms where some selection is not meaningful such as <b>OSSL_KEYMGMT_SELECT_DOMAIN_PARAMETERS</b> for RSA keys the function should just return 1 as the selected subset is not really missing in the key.</p>
+
+<p>OSSL_FUNC_keymgmt_validate() should check if the <i>keydata</i> contains valid data subsets indicated by <i>selection</i>. Some combined selections of data subsets may cause validation of the combined data. For example, the combination of <b>OSSL_KEYMGMT_SELECT_PRIVATE_KEY</b> and <b>OSSL_KEYMGMT_SELECT_PUBLIC_KEY</b> (or <b>OSSL_KEYMGMT_SELECT_KEYPAIR</b> for short) is expected to check that the pairwise consistency of <i>keydata</i> is valid. The <i>checktype</i> parameter controls what type of check is performed on the subset of data. Two types of check are defined: <b>OSSL_KEYMGMT_VALIDATE_FULL_CHECK</b> and <b>OSSL_KEYMGMT_VALIDATE_QUICK_CHECK</b>. The interpretation of how much checking is performed in a full check versus a quick check is key type specific. Some providers may have no distinction between a full check and a quick check. For algorithms where some selection is not meaningful such as <b>OSSL_KEYMGMT_SELECT_DOMAIN_PARAMETERS</b> for RSA keys the function should just return 1 as there is nothing to validate for that selection.</p>
+
+<p>OSSL_FUNC_keymgmt_match() should check if the data subset indicated by <i>selection</i> in <i>keydata1</i> and <i>keydata2</i> match. It is assumed that the caller has ensured that <i>keydata1</i> and <i>keydata2</i> are both owned by the implementation of this function.</p>
+
+<h2 id="Key-Object-Import-Export-and-Duplication-Functions">Key Object Import, Export and Duplication Functions</h2>
+
+<p>OSSL_FUNC_keymgmt_import() should import data indicated by <i>selection</i> into <i>keydata</i> with values taken from the <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> array <i>params</i>.</p>
+
+<p>OSSL_FUNC_keymgmt_export() should extract values indicated by <i>selection</i> from <i>keydata</i>, create an <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> array with them and call <i>param_cb</i> with that array as well as the given <i>cbarg</i>.</p>
+
+<p>OSSL_FUNC_keymgmt_import_types() and OSSL_FUNC_keymgmt_import_types_ex() should return a constant array of descriptor <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> for data indicated by <i>selection</i>, for parameters that OSSL_FUNC_keymgmt_import() can handle. Either OSSL_FUNC_keymgmt_import_types() or OSSL_FUNC_keymgmt_import_types_ex(), must be implemented, if OSSL_FUNC_keymgmt_import_types_ex() is implemented, then it is preferred over OSSL_FUNC_keymgmt_import_types(). Providers that are supposed to be backward compatible with OpenSSL 3.0 or 3.1 must continue to implement OSSL_FUNC_keymgmt_import_types().</p>
+
+<p>OSSL_FUNC_keymgmt_export_types() and OSSL_FUNC_keymgmt_export_types_ex() should return a constant array of descriptor <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> for data indicated by <i>selection</i>, that the OSSL_FUNC_keymgmt_export() callback can expect to receive. Either OSSL_FUNC_keymgmt_export_types() or OSSL_FUNC_keymgmt_export_types_ex(), must be implemented, if OSSL_FUNC_keymgmt_export_types_ex() is implemented, then it is preferred over OSSL_FUNC_keymgmt_export_types(). Providers that are supposed to be backward compatible with OpenSSL 3.0 or 3.1 must continue to implement OSSL_FUNC_keymgmt_export_types().</p>
+
+<p>OSSL_FUNC_keymgmt_dup() should duplicate data subsets indicated by <i>selection</i> or the whole key data <i>keydata_from</i> and create a new provider side key object with the data.</p>
+
+<h2 id="Common-Information-Parameters">Common Information Parameters</h2>
+
+<p>See <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> for further details on the parameters structure.</p>
+
+<p>Common information parameters currently recognised by all built-in keymgmt algorithms are as follows:</p>
+
+<dl>
+
+<dt id="bits-OSSL_PKEY_PARAM_BITS-integer">&quot;bits&quot; (<b>OSSL_PKEY_PARAM_BITS</b>) &lt;integer&gt;</dt>
+<dd>
+
+<p>The value should be the cryptographic length of the cryptosystem to which the key belongs, in bits. The definition of cryptographic length is specific to the key cryptosystem.</p>
+
+</dd>
+<dt id="max-size-OSSL_PKEY_PARAM_MAX_SIZE-integer">&quot;max-size&quot; (<b>OSSL_PKEY_PARAM_MAX_SIZE</b>) &lt;integer&gt;</dt>
+<dd>
+
+<p>The value should be the maximum size that a caller should allocate to safely store a signature (called <i>sig</i> in <a href="../man7/provider-signature.html">provider-signature(7)</a>), the result of asymmetric encryption / decryption (<i>out</i> in <a href="../man7/provider-asym_cipher.html">provider-asym_cipher(7)</a>, a derived secret (<i>secret</i> in <a href="../man7/provider-keyexch.html">provider-keyexch(7)</a>, and similar data).</p>
+
+<p>Providers need to implement this parameter in order to properly support various use cases such as CMS signing.</p>
+
+<p>Because an EVP_KEYMGMT method is always tightly bound to another method (signature, asymmetric cipher, key exchange, ...) and must be of the same provider, this number only needs to be synchronised with the dimensions handled in the rest of the same provider.</p>
+
+</dd>
+<dt id="security-bits-OSSL_PKEY_PARAM_SECURITY_BITS-integer">&quot;security-bits&quot; (<b>OSSL_PKEY_PARAM_SECURITY_BITS</b>) &lt;integer&gt;</dt>
+<dd>
+
+<p>The value should be the number of security bits of the given key. Bits of security is defined in SP800-57.</p>
+
+</dd>
+<dt id="security-category-OSSL_PKEY_PARAM_SECURITY_CATEGORY-integer">&quot;security-category&quot; (<b>OSSL_PKEY_PARAM_SECURITY_CATEGORY</b>) &lt;integer&gt;</dt>
+<dd>
+
+<p>The value is the NIST <a href="https://nvlpubs.nist.gov/nistpubs/ir/2024/NIST.IR.8547.ipd.pdf">post-quantum security category</a> for the algorithm. It is an integer value in the range [0, 5] inclusive.</p>
+
+</dd>
+<dt id="mandatory-digest-OSSL_PKEY_PARAM_MANDATORY_DIGEST-UTF8-string">&quot;mandatory-digest&quot; (<b>OSSL_PKEY_PARAM_MANDATORY_DIGEST</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+<p>If there is a mandatory digest for performing a signature operation with keys from this keymgmt, this parameter should get its name as value.</p>
+
+<p>When EVP_PKEY_get_default_digest_name() queries this parameter and it&#39;s filled in by the implementation, its return value will be 2.</p>
+
+<p>If the keymgmt implementation fills in the value <code>&quot;&quot;</code> or <code>&quot;UNDEF&quot;</code>, <a href="../man3/EVP_PKEY_get_default_digest_name.html">EVP_PKEY_get_default_digest_name(3)</a> will place the string <code>&quot;UNDEF&quot;</code> into its argument <i>mdname</i>. This signifies that no digest should be specified with the corresponding signature operation.</p>
+
+</dd>
+<dt id="default-digest-OSSL_PKEY_PARAM_DEFAULT_DIGEST-UTF8-string">&quot;default-digest&quot; (<b>OSSL_PKEY_PARAM_DEFAULT_DIGEST</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+<p>If there is a default digest for performing a signature operation with keys from this keymgmt, this parameter should get its name as value.</p>
+
+<p>When <a href="../man3/EVP_PKEY_get_default_digest_name.html">EVP_PKEY_get_default_digest_name(3)</a> queries this parameter and it&#39;s filled in by the implementation, its return value will be 1. Note that if <b>OSSL_PKEY_PARAM_MANDATORY_DIGEST</b> is responded to as well, <a href="../man3/EVP_PKEY_get_default_digest_name.html">EVP_PKEY_get_default_digest_name(3)</a> ignores the response to this parameter.</p>
+
+<p>If the keymgmt implementation fills in the value <code>&quot;&quot;</code> or <code>&quot;UNDEF&quot;</code>, <a href="../man3/EVP_PKEY_get_default_digest_name.html">EVP_PKEY_get_default_digest_name(3)</a> will place the string <code>&quot;UNDEF&quot;</code> into its argument <i>mdname</i>. This signifies that no digest has to be specified with the corresponding signature operation, but may be specified as an option.</p>
+
+</dd>
+<dt id="ri-type-OSSL_PKEY_PARAM_CMS_RI_TYPE-integer">&quot;ri-type&quot; (<b>OSSL_PKEY_PARAM_CMS_RI_TYPE</b>) &lt;integer&gt;</dt>
+<dd>
+
+<p>The value should be the CMS RecipientInfo type for the given key, for example <b>CMS_RECIPINFO_KEM</b> or <b>CMS_RECIPINFO_AGREE</b>. The value that can be given through this parameter is found in <i>&lt;openssl/cms.h&gt;</i>, with the macros having names starting with <code>CMS_RECIPINFO_</code>.</p>
+
+<p>CMS will query this parameter first to determine the RecipientInfo type. If this parameter is not filled in, CMS will check for known key types and map them to the appropriate RecipientInfo type. Otherwise, CMS will default to using <b>CMS_RECIPINFO_TRANS</b>.</p>
+
+</dd>
+<dt id="kemri-kdf-alg-OSSL_PKEY_PARAM_CMS_KEMRI_KDF_ALGORITHM-UTF8-string">&quot;kemri-kdf-alg&quot; (<b>OSSL_PKEY_PARAM_CMS_KEMRI_KDF_ALGORITHM</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+<p>The value should be the DER-encoded X509_ALGOR for the default KDF for this key if it supports the KEMRecipientInfo (<b>CMS_RECIPINFO_KEM</b>) type.</p>
+
+<p>Any KDF that takes <b>OSSL_KDF_PARAM_KEY</b> and <b>OSSL_KDF_PARAM_INFO</b> parameters and is otherwise fully defined by its OID can be used, for example <b>HKDF-SHA256</b>.</p>
+
+<p>If <b>OSSL_PKEY_PARAM_CMS_KEMRI_KDF_ALGORITHM</b> is not implemented, <b>HKDF-SHA256</b> will be used as the default KDF.</p>
+
+</dd>
+</dl>
+
+<p>The OpenSSL FIPS provider also supports the following parameters:</p>
+
+<dl>
+
+<dt id="fips-indicator-OSSL_PKEY_PARAM_FIPS_APPROVED_INDICATOR-integer">&quot;fips-indicator&quot; (<b>OSSL_PKEY_PARAM_FIPS_APPROVED_INDICATOR</b>) &lt;integer&gt;</dt>
+<dd>
+
+<p>A getter that returns 1 if the operation is FIPS approved, or 0 otherwise. This may be used after calling OSSL_FUNC_keymgmt_gen() function. It may return 0 if either the &quot;key-check&quot;, or &quot;sign-check&quot; are set to 0.</p>
+
+</dd>
+<dt id="key-check-OSSL_PKEY_PARAM_FIPS_KEY_CHECK-integer">&quot;key-check&quot; (<b>OSSL_PKEY_PARAM_FIPS_KEY_CHECK</b>) &lt;integer&gt;</dt>
+<dd>
+
+<p>If required this parameter should be set using OSSL_FUNC_keymgmt_gen_set_params() or OSSL_FUNC_keymgmt_gen_init(). The default value of 1 causes an error during the init if the key is not FIPS approved (e.g. The key has a security strength of less than 112 bits). Setting this to 0 will ignore the error and set the approved &quot;fips-indicator&quot; to 0. This option breaks FIPS compliance if it causes the approved &quot;fips-indicator&quot; to return 0.</p>
+
+</dd>
+<dt id="sign-check-OSSL_PKEY_PARAM_FIPS_SIGN_CHECK-integer">&quot;sign-check&quot; (<b>OSSL_PKEY_PARAM_FIPS_SIGN_CHECK</b>) &lt;integer&gt;</dt>
+<dd>
+
+<p>If required this parameter should be set before the OSSL_FUNC_keymgmt_gen() function. This value is not supported by all keygen algorithms. The default value of 1 will cause an error if the generated key is not allowed to be used for signing. Setting this to 0 will ignore the error and set the approved &quot;fips-indicator&quot; to 0. This option breaks FIPS compliance if it causes the approved &quot;fips-indicator&quot; to return 0.</p>
+
+</dd>
+</dl>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>OSSL_FUNC_keymgmt_new() and OSSL_FUNC_keymgmt_dup() should return a valid reference to the newly created provider side key object, or NULL on failure.</p>
+
+<p>OSSL_FUNC_keymgmt_import(), OSSL_FUNC_keymgmt_export(), OSSL_FUNC_keymgmt_get_params() and OSSL_FUNC_keymgmt_set_params() should return 1 for success or 0 on error.</p>
+
+<p>OSSL_FUNC_keymgmt_validate() should return 1 on successful validation, or 0 on failure.</p>
+
+<p>OSSL_FUNC_keymgmt_has() should return 1 if all the selected data subsets are contained in the given <i>keydata</i> or 0 otherwise.</p>
+
+<p>OSSL_FUNC_keymgmt_query_operation_name() should return a pointer to a string matching the requested operation, or NULL if the same name used to fetch the keymgmt applies.</p>
+
+<p>OSSL_FUNC_keymgmt_gettable_params() and OSSL_FUNC_keymgmt_settable_params() OSSL_FUNC_keymgmt_import_types(), OSSL_FUNC_keymgmt_import_types_ex(), OSSL_FUNC_keymgmt_export_types(), OSSL_FUNC_keymgmt_export_types_ex() should always return a constant <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> array.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>LMS support is disabled by default at compile-time. To enable, specify the <b>enable-lms</b> build configuration option.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_PKEY_get_size.html">EVP_PKEY_get_size(3)</a>, <a href="../man3/EVP_PKEY_get_bits.html">EVP_PKEY_get_bits(3)</a>, <a href="../man3/EVP_PKEY_get_security_bits.html">EVP_PKEY_get_security_bits(3)</a>, <a href="../man7/provider.html">provider(7)</a>, <a href="../man7/EVP_PKEY-X25519.html">EVP_PKEY-X25519(7)</a>, <a href="../man7/EVP_PKEY-X448.html">EVP_PKEY-X448(7)</a>, <a href="../man7/EVP_PKEY-ED25519.html">EVP_PKEY-ED25519(7)</a>, <a href="../man7/EVP_PKEY-ED448.html">EVP_PKEY-ED448(7)</a>, <a href="../man7/EVP_PKEY-EC.html">EVP_PKEY-EC(7)</a>, <a href="../man7/EVP_PKEY-RSA.html">EVP_PKEY-RSA(7)</a>, <a href="../man7/EVP_PKEY-DSA.html">EVP_PKEY-DSA(7)</a>, <a href="../man7/EVP_PKEY-DH.html">EVP_PKEY-DH(7)</a>, <a href="../man7/EVP_PKEY-LMS.html">EVP_PKEY-LMS(7)</a>, <a href="../man7/EVP_PKEY-ML-DSA.html">EVP_PKEY-ML-DSA(7)</a>, <a href="../man7/EVP_PKEY-ML-KEM.html">EVP_PKEY-ML-KEM(7)</a>, <a href="../man7/EVP_PKEY-SLH-DSA.html">EVP_PKEY-SLH-DSA(7)</a>.</p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The KEYMGMT interface was introduced in OpenSSL 3.0.</p>
+
+<p>Functions OSSL_FUNC_keymgmt_import_types_ex(), and OSSL_FUNC_keymgmt_export_types_ex() were added with OpenSSL 3.2.</p>
+
+<p>The functions OSSL_FUNC_keymgmt_gen_get_params() and OSSL_FUNC_keymgmt_gen_gettable_params() were added in OpenSSL 3.4.</p>
+
+<p>The parameters &quot;sign-check&quot; and &quot;fips-indicator&quot; were added in OpenSSL 3.4.</p>
+
+<p>Support for the <b>ML-DSA</b>, <b>ML-KEM</b> and <b>SLH-DSA</b> algorithms was added in OpenSSL 3.5.</p>
+
+<p>Support for the <b>LMS</b> algorithm was added in OpenSSL 3.6.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2019-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,304 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_PKEY_sign</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a>
+    <ul>
+      <li><a href="#General">General</a></li>
+      <li><a href="#Performing-multiple-signatures">Performing multiple signatures</a></li>
+    </ul>
+  </li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a>
+    <ul>
+      <li><a href="#RSA-with-PKCS-1-padding-for-SHA256">RSA with PKCS#1 padding for SHA256</a></li>
+      <li><a href="#RSA-SHA256-with-a-pre-computed-digest">RSA-SHA256 with a pre-computed digest</a></li>
+      <li><a href="#RSA-SHA256-one-shot">RSA-SHA256, one-shot</a></li>
+      <li><a href="#RSA-SHA256-using-update-and-final">RSA-SHA256, using update and final</a></li>
+    </ul>
+  </li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_PKEY_sign_init, EVP_PKEY_sign_init_ex, EVP_PKEY_sign_init_ex2, EVP_PKEY_sign, EVP_PKEY_sign_message_init, EVP_PKEY_sign_message_update, EVP_PKEY_sign_message_final - sign using a public key algorithm</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+
+int EVP_PKEY_sign_init(EVP_PKEY_CTX *ctx);
+int EVP_PKEY_sign_init_ex(EVP_PKEY_CTX *ctx, const OSSL_PARAM params[]);
+int EVP_PKEY_sign_init_ex2(EVP_PKEY_CTX *ctx, EVP_SIGNATURE *algo,
+                           const OSSL_PARAM params[]);
+int EVP_PKEY_sign_message_init(EVP_PKEY_CTX *ctx, EVP_SIGNATURE *algo,
+                               const OSSL_PARAM params[]);
+int EVP_PKEY_sign_message_update(EVP_PKEY_CTX *ctx,
+                                 unsigned char *in, size_t inlen);
+int EVP_PKEY_sign_message_final(EVP_PKEY_CTX *ctx, unsigned char *sig,
+                                size_t *siglen, size_t sigsize);
+int EVP_PKEY_sign(EVP_PKEY_CTX *ctx,
+                  unsigned char *sig, size_t *siglen,
+                  const unsigned char *tbs, size_t tbslen);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>EVP_PKEY_sign_init() initializes a public key algorithm context <i>ctx</i> for signing using the algorithm given when the context was created using <a href="../man3/EVP_PKEY_CTX_new.html">EVP_PKEY_CTX_new(3)</a> or variants thereof. The algorithm is used to fetch a <b>EVP_SIGNATURE</b> method implicitly, see <a href="../man7/provider.html">&quot;Implicit fetch&quot; in provider(7)</a> for more information about implicit fetches.</p>
+
+<p>EVP_PKEY_sign_init_ex() is the same as EVP_PKEY_sign_init() but additionally sets the passed parameters <i>params</i> on the context before returning.</p>
+
+<p>EVP_PKEY_sign_init_ex2() initializes a public key algorithm context <i>ctx</i> for signing a pre-computed message digest using the algorithm given by <i>algo</i> and the key given through <a href="../man3/EVP_PKEY_CTX_new.html">EVP_PKEY_CTX_new(3)</a> or <a href="../man3/EVP_PKEY_CTX_new_from_pkey.html">EVP_PKEY_CTX_new_from_pkey(3)</a>. A context <i>ctx</i> without a pre-loaded key cannot be used with this function. This function provides almost the same functionality as EVP_PKEY_sign_init_ex(), but is uniquely intended to be used with a pre-computed message digest, and allows pre-determining the exact conditions for that message digest, if a composite signature algorithm (such as RSA-SHA256) was fetched. Following a call to this function, setting parameters that modifies the digest implementation or padding is not normally supported.</p>
+
+<p>EVP_PKEY_sign_message_init() initializes a public key algorithm context <i>ctx</i> for signing an unlimited size message using the algorithm given by <i>algo</i> and the key given through <a href="../man3/EVP_PKEY_CTX_new.html">EVP_PKEY_CTX_new(3)</a> or <a href="../man3/EVP_PKEY_CTX_new_from_pkey.html">EVP_PKEY_CTX_new_from_pkey(3)</a>. Passing the message is supported both in a one-shot fashion using EVP_PKEY_sign(), and through the combination of EVP_PKEY_sign_message_update() and EVP_PKEY_sign_message_final(). This function enables using algorithms that can process input of arbitrary length, such as ED25519, RSA-SHA256 and similar.</p>
+
+<p>EVP_PKEY_sign_message_update() adds <i>inlen</i> bytes from <i>in</i> to the data to be processed for signature. The signature algorithm specification and implementation determine how the input bytes are processed and if there&#39;s a limit on the total size of the input. See <a href="#NOTES">&quot;NOTES&quot;</a> below for a deeper explanation.</p>
+
+<p>EVP_PKEY_sign_message_final() signs the processed data and places the data in <i>sig</i>, and the number of signature bytes in <i>*siglen</i>, if the number of bytes doesn&#39;t surpass the size given by <i>sigsize</i>. <i>sig</i> may be NULL, and in that case, only <i>*siglen</i> is updated with the number of signature bytes.</p>
+
+<p>EVP_PKEY_sign() is a one-shot function that can be used with all the init functions above. When initialization was done with EVP_PKEY_sign_init(), EVP_PKEY_sign_init_ex() or EVP_PKEY_sign_init_ex2(), the data specified by <i>tbs</i> and <i>tbslen</i> is signed after appropriate padding. When initialization was done with EVP_PKEY_sign_message_init(), the data specified by <i>tbs</i> and <i>tbslen</i> is digested by the implied message digest algorithm, and the result is signed after appropriate padding. If <i>sig</i> is NULL then the maximum size of the output buffer is written to the <i>siglen</i> parameter. If <i>sig</i> is not NULL, then before the call the <i>siglen</i> parameter should contain the length of the <i>sig</i> buffer, and if the call is successful the signature is written to <i>sig</i> and the amount of data written to <i>siglen</i>.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<h2 id="General">General</h2>
+
+<p>Some signature implementations only accumulate the input data and do no further processing before signing it (they expect the input to be a digest), while others compress the data, typically by internally producing a digest, and signing the result. Some of them support both modes of operation at the same time. The caller is expected to know how the chosen algorithm is supposed to behave and under what conditions.</p>
+
+<p>For example, an RSA implementation can be expected to only expect a message digest as input, while ED25519 can be expected to process the input with a hash, i.e. to produce the message digest internally, and while RSA-SHA256 can be expected to handle either mode of operation, depending on if the operation was initialized with EVP_PKEY_sign_init_ex2() or with EVP_PKEY_sign_message_init().</p>
+
+<p>Similarly, an RSA implementation usually expects additional details to be set, like the message digest algorithm that the input is supposed to be digested with, as well as the padding mode (see <a href="../man3/EVP_PKEY_CTX_set_signature_md.html">EVP_PKEY_CTX_set_signature_md(3)</a> and <a href="../man3/EVP_PKEY_CTX_set_rsa_padding.html">EVP_PKEY_CTX_set_rsa_padding(3)</a> and similar others), while an RSA-SHA256 implementation usually has these details pre-set and immutable.</p>
+
+<p>The functions described here can&#39;t be used to combine separate algorithms. In particular, neither <a href="../man3/EVP_PKEY_CTX_set_signature_md.html">EVP_PKEY_CTX_set_signature_md(3)</a> nor the <b>OSSL_PARAM</b> parameter &quot;digest&quot; (<b>OSSL_SIGNATURE_PARAM_DIGEST</b>) can be used to combine a signature algorithm with a hash algorithm to process the input. In other words, it&#39;s not possible to specify a <i>ctx</i> pre-loaded with an RSA pkey, or an <i>algo</i> that fetched <code>RSA</code> and try to specify SHA256 separately to get the functionality of RSA-SHA256. If combining algorithms in that manner is desired, please use <a href="../man3/EVP_DigestSignInit.html">EVP_DigestSignInit(3)</a> and associated functions.</p>
+
+<h2 id="Performing-multiple-signatures">Performing multiple signatures</h2>
+
+<p>When initialized using EVP_PKEY_sign_init_ex() or EVP_PKEY_sign_init_ex2(), EVP_PKEY_sign() can be called more than once on the same context to have several one-shot operations performed using the same parameters.</p>
+
+<p>When initialized using EVP_PKEY_sign_message_init(), it&#39;s not possible to call EVP_PKEY_sign() multiple times.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>All functions return 1 for success and 0 or a negative value for failure.</p>
+
+<p>In particular, EVP_PKEY_sign_init() and its other variants may return -2 to indicate that the operation is not supported by the public key algorithm.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<h2 id="RSA-with-PKCS-1-padding-for-SHA256">RSA with PKCS#1 padding for SHA256</h2>
+
+<p>Sign data using RSA with PKCS#1 padding and a SHA256 digest as input:</p>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+#include &lt;openssl/rsa.h&gt;
+
+EVP_PKEY_CTX *ctx;
+/* md is a SHA-256 digest in this example. */
+unsigned char *md, *sig;
+size_t mdlen = 32, siglen;
+EVP_PKEY *signing_key;
+
+/*
+ * NB: assumes signing_key and md are set up before the next
+ * step. signing_key must be an RSA private key and md must
+ * point to the SHA-256 digest to be signed.
+ */
+ctx = EVP_PKEY_CTX_new(signing_key, NULL /* no engine */);
+if (ctx == NULL)
+    /* Error occurred */
+if (EVP_PKEY_sign_init(ctx) &lt;= 0)
+    /* Error */
+if (EVP_PKEY_CTX_set_rsa_padding(ctx, RSA_PKCS1_PADDING) &lt;= 0)
+    /* Error */
+if (EVP_PKEY_CTX_set_signature_md(ctx, EVP_sha256()) &lt;= 0)
+    /* Error */
+
+/* Determine buffer length */
+if (EVP_PKEY_sign(ctx, NULL, &amp;siglen, md, mdlen) &lt;= 0)
+    /* Error */
+
+sig = OPENSSL_malloc(siglen);
+
+if (sig == NULL)
+    /* malloc failure */
+
+if (EVP_PKEY_sign(ctx, sig, &amp;siglen, md, mdlen) &lt;= 0)
+    /* Error */
+
+/* Signature is siglen bytes written to buffer sig */</code></pre>
+
+<h2 id="RSA-SHA256-with-a-pre-computed-digest">RSA-SHA256 with a pre-computed digest</h2>
+
+<p>Sign a digest with RSA-SHA256 using one-shot functions. To be noted is that RSA-SHA256 is assumed to be an implementation of <code>sha256WithRSAEncryption</code>, for which the padding is pre-determined to be <b>RSA_PKCS1_PADDING</b>, and the input digest is assumed to have been computed using SHA256.</p>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+#include &lt;openssl/rsa.h&gt;
+
+EVP_PKEY_CTX *ctx;
+/* md is a SHA-256 digest in this example. */
+unsigned char *md, *sig;
+size_t mdlen = 32, siglen;
+EVP_PKEY *signing_key;
+
+/*
+ * NB: assumes signing_key and md are set up before the next
+ * step. signing_key must be an RSA private key and md must
+ * point to the SHA-256 digest to be signed.
+ */
+ctx = EVP_PKEY_CTX_new(signing_key, NULL /* no engine */);
+alg = EVP_SIGNATURE_fetch(NULL, &quot;RSA-SHA256&quot;, NULL);
+
+if (ctx == NULL)
+    /* Error occurred */
+if (EVP_PKEY_sign_init_ex2(ctx, alg, NULL) &lt;= 0)
+    /* Error */
+
+/* Determine buffer length */
+if (EVP_PKEY_sign(ctx, NULL, &amp;siglen, md, mdlen) &lt;= 0)
+    /* Error */
+
+sig = OPENSSL_malloc(siglen);
+
+if (sig == NULL)
+    /* malloc failure */
+
+if (EVP_PKEY_sign(ctx, sig, &amp;siglen, md, mdlen) &lt;= 0)
+    /* Error */
+
+/* Signature is siglen bytes written to buffer sig */</code></pre>
+
+<h2 id="RSA-SHA256-one-shot">RSA-SHA256, one-shot</h2>
+
+<p>Sign a document with RSA-SHA256 using one-shot functions. To be noted is that RSA-SHA256 is assumed to be an implementation of <code>sha256WithRSAEncryption</code>, for which the padding is pre-determined to be <b>RSA_PKCS1_PADDING</b>.</p>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+#include &lt;openssl/rsa.h&gt;
+
+EVP_PKEY_CTX *ctx;
+/* in is the input in this example. */
+unsigned char *in, *sig;
+/* inlen is the length of the input in this example. */
+size_t inlen, siglen;
+EVP_PKEY *signing_key;
+EVP_SIGNATURE *alg;
+
+/*
+ * NB: assumes signing_key, in and inlen are set up before
+ * the next step. signing_key must be an RSA private key,
+ * in must point to data to be digested and signed, and
+ * inlen must be the size of the data in bytes.
+ */
+ctx = EVP_PKEY_CTX_new(signing_key, NULL /* no engine */);
+alg = EVP_SIGNATURE_fetch(NULL, &quot;RSA-SHA256&quot;, NULL);
+
+if (ctx == NULL || alg == NULL)
+    /* Error occurred */
+if (EVP_PKEY_sign_message_init(ctx, alg, NULL) &lt;= 0)
+    /* Error */
+
+/* Determine sig buffer length */
+if (EVP_PKEY_sign(ctx, NULL, &amp;siglen, in, inlen) &lt;= 0)
+    /* Error */
+
+sig = OPENSSL_malloc(siglen);
+
+if (sig == NULL)
+    /* malloc failure */
+
+if (EVP_PKEY_sign(ctx, sig, &amp;siglen, in, inlen) &lt;= 0)
+    /* Error */
+
+/* Signature is siglen bytes written to buffer sig */</code></pre>
+
+<h2 id="RSA-SHA256-using-update-and-final">RSA-SHA256, using update and final</h2>
+
+<p>This is the same as the previous example, but allowing stream-like functionality.</p>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+#include &lt;openssl/rsa.h&gt;
+
+EVP_PKEY_CTX *ctx;
+/* in is the input in this example. */
+unsigned char *in, *sig;
+/* inlen is the length of the input in this example. */
+size_t inlen, siglen;
+EVP_PKEY *signing_key;
+EVP_SIGNATURE *alg;
+
+/*
+ * NB: assumes signing_key, in and inlen are set up before
+ * the next step. signing_key must be an RSA private key,
+ * in must point to data to be digested and signed, and
+ * inlen must be the size of the data in bytes.
+ */
+ctx = EVP_PKEY_CTX_new(signing_key, NULL /* no engine */);
+alg = EVP_SIGNATURE_fetch(NULL, &quot;RSA-SHA256&quot;, NULL);
+
+if (ctx == NULL || alg == NULL)
+    /* Error occurred */
+if (EVP_PKEY_sign_message_init(ctx, alg, NULL) &lt;= 0)
+    /* Error */
+
+while (inlen &gt; 0) {
+    if (EVP_PKEY_sign_message_update(ctx, in, inlen)) &lt;= 0)
+        /* Error */
+    if (inlen &gt; 256) {
+        inlen -= 256;
+        in += 256;
+    } else {
+        inlen = 0;
+    }
+}
+
+/* Determine sig buffer length */
+if (EVP_PKEY_sign_message_final(ctx, NULL, &amp;siglen) &lt;= 0)
+    /* Error */
+
+sig = OPENSSL_malloc(siglen);
+
+if (sig == NULL)
+    /* malloc failure */
+
+if (EVP_PKEY_sign_message_final(ctx, sig, &amp;siglen) &lt;= 0)
+    /* Error */
+
+/* Signature is siglen bytes written to buffer sig */</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_PKEY_CTX_new.html">EVP_PKEY_CTX_new(3)</a>, <a href="../man3/EVP_PKEY_CTX_ctrl.html">EVP_PKEY_CTX_ctrl(3)</a>, <a href="../man3/EVP_PKEY_encrypt.html">EVP_PKEY_encrypt(3)</a>, <a href="../man3/EVP_PKEY_decrypt.html">EVP_PKEY_decrypt(3)</a>, <a href="../man3/EVP_PKEY_verify.html">EVP_PKEY_verify(3)</a>, <a href="../man3/EVP_PKEY_verify_recover.html">EVP_PKEY_verify_recover(3)</a>, <a href="../man3/EVP_PKEY_derive.html">EVP_PKEY_derive(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The EVP_PKEY_sign_init() and EVP_PKEY_sign() functions were added in OpenSSL 1.0.0.</p>
+
+<p>The EVP_PKEY_sign_init_ex() function was added in OpenSSL 3.0.</p>
+
+<p>The EVP_PKEY_sign_init_ex2(), EVP_PKEY_sign_message_init(), EVP_PKEY_sign_message_update() and EVP_PKEY_sign_message_final() functions where added in OpenSSL 3.4.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2006-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

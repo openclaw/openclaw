@@ -1,0 +1,86 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>CMS_EnvelopedData_create</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>CMS_EnvelopedData_create_ex, CMS_EnvelopedData_create, CMS_AuthEnvelopedData_create, CMS_AuthEnvelopedData_create_ex - Create CMS envelope</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/cms.h&gt;
+
+CMS_ContentInfo *
+CMS_EnvelopedData_create_ex(const EVP_CIPHER *cipher, OSSL_LIB_CTX *libctx,
+                            const char *propq);
+CMS_ContentInfo *CMS_EnvelopedData_create(const EVP_CIPHER *cipher);
+
+CMS_ContentInfo *
+CMS_AuthEnvelopedData_create_ex(const EVP_CIPHER *cipher, OSSL_LIB_CTX *libctx,
+                                const char *propq);
+CMS_ContentInfo *CMS_AuthEnvelopedData_create(const EVP_CIPHER *cipher);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>CMS_EnvelopedData_create_ex() creates a <b>CMS_ContentInfo</b> structure with a type <b>NID_pkcs7_enveloped</b>. <i>cipher</i> is the symmetric cipher to use. The library context <i>libctx</i> and the property query <i>propq</i> are used when retrieving algorithms from providers.</p>
+
+<p>CMS_AuthEnvelopedData_create_ex() creates a <b>CMS_ContentInfo</b> structure with a type <b>NID_id_smime_ct_authEnvelopedData</b>. <b>cipher</b> is the symmetric AEAD cipher to use. Currently only AES variants with GCM mode are supported. The library context <i>libctx</i> and the property query <i>propq</i> are used when retrieving algorithms from providers.</p>
+
+<p>The algorithm passed in the <i>cipher</i> parameter must support ASN1 encoding of its parameters.</p>
+
+<p>The recipients can be added later using <a href="../man3/CMS_add1_recipient_cert.html">CMS_add1_recipient_cert(3)</a> or <a href="../man3/CMS_add0_recipient_key.html">CMS_add0_recipient_key(3)</a>.</p>
+
+<p>The <b>CMS_ContentInfo</b> structure needs to be finalized using <a href="../man3/CMS_final.html">CMS_final(3)</a> and then freed using <a href="../man3/CMS_ContentInfo_free.html">CMS_ContentInfo_free(3)</a>.</p>
+
+<p>CMS_EnvelopedData_create() and CMS_AuthEnvelopedData_create() are similar to CMS_EnvelopedData_create_ex() and CMS_AuthEnvelopedData_create_ex() but use default values of NULL for the library context <i>libctx</i> and the property query <i>propq</i>.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>Although CMS_EnvelopedData_create_ex(), and CMS_EnvelopedData_create(), CMS_AuthEnvelopedData_create_ex(), and CMS_AuthEnvelopedData_create() allocate a new <b>CMS_ContentInfo</b> structure, they are not usually used in applications. The wrappers <a href="../man3/CMS_encrypt.html">CMS_encrypt(3)</a> and <a href="../man3/CMS_decrypt.html">CMS_decrypt(3)</a> are often used instead.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>If the allocation fails, CMS_EnvelopedData_create_ex(), CMS_EnvelopedData_create(), CMS_AuthEnvelopedData_create_ex(), CMS_AuthEnvelopedData_create(), CMS_AuthEnvelopedData_create(), and CMS_AuthEnvelopedData_create_ex() return NULL and set an error code that can be obtained by <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>. Otherwise, they return a pointer to the newly allocated structure.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>, <a href="../man3/CMS_encrypt.html">CMS_encrypt(3)</a>, <a href="../man3/CMS_decrypt.html">CMS_decrypt(3)</a>, <a href="../man3/CMS_final.html">CMS_final(3)</a>, <a href="../man3/CMS_sign_ex.html">CMS_sign_ex(3)</a>, <a href="../man3/CMS_encrypt_ex.html">CMS_encrypt_ex(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The CMS_EnvelopedData_create_ex() method was added in OpenSSL 3.0.</p>
+
+<p>CMS_AuthEnvelopedData_create() and CMS_AuthEnvelopedData_create_ex() were added in OpenSSL 3.5.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2020-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

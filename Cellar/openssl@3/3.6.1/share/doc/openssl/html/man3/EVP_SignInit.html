@@ -1,0 +1,104 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_SignInit</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#BUGS">BUGS</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_SignInit, EVP_SignInit_ex, EVP_SignUpdate, EVP_SignFinal_ex, EVP_SignFinal - EVP signing functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+
+int EVP_SignInit_ex(EVP_MD_CTX *ctx, const EVP_MD *type, ENGINE *impl);
+int EVP_SignUpdate(EVP_MD_CTX *ctx, const void *d, unsigned int cnt);
+int EVP_SignFinal_ex(EVP_MD_CTX *ctx, unsigned char *md, unsigned int *s,
+                     EVP_PKEY *pkey, OSSL_LIB_CTX *libctx, const char *propq);
+int EVP_SignFinal(EVP_MD_CTX *ctx, unsigned char *sig, unsigned int *s,
+                  EVP_PKEY *pkey);
+
+void EVP_SignInit(EVP_MD_CTX *ctx, const EVP_MD *type);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The EVP signature routines are a high-level interface to digital signatures.</p>
+
+<p>EVP_SignInit_ex() sets up signing context <i>ctx</i> to use digest <i>type</i> from <b>ENGINE</b> <i>impl</i>. <i>ctx</i> must be created with EVP_MD_CTX_new() before calling this function.</p>
+
+<p>EVP_SignUpdate() hashes <i>cnt</i> bytes of data at <i>d</i> into the signature context <i>ctx</i>. This function can be called several times on the same <i>ctx</i> to include additional data.</p>
+
+<p>EVP_SignFinal_ex() signs the data in <i>ctx</i> using the private key <i>pkey</i> and places the signature in <i>sig</i>. The library context <i>libctx</i> and property query <i>propq</i> are used when creating a context to use with the key <i>pkey</i>. <i>sig</i> must be at least <code>EVP_PKEY_get_size(pkey)</code> bytes in size. <i>s</i> is an OUT parameter, and not used as an IN parameter. The number of bytes of data written (i.e. the length of the signature) will be written to the integer at <i>s</i>, at most <code>EVP_PKEY_get_size(pkey)</code> bytes will be written.</p>
+
+<p>EVP_SignFinal() is similar to EVP_SignFinal_ex() but uses default values of NULL for the library context <i>libctx</i> and the property query <i>propq</i>.</p>
+
+<p>EVP_SignInit() initializes a signing context <i>ctx</i> to use the default implementation of digest <i>type</i>.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>EVP_SignInit_ex(), EVP_SignUpdate(), EVP_SignFinal_ex() and EVP_SignFinal() return 1 for success and 0 for failure.</p>
+
+<p>The error codes can be obtained by <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The <b>EVP</b> interface to digital signatures should almost always be used in preference to the low-level interfaces. This is because the code then becomes transparent to the algorithm used and much more flexible.</p>
+
+<p>When signing with some private key types the random number generator must be seeded. If the automatic seeding or reseeding of the OpenSSL CSPRNG fails due to external circumstances (see <a href="../man7/RAND.html">RAND(7)</a>), the operation will fail.</p>
+
+<p>The call to EVP_SignFinal() internally finalizes a copy of the digest context. This means that calls to EVP_SignUpdate() and EVP_SignFinal() can be called later to digest and sign additional data.cApplications may disable this behavior by setting the EVP_MD_CTX_FLAG_FINALISE context flag via <a href="../man3/EVP_MD_CTX_set_flags.html">EVP_MD_CTX_set_flags(3)</a>.</p>
+
+<p>Since only a copy of the digest context is ever finalized the context must be cleaned up after use by calling EVP_MD_CTX_free() or a memory leak will occur.</p>
+
+<p>Note that not all providers support continuation, in case the selected provider does not allow to duplicate contexts EVP_SignFinal() will finalize the digest context and attempting to process additional data via EVP_SignUpdate() will result in an error.</p>
+
+<h1 id="BUGS">BUGS</h1>
+
+<p>Older versions of this documentation wrongly stated that calls to EVP_SignUpdate() could not be made after calling EVP_SignFinal().</p>
+
+<p>Since the private key is passed in the call to EVP_SignFinal() any error relating to the private key (for example an unsuitable key and digest combination) will not be indicated until after potentially large amounts of data have been passed through EVP_SignUpdate().</p>
+
+<p>It is not possible to change the signing parameters using these function.</p>
+
+<p>The previous two bugs are fixed in the newer EVP_DigestSign*() functions.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_PKEY_get_size.html">EVP_PKEY_get_size(3)</a>, <a href="../man3/EVP_PKEY_get_bits.html">EVP_PKEY_get_bits(3)</a>, <a href="../man3/EVP_PKEY_get_security_bits.html">EVP_PKEY_get_security_bits(3)</a>, <a href="../man3/EVP_VerifyInit.html">EVP_VerifyInit(3)</a>, <a href="../man3/EVP_DigestInit.html">EVP_DigestInit(3)</a>, <a href="../man7/evp.html">evp(7)</a>, <a href="../man3/HMAC.html">HMAC(3)</a>, <a href="../man3/MD2.html">MD2(3)</a>, <a href="../man3/MD5.html">MD5(3)</a>, <a href="../man3/MDC2.html">MDC2(3)</a>, <a href="../man3/RIPEMD160.html">RIPEMD160(3)</a>, <a href="../man3/SHA1.html">SHA1(3)</a>, <a href="../man1/openssl-dgst.html">openssl-dgst(1)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The function EVP_SignFinal_ex() was added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

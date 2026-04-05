@@ -1,0 +1,77 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>X509_get_pubkey</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>X509_get_pubkey, X509_get0_pubkey, X509_set_pubkey, X509_get_X509_PUBKEY, X509_REQ_get_pubkey, X509_REQ_get0_pubkey, X509_REQ_set_pubkey, X509_REQ_get_X509_PUBKEY - get or set certificate or certificate request public key</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/x509.h&gt;
+
+EVP_PKEY *X509_get_pubkey(X509 *x);
+EVP_PKEY *X509_get0_pubkey(const X509 *x);
+int X509_set_pubkey(X509 *x, EVP_PKEY *pkey);
+X509_PUBKEY *X509_get_X509_PUBKEY(const X509 *x);
+
+EVP_PKEY *X509_REQ_get_pubkey(X509_REQ *req);
+EVP_PKEY *X509_REQ_get0_pubkey(X509_REQ *req);
+int X509_REQ_set_pubkey(X509_REQ *x, EVP_PKEY *pkey);
+X509_PUBKEY *X509_REQ_get_X509_PUBKEY(X509_REQ *x);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>X509_get_pubkey() attempts to decode the public key for certificate <b>x</b>. If successful it returns the public key as an <b>EVP_PKEY</b> pointer with its reference count incremented: this means the returned key must be freed up after use. X509_get0_pubkey() is similar except it does <b>not</b> increment the reference count of the returned <b>EVP_PKEY</b> so it must not be freed up after use.</p>
+
+<p>X509_get_X509_PUBKEY() returns an internal pointer to the <b>X509_PUBKEY</b> structure which encodes the certificate of <b>x</b>. The returned value must not be freed up after use.</p>
+
+<p>X509_set_pubkey() attempts to set the public key for certificate <b>x</b> to <b>pkey</b>. The key <b>pkey</b> should be freed up after use.</p>
+
+<p>X509_REQ_get_pubkey(), X509_REQ_get0_pubkey(), X509_REQ_set_pubkey() and X509_REQ_get_X509_PUBKEY() are similar but operate on certificate request <b>req</b>.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The first time a public key is decoded the <b>EVP_PKEY</b> structure is cached in the certificate or certificate request itself. Subsequent calls return the cached structure with its reference count incremented to improve performance.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>X509_get_pubkey(), X509_get0_pubkey(), X509_get_X509_PUBKEY(), X509_REQ_get_pubkey() and X509_REQ_get_X509_PUBKEY() return a public key or <b>NULL</b> if an error occurred.</p>
+
+<p>X509_set_pubkey() and X509_REQ_set_pubkey() return 1 for success and 0 for failure.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/d2i_X509.html">d2i_X509(3)</a>, <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>, <a href="../man3/X509_CRL_get0_by_serial.html">X509_CRL_get0_by_serial(3)</a>, <a href="../man3/X509_get0_signature.html">X509_get0_signature(3)</a>, <a href="../man3/X509_get_ext_d2i.html">X509_get_ext_d2i(3)</a>, <a href="../man3/X509_get_extension_flags.html">X509_get_extension_flags(3)</a>, <a href="../man3/X509_get_subject_name.html">X509_get_subject_name(3)</a>, <a href="../man3/X509_get_version.html">X509_get_version(3)</a>, <a href="../man3/X509_NAME_add_entry_by_txt.html">X509_NAME_add_entry_by_txt(3)</a>, <a href="../man3/X509_NAME_ENTRY_get_object.html">X509_NAME_ENTRY_get_object(3)</a>, <a href="../man3/X509_NAME_get_index_by_NID.html">X509_NAME_get_index_by_NID(3)</a>, <a href="../man3/X509_NAME_print_ex.html">X509_NAME_print_ex(3)</a>, <a href="../man3/X509_new.html">X509_new(3)</a>, <a href="../man3/X509_sign.html">X509_sign(3)</a>, <a href="../man3/X509V3_get_d2i.html">X509V3_get_d2i(3)</a>, <a href="../man3/X509_verify_cert.html">X509_verify_cert(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2015-2016 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,186 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>X509_LOOKUP</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Control-Commands">Control Commands</a></li>
+    </ul>
+  </li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>X509_LOOKUP, X509_LOOKUP_TYPE, X509_LOOKUP_new, X509_LOOKUP_free, X509_LOOKUP_init, X509_LOOKUP_shutdown, X509_LOOKUP_set_method_data, X509_LOOKUP_get_method_data, X509_LOOKUP_ctrl_ex, X509_LOOKUP_ctrl, X509_LOOKUP_load_file_ex, X509_LOOKUP_load_file, X509_LOOKUP_add_dir, X509_LOOKUP_add_store_ex, X509_LOOKUP_add_store, X509_LOOKUP_load_store_ex, X509_LOOKUP_load_store, X509_LOOKUP_get_store, X509_LOOKUP_by_subject_ex, X509_LOOKUP_by_subject, X509_LOOKUP_by_issuer_serial, X509_LOOKUP_by_fingerprint, X509_LOOKUP_by_alias - OpenSSL certificate lookup mechanisms</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/x509_vfy.h&gt;
+
+typedef x509_lookup_st X509_LOOKUP;
+
+typedef enum X509_LOOKUP_TYPE;
+
+X509_LOOKUP *X509_LOOKUP_new(X509_LOOKUP_METHOD *method);
+int X509_LOOKUP_init(X509_LOOKUP *ctx);
+int X509_LOOKUP_shutdown(X509_LOOKUP *ctx);
+void X509_LOOKUP_free(X509_LOOKUP *ctx);
+
+int X509_LOOKUP_set_method_data(X509_LOOKUP *ctx, void *data);
+void *X509_LOOKUP_get_method_data(const X509_LOOKUP *ctx);
+
+int X509_LOOKUP_ctrl_ex(X509_LOOKUP *ctx, int cmd, const char *argc, long argl,
+                        char **ret, OSSL_LIB_CTX *libctx, const char *propq);
+int X509_LOOKUP_ctrl(X509_LOOKUP *ctx, int cmd, const char *argc,
+                     long argl, char **ret);
+int X509_LOOKUP_load_file_ex(X509_LOOKUP *ctx, char *name, long type,
+                             OSSL_LIB_CTX *libctx, const char *propq);
+int X509_LOOKUP_load_file(X509_LOOKUP *ctx, char *name, long type);
+int X509_LOOKUP_load_file_ex(X509_LOOKUP *ctx, char *name, long type,
+                             OSSL_LIB_CTX *libctx, const char *propq);
+int X509_LOOKUP_add_dir(X509_LOOKUP *ctx, char *name, long type);
+int X509_LOOKUP_add_store_ex(X509_LOOKUP *ctx, char *uri, OSSL_LIB_CTX *libctx,
+                             const char *propq);
+int X509_LOOKUP_add_store(X509_LOOKUP *ctx, char *uri);
+int X509_LOOKUP_load_store_ex(X509_LOOKUP *ctx, char *uri, OSSL_LIB_CTX *libctx,
+                              const char *propq);
+int X509_LOOKUP_load_store(X509_LOOKUP *ctx, char *uri);
+
+X509_STORE *X509_LOOKUP_get_store(const X509_LOOKUP *ctx);
+
+int X509_LOOKUP_by_subject_ex(X509_LOOKUP *ctx, X509_LOOKUP_TYPE type,
+                              const X509_NAME *name, X509_OBJECT *ret,
+                              OSSL_LIB_CTX *libctx, const char *propq);
+int X509_LOOKUP_by_subject(X509_LOOKUP *ctx, X509_LOOKUP_TYPE type,
+                           const X509_NAME *name, X509_OBJECT *ret);
+int X509_LOOKUP_by_issuer_serial(X509_LOOKUP *ctx, X509_LOOKUP_TYPE type,
+                                 const X509_NAME *name,
+                                 const ASN1_INTEGER *serial, X509_OBJECT *ret);
+int X509_LOOKUP_by_fingerprint(X509_LOOKUP *ctx, X509_LOOKUP_TYPE type,
+                               const unsigned char *bytes, int len,
+                               X509_OBJECT *ret);
+int X509_LOOKUP_by_alias(X509_LOOKUP *ctx, X509_LOOKUP_TYPE type,
+                         const char *str, int len, X509_OBJECT *ret);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The <b>X509_LOOKUP</b> structure holds the information needed to look up certificates and CRLs according to an associated <a href="../man3/X509_LOOKUP_METHOD.html">X509_LOOKUP_METHOD(3)</a>. Multiple <b>X509_LOOKUP</b> instances can be added to an <a href="../man3/X509_STORE.html">X509_STORE(3)</a> to enable lookup in that store.</p>
+
+<p>X509_LOOKUP_new() creates a new <b>X509_LOOKUP</b> using the given lookup <i>method</i>. It can also be created by calling <a href="../man3/X509_STORE_add_lookup.html">X509_STORE_add_lookup(3)</a>, which will associate a <b>X509_STORE</b> with the lookup mechanism.</p>
+
+<p>X509_LOOKUP_init() initializes the internal state and resources as needed by the given <b>X509_LOOKUP</b> to do its work.</p>
+
+<p>X509_LOOKUP_shutdown() tears down the internal state and resources of the given <b>X509_LOOKUP</b>.</p>
+
+<p>X509_LOOKUP_free() destructs the given <b>X509_LOOKUP</b>. If the argument is NULL, nothing is done.</p>
+
+<p>X509_LOOKUP_set_method_data() and X509_LOOKUP_get_method_data() associates and retrieves a pointer to application data to and from the given <b>X509_LOOKUP</b>, respectively.</p>
+
+<p>X509_LOOKUP_ctrl_ex() is used to set or get additional data to or from a <b>X509_LOOKUP</b> structure using any control function in the associated <a href="../man3/X509_LOOKUP_METHOD.html">X509_LOOKUP_METHOD(3)</a>. The arguments of the control command are passed via <i>argc</i> and <i>argl</i>, its return value via <i>*ret</i>. The library context <i>libctx</i> and property query <i>propq</i> are used when fetching algorithms from providers. The meaning of the arguments depends on the <i>cmd</i> number of the control command. In general, this function is not called directly, but wrapped by a macro call, see below. The control <i>cmd</i>s known to OpenSSL are discussed in more depth in <a href="#Control-Commands">&quot;Control Commands&quot;</a>.</p>
+
+<p>X509_LOOKUP_ctrl() is similar to X509_LOOKUP_ctrl_ex() but uses NULL for the library context <i>libctx</i> and property query <i>propq</i>.</p>
+
+<p>X509_LOOKUP_load_file_ex() passes a filename to be loaded immediately into the associated <b>X509_STORE</b>. The library context <i>libctx</i> and property query <i>propq</i> are used when fetching algorithms from providers. <i>type</i> indicates what type of object is expected. This can only be used with a lookup using the implementation <a href="../man3/X509_LOOKUP_file.html">X509_LOOKUP_file(3)</a>.</p>
+
+<p>X509_LOOKUP_load_file() is similar to X509_LOOKUP_load_file_ex() but uses NULL for the library context <i>libctx</i> and property query <i>propq</i>.</p>
+
+<p>X509_LOOKUP_add_dir() passes a directory specification from which certificates and CRLs are loaded on demand into the associated <b>X509_STORE</b>. <i>type</i> indicates what type of object is expected. This can only be used with a lookup using the implementation <a href="../man3/X509_LOOKUP_hash_dir.html">X509_LOOKUP_hash_dir(3)</a>.</p>
+
+<p>X509_LOOKUP_add_store_ex() passes a URI for a directory-like structure from which containers with certificates and CRLs are loaded on demand into the associated <b>X509_STORE</b>. The library context <i>libctx</i> and property query <i>propq</i> are used when fetching algorithms from providers.</p>
+
+<p>X509_LOOKUP_add_store() is similar to X509_LOOKUP_add_store_ex() but uses NULL for the library context <i>libctx</i> and property query <i>propq</i>.</p>
+
+<p>X509_LOOKUP_load_store_ex() passes a URI for a single container from which certificates and CRLs are immediately loaded into the associated <b>X509_STORE</b>. The library context <i>libctx</i> and property query <i>propq</i> are used when fetching algorithms from providers. These functions can only be used with a lookup using the implementation <a href="../man3/X509_LOOKUP_store.html">X509_LOOKUP_store(3)</a>.</p>
+
+<p>X509_LOOKUP_load_store() is similar to X509_LOOKUP_load_store_ex() but uses NULL for the library context <i>libctx</i> and property query <i>propq</i>.</p>
+
+<p>X509_LOOKUP_load_file_ex(), X509_LOOKUP_load_file(), X509_LOOKUP_add_dir(), X509_LOOKUP_add_store_ex() X509_LOOKUP_add_store(), X509_LOOKUP_load_store_ex() and X509_LOOKUP_load_store() are implemented as macros that use X509_LOOKUP_ctrl().</p>
+
+<p>X509_LOOKUP_by_subject_ex(), X509_LOOKUP_by_subject(), X509_LOOKUP_by_issuer_serial(), X509_LOOKUP_by_fingerprint(), and X509_LOOKUP_by_alias() look up certificates and CRLs in the <a href="../man3/X509_STORE.html">X509_STORE(3)</a> associated with the <b>X509_LOOKUP</b> using different criteria, where the looked up object is stored in <i>ret</i>. Some of the underlying <b>X509_LOOKUP_METHOD</b>s will also cache objects matching the criteria in the associated <b>X509_STORE</b>, which makes it possible to handle cases where the criteria have more than one hit.</p>
+
+<h2 id="Control-Commands">Control Commands</h2>
+
+<p>The <b>X509_LOOKUP_METHOD</b>s built into OpenSSL recognize the following X509_LOOKUP_ctrl() <i>cmd</i>s:</p>
+
+<dl>
+
+<dt id="X509_L_FILE_LOAD"><b>X509_L_FILE_LOAD</b></dt>
+<dd>
+
+<p>This is the command that X509_LOOKUP_load_file_ex() and X509_LOOKUP_load_file() use. The filename is passed in <i>argc</i>, and the type in <i>argl</i>.</p>
+
+</dd>
+<dt id="X509_L_ADD_DIR"><b>X509_L_ADD_DIR</b></dt>
+<dd>
+
+<p>This is the command that X509_LOOKUP_add_dir() uses. The directory specification is passed in <i>argc</i>, and the type in <i>argl</i>.</p>
+
+</dd>
+<dt id="X509_L_ADD_STORE"><b>X509_L_ADD_STORE</b></dt>
+<dd>
+
+<p>This is the command that X509_LOOKUP_add_store_ex() and X509_LOOKUP_add_store() use. The URI is passed in <i>argc</i>.</p>
+
+</dd>
+<dt id="X509_L_LOAD_STORE"><b>X509_L_LOAD_STORE</b></dt>
+<dd>
+
+<p>This is the command that X509_LOOKUP_load_store_ex() and X509_LOOKUP_load_store() use. The URI is passed in <i>argc</i>.</p>
+
+</dd>
+</dl>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>X509_LOOKUP_new() returns a <b>X509_LOOKUP</b> pointer when successful, or NULL on error.</p>
+
+<p>X509_LOOKUP_init() and X509_LOOKUP_shutdown() return 1 on success, or 0 on error.</p>
+
+<p>X509_LOOKUP_ctrl_ex() and X509_LOOKUP_ctrl() return -1 if the <b>X509_LOOKUP</b> doesn&#39;t have an associated <b>X509_LOOKUP_METHOD</b>, or 1 if the  doesn&#39;t have a control function. Otherwise, it returns what the control function in the <b>X509_LOOKUP_METHOD</b> returns, which is usually 1 on success and 0 on error but could also be -1 on failure.</p>
+
+<p>X509_LOOKUP_get_store() returns a <b>X509_STORE</b> pointer if there is one, otherwise NULL.</p>
+
+<p>X509_LOOKUP_by_subject_ex() returns 0 if there is no <b>X509_LOOKUP_METHOD</b> that implements any of the get_by_subject_ex() or get_by_subject() functions. It calls get_by_subject_ex() if present, otherwise get_by_subject(), and returns the result of the function, which is usually 1 on success and 0 on error.</p>
+
+<p>X509_LOOKUP_by_subject() is similar to X509_LOOKUP_by_subject_ex() but passes NULL for both the libctx and propq.</p>
+
+<p>X509_LOOKUP_by_issuer_serial(), X509_LOOKUP_by_fingerprint(), and X509_LOOKUP_by_alias() all return 0 if there is no <b>X509_LOOKUP_METHOD</b> or that method doesn&#39;t implement the corresponding function. Otherwise, they return what the corresponding function in the <b>X509_LOOKUP_METHOD</b> returns, which is usually 1 on success and 0 in error.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/X509_LOOKUP_METHOD.html">X509_LOOKUP_METHOD(3)</a>, <a href="../man3/X509_STORE.html">X509_STORE(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The functions X509_LOOKUP_by_subject_ex() and X509_LOOKUP_ctrl_ex() were added in OpenSSL 3.0.</p>
+
+<p>The macros X509_LOOKUP_load_file_ex(), X509_LOOKUP_load_store_ex() and X509_LOOKUP_add_store_ex() were added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2020-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,112 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_PKEY_CTX_set_tls1_prf_md</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#STRING-CTRLS">STRING CTRLS</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_PKEY_CTX_set_tls1_prf_md, EVP_PKEY_CTX_set1_tls1_prf_secret, EVP_PKEY_CTX_add1_tls1_prf_seed - TLS PRF key derivation algorithm</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/kdf.h&gt;
+
+int EVP_PKEY_CTX_set_tls1_prf_md(EVP_PKEY_CTX *pctx, const EVP_MD *md);
+int EVP_PKEY_CTX_set1_tls1_prf_secret(EVP_PKEY_CTX *pctx,
+                                      unsigned char *sec, int seclen);
+int EVP_PKEY_CTX_add1_tls1_prf_seed(EVP_PKEY_CTX *pctx,
+                                    unsigned char *seed, int seedlen);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The <b>EVP_PKEY_TLS1_PRF</b> algorithm implements the PRF key derivation function for TLS. It has no associated private key and only implements key derivation using <a href="../man3/EVP_PKEY_derive.html">EVP_PKEY_derive(3)</a>.</p>
+
+<p>EVP_PKEY_set_tls1_prf_md() sets the message digest associated with the TLS PRF. EVP_md5_sha1() is treated as a special case which uses the PRF algorithm using both <b>MD5</b> and <b>SHA1</b> as used in TLS 1.0 and 1.1.</p>
+
+<p>EVP_PKEY_CTX_set_tls1_prf_secret() sets the secret value of the TLS PRF to <b>seclen</b> bytes of the buffer <b>sec</b>. Any existing secret value is replaced and any seed is reset.</p>
+
+<p>EVP_PKEY_CTX_add1_tls1_prf_seed() sets the seed to <b>seedlen</b> bytes of <b>seed</b>. If a seed is already set it is appended to the existing value.</p>
+
+<h1 id="STRING-CTRLS">STRING CTRLS</h1>
+
+<p>The TLS PRF also supports string based control operations using <a href="../man3/EVP_PKEY_CTX_ctrl_str.html">EVP_PKEY_CTX_ctrl_str(3)</a>. The <b>type</b> parameter &quot;md&quot; uses the supplied <b>value</b> as the name of the digest algorithm to use. The <b>type</b> parameters &quot;secret&quot; and &quot;seed&quot; use the supplied <b>value</b> parameter as a secret or seed value. The names &quot;hexsecret&quot; and &quot;hexseed&quot; are similar except they take a hex string which is converted to binary.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>A context for the TLS PRF can be obtained by calling:</p>
+
+<pre><code>EVP_PKEY_CTX *pctx = EVP_PKEY_CTX_new_id(EVP_PKEY_TLS1_PRF, NULL);</code></pre>
+
+<p>The digest, secret value and seed must be set before a key is derived or an error occurs.</p>
+
+<p>The total length of all seeds cannot exceed 1024 bytes in length: this should be more than enough for any normal use of the TLS PRF.</p>
+
+<p>The output length of the PRF is specified by the length parameter in the EVP_PKEY_derive() function. Since the output length is variable, setting the buffer to <b>NULL</b> is not meaningful for the TLS PRF.</p>
+
+<p>Optimised versions of the TLS PRF can be implemented in an ENGINE.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>All these functions return 1 for success and 0 or a negative value for failure. In particular a return value of -2 indicates the operation is not supported by the public key algorithm.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>This example derives 10 bytes using SHA-256 with the secret key &quot;secret&quot; and seed value &quot;seed&quot;:</p>
+
+<pre><code>EVP_PKEY_CTX *pctx;
+unsigned char out[10];
+size_t outlen = sizeof(out);
+
+pctx = EVP_PKEY_CTX_new_id(EVP_PKEY_TLS1_PRF, NULL);
+if (EVP_PKEY_derive_init(pctx) &lt;= 0)
+    /* Error */
+if (EVP_PKEY_CTX_set_tls1_prf_md(pctx, EVP_sha256()) &lt;= 0)
+    /* Error */
+if (EVP_PKEY_CTX_set1_tls1_prf_secret(pctx, &quot;secret&quot;, 6) &lt;= 0)
+    /* Error */
+if (EVP_PKEY_CTX_add1_tls1_prf_seed(pctx, &quot;seed&quot;, 4) &lt;= 0)
+    /* Error */
+if (EVP_PKEY_derive(pctx, out, &amp;outlen) &lt;= 0)
+    /* Error */</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_PKEY_CTX_new.html">EVP_PKEY_CTX_new(3)</a>, <a href="../man3/EVP_PKEY_CTX_ctrl_str.html">EVP_PKEY_CTX_ctrl_str(3)</a>, <a href="../man3/EVP_PKEY_derive.html">EVP_PKEY_derive(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>All of the functions described here were converted from macros to functions in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2016-2020 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

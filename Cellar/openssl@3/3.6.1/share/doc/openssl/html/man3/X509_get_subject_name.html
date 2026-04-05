@@ -1,0 +1,114 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>X509_get_subject_name</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#BUGS">BUGS</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>X509_NAME_hash_ex, X509_NAME_hash, X509_get_subject_name, X509_set_subject_name, X509_subject_name_hash, X509_get_issuer_name, X509_set_issuer_name, X509_issuer_name_hash, X509_REQ_get_subject_name, X509_REQ_set_subject_name, X509_ACERT_get0_issuerName, X509_ACERT_set1_issuerName, X509_CRL_get_issuer, X509_CRL_set_issuer_name - get X509_NAME hashes or get and set issuer or subject names</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/x509.h&gt;
+
+unsigned long X509_NAME_hash_ex(const X509_NAME *x, OSSL_LIB_CTX *libctx,
+                                const char *propq, int *ok);
+
+X509_NAME *X509_get_subject_name(const X509 *x);
+int X509_set_subject_name(X509 *x, const X509_NAME *name);
+unsigned long X509_subject_name_hash(X509 *x);
+
+X509_NAME *X509_get_issuer_name(const X509 *x);
+int X509_set_issuer_name(X509 *x, const X509_NAME *name);
+unsigned long X509_issuer_name_hash(X509 *x);
+
+X509_NAME *X509_REQ_get_subject_name(const X509_REQ *req);
+int X509_REQ_set_subject_name(X509_REQ *req, const X509_NAME *name);
+
+X509_NAME *X509_CRL_get_issuer(const X509_CRL *crl);
+int X509_CRL_set_issuer_name(X509_CRL *x, const X509_NAME *name);
+
+#include &lt;openssl/x509_acert.h&gt;
+
+X509_NAME *X509_ACERT_get0_issuerName(const X509_ACERT *x);
+int X509_ACERT_set1_issuerName(X509_ACERT *x, const X509_NAME *name);</code></pre>
+
+<p>The following macro has been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>#define X509_NAME_hash(x) X509_NAME_hash_ex(x, NULL, NULL, NULL)</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>X509_NAME_hash_ex() returns a hash value of name <i>x</i> or 0 on failure, using any given library context <i>libctx</i> and property query <i>propq</i>. The <i>ok</i> result argument may be NULL or else is used to return 1 for success and 0 for failure. Failure may happen on malloc error or if no SHA1 implementation is available.</p>
+
+<p>X509_NAME_hash() returns a hash value of name <i>x</i> or 0 on failure, using the default library context and default property query.</p>
+
+<p>X509_get_subject_name() returns the subject name of certificate <i>x</i>. The returned value is an internal pointer which <b>MUST NOT</b> be freed. <i>x</i> <b>MUST NOT</b> be NULL.</p>
+
+<p>X509_set_subject_name() sets the issuer name of certificate <i>x</i> to <i>name</i>. The <i>name</i> parameter is copied internally and should be freed up when it is no longer needed.</p>
+
+<p>X509_subject_name_hash() returns a hash value of the subject name of certificate <i>x</i>.</p>
+
+<p>X509_get_issuer_name(), X509_set_issuer_name(), and X509_issuer_name_hash() are identical to X509_get_subject_name(), X509_set_subject_name(), and X509_subject_name_hash() except they relate to the issuer name of <i>x</i>.</p>
+
+<p>Similarly X509_REQ_get_subject_name(), X509_REQ_set_subject_name(), X509_ACERT_get0_issuerName(), X509_ACERT_set1_issuerName(), X509_CRL_get_issuer() and X509_CRL_set_issuer_name() get or set the subject or issuer names of certificate requests of CRLs respectively.</p>
+
+<p>Since attribute certificates do not have a subject name, only the issuer name can be set. For details on setting X509_ACERT holder identities, see <a href="../man3/X509_ACERT_set0_holder_entityName.html">X509_ACERT_set0_holder_entityName(3)</a>.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>X509_get_subject_name(), X509_get_issuer_name(), X509_REQ_get_subject_name() X509_ACERT_get0_issuerName() and X509_CRL_get_issuer() return an <b>X509_NAME</b> pointer.</p>
+
+<p>X509_NAME_hash_ex(), X509_NAME_hash(), X509_subject_name_hash() and X509_issuer_name_hash() return the first four bytes of the SHA1 hash value, converted to <b>unsigned long</b> in little endian order, or 0 on failure.</p>
+
+<p>X509_set_subject_name(), X509_set_issuer_name(), X509_REQ_set_subject_name(), X509_ACERT_get0_issuerName() and X509_CRL_set_issuer_name() return 1 for success and 0 for failure.</p>
+
+<h1 id="BUGS">BUGS</h1>
+
+<p>In case X509_NAME_hash(), X509_subject_name_hash(), or X509_issuer_name_hash() returns 0 it remains unclear if this is the real hash value or due to failure. Better use X509_NAME_hash_ex() instead.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/d2i_X509.html">d2i_X509(3)</a>, <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>, <a href="../man3/d2i_X509.html">d2i_X509(3)</a> <a href="../man3/X509_CRL_get0_by_serial.html">X509_CRL_get0_by_serial(3)</a>, <a href="../man3/X509_get0_signature.html">X509_get0_signature(3)</a>, <a href="../man3/X509_get_ext_d2i.html">X509_get_ext_d2i(3)</a>, <a href="../man3/X509_get_extension_flags.html">X509_get_extension_flags(3)</a>, <a href="../man3/X509_get_pubkey.html">X509_get_pubkey(3)</a>, <a href="../man3/X509_NAME_add_entry_by_txt.html">X509_NAME_add_entry_by_txt(3)</a>, <a href="../man3/X509_NAME_ENTRY_get_object.html">X509_NAME_ENTRY_get_object(3)</a>, <a href="../man3/X509_NAME_get_index_by_NID.html">X509_NAME_get_index_by_NID(3)</a>, <a href="../man3/X509_NAME_print_ex.html">X509_NAME_print_ex(3)</a>, <a href="../man3/X509_new.html">X509_new(3)</a>, <a href="../man3/X509_sign.html">X509_sign(3)</a>, <a href="../man3/X509V3_get_d2i.html">X509V3_get_d2i(3)</a>, <a href="../man3/X509_verify_cert.html">X509_verify_cert(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>X509_REQ_get_subject_name() is a function in OpenSSL 1.1.0 and a macro in earlier versions.</p>
+
+<p>X509_CRL_get_issuer() is a function in OpenSSL 1.1.0. It was previously added in OpenSSL 1.0.0 as a macro.</p>
+
+<p>X509_NAME_hash() was turned into a macro and deprecated in OpenSSL 3.0.</p>
+
+<p>X509_ACERT_get0_issuerName(), X509_ACERT_set1_issuerName() were added in OpenSSL 3.4.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2015-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

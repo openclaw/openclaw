@@ -1,0 +1,57 @@
+{
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "spdxVersion": "SPDX-2.3",
+  "name": "SBOM-SPDX-summarize-0.12.0",
+  "creationInfo": {
+    "created": "2026-04-01T16:15:46Z",
+    "creators": ["Tool: https://github.com/Homebrew/brew@5.1.3"]
+  },
+  "dataLicense": "CC0-1.0",
+  "documentNamespace": "https://formulae.brew.sh/spdx/summarize-0.12.0.json",
+  "documentDescribes": ["SPDXRef-Archive-summarize-src", "SPDXRef-Compiler"],
+  "files": [],
+  "packages": [
+    {
+      "SPDXID": "SPDXRef-Archive-summarize-src",
+      "name": "summarize",
+      "versionInfo": "0.12.0",
+      "filesAnalyzed": false,
+      "licenseDeclared": "NOASSERTION",
+      "builtDate": "2026-03-11 23:18:56 UTC",
+      "licenseConcluded": "MIT",
+      "downloadLocation": "https://github.com/steipete/summarize/releases/download/v0.12.0/summarize-macos-arm64-v0.12.0.tar.gz",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [],
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "1c053d853d568ef1910570e6c0fa85bc7831faf377f2624b3e9e62284978f4aa"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Compiler",
+      "name": "clang",
+      "versionInfo": "26.3",
+      "filesAnalyzed": false,
+      "licenseDeclared": "NOASSERTION",
+      "licenseConcluded": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "checksums": [],
+      "externalRefs": []
+    }
+  ],
+  "relationships": [
+    {
+      "spdxElementId": "SPDXRef-File-summarize",
+      "relationshipType": "PACKAGE_OF",
+      "relatedSpdxElement": "SPDXRef-Archive-summarize-src"
+    },
+    {
+      "spdxElementId": "SPDXRef-Compiler",
+      "relationshipType": "BUILD_TOOL_OF",
+      "relatedSpdxElement": "SPDXRef-Package-summarize-src"
+    }
+  ]
+}

@@ -1,0 +1,173 @@
+
+The .lzma File Format
+=====================
+
+        0. Preface
+           0.1. Notices and Acknowledgements
+           0.2. Changes
+        1. File Format
+           1.1. Header
+                1.1.1. Properties
+                1.1.2. Dictionary Size
+                1.1.3. Uncompressed Size
+           1.2. LZMA Compressed Data
+        2. References
+
+
+0. Preface
+
+        This document describes the .lzma file format, which is
+        sometimes also called LZMA_Alone format. It is a legacy file
+        format, which is being or has been replaced by the .xz format.
+        The MIME type of the .lzma format is `application/x-lzma'.
+
+        The most commonly used software to handle .lzma files are
+        LZMA SDK, LZMA Utils, 7-Zip, and XZ Utils. This document
+        describes some of the differences between these implementations
+        and gives hints what subset of the .lzma format is the most
+        portable.
+
+
+0.1. Notices and Acknowledgements
+
+        This file format was designed by Igor Pavlov for use in
+        LZMA SDK. This document was written by Lasse Collin
+        <lasse.collin@tukaani.org> using the documentation found
+        from the LZMA SDK.
+
+        This document has been put into the public domain.
+
+
+0.2. Changes
+
+        Last modified: 2024-04-08 17:35+0300
+
+        From version 2011-04-12 11:55+0300 to 2022-07-13 21:00+0300:
+        The section 1.1.3 was modified to allow End of Payload Marker
+        with a known Uncompressed Size.
+
+
+1. File Format
+
+        +-+-+-+-+-+-+-+-+-+-+-+-+-+==========================+
+        |         Header          |   LZMA Compressed Data   |
+        +-+-+-+-+-+-+-+-+-+-+-+-+-+==========================+
+
+        The .lzma format file consist of 13-byte Header followed by
+        the LZMA Compressed Data.
+
+        Unlike the .gz, .bz2, and .xz formats, it is not possible to
+        concatenate multiple .lzma files as is and expect the
+        decompression tool to decode the resulting file as if it were
+        a single .lzma file.
+
+        For example, the command line tools from LZMA Utils and
+        LZMA SDK silently ignore all the data after the first .lzma
+        stream. In contrast, the command line tool from XZ Utils
+        considers the .lzma file to be corrupt if there is data after
+        the first .lzma stream.
+
+
+1.1. Header
+
+        +------------+----+----+----+----+--+--+--+--+--+--+--+--+
+        | Properties |  Dictionary Size  |   Uncompressed Size   |
+        +------------+----+----+----+----+--+--+--+--+--+--+--+--+
+
+
+1.1.1. Properties
+
+        The Properties field contains three properties. An abbreviation
+        is given in parentheses, followed by the value range of the
+        property. The field consists of
+
+            1) the number of literal context bits (lc, [0, 8]);
+            2) the number of literal position bits (lp, [0, 4]); and
+            3) the number of position bits (pb, [0, 4]).
+
+        The properties are encoded using the following formula:
+
+            Properties = (pb * 5 + lp) * 9 + lc
+
+        The following C code illustrates a straightforward way to
+        decode the Properties field:
+
+            uint8_t lc, lp, pb;
+            uint8_t prop = get_lzma_properties();
+            if (prop > (4 * 5 + 4) * 9 + 8)
+                return LZMA_PROPERTIES_ERROR;
+
+            pb = prop / (9 * 5);
+            prop -= pb * 9 * 5;
+            lp = prop / 9;
+            lc = prop - lp * 9;
+
+        XZ Utils has an additional requirement: lc + lp <= 4. Files
+        which don't follow this requirement cannot be decompressed
+        with XZ Utils. Usually this isn't a problem since the most
+        common lc/lp/pb values are 3/0/2. It is the only lc/lp/pb
+        combination that the files created by LZMA Utils can have,
+        but LZMA Utils can decompress files with any lc/lp/pb.
+
+
+1.1.2. Dictionary Size
+
+        Dictionary Size is stored as an unsigned 32-bit little endian
+        integer. Any 32-bit value is possible, but for maximum
+        portability, only sizes of 2^n and 2^n + 2^(n-1) should be
+        used.
+
+        LZMA Utils creates only files with dictionary size 2^n,
+        16 <= n <= 25. LZMA Utils can decompress files with any
+        dictionary size.
+
+        XZ Utils creates and decompresses .lzma files only with
+        dictionary sizes 2^n and 2^n + 2^(n-1). If some other
+        dictionary size is specified when compressing, the value
+        stored in the Dictionary Size field is a rounded up, but the
+        specified value is still used in the actual compression code.
+
+
+1.1.3. Uncompressed Size
+
+        Uncompressed Size is stored as unsigned 64-bit little endian
+        integer. A special value of 0xFFFF_FFFF_FFFF_FFFF indicates
+        that Uncompressed Size is unknown. End of Payload Marker (*)
+        is used if Uncompressed Size is unknown. End of Payload Marker
+        is allowed but rarely used if Uncompressed Size is known.
+        XZ Utils 5.2.5 and older don't support .lzma files that have
+        End of Payload Marker together with a known Uncompressed Size.
+
+        XZ Utils rejects files whose Uncompressed Size field specifies
+        a known size that is 256 GiB or more. This is to reject false
+        positives when trying to guess if the input file is in the
+        .lzma format. When Uncompressed Size is unknown, there is no
+        limit for the uncompressed size of the file.
+
+        (*) Some tools use the term End of Stream (EOS) marker
+            instead of End of Payload Marker.
+
+
+1.2. LZMA Compressed Data
+
+        Detailed description of the format of this field is out of
+        scope of this document.
+
+
+2. References
+
+        LZMA SDK - The original LZMA implementation
+        https://7-zip.org/sdk.html
+
+        7-Zip
+        https://7-zip.org/
+
+        LZMA Utils - LZMA adapted to POSIX-like systems
+        https://tukaani.org/lzma/
+
+        XZ Utils - The next generation of LZMA Utils
+        https://tukaani.org/xz/
+
+        The .xz file format - The successor of the .lzma format
+        https://tukaani.org/xz/xz-file-format.txt
+

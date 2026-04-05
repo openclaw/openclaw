@@ -1,0 +1,75 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>BN_copy</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>BN_copy, BN_dup, BN_with_flags - copy BIGNUMs</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/bn.h&gt;
+
+BIGNUM *BN_copy(BIGNUM *to, const BIGNUM *from);
+
+BIGNUM *BN_dup(const BIGNUM *from);
+
+void BN_with_flags(BIGNUM *dest, const BIGNUM *b, int flags);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>BN_copy() copies <b>from</b> to <b>to</b>. BN_dup() creates a new <b>BIGNUM</b> containing the value <b>from</b>.</p>
+
+<p>BN_with_flags creates a <b>temporary</b> shallow copy of <b>b</b> in <b>dest</b>. It places significant restrictions on the copied data. Applications that do no adhere to these restrictions may encounter unexpected side effects or crashes. For that reason use of this function is discouraged. Any flags provided in <b>flags</b> will be set in <b>dest</b> in addition to any flags already set in <b>b</b>. For example this might commonly be used to create a temporary copy of a BIGNUM with the <b>BN_FLG_CONSTTIME</b> flag set for constant time operations. The temporary copy in <b>dest</b> will share some internal state with <b>b</b>. For this reason the following restrictions apply to the use of <b>dest</b>:</p>
+
+<ul>
+
+<li><p><b>dest</b> should be a newly allocated BIGNUM obtained via a call to BN_new(). It should not have been used for other purposes or initialised in any way.</p>
+
+</li>
+<li><p><b>dest</b> must only be used in &quot;read-only&quot; operations, i.e. typically those functions where the relevant parameter is declared &quot;const&quot;.</p>
+
+</li>
+<li><p><b>dest</b> must be used and freed before any further subsequent use of <b>b</b></p>
+
+</li>
+</ul>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>BN_copy() returns <b>to</b> on success, NULL on error. BN_dup() returns the new <b>BIGNUM</b>, and NULL on error. The error codes can be obtained by <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ERR_get_error.html">ERR_get_error(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2017 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

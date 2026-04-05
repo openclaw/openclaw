@@ -1,0 +1,49 @@
+.\"
+.\" Copyright (C) Daniel Stenberg
+.\" SPDX-License-Identifier: MIT
+.\"
+.TH ARES_SET_SORTLIST 3 "23 November 2015"
+.SH NAME
+ares_set_sortlist \- Initialize an ares_channel_t *sortlist configuration
+.SH SYNOPSIS
+.nf
+#include <ares.h>
+
+int ares_set_sortlist(ares_channel_t *\fIchannel\fP, const char *\fIsortstr\fP)
+.fi
+.SH DESCRIPTION
+The \fBares_set_sortlist(3)\fP function initializes an address sortlist configuration
+for the channel data identified by
+.IR channel ,
+so that addresses returned by \fBares_gethostbyname(3)\fP are sorted according to the
+sortlist.  The provided
+.IR sortstr
+string that holds a space separated list of IP-address-netmask pairs.  The
+netmask is optional but follows the address after a slash if present.  For example,
+"130.155.160.0/255.255.240.0 130.155.0.0".
+
+This function replaces any potentially previously configured address sortlist
+with the ones given in the configuration string.
+
+.SH RETURN VALUES
+.B ares_set_sortlist(3)
+may return any of the following values:
+.TP 15
+.B ARES_SUCCESS
+The sortlist configuration was successfully initialized.
+.TP 15
+.B ARES_ENOMEM
+The process's available memory was exhausted.
+.TP 15
+.B ARES_ENODATA
+The channel data identified by
+.IR channel
+was invalid.
+.TP 15
+.B ARES_ENOTINITIALIZED
+c-ares library initialization not yet performed.
+.SH SEE ALSO
+.BR ares_init_options (3),
+.BR ares_dup (3)
+.SH AVAILABILITY
+ares_set_sortlist(3) was added in c-ares 1.11.0

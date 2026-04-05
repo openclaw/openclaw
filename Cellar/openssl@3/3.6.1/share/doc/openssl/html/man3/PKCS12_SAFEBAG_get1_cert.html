@@ -1,0 +1,90 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>PKCS12_SAFEBAG_get1_cert</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>PKCS12_SAFEBAG_get0_attr, PKCS12_SAFEBAG_get0_type, PKCS12_SAFEBAG_get_nid, PKCS12_SAFEBAG_get_bag_nid, PKCS12_SAFEBAG_get0_bag_obj, PKCS12_SAFEBAG_get0_bag_type, PKCS12_SAFEBAG_get1_cert_ex, PKCS12_SAFEBAG_get1_cert, PKCS12_SAFEBAG_get1_crl_ex, PKCS12_SAFEBAG_get1_crl, PKCS12_SAFEBAG_get0_safes, PKCS12_SAFEBAG_get0_p8inf, PKCS12_SAFEBAG_get0_pkcs8 - Get objects from a PKCS#12 safeBag</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/pkcs12.h&gt;
+
+const ASN1_TYPE *PKCS12_SAFEBAG_get0_attr(const PKCS12_SAFEBAG *bag,
+                                          int attr_nid);
+const ASN1_OBJECT *PKCS12_SAFEBAG_get0_type(const PKCS12_SAFEBAG *bag);
+int PKCS12_SAFEBAG_get_nid(const PKCS12_SAFEBAG *bag);
+int PKCS12_SAFEBAG_get_bag_nid(const PKCS12_SAFEBAG *bag);
+const ASN1_TYPE *PKCS12_SAFEBAG_get0_bag_obj(const PKCS12_SAFEBAG *bag);
+const ASN1_OBJECT *PKCS12_SAFEBAG_get0_bag_type(const PKCS12_SAFEBAG *bag);
+X509_CRL *PKCS12_SAFEBAG_get1_cert_ex(const PKCS12_SAFEBAG *bag,
+                                      OSSL_LIB_CTX *libctx, const char *propq);
+X509 *PKCS12_SAFEBAG_get1_cert(const PKCS12_SAFEBAG *bag);
+X509_CRL *PKCS12_SAFEBAG_get1_crl_ex(const PKCS12_SAFEBAG *bag,
+                                     OSSL_LIB_CTX *libctx, const char *propq);
+X509_CRL *PKCS12_SAFEBAG_get1_crl(const PKCS12_SAFEBAG *bag);
+const STACK_OF(PKCS12_SAFEBAG) *PKCS12_SAFEBAG_get0_safes(const PKCS12_SAFEBAG *bag);
+const PKCS8_PRIV_KEY_INFO *PKCS12_SAFEBAG_get0_p8inf(const PKCS12_SAFEBAG *bag);
+const X509_SIG *PKCS12_SAFEBAG_get0_pkcs8(const PKCS12_SAFEBAG *bag);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>PKCS12_SAFEBAG_get0_attr() gets the attribute value corresponding to the <b>attr_nid</b>.</p>
+
+<p>PKCS12_SAFEBAG_get0_type() gets the <b>safeBag</b> type as an OID, whereas PKCS12_SAFEBAG_get_nid() gets the <b>safeBag</b> type as an NID, which could be <b>NID_certBag</b>, <b>NID_crlBag</b>, <b>NID_keyBag</b>, <b>NID_secretBag</b>, <b>NID_safeContentsBag</b> or <b>NID_pkcs8ShroudedKeyBag</b>.</p>
+
+<p>PKCS12_SAFEBAG_get_bag_nid() gets the type of the object contained within the <b>PKCS12_SAFEBAG</b>. This corresponds to the bag type for most bags, but can be arbitrary for <b>secretBag</b>s. PKCS12_SAFEBAG_get0_bag_type() gets this type as an OID.</p>
+
+<p>PKCS12_SAFEBAG_get0_bag_obj() retrieves the object contained within the safeBag.</p>
+
+<p>PKCS12_SAFEBAG_get1_cert_ex() and PKCS12_SAFEBAG_get1_crl_ex() return new <b>X509</b> or <b>X509_CRL</b> objects from the item in the safeBag. <i>libctx</i> and <i>propq</i> are used when fetching algorithms, and may optionally be set to NULL.</p>
+
+<p>PKCS12_SAFEBAG_get1_cert() and PKCS12_SAFEBAG_get1_crl() are the same as PKCS12_SAFEBAG_get1_cert_ex() and PKCS12_SAFEBAG_get1_crl_ex() and set the <i>libctx</i> and <i>prop</i> to NULL. This will use the default library context.</p>
+
+<p>PKCS12_SAFEBAG_get0_p8inf() and PKCS12_SAFEBAG_get0_pkcs8() return the PKCS8 object from a PKCS8shroudedKeyBag or a keyBag.</p>
+
+<p>PKCS12_SAFEBAG_get0_safes() retrieves the set of <b>safeBags</b> contained within a safeContentsBag.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>PKCS12_SAFEBAG_get_nid() and PKCS12_SAFEBAG_get_bag_nid() return the NID of the safeBag or bag object, or -1 if there is no corresponding NID. Other functions return a valid object of the specified type or NULL if an error occurred.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/PKCS12_create.html">PKCS12_create(3)</a>, <a href="../man3/PKCS12_add_safe.html">PKCS12_add_safe(3)</a>, <a href="../man3/PKCS12_add_safes.html">PKCS12_add_safes(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The functions PKCS12_SAFEBAG_get1_cert_ex() and PKCS12_SAFEBAG_get1_crl_ex() were added in OpenSSL 3.2.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2019-2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

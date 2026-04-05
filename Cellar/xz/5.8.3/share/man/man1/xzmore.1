@@ -1,0 +1,69 @@
+.\" SPDX-License-Identifier: 0BSD
+.\"
+.\" Authors: Andrew Dudman
+.\"          Lasse Collin
+.\"
+.\" (Note that this file is based on xzless.1 instead of gzip's zmore.1.)
+.\"
+.TH XZMORE 1 "2025-03-06" "Tukaani" "XZ Utils"
+.SH NAME
+xzmore, lzmore \- view xz or lzma compressed (text) files
+.
+.SH SYNOPSIS
+.B xzmore
+.RI [ file ...]
+.br
+.B lzmore
+.RI [ file ...]
+(DEPRECATED)
+.
+.SH DESCRIPTION
+.B xzmore
+displays text from compressed files to a terminal using
+.BR more (1).
+Files supported by
+.BR xz (1)
+are decompressed;
+other files are assumed to be in uncompressed form already.
+If no
+.I files
+are given,
+.B xzmore
+reads from standard input.
+See the
+.BR more (1)
+manual for the keyboard commands.
+.PP
+Note that scrolling backwards might not be possible
+depending on the implementation of
+.BR more (1).
+This is because
+.B xzmore
+uses a pipe to pass the decompressed data to
+.BR more (1).
+.BR xzless (1)
+uses
+.BR less (1)
+which provides more advanced features.
+.PP
+The command
+.B lzmore
+is provided for backward compatibility with LZMA Utils.
+It is deprecated and will be removed in a future version.
+.
+.SH ENVIRONMENT
+.TP
+.\" TRANSLATORS: Don't translate the uppercase PAGER.
+.\" It is a name of an environment variable.
+.B PAGER
+If
+.B PAGER
+is set,
+its value is used as the pager instead of
+.BR more (1).
+.
+.SH "SEE ALSO"
+.BR more (1),
+.BR xz (1),
+.BR xzless (1),
+.BR zmore (1)

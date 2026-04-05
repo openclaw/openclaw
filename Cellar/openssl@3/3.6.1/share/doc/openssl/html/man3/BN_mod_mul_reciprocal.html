@@ -1,0 +1,84 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>BN_mod_mul_reciprocal</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>BN_mod_mul_reciprocal, BN_div_recp, BN_RECP_CTX_new, BN_RECP_CTX_free, BN_RECP_CTX_set - modular multiplication using reciprocal</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/bn.h&gt;
+
+BN_RECP_CTX *BN_RECP_CTX_new(void);
+void BN_RECP_CTX_free(BN_RECP_CTX *recp);
+
+int BN_RECP_CTX_set(BN_RECP_CTX *recp, const BIGNUM *m, BN_CTX *ctx);
+
+int BN_div_recp(BIGNUM *dv, BIGNUM *rem, const BIGNUM *a, BN_RECP_CTX *recp,
+                BN_CTX *ctx);
+
+int BN_mod_mul_reciprocal(BIGNUM *r, const BIGNUM *a, const BIGNUM *b,
+                          BN_RECP_CTX *recp, BN_CTX *ctx);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>BN_mod_mul_reciprocal() can be used to perform an efficient <a href="../man3/BN_mod_mul.html">BN_mod_mul(3)</a> operation when the operation will be performed repeatedly with the same modulus. It computes <b>r</b>=(<b>a</b>*<b>b</b>)%<b>m</b> using <b>recp</b>=1/<b>m</b>, which is set as described below. <b>ctx</b> is a previously allocated <b>BN_CTX</b> used for temporary variables.</p>
+
+<p>BN_RECP_CTX_new() allocates and initializes a <b>BN_RECP</b> structure.</p>
+
+<p>BN_RECP_CTX_free() frees the components of the <b>BN_RECP</b>, and, if it was created by BN_RECP_CTX_new(), also the structure itself. If <b>recp</b> is NULL, nothing is done.</p>
+
+<p>BN_RECP_CTX_set() stores <b>m</b> in <b>recp</b> and sets it up for computing 1/<b>m</b> and shifting it left by BN_num_bits(<b>m</b>)+1 to make it an integer. The result and the number of bits it was shifted left will later be stored in <b>recp</b>.</p>
+
+<p>BN_div_recp() divides <b>a</b> by <b>m</b> using <b>recp</b>. It places the quotient in <b>dv</b> and the remainder in <b>rem</b>.</p>
+
+<p>The <b>BN_RECP_CTX</b> structure cannot be shared between threads.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>BN_RECP_CTX_new() returns the newly allocated <b>BN_RECP_CTX</b>, and NULL on error.</p>
+
+<p>BN_RECP_CTX_free() has no return value.</p>
+
+<p>For the other functions, 1 is returned for success, 0 on error. The error codes can be obtained by <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>, <a href="../man3/BN_add.html">BN_add(3)</a>, <a href="../man3/BN_CTX_new.html">BN_CTX_new(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>BN_RECP_CTX_init() was removed in OpenSSL 1.1.0</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2017 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

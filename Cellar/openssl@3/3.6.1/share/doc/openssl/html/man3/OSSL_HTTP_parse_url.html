@@ -1,0 +1,83 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OSSL_HTTP_parse_url</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OSSL_HTTP_adapt_proxy, OSSL_parse_url, OSSL_HTTP_parse_url, OCSP_parse_url - http utility functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/http.h&gt;
+
+const char *OSSL_HTTP_adapt_proxy(const char *proxy, const char *no_proxy,
+                                  const char *server, int use_ssl);
+
+int OSSL_parse_url(const char *url, char **pscheme, char **puser, char **phost,
+                   char **pport, int *pport_num,
+                   char **ppath, char **pquery, char **pfrag);
+int OSSL_HTTP_parse_url(const char *url,
+                        int *pssl, char **puser, char **phost,
+                        char **pport, int *pport_num,
+                        char **ppath, char **pquery, char **pfrag);</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>int OCSP_parse_url(const char *url, char **phost, char **pport, char **ppath,
+                   int *pssl);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>OSSL_HTTP_adapt_proxy() takes an optional proxy hostname <i>proxy</i> and returns it transformed according to the optional <i>no_proxy</i> parameter, <i>server</i>, <i>use_ssl</i>, and the applicable environment variable, as follows. If <i>proxy</i> is NULL, take any default value from the <code>http_proxy</code> environment variable, or from <code>https_proxy</code> if <i>use_ssl</i> is nonzero. If this still does not yield a proxy hostname, take any further default value from the <code>HTTP_PROXY</code> environment variable, or from <code>HTTPS_PROXY</code> if <i>use_ssl</i> is nonzero. If <i>no_proxy</i> is NULL, take any default exclusion value from the <code>no_proxy</code> environment variable, or else from <code>NO_PROXY</code>. Return the determined proxy host unless the exclusion value, which is a list of proxy hosts separated by <code>,</code> and/or whitespace, contains <i>server</i>. Otherwise return NULL. When <i>server</i> is a string delimited by <code>[</code> and <code>]</code>, which are used for IPv6 addresses, the enclosing <code>[</code> and <code>]</code> are stripped prior to comparison.</p>
+
+<p>OSSL_parse_url() parses its input string <i>url</i> as a URL of the form <code>[scheme://][userinfo@]host[:port][/path][?query][#fragment]</code> and splits it up into scheme, userinfo, host, port, path, query, and fragment components. The host (or server) component may be a DNS name or an IP address where IPv6 addresses must be enclosed in square brackets <code>[</code> and <code>]</code>. The port component is optional and defaults to <code>0</code>. If given, it must be in decimal form. If the <i>pport_num</i> argument is not NULL the integer value of the port number is assigned to <i>*pport_num</i> on success. The path component is also optional and defaults to <code>/</code>. Each non-NULL result pointer argument <i>pscheme</i>, <i>puser</i>, <i>phost</i>, <i>pport</i>, <i>ppath</i>, <i>pquery</i>, and <i>pfrag</i>, is assigned the respective url component. Any IPv6 address in <i>*phost</i> is enclosed in <code>[</code> and <code>]</code>. On success, they are guaranteed to contain non-NULL string pointers, else NULL. It is the responsibility of the caller to free them using <a href="../man3/OPENSSL_free.html">OPENSSL_free(3)</a>. If <i>pquery</i> is NULL, any given query component is handled as part of the path. A string returned via <i>*ppath</i> is guaranteed to begin with a <code>/</code> character. For absent scheme, userinfo, port, query, and fragment components an empty string is provided.</p>
+
+<p>OSSL_HTTP_parse_url() is a special form of OSSL_parse_url() where the scheme, if given, must be <code>http</code> or <code>https</code>. If <i>pssl</i> is not NULL, <i>*pssl</i> is assigned 1 in case parsing was successful and the scheme is <code>https</code>, else 0. The port component is optional and defaults to <code>443</code> if the scheme is <code>https</code>, else <code>80</code>. Note that relative paths must be given with a leading <code>/</code>, otherwise the first path element is interpreted as the host.</p>
+
+<p>Calling the deprecated function OCSP_parse_url(url, host, port, path, ssl) is equivalent to OSSL_HTTP_parse_url(url, ssl, NULL, host, port, NULL, path, NULL, NULL).</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>OSSL_HTTP_adapt_proxy() returns NULL if no proxy is to be used, otherwise a constant proxy hostname string, which is either the proxy name handed in or an environment variable value.</p>
+
+<p>OSSL_parse_url(), OSSL_HTTP_parse_url(), and OCSP_parse_url() return 1 on success, 0 on error.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/OSSL_HTTP_transfer.html">OSSL_HTTP_transfer(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>OSSL_HTTP_adapt_proxy(), OSSL_parse_url() and OSSL_HTTP_parse_url() were added in OpenSSL 3.0. OCSP_parse_url() was deprecated in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2019-2022 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

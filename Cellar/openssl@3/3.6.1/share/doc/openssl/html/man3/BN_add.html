@@ -1,0 +1,128 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>BN_add</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>BN_add, BN_sub, BN_mul, BN_sqr, BN_div, BN_mod, BN_nnmod, BN_mod_add, BN_mod_sub, BN_mod_mul, BN_mod_sqr, BN_mod_sqrt, BN_exp, BN_mod_exp, BN_gcd - arithmetic operations on BIGNUMs</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/bn.h&gt;
+
+int BN_add(BIGNUM *r, const BIGNUM *a, const BIGNUM *b);
+
+int BN_sub(BIGNUM *r, const BIGNUM *a, const BIGNUM *b);
+
+int BN_mul(BIGNUM *r, const BIGNUM *a, const BIGNUM *b, BN_CTX *ctx);
+
+int BN_sqr(BIGNUM *r, const BIGNUM *a, BN_CTX *ctx);
+
+int BN_div(BIGNUM *dv, BIGNUM *rem, const BIGNUM *a, const BIGNUM *d,
+           BN_CTX *ctx);
+
+int BN_mod(BIGNUM *rem, const BIGNUM *a, const BIGNUM *m, BN_CTX *ctx);
+
+int BN_nnmod(BIGNUM *r, const BIGNUM *a, const BIGNUM *m, BN_CTX *ctx);
+
+int BN_mod_add(BIGNUM *r, const BIGNUM *a, const BIGNUM *b, const BIGNUM *m,
+               BN_CTX *ctx);
+
+int BN_mod_sub(BIGNUM *r, const BIGNUM *a, const BIGNUM *b, const BIGNUM *m,
+               BN_CTX *ctx);
+
+int BN_mod_mul(BIGNUM *r, const BIGNUM *a, const BIGNUM *b, const BIGNUM *m,
+               BN_CTX *ctx);
+
+int BN_mod_sqr(BIGNUM *r, const BIGNUM *a, const BIGNUM *m, BN_CTX *ctx);
+
+BIGNUM *BN_mod_sqrt(BIGNUM *in, const BIGNUM *a, const BIGNUM *p, BN_CTX *ctx);
+
+int BN_exp(BIGNUM *r, const BIGNUM *a, const BIGNUM *p, BN_CTX *ctx);
+
+int BN_mod_exp(BIGNUM *r, const BIGNUM *a, const BIGNUM *p,
+               const BIGNUM *m, BN_CTX *ctx);
+
+int BN_gcd(BIGNUM *r, const BIGNUM *a, const BIGNUM *b, BN_CTX *ctx);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>BN_add() adds <i>a</i> and <i>b</i> and places the result in <i>r</i> (<code>r=a+b</code>). <i>r</i> may be the same <b>BIGNUM</b> as <i>a</i> or <i>b</i>.</p>
+
+<p>BN_sub() subtracts <i>b</i> from <i>a</i> and places the result in <i>r</i> (<code>r=a-b</code>). <i>r</i> may be the same <b>BIGNUM</b> as <i>a</i> or <i>b</i>.</p>
+
+<p>BN_mul() multiplies <i>a</i> and <i>b</i> and places the result in <i>r</i> (<code>r=a*b</code>). <i>r</i> may be the same <b>BIGNUM</b> as <i>a</i> or <i>b</i>. For multiplication by powers of 2, use <a href="../man3/BN_lshift.html">BN_lshift(3)</a>.</p>
+
+<p>BN_sqr() takes the square of <i>a</i> and places the result in <i>r</i> (<code>r=a^2</code>). <i>r</i> and <i>a</i> may be the same <b>BIGNUM</b>. This function is faster than BN_mul(r,a,a).</p>
+
+<p>BN_div() divides <i>a</i> by <i>d</i> and places the result in <i>dv</i> and the remainder in <i>rem</i> (<code>dv=a/d, rem=a%d</code>). Either of <i>dv</i> and <i>rem</i> may be <b>NULL</b>, in which case the respective value is not returned. The result is rounded towards zero; thus if <i>a</i> is negative, the remainder will be zero or negative. For division by powers of 2, use BN_rshift(3).</p>
+
+<p>BN_mod() corresponds to BN_div() with <i>dv</i> set to <b>NULL</b>.</p>
+
+<p>BN_nnmod() reduces <i>a</i> modulo <i>m</i> and places the nonnegative remainder in <i>r</i>.</p>
+
+<p>BN_mod_add() adds <i>a</i> to <i>b</i> modulo <i>m</i> and places the nonnegative result in <i>r</i>.</p>
+
+<p>BN_mod_sub() subtracts <i>b</i> from <i>a</i> modulo <i>m</i> and places the nonnegative result in <i>r</i>.</p>
+
+<p>BN_mod_mul() multiplies <i>a</i> by <i>b</i> and finds the nonnegative remainder respective to modulus <i>m</i> (<code>r=(a*b) mod m</code>). <i>r</i> may be the same <b>BIGNUM</b> as <i>a</i> or <i>b</i>. For more efficient algorithms for repeated computations using the same modulus, see <a href="../man3/BN_mod_mul_montgomery.html">BN_mod_mul_montgomery(3)</a> and <a href="../man3/BN_mod_mul_reciprocal.html">BN_mod_mul_reciprocal(3)</a>.</p>
+
+<p>BN_mod_sqr() takes the square of <i>a</i> modulo <b>m</b> and places the result in <i>r</i>.</p>
+
+<p>BN_mod_sqrt() returns the modular square root of <i>a</i> such that <code>in^2 = a (mod p)</code>. The modulus <i>p</i> must be a prime, otherwise an error or an incorrect &quot;result&quot; will be returned. The result is stored into <i>in</i> which can be NULL. The result will be newly allocated in that case.</p>
+
+<p>BN_exp() raises <i>a</i> to the <i>p</i>-th power and places the result in <i>r</i> (<code>r=a^p</code>). This function is faster than repeated applications of BN_mul().</p>
+
+<p>BN_mod_exp() computes <i>a</i> to the <i>p</i>-th power modulo <i>m</i> (<code>r=a^p % m</code>). This function uses less time and space than BN_exp(). Do not call this function when <b>m</b> is even and any of the parameters have the <b>BN_FLG_CONSTTIME</b> flag set.</p>
+
+<p>BN_gcd() computes the greatest common divisor of <i>a</i> and <i>b</i> and places the result in <i>r</i>. <i>r</i> may be the same <b>BIGNUM</b> as <i>a</i> or <i>b</i>.</p>
+
+<p>For all functions, <i>ctx</i> is a previously allocated <b>BN_CTX</b> used for temporary variables; see <a href="../man3/BN_CTX_new.html">BN_CTX_new(3)</a>.</p>
+
+<p>Unless noted otherwise, the result <b>BIGNUM</b> must be different from the arguments.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>For modular operations such as BN_nnmod() or BN_mod_exp() it is an error to use the same <b>BIGNUM</b> object for the modulus as for the output.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>The BN_mod_sqrt() returns the result (possibly incorrect if <i>p</i> is not a prime), or NULL.</p>
+
+<p>For all remaining functions, 1 is returned for success, 0 on error. The return value should always be checked (e.g., <code>if (!BN_add(r,a,b)) goto err;</code>). The error codes can be obtained by <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>, <a href="../man3/BN_CTX_new.html">BN_CTX_new(3)</a>, <a href="../man3/BN_add_word.html">BN_add_word(3)</a>, <a href="../man3/BN_set_bit.html">BN_set_bit(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

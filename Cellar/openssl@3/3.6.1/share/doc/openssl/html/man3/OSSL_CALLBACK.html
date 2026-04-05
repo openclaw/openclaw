@@ -1,0 +1,84 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OSSL_CALLBACK</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OSSL_CALLBACK, OSSL_PASSPHRASE_CALLBACK - OpenSSL Core type to define callbacks</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/core.h&gt;
+typedef int (OSSL_CALLBACK)(const OSSL_PARAM params[], void *arg);
+typedef int (OSSL_PASSPHRASE_CALLBACK)(char *pass, size_t pass_size,
+                                       size_t *pass_len,
+                                       const OSSL_PARAM params[],
+                                       void *arg);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>For certain events or activities, provider functionality may need help from the application or the calling OpenSSL libraries themselves. For example, user input or direct (possibly optional) user output could be implemented this way.</p>
+
+<p>Callback functions themselves are always provided by or through the calling OpenSSL libraries, along with a generic pointer to data <i>arg</i>. As far as the function receiving the pointer to the function pointer and <i>arg</i> is concerned, the data that <i>arg</i> points at is opaque, and the pointer should simply be passed back to the callback function when it&#39;s called.</p>
+
+<dl>
+
+<dt id="OSSL_CALLBACK"><b>OSSL_CALLBACK</b></dt>
+<dd>
+
+<p>This is a generic callback function. When calling this callback function, the caller is expected to build an <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> array of data it wants or is expected to pass back, and pass that as <i>params</i>, as well as the opaque data pointer it received, as <i>arg</i>.</p>
+
+</dd>
+<dt id="OSSL_PASSPHRASE_CALLBACK"><b>OSSL_PASSPHRASE_CALLBACK</b></dt>
+<dd>
+
+<p>This is a specialised callback function, used specifically to prompt the user for a passphrase. When calling this callback function, a buffer to store the pass phrase needs to be given with <i>pass</i>, and its size with <i>pass_size</i>. The length of the prompted pass phrase will be given back in <i>*pass_len</i>.</p>
+
+<p>Additional parameters can be passed with the <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> array <i>params</i>,</p>
+
+</dd>
+</dl>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>Functions of type <b>OSSL_CALLBACK</b> and <b>OSSL_PASSPHRASE_CALLBACK</b> must return 1 on success and 0 on failure.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/openssl-core.h.html">openssl-core.h(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The types described here were added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2022-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,76 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_set_blocking_mode</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_set_blocking_mode, SSL_get_blocking_mode - configure blocking mode for a QUIC SSL object</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+int SSL_set_blocking_mode(SSL *s, int blocking);
+int SSL_get_blocking_mode(SSL *s);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_set_blocking_mode() can be used to enable or disable blocking mode on a QUIC connection SSL object. By default, blocking is enabled, unless the SSL object is configured to use an underlying read or write BIO which cannot provide a poll descriptor (see <a href="../man3/BIO_get_rpoll_descriptor.html">BIO_get_rpoll_descriptor(3)</a>), as blocking mode cannot be supported in this case.</p>
+
+<p>To enable blocking mode, call SSL_set_blocking_mode() with <i>blocking</i> set to 1; to disable it, call SSL_set_blocking_mode() with <i>blocking</i> set to 0.</p>
+
+<p>To retrieve the current blocking mode, call SSL_get_blocking_mode().</p>
+
+<p>Blocking mode means that calls such as SSL_read() and SSL_write() will block until the requested operation can be performed. In nonblocking mode, these calls will fail if the requested operation cannot be performed immediately; see <a href="../man3/SSL_get_error.html">SSL_get_error(3)</a>.</p>
+
+<p>These functions are only applicable to QUIC connection SSL objects. Other kinds of SSL object, such as those for TLS, automatically function in blocking or nonblocking mode based on whether the underlying network read and write BIOs provided to the SSL object are themselves configured in nonblocking mode.</p>
+
+<p>Where a QUIC connection SSL object is used in nonblocking mode, an application is responsible for ensuring that the SSL object is ticked regularly; see <a href="../man3/SSL_handle_events.html">SSL_handle_events(3)</a>.</p>
+
+<p>Blocking mode is disabled automatically if the application provides a QUIC connection SSL object with a network BIO which cannot support blocking mode. To re-enable blocking mode in this case, an application must set a network BIO which can support blocking mode and explicitly call SSL_set_blocking_mode().</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_set_blocking_mode() returns 1 on success and 0 on failure. The function fails if called on an SSL object which does not represent a QUIC connection, or if blocking mode cannot be used for the given connection.</p>
+
+<p>SSL_get_blocking_mode() returns 1 if blocking is currently enabled. It returns -1 if called on an unsupported SSL object.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/SSL_handle_events.html">SSL_handle_events(3)</a>, <a href="../man3/SSL_poll.html">SSL_poll(3)</a>, <a href="../man7/openssl-quic.html">openssl-quic(7)</a>, <a href="../man7/openssl-quic-concurrency.html">openssl-quic-concurrency(7)</a>, <a href="../man7/ssl.html">ssl(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The SSL_set_blocking_mode() and SSL_get_blocking_mode() functions were added in OpenSSL 3.2.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2022-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,50 @@
+.\"
+.\" Copyright (C) the Massachusetts Institute of Technology.
+.\" Copyright (C) Daniel Stenberg
+.\" SPDX-License-Identifier: MIT
+.\"
+.TH AHOST "1" "April 2011" "c-ares utilities"
+.SH NAME
+ahost \- print the A or AAAA record associated with a hostname or IP address
+.SH SYNOPSIS
+.B ahost
+[\fIOPTION\fR]... \fIHOST\fR...
+.SH DESCRIPTION
+.PP
+.\" Add any additional description here
+.PP
+Look up the DNS A or AAAA record associated with HOST (a hostname or an
+IP address).
+.PP
+This utility comes with the \fBc\-ares\fR asynchronous resolver library.
+.SH OPTIONS
+.TP
+\fB\-d\fR
+Print some extra debugging output.
+.TP
+\fB\-h\fR, \fB\-?\fR
+Display this help and exit.
+.TP
+\fB\-t\fR type
+If type is "a", print the A record.
+If type is "aaaa", print the AAAA record.
+If type is "u", look for both AAAA and A records (default).
+.TP
+\fB\-s\fR server
+Set the server list to use for DNS lookups.
+.TP
+\fB\-D\fR \fIdomain\fP
+Specify the \fIdomain\fP to search instead of using the default values from
+.br
+/etc/resolv.conf. This option only has an effect on platforms that use
+.br
+/etc/resolv.conf
+for DNS configuration; it has no effect on other platforms (such as Win32
+or Android).
+.SH "REPORTING BUGS"
+Report bugs to the c-ares mailing list:
+.br
+\fBhttps://lists.haxx.se/listinfo/c-ares\fR
+.SH "SEE ALSO"
+.PP
+adig(1)

@@ -1,0 +1,147 @@
+.\"
+.\" Copyright 2005 by Dominick Meglio.
+.\" SPDX-License-Identifier: MIT
+.\"
+.TH ARES_GETNAMEINFO 3 "1 May 2009"
+.SH NAME
+ares_getnameinfo \- Address-to-nodename translation in protocol-independent manner
+.SH SYNOPSIS
+.nf
+#include <ares.h>
+
+typedef void (*ares_nameinfo_callback)(void *\fIarg\fP, int \fIstatus\fP,
+                                       int \fItimeouts\fP, char *\fInode\fP,
+                                       char *\fIservice\fP)
+
+void ares_getnameinfo(ares_channel_t *\fIchannel\fP, const struct sockaddr *\fIsa\fP,
+                      ares_socklen_t \fIsalen\fP, int \fIflags\fP,
+                      ares_nameinfo_callback \fIcallback\fP, void *\fIarg\fP)
+.fi
+.SH DESCRIPTION
+The
+.B ares_getnameinfo
+function is defined for protocol-independent address translation. The function
+is a combination of \fIares_gethostbyaddr(3)\fP and \fIgetservbyport(3)\fP. The function will
+translate the address either by executing a host query on the name service channel
+identified by
+.IR channel 
+or it will attempt to resolve it locally if possible.
+The parameters
+.I sa
+and
+.I len
+give the address as a sockaddr structure, and
+.I flags
+gives the options that the function will use.  Valid flags are listed below:
+.TP 19
+.B ARES_NI_NOFQDN
+Only the nodename portion of the FQDN is returned for local hosts.
+.TP 19
+.B ARES_NI_NUMERICHOST
+The numeric form of the hostname is returned rather than the name.
+.TP 19
+.B ARES_NI_NAMEREQD
+An error is returned if the hostname cannot be found in the DNS.
+.TP 19
+.B ARES_NI_NUMERICSERV
+The numeric form of the service is returned rather than the name.
+.TP 19
+.B ARES_NI_TCP
+The service name is to be looked up for the TCP protocol.
+.TP 19
+.B ARES_NI_UDP
+The service name is to be looked up for the UDP protocol.
+.TP 19
+.B ARES_NI_SCTP
+The service name is to be looked up for the SCTP protocol.
+.TP 19
+.B ARES_NI_DCCP
+The service name is to be looked up for the DCCP protocol.
+.TP 19
+.B ARES_NI_NUMERICSCOPE
+The numeric form of the scope ID is returned rather than the name.
+.TP 19
+.B ARES_NI_LOOKUPHOST
+A hostname lookup is being requested.
+.TP 19
+.B ARES_NI_LOOKUPSERVICE
+A service name lookup is being requested.
+.PP
+When the query
+is complete or has 
+failed, the ares library will invoke \fIcallback\fP.  Completion or failure of 
+the query may happen immediately, or may happen during a later call to
+\fIares_process(3)\fP, \fIares_destroy(3)\fP or \fIares_cancel(3)\fP.
+.PP
+When the associated callback is called, it is called with a channel lock so care
+must be taken to ensure any processing is minimal to prevent DNS channel stalls.
+
+The callback may be triggered from a different thread than the one which
+called \fIares_getnameinfo(3)\fP.
+
+For integrators running their own event loops and not using \fBARES_OPT_EVENT_THREAD\fP,
+care needs to be taken to ensure any file descriptor lists are updated immediately
+within the eventloop when notified.
+.PP
+The callback argument
+.I arg
+is copied from the
+.B ares_getnameinfo
+argument
+.IR arg .
+The callback argument
+.I status
+indicates whether the query succeeded and, if not, how it failed.  It
+may have any of the following values:
+.TP 19
+.B ARES_SUCCESS
+The host lookup completed successfully.
+.TP 19
+.B ARES_ENOTIMP
+The ares library does not know how to look up addresses of type
+.IR family .
+.TP 19
+.B ARES_ENOTFOUND
+The address
+.I addr
+was not found.
+.TP 19
+.B ARES_ENOMEM
+Memory was exhausted.
+.TP 19
+.B ARES_ECANCELLED
+The query was cancelled.
+.TP 19
+.B ARES_EDESTRUCTION
+The name service channel
+.I channel
+is being destroyed; the query will not be completed.
+.TP 19
+.B ARES_EBADFLAGS
+The
+.I flags
+parameter contains an illegal value.
+.PP
+The callback argument
+.I timeouts
+reports how many times a query timed out during the execution of the
+given request.
+.PP
+On successful completion of the query, the callback argument
+.I node
+contains a string representing the hostname (assuming 
+.B ARES_NI_LOOKUPHOST
+was specified). Additionally, 
+.I service
+contains a string representing the service name (assuming
+.B ARES_NI_LOOKUPSERVICE
+was specified).
+If the query did not complete successfully, or one of the values
+was not requested, 
+.I node
+or
+.I service
+will be 
+.BR NULL .
+.SH SEE ALSO
+.BR ares_process (3),

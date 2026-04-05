@@ -1,0 +1,173 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>PKCS5_PBE_keyivgen</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Key-Derivation">Key Derivation</a></li>
+      <li><a href="#Algorithm-Identifier-Creation">Algorithm Identifier Creation</a></li>
+    </ul>
+  </li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#CONFORMING-TO">CONFORMING TO</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>PKCS5_PBE_keyivgen, PKCS5_PBE_keyivgen_ex, PKCS5_pbe2_set, PKCS5_pbe2_set_iv, PKCS5_pbe2_set_iv_ex, PKCS5_pbe_set, PKCS5_pbe_set_ex, PKCS5_pbe2_set_scrypt, PKCS5_pbe_set0_algor, PKCS5_pbe_set0_algor_ex, PKCS5_v2_PBE_keyivgen, PKCS5_v2_PBE_keyivgen_ex, PKCS5_v2_scrypt_keyivgen, PKCS5_v2_scrypt_keyivgen_ex, PKCS5_pbkdf2_set, PKCS5_pbkdf2_set_ex, EVP_PBE_scrypt, EVP_PBE_scrypt_ex - PKCS#5 Password based encryption routines</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+
+int PKCS5_PBE_keyivgen(EVP_CIPHER_CTX *ctx, const char *pass, int passlen,
+                       ASN1_TYPE *param, const EVP_CIPHER *cipher,
+                       const EVP_MD *md, int en_de);
+int PKCS5_PBE_keyivgen_ex(EVP_CIPHER_CTX *cctx, const char *pass, int passlen,
+                          ASN1_TYPE *param, const EVP_CIPHER *cipher,
+                          const EVP_MD *md, int en_de, OSSL_LIB_CTX *libctx,
+                          const char *propq);
+int PKCS5_v2_PBE_keyivgen(EVP_CIPHER_CTX *ctx, const char *pass, int passlen,
+                          ASN1_TYPE *param, const EVP_CIPHER *cipher,
+                          const EVP_MD *md, int en_de);
+int PKCS5_v2_PBE_keyivgen_ex(EVP_CIPHER_CTX *ctx, const char *pass, int passlen,
+                             ASN1_TYPE *param, const EVP_CIPHER *cipher,
+                             const EVP_MD *md, int en_de,
+                             OSSL_LIB_CTX *libctx, const char *propq);
+int EVP_PBE_scrypt(const char *pass, size_t passlen,
+                   const unsigned char *salt, size_t saltlen,
+                   uint64_t N, uint64_t r, uint64_t p, uint64_t maxmem,
+                   unsigned char *key, size_t keylen);
+int EVP_PBE_scrypt_ex(const char *pass, size_t passlen,
+                      const unsigned char *salt, size_t saltlen,
+                      uint64_t N, uint64_t r, uint64_t p, uint64_t maxmem,
+                      unsigned char *key, size_t keylen,
+                      OSSL_LIB_CTX *ctx, const char *propq);
+int PKCS5_v2_scrypt_keyivgen(EVP_CIPHER_CTX *ctx, const char *pass,
+                             int passlen, ASN1_TYPE *param,
+                             const EVP_CIPHER *c, const EVP_MD *md, int en_de);
+int PKCS5_v2_scrypt_keyivgen_ex(EVP_CIPHER_CTX *ctx, const char *pass,
+                                int passlen, ASN1_TYPE *param,
+                                const EVP_CIPHER *c, const EVP_MD *md, int en_de,
+                                OSSL_LIB_CTX *libctx, const char *propq);
+
+#include &lt;openssl/x509.h&gt;
+
+int PKCS5_pbe_set0_algor(X509_ALGOR *algor, int alg, int iter,
+                         const unsigned char *salt, int saltlen);
+int PKCS5_pbe_set0_algor_ex(X509_ALGOR *algor, int alg, int iter,
+                            const unsigned char *salt, int saltlen,
+                            OSSL_LIB_CTX *libctx);
+
+X509_ALGOR *PKCS5_pbe_set(int alg, int iter,
+                          const unsigned char *salt, int saltlen);
+X509_ALGOR *PKCS5_pbe_set_ex(int alg, int iter,
+                             const unsigned char *salt, int saltlen,
+                             OSSL_LIB_CTX *libctx);
+
+X509_ALGOR *PKCS5_pbe2_set(const EVP_CIPHER *cipher, int iter,
+                           unsigned char *salt, int saltlen);
+X509_ALGOR *PKCS5_pbe2_set_iv(const EVP_CIPHER *cipher, int iter,
+                              unsigned char *salt, int saltlen,
+                              unsigned char *aiv, int prf_nid);
+X509_ALGOR *PKCS5_pbe2_set_iv_ex(const EVP_CIPHER *cipher, int iter,
+                                 unsigned char *salt, int saltlen,
+                                 unsigned char *aiv, int prf_nid,
+                                 OSSL_LIB_CTX *libctx);
+X509_ALGOR *PKCS5_pbe2_set_scrypt(const EVP_CIPHER *cipher,
+                                  const unsigned char *salt, int saltlen,
+                                  unsigned char *aiv, uint64_t N, uint64_t r,
+                                  uint64_t p);
+
+X509_ALGOR *PKCS5_pbkdf2_set(int iter, unsigned char *salt, int saltlen,
+                             int prf_nid, int keylen);
+X509_ALGOR *PKCS5_pbkdf2_set_ex(int iter, unsigned char *salt, int saltlen,
+                                int prf_nid, int keylen,
+                                OSSL_LIB_CTX *libctx);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<h2 id="Key-Derivation">Key Derivation</h2>
+
+<p>PKCS5_PBE_keyivgen() and PKCS5_PBE_keyivgen_ex() take a password <i>pass</i> of length <i>passlen</i>, parameters <i>param</i> and a message digest function <i>md_type</i> and performs a key derivation according to PKCS#5 PBES1. The resulting key is then used to initialise the cipher context <i>ctx</i> with a cipher <i>cipher</i> for encryption (<i>en_de</i>=1) or decryption (<i>en_de</i>=0).</p>
+
+<p><i>pass</i> is an optional parameter and can be NULL. If <i>passlen</i> is -1, then the function will calculate the length of <i>pass</i> using strlen().</p>
+
+<p>PKCS5_v2_PBE_keyivgen() and PKCS5_v2_PBE_keyivgen_ex() are similar to the above but instead use PKCS#5 PBES2 as the encryption algorithm using the supplied parameters.</p>
+
+<p>PKCS5_v2_scrypt_keyivgen() and PKCS5_v2_scrypt_keyivgen_ex() use SCRYPT as the key derivation part of the encryption algorithm.</p>
+
+<p><i>salt</i> is the salt used in the derivation of length <i>saltlen</i>. If the <i>salt</i> is NULL, then <i>saltlen</i> must be 0. The function will not attempt to calculate the length of the <i>salt</i> because it is not assumed to be NULL terminated.</p>
+
+<p><i>iter</i> is the iteration count and its value should be greater than or equal to 1. RFC 2898 suggests an iteration count of at least 1000. Any <i>iter</i> less than 1 is treated as a single iteration.</p>
+
+<p><i>digest</i> is the message digest function used in the derivation.</p>
+
+<p>Functions ending in _ex() take optional parameters <i>libctx</i> and <i>propq</i> which are used to select appropriate algorithm implementations.</p>
+
+<h2 id="Algorithm-Identifier-Creation">Algorithm Identifier Creation</h2>
+
+<p>PKCS5_pbe_set(), PKCS5_pbe_set_ex(), PKCS5_pbe2_set(), PKCS5_pbe2_set_iv(), PKCS5_pbe2_set_iv_ex() and PKCS5_pbe2_set_scrypt() generate an <b>X509_ALGOR</b> object which represents an AlgorithmIdentifier containing the algorithm OID and associated parameters for the PBE algorithm.</p>
+
+<p>PKCS5_pbkdf2_set() and PKCS5_pbkdf2_set_ex() generate an <b>X509_ALGOR</b> object which represents an AlgorithmIdentifier containing the algorithm OID and associated parameters for the PBKDF2 algorithm.</p>
+
+<p>PKCS5_pbe_set0_algor() and PKCS5_pbe_set0_algor_ex() set the PBE algorithm OID and parameters into the supplied <b>X509_ALGOR</b>.</p>
+
+<p>If <i>salt</i> is NULL, then <i>saltlen</i> specifies the size in bytes of the random salt to generate. If <i>saltlen</i> is 0 then a default size is used. For PBE related functions such as PKCS5_pbe_set_ex() the default salt length is 8 bytes. For PBE2 related functions that use PBKDF2 such as PKCS5_pbkdf2_set(), PKCS5_pbe2_set_scrypt() and PKCS5_pbe2_set() the default salt length is 16 bytes.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The *_keyivgen() functions are typically used in PKCS#12 to encrypt objects.</p>
+
+<p>These functions make no assumption regarding the given password. It will simply be treated as a byte sequence.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>PKCS5_PBE_keyivgen(), PKCS5_v2_PBE_keyivgen(), PKCS5_v2_PBE_keyivgen_ex(), PKCS5_v2_scrypt_keyivgen(), PKCS5_v2_scrypt_keyivgen_ex(), PKCS5_pbe_set0_algor() and PKCS5_pbe_set0_algor_ex() return 1 for success and 0 if an error occurs.</p>
+
+<p>PKCS5_pbe_set(), PKCS5_pbe_set_ex(), PKCS5_pbe2_set(), PKCS5_pbe2_set_iv(), PKCS5_pbe2_set_iv_ex(), PKCS5_pbe2_set_scrypt(), PKCS5_pbkdf2_set() and PKCS5_pbkdf2_set_ex() return an <b>X509_ALGOR</b> object or NULL if an error occurs.</p>
+
+<h1 id="CONFORMING-TO">CONFORMING TO</h1>
+
+<p>IETF RFC 8018 (<a href="https://tools.ietf.org/html/rfc8018">https://tools.ietf.org/html/rfc8018</a>)</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_PBE_CipherInit_ex.html">EVP_PBE_CipherInit_ex(3)</a>, <a href="../man3/PKCS12_pbe_crypt_ex.html">PKCS12_pbe_crypt_ex(3)</a>, <a href="../man7/passphrase-encoding.html">passphrase-encoding(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>PKCS5_v2_PBE_keyivgen_ex(), EVP_PBE_scrypt_ex(), PKCS5_v2_scrypt_keyivgen_ex(), PKCS5_pbe_set0_algor_ex(), PKCS5_pbe_set_ex(), PKCS5_pbe2_set_iv_ex() and PKCS5_pbkdf2_set_ex() were added in OpenSSL 3.0.</p>
+
+<p>From OpenSSL 3.0 the PBKDF1 algorithm used in PKCS5_PBE_keyivgen() and PKCS5_PBE_keyivgen_ex() has been moved to the legacy provider as an EVP_KDF.</p>
+
+<p>In OpenSSL 3.2 the default salt length changed from 8 bytes to 16 bytes for PBE2 related functions such as PKCS5_pbe2_set(). This is required for PBKDF2 FIPS compliance.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2021-2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

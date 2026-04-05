@@ -1,0 +1,103 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>BIO_read</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>BIO_read_ex, BIO_write_ex, BIO_read, BIO_write, BIO_gets, BIO_get_line, BIO_puts - BIO I/O functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/bio.h&gt;
+
+int BIO_read_ex(BIO *b, void *data, size_t dlen, size_t *readbytes);
+int BIO_write_ex(BIO *b, const void *data, size_t dlen, size_t *written);
+
+int BIO_read(BIO *b, void *data, int dlen);
+int BIO_gets(BIO *b, char *buf, int size);
+int BIO_get_line(BIO *b, char *buf, int size);
+int BIO_write(BIO *b, const void *data, int dlen);
+int BIO_puts(BIO *b, const char *buf);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>BIO_read_ex() attempts to read <i>dlen</i> bytes from BIO <i>b</i> and places the data in <i>data</i>. If any bytes were successfully read then the number of bytes read is stored in <i>*readbytes</i>.</p>
+
+<p>BIO_write_ex() attempts to write <i>dlen</i> bytes from <i>data</i> to BIO <i>b</i>. If successful then the number of bytes written is stored in <i>*written</i> unless <i>written</i> is NULL.</p>
+
+<p>BIO_read() attempts to read <i>len</i> bytes from BIO <i>b</i> and places the data in <i>buf</i>.</p>
+
+<p>BIO_gets() performs the BIOs &quot;gets&quot; operation and places the data in <i>buf</i>. Usually this operation will attempt to read a line of data from the BIO of maximum length <i>size-1</i>. There are exceptions to this, however; for example, BIO_gets() on a digest BIO will calculate and return the digest and other BIOs may not support BIO_gets() at all. The returned string is always NUL-terminated and the &#39;\n&#39; is preserved if present in the input data. On binary input there may be NUL characters within the string; in this case the return value (if nonnegative) may give an incorrect length.</p>
+
+<p>BIO_get_line() attempts to read from BIO <i>b</i> a line of data up to the next &#39;\n&#39; or the maximum length <i>size-1</i> is reached and places the data in <i>buf</i>. The returned string is always NUL-terminated and the &#39;\n&#39; is preserved if present in the input data. On binary input there may be NUL characters within the string; in this case the return value (if nonnegative) gives the actual length read. For implementing this, unfortunately the data needs to be read byte-by-byte.</p>
+
+<p>BIO_write() attempts to write <i>len</i> bytes from <i>buf</i> to BIO <i>b</i>.</p>
+
+<p>BIO_puts() attempts to write a NUL-terminated string <i>buf</i> to BIO <i>b</i>.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>BIO_read_ex() returns 1 if data was successfully read, and 0 otherwise.</p>
+
+<p>BIO_write_ex() returns 1 if no error was encountered writing data, 0 otherwise. Requesting to write 0 bytes is not considered an error.</p>
+
+<p>BIO_write() returns -2 if the &quot;write&quot; operation is not implemented by the BIO or -1 on other errors. Otherwise it returns the number of bytes written. This may be 0 if the BIO <i>b</i> is NULL or <i>dlen &lt;= 0</i>.</p>
+
+<p>BIO_gets() returns -2 if the &quot;gets&quot; operation is not implemented by the BIO or -1 on other errors. Otherwise it typically returns the amount of data read, but depending on the implementation it may return only the length up to the first NUL character contained in the data read. In any case the trailing NUL that is added after the data read is not included in the length returned.</p>
+
+<p>All other functions return either the amount of data successfully read or written (if the return value is positive) or that no data was successfully read or written if the result is 0 or -1. If the return value is -2 then the operation is not implemented in the specific BIO type.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>A 0 or -1 return is not necessarily an indication of an error. In particular when the source/sink is nonblocking or of a certain type it may merely be an indication that no data is currently available and that the application should retry the operation later.</p>
+
+<p>One technique sometimes used with blocking sockets is to use a system call (such as select(), poll() or equivalent) to determine when data is available and then call read() to read the data. The equivalent with BIOs (that is call select() on the underlying I/O structure and then call BIO_read() to read the data) should <b>not</b> be used because a single call to BIO_read() can cause several reads (and writes in the case of SSL BIOs) on the underlying I/O structure and may block as a result. Instead select() (or equivalent) should be combined with non blocking I/O so successive reads will request a retry instead of blocking.</p>
+
+<p>See <a href="../man3/BIO_should_retry.html">BIO_should_retry(3)</a> for details of how to determine the cause of a retry and other I/O issues.</p>
+
+<p>If the &quot;gets&quot; method is not supported by a BIO then BIO_get_line() can be used. It is also possible to make BIO_gets() usable even if the &quot;gets&quot; method is not supported by adding a buffering BIO <a href="../man3/BIO_f_buffer.html">BIO_f_buffer(3)</a> to the chain.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/BIO_should_retry.html">BIO_should_retry(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>BIO_gets() on 1.1.0 and older when called on BIO_fd() based BIO did not keep the &#39;\n&#39; at the end of the line in the buffer.</p>
+
+<p>BIO_get_line() was added in OpenSSL 3.0.</p>
+
+<p>BIO_write_ex() returns 1 if the size of the data to write is 0 and the <i>written</i> parameter of the function can be NULL since OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

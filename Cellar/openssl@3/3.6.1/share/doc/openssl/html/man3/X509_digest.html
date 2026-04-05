@@ -1,0 +1,90 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>X509_digest</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>X509_digest, X509_digest_sig, X509_CRL_digest, X509_pubkey_digest, X509_NAME_digest, X509_REQ_digest, PKCS7_ISSUER_AND_SERIAL_digest - get digest of various objects</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/x509.h&gt;
+
+int X509_digest(const X509 *data, const EVP_MD *type, unsigned char *md,
+                unsigned int *len);
+ASN1_OCTET_STRING *X509_digest_sig(const X509 *cert,
+                                   EVP_MD **md_used, int *md_is_fallback);
+
+int X509_CRL_digest(const X509_CRL *data, const EVP_MD *type, unsigned char *md,
+                    unsigned int *len);
+
+int X509_pubkey_digest(const X509 *data, const EVP_MD *type,
+                       unsigned char *md, unsigned int *len);
+
+int X509_REQ_digest(const X509_REQ *data, const EVP_MD *type,
+                    unsigned char *md, unsigned int *len);
+
+int X509_NAME_digest(const X509_NAME *data, const EVP_MD *type,
+                     unsigned char *md, unsigned int *len);
+
+#include &lt;openssl/pkcs7.h&gt;
+
+int PKCS7_ISSUER_AND_SERIAL_digest(PKCS7_ISSUER_AND_SERIAL *data,
+                                   const EVP_MD *type, unsigned char *md,
+                                   unsigned int *len);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>X509_digest_sig() calculates a digest of the given certificate <i>cert</i> using the same hash algorithm as in its signature, if the digest is an integral part of the certificate signature algorithm identifier. Otherwise, a fallback hash algorithm is determined as follows: SHA512 if the signature algorithm is ED25519, SHAKE256 if it is ED448, otherwise SHA256. The output parameters are assigned as follows. Unless <i>md_used</i> is NULL, the hash algorithm used is provided in <i>*md_used</i> and must be freed by the caller (if it is not NULL). Unless <i>md_is_fallback</i> is NULL, the <i>*md_is_fallback</i> is set to 1 if the hash algorithm used is a fallback, otherwise to 0.</p>
+
+<p>X509_pubkey_digest() returns a digest of the DER representation of the public key in the specified X509 <i>data</i> object.</p>
+
+<p>All other functions described here return a digest of the DER representation of their entire <i>data</i> objects.</p>
+
+<p>The <i>type</i> parameter specifies the digest to be used, such as EVP_sha1(). The <i>md</i> is a pointer to the buffer where the digest will be copied and is assumed to be large enough; the constant <b>EVP_MAX_MD_SIZE</b> is suggested. The <i>len</i> parameter, if not NULL, points to a place where the digest size will be stored.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>X509_digest_sig() returns an ASN1_OCTET_STRING pointer on success, else NULL.</p>
+
+<p>All other functions described here return 1 for success and 0 for failure.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_sha1.html">EVP_sha1(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The X509_digest_sig() function was added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2017-2022 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

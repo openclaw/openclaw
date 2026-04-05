@@ -1,0 +1,119 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>PEM_read</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>PEM_read, PEM_read_bio, PEM_do_header, PEM_get_EVP_CIPHER_INFO, PEM_write, PEM_write_bio, PEM_ASN1_write, PEM_ASN1_write_bio, PEM_ASN1_write_bio_ctx - PEM encoding routines</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/pem.h&gt;
+
+int PEM_read(FILE *fp, char **name, char **header,
+             unsigned char **data, long *len);
+int PEM_read_bio(BIO *bp, char **name, char **header,
+                 unsigned char **data, long *len);
+
+int PEM_get_EVP_CIPHER_INFO(char *header, EVP_CIPHER_INFO *cinfo);
+int PEM_do_header(EVP_CIPHER_INFO *cinfo, unsigned char *data, long *len,
+                  pem_password_cb *cb, void *u);
+
+int PEM_write(FILE *fp, const char *name, const char *header,
+              const unsigned char *data, long len);
+int PEM_write_bio(BIO *bp, const char *name, const char *header,
+                  const unsigned char *data, long len);
+int PEM_ASN1_write(i2d_of_void *i2d, const char *name, FILE *fp,
+                   const void *x, const EVP_CIPHER *enc,
+                   const unsigned char *kstr, int klen,
+                   pem_password_cb *callback, void *u);
+int PEM_ASN1_write_bio(i2d_of_void *i2d, const char *name, BIO *bp,
+                       const void *x, const EVP_CIPHER *enc,
+                       const unsigned char *kstr, int klen,
+                       pem_password_cb *callback, void *u);
+int PEM_ASN1_write_bio_ctx(OSSL_i2d_of_void_ctx *i2d, void *vctx,
+                           const char *name, BIO *bp, const void *x,
+                           const EVP_CIPHER *enc, const unsigned char *kstr,
+                           int klen, pem_password_cb *callback, void *u);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>These functions read and write PEM-encoded objects, using the PEM type <b>name</b>, any additional <b>header</b> information, and the raw <b>data</b> of length <b>len</b>.</p>
+
+<p>PEM is the term used for binary content encoding first defined in IETF RFC 1421. The content is a series of base64-encoded lines, surrounded by begin/end markers each on their own line. For example:</p>
+
+<pre><code>-----BEGIN PRIVATE KEY-----
+MIICdg....
+... bhTQ==
+-----END PRIVATE KEY-----</code></pre>
+
+<p>Optional header line(s) may appear after the begin line, and their existence depends on the type of object being written or read.</p>
+
+<p>PEM_write() writes to the file <b>fp</b>, while PEM_write_bio() writes to the BIO <b>bp</b>. The <b>name</b> is the name to use in the marker, the <b>header</b> is the header value or NULL, and <b>data</b> and <b>len</b> specify the data and its length.</p>
+
+<p>The final <b>data</b> buffer is typically an ASN.1 object which can be decoded with the <b>d2i</b> function appropriate to the type <b>name</b>; see <a href="../man3/d2i_X509.html">d2i_X509(3)</a> for examples.</p>
+
+<p>PEM_read() reads from the file <b>fp</b>, while PEM_read_bio() reads from the BIO <b>bp</b>. Both skip any non-PEM data that precedes the start of the next PEM object. When an object is successfully retrieved, the type name from the &quot;----BEGIN &lt;type&gt;-----&quot; is returned via the <b>name</b> argument, any encapsulation headers are returned in <b>header</b> and the base64-decoded content and its length are returned via <b>data</b> and <b>len</b> respectively. The <b>name</b>, <b>header</b> and <b>data</b> pointers are allocated via OPENSSL_malloc() and should be freed by the caller via OPENSSL_free() when no longer needed.</p>
+
+<p>PEM_get_EVP_CIPHER_INFO() can be used to determine the <b>data</b> returned by PEM_read() or PEM_read_bio() is encrypted and to retrieve the associated cipher and IV. The caller passes a pointer to structure of type <b>EVP_CIPHER_INFO</b> via the <b>cinfo</b> argument and the <b>header</b> returned via PEM_read() or PEM_read_bio(). If the call is successful 1 is returned and the cipher and IV are stored at the address pointed to by <b>cinfo</b>. When the header is malformed, or not supported or when the cipher is unknown or some internal error happens 0 is returned. This function is deprecated, see <b>NOTES</b> below.</p>
+
+<p>PEM_do_header() can then be used to decrypt the data if the header indicates encryption. The <b>cinfo</b> argument is a pointer to the structure initialized by the previous call to PEM_get_EVP_CIPHER_INFO(). The <b>data</b> and <b>len</b> arguments are those returned by the previous call to PEM_read() or PEM_read_bio(). The <b>cb</b> and <b>u</b> arguments make it possible to override the default password prompt function as described in <a href="../man3/PEM_read_PrivateKey.html">PEM_read_PrivateKey(3)</a>. On successful completion the <b>data</b> is decrypted in place, and <b>len</b> is updated to indicate the plaintext length. This function is deprecated, see <b>NOTES</b> below.</p>
+
+<p>If the data is a priori known to not be encrypted, then neither PEM_do_header() nor PEM_get_EVP_CIPHER_INFO() need be called.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>PEM_read(), and PEM_read_bio() return 1 on success and 0 on failure, the latter includes the case when no more PEM objects remain in the input file. To distinguish end of file from more serious errors the caller must peek at the error stack and check for <b>PEM_R_NO_START_LINE</b>, which indicates that no more PEM objects were found. See <a href="../man3/ERR_peek_last_error.html">ERR_peek_last_error(3)</a>, <a href="../man3/ERR_GET_REASON.html">ERR_GET_REASON(3)</a>.</p>
+
+<p>PEM_get_EVP_CIPHER_INFO() and PEM_do_header() return 1 on success, and 0 on failure. The <b>data</b> is likely meaningless if these functions fail.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The PEM_get_EVP_CIPHER_INFO() and PEM_do_header() functions are deprecated. This is because the underlying PEM encryption format is obsolete, and should be avoided. It uses an encryption format with an OpenSSL-specific key-derivation function, which employs MD5 with an iteration count of 1! Instead, private keys should be stored in PKCS#8 form, with a strong PKCS#5 v2.0 PBE. See <a href="../man3/PEM_write_PrivateKey.html">PEM_write_PrivateKey(3)</a> and <a href="../man3/d2i_PKCS8PrivateKey_bio.html">d2i_PKCS8PrivateKey_bio(3)</a>.</p>
+
+<p>PEM_do_header() makes no assumption regarding the pass phrase received from the password callback. It will simply be treated as a byte sequence.</p>
+
+<p>PEM_write() and PEM_write_bio() return the number of encoded bytes (not counting the PEM header and end marker) written on success or 0 on failure.</p>
+
+<p>PEM_ASN1_write_bio(), and PEM_ASN1_write_bio_ctx() return 1 on success and 0 on failure. The latter function passes an additional application-provided context value to the <b>i2d</b> function that serialises the input ASN.1 object.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ERR_peek_last_error.html">ERR_peek_last_error(3)</a>, <a href="../man3/ERR_GET_LIB.html">ERR_GET_LIB(3)</a>, <a href="../man3/d2i_PKCS8PrivateKey_bio.html">d2i_PKCS8PrivateKey_bio(3)</a>, <a href="../man7/passphrase-encoding.html">passphrase-encoding(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The PEM_ASN1_write_bio_ctx() function was added in OpenSSL 3.5.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 1998-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

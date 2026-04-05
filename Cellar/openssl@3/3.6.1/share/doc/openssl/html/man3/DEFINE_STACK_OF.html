@@ -1,0 +1,210 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>DEFINE_STACK_OF</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>DEFINE_STACK_OF, DEFINE_STACK_OF_CONST, DEFINE_SPECIAL_STACK_OF, DEFINE_SPECIAL_STACK_OF_CONST, sk_TYPE_num, sk_TYPE_value, sk_TYPE_new, sk_TYPE_new_null, sk_TYPE_reserve, sk_TYPE_free, sk_TYPE_zero, sk_TYPE_delete, sk_TYPE_delete_ptr, sk_TYPE_push, sk_TYPE_unshift, sk_TYPE_pop, sk_TYPE_shift, sk_TYPE_pop_free, sk_TYPE_insert, sk_TYPE_set, sk_TYPE_find, sk_TYPE_find_ex, sk_TYPE_find_all, sk_TYPE_sort, sk_TYPE_is_sorted, sk_TYPE_dup, sk_TYPE_deep_copy, sk_TYPE_set_cmp_func, sk_TYPE_new_reserve, OPENSSL_sk_deep_copy, OPENSSL_sk_delete, OPENSSL_sk_delete_ptr, OPENSSL_sk_dup, OPENSSL_sk_find, OPENSSL_sk_find_ex, OPENSSL_sk_find_all, OPENSSL_sk_free, OPENSSL_sk_insert, OPENSSL_sk_is_sorted, OPENSSL_sk_new, OPENSSL_sk_new_null, OPENSSL_sk_new_reserve, OPENSSL_sk_num, OPENSSL_sk_pop, OPENSSL_sk_pop_free, OPENSSL_sk_push, OPENSSL_sk_reserve, OPENSSL_sk_set, OPENSSL_sk_set_thunks, OPENSSL_sk_set_cmp_func, OPENSSL_sk_shift, OPENSSL_sk_sort, OPENSSL_sk_unshift, OPENSSL_sk_value, OPENSSL_sk_zero - stack container</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/safestack.h&gt;
+
+STACK_OF(TYPE)
+DEFINE_STACK_OF(TYPE)
+DEFINE_STACK_OF_CONST(TYPE)
+DEFINE_SPECIAL_STACK_OF(FUNCTYPE, TYPE)
+DEFINE_SPECIAL_STACK_OF_CONST(FUNCTYPE, TYPE)
+
+typedef int (*sk_TYPE_compfunc)(const TYPE *const *a, const TYPE *const *b);
+typedef TYPE * (*sk_TYPE_copyfunc)(const TYPE *a);
+typedef void (*sk_TYPE_freefunc)(TYPE *a);
+
+int sk_TYPE_num(const STACK_OF(TYPE) *sk);
+TYPE *sk_TYPE_value(const STACK_OF(TYPE) *sk, int idx);
+STACK_OF(TYPE) *sk_TYPE_new(sk_TYPE_compfunc compare);
+STACK_OF(TYPE) *sk_TYPE_new_null(void);
+int sk_TYPE_reserve(STACK_OF(TYPE) *sk, int n);
+void sk_TYPE_free(STACK_OF(TYPE) *sk);
+void sk_TYPE_zero(STACK_OF(TYPE) *sk);
+TYPE *sk_TYPE_delete(STACK_OF(TYPE) *sk, int i);
+TYPE *sk_TYPE_delete_ptr(STACK_OF(TYPE) *sk, TYPE *ptr);
+int sk_TYPE_push(STACK_OF(TYPE) *sk, const TYPE *ptr);
+int sk_TYPE_unshift(STACK_OF(TYPE) *sk, const TYPE *ptr);
+TYPE *sk_TYPE_pop(STACK_OF(TYPE) *sk);
+TYPE *sk_TYPE_shift(STACK_OF(TYPE) *sk);
+void sk_TYPE_pop_free(STACK_OF(TYPE) *sk, sk_TYPE_freefunc freefunc);
+int sk_TYPE_insert(STACK_OF(TYPE) *sk, TYPE *ptr, int idx);
+TYPE *sk_TYPE_set(STACK_OF(TYPE) *sk, int idx, const TYPE *ptr);
+int sk_TYPE_find(STACK_OF(TYPE) *sk, TYPE *ptr);
+int sk_TYPE_find_ex(STACK_OF(TYPE) *sk, TYPE *ptr);
+int sk_TYPE_find_all(STACK_OF(TYPE) *sk, TYPE *ptr, int *pnum);
+void sk_TYPE_sort(const STACK_OF(TYPE) *sk);
+int sk_TYPE_is_sorted(const STACK_OF(TYPE) *sk);
+STACK_OF(TYPE) *sk_TYPE_dup(const STACK_OF(TYPE) *sk);
+STACK_OF(TYPE) *sk_TYPE_deep_copy(const STACK_OF(TYPE) *sk,
+                                  sk_TYPE_copyfunc copyfunc,
+                                  sk_TYPE_freefunc freefunc);
+sk_TYPE_compfunc (*sk_TYPE_set_cmp_func(STACK_OF(TYPE) *sk,
+                                        sk_TYPE_compfunc compare));
+STACK_OF(TYPE) *sk_TYPE_new_reserve(sk_TYPE_compfunc compare, int n);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>Applications can create and use their own stacks by placing any of the macros described below in a header file. These macros define typesafe inline functions that wrap around the utility <b>OPENSSL_sk_</b> API. In the description here, <b><i>TYPE</i></b> is used as a placeholder for any of the OpenSSL datatypes, such as <b>X509</b>.</p>
+
+<p>The STACK_OF() macro returns the name for a stack of the specified <b><i>TYPE</i></b>. This is an opaque pointer to a structure declaration. This can be used in every header file that references the stack. There are several <b>DEFINE...</b> macros that create static inline functions for all of the functions described on this page. This should normally be used in one source file, and the stack manipulation is wrapped with application-specific functions.</p>
+
+<p>DEFINE_STACK_OF() creates set of functions for a stack of <b><i>TYPE</i></b> elements. The type is referenced by <b>STACK_OF</b>(<b><i>TYPE</i></b>) and each function name begins with <b>sk_<i>TYPE</i>_</b>. DEFINE_STACK_OF_CONST() is identical to DEFINE_STACK_OF() except each element is constant.</p>
+
+<pre><code>/* DEFINE_STACK_OF(TYPE) */
+TYPE *sk_TYPE_value(STACK_OF(TYPE) *sk, int idx);
+/* DEFINE_STACK_OF_CONST(TYPE) */
+const TYPE *sk_TYPE_value(STACK_OF(TYPE) *sk, int idx);</code></pre>
+
+<p>DEFINE_SPECIAL_STACK_OF() and DEFINE_SPECIAL_STACK_OF_CONST() are similar except <b>FUNCNAME</b> is used in the function names:</p>
+
+<pre><code>/* DEFINE_SPECIAL_STACK_OF(TYPE, FUNCNAME) */
+TYPE *sk_FUNCNAME_value(STACK_OF(TYPE) *sk, int idx);
+/* DEFINE_SPECIAL_STACK_OF(TYPE, FUNCNAME) */
+const TYPE *sk_FUNCNAME_value(STACK_OF(TYPE) *sk, int idx);</code></pre>
+
+<p><b>sk_<i>TYPE</i>_num</b>() returns the number of elements in <i>sk</i> or -1 if <i>sk</i> is NULL.</p>
+
+<p><b>sk_<i>TYPE</i>_value</b>() returns element <i>idx</i> in <i>sk</i>, where <i>idx</i> starts at zero. If <i>idx</i> is out of range then NULL is returned.</p>
+
+<p><b>sk_<i>TYPE</i>_new</b>() allocates a new empty stack using comparison function <i>compare</i>. If <i>compare</i> is NULL then no comparison function is used. This function is equivalent to <b>sk_<i>TYPE</i>_new_reserve</b>(<i>compare</i>, 0).</p>
+
+<p><b>sk_<i>TYPE</i>_new_null</b>() allocates a new empty stack with no comparison function. This function is equivalent to <b>sk_<i>TYPE</i>_new_reserve</b>(NULL, 0).</p>
+
+<p><b>sk_<i>TYPE</i>_reserve</b>() allocates additional memory in the <i>sk</i> structure such that the next <i>n</i> calls to <b>sk_<i>TYPE</i>_insert</b>(), <b>sk_<i>TYPE</i>_push</b>() or <b>sk_<i>TYPE</i>_unshift</b>() will not fail or cause memory to be allocated or reallocated. If <i>n</i> is zero, any excess space allocated in the <i>sk</i> structure is freed. On error <i>sk</i> is unchanged.</p>
+
+<p><b>sk_<i>TYPE</i>_new_reserve</b>() allocates a new stack. The new stack will have additional memory allocated to hold <i>n</i> elements if <i>n</i> is positive. The next <i>n</i> calls to <b>sk_<i>TYPE</i>_insert</b>(), <b>sk_<i>TYPE</i>_push</b>() or <b>sk_<i>TYPE</i>_unshift</b>() will not fail or cause memory to be allocated or reallocated. If <i>n</i> is zero or less than zero, no memory is allocated. <b>sk_<i>TYPE</i>_new_reserve</b>() also sets the comparison function <i>compare</i> to the newly created stack. If <i>compare</i> is NULL then no comparison function is used.</p>
+
+<p><b>sk_<i>TYPE</i>_set_cmp_func</b>() sets the comparison function of <i>sk</i> to <i>compare</i>. The previous comparison function is returned or NULL if there was no previous comparison function.</p>
+
+<p><b>sk_<i>TYPE</i>_free</b>() frees up the <i>sk</i> structure. It does <i>not</i> free up any elements of <i>sk</i>. After this call <i>sk</i> is no longer valid.</p>
+
+<p><b>sk_<i>TYPE</i>_zero</b>() sets the number of elements in <i>sk</i> to zero. It does not free <i>sk</i> so after this call <i>sk</i> is still valid.</p>
+
+<p><b>sk_<i>TYPE</i>_pop_free</b>() frees up all elements of <i>sk</i> and <i>sk</i> itself. The free function freefunc() is called on each element to free it.</p>
+
+<p><b>sk_<i>TYPE</i>_delete</b>() deletes element <i>i</i> from <i>sk</i>. It returns the deleted element or NULL if <i>i</i> is out of range.</p>
+
+<p><b>sk_<i>TYPE</i>_delete_ptr</b>() deletes element matching <i>ptr</i> from <i>sk</i>. It returns the deleted element or NULL if no element matching <i>ptr</i> was found.</p>
+
+<p><b>sk_<i>TYPE</i>_insert</b>() inserts <i>ptr</i> into <i>sk</i> at position <i>idx</i>. Any existing elements at or after <i>idx</i> are moved downwards. If <i>idx</i> is out of range the new element is appended to <i>sk</i>. <b>sk_<i>TYPE</i>_insert</b>() either returns the number of elements in <i>sk</i> after the new element is inserted or zero if an error (such as memory allocation failure) occurred.</p>
+
+<p><b>sk_<i>TYPE</i>_push</b>() appends <i>ptr</i> to <i>sk</i> it is equivalent to:</p>
+
+<pre><code>sk_TYPE_insert(sk, ptr, -1);</code></pre>
+
+<p><b>sk_<i>TYPE</i>_unshift</b>() inserts <i>ptr</i> at the start of <i>sk</i> it is equivalent to:</p>
+
+<pre><code>sk_TYPE_insert(sk, ptr, 0);</code></pre>
+
+<p><b>sk_<i>TYPE</i>_pop</b>() returns and removes the last element from <i>sk</i>.</p>
+
+<p><b>sk_<i>TYPE</i>_shift</b>() returns and removes the first element from <i>sk</i>.</p>
+
+<p><b>sk_<i>TYPE</i>_set</b>() sets element <i>idx</i> of <i>sk</i> to <i>ptr</i> replacing the current element. The new element value is returned or NULL if an error occurred: this will only happen if <i>sk</i> is NULL or <i>idx</i> is out of range.</p>
+
+<p><b>sk_<i>TYPE</i>_find</b>() searches <i>sk</i> for the element <i>ptr</i>. In the case where no comparison function has been specified, the function performs a linear search for a pointer equal to <i>ptr</i>. In the case where a comparison function has been specified, the function performs a search for a element that the comparison function indicates is a match. If the stack is sorted, a binary search is used, otherwise, a linear search is used. <b>sk_<i>TYPE</i>_find</b>() returns the index of a matching element or <b>-1</b> if there is no match.</p>
+
+<p><b>sk_<i>TYPE</i>_find_ex</b>() operates like <b>sk_<i>TYPE</i>_find</b>() except when a comparison function has been specified and no matching element is found. Instead of returning <b>-1</b>, <b>sk_<i>TYPE</i>_find_ex</b>() returns the index of the element either before or after the location where <i>ptr</i> would be if it were present in <i>sk</i>. The function also does not guarantee that the first matching element in the sorted stack is returned.</p>
+
+<p><b>sk_<i>TYPE</i>_find_all</b>() operates like <b>sk_<i>TYPE</i>_find</b>() but it also sets the <i>*pnum</i> to number of matching elements in the stack. In case no comparison function has been specified the <i>*pnum</i> will be always set to 1 if matching element was found, 0 otherwise.</p>
+
+<p><b>sk_<i>TYPE</i>_sort</b>() sorts <i>sk</i> using the supplied comparison function.</p>
+
+<p><b>sk_<i>TYPE</i>_is_sorted</b>() returns <b>1</b> if <i>sk</i> is sorted and <b>0</b> otherwise.</p>
+
+<p><b>sk_<i>TYPE</i>_dup</b>() returns a shallow copy of <i>sk</i> or an empty stack if the passed stack is NULL. Note the pointers in the copy are identical to the original.</p>
+
+<p><b>sk_<i>TYPE</i>_deep_copy</b>() returns a new stack where each element has been copied or an empty stack if the passed stack is NULL. Copying is performed by the supplied copyfunc() and freeing by freefunc(). The function freefunc() is only called if an error occurs.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>Care should be taken when accessing stacks in multi-threaded environments. Any operation which increases the size of a stack such as <b>sk_<i>TYPE</i>_insert</b>() or <b>sk_<i>TYPE</i>_push</b>() can &quot;grow&quot; the size of an internal array and cause race conditions if the same stack is accessed in a different thread. Operations such as <b>sk_<i>TYPE</i>_find</b>() and <b>sk_<i>TYPE</i>_sort</b>() can also reorder the stack.</p>
+
+<p>Any comparison function supplied should use a metric suitable for use in a binary search operation. That is it should return zero, a positive or negative value if <i>a</i> is equal to, greater than or less than <i>b</i> respectively.</p>
+
+<p>Care should be taken when checking the return values of the functions <b>sk_<i>TYPE</i>_find</b>() and <b>sk_<i>TYPE</i>_find_ex</b>(). They return an index to the matching element. In particular <b>0</b> indicates a matching first element. A failed search is indicated by a <b>-1</b> return value.</p>
+
+<p>STACK_OF(), DEFINE_STACK_OF(), DEFINE_STACK_OF_CONST(), and DEFINE_SPECIAL_STACK_OF() are implemented as macros.</p>
+
+<p>It is not an error to call <b>sk_<i>TYPE</i>_num</b>(), <b>sk_<i>TYPE</i>_value</b>(), <b>sk_<i>TYPE</i>_free</b>(), <b>sk_<i>TYPE</i>_zero</b>(), <b>sk_<i>TYPE</i>_pop_free</b>(), <b>sk_<i>TYPE</i>_delete</b>(), <b>sk_<i>TYPE</i>_delete_ptr</b>(), <b>sk_<i>TYPE</i>_pop</b>(), <b>sk_<i>TYPE</i>_shift</b>(), <b>sk_<i>TYPE</i>_find</b>(), <b>sk_<i>TYPE</i>_find_ex</b>(), and <b>sk_<i>TYPE</i>_find_all</b>() on a NULL stack, empty stack, or with an invalid index. An error is not raised in these conditions.</p>
+
+<p>The underlying utility <b>OPENSSL_sk_</b> API should not be used directly. It defines these functions: OPENSSL_sk_deep_copy(), OPENSSL_sk_delete(), OPENSSL_sk_delete_ptr(), OPENSSL_sk_dup(), OPENSSL_sk_find(), OPENSSL_sk_find_ex(), OPENSSL_sk_find_all(), OPENSSL_sk_free(), OPENSSL_sk_insert(), OPENSSL_sk_is_sorted(), OPENSSL_sk_new(), OPENSSL_sk_new_null(), OPENSSL_sk_new_reserve(), OPENSSL_sk_num(), OPENSSL_sk_pop(), OPENSSL_sk_pop_free(), OPENSSL_sk_push(), OPENSSL_sk_reserve(), OPENSSL_sk_set(), OPENSSL_sk_set_cmp_func(), OPENSSL_sk_set_thunks(), OPENSSL_sk_shift(), OPENSSL_sk_sort(), OPENSSL_sk_unshift(), OPENSSL_sk_value(), OPENSSL_sk_zero().</p>
+
+<p>OPENSSL_sk_set_thunks(), while public by necessity, is actually an internal function and should not be used.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p><b>sk_<i>TYPE</i>_num</b>() returns the number of elements in the stack or <b>-1</b> if the passed stack is NULL.</p>
+
+<p><b>sk_<i>TYPE</i>_value</b>() returns a pointer to a stack element or NULL if the index is out of range.</p>
+
+<p><b>sk_<i>TYPE</i>_new</b>(), <b>sk_<i>TYPE</i>_new_null</b>() and <b>sk_<i>TYPE</i>_new_reserve</b>() return an empty stack or NULL if an error occurs.</p>
+
+<p><b>sk_<i>TYPE</i>_reserve</b>() returns <b>1</b> on successful allocation of the required memory or <b>0</b> on error.</p>
+
+<p><b>sk_<i>TYPE</i>_set_cmp_func</b>() returns the old comparison function or NULL if there was no old comparison function.</p>
+
+<p><b>sk_<i>TYPE</i>_free</b>(), <b>sk_<i>TYPE</i>_zero</b>(), <b>sk_<i>TYPE</i>_pop_free</b>() and <b>sk_<i>TYPE</i>_sort</b>() do not return values.</p>
+
+<p><b>sk_<i>TYPE</i>_pop</b>(), <b>sk_<i>TYPE</i>_shift</b>(), <b>sk_<i>TYPE</i>_delete</b>() and <b>sk_<i>TYPE</i>_delete_ptr</b>() return a pointer to the deleted element or NULL on error.</p>
+
+<p><b>sk_<i>TYPE</i>_insert</b>(), <b>sk_<i>TYPE</i>_push</b>() and <b>sk_<i>TYPE</i>_unshift</b>() return the total number of elements in the stack and 0 if an error occurred.</p>
+
+<p><b>sk_<i>TYPE</i>_set</b>() returns a pointer to the replacement element or NULL on error.</p>
+
+<p><b>sk_<i>TYPE</i>_find</b>() and <b>sk_<i>TYPE</i>_find_ex</b>() return an index to the found element or <b>-1</b> on error.</p>
+
+<p><b>sk_<i>TYPE</i>_is_sorted</b>() returns <b>1</b> if the stack is sorted and <b>0</b> if it is not.</p>
+
+<p><b>sk_<i>TYPE</i>_dup</b>() and <b>sk_<i>TYPE</i>_deep_copy</b>() return a pointer to the copy of the stack or NULL on error.</p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>Before OpenSSL 1.1.0, this was implemented via macros and not inline functions and was not a public API.</p>
+
+<p><b>sk_<i>TYPE</i>_reserve</b>() and <b>sk_<i>TYPE</i>_new_reserve</b>() were added in OpenSSL 1.1.1.</p>
+
+<p>From OpenSSL 3.2.0, the <b>sk_<i>TYPE</i>_find</b>(), <b>sk_<i>TYPE</i>_find_ex</b>() and <b>sk_<i>TYPE</i>_find_all</b>() calls are read-only and do not sort the stack. To avoid any performance implications this change introduces, <b>sk_<i>TYPE</i>_sort</b>() should be called before these find operations.</p>
+
+<p>Before OpenSSL 3.3.0 <b>sk_<i>TYPE</i>_push</b>() returned -1 if <i>sk</i> was NULL. It was changed to return 0 in this condition as for other errors.</p>
+
+<p>OPENSSL_sk_set_thunks() was added in OpenSSL 3.6.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

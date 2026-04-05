@@ -1,0 +1,76 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>BIO_get_data</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>BIO_set_data, BIO_get_data, BIO_set_init, BIO_get_init, BIO_set_shutdown, BIO_get_shutdown - functions for managing BIO state information</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/bio.h&gt;
+
+void BIO_set_data(BIO *a, void *ptr);
+void *BIO_get_data(BIO *a);
+void BIO_set_init(BIO *a, int init);
+int BIO_get_init(BIO *a);
+void BIO_set_shutdown(BIO *a, int shut);
+int BIO_get_shutdown(BIO *a);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>These functions are mainly useful when implementing a custom BIO.</p>
+
+<p>The BIO_set_data() function associates the custom data pointed to by <b>ptr</b> with the BIO. This data can subsequently be retrieved via a call to BIO_get_data(). This can be used by custom BIOs for storing implementation specific information.</p>
+
+<p>The BIO_set_init() function sets the value of the BIO&#39;s &quot;init&quot; flag to indicate whether initialisation has been completed for this BIO or not. A nonzero value indicates that initialisation is complete, whilst zero indicates that it is not. Often initialisation will complete during initial construction of the BIO. For some BIOs however, initialisation may not complete until after additional steps have occurred (for example through calling custom ctrls). The BIO_get_init() function returns the value of the &quot;init&quot; flag.</p>
+
+<p>The BIO_set_shutdown() and BIO_get_shutdown() functions set and get the state of this BIO&#39;s shutdown (i.e. BIO_CLOSE) flag. If set then the underlying resource is also closed when the BIO is freed.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>BIO_get_data() returns a pointer to the implementation specific custom data associated with this BIO, or NULL if none has been set.</p>
+
+<p>BIO_get_init() returns the state of the BIO&#39;s init flag.</p>
+
+<p>BIO_get_shutdown() returns the stat of the BIO&#39;s shutdown (i.e. BIO_CLOSE) flag.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/bio.html">bio(7)</a>, <a href="../man3/BIO_meth_new.html">BIO_meth_new(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The functions described here were added in OpenSSL 1.1.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2016 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

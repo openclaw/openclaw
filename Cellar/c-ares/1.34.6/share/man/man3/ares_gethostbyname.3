@@ -1,0 +1,108 @@
+.\"
+.\" Copyright 1998 by the Massachusetts Institute of Technology.
+.\" SPDX-License-Identifier: MIT
+.\"
+.TH ARES_GETHOSTBYNAME 3 "25 July 1998"
+.SH NAME
+ares_gethostbyname \- Initiate a host query by name
+.SH SYNOPSIS
+.nf
+#include <ares.h>
+
+typedef void (*ares_host_callback)(void *\fIarg\fP, int \fIstatus\fP,
+                                   int \fItimeouts\fP,
+                                   struct hostent *\fIhostent\fP)
+
+void ares_gethostbyname(ares_channel_t *\fIchannel\fP, const char *\fIname\fP,
+                        int \fIfamily\fP, ares_host_callback \fIcallback\fP,
+                        void *\fIarg\fP)
+.fi
+.SH DESCRIPTION
+The
+.B ares_gethostbyname
+function initiates a host query by name on the name service channel
+identified by
+.IR channel .
+The parameter
+.I name
+gives the hostname as a NUL-terminated C string, and
+.I family
+gives the desired type of address for the resulting host entry.  When the
+query is complete or has failed, the ares library will invoke \fIcallback\fP.
+Completion or failure of the query may happen immediately, or may happen
+during a later call to \fIares_process(3)\fP, \fIares_destroy(3)\fP or
+\fIares_cancel(3)\fP.
+.PP
+The callback argument
+.I arg
+is copied from the
+.B ares_gethostbyname
+argument
+.IR arg .
+The callback argument
+.I status
+indicates whether the query succeeded and, if not, how it failed.  It
+may have any of the following values:
+.TP 19
+.B ARES_SUCCESS
+The host lookup completed successfully.
+.TP 19
+.B ARES_ENOTIMP
+The ares library does not know how to find addresses of type
+.IR family .
+.TP 19
+.B ARES_EBADNAME
+The hostname
+.B name
+is composed entirely of numbers and periods, but is not a valid
+representation of an Internet address.
+.TP 19
+.B ARES_ENODATA
+There was no data returned to extract a result from.
+.TP 19
+.B ARES_ENOTFOUND
+The name
+.I name
+was not found.
+.TP 19
+.B ARES_ENOMEM
+Memory was exhausted.
+.TP 19
+.B ARES_ECANCELLED
+The query was cancelled.
+.TP 19
+.B ARES_EDESTRUCTION
+The name service channel
+.I channel
+is being destroyed; the query will not be completed.
+.PP
+The callback argument
+.I timeouts
+reports how many times a query timed out during the execution of the
+given request.
+.PP
+On successful completion of the query, the callback argument
+.I hostent
+points to a
+.B struct hostent
+containing the name of the host returned by the query.  The callback
+need not and should not attempt to free the memory pointed to by
+.IR hostent ;
+the ares library will free it when the callback returns.  If the query
+did not complete successfully,
+.I hostent
+will be
+.BR NULL .
+.PP
+When the associated callback is called, it is called with a channel lock so care
+must be taken to ensure any processing is minimal to prevent DNS channel stalls.
+
+The callback may be triggered from a different thread than the one which
+called \fIares_gethostbyname(3)\fP.
+
+For integrators running their own event loops and not using \fBARES_OPT_EVENT_THREAD\fP,
+care needs to be taken to ensure any file descriptor lists are updated immediately
+within the eventloop when notified.
+.SH SEE ALSO
+.BR ares_process (3),
+.BR ares_gethostbyaddr (3)

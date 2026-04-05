@@ -1,0 +1,87 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>PEM_X509_INFO_read_bio_ex</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>PEM_X509_INFO_read_ex, PEM_X509_INFO_read, PEM_X509_INFO_read_bio_ex, PEM_X509_INFO_read_bio - read PEM-encoded data structures into one or more <b>X509_INFO</b> objects</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/pem.h&gt;
+
+STACK_OF(X509_INFO) *PEM_X509_INFO_read_ex(FILE *fp, STACK_OF(X509_INFO) *sk,
+                                           pem_password_cb *cb, void *u,
+                                           OSSL_LIB_CTX *libctx,
+                                           const char *propq);
+STACK_OF(X509_INFO) *PEM_X509_INFO_read(FILE *fp, STACK_OF(X509_INFO) *sk,
+                                        pem_password_cb *cb, void *u);
+STACK_OF(X509_INFO) *PEM_X509_INFO_read_bio_ex(BIO *bio,
+                                               STACK_OF(X509_INFO) *sk,
+                                               pem_password_cb *cb, void *u,
+                                               OSSL_LIB_CTX *libctx,
+                                               const char *propq);
+STACK_OF(X509_INFO) *PEM_X509_INFO_read_bio(BIO *bp, STACK_OF(X509_INFO) *sk,
+                                            pem_password_cb *cb, void *u);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>PEM_X509_INFO_read_ex() loads the <b>X509_INFO</b> objects from a file <i>fp</i>.</p>
+
+<p>PEM_X509_INFO_read() is similar to PEM_X509_INFO_read_ex() but uses the default (NULL) library context <i>libctx</i> and empty property query <i>propq</i>.</p>
+
+<p>PEM_X509_INFO_read_bio_ex() loads the <b>X509_INFO</b> objects using a bio <i>bp</i>.</p>
+
+<p>PEM_X509_INFO_read_bio() is similar to PEM_X509_INFO_read_bio_ex() but uses the default (NULL) library context <i>libctx</i> and empty property query <i>propq</i>.</p>
+
+<p>Each of the loaded <b>X509_INFO</b> objects can contain a CRL, a certificate, and/or a private key. The elements are read sequentially, and as far as they are of different type than the elements read before, they are combined into the same <b>X509_INFO</b> object. The idea behind this is that if, for instance, a certificate is followed by a private key, the private key is supposed to correspond to the certificate.</p>
+
+<p>If the input stack <i>sk</i> is NULL a new stack is allocated, else the given stack is extended.</p>
+
+<p>The optional <i>cb</i> and <i>u</i> parameters can be used for providing a pass phrase needed for decrypting encrypted PEM structures (normally only private keys). See <a href="../man3/PEM_read_bio_PrivateKey.html">PEM_read_bio_PrivateKey(3)</a> and <a href="../man7/passphrase-encoding.html">passphrase-encoding(7)</a> for details.</p>
+
+<p>The library context <i>libctx</i> and property query <i>propq</i> are used for fetching algorithms from providers.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>PEM_X509_INFO_read_ex(), PEM_X509_INFO_read(), PEM_X509_INFO_read_bio_ex() and PEM_X509_INFO_read_bio() return a stack of <b>X509_INFO</b> objects or NULL on failure.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/PEM_read_bio_ex.html">PEM_read_bio_ex(3)</a>, <a href="../man3/PEM_read_bio_PrivateKey.html">PEM_read_bio_PrivateKey(3)</a>, <a href="../man7/passphrase-encoding.html">passphrase-encoding(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The functions PEM_X509_INFO_read_ex() and PEM_X509_INFO_read_bio_ex() were added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2020-2022 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

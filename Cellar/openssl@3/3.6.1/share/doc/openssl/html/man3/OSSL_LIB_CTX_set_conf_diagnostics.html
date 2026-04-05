@@ -1,0 +1,64 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OSSL_LIB_CTX_set_conf_diagnostics</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OSSL_LIB_CTX_set_conf_diagnostics, OSSL_LIB_CTX_get_conf_diagnostics - Set and get configuration diagnostics</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/crypto.h&gt;
+
+void OSSL_LIB_CTX_set_conf_diagnostics(OSSL_LIB_CTX *ctx, int value);
+int OSSL_LIB_CTX_get_conf_diagnostics(OSSL_LIB_CTX *ctx);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>OSSL_LIB_CTX_set_conf_diagnostics() sets the value of the configuration diagnostics flag. If <i>value</i> is nonzero subsequent parsing and application of configuration data can report errors that would otherwise be ignored. In particular any errors in the ssl configuration module will cause a failure of <a href="../man3/SSL_CTX_new.html">SSL_CTX_new(3)</a> and <a href="../man3/SSL_CTX_new_ex.html">SSL_CTX_new_ex(3)</a> calls. The configuration diagnostics flag can be also set when a configuration file is being loaded into <b>OSSL_LIB_CTX</b> with <a href="../man3/OSSL_LIB_CTX_load_config.html">OSSL_LIB_CTX_load_config(3)</a>. If the configuration sets a <b>config_diagnostics</b> value as described in <a href="../man5/config.html">config(5)</a>, it will override the value set by OSSL_LIB_CTX_set_conf_diagnostics() before loading the configuration file.</p>
+
+<p>OSSL_LIB_CTX_get_conf_diagnostics() returns the current value of the configuration diagnostics flag.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>OSSL_LIB_CTX_get_conf_diagnostics() returns 0 if the configuration diagnostics should not be performed, nonzero otherwise.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/SSL_CTX_new.html">SSL_CTX_new(3)</a>, <a href="../man3/OSSL_LIB_CTX_load_config.html">OSSL_LIB_CTX_load_config(3)</a>, <a href="../man5/config.html">config(5)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The functions described on this page were added in OpenSSL 3.4.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

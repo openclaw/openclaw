@@ -1,0 +1,76 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>ERR_new</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>ERR_new, ERR_set_debug, ERR_set_error, ERR_vset_error - Error recording building blocks</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/err.h&gt;
+
+void ERR_new(void);
+void ERR_set_debug(const char *file, int line, const char *func);
+void ERR_set_error(int lib, int reason, const char *fmt, ...);
+void ERR_vset_error(int lib, int reason, const char *fmt, va_list args);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The functions described here are generally not used directly, but rather through macros such as <a href="../man3/ERR_raise.html">ERR_raise(3)</a>. They can still be useful for anyone that wants to make their own macros.</p>
+
+<p>ERR_new() allocates a new slot in the thread&#39;s error queue.</p>
+
+<p>ERR_set_debug() sets the debug information related to the current error in the thread&#39;s error queue. The values that can be given are the filename <i>file</i>, line in the file <i>line</i> and the name of the function <i>func</i> where the error occurred. The names must be constant, this function will only save away the pointers, not copy the strings.</p>
+
+<p>ERR_set_error() sets the error information, which are the library number <i>lib</i> and the reason code <i>reason</i>, and additional data as a format string <i>fmt</i> and an arbitrary number of arguments. The additional data is processed with <a href="../man3/BIO_snprintf.html">BIO_snprintf(3)</a> to form the additional data string, which is allocated and store in the error record.</p>
+
+<p>ERR_vset_error() works like ERR_set_error(), but takes a <b>va_list</b> argument instead of a variable number of arguments.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>ERR_new, ERR_set_debug, ERR_set_error and ERR_vset_error do not return any values.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The library number is unique to each unit that records errors. OpenSSL has a number of preallocated ones for its own uses, but others may allocate their own library number dynamically with <a href="../man3/ERR_get_next_error_library.html">ERR_get_next_error_library(3)</a>.</p>
+
+<p>Reason codes are unique within each library, and may have an associated set of strings as a short description of the reason. For dynamically allocated library numbers, reason strings are recorded with <a href="../man3/ERR_load_strings.html">ERR_load_strings(3)</a>.</p>
+
+<p>Provider authors are supplied with core versions of these functions, see <a href="../man7/provider-base.html">provider-base(7)</a>.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ERR_raise.html">ERR_raise(3)</a>, <a href="../man3/ERR_get_next_error_library.html">ERR_get_next_error_library(3)</a>, <a href="../man3/ERR_load_strings.html">ERR_load_strings(3)</a>, <a href="../man3/BIO_snprintf.html">BIO_snprintf(3)</a>, <a href="../man7/provider-base.html">provider-base(7)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2020 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

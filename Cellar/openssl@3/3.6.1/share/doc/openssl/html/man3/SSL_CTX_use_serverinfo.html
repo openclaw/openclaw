@@ -1,0 +1,78 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_CTX_use_serverinfo</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_CTX_use_serverinfo_ex, SSL_CTX_use_serverinfo, SSL_CTX_use_serverinfo_file - use serverinfo extension</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+int SSL_CTX_use_serverinfo_ex(SSL_CTX *ctx, unsigned int version,
+                              const unsigned char *serverinfo,
+                              size_t serverinfo_length);
+
+int SSL_CTX_use_serverinfo(SSL_CTX *ctx, const unsigned char *serverinfo,
+                           size_t serverinfo_length);
+
+int SSL_CTX_use_serverinfo_file(SSL_CTX *ctx, const char *file);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>These functions load &quot;serverinfo&quot; TLS extensions into the SSL_CTX. A &quot;serverinfo&quot; extension is returned in response to an empty ClientHello Extension.</p>
+
+<p>SSL_CTX_use_serverinfo_ex() loads one or more serverinfo extensions from a byte array into <b>ctx</b>. The <b>version</b> parameter specifies the format of the byte array provided in <b>*serverinfo</b> which is of length <b>serverinfo_length</b>.</p>
+
+<p>If <b>version</b> is <b>SSL_SERVERINFOV2</b> then the extensions in the array must consist of a 4-byte context, a 2-byte Extension Type, a 2-byte length, and then length bytes of extension_data. The context and type values have the same meaning as for <a href="../man3/SSL_CTX_add_custom_ext.html">SSL_CTX_add_custom_ext(3)</a>. If serverinfo is being loaded for extensions to be added to a Certificate message, then the extension will only be added for the first certificate in the message (which is always the end-entity certificate).</p>
+
+<p>If <b>version</b> is <b>SSL_SERVERINFOV1</b> then the extensions in the array must consist of a 2-byte Extension Type, a 2-byte length, and then length bytes of extension_data. The type value has the same meaning as for <a href="../man3/SSL_CTX_add_custom_ext.html">SSL_CTX_add_custom_ext(3)</a>. The following default context value will be used in this case:</p>
+
+<pre><code>SSL_EXT_TLS1_2_AND_BELOW_ONLY | SSL_EXT_CLIENT_HELLO
+| SSL_EXT_TLS1_2_SERVER_HELLO | SSL_EXT_IGNORE_ON_RESUMPTION</code></pre>
+
+<p>SSL_CTX_use_serverinfo() does the same thing as SSL_CTX_use_serverinfo_ex() except that there is no <b>version</b> parameter so a default version of SSL_SERVERINFOV1 is used instead.</p>
+
+<p>SSL_CTX_use_serverinfo_file() loads one or more serverinfo extensions from <b>file</b> into <b>ctx</b>. The extensions must be in PEM format. Each extension must be in a format as described above for SSL_CTX_use_serverinfo_ex(). Each PEM extension name must begin with the phrase &quot;BEGIN SERVERINFOV2 FOR &quot; for SSL_SERVERINFOV2 data or &quot;BEGIN SERVERINFO FOR &quot; for SSL_SERVERINFOV1 data.</p>
+
+<p>If more than one certificate (RSA/DSA) is installed using SSL_CTX_use_certificate(), the serverinfo extension will be loaded into the last certificate installed. If e.g. the last item was an RSA certificate, the loaded serverinfo extension data will be loaded for that certificate. To use the serverinfo extension for multiple certificates, SSL_CTX_use_serverinfo() needs to be called multiple times, once <b>after</b> each time a certificate is loaded via a call to SSL_CTX_use_certificate().</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>On success, the functions return 1. On failure, the functions return 0. Check out the error stack to find out the reason.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2013-2017 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,87 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>ERR_error_string</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>ERR_error_string, ERR_error_string_n, ERR_lib_error_string, ERR_func_error_string, ERR_reason_error_string - obtain human-readable error message</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/err.h&gt;
+
+char *ERR_error_string(unsigned long e, char *buf);
+void ERR_error_string_n(unsigned long e, char *buf, size_t len);
+
+const char *ERR_lib_error_string(unsigned long e);
+const char *ERR_reason_error_string(unsigned long e);</code></pre>
+
+<p>Deprecated in OpenSSL 3.0:</p>
+
+<pre><code>const char *ERR_func_error_string(unsigned long e);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>ERR_error_string() generates a human-readable string representing the error code <i>e</i>, and places it at <i>buf</i>. <i>buf</i> must be at least 256 bytes long. If <i>buf</i> is <b>NULL</b>, the error string is placed in a static buffer. Note that this function is not thread-safe and does no checks on the size of the buffer; use ERR_error_string_n() instead.</p>
+
+<p>ERR_error_string_n() is a variant of ERR_error_string() that writes at most <i>len</i> characters (including the terminating 0) and truncates the string if necessary. For ERR_error_string_n(), <i>buf</i> <b>MUST NOT</b> be NULL.</p>
+
+<p>The string will have the following format:</p>
+
+<pre><code>error:[error code]:[library name]::[reason string]</code></pre>
+
+<p><i>error code</i> is an 8 digit hexadecimal number, <i>library name</i> and <i>reason string</i> are ASCII text.</p>
+
+<p>ERR_lib_error_string() and ERR_reason_error_string() return the library name and reason string respectively.</p>
+
+<p>If there is no text string registered for the given error code, the error string will contain the numeric code.</p>
+
+<p><a href="../man3/ERR_print_errors.html">ERR_print_errors(3)</a> can be used to print all error codes currently in the queue.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>ERR_error_string() returns a pointer to a static buffer containing the string if <i>buf</i> <b>== NULL</b>, <i>buf</i> otherwise.</p>
+
+<p>ERR_lib_error_string() and ERR_reason_error_string() return the strings, and <b>NULL</b> if none is registered for the error code.</p>
+
+<p>ERR_func_error_string() returns NULL.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>, <a href="../man3/ERR_print_errors.html">ERR_print_errors(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>ERR_func_error_string() became deprecated in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2017 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

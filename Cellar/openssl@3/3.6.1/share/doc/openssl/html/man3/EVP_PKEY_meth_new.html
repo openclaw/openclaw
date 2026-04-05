@@ -1,0 +1,405 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_PKEY_meth_new</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Methods">Methods</a></li>
+      <li><a href="#Functions">Functions</a></li>
+    </ul>
+  </li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_PKEY_meth_new, EVP_PKEY_meth_free, EVP_PKEY_meth_copy, EVP_PKEY_meth_find, EVP_PKEY_meth_add0, EVP_PKEY_METHOD, EVP_PKEY_meth_set_init, EVP_PKEY_meth_set_copy, EVP_PKEY_meth_set_cleanup, EVP_PKEY_meth_set_paramgen, EVP_PKEY_meth_set_keygen, EVP_PKEY_meth_set_sign, EVP_PKEY_meth_set_verify, EVP_PKEY_meth_set_verify_recover, EVP_PKEY_meth_set_signctx, EVP_PKEY_meth_set_verifyctx, EVP_PKEY_meth_set_encrypt, EVP_PKEY_meth_set_decrypt, EVP_PKEY_meth_set_derive, EVP_PKEY_meth_set_ctrl, EVP_PKEY_meth_set_digestsign, EVP_PKEY_meth_set_digestverify, EVP_PKEY_meth_set_check, EVP_PKEY_meth_set_public_check, EVP_PKEY_meth_set_param_check, EVP_PKEY_meth_set_digest_custom, EVP_PKEY_meth_get_init, EVP_PKEY_meth_get_copy, EVP_PKEY_meth_get_cleanup, EVP_PKEY_meth_get_paramgen, EVP_PKEY_meth_get_keygen, EVP_PKEY_meth_get_sign, EVP_PKEY_meth_get_verify, EVP_PKEY_meth_get_verify_recover, EVP_PKEY_meth_get_signctx, EVP_PKEY_meth_get_verifyctx, EVP_PKEY_meth_get_encrypt, EVP_PKEY_meth_get_decrypt, EVP_PKEY_meth_get_derive, EVP_PKEY_meth_get_ctrl, EVP_PKEY_meth_get_digestsign, EVP_PKEY_meth_get_digestverify, EVP_PKEY_meth_get_check, EVP_PKEY_meth_get_public_check, EVP_PKEY_meth_get_param_check, EVP_PKEY_meth_get_digest_custom, EVP_PKEY_meth_remove - manipulating EVP_PKEY_METHOD structure</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/evp.h&gt;</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>typedef struct evp_pkey_method_st EVP_PKEY_METHOD;
+
+EVP_PKEY_METHOD *EVP_PKEY_meth_new(int id, int flags);
+void EVP_PKEY_meth_free(EVP_PKEY_METHOD *pmeth);
+void EVP_PKEY_meth_copy(EVP_PKEY_METHOD *dst, const EVP_PKEY_METHOD *src);
+const EVP_PKEY_METHOD *EVP_PKEY_meth_find(int type);
+int EVP_PKEY_meth_add0(const EVP_PKEY_METHOD *pmeth);
+int EVP_PKEY_meth_remove(const EVP_PKEY_METHOD *pmeth);
+
+void EVP_PKEY_meth_set_init(EVP_PKEY_METHOD *pmeth,
+                            int (*init) (EVP_PKEY_CTX *ctx));
+void EVP_PKEY_meth_set_copy(EVP_PKEY_METHOD *pmeth,
+                            int (*copy) (EVP_PKEY_CTX *dst,
+                                         const EVP_PKEY_CTX *src));
+void EVP_PKEY_meth_set_cleanup(EVP_PKEY_METHOD *pmeth,
+                               void (*cleanup) (EVP_PKEY_CTX *ctx));
+void EVP_PKEY_meth_set_paramgen(EVP_PKEY_METHOD *pmeth,
+                                int (*paramgen_init) (EVP_PKEY_CTX *ctx),
+                                int (*paramgen) (EVP_PKEY_CTX *ctx,
+                                                 EVP_PKEY *pkey));
+void EVP_PKEY_meth_set_keygen(EVP_PKEY_METHOD *pmeth,
+                              int (*keygen_init) (EVP_PKEY_CTX *ctx),
+                              int (*keygen) (EVP_PKEY_CTX *ctx,
+                                             EVP_PKEY *pkey));
+void EVP_PKEY_meth_set_sign(EVP_PKEY_METHOD *pmeth,
+                            int (*sign_init) (EVP_PKEY_CTX *ctx),
+                            int (*sign) (EVP_PKEY_CTX *ctx,
+                                         unsigned char *sig, size_t *siglen,
+                                         const unsigned char *tbs,
+                                         size_t tbslen));
+void EVP_PKEY_meth_set_verify(EVP_PKEY_METHOD *pmeth,
+                              int (*verify_init) (EVP_PKEY_CTX *ctx),
+                              int (*verify) (EVP_PKEY_CTX *ctx,
+                                             const unsigned char *sig,
+                                             size_t siglen,
+                                             const unsigned char *tbs,
+                                             size_t tbslen));
+void EVP_PKEY_meth_set_verify_recover(EVP_PKEY_METHOD *pmeth,
+                                      int (*verify_recover_init) (EVP_PKEY_CTX
+                                                                  *ctx),
+                                      int (*verify_recover) (EVP_PKEY_CTX
+                                                             *ctx,
+                                                             unsigned char
+                                                             *sig,
+                                                             size_t *siglen,
+                                                             const unsigned
+                                                             char *tbs,
+                                                             size_t tbslen));
+void EVP_PKEY_meth_set_signctx(EVP_PKEY_METHOD *pmeth,
+                               int (*signctx_init) (EVP_PKEY_CTX *ctx,
+                                                    EVP_MD_CTX *mctx),
+                               int (*signctx) (EVP_PKEY_CTX *ctx,
+                                               unsigned char *sig,
+                                               size_t *siglen,
+                                               EVP_MD_CTX *mctx));
+void EVP_PKEY_meth_set_verifyctx(EVP_PKEY_METHOD *pmeth,
+                                 int (*verifyctx_init) (EVP_PKEY_CTX *ctx,
+                                                        EVP_MD_CTX *mctx),
+                                 int (*verifyctx) (EVP_PKEY_CTX *ctx,
+                                                   const unsigned char *sig,
+                                                   int siglen,
+                                                   EVP_MD_CTX *mctx));
+void EVP_PKEY_meth_set_encrypt(EVP_PKEY_METHOD *pmeth,
+                               int (*encrypt_init) (EVP_PKEY_CTX *ctx),
+                               int (*encryptfn) (EVP_PKEY_CTX *ctx,
+                                                 unsigned char *out,
+                                                 size_t *outlen,
+                                                 const unsigned char *in,
+                                                 size_t inlen));
+void EVP_PKEY_meth_set_decrypt(EVP_PKEY_METHOD *pmeth,
+                               int (*decrypt_init) (EVP_PKEY_CTX *ctx),
+                               int (*decrypt) (EVP_PKEY_CTX *ctx,
+                                               unsigned char *out,
+                                               size_t *outlen,
+                                               const unsigned char *in,
+                                               size_t inlen));
+void EVP_PKEY_meth_set_derive(EVP_PKEY_METHOD *pmeth,
+                              int (*derive_init) (EVP_PKEY_CTX *ctx),
+                              int (*derive) (EVP_PKEY_CTX *ctx,
+                                             unsigned char *key,
+                                             size_t *keylen));
+void EVP_PKEY_meth_set_ctrl(EVP_PKEY_METHOD *pmeth,
+                            int (*ctrl) (EVP_PKEY_CTX *ctx, int type, int p1,
+                                         void *p2),
+                            int (*ctrl_str) (EVP_PKEY_CTX *ctx,
+                                             const char *type,
+                                             const char *value));
+void EVP_PKEY_meth_set_digestsign(EVP_PKEY_METHOD *pmeth,
+                                  int (*digestsign) (EVP_MD_CTX *ctx,
+                                                     unsigned char *sig,
+                                                     size_t *siglen,
+                                                     const unsigned char *tbs,
+                                                     size_t tbslen));
+void EVP_PKEY_meth_set_digestverify(EVP_PKEY_METHOD *pmeth,
+                                    int (*digestverify) (EVP_MD_CTX *ctx,
+                                                         const unsigned char *sig,
+                                                         size_t siglen,
+                                                         const unsigned char *tbs,
+                                                         size_t tbslen));
+void EVP_PKEY_meth_set_check(EVP_PKEY_METHOD *pmeth,
+                             int (*check) (EVP_PKEY *pkey));
+void EVP_PKEY_meth_set_public_check(EVP_PKEY_METHOD *pmeth,
+                                    int (*check) (EVP_PKEY *pkey));
+void EVP_PKEY_meth_set_param_check(EVP_PKEY_METHOD *pmeth,
+                                   int (*check) (EVP_PKEY *pkey));
+void EVP_PKEY_meth_set_digest_custom(EVP_PKEY_METHOD *pmeth,
+                                    int (*digest_custom) (EVP_PKEY_CTX *ctx,
+                                                          EVP_MD_CTX *mctx));
+
+void EVP_PKEY_meth_get_init(const EVP_PKEY_METHOD *pmeth,
+                            int (**pinit) (EVP_PKEY_CTX *ctx));
+void EVP_PKEY_meth_get_copy(const EVP_PKEY_METHOD *pmeth,
+                            int (**pcopy) (EVP_PKEY_CTX *dst,
+                                           EVP_PKEY_CTX *src));
+void EVP_PKEY_meth_get_cleanup(const EVP_PKEY_METHOD *pmeth,
+                               void (**pcleanup) (EVP_PKEY_CTX *ctx));
+void EVP_PKEY_meth_get_paramgen(const EVP_PKEY_METHOD *pmeth,
+                                int (**pparamgen_init) (EVP_PKEY_CTX *ctx),
+                                int (**pparamgen) (EVP_PKEY_CTX *ctx,
+                                                   EVP_PKEY *pkey));
+void EVP_PKEY_meth_get_keygen(const EVP_PKEY_METHOD *pmeth,
+                              int (**pkeygen_init) (EVP_PKEY_CTX *ctx),
+                              int (**pkeygen) (EVP_PKEY_CTX *ctx,
+                                               EVP_PKEY *pkey));
+void EVP_PKEY_meth_get_sign(const EVP_PKEY_METHOD *pmeth,
+                            int (**psign_init) (EVP_PKEY_CTX *ctx),
+                            int (**psign) (EVP_PKEY_CTX *ctx,
+                                           unsigned char *sig, size_t *siglen,
+                                           const unsigned char *tbs,
+                                           size_t tbslen));
+void EVP_PKEY_meth_get_verify(const EVP_PKEY_METHOD *pmeth,
+                              int (**pverify_init) (EVP_PKEY_CTX *ctx),
+                              int (**pverify) (EVP_PKEY_CTX *ctx,
+                                               const unsigned char *sig,
+                                               size_t siglen,
+                                               const unsigned char *tbs,
+                                               size_t tbslen));
+void EVP_PKEY_meth_get_verify_recover(const EVP_PKEY_METHOD *pmeth,
+                                      int (**pverify_recover_init) (EVP_PKEY_CTX
+                                                                    *ctx),
+                                      int (**pverify_recover) (EVP_PKEY_CTX
+                                                               *ctx,
+                                                               unsigned char
+                                                               *sig,
+                                                               size_t *siglen,
+                                                               const unsigned
+                                                               char *tbs,
+                                                               size_t tbslen));
+void EVP_PKEY_meth_get_signctx(const EVP_PKEY_METHOD *pmeth,
+                               int (**psignctx_init) (EVP_PKEY_CTX *ctx,
+                                                      EVP_MD_CTX *mctx),
+                               int (**psignctx) (EVP_PKEY_CTX *ctx,
+                                                 unsigned char *sig,
+                                                 size_t *siglen,
+                                                 EVP_MD_CTX *mctx));
+void EVP_PKEY_meth_get_verifyctx(const EVP_PKEY_METHOD *pmeth,
+                                 int (**pverifyctx_init) (EVP_PKEY_CTX *ctx,
+                                                          EVP_MD_CTX *mctx),
+                                 int (**pverifyctx) (EVP_PKEY_CTX *ctx,
+                                                     const unsigned char *sig,
+                                                     int siglen,
+                                                     EVP_MD_CTX *mctx));
+void EVP_PKEY_meth_get_encrypt(const EVP_PKEY_METHOD *pmeth,
+                               int (**pencrypt_init) (EVP_PKEY_CTX *ctx),
+                               int (**pencryptfn) (EVP_PKEY_CTX *ctx,
+                                                   unsigned char *out,
+                                                   size_t *outlen,
+                                                   const unsigned char *in,
+                                                   size_t inlen));
+void EVP_PKEY_meth_get_decrypt(const EVP_PKEY_METHOD *pmeth,
+                               int (**pdecrypt_init) (EVP_PKEY_CTX *ctx),
+                               int (**pdecrypt) (EVP_PKEY_CTX *ctx,
+                                                 unsigned char *out,
+                                                 size_t *outlen,
+                                                 const unsigned char *in,
+                                                 size_t inlen));
+void EVP_PKEY_meth_get_derive(const EVP_PKEY_METHOD *pmeth,
+                              int (**pderive_init) (EVP_PKEY_CTX *ctx),
+                              int (**pderive) (EVP_PKEY_CTX *ctx,
+                                               unsigned char *key,
+                                               size_t *keylen));
+void EVP_PKEY_meth_get_ctrl(const EVP_PKEY_METHOD *pmeth,
+                            int (**pctrl) (EVP_PKEY_CTX *ctx, int type, int p1,
+                                           void *p2),
+                            int (**pctrl_str) (EVP_PKEY_CTX *ctx,
+                                               const char *type,
+                                               const char *value));
+void EVP_PKEY_meth_get_digestsign(const EVP_PKEY_METHOD *pmeth,
+                                  int (**digestsign) (EVP_MD_CTX *ctx,
+                                                      unsigned char *sig,
+                                                      size_t *siglen,
+                                                      const unsigned char *tbs,
+                                                      size_t tbslen));
+void EVP_PKEY_meth_get_digestverify(const EVP_PKEY_METHOD *pmeth,
+                                    int (**digestverify) (EVP_MD_CTX *ctx,
+                                                          const unsigned char *sig,
+                                                          size_t siglen,
+                                                          const unsigned char *tbs,
+                                                          size_t tbslen));
+void EVP_PKEY_meth_get_check(const EVP_PKEY_METHOD *pmeth,
+                             int (**pcheck) (EVP_PKEY *pkey));
+void EVP_PKEY_meth_get_public_check(const EVP_PKEY_METHOD *pmeth,
+                                    int (**pcheck) (EVP_PKEY *pkey));
+void EVP_PKEY_meth_get_param_check(const EVP_PKEY_METHOD *pmeth,
+                                   int (**pcheck) (EVP_PKEY *pkey));
+void EVP_PKEY_meth_get_digest_custom(const EVP_PKEY_METHOD *pmeth,
+                                    int (**pdigest_custom) (EVP_PKEY_CTX *ctx,
+                                                            EVP_MD_CTX *mctx));</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>All of the functions described on this page are deprecated. Applications should instead use the OSSL_PROVIDER APIs.</p>
+
+<p><b>EVP_PKEY_METHOD</b> is a structure which holds a set of methods for a specific public key cryptographic algorithm. Those methods are usually used to perform different jobs, such as generating a key, signing or verifying, encrypting or decrypting, etc.</p>
+
+<p>There are two places where the <b>EVP_PKEY_METHOD</b> objects are stored: one is a built-in static array representing the standard methods for different algorithms, and the other one is a stack of user-defined application-specific methods, which can be manipulated by using <a href="../man3/EVP_PKEY_meth_add0.html">EVP_PKEY_meth_add0(3)</a>.</p>
+
+<p>The <b>EVP_PKEY_METHOD</b> objects are usually referenced by <b>EVP_PKEY_CTX</b> objects.</p>
+
+<h2 id="Methods">Methods</h2>
+
+<p>The methods are the underlying implementations of a particular public key algorithm present by the <b>EVP_PKEY_CTX</b> object.</p>
+
+<pre><code>int (*init) (EVP_PKEY_CTX *ctx);
+int (*copy) (EVP_PKEY_CTX *dst, const EVP_PKEY_CTX *src);
+void (*cleanup) (EVP_PKEY_CTX *ctx);</code></pre>
+
+<p>The init() method is called to initialize algorithm-specific data when a new <b>EVP_PKEY_CTX</b> is created. As opposed to init(), the cleanup() method is called when an <b>EVP_PKEY_CTX</b> is freed. The copy() method is called when an <b>EVP_PKEY_CTX</b> is being duplicated. Refer to <a href="../man3/EVP_PKEY_CTX_new.html">EVP_PKEY_CTX_new(3)</a>, <a href="../man3/EVP_PKEY_CTX_new_id.html">EVP_PKEY_CTX_new_id(3)</a>, <a href="../man3/EVP_PKEY_CTX_free.html">EVP_PKEY_CTX_free(3)</a> and <a href="../man3/EVP_PKEY_CTX_dup.html">EVP_PKEY_CTX_dup(3)</a>.</p>
+
+<pre><code>int (*paramgen_init) (EVP_PKEY_CTX *ctx);
+int (*paramgen) (EVP_PKEY_CTX *ctx, EVP_PKEY *pkey);</code></pre>
+
+<p>The paramgen_init() and paramgen() methods deal with key parameter generation. They are called by <a href="../man3/EVP_PKEY_paramgen_init.html">EVP_PKEY_paramgen_init(3)</a> and <a href="../man3/EVP_PKEY_paramgen.html">EVP_PKEY_paramgen(3)</a> to handle the parameter generation process.</p>
+
+<pre><code>int (*keygen_init) (EVP_PKEY_CTX *ctx);
+int (*keygen) (EVP_PKEY_CTX *ctx, EVP_PKEY *pkey);</code></pre>
+
+<p>The keygen_init() and keygen() methods are used to generate the actual key for the specified algorithm. They are called by <a href="../man3/EVP_PKEY_keygen_init.html">EVP_PKEY_keygen_init(3)</a> and <a href="../man3/EVP_PKEY_keygen.html">EVP_PKEY_keygen(3)</a>.</p>
+
+<pre><code>int (*sign_init) (EVP_PKEY_CTX *ctx);
+int (*sign) (EVP_PKEY_CTX *ctx, unsigned char *sig, size_t *siglen,
+             const unsigned char *tbs, size_t tbslen);</code></pre>
+
+<p>The sign_init() and sign() methods are used to generate the signature of a piece of data using a private key. They are called by <a href="../man3/EVP_PKEY_sign_init.html">EVP_PKEY_sign_init(3)</a> and <a href="../man3/EVP_PKEY_sign.html">EVP_PKEY_sign(3)</a>.</p>
+
+<pre><code>int (*verify_init) (EVP_PKEY_CTX *ctx);
+int (*verify) (EVP_PKEY_CTX *ctx,
+               const unsigned char *sig, size_t siglen,
+               const unsigned char *tbs, size_t tbslen);</code></pre>
+
+<p>The verify_init() and verify() methods are used to verify whether a signature is valid. They are called by <a href="../man3/EVP_PKEY_verify_init.html">EVP_PKEY_verify_init(3)</a> and <a href="../man3/EVP_PKEY_verify.html">EVP_PKEY_verify(3)</a>.</p>
+
+<pre><code>int (*verify_recover_init) (EVP_PKEY_CTX *ctx);
+int (*verify_recover) (EVP_PKEY_CTX *ctx,
+                       unsigned char *rout, size_t *routlen,
+                       const unsigned char *sig, size_t siglen);</code></pre>
+
+<p>The verify_recover_init() and verify_recover() methods are used to verify a signature and then recover the digest from the signature (for instance, a signature that was generated by RSA signing algorithm). They are called by <a href="../man3/EVP_PKEY_verify_recover_init.html">EVP_PKEY_verify_recover_init(3)</a> and <a href="../man3/EVP_PKEY_verify_recover.html">EVP_PKEY_verify_recover(3)</a>.</p>
+
+<pre><code>int (*signctx_init) (EVP_PKEY_CTX *ctx, EVP_MD_CTX *mctx);
+int (*signctx) (EVP_PKEY_CTX *ctx, unsigned char *sig, size_t *siglen,
+                EVP_MD_CTX *mctx);</code></pre>
+
+<p>The signctx_init() and signctx() methods are used to sign a digest present by a <b>EVP_MD_CTX</b> object. They are called by the EVP_DigestSign functions. See <a href="../man3/EVP_DigestSignInit.html">EVP_DigestSignInit(3)</a> for details.</p>
+
+<pre><code>int (*verifyctx_init) (EVP_PKEY_CTX *ctx, EVP_MD_CTX *mctx);
+int (*verifyctx) (EVP_PKEY_CTX *ctx, const unsigned char *sig, int siglen,
+                  EVP_MD_CTX *mctx);</code></pre>
+
+<p>The verifyctx_init() and verifyctx() methods are used to verify a signature against the data in a <b>EVP_MD_CTX</b> object. They are called by the various EVP_DigestVerify functions. See <a href="../man3/EVP_DigestVerifyInit.html">EVP_DigestVerifyInit(3)</a> for details.</p>
+
+<pre><code>int (*encrypt_init) (EVP_PKEY_CTX *ctx);
+int (*encrypt) (EVP_PKEY_CTX *ctx, unsigned char *out, size_t *outlen,
+                const unsigned char *in, size_t inlen);</code></pre>
+
+<p>The encrypt_init() and encrypt() methods are used to encrypt a piece of data. They are called by <a href="../man3/EVP_PKEY_encrypt_init.html">EVP_PKEY_encrypt_init(3)</a> and <a href="../man3/EVP_PKEY_encrypt.html">EVP_PKEY_encrypt(3)</a>.</p>
+
+<pre><code>int (*decrypt_init) (EVP_PKEY_CTX *ctx);
+int (*decrypt) (EVP_PKEY_CTX *ctx, unsigned char *out, size_t *outlen,
+                const unsigned char *in, size_t inlen);</code></pre>
+
+<p>The decrypt_init() and decrypt() methods are used to decrypt a piece of data. They are called by <a href="../man3/EVP_PKEY_decrypt_init.html">EVP_PKEY_decrypt_init(3)</a> and <a href="../man3/EVP_PKEY_decrypt.html">EVP_PKEY_decrypt(3)</a>.</p>
+
+<pre><code>int (*derive_init) (EVP_PKEY_CTX *ctx);
+int (*derive) (EVP_PKEY_CTX *ctx, unsigned char *key, size_t *keylen);</code></pre>
+
+<p>The derive_init() and derive() methods are used to derive the shared secret from a public key algorithm (for instance, the DH algorithm). They are called by <a href="../man3/EVP_PKEY_derive_init.html">EVP_PKEY_derive_init(3)</a> and <a href="../man3/EVP_PKEY_derive.html">EVP_PKEY_derive(3)</a>.</p>
+
+<pre><code>int (*ctrl) (EVP_PKEY_CTX *ctx, int type, int p1, void *p2);
+int (*ctrl_str) (EVP_PKEY_CTX *ctx, const char *type, const char *value);</code></pre>
+
+<p>The ctrl() and ctrl_str() methods are used to adjust algorithm-specific settings. See <a href="../man3/EVP_PKEY_CTX_ctrl.html">EVP_PKEY_CTX_ctrl(3)</a> and related functions for details.</p>
+
+<pre><code>int (*digestsign) (EVP_MD_CTX *ctx, unsigned char *sig, size_t *siglen,
+                   const unsigned char *tbs, size_t tbslen);
+int (*digestverify) (EVP_MD_CTX *ctx, const unsigned char *sig,
+                     size_t siglen, const unsigned char *tbs,
+                     size_t tbslen);</code></pre>
+
+<p>The digestsign() and digestverify() methods are used to generate or verify a signature in a one-shot mode. They could be called by <a href="../man3/EVP_DigestSign.html">EVP_DigestSign(3)</a> and <a href="../man3/EVP_DigestVerify.html">EVP_DigestVerify(3)</a>.</p>
+
+<pre><code>int (*check) (EVP_PKEY *pkey);
+int (*public_check) (EVP_PKEY *pkey);
+int (*param_check) (EVP_PKEY *pkey);</code></pre>
+
+<p>The check(), public_check() and param_check() methods are used to validate a key-pair, the public component and parameters respectively for a given <b>pkey</b>. They could be called by <a href="../man3/EVP_PKEY_check.html">EVP_PKEY_check(3)</a>, <a href="../man3/EVP_PKEY_public_check.html">EVP_PKEY_public_check(3)</a> and <a href="../man3/EVP_PKEY_param_check.html">EVP_PKEY_param_check(3)</a> respectively.</p>
+
+<pre><code>int (*digest_custom) (EVP_PKEY_CTX *ctx, EVP_MD_CTX *mctx);</code></pre>
+
+<p>The digest_custom() method is used to generate customized digest content before the real message is passed to functions like <a href="../man3/EVP_DigestSignUpdate.html">EVP_DigestSignUpdate(3)</a> or <a href="../man3/EVP_DigestVerifyInit.html">EVP_DigestVerifyInit(3)</a>. This is usually required by some public key signature algorithms like SM2 which requires a hashed prefix to the message to be signed. The digest_custom() function will be called by <a href="../man3/EVP_DigestSignInit.html">EVP_DigestSignInit(3)</a> and <a href="../man3/EVP_DigestVerifyInit.html">EVP_DigestVerifyInit(3)</a>.</p>
+
+<h2 id="Functions">Functions</h2>
+
+<p>EVP_PKEY_meth_new() creates and returns a new <b>EVP_PKEY_METHOD</b> object, and associates the given <b>id</b> and <b>flags</b>. The following flags are supported:</p>
+
+<pre><code>EVP_PKEY_FLAG_AUTOARGLEN
+EVP_PKEY_FLAG_SIGCTX_CUSTOM</code></pre>
+
+<p>If an <b>EVP_PKEY_METHOD</b> is set with the <b>EVP_PKEY_FLAG_AUTOARGLEN</b> flag, the maximum size of the output buffer will be automatically calculated or checked in corresponding EVP methods by the EVP framework. Thus the implementations of these methods don&#39;t need to care about handling the case of returning output buffer size by themselves. For details on the output buffer size, refer to <a href="../man3/EVP_PKEY_sign.html">EVP_PKEY_sign(3)</a>.</p>
+
+<p>The <b>EVP_PKEY_FLAG_SIGCTX_CUSTOM</b> is used to indicate the signctx() method of an <b>EVP_PKEY_METHOD</b> is always called by the EVP framework while doing a digest signing operation by calling <a href="../man3/EVP_DigestSignFinal.html">EVP_DigestSignFinal(3)</a>.</p>
+
+<p>EVP_PKEY_meth_free() frees an existing <b>EVP_PKEY_METHOD</b> pointed by <b>pmeth</b>. If the argument is NULL, nothing is done.</p>
+
+<p>EVP_PKEY_meth_copy() copies an <b>EVP_PKEY_METHOD</b> object from <b>src</b> to <b>dst</b>.</p>
+
+<p>EVP_PKEY_meth_find() finds an <b>EVP_PKEY_METHOD</b> object with the <b>id</b>. This function first searches through the user-defined method objects and then the built-in objects.</p>
+
+<p>EVP_PKEY_meth_add0() adds <b>pmeth</b> to the user defined stack of methods.</p>
+
+<p>EVP_PKEY_meth_remove() removes an <b>EVP_PKEY_METHOD</b> object added by EVP_PKEY_meth_add0().</p>
+
+<p>The EVP_PKEY_meth_set functions set the corresponding fields of <b>EVP_PKEY_METHOD</b> structure with the arguments passed.</p>
+
+<p>The EVP_PKEY_meth_get functions get the corresponding fields of <b>EVP_PKEY_METHOD</b> structure to the arguments provided.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>EVP_PKEY_meth_new() returns a pointer to a new <b>EVP_PKEY_METHOD</b> object or returns NULL on error.</p>
+
+<p>EVP_PKEY_meth_free() and EVP_PKEY_meth_copy() do not return values.</p>
+
+<p>EVP_PKEY_meth_find() returns a pointer to the found <b>EVP_PKEY_METHOD</b> object or returns NULL if not found.</p>
+
+<p>EVP_PKEY_meth_add0() returns 1 if method is added successfully or 0 if an error occurred.</p>
+
+<p>EVP_PKEY_meth_remove() returns 1 if method is removed successfully or 0 if an error occurred.</p>
+
+<p>All EVP_PKEY_meth_set and EVP_PKEY_meth_get functions have no return values. For the &#39;get&#39; functions, function pointers are returned by arguments.</p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>All of these functions were deprecated in OpenSSL 3.0.</p>
+
+<p>The signature of the <i>copy</i> functional argument of EVP_PKEY_meth_set_copy() has changed in OpenSSL 3.0 so its <i>src</i> parameter is now constified.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2017-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

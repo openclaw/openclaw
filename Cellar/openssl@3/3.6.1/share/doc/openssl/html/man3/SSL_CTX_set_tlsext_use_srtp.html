@@ -1,0 +1,156 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_CTX_set_tlsext_use_srtp</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_CTX_set_tlsext_use_srtp, SSL_set_tlsext_use_srtp, SSL_get_srtp_profiles, SSL_get_selected_srtp_profile - Configure and query SRTP support</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/srtp.h&gt;
+
+int SSL_CTX_set_tlsext_use_srtp(SSL_CTX *ctx, const char *profiles);
+int SSL_set_tlsext_use_srtp(SSL *ssl, const char *profiles);
+
+STACK_OF(SRTP_PROTECTION_PROFILE) *SSL_get_srtp_profiles(SSL *ssl);
+SRTP_PROTECTION_PROFILE *SSL_get_selected_srtp_profile(SSL *s);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SRTP is the Secure Real-Time Transport Protocol. OpenSSL implements support for the &quot;use_srtp&quot; DTLS extension defined in RFC5764. This provides a mechanism for establishing SRTP keying material, algorithms and parameters using DTLS. This capability may be used as part of an implementation that conforms to RFC5763. OpenSSL does not implement SRTP itself or RFC5763. Note that OpenSSL does not support the use of SRTP Master Key Identifiers (MKIs). Also note that this extension is only supported in DTLS. Any SRTP configuration will be ignored if a TLS connection is attempted.</p>
+
+<p>An OpenSSL client wishing to send the &quot;use_srtp&quot; extension should call SSL_CTX_set_tlsext_use_srtp() to set its use for all SSL objects subsequently created from an SSL_CTX. Alternatively a client may call SSL_set_tlsext_use_srtp() to set its use for an individual SSL object. The <b>profiles</b> parameters should point to a NUL-terminated, colon delimited list of SRTP protection profile names.</p>
+
+<p>The currently supported protection profile names are:</p>
+
+<dl>
+
+<dt id="SRTP_AES128_CM_SHA1_80">SRTP_AES128_CM_SHA1_80</dt>
+<dd>
+
+<p>This corresponds to SRTP_AES128_CM_HMAC_SHA1_80 defined in RFC5764.</p>
+
+</dd>
+<dt id="SRTP_AES128_CM_SHA1_32">SRTP_AES128_CM_SHA1_32</dt>
+<dd>
+
+<p>This corresponds to SRTP_AES128_CM_HMAC_SHA1_32 defined in RFC5764.</p>
+
+</dd>
+<dt id="SRTP_AEAD_AES_128_GCM">SRTP_AEAD_AES_128_GCM</dt>
+<dd>
+
+<p>This corresponds to the profile of the same name defined in RFC7714.</p>
+
+</dd>
+<dt id="SRTP_AEAD_AES_256_GCM">SRTP_AEAD_AES_256_GCM</dt>
+<dd>
+
+<p>This corresponds to the profile of the same name defined in RFC7714.</p>
+
+</dd>
+<dt id="SRTP_DOUBLE_AEAD_AES_128_GCM_AEAD_AES_128_GCM">SRTP_DOUBLE_AEAD_AES_128_GCM_AEAD_AES_128_GCM</dt>
+<dd>
+
+<p>This corresponds to the profile of the same name defined in RFC8723.</p>
+
+</dd>
+<dt id="SRTP_DOUBLE_AEAD_AES_256_GCM_AEAD_AES_256_GCM">SRTP_DOUBLE_AEAD_AES_256_GCM_AEAD_AES_256_GCM</dt>
+<dd>
+
+<p>This corresponds to the profile of the same name defined in RFC8723.</p>
+
+</dd>
+<dt id="SRTP_ARIA_128_CTR_HMAC_SHA1_80">SRTP_ARIA_128_CTR_HMAC_SHA1_80</dt>
+<dd>
+
+<p>This corresponds to the profile of the same name defined in RFC8269.</p>
+
+</dd>
+<dt id="SRTP_ARIA_128_CTR_HMAC_SHA1_32">SRTP_ARIA_128_CTR_HMAC_SHA1_32</dt>
+<dd>
+
+<p>This corresponds to the profile of the same name defined in RFC8269.</p>
+
+</dd>
+<dt id="SRTP_ARIA_256_CTR_HMAC_SHA1_80">SRTP_ARIA_256_CTR_HMAC_SHA1_80</dt>
+<dd>
+
+<p>This corresponds to the profile of the same name defined in RFC8269.</p>
+
+</dd>
+<dt id="SRTP_ARIA_256_CTR_HMAC_SHA1_32">SRTP_ARIA_256_CTR_HMAC_SHA1_32</dt>
+<dd>
+
+<p>This corresponds to the profile of the same name defined in RFC8269.</p>
+
+</dd>
+<dt id="SRTP_AEAD_ARIA_128_GCM">SRTP_AEAD_ARIA_128_GCM</dt>
+<dd>
+
+<p>This corresponds to the profile of the same name defined in RFC8269.</p>
+
+</dd>
+<dt id="SRTP_AEAD_ARIA_256_GCM">SRTP_AEAD_ARIA_256_GCM</dt>
+<dd>
+
+<p>This corresponds to the profile of the same name defined in RFC8269.</p>
+
+</dd>
+</dl>
+
+<p>Supplying an unrecognised protection profile name will result in an error.</p>
+
+<p>An OpenSSL server wishing to support the &quot;use_srtp&quot; extension should also call SSL_CTX_set_tlsext_use_srtp() or SSL_set_tlsext_use_srtp() to indicate the protection profiles that it is willing to negotiate.</p>
+
+<p>The currently configured list of protection profiles for either a client or a server can be obtained by calling SSL_get_srtp_profiles(). This returns a stack of SRTP_PROTECTION_PROFILE objects. The memory pointed to in the return value of this function should not be freed by the caller.</p>
+
+<p>After a handshake has been completed the negotiated SRTP protection profile (if any) can be obtained (on the client or the server) by calling SSL_get_selected_srtp_profile(). This function will return NULL if no SRTP protection profile was negotiated. The memory returned from this function should not be freed by the caller.</p>
+
+<p>If an SRTP protection profile has been successfully negotiated then the SRTP keying material (on both the client and server) should be obtained via a call to <a href="../man3/SSL_export_keying_material.html">SSL_export_keying_material(3)</a>. This call should provide a label value of &quot;EXTRACTOR-dtls_srtp&quot; and a NULL context value (use_context is 0). The total length of keying material obtained should be equal to two times the sum of the master key length and the salt length as defined for the protection profile in use. This provides the client write master key, the server write master key, the client write master salt and the server write master salt in that order.</p>
+
+<p>These functions cannot be used with QUIC SSL objects. SSL_CTX_set_tlsext_use_srtp() fails if called on a QUIC SSL context. SSL_set_tlsext_use_srtp() fails if called on a QUIC SSL object.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_CTX_set_tlsext_use_srtp() and SSL_set_tlsext_use_srtp() return 0 on success or 1 on error.</p>
+
+<p>SSL_get_srtp_profiles() returns a stack of SRTP_PROTECTION_PROFILE objects on success or NULL on error or if no protection profiles have been configured.</p>
+
+<p>SSL_get_selected_srtp_profile() returns a pointer to an SRTP_PROTECTION_PROFILE object if one has been negotiated or NULL otherwise.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a>, <a href="../man3/SSL_export_keying_material.html">SSL_export_keying_material(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2017-2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

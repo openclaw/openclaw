@@ -1,0 +1,168 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_ASYM_CIPHER-RSA</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#RSA-Asymmetric-Cipher-parameters">RSA Asymmetric Cipher parameters</a></li>
+    </ul>
+  </li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_ASYM_CIPHER-RSA - RSA Asymmetric Cipher algorithm support</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>Asymmetric Cipher support for the <b>RSA</b> key type.</p>
+
+<h2 id="RSA-Asymmetric-Cipher-parameters">RSA Asymmetric Cipher parameters</h2>
+
+<dl>
+
+<dt id="pad-mode-OSSL_ASYM_CIPHER_PARAM_PAD_MODE-UTF8-string">&quot;pad-mode&quot; (<b>OSSL_ASYM_CIPHER_PARAM_PAD_MODE</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+<p>The default provider understands these RSA padding modes in string form:</p>
+
+<dl>
+
+<dt id="none-OSSL_PKEY_RSA_PAD_MODE_NONE">&quot;none&quot; (<b>OSSL_PKEY_RSA_PAD_MODE_NONE</b>)</dt>
+<dd>
+
+</dd>
+<dt id="oaep-OSSL_PKEY_RSA_PAD_MODE_OAEP">&quot;oaep&quot; (<b>OSSL_PKEY_RSA_PAD_MODE_OAEP</b>)</dt>
+<dd>
+
+</dd>
+<dt id="pkcs1-OSSL_PKEY_RSA_PAD_MODE_PKCSV15">&quot;pkcs1&quot; (<b>OSSL_PKEY_RSA_PAD_MODE_PKCSV15</b>)</dt>
+<dd>
+
+<p>This padding mode is no longer supported by the FIPS provider for key agreement and key transport. (This is a FIPS 140-3 requirement). See <a href="../man1/openssl-fipsinstall.html">&quot;OPTIONS&quot; in openssl-fipsinstall(1)</a> <b>-rsa_pkcs15_pad_disabled</b>.</p>
+
+</dd>
+<dt id="x931-OSSL_PKEY_RSA_PAD_MODE_X931">&quot;x931&quot; (<b>OSSL_PKEY_RSA_PAD_MODE_X931</b>)</dt>
+<dd>
+
+</dd>
+</dl>
+
+</dd>
+<dt id="pad-mode-OSSL_ASYM_CIPHER_PARAM_PAD_MODE-integer">&quot;pad-mode&quot; (<b>OSSL_ASYM_CIPHER_PARAM_PAD_MODE</b>) &lt;integer&gt;</dt>
+<dd>
+
+<p>The default provider understands these RSA padding modes in integer form:</p>
+
+<dl>
+
+<dt id="RSA_PKCS1_PADDING">1 (<b>RSA_PKCS1_PADDING</b>)</dt>
+<dd>
+
+<p>This padding mode is no longer supported by the FIPS provider for key agreement and key transport. (This is a FIPS 140-3 requirement)</p>
+
+</dd>
+<dt id="RSA_NO_PADDING">3 (<b>RSA_NO_PADDING</b>)</dt>
+<dd>
+
+</dd>
+<dt id="RSA_PKCS1_OAEP_PADDING">4 (<b>RSA_PKCS1_OAEP_PADDING</b>)</dt>
+<dd>
+
+</dd>
+<dt id="RSA_X931_PADDING">5 (<b>RSA_X931_PADDING</b>)</dt>
+<dd>
+
+</dd>
+</dl>
+
+<p>See <a href="../man3/EVP_PKEY_CTX_set_rsa_padding.html">EVP_PKEY_CTX_set_rsa_padding(3)</a> for further details.</p>
+
+</dd>
+<dt id="digest-OSSL_ASYM_CIPHER_PARAM_OAEP_DIGEST-UTF8-string">&quot;digest&quot; (<b>OSSL_ASYM_CIPHER_PARAM_OAEP_DIGEST</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+</dd>
+<dt id="digest-props-OSSL_ASYM_CIPHER_PARAM_OAEP_DIGEST_PROPS-UTF8-string">&quot;digest-props&quot; (<b>OSSL_ASYM_CIPHER_PARAM_OAEP_DIGEST_PROPS</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+</dd>
+<dt id="mgf1-digest-OSSL_ASYM_CIPHER_PARAM_MGF1_DIGEST-UTF8-string">&quot;mgf1-digest&quot; (<b>OSSL_ASYM_CIPHER_PARAM_MGF1_DIGEST</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+</dd>
+<dt id="mgf1-digest-props-OSSL_ASYM_CIPHER_PARAM_MGF1_DIGEST_PROPS-UTF8-string">&quot;mgf1-digest-props&quot; (<b>OSSL_ASYM_CIPHER_PARAM_MGF1_DIGEST_PROPS</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+</dd>
+<dt id="oaep-label-OSSL_ASYM_CIPHER_PARAM_OAEP_LABEL-octet-string">&quot;oaep-label&quot; (<b>OSSL_ASYM_CIPHER_PARAM_OAEP_LABEL</b>) &lt;octet string&gt;</dt>
+<dd>
+
+</dd>
+<dt id="tls-client-version-OSSL_ASYM_CIPHER_PARAM_TLS_CLIENT_VERSION-unsigned-integer">&quot;tls-client-version&quot; (<b>OSSL_ASYM_CIPHER_PARAM_TLS_CLIENT_VERSION</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+<p>See <b>RSA_PKCS1_WITH_TLS_PADDING</b> on the page <a href="../man3/EVP_PKEY_CTX_set_rsa_padding.html">EVP_PKEY_CTX_set_rsa_padding(3)</a>.</p>
+
+</dd>
+<dt id="tls-negotiated-version-OSSL_ASYM_CIPHER_PARAM_TLS_CLIENT_VERSION-unsigned-integer">&quot;tls-negotiated-version&quot; (<b>OSSL_ASYM_CIPHER_PARAM_TLS_CLIENT_VERSION</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+<p>See <b>RSA_PKCS1_WITH_TLS_PADDING</b> on the page <a href="../man3/EVP_PKEY_CTX_set_rsa_padding.html">EVP_PKEY_CTX_set_rsa_padding(3)</a>.</p>
+
+<p>See <a href="../man7/provider-asym_cipher.html">&quot;Asymmetric Cipher Parameters&quot; in provider-asym_cipher(7)</a> for more information.</p>
+
+</dd>
+</dl>
+
+<p>The OpenSSL FIPS provider also supports the following parameters:</p>
+
+<dl>
+
+<dt id="fips-indicator-OSSL_ASYM_CIPHER_PARAM_FIPS_APPROVED_INDICATOR-integer">&quot;fips-indicator&quot; (<b>OSSL_ASYM_CIPHER_PARAM_FIPS_APPROVED_INDICATOR</b>) &lt;integer&gt;</dt>
+<dd>
+
+</dd>
+<dt id="key-check-OSSL_ASYM_CIPHER_PARAM_FIPS_KEY_CHECK-integer">&quot;key-check&quot; (<b>OSSL_ASYM_CIPHER_PARAM_FIPS_KEY_CHECK</b>) &lt;integer&gt;</dt>
+<dd>
+
+<p>See <a href="../man7/provider-asym_cipher.html">&quot;Asymmetric Cipher Parameters&quot; in provider-asym_cipher(7)</a> for more information.</p>
+
+</dd>
+<dt id="pkcs15-pad-disabled-OSSL_ASYM_CIPHER_PARAM_FIPS_RSA_PKCS15_PAD_DISABLED-integer">&quot;pkcs15-pad-disabled&quot; (<b>OSSL_ASYM_CIPHER_PARAM_FIPS_RSA_PKCS15_PAD_DISABLED</b>) &lt;integer&gt;</dt>
+<dd>
+
+<p>The default value of 1 causes an error during encryption if the RSA padding mode is set to &quot;pkcs1&quot;. Setting this to zero will ignore the error and set the approved &quot;fips-indicator&quot; to 0. This option breaks FIPS compliance if it causes the approved &quot;fips-indicator&quot; to return 0.</p>
+
+</dd>
+</dl>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/EVP_PKEY-RSA.html">EVP_PKEY-RSA(7)</a>, <a href="../man3/EVP_PKEY.html">EVP_PKEY(3)</a>, <a href="../man7/provider-asym_cipher.html">provider-asym_cipher(7)</a>, <a href="../man7/provider-keymgmt.html">provider-keymgmt(7)</a>, <a href="../man7/OSSL_PROVIDER-default.html">OSSL_PROVIDER-default(7)</a> <a href="../man7/OSSL_PROVIDER-FIPS.html">OSSL_PROVIDER-FIPS(7)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2022-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

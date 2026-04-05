@@ -1,0 +1,63 @@
+.\"
+.\" Copyright 2005 by Dominick Meglio.
+.\" SPDX-License-Identifier: MIT
+.\"
+.TH ARES_PARSE_AAAA_REPLY 3 "20 Nov 2009"
+.SH NAME
+ares_parse_aaaa_reply \- Parse a reply to a DNS query of type AAAA
+.SH SYNOPSIS
+.nf
+#include <ares.h>
+
+int ares_parse_aaaa_reply(const unsigned char *\fIabuf\fP, int \fIalen\fP,
+                          struct hostent **\fIhost\fP,         
+                          struct ares_addr6ttl *\fIaddrttls\fP, int *\fInaddrttls\fP);
+.fi
+.SH DESCRIPTION
+The
+.B ares_parse_aaaa_reply
+function parses the response to a query of type AAAA into a
+.BR "struct hostent"
+and/or an array of
+.BR "struct ares_addr6ttl" . 
+The parameters
+.I abuf
+and
+.I alen
+give the contents of the response.  The result is stored in allocated
+memory and a pointer to it stored into the variable pointed to by
+.IR host ,
+if host is nonnull.
+It is the caller's responsibility to free the resulting host structure
+using
+.BR ares_free_hostent (3)
+when it is no longer needed.
+.PP
+If
+.IR addrttls
+and
+.IR naddrttls
+are both nonnull,
+then up to *naddrttls
+.BR "struct ares_addr6ttl"
+records are stored in the array pointed to by addrttls,
+and then *naddrttls is set to the number of records so stored.
+Note that the memory for these records is supplied by the caller.
+.SH RETURN VALUES
+.B ares_parse_aaaa_reply
+can return any of the following values:
+.TP 15
+.B ARES_SUCCESS
+The response was successfully parsed.
+.TP 15
+.B ARES_EBADRESP
+The response was malformatted.
+.TP 15
+.B ARES_ENODATA
+The response did not contain an answer to the query.
+.TP 15
+.B ARES_ENOMEM
+Memory was exhausted.
+.SH SEE ALSO
+.BR ares_gethostbyname (3),
+.BR ares_free_hostent (3)

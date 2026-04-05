@@ -1,0 +1,151 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_PKEY-SLH-DSA</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Keygen-Parameters">Keygen Parameters</a></li>
+      <li><a href="#Common-SLH-DSA-parameters">Common SLH-DSA parameters</a></li>
+    </ul>
+  </li>
+  <li><a href="#CONFORMING-TO">CONFORMING TO</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_PKEY-SLH-DSA, EVP_KEYMGMT-SLH-DSA, EVP_PKEY-SLH-DSA-SHA2-128s, EVP_PKEY-SLH-DSA-SHA2-128f, EVP_PKEY-SLH-DSA-SHA2-192s, EVP_PKEY-SLH-DSA-SHA2-192f, EVP_PKEY-SLH-DSA-SHA2-256s, EVP_PKEY-SLH-DSA-SHA2-256f, EVP_PKEY-SLH-DSA-SHAKE-128s, EVP_PKEY-SLH-DSA-SHAKE-128f, EVP_PKEY-SLH-DSA-SHAKE-192s, EVP_PKEY-SLH-DSA-SHAKE-192f, EVP_PKEY-SLH-DSA-SHAKE-256s, EVP_PKEY-SLH-DSA-SHAKE-256f - EVP_PKEY SLH-DSA keytype and algorithm support</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The <b>SLH-DSA-SHA2-128s</b>, <b>EVP_PKEY-SLH-DSA-SHA2-128f</b>, <b>SLH-DSA-SHA2-192s</b>, <b>EVP_PKEY-SLH-DSA-SHA2-192f</b>, <b>SLH-DSA-SHA2-256s</b>, <b>EVP_PKEY-SLH-DSA-SHA2-256f</b>, <b>SLH-DSA-SHAKE-128s</b>, <b>EVP_PKEY-SLH-DSA-SHAKE-128f</b>, <b>SLH-DSA-SHAKE-192s</b>, <b>EVP_PKEY-SLH-DSA-SHAKE-192f</b>, <b>SLH-DSA-SHAKE-256s</b> and <b>EVP_PKEY-SLH-DSA-SHAKE-256f</b> key types are implemented in OpenSSL&#39;s default and FIPS providers. These implementations support the associated key, containing the public key <i>pub</i> and the private key <i>priv</i>.</p>
+
+<p>SLH-DSA (Stateless Hash-based Digital Signature Standard) uses small keys, but has relatively large signatures and is relatively slow performing all operations compared to <b>ML-DSA</b>. It does however have proven security proofs, since it relies only on hash functions.</p>
+
+<p>Each of the different key types has an associated security parameter <b>n</b>. This value is one of 16, 24 or 32 for key types <b>SLH-DSA*128*</b>, <b>SLH-DSA*192*</b> and <b>SLH-DSA*256*</b>, respectively.</p>
+
+<p>Both the public and private key components contain 2 elements of size <b>n</b>. Key generation generates the private key elements and one of the public key elements randomly, and the final public key element is computed from these values.</p>
+
+<p>The public key has relatively small sizes of 32, 48 or 64 bytes, corresponding to the algorithm names of 128, 192 and 256 respectively.</p>
+
+<p>The algorithms ending with <b>s</b> produce smaller signatures, but are much slower than the faster <b>f</b> variants.</p>
+
+<p>The signature sizes for the <b>s</b> algorithm variants are 7856, 16224 and 29792 which correspond to the algorithm names of 128s, 192s and 256s respectively. The signature sizes for the <b>f</b> algorithm variants are 17088, 35664 and 49856 which correspond to the algorithm names containing 128f, 192f and 256f respectively.</p>
+
+<p>Internally there are 7 hash related functions that are used for each algorithm. For algorithms containing <b>SHAKE</b> in their name <b>SHAKE-256</b> is used for all functions. For the &lt;SHA2-128&gt; algorithms the functions use &lt;MGF1-SHA-256&gt;, &lt;HMAC-SHA-256&gt; and &lt;SHA-256&gt;. The remaining &lt;SHA2&gt; algorithms use &lt;MGF1-SHA-512&gt;, &lt;HMAC-SHA-512&gt;, &lt;SHA-256&gt; and &lt;SHA-512&gt;. See FIPS 205 Section 11.1 and 11.2 for more information.</p>
+
+<h2 id="Keygen-Parameters">Keygen Parameters</h2>
+
+<dl>
+
+<dt id="seed-OSSL_PKEY_PARAM_SLH_DSA_SEED-octet-string">&quot;seed&quot; (<b>OSSL_PKEY_PARAM_SLH_DSA_SEED</b>) &lt;octet string&gt;</dt>
+<dd>
+
+<p>Supplies values to use for the private seed, private prf and public seed instead of generating random values. This is used for testing purposes only. The length of the value supplied must be 3 * <b>n</b>.</p>
+
+</dd>
+<dt id="properties-OSSL_PKEY_PARAM_PROPERTIES-utf8_string">&quot;properties&quot; (<b>OSSL_PKEY_PARAM_PROPERTIES</b>) &lt;utf8_string&gt;</dt>
+<dd>
+
+<p>Sets properties to be used when fetching algorithm implementations used for SLH-DSA hashing operations.</p>
+
+</dd>
+</dl>
+
+<p>Use EVP_PKEY_CTX_set_params() after calling EVP_PKEY_keygen_init().</p>
+
+<h2 id="Common-SLH-DSA-parameters">Common SLH-DSA parameters</h2>
+
+<p>In addition to the common parameters that all keytypes should support (see <a href="../man7/provider-keymgmt.html">&quot;Common Information Parameters&quot; in provider-keymgmt(7)</a>), the implementation of these key types support the following.</p>
+
+<p>The following parameters are gettable using EVP_PKEY_get_octet_string_param(), and settable when using EVP_PKEY_fromdata().</p>
+
+<dl>
+
+<dt id="pub-OSSL_PKEY_PARAM_PUB_KEY-octet-string">&quot;pub&quot; (<b>OSSL_PKEY_PARAM_PUB_KEY</b>) &lt;octet string&gt;</dt>
+<dd>
+
+<p>The public key has a size of 2 * <b>n</b> bytes. i.e. It consists of the concatenation of PK.seed and PK.root as defined by FIPS 205 Figure 16.</p>
+
+</dd>
+<dt id="priv-OSSL_PKEY_PARAM_PRIV_KEY-octet-string">&quot;priv&quot; (<b>OSSL_PKEY_PARAM_PRIV_KEY</b>) &lt;octet string&gt;</dt>
+<dd>
+
+<p>The private key has a size of 4 * <b>n</b> bytes, which includes the public key components. i.e. It consists of the concatenation of SK.seed, SK.prf, PK.seed and PF.root as defined by FIPS 205 Figure 15.</p>
+
+</dd>
+<dt id="mandatory-digest-OSSL_PKEY_PARAM_MANDATORY_DIGEST-UTF8-string">&quot;mandatory-digest&quot; (<b>OSSL_PKEY_PARAM_MANDATORY_DIGEST</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+<p>The empty string, signifying that no digest may be specified.</p>
+
+</dd>
+</dl>
+
+<h1 id="CONFORMING-TO">CONFORMING TO</h1>
+
+<dl>
+
+<dt id="FIPS-205">FIPS 205</dt>
+<dd>
+
+</dd>
+</dl>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>An <b>EVP_PKEY</b> context can be obtained by calling:</p>
+
+<pre><code>EVP_PKEY_CTX *pctx =
+    EVP_PKEY_CTX_new_from_name(NULL, &quot;SLH-DSA-SHA2-128f&quot;, NULL);</code></pre>
+
+<p>An <b>SLH-DSA</b> key can be generated like this:</p>
+
+<pre><code>pkey = EVP_PKEY_Q_keygen(NULL, NULL, &quot;SLH-DSA-SHA2-128f&quot;);</code></pre>
+
+<p>The key pair components can be extracted from a key by calling:</p>
+
+<pre><code>uint8_t priv[64], pub[32];
+size_t priv_len, pub_len;
+
+EVP_PKEY_get_octet_string_param(pkey, OSSL_PKEY_PARAM_PRIV_KEY,
+                                priv, sizeof(priv), &amp;priv_len);
+EVP_PKEY_get_octet_string_param(pkey, OSSL_PKEY_PARAM_PUB_KEY,
+                                pub, sizeof(pub), &amp;pub_len));</code></pre>
+
+<p>Similar code can be used for the other key types such as &quot;SLH-DSA-SHAKE-256f&quot;.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_KEYMGMT.html">EVP_KEYMGMT(3)</a>, <a href="../man3/EVP_PKEY.html">EVP_PKEY(3)</a>, <a href="../man7/provider-keymgmt.html">provider-keymgmt(7)</a>, <a href="../man7/EVP_SIGNATURE-SLH-DSA.html">EVP_SIGNATURE-SLH-DSA(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>This functionality was added in OpenSSL 3.5.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2024-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

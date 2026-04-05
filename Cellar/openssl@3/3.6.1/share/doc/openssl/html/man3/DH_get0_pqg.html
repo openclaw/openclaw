@@ -1,0 +1,114 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>DH_get0_pqg</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>DH_get0_pqg, DH_set0_pqg, DH_get0_key, DH_set0_key, DH_get0_p, DH_get0_q, DH_get0_g, DH_get0_priv_key, DH_get0_pub_key, DH_clear_flags, DH_test_flags, DH_set_flags, DH_get0_engine, DH_get_length, DH_set_length - Routines for getting and setting data in a DH object</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/dh.h&gt;</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>void DH_get0_pqg(const DH *dh,
+                 const BIGNUM **p, const BIGNUM **q, const BIGNUM **g);
+int DH_set0_pqg(DH *dh, BIGNUM *p, BIGNUM *q, BIGNUM *g);
+void DH_get0_key(const DH *dh,
+                 const BIGNUM **pub_key, const BIGNUM **priv_key);
+int DH_set0_key(DH *dh, BIGNUM *pub_key, BIGNUM *priv_key);
+const BIGNUM *DH_get0_p(const DH *dh);
+const BIGNUM *DH_get0_q(const DH *dh);
+const BIGNUM *DH_get0_g(const DH *dh);
+const BIGNUM *DH_get0_priv_key(const DH *dh);
+const BIGNUM *DH_get0_pub_key(const DH *dh);
+void DH_clear_flags(DH *dh, int flags);
+int DH_test_flags(const DH *dh, int flags);
+void DH_set_flags(DH *dh, int flags);
+
+long DH_get_length(const DH *dh);
+int DH_set_length(DH *dh, long length);
+
+ENGINE *DH_get0_engine(DH *d);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>All of the functions described on this page are deprecated. Applications should instead use <a href="../man3/EVP_PKEY_get_bn_param.html">EVP_PKEY_get_bn_param(3)</a> for any methods that return a <b>BIGNUM</b>. Refer to <a href="../man7/EVP_PKEY-DH.html">EVP_PKEY-DH(7)</a> for more information.</p>
+
+<p>A DH object contains the parameters <i>p</i>, <i>q</i> and <i>g</i>. Note that the <i>q</i> parameter is optional. It also contains a public key (<i>pub_key</i>) and (optionally) a private key (<i>priv_key</i>).</p>
+
+<p>The <i>p</i>, <i>q</i> and <i>g</i> parameters can be obtained by calling DH_get0_pqg(). If the parameters have not yet been set then <i>*p</i>, <i>*q</i> and <i>*g</i> will be set to NULL. Otherwise they are set to pointers to their respective values. These point directly to the internal representations of the values and therefore should not be freed directly. Any of the out parameters <i>p</i>, <i>q</i>, and <i>g</i> can be NULL, in which case no value will be returned for that parameter.</p>
+
+<p>The <i>p</i>, <i>q</i> and <i>g</i> values can be set by calling DH_set0_pqg() and passing the new values for <i>p</i>, <i>q</i> and <i>g</i> as parameters to the function. Calling this function transfers the memory management of the values to the DH object, and therefore the values that have been passed in should not be freed directly after this function has been called. The <i>q</i> parameter may be NULL. DH_set0_pqg() also checks if the parameters associated with <i>p</i> and <i>g</i> and optionally <i>q</i> are associated with known safe prime groups. If it is a safe prime group then the value of <i>q</i> will be set to q = (p - 1) / 2 if <i>q</i> is NULL. The optional length parameter will be set to BN_num_bits(<i>q</i>) if <i>q</i> is not NULL.</p>
+
+<p>To get the public and private key values use the DH_get0_key() function. A pointer to the public key will be stored in <i>*pub_key</i>, and a pointer to the private key will be stored in <i>*priv_key</i>. Either may be NULL if they have not been set yet, although if the private key has been set then the public key must be. The values point to the internal representation of the public key and private key values. This memory should not be freed directly. Any of the out parameters <i>pub_key</i> and <i>priv_key</i> can be NULL, in which case no value will be returned for that parameter.</p>
+
+<p>The public and private key values can be set using DH_set0_key(). Either parameter may be NULL, which means the corresponding DH field is left untouched. As with DH_set0_pqg() this function transfers the memory management of the key values to the DH object, and therefore they should not be freed directly after this function has been called.</p>
+
+<p>Any of the values <i>p</i>, <i>q</i>, <i>g</i>, <i>priv_key</i>, and <i>pub_key</i> can also be retrieved separately by the corresponding function DH_get0_p(), DH_get0_q(), DH_get0_g(), DH_get0_priv_key(), and DH_get0_pub_key(), respectively.</p>
+
+<p>DH_set_flags() sets the flags in the <i>flags</i> parameter on the DH object. Multiple flags can be passed in one go (bitwise ORed together). Any flags that are already set are left set. DH_test_flags() tests to see whether the flags passed in the <i>flags</i> parameter are currently set in the DH object. Multiple flags can be tested in one go. All flags that are currently set are returned, or zero if none of the flags are set. DH_clear_flags() clears the specified flags within the DH object.</p>
+
+<p>DH_get0_engine() returns a handle to the ENGINE that has been set for this DH object, or NULL if no such ENGINE has been set. This function is deprecated. All engines should be replaced by providers.</p>
+
+<p>The DH_get_length() and DH_set_length() functions get and set the optional length parameter associated with this DH object. If the length is nonzero then it is used, otherwise it is ignored. The <i>length</i> parameter indicates the length of the secret exponent (private key) in bits. For safe prime groups the optional length parameter <i>length</i> can be set to a value greater or equal to 2 * maximum_target_security_strength(BN_num_bits(<i>p</i>)) as listed in SP800-56Ar3 Table(s) 25 &amp; 26. These functions are deprecated and should be replaced with EVP_PKEY_CTX_set_params() and EVP_PKEY_get_int_param() using the parameter key <b>OSSL_PKEY_PARAM_DH_PRIV_LEN</b> as described in <a href="../man7/EVP_PKEY-DH.html">EVP_PKEY-DH(7)</a>.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>Values retrieved with DH_get0_key() are owned by the DH object used in the call and may therefore <i>not</i> be passed to DH_set0_key(). If needed, duplicate the received value using BN_dup() and pass the duplicate. The same applies to DH_get0_pqg() and DH_set0_pqg().</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>DH_set0_pqg() and DH_set0_key() return 1 on success or 0 on failure.</p>
+
+<p>DH_get0_p(), DH_get0_q(), DH_get0_g(), DH_get0_priv_key(), and DH_get0_pub_key() return the respective value, or NULL if it is unset.</p>
+
+<p>DH_test_flags() returns the current state of the flags in the DH object.</p>
+
+<p>DH_get0_engine() returns the ENGINE set for the DH object or NULL if no ENGINE has been set.</p>
+
+<p>DH_get_length() returns the length of the secret exponent (private key) in bits, or zero if no such length has been explicitly set.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/DH_new.html">DH_new(3)</a>, <a href="../man3/DH_new.html">DH_new(3)</a>, <a href="../man3/DH_generate_parameters.html">DH_generate_parameters(3)</a>, <a href="../man3/DH_generate_key.html">DH_generate_key(3)</a>, <a href="../man3/DH_set_method.html">DH_set_method(3)</a>, <a href="../man3/DH_size.html">DH_size(3)</a>, <a href="../man3/DH_meth_new.html">DH_meth_new(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The functions described here were added in OpenSSL 1.1.0.</p>
+
+<p>All of these functions were deprecated in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2016-2022 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

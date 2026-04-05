@@ -1,0 +1,113 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>openssl-prime</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#OPTIONS">OPTIONS</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>openssl-prime - compute prime numbers</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<p><b>openssl prime</b> [<b>-help</b>] [<b>-hex</b>] [<b>-in</b>] [<b>-generate</b>] [<b>-bits</b> <i>num</i>] [<b>-safe</b>] [<b>-provider</b> <i>name</i>] [<b>-provider-path</b> <i>path</i>] [<b>-provparam</b> <i>[name:]key=value</i>] [<b>-propquery</b> <i>propq</i>] [<b>-checks</b> <i>num</i>] [<i>number</i> ...]</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>This command checks if the specified numbers are prime.</p>
+
+<p>If no numbers are given on the command line, the <b>-generate</b> flag should be used to generate primes according to the requirements specified by the rest of the flags.</p>
+
+<h1 id="OPTIONS">OPTIONS</h1>
+
+<dl>
+
+<dt id="help"><b>-help</b></dt>
+<dd>
+
+<p>Display an option summary.</p>
+
+</dd>
+<dt id="hex"><b>-hex</b></dt>
+<dd>
+
+<p>Enable hex format for output from prime generation or input to primality checking.</p>
+
+</dd>
+<dt id="in"><b>-in</b></dt>
+<dd>
+
+<p>Provide file names containing numbers for primality checking.</p>
+
+</dd>
+<dt id="generate"><b>-generate</b></dt>
+<dd>
+
+<p>Generate a prime number.</p>
+
+</dd>
+<dt id="bits-num"><b>-bits</b> <i>num</i></dt>
+<dd>
+
+<p>Generate a prime with <i>num</i> bits.</p>
+
+</dd>
+<dt id="safe"><b>-safe</b></dt>
+<dd>
+
+<p>When used with <b>-generate</b>, generates a &quot;safe&quot; prime. If the number generated is <i>n</i>, then check that <code>(<i>n</i>-1)/2</code> is also prime.</p>
+
+</dd>
+<dt id="provider-name"><b>-provider</b> <i>name</i></dt>
+<dd>
+
+</dd>
+<dt id="provider-path-path"><b>-provider-path</b> <i>path</i></dt>
+<dd>
+
+</dd>
+<dt id="provparam-name:-key-value"><b>-provparam</b> <i>[name:]key=value</i></dt>
+<dd>
+
+</dd>
+<dt id="propquery-propq"><b>-propquery</b> <i>propq</i></dt>
+<dd>
+
+<p>See <a href="../man1/openssl.html">&quot;Provider Options&quot; in openssl(1)</a>, <a href="../man7/provider.html">provider(7)</a>, and <a href="../man7/property.html">property(7)</a>.</p>
+
+</dd>
+<dt id="checks-num"><b>-checks</b> <i>num</i></dt>
+<dd>
+
+<p>This parameter is ignored.</p>
+
+</dd>
+</dl>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2017-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,133 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_KDF-KRB5KDF</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Identity">Identity</a></li>
+      <li><a href="#Supported-parameters">Supported parameters</a></li>
+    </ul>
+  </li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#CONFORMING-TO">CONFORMING TO</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_KDF-KRB5KDF - The RFC3961 Krb5 KDF EVP_KDF implementation</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>Support for computing the <b>KRB5KDF</b> KDF through the <b>EVP_KDF</b> API.</p>
+
+<p>The EVP_KDF-KRB5KDF algorithm implements the key derivation function defined in RFC 3961, section 5.1 and is used by Krb5 to derive session keys. Three inputs are required to perform key derivation: a cipher, (for example AES-128-CBC), the initial key, and a constant.</p>
+
+<h2 id="Identity">Identity</h2>
+
+<p>&quot;KRB5KDF&quot; is the name for this implementation; it can be used with the EVP_KDF_fetch() function.</p>
+
+<h2 id="Supported-parameters">Supported parameters</h2>
+
+<p>The supported parameters are:</p>
+
+<dl>
+
+<dt id="properties-OSSL_KDF_PARAM_PROPERTIES-UTF8-string">&quot;properties&quot; (<b>OSSL_KDF_PARAM_PROPERTIES</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+</dd>
+<dt id="cipher-OSSL_KDF_PARAM_CIPHER-UTF8-string">&quot;cipher&quot; (<b>OSSL_KDF_PARAM_CIPHER</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+</dd>
+<dt id="key-OSSL_KDF_PARAM_KEY-octet-string">&quot;key&quot; (<b>OSSL_KDF_PARAM_KEY</b>) &lt;octet string&gt;</dt>
+<dd>
+
+<p>These parameters work as described in <a href="../man3/EVP_KDF.html">&quot;PARAMETERS&quot; in EVP_KDF(3)</a>.</p>
+
+</dd>
+<dt id="constant-OSSL_KDF_PARAM_CONSTANT-octet-string">&quot;constant&quot; (<b>OSSL_KDF_PARAM_CONSTANT</b>) &lt;octet string&gt;</dt>
+<dd>
+
+<p>This parameter sets the constant value for the KDF. If a value is already set, the contents are replaced.</p>
+
+</dd>
+</dl>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>A context for KRB5KDF can be obtained by calling:</p>
+
+<pre><code>EVP_KDF *kdf = EVP_KDF_fetch(NULL, &quot;KRB5KDF&quot;, NULL);
+EVP_KDF_CTX *kctx = EVP_KDF_CTX_new(kdf);</code></pre>
+
+<p>The output length of the KRB5KDF derivation is specified via the <i>keylen</i> parameter to the <a href="../man3/EVP_KDF_derive.html">EVP_KDF_derive(3)</a> function, and MUST match the key length for the chosen cipher or an error is returned. Moreover, the constant&#39;s length must not exceed the block size of the cipher. Since the KRB5KDF output length depends on the chosen cipher, calling <a href="../man3/EVP_KDF_CTX_get_kdf_size.html">EVP_KDF_CTX_get_kdf_size(3)</a> to obtain the requisite length returns the correct length only after the cipher is set. Prior to that <b>EVP_MAX_KEY_LENGTH</b> is returned. The caller must allocate a buffer of the correct length for the chosen cipher, and pass that buffer to the <a href="../man3/EVP_KDF_derive.html">EVP_KDF_derive(3)</a> function along with that length.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>This example derives a key using the AES-128-CBC cipher:</p>
+
+<pre><code>EVP_KDF *kdf;
+EVP_KDF_CTX *kctx;
+unsigned char key[16] = &quot;01234...&quot;;
+unsigned char constant[] = &quot;I&#39;m a constant&quot;;
+unsigned char out[16];
+size_t outlen = sizeof(out);
+OSSL_PARAM params[4], *p = params;
+
+kdf = EVP_KDF_fetch(NULL, &quot;KRB5KDF&quot;, NULL);
+kctx = EVP_KDF_CTX_new(kdf);
+EVP_KDF_free(kdf);
+
+*p++ = OSSL_PARAM_construct_utf8_string(OSSL_KDF_PARAM_CIPHER,
+                                        SN_aes_128_cbc,
+                                        strlen(SN_aes_128_cbc));
+*p++ = OSSL_PARAM_construct_octet_string(OSSL_KDF_PARAM_KEY,
+                                         key, (size_t)16);
+*p++ = OSSL_PARAM_construct_octet_string(OSSL_KDF_PARAM_CONSTANT,
+                                         constant, strlen(constant));
+*p = OSSL_PARAM_construct_end();
+if (EVP_KDF_derive(kctx, out, outlen, params) &lt;= 0)
+    /* Error */
+
+EVP_KDF_CTX_free(kctx);</code></pre>
+
+<h1 id="CONFORMING-TO">CONFORMING TO</h1>
+
+<p>RFC 3961</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_KDF.html">EVP_KDF(3)</a>, <a href="../man3/EVP_KDF_CTX_free.html">EVP_KDF_CTX_free(3)</a>, <a href="../man3/EVP_KDF_CTX_get_kdf_size.html">EVP_KDF_CTX_get_kdf_size(3)</a>, <a href="../man3/EVP_KDF_derive.html">EVP_KDF_derive(3)</a>, <a href="../man3/EVP_KDF.html">&quot;PARAMETERS&quot; in EVP_KDF(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>This functionality was added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2016-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

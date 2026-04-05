@@ -1,0 +1,274 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>ASN1_generate_nconf</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#GENERATION-STRING-FORMAT">GENERATION STRING FORMAT</a>
+    <ul>
+      <li><a href="#Supported-Types">Supported Types</a></li>
+      <li><a href="#Modifiers">Modifiers</a></li>
+    </ul>
+  </li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>ASN1_generate_nconf, ASN1_generate_v3 - ASN1 string generation functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/asn1.h&gt;
+
+ASN1_TYPE *ASN1_generate_nconf(const char *str, CONF *nconf);
+ASN1_TYPE *ASN1_generate_v3(const char *str, X509V3_CTX *cnf);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>These functions generate the ASN1 encoding of a string in an <b>ASN1_TYPE</b> structure.</p>
+
+<p><i>str</i> contains the string to encode. <i>nconf</i> or <i>cnf</i> contains the optional configuration information where additional strings will be read from. <i>nconf</i> will typically come from a config file whereas <i>cnf</i> is obtained from an <b>X509V3_CTX</b> structure, which will typically be used by X509 v3 certificate extension functions. <i>cnf</i> or <i>nconf</i> can be set to NULL if no additional configuration will be used.</p>
+
+<h1 id="GENERATION-STRING-FORMAT">GENERATION STRING FORMAT</h1>
+
+<p>The actual data encoded is determined by the string <i>str</i> and the configuration information. The general format of the string is:</p>
+
+<dl>
+
+<dt id="modifier-type-:value">[<i>modifier</i>,]<i>type</i>[:<i>value</i>]</dt>
+<dd>
+
+</dd>
+</dl>
+
+<p>That is zero or more comma separated modifiers followed by a type followed by an optional colon and a value. The formats of <i>type</i>, <i>value</i> and <i>modifier</i> are explained below.</p>
+
+<h2 id="Supported-Types">Supported Types</h2>
+
+<p>The supported types are listed below. Case is not significant in the type names. Unless otherwise specified only the <b>ASCII</b> format is permissible.</p>
+
+<dl>
+
+<dt id="BOOLEAN-BOOL"><b>BOOLEAN</b>, <b>BOOL</b></dt>
+<dd>
+
+<p>This encodes a boolean type. The <i>value</i> string is mandatory and should be <b>TRUE</b> or <b>FALSE</b>. Additionally <b>TRUE</b>, <b>true</b>, <b>Y</b>, <b>y</b>, <b>YES</b>, <b>yes</b>, <b>FALSE</b>, <b>false</b>, <b>N</b>, <b>n</b>, <b>NO</b> and <b>no</b> are acceptable.</p>
+
+</dd>
+<dt id="NULL"><b>NULL</b></dt>
+<dd>
+
+<p>Encode the <b>NULL</b> type, the <i>value</i> string must not be present.</p>
+
+</dd>
+<dt id="INTEGER-INT"><b>INTEGER</b>, <b>INT</b></dt>
+<dd>
+
+<p>Encodes an ASN1 <b>INTEGER</b> type. The <i>value</i> string represents the value of the integer, it can be prefaced by a minus sign and is normally interpreted as a decimal value unless the prefix <b>0x</b> is included.</p>
+
+</dd>
+<dt id="ENUMERATED-ENUM"><b>ENUMERATED</b>, <b>ENUM</b></dt>
+<dd>
+
+<p>Encodes the ASN1 <b>ENUMERATED</b> type, it is otherwise identical to <b>INTEGER</b>.</p>
+
+</dd>
+<dt id="OBJECT-OID"><b>OBJECT</b>, <b>OID</b></dt>
+<dd>
+
+<p>Encodes an ASN1 <b>OBJECT IDENTIFIER</b>, the <i>value</i> string can be a short name, a long name or numerical format.</p>
+
+</dd>
+<dt id="UTCTIME-UTC"><b>UTCTIME</b>, <b>UTC</b></dt>
+<dd>
+
+<p>Encodes an ASN1 <b>UTCTime</b> structure, the value should be in the format <b>YYMMDDHHMMSSZ</b>.</p>
+
+</dd>
+<dt id="GENERALIZEDTIME-GENTIME"><b>GENERALIZEDTIME</b>, <b>GENTIME</b></dt>
+<dd>
+
+<p>Encodes an ASN1 <b>GeneralizedTime</b> structure, the value should be in the format <b>YYYYMMDDHHMMSSZ</b>.</p>
+
+</dd>
+<dt id="OCTETSTRING-OCT"><b>OCTETSTRING</b>, <b>OCT</b></dt>
+<dd>
+
+<p>Encodes an ASN1 <b>OCTET STRING</b>. <i>value</i> represents the contents of this structure, the format strings <b>ASCII</b> and <b>HEX</b> can be used to specify the format of <i>value</i>.</p>
+
+</dd>
+<dt id="BITSTRING-BITSTR"><b>BITSTRING</b>, <b>BITSTR</b></dt>
+<dd>
+
+<p>Encodes an ASN1 <b>BIT STRING</b>. <i>value</i> represents the contents of this structure, the format strings <b>ASCII</b>, <b>HEX</b> and <b>BITLIST</b> can be used to specify the format of <i>value</i>.</p>
+
+<p>If the format is anything other than <b>BITLIST</b> the number of unused bits is set to zero.</p>
+
+</dd>
+<dt id="UNIVERSALSTRING-UNIV-IA5-IA5STRING-UTF8-UTF8String-BMP-BMPSTRING-VISIBLESTRING-VISIBLE-PRINTABLESTRING-PRINTABLE-T61-T61STRING-TELETEXSTRING-GeneralString-NUMERICSTRING-NUMERIC"><b>UNIVERSALSTRING</b>, <b>UNIV</b>, <b>IA5</b>, <b>IA5STRING</b>, <b>UTF8</b>, <b>UTF8String</b>, <b>BMP</b>, <b>BMPSTRING</b>, <b>VISIBLESTRING</b>, <b>VISIBLE</b>, <b>PRINTABLESTRING</b>, <b>PRINTABLE</b>, <b>T61</b>, <b>T61STRING</b>, <b>TELETEXSTRING</b>, <b>GeneralString</b>, <b>NUMERICSTRING</b>, <b>NUMERIC</b></dt>
+<dd>
+
+<p>These encode the corresponding string types. <i>value</i> represents the contents of this structure. The format can be <b>ASCII</b> or <b>UTF8</b>.</p>
+
+</dd>
+<dt id="SEQUENCE-SEQ-SET"><b>SEQUENCE</b>, <b>SEQ</b>, <b>SET</b></dt>
+<dd>
+
+<p>Formats the result as an ASN1 <b>SEQUENCE</b> or <b>SET</b> type. <i>value</i> should be a section name which will contain the contents. The field names in the section are ignored and the values are in the generated string format. If <i>value</i> is absent then an empty SEQUENCE will be encoded.</p>
+
+</dd>
+</dl>
+
+<h2 id="Modifiers">Modifiers</h2>
+
+<p>Modifiers affect the following structure, they can be used to add EXPLICIT or IMPLICIT tagging, add wrappers or to change the string format of the final type and value. The supported formats are documented below.</p>
+
+<dl>
+
+<dt id="EXPLICIT-EXP"><b>EXPLICIT</b>, <b>EXP</b></dt>
+<dd>
+
+<p>Add an explicit tag to the following structure. This string should be followed by a colon and the tag value to use as a decimal value.</p>
+
+<p>By following the number with <b>U</b>, <b>A</b>, <b>P</b> or <b>C</b> UNIVERSAL, APPLICATION, PRIVATE or CONTEXT SPECIFIC tagging can be used, the default is CONTEXT SPECIFIC.</p>
+
+</dd>
+<dt id="IMPLICIT-IMP"><b>IMPLICIT</b>, <b>IMP</b></dt>
+<dd>
+
+<p>This is the same as <b>EXPLICIT</b> except IMPLICIT tagging is used instead.</p>
+
+</dd>
+<dt id="OCTWRAP-SEQWRAP-SETWRAP-BITWRAP"><b>OCTWRAP</b>, <b>SEQWRAP</b>, <b>SETWRAP</b>, <b>BITWRAP</b></dt>
+<dd>
+
+<p>The following structure is surrounded by an OCTET STRING, a SEQUENCE, a SET or a BIT STRING respectively. For a BIT STRING the number of unused bits is set to zero.</p>
+
+</dd>
+<dt id="FORMAT"><b>FORMAT</b></dt>
+<dd>
+
+<p>This specifies the format of the ultimate value. It should be followed by a colon and one of the strings <b>ASCII</b>, <b>UTF8</b>, <b>HEX</b> or <b>BITLIST</b>.</p>
+
+<p>If no format specifier is included then <b>ASCII</b> is used. If <b>UTF8</b> is specified then the value string must be a valid <b>UTF8</b> string. For <b>HEX</b> the output must be a set of hex digits. <b>BITLIST</b> (which is only valid for a BIT STRING) is a comma separated list of the indices of the set bits, all other bits are zero.</p>
+
+</dd>
+</dl>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>ASN1_generate_nconf() and ASN1_generate_v3() return the encoded data as an <b>ASN1_TYPE</b> structure or NULL if an error occurred.</p>
+
+<p>The error codes that can be obtained by <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>A simple IA5String:</p>
+
+<pre><code>IA5STRING:Hello World</code></pre>
+
+<p>An IA5String explicitly tagged:</p>
+
+<pre><code>EXPLICIT:0,IA5STRING:Hello World</code></pre>
+
+<p>An IA5String explicitly tagged using APPLICATION tagging:</p>
+
+<pre><code>EXPLICIT:0A,IA5STRING:Hello World</code></pre>
+
+<p>A BITSTRING with bits 1 and 5 set and all others zero:</p>
+
+<pre><code>FORMAT:BITLIST,BITSTRING:1,5</code></pre>
+
+<p>A more complex example using a config file to produce a SEQUENCE consisting of a BOOL an OID and a UTF8String:</p>
+
+<pre><code>asn1 = SEQUENCE:seq_section
+
+[seq_section]
+
+field1 = BOOLEAN:TRUE
+field2 = OID:commonName
+field3 = UTF8:Third field</code></pre>
+
+<p>This example produces an RSAPrivateKey structure, this is the key contained in the file client.pem in all OpenSSL distributions (note: the field names such as &#39;coeff&#39; are ignored and are present just for clarity):</p>
+
+<pre><code>asn1=SEQUENCE:private_key
+[private_key]
+version=INTEGER:0
+
+n=INTEGER:0xBB6FE79432CC6EA2D8F970675A5A87BFBE1AFF0BE63E879F2AFFB93644\
+D4D2C6D000430DEC66ABF47829E74B8C5108623A1C0EE8BE217B3AD8D36D5EB4FCA1D9
+
+e=INTEGER:0x010001
+
+d=INTEGER:0x6F05EAD2F27FFAEC84BEC360C4B928FD5F3A9865D0FCAAD291E2A52F4A\
+F810DC6373278C006A0ABBA27DC8C63BF97F7E666E27C5284D7D3B1FFFE16B7A87B51D
+
+p=INTEGER:0xF3929B9435608F8A22C208D86795271D54EBDFB09DDEF539AB083DA912\
+D4BD57
+
+q=INTEGER:0xC50016F89DFF2561347ED1186A46E150E28BF2D0F539A1594BBD7FE467\
+46EC4F
+
+exp1=INTEGER:0x9E7D4326C924AFC1DEA40B45650134966D6F9DFA3A7F9D698CD4ABEA\
+9C0A39B9
+
+exp2=INTEGER:0xBA84003BB95355AFB7C50DF140C60513D0BA51D637272E355E397779\
+E7B2458F
+
+coeff=INTEGER:0x30B9E4F2AFA5AC679F920FC83F1F2DF1BAF1779CF989447FABC2F5\
+628657053A</code></pre>
+
+<p>This example is the corresponding public key in a SubjectPublicKeyInfo structure:</p>
+
+<pre><code># Start with a SEQUENCE
+asn1=SEQUENCE:pubkeyinfo
+
+# pubkeyinfo contains an algorithm identifier and the public key wrapped
+# in a BIT STRING
+[pubkeyinfo]
+algorithm=SEQUENCE:rsa_alg
+pubkey=BITWRAP,SEQUENCE:rsapubkey
+
+# algorithm ID for RSA is just an OID and a NULL
+[rsa_alg]
+algorithm=OID:rsaEncryption
+parameter=NULL
+
+# Actual public key: modulus and exponent
+[rsapubkey]
+n=INTEGER:0xBB6FE79432CC6EA2D8F970675A5A87BFBE1AFF0BE63E879F2AFFB93644\
+D4D2C6D000430DEC66ABF47829E74B8C5108623A1C0EE8BE217B3AD8D36D5EB4FCA1D9
+
+e=INTEGER:0x010001</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ERR_get_error.html">ERR_get_error(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2002-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,73 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_KEYEXCH-X25519</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Key-exchange-parameters">Key exchange parameters</a></li>
+    </ul>
+  </li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_KEYEXCH-X25519, EVP_KEYEXCH-X448 - X25519 and X448 Key Exchange algorithm support</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>Key exchange support for the <b>X25519</b> and <b>X448</b> key types.</p>
+
+<h2 id="Key-exchange-parameters">Key exchange parameters</h2>
+
+<dl>
+
+<dt id="pad-OSSL_EXCHANGE_PARAM_PAD-unsigned-integer">&quot;pad&quot; (<b>OSSL_EXCHANGE_PARAM_PAD</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+</dd>
+<dt id="fips-indicator-OSSL_EXCHANGE_PARAM_FIPS_APPROVED_INDICATOR-integer">&quot;fips-indicator&quot; (<b>OSSL_EXCHANGE_PARAM_FIPS_APPROVED_INDICATOR</b>) &lt;integer&gt;</dt>
+<dd>
+
+<p><b>X25519</b> and <b>X448</b> are not FIPS approved in FIPS 140-3. So this getter will return 0.</p>
+
+<p>See <a href="../man7/provider-keyexch.html">&quot;Common Key Exchange parameters&quot; in provider-keyexch(7)</a>.</p>
+
+</dd>
+</dl>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>Keys for the host and peer can be generated as shown in <a href="../man7/EVP_PKEY-X25519.html">&quot;Examples&quot; in EVP_PKEY-X25519(7)</a>.</p>
+
+<p>The code to generate a shared secret is identical to <a href="../man7/EVP_KEYEXCH-DH.html">&quot;Examples&quot; in EVP_KEYEXCH-DH(7)</a>.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/EVP_PKEY-FFC.html">EVP_PKEY-FFC(7)</a>, <a href="../man7/EVP_PKEY-DH.html">EVP_PKEY-DH(7)</a> <a href="../man3/EVP_PKEY.html">EVP_PKEY(3)</a>, <a href="../man7/provider-keyexch.html">provider-keyexch(7)</a>, <a href="../man7/provider-keymgmt.html">provider-keymgmt(7)</a>, <a href="../man7/OSSL_PROVIDER-default.html">OSSL_PROVIDER-default(7)</a>, <a href="../man7/OSSL_PROVIDER-FIPS.html">OSSL_PROVIDER-FIPS(7)</a>,</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2020-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

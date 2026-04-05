@@ -1,0 +1,77 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_set_connect_state</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_set_connect_state, SSL_set_accept_state, SSL_is_server - functions for manipulating and examining the client or server mode of an SSL object</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+void SSL_set_connect_state(SSL *ssl);
+
+void SSL_set_accept_state(SSL *ssl);
+
+int SSL_is_server(const SSL *ssl);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_set_connect_state() sets <b>ssl</b> to work in client mode.</p>
+
+<p>SSL_set_accept_state() sets <b>ssl</b> to work in server mode.</p>
+
+<p>SSL_is_server() checks if <b>ssl</b> is working in server mode.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>When the SSL_CTX object was created with <a href="../man3/SSL_CTX_new.html">SSL_CTX_new(3)</a>, it was either assigned a dedicated client method, a dedicated server method, or a generic method, that can be used for both client and server connections. (The method might have been changed with <a href="../man3/SSL_CTX_set_ssl_version.html">SSL_CTX_set_ssl_version(3)</a> or <a href="../man3/SSL_set_ssl_method.html">SSL_set_ssl_method(3)</a>.)</p>
+
+<p>When beginning a new handshake, the SSL engine must know whether it must call the connect (client) or accept (server) routines. Even though it may be clear from the method chosen, whether client or server mode was requested, the handshake routines must be explicitly set.</p>
+
+<p>When using the <a href="../man3/SSL_connect.html">SSL_connect(3)</a> or <a href="../man3/SSL_accept.html">SSL_accept(3)</a> routines, the correct handshake routines are automatically set. When performing a transparent negotiation using <a href="../man3/SSL_write_ex.html">SSL_write_ex(3)</a>, <a href="../man3/SSL_write.html">SSL_write(3)</a>, <a href="../man3/SSL_read_ex.html">SSL_read_ex(3)</a>, or <a href="../man3/SSL_read.html">SSL_read(3)</a>, the handshake routines must be explicitly set in advance using either SSL_set_connect_state() or SSL_set_accept_state().</p>
+
+<p>If SSL_is_server() is called before SSL_set_connect_state() or SSL_set_accept_state() is called (either automatically or explicitly), the result depends on what method was used when SSL_CTX was created with <a href="../man3/SSL_CTX_new.html">SSL_CTX_new(3)</a>. If a generic method or a dedicated server method was passed to <a href="../man3/SSL_CTX_new.html">SSL_CTX_new(3)</a>, SSL_is_server() returns 1; otherwise, it returns 0.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_set_connect_state() and SSL_set_accept_state() do not return diagnostic information.</p>
+
+<p>SSL_is_server() returns 1 if <b>ssl</b> is working in server mode or 0 for client mode.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a>, <a href="../man3/SSL_new.html">SSL_new(3)</a>, <a href="../man3/SSL_CTX_new.html">SSL_CTX_new(3)</a>, <a href="../man3/SSL_connect.html">SSL_connect(3)</a>, <a href="../man3/SSL_accept.html">SSL_accept(3)</a>, <a href="../man3/SSL_write_ex.html">SSL_write_ex(3)</a>, <a href="../man3/SSL_write.html">SSL_write(3)</a>, <a href="../man3/SSL_read_ex.html">SSL_read_ex(3)</a>, <a href="../man3/SSL_read.html">SSL_read(3)</a>, <a href="../man3/SSL_do_handshake.html">SSL_do_handshake(3)</a>, <a href="../man3/SSL_CTX_set_ssl_version.html">SSL_CTX_set_ssl_version(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2001-2017 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

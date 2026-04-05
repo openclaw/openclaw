@@ -1,0 +1,197 @@
+Introduction
+============
+
+This is the Gnu Readline library, version 8.3.
+
+The Readline library provides a set of functions for use by applications
+that allow users to edit command lines as they are typed in.  Both
+Emacs and vi editing modes are available.  The Readline library includes
+additional functions to maintain a list of previously-entered command
+lines, to recall and perhaps reedit those lines, and perform csh-like
+history expansion on previous commands.
+
+The history facilities are also placed into a separate library, the
+History library, as part of the build process.  The History library
+may be used without Readline in applications which desire its
+capabilities.
+
+The Readline library is free software, distributed under the terms of
+the [GNU] General Public License as published by the Free Software
+Foundation, version 3 of the License.  For more information, see the
+file COPYING.
+
+To build the library, try typing `./configure', then `make'.  The
+configuration process is automated, so no further intervention should
+be necessary.  Readline builds with `gcc' by default if it is
+available.  If you want to use `cc' instead, type
+
+        CC=cc ./configure
+
+if you are using a Bourne-style shell.  If you are not, the following
+may work:
+
+        env CC=cc ./configure
+
+Read the file INSTALL in this directory for more information about how
+to customize and control the build process, including how to build readline
+in a directory other than the source directory.
+
+The file rlconf.h contains C preprocessor defines that enable and disable
+certain Readline features.
+
+The special make target `everything' will build the static and shared
+libraries (if the target platform supports them) and the examples.
+
+Examples
+========
+
+There are several example programs that use Readline features in the
+examples directory.  The `rl' program is of particular interest.  It
+is a command-line interface to Readline, suitable for use in shell
+scripts in place of `read' (but look at bash's `read -e' first).
+
+Shared Libraries
+================
+
+There is skeletal support for building shared versions of the
+Readline and History libraries.  The configure script creates
+a Makefile in the `shlib' subdirectory, and typing `make shared'
+will cause shared versions of the Readline and History libraries
+to be built on supported platforms.
+
+If `configure' is given the `--enable-shared' option, it will attempt
+to build the shared libraries by default on supported platforms.
+
+Configure calls the script support/shobj-conf to test whether or
+not shared library creation is supported and to generate the values
+of variables that are substituted into shlib/Makefile.  If you
+try to build shared libraries on an unsupported platform, `make'
+will display a message asking you to update support/shobj-conf for
+your platform.
+
+If you need to update support/shobj-conf, you will need to create
+a `stanza' for your operating system and compiler.  The script uses
+the value of host_os and ${CC} as determined by configure.  For
+instance, FreeBSD 4.2 with any version of gcc is identified as
+`freebsd4.2-gcc*'.
+
+In the stanza for your operating system-compiler pair, you will need to
+define several variables.  They are:
+
+SHOBJ_CC	The C compiler used to compile source files into shareable
+		object files.  This is normally set to the value of ${CC}
+		by configure, and should not need to be changed.
+
+SHOBJ_CFLAGS	Flags to pass to the C compiler ($SHOBJ_CC) to create
+		position-independent code.  If you are using gcc, this
+		should probably be set to `-fpic'.
+
+SHOBJ_LD	The link editor to be used to create the shared library from
+		the object files created by $SHOBJ_CC.  If you are using
+		gcc, a value of `gcc' will probably work.
+
+SHOBJ_LDFLAGS	Flags to pass to SHOBJ_LD to enable shared object creation.
+		If you are using gcc, `-shared' may be all that is necessary.
+		These should be the flags needed for generic shared object
+		creation.
+
+SHLIB_XLDFLAGS	Additional flags to pass to SHOBJ_LD for shared library
+		creation.  Many systems use the -R option to the link
+		editor to embed a path within the library for run-time
+		library searches.  A reasonable value for such systems would
+		be `-R$(libdir)'.
+
+SHLIB_LIBS	Any additional libraries that shared libraries should be
+		linked against when they are created.
+
+SHLIB_LIBPREF	The prefix to use when generating the filename of the shared
+		library.  The default is `lib'; Cygwin uses `cyg'.
+
+SHLIB_LIBSUFF	The suffix to add to `libreadline' and `libhistory' when
+		generating the filename of the shared library.  Many systems
+		use `so'; HP-UX uses `sl'.
+
+SHLIB_LIBVERSION The string to append to the filename to indicate the version
+		of the shared library.  It should begin with $(SHLIB_LIBSUFF),
+		and possibly include version information that allows the
+		run-time loader to load the version of the shared library
+		appropriate for a particular program.  Systems using shared
+		libraries similar to SunOS 4.x use major and minor library
+		version numbers; for those systems a value of
+		`$(SHLIB_LIBSUFF).$(SHLIB_MAJOR)$(SHLIB_MINOR)' is appropriate.
+		Systems based on System V Release 4 don't use minor version
+		numbers; use `$(SHLIB_LIBSUFF).$(SHLIB_MAJOR)' on those systems.
+		Other Unix versions use different schemes.
+
+SHLIB_DLLVERSION The version number for shared libraries that determines API
+		compatibility between readline versions and the underlying
+		system.  Used only on Cygwin.  Defaults to $SHLIB_MAJOR, but
+		can be overridden at configuration time by defining DLLVERSION
+		in the environment.
+
+SHLIB_DOT	The character used to separate the name of the shared library
+		from the suffix and version information.  The default is `.';
+		systems like Cygwin which don't separate version information
+		from the library name should set this to the empty string.
+
+SHLIB_STATUS	Set this to `supported' when you have defined the other
+		necessary variables.  Make uses this to determine whether
+		or not shared library creation should be attempted.
+
+You should look at the existing stanzas in support/shobj-conf for ideas.
+
+Once you have updated support/shobj-conf, re-run configure and type
+`make shared'.  The shared libraries will be created in the shlib
+subdirectory.
+
+If shared libraries are created, `make install' will install them. 
+You may install only the shared libraries by running `make
+install-shared' from the top-level build directory.  Running `make
+install' in the shlib subdirectory will also work.  If you don't want
+to install any created shared libraries, run `make install-static'. 
+
+Documentation
+=============
+
+The documentation for the Readline and History libraries appears in
+the `doc' subdirectory.  There are three texinfo files and a
+Unix-style manual page describing the facilities available in the
+Readline library.  The texinfo files include both user and
+programmer's manuals.  HTML versions of the manuals appear in the
+`doc' subdirectory as well. 
+
+Usage
+=====
+
+Our position on the use of Readline through a shared-library linking
+mechanism is that there is no legal difference between shared-library
+linking and static linking--either kind of linking combines various
+modules into a single larger work.  The conditions for using Readline
+in a larger work are stated in section 3 of the GNU GPL.
+
+Reporting Bugs
+==============
+
+Bug reports for Readline should be sent to:
+
+        bug-readline@gnu.org
+
+When reporting a bug, please include the following information:
+
+        * the version number and release status of Readline (e.g., 4.2-release)
+        * the machine and OS that it is running on
+        * a list of the compilation flags or the contents of `config.h', if
+          appropriate
+        * a description of the bug
+        * a recipe for recreating the bug reliably
+        * a fix for the bug if you have one!
+
+If you would like to contact the Readline maintainer directly, send mail
+to bash-maintainers@gnu.org.
+
+Since Readline is developed along with bash, the bug-bash@gnu.org mailing
+list (mirrored to the Usenet newsgroup gnu.bash.bug) often contains
+Readline bug reports and fixes. 
+
+Chet Ramey
+chet.ramey@case.edu

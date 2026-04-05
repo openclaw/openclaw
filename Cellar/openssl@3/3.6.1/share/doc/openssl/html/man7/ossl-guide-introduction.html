@@ -1,0 +1,121 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>ossl-guide-introduction</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#WHAT-IS-OPENSSL">WHAT IS OPENSSL?</a></li>
+  <li><a href="#GETTING-AND-INSTALLING-OPENSSL">GETTING AND INSTALLING OPENSSL</a></li>
+  <li><a href="#CONTENTS-OF-THE-OPENSSL-GUIDE">CONTENTS OF THE OPENSSL GUIDE</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>ossl-guide-introduction - OpenSSL Guide: An introduction to OpenSSL</p>
+
+<h1 id="WHAT-IS-OPENSSL">WHAT IS OPENSSL?</h1>
+
+<p>OpenSSL is a robust, commercial-grade, full-featured toolkit for general-purpose cryptography and secure communication. Its features are made available via a command line application that enables users to perform various cryptography related functions such as generating keys and certificates. Additionally it supplies two libraries that application developers can use to implement cryptography based capabilities and to securely communicate across a network. Finally, it also has a set of providers that supply implementations of a broad set of cryptographic algorithms.</p>
+
+<p>OpenSSL is fully open source. Version 3.0 and above are distributed under the Apache v2 license.</p>
+
+<h1 id="GETTING-AND-INSTALLING-OPENSSL">GETTING AND INSTALLING OPENSSL</h1>
+
+<p>The OpenSSL Project develops and distributes the source code for OpenSSL. You can obtain that source code via the OpenSSL website (<a href="https://www.openssl.org/source">https://www.openssl.org/source</a>).</p>
+
+<p>Many Operating Systems (notably Linux distributions) supply pre-built OpenSSL binaries either pre-installed or available via the package management system in use for that OS. It is worth checking whether this applies to you before attempting to build OpenSSL from the source code.</p>
+
+<p>Some third parties also supply OpenSSL binaries (e.g. for Windows and some other platforms). The OpenSSL project maintains a list of these third parties at <a href="https://github.com/openssl/openssl/wiki/Binaries">https://github.com/openssl/openssl/wiki/Binaries</a>.</p>
+
+<p>If you build and install OpenSSL from the source code then you should download the appropriate files for the version that you want to use from the link given above. Extract the contents of the <b>tar.gz</b> archive file that you downloaded into an appropriate directory. Inside that archive you will find a file named <b>INSTALL.md</b> which will supply detailed instructions on how to build and install OpenSSL from source. Make sure you read the contents of that file carefully in order to achieve a successful build. In the directory you will also find a set of <b>NOTES</b> files that provide further platform specific information. Make sure you carefully read the file appropriate to your platform. As well as the platform specific <b>NOTES</b> files there is also a <b>NOTES-PERL.md</b> file that provides information about setting up Perl for use by the OpenSSL build system across multiple platforms.</p>
+
+<p>Sometimes you may want to build and install OpenSSL from source on a system which already has a pre-built version of OpenSSL installed on it via the Operating System package management system (for example if you want to use a newer version of OpenSSL than the one supplied by your Operating System). In this case it is strongly recommended to install OpenSSL to a different location than where the pre-built version is installed. You should <b>never</b> replace the pre-built version with a different version as this may break your system.</p>
+
+<h1 id="CONTENTS-OF-THE-OPENSSL-GUIDE">CONTENTS OF THE OPENSSL GUIDE</h1>
+
+<p>The OpenSSL Guide is a series of documentation pages (starting with this one) that introduce some of the main concepts in OpenSSL. The guide can either be read end-to-end in order, or alternatively you can simply skip to the parts most applicable to your use case. Note however that later pages may depend on and assume knowledge from earlier pages.</p>
+
+<p>The pages in the guide are as follows:</p>
+
+<dl>
+
+<dt id="ossl-guide-libraries-introduction-7-:-An-introduction-to-the-OpenSSL-libraries"><a href="../man7/ossl-guide-libraries-introduction.html">ossl-guide-libraries-introduction(7)</a>: An introduction to the OpenSSL libraries</dt>
+<dd>
+
+</dd>
+<dt id="ossl-guide-libcrypto-introduction-7-:-An-introduction-to-libcrypto"><a href="../man7/ossl-guide-libcrypto-introduction.html">ossl-guide-libcrypto-introduction(7)</a>: An introduction to libcrypto</dt>
+<dd>
+
+</dd>
+<dt id="ossl-guide-libssl-introduction-7-:-An-introduction-to-libssl"><a href="../man7/ossl-guide-libssl-introduction.html">ossl-guide-libssl-introduction(7)</a>: An introduction to libssl</dt>
+<dd>
+
+</dd>
+<dt id="ossl-guide-tls-introduction-7-:-An-introduction-to-SSL-TLS-in-OpenSSL"><a href="../man7/ossl-guide-tls-introduction.html">ossl-guide-tls-introduction(7)</a>: An introduction to SSL/TLS in OpenSSL</dt>
+<dd>
+
+</dd>
+<dt id="ossl-guide-tls-client-block-7-:-Writing-a-simple-blocking-TLS-client"><a href="../man7/ossl-guide-tls-client-block.html">ossl-guide-tls-client-block(7)</a>: Writing a simple blocking TLS client</dt>
+<dd>
+
+</dd>
+<dt id="ossl-guide-tls-client-non-block-7-:-Writing-a-simple-nonblocking-TLS-client"><a href="../man7/ossl-guide-tls-client-non-block.html">ossl-guide-tls-client-non-block(7)</a>: Writing a simple nonblocking TLS client</dt>
+<dd>
+
+</dd>
+<dt id="ossl-guide-tls-server-block-7-:-Writing-a-simple-blocking-TLS-server"><a href="../man7/ossl-guide-tls-server-block.html">ossl-guide-tls-server-block(7)</a>: Writing a simple blocking TLS server</dt>
+<dd>
+
+</dd>
+<dt id="ossl-guide-quic-introduction-7-:-An-introduction-to-QUIC-in-OpenSSL"><a href="../man7/ossl-guide-quic-introduction.html">ossl-guide-quic-introduction(7)</a>: An introduction to QUIC in OpenSSL</dt>
+<dd>
+
+</dd>
+<dt id="ossl-guide-quic-client-block-7-:-Writing-a-simple-blocking-QUIC-client"><a href="../man7/ossl-guide-quic-client-block.html">ossl-guide-quic-client-block(7)</a>: Writing a simple blocking QUIC client</dt>
+<dd>
+
+</dd>
+<dt id="ossl-guide-quic-server-block-7-:-Writing-a-simple-blocking-QUIC-server"><a href="../man7/ossl-guide-quic-server-block.html">ossl-guide-quic-server-block(7)</a>: Writing a simple blocking QUIC server</dt>
+<dd>
+
+</dd>
+<dt id="ossl-guide-quic-multi-stream-7-:-Writing-a-simple-multi-stream-QUIC-client"><a href="../man7/ossl-guide-quic-multi-stream.html">ossl-guide-quic-multi-stream(7)</a>: Writing a simple multi-stream QUIC client</dt>
+<dd>
+
+</dd>
+<dt id="ossl-guide-quic-server-non-block-7-:-Writing-a-simple-nonblocking-QUIC-server"><a href="../man7/ossl-guide-quic-server-non-block.html">ossl-guide-quic-server-non-block(7)</a>: Writing a simple nonblocking QUIC server</dt>
+<dd>
+
+</dd>
+<dt id="ossl-guide-quic-client-non-block-7-:-Writing-a-simple-nonblocking-QUIC-client"><a href="../man7/ossl-guide-quic-client-non-block.html">ossl-guide-quic-client-non-block(7)</a>: Writing a simple nonblocking QUIC client</dt>
+<dd>
+
+</dd>
+<dt id="ossl-guide-migration-7-:-Migrating-from-older-OpenSSL-versions"><a href="../man7/ossl-guide-migration.html">ossl-guide-migration(7)</a>: Migrating from older OpenSSL versions</dt>
+<dd>
+
+</dd>
+</dl>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2023-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

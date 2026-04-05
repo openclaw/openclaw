@@ -1,0 +1,117 @@
+.TH "types.h" 3 "August 2021" "Brotli" \" -*- nroff -*-
+.ad l
+.nh
+.SH NAME
+types.h \- Common types used in decoder and encoder API\&.  
+
+.SH SYNOPSIS
+.br
+.PP
+.SS "Macros"
+
+.in +1c
+.ti -1c
+.RI "#define \fBBROTLI_BOOL\fP   int"
+.br
+.RI "\fIA portable \fCbool\fP replacement\&. \fP"
+.ti -1c
+.RI "#define \fBBROTLI_FALSE\fP   0"
+.br
+.RI "\fIPortable \fCfalse\fP replacement\&. \fP"
+.ti -1c
+.RI "#define \fBBROTLI_TRUE\fP   1"
+.br
+.RI "\fIPortable \fCtrue\fP replacement\&. \fP"
+.ti -1c
+.RI "#define \fBTO_BROTLI_BOOL\fP(X)   (!!(X) ? \fBBROTLI_TRUE\fP : \fBBROTLI_FALSE\fP)"
+.br
+.RI "\fI\fCbool\fP to \fBBROTLI_BOOL\fP conversion macros\&. \fP"
+.in -1c
+.SS "Typedefs"
+
+.in +1c
+.ti -1c
+.RI "typedef void *(* \fBbrotli_alloc_func\fP) (void *opaque, size_t size)"
+.br
+.RI "\fIAllocating function pointer type\&. \fP"
+.ti -1c
+.RI "typedef void(* \fBbrotli_free_func\fP) (void *opaque, void *address)"
+.br
+.RI "\fIDeallocating function pointer type\&. \fP"
+.in -1c
+.SH "Detailed Description"
+.PP 
+Common types used in decoder and encoder API\&. 
+
+
+.SH "Macro Definition Documentation"
+.PP 
+.SS "#define BROTLI_BOOL   int"
+
+.PP
+A portable \fCbool\fP replacement\&. \fBBROTLI_BOOL\fP is a 'documentation' type: actually it is \fCint\fP, but in API it denotes a type, whose only values are \fBBROTLI_TRUE\fP and \fBBROTLI_FALSE\fP\&.
+.PP
+\fBBROTLI_BOOL\fP values passed to Brotli should either be \fBBROTLI_TRUE\fP or \fBBROTLI_FALSE\fP, or be a result of \fBTO_BROTLI_BOOL\fP macros\&.
+.PP
+\fBBROTLI_BOOL\fP values returned by Brotli should not be tested for equality with \fCtrue\fP, \fCfalse\fP, \fBBROTLI_TRUE\fP, \fBBROTLI_FALSE\fP, but rather should be evaluated, for example:
+.PP
+.nf
+if (SomeBrotliFunction(encoder, BROTLI_TRUE) &&
+    !OtherBrotliFunction(decoder, BROTLI_FALSE)) {
+  bool x = !!YetAnotherBrotliFunction(encoder, TO_BROLTI_BOOL(2 * 2 == 4));
+  DoSomething(x);
+}
+
+.fi
+.PP
+ 
+.SS "#define BROTLI_FALSE   0"
+
+.PP
+Portable \fCfalse\fP replacement\&. 
+.SS "#define BROTLI_TRUE   1"
+
+.PP
+Portable \fCtrue\fP replacement\&. 
+.SS "#define TO_BROTLI_BOOL(X)   (!!(X) ? \fBBROTLI_TRUE\fP : \fBBROTLI_FALSE\fP)"
+
+.PP
+\fCbool\fP to \fBBROTLI_BOOL\fP conversion macros\&. 
+.SH "Typedef Documentation"
+.PP 
+.SS "typedef void*(* brotli_alloc_func) (void *opaque, size_t size)"
+
+.PP
+Allocating function pointer type\&. 
+.PP
+\fBParameters:\fP
+.RS 4
+\fIopaque\fP custom memory manager handle provided by client 
+.br
+\fIsize\fP requested memory region size; can not be \fC0\fP 
+.RE
+.PP
+\fBReturns:\fP
+.RS 4
+\fC0\fP in the case of failure 
+.PP
+a valid pointer to a memory region of at least \fCsize\fP bytes long otherwise 
+.RE
+.PP
+
+.SS "typedef void(* brotli_free_func) (void *opaque, void *address)"
+
+.PP
+Deallocating function pointer type\&. This function \fBSHOULD\fP do nothing if \fCaddress\fP is \fC0\fP\&.
+.PP
+\fBParameters:\fP
+.RS 4
+\fIopaque\fP custom memory manager handle provided by client 
+.br
+\fIaddress\fP memory region pointer returned by \fBbrotli_alloc_func\fP, or \fC0\fP 
+.RE
+.PP
+
+.SH "Author"
+.PP 
+Generated automatically by Doxygen for Brotli from the source code\&.

@@ -1,0 +1,66 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_PKEY_set_type</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_PKEY_set_type, EVP_PKEY_set_type_str, EVP_PKEY_set_type_by_keymgmt - functions to change the EVP_PKEY type</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+
+int EVP_PKEY_set_type(EVP_PKEY *pkey, int type);
+int EVP_PKEY_set_type_str(EVP_PKEY *pkey, const char *str, int len);
+int EVP_PKEY_set_type_by_keymgmt(EVP_PKEY *pkey, EVP_KEYMGMT *keymgmt);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>All the functions described here behave the same in so far that they clear all the previous key data and methods from <i>pkey</i>, and reset it to be of the type of key given by the different arguments. If <i>pkey</i> is NULL, these functions will still return the same return values as if it wasn&#39;t.</p>
+
+<p>EVP_PKEY_set_type() initialises <i>pkey</i> to contain an internal legacy key. When doing this, it finds a <a href="../man3/EVP_PKEY_ASN1_METHOD.html">EVP_PKEY_ASN1_METHOD(3)</a> corresponding to <i>type</i>, and associates <i>pkey</i> with the findings. It is an error if no <a href="../man3/EVP_PKEY_ASN1_METHOD.html">EVP_PKEY_ASN1_METHOD(3)</a> could be found for <i>type</i>.</p>
+
+<p>EVP_PKEY_set_type_str() initialises <i>pkey</i> to contain an internal legacy key. When doing this, it finds a <a href="../man3/EVP_PKEY_ASN1_METHOD.html">EVP_PKEY_ASN1_METHOD(3)</a> corresponding to <i>str</i> that has then length <i>len</i>, and associates <i>pkey</i> with the findings. It is an error if no <a href="../man3/EVP_PKEY_ASN1_METHOD.html">EVP_PKEY_ASN1_METHOD(3)</a> could be found for <i>type</i>.</p>
+
+<p>For both EVP_PKEY_set_type() and EVP_PKEY_set_type_str(), <i>pkey</i> gets a numeric type, which can be retrieved with <a href="../man3/EVP_PKEY_get_id.html">EVP_PKEY_get_id(3)</a>. This numeric type is taken from the <a href="../man3/EVP_PKEY_ASN1_METHOD.html">EVP_PKEY_ASN1_METHOD(3)</a> that was found, and is equal to or closely related to <i>type</i> in the case of EVP_PKEY_set_type(), or related to <i>str</i> in the case of EVP_PKEY_set_type_str().</p>
+
+<p>EVP_PKEY_set_type_by_keymgmt() initialises <i>pkey</i> to contain an internal provider side key. When doing this, it associates <i>pkey</i> with <i>keymgmt</i>. For keys initialised like this, the numeric type retrieved with <a href="../man3/EVP_PKEY_get_id.html">EVP_PKEY_get_id(3)</a> will always be <b>EVP_PKEY_NONE</b>.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>All functions described here return 1 if successful, or 0 on error.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_PKEY_assign.html">EVP_PKEY_assign(3)</a>, <a href="../man3/EVP_PKEY_get_id.html">EVP_PKEY_get_id(3)</a>, <a href="../man3/EVP_PKEY_get0_RSA.html">EVP_PKEY_get0_RSA(3)</a>, <a href="../man3/EVP_PKEY_copy_parameters.html">EVP_PKEY_copy_parameters(3)</a>, <a href="../man3/EVP_PKEY_ASN1_METHOD.html">EVP_PKEY_ASN1_METHOD(3)</a>, <a href="../man3/EVP_KEYMGMT.html">EVP_KEYMGMT(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2020-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

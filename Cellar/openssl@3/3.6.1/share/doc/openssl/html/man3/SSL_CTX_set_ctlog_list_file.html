@@ -1,0 +1,66 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_CTX_set_ctlog_list_file</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_CTX_set_default_ctlog_list_file, SSL_CTX_set_ctlog_list_file - load a Certificate Transparency log list from a file</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+int SSL_CTX_set_default_ctlog_list_file(SSL_CTX *ctx);
+int SSL_CTX_set_ctlog_list_file(SSL_CTX *ctx, const char *path);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_CTX_set_default_ctlog_list_file() loads a list of Certificate Transparency (CT) logs from the default file location, &quot;ct_log_list.cnf&quot;, found in the directory where OpenSSL is installed.</p>
+
+<p>SSL_CTX_set_ctlog_list_file() loads a list of CT logs from a specific path. See <a href="../man3/CTLOG_STORE_new.html">CTLOG_STORE_new(3)</a> for the file format.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>These functions will not clear the existing CT log list - it will be appended to. To replace the existing list, use <a href="../man3/SSL_CTX_set0_ctlog_store.html">SSL_CTX_set0_ctlog_store(3)</a> first.</p>
+
+<p>If an error occurs whilst parsing a particular log entry in the file, that log entry will be skipped.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_CTX_set_default_ctlog_list_file() and SSL_CTX_set_ctlog_list_file() return 1 if the log list is successfully loaded, and 0 if an error occurs. In the case of an error, the log list may have been partially loaded.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a>, <a href="../man3/SSL_CTX_set_ct_validation_callback.html">SSL_CTX_set_ct_validation_callback(3)</a>, <a href="../man3/CTLOG_STORE_new.html">CTLOG_STORE_new(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2016 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

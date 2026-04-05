@@ -1,0 +1,153 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>openssl-genrsa</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#OPTIONS">OPTIONS</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>openssl-genrsa - generate an RSA private key</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<p><b>openssl</b> <b>genrsa</b> [<b>-help</b>] [<b>-out</b> <i>filename</i>] [<b>-passout</b> <i>arg</i>] [<b>-aes128</b>] [<b>-aes192</b>] [<b>-aes256</b>] [<b>-aria128</b>] [<b>-aria192</b>] [<b>-aria256</b>] [<b>-camellia128</b>] [<b>-camellia192</b>] [<b>-camellia256</b>] [<b>-des</b>] [<b>-des3</b>] [<b>-idea</b>] [<b>-F4</b>] [<b>-f4</b>] [<b>-3</b>] [<b>-primes</b> <i>num</i>] [<b>-verbose</b>] [<b>-quiet</b>] [<b>-traditional</b>] [<b>-rand</b> <i>files</i>] [<b>-writerand</b> <i>file</i>] [<b>-engine</b> <i>id</i>] [<b>-provider</b> <i>name</i>] [<b>-provider-path</b> <i>path</i>] [<b>-provparam</b> <i>[name:]key=value</i>] [<b>-propquery</b> <i>propq</i>] [<b>numbits</b>]</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>This command generates an RSA private key.</p>
+
+<h1 id="OPTIONS">OPTIONS</h1>
+
+<dl>
+
+<dt id="help"><b>-help</b></dt>
+<dd>
+
+<p>Print out a usage message.</p>
+
+</dd>
+<dt id="out-filename"><b>-out</b> <i>filename</i></dt>
+<dd>
+
+<p>Output the key to the specified file. If this argument is not specified then standard output is used.</p>
+
+</dd>
+<dt id="passout-arg"><b>-passout</b> <i>arg</i></dt>
+<dd>
+
+<p>The output file password source. For more information about the format see <a href="../man1/openssl-passphrase-options.html">openssl-passphrase-options(1)</a>.</p>
+
+</dd>
+<dt id="aes128--aes192--aes256--aria128--aria192--aria256--camellia128--camellia192--camellia256--des--des3--idea"><b>-aes128</b>, <b>-aes192</b>, <b>-aes256</b>, <b>-aria128</b>, <b>-aria192</b>, <b>-aria256</b>, <b>-camellia128</b>, <b>-camellia192</b>, <b>-camellia256</b>, <b>-des</b>, <b>-des3</b>, <b>-idea</b></dt>
+<dd>
+
+<p>These options encrypt the private key with specified cipher before outputting it. If none of these options is specified no encryption is used. If encryption is used a pass phrase is prompted for if it is not supplied via the <b>-passout</b> argument.</p>
+
+</dd>
+<dt id="F4--f4--3"><b>-F4</b>, <b>-f4</b>, <b>-3</b></dt>
+<dd>
+
+<p>The public exponent to use, either 65537 or 3. The default is 65537. The <b>-3</b> option has been deprecated.</p>
+
+</dd>
+<dt id="primes-num"><b>-primes</b> <i>num</i></dt>
+<dd>
+
+<p>Specify the number of primes to use while generating the RSA key. The <i>num</i> parameter must be a positive integer that is greater than 1 and less than 16. If <i>num</i> is greater than 2, then the generated key is called a &#39;multi-prime&#39; RSA key, which is defined in RFC 8017.</p>
+
+</dd>
+<dt id="verbose"><b>-verbose</b></dt>
+<dd>
+
+<p>Print extra details about the operations being performed.</p>
+
+</dd>
+<dt id="quiet"><b>-quiet</b></dt>
+<dd>
+
+<p>Print fewer details about the operations being performed, which may be handy during batch scripts and pipelines.</p>
+
+</dd>
+<dt id="traditional"><b>-traditional</b></dt>
+<dd>
+
+<p>Write the key using the traditional PKCS#1 format instead of the PKCS#8 format.</p>
+
+</dd>
+<dt id="rand-files--writerand-file"><b>-rand</b> <i>files</i>, <b>-writerand</b> <i>file</i></dt>
+<dd>
+
+<p>See <a href="../man1/openssl.html">&quot;Random State Options&quot; in openssl(1)</a> for details.</p>
+
+</dd>
+<dt id="engine-id"><b>-engine</b> <i>id</i></dt>
+<dd>
+
+<p>See <a href="../man1/openssl.html">&quot;Engine Options&quot; in openssl(1)</a>. This option is deprecated.</p>
+
+</dd>
+<dt id="provider-name"><b>-provider</b> <i>name</i></dt>
+<dd>
+
+</dd>
+<dt id="provider-path-path"><b>-provider-path</b> <i>path</i></dt>
+<dd>
+
+</dd>
+<dt id="provparam-name:-key-value"><b>-provparam</b> <i>[name:]key=value</i></dt>
+<dd>
+
+</dd>
+<dt id="propquery-propq"><b>-propquery</b> <i>propq</i></dt>
+<dd>
+
+<p>See <a href="../man1/openssl.html">&quot;Provider Options&quot; in openssl(1)</a>, <a href="../man7/provider.html">provider(7)</a>, and <a href="../man7/property.html">property(7)</a>.</p>
+
+</dd>
+<dt id="numbits"><b>numbits</b></dt>
+<dd>
+
+<p>The size of the private key to generate in bits. This must be the last option specified. The default is 2048 and values less than 512 are not allowed.</p>
+
+</dd>
+</dl>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>RSA private key generation essentially involves the generation of two or more prime numbers. When generating a private key various symbols will be output to indicate the progress of the generation. A <b>.</b> represents each number which has passed an initial sieve test, <b>+</b> means a number has passed a single round of the Miller-Rabin primality test, <b>*</b> means the current prime starts a regenerating progress due to some failed tests. A newline means that the number has passed all the prime tests (the actual number depends on the key size).</p>
+
+<p>Because key generation is a random process the time taken to generate a key may vary somewhat. But in general, more primes lead to less generation time of a key.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man1/openssl.html">openssl(1)</a>, <a href="../man1/openssl-genpkey.html">openssl-genpkey(1)</a>, <a href="../man1/openssl-gendsa.html">openssl-gendsa(1)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

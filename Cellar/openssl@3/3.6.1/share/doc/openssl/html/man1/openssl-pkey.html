@@ -1,0 +1,262 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>openssl-pkey</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#OPTIONS">OPTIONS</a>
+    <ul>
+      <li><a href="#General-options">General options</a></li>
+      <li><a href="#Input-options">Input options</a></li>
+      <li><a href="#Output-options">Output options</a></li>
+    </ul>
+  </li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>openssl-pkey - public or private key processing command</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<p><b>openssl</b> <b>pkey</b> [<b>-help</b>] [<b>-engine</b> <i>id</i>] [<b>-provider</b> <i>name</i>] [<b>-provider-path</b> <i>path</i>] [<b>-provparam</b> <i>[name:]key=value</i>] [<b>-propquery</b> <i>propq</i>] [<b>-check</b>] [<b>-pubcheck</b>] [<b>-in</b> <i>filename</i>|<i>uri</i>] [<b>-inform</b> <b>DER</b>|<b>PEM</b>|<b>P12</b>|<b>ENGINE</b>] [<b>-passin</b> <i>arg</i>] [<b>-pubin</b>] [<b>-out</b> <i>filename</i>] [<b>-outform</b> <b>DER</b>|<b>PEM</b>] [<b>-<i>cipher</i></b>] [<b>-passout</b> <i>arg</i>] [<b>-traditional</b>] [<b>-pubout</b>] [<b>-noout</b>] [<b>-text</b>] [<b>-text_pub</b>] [<b>-ec_conv_form</b> <i>arg</i>] [<b>-ec_param_enc</b> <i>arg</i>]</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>This command processes public or private keys. They can be converted between various forms and their components printed.</p>
+
+<h1 id="OPTIONS">OPTIONS</h1>
+
+<h2 id="General-options">General options</h2>
+
+<dl>
+
+<dt id="help"><b>-help</b></dt>
+<dd>
+
+<p>Print out a usage message.</p>
+
+</dd>
+<dt id="engine-id"><b>-engine</b> <i>id</i></dt>
+<dd>
+
+<p>See <a href="../man1/openssl.html">&quot;Engine Options&quot; in openssl(1)</a>. This option is deprecated.</p>
+
+</dd>
+<dt id="provider-name"><b>-provider</b> <i>name</i></dt>
+<dd>
+
+</dd>
+<dt id="provider-path-path"><b>-provider-path</b> <i>path</i></dt>
+<dd>
+
+</dd>
+<dt id="provparam-name:-key-value"><b>-provparam</b> <i>[name:]key=value</i></dt>
+<dd>
+
+</dd>
+<dt id="propquery-propq"><b>-propquery</b> <i>propq</i></dt>
+<dd>
+
+<p>See <a href="../man1/openssl.html">&quot;Provider Options&quot; in openssl(1)</a>, <a href="../man7/provider.html">provider(7)</a>, and <a href="../man7/property.html">property(7)</a>.</p>
+
+</dd>
+<dt id="check"><b>-check</b></dt>
+<dd>
+
+<p>This option checks the consistency of a key pair for both public and private components.</p>
+
+</dd>
+<dt id="pubcheck"><b>-pubcheck</b></dt>
+<dd>
+
+<p>This option checks the correctness of either a public key or the public component of a key pair.</p>
+
+</dd>
+</dl>
+
+<h2 id="Input-options">Input options</h2>
+
+<dl>
+
+<dt id="in-filename-uri"><b>-in</b> <i>filename</i>|<i>uri</i></dt>
+<dd>
+
+<p>This specifies the input file to read a key from or standard input if this option is not specified.</p>
+
+<p>If the key input is encrypted and <b>-passin</b> is not given a pass phrase will be prompted for.</p>
+
+</dd>
+<dt id="inform-DER-PEM-P12-ENGINE"><b>-inform</b> <b>DER</b>|<b>PEM</b>|<b>P12</b>|<b>ENGINE</b></dt>
+<dd>
+
+<p>The key input format; unspecified by default. See <a href="../man1/openssl-format-options.html">openssl-format-options(1)</a> for details.</p>
+
+</dd>
+<dt id="passin-arg"><b>-passin</b> <i>arg</i></dt>
+<dd>
+
+<p>The password source for the key input.</p>
+
+<p>For more information about the format of <b>arg</b> see <a href="../man1/openssl-passphrase-options.html">openssl-passphrase-options(1)</a>.</p>
+
+</dd>
+<dt id="pubin"><b>-pubin</b></dt>
+<dd>
+
+<p>By default a private key is read from the input. With this option a public key is read instead. If the input contains no public key but a private key, its public part is used.</p>
+
+</dd>
+</dl>
+
+<h2 id="Output-options">Output options</h2>
+
+<dl>
+
+<dt id="out-filename"><b>-out</b> <i>filename</i></dt>
+<dd>
+
+<p>This specifies the output file to save the encoded and/or text output of key or standard output if this option is not specified. The output filename can be the same as the input filename, which leads to replacing the file contents. Note that file I/O is not atomic. The output file is truncated and then written.</p>
+
+<p>If any cipher option is set but no <b>-passout</b> is given then a pass phrase will be prompted for. When password input is interrupted, the output file is not touched.</p>
+
+</dd>
+<dt id="outform-DER-PEM"><b>-outform</b> <b>DER</b>|<b>PEM</b></dt>
+<dd>
+
+<p>The key output format; the default is <b>PEM</b>. See <a href="../man1/openssl-format-options.html">openssl-format-options(1)</a> for details.</p>
+
+</dd>
+<dt id="cipher"><b>-<i>cipher</i></b></dt>
+<dd>
+
+<p>Encrypt the PEM encoded private key with the supplied cipher. Any algorithm name accepted by EVP_get_cipherbyname() is acceptable such as <b>aes128</b>. Encryption is not supported for DER output.</p>
+
+</dd>
+<dt id="passout-arg"><b>-passout</b> <i>arg</i></dt>
+<dd>
+
+<p>The password source for the output file.</p>
+
+<p>For more information about the format of <b>arg</b> see <a href="../man1/openssl-passphrase-options.html">openssl-passphrase-options(1)</a>.</p>
+
+</dd>
+<dt id="traditional"><b>-traditional</b></dt>
+<dd>
+
+<p>Normally a private key is written using standard format: this is PKCS#8 form with the appropriate encryption algorithm (if any). If the <b>-traditional</b> option is specified then the older &quot;traditional&quot; format is used instead.</p>
+
+</dd>
+<dt id="pubout"><b>-pubout</b></dt>
+<dd>
+
+<p>By default the private and public key is output; this option restricts the output to the public components. This option is automatically set if the input is a public key.</p>
+
+<p>When combined with <b>-text</b>, this is equivalent to <b>-text_pub</b>.</p>
+
+</dd>
+<dt id="noout"><b>-noout</b></dt>
+<dd>
+
+<p>Do not output the key in encoded form.</p>
+
+</dd>
+<dt id="text"><b>-text</b></dt>
+<dd>
+
+<p>Output the various key components in plain text (possibly in addition to the PEM encoded form). This cannot be combined with encoded output in DER format.</p>
+
+</dd>
+<dt id="text_pub"><b>-text_pub</b></dt>
+<dd>
+
+<p>Output in text form only the public key components (also for private keys). This cannot be combined with encoded output in DER format.</p>
+
+</dd>
+<dt id="ec_conv_form-arg"><b>-ec_conv_form</b> <i>arg</i></dt>
+<dd>
+
+<p>This option only applies to elliptic-curve based keys.</p>
+
+<p>This specifies how the points on the elliptic curve are converted into octet strings. Possible values are: <b>compressed</b> (the default value), <b>uncompressed</b> and <b>hybrid</b>. For more information regarding the point conversion forms please read the X9.62 standard. <b>Note</b> Due to patent issues the <b>compressed</b> option is disabled by default for binary curves and can be enabled by defining the preprocessor macro <b>OPENSSL_EC_BIN_PT_COMP</b> at compile time.</p>
+
+</dd>
+<dt id="ec_param_enc-arg"><b>-ec_param_enc</b> <i>arg</i></dt>
+<dd>
+
+<p>This option only applies to elliptic curve based public and private keys.</p>
+
+<p>This specifies how the elliptic curve parameters are encoded. Possible value are: <b>named_curve</b>, i.e. the ec parameters are specified by an OID, or <b>explicit</b> where the ec parameters are explicitly given (see RFC 3279 for the definition of the EC parameters structures). The default value is <b>named_curve</b>. <b>Note</b> the <b>implicitlyCA</b> alternative, as specified in RFC 3279, is currently not implemented in OpenSSL.</p>
+
+</dd>
+</dl>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>To remove the pass phrase on a private key:</p>
+
+<pre><code>openssl pkey -in key.pem -out keyout.pem</code></pre>
+
+<p>To encrypt a private key using triple DES:</p>
+
+<pre><code>openssl pkey -in key.pem -des3 -out keyout.pem</code></pre>
+
+<p>To convert a private key from PEM to DER format:</p>
+
+<pre><code>openssl pkey -in key.pem -outform DER -out keyout.der</code></pre>
+
+<p>To print out the components of a private key to standard output:</p>
+
+<pre><code>openssl pkey -in key.pem -text -noout</code></pre>
+
+<p>To print out the public components of a private key to standard output:</p>
+
+<pre><code>openssl pkey -in key.pem -text_pub -noout</code></pre>
+
+<p>To just output the public part of a private key:</p>
+
+<pre><code>openssl pkey -in key.pem -pubout -out pubkey.pem</code></pre>
+
+<p>To change the EC parameters encoding to <b>explicit</b>:</p>
+
+<pre><code>openssl pkey -in key.pem -ec_param_enc explicit -out keyout.pem</code></pre>
+
+<p>To change the EC point conversion form to <b>compressed</b>:</p>
+
+<pre><code>openssl pkey -in key.pem -ec_conv_form compressed -out keyout.pem</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man1/openssl.html">openssl(1)</a>, <a href="../man1/openssl-genpkey.html">openssl-genpkey(1)</a>, <a href="../man1/openssl-rsa.html">openssl-rsa(1)</a>, <a href="../man1/openssl-pkcs8.html">openssl-pkcs8(1)</a>, <a href="../man1/openssl-dsa.html">openssl-dsa(1)</a>, <a href="../man1/openssl-genrsa.html">openssl-genrsa(1)</a>, <a href="../man1/openssl-gendsa.html">openssl-gendsa(1)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The <b>-engine</b> option was deprecated in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2006-2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,157 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OSSL_CMP_SRV_CTX_new</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OSSL_CMP_SRV_process_request, OSSL_CMP_CTX_server_perform, OSSL_CMP_SRV_CTX_new, OSSL_CMP_SRV_CTX_free, OSSL_CMP_SRV_cert_request_cb_t, OSSL_CMP_SRV_rr_cb_t, OSSL_CMP_SRV_certConf_cb_t, OSSL_CMP_SRV_genm_cb_t, OSSL_CMP_SRV_error_cb_t, OSSL_CMP_SRV_pollReq_cb_t, OSSL_CMP_SRV_CTX_init, OSSL_CMP_SRV_delayed_delivery_cb_t, OSSL_CMP_SRV_clean_transaction_cb_t, OSSL_CMP_SRV_CTX_init_trans, OSSL_CMP_SRV_CTX_get0_cmp_ctx, OSSL_CMP_SRV_CTX_get0_custom_ctx, OSSL_CMP_SRV_CTX_set_send_unprotected_errors, OSSL_CMP_SRV_CTX_set_accept_unprotected, OSSL_CMP_SRV_CTX_set_accept_raverified, OSSL_CMP_SRV_CTX_set_grant_implicit_confirm - generic functions to set up and control a CMP server</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/cmp.h&gt;
+
+OSSL_CMP_MSG *OSSL_CMP_SRV_process_request(OSSL_CMP_SRV_CTX *srv_ctx,
+                                           const OSSL_CMP_MSG *req);
+OSSL_CMP_MSG *OSSL_CMP_CTX_server_perform(OSSL_CMP_CTX *client_ctx,
+                                          const OSSL_CMP_MSG *req);
+OSSL_CMP_SRV_CTX *OSSL_CMP_SRV_CTX_new(OSSL_LIB_CTX *libctx, const char *propq);
+void OSSL_CMP_SRV_CTX_free(OSSL_CMP_SRV_CTX *srv_ctx);
+
+typedef OSSL_CMP_PKISI *(*OSSL_CMP_SRV_cert_request_cb_t)(
+                                                OSSL_CMP_SRV_CTX *srv_ctx,
+                                                const OSSL_CMP_MSG *req,
+                                                int certReqId,
+                                                const OSSL_CRMF_MSG *crm,
+                                                const X509_REQ *p10cr,
+                                                X509 **certOut,
+                                                STACK_OF(X509) **chainOut,
+                                                STACK_OF(X509) **caPubs);
+typedef OSSL_CMP_PKISI *(*OSSL_CMP_SRV_rr_cb_t)(OSSL_CMP_SRV_CTX *srv_ctx,
+                                                const OSSL_CMP_MSG *req,
+                                                const X509_NAME *issuer,
+                                                const ASN1_INTEGER *serial);
+typedef int (*OSSL_CMP_SRV_genm_cb_t)(OSSL_CMP_SRV_CTX *srv_ctx,
+                                      const OSSL_CMP_MSG *req,
+                                      STACK_OF(OSSL_CMP_ITAV) *in,
+                                      STACK_OF(OSSL_CMP_ITAV) **out);
+typedef void (*OSSL_CMP_SRV_error_cb_t)(OSSL_CMP_SRV_CTX *srv_ctx,
+                                        const OSSL_CMP_MSG *req,
+                                        const OSSL_CMP_PKISI *statusInfo,
+                                        const ASN1_INTEGER *errorCode,
+                                        const OSSL_CMP_PKIFREETEXT *errorDetails);
+typedef int (*OSSL_CMP_SRV_certConf_cb_t)(OSSL_CMP_SRV_CTX *srv_ctx,
+                                          const OSSL_CMP_MSG *req,
+                                          int certReqId,
+                                          const ASN1_OCTET_STRING *certHash,
+                                          const OSSL_CMP_PKISI *si);
+typedef int (*OSSL_CMP_SRV_pollReq_cb_t)(OSSL_CMP_SRV_CTX *srv_ctx,
+                                         const OSSL_CMP_MSG *req,
+                                         int certReqId,
+                                         OSSL_CMP_MSG **certReq,
+                                         int64_t *check_after);
+int OSSL_CMP_SRV_CTX_init(OSSL_CMP_SRV_CTX *srv_ctx, void *custom_ctx,
+                          OSSL_CMP_SRV_cert_request_cb_t process_cert_request,
+                          OSSL_CMP_SRV_rr_cb_t process_rr,
+                          OSSL_CMP_SRV_genm_cb_t process_genm,
+                          OSSL_CMP_SRV_error_cb_t process_error,
+                          OSSL_CMP_SRV_certConf_cb_t process_certConf,
+                          OSSL_CMP_SRV_pollReq_cb_t process_pollReq);
+typedef int (*OSSL_CMP_SRV_delayed_delivery_cb_t)(OSSL_CMP_SRV_CTX *srv_ctx,
+                                                  const OSSL_CMP_MSG *req);
+typedef int (*OSSL_CMP_SRV_clean_transaction_cb_t)(OSSL_CMP_SRV_CTX *srv_ctx,
+                                                   const ASN1_OCTET_STRING *id);
+int OSSL_CMP_SRV_CTX_init_trans(OSSL_CMP_SRV_CTX *srv_ctx,
+                                OSSL_CMP_SRV_delayed_delivery_cb_t delay,
+                                OSSL_CMP_SRV_clean_transaction_cb_t clean);
+
+OSSL_CMP_CTX *OSSL_CMP_SRV_CTX_get0_cmp_ctx(const OSSL_CMP_SRV_CTX *srv_ctx);
+void *OSSL_CMP_SRV_CTX_get0_custom_ctx(const OSSL_CMP_SRV_CTX *srv_ctx);
+
+int OSSL_CMP_SRV_CTX_set_send_unprotected_errors(OSSL_CMP_SRV_CTX *srv_ctx,
+                                                 int val);
+int OSSL_CMP_SRV_CTX_set_accept_unprotected(OSSL_CMP_SRV_CTX *srv_ctx, int val);
+int OSSL_CMP_SRV_CTX_set_accept_raverified(OSSL_CMP_SRV_CTX *srv_ctx, int val);
+int OSSL_CMP_SRV_CTX_set_grant_implicit_confirm(OSSL_CMP_SRV_CTX *srv_ctx,
+                                                int val);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>OSSL_CMP_SRV_process_request() implements the generic aspects of a CMP server. Its arguments are the <b>OSSL_CMP_SRV_CTX</b> <i>srv_ctx</i> and the CMP request message <i>req</i>. It does the typical generic checks on <i>req</i>, calls the respective callback function (if present) for more specific processing, and then assembles a result message, which may be a CMP error message. If after return of the function the expression <i>OSSL_CMP_CTX_get_status(OSSL_CMP_SRV_CTX_get0_cmp_ctx(srv_ctx))</i> yields -1 then the function has closed the current transaction, which may be due to normal successful end of the transaction or due to an error.</p>
+
+<p>OSSL_CMP_CTX_server_perform() is an interface to OSSL_CMP_SRV_process_request() that can be used by a CMP client in the same way as <a href="../man3/OSSL_CMP_MSG_http_perform.html">OSSL_CMP_MSG_http_perform(3)</a>. In particular, the first parameter <i>client_ctx</i> is the <b>OSSL_CMP_CTX</b> of the client. The <b>OSSL_CMP_SRV_CTX</b> must be set as <i>transfer_cb_arg</i> of <i>client_ctx</i>.</p>
+
+<p>OSSL_CMP_SRV_CTX_new() creates and initializes an <b>OSSL_CMP_SRV_CTX</b> structure associated with the library context <i>libctx</i> and property query string <i>propq</i>, both of which may be NULL to select the defaults.</p>
+
+<p>OSSL_CMP_SRV_CTX_free() deletes the given <i>srv_ctx</i>. If the argument is NULL, nothing is done.</p>
+
+<p>OSSL_CMP_SRV_CTX_init() sets in the given <i>srv_ctx</i> a custom server context pointer as well as callback functions performing the specific processing of CMP certificate requests, revocation requests, certificate confirmation requests, general messages, error messages, and poll requests. All arguments except <i>srv_ctx</i> may be NULL. If a callback for some message type is not given this means that the respective type of CMP message is not supported by the server.</p>
+
+<p>OSSL_CMP_SRV_CTX_init_trans() sets in <i>srv_ctx</i> the optional callback functions for initiating delayed delivery and cleaning up a transaction. If the &lt;delay&gt; function is NULL then delivery of responses is never delayed. Otherwise <i>delay</i> takes a custom server context and a request message as input. It must return 1 if delivery of the respective response shall be delayed, 0 if not, and -1 on error. If the &lt;clean&gt; function is NULL then no specific cleanup is performed. Otherwise <i>clean</i> takes a custom server context and a transaction ID pointer as input, where the pointer is NULL in case a new transaction is being started and otherwise provides the ID of the transaction being terminated. The &lt;clean&gt; function should reset the respective portions of the state and free related memory. It must return 1 on success and 0 on error.</p>
+
+<p>OSSL_CMP_SRV_CTX_get0_cmp_ctx() returns the <b>OSSL_CMP_CTX</b> from the <i>srv_ctx</i>.</p>
+
+<p>OSSL_CMP_SRV_CTX_get0_custom_ctx() returns the custom server context from <i>srv_ctx</i> that has been set using OSSL_CMP_SRV_CTX_init().</p>
+
+<p>OSSL_CMP_SRV_CTX_set_send_unprotected_errors() enables sending error messages and other forms of negative responses unprotected.</p>
+
+<p>OSSL_CMP_SRV_CTX_set_accept_unprotected() enables acceptance of requests without protection of with invalid protection.</p>
+
+<p>OSSL_CMP_SRV_CTX_set_accept_raverified() enables acceptance of ir/cr/kur messages with POPO &#39;RAVerified&#39;.</p>
+
+<p>OSSL_CMP_SRV_CTX_set_grant_implicit_confirm() enables granting implicit confirmation of newly enrolled certificates if requested.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>CMP is defined in RFC 9810 (and CRMF in RFC 4211).</p>
+
+<p>So far the CMP server implementation is limited to one request per CMP message (and consequently to at most one response component per CMP message).</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>OSSL_CMP_SRV_CTX_new() returns a <b>OSSL_CMP_SRV_CTX</b> structure on success, NULL on error.</p>
+
+<p>OSSL_CMP_SRV_CTX_free() does not return a value.</p>
+
+<p>OSSL_CMP_SRV_CTX_get0_cmp_ctx() returns a <b>OSSL_CMP_CTX</b> structure on success, NULL on error.</p>
+
+<p>OSSL_CMP_SRV_CTX_get0_custom_ctx() returns the custom server context that has been set using OSSL_CMP_SRV_CTX_init().</p>
+
+<p>All other functions return 1 on success, 0 on error.</p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The OpenSSL CMP support was added in OpenSSL 3.0.</p>
+
+<p>OSSL_CMP_SRV_CTX_init_trans() supporting delayed delivery of all types of response messages was added in OpenSSL 3.3.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2007-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

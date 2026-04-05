@@ -1,0 +1,66 @@
+.\"
+.\" Copyright 1998 by the Massachusetts Institute of Technology.
+.\" Copyright (C) 2004-2009 by Daniel Stenberg
+.\" SPDX-License-Identifier: MIT
+.\"
+.TH ARES_LIBRARY_CLEANUP 3 "19 May 2009"
+.SH NAME
+ares_library_cleanup \- c-ares library deinitialization
+.SH SYNOPSIS
+.nf
+#include <ares.h>
+
+void ares_library_cleanup(void)
+.fi
+.SH DESCRIPTION
+.PP
+The
+.B ares_library_cleanup
+function uninitializes the c-ares library, freeing all resources
+previously acquired by \fIares_library_init(3)\fP when the library
+was initialized, provided there was only one single previous call to
+\fIares_library_init(3)\fP. If there was more than one previous call to
+\fIares_library_init(3)\fP, this function uninitializes the c-ares
+library only if it is the call matching the call to
+\fIares_library_init(3)\fP which initialized the library
+(usually the very first call to \fIares_library_init(3)\fP).
+Other calls to \fIares_library_cleanup(3)\fP have no effect other than
+decrementing an internal counter.
+.PP
+This function must be called when the program using c-ares will
+no longer need any c-ares function. Once the program has called
+\fIares_library_cleanup(3)\fP sufficiently often such that the
+library is uninitialised, it shall not make any further call to any
+c-ares function.
+.PP
+This function does not cancel any pending c-ares lookups or requests
+previously done. Program  must use \fIares_cancel(3)\fP for this purpose.
+.PP
+.B This function is not thread safe.
+You have to call it once the program is about to terminate, but this call must
+be done once the program has terminated every single thread that it could have
+initiated. This is required to avoid potential race conditions in library
+deinitialization, and also due to the fact that \fIares_library_cleanup(3)\fP
+might call functions from other libraries that are thread unsafe, and could
+conflict with any other thread that is already using these other libraries.
+.PP
+Win32/64 application DLLs shall not call \fIares_library_cleanup(3)\fP from
+the DllMain function. Doing so will produce deadlocks and other problems.
+.SH AVAILABILITY
+This function was first introduced in c-ares version 1.7.0 along with the
+definition of preprocessor symbol \fICARES_HAVE_ARES_LIBRARY_CLEANUP\fP as an
+indication of the availability of this function. Reference counting in
+\fIares_library_init(3)\fP and \fIares_library_cleanup(3)\fP, which requires
+calls to the former function to match calls to the latter, is present since
+c-ares version 1.10.0.  Earlier versions would deinitialize the library on the
+first call to \fIares_library_cleanup(3)\fP.
+.PP
+Since the introduction of this function, it is absolutely mandatory to call it
+for any Win32/64 program using c-ares.
+.PP
+Non-Win32/64 systems can still use c-ares version 1.7.0 without calling
+\fIares_library_cleanup(3)\fP due to the fact that \fIcurrently\fP it is nearly
+a do-nothing function on non-Win32/64 platforms.
+.SH SEE ALSO
+.BR ares_library_init (3),
+.BR ares_cancel (3)

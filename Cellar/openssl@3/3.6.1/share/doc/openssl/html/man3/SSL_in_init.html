@@ -1,0 +1,119 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_in_init</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_in_before, SSL_in_init, SSL_is_init_finished, SSL_in_connect_init, SSL_in_accept_init, SSL_get_state - retrieve information about the handshake state machine</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+int SSL_in_init(const SSL *s);
+int SSL_in_before(const SSL *s);
+int SSL_is_init_finished(const SSL *s);
+
+int SSL_in_connect_init(SSL *s);
+int SSL_in_accept_init(SSL *s);
+
+OSSL_HANDSHAKE_STATE SSL_get_state(const SSL *ssl);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_in_init() returns 1 if the SSL/TLS state machine is currently processing or awaiting handshake messages, or 0 otherwise.</p>
+
+<p>SSL_in_before() returns 1 if no SSL/TLS handshake has yet been initiated, or 0 otherwise.</p>
+
+<p>SSL_is_init_finished() returns 1 if the SSL/TLS connection is in a state where fully protected application data can be transferred or 0 otherwise.</p>
+
+<p>Note that in some circumstances (such as when early data is being transferred) SSL_in_init(), SSL_in_before() and SSL_is_init_finished() can all return 0.</p>
+
+<p><b>s</b> <b>MUST NOT</b> be NULL.</p>
+
+<p>SSL_in_connect_init() returns 1 if <b>s</b> is acting as a client and SSL_in_init() would return 1, or 0 otherwise.</p>
+
+<p>SSL_in_accept_init() returns 1 if <b>s</b> is acting as a server and SSL_in_init() would return 1, or 0 otherwise.</p>
+
+<p>SSL_in_connect_init() and SSL_in_accept_init() are implemented as macros.</p>
+
+<p>SSL_get_state() returns a value indicating the current state of the handshake state machine. OSSL_HANDSHAKE_STATE is an enumerated type where each value indicates a discrete state machine state. Note that future versions of OpenSSL may define more states so applications should expect to receive unrecognised state values. The naming format is made up of a number of elements as follows:</p>
+
+<p><b>protocol</b>_ST_<b>role</b>_<b>message</b></p>
+
+<p><b>protocol</b> is one of TLS or DTLS. DTLS is used where a state is specific to the DTLS protocol. Otherwise TLS is used.</p>
+
+<p><b>role</b> is one of CR, CW, SR or SW to indicate &quot;client reading&quot;, &quot;client writing&quot;, &quot;server reading&quot; or &quot;server writing&quot; respectively.</p>
+
+<p><b>message</b> is the name of a handshake message that is being or has been sent, or is being or has been processed.</p>
+
+<p>Additionally there are some special states that do not conform to the above format. These are:</p>
+
+<dl>
+
+<dt id="TLS_ST_BEFORE">TLS_ST_BEFORE</dt>
+<dd>
+
+<p>No handshake messages have yet been been sent or received.</p>
+
+</dd>
+<dt id="TLS_ST_OK">TLS_ST_OK</dt>
+<dd>
+
+<p>Handshake message sending/processing has completed.</p>
+
+</dd>
+<dt id="TLS_ST_EARLY_DATA">TLS_ST_EARLY_DATA</dt>
+<dd>
+
+<p>Early data is being processed</p>
+
+</dd>
+<dt id="TLS_ST_PENDING_EARLY_DATA_END">TLS_ST_PENDING_EARLY_DATA_END</dt>
+<dd>
+
+<p>Awaiting the end of early data processing</p>
+
+</dd>
+</dl>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_in_init(), SSL_in_before(), SSL_is_init_finished(), SSL_in_connect_init() and SSL_in_accept_init() return values as indicated above.</p>
+
+<p>SSL_get_state() returns the current handshake state.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a>, <a href="../man3/SSL_read_early_data.html">SSL_read_early_data(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2017-2018 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

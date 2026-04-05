@@ -1,0 +1,255 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>openssl-quic-concurrency</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#EXPLICIT-AND-IMPLICIT-QUIC-DOMAINS">EXPLICIT AND IMPLICIT QUIC DOMAINS</a></li>
+  <li><a href="#CONCURRENCY-MODELS">CONCURRENCY MODELS</a></li>
+  <li><a href="#BLOCKING-I-O-CAPABILITIES">BLOCKING I/O CAPABILITIES</a>
+    <ul>
+      <li><a href="#Legacy-Blocking-Support-Compatibility">Legacy Blocking Support Compatibility</a></li>
+    </ul>
+  </li>
+  <li><a href="#RECOMMENDED-USAGE">RECOMMENDED USAGE</a></li>
+  <li><a href="#CONFIGURING-A-CONCURRENCY-MODEL">CONFIGURING A CONCURRENCY MODEL</a>
+    <ul>
+      <li><a href="#Default-Behaviour">Default Behaviour</a></li>
+      <li><a href="#Configuration-of-Concurrency-Models-with-Implicit-QUIC-Domains">Configuration of Concurrency Models with Implicit QUIC Domains</a></li>
+    </ul>
+  </li>
+  <li><a href="#CONSUMPTION-OF-OS-RESOURCES">CONSUMPTION OF OS RESOURCES</a></li>
+  <li><a href="#BEHAVIOUR-OF-SSL-OBJECTS">BEHAVIOUR OF SSL OBJECTS</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>openssl-quic-concurrency - OpenSSL QUIC Concurrency Model</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>A QUIC domain is a group of QUIC resources such as listeners (see <a href="../man3/SSL_new_listener.html">SSL_new_listener(3)</a>) and connections which share common event processing resources, such as internal pollers, timers and locks. All usage of OpenSSL QUIC happens inside a QUIC domain.</p>
+
+<p>These resources can be accessed and used concurrently depending on the circumstances. This man page discusses the available concurrency models and how they can be used.</p>
+
+<h1 id="EXPLICIT-AND-IMPLICIT-QUIC-DOMAINS">EXPLICIT AND IMPLICIT QUIC DOMAINS</h1>
+
+<p>A QUIC domain is instantiated either explicitly (<a href="../man3/SSL_new_domain.html">SSL_new_domain(3)</a>) or implicitly by calling <a href="../man3/SSL_new.html">SSL_new(3)</a> or <a href="../man3/SSL_new_listener.html">SSL_new_listener(3)</a>:</p>
+
+<ul>
+
+<li><p>An explicit QUIC domain is created by and visible to the application as a QUIC domain SSL object and has other QUIC SSL objects created underneath it, such as listeners or connections.</p>
+
+</li>
+<li><p>An implicit QUIC domain is one which is created internally due to the direct creation of a QUIC connection or listener SSL object; the application does not explicitly create a QUIC domain SSL object and never directly references the domain.</p>
+
+</li>
+</ul>
+
+<p>Explicit creation of a QUIC domain provides the greatest level of control for an application. Applications can use an implicit QUIC domain for ease of use and to avoid needing to create a separate QUIC domain SSL object.</p>
+
+<p>Regardless of whether a QUIC domain is explicitly created, the internal processing model is the same and the application must choose an appropriate concurrency model as discussed below.</p>
+
+<h1 id="CONCURRENCY-MODELS">CONCURRENCY MODELS</h1>
+
+<p>The OpenSSL QUIC implementation supports multiple concurrency models to support a wide variety of usage scenarios.</p>
+
+<p>The available concurrency models are as follows:</p>
+
+<ul>
+
+<li><p>The <b>Single-Threaded Concurrency Model (SCM)</b>, which supports only application-synchronised single-threaded usage.</p>
+
+</li>
+<li><p>The <b>Contentive Concurrency Model (CCM)</b>, which supports multi-threaded usage.</p>
+
+</li>
+<li><p>The <b>Thread-Assisted Concurrency Model (TACM)</b>, which also supports multi-threaded usage and provides assistance to an application for handling QUIC timer events.</p>
+
+</li>
+</ul>
+
+<p>The merits of these models are as follows:</p>
+
+<ul>
+
+<li><p>The <b>Single-Threaded Concurrency Model (SCM)</b> performs no locking or synchronisation. It is entirely up to the application to synchronise access to the QUIC domain and its subsidiary SSL objects.</p>
+
+<p>This concurrency model is also useful for an application which wants to use the OpenSSL QUIC implementation as a pure state machine.</p>
+
+</li>
+<li><p>The <b>Contentive Concurrency Model (CCM)</b> performs automatic locking when making API calls to SSL objects in a QUIC domain. This provides automatic synchronisation for multi-threaded usage of QUIC objects. For example, different QUIC stream SSL objects in the same QUIC connection can be safely accessed from different threads.</p>
+
+<p>This concurrency model adds the overhead of locking over the Single-Threaded Concurrency Model in order to support multi-threaded usage, but provides limited performance in highly contended multi-threaded usage due to its simple approach. However, it may still prove a good solution for a broad class of applications which spend the majority of their time in application logic and not in QUIC I/O processing.</p>
+
+<p>An advantage of this model relative to the more sophisticated concurrency models below is that it does not create any OS threads.</p>
+
+</li>
+<li><p>The <b>Thread-Assisted Concurrency Model (TACM)</b> is identical to the Contentive Concurrency Model except that a thread is spun up in the background to ensure that QUIC timer events are handled in a timely fashion. This ensures that QUIC timeout events are handled even if an application does not periodically call into the QUIC domain to ensure that any outstanding QUIC-related timer or network I/O events are handled. The assist thread contends for the same resources like any other thread. However, handshake layer events (TLS) are never processed by the assist thread.</p>
+
+</li>
+</ul>
+
+<p>The default concurrency model is CCM or TACM, depending on the <b>SSL_METHOD</b> used with a <b>SSL_CTX</b>. Using <a href="../man3/OSSL_QUIC_client_method.html">OSSL_QUIC_client_method(3)</a> results in a default concurrency model of CCM, whereas using <a href="../man3/OSSL_QUIC_client_thread_method.html">OSSL_QUIC_client_thread_method(3)</a> results in a default concurrency model of TACM.</p>
+
+<p>Additional concurrency models may be offered in future releases of OpenSSL.</p>
+
+<h1 id="BLOCKING-I-O-CAPABILITIES">BLOCKING I/O CAPABILITIES</h1>
+
+<p>All of the supported concurrency models are capable of supporting blocking I/O calls, where application-level I/O calls (for example, to <a href="../man3/SSL_read_ex.html">SSL_read_ex(3)</a> or <a href="../man3/SSL_write_ex.html">SSL_write_ex(3)</a> on a QUIC stream SSL object) block until the request can be serviced. This includes the use of <a href="../man3/SSL_poll.html">SSL_poll(3)</a> in a blocking fashion.</p>
+
+<p>Supporting blocking API calls reliably with multi-threaded usage requires the creation of additional OS resources such as internal file descriptors to allow threads to be woken when necessary. This creation of internal OS resources is optional and may need to be explicitly requested by an application depending on the chosen concurrency model. If this functionality is disabled, depending on the chosen concurrency model, blocking API calls may not be available and calls to <a href="../man3/SSL_set_blocking_mode.html">SSL_set_blocking_mode(3)</a> attempting to enable blocking mode may fail, notwithstanding the following section.</p>
+
+<h2 id="Legacy-Blocking-Support-Compatibility">Legacy Blocking Support Compatibility</h2>
+
+<p>OpenSSL 3.2 and 3.3 contained a buggy implementation of blocking QUIC I/O calls which is only reliable under single-threaded usage. This functionality is always available in the Single-Threaded Concurrency Model (SCM), where it works reliably.</p>
+
+<p>For compatibility reasons, this functionality is also available under the default concurrency model if the application does not explicitly specify a concurrency model or disable it. This is known as Legacy Blocking Compatibility Mode, and its usage is not recommended for multi-threaded applications.</p>
+
+<h1 id="RECOMMENDED-USAGE">RECOMMENDED USAGE</h1>
+
+<p>New applications are advised to choose a concurrency model as follows:</p>
+
+<ul>
+
+<li><p>A purely single-threaded application, or an application which wishes to use OpenSSL QUIC as a state machine and manage synchronisation itself, should explicitly select the SCM concurrency model.</p>
+
+</li>
+<li><p>An application which wants to engage in multi-threaded usage of different QUIC connections or streams in the same QUIC domain should a) select the CCM or TACM concurrency model and b) explicitly opt in or out of blocking I/O support (depending on whether the application wishes to make blocking I/O calls), disabling Legacy Blocking Compatibility Mode.</p>
+
+<p>An application should select the CCM concurrency model if the application can guarantee that a QUIC domain will be serviced regularly (for example, because the application can guarantee that the timeout returned by <a href="../man3/SSL_get_event_timeout.html">SSL_get_event_timeout(3)</a> will be handled). If an application is unable to do this, it should select the TACM concurrency model.</p>
+
+</li>
+<li><p>Applications should explicitly configure a concurrency model during initialisation.</p>
+
+</li>
+</ul>
+
+<h1 id="CONFIGURING-A-CONCURRENCY-MODEL">CONFIGURING A CONCURRENCY MODEL</h1>
+
+<p>If using an explicit QUIC domain, a concurrency model is chosen when calling <a href="../man3/SSL_new_domain.html">SSL_new_domain(3)</a> by specifying zero or more of the following flags:</p>
+
+<dl>
+
+<dt id="SSL_DOMAIN_FLAG_SINGLE_THREAD"><b>SSL_DOMAIN_FLAG_SINGLE_THREAD</b></dt>
+<dd>
+
+<p>Specifying this flag configures the Single-Threaded Concurrency Model (SCM).</p>
+
+</dd>
+<dt id="SSL_DOMAIN_FLAG_MULTI_THREAD"><b>SSL_DOMAIN_FLAG_MULTI_THREAD</b></dt>
+<dd>
+
+<p>Specifying this flag configures the Contentive Concurrency Model (CCM) (unless <b>SSL_DOMAIN_FLAG_THREAD_ASSISTED</b> is also specified).</p>
+
+</dd>
+<dt id="SSL_DOMAIN_FLAG_THREAD_ASSISTED"><b>SSL_DOMAIN_FLAG_THREAD_ASSISTED</b></dt>
+<dd>
+
+<p>Specifying this flag configures the Thread-Assisted Concurrency Model (TACM). It implies <b>SSL_DOMAIN_FLAG_MULTI_THREAD</b>.</p>
+
+</dd>
+<dt id="SSL_DOMAIN_FLAG_BLOCKING"><b>SSL_DOMAIN_FLAG_BLOCKING</b></dt>
+<dd>
+
+<p>Enable reliable support for blocking I/O calls, allocating whatever OS resources are necessary to realise this. If this flag is specified, <b>SSL_DOMAIN_FLAG_LEGACY_BLOCKING</b> is ignored.</p>
+
+<p>Details on the allocated OS resources can be found under <a href="#CONSUMPTION-OF-OS-RESOURCES">&quot;CONSUMPTION OF OS RESOURCES&quot;</a> below.</p>
+
+</dd>
+<dt id="SSL_DOMAIN_FLAG_LEGACY_BLOCKING"><b>SSL_DOMAIN_FLAG_LEGACY_BLOCKING</b></dt>
+<dd>
+
+<p>Enables legacy blocking compatibility mode. See <a href="#Legacy-Blocking-Support-Compatibility">&quot;Legacy Blocking Support Compatibility&quot;</a>.</p>
+
+</dd>
+</dl>
+
+<p>Mutually exclusive flag combinations result in an error (for example, combining <b>SSL_DOMAIN_FLAG_SINGLE_THREAD</b> and <b>SSL_DOMAIN_FLAG_MULTI_THREADED</b>).</p>
+
+<p>The concurrency model for a domain cannot be changed after the domain is created.</p>
+
+<h2 id="Default-Behaviour">Default Behaviour</h2>
+
+<p>If none of <b>SSL_DOMAIN_FLAG_SINGLE_THREAD</b>, <b>SSL_DOMAIN_FLAG_MULTI_THREAD</b> or <b>SSL_DOMAIN_FLAG_THREAD_ASSISTED</b> are provided to <a href="../man3/SSL_new_domain.html">SSL_new_domain(3)</a> or another constructor function which can accept the above flags, the default concurrency model set on the <b>SSL_CTX</b> is used. This default can be set and get using <a href="../man3/SSL_CTX_set_domain_flags.html">SSL_CTX_set_domain_flags(3)</a> and <a href="../man3/SSL_CTX_get_domain_flags.html">SSL_CTX_get_domain_flags(3)</a>. Any additional flags provided (for example, <b>SSL_DOMAIN_FLAG_BLOCCKING</b>) are added to the set of inherited flags.</p>
+
+<p>The default concurrency model set on a newly created <b>SSL_CTX</b> is determined as follows:</p>
+
+<ul>
+
+<li><p>If an <b>SSL_METHOD</b> of <a href="../man3/OSSL_QUIC_client_thread_method.html">OSSL_QUIC_client_thread_method(3)</a> is used, the Thread-Assisted Concurrency Model (TACM) is used with the <b>SSL_DOMAIN_FLAG_BLOCKING</b> flag. This provides reliable blocking functionality.</p>
+
+</li>
+<li><p>Otherwise, if OpenSSL was built without threading support, the Single-Threaded Concurrency Model (SCM) is used, with the <b>SSL_DOMAIN_FLAG_LEGACY_BLOCKING</b> flag.</p>
+
+</li>
+<li><p>Otherwise, if an <b>SSL_METHOD</b> of <a href="../man3/OSSL_QUIC_client_method.html">OSSL_QUIC_client_method(3)</a> is used, the Contentive Concurrency Model (CCM) is used with the <b>SSL_DOMAIN_FLAG_LEGACY_BLOCKING</b> flag.</p>
+
+</li>
+<li><p>Otherwise, the Contentive Concurrency Model (CCM) is used.</p>
+
+</li>
+</ul>
+
+<p>The default concurrency model may vary between releases of OpenSSL. An application may specify one or more of the domain flags above to ensure consistent usage of a specific concurrency model between releases.</p>
+
+<h2 id="Configuration-of-Concurrency-Models-with-Implicit-QUIC-Domains">Configuration of Concurrency Models with Implicit QUIC Domains</h2>
+
+<p>If an explicit QUIC domain is not explicitly created using <a href="../man3/SSL_new_domain.html">SSL_new_domain(3)</a>, an implicit QUIC domain is created when calling <a href="../man3/SSL_new_listener.html">SSL_new_listener(3)</a> or <a href="../man3/SSL_new.html">SSL_new(3)</a>. Such a domain will use the default domain flags configured on the <b>SSL_CTX</b> as described above.</p>
+
+<h1 id="CONSUMPTION-OF-OS-RESOURCES">CONSUMPTION OF OS RESOURCES</h1>
+
+<p>If full blocking I/O support is selected using <b>SSL_DOMAIN_FLAG_BLOCKING</b>, at least one socket, socket-like OS handle or file descriptor must be allocated to allow one thread to wake other threads which may be blocking in calls to OS socket polling interfaces such as select(2) or poll(2). This is allocated automatically internally by OpenSSL.</p>
+
+<p>If the Thread-Assisted Concurrency Model (TACM) is selected, a background thread is spawned. This also implies <b>SSL_DOMAIN_FLAG_BLOCKING</b> and the above.</p>
+
+<p>The internal consumption by OpenSSL of mutexes, condition variables, spin locks or other similar thread synchronisation primitives is unspecified under all concurrency models.</p>
+
+<p>The internal consumption by OpenSSL of threads is unspecified under the Thread-Assisted Concurrency Model.</p>
+
+<p>The internal consumption by OpenSSL of sockets, socket-like OS handles or file descriptors, or other resources as needed to support inter-thread notification, is unspecified under the Thread-Assisted Concurrency Model or when using <b>SSL_DOMAIN_FLAG_BLOCKING</b>.</p>
+
+<h1 id="BEHAVIOUR-OF-SSL-OBJECTS">BEHAVIOUR OF SSL OBJECTS</h1>
+
+<p>A QUIC SSL object has blocking mode enabled by default where <b>all</b> of the following criteria are met:</p>
+
+<ul>
+
+<li><p><b>SSL_DOMAIN_FLAG_BLOCKING</b> or <b>SSL_DOMAIN_FLAG_LEGACY_BLOCKING</b> is enabled; and</p>
+
+</li>
+<li><p>The QUIC connection is being used with network read and write BIOs which expose supported poll descriptors. See <a href="../man7/openssl-quic.html">openssl-quic(7)</a> for details.</p>
+
+</li>
+</ul>
+
+<p>In all other cases, a QUIC SSL object has blocking mode disabled by default. The blocking mode can be changed explicitly using <a href="../man3/SSL_set_blocking_mode.html">SSL_set_blocking_mode(3)</a>.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/openssl-quic.html">openssl-quic(7)</a>, <a href="../man3/SSL_handle_events.html">SSL_handle_events(3)</a>, <a href="../man3/SSL_get_event_timeout.html">SSL_get_event_timeout(3)</a>, <a href="../man3/OSSL_QUIC_client_thread_method.html">OSSL_QUIC_client_thread_method(3)</a>, <a href="../man3/SSL_CTX_set_domain_flags.html">SSL_CTX_set_domain_flags(3)</a>, <a href="../man3/SSL_new_domain.html">SSL_new_domain(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2024-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

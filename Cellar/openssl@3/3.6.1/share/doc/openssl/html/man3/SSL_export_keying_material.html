@@ -1,0 +1,83 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_export_keying_material</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_export_keying_material, SSL_export_keying_material_early - obtain keying material for application use</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+int SSL_export_keying_material(SSL *s, unsigned char *out, size_t olen,
+                               const char *label, size_t llen,
+                               const unsigned char *context,
+                               size_t contextlen, int use_context);
+
+int SSL_export_keying_material_early(SSL *s, unsigned char *out, size_t olen,
+                                     const char *label, size_t llen,
+                                     const unsigned char *context,
+                                     size_t contextlen);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>During the creation of a TLS or DTLS connection shared keying material is established between the two endpoints. The functions SSL_export_keying_material() and SSL_export_keying_material_early() enable an application to use some of this keying material for its own purposes in accordance with RFC5705 (for TLSv1.2 and below) or RFC8446 (for TLSv1.3).</p>
+
+<p>SSL_export_keying_material() derives keying material using the <i>exporter_master_secret</i> established in the handshake.</p>
+
+<p>SSL_export_keying_material_early() is only usable with TLSv1.3, and derives keying material using the <i>early_exporter_master_secret</i> (as defined in the TLS 1.3 RFC). For the client, the <i>early_exporter_master_secret</i> is only available when the client attempts to send 0-RTT data. For the server, it is only available when the server accepts 0-RTT data.</p>
+
+<p>An application may need to securely establish the context within which this keying material will be used. For example this may include identifiers for the application session, application algorithms or parameters, or the lifetime of the context. The context value is left to the application but must be the same on both sides of the communication.</p>
+
+<p>For a given SSL connection <b>s</b>, <b>olen</b> bytes of data will be written to <b>out</b>. The application specific context should be supplied in the location pointed to by <b>context</b> and should be <b>contextlen</b> bytes long. Provision of a context is optional. If the context should be omitted entirely then <b>use_context</b> should be set to 0. Otherwise it should be any other value. If <b>use_context</b> is 0 then the values of <b>context</b> and <b>contextlen</b> are ignored. Note that in TLSv1.2 and below a zero length context is treated differently from no context at all, and will result in different keying material being returned. In TLSv1.3 a zero length context is that same as no context at all and will result in the same keying material being returned.</p>
+
+<p>An application specific label should be provided in the location pointed to by <b>label</b> and should be <b>llen</b> bytes long. Typically this will be a value from the IANA Exporter Label Registry (<a href="https://www.iana.org/assignments/tls-parameters/tls-parameters.xhtml#exporter-labels">https://www.iana.org/assignments/tls-parameters/tls-parameters.xhtml#exporter-labels</a>). Alternatively labels beginning with &quot;EXPERIMENTAL&quot; are permitted by the standard to be used without registration. TLSv1.3 imposes a maximum label length of 249 bytes.</p>
+
+<p>Note that this function is only defined for TLSv1.0 and above, and DTLSv1.0 and above. Attempting to use it in SSLv3 will result in an error.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_export_keying_material() returns 0 or -1 on failure or 1 on success.</p>
+
+<p>SSL_export_keying_material_early() returns 0 on failure or 1 on success.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The SSL_export_keying_material_early() function was added in OpenSSL 1.1.1.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2017-2018 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,74 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OPENSSL_gmtime</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OPENSSL_gmtime, OPENSSL_gmtime_adj, OPENSSL_gmtime_diff - platform-agnostic OpenSSL time routines</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/crypto.h&gt;
+
+struct tm *OPENSSL_gmtime(const time_t *timer, struct tm *result);
+int OPENSSL_gmtime_adj(struct tm *tm, int offset_day, long offset_sec);
+int OPENSSL_gmtime_diff(int *pday, int *psec,
+                       const struct tm *from, const struct tm *to);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>OPENSSL_gmtime() returns the UTC time specified by <i>timer</i> into the provided <i>result</i> argument.</p>
+
+<p>OPENSSL_gmtime_adj() adds the offsets in <i>offset_day</i> and <i>offset_sec</i> to <i>tm</i>.</p>
+
+<p>OPENSSL_gmtime_diff() calculates the difference between <i>from</i> and <i>to</i>.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>It is an error to call OPENSSL_gmtime() with <i>result</i> equal to NULL. The contents of the time_t given by <i>timer</i> are stored into the <i>result</i>. Calling with <i>timer</i> equal to NULL means use the current time.</p>
+
+<p>OPENSSL_gmtime_adj() converts <i>tm</i> into a days and seconds value, adds the offsets, then converts back into a <i>struct tm</i> specified by <i>tm</i>. Leap seconds are not considered.</p>
+
+<p>OPENSSL_gmtime_diff() calculates the difference between the two <i>struct tm</i> structures <i>from</i> and <i>to</i>. The difference in days is placed into <i>*pday</i>, the remaining seconds are placed to <i>*psec</i>. The value in <i>*psec</i> will be less than the number of seconds per day (3600). Leap seconds are not considered.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>OPENSSL_gmtime() returns NULL on error, or <i>result</i> on success.</p>
+
+<p>OPENSSL_gmtime_adj() and OPENSSL_gmtime_diff() return 0 on error, and 1 on success.</p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>OPENSSL_gmtime(), OPENSSL_gmtime_adj() and OPENSSL_gmtime_diff() have been in OpenSSL since 1.0.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2022 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

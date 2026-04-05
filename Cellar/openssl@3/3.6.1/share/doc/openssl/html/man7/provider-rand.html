@@ -1,0 +1,303 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>provider-rand</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Context-Management-Functions">Context Management Functions</a></li>
+      <li><a href="#Random-Number-Generator-Functions:-NIST">Random Number Generator Functions: NIST</a></li>
+      <li><a href="#Random-Number-Generator-Functions:-Additional">Random Number Generator Functions: Additional</a></li>
+      <li><a href="#Context-Locking">Context Locking</a></li>
+      <li><a href="#Rand-Parameters">Rand Parameters</a></li>
+    </ul>
+  </li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>provider-rand - The random number generation library &lt;-&gt; provider functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/core_dispatch.h&gt;
+#include &lt;openssl/core_names.h&gt;
+
+/*
+ * None of these are actual functions, but are displayed like this for
+ * the function signatures for functions that are offered as function
+ * pointers in OSSL_DISPATCH arrays.
+ */
+
+/* Context management */
+void *OSSL_FUNC_rand_newctx(void *provctx, void *parent,
+                            const OSSL_DISPATCH *parent_calls);
+void OSSL_FUNC_rand_freectx(void *ctx);
+
+/* Random number generator functions: NIST */
+int OSSL_FUNC_rand_instantiate(void *ctx, unsigned int strength,
+                               int prediction_resistance,
+                               const unsigned char *pstr, size_t pstr_len,
+                               const OSSL_PARAM params[]);
+int OSSL_FUNC_rand_uninstantiate(void *ctx);
+int OSSL_FUNC_rand_generate(void *ctx, unsigned char *out, size_t outlen,
+                            unsigned int strength, int prediction_resistance,
+                            const unsigned char *addin, size_t addin_len);
+int OSSL_FUNC_rand_reseed(void *ctx, int prediction_resistance,
+                          const unsigned char *ent, size_t ent_len,
+                          const unsigned char *addin, size_t addin_len);
+
+/* Random number generator functions: additional */
+size_t OSSL_FUNC_rand_nonce(void *ctx, unsigned char *out, size_t outlen,
+                            int strength, size_t min_noncelen,
+                            size_t max_noncelen);
+size_t OSSL_FUNC_rand_get_seed(void *ctx, unsigned char **buffer,
+                               int entropy, size_t min_len, size_t max_len,
+                               int prediction_resistance,
+                               const unsigned char *adin, size_t adin_len);
+void OSSL_FUNC_rand_clear_seed(void *ctx, unsigned char *buffer, size_t b_len);
+int OSSL_FUNC_rand_verify_zeroization(void *ctx);
+
+/* Context Locking */
+int OSSL_FUNC_rand_enable_locking(void *ctx);
+int OSSL_FUNC_rand_lock(void *ctx);
+void OSSL_FUNC_rand_unlock(void *ctx);
+
+/* RAND parameter descriptors */
+const OSSL_PARAM *OSSL_FUNC_rand_gettable_params(void *provctx);
+const OSSL_PARAM *OSSL_FUNC_rand_gettable_ctx_params(void *ctx, void *provctx);
+const OSSL_PARAM *OSSL_FUNC_rand_settable_ctx_params(void *ctx, void *provctx);
+
+/* RAND parameters */
+int OSSL_FUNC_rand_get_params(OSSL_PARAM params[]);
+int OSSL_FUNC_rand_get_ctx_params(void *ctx, OSSL_PARAM params[]);
+int OSSL_FUNC_rand_set_ctx_params(void *ctx, const OSSL_PARAM params[]);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>This documentation is primarily aimed at provider authors. See <a href="../man7/provider.html">provider(7)</a> for further information.</p>
+
+<p>The RAND operation enables providers to implement random number generation algorithms and random number sources and make them available to applications via the API function <a href="../man3/EVP_RAND.html">EVP_RAND(3)</a>.</p>
+
+<h2 id="Context-Management-Functions">Context Management Functions</h2>
+
+<p>OSSL_FUNC_rand_newctx() should create and return a pointer to a provider side structure for holding context information during a rand operation. A pointer to this context will be passed back in a number of the other rand operation function calls. The parameter <i>provctx</i> is the provider context generated during provider initialisation (see <a href="../man7/provider.html">provider(7)</a>). The parameter <i>parent</i> specifies another rand instance to be used for seeding purposes. If NULL and the specific instance supports it, the operating system will be used for seeding. The parameter <i>parent_calls</i> points to the dispatch table for <i>parent</i>. Thus, the parent need not be from the same provider as the new instance.</p>
+
+<p>OSSL_FUNC_rand_freectx() is passed a pointer to the provider side rand context in the <i>mctx</i> parameter. If it receives NULL as <i>ctx</i> value, it should not do anything other than return. This function should free any resources associated with that context.</p>
+
+<h2 id="Random-Number-Generator-Functions:-NIST">Random Number Generator Functions: NIST</h2>
+
+<p>These functions correspond to those defined in NIST SP 800-90A and SP 800-90C.</p>
+
+<p>OSSL_FUNC_rand_instantiate() is used to instantiate the DRBG <i>ctx</i> at a requested security <i>strength</i>. In addition, <i>prediction_resistance</i> can be requested. Additional input <i>addin</i> of length <i>addin_len</i> bytes can optionally be provided. The parameters specified in <i>params</i> configure the DRBG and these should be processed before instantiation.</p>
+
+<p>OSSL_FUNC_rand_uninstantiate() is used to uninstantiate the DRBG <i>ctx</i>. After being uninstantiated, a DRBG is unable to produce output until it is instantiated anew.</p>
+
+<p>OSSL_FUNC_rand_generate() is used to generate random bytes from the DRBG <i>ctx</i>. It will generate <i>outlen</i> bytes placing them into the buffer pointed to by <i>out</i>. The generated bytes will meet the specified security <i>strength</i> and, if <i>prediction_resistance</i> is true, the bytes will be produced after reseeding from a live entropy source. Additional input <i>addin</i> of length <i>addin_len</i> bytes can optionally be provided.</p>
+
+<h2 id="Random-Number-Generator-Functions:-Additional">Random Number Generator Functions: Additional</h2>
+
+<p>OSSL_FUNC_rand_nonce() is used to generate a nonce of the given <i>strength</i> with a length from <i>min_noncelen</i> to <i>max_noncelen</i>. If the output buffer <i>out</i> is NULL, the length of the nonce should be returned.</p>
+
+<p>OSSL_FUNC_rand_get_seed() is used by deterministic generators to obtain their seeding material from their parent. The seed bytes will meet the specified security level of <i>entropy</i> bits and there will be between <i>min_len</i> and <i>max_len</i> inclusive bytes in total. If <i>prediction_resistance</i> is true, the bytes will be produced from a live entropy source. Additional input <i>addin</i> of length <i>addin_len</i> bytes can optionally be provided. A pointer to the seed material is returned in <i>*buffer</i> and this must be freed by a later call to OSSL_FUNC_rand_clear_seed().</p>
+
+<p>OSSL_FUNC_rand_clear_seed() frees a seed <i>buffer</i> of length <i>b_len</i> bytes which was previously allocated by OSSL_FUNC_rand_get_seed().</p>
+
+<p>OSSL_FUNC_rand_verify_zeroization() is used to determine if the internal state of the DRBG is zero. This capability is mandated by NIST as part of the self tests, it is unlikely to be useful in other circumstances.</p>
+
+<h2 id="Context-Locking">Context Locking</h2>
+
+<p>When DRBGs are used by multiple threads, there must be locking employed to ensure their proper operation. Because locking introduces an overhead, it is disabled by default.</p>
+
+<p>OSSL_FUNC_rand_enable_locking() allows locking to be turned on for a DRBG and all of its parent DRBGs. From this call onwards, the DRBG can be used in a thread safe manner.</p>
+
+<p>OSSL_FUNC_rand_lock() is used to lock a DRBG. Once locked, exclusive access is guaranteed.</p>
+
+<p>OSSL_FUNC_rand_unlock() is used to unlock a DRBG.</p>
+
+<h2 id="Rand-Parameters">Rand Parameters</h2>
+
+<p>See <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> for further details on the parameters structure used by these functions.</p>
+
+<p>OSSL_FUNC_rand_get_params() gets details of parameter values associated with the provider algorithm and stores them in <i>params</i>.</p>
+
+<p>OSSL_FUNC_rand_set_ctx_params() sets rand parameters associated with the given provider side rand context <i>ctx</i> to <i>params</i>. Any parameter settings are additional to any that were previously set. Passing NULL for <i>params</i> should return true.</p>
+
+<p>OSSL_FUNC_rand_get_ctx_params() gets details of currently set parameter values associated with the given provider side rand context <i>ctx</i> and stores them in <i>params</i>. Passing NULL for <i>params</i> should return true.</p>
+
+<p>OSSL_FUNC_rand_gettable_params(), OSSL_FUNC_rand_gettable_ctx_params(), and OSSL_FUNC_rand_settable_ctx_params() all return constant <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> arrays as descriptors of the parameters that OSSL_FUNC_rand_get_params(), OSSL_FUNC_rand_get_ctx_params(), and OSSL_FUNC_rand_set_ctx_params() can handle, respectively. OSSL_FUNC_rand_gettable_ctx_params() and OSSL_FUNC_rand_settable_ctx_params() will return the parameters associated with the provider side context <i>ctx</i> in its current state if it is not NULL. Otherwise, they return the parameters associated with the provider side algorithm <i>provctx</i>.</p>
+
+<p>Parameters currently recognised by built-in rands are as follows. Not all parameters are relevant to, or are understood by all rands:</p>
+
+<dl>
+
+<dt id="state-OSSL_RAND_PARAM_STATE-integer">&quot;state&quot; (<b>OSSL_RAND_PARAM_STATE</b>) &lt;integer&gt;</dt>
+<dd>
+
+<p>Returns the state of the random number generator.</p>
+
+</dd>
+<dt id="strength-OSSL_RAND_PARAM_STRENGTH-unsigned-integer">&quot;strength&quot; (<b>OSSL_RAND_PARAM_STRENGTH</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+<p>Returns the bit strength of the random number generator.</p>
+
+</dd>
+<dt id="fips-indicator-OSSL_RAND_PARAM_FIPS_APPROVED_INDICATOR-integer">&quot;fips-indicator&quot; (<b>OSSL_RAND_PARAM_FIPS_APPROVED_INDICATOR</b>) &lt;integer&gt;</dt>
+<dd>
+
+<p>A getter that returns 1 if the operation is FIPS approved, or 0 otherwise. This option is used by the OpenSSL FIPS provider and is not supported by all EVP_RAND sources.</p>
+
+</dd>
+</dl>
+
+<p>For rands that are also deterministic random bit generators (DRBGs), these additional parameters are recognised. Not all parameters are relevant to, or are understood by all DRBG rands:</p>
+
+<dl>
+
+<dt id="reseed_requests-OSSL_DRBG_PARAM_RESEED_REQUESTS-unsigned-integer">&quot;reseed_requests&quot; (<b>OSSL_DRBG_PARAM_RESEED_REQUESTS</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+<p>Reads or set the number of generate requests before reseeding the associated RAND ctx.</p>
+
+</dd>
+<dt id="reseed_time_interval-OSSL_DRBG_PARAM_RESEED_TIME_INTERVAL-integer">&quot;reseed_time_interval&quot; (<b>OSSL_DRBG_PARAM_RESEED_TIME_INTERVAL</b>) &lt;integer&gt;</dt>
+<dd>
+
+<p>Reads or set the number of elapsed seconds before reseeding the associated RAND ctx.</p>
+
+</dd>
+<dt id="max_request-OSSL_DRBG_PARAM_RESEED_REQUESTS-unsigned-integer">&quot;max_request&quot; (<b>OSSL_DRBG_PARAM_RESEED_REQUESTS</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+<p>Specifies the maximum number of bytes that can be generated in a single call to OSSL_FUNC_rand_generate.</p>
+
+</dd>
+<dt id="min_entropylen-OSSL_DRBG_PARAM_MIN_ENTROPYLEN-unsigned-integer">&quot;min_entropylen&quot; (<b>OSSL_DRBG_PARAM_MIN_ENTROPYLEN</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+</dd>
+<dt id="max_entropylen-OSSL_DRBG_PARAM_MAX_ENTROPYLEN-unsigned-integer">&quot;max_entropylen&quot; (<b>OSSL_DRBG_PARAM_MAX_ENTROPYLEN</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+<p>Specify the minimum and maximum number of bytes of random material that can be used to seed the DRBG.</p>
+
+</dd>
+<dt id="min_noncelen-OSSL_DRBG_PARAM_MIN_NONCELEN-unsigned-integer">&quot;min_noncelen&quot; (<b>OSSL_DRBG_PARAM_MIN_NONCELEN</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+</dd>
+<dt id="max_noncelen-OSSL_DRBG_PARAM_MAX_NONCELEN-unsigned-integer">&quot;max_noncelen&quot; (<b>OSSL_DRBG_PARAM_MAX_NONCELEN</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+<p>Specify the minimum and maximum number of bytes of nonce that can be used to instantiate the DRBG.</p>
+
+</dd>
+<dt id="max_perslen-OSSL_DRBG_PARAM_MAX_PERSLEN-unsigned-integer">&quot;max_perslen&quot; (<b>OSSL_DRBG_PARAM_MAX_PERSLEN</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+</dd>
+<dt id="max_adinlen-OSSL_DRBG_PARAM_MAX_ADINLEN-unsigned-integer">&quot;max_adinlen&quot; (<b>OSSL_DRBG_PARAM_MAX_ADINLEN</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+<p>Specify the minimum and maximum number of bytes of personalisation string that can be used with the DRBG.</p>
+
+</dd>
+<dt id="reseed_counter-OSSL_DRBG_PARAM_RESEED_COUNTER-unsigned-integer">&quot;reseed_counter&quot; (<b>OSSL_DRBG_PARAM_RESEED_COUNTER</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+<p>Specifies the number of times the DRBG has been seeded or reseeded.</p>
+
+</dd>
+<dt id="digest-OSSL_DRBG_PARAM_DIGEST-UTF8-string">&quot;digest&quot; (<b>OSSL_DRBG_PARAM_DIGEST</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+</dd>
+<dt id="cipher-OSSL_DRBG_PARAM_CIPHER-UTF8-string">&quot;cipher&quot; (<b>OSSL_DRBG_PARAM_CIPHER</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+</dd>
+<dt id="mac-OSSL_DRBG_PARAM_MAC-UTF8-string">&quot;mac&quot; (<b>OSSL_DRBG_PARAM_MAC</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+<p>Sets the name of the underlying cipher, digest or MAC to be used. It must name a suitable algorithm for the DRBG that&#39;s being used.</p>
+
+</dd>
+<dt id="properties-OSSL_DRBG_PARAM_PROPERTIES-UTF8-string">&quot;properties&quot; (<b>OSSL_DRBG_PARAM_PROPERTIES</b>) &lt;UTF8 string&gt;</dt>
+<dd>
+
+<p>Sets the properties to be queried when trying to fetch an underlying algorithm. This must be given together with the algorithm naming parameter to be considered valid.</p>
+
+</dd>
+</dl>
+
+<p>The OpenSSL FIPS provider also supports the following parameters:</p>
+
+<dl>
+
+<dt id="fips-indicator-OSSL_DRBG_PARAM_FIPS_APPROVED_INDICATOR-integer">&quot;fips-indicator&quot; (<b>OSSL_DRBG_PARAM_FIPS_APPROVED_INDICATOR</b>) &lt;integer&gt;</dt>
+<dd>
+
+<p>A getter that returns 1 if the operation is FIPS approved, or 0 otherwise. This may be used after calling OSSL_FUNC_rand_generate(). It may return 0 if the &quot;digest-check&quot; is set to 0.</p>
+
+</dd>
+<dt id="digest-check-OSSL_DRBG_PARAM_FIPS_DIGEST_CHECK-integer">&quot;digest-check&quot; (<b>OSSL_DRBG_PARAM_FIPS_DIGEST_CHECK</b>) &lt;integer&gt;</dt>
+<dd>
+
+<p>If required this parameter should be set before the digest is set. The default value of 1 causes an error when the digest is set if the digest is not FIPS approved (e.g. truncated digests). Setting this to 0 will ignore the error and set the approved &quot;fips-indicator&quot; to 0. This option breaks FIPS compliance if it causes the approved &quot;fips-indicator&quot; to return 0.</p>
+
+</dd>
+</dl>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>OSSL_FUNC_rand_newctx() should return the newly created provider side rand context, or NULL on failure.</p>
+
+<p>OSSL_FUNC_rand_gettable_params(), OSSL_FUNC_rand_gettable_ctx_params() and OSSL_FUNC_rand_settable_ctx_params() should return a constant <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> array, or NULL if none is offered.</p>
+
+<p>OSSL_FUNC_rand_nonce() returns the size of the generated nonce, or 0 on error.</p>
+
+<p>OSSL_FUNC_rand_get_seed() returns the size of the generated seed, or 0 on error.</p>
+
+<p>All of the remaining functions should return 1 for success or 0 on error.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The RAND life-cycle is described in <a href="../man7/life_cycle-rand.html">life_cycle-rand(7)</a>. Providers should ensure that the various transitions listed there are supported. At some point the EVP layer will begin enforcing the listed transitions.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/provider.html">provider(7)</a>, <a href="../man7/RAND.html">RAND(7)</a>, <a href="../man7/EVP_RAND.html">EVP_RAND(7)</a>, <a href="../man7/life_cycle-rand.html">life_cycle-rand(7)</a>, <a href="../man3/EVP_RAND.html">EVP_RAND(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The provider RAND interface was introduced in OpenSSL 3.0. The Rand Parameters &quot;fips-indicator&quot; and &quot;digest-check&quot; were added in OpenSSL 3.4.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2020-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

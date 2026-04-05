@@ -1,0 +1,80 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SRP_user_pwd_new</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SRP_user_pwd_new, SRP_user_pwd_free, SRP_user_pwd_set1_ids, SRP_user_pwd_set_gN, SRP_user_pwd_set0_sv - Functions to create a record of SRP user verifier information</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/srp.h&gt;</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>SRP_user_pwd *SRP_user_pwd_new(void);
+void SRP_user_pwd_free(SRP_user_pwd *user_pwd);
+
+int SRP_user_pwd_set1_ids(SRP_user_pwd *user_pwd, const char *id, const char *info);
+void SRP_user_pwd_set_gN(SRP_user_pwd *user_pwd, const BIGNUM *g, const BIGNUM *N);
+int SRP_user_pwd_set0_sv(SRP_user_pwd *user_pwd, BIGNUM *s, BIGNUM *v);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>All of the functions described on this page are deprecated. There are no available replacement functions at this time.</p>
+
+<p>The SRP_user_pwd_new() function allocates a structure to store a user verifier record.</p>
+
+<p>The SRP_user_pwd_free() function frees up the <b>user_pwd</b> structure. If <b>user_pwd</b> is NULL, nothing is done.</p>
+
+<p>The SRP_user_pwd_set1_ids() function sets the username to <b>id</b> and the optional user info to <b>info</b> for <b>user_pwd</b>. The library allocates new copies of <b>id</b> and <b>info</b>, the caller still owns the original memory.</p>
+
+<p>The SRP_user_pwd_set0_sv() function sets the user salt to <b>s</b> and the verifier to <b>v</b> for <b>user_pwd</b>. The library takes ownership of the values, they should not be freed by the caller.</p>
+
+<p>The SRP_user_pwd_set_gN() function sets the SRP group parameters for <b>user_pwd</b>. The memory is not freed by SRP_user_pwd_free(), the caller must make sure it is freed once it is no longer used.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SRP_user_pwd_set1_ids() returns 1 on success and 0 on failure or if <b>id</b> was NULL.</p>
+
+<p>SRP_user_pwd_set0_sv() returns 1 if both <b>s</b> and <b>v</b> are not NULL, 0 otherwise.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man1/openssl-srp.html">openssl-srp(1)</a>, <a href="../man3/SRP_create_verifier.html">SRP_create_verifier(3)</a>, <a href="../man3/SRP_VBASE_new.html">SRP_VBASE_new(3)</a>, <a href="../man3/SSL_CTX_set_srp_password.html">SSL_CTX_set_srp_password(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>These functions were made public in OpenSSL 3.0 and are deprecated.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2018-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

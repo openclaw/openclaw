@@ -1,0 +1,84 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_CTX_set_cert_store</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RESTRICTIONS">RESTRICTIONS</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_CTX_set_cert_store, SSL_CTX_set1_cert_store, SSL_CTX_get_cert_store - manipulate X509 certificate verification storage</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+void SSL_CTX_set_cert_store(SSL_CTX *ctx, X509_STORE *store);
+void SSL_CTX_set1_cert_store(SSL_CTX *ctx, X509_STORE *store);
+X509_STORE *SSL_CTX_get_cert_store(const SSL_CTX *ctx);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_CTX_set_cert_store() sets/replaces the certificate verification storage of <b>ctx</b> to/with <b>store</b>. If another X509_STORE object is currently set in <b>ctx</b>, it will be X509_STORE_free()ed. SSL_CTX_set_cert_store() will take ownership of the <b>store</b>, i.e., the call <code>X509_STORE_free(store)</code> is no longer needed.</p>
+
+<p>SSL_CTX_set1_cert_store() sets/replaces the certificate verification storage of <b>ctx</b> to/with <b>store</b>. The <b>store</b>&#39;s reference count is incremented. If another X509_STORE object is currently set in <b>ctx</b>, it will be X509_STORE_free()ed.</p>
+
+<p>SSL_CTX_get_cert_store() returns a pointer to the current certificate verification storage. <b>ctx</b> <b>MUST NOT</b> be NULL.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>In order to verify the certificates presented by the peer, trusted CA certificates must be accessed. These CA certificates are made available via lookup methods, handled inside the X509_STORE. From the X509_STORE the X509_STORE_CTX used when verifying certificates is created.</p>
+
+<p>Typically the trusted certificate store is handled indirectly via using <a href="../man3/SSL_CTX_load_verify_locations.html">SSL_CTX_load_verify_locations(3)</a>. Using the SSL_CTX_set_cert_store() and SSL_CTX_get_cert_store() functions it is possible to manipulate the X509_STORE object beyond the <a href="../man3/SSL_CTX_load_verify_locations.html">SSL_CTX_load_verify_locations(3)</a> call.</p>
+
+<p>Currently no detailed documentation on how to use the X509_STORE object is available. Not all members of the X509_STORE are used when the verification takes place. So will e.g. the verify_callback() be overridden with the verify_callback() set via the <a href="../man3/SSL_CTX_set_verify.html">SSL_CTX_set_verify(3)</a> family of functions. This document must therefore be updated when documentation about the X509_STORE object and its handling becomes available.</p>
+
+<p>SSL_CTX_set_cert_store() does not increment the <b>store</b>&#39;s reference count, so it should not be used to assign an X509_STORE that is owned by another SSL_CTX.</p>
+
+<p>To share X509_STOREs between two SSL_CTXs, use SSL_CTX_get_cert_store() to get the X509_STORE from the first SSL_CTX, and then use SSL_CTX_set1_cert_store() to assign to the second SSL_CTX and increment the reference count of the X509_STORE.</p>
+
+<h1 id="RESTRICTIONS">RESTRICTIONS</h1>
+
+<p>The X509_STORE structure used by an SSL_CTX is used for verifying peer certificates and building certificate chains, it is also shared by every child SSL structure. Applications wanting finer control can use functions such as SSL_CTX_set1_verify_cert_store() instead.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_CTX_set_cert_store() does not return diagnostic output.</p>
+
+<p>SSL_CTX_set1_cert_store() does not return diagnostic output.</p>
+
+<p>SSL_CTX_get_cert_store() returns the current setting.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a>, <a href="../man3/SSL_CTX_load_verify_locations.html">SSL_CTX_load_verify_locations(3)</a>, <a href="../man3/SSL_CTX_set_verify.html">SSL_CTX_set_verify(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2001-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

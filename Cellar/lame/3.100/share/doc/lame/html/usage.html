@@ -1,0 +1,140 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+        "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+ <head>
+  <meta name="generator" content="PSPad editor, www.pspad.com" />
+  <meta http-equiv="content-type" content="text/html; charset=UTF-8" />
+  <link rel="stylesheet" type="text/css" href="styles/lame.css" />
+  <title>Usage of the commandline encoder</title>
+ </head>
+ <body>
+<div id="menu">
+	<ul>
+		<li><a href="index.html">Index page</a></li>
+		<li><a href="about.html">About LAME</a></li>
+		<li><a href="introduction.html">Intro to encoding</a></li>
+		<li><a style="border: 0" href="usage.html">Usage of LAME</a>
+    <div id="submenu">
+    	<ul>
+    	  <li><a href="usage.html">Common switches</a></li>
+    		<li><a style="border: 0" href="detailed.html">Detailed Settings</a></li>
+    	</ul>
+    </div>
+    </li>
+		<li><a href="history.html">Version history</a></li>
+		<li><a href="contributors.html">Coders of LAME</a></li>
+		<li><a href="contact.html">Contact LAME</a></li>
+		<li><a style="border: 0" href="links.html">LAME links</a></li>
+	</ul>
+</div>
+<div id="container">
+<div id="content">
+
+<div align="center">
+	<img src="images/logo.gif" width="358" height="231" alt="LAME Official Logo" />
+	<h2 class="hilight">Common and recommended switches</h2>
+</div>
+<h3>Common settings</h3>
+<pre>
+% lame <span class="hilight">[options]</span> inputfile [outputfile]
+</pre>
+<ul>
+<li><strong>Constant Bitrate</strong>: <span class="hilight">-b number</span> or
+ <span class="hilight">--preset cbr number</span>  Valid values
+for the -b settings depend on the sampling rate<a href="#note1"><sup>1</sup></a>.
+<pre>lame -b 128 sample.wav sample.mp3</pre>
+</li>
+<li><strong>Variable Bitrate (<a href="abr.html">ABR</a> mode)</strong>:
+ <span class="hilight">--abr number</span> or <span class="hilight">--preset number</span>
+ Valid values for the --abr setting range from 8 to 320.
+<pre>lame --abr 128 sample.wav sample.mp3</pre> 
+</li>
+<li><strong>Variable Bitrate (<a href="vbr.html">VBR</a> mode)</strong>:
+ <span class="hilight">-V number</span> Valid values
+are from 0 to 9, with decimal values possible, where 0 is the highest quality
+while 9.999 is the lowest one.
+<pre>lame -V2 sample.wav sample.mp3</pre>
+</li>
+</ul>
+<h3>Hydrogenaudio recommended settings</h3>
+<ul>
+<strong>Very high quality</strong>, HiFi, home, or quiet listening, with best file size<a href="#note2"></a> : 
+<span class="hilight">-V0</span> (avg. 245 kbps) or <span class="hilight">-V1</span>
+ (avg. 225 kbps) or <span class="hilight">-V2</span> (avg. 190 kbps) or <span class="hilight">-V3</span> (avg. 175 kbps).
+ <p>VBR settings will normally produce transparent results.
+ Audible differences between these presets may exist, but are rare.
+</p>
+</li>
+<li>
+<strong>Very high quality</strong>, HiFi, home, or quiet listening, with maximum file size<a href="#note2"><sup>2</sup></a> : 
+<span class="hilight">-b 320</span>
+<p>This CBR mode will maximize the MP3's bitrate and overall file 
+size. The extra space may allow for some parts of the audio to be 
+compressed with fewer sacrifices, but to date, no one has produced
+ABX test results demonstrating that perceived quality is ever better
+than the highest VBR profiles described above.
+</p>
+</li>
+<li><strong>Portable</strong>, listening in noisy conditions, lower bitrate, smaller file size: 
+<span class="hilight">-V4</span> (avg. 160 kbps) or <span class="hilight">-V5</span>
+(avg. 130 kbps) or <span class="hilight"> -V6</span> (avg. 115 kbps)
+<p>
+-V6 produces an "acceptable" quality, while -V4 should be close to perceptual transparency.
+</p>
+</li>
+<li><strong>Very low bitrate, small sizes</strong>, eg. for voice, radio, mono encoding :
+<span class="hilight">--abr 80</span> (stereo) or <span class="hilight">--abr 56 -m m</span> (mono)
+<p>
+For very low bitrates, up to 100kbps, ABR is most often the best solution.
+--preset voice is only available in the command line front-end, and 
+is there for compatibility. It is currently mapped to --abr 56 -mm,
+ so that means that the recommendation would be to encode in mono, 
+ and use ABR. 
+</p>
+</li>
+</ul>
+<div id="notes">
+<ol>
+<li><a name="note1"></a>
+<table cellpadding="5">
+<tr><th>Codec</th>
+<th>sample frequencies (kHz)</th>
+<th>bitrates (kbps)</th></tr>
+<tr><td>MPEG-1 layer III </td>  <td>32, 44.1, 48</td>
+<td>32 40 48 56 64 80 96 112 128 160 192 224 256 320</td></tr>
+<tr><td>MPEG-2 layer III</td><td> 16, 22.05, 24</td>
+<td> 8 16 24 32 40 48 56 64 80 96 112 128 144 160</td></tr>
+<tr><td style="border-bottom:0px;">MPEG-2.5 layer III</td><td style="border-bottom:0px;"> 8, 11.025, 12</td>
+<td style="border-bottom:0px;">8 16 24 32 40 48 56 64</td></tr>
+</table>
+</li>
+<li><a name="note2"></a>Lossy codecs, like MP3, should not be used for archiving,
+since the nature of lossy encoding always changes the original sound, even if it
+sounds transparent. Use lossless codecs for this purpose.
+</li>
+</ol>
+</div>
+
+</div>
+<div id="footer">
+
+<a href="http://sourceforge.net/projects/lame"><img src="http://sflogo.sourceforge.net/sflogo.php?group_id=290&amp;type=12"
+ alt="Get LAME (Lame Aint an MP3 Encoder) at SourceForge.net. Fast, secure and Free Open Source software downloads"
+ border="0" height="30" width="120" /></a>
+
+<a href="http://validator.w3.org/#validate_by_upload"><img src="images/valid-xhtml10.png"
+ alt="Valid XHTML 1.0 Transitional" border="0" height="31" width="88" /></a>
+
+<a href="http://jigsaw.w3.org/css-validator/"><img src="images/valid-css.png"
+ alt="Valid CSS!" border="0" height="31" width="88" /></a>
+
+<p>HTML markup and design by <a
+href="http://www.rjamorim.com" target="_blank">Roberto Amorim</a> and <a
+href="http://www.maresweb.de" target="_blank">Sebastian Mares</a>. Logo by <a 
+href="http://www.brightercreative.co.uk">Sam Fisher</a>.</p>
+
+</div>
+</div>
+
+ </body>
+</html>

@@ -1,0 +1,86 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>X509_cmp_time</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#BUGS">BUGS</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>X509_cmp_time, X509_cmp_current_time, X509_cmp_timeframe, X509_time_adj, X509_time_adj_ex, X509_gmtime_adj - X509 time functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>int X509_cmp_time(const ASN1_TIME *asn1_time, time_t *in_tm);
+int X509_cmp_current_time(const ASN1_TIME *asn1_time);
+int X509_cmp_timeframe(const X509_VERIFY_PARAM *vpm,
+                       const ASN1_TIME *start, const ASN1_TIME *end);
+ASN1_TIME *X509_time_adj(ASN1_TIME *asn1_time, long offset_sec, time_t *in_tm);
+ASN1_TIME *X509_time_adj_ex(ASN1_TIME *asn1_time, int offset_day, long
+                            offset_sec, time_t *in_tm);
+ASN1_TIME *X509_gmtime_adj(ASN1_TIME *asn1_time, long offset_sec);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>X509_cmp_time() compares the ASN1_TIME in <i>asn1_time</i> with the time in &lt;in_tm&gt;.</p>
+
+<p>X509_cmp_current_time() compares the ASN1_TIME in <i>asn1_time</i> with the current time, expressed as time_t.</p>
+
+<p>X509_cmp_timeframe() compares the given time period with the reference time included in the verification parameters <i>vpm</i> if they are not NULL and contain <b>X509_V_FLAG_USE_CHECK_TIME</b>; else the current time is used as reference time.</p>
+
+<p>X509_time_adj_ex() sets the ASN1_TIME structure <i>asn1_time</i> to the time <i>offset_day</i> and <i>offset_sec</i> after <i>in_tm</i>.</p>
+
+<p>X509_time_adj() sets the ASN1_TIME structure <i>asn1_time</i> to the time <i>offset_sec</i> after <i>in_tm</i>. This method can only handle second offsets up to the capacity of long, so the newer X509_time_adj_ex() API should be preferred.</p>
+
+<p>In both methods, if <i>asn1_time</i> is NULL, a new ASN1_TIME structure is allocated and returned.</p>
+
+<p>In all methods, if <i>in_tm</i> is NULL, the current time, expressed as time_t, is used.</p>
+
+<p><i>asn1_time</i> must satisfy the ASN1_TIME format mandated by RFC 5280, i.e., its format must be either YYMMDDHHMMSSZ or YYYYMMDDHHMMSSZ.</p>
+
+<p>X509_gmtime_adj() sets the ASN1_TIME structure <i>asn1_time</i> to the time <i>offset_sec</i> after the current time. It is equivalent to calling X509_time_adj() with the last parameter as NULL.</p>
+
+<h1 id="BUGS">BUGS</h1>
+
+<p>Unlike many standard comparison functions, X509_cmp_time() and X509_cmp_current_time() return 0 on error.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>X509_cmp_time() and X509_cmp_current_time() return -1 if <i>asn1_time</i> is earlier than, or equal to, <i>in_tm</i> (resp. current time), and 1 otherwise. These methods return 0 on error.</p>
+
+<p>X509_cmp_timeframe() returns 0 if <i>vpm</i> is not NULL and the verification parameters do not contain <b>X509_V_FLAG_USE_CHECK_TIME</b> but do contain <b>X509_V_FLAG_NO_CHECK_TIME</b>. Otherwise it returns 1 if the end time is not NULL and the reference time (which has determined as stated above) is past the end time, -1 if the start time is not NULL and the reference time is before, else 0 to indicate that the reference time is in range (implying that the end time is not before the start time if both are present).</p>
+
+<p>X509_time_adj(), X509_time_adj_ex() and X509_gmtime_adj() return a pointer to the updated ASN1_TIME structure, and NULL on error.</p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>X509_cmp_timeframe() was added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2017-2018 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,131 @@
+.\" Hey, Emacs! This is -*-nroff-*- you know...
+.\"
+.\" gencmn.8: manual page for the gencmn utility
+.\"
+.\" Copyright (C) 2016 and later: Unicode, Inc. and others.
+.\" License & terms of use: http://www.unicode.org/copyright.html
+.\" Copyright (C) 2000-2001 IBM, Inc. and others.
+.\"
+.\" Manual page by Yves Arrouye <yves@realnames.com>.
+.\"
+.TH GENCMN 8 "5 November 2001" "ICU MANPAGE" "ICU 78.3 Manual"
+.SH NAME
+.B gencmn
+\- generate an ICU memory-mappable data file
+.SH SYNOPSIS
+.B gencmn
+[
+.BR "\-h\fP, \fB\-?\fP, \fB\-\-help"
+]
+[
+.BR "\-v\fP, \fB\-\-verbose"
+]
+[
+.BR "\-c\fP, \fB\-\-copyright"
+|
+.BI "\-C\fP, \fB\-\-comment" " comment"
+]
+[
+.BI "\-d\fP, \fB\-\-destdir" " destination"
+]
+[
+.BI "\-n\fP, \fB\-\-name" " name"
+]
+[
+.BI "\-t\fP, \fB\-\-type" " fileext"
+]
+[
+.BI "\-S\fP, \fB\-\-source"
+]
+[
+.BI "\-e\fP, \fB\-\-entrypoint" " name"
+]
+.I maxsize
+[
+.I listfilename
+]
+.SH DESCRIPTION
+.B gencmn
+takes a set of files and packages them as an ICU memory-mappable data
+file. The resulting data file can then be used directly by ICU.
+.PP
+.B gencmn
+reads a list of files to be packaged from either the
+supplied
+.I listfilename
+file, or from its standard output. It packages all the files from
+the list that are not bigger than
+.I maxsize
+bytes, except if
+.I maxsize
+is 0, which indicates that there is no size limit on files.
+.SH OPTIONS
+.TP
+.BR "\-h\fP, \fB\-?\fP, \fB\-\-help"
+Print help about usage and exit.
+.TP
+.BR "\-v\fP, \fB\-\-verbose"
+Display extra informative messages during execution.
+.TP
+.BR \-c\fP, \fB\-\-copyright
+Include the ICU copyright notice in the resulting data.
+.TP
+.BI "\-C\fP, \fB\-\-comment" " comment"
+Include the specified
+.I comment
+in the resulting data instead of the ICU copyright notice. 
+.TP
+.BI "\-d\fP, \fB\-\-destdir" " destination"
+Set the destination directory to
+.IR destination .
+The default destination directory is specified by the environment variable
+.BR ICU_DATA .
+.TP
+.BI "\-n\fP, \fB\-\-name" " name"
+Set the data name to
+.I name
+instead of the default. This name is also used as the base name of the
+output. The default name is made of the
+.I icudt
+prefix, followed by a two-digit version number corresponding to
+the current version of the ICU release, and a single letter indicating
+the endianness of the data (the letter
+.I b
+indicated big endian data, and the letter
+.I l
+indicates little endian ones).
+.TP
+.BI "\-t\fP, \fB\-\-type" " type"
+Use
+.I type
+as the type of the data. This type is also used as the extension of
+the generated data file. The default type ie
+.IR dat .
+.TP
+.BI "\-S\fP, \fB\-\-source"
+Write a C source file with the table of contents of the data.
+.TP
+.BI "\-e\fP, \fB\-\-entrypoint" " name"
+Set the data entry point (used for linking against the data in a
+shared library form) to
+.IR name .
+The default entry point name is made of the data (set by the
+.BI "\-n\fP, \fB\-\-name"
+option) followed by an underscore and the type of the data (set by the
+.BI "\-t\fP, \fB\-\-type"
+option).
+.SH ENVIRONMENT
+.TP 10
+.B ICU_DATA
+Specifies the directory containing ICU data. Defaults to
+.BR ${prefix}/share/icu/78.3/ .
+Some tools in ICU depend on the presence of the trailing slash. It is thus
+important to make sure that it is present if
+.B ICU_DATA
+is set.
+.SH VERSION
+78.3
+.SH COPYRIGHT
+Copyright (C) 2000-2001 IBM, Inc. and others.
+.SH SEE ALSO
+.BR decmn (8)

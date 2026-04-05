@@ -1,0 +1,72 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>CMS_final</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>CMS_final, CMS_final_digest - finalise a CMS_ContentInfo structure</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/cms.h&gt;
+
+int CMS_final(CMS_ContentInfo *cms, BIO *data, BIO *dcont, unsigned int flags);
+int CMS_final_digest(CMS_ContentInfo *cms, const unsigned char *md,
+                     unsigned int mdlen, BIO *dcont, unsigned int flags);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>CMS_final() finalises the structure <b>cms</b>. Its purpose is to perform any operations necessary on <b>cms</b> (digest computation for example) and set the appropriate fields. The parameter <b>data</b> contains the content to be processed. The <b>dcont</b> parameter contains a BIO to write content to after processing: this is only used with detached data and will usually be set to NULL.</p>
+
+<p>CMS_final_digest() finalises the structure <b>cms</b> using a pre-computed digest, rather than computing the digest from the original data.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>These functions will normally be called when the <b>CMS_PARTIAL</b> flag is used. It should only be used when streaming is not performed because the streaming I/O functions perform finalisation operations internally.</p>
+
+<p>To sign a pre-computed digest, <a href="../man3/CMS_sign.html">CMS_sign(3)</a> or CMS_sign_ex() is called with the <b>data</b> parameter set to NULL before the CMS structure is finalised with the digest provided to CMS_final_digest() in binary form. When signing a pre-computed digest, the security relies on the digest and its computation from the original message being trusted.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>CMS_final() and CMS_final_digest() return 1 for success or 0 for failure.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>, <a href="../man3/CMS_sign.html">CMS_sign(3)</a>, <a href="../man3/CMS_encrypt.html">CMS_encrypt(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>CMS_final_digest() was added in OpenSSL 3.2.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2008-2022 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

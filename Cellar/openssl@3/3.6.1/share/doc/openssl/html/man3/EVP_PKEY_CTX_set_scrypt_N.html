@@ -1,0 +1,89 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_PKEY_CTX_set_scrypt_N</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#STRING-CTRLS">STRING CTRLS</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_PKEY_CTX_set1_scrypt_salt, EVP_PKEY_CTX_set_scrypt_N, EVP_PKEY_CTX_set_scrypt_r, EVP_PKEY_CTX_set_scrypt_p, EVP_PKEY_CTX_set_scrypt_maxmem_bytes - EVP_PKEY scrypt KDF support functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/kdf.h&gt;
+
+int EVP_PKEY_CTX_set1_scrypt_salt(EVP_PKEY_CTX *pctx, unsigned char *salt,
+                                  int saltlen);
+
+int EVP_PKEY_CTX_set_scrypt_N(EVP_PKEY_CTX *pctx, uint64_t N);
+
+int EVP_PKEY_CTX_set_scrypt_r(EVP_PKEY_CTX *pctx, uint64_t r);
+
+int EVP_PKEY_CTX_set_scrypt_p(EVP_PKEY_CTX *pctx, uint64_t p);
+
+int EVP_PKEY_CTX_set_scrypt_maxmem_bytes(EVP_PKEY_CTX *pctx,
+                                         uint64_t maxmem);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>These functions are used to set up the necessary data to use the scrypt KDF. For more information on scrypt, see <a href="../man7/EVP_KDF-SCRYPT.html">EVP_KDF-SCRYPT(7)</a>.</p>
+
+<p>EVP_PKEY_CTX_set1_scrypt_salt() sets the <b>saltlen</b> bytes long salt value.</p>
+
+<p>EVP_PKEY_CTX_set_scrypt_N(), EVP_PKEY_CTX_set_scrypt_r() and EVP_PKEY_CTX_set_scrypt_p() configure the work factors N, r and p.</p>
+
+<p>EVP_PKEY_CTX_set_scrypt_maxmem_bytes() sets how much RAM key derivation may maximally use, given in bytes. If RAM is exceeded because the load factors are chosen too high, the key derivation will fail.</p>
+
+<h1 id="STRING-CTRLS">STRING CTRLS</h1>
+
+<p>scrypt also supports string based control operations via <a href="../man3/EVP_PKEY_CTX_ctrl_str.html">EVP_PKEY_CTX_ctrl_str(3)</a>. Similarly, the <b>salt</b> can either be specified using the <b>type</b> parameter &quot;salt&quot; or in hex encoding by using the &quot;hexsalt&quot; parameter. The work factors <b>N</b>, <b>r</b> and <b>p</b> as well as <b>maxmem_bytes</b> can be set by using the parameters &quot;N&quot;, &quot;r&quot;, &quot;p&quot; and &quot;maxmem_bytes&quot;, respectively.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>There is a newer generic API for KDFs, <a href="../man3/EVP_KDF.html">EVP_KDF(3)</a>, which is preferred over the EVP_PKEY method.</p>
+
+<p>The scrypt KDF also uses EVP_PKEY_CTX_set1_pbe_pass() as well as the value from the string controls &quot;pass&quot; and &quot;hexpass&quot;. See <a href="../man3/EVP_PKEY_CTX_set1_pbe_pass.html">EVP_PKEY_CTX_set1_pbe_pass(3)</a>.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>All these functions return 1 for success and 0 or a negative value for failure. In particular a return value of -2 indicates the operation is not supported by the public key algorithm.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_KDF.html">EVP_KDF(3)</a> <a href="../man3/EVP_PKEY_CTX_new.html">EVP_PKEY_CTX_new(3)</a>, <a href="../man3/EVP_PKEY_CTX_ctrl_str.html">EVP_PKEY_CTX_ctrl_str(3)</a>, <a href="../man3/EVP_PKEY_derive.html">EVP_PKEY_derive(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>All of the functions described here were converted from macros to functions in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2017-2020 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

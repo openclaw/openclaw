@@ -1,0 +1,111 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>BIO_get_rpoll_descriptor</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>BIO_get_rpoll_descriptor, BIO_get_wpoll_descriptor - obtain a structure which can be used to determine when a BIO object can next be read or written</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/bio.h&gt;
+
+typedef struct bio_poll_descriptor_st {
+    uint32_t type;
+    union {
+        int        fd;
+        void       *custom;
+        uintptr_t  custom_ui;
+    } value;
+} BIO_POLL_DESCRIPTOR;
+
+int BIO_get_rpoll_descriptor(BIO *b, BIO_POLL_DESCRIPTOR *desc);
+int BIO_get_wpoll_descriptor(BIO *b, BIO_POLL_DESCRIPTOR *desc);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>BIO_get_rpoll_descriptor() and BIO_get_wpoll_descriptor(), on success, fill <i>*desc</i> with a poll descriptor. A poll descriptor is a tagged union structure which represents some kind of OS or non-OS resource which can be used to synchronise on I/O availability events.</p>
+
+<p>BIO_get_rpoll_descriptor() outputs a descriptor which can be used to determine when the BIO can (potentially) next be read, and BIO_get_wpoll_descriptor() outputs a descriptor which can be used to determine when the BIO can (potentially) next be written.</p>
+
+<p>It is permissible for BIO_get_rpoll_descriptor() and BIO_get_wpoll_descriptor() to output the same descriptor.</p>
+
+<p>Poll descriptors can represent different kinds of information. A typical kind of resource which might be represented by a poll descriptor is an OS file descriptor which can be used with APIs such as select().</p>
+
+<p>The kinds of poll descriptor defined by OpenSSL are:</p>
+
+<dl>
+
+<dt id="BIO_POLL_DESCRIPTOR_TYPE_NONE">BIO_POLL_DESCRIPTOR_TYPE_NONE</dt>
+<dd>
+
+<p>Represents the absence of a valid poll descriptor. It may be used by BIO_get_rpoll_descriptor() or BIO_get_wpoll_descriptor() to indicate that the BIO is not pollable for readability or writeability respectively.</p>
+
+<p>For this type, no field within the <i>value</i> field of the <b>BIO_POLL_DESCRIPTOR</b> is valid.</p>
+
+</dd>
+<dt id="BIO_POLL_DESCRIPTOR_TYPE_SOCK_FD">BIO_POLL_DESCRIPTOR_TYPE_SOCK_FD</dt>
+<dd>
+
+<p>The poll descriptor represents an OS socket resource. The field <i>value.fd</i> in the <b>BIO_POLL_DESCRIPTOR</b> is valid if it is not set to -1.</p>
+
+<p>The resource is whatever kind of handle is used by a given OS to represent sockets, which may vary by OS. For example, on Windows, the value is a <b>SOCKET</b> for use with the Winsock API. On POSIX-like platforms, it is a file descriptor.</p>
+
+<p>Where a poll descriptor of this type is output by BIO_get_rpoll_descriptor(), it should be polled for readability to determine when the BIO might next be able to successfully complete a BIO_read() operation; likewise, where a poll descriptor of this type is output by BIO_get_wpoll_descriptor(), it should be polled for writeability to determine when the BIO might next be able to successfully complete a BIO_write() operation.</p>
+
+</dd>
+<dt id="BIO_POLL_DESCRIPTOR_CUSTOM_START">BIO_POLL_DESCRIPTOR_CUSTOM_START</dt>
+<dd>
+
+<p>Type values beginning with this value (inclusive) are reserved for application allocation for custom poll descriptor types. Any of the definitions in the union field <i>value</i> can be used by the application arbitrarily as opaque values.</p>
+
+</dd>
+</dl>
+
+<p>Because poll descriptors are a tagged union structure, they can represent different kinds of information. New types of poll descriptor may be defined, including by applications, according to their needs.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>The functions BIO_get_rpoll_descriptor() and BIO_get_wpoll_descriptor() return 1 on success and 0 on failure.</p>
+
+<p>These functions are permitted to succeed and initialise <i>*desc</i> with a poll descriptor of type <b>BIO_POLL_DESCRIPTOR_TYPE_NONE</b> to indicate that the BIO is not pollable for readability or writeability respectively.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/SSL_handle_events.html">SSL_handle_events(3)</a>, <a href="../man3/SSL_get_event_timeout.html">SSL_get_event_timeout(3)</a>, <a href="../man3/SSL_get_rpoll_descriptor.html">SSL_get_rpoll_descriptor(3)</a>, <a href="../man3/SSL_get_wpoll_descriptor.html">SSL_get_wpoll_descriptor(3)</a>, <a href="../man7/bio.html">bio(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The BIO_get_rpoll_descriptor() and BIO_get_wpoll_descriptor() functions were added in OpenSSL 3.2.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2022-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

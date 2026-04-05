@@ -1,0 +1,151 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>COMP_CTX_new</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>COMP_CTX_new, COMP_CTX_get_method, COMP_CTX_get_type, COMP_get_type, COMP_get_name, COMP_CTX_free, COMP_compress_block, COMP_expand_block, COMP_zlib, COMP_zlib_oneshot, COMP_brotli, COMP_brotli_oneshot, COMP_zstd, COMP_zstd_oneshot, BIO_f_zlib, BIO_f_brotli, BIO_f_zstd - Compression support</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/comp.h&gt;
+
+COMP_CTX *COMP_CTX_new(COMP_METHOD *meth);
+void COMP_CTX_free(COMP_CTX *ctx);
+const COMP_METHOD *COMP_CTX_get_method(const COMP_CTX *ctx);
+int COMP_CTX_get_type(const COMP_CTX* comp);
+int COMP_get_type(const COMP_METHOD *meth);
+const char *COMP_get_name(const COMP_METHOD *meth);
+
+int COMP_compress_block(COMP_CTX *ctx, unsigned char *out, int olen,
+                        unsigned char *in, int ilen);
+int COMP_expand_block(COMP_CTX *ctx, unsigned char *out, int olen,
+                      unsigned char *in, int ilen);
+
+COMP_METHOD *COMP_zlib(void);
+COMP_METHOD *COMP_zlib_oneshot(void);
+COMP_METHOD *COMP_brotli(void);
+COMP_METHOD *COMP_brotli_oneshot(void);
+COMP_METHOD *COMP_zstd(void);
+COMP_METHOD *COMP_zstd_oneshot(void);
+
+const BIO_METHOD *BIO_f_zlib(void);
+const BIO_METHOD *BIO_f_brotli(void);
+const BIO_METHOD *BIO_f_zstd(void);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>These functions provide compression support for OpenSSL. Compression is used within the OpenSSL library to support TLS record and certificate compression.</p>
+
+<p>COMP_CTX_new() is used to create a new <b>COMP_CTX</b> structure used to compress data.</p>
+
+<p>COMP_CTX_free() is used to free the returned <b>COMP_CTX</b>. If the argument is NULL, nothing is done.</p>
+
+<p>COMP_CTX_get_method() returns the <b>COMP_METHOD</b> of the given <i>ctx</i>.</p>
+
+<p>COMP_CTX_get_type() and COMP_get_type() return the NID for the <b>COMP_CTX</b> and <b>COMP_METHOD</b>, respectively. COMP_get_name() returns the name of the algorithm of the given <b>COMP_METHOD</b>.</p>
+
+<p>COMP_compress_block() compresses <b>ilen</b> bytes from the buffer <i>in</i> into the buffer <b>out</b> of size <i>olen</i> using the algorithm specified by <i>ctx</i>.</p>
+
+<p>COMP_expand_block() expands <i>ilen</i> bytes from the buffer <i>in</i> into the buffer <i>out</i> of size <i>olen</i> using the algorithm specified by <i>ctx</i>.</p>
+
+<p>Methods (<b>COMP_METHOD</b>) may be specified by one of these functions. These functions will be available even if their corresponding compression algorithm is not configured into the OpenSSL library. In such a case, NULL will be returned.</p>
+
+<ul>
+
+<li><p>COMP_zlib() returns a <b>COMP_METHOD</b> for stream-based ZLIB compression.</p>
+
+</li>
+<li><p>COMP_zlib_oneshot() returns a <b>COMP_METHOD</b> for one-shot ZLIB compression.</p>
+
+</li>
+<li><p>COMP_brotli() returns a <b>COMP_METHOD</b> for stream-based Brotli compression.</p>
+
+</li>
+<li><p>COMP_brotli_oneshot() returns a <b>COMP_METHOD</b> for one-shot Brotli compression.</p>
+
+</li>
+<li><p>COMP_zstd() returns a <b>COMP_METHOD</b> for stream-based Zstandard compression.</p>
+
+</li>
+<li><p>COMP_zstd_oneshot() returns a <b>COMP_METHOD</b> for one-shot Zstandard compression.</p>
+
+</li>
+</ul>
+
+<p>BIO_f_zlib(), BIO_f_brotli() BIO_f_zstd() each return a <b>BIO_METHOD</b> that may be used to create a <b>BIO</b> via <b>BIO_new(3)</b> to read and write compressed files or streams. The functions are only available if the corresponding algorithm is compiled into the OpenSSL library. NULL may be returned if the algorithm fails to load dynamically.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>While compressing non-compressible data, the output may be larger than the input. Care should be taken to size output buffers appropriate for both compression and expansion.</p>
+
+<p>Compression support and compression algorithms must be enabled and built into the library before use. Refer to the INSTALL.md file when configuring OpenSSL.</p>
+
+<p>ZLIB may be found at <a href="https://zlib.net">https://zlib.net</a></p>
+
+<p>Brotli may be found at <a href="https://github.com/google/brotli">https://github.com/google/brotli</a>.</p>
+
+<p>Zstandard may be found at <a href="https://github.com/facebook/zstd">https://github.com/facebook/zstd</a>.</p>
+
+<p>Compression of SSL/TLS records is not recommended, as it has been shown to lead to the CRIME attack <a href="https://en.wikipedia.org/wiki/CRIME">https://en.wikipedia.org/wiki/CRIME</a>. It is disabled by default, and may be enabled by clearing the SSL_OP_NO_COMPRESSION option and setting the security level as appropriate. See the documentation for the <a href="../man3/SSL_CTX_set_options.html">SSL_CTX_set_options(3)</a> and <a href="../man3/SSL_set_options.html">SSL_set_options(3)</a> functions.</p>
+
+<p>Compression is also used to support certificate compression as described in RFC8879 <a href="https://datatracker.ietf.org/doc/html/rfc8879">https://datatracker.ietf.org/doc/html/rfc8879</a>. It may be disabled via the SSL_OP_NO_TX_CERTIFICATE_COMPRESSION and SSL_OP_NO_RX_CERTIFICATE_COMPRESSION options of the <a href="../man3/SSL_CTX_set_options.html">SSL_CTX_set_options(3)</a> or <a href="../man3/SSL_set_options.html">SSL_set_options(3)</a> functions.</p>
+
+<p>COMP_zlib(), COMP_brotli() and COMP_zstd() are stream-based compression methods. Internal state (including compression dictionary) is maintained between calls. If an error is returned, the stream is corrupted, and should be closed.</p>
+
+<p>COMP_zlib_oneshot(), COMP_brotli_oneshot() and COMP_zstd_oneshot() are not stream-based. These methods do not maintain state between calls. An error in one call does not affect future calls.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>COMP_CTX_new() returns a <b>COMP_CTX</b> on success, or NULL on failure.</p>
+
+<p>COMP_CTX_get_method(), COMP_zlib(), COMP_zlib_oneshot(), COMP_brotli(), COMP_brotli_oneshot(), COMP_zstd(), and COMP_zstd_oneshot() return a <b>COMP_METHOD</b> on success, or NULL on failure.</p>
+
+<p>COMP_CTX_get_type() and COMP_get_type() return a NID value. On failure, NID_undef is returned.</p>
+
+<p>COMP_compress_block() and COMP_expand_block() return the number of bytes stored in the output buffer <i>out</i>. This may be 0. On failure, -1 is returned.</p>
+
+<p>COMP_get_name() returns a <b>const char *</b> that must not be freed on success, or NULL on failure.</p>
+
+<p>BIO_f_zlib(), BIO_f_brotli() and BIO_f_zstd() return NULL on error, and a <b>BIO_METHOD</b> on success.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/BIO_new.html">BIO_new(3)</a>, <a href="../man3/SSL_CTX_set_options.html">SSL_CTX_set_options(3)</a>, <a href="../man3/SSL_set_options.html">SSL_set_options(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>Brotli and Zstandard functions were added in OpenSSL 3.2.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2022-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

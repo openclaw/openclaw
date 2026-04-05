@@ -1,0 +1,169 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_CTX_set_session_ticket_cb</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_CTX_set_session_ticket_cb, SSL_SESSION_get0_ticket_appdata, SSL_SESSION_set1_ticket_appdata, SSL_CTX_generate_session_ticket_fn, SSL_CTX_decrypt_session_ticket_fn - manage session ticket application data</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+typedef int (*SSL_CTX_generate_session_ticket_fn)(SSL *s, void *arg);
+typedef SSL_TICKET_RETURN (*SSL_CTX_decrypt_session_ticket_fn)(SSL *s, SSL_SESSION *ss,
+                                                               const unsigned char *keyname,
+                                                               size_t keyname_len,
+                                                               SSL_TICKET_STATUS status,
+                                                               void *arg);
+int SSL_CTX_set_session_ticket_cb(SSL_CTX *ctx,
+                                  SSL_CTX_generate_session_ticket_fn gen_cb,
+                                  SSL_CTX_decrypt_session_ticket_fn dec_cb,
+                                  void *arg);
+int SSL_SESSION_set1_ticket_appdata(SSL_SESSION *ss, const void *data, size_t len);
+int SSL_SESSION_get0_ticket_appdata(SSL_SESSION *ss, void **data, size_t *len);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_CTX_set_set_session_ticket_cb() sets the application callbacks <b>gen_cb</b> and <b>dec_cb</b> that are used by a server to set and get application data stored with a session, and placed into a session ticket. Either callback function may be set to NULL. The value of <b>arg</b> is passed to the callbacks.</p>
+
+<p><b>gen_cb</b> is the application defined callback invoked when a session ticket is about to be created. The application can call SSL_SESSION_set1_ticket_appdata() at this time to add application data to the session ticket. The value of <b>arg</b> is the same as that given to SSL_CTX_set_session_ticket_cb(). The <b>gen_cb</b> callback is defined as type <b>SSL_CTX_generate_session_ticket_fn</b>.</p>
+
+<p><b>dec_cb</b> is the application defined callback invoked after session ticket decryption has been attempted and any session ticket application data is available. If ticket decryption was successful then the <b>ss</b> argument contains the session data. The <b>keyname</b> and <b>keyname_len</b> arguments identify the key used to decrypt the session ticket. The <b>status</b> argument is the result of the ticket decryption. See the <a href="#NOTES">&quot;NOTES&quot;</a> section below for further details. The value of <b>arg</b> is the same as that given to SSL_CTX_set_session_ticket_cb(). The <b>dec_cb</b> callback is defined as type <b>SSL_CTX_decrypt_session_ticket_fn</b>.</p>
+
+<p>SSL_SESSION_set1_ticket_appdata() sets the application data specified by <b>data</b> and <b>len</b> into <b>ss</b> which is then placed into any generated session tickets. It can be called at any time before a session ticket is created to update the data placed into the session ticket. However, given that sessions and tickets are created by the handshake, the <b>gen_cb</b> is provided to notify the application that a session ticket is about to be generated.</p>
+
+<p>SSL_SESSION_get0_ticket_appdata() assigns <b>data</b> to the session ticket application data and assigns <b>len</b> to the length of the session ticket application data from <b>ss</b>. The application data can be set via SSL_SESSION_set1_ticket_appdata() or by a session ticket. NULL will be assigned to <b>data</b> and 0 will be assigned to <b>len</b> if there is no session ticket application data. SSL_SESSION_get0_ticket_appdata() can be called any time after a session has been created. The <b>dec_cb</b> is provided to notify the application that a session ticket has just been decrypted.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>When the <b>dec_cb</b> callback is invoked, the SSL_SESSION <b>ss</b> has not yet been assigned to the SSL <b>s</b>. The <b>status</b> indicates the result of the ticket decryption. The callback must check the <b>status</b> value before performing any action, as it is called even if ticket decryption fails.</p>
+
+<p>The <b>keyname</b> and <b>keyname_len</b> arguments to <b>dec_cb</b> may be used to identify the key that was used to encrypt the session ticket.</p>
+
+<p>The <b>status</b> argument can be any of these values:</p>
+
+<dl>
+
+<dt id="SSL_TICKET_EMPTY">SSL_TICKET_EMPTY</dt>
+<dd>
+
+<p>Empty ticket present. No ticket data will be used and a new ticket should be sent to the client. This only occurs in TLSv1.2 or below. In TLSv1.3 it is not valid for a client to send an empty ticket.</p>
+
+</dd>
+<dt id="SSL_TICKET_NO_DECRYPT">SSL_TICKET_NO_DECRYPT</dt>
+<dd>
+
+<p>The ticket couldn&#39;t be decrypted. No ticket data will be used and a new ticket should be sent to the client.</p>
+
+</dd>
+<dt id="SSL_TICKET_SUCCESS">SSL_TICKET_SUCCESS</dt>
+<dd>
+
+<p>A ticket was successfully decrypted, any session ticket application data should be available. A new ticket should not be sent to the client.</p>
+
+</dd>
+<dt id="SSL_TICKET_SUCCESS_RENEW">SSL_TICKET_SUCCESS_RENEW</dt>
+<dd>
+
+<p>Same as <b>SSL_TICKET_SUCCESS</b>, but a new ticket should be sent to the client.</p>
+
+</dd>
+</dl>
+
+<p>The return value can be any of these values:</p>
+
+<dl>
+
+<dt id="SSL_TICKET_RETURN_ABORT">SSL_TICKET_RETURN_ABORT</dt>
+<dd>
+
+<p>The handshake should be aborted, either because of an error or because of some policy. Note that in TLSv1.3 a client may send more than one ticket in a single handshake. Therefore, just because one ticket is unacceptable it does not mean that all of them are. For this reason this option should be used with caution.</p>
+
+</dd>
+<dt id="SSL_TICKET_RETURN_IGNORE">SSL_TICKET_RETURN_IGNORE</dt>
+<dd>
+
+<p>Do not use a ticket (if one was available). Do not send a renewed ticket to the client.</p>
+
+</dd>
+<dt id="SSL_TICKET_RETURN_IGNORE_RENEW">SSL_TICKET_RETURN_IGNORE_RENEW</dt>
+<dd>
+
+<p>Do not use a ticket (if one was available). Send a renewed ticket to the client.</p>
+
+<p>If the callback does not wish to change the default ticket behaviour then it should return this value if <b>status</b> is <b>SSL_TICKET_EMPTY</b> or <b>SSL_TICKET_NO_DECRYPT</b>.</p>
+
+</dd>
+<dt id="SSL_TICKET_RETURN_USE">SSL_TICKET_RETURN_USE</dt>
+<dd>
+
+<p>Use the ticket. Do not send a renewed ticket to the client. It is an error for the callback to return this value if <b>status</b> has a value other than <b>SSL_TICKET_SUCCESS</b> or <b>SSL_TICKET_SUCCESS_RENEW</b>.</p>
+
+<p>If the callback does not wish to change the default ticket behaviour then it should return this value if <b>status</b> is <b>SSL_TICKET_SUCCESS</b>.</p>
+
+</dd>
+<dt id="SSL_TICKET_RETURN_USE_RENEW">SSL_TICKET_RETURN_USE_RENEW</dt>
+<dd>
+
+<p>Use the ticket. Send a renewed ticket to the client. It is an error for the callback to return this value if <b>status</b> has a value other than <b>SSL_TICKET_SUCCESS</b> or <b>SSL_TICKET_SUCCESS_RENEW</b>.</p>
+
+<p>If the callback does not wish to change the default ticket behaviour then it should return this value if <b>status</b> is <b>SSL_TICKET_SUCCESS_RENEW</b>.</p>
+
+</dd>
+</dl>
+
+<p>If <b>status</b> has the value <b>SSL_TICKET_EMPTY</b> or <b>SSL_TICKET_NO_DECRYPT</b> then no session data will be available and the callback must not use the <b>ss</b> argument. If <b>status</b> has the value <b>SSL_TICKET_SUCCESS</b> or <b>SSL_TICKET_SUCCESS_RENEW</b> then the application can call SSL_SESSION_get0_ticket_appdata() using the session provided in the <b>ss</b> argument to retrieve the application data.</p>
+
+<p>When the <b>gen_cb</b> callback is invoked, the SSL_get_session() function can be used to retrieve the SSL_SESSION for SSL_SESSION_set1_ticket_appdata().</p>
+
+<p>By default, in TLSv1.2 and below, a new session ticket is not issued on a successful resumption and therefore <b>gen_cb</b> will not be called. In TLSv1.3 the default behaviour is to always issue a new ticket on resumption. In both cases this behaviour can be changed if a ticket key callback is in use (see <a href="../man3/SSL_CTX_set_tlsext_ticket_key_cb.html">SSL_CTX_set_tlsext_ticket_key_cb(3)</a>).</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>The SSL_CTX_set_session_ticket_cb(), SSL_SESSION_set1_ticket_appdata() and SSL_SESSION_get0_ticket_appdata() functions return 1 on success and 0 on failure.</p>
+
+<p>The <b>gen_cb</b> callback must return 1 to continue the connection. A return of 0 will terminate the connection with an INTERNAL_ERROR alert.</p>
+
+<p>The <b>dec_cb</b> callback must return a value as described in <a href="#NOTES">&quot;NOTES&quot;</a> above.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a>, <a href="../man3/SSL_get_session.html">SSL_get_session(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The SSL_CTX_set_session_ticket_cb(), SSL_SESSION_set1_ticket_appdata() and SSL_SESSION_get_ticket_appdata() functions were added in OpenSSL 1.1.1.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2017-2020 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

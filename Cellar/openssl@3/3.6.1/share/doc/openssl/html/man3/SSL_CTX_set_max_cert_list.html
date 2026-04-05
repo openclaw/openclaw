@@ -1,0 +1,81 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_CTX_set_max_cert_list</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_CTX_set_max_cert_list, SSL_CTX_get_max_cert_list, SSL_set_max_cert_list, SSL_get_max_cert_list - manipulate allowed size for the peer&#39;s certificate chain</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+long SSL_CTX_set_max_cert_list(SSL_CTX *ctx, long size);
+long SSL_CTX_get_max_cert_list(SSL_CTX *ctx);
+
+long SSL_set_max_cert_list(SSL *ssl, long size);
+long SSL_get_max_cert_list(SSL *ctx);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_CTX_set_max_cert_list() sets the maximum size allowed for the peer&#39;s certificate chain for all SSL objects created from <b>ctx</b> to be &lt;size&gt; bytes. The SSL objects inherit the setting valid for <b>ctx</b> at the time <a href="../man3/SSL_new.html">SSL_new(3)</a> is being called.</p>
+
+<p>SSL_CTX_get_max_cert_list() returns the currently set maximum size for <b>ctx</b>.</p>
+
+<p>SSL_set_max_cert_list() sets the maximum size allowed for the peer&#39;s certificate chain for <b>ssl</b> to be &lt;size&gt; bytes. This setting stays valid until a new value is set.</p>
+
+<p>SSL_get_max_cert_list() returns the currently set maximum size for <b>ssl</b>.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>During the handshake process, the peer may send a certificate chain. The TLS/SSL standard does not give any maximum size of the certificate chain. The OpenSSL library handles incoming data by a dynamically allocated buffer. In order to prevent this buffer from growing without bounds due to data received from a faulty or malicious peer, a maximum size for the certificate chain is set.</p>
+
+<p>The default value for the maximum certificate chain size is 100kB (30kB on the 16-bit DOS platform). This should be sufficient for usual certificate chains (OpenSSL&#39;s default maximum chain length is 10, see <a href="../man3/SSL_CTX_set_verify.html">SSL_CTX_set_verify(3)</a>, and certificates without special extensions have a typical size of 1-2kB).</p>
+
+<p>For special applications it can be necessary to extend the maximum certificate chain size allowed to be sent by the peer, see e.g. the work on &quot;Internet X.509 Public Key Infrastructure Proxy Certificate Profile&quot; and &quot;TLS Delegation Protocol&quot; at http://www.ietf.org/ and http://www.globus.org/ .</p>
+
+<p>Under normal conditions it should never be necessary to set a value smaller than the default, as the buffer is handled dynamically and only uses the memory actually required by the data sent by the peer.</p>
+
+<p>If the maximum certificate chain size allowed is exceeded, the handshake will fail with an SSL_R_EXCESSIVE_MESSAGE_SIZE error.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_CTX_set_max_cert_list() and SSL_set_max_cert_list() return the previously set value.</p>
+
+<p>SSL_CTX_get_max_cert_list() and SSL_get_max_cert_list() return the currently set value.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a>, <a href="../man3/SSL_new.html">SSL_new(3)</a>, <a href="../man3/SSL_CTX_set_verify.html">SSL_CTX_set_verify(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2001-2020 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

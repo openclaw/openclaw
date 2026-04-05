@@ -1,0 +1,112 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+        "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+ <head>
+  <meta name="generator" content="PSPad editor, www.pspad.com" />
+  <meta http-equiv="content-type" content="text/html; charset=UTF-8" />
+  <link rel="stylesheet" type="text/css" href="styles/lame.css" />
+	<title>LAME MP3 Encoder ::Average Bit Rate (ABR)</title>
+ </head>
+ <body>
+<div id="menu">
+	<ul>
+		<li><a href="index.html">Index page</a></li>
+		<li><a href="about.html">About LAME</a></li>
+		<li><a style="border: 0" href="introduction.html">Intro to encoding</a>
+    <div id="submenu">
+    	<ul>
+    		<li><a href="cbr.html">CBR </a></li>
+    		<li><a href="abr.html">ABR </a></li>
+        <li><a href="vbr.html">VBR </a></li>
+        <li><a style="border: 0" href="ms_stereo.html">M/S Stereo</a></li>
+    	</ul>
+    </div>
+    </li>
+		<li><a href="usage.html">Usage of LAME</a></li>
+		<li><a href="history.html">Version history</a></li>
+		<li><a href="contributors.html">Coders of LAME</a></li>
+		<li><a href="contact.html">Contact LAME</a></li>
+		<li><a style="border: 0" href="links.html">LAME links</a></li>
+	</ul>
+</div>
+<div id="container">
+<div id="content">
+
+<div align="center">
+	<img src="images/logo.gif" width="358" height="231" alt="LAME Official Logo" />
+	<h2 class="hilight">LAME - Average Bit Rate (ABR)</h2>
+</div>
+
+<p>Suggested usage:</p>
+<blockquote class="code">lame --abr 128 input.wav output.mp3</blockquote>
+			
+<p>
+  ABR is a mix between CBR and VBR.
+</p>
+<p>
+  Like CBR, the files will have the (approximate) bitrate specified in the
+  commandline, and uses the CBR algorithm to compute the number of bits needed
+  to encode each frame.<br/>
+</p>
+
+<p>
+  Like VBR, the files will use different frame bitrates so instead of relying on
+  bit reservoir like CBR, each frame just uses the smallest possible bitrate
+  that can encode it.
+</p>
+
+<p>
+	The difference between ABR and true VBR is in how the desired number of bits
+	is chosen. The true VBR mode determines the number of bits based on the
+	quantization noise. VBR figures out how many bits are needed so that the
+	quantization noise is less than the allowed masking.
+</p>
+
+<p>
+	ABR mode uses the CBR formula to determine the desired number of bits. This
+	formula is based on the perceptual entropy, which is a rough measure of how
+	difficult the frame is to encode.
+</p>
+<p>
+The majority of frames in a VBR MP3 produced with an ABR method is normally at
+or near the target bitrate chosen by the user, but each frame can still
+potentially vary within the normal range of 8 to 320 kbps. The ABR encoder will
+typically limit the range of bitrates it can choose from, or will greatly favor
+certain bitrates, in an effort to ensure that the average comes out near the
+target.
+</p>
+
+<h3>Who should use ABR</h3>
+
+<p>
+ABR encoding is desirable for users who want the general benefits of VBR (an
+optimum bitrate from frame to frame) but with a relatively predictable file size
+like they would get with constant bitrate (CBR), and a greater preference for
+bitrates that are near a desired target. Inevitably, some frames will be encoded
+with more bits than necessary, but the result will always be equal to or better
+than that of CBR for the target bitrate.
+</p>
+
+</div>
+<div id="footer">
+
+<a href="http://sourceforge.net/projects/lame"><img src="http://sflogo.sourceforge.net/sflogo.php?group_id=290&amp;type=12"
+ alt="Get LAME (Lame Aint an MP3 Encoder) at SourceForge.net. Fast, secure and Free Open Source software downloads"
+ border="0" height="30" width="120" /></a>
+
+<a href="http://validator.w3.org/#validate_by_upload"><img src="images/valid-xhtml10.png"
+ alt="Valid XHTML 1.0 Transitional" border="0" height="31" width="88" /></a>
+
+<a href="http://jigsaw.w3.org/css-validator/"><img src="images/valid-css.png"
+ alt="Valid CSS!" border="0" height="31" width="88" /></a>
+
+<p>HTML markup and design by <a
+href="http://www.rjamorim.com" target="_blank">Roberto Amorim</a> and <a
+href="http://www.maresweb.de" target="_blank">Sebastian Mares</a>. Logo by <a 
+href="http://www.brightercreative.co.uk">Sam Fisher</a>.</p>
+
+</div>
+</div>
+
+</body>
+</html>

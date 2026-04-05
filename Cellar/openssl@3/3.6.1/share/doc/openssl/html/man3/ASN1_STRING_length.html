@@ -1,0 +1,107 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>ASN1_STRING_length</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>ASN1_STRING_dup, ASN1_STRING_cmp, ASN1_STRING_set, ASN1_STRING_length, ASN1_STRING_type, ASN1_STRING_get0_data, ASN1_STRING_data, ASN1_STRING_to_UTF8 - ASN1_STRING utility functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/asn1.h&gt;
+
+int ASN1_STRING_length(ASN1_STRING *x);
+const unsigned char *ASN1_STRING_get0_data(const ASN1_STRING *x);
+unsigned char *ASN1_STRING_data(ASN1_STRING *x);
+
+ASN1_STRING *ASN1_STRING_dup(const ASN1_STRING *a);
+
+int ASN1_STRING_cmp(ASN1_STRING *a, ASN1_STRING *b);
+
+int ASN1_STRING_set(ASN1_STRING *str, const void *data, int len);
+
+int ASN1_STRING_type(const ASN1_STRING *x);
+
+int ASN1_STRING_to_UTF8(unsigned char **out, const ASN1_STRING *in);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>These functions allow an <b>ASN1_STRING</b> structure to be manipulated.</p>
+
+<p>ASN1_STRING_length() returns the length of the content of <i>x</i>. <i>x</i> <b>MUST NOT</b> be NULL.</p>
+
+<p>ASN1_STRING_get0_data() returns an internal pointer to the data of <i>x</i>. Since this is an internal pointer it should <b>not</b> be freed or modified in any way. <i>x</i> <b>MUST NOT</b> be NULL.</p>
+
+<p>ASN1_STRING_data() is similar to ASN1_STRING_get0_data() except the returned value is not constant. This function is deprecated: applications should use ASN1_STRING_get0_data() instead.</p>
+
+<p>ASN1_STRING_dup() returns a copy of the structure <i>a</i>.</p>
+
+<p>ASN1_STRING_cmp() compares <i>a</i> and <i>b</i> returning 0 if the two are identical. The string types and content are compared.</p>
+
+<p>ASN1_STRING_set() sets the data of string <i>str</i> to the buffer <i>data</i> or length <i>len</i>. The supplied data is copied. If <i>len</i> is -1 then the length is determined by strlen(data).</p>
+
+<p>ASN1_STRING_type() returns the type of <i>x</i>, using standard constants such as <b>V_ASN1_OCTET_STRING</b>.</p>
+
+<p>ASN1_STRING_to_UTF8() converts the string <i>in</i> to UTF8 format, the converted data is allocated in a buffer in <i>*out</i>. The length of <i>out</i> is returned or a negative error code. The buffer <i>*out</i> should be freed using OPENSSL_free().</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>Almost all ASN1 types in OpenSSL are represented as an <b>ASN1_STRING</b> structure. Other types such as <b>ASN1_OCTET_STRING</b> are simply typedef&#39;ed to <b>ASN1_STRING</b> and the functions call the <b>ASN1_STRING</b> equivalents. <b>ASN1_STRING</b> is also used for some <b>CHOICE</b> types which consist entirely of primitive string types such as <b>DirectoryString</b> and <b>Time</b>.</p>
+
+<p>These functions should <b>not</b> be used to examine or modify <b>ASN1_INTEGER</b> or <b>ASN1_ENUMERATED</b> types: the relevant <b>INTEGER</b> or <b>ENUMERATED</b> utility functions should be used instead.</p>
+
+<p>In general it cannot be assumed that the data returned by ASN1_STRING_data() is null terminated or does not contain embedded nulls. The actual format of the data will depend on the actual string type itself: for example for an IA5String the data will be ASCII, for a BMPString two bytes per character in big endian format, and for a UTF8String it will be in UTF8 format.</p>
+
+<p>Similar care should be take to ensure the data is in the correct format when calling ASN1_STRING_set().</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>ASN1_STRING_length() returns the length of the content of <i>x</i>.</p>
+
+<p>ASN1_STRING_get0_data() and ASN1_STRING_data() return an internal pointer to the data of <i>x</i>.</p>
+
+<p>ASN1_STRING_dup() returns a valid <b>ASN1_STRING</b> structure or NULL if an error occurred.</p>
+
+<p>ASN1_STRING_cmp() returns an integer greater than, equal to, or less than 0, according to whether <i>a</i> is greater than, equal to, or less than <i>b</i>.</p>
+
+<p>ASN1_STRING_set() returns 1 on success or 0 on error.</p>
+
+<p>ASN1_STRING_type() returns the type of <i>x</i>.</p>
+
+<p>ASN1_STRING_to_UTF8() returns the number of bytes in output string <i>out</i> or a negative value if an error occurred.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ERR_get_error.html">ERR_get_error(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2002-2020 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

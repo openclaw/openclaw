@@ -1,0 +1,91 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_CTX_get0_param</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_CTX_get0_param, SSL_get0_param, SSL_CTX_set1_param, SSL_set1_param, SSL_CTX_set_purpose, SSL_CTX_set_trust, SSL_set_purpose, SSL_set_trust - get and set verification parameters</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+X509_VERIFY_PARAM *SSL_CTX_get0_param(SSL_CTX *ctx);
+X509_VERIFY_PARAM *SSL_get0_param(SSL *ssl);
+int SSL_CTX_set1_param(SSL_CTX *ctx, X509_VERIFY_PARAM *vpm);
+int SSL_set1_param(SSL *ssl, X509_VERIFY_PARAM *vpm);
+
+int SSL_CTX_set_purpose(SSL_CTX *ctx, int purpose);
+int SSL_set_purpose(SSL *ssl, int purpose);
+
+int SSL_CTX_set_trust(SSL_CTX *ctx, int trust);
+int SSL_set_trust(SSL *ssl, int trust);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_CTX_get0_param() and SSL_get0_param() retrieve an internal pointer to the verification parameters for <b>ctx</b> or <b>ssl</b> respectively. The returned pointer must not be freed by the calling application.</p>
+
+<p>SSL_CTX_set1_param() and SSL_set1_param() set the verification parameters to <b>vpm</b> for <b>ctx</b> or <b>ssl</b>.</p>
+
+<p>The functions SSL_CTX_set_purpose() and SSL_set_purpose() are shorthands which set the purpose parameter on the verification parameters object. These functions are equivalent to calling X509_VERIFY_PARAM_set_purpose() directly.</p>
+
+<p>The functions SSL_CTX_set_trust() and SSL_set_trust() are similarly shorthands which set the trust parameter on the verification parameters object. These functions are equivalent to calling X509_VERIFY_PARAM_set_trust() directly.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>Typically parameters are retrieved from an <b>SSL_CTX</b> or <b>SSL</b> structure using SSL_CTX_get0_param() or SSL_get0_param() and an application modifies them to suit its needs: for example to add a hostname check.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SSL_CTX_get0_param() and SSL_get0_param() return a pointer to an <b>X509_VERIFY_PARAM</b> structure.</p>
+
+<p>SSL_CTX_set1_param(), SSL_set1_param(), SSL_CTX_set_purpose(), SSL_set_purpose(), SSL_CTX_set_trust() and SSL_set_trust() return 1 for success and 0 for failure.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>Check hostname matches &quot;www.foo.com&quot; in peer certificate:</p>
+
+<pre><code>X509_VERIFY_PARAM *vpm = SSL_get0_param(ssl);
+X509_VERIFY_PARAM_set1_host(vpm, &quot;www.foo.com&quot;, 0);</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a>, <a href="../man3/X509_VERIFY_PARAM_set_flags.html">X509_VERIFY_PARAM_set_flags(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>These functions were added in OpenSSL 1.0.2.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2015-2022 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

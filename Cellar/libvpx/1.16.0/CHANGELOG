@@ -1,0 +1,1160 @@
+2026-01-06 v1.16.0 "Xenonetta Duck"
+  This release includes Arm SVE2 and Neon optimizations for 12-tap filters,
+  AVX512 implementations for SAD, support for per-frame and per-spatial-layer
+  PSNR calculation, and numerous bug fixes.
+
+  - Upgrading:
+    This release is ABI incompatible with the previous release.
+
+    Unit tests require C++17 to build.
+
+    Support for 32-bit iOS targets (armv7, armv7s, and i386) has been removed.
+
+  - Enhancement:
+    Optimized Arm SVE2 and Neon implementations for 12-tap convolution filters.
+    Optimized Neon High Bitdepth (HBD) SAD and sad_avg functions.
+    Added Arm Neon DotProd and I8MM implementations for vpx_convolve12.
+    Added AVX512 implementations for SAD64 and sad_skip functions.
+    Added SSSE3 and AVX2 implementations for 12-tap temporal filter prediction.
+    Added support for per-frame and per-spatial-layer PSNR calculation.
+
+    Adjusted temporal filter strength to improve visual quality and reduce block
+    artifacts.
+
+    Added support for darwin24 (macOS 15) and darwin25 (macOS 26).
+    libwebm is upgraded to commit b4f01ea.
+
+  - Bug fixes:
+    Fix to heap buffer overflow in vp9_deblock, vp9_post_proc_frame, and
+    vp9_pack_bitstream.
+
+    Fix to integer overflow in vp9_highbd_post_proc, vp9_rc_regulate_q,
+    tiny_ssim, and vp9_calc_pframe_target_size_one_pass_cbr.
+
+    Fix to use-of-uninitialized-value in vp9_highbd_post_proc, mfqe, and
+    vp8_datarate_test.
+
+    Fix to out-of-bounds in log_tile_cols_from_picsize_level.
+    Fix to double free on initialization failure in vpx_codec_enc_init_multi.
+    Fix to division-by-zero crash in vpxenc with 0 FPS numerator input.
+
+    Fix to various build failures for Arm/SVE2, macOS cross-compilation, and
+    Xcode 16.
+
+2025-05-28 v1.15.2 "Wigeon Duck"
+  This release fixes CVE-2025-5283 (bug webm:413411335), and is ABI compatible
+  with the previous release.
+
+2025-01-09 v1.15.1 "Wigeon Duck"
+  This release bumps up the SO major version and fixes the language about ABI
+  compatibility in the previous release changelog.
+
+2024-10-22 v1.15.0 "Wigeon Duck"
+  This release includes new codec control for key frame filtering, more Neon
+  optimizations, improvements to RTC encoding and bug fixes.
+
+  - Upgrading:
+    This release is ABI incompatible with the previous release.
+
+    It is strongly recommended to skip this release and upgrade to v1.15.1 since
+    the shared object was versioned incorrectly, as shown in
+    https://issues.webmproject.org/issues/384672478.
+
+    Temporal filtering improvement that can be turned on with the new codec
+    control VP9E_SET_KEY_FRAME_FILTERING, which gives 1+% BD-rate saving with
+    minimal encoder time increase.
+
+    libwebm is upgraded to libwebm-1.0.0.31-10-g3b63004
+
+  - Enhancement:
+    Neon optimization speed up
+      1-3% speed up across speed 5 to 10 for RTC
+      3% speed up for speed 0 and 1 for VoD in standard bitdepth
+      3% and 7% speed up for speed 0 and 1 respectively for VoD in high bitdepth
+    Scene detection is allowed for all RTC speeds (>=5)
+    Support profile guided optimizations
+
+    Delta quantization parameters for UV channels for vp8 is supported in RTC
+    rate control library
+
+    Rate control parameters are reset and maximum QP is enforced on scene
+    changes in SVC when there is no inter-layer prediction
+
+  - Bug fixes:
+    Fix to Uninitialized scalar variable in `vp9_rd_pick_inter_mode_sb()`
+    Fix to Integer-overflow in `resize_multistep`
+    Fix to Heap-buffer-overflow in `vpx_sad64x64_avx2`
+    Fix to Crash in `vpx_sad8x8_sse2`
+    Fix to Assertion in `write_modes`
+    Support profile guided optimizations
+    Fix to Integer-overflow in `encode_frame_to_data_rate`
+    Fix to Integer-overflow in `vp9_svc_check_reset_layer_rc_flag`
+    Fix to core dump error from /usr/bin/tools/tiny_ssim --help
+    Fix to use-of-uninitialized-value in `vp9_setup_tpl_stats`
+    Fix to Undefined-shift in `vp9_cyclic_refresh_setup`
+    Fix to redundant `&& __GNUC__` preproc check
+    Fix to valgrind warning in EncodeAPI.OssFuzz69906
+    Fix to Index-out-of-bounds in `vp8_rd_pick_inter_mode`
+    Fix to Integer-overflow in `vp8_pick_frame_size`
+    Fix to Use-of-uninitialized-value in `vpx_codec_peek_stream_info`
+    Fix to log clutters with the message "Warning: Desired height too large"
+    Fix to Integer-overflow in `vp9_svc_adjust_avg_frame_qindex`
+
+    Fix to integer overflows caused by huge target bitrate, frame rate, or
+    g_timebase numerator or denominator
+
+    Fix to missing license headers
+    Fix to build failure for Android Armv7
+    Fix to integer overflows in image helpers
+    Fix to Integer-overflow in `vp9_calc_iframe_target_size_one_pass_cbr`
+    Fix to Heap-buffer-overflow in `vp9_pick_inter_mode`
+    Fix to Segv in `vp9_multi_thread_tile_init`
+    Fix to Use-of-uninitialized-value in `vp9_row_mt_sync_mem_dealloc`
+    Fix to Crash in `mbloop_filter_vertical_edge_c`
+    Fix to Check failed in CheckUnwind
+    Fix to Heap-buffer-overflow in `write_modes_b` and `vpx_write`
+    Fix to Possible signed integer overflow found in `vpx_codec_encode`
+    Fix to build conflicts between Abseil and libaom/libvpx in Win ARM64 builds
+    Fix to build failures on aarch64
+    Fix to Data race in libvpx ARM NEON
+    Fix to Heap-buffer-overflow in `scale_plane_1_to_2_phase_0`
+    Fix to integer overflow in `encode_mb_row`
+    Fix to Floating-point-exception in `vp8_pick_frame_size`
+    Fix to Heap-buffer-overflow in `vp9_enc_setup_mi`
+    Fix to build failure with --target=arm64-win64-vs17
+    Fix to heap-buffer-overflow write in `vpx_img_read()`
+    Fix to C vs armv8-linux-gcc encode mismatches for `y4m_360p_10bit_input`
+    Fix to Null-dereference READ in `ml_predict_var_rd_partitioning`
+    Fix to Heap-buffer-overflow in `vpx_scaled_2d_ssse3`
+    Fix to Crash in `convolve_horiz`
+    Fix to Ill in `vpx_scaled_2d_ssse3`
+    Fix to Global-buffer-overflow in `cost_coeffs`
+
+2024-05-21 v1.14.1 "Venetian Duck"
+  This release includes enhancements and bug fixes.
+
+  - Upgrading:
+    This release is ABI compatible with the previous release.
+
+  - Enhancement:
+    Improved the detection of compiler support for AArch64 extensions,
+    particularly SVE.
+
+    Added vpx_codec_get_global_headers() support for VP9.
+
+  - Bug fixes:
+    Added buffer bounds checks to vpx_writer and vpx_write_bit_buffer.
+    Fix to GetSegmentationData() crash in aq_mode=0 for RTC rate control.
+    Fix to alloc for row_base_thresh_freq_fac.
+    Free row mt memory before freeing cpi->tile_data.
+    Fix to buffer alloc for vp9_bitstream_worker_data.
+    Fix to VP8 race issue for multi-thread with pnsr_calc.
+    Fix to uv width/height in vp9_scale_and_extend_frame_ssse3.
+    Fix to integer division by zero and overflow in calc_pframe_target_size().
+    Fix to integer overflow in vpx_img_alloc() & vpx_img_wrap()(CVE-2024-5197).
+    Fix to UBSan error in vp9_rc_update_framerate().
+    Fix to UBSan errors in vp8_new_framerate().
+    Fix to integer overflow in vp8 encodeframe.c.
+    Handle EINTR from sem_wait().
+
+2024-01-02 v1.14.0 "Venetian Duck"
+  This release drops support for old C compilers, such as Visual Studio 2012
+  and older, that disallow mixing variable declarations and statements (a C99
+  feature). It adds support for run-time CPU feature detection for Arm
+  platforms, as well as support for darwin23 (macOS 14).
+
+  - Upgrading:
+    This release is ABI incompatible with the previous release.
+
+    Various new features for rate control library for real-time: SVC parallel
+    encoding, loopfilter level, support for frame dropping, and screen content.
+
+    New callback function send_tpl_gop_stats for vp9 external rate control
+    library, which can be used to transmit TPL stats for a group of pictures. A
+    public header vpx_tpl.h is added for the definition of TPL stats used in
+    this callback.
+
+    libwebm is upgraded to libwebm-1.0.0.29-9-g1930e3c.
+
+  - Enhancement:
+    Improvements on Neon optimizations: VoD: 12-35% speed up for bitdepth 8,
+    68%-151% speed up for high bitdepth.
+
+    Improvements on AVX2 and SSE optimizations.
+    Improvements on LSX optimizations for LoongArch.
+    42-49% speedup on speed 0 VoD encoding.
+    Android API level predicates.
+
+  - Bug fixes:
+    Fix to missing prototypes from the rtcd header.
+    Fix to segfault when total size is enlarged but width is smaller.
+    Fix to the build for arm64ec using MSVC.
+    Fix to copy BLOCK_8X8's mi to PICK_MODE_CONTEXT::mic.
+    Fix to -Wshadow warnings.
+    Fix to heap overflow in vpx_get4x4sse_cs_neon.
+    Fix to buffer overrun in highbd Neon subpel variance filters.
+    Added bitexact encode test script.
+    Fix to -Wl,-z,defs with Clang's sanitizers.
+    Fix to decoder stability after error & continued decoding.
+    Fix to mismatch of VP9 encode with NEON intrinsics with C only version.
+    Fix to Arm64 MSVC compile vpx_highbd_fdct4x4_neon.
+    Fix to fragments count before use.
+    Fix to a case where target bandwidth is 0 for SVC.
+    Fix mask in vp9_quantize_avx2,highbd_get_max_lane_eob.
+    Fix to int overflow in vp9_calc_pframe_target_size_one_pass_cbr.
+    Fix to integer overflow in vp8,ratectrl.c.
+    Fix to integer overflow in vp9 svc.
+    Fix to avg_frame_bandwidth overflow.
+    Fix to per frame qp for temporal layers.
+    Fix to unsigned integer overflow in sse computation.
+    Fix to uninitialized mesh feature for BEST mode.
+    Fix to overflow in highbd temporal_filter.
+    Fix to unaligned loads w/w==4 in vpx_convolve_copy_neon.
+    Skip arm64_neon.h workaround w/VS >= 2019.
+    Fix to c vs avx mismatch of diamond_search_sad().
+    Fix to c vs intrinsic mismatch of vpx_hadamard_32x32() function.
+    Fix to a bug in vpx_hadamard_32x32_neon().
+    Fix to Clang -Wunreachable-code-aggressive warnings.
+    Fix to a bug in vpx_highbd_hadamard_32x32_neon().
+    Fix to -Wunreachable-code in mfqe_partition.
+    Force mode search on 64x64 if no mode is selected.
+    Fix to ubsan failure caused by left shift of negative.
+    Fix to integer overflow in calc_pframe_target_size.
+    Fix to float-cast-overflow in vp8_change_config().
+    Fix to a null ptr before use.
+    Conditionally skip using inter frames in speed features.
+    Remove invalid reference frames.
+    Disable intra mode search speed features conditionally.
+    Set nonrd keyframe under dynamic change of deadline for rtc.
+    Fix to scaled reference offsets.
+    Set skip_recode=0 in nonrd_pick_sb_modes.
+    Fix to an edge case when downsizing to one.
+    Fix to a bug in frame scaling.
+    Fix to pred buffer stride.
+    Fix to a bug in simple motion search.
+    Update frame size in actual encoding.
+
+2023-09-29 v1.13.1 "Ugly Duckling"
+  This release contains two security related fixes. One each for VP8 and VP9.
+
+  - Upgrading:
+    This release is ABI compatible with the previous release.
+
+  - Bug fixes:
+    https://crbug.com/1486441 (CVE-2023-5217)
+    Fix to a crash related to VP9 encoding (#1642, CVE-2023-6349)
+
+2023-01-31 v1.13.0 "Ugly Duckling"
+  This release includes more Neon and AVX2 optimizations, adds a new codec
+  control to set per frame QP, upgrades GoogleTest to v1.12.1, and includes
+  numerous bug fixes.
+
+  - Upgrading:
+    This release is ABI incompatible with the previous release.
+
+    New codec control VP9E_SET_QUANTIZER_ONE_PASS to set per frame QP.
+
+    GoogleTest is upgraded to v1.12.1.
+
+    .clang-format is upgraded to clang-format-11.
+
+    VPX_EXT_RATECTRL_ABI_VERSION was bumped due to incompatible changes to the
+    feature of using external rate control models for vp9.
+
+  - Enhancement:
+    Numerous improvements on Neon optimizations.
+    Numerous improvements on AVX2 optimizations.
+    Additional ARM targets added for Visual Studio.
+
+  - Bug fixes:
+    Fix to calculating internal stats when frame dropped.
+    Fix to segfault for external resize test in vp9.
+    Fix to build system with replacing egrep with grep -E.
+    Fix to a few bugs with external RTC rate control library.
+    Fix to make SVC work with VBR.
+    Fix to key frame setting in VP9 external RC.
+    Fix to -Wimplicit-int (Clang 16).
+    Fix to VP8 external RC for buffer levels.
+    Fix to VP8 external RC for dynamic update of layers.
+    Fix to VP9 auto level.
+    Fix to off-by-one error of max w/h in validate_config.
+    Fix to make SVC work for Profile 1.
+
+2022-06-17 v1.12.0 "Torrent Duck"
+  This release adds optimizations for Loongarch, adds support for vp8 in the
+  real-time rate control library, upgrades GoogleTest to v1.11.0, updates
+  libwebm to libwebm-1.0.0.28-20-g206d268, and includes numerous bug fixes.
+
+  - Upgrading:
+    This release is ABI compatible with the previous release.
+
+    vp8 support in the real-time rate control library.
+    New codec control VP8E_SET_RTC_EXTERNAL_RATECTRL is added.
+
+    Configure support for darwin21 is added.
+
+    GoogleTest is upgraded to v1.11.0.
+
+    libwebm is updated to libwebm-1.0.0.28-20-g206d268.
+
+    Allow SimpleEncode environment to take target level as input to match
+    the level conformance in vp9.
+
+  - Enhancement:
+    Numerous improvements on checking memory allocations.
+    Optimizations for Loongarch.
+    Code clean-up.
+
+  - Bug fixes:
+    Fix to a crash related to {vp8/vp9}_set_roi_map.
+    Fix to compiling failure with -Wformat-nonliteral.
+    Fix to integer overflow with vp9 with high resolution content.
+    Fix to AddNoiseTest failure with ARMv7.
+    Fix to libvpx Null-dereference READ in vp8.
+
+2021-09-27 v1.11.0 "Smew Duck"
+  This maintenance release adds support for VBR mode in VP9 rate control
+  interface, new codec controls to get quantization parameters and loop filter
+  levels, and includes several improvements to NEON and numerous bug fixes.
+
+  - Upgrading:
+    This release is ABI incompatible with the previous release.
+    New codec control is added to get quantization parameters and loop filter
+    levels.
+
+    VBR mode is supported in VP9 rate control library.
+
+  - Enhancement:
+    Numerous improvements for Neon optimizations.
+    Code clean-up and refactoring.
+    Calculation of rd multiplier is changed with BDRATE gains.
+
+  - Bug fixes:
+    Fix to overflow on duration.
+    Fix to several instances of -Wunused-but-set-variable.
+    Fix to avoid chroma resampling for 420mpeg2 input.
+    Fix to overflow in calc_iframe_target_size.
+    Fix to disallow skipping transform and quantization.
+    Fix some -Wsign-compare warnings in simple_encode.
+    Fix input file path in simple_encode_test.
+    Fix valid range for under/over_shoot pct.
+
+2021-03-09 v1.10.0 "Ruddy Duck"
+  This maintenance release adds support for darwin20 and new codec controls, as
+  well as numerous bug fixes.
+
+  - Upgrading:
+    This release is ABI incompatible with the previous release.
+    New codec control is added to disable loopfilter for VP9.
+
+    New encoder control is added to disable feature to increase Q on overshoot
+    detection for CBR.
+
+    Configure support for darwin20 is added.
+
+    New codec control is added for VP9 rate control. The control ID of this
+    interface is VP9E_SET_EXTERNAL_RATE_CONTROL. To make VP9 use a customized
+    external rate control model, users will have to implement each callback
+    function in vpx_rc_funcs_t and register them using libvpx API
+    vpx_codec_control_() with the control ID.
+
+  - Enhancement:
+    Use -std=gnu++11 instead of -std=c++11 for c++ files.
+
+  - Bug fixes:
+    Override assembler with --as option of configure for MSVS.
+    Fix several compilation issues with gcc 4.8.5.
+    Fix to resetting rate control for temporal layers.
+    Fix to the rate control stats of SVC example encoder when number of spatial
+    layers is 1.
+    Fix to reusing motion vectors from the base spatial layer in SVC.
+    2 pass related flags removed from SVC example encoder.
+
+2020-07-29 v1.9.0 "Quacking Duck"
+  This release adds support for NV12, a separate library for rate control, as
+  well as incremental improvements.
+
+  - Upgrading:
+    This release is ABI compatible with the previous release.
+    NV12 support is added to this release.
+    A new interface is added for VP9 rate control. The new library libvp9rc.a
+    must be linked by applications.
+    Googletest is updated to v1.10.0.
+    simple_encode.cc is compiled into a new library libsimple_encode.a with
+    CONFIG_RATE_CTRL.
+
+  - Enhancement:
+    Various changes to improve VP9 SVC, rate control, quality and speed to real
+    time encoding.
+
+  - Bug fixes:
+    Fix key frame update refresh simulcast flexible svc.
+    Fix to disable_16x16part speed feature for real time encoding.
+    Fix some signed integer overflows for VP9 rate control.
+    Fix initialization of delta_q_uv.
+    Fix condition in regulate_q for cyclic refresh.
+    Various fixes to dynamic resizing for VP9 SVC.
+
+2019-12-09 v1.8.2 "Pekin Duck"
+  This release collects incremental improvements to many aspects of the library.
+
+  - Upgrading:
+    This release is ABI compatible with the previous release.
+    ARCH_* defines have been removed in favor of VPX_ARCH_*.
+
+2019-07-15 v1.8.1 "Orpington Duck"
+  This release collects incremental improvements to many aspects of the library.
+
+  - Upgrading:
+    This release is ABI incompatible with the previous release.
+    VP8E_SET_CPUUSED now accepts values up to 9 for vp9.
+    VPX_CTRL_VP9E_SET_MAX_INTER_BITRATE_PCT had a spelling fix (was VP8E).
+    The --sdk-path option has been removed. If you were using it to build for
+      Android please read build/make/Android.mk for alternatives.
+    All PPC optimizations have been disabled:
+      https://bugs.chromium.org/p/webm/issues/detail?id=1522.
+
+  - Enhancements:
+    Various changes to improve encoder rate control, quality and speed
+      for practically every use case.
+
+  - Bug fixes:
+    vp9-rtc: Fix color artifacts for speed >= 8.
+
+2019-01-31 v1.8.0 "Northern Shoveler Duck"
+  This release focused on encoding performance for realtime and VOD use cases.
+
+  - Upgrading:
+    This release is ABI incompatible with the previous release. This adds and
+    improves several vp9 controls. Most are related to SVC:
+      VP9E_SET_SVC_FRAME_DROP_LAYER:
+        - Frame dropping in SVC.
+      VP9E_SET_SVC_INTER_LAYER_PRED:
+        - Inter-layer prediction in SVC.
+      VP9E_SET_SVC_GF_TEMPORAL_REF:
+        - Enable long term temporal reference in SVC.
+      VP9E_SET_SVC_REF_FRAME_CONFIG/VP9E_GET_SVC_REF_FRAME_CONFIG:
+        - Extend and improve this control for better flexibility in setting SVC
+          pattern dynamically.
+      VP9E_SET_POSTENCODE_DROP:
+        - Allow for post-encode frame dropping (applies to non-SVC too).
+      VP9E_SET_SVC_SPATIAL_LAYER_SYNC:
+        - Enable spatial layer sync frames.
+      VP9E_SET_SVC_LAYER_ID:
+        - Extend api to specify temporal id for each spatial layers.
+      VP9E_SET_ROI_MAP:
+        - Extend Region of Interest functionality to VP9.
+
+  - Enhancements:
+    2 pass vp9 encoding has improved substantially. When using --auto-alt-ref=6,
+    we see approximately 8% for VBR and 10% for CQ. When using --auto-alt-ref=1,
+    the gains are approximately 4% for VBR and 5% for CQ.
+
+    For real-time encoding, speed 7 has improved by ~5-10%. Encodes targeted at
+    screen sharing have improved when the content changes significantly (slide
+    sharing) or scrolls. There is a new speed 9 setting for mobile devices which
+    is about 10-20% faster than speed 8.
+
+  - Bug fixes:
+    VP9 denoiser issue.
+    VP9 partition issue for 1080p.
+    VP9 rate control improvments.
+    Postprocessing Multi Frame Quality Enhancement (MFQE) issue.
+    VP8 multithread decoder issues.
+    A variety of fuzzing issues.
+
+2018-01-04 v1.7.0 "Mandarin Duck"
+  This release focused on high bit depth performance (10/12 bit) and vp9
+  encoding improvements.
+
+  - Upgrading:
+    This release is ABI incompatible due to new vp9 encoder features.
+
+    Frame parallel decoding for vp9 has been removed.
+
+  - Enhancements:
+    vp9 encoding supports additional threads with --row-mt. This can be greater
+    than the number of tiles.
+
+    Two new vp9 encoder options have been added:
+      --corpus-complexity
+      --tune-content=film
+
+    Additional tooling for respecting the vp9 "level" profiles has been added.
+
+  - Bug fixes:
+    A variety of fuzzing issues.
+    vp8 threading fix for ARM.
+    Codec control VP9_SET_SKIP_LOOP_FILTER fixed.
+    Reject invalid multi resolution configurations.
+
+2017-01-09 v1.6.1 "Long Tailed Duck"
+  This release improves upon the VP9 encoder and speeds up the encoding and
+  decoding processes.
+
+  - Upgrading:
+    This release is ABI compatible with 1.6.0.
+
+  - Enhancements:
+    Faster VP9 encoding and decoding.
+    High bit depth builds now provide similar speed for 8 bit encode and decode
+    for x86 targets. Other platforms and higher bit depth improvements are in
+    progress.
+
+  - Bug Fixes:
+    A variety of fuzzing issues.
+
+2016-07-20 v1.6.0 "Khaki Campbell Duck"
+  This release improves upon the VP9 encoder and speeds up the encoding and
+  decoding processes.
+
+  - Upgrading:
+    This release is ABI incompatible with 1.5.0 due to a new 'color_range' enum
+    in vpx_image and some minor changes to the VP8_COMP structure.
+
+    The default key frame interval for VP9 has changed from 128 to 9999.
+
+  - Enhancement:
+    A core focus has been performance for low end Intel processors. SSSE3
+    instructions such as 'pshufb' have been avoided and instructions have been
+    reordered to better accommodate the more constrained pipelines.
+
+    As a result, devices based on Celeron processors have seen substantial
+    decoding improvements. From Indian Runner Duck to Javan Whistling Duck,
+    decoding speed improved between 10 and 30%. Between Javan Whistling Duck
+    and Khaki Campbell Duck, it improved another 10 to 15%.
+
+    While Celeron benefited most, Core-i5 also improved 5% and 10% between the
+    respective releases.
+
+    Realtime performance for WebRTC for both speed and quality has received a
+    lot of attention.
+
+  - Bug Fixes:
+    A number of fuzzing issues, found variously by Mozilla, Chromium and others,
+    have been fixed and we strongly recommend updating.
+
+2015-11-09 v1.5.0 "Javan Whistling Duck"
+  This release improves upon the VP9 encoder and speeds up the encoding and
+  decoding processes.
+
+  - Upgrading:
+    This release is ABI incompatible with 1.4.0. It drops deprecated VP8
+    controls and adds a variety of VP9 controls for testing.
+
+    The vpxenc utility now prefers VP9 by default.
+
+  - Enhancements:
+    Faster VP9 encoding and decoding
+    Smaller library size by combining functions used by VP8 and VP9
+
+  - Bug Fixes:
+    A variety of fuzzing issues
+
+2015-04-03 v1.4.0 "Indian Runner Duck"
+  This release includes significant improvements to the VP9 codec.
+
+  - Upgrading:
+    This release is ABI incompatible with 1.3.0. It drops the compatibility
+    layer, requiring VPX_IMG_FMT_* instead of IMG_FMT_*, and adds several codec
+    controls for VP9.
+
+  - Enhancements:
+    Faster VP9 encoding and decoding
+    Multithreaded VP9 decoding (tile and frame-based)
+    Multithreaded VP9 encoding - on by default
+    YUV 4:2:2 and 4:4:4 support in VP9
+    10 and 12bit support in VP9
+    64bit ARM support by replacing ARM assembly with intrinsics
+
+  - Bug Fixes:
+    Fixes a VP9 bitstream issue in Profile 1. This only affected non-YUV 4:2:0
+    files.
+
+  - Known Issues:
+    Frame Parallel decoding fails for segmented and non-420 files.
+
+2013-11-15 v1.3.0 "Forest"
+  This release introduces the VP9 codec in a backward-compatible way.
+  All existing users of VP8 can continue to use the library without
+  modification. However, some VP8 options do not map to VP9 in the same manner.
+
+  The VP9 encoder in this release is not feature complete. Users interested in
+  the encoder are advised to use the git master branch and discuss issues on
+  libvpx mailing lists.
+
+  - Upgrading:
+    This release is ABI and API compatible with Duclair (v1.0.0). Users
+    of older releases should refer to the Upgrading notes in this document
+    for that release.
+
+  - Enhancements:
+      Get rid of bashisms in the main build scripts
+      Added usage info on command line options
+      Add lossless compression mode
+      Dll build of libvpx
+      Add additional Mac OS X targets: 10.7, 10.8 and 10.9 (darwin11-13)
+      Add option to disable documentation
+      configure: add --enable-external-build support
+      make: support V=1 as short form of verbose=yes
+      configure: support mingw-w64
+      configure: support hardfloat armv7 CHOSTS
+      configure: add support for android x86
+      Add estimated completion time to vpxenc
+      Don't exit on decode errors in vpxenc
+      vpxenc: support scaling prior to encoding
+      vpxdec: support scaling output
+      vpxenc: improve progress indicators with --skip
+      msvs: Don't link to winmm.lib
+      Add a new script for producing vcxproj files
+      Produce Visual Studio 10 and 11 project files
+      Produce Windows Phone project files
+      msvs-build: use msbuild for vs >= 2005
+      configure: default configure log to config.log
+      Add encoding option --static-thresh
+
+  - Speed:
+      Miscellaneous speed optimizations for VP8 and VP9.
+
+  - Quality:
+      In general, quality is consistent with the Eider release.
+
+  - Bug Fixes:
+      This release represents approximately a year of engineering effort,
+      and contains multiple bug fixes. Please refer to git history for details.
+
+
+2012-12-21 v1.2.0
+  This release acts as a checkpoint for a large amount of internal refactoring
+  and testing. It also contains a number of small bugfixes, so all users are
+  encouraged to upgrade.
+
+  - Upgrading:
+    This release is ABI and API compatible with Duclair (v1.0.0). Users
+    of older releases should refer to the Upgrading notes in this
+    document for that release.
+
+  - Enhancements:
+      VP8 optimizations for MIPS dspr2
+      vpxenc: add -quiet option
+
+  - Speed:
+      Encoder and decoder speed is consistent with the Eider release.
+
+  - Quality:
+      In general, quality is consistent with the Eider release.
+
+      Minor tweaks to ARNR filtering
+      Minor improvements to real time encoding with multiple temporal layers
+
+  - Bug Fixes:
+      Fixes multithreaded encoder race condition in loopfilter
+      Fixes multi-resolution threaded encoding
+      Fix potential encoder dead-lock after picture resize
+
+
+2012-05-09 v1.1.0 "Eider"
+  This introduces a number of enhancements, mostly focused on real-time
+  encoding. In addition, it fixes a decoder bug (first introduced in
+  Duclair) so all users of that release are encouraged to upgrade.
+
+  - Upgrading:
+    This release is ABI and API compatible with Duclair (v1.0.0). Users
+    of older releases should refer to the Upgrading notes in this
+    document for that release.
+
+    This release introduces a new temporal denoiser, controlled by the
+    VP8E_SET_NOISE_SENSITIVITY control. The temporal denoiser does not
+    currently take a strength parameter, so the control is effectively
+    a boolean - zero (off) or non-zero (on). For compatibility with
+    existing applications, the values accepted are the same as those
+    for the spatial denoiser (0-6). The temporal denoiser is enabled
+    by default, and the older spatial denoiser may be restored by
+    configuring with --disable-temporal-denoising. The temporal denoiser
+    is more computationally intensive than the spatial one.
+
+    This release removes support for a legacy, decode only API that was
+    supported, but deprecated, at the initial release of libvpx
+    (v0.9.0). This is not expected to have any impact. If you are
+    impacted, you can apply a reversion to commit 2bf8fb58 locally.
+    Please update to the latest libvpx API if you are affected.
+
+  - Enhancements:
+      Adds a motion compensated temporal denoiser to the encoder, which
+      gives higher quality than the older spatial denoiser. (See above
+      for notes on upgrading).
+
+      In addition, support for new compilers and platforms were added,
+      including:
+        improved support for XCode
+        Android x86 NDK build
+        OS/2 support
+        SunCC support
+
+      Changing resolution with vpx_codec_enc_config_set() is now
+      supported. Previously, reinitializing the codec was required to
+      change the input resolution.
+
+      The vpxenc application has initial support for producing multiple
+      encodes from the same input in one call. Resizing is not yet
+      supported, but varying other codec parameters is. Use -- to
+      delineate output streams. Options persist from one stream to the
+      next.
+
+      Also, the vpxenc application will now use a keyframe interval of
+      5 seconds by default. Use the --kf-max-dist option to override.
+
+  - Speed:
+      Decoder performance improved 2.5% versus Duclair. Encoder speed is
+      consistent with Duclair for most material. Two pass encoding of
+      slideshow-like material will see significant improvements.
+
+      Large realtime encoding speed gains at a small quality expense are
+      possible by configuring the on-the-fly bitpacking experiment with
+      --enable-onthefly-bitpacking. Realtime encoder can be up to 13%
+      faster (ARM) depending on the number of threads and bitrate
+      settings. This technique sees constant gain over the 5-16 speed
+      range. For VC style input the loss seen is up to 0.2dB. See commit
+      52cf4dca for further details.
+
+  - Quality:
+      On the whole, quality is consistent with the Duclair release. Some
+      tweaks:
+
+        Reduced blockiness in easy sections by applying a penalty to
+        intra modes.
+
+        Improved quality of static sections (like slideshows) with
+        two pass encoding.
+
+        Improved keyframe sizing with multiple temporal layers
+
+  - Bug Fixes:
+      Corrected alt-ref contribution to frame rate for visible updates
+      to the alt-ref buffer. This affected applications making manual
+      usage of the frame reference flags, or temporal layers.
+
+      Additional constraints were added to disable multi-frame quality
+      enhancement (MFQE) in sections of the frame where there is motion.
+      (#392)
+
+      Fixed corruption issues when vpx_codec_enc_config_set() was called
+      with spatial resampling enabled.
+
+      Fixed a decoder error introduced in Duclair where the segmentation
+      map was not being reinitialized on keyframes (#378)
+
+
+2012-01-27 v1.0.0 "Duclair"
+  Our fourth named release, focused on performance and features related to
+  real-time encoding. It also fixes a decoder crash bug introduced in
+  v0.9.7, so all users of that release are encouraged to upgrade.
+
+  - Upgrading:
+      This release is ABI incompatible with prior releases of libvpx, so the
+      "major" version number has been bumped to 1. You must recompile your
+      applications against the latest version of the libvpx headers. The
+      API remains compatible, and this should not require code changes in most
+      applications.
+
+  - Enhancements:
+      This release introduces several substantial new features to the encoder,
+      of particular interest to real time streaming applications.
+
+      Temporal scalability allows the encoder to produce a stream that can
+      be decimated to different frame rates, with independent rate targeting
+      for each substream.
+
+      Multiframe quality enhancement postprocessing can make visual quality
+      more consistent in the presence of frames that are substantially
+      different quality than the surrounding frames, as in the temporal
+      scalability case and in some forced keyframe scenarios.
+
+      Multiple-resolution encoding support allows the encoding of the
+      same content at different resolutions faster than encoding them
+      separately.
+
+  - Speed:
+      Optimization targets for this release included the decoder and the real-
+      time modes of the encoder. Decoder speed on x86 has improved 10.5% with
+      this release. Encoder improvements followed a curve where speeds 1-3
+      improved 4.0%-1.5%, speeds 4-8 improved <1%, and speeds 9-16 improved
+      1.5% to 10.5%, respectively. "Best" mode speed is consistent with the
+      Cayuga release.
+
+  - Quality:
+      Encoder quality in the single stream case is consistent with the Cayuga
+      release.
+
+  - Bug Fixes:
+      This release fixes an OOB read decoder crash bug present in v0.9.7
+      related to the clamping of motion vectors in SPLITMV blocks. This
+      behavior could be triggered by corrupt input or by starting
+      decoding from a P-frame.
+
+
+2011-08-15 v0.9.7-p1 "Cayuga" patch 1
+  This is an incremental bugfix release against Cayuga. All users of that
+  release are strongly encouraged to upgrade.
+
+    - Fix potential OOB reads (cdae03a)
+
+          An unbounded out of bounds read was discovered when the
+          decoder was requested to perform error concealment (new in
+          Cayuga) given a frame with corrupt partition sizes.
+
+          A bounded out of bounds read was discovered affecting all
+          versions of libvpx. Given an multipartition input frame that
+          is truncated between the mode/mv partition and the first
+          residiual paritition (in the block of partition offsets), up
+          to 3 extra bytes could have been read from the source buffer.
+          The code will not take any action regardless of the contents
+          of these undefined bytes, as the truncated buffer is detected
+          immediately following the read based on the calculated
+          starting position of the coefficient partition.
+
+    - Fix potential error concealment crash when the very first frame
+      is missing or corrupt (a609be5)
+
+    - Fix significant artifacts in error concealment (a4c2211, 99d870a)
+
+    - Revert 1-pass CBR rate control changes (e961317)
+      Further testing showed this change produced undesirable visual
+      artifacts, rolling back for now.
+
+
+2011-08-02 v0.9.7 "Cayuga"
+  Our third named release, focused on a faster, higher quality, encoder.
+
+  - Upgrading:
+    This release is backwards compatible with Aylesbury (v0.9.5) and
+    Bali (v0.9.6). Users of older releases should refer to the Upgrading
+    notes in this document for that release.
+
+  - Enhancements:
+          Stereo 3D format support for vpxenc
+          Runtime detection of available processor cores.
+          Allow specifying --end-usage by enum name
+          vpxdec: test for frame corruption
+          vpxenc: add quantizer histogram display
+          vpxenc: add rate histogram display
+          Set VPX_FRAME_IS_DROPPABLE
+          update configure for ios sdk 4.3
+          Avoid text relocations in ARM vp8 decoder
+          Generate a vpx.pc file for pkg-config.
+          New ways of passing encoded data between encoder and decoder.
+
+  - Speed:
+      This release includes across-the-board speed improvements to the
+      encoder. On x86, these measure at approximately 11.5% in Best mode,
+      21.5% in Good mode (speed 0), and 22.5% in Realtime mode (speed 6).
+      On ARM Cortex A9 with Neon extensions, real-time encoding of video
+      telephony content is 35% faster than Bali on single core and 48%
+      faster on multi-core. On the NVidia Tegra2 platform, real time
+      encoding is 40% faster than Bali.
+
+      Decoder speed was not a priority for this release, but improved
+      approximately 8.4% on x86.
+
+          Reduce motion vector search on alt-ref frame.
+          Encoder loopfilter running in its own thread
+          Reworked loopfilter to precalculate more parameters
+          SSE2/SSSE3 optimizations for build_predictors_mbuv{,_s}().
+          Make hor UV predict ~2x faster (73 vs 132 cycles) using SSSE3.
+          Removed redundant checks
+          Reduced structure sizes
+          utilize preload in ARMv6 MC/LPF/Copy routines
+          ARM optimized quantization, dfct, variance, subtract
+          Increase chrow row alignment to 16 bytes.
+          disable trellis optimization for first pass
+          Write SSSE3 sub-pixel filter function
+          Improve SSE2 half-pixel filter funtions
+          Add vp8_sub_pixel_variance16x8_ssse3 function
+          Reduce unnecessary distortion computation
+          Use diamond search to replace full search
+          Preload reference area in sub-pixel motion search (real-time mode)
+
+  - Quality:
+      This release focused primarily on one-pass use cases, including
+      video conferencing. Low latency data rate control was significantly
+      improved, improving streamability over bandwidth constrained links.
+      Added support for error concealment, allowing frames to maintain
+      visual quality in the presence of substantial packet loss.
+
+          Add rc_max_intra_bitrate_pct control
+          Limit size of initial keyframe in one-pass.
+          Improve framerate adaptation
+          Improved 1-pass CBR rate control
+          Improved KF insertion after fades to still.
+          Improved key frame detection.
+          Improved activity masking (lower PSNR impact for same SSIM boost)
+          Improved interaction between GF and ARFs
+          Adding error-concealment to the decoder.
+          Adding support for independent partitions
+          Adjusted rate-distortion constants
+
+
+  - Bug Fixes:
+          Removed firstpass motion map
+          Fix parallel make install
+          Fix multithreaded encoding for 1 MB wide frame
+          Fixed iwalsh_neon build problems with RVDS4.1
+          Fix semaphore emulation, spin-wait intrinsics on Windows
+          Fix build with xcode4 and simplify GLOBAL.
+          Mark ARM asm objects as allowing a non-executable stack.
+          Fix vpxenc encoding incorrect webm file header on big endian
+
+
+2011-03-07 v0.9.6 "Bali"
+  Our second named release, focused on a faster, higher quality, encoder.
+
+  - Upgrading:
+    This release is backwards compatible with Aylesbury (v0.9.5). Users
+    of older releases should refer to the Upgrading notes in this
+    document for that release.
+
+  - Enhancements:
+      vpxenc --psnr shows a summary when encode completes
+      --tune=ssim option to enable activity masking
+      improved postproc visualizations for development
+      updated support for Apple iOS to SDK 4.2
+      query decoder to determine which reference frames were updated
+      implemented error tracking in the decoder
+      fix pipe support on windows
+
+  - Speed:
+      Primary focus was on good quality mode, speed 0. Average improvement
+      on x86 about 40%, up to 100% on user-generated content at that speed.
+      Best quality mode speed improved 35%, and realtime speed 10-20%. This
+      release also saw significant improvement in realtime encoding speed
+      on ARM platforms.
+
+        Improved encoder threading
+        Dont pick encoder filter level when loopfilter is disabled.
+        Avoid double copying of key frames into alt and golden buffer
+        FDCT optimizations.
+        x86 sse2 temporal filter
+        SSSE3 version of fast quantizer
+        vp8_rd_pick_best_mbsegmentation code restructure
+        Adjusted breakout RD for SPLITMV
+        Changed segmentation check order
+        Improved rd_pick_intra4x4block
+        Adds armv6 optimized variance calculation
+        ARMv6 optimized sad16x16
+        ARMv6 optimized half pixel variance calculations
+        Full search SAD function optimization in SSE4.1
+        Improve MV prediction accuracy to achieve performance gain
+        Improve MV prediction in vp8_pick_inter_mode() for speed>3
+
+  - Quality:
+      Best quality mode improved PSNR 6.3%, and SSIM 6.1%. This release
+      also includes support for "activity masking," which greatly improves
+      SSIM at the expense of PSNR. For now, this feature is available with
+      the --tune=ssim option. Further experimentation in this area
+      is ongoing. This release also introduces a new rate control mode
+      called "CQ," which changes the allocation of bits within a clip to
+      the sections where they will have the most visual impact.
+
+        Tuning for the more exact quantizer.
+        Relax rate control for last few frames
+        CQ Mode
+        Limit key frame quantizer for forced key frames.
+        KF/GF Pulsing
+        Add simple version of activity masking.
+        make rdmult adaptive for intra in quantizer RDO
+        cap the best quantizer for 2nd order DC
+        change the threshold of DC check for encode breakout
+
+  - Bug Fixes:
+      Fix crash on Sparc Solaris.
+      Fix counter of fixed keyframe distance
+      ARNR filter pointer update bug fix
+      Fixed use of motion percentage in KF/GF group calc
+      Changed condition for using RD in Intra Mode
+      Fix encoder real-time only configuration.
+      Fix ARM encoder crash with multiple token partitions
+      Fixed bug first cluster timecode of webm file is wrong.
+      Fixed various encoder bugs with odd-sized images
+      vp8e_get_preview fixed when spatial resampling enabled
+      quantizer: fix assertion in fast quantizer path
+      Allocate source buffers to be multiples of 16
+      Fix for manual Golden frame frequency
+      Fix drastic undershoot in long form content
+
+
+2010-10-28 v0.9.5 "Aylesbury"
+  Our first named release, focused on a faster decoder, and a better encoder.
+
+  - Upgrading:
+    This release incorporates backwards-incompatible changes to the
+    ivfenc and ivfdec tools. These tools are now called vpxenc and vpxdec.
+
+    vpxdec
+      * the -q (quiet) option has been removed, and replaced with
+        -v (verbose). the output is quiet by default. Use -v to see
+        the version number of the binary.
+
+      * The default behavior is now to write output to a single file
+        instead of individual frames. The -y option has been removed.
+        Y4M output is the default.
+
+      * For raw I420/YV12 output instead of Y4M, the --i420 or --yv12
+        options must be specified.
+
+          $ ivfdec -o OUTPUT INPUT
+          $ vpxdec --i420 -o OUTPUT INPUT
+
+      * If an output file is not specified, the default is to write
+        Y4M to stdout. This makes piping more natural.
+
+          $ ivfdec -y -o - INPUT | ...
+          $ vpxdec INPUT | ...
+
+      * The output file has additional flexibility for formatting the
+        filename. It supports escape characters for constructing a
+        filename from the width, height, and sequence number. This
+        replaces the -p option. To get the equivalent:
+
+          $ ivfdec -p frame INPUT
+          $ vpxdec --i420 -o frame-%wx%h-%4.i420 INPUT
+
+    vpxenc
+      * The output file must be specified with -o, rather than as the
+        last argument.
+
+          $ ivfenc <options> INPUT OUTPUT
+          $ vpxenc <options> -o OUTPUT INPUT
+
+      * The output defaults to webm. To get IVF output, use the --ivf
+        option.
+
+          $ ivfenc <options> INPUT OUTPUT.ivf
+          $ vpxenc <options> -o OUTPUT.ivf --ivf INPUT
+
+
+  - Enhancements:
+      ivfenc and ivfdec have been renamed to vpxenc, vpxdec.
+      vpxdec supports .webm input
+      vpxdec writes .y4m by default
+      vpxenc writes .webm output by default
+      vpxenc --psnr now shows the average/overall PSNR at the end
+      ARM platforms now support runtime cpu detection
+      vpxdec visualizations added for motion vectors, block modes, references
+      vpxdec now silent by default
+      vpxdec --progress shows frame-by-frame timing information
+      vpxenc supports the distinction between --fps and --timebase
+      NASM is now a supported assembler
+      configure: enable PIC for shared libs by default
+      configure: add --enable-small
+      configure: support for ppc32-linux-gcc
+      configure: support for sparc-solaris-gcc
+
+  - Bugs:
+      Improve handling of invalid frames
+      Fix valgrind errors in the NEON loop filters.
+      Fix loopfilter delta zero transitions
+      Fix valgrind errors in vp8_sixtap_predict8x4_armv6().
+      Build fixes for darwin-icc
+
+  - Speed:
+      20-40% (average 28%) improvement in libvpx decoder speed,
+      including:
+        Rewrite vp8_short_walsh4x4_sse2()
+        Optimizations on the loopfilters.
+        Miscellaneous improvements for Atom
+        Add 4-tap version of 2nd-pass ARMv6 MC filter.
+        Improved multithread utilization
+        Better instruction choices on x86
+        reorder data to use wider instructions
+        Update NEON wide idcts
+        Make block access to frame buffer sequential
+        Improved subset block search
+        Bilinear subpixel optimizations for ssse3.
+        Decrease memory footprint
+
+      Encoder speed improvements (percentage gain not measured):
+        Skip unnecessary search of identical frames
+        Add SSE2 subtract functions
+        Improve bounds checking in vp8_diamond_search_sadx4()
+        Added vp8_fast_quantize_b_sse2
+
+  - Quality:
+      Over 7% overall PSNR improvement (6.3% SSIM) in "best" quality
+      encoding mode, and up to 60% improvement on very noisy, still
+      or slow moving source video
+
+        Motion compensated temporal filter for Alt-Ref Noise Reduction
+        Improved use of trellis quantization on 2nd order Y blocks
+        Tune effect of motion on KF/GF boost in two pass
+        Allow coefficient optimization for good quality speed 0.
+        Improved control of active min quantizer for two pass.
+        Enable ARFs for non-lagged compress
+
+2010-09-02 v0.9.2
+  - Enhancements:
+      Disable frame dropping by default
+      Improved multithreaded performance
+      Improved Force Key Frame Behaviour
+      Increased rate control buffer level precision
+      Fix bug in 1st pass motion compensation
+      ivfenc: correct fixed kf interval, --disable-kf
+  - Speed:
+      Changed above and left context data layout
+      Rework idct calling structure.
+      Removed unnecessary MB_MODE_INFO copies
+      x86: SSSE3 sixtap prediction
+      Reworked IDCT to include reconstruction (add) step
+      Swap alt/gold/new/last frame buffer ptrs instead of copying.
+      Improve SSE2 loopfilter functions
+      Change bitreader to use a larger window.
+      Avoid loopfilter reinitialization when possible
+  - Quality:
+      Normalize quantizer's zero bin and rounding factors
+      Add trellis quantization.
+      Make the quantizer exact.
+      Updates to ARNR filtering algorithm
+      Fix breakout thresh computation for golden & AltRef frames
+      Redo the forward 4x4 dct
+      Improve the accuracy of forward walsh-hadamard transform
+      Further adjustment of RD behaviour with Q and Zbin.
+  - Build System:
+      Allow linking of libs built with MinGW to MSVC
+      Fix target auto-detection on mingw32
+      Allow --cpu= to work for x86.
+      configure: pass original arguments through to make dist
+      Fix builds without runtime CPU detection
+      msvs: fix install of codec sources
+      msvs: Change devenv.com command line for better msys support
+      msvs: Add vs9 targets.
+      Add x86_64-linux-icc target
+  - Bugs:
+      Potential crashes on older MinGW builds
+      Fix two-pass framrate for Y4M input.
+      Fixed simple loop filter, other crashes on ARM v6
+      arm: fix missing dependency with --enable-shared
+      configure: support directories containing .o
+      Replace pinsrw (SSE) with MMX instructions
+      apple: include proper mach primatives
+      Fixed rate control bug with long key frame interval.
+      Fix DSO link errors on x86-64 when not using a version script
+      Fixed buffer selection for UV in AltRef filtering
+
+
+2010-06-17 v0.9.1
+  - Enhancements:
+      * ivfenc/ivfdec now support YUV4MPEG2 input and pipe I/O
+      * Speed optimizations
+  - Bugfixes:
+      * Rate control
+      * Prevent out-of-bounds accesses on invalid data
+  - Build system updates:
+      * Detect toolchain to be used automatically for native builds
+      * Support building shared libraries
+      * Better autotools emulation (--prefix, --libdir, DESTDIR)
+  - Updated LICENSE
+      * http://webmproject.blogspot.com/2010/06/changes-to-webm-open-source-license.html
+
+
+2010-05-18 v0.9.0
+  - Initial open source release. Welcome to WebM and VP8!
+

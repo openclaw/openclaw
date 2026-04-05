@@ -1,0 +1,62 @@
+.\"
+.\" Copyright 1998 by the Massachusetts Institute of Technology.
+.\" Copyright (C) 2004-2010 by Daniel Stenberg
+.\" SPDX-License-Identifier: MIT
+.\"
+.TH ARES_FREE_DATA 3 "5 March 2010"
+.SH NAME
+ares_free_data \- Free data allocated by several c-ares functions
+.SH SYNOPSIS
+.nf
+#include <ares.h>
+
+void ares_free_data(void *\fIdataptr\fP)
+.fi
+.SH DESCRIPTION
+.PP
+The \fBares_free_data(3)\fP function frees one or more data structures
+allocated and returned by several c-ares functions. Specifically the data
+returned by the following list of functions must be deallocated using this
+function.
+.TP 5
+.B ares_get_servers(3)
+When used to free the data returned by \fIares_get_servers(3)\fP this will
+free the whole linked list of ares_addr_node structures returned by
+\fIares_get_servers(3)\fP.
+.TP
+.B ares_parse_srv_reply(3)
+When used to free the data returned by \fIares_parse_srv_reply(3)\fP this will
+free the whole linked list of ares_srv_reply structures returned by
+\fIares_parse_srv_reply(3)\fP, along with any additional storage associated
+with those structures.
+.TP
+.B ares_parse_mx_reply(3)
+When used to free the data returned by \fIares_parse_mx_reply(3)\fP this will
+free the whole linked list of ares_mx_reply structures returned by
+\fIares_parse_mx_reply(3)\fP, along with any additional storage associated
+with those structures.
+.TP
+.B ares_parse_txt_reply(3)
+When used to free the data returned by \fIares_parse_txt_reply(3)\fP this will
+free the whole linked list of ares_txt_reply structures returned by
+\fIares_parse_txt_reply(3)\fP, along with any additional storage associated
+with those structures.
+.TP
+.B ares_parse_soa_reply(3)
+When used to free the data returned by \fIares_parse_soa_reply(3)\fP this will
+free the ares_soa_reply structure, along with any additional storage
+associated with those structure.
+.B ares_parse_uri_reply(3)
+When used to free the data returned by \fIares_parse_uri_reply(3)\fP this will
+free list of ares_uri_reply structures, along with any additional storage
+associated with those structure.
+.SH RETURN VALUE
+The \fIares_free_data(3)\fP function does not return a value.
+.SH AVAILABILITY
+This function was first introduced in c-ares version 1.7.0.
+.SH SEE ALSO
+.BR ares_get_servers (3),
+.BR ares_parse_srv_reply (3),
+.BR ares_parse_mx_reply (3),
+.BR ares_parse_txt_reply (3),
+.BR ares_parse_soa_reply (3)

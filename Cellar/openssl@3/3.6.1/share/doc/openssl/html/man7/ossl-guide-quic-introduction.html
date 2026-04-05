@@ -1,0 +1,138 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>ossl-guide-quic-introduction</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#INTRODUCTION">INTRODUCTION</a></li>
+  <li><a href="#WHAT-IS-QUIC">WHAT IS QUIC?</a></li>
+  <li><a href="#QUIC-TIME-BASED-EVENTS">QUIC TIME BASED EVENTS</a></li>
+  <li><a href="#QUIC-AND-TLS">QUIC AND TLS</a></li>
+  <li><a href="#QUIC-STREAMS">QUIC STREAMS</a></li>
+  <li><a href="#SOCKETS-AND-BLOCKING">SOCKETS AND BLOCKING</a></li>
+  <li><a href="#FURTHER-READING">FURTHER READING</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>ossl-guide-quic-introduction - OpenSSL Guide: An introduction to QUIC in OpenSSL</p>
+
+<h1 id="INTRODUCTION">INTRODUCTION</h1>
+
+<p>This page will provide an introduction to some basic QUIC concepts and background and how it is used within OpenSSL. It assumes that you have a basic understanding of UDP/IP and sockets. It also assumes that you are familiar with some OpenSSL and TLS fundamentals (see <a href="../man7/ossl-guide-libraries-introduction.html">ossl-guide-libraries-introduction(7)</a> and <a href="../man7/ossl-guide-tls-introduction.html">ossl-guide-tls-introduction(7)</a>).</p>
+
+<h1 id="WHAT-IS-QUIC">WHAT IS QUIC?</h1>
+
+<p>QUIC is a general purpose protocol for enabling applications to securely communicate over a network. It is defined in RFC9000 (see <a href="https://datatracker.ietf.org/doc/rfc9000/">https://datatracker.ietf.org/doc/rfc9000/</a>). QUIC integrates parts of the TLS protocol for connection establishment but independently protects packets. It provides similar security guarantees to TLS such as confidentiality, integrity and authentication (see <a href="../man7/ossl-guide-tls-introduction.html">ossl-guide-tls-introduction(7)</a>).</p>
+
+<p>QUIC delivers a number of advantages:</p>
+
+<dl>
+
+<dt id="Multiple-streams">Multiple streams</dt>
+<dd>
+
+<p>It supports multiple streams of communication (see <a href="#QUIC-STREAMS">&quot;QUIC STREAMS&quot;</a> below), allowing application protocols built on QUIC to create arbitrarily many bytestreams for communication between a client and server. This allows an application protocol to avoid problems where one packet of data is held up waiting on another packet being delivered (commonly referred to as &quot;head-of-line blocking&quot;). It also enables an application to open additional logical streams without requiring a round-trip exchange of packets between the client and server as is required when opening an additional TLS/TCP connection.</p>
+
+</dd>
+<dt id="HTTP-3">HTTP/3</dt>
+<dd>
+
+<p>Since QUIC is the basis of HTTP/3, support for QUIC also enables applications to use HTTP/3 using a suitable third-party library.</p>
+
+</dd>
+<dt id="Fast-connection-initiation">Fast connection initiation</dt>
+<dd>
+
+<p>Future versions of OpenSSL will offer support for 0-RTT connection initiation, allowing a connection to be initiated to a server and application data to be transmitted without any waiting time. This is similar to TLS 1.3&#39;s 0-RTT functionality but also avoids the round trip needed to open a TCP socket; thus, it is similar to a combination of TLS 1.3 0-RTT and TCP Fast Open.</p>
+
+</dd>
+<dt id="Connection-migration">Connection migration</dt>
+<dd>
+
+<p>Future versions of OpenSSL will offer support for connection migration, allowing connections to seamlessly survive IP address changes.</p>
+
+</dd>
+<dt id="Datagram-based-use-cases">Datagram based use cases</dt>
+<dd>
+
+<p>Future versions of OpenSSL will offer support for the QUIC datagram extension, allowing support for both TLS and DTLS-style use cases on a single connection.</p>
+
+</dd>
+<dt id="Implemented-as-application-library">Implemented as application library</dt>
+<dd>
+
+<p>Because most QUIC implementations, including OpenSSL&#39;s implementation, are implemented as an application library rather than by an operating system, an application can gain the benefit of QUIC without needing to wait for an OS update to be deployed. Future evolutions and enhancements to the QUIC protocol can be delivered as quickly as an application can be updated without dependency on an OS update cadence.</p>
+
+</dd>
+<dt id="Multiplexing-over-a-single-UDP-socket">Multiplexing over a single UDP socket</dt>
+<dd>
+
+<p>Because QUIC is UDP-based, it is possible to multiplex a QUIC connection on the same UDP socket as some other UDP-based protocols, such as RTP.</p>
+
+</dd>
+</dl>
+
+<h1 id="QUIC-TIME-BASED-EVENTS">QUIC TIME BASED EVENTS</h1>
+
+<p>A key difference between the TLS implementation and the QUIC implementation in OpenSSL is how time is handled. The QUIC protocol requires various actions to be performed on a regular basis regardless of whether application data is being transmitted or received.</p>
+
+<p>OpenSSL introduces a new function <a href="../man3/SSL_handle_events.html">SSL_handle_events(3)</a> that will automatically process any outstanding time based events that must be handled. Alternatively calling any I/O function such as <a href="../man3/SSL_read_ex.html">SSL_read_ex(3)</a> or <a href="../man3/SSL_write_ex.html">SSL_write_ex(3)</a> will also process these events. There is also <a href="../man3/SSL_get_event_timeout.html">SSL_get_event_timeout(3)</a> which tells an application the amount of time that remains until <a href="../man3/SSL_handle_events.html">SSL_handle_events(3)</a> (or any I/O function) must be called.</p>
+
+<p>Fortunately a blocking application that does not leave the QUIC connection idle, and is regularly calling I/O functions does not typically need to worry about this. However if you are developing a nonblocking application or one that may leave the QUIC connection idle for a period of time then you will need to arrange to call these functions.</p>
+
+<p>OpenSSL provides an optional &quot;thread assisted mode&quot; that will automatically create a background thread and will regularly call <a href="../man3/SSL_handle_events.html">SSL_handle_events(3)</a> in a thread safe manner. This provides a simple way for an application to satisfy the QUIC requirements for time based events without having to implement special logic to accomplish it.</p>
+
+<h1 id="QUIC-AND-TLS">QUIC AND TLS</h1>
+
+<p>QUIC reuses parts of the TLS protocol in its implementation. Specifically the TLS handshake also exists in QUIC. The TLS handshake messages are wrapped up in QUIC protocol messages in order to send them to the peer. Once the TLS handshake is complete all application data is sent entirely using QUIC protocol messages without using TLS - although some TLS handshake messages may still be sent in some circumstances.</p>
+
+<p>This relationship between QUIC and TLS means that many of the API functions in OpenSSL that apply to TLS connections also apply to QUIC connections and applications can use them in exactly the same way. Some functions do not apply to QUIC at all, and others have altered semantics. You should refer to the documentation pages for each function for information on how it applies to QUIC. Typically if QUIC is not mentioned in the manual pages then the functions apply to both TLS and QUIC.</p>
+
+<h1 id="QUIC-STREAMS">QUIC STREAMS</h1>
+
+<p>QUIC introduces the concept of &quot;streams&quot;. A stream provides a reliable mechanism for sending and receiving application data between the endpoints. The bytes transmitted are guaranteed to be received in the same order they were sent without any loss of data or reordering of the bytes. A TLS application effectively has one bi-directional stream available to it per TLS connection. A QUIC application can have multiple uni-directional or bi-directional streams available to it for each connection.</p>
+
+<p>In OpenSSL an <b>SSL</b> object is used to represent both connections and streams. A QUIC application creates an initial <b>SSL</b> object to represent the connection (known as the connection <b>SSL</b> object). Once the connection is complete additional <b>SSL</b> objects can be created to represent streams (known as stream <b>SSL</b> objects). Unless configured otherwise, a &quot;default&quot; stream is also associated with the connection <b>SSL</b> object so you can still write data and read data to/from it. Some OpenSSL API functions can only be used with connection <b>SSL</b> objects, and some can only be used with stream <b>SSL</b> objects. Check the documentation for each function to confirm what type of <b>SSL</b> object can be used in any particular context. A connection <b>SSL</b> object that has a default stream attached to it can be used in contexts that require a connection <b>SSL</b> object or in contexts that require a stream <b>SSL</b> object.</p>
+
+<h1 id="SOCKETS-AND-BLOCKING">SOCKETS AND BLOCKING</h1>
+
+<p>TLS assumes &quot;stream&quot; type semantics for its underlying transport layer protocol (usually achieved by using TCP). However QUIC assumes &quot;datagram&quot; type semantics by using UDP. An OpenSSL application using QUIC is responsible for creating a BIO to represent the underlying transport layer. This BIO must support datagrams and is typically <a href="../man3/BIO_s_datagram.html">BIO_s_datagram(3)</a>, but other <b>BIO</b> choices are available. See <a href="../man7/bio.html">bio(7)</a> for an introduction to OpenSSL&#39;s <b>BIO</b> concept.</p>
+
+<p>A significant difference between OpenSSL TLS applications and OpenSSL QUIC applications is the way that blocking is implemented. In TLS if your application expects blocking behaviour then you configure the underlying socket for blocking. Conversely if your application wants nonblocking behaviour then the underlying socket is configured to be nonblocking.</p>
+
+<p>With an OpenSSL QUIC application the underlying socket must always be configured to be nonblocking. Howevever the <b>SSL</b> object will, by default, still operate in blocking mode. So, from an application&#39;s perspective, calls to functions such as <a href="../man3/SSL_read_ex.html">SSL_read_ex(3)</a>, <a href="../man3/SSL_write_ex.html">SSL_write_ex(3)</a> and other I/O functions will still block. OpenSSL itself provides that blocking capability for QUIC instead of the socket. If nonblocking behaviour is desired then the application must call <a href="../man3/SSL_set_blocking_mode.html">SSL_set_blocking_mode(3)</a>.</p>
+
+<h1 id="FURTHER-READING">FURTHER READING</h1>
+
+<p>See <a href="../man7/ossl-guide-quic-client-block.html">ossl-guide-quic-client-block(7)</a> to see an example of applying these concepts in order to write a simple blocking QUIC client.</p>
+
+<p>See <a href="../man7/ossl-guide-quic-server-block.html">ossl-guide-quic-server-block(7)</a> to see an example of applying these concepts in order to write a simple blocking QUIC server.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ossl-guide-introduction.html">ossl-guide-introduction(7)</a>, <a href="../man7/ossl-guide-libraries-introduction.html">ossl-guide-libraries-introduction(7)</a>, <a href="../man7/ossl-guide-libssl-introduction.html">ossl-guide-libssl-introduction(7)</a>, <a href="../man7/ossl-guide-tls-introduction.html">ossl-guide-tls-introduction(7)</a>, <a href="../man7/ossl-guide-tls-client-block.html">ossl-guide-tls-client-block(7)</a>, <a href="../man7/ossl-guide-quic-client-block.html">ossl-guide-quic-client-block(7)</a>, <a href="../man7/ossl-guide-quic-client-non-block.html">ossl-guide-quic-client-non-block(7)</a>, <a href="../man7/ossl-guide-quic-multi-stream.html">ossl-guide-quic-multi-stream(7)</a>, <a href="../man7/ossl-guide-quic-server-block.html">ossl-guide-quic-server-block(7)</a>, <a href="../man7/ossl-guide-quic-server-non-block.html">ossl-guide-quic-server-non-block(7)</a>, <a href="../man7/bio.html">bio(7)</a>,</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2023-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

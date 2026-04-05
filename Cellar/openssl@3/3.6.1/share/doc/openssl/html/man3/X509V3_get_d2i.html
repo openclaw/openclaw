@@ -1,0 +1,228 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>X509V3_get_d2i</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#SUPPORTED-EXTENSIONS">SUPPORTED EXTENSIONS</a>
+    <ul>
+      <li><a href="#PKIX-Certificate-Extensions">PKIX Certificate Extensions</a></li>
+      <li><a href="#Netscape-Certificate-Extensions">Netscape Certificate Extensions</a></li>
+      <li><a href="#Miscellaneous-Certificate-Extensions">Miscellaneous Certificate Extensions</a></li>
+      <li><a href="#PKIX-CRL-Extensions">PKIX CRL Extensions</a></li>
+      <li><a href="#OCSP-Extensions">OCSP Extensions</a></li>
+      <li><a href="#Certificate-Transparency-Extensions">Certificate Transparency Extensions</a></li>
+    </ul>
+  </li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>X509V3_get_d2i, X509V3_add1_i2d, X509V3_EXT_d2i, X509V3_EXT_i2d, X509_get_ext_d2i, X509_add1_ext_i2d, X509_ACERT_get_ext_d2i, X509_ACERT_add1_ext_i2d, X509_CRL_get_ext_d2i, X509_CRL_add1_ext_i2d, X509_REVOKED_get_ext_d2i, X509_REVOKED_add1_ext_i2d, X509_get0_extensions, X509_ACERT_get0_extensions, X509_CRL_get0_extensions, X509_REVOKED_get0_extensions - X509 extension decode and encode functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/x509v3.h&gt;
+
+void *X509V3_get_d2i(const STACK_OF(X509_EXTENSION) *x, int nid, int *crit,
+                     int *idx);
+int X509V3_add1_i2d(STACK_OF(X509_EXTENSION) **x, int nid, void *value,
+                    int crit, unsigned long flags);
+
+void *X509V3_EXT_d2i(X509_EXTENSION *ext);
+X509_EXTENSION *X509V3_EXT_i2d(int ext_nid, int crit, void *ext_struc);
+
+void *X509_get_ext_d2i(const X509 *x, int nid, int *crit, int *idx);
+int X509_add1_ext_i2d(X509 *x, int nid, void *value, int crit,
+                      unsigned long flags);
+
+void *X509_ACERT_get_ext_d2i(const X509_ACERT *x, int nid, int *crit, int *idx);
+int X509_ACERT_add1_ext_i2d(X509_ACERT *x, int nid, void *value, int crit,
+                            unsigned long flags);
+
+void *X509_CRL_get_ext_d2i(const X509_CRL *crl, int nid, int *crit, int *idx);
+int X509_CRL_add1_ext_i2d(X509_CRL *crl, int nid, void *value, int crit,
+                          unsigned long flags);
+
+void *X509_REVOKED_get_ext_d2i(const X509_REVOKED *r, int nid, int *crit, int *idx);
+int X509_REVOKED_add1_ext_i2d(X509_REVOKED *r, int nid, void *value, int crit,
+                              unsigned long flags);
+
+const STACK_OF(X509_EXTENSION) *X509_get0_extensions(const X509 *x);
+const STACK_OF(X509_EXTENSION) *X509_ACERT_get0_extensions(const X509 *x);
+const STACK_OF(X509_EXTENSION) *X509_CRL_get0_extensions(const X509_CRL *crl);
+const STACK_OF(X509_EXTENSION) *X509_REVOKED_get0_extensions(const X509_REVOKED *r);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>X509V3_get_d2i() looks for an extension with OID <i>nid</i> in the extensions <i>x</i> and, if found, decodes it. If <i>idx</i> is NULL then only one occurrence of an extension is permissible, otherwise the first extension after index <i>*idx</i> is returned and <i>*idx</i> updated to the location of the extension. If <i>crit</i> is not NULL then <i>*crit</i> is set to a status value: -2 if the extension occurs multiple times (this is only returned if <i>idx</i> is NULL), -1 if the extension could not be found, 0 if the extension is found and is not critical and 1 if critical. A pointer to an extension specific structure or NULL is returned.</p>
+
+<p>X509V3_add1_i2d() adds extension <i>value</i> to STACK <i>*x</i> (allocating a new STACK if necessary) using OID <i>nid</i> and criticality <i>crit</i> according to <i>flags</i>.</p>
+
+<p>X509V3_EXT_d2i() attempts to decode the ASN.1 data contained in extension <i>ext</i> and returns a pointer to an extension specific structure or NULL if the extension could not be decoded (invalid syntax or not supported).</p>
+
+<p>X509V3_EXT_i2d() encodes the extension specific structure <i>ext_struc</i> with OID <i>ext_nid</i> and criticality <i>crit</i>.</p>
+
+<p>X509_get_ext_d2i() and X509_add1_ext_i2d() operate on the extensions of certificate <i>x</i>. They are otherwise identical to X509V3_get_d2i() and X509V3_add1_i2d().</p>
+
+<p>X509_ACERT_get_ext_d2i() and X509_ACERT_add1_ext_i2d() operate on the extensions of <b>X509_ACERT</b> structure <i>x</i>. They are otherwise identical to X509V3_get_d2i() and X509V3_add1_i2d().</p>
+
+<p>X509_CRL_get_ext_d2i() and X509_CRL_add1_ext_i2d() operate on the extensions of CRL <i>crl</i>. They are otherwise identical to X509V3_get_d2i() and X509V3_add1_i2d().</p>
+
+<p>X509_REVOKED_get_ext_d2i() and X509_REVOKED_add1_ext_i2d() operate on the extensions of <b>X509_REVOKED</b> structure <i>r</i> (i.e for CRL entry extensions). They are otherwise identical to X509V3_get_d2i() and X509V3_add1_i2d().</p>
+
+<p>X509_get0_extensions(), X509_ACERT_get0_extensions(), X509_CRL_get0_extensions() and X509_REVOKED_get0_extensions() return a STACK of all the extensions of a certificate, an attribute certificate, a CRL or a CRL entry respectively.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>In almost all cases an extension can occur at most once and multiple occurrences is an error. Therefore, the <i>idx</i> parameter is usually NULL.</p>
+
+<p>The <i>flags</i> parameter may be one of the following values.</p>
+
+<p><b>X509V3_ADD_DEFAULT</b> appends a new extension only if the extension does not exist. An error is returned if the extension exists.</p>
+
+<p><b>X509V3_ADD_APPEND</b> appends a new extension, ignoring whether the extension exists.</p>
+
+<p><b>X509V3_ADD_REPLACE</b> replaces an existing extension. If the extension does not exist, appends a new extension.</p>
+
+<p><b>X509V3_ADD_REPLACE_EXISTING</b> replaces an existing extension. If the extension does not exist, returns an error.</p>
+
+<p><b>X509V3_ADD_KEEP_EXISTING</b> appends a new extension only if the extension does not exist. An error is <b>not</b> returned if the extension exists.</p>
+
+<p><b>X509V3_ADD_DELETE</b> deletes and frees an existing extension. If the extension does not exist, returns an error. No new extension is added.</p>
+
+<p>If <b>X509V3_ADD_SILENT</b> is bitwise ORed with <i>flags</i>: any error returned will not be added to the error queue.</p>
+
+<p>The function X509V3_get_d2i() and its variants will return NULL if the extension is not found, occurs multiple times or cannot be decoded. It is possible to determine the precise reason by checking the value of <i>*crit</i>. The returned pointer must be explicitly freed.</p>
+
+<p>The function X509V3_add1_i2d() and its variants allocate <b>X509_EXTENSION</b> objects on STACK <i>*x</i> depending on <i>flags</i>. The <b>X509_EXTENSION</b> objects must be explicitly freed using X509_EXTENSION_free().</p>
+
+<h1 id="SUPPORTED-EXTENSIONS">SUPPORTED EXTENSIONS</h1>
+
+<p>The following sections contain a list of all supported extensions including their name and NID.</p>
+
+<h2 id="PKIX-Certificate-Extensions">PKIX Certificate Extensions</h2>
+
+<p>The following certificate extensions are defined in PKIX standards such as RFC5280.</p>
+
+<pre><code>Basic Constraints                  NID_basic_constraints
+Key Usage                          NID_key_usage
+Extended Key Usage                 NID_ext_key_usage
+
+Subject Key Identifier             NID_subject_key_identifier
+Authority Key Identifier           NID_authority_key_identifier
+
+Private Key Usage Period           NID_private_key_usage_period
+
+Subject Alternative Name           NID_subject_alt_name
+Issuer Alternative Name            NID_issuer_alt_name
+
+Authority Information Access       NID_info_access
+Subject Information Access         NID_sinfo_access
+
+Name Constraints                   NID_name_constraints
+
+Certificate Policies               NID_certificate_policies
+Policy Mappings                    NID_policy_mappings
+Policy Constraints                 NID_policy_constraints
+Inhibit Any Policy                 NID_inhibit_any_policy
+
+TLS Feature                        NID_tlsfeature</code></pre>
+
+<h2 id="Netscape-Certificate-Extensions">Netscape Certificate Extensions</h2>
+
+<p>The following are (largely obsolete) Netscape certificate extensions.</p>
+
+<pre><code>Netscape Cert Type                 NID_netscape_cert_type
+Netscape Base Url                  NID_netscape_base_url
+Netscape Revocation Url            NID_netscape_revocation_url
+Netscape CA Revocation Url         NID_netscape_ca_revocation_url
+Netscape Renewal Url               NID_netscape_renewal_url
+Netscape CA Policy Url             NID_netscape_ca_policy_url
+Netscape SSL Server Name           NID_netscape_ssl_server_name
+Netscape Comment                   NID_netscape_comment</code></pre>
+
+<h2 id="Miscellaneous-Certificate-Extensions">Miscellaneous Certificate Extensions</h2>
+
+<pre><code>Strong Extranet ID                 NID_sxnet
+Proxy Certificate Information      NID_proxyCertInfo</code></pre>
+
+<h2 id="PKIX-CRL-Extensions">PKIX CRL Extensions</h2>
+
+<p>The following are CRL extensions from PKIX standards such as RFC5280.</p>
+
+<pre><code>CRL Number                         NID_crl_number
+CRL Distribution Points            NID_crl_distribution_points
+Delta CRL Indicator                NID_delta_crl
+Freshest CRL                       NID_freshest_crl
+Invalidity Date                    NID_invalidity_date
+Issuing Distribution Point         NID_issuing_distribution_point</code></pre>
+
+<p>The following are CRL entry extensions from PKIX standards such as RFC5280.</p>
+
+<pre><code>CRL Reason Code                    NID_crl_reason
+Certificate Issuer                 NID_certificate_issuer</code></pre>
+
+<h2 id="OCSP-Extensions">OCSP Extensions</h2>
+
+<pre><code>OCSP Nonce                         NID_id_pkix_OCSP_Nonce
+OCSP CRL ID                        NID_id_pkix_OCSP_CrlID
+Acceptable OCSP Responses          NID_id_pkix_OCSP_acceptableResponses
+OCSP No Check                      NID_id_pkix_OCSP_noCheck
+OCSP Archive Cutoff                NID_id_pkix_OCSP_archiveCutoff
+OCSP Service Locator               NID_id_pkix_OCSP_serviceLocator
+Hold Instruction Code              NID_hold_instruction_code</code></pre>
+
+<h2 id="Certificate-Transparency-Extensions">Certificate Transparency Extensions</h2>
+
+<p>The following extensions are used by certificate transparency, RFC6962</p>
+
+<pre><code>CT Precertificate SCTs             NID_ct_precert_scts
+CT Certificate SCTs                NID_ct_cert_scts</code></pre>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>X509V3_get_d2i(), its variants, and X509V3_EXT_d2i() return a pointer to an extension specific structure or NULL if an error occurs.</p>
+
+<p>X509V3_add1_i2d() and its variants return 1 if the operation is successful and 0 if it fails due to a non-fatal error (extension not found, already exists, cannot be encoded) or -1 due to a fatal error such as a memory allocation failure.</p>
+
+<p>X509V3_EXT_i2d() returns a pointer to an <b>X509_EXTENSION</b> structure or NULL if an error occurs.</p>
+
+<p>X509_get0_extensions(), X509_CRL_get0_extensions() and X509_REVOKED_get0_extensions() return a stack of extensions. They return NULL if no extensions are present.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/d2i_X509.html">d2i_X509(3)</a>, <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>, <a href="../man3/X509_CRL_get0_by_serial.html">X509_CRL_get0_by_serial(3)</a>, <a href="../man3/X509_get0_signature.html">X509_get0_signature(3)</a>, <a href="../man3/X509_get_ext_d2i.html">X509_get_ext_d2i(3)</a>, <a href="../man3/X509_get_extension_flags.html">X509_get_extension_flags(3)</a>, <a href="../man3/X509_get_pubkey.html">X509_get_pubkey(3)</a>, <a href="../man3/X509_get_subject_name.html">X509_get_subject_name(3)</a>, <a href="../man3/X509_get_version.html">X509_get_version(3)</a>, <a href="../man3/X509_NAME_add_entry_by_txt.html">X509_NAME_add_entry_by_txt(3)</a>, <a href="../man3/X509_NAME_ENTRY_get_object.html">X509_NAME_ENTRY_get_object(3)</a>, <a href="../man3/X509_NAME_get_index_by_NID.html">X509_NAME_get_index_by_NID(3)</a>, <a href="../man3/X509_NAME_print_ex.html">X509_NAME_print_ex(3)</a>, <a href="../man3/X509_new.html">X509_new(3)</a>, <a href="../man3/X509_sign.html">X509_sign(3)</a>, <a href="../man3/X509_verify_cert.html">X509_verify_cert(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>X509_ACERT_get_ext_d2i(), X509_ACERT_add1_ext_i2d(), X509_ACERT_get0_extensions() were added in OpenSSL 3.4.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2015-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

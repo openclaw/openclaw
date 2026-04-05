@@ -1,0 +1,81 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>BIO_f_cipher</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>BIO_f_cipher, BIO_set_cipher, BIO_get_cipher_status, BIO_get_cipher_ctx - cipher BIO filter</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/bio.h&gt;
+#include &lt;openssl/evp.h&gt;
+
+const BIO_METHOD *BIO_f_cipher(void);
+int BIO_set_cipher(BIO *b, const EVP_CIPHER *cipher,
+                   const unsigned char *key, const unsigned char *iv, int enc);
+int BIO_get_cipher_status(BIO *b);
+int BIO_get_cipher_ctx(BIO *b, EVP_CIPHER_CTX **pctx);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>BIO_f_cipher() returns the cipher BIO method. This is a filter BIO that encrypts any data written through it, and decrypts any data read from it. It is a BIO wrapper for the cipher routines EVP_CipherInit(), EVP_CipherUpdate() and EVP_CipherFinal().</p>
+
+<p>Cipher BIOs do not support BIO_gets() or BIO_puts().</p>
+
+<p>BIO_flush() on an encryption BIO that is being written through is used to signal that no more data is to be encrypted: this is used to flush and possibly pad the final block through the BIO.</p>
+
+<p>BIO_set_cipher() sets the cipher of BIO <b>b</b> to <b>cipher</b> using key <b>key</b> and IV <b>iv</b>. <b>enc</b> should be set to 1 for encryption and zero for decryption.</p>
+
+<p>When reading from an encryption BIO the final block is automatically decrypted and checked when EOF is detected. BIO_get_cipher_status() is a BIO_ctrl() macro which can be called to determine whether the decryption operation was successful.</p>
+
+<p>BIO_get_cipher_ctx() is a BIO_ctrl() macro which retrieves the internal BIO cipher context. The retrieved context can be used in conjunction with the standard cipher routines to set it up. This is useful when BIO_set_cipher() is not flexible enough for the applications needs.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>When encrypting BIO_flush() <b>must</b> be called to flush the final block through the BIO. If it is not then the final block will fail a subsequent decrypt.</p>
+
+<p>When decrypting an error on the final block is signaled by a zero return value from the read operation. A successful decrypt followed by EOF will also return zero for the final read. BIO_get_cipher_status() should be called to determine if the decrypt was successful.</p>
+
+<p>As always, if BIO_gets() or BIO_puts() support is needed then it can be achieved by preceding the cipher BIO with a buffering BIO.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>BIO_f_cipher() returns the cipher BIO method.</p>
+
+<p>BIO_set_cipher() returns 1 for success and 0 for failure.</p>
+
+<p>BIO_get_cipher_status() returns 1 for a successful decrypt and &lt;=0 for failure.</p>
+
+<p>BIO_get_cipher_ctx() returns 1 for success and &lt;=0 for failure.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2020 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

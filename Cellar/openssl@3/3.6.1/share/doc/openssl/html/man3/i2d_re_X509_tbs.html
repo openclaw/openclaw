@@ -1,0 +1,74 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>i2d_re_X509_tbs</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>d2i_X509_AUX, i2d_X509_AUX, i2d_re_X509_tbs, i2d_re_X509_CRL_tbs, i2d_re_X509_REQ_tbs - X509 encode and decode functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/x509.h&gt;
+
+X509 *d2i_X509_AUX(X509 **px, const unsigned char **in, long len);
+int i2d_X509_AUX(const X509 *x, unsigned char **out);
+int i2d_re_X509_tbs(X509 *x, unsigned char **out);
+int i2d_re_X509_CRL_tbs(X509_CRL *crl, unsigned char **pp);
+int i2d_re_X509_REQ_tbs(X509_REQ *req, unsigned char **pp);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The X509 encode and decode routines encode and parse an <b>X509</b> structure, which represents an X509 certificate.</p>
+
+<p>d2i_X509_AUX() is similar to <a href="../man3/d2i_X509.html">d2i_X509(3)</a> but the input is expected to consist of an X509 certificate followed by auxiliary trust information. This is used by the PEM routines to read &quot;TRUSTED CERTIFICATE&quot; objects. This function should not be called on untrusted input.</p>
+
+<p>i2d_X509_AUX() is similar to <a href="../man3/i2d_X509.html">i2d_X509(3)</a>, but the encoded output contains both the certificate and any auxiliary trust information. This is used by the PEM routines to write &quot;TRUSTED CERTIFICATE&quot; objects. Note that this is a non-standard OpenSSL-specific data format.</p>
+
+<p>i2d_re_X509_tbs() is similar to <a href="../man3/i2d_X509.html">i2d_X509(3)</a> except it encodes only the TBSCertificate portion of the certificate. i2d_re_X509_CRL_tbs() and i2d_re_X509_REQ_tbs() are analogous for CRL and certificate request, respectively. The &quot;re&quot; in <b>i2d_re_X509_tbs</b> stands for &quot;re-encode&quot;, and ensures that a fresh encoding is generated in case the object has been modified after creation (see the BUGS section).</p>
+
+<p>The encoding of the TBSCertificate portion of a certificate is cached in the <b>X509</b> structure internally to improve encoding performance and to ensure certificate signatures are verified correctly in some certificates with broken (non-DER) encodings.</p>
+
+<p>If, after modification, the <b>X509</b> object is re-signed with X509_sign(), the encoding is automatically renewed. Otherwise, the encoding of the TBSCertificate portion of the <b>X509</b> can be manually renewed by calling i2d_re_X509_tbs().</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>d2i_X509_AUX() returns a valid <b>X509</b> structure or NULL if an error occurred.</p>
+
+<p>i2d_X509_AUX() returns the length of encoded data or -1 on error.</p>
+
+<p>i2d_re_X509_tbs(), i2d_re_X509_CRL_tbs() and i2d_re_X509_REQ_tbs() return the length of encoded data or &lt;=0 on error.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ERR_get_error.html">ERR_get_error(3)</a> <a href="../man3/X509_CRL_get0_by_serial.html">X509_CRL_get0_by_serial(3)</a>, <a href="../man3/X509_get0_signature.html">X509_get0_signature(3)</a>, <a href="../man3/X509_get_ext_d2i.html">X509_get_ext_d2i(3)</a>, <a href="../man3/X509_get_extension_flags.html">X509_get_extension_flags(3)</a>, <a href="../man3/X509_get_pubkey.html">X509_get_pubkey(3)</a>, <a href="../man3/X509_get_subject_name.html">X509_get_subject_name(3)</a>, <a href="../man3/X509_get_version.html">X509_get_version(3)</a>, <a href="../man3/X509_NAME_add_entry_by_txt.html">X509_NAME_add_entry_by_txt(3)</a>, <a href="../man3/X509_NAME_ENTRY_get_object.html">X509_NAME_ENTRY_get_object(3)</a>, <a href="../man3/X509_NAME_get_index_by_NID.html">X509_NAME_get_index_by_NID(3)</a>, <a href="../man3/X509_NAME_print_ex.html">X509_NAME_print_ex(3)</a>, <a href="../man3/X509_new.html">X509_new(3)</a>, <a href="../man3/X509_sign.html">X509_sign(3)</a>, <a href="../man3/X509V3_get_d2i.html">X509V3_get_d2i(3)</a>, <a href="../man3/X509_verify_cert.html">X509_verify_cert(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2002-2018 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

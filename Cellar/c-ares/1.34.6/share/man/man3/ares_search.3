@@ -1,0 +1,181 @@
+.\"
+.\" Copyright 1998 by the Massachusetts Institute of Technology.
+.\" SPDX-License-Identifier: MIT
+.\"
+.TH ARES_SEARCH 3 "24 July 1998"
+.SH NAME
+ares_search \- Initiate a DNS query with domain search
+.SH SYNOPSIS
+.nf
+#include <ares.h>
+
+typedef void (*ares_callback_dnsrec)(void *\fIarg\fP,
+                                     ares_status_t \fIstatus\fP,
+                                     size_t \fItimeouts\fP,
+                                     const ares_dns_record_t *\fIdnsrec\fP);
+
+void ares_search_dnsrec(ares_channel_t *\fIchannel\fP,
+                        const ares_dns_record_t *\fIdnsrec\fP,
+                        ares_callback_dnsrec \fIcallback\fP, void *\fIarg\fP);
+
+typedef void (*ares_callback)(void *\fIarg\fP, int \fIstatus\fP,
+                              int \fItimeouts\fP, unsigned char *\fIabuf\fP,
+                              int \fIalen\fP);
+
+void ares_search(ares_channel_t *\fIchannel\fP, const char *\fIname\fP,
+                 int \fIdnsclass\fP, int \fItype\fP,
+                 ares_callback \fIcallback\fP, void *\fIarg\fP);
+
+.fi
+.SH DESCRIPTION
+The
+.B ares_search
+function initiates a series of single-question DNS queries on the name
+service channel identified by
+.IR channel ,
+using the channel's search domains as well as a host alias file given
+by the HOSTALIAS environment variable.  The parameter
+.I name
+gives the alias name or the base of the query name as a NUL-terminated
+C string of period-separated labels; if it ends with a period, the
+channel's search domains will not be used.  Periods and backslashes
+within a label must be escaped with a backslash.  The parameters
+.I dnsclass
+and
+.I type
+give the class and type of the query using the values defined in
+.BR <arpa/nameser.h> .
+When the query sequence is complete or has failed, the ares library
+will invoke
+.IR callback .
+Completion or failure of the query sequence may happen immediately, or
+may happen during a later call to
+.BR ares_process (3)
+or
+.BR ares_destroy (3).
+.PP
+If this is called from a thread other than which the main program event loop is
+running, care needs to be taken to ensure any file descriptor lists are updated
+immediately within the eventloop.  When the associated callback is called,
+it is called with a channel lock so care must be taken to ensure any processing
+is minimal to prevent DNS channel stalls.
+.PP
+The callback argument
+.I arg
+is copied from the
+.B ares_search
+argument
+.IR arg .
+The callback argument
+.I status
+indicates whether the query sequence ended with a successful query
+and, if not, how the query sequence failed.  It may have any of the
+following values:
+.TP 19
+.B ARES_SUCCESS
+A query completed successfully.
+.TP 19
+.B ARES_ENODATA
+No query completed successfully; when the query was tried without a
+search domain appended, a response was returned with no answers.
+.TP 19
+.B ARES_EFORMERR
+A query completed but the server claimed that the query was
+malformatted.
+.TP 19
+.B ARES_ESERVFAIL
+No query completed successfully; when the query was tried without a
+search domain appended, the server claimed to have experienced a
+failure.  (This code can only occur if the
+.B ARES_FLAG_NOCHECKRESP
+flag was specified at channel initialization time; otherwise, such
+responses are ignored at the
+.BR ares_send (3)
+level.)
+.TP 19
+.B ARES_ENOTFOUND
+No query completed successfully; when the query was tried without a
+search domain appended, the server reported that the queried-for
+domain name was not found.
+.TP 19
+.B ARES_ENOTIMP
+A query completed but the server does not implement the operation
+requested by the query.  (This code can only occur if the
+.B ARES_FLAG_NOCHECKRESP
+flag was specified at channel initialization time; otherwise, such
+responses are ignored at the
+.BR ares_send (3)
+level.)
+.TP 19
+.B ARES_EREFUSED
+A query completed but the server refused the query.  (This code can
+only occur returned if the
+.B ARES_FLAG_NOCHECKRESP
+flag was specified at channel initialization time; otherwise, such
+responses are ignored at the
+.BR ares_send (3)
+level.)
+.TP 19
+.B ARES_TIMEOUT
+No name servers responded to a query within the timeout period.
+.TP 19
+.B ARES_ECONNREFUSED
+No name servers could be contacted.
+.TP 19
+.B ARES_ENOMEM
+Memory was exhausted.
+.TP 19
+.B ARES_ECANCELLED
+The query was cancelled.
+.TP 19
+.B ARES_EDESTRUCTION
+The name service channel
+.I channel
+is being destroyed; the query will not be completed.
+.TP 19
+.B ARES_ENOSERVER
+No query completed successfully; no DNS servers were configured on the channel.
+.PP
+The callback argument
+.I timeouts
+reports how many times a query timed out during the execution of the
+given request.
+.PP
+If a query completed successfully, the callback argument
+.I abuf
+points to a result buffer of length
+.IR alen .
+If the query did not complete successfully,
+.I abuf
+will usually be NULL and
+.I alen
+will usually be 0, but in some cases an unsuccessful query result may
+be placed in
+.IR abuf .
+
+The \fIares_search_dnsrec(3)\fP function behaves identically to
+\fIares_search(3)\fP, but takes an initialized and filled DNS record object to
+use for queries as the second argument
+.I dnsrec
+instead of a name, class and type.  This object is used as the base for the
+queries and must itself represent a valid query for a single name.  Note that
+the search domains will only be appended to the name in the question section;
+RRs on the DNS record object will not be affected.  Moreover, the
+.I callback
+argument is of type \fIares_callback_dnsrec\fP.  This callback behaves
+identically to \fIares_callback\fP, but is invoked with a parsed DNS record
+object
+.I dnsrec
+rather than a raw buffer with length.  Note that this object is read-only.
+
+The \fIares_search_dnsrec(3)\fP function returns an \fIares_status_t\fP response
+code.  This may be useful to know that the query was enqueued properly.  The
+response code does not reflect the result of the query, just the result of the
+enqueuing of the query.
+
+.SH AVAILABILITY
+\fBares_search_dnsrec(3)\fP was introduced in c-ares 1.28.0.
+
+.SH SEE ALSO
+.BR ares_process (3),
+.BR ares_dns_record (3)

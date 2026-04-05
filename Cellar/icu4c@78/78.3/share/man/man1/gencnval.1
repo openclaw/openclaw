@@ -1,0 +1,93 @@
+.\" Hey, Emacs! This is -*-nroff-*- you know...
+.\"
+.\" gencnval.1: manual page for the gencnval utility
+.\"
+.\" Copyright (C) 2016 and later: Unicode, Inc. and others.
+.\" License & terms of use: http://www.unicode.org/copyright.html
+.\" Copyright (C) 2000-2004 IBM, Inc. and others.
+.\"
+.\" Manual page by Yves Arrouye <yves@realnames.com>.
+.\" Manual page by George Rhoten
+.\"
+.TH GENCNVAL 1 "11 March 2004" "ICU MANPAGE" "ICU 78.3 Manual"
+.SH NAME
+.B gencnval
+\- compile the converters aliases file
+.SH SYNOPSIS
+.B gencnval
+[
+.BR "\-h\fP, \fB\-?\fP, \fB\-\-help"
+]
+[
+.BR "\-v\fP, \fB\-\-verbose"
+]
+[
+.BR "\-c\fP, \fB\-\-copyright"
+]
+[
+.BI "\-s\fP, \fB\-\-sourcedir" " source"
+]
+[
+.BI "\-d\fP, \fB\-\-destdir" " destination"
+]
+[
+.I converterfile
+]
+.SH DESCRIPTION
+.B gencnval
+converts the ICU aliases file
+.I converterfile
+into the binary file
+.BR cnvalias.icu .
+This binary file can then be read directly by ICU, or used by
+.BR pkgdata (1)
+for incorporation into a larger archive or library.
+.PP
+If
+.I converterfile
+is not provided, the default ICU
+.B convrtrs.txt
+file is used.
+.SH OPTIONS
+.TP
+.BR "\-h\fP, \fB\-?\fP, \fB\-\-help"
+Print help about usage and exit.
+.TP
+.BR "\-v\fP, \fB\-\-verbose"
+Display verbose output. This information can include information about
+conflicting aliases and the converters the aliases resolve to.
+.TP
+.BR "\-c\fP, \fB\-\-copyright"
+Include a copyright notice in the binary data.
+.TP
+.BI "\-s\fP, \fB\-\-sourcedir" " source"
+Set the source directory to
+.IR source .
+The default source directory is specified by the environment variable
+.BR ICU_DATA .
+.TP
+.BI "\-d\fP, \fB\-\-destdir" " destination"
+Set the destination directory to
+.IR destination .
+The default destination directory is specified by the environment variable
+.BR ICU_DATA .
+.SH ENVIRONMENT
+.TP 10
+.B ICU_DATA
+Specifies the directory containing ICU data. Defaults to
+.BR ${prefix}/share/icu/78.3/ .
+Some tools in ICU depend on the presence of the trailing slash. It is thus
+important to make sure that it is present if
+.B ICU_DATA
+is set.
+.SH FILES
+.TP \w'\fBicu/source/data/mappings/convrtrs.txt'u+3n
+.B icu/source/data/mappings/convrtrs.txt
+Description of ICU's converters and their aliases. This data file is not
+normally installed, and it is available as a part of ICU source code.
+.SH VERSION
+78.3
+.SH COPYRIGHT
+Copyright (C) 2000-2004 IBM, Inc. and others.
+.SH SEE ALSO
+.BR pkgdata (1)

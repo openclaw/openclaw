@@ -1,0 +1,71 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>BN_num_bytes</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>BN_num_bits, BN_num_bytes, BN_num_bits_word - get BIGNUM size</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/bn.h&gt;
+
+int BN_num_bytes(const BIGNUM *a);
+
+int BN_num_bits(const BIGNUM *a);
+
+int BN_num_bits_word(BN_ULONG w);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>BN_num_bytes() returns the size of a <b>BIGNUM</b> in bytes.</p>
+
+<p>BN_num_bits_word() returns the number of significant bits in a word. If we take 0x00000432 as an example, it returns 11, not 16, not 32. Basically, except for a zero, it returns <i>floor(log2(w))+1</i>.</p>
+
+<p>BN_num_bits() returns the number of significant bits in a <b>BIGNUM</b>, following the same principle as BN_num_bits_word().</p>
+
+<p>BN_num_bytes() is a macro.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>The size.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>Some have tried using BN_num_bits() on individual numbers in RSA keys, DH keys and DSA keys, and found that they don&#39;t always come up with the number of bits they expected (something like 512, 1024, 2048, ...). This is because generating a number with some specific number of bits doesn&#39;t always set the highest bits, thereby making the number of <i>significant</i> bits a little lower. If you want to know the &quot;key size&quot; of such a key, either use functions like RSA_size(), DH_size() and DSA_size(), or use BN_num_bytes() and multiply with 8 (although there&#39;s no real guarantee that will match the &quot;key size&quot;, just a lot more probability).</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/DH_size.html">DH_size(3)</a>, <a href="../man3/DSA_size.html">DSA_size(3)</a>, <a href="../man3/RSA_size.html">RSA_size(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2017 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

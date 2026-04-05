@@ -1,0 +1,138 @@
+.\"
+.TH "brotli" "1" "August 14 2021" "brotli 1.0.9" "User Manual"
+.hy
+.SH NAME
+.PP
+brotli(1) -- brotli, brcat, unbrotli - compress or decompress files
+.SH SYNOPSIS
+.PP
+\f[B]brotli\f[R] [\f[I]OPTION|FILE\f[R]]\&...
+.PP
+\f[B]brcat\f[R] is equivalent to \f[B]brotli --decompress --concatenated
+--stdout\f[R]
+.PP
+\f[B]unbrotli\f[R] is equivalent to \f[B]brotli --decompress\f[R]
+.SH DESCRIPTION
+.PP
+\f[B]brotli\f[R] is a generic-purpose lossless compression algorithm
+that compresses data using a combination of a modern variant of the
+\f[B]LZ77\f[R] algorithm, Huffman coding and 2-nd order context
+modeling, with a compression ratio comparable to the best currently
+available general-purpose compression methods.
+It is similar in speed with deflate but offers more dense compression.
+.PP
+\f[B]brotli\f[R] command line syntax similar to \f[B]gzip (1)\f[R] and
+\f[B]zstd (1)\f[R].
+Unlike \f[B]gzip (1)\f[R], source files are preserved by default.
+It is possible to remove them after processing by using the
+\f[B]--rm\f[R] \f[I]option\f[R].
+.PP
+Arguments that look like \[lq]\f[B]--name\f[R]\[rq] or
+\[lq]\f[B]--name=value\f[R]\[rq] are \f[I]options\f[R].
+Every \f[I]option\f[R] has a short form \[lq]\f[B]-x\f[R]\[rq] or
+\[lq]\f[B]-x value\f[R]\[rq].
+Multiple short form \f[I]options\f[R] could be coalesced:
+.IP \[bu] 2
+\[lq]\f[B]--decompress --stdout --suffix=.b\f[R]\[rq] works the same as
+.IP \[bu] 2
+\[lq]\f[B]-d -s -S .b\f[R]\[rq] and
+.IP \[bu] 2
+\[lq]\f[B]-dsS .b\f[R]\[rq]
+.PP
+\f[B]brotli\f[R] has 3 operation modes:
+.IP \[bu] 2
+default mode is compression;
+.IP \[bu] 2
+\f[B]--decompress\f[R] option activates decompression mode;
+.IP \[bu] 2
+\f[B]--test\f[R] option switches to integrity test mode; this option is
+equivalent to \[lq]\f[B]--decompress --stdout\f[R]\[rq] except that the
+decompressed data is discarded instead of being written to standard
+output.
+.PP
+Every non-option argument is a \f[I]file\f[R] entry.
+If no \f[I]files\f[R] are given or \f[I]file\f[R] is
+\[lq]\f[B]-\f[R]\[rq], \f[B]brotli\f[R] reads from standard input.
+All arguments after \[lq]\f[B]--\f[R]\[rq] are \f[I]file\f[R] entries.
+.PP
+Unless \f[B]--stdout\f[R] or \f[B]--output\f[R] is specified,
+\f[I]files\f[R] are written to a new file whose name is derived from the
+source \f[I]file\f[R] name:
+.IP \[bu] 2
+when compressing, a suffix is appended to the source filename to get the
+target filename
+.IP \[bu] 2
+when decompressing, a suffix is removed from the source filename to get
+the target filename
+.PP
+Default suffix is \f[B].br\f[R], but it could be specified with
+\f[B]--suffix\f[R] option.
+.PP
+Conflicting or duplicate \f[I]options\f[R] are not allowed.
+.SH OPTIONS
+.IP \[bu] 2
+\f[B]-#\f[R]: compression level (0-9); bigger values cause denser, but
+slower compression
+.IP \[bu] 2
+\f[B]-c\f[R], \f[B]--stdout\f[R]: write on standard output
+.IP \[bu] 2
+\f[B]-d\f[R], \f[B]--decompress\f[R]: decompress mode
+.IP \[bu] 2
+\f[B]-f\f[R], \f[B]--force\f[R]: force output file overwrite
+.IP \[bu] 2
+\f[B]-h\f[R], \f[B]--help\f[R]: display this help and exit
+.IP \[bu] 2
+\f[B]-j\f[R], \f[B]--rm\f[R]: remove source file(s); \f[B]gzip
+(1)\f[R]-like behaviour
+.IP \[bu] 2
+\f[B]-k\f[R], \f[B]--keep\f[R]: keep source file(s); \f[B]zstd
+(1)\f[R]-like behaviour
+.IP \[bu] 2
+\f[B]-n\f[R], \f[B]--no-copy-stat\f[R]: do not copy source file(s)
+attributes
+.IP \[bu] 2
+\f[B]-o FILE\f[R], \f[B]--output=FILE\f[R] output file; valid only if
+there is a single input entry
+.IP \[bu] 2
+\f[B]-q NUM\f[R], \f[B]--quality=NUM\f[R]: compression level (0-11);
+bigger values cause denser, but slower compression
+.IP \[bu] 2
+\f[B]-t\f[R], \f[B]--test\f[R]: test file integrity mode
+.IP \[bu] 2
+\f[B]-v\f[R], \f[B]--verbose\f[R]: increase output verbosity
+.IP \[bu] 2
+\f[B]-w NUM\f[R], \f[B]--lgwin=NUM\f[R]: set LZ77 window size (0, 10-24)
+(default: 24); window size is \f[B](pow(2, NUM) - 16)\f[R]; 0 lets
+compressor decide over the optimal value; bigger windows size improve
+density; decoder might require up to window size memory to operate
+.IP \[bu] 2
+\f[B]-C B64\f[R], \f[B]--comment=B64\f[R]: set comment; argument is
+base64-decoded first; when decoding: check stream comment; when
+encoding: embed comment (fingerprint)
+.IP \[bu] 2
+\f[B]-D FILE\f[R], \f[B]--dictionary=FILE\f[R]: use FILE as raw (LZ77)
+dictionary; same dictionary MUST be used both for compression and
+decompression
+.IP \[bu] 2
+\f[B]-K\f[R], \f[B]--concatenated\f[R]: when decoding, allow
+concatenated brotli streams as input
+.IP \[bu] 2
+\f[B]-S SUF\f[R], \f[B]--suffix=SUF\f[R]: output file suffix (default:
+\f[B].br\f[R])
+.IP \[bu] 2
+\f[B]-V\f[R], \f[B]--version\f[R]: display version and exit
+.IP \[bu] 2
+\f[B]-Z\f[R], \f[B]--best\f[R]: use best compression level (default);
+same as \[lq]\f[B]-q 11\f[R]\[rq]
+.SH SEE ALSO
+.PP
+\f[B]brotli\f[R] file format is defined in RFC
+7932 (https://www.ietf.org/rfc/rfc7932.txt).
+.PP
+\f[B]brotli\f[R] is open-sourced under the MIT
+License (https://opensource.org/licenses/MIT).
+.PP
+Mailing list: https://groups.google.com/forum/#!forum/brotli
+.SH BUGS
+.PP
+Report bugs at: https://github.com/google/brotli/issues

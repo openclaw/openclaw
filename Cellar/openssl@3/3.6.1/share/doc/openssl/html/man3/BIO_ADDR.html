@@ -1,0 +1,109 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>BIO_ADDR</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RAW-ADDRESSES">RAW ADDRESSES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>BIO_ADDR, BIO_ADDR_new, BIO_ADDR_copy, BIO_ADDR_dup, BIO_ADDR_clear, BIO_ADDR_free, BIO_ADDR_rawmake, BIO_ADDR_family, BIO_ADDR_rawaddress, BIO_ADDR_rawport, BIO_ADDR_hostname_string, BIO_ADDR_service_string, BIO_ADDR_path_string - BIO_ADDR routines</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;sys/types.h&gt;
+#include &lt;openssl/bio.h&gt;
+
+typedef union bio_addr_st BIO_ADDR;
+
+BIO_ADDR *BIO_ADDR_new(void);
+int BIO_ADDR_copy(BIO_ADDR *dst, const BIO_ADDR *src);
+BIO_ADDR *BIO_ADDR_dup(const BIO_ADDR *ap);
+void BIO_ADDR_free(BIO_ADDR *ap);
+void BIO_ADDR_clear(BIO_ADDR *ap);
+int BIO_ADDR_rawmake(BIO_ADDR *ap, int family,
+                     const void *where, size_t wherelen, unsigned short port);
+int BIO_ADDR_family(const BIO_ADDR *ap);
+int BIO_ADDR_rawaddress(const BIO_ADDR *ap, void *p, size_t *l);
+unsigned short BIO_ADDR_rawport(const BIO_ADDR *ap);
+char *BIO_ADDR_hostname_string(const BIO_ADDR *ap, int numeric);
+char *BIO_ADDR_service_string(const BIO_ADDR *ap, int numeric);
+char *BIO_ADDR_path_string(const BIO_ADDR *ap);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The <b>BIO_ADDR</b> type is a wrapper around all types of socket addresses that OpenSSL deals with, currently transparently supporting AF_INET, AF_INET6 and AF_UNIX according to what&#39;s available on the platform at hand.</p>
+
+<p>BIO_ADDR_new() creates a new unfilled <b>BIO_ADDR</b>, to be used with routines that will fill it with information, such as BIO_accept_ex().</p>
+
+<p>BIO_ADDR_copy() copies the contents of <b>src</b> into <b>dst</b>. Neither <b>src</b> or <b>dst</b> can be NULL.</p>
+
+<p>BIO_ADDR_dup() creates a new <b>BIO_ADDR</b>, with a copy of the address data in <b>ap</b>.</p>
+
+<p>BIO_ADDR_free() frees a <b>BIO_ADDR</b> created with BIO_ADDR_new() or BIO_ADDR_dup(). If the argument is NULL, nothing is done.</p>
+
+<p>BIO_ADDR_clear() clears any data held within the provided <b>BIO_ADDR</b> and sets it back to an uninitialised state.</p>
+
+<p>BIO_ADDR_rawmake() takes a protocol <b>family</b>, a byte array of size <b>wherelen</b> with an address in network byte order pointed at by <b>where</b> and a port number in network byte order in <b>port</b> (except for the <b>AF_UNIX</b> protocol family, where <b>port</b> is meaningless and therefore ignored) and populates the given <b>BIO_ADDR</b> with them. In case this creates a <b>AF_UNIX</b> <b>BIO_ADDR</b>, <b>wherelen</b> is expected to be the length of the path string (not including the terminating NUL, such as the result of a call to strlen()). Read on about the addresses in <a href="#RAW-ADDRESSES">&quot;RAW ADDRESSES&quot;</a> below.</p>
+
+<p>BIO_ADDR_family() returns the protocol family of the given <b>BIO_ADDR</b>. The possible non-error results are one of the constants AF_INET, AF_INET6 and AF_UNIX. It will also return AF_UNSPEC if the BIO_ADDR has not been initialised.</p>
+
+<p>BIO_ADDR_rawaddress() will write the raw address of the given <b>BIO_ADDR</b> in the area pointed at by <b>p</b> if <b>p</b> is non-NULL, and will set <b>*l</b> to be the amount of bytes the raw address takes up if <b>l</b> is non-NULL. A technique to only find out the size of the address is a call with <b>p</b> set to <b>NULL</b>. The raw address will be in network byte order, most significant byte first. In case this is a <b>AF_UNIX</b> <b>BIO_ADDR</b>, <b>l</b> gets the length of the path string (not including the terminating NUL, such as the result of a call to strlen()). Read on about the addresses in <a href="#RAW-ADDRESSES">&quot;RAW ADDRESSES&quot;</a> below.</p>
+
+<p>BIO_ADDR_rawport() returns the raw port of the given <b>BIO_ADDR</b>. The raw port will be in network byte order.</p>
+
+<p>BIO_ADDR_hostname_string() returns a character string with the hostname of the given <b>BIO_ADDR</b>. If <b>numeric</b> is 1, the string will contain the numerical form of the address. This only works for <b>BIO_ADDR</b> of the protocol families AF_INET and AF_INET6. The returned string has been allocated on the heap and must be freed with OPENSSL_free().</p>
+
+<p>BIO_ADDR_service_string() returns a character string with the service name of the port of the given <b>BIO_ADDR</b>. If <b>numeric</b> is 1, the string will contain the port number. This only works for <b>BIO_ADDR</b> of the protocol families AF_INET and AF_INET6. The returned string has been allocated on the heap and must be freed with OPENSSL_free().</p>
+
+<p>BIO_ADDR_path_string() returns a character string with the path of the given <b>BIO_ADDR</b>. This only works for <b>BIO_ADDR</b> of the protocol family AF_UNIX. The returned string has been allocated on the heap and must be freed with OPENSSL_free().</p>
+
+<h1 id="RAW-ADDRESSES">RAW ADDRESSES</h1>
+
+<p>Both BIO_ADDR_rawmake() and BIO_ADDR_rawaddress() take a pointer to a network byte order address of a specific site. Internally, those are treated as a pointer to <b>struct in_addr</b> (for <b>AF_INET</b>), <b>struct in6_addr</b> (for <b>AF_INET6</b>) or <b>char *</b> (for <b>AF_UNIX</b>), all depending on the protocol family the address is for.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>The string producing functions BIO_ADDR_hostname_string(), BIO_ADDR_service_string() and BIO_ADDR_path_string() will return <b>NULL</b> on error and leave an error indication on the OpenSSL error stack.</p>
+
+<p>BIO_ADDR_copy() returns 1 on success or 0 on error.</p>
+
+<p>All other functions described here return 0 or <b>NULL</b> when the information they should return isn&#39;t available.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/BIO_connect.html">BIO_connect(3)</a>, <a href="../man3/BIO_s_connect.html">BIO_s_connect(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>BIO_ADDR_copy() and BIO_ADDR_dup() were added in OpenSSL 3.2.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2016-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

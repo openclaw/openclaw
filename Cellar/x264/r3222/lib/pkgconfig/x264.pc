@@ -1,0 +1,11 @@
+prefix=/opt/homebrew/Cellar/x264/r3222
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include
+
+Name: x264
+Description: H.264 (MPEG4 AVC) encoder library
+Version: 0.165.3222
+Libs: -L${exec_prefix}/lib -lx264 
+Libs.private: -lpthread -lm -ldl
+Cflags: -I${prefix}/include -DX264_API_IMPORTS

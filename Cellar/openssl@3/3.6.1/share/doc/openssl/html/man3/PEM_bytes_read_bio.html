@@ -1,0 +1,81 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>PEM_bytes_read_bio</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>PEM_bytes_read_bio, PEM_bytes_read_bio_secmem - read a PEM-encoded data structure from a BIO</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/pem.h&gt;
+
+int PEM_bytes_read_bio(unsigned char **pdata, long *plen, char **pnm,
+                       const char *name, BIO *bp, pem_password_cb *cb,
+                       void *u);
+int PEM_bytes_read_bio_secmem(unsigned char **pdata, long *plen, char **pnm,
+                              const char *name, BIO *bp, pem_password_cb *cb,
+                              void *u);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>PEM_bytes_read_bio() reads PEM-formatted (IETF RFC 1421 and IETF RFC 7468) data from the BIO <i>bp</i> for the data type given in <i>name</i> (RSA PRIVATE KEY, CERTIFICATE, etc.). If multiple PEM-encoded data structures are present in the same stream, PEM_bytes_read_bio() will skip non-matching data types and continue reading. Non-PEM data present in the stream may cause an error.</p>
+
+<p>The PEM header may indicate that the following data is encrypted; if so, the data will be decrypted, waiting on user input to supply a passphrase if needed. The password callback <i>cb</i> and rock <i>u</i> are used to obtain the decryption passphrase, if applicable.</p>
+
+<p>Some data types have compatibility aliases, such as a file containing X509 CERTIFICATE matching a request for the deprecated type CERTIFICATE. The actual type indicated by the file is returned in <i>*pnm</i> if <i>pnm</i> is non-NULL. The caller must free the storage pointed to by <i>*pnm</i>.</p>
+
+<p>The returned data is the DER-encoded form of the requested type, in <i>*pdata</i> with length <i>*plen</i>. The caller must free the storage pointed to by <i>*pdata</i>.</p>
+
+<p>PEM_bytes_read_bio_secmem() is similar to PEM_bytes_read_bio(), but uses memory from the secure heap for its temporary buffers and the storage returned in <i>*pdata</i> and <i>*pnm</i>. Accordingly, the caller must use OPENSSL_secure_free() to free that storage.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>PEM_bytes_read_bio_secmem() only enforces that the secure heap is used for storage allocated within the PEM processing stack. The BIO stack from which input is read may also use temporary buffers, which are not necessarily allocated from the secure heap. In cases where it is desirable to ensure that the contents of the PEM file only appears in memory from the secure heap, care is needed in generating the BIO passed as <i>bp</i>. In particular, the use of BIO_s_file() indicates the use of the operating system stdio functionality, which includes buffering as a feature; BIO_s_fd() is likely to be more appropriate in such cases.</p>
+
+<p>These functions make no assumption regarding the pass phrase received from the password callback. It will simply be treated as a byte sequence.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>PEM_bytes_read_bio() and PEM_bytes_read_bio_secmem() return 1 for success or 0 for failure.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/PEM_read_bio_ex.html">PEM_read_bio_ex(3)</a>, <a href="../man7/passphrase-encoding.html">passphrase-encoding(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>PEM_bytes_read_bio_secmem() was introduced in OpenSSL 1.1.1</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2017-2018 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

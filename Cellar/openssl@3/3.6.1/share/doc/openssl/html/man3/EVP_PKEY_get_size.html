@@ -1,0 +1,97 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_PKEY_get_size</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_PKEY_get_size, EVP_PKEY_get_bits, EVP_PKEY_get_security_bits, EVP_PKEY_bits, EVP_PKEY_security_bits, EVP_PKEY_get_security_category, EVP_PKEY_size - EVP_PKEY information functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+
+int EVP_PKEY_get_size(const EVP_PKEY *pkey);
+int EVP_PKEY_get_bits(const EVP_PKEY *pkey);
+int EVP_PKEY_get_security_bits(const EVP_PKEY *pkey);
+int EVP_PKEY_get_security_category(const EVP_PKEY *pkey);
+
+#define EVP_PKEY_bits EVP_PKEY_get_bits
+#define EVP_PKEY_security_bits EVP_PKEY_get_security_bits
+#define EVP_PKEY_size EVP_PKEY_get_size</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>EVP_PKEY_get_size() returns the maximum suitable size for the output buffers for almost all operations that can be done with <i>pkey</i>. This corresponds to the provider parameter <b>OSSL_PKEY_PARAM_MAX_SIZE</b>. The primary documented use is with <a href="../man3/EVP_SignFinal.html">EVP_SignFinal(3)</a> and <a href="../man3/EVP_SealInit.html">EVP_SealInit(3)</a>, but it isn&#39;t limited there. The returned size is also large enough for the output buffer of <a href="../man3/EVP_PKEY_sign.html">EVP_PKEY_sign(3)</a>, <a href="../man3/EVP_PKEY_encrypt.html">EVP_PKEY_encrypt(3)</a>, <a href="../man3/EVP_PKEY_decrypt.html">EVP_PKEY_decrypt(3)</a>, <a href="../man3/EVP_PKEY_derive.html">EVP_PKEY_derive(3)</a>.</p>
+
+<p>It must be stressed that, unless the documentation for the operation that&#39;s being performed says otherwise, the size returned by EVP_PKEY_get_size() is only preliminary and not exact, so the final contents of the target buffer may be smaller. It is therefore crucial to take note of the size given back by the function that performs the operation, such as <a href="../man3/EVP_PKEY_sign.html">EVP_PKEY_sign(3)</a> (the <i>siglen</i> argument will receive that length), to avoid bugs.</p>
+
+<p>EVP_PKEY_get_bits() returns the cryptographic length of the cryptosystem to which the key in <i>pkey</i> belongs, in bits. Note that the definition of cryptographic length is specific to the key cryptosystem. This length corresponds to the provider parameter <b>OSSL_PKEY_PARAM_BITS</b>.</p>
+
+<p>EVP_PKEY_get_security_bits() returns the number of security bits of the given <i>pkey</i>, bits of security is defined in NIST SP800-57. This corresponds to the provider parameter <b>OSSL_PKEY_PARAM_SECURITY_BITS</b>.</p>
+
+<p>EVP_PKEY_get_security_category() returns the <a href="https://nvlpubs.nist.gov/nistpubs/ir/2024/NIST.IR.8547.ipd.pdf">post-quantum security category</a> as defined by NIST. The post-quantum security category is an integer value from 0 to 5 that is based on an algorithm&#39;s classification on the range of security strengths offered by the existing standards in symmetric cryptography:</p>
+
+<table>
+<tr><th>Security Category</th><th>Attack Type</th>></tr>
+<tr><td>0</td><td>Weak</td></tr>
+<tr><td>1</td><td>Key search on a block cipher with a 128-bit key</td></tr>
+<tr><td>2</td><td>Collision search on a 256-bit hash function</td></tr>
+<tr><td>3</td><td>Key search on a block cipher with a 192-bit key</td></tr>
+<tr><td>4</td><td>Collision search on a 384-bit hash function</td></tr>
+<tr><td>5</td><td>Key search on a block cipher with a 256-bit key</td></tr>
+</table>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>EVP_PKEY_get_size(), EVP_PKEY_get_bits() and EVP_PKEY_get_security_bits() return a positive number, or 0 if this size isn&#39;t available.</p>
+
+<p>EVP_PKEY_get_security_category() returns the post-quantum security category which is an integer in the range zero to five inclusive. It returns -1 if the security category information isn&#39;t available. For all classical algorithms, 0 is returned meaning that they are not considered to be quantum safe.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>Most functions that have an output buffer and are mentioned with EVP_PKEY_get_size() have a functionality where you can pass NULL for the buffer and still pass a pointer to an integer and get the exact size that this function call delivers in the context that it&#39;s called in. This allows those functions to be called twice, once to find out the exact buffer size, then allocate the buffer in between, and call that function again actually output the data. For those functions, it isn&#39;t strictly necessary to call EVP_PKEY_get_size() to find out the buffer size, but may be useful in cases where it&#39;s desirable to know the upper limit in advance.</p>
+
+<p>It should also be especially noted that EVP_PKEY_get_size() shouldn&#39;t be used to get the output size for EVP_DigestSignFinal(), according to <a href="../man3/EVP_DigestSignFinal.html">&quot;NOTES&quot; in EVP_DigestSignFinal(3)</a>.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/provider-keymgmt.html">provider-keymgmt(7)</a>, <a href="../man3/EVP_SignFinal.html">EVP_SignFinal(3)</a>, <a href="../man3/EVP_SealInit.html">EVP_SealInit(3)</a>, <a href="../man3/EVP_PKEY_sign.html">EVP_PKEY_sign(3)</a>, <a href="../man3/EVP_PKEY_encrypt.html">EVP_PKEY_encrypt(3)</a>, <a href="../man3/EVP_PKEY_decrypt.html">EVP_PKEY_decrypt(3)</a>, <a href="../man3/EVP_PKEY_derive.html">EVP_PKEY_derive(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The EVP_PKEY_bits(), EVP_PKEY_security_bits(), and EVP_PKEY_size() functions were renamed to include <code>get</code> in their names in OpenSSL 3.0, respectively. The old names are kept as non-deprecated alias macros.</p>
+
+<p>EVP_PKEY_get_security_category() was added in OpenSSL 3.6.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2020-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

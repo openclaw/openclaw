@@ -1,0 +1,101 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>bio</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#TCP-Fast-Open">TCP Fast Open</a></li>
+    </ul>
+  </li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>bio - Basic I/O abstraction</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/bio.h&gt;</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>A BIO is an I/O abstraction, it hides many of the underlying I/O details from an application. If an application uses a BIO for its I/O it can transparently handle SSL connections, unencrypted network connections and file I/O.</p>
+
+<p>There are two types of BIO, a source/sink BIO and a filter BIO.</p>
+
+<p>As its name implies a source/sink BIO is a source and/or sink of data, examples include a socket BIO and a file BIO.</p>
+
+<p>A filter BIO takes data from one BIO and passes it through to another, or the application. The data may be left unmodified (for example a message digest BIO) or translated (for example an encryption BIO). The effect of a filter BIO may change according to the I/O operation it is performing: for example an encryption BIO will encrypt data if it is being written to and decrypt data if it is being read from.</p>
+
+<p>BIOs can be joined together to form a chain (a single BIO is a chain with one component). A chain normally consists of one source/sink BIO and one or more filter BIOs. Data read from or written to the first BIO then traverses the chain to the end (normally a source/sink BIO).</p>
+
+<p>Some BIOs (such as memory BIOs) can be used immediately after calling BIO_new(). Others (such as file BIOs) need some additional initialization, and frequently a utility function exists to create and initialize such BIOs.</p>
+
+<p>If BIO_free() is called on a BIO chain it will only free one BIO resulting in a memory leak.</p>
+
+<p>Calling BIO_free_all() on a single BIO has the same effect as calling BIO_free() on it other than the discarded return value.</p>
+
+<p>Normally the <i>type</i> argument is supplied by a function which returns a pointer to a BIO_METHOD. There is a naming convention for such functions: a source/sink BIO typically starts with <i>BIO_s_</i> and a filter BIO with <i>BIO_f_</i>.</p>
+
+<h2 id="TCP-Fast-Open">TCP Fast Open</h2>
+
+<p>TCP Fast Open (RFC7413), abbreviated &quot;TFO&quot;, is supported by the BIO interface since OpenSSL 3.2. TFO is supported in the following operating systems:</p>
+
+<ul>
+
+<li><p>Linux kernel 3.13 and later, where TFO is enabled by default.</p>
+
+</li>
+<li><p>Linux kernel 4.11 and later, using TCP_FASTOPEN_CONNECT.</p>
+
+</li>
+<li><p>FreeBSD 10.3 to 11.4, supports server TFO only.</p>
+
+</li>
+<li><p>FreeBSD 12.0 and later, supports both client and server TFO.</p>
+
+</li>
+<li><p>macOS 10.14 and later.</p>
+
+</li>
+</ul>
+
+<p>Each operating system has a slightly different API for TFO. Please refer to the operating systems&#39; API documentation when using sockets directly.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>Create a memory BIO:</p>
+
+<pre><code>BIO *mem = BIO_new(BIO_s_mem());</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/BIO_ctrl.html">BIO_ctrl(3)</a>, <a href="../man3/BIO_f_base64.html">BIO_f_base64(3)</a>, <a href="../man3/BIO_f_buffer.html">BIO_f_buffer(3)</a>, <a href="../man3/BIO_f_cipher.html">BIO_f_cipher(3)</a>, <a href="../man3/BIO_f_md.html">BIO_f_md(3)</a>, <a href="../man3/BIO_f_null.html">BIO_f_null(3)</a>, <a href="../man3/BIO_f_ssl.html">BIO_f_ssl(3)</a>, <a href="../man3/BIO_f_readbuffer.html">BIO_f_readbuffer(3)</a>, <a href="../man3/BIO_find_type.html">BIO_find_type(3)</a>, <a href="../man3/BIO_get_conn_mode.html">BIO_get_conn_mode(3)</a>, <a href="../man3/BIO_new.html">BIO_new(3)</a>, <a href="../man3/BIO_new_bio_pair.html">BIO_new_bio_pair(3)</a>, <a href="../man3/BIO_push.html">BIO_push(3)</a>, <a href="../man3/BIO_read_ex.html">BIO_read_ex(3)</a>, <a href="../man3/BIO_s_accept.html">BIO_s_accept(3)</a>, <a href="../man3/BIO_s_bio.html">BIO_s_bio(3)</a>, <a href="../man3/BIO_s_connect.html">BIO_s_connect(3)</a>, <a href="../man3/BIO_s_fd.html">BIO_s_fd(3)</a>, <a href="../man3/BIO_s_file.html">BIO_s_file(3)</a>, <a href="../man3/BIO_s_mem.html">BIO_s_mem(3)</a>, <a href="../man3/BIO_s_null.html">BIO_s_null(3)</a>, <a href="../man3/BIO_s_socket.html">BIO_s_socket(3)</a>, <a href="../man3/BIO_set_callback.html">BIO_set_callback(3)</a>, <a href="../man3/BIO_set_conn_mode.html">BIO_set_conn_mode(3)</a>, <a href="../man3/BIO_set_tfo.html">BIO_set_tfo(3)</a>, <a href="../man3/BIO_set_tfo_accept.html">BIO_set_tfo_accept(3)</a>, <a href="../man3/BIO_should_retry.html">BIO_should_retry(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2022 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,191 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_MAC-KMAC</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Identity">Identity</a></li>
+      <li><a href="#Supported-parameters">Supported parameters</a></li>
+    </ul>
+  </li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_MAC-KMAC, EVP_MAC-KMAC128, EVP_MAC-KMAC256 - The KMAC EVP_MAC implementations</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>Support for computing KMAC MACs through the <b>EVP_MAC</b> API.</p>
+
+<h2 id="Identity">Identity</h2>
+
+<p>These implementations are identified with one of these names and properties, to be used with EVP_MAC_fetch():</p>
+
+<dl>
+
+<dt id="KMAC-128-provider-default-or-provider-fips">&quot;KMAC-128&quot;, &quot;provider=default&quot; or &quot;provider=fips&quot;</dt>
+<dd>
+
+</dd>
+<dt id="KMAC-256-provider-default-or-provider-fips">&quot;KMAC-256&quot;, &quot;provider=default&quot; or &quot;provider=fips&quot;</dt>
+<dd>
+
+</dd>
+</dl>
+
+<h2 id="Supported-parameters">Supported parameters</h2>
+
+<p>The general description of these parameters can be found in <a href="../man3/EVP_MAC.html">&quot;PARAMETERS&quot; in EVP_MAC(3)</a>.</p>
+
+<p>All these parameters (except for &quot;block-size&quot;) can be set with EVP_MAC_CTX_set_params(). Furthermore, the &quot;size&quot; parameter can be retrieved with EVP_MAC_CTX_get_params(), or with EVP_MAC_CTX_get_mac_size(). The length of the &quot;size&quot; parameter should not exceed that of a <b>size_t</b>. Likewise, the &quot;block-size&quot; parameter can be retrieved with EVP_MAC_CTX_get_params(), or with EVP_MAC_CTX_get_block_size().</p>
+
+<dl>
+
+<dt id="key-OSSL_MAC_PARAM_KEY-octet-string">&quot;key&quot; (<b>OSSL_MAC_PARAM_KEY</b>) &lt;octet string&gt;</dt>
+<dd>
+
+<p>Sets the MAC key. Setting this parameter is identical to passing a <i>key</i> to <a href="../man3/EVP_MAC_init.html">EVP_MAC_init(3)</a>. The length of the key (in bytes) must be in the range 4...512.</p>
+
+</dd>
+<dt id="custom-OSSL_MAC_PARAM_CUSTOM-octet-string">&quot;custom&quot; (<b>OSSL_MAC_PARAM_CUSTOM</b>) &lt;octet string&gt;</dt>
+<dd>
+
+<p>Sets the customization string. It is an optional value with a length of at most 512 bytes, and is empty by default.</p>
+
+</dd>
+<dt id="size-OSSL_MAC_PARAM_SIZE-unsigned-integer">&quot;size&quot; (<b>OSSL_MAC_PARAM_SIZE</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+<p>Sets the MAC size. By default, it is 32 for <code>KMAC-128</code> and 64 for <code>KMAC-256</code>.</p>
+
+</dd>
+<dt id="block-size-OSSL_MAC_PARAM_BLOCK_SIZE-unsigned-integer">&quot;block-size&quot; (<b>OSSL_MAC_PARAM_BLOCK_SIZE</b>) &lt;unsigned integer&gt;</dt>
+<dd>
+
+<p>Gets the MAC block size. It is 168 for <code>KMAC-128</code> and 136 for <code>KMAC-256</code>.</p>
+
+</dd>
+<dt id="xof-OSSL_MAC_PARAM_XOF-integer">&quot;xof&quot; (<b>OSSL_MAC_PARAM_XOF</b>) &lt;integer&gt;</dt>
+<dd>
+
+<p>The &quot;xof&quot; parameter value is expected to be 1 or 0. Use 1 to enable XOF mode. The default value is 0.</p>
+
+</dd>
+<dt id="fips-indicator-OSSL_MAC_PARAM_FIPS_APPROVED_INDICATOR-int">&quot;fips-indicator&quot; (<b>OSSL_MAC_PARAM_FIPS_APPROVED_INDICATOR</b>) &lt;int&gt;</dt>
+<dd>
+
+<p>This settable parameter is described in <a href="../man7/provider-mac.html">provider-mac(7)</a>.</p>
+
+</dd>
+<dt id="no-short-mac-OSSL_MAC_PARAM_FIPS_NO_SHORT_MAC-integer">&quot;no-short-mac&quot; (<b>OSSL_MAC_PARAM_FIPS_NO_SHORT_MAC</b>) &lt;integer&gt;</dt>
+<dd>
+
+<p>This settable parameter is described in <a href="../man7/provider-mac.html">provider-mac(7)</a>. It is used by the OpenSSL FIPS provider and the minimum length output for KMAC is defined by NIST&#39;s SP 800-185 8.4.2.</p>
+
+</dd>
+<dt id="key-check-OSSL_MAC_PARAM_FIPS_KEY_CHECK-integer">&quot;key-check&quot; (<b>OSSL_MAC_PARAM_FIPS_KEY_CHECK</b>) &lt;integer&gt;</dt>
+<dd>
+
+<p>This settable parameter is described in <a href="../man7/provider-mac.html">provider-mac(7)</a>.</p>
+
+</dd>
+</dl>
+
+<p>The &quot;custom&quot; and &quot;no-short-mac&quot; parameters must be set as part of or before the EVP_MAC_init() call. The &quot;xof&quot; and &quot;size&quot; parameters can be set at any time before EVP_MAC_final(). The &quot;key&quot; parameter is set as part of the EVP_MAC_init() call, but can be set before it instead.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+#include &lt;openssl/params.h&gt;
+
+static int do_kmac(const unsigned char *in, size_t in_len,
+                   const unsigned char *key, size_t key_len,
+                   const unsigned char *custom, size_t custom_len,
+                   int xof_enabled, unsigned char *out, int out_len)
+{
+    EVP_MAC_CTX *ctx = NULL;
+    EVP_MAC *mac = NULL;
+    OSSL_PARAM params[4], *p;
+    int ret = 0;
+    size_t l = 0;
+
+    mac = EVP_MAC_fetch(NULL, &quot;KMAC-128&quot;, NULL);
+    if (mac == NULL)
+        goto err;
+    ctx = EVP_MAC_CTX_new(mac);
+    /* The mac can be freed after it is used by EVP_MAC_CTX_new */
+    EVP_MAC_free(mac);
+    if (ctx == NULL)
+        goto err;
+
+    /*
+     * Setup parameters required before calling EVP_MAC_init()
+     * The parameters OSSL_MAC_PARAM_XOF and OSSL_MAC_PARAM_SIZE may also be
+     * used at this point.
+     */
+    p = params;
+    *p++ = OSSL_PARAM_construct_octet_string(OSSL_MAC_PARAM_KEY,
+                                             (void *)key, key_len);
+    if (custom != NULL &amp;&amp; custom_len != 0)
+      *p++ = OSSL_PARAM_construct_octet_string(OSSL_MAC_PARAM_CUSTOM,
+                                               (void *)custom, custom_len);
+    *p = OSSL_PARAM_construct_end();
+    if (!EVP_MAC_CTX_set_params(ctx, params))
+        goto err;
+
+    if (!EVP_MAC_init(ctx))
+        goto err;
+
+    /*
+     * Note: the following optional parameters can be set any time
+     * before EVP_MAC_final().
+     */
+    p = params;
+    *p++ = OSSL_PARAM_construct_int(OSSL_MAC_PARAM_XOF, &amp;xof_enabled);
+    *p++ = OSSL_PARAM_construct_int(OSSL_MAC_PARAM_SIZE, &amp;out_len);
+    *p = OSSL_PARAM_construct_end();
+    if (!EVP_MAC_CTX_set_params(ctx, params))
+        goto err;
+
+    /* The update may be called multiple times here for streamed input */
+    if (!EVP_MAC_update(ctx, in, in_len))
+        goto err;
+    if (!EVP_MAC_final(ctx, out, &amp;l, out_len))
+        goto err;
+    ret = 1;
+err:
+    EVP_MAC_CTX_free(ctx);
+    return ret;
+}</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_MAC_CTX_get_params.html">EVP_MAC_CTX_get_params(3)</a>, <a href="../man3/EVP_MAC_CTX_set_params.html">EVP_MAC_CTX_set_params(3)</a>, <a href="../man3/EVP_MAC.html">&quot;PARAMETERS&quot; in EVP_MAC(3)</a>, <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a>, <a href="https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-185.pdf">SP 800-185 8.4.2</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2018-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

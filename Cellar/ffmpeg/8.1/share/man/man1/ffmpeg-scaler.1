@@ -1,0 +1,311 @@
+.\"
+.\" Standard preamble:
+.\" ========================================================================
+.de Sp \" Vertical space (when we can't use .PP)
+.if t .sp .5v
+.if n .sp
+..
+.de Vb \" Begin verbatim text
+.ft CW
+.nf
+.ne \\$1
+..
+.de Ve \" End verbatim text
+.ft R
+.fi
+..
+.\" Set up some character translations and predefined strings.  \*(-- will
+.\" give an unbreakable dash, \*(PI will give pi, \*(L" will give a left
+.\" double quote, and \*(R" will give a right double quote.  \*(C+ will
+.\" give a nicer C++.  Capital omega is used to do unbreakable dashes and
+.\" therefore won't be available.  \*(C` and \*(C' expand to `' in nroff,
+.\" nothing in troff, for use with C<>.
+.tr \(*W-
+.ds C+ C\v'-.1v'\h'-1p'\s-2+\h'-1p'+\s0\v'.1v'\h'-1p'
+.ie n \{\
+.    ds -- \(*W-
+.    ds PI pi
+.    if (\n(.H=4u)&(1m=24u) .ds -- \(*W\h'-12u'\(*W\h'-12u'-\" diablo 10 pitch
+.    if (\n(.H=4u)&(1m=20u) .ds -- \(*W\h'-12u'\(*W\h'-8u'-\"  diablo 12 pitch
+.    ds L" ""
+.    ds R" ""
+.    ds C` ""
+.    ds C' ""
+'br\}
+.el\{\
+.    ds -- \|\(em\|
+.    ds PI \(*p
+.    ds L" ``
+.    ds R" ''
+.    ds C`
+.    ds C'
+'br\}
+.\"
+.\" Escape single quotes in literal strings from groff's Unicode transform.
+.ie \n(.g .ds Aq \(aq
+.el       .ds Aq '
+.\"
+.\" If the F register is >0, we'll generate index entries on stderr for
+.\" titles (.TH), headers (.SH), subsections (.SS), items (.Ip), and index
+.\" entries marked with X<> in POD.  Of course, you'll have to process the
+.\" output yourself in some meaningful fashion.
+.\"
+.\" Avoid warning from groff about undefined register 'F'.
+.de IX
+..
+.nr rF 0
+.if \n(.g .if rF .nr rF 1
+.if (\n(rF:(\n(.g==0)) \{\
+.    if \nF \{\
+.        de IX
+.        tm Index:\\$1\t\\n%\t"\\$2"
+..
+.        if !\nF==2 \{\
+.            nr % 0
+.            nr F 2
+.        \}
+.    \}
+.\}
+.rr rF
+.\"
+.\" Accent mark definitions (@(#)ms.acc 1.5 88/02/08 SMI; from UCB 4.2).
+.\" Fear.  Run.  Save yourself.  No user-serviceable parts.
+.    \" fudge factors for nroff and troff
+.if n \{\
+.    ds #H 0
+.    ds #V .8m
+.    ds #F .3m
+.    ds #[ \f1
+.    ds #] \fP
+.\}
+.if t \{\
+.    ds #H ((1u-(\\\\n(.fu%2u))*.13m)
+.    ds #V .6m
+.    ds #F 0
+.    ds #[ \&
+.    ds #] \&
+.\}
+.    \" simple accents for nroff and troff
+.if n \{\
+.    ds ' \&
+.    ds ` \&
+.    ds ^ \&
+.    ds , \&
+.    ds ~ ~
+.    ds /
+.\}
+.if t \{\
+.    ds ' \\k:\h'-(\\n(.wu*8/10-\*(#H)'\'\h"|\\n:u"
+.    ds ` \\k:\h'-(\\n(.wu*8/10-\*(#H)'\`\h'|\\n:u'
+.    ds ^ \\k:\h'-(\\n(.wu*10/11-\*(#H)'^\h'|\\n:u'
+.    ds , \\k:\h'-(\\n(.wu*8/10)',\h'|\\n:u'
+.    ds ~ \\k:\h'-(\\n(.wu-\*(#H-.1m)'~\h'|\\n:u'
+.    ds / \\k:\h'-(\\n(.wu*8/10-\*(#H)'\z\(sl\h'|\\n:u'
+.\}
+.    \" troff and (daisy-wheel) nroff accents
+.ds : \\k:\h'-(\\n(.wu*8/10-\*(#H+.1m+\*(#F)'\v'-\*(#V'\z.\h'.2m+\*(#F'.\h'|\\n:u'\v'\*(#V'
+.ds 8 \h'\*(#H'\(*b\h'-\*(#H'
+.ds o \\k:\h'-(\\n(.wu+\w'\(de'u-\*(#H)/2u'\v'-.3n'\*(#[\z\(de\v'.3n'\h'|\\n:u'\*(#]
+.ds d- \h'\*(#H'\(pd\h'-\w'~'u'\v'-.25m'\f2\(hy\fP\v'.25m'\h'-\*(#H'
+.ds D- D\\k:\h'-\w'D'u'\v'-.11m'\z\(hy\v'.11m'\h'|\\n:u'
+.ds th \*(#[\v'.3m'\s+1I\s-1\v'-.3m'\h'-(\w'I'u*2/3)'\s-1o\s+1\*(#]
+.ds Th \*(#[\s+2I\s-2\h'-\w'I'u*3/5'\v'-.3m'o\v'.3m'\*(#]
+.ds ae a\h'-(\w'a'u*4/10)'e
+.ds Ae A\h'-(\w'A'u*4/10)'E
+.    \" corrections for vroff
+.if v .ds ~ \\k:\h'-(\\n(.wu*9/10-\*(#H)'\s-2\u~\d\s+2\h'|\\n:u'
+.if v .ds ^ \\k:\h'-(\\n(.wu*10/11-\*(#H)'\v'-.4m'^\v'.4m'\h'|\\n:u'
+.    \" for low resolution devices (crt and lpr)
+.if \n(.H>23 .if \n(.V>19 \
+\{\
+.    ds : e
+.    ds 8 ss
+.    ds o a
+.    ds d- d\h'-1'\(ga
+.    ds D- D\h'-1'\(hy
+.    ds th \o'bp'
+.    ds Th \o'LP'
+.    ds ae ae
+.    ds Ae AE
+.\}
+.rm #[ #] #H #V #F C
+.\" ========================================================================
+.\"
+.IX Title "FFMPEG-SCALER 1"
+.TH FFMPEG-SCALER 1 " " " " " "
+.\" For nroff, turn off justification.  Always turn off hyphenation; it makes
+.\" way too many mistakes in technical documents.
+.if n .ad l
+.nh
+.SH "NAME"
+ffmpeg\-scaler \- FFmpeg video scaling and pixel format converter
+.SH "DESCRIPTION"
+.IX Header "DESCRIPTION"
+The FFmpeg rescaler provides a high-level interface to the libswscale
+library image conversion utilities. In particular it allows one to perform
+image rescaling and pixel format conversion.
+.SH "SCALER OPTIONS"
+.IX Header "SCALER OPTIONS"
+The video scaler supports the following named options.
+.PP
+Options may be set by specifying \-\fIoption\fR \fIvalue\fR in the
+FFmpeg tools, with a few API-only exceptions noted below.
+For programmatic use, they can be set explicitly in the
+\&\f(CW\*(C`SwsContext\*(C'\fR options or through the \fIlibavutil/opt.h\fR \s-1API.\s0
+.IP "\fBsws_flags\fR" 4
+.IX Item "sws_flags"
+Set the scaler flags. This is also used to set the scaling
+algorithm. Only a single algorithm should be selected. Default
+value is \fBbicubic\fR.
+.Sp
+It accepts the following values:
+.RS 4
+.IP "\fBfast_bilinear\fR" 4
+.IX Item "fast_bilinear"
+Select fast bilinear scaling algorithm.
+.IP "\fBbilinear\fR" 4
+.IX Item "bilinear"
+Select bilinear scaling algorithm.
+.IP "\fBbicubic\fR" 4
+.IX Item "bicubic"
+Select bicubic scaling algorithm.
+.IP "\fBexperimental\fR" 4
+.IX Item "experimental"
+Select experimental scaling algorithm.
+.IP "\fBneighbor\fR" 4
+.IX Item "neighbor"
+Select nearest neighbor rescaling algorithm.
+.IP "\fBarea\fR" 4
+.IX Item "area"
+Select averaging area rescaling algorithm.
+.IP "\fBbicublin\fR" 4
+.IX Item "bicublin"
+Select bicubic scaling algorithm for the luma component, bilinear for
+chroma components.
+.IP "\fBgauss\fR" 4
+.IX Item "gauss"
+Select Gaussian rescaling algorithm.
+.IP "\fBsinc\fR" 4
+.IX Item "sinc"
+Select sinc rescaling algorithm.
+.IP "\fBlanczos\fR" 4
+.IX Item "lanczos"
+Select Lanczos rescaling algorithm. The default width (alpha) is 3 and can be
+changed by setting \f(CW\*(C`param0\*(C'\fR.
+.IP "\fBspline\fR" 4
+.IX Item "spline"
+Select natural bicubic spline rescaling algorithm.
+.IP "\fBprint_info\fR" 4
+.IX Item "print_info"
+Enable printing/debug logging.
+.IP "\fBaccurate_rnd\fR" 4
+.IX Item "accurate_rnd"
+Enable accurate rounding.
+.IP "\fBfull_chroma_int\fR" 4
+.IX Item "full_chroma_int"
+Enable full chroma interpolation.
+.IP "\fBfull_chroma_inp\fR" 4
+.IX Item "full_chroma_inp"
+Select full chroma input.
+.IP "\fBbitexact\fR" 4
+.IX Item "bitexact"
+Enable bitexact output.
+.IP "\fBunstable\fR" 4
+.IX Item "unstable"
+Allow the use of experimental new code. May subtly affect the output or even
+produce wrong results. For testing only.
+.RE
+.RS 4
+.RE
+.IP "\fBsrcw\fR \fI(\s-1API\s0 only)\fR" 4
+.IX Item "srcw (API only)"
+Set source width.
+.IP "\fBsrch\fR \fI(\s-1API\s0 only)\fR" 4
+.IX Item "srch (API only)"
+Set source height.
+.IP "\fBdstw\fR \fI(\s-1API\s0 only)\fR" 4
+.IX Item "dstw (API only)"
+Set destination width.
+.IP "\fBdsth\fR \fI(\s-1API\s0 only)\fR" 4
+.IX Item "dsth (API only)"
+Set destination height.
+.IP "\fBsrc_format\fR \fI(\s-1API\s0 only)\fR" 4
+.IX Item "src_format (API only)"
+Set source pixel format (must be expressed as an integer).
+.IP "\fBdst_format\fR \fI(\s-1API\s0 only)\fR" 4
+.IX Item "dst_format (API only)"
+Set destination pixel format (must be expressed as an integer).
+.IP "\fBsrc_range\fR \fI(boolean)\fR" 4
+.IX Item "src_range (boolean)"
+If value is set to \f(CW1\fR, indicates source is full range. Default value is
+\&\f(CW0\fR, which indicates source is limited range.
+.IP "\fBdst_range\fR \fI(boolean)\fR" 4
+.IX Item "dst_range (boolean)"
+If value is set to \f(CW1\fR, enable full range for destination. Default value
+is \f(CW0\fR, which enables limited range.
+.IP "\fBgamma\fR \fI(boolean)\fR" 4
+.IX Item "gamma (boolean)"
+If value is set to \f(CW1\fR, enable gamma correct scaling. Default value is \f(CW0\fR.
+.IP "\fBparam0, param1\fR" 4
+.IX Item "param0, param1"
+Set scaling algorithm parameters. The specified values are specific of
+some scaling algorithms and ignored by others. The specified values
+are floating point number values.
+.IP "\fBsws_dither\fR" 4
+.IX Item "sws_dither"
+Set the dithering algorithm. Accepts one of the following
+values. Default value is \fBauto\fR.
+.RS 4
+.IP "\fBauto\fR" 4
+.IX Item "auto"
+automatic choice
+.IP "\fBnone\fR" 4
+.IX Item "none"
+no dithering
+.IP "\fBbayer\fR" 4
+.IX Item "bayer"
+bayer dither
+.IP "\fBed\fR" 4
+.IX Item "ed"
+error diffusion dither
+.IP "\fBa_dither\fR" 4
+.IX Item "a_dither"
+arithmetic dither, based using addition
+.IP "\fBx_dither\fR" 4
+.IX Item "x_dither"
+arithmetic dither, based using xor (more random/less apparent patterning that
+a_dither).
+.RE
+.RS 4
+.RE
+.IP "\fBalphablend\fR" 4
+.IX Item "alphablend"
+Set the alpha blending to use when the input has alpha but the output does not.
+Default value is \fBnone\fR.
+.RS 4
+.IP "\fBuniform_color\fR" 4
+.IX Item "uniform_color"
+Blend onto a uniform background color
+.IP "\fBcheckerboard\fR" 4
+.IX Item "checkerboard"
+Blend onto a checkerboard
+.IP "\fBnone\fR" 4
+.IX Item "none"
+No blending
+.RE
+.RS 4
+.RE
+.SH "SEE ALSO"
+.IX Header "SEE ALSO"
+\&\fBffmpeg\fR\|(1), \fBffplay\fR\|(1), \fBffprobe\fR\|(1), \fBlibswscale\fR\|(3)
+.SH "AUTHORS"
+.IX Header "AUTHORS"
+The FFmpeg developers.
+.PP
+For details about the authorship, see the Git history of the project
+(https://git.ffmpeg.org/ffmpeg), e.g. by typing the command
+\&\fBgit log\fR in the FFmpeg source directory, or browsing the
+online repository at <\fBhttps://git.ffmpeg.org/ffmpeg\fR>.
+.PP
+Maintainers for the specific components are listed in the file
+\&\fI\s-1MAINTAINERS\s0\fR in the source code tree.

@@ -1,0 +1,48 @@
+.\"
+.\" Copyright 1998 by the Massachusetts Institute of Technology.
+.\" SPDX-License-Identifier: MIT
+.\"
+.TH ARES_EXPAND_NAME 3 "20 Nov 2009"
+.SH NAME
+ares_expand_string \- Expand a length encoded string
+.SH SYNOPSIS
+.nf
+#include <ares.h>
+
+int ares_expand_string(const unsigned char *\fIencoded\fP,
+                       const unsigned char *\fIabuf\fP, int \fIalen\fP,
+                       unsigned char **\fIs\fP, long *\fIenclen\fP)
+.fi
+.SH DESCRIPTION
+The
+.B ares_expand_string
+function converts a length encoded string to a NUL-terminated C
+string.  The argument
+.I encoded
+gives the beginning of the encoded string, and the arguments
+.I abuf
+and
+.I alen
+give the containing message buffer (necessary for the processing of
+indirection pointers within the encoded domain name).  The result is
+placed in a NUL-terminated allocated buffer, a pointer to which is
+stored in the variable pointed to by
+.IR s .
+The length of the encoded string is stored in the variable pointed to by
+.I enclen
+so that the caller can advance past the encoded string to read
+further data in the message.
+.SH RETURN VALUES
+.B ares_expand_string
+can return any of the following values:
+.TP 15
+.B ARES_SUCCESS
+Expansion of the encoded string succeeded.
+.TP 15
+.B ARES_EBADSTR
+The encoded string was malformed and could not be expanded.
+.TP 15
+.B ARES_ENOMEM
+Memory was exhausted.
+.SH SEE ALSO
+.BR ares_free_string (3)

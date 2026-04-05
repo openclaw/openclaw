@@ -1,0 +1,157 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OPENSSL_ppccap</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OPENSSL_ppccap - the PowerPC processor capabilities vector</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>env OPENSSL_ppccap=... &lt;application&gt;</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>libcrypto supports PowerPC instruction set extensions. These extensions are represented by bits in the PowerPC capabilities vector. When libcrypto initializes, it stores the results returned by PowerPC CPU capabilities detection logic in the PowerPC capabilities vector. The CPU capabilities detection methods are OS-dependent and use a combination of information gathered by the kernel during boot and probe functions that attempt to execute instructions and trap illegal instruction signals with a signal handler.</p>
+
+<p>To override the set of extensions available to an application, you can set the <b>OPENSSL_ppccap</b> environment variable before you start the application. The environment variable is assigned a numerical value that denotes the bits in the PowerPC capabilities vector. The ppc_arch.h header file states that, &quot;Flags&#39; usage can appear ambiguous, because they are set rather to reflect OpenSSL performance preferences than actual processor capabilities.&quot;</p>
+
+<p>Multiple extensions are enabled by logically OR-ing the values that represent the desired extensions.</p>
+
+<p><b>Notes</b>: Enabling an extension on a CPU that does not support the extension will result in a SIGILL crash. On AIX, all vector instructions can be disabled with the schedo -ro allow_vmx=0 command. DO NOT USE THIS COMMAND to disable vector instructions in the OS when it is running on a CPU level that supports the instructions without also disabling them in libcrpto via the OPENSSL_ppccap environment variable or the application will crash with a SIGILL.</p>
+
+<p>Currently, the following extensions are defined:</p>
+
+<dl>
+
+<dt id="x01">0x01</dt>
+<dd>
+
+<p>Name: <b>PPC_FPU64</b></p>
+
+<p>This flag is obsolete.</p>
+
+</dd>
+<dt id="x02">0x02</dt>
+<dd>
+
+<p>Name: <b>PPC_ALTIVEC</b></p>
+
+<p>Meaning: Use AltiVec (aka VMX) instructions. In some but not all cases, this capability gates the use of later ISA vector instructions. The associated probe instruction is vor (vector logical or).</p>
+
+<p>Effect: Enables use of vector instructions but does not enable extensions added at specific ISA levels. However, disabling this capability disables a subset of vector extensions added at specific ISA levels even if they are otherwise enabled.</p>
+
+</dd>
+<dt id="x04">0x04</dt>
+<dd>
+
+<p>Name: <b>PPC_CRYPTO207</b></p>
+
+<p>Meaning: Use instructions added in ISA level 2.07. The associated probe instruction instruction is vcipher (vector AES cipher round).</p>
+
+<p>Effect: Enables AES, SHA-2 sigma, and other ISA 2.07 instructions for AES, SHA-2, GHASH, and Poly1305.</p>
+
+</dd>
+<dt id="x08">0x08</dt>
+<dd>
+
+<p>Name: <b>PPC_FPU</b></p>
+
+<p>Meaning: Use FPU instructions. The associated probe instruction is fmr (floating move register).</p>
+
+<p>Effect: Enables Poly1305 FPU implementation. The PPC_CRYPTO207 capability overrides this effect.</p>
+
+</dd>
+<dt id="x10">0x10</dt>
+<dd>
+
+<p>Name: <b>PPC_MADD300</b></p>
+
+<p>Meaning: Use instructions added in ISA level 3.00. The associated probe instruction is maddhdu (multiply-add high doubleword unsigned).</p>
+
+<p>Effect: Enables use of the polynomial multiply and other ISA 3.00 instructions for AES-GCM, P-384, and P-521.</p>
+
+</dd>
+<dt id="x20">0x20</dt>
+<dd>
+
+<p>Name: <b>PPC_MFTB</b></p>
+
+<p>Meaning: Use the mftb (move from time base) instruction. The associated probe instruction is mftb.</p>
+
+<p>Effect: Enables use of the mftb instruction to sample the lower 32 bits of the CPU time base register in order to acquire entropy. Considered obsolete. The PPC_MFSPR268 capability overrides this capability.</p>
+
+</dd>
+<dt id="x40">0x40</dt>
+<dd>
+
+<p>Name: <b>PPC_MFSPR268</b></p>
+
+<p>Meaning: Use the mfspr (move from special purpose register) instruction to read SPR 268. The associated probe instruction is mfspr 268.</p>
+
+<p>Effect: Enables use of the mfspr instruction to sample the lower 32 bits of the CPU time base register from SPR 268, the TBL (time base lower) register, in order to acquire entropy.</p>
+
+</dd>
+<dt id="x80">0x80</dt>
+<dd>
+
+<p>Name: <b>PPC_BRD31</b></p>
+
+<p>Meaning: Use instructions added in ISA level 3.1. The associated probe instruction is brd (byte-reverse doubleword).</p>
+
+<p>Effect: Enables use of ISA 3.1 instructions in ChaCha20.</p>
+
+</dd>
+</dl>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>Not available.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>Check currently detected capabilities:</p>
+
+<pre><code>$ openssl info -cpusettings
+OPENSSL_ppccap=0x2E</code></pre>
+
+<p>The detected capabilities in the above example indicate that PPC_MFTB, PPC_FPU, PPC_CRYPTO207, PPC_MFSPR268, and PPC_ALTIVEC are enabled.</p>
+
+<p>Disable all instruction set extensions:</p>
+
+<pre><code>OPENSSL_ppccap=0x00</code></pre>
+
+<p>Enable base AltiVec extensions:</p>
+
+<pre><code>OPENSSL_ppccap=0x02</code></pre>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

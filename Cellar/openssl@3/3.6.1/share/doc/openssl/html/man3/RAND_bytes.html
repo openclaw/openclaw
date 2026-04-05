@@ -1,0 +1,104 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>RAND_bytes</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>RAND_bytes, RAND_priv_bytes, RAND_bytes_ex, RAND_priv_bytes_ex, RAND_pseudo_bytes, RAND_set1_random_provider - generate random data</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/rand.h&gt;
+
+int RAND_bytes(unsigned char *buf, int num);
+int RAND_priv_bytes(unsigned char *buf, int num);
+
+int RAND_bytes_ex(OSSL_LIB_CTX *ctx, unsigned char *buf, size_t num,
+                  unsigned int strength);
+int RAND_priv_bytes_ex(OSSL_LIB_CTX *ctx, unsigned char *buf, size_t num,
+                       unsigned int strength);
+
+int RAND_set1_random_provider(OSSL_LIB_CTX *ctx, OSSL_PROVIDER *p);</code></pre>
+
+<p>The following function has been deprecated since OpenSSL 1.1.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>int RAND_pseudo_bytes(unsigned char *buf, int num);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>RAND_bytes() generates <b>num</b> random bytes using a cryptographically secure pseudo random generator (CSPRNG) and stores them in <b>buf</b>. <b>buf</b> <b>MUST NOT</b> be NULL.</p>
+
+<p>RAND_priv_bytes() has the same semantics as RAND_bytes(). It is intended to be used for generating values that should remain private. If using the default RAND_METHOD, this function uses a separate &quot;private&quot; PRNG instance so that a compromise of the &quot;public&quot; PRNG instance will not affect the secrecy of these private values, as described in <a href="../man7/RAND.html">RAND(7)</a> and <a href="../man7/EVP_RAND.html">EVP_RAND(7)</a>.</p>
+
+<p>RAND_bytes_ex() and RAND_priv_bytes_ex() are the same as RAND_bytes() and RAND_priv_bytes() except that they both take additional <i>strength</i> and <i>ctx</i> parameters. The bytes generated will have a security strength of at least <i>strength</i> bits. The DRBG used for the operation is the public or private DRBG associated with the specified <i>ctx</i>. The parameter can be NULL, in which case the default library context is used (see <a href="../man3/OSSL_LIB_CTX.html">OSSL_LIB_CTX(3)</a>. If the default RAND_METHOD has been changed then for compatibility reasons the RAND_METHOD will be used in preference and the DRBG of the library context ignored.</p>
+
+<p>RAND_set1_random_provider() specifies a provider, <i>prov</i>, which will be used by the library context <i>ctx</i> for all of the generate calls above instead of the built-in in DRBGs and entropy source. Pass NULL for the provider to disable the random provider functionality. In this case, the built-in DRBGs and entropy source will be used. This call should not be considered thread safe.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>By default, the OpenSSL CSPRNG supports a security level of 256 bits, provided it was able to seed itself from a trusted entropy source. On all major platforms supported by OpenSSL (including the Unix-like platforms and Windows), OpenSSL is configured to automatically seed the CSPRNG on first use using the operating systems&#39;s random generator.</p>
+
+<p>If the entropy source fails or is not available, the CSPRNG will enter an error state and refuse to generate random bytes. For that reason, it is important to always check the error return value of RAND_bytes() and RAND_priv_bytes() and not take randomness for granted.</p>
+
+<p>On other platforms, there might not be a trusted entropy source available or OpenSSL might have been explicitly configured to use different entropy sources. If you are in doubt about the quality of the entropy source, don&#39;t hesitate to ask your operating system vendor or post a question on GitHub or the openssl-users mailing list.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>RAND_bytes() and RAND_priv_bytes() return 1 on success, -1 if not supported by the current RAND method, or 0 on other failure. The error code can be obtained by <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>.</p>
+
+<p>RAND_set1_random_provider() returns 1 on success and 0 on failure.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/RAND_add.html">RAND_add(3)</a>, <a href="../man3/RAND_bytes.html">RAND_bytes(3)</a>, <a href="../man3/RAND_priv_bytes.html">RAND_priv_bytes(3)</a>, <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>, <a href="../man7/RAND.html">RAND(7)</a>, <a href="../man7/EVP_RAND.html">EVP_RAND(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<ul>
+
+<li><p>RAND_pseudo_bytes() was deprecated in OpenSSL 1.1.0; use RAND_bytes() instead.</p>
+
+</li>
+<li><p>The RAND_priv_bytes() function was added in OpenSSL 1.1.1.</p>
+
+</li>
+<li><p>The RAND_bytes_ex() and RAND_priv_bytes_ex() functions were added in OpenSSL 3.0</p>
+
+</li>
+<li><p>The RAND_set1_random_provider() function was added in OpenSSL 3.5</p>
+
+</li>
+</ul>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

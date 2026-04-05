@@ -1,0 +1,155 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OSSL_CMP_MSG_get0_header</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OSSL_CMP_MSG_get0_header, OSSL_CMP_MSG_get_bodytype, OSSL_CMP_MSG_get0_certreq_publickey, OSSL_CMP_MSG_update_transactionID, OSSL_CMP_MSG_update_recipNonce, OSSL_CMP_CTX_setup_CRM, OSSL_CMP_MSG_read, OSSL_CMP_MSG_write, d2i_OSSL_CMP_MSG_bio, i2d_OSSL_CMP_MSG_bio - function(s) manipulating CMP messages</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/cmp.h&gt;
+
+OSSL_CMP_PKIHEADER *OSSL_CMP_MSG_get0_header(const OSSL_CMP_MSG *msg);
+int OSSL_CMP_MSG_get_bodytype(const OSSL_CMP_MSG *msg);
+X509_PUBKEY *OSSL_CMP_MSG_get0_certreq_publickey(const OSSL_CMP_MSG *msg);
+int OSSL_CMP_MSG_update_transactionID(OSSL_CMP_CTX *ctx, OSSL_CMP_MSG *msg);
+int OSSL_CMP_MSG_update_recipNonce(OSSL_CMP_CTX *ctx, OSSL_CMP_MSG *msg);
+OSSL_CRMF_MSG *OSSL_CMP_CTX_setup_CRM(OSSL_CMP_CTX *ctx, int for_KUR, int rid);
+OSSL_CMP_MSG *OSSL_CMP_MSG_read(const char *file, OSSL_LIB_CTX *libctx, const char *propq);
+int OSSL_CMP_MSG_write(const char *file, const OSSL_CMP_MSG *msg);
+OSSL_CMP_MSG *d2i_OSSL_CMP_MSG_bio(BIO *bio, OSSL_CMP_MSG **msg);
+int i2d_OSSL_CMP_MSG_bio(BIO *bio, const OSSL_CMP_MSG *msg);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>OSSL_CMP_MSG_get0_header() returns the header of the given CMP message.</p>
+
+<p>OSSL_CMP_MSG_get_bodytype() returns the body type of the given CMP message.</p>
+
+<p>OSSL_CMP_MSG_get0_certreq_publickey() expects that <i>msg</i> is a certificate request message and returns the public key in its certificate template if present.</p>
+
+<p>OSSL_CMP_MSG_update_transactionID() updates the transactionID field in the header of the given message according to the CMP_CTX. If <i>ctx</i> does not contain a transaction ID, a fresh one is created before. The message gets re-protected (if protecting requests is required).</p>
+
+<p>OSSL_CMP_MSG_update_recipNonce() updates the recipNonce field in the header of the given message according to the CMP_CTX. The message gets re-protected (if protecting requests is required).</p>
+
+<p>OSSL_CMP_CTX_setup_CRM() creates a CRMF certificate request message from various information provided in the CMP context argument <i>ctx</i> for inclusion in a CMP request message based on details contained in <i>ctx</i>. The <i>rid</i> argument defines the request identifier to use, which typically is 0.</p>
+
+<p>The subject DN included in the certificate template is the first available value of these:</p>
+
+<dl>
+
+<dt id="any-subject-name-in-ctx-set-via-OSSL_CMP_CTX_set1_subjectName-3---if-it-is-the-NULL-DN-i.e.-any-empty-sequence-of-RDNs-no-subject-is-included">any subject name in <i>ctx</i> set via <a href="../man3/OSSL_CMP_CTX_set1_subjectName.html">OSSL_CMP_CTX_set1_subjectName(3)</a> - if it is the NULL-DN (i.e., any empty sequence of RDNs), no subject is included,</dt>
+<dd>
+
+</dd>
+<dt id="the-subject-field-of-any-PKCS-10-CSR-set-in-ctx-via-OSSL_CMP_CTX_set1_p10CSR-3">the subject field of any PKCS#10 CSR set in <i>ctx</i> via <a href="../man3/OSSL_CMP_CTX_set1_p10CSR.html">OSSL_CMP_CTX_set1_p10CSR(3)</a>,</dt>
+<dd>
+
+</dd>
+<dt id="the-subject-field-of-any-reference-certificate-given-in-ctx-see-OSSL_CMP_CTX_set1_oldCert-3-but-only-if-for_KUR-is-nonzero-or-the-ctx-does-not-include-a-Subject-Alternative-Name">the subject field of any reference certificate given in <i>ctx</i> (see <a href="../man3/OSSL_CMP_CTX_set1_oldCert.html">OSSL_CMP_CTX_set1_oldCert(3)</a>), but only if <i>for_KUR</i> is nonzero or the <i>ctx</i> does not include a Subject Alternative Name.</dt>
+<dd>
+
+</dd>
+</dl>
+
+<p>The public key included is the first available value of these:</p>
+
+<dl>
+
+<dt id="the-public-key-derived-from-any-key-set-via-OSSL_CMP_CTX_set0_newPkey-3">the public key derived from any key set via <a href="../man3/OSSL_CMP_CTX_set0_newPkey.html">OSSL_CMP_CTX_set0_newPkey(3)</a>,</dt>
+<dd>
+
+</dd>
+<dt id="the-public-key-of-any-PKCS-10-CSR-given-in-ctx">the public key of any PKCS#10 CSR given in <i>ctx</i>,</dt>
+<dd>
+
+</dd>
+<dt id="the-public-key-of-any-reference-certificate-given-in-ctx-see-OSSL_CMP_CTX_set1_oldCert-3">the public key of any reference certificate given in <i>ctx</i> (see <a href="../man3/OSSL_CMP_CTX_set1_oldCert.html">OSSL_CMP_CTX_set1_oldCert(3)</a>),</dt>
+<dd>
+
+</dd>
+<dt id="the-public-key-derived-from-any-clients-private-key-set-via-OSSL_CMP_CTX_set1_pkey-3">the public key derived from any client&#39;s private key set via <a href="../man3/OSSL_CMP_CTX_set1_pkey.html">OSSL_CMP_CTX_set1_pkey(3)</a>.</dt>
+<dd>
+
+</dd>
+</dl>
+
+<p>The set of X.509 extensions to include is computed as follows. If a PKCS#10 CSR is present in <i>ctx</i>, default extensions are taken from there, otherwise the empty set is taken as the initial value. If there is a reference certificate in <i>ctx</i> and contains Subject Alternative Names (SANs) and <b>OSSL_CMP_OPT_SUBJECTALTNAME_NODEFAULT</b> is not set, these override any SANs from the PKCS#10 CSR. The extensions are further augmented or overridden by any extensions with the same OIDs included in the <i>ctx</i> via <a href="../man3/OSSL_CMP_CTX_set0_reqExtensions.html">OSSL_CMP_CTX_set0_reqExtensions(3)</a>. The SANs are further overridden by any SANs included in <i>ctx</i> via <a href="../man3/OSSL_CMP_CTX_push1_subjectAltName.html">OSSL_CMP_CTX_push1_subjectAltName(3)</a>. Finally, policies are overridden by any policies included in <i>ctx</i> via <a href="../man3/OSSL_CMP_CTX_push0_policy.html">OSSL_CMP_CTX_push0_policy(3)</a>.</p>
+
+<p>OSSL_CMP_CTX_setup_CRM() also sets the sets the regToken control <b>oldCertID</b> for KUR messages using the issuer name and serial number of the reference certificate, if present.</p>
+
+<p>OSSL_CMP_MSG_read() loads a DER-encoded OSSL_CMP_MSG from <i>file</i>.</p>
+
+<p>OSSL_CMP_MSG_write() stores the given OSSL_CMP_MSG to <i>file</i> in DER encoding.</p>
+
+<p>d2i_OSSL_CMP_MSG_bio() parses an ASN.1-encoded OSSL_CMP_MSG from the BIO <i>bio</i>. It assigns a pointer to the new structure to <i>*msg</i> if <i>msg</i> is not NULL.</p>
+
+<p>i2d_OSSL_CMP_MSG_bio() writes the OSSL_CMP_MSG <i>msg</i> in ASN.1 encoding to BIO <i>bio</i>.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>CMP is defined in RFC 9810.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>OSSL_CMP_MSG_get0_header() returns the intended pointer value as described above or NULL if the respective entry does not exist and on error.</p>
+
+<p>OSSL_CMP_MSG_get_bodytype() returns the body type or -1 on error.</p>
+
+<p>OSSL_CMP_MSG_get0_certreq_publickey() returns a public key or NULL on error.</p>
+
+<p>OSSL_CMP_CTX_setup_CRM() returns a pointer to a <b>OSSL_CRMF_MSG</b> on success, NULL on error.</p>
+
+<p>d2i_OSSL_CMP_MSG_bio() returns the parsed message or NULL on error.</p>
+
+<p>OSSL_CMP_MSG_read() and d2i_OSSL_CMP_MSG_bio() return the parsed CMP message or NULL on error.</p>
+
+<p>OSSL_CMP_MSG_write() returns the number of bytes successfully encoded or a negative value if an error occurs.</p>
+
+<p>i2d_OSSL_CMP_MSG_bio(), OSSL_CMP_MSG_update_transactionID(), and OSSL_CMP_MSG_update_recipNonce() return 1 on success, 0 on error.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/OSSL_CMP_CTX_set1_subjectName.html">OSSL_CMP_CTX_set1_subjectName(3)</a>, <a href="../man3/OSSL_CMP_CTX_set1_p10CSR.html">OSSL_CMP_CTX_set1_p10CSR(3)</a>, <a href="../man3/OSSL_CMP_CTX_set1_oldCert.html">OSSL_CMP_CTX_set1_oldCert(3)</a>, <a href="../man3/OSSL_CMP_CTX_set0_newPkey.html">OSSL_CMP_CTX_set0_newPkey(3)</a>, <a href="../man3/OSSL_CMP_CTX_set1_pkey.html">OSSL_CMP_CTX_set1_pkey(3)</a>, <a href="../man3/OSSL_CMP_CTX_set0_reqExtensions.html">OSSL_CMP_CTX_set0_reqExtensions(3)</a>, <a href="../man3/OSSL_CMP_CTX_push1_subjectAltName.html">OSSL_CMP_CTX_push1_subjectAltName(3)</a>, <a href="../man3/OSSL_CMP_CTX_push0_policy.html">OSSL_CMP_CTX_push0_policy(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The OpenSSL CMP support was added in OpenSSL 3.0.</p>
+
+<p>OSSL_CMP_MSG_update_recipNonce() was added in OpenSSL 3.0.9.</p>
+
+<p>OSSL_CMP_MSG_get0_certreq_publickey() was added in OpenSSL 3.3.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2007-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

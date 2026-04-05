@@ -1,0 +1,124 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>passphrase-encoding</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#The-general-case">The general case</a></li>
+      <li><a href="#PKCS-12">PKCS#12</a></li>
+      <li><a href="#OSSL_STORE">OSSL_STORE</a></li>
+    </ul>
+  </li>
+  <li><a href="#RECOMMENDATIONS">RECOMMENDATIONS</a>
+    <ul>
+      <li><a href="#Creating-new-objects">Creating new objects</a></li>
+      <li><a href="#Opening-existing-objects">Opening existing objects</a></li>
+    </ul>
+  </li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>passphrase-encoding - How diverse parts of OpenSSL treat pass phrases character encoding</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>In a modern world with all sorts of character encodings, the treatment of pass phrases has become increasingly complex. This manual page attempts to give an overview over how this problem is currently addressed in different parts of the OpenSSL library.</p>
+
+<h2 id="The-general-case">The general case</h2>
+
+<p>The OpenSSL library doesn&#39;t treat pass phrases in any special way as a general rule, and trusts the application or user to choose a suitable character set and stick to that throughout the lifetime of affected objects. This means that for an object that was encrypted using a pass phrase encoded in ISO-8859-1, that object needs to be decrypted using a pass phrase encoded in ISO-8859-1. Using the wrong encoding is expected to cause a decryption failure.</p>
+
+<h2 id="PKCS-12">PKCS#12</h2>
+
+<p>PKCS#12 is a bit different regarding pass phrase encoding. The standard stipulates that the pass phrase shall be encoded as an ASN.1 BMPString, which consists of the code points of the basic multilingual plane, encoded in big endian (UCS-2 BE).</p>
+
+<p>OpenSSL tries to adapt to this requirements in one of the following manners:</p>
+
+<ol>
+
+<li><p>Treats the received pass phrase as UTF-8 encoded and tries to re-encode it to UTF-16 (which is the same as UCS-2 for characters U+0000 to U+D7FF and U+E000 to U+FFFF, but becomes an expansion for any other character), or failing that, proceeds with step 2.</p>
+
+</li>
+<li><p>Assumes that the pass phrase is encoded in ASCII or ISO-8859-1 and opportunistically prepends each byte with a zero byte to obtain the UCS-2 encoding of the characters, which it stores as a BMPString.</p>
+
+<p>Note that since there is no check of your locale, this may produce UCS-2 / UTF-16 characters that do not correspond to the original pass phrase characters for other character sets, such as any ISO-8859-X encoding other than ISO-8859-1 (or for Windows, CP 1252 with exception for the extra &quot;graphical&quot; characters in the 0x80-0x9F range).</p>
+
+</li>
+</ol>
+
+<p>OpenSSL versions older than 1.1.0 do variant 2 only, and that is the reason why OpenSSL still does this, to be able to read files produced with older versions.</p>
+
+<p>It should be noted that this approach isn&#39;t entirely fault free.</p>
+
+<p>A pass phrase encoded in ISO-8859-2 could very well have a sequence such as 0xC3 0xAF (which is the two characters &quot;LATIN CAPITAL LETTER A WITH BREVE&quot; and &quot;LATIN CAPITAL LETTER Z WITH DOT ABOVE&quot; in ISO-8859-2 encoding), but would be misinterpreted as the perfectly valid UTF-8 encoded code point U+00EF (LATIN SMALL LETTER I WITH DIAERESIS) <i>if the pass phrase doesn&#39;t contain anything that would be invalid UTF-8</i>. A pass phrase that contains this kind of byte sequence will give a different outcome in OpenSSL 1.1.0 and newer than in OpenSSL older than 1.1.0.</p>
+
+<pre><code>0x00 0xC3 0x00 0xAF                    # OpenSSL older than 1.1.0
+0x00 0xEF                              # OpenSSL 1.1.0 and newer</code></pre>
+
+<p>On the same accord, anything encoded in UTF-8 that was given to OpenSSL older than 1.1.0 was misinterpreted as ISO-8859-1 sequences.</p>
+
+<h2 id="OSSL_STORE">OSSL_STORE</h2>
+
+<p><a href="../man7/ossl_store.html">ossl_store(7)</a> acts as a general interface to access all kinds of objects, potentially protected with a pass phrase, a PIN or something else. This API stipulates that pass phrases should be UTF-8 encoded, and that any other pass phrase encoding may give undefined results. This API relies on the application to ensure UTF-8 encoding, and doesn&#39;t check that this is the case, so what it gets, it will also pass to the underlying loader.</p>
+
+<h1 id="RECOMMENDATIONS">RECOMMENDATIONS</h1>
+
+<p>This section assumes that you know what pass phrase was used for encryption, but that it may have been encoded in a different character encoding than the one used by your current input method. For example, the pass phrase may have been used at a time when your default encoding was ISO-8859-1 (i.e. &quot;na&iuml;ve&quot; resulting in the byte sequence 0x6E 0x61 0xEF 0x76 0x65), and you&#39;re now in an environment where your default encoding is UTF-8 (i.e. &quot;na&iuml;ve&quot; resulting in the byte sequence 0x6E 0x61 0xC3 0xAF 0x76 0x65). Whenever it&#39;s mentioned that you should use a certain character encoding, it should be understood that you either change the input method to use the mentioned encoding when you type in your pass phrase, or use some suitable tool to convert your pass phrase from your default encoding to the target encoding.</p>
+
+<p>Also note that the sub-sections below discuss human readable pass phrases. This is particularly relevant for PKCS#12 objects, where human readable pass phrases are assumed. For other objects, it&#39;s as legitimate to use any byte sequence (such as a sequence of bytes from <i>/dev/urandom</i> that&#39;s been saved away), which makes any character encoding discussion irrelevant; in such cases, simply use the same byte sequence as it is.</p>
+
+<h2 id="Creating-new-objects">Creating new objects</h2>
+
+<p>For creating new pass phrase protected objects, make sure the pass phrase is encoded using UTF-8. This is default on most modern Unixes, but may involve an effort on other platforms. Specifically for Windows, setting the environment variable <b>OPENSSL_WIN32_UTF8</b> will have anything entered on [Windows] console prompt converted to UTF-8 (command line and separately prompted pass phrases alike).</p>
+
+<h2 id="Opening-existing-objects">Opening existing objects</h2>
+
+<p>For opening pass phrase protected objects where you know what character encoding was used for the encryption pass phrase, make sure to use the same encoding again.</p>
+
+<p>For opening pass phrase protected objects where the character encoding that was used is unknown, or where the producing application is unknown, try one of the following:</p>
+
+<ol>
+
+<li><p>Try the pass phrase that you have as it is in the character encoding of your environment. It&#39;s possible that its byte sequence is exactly right.</p>
+
+</li>
+<li><p>Convert the pass phrase to UTF-8 and try with the result. Specifically with PKCS#12, this should open up any object that was created according to the specification.</p>
+
+</li>
+<li><p>Do a na&iuml;ve (i.e. purely mathematical) ISO-8859-1 to UTF-8 conversion and try with the result. This differs from the previous attempt because ISO-8859-1 maps directly to U+0000 to U+00FF, which other non-UTF-8 character sets do not.</p>
+
+<p>This also takes care of the case when a UTF-8 encoded string was used with OpenSSL older than 1.1.0. (for example, <code>&iuml;</code>, which is 0xC3 0xAF when encoded in UTF-8, would become 0xC3 0x83 0xC2 0xAF when re-encoded in the na&iuml;ve manner. The conversion to BMPString would then yield 0x00 0xC3 0x00 0xA4 0x00 0x00, the erroneous/non-compliant encoding used by OpenSSL older than 1.1.0)</p>
+
+</li>
+</ol>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/evp.html">evp(7)</a>, <a href="../man7/ossl_store.html">ossl_store(7)</a>, <a href="../man3/EVP_BytesToKey.html">EVP_BytesToKey(3)</a>, <a href="../man3/EVP_DecryptInit.html">EVP_DecryptInit(3)</a>, <a href="../man3/PEM_do_header.html">PEM_do_header(3)</a>, <a href="../man3/PKCS12_parse.html">PKCS12_parse(3)</a>, <a href="../man3/PKCS12_newpass.html">PKCS12_newpass(3)</a>, <a href="../man3/d2i_PKCS8PrivateKey_bio.html">d2i_PKCS8PrivateKey_bio(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2018-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

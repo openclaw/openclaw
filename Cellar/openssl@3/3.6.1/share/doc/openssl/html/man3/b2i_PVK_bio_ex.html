@@ -1,0 +1,76 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>b2i_PVK_bio_ex</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>b2i_PVK_bio, b2i_PVK_bio_ex, i2b_PVK_bio, i2b_PVK_bio_ex - Decode and encode functions for reading and writing MSBLOB format private keys</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/pem.h&gt;
+
+EVP_PKEY *b2i_PVK_bio(BIO *in, pem_password_cb *cb, void *u);
+EVP_PKEY *b2i_PVK_bio_ex(BIO *in, pem_password_cb *cb, void *u,
+                         OSSL_LIB_CTX *libctx, const char *propq);
+int i2b_PVK_bio(BIO *out, const EVP_PKEY *pk, int enclevel,
+                pem_password_cb *cb, void *u);
+int i2b_PVK_bio_ex(BIO *out, const EVP_PKEY *pk, int enclevel,
+                   pem_password_cb *cb, void *u,
+                   OSSL_LIB_CTX *libctx, const char *propq);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>b2i_PVK_bio_ex() decodes a private key of MSBLOB format read from a <b>BIO</b>. It attempts to automatically determine the key type. If the key is encrypted then <i>cb</i> is called with the user data <i>u</i> in order to obtain a password to decrypt the key. The supplied library context <i>libctx</i> and property query string <i>propq</i> are used in any decrypt operation.</p>
+
+<p>b2i_PVK_bio() does the same as b2i_PVK_bio_ex() except that the default library context and property query string are used.</p>
+
+<p>i2b_PVK_bio_ex() encodes <i>pk</i> using MSBLOB format. If <i>enclevel</i> is 1 then a password obtained via <i>pem_password_cb</i> is used to encrypt the private key. If <i>enclevel</i> is 0 then no encryption is applied. The user data in <i>u</i> is passed to the password callback. The supplied library context <i>libctx</i> and property query string <i>propq</i> are used in any decrypt operation.</p>
+
+<p>i2b_PVK_bio() does the same as i2b_PVK_bio_ex() except that the default library context and property query string are used.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>The b2i_PVK_bio() and b2i_PVK_bio_ex() functions return a valid <b>EVP_KEY</b> structure or <b>NULL</b> if an error occurs. The error code can be obtained by calling <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>.</p>
+
+<p>i2b_PVK_bio() and i2b_PVK_bio_ex() return the number of bytes successfully encoded or a negative value if an error occurs. The error code can be obtained by calling <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/crypto.html">crypto(7)</a>, <a href="../man3/d2i_PKCS8PrivateKey_bio.html">d2i_PKCS8PrivateKey_bio(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>b2i_PVK_bio_ex() and i2b_PVK_bio_ex() were added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

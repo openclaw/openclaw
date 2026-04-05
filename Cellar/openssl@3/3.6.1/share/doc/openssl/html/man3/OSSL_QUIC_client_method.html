@@ -1,0 +1,69 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OSSL_QUIC_client_method</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OSSL_QUIC_client_method, OSSL_QUIC_client_thread_method, OSSL_QUIC_server_method - Provide SSL_METHOD objects for QUIC enabled functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/quic.h&gt;
+
+const SSL_METHOD *OSSL_QUIC_client_method(void);
+const SSL_METHOD *OSSL_QUIC_client_thread_method(void);
+const SSL_METHOD *OSSL_QUIC_server_method(void);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The OSSL_QUIC_client_method(), OSSL_QUIC_client_thread_method(), and OSSL_QUIC_server_method() functions provide methods for the <a href="../man3/SSL_CTX_new_ex.html">SSL_CTX_new_ex(3)</a> function to provide QUIC protocol support.</p>
+
+<p>The OSSL_QUIC_client_thread_method() uses threads to allow for a blocking mode of operation and avoid the need to return control to the OpenSSL library for processing time based events. The OSSL_QUIC_client_method() does not use threads and depends on nonblocking mode of operation and the application periodically calling SSL functions.</p>
+
+<p>The OSSL_QUIC_server_method() provides server-side QUIC protocol support and must be used with the <a href="../man3/SSL_new_listener.html">SSL_new_listener(3)</a> API. Attempting to use OSSL_QUIC_server_method() with <a href="../man3/SSL_new.html">SSL_new(3)</a> will result in an error.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>These functions return pointers to the constant method objects.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/SSL_CTX_new_ex.html">SSL_CTX_new_ex(3)</a>, <a href="../man3/SSL_new_listener.html">SSL_new_listener(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>OSSL_QUIC_client_method() and OSSL_QUIC_client_thread_method() were added in OpenSSL 3.2.</p>
+
+<p>OSSL_QUIC_server_method() was added in OpenSSL 3.5.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2022-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

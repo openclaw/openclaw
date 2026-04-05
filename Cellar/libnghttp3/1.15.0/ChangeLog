@@ -1,0 +1,171 @@
+commit d326f4c1eb3f6a780d77793b30e16756c498f913
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-01-20
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-01-20
+
+    Bump package and library versions
+
+commit b154e9e0aaf1d505ad36a22820389d6044148986
+Merge: 38854cf 03edf38
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-01-19
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-01-19
+
+    Merge pull request #454 from ngtcp2/add-const
+    
+    Add const to nghttp3_frame_settings.local_settings
+
+commit 03edf382adef16c57538643d1cc4dda13f4360ec
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-01-19
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-01-19
+
+    Add const to nghttp3_frame_settings.local_settings
+
+commit 38854cf36c5e9bd0cf42500b95cc53505d17b893
+Merge: bac3594 ce75e28
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-01-19
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-01-19
+
+    Merge pull request #453 from ngtcp2/eliminate-aux
+    
+    Move aux objects into the individual frames
+
+commit ce75e284a75fe0824ca1fd2767c852ce2067988e
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-01-19
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-01-19
+
+    Move aux objects into the individual frames
+    
+    Move aux objects into the individual frames.  Remove
+    nghttp3_frame_entry and use ngtcp2_frame directly.
+
+commit bac359420051c6b9e309997761f204dd1ecaaf4a
+Merge: 8ff188f dc67ec9
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-01-18
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-01-18
+
+    Merge pull request #452 from ngtcp2/update-ksl
+    
+    ksl: Port ngtcp2 changes
+
+commit dc67ec9d2d0331934bfd0c0a9228b61aa2cf842d
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-01-18
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-01-18
+
+    ksl: Port ngtcp2 changes
+
+commit 8ff188f532ede172c2f7d5f2d3b02646e1c84fd7
+Merge: 66ce2d8 e545d43
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-01-08
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-01-08
+
+    Merge pull request #451 from ngtcp2/strlen-lit
+    
+    Introduce nghttp3_strlen_lit
+
+commit e545d43f9de1511b04b6ed650cf788c0335e65ef
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-01-08
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-01-08
+
+    Introduce nghttp3_strlen_lit
+
+commit 66ce2d85fda454fce31665667304838c84548396
+Merge: 0b76bd6 b383305
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-01-07
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-01-07
+
+    Merge pull request #450 from ngtcp2/remove-submit-request2
+    
+    Remove nghttp3_conn_submit_request2
+
+commit b383305a5035f95ef9ab76feb6e59397231eefc7
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-01-07
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-01-07
+
+    Remove nghttp3_conn_submit_request2
+    
+    Defaulting incremental = 1 for client-side stream scheduling fixes
+    most of the issue in client side.  I still do not have strong evidence
+    that necessitates to add new function that accepts the optional
+    priority.
+
+commit 0b76bd63dc14fcab98910154e1866b2ac31655af
+Merge: 354c223 d707c7a
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-01-05
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-01-05
+
+    Merge pull request #449 from ngtcp2/req-inc-default
+    
+    Make client-side scheduling incremental by default
+
+commit d707c7add286ebd90d3545beaf25f683a12b81a8
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2026-01-05
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-01-05
+
+    Make client-side scheduling incremental by default
+    
+    We have added nghttp3_conn_submit_request2 to provide client-side
+    scheduling hint.  Without the hint, the default is not incremental.
+    This means the large upload may starve the other requests by default.
+    It would be desirable to avoid it with the default configuration.
+
+commit 354c2233bd84907863a57fbe967caad93e0bd722
+Merge: 3b64a00 3892a1d
+Author:     Tatsuhiro Tsujikawa <404610+tatsuhiro-t@users.noreply.github.com>
+AuthorDate: 2026-01-05
+Commit:     GitHub <noreply@github.com>
+CommitDate: 2026-01-05
+
+    Merge pull request #448 from ngtcp2/client-side-stream-scheduling
+    
+    Add nghttp3_conn_submit_request2 to set client-side scheduling hint
+
+commit 3892a1db82f0cbd798d57a9648a7e4329b2303e2
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2025-12-27
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2026-01-05
+
+    Add nghttp3_conn_submit_request2 to set client-side scheduling hint
+
+commit 3b64a00d2086c98dd85770998da44ffa59803b98
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2025-12-23
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2025-12-23
+
+    Revert "Update AUTHORS"
+    
+    This reverts commit 67b64abf3bfa1bf6520c7abfb428c76cd7e40ff4.
+
+commit aa62ed82bb8fd24a71700bdf9c7148cb603f6826
+Author:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+AuthorDate: 2025-12-23
+Commit:     Tatsuhiro Tsujikawa <tatsuhiro.t@gmail.com>
+CommitDate: 2025-12-23
+
+    Bump package version

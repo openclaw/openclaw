@@ -1,0 +1,89 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SSL_get_ciphers</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_get1_supported_ciphers, SSL_get_client_ciphers, SSL_get_ciphers, SSL_CTX_get_ciphers, SSL_bytes_to_cipher_list, SSL_get_cipher_list, SSL_get_shared_ciphers - get list of available SSL_CIPHERs</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+STACK_OF(SSL_CIPHER) *SSL_get_ciphers(const SSL *ssl);
+STACK_OF(SSL_CIPHER) *SSL_CTX_get_ciphers(const SSL_CTX *ctx);
+STACK_OF(SSL_CIPHER) *SSL_get1_supported_ciphers(SSL *s);
+STACK_OF(SSL_CIPHER) *SSL_get_client_ciphers(const SSL *ssl);
+int SSL_bytes_to_cipher_list(SSL *s, const unsigned char *bytes, size_t len,
+                             int isv2format, STACK_OF(SSL_CIPHER) **sk,
+                             STACK_OF(SSL_CIPHER) **scsvs);
+const char *SSL_get_cipher_list(const SSL *ssl, int priority);
+char *SSL_get_shared_ciphers(const SSL *s, char *buf, int size);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_get_ciphers() returns the stack of available SSL_CIPHERs for <b>ssl</b>, sorted by preference. If <b>ssl</b> is NULL or no ciphers are available, NULL is returned.</p>
+
+<p>SSL_CTX_get_ciphers() returns the stack of available SSL_CIPHERs for <b>ctx</b>.</p>
+
+<p>SSL_get1_supported_ciphers() returns the stack of enabled SSL_CIPHERs for <b>ssl</b> as would be sent in a ClientHello (that is, sorted by preference). The list depends on settings like the cipher list, the supported protocol versions, the security level, and the enabled signature algorithms. SRP and PSK ciphers are only enabled if the appropriate callbacks or settings have been applied. The list of ciphers that would be sent in a ClientHello can differ from the list of ciphers that would be acceptable when acting as a server. For example, additional ciphers may be usable by a server if there is a gap in the list of supported protocols, and some ciphers may not be usable by a server if there is not a suitable certificate configured. If <b>ssl</b> is NULL or no ciphers are available, NULL is returned.</p>
+
+<p>SSL_get_client_ciphers() returns the stack of available SSL_CIPHERs matching the list received from the client on <b>ssl</b>. If <b>ssl</b> is NULL, no ciphers are available, or <b>ssl</b> is not operating in server mode, NULL is returned.</p>
+
+<p>SSL_bytes_to_cipher_list() treats the supplied <b>len</b> octets in <b>bytes</b> as a wire-protocol cipher suite specification (in the three-octet-per-cipher SSLv2 wire format if <b>isv2format</b> is nonzero; otherwise the two-octet SSLv3/TLS wire format), and parses the cipher suites supported by the library into the returned stacks of SSL_CIPHER objects sk and Signalling Cipher-Suite Values scsvs. Unsupported cipher suites are ignored. Returns 1 on success and 0 on failure.</p>
+
+<p>SSL_get_cipher_list() returns a pointer to the name of the SSL_CIPHER listed for <b>ssl</b> with <b>priority</b>. If <b>ssl</b> is NULL, no ciphers are available, or there are less ciphers than <b>priority</b> available, NULL is returned.</p>
+
+<p>SSL_get_shared_ciphers() creates a colon separated and NUL terminated list of SSL_CIPHER names that are available in both the client and the server. <b>buf</b> is the buffer that should be populated with the list of names and <b>size</b> is the size of that buffer. A pointer to <b>buf</b> is returned on success or NULL on error. If the supplied buffer is not large enough to contain the complete list of names then a truncated list of names will be returned. Note that just because a ciphersuite is available (i.e. it is configured in the cipher list) and shared by both the client and the server it does not mean that it is enabled (see the description of SSL_get1_supported_ciphers() above). This function will return available shared ciphersuites whether or not they are enabled. This is a server side function only and must only be called after the completion of the initial handshake.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The details of the ciphers obtained by SSL_get_ciphers(), SSL_CTX_get_ciphers() SSL_get1_supported_ciphers() and SSL_get_client_ciphers() can be obtained using the <a href="../man3/SSL_CIPHER_get_name.html">SSL_CIPHER_get_name(3)</a> family of functions.</p>
+
+<p>Call SSL_get_cipher_list() with <b>priority</b> starting from 0 to obtain the sorted list of available ciphers, until NULL is returned.</p>
+
+<p>Note: SSL_get_ciphers(), SSL_CTX_get_ciphers() and SSL_get_client_ciphers() return a pointer to an internal cipher stack, which will be freed later on when the SSL or SSL_SESSION object is freed. Therefore, the calling code <b>MUST NOT</b> free the return value itself.</p>
+
+<p>The stack returned by SSL_get1_supported_ciphers() should be freed using sk_SSL_CIPHER_free().</p>
+
+<p>The stacks returned by SSL_bytes_to_cipher_list() should be freed using sk_SSL_CIPHER_free().</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>See DESCRIPTION</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ssl.html">ssl(7)</a>, <a href="../man3/SSL_CTX_set_cipher_list.html">SSL_CTX_set_cipher_list(3)</a>, <a href="../man3/SSL_CIPHER_get_name.html">SSL_CIPHER_get_name(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2018 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

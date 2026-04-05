@@ -1,0 +1,51 @@
+.\"
+.\" Copyright 1998 by the Massachusetts Institute of Technology.
+.\" SPDX-License-Identifier: MIT
+.\"
+.TH ARES_EXPAND_NAME 3 "20 Nov 2009"
+.SH NAME
+ares_expand_name \- Expand a DNS-encoded domain name
+.SH SYNOPSIS
+.nf
+#include <ares.h>
+
+int ares_expand_name(const unsigned char *\fIencoded\fP,
+                     const unsigned char *\fIabuf\fP, int \fIalen\fP,
+                     char **\fIs\fP, long *\fIenclen\fP)
+.fi
+.SH DESCRIPTION
+The
+.B ares_expand_name
+function converts a DNS-encoded domain name to a dot-separated C
+string.  The argument
+.I encoded
+gives the beginning of the encoded domain name, and the arguments
+.I abuf
+and
+.I alen
+give the containing message buffer (necessary for the processing of
+indirection pointers within the encoded domain name).  The result is
+placed in a NUL-terminated allocated buffer, a pointer to which is
+stored in the variable pointed to by
+.IR s .
+The length of the encoded name is stored in the variable pointed to by
+.I enclen
+so that the caller can advance past the encoded domain name to read
+further data in the message.
+
+Use \fIares_free_string(3)\fP to free the allocated hostname.
+.SH RETURN VALUES
+.B ares_expand_name
+can return any of the following values:
+.TP 15
+.B ARES_SUCCESS
+Expansion of the encoded name succeeded.
+.TP 15
+.B ARES_EBADNAME
+The encoded domain name was malformed and could not be expanded.
+.TP 15
+.B ARES_ENOMEM
+Memory was exhausted.
+.SH SEE ALSO
+.BR ares_mkquery (3),
+.BR ares_free_string (3)

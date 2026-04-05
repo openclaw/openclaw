@@ -1,0 +1,69 @@
+.\" SPDX-License-Identifier: 0BSD
+.\"
+.\" Authors: Andrew Dudman
+.\"          Lasse Collin
+.\"
+.\" (Note that this file is not based on gzip's zless.1.)
+.\"
+.TH XZLESS 1 "2025-03-06" "Tukaani" "XZ Utils"
+.SH NAME
+xzless, lzless \- view xz or lzma compressed (text) files
+.SH SYNOPSIS
+.B xzless
+.RI [ file ...]
+.br
+.B lzless
+.RI [ file ...]
+(DEPRECATED)
+.SH DESCRIPTION
+.B xzless
+is a filter that displays text from compressed files to a terminal.
+Files supported by
+.BR xz (1)
+are decompressed;
+other files are assumed to be in uncompressed form already.
+If no
+.I files
+are given,
+.B xzless
+reads from standard input.
+.PP
+.B xzless
+uses
+.BR less (1)
+to present its output.
+Unlike
+.BR xzmore ,
+its choice of pager cannot be altered by
+setting an environment variable.
+Commands are based on both
+.BR more (1)
+and
+.BR vi (1)
+and allow back and forth movement and searching.
+See the
+.BR less (1)
+manual for more information.
+.PP
+The command named
+.B lzless
+is provided for backward compatibility with LZMA Utils.
+It is deprecated and will be removed in a future version.
+.SH ENVIRONMENT
+.TP
+.B LESSMETACHARS
+A list of characters special to the shell.
+Set by
+.B xzless
+unless it is already set in the environment.
+.TP
+.B LESSOPEN
+Set to a command line to invoke the
+.BR xz (1)
+decompressor for preprocessing the input files to
+.BR less (1).
+.SH "SEE ALSO"
+.BR less (1),
+.BR xz (1),
+.BR xzmore (1),
+.BR zless (1)

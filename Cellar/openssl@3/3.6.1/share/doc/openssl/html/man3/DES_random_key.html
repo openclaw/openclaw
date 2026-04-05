@@ -1,0 +1,225 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>DES_random_key</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#BUGS">BUGS</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>DES_random_key, DES_set_key, DES_key_sched, DES_set_key_checked, DES_set_key_unchecked, DES_set_odd_parity, DES_is_weak_key, DES_ecb_encrypt, DES_ecb2_encrypt, DES_ecb3_encrypt, DES_ncbc_encrypt, DES_cfb_encrypt, DES_ofb_encrypt, DES_pcbc_encrypt, DES_cfb64_encrypt, DES_ofb64_encrypt, DES_xcbc_encrypt, DES_ede2_cbc_encrypt, DES_ede2_cfb64_encrypt, DES_ede2_ofb64_encrypt, DES_ede3_cbc_encrypt, DES_ede3_cfb64_encrypt, DES_ede3_ofb64_encrypt, DES_cbc_cksum, DES_quad_cksum, DES_string_to_key, DES_string_to_2keys, DES_fcrypt, DES_crypt - DES encryption</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/des.h&gt;</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>void DES_random_key(DES_cblock *ret);
+
+int DES_set_key(const_DES_cblock *key, DES_key_schedule *schedule);
+int DES_key_sched(const_DES_cblock *key, DES_key_schedule *schedule);
+int DES_set_key_checked(const_DES_cblock *key, DES_key_schedule *schedule);
+void DES_set_key_unchecked(const_DES_cblock *key, DES_key_schedule *schedule);
+
+void DES_set_odd_parity(DES_cblock *key);
+int DES_is_weak_key(const_DES_cblock *key);
+
+void DES_ecb_encrypt(const_DES_cblock *input, DES_cblock *output,
+                     DES_key_schedule *ks, int enc);
+void DES_ecb2_encrypt(const_DES_cblock *input, DES_cblock *output,
+                      DES_key_schedule *ks1, DES_key_schedule *ks2, int enc);
+void DES_ecb3_encrypt(const_DES_cblock *input, DES_cblock *output,
+                      DES_key_schedule *ks1, DES_key_schedule *ks2,
+                      DES_key_schedule *ks3, int enc);
+
+void DES_ncbc_encrypt(const unsigned char *input, unsigned char *output,
+                      long length, DES_key_schedule *schedule, DES_cblock *ivec,
+                      int enc);
+void DES_cfb_encrypt(const unsigned char *in, unsigned char *out,
+                     int numbits, long length, DES_key_schedule *schedule,
+                     DES_cblock *ivec, int enc);
+void DES_ofb_encrypt(const unsigned char *in, unsigned char *out,
+                     int numbits, long length, DES_key_schedule *schedule,
+                     DES_cblock *ivec);
+void DES_pcbc_encrypt(const unsigned char *input, unsigned char *output,
+                      long length, DES_key_schedule *schedule, DES_cblock *ivec,
+                      int enc);
+void DES_cfb64_encrypt(const unsigned char *in, unsigned char *out,
+                       long length, DES_key_schedule *schedule, DES_cblock *ivec,
+                       int *num, int enc);
+void DES_ofb64_encrypt(const unsigned char *in, unsigned char *out,
+                       long length, DES_key_schedule *schedule, DES_cblock *ivec,
+                       int *num);
+
+void DES_xcbc_encrypt(const unsigned char *input, unsigned char *output,
+                      long length, DES_key_schedule *schedule, DES_cblock *ivec,
+                      const_DES_cblock *inw, const_DES_cblock *outw, int enc);
+
+void DES_ede2_cbc_encrypt(const unsigned char *input, unsigned char *output,
+                          long length, DES_key_schedule *ks1,
+                          DES_key_schedule *ks2, DES_cblock *ivec, int enc);
+void DES_ede2_cfb64_encrypt(const unsigned char *in, unsigned char *out,
+                            long length, DES_key_schedule *ks1,
+                            DES_key_schedule *ks2, DES_cblock *ivec,
+                            int *num, int enc);
+void DES_ede2_ofb64_encrypt(const unsigned char *in, unsigned char *out,
+                            long length, DES_key_schedule *ks1,
+                            DES_key_schedule *ks2, DES_cblock *ivec, int *num);
+
+void DES_ede3_cbc_encrypt(const unsigned char *input, unsigned char *output,
+                          long length, DES_key_schedule *ks1,
+                          DES_key_schedule *ks2, DES_key_schedule *ks3,
+                          DES_cblock *ivec, int enc);
+void DES_ede3_cfb64_encrypt(const unsigned char *in, unsigned char *out,
+                            long length, DES_key_schedule *ks1,
+                            DES_key_schedule *ks2, DES_key_schedule *ks3,
+                            DES_cblock *ivec, int *num, int enc);
+void DES_ede3_ofb64_encrypt(const unsigned char *in, unsigned char *out,
+                            long length, DES_key_schedule *ks1,
+                            DES_key_schedule *ks2, DES_key_schedule *ks3,
+                            DES_cblock *ivec, int *num);
+
+DES_LONG DES_cbc_cksum(const unsigned char *input, DES_cblock *output,
+                       long length, DES_key_schedule *schedule,
+                       const_DES_cblock *ivec);
+DES_LONG DES_quad_cksum(const unsigned char *input, DES_cblock output[],
+                        long length, int out_count, DES_cblock *seed);
+void DES_string_to_key(const char *str, DES_cblock *key);
+void DES_string_to_2keys(const char *str, DES_cblock *key1, DES_cblock *key2);
+
+char *DES_fcrypt(const char *buf, const char *salt, char *ret);
+char *DES_crypt(const char *buf, const char *salt);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>All of the functions described on this page are deprecated. Applications should instead use <a href="../man3/EVP_EncryptInit_ex.html">EVP_EncryptInit_ex(3)</a>, <a href="../man3/EVP_EncryptUpdate.html">EVP_EncryptUpdate(3)</a> and <a href="../man3/EVP_EncryptFinal_ex.html">EVP_EncryptFinal_ex(3)</a> or the equivalently named decrypt functions.</p>
+
+<p>This library contains a fast implementation of the DES encryption algorithm.</p>
+
+<p>There are two phases to the use of DES encryption. The first is the generation of a <i>DES_key_schedule</i> from a key, the second is the actual encryption. A DES key is of type <i>DES_cblock</i>. This type consists of 8 bytes with odd parity. The least significant bit in each byte is the parity bit. The key schedule is an expanded form of the key; it is used to speed the encryption process.</p>
+
+<p>DES_random_key() generates a random key. The random generator must be seeded when calling this function. If the automatic seeding or reseeding of the OpenSSL CSPRNG fails due to external circumstances (see <a href="../man7/RAND.html">RAND(7)</a>), the operation will fail. If the function fails, 0 is returned.</p>
+
+<p>Before a DES key can be used, it must be converted into the architecture dependent <i>DES_key_schedule</i> via the DES_set_key_checked() or DES_set_key_unchecked() function.</p>
+
+<p>DES_set_key_checked() will check that the key passed is of odd parity and is not a weak or semi-weak key. If the parity is wrong, then -1 is returned. If the key is a weak key, then -2 is returned. If an error is returned, the key schedule is not generated.</p>
+
+<p>DES_set_key() works like DES_set_key_checked() and remains for backward compatibility.</p>
+
+<p>DES_set_odd_parity() sets the parity of the passed <i>key</i> to odd.</p>
+
+<p>DES_is_weak_key() returns 1 if the passed key is a weak key, 0 if it is ok.</p>
+
+<p>The following routines mostly operate on an input and output stream of <i>DES_cblock</i>s.</p>
+
+<p>DES_ecb_encrypt() is the basic DES encryption routine that encrypts or decrypts a single 8-byte <i>DES_cblock</i> in <i>electronic code book</i> (ECB) mode. It always transforms the input data, pointed to by <i>input</i>, into the output data, pointed to by the <i>output</i> argument. If the <i>encrypt</i> argument is nonzero (DES_ENCRYPT), the <i>input</i> (cleartext) is encrypted in to the <i>output</i> (ciphertext) using the key_schedule specified by the <i>schedule</i> argument, previously set via <i>DES_set_key</i>. If <i>encrypt</i> is zero (DES_DECRYPT), the <i>input</i> (now ciphertext) is decrypted into the <i>output</i> (now cleartext). Input and output may overlap. DES_ecb_encrypt() does not return a value.</p>
+
+<p>DES_ecb3_encrypt() encrypts/decrypts the <i>input</i> block by using three-key Triple-DES encryption in ECB mode. This involves encrypting the input with <i>ks1</i>, decrypting with the key schedule <i>ks2</i>, and then encrypting with <i>ks3</i>. This routine greatly reduces the chances of brute force breaking of DES and has the advantage of if <i>ks1</i>, <i>ks2</i> and <i>ks3</i> are the same, it is equivalent to just encryption using ECB mode and <i>ks1</i> as the key.</p>
+
+<p>The macro DES_ecb2_encrypt() is provided to perform two-key Triple-DES encryption by using <i>ks1</i> for the final encryption.</p>
+
+<p>DES_ncbc_encrypt() encrypts/decrypts using the <i>cipher-block-chaining</i> (CBC) mode of DES. If the <i>encrypt</i> argument is nonzero, the routine cipher-block-chain encrypts the cleartext data pointed to by the <i>input</i> argument into the ciphertext pointed to by the <i>output</i> argument, using the key schedule provided by the <i>schedule</i> argument, and initialization vector provided by the <i>ivec</i> argument. If the <i>length</i> argument is not an integral multiple of eight bytes, the last block is copied to a temporary area and zero filled. The output is always an integral multiple of eight bytes.</p>
+
+<p>DES_xcbc_encrypt() is RSA&#39;s DESX mode of DES. It uses <i>inw</i> and <i>outw</i> to &#39;whiten&#39; the encryption. <i>inw</i> and <i>outw</i> are secret (unlike the iv) and are as such, part of the key. So the key is sort of 24 bytes. This is much better than CBC DES.</p>
+
+<p>DES_ede3_cbc_encrypt() implements outer triple CBC DES encryption with three keys. This means that each DES operation inside the CBC mode is <code>C=E(ks3,D(ks2,E(ks1,M)))</code>. This mode is used by SSL.</p>
+
+<p>The DES_ede2_cbc_encrypt() macro implements two-key Triple-DES by reusing <i>ks1</i> for the final encryption. <code>C=E(ks1,D(ks2,E(ks1,M)))</code>. This form of Triple-DES is used by the RSAREF library.</p>
+
+<p>DES_pcbc_encrypt() encrypts/decrypts using the propagating cipher block chaining mode used by Kerberos v4. Its parameters are the same as DES_ncbc_encrypt().</p>
+
+<p>DES_cfb_encrypt() encrypts/decrypts using cipher feedback mode. This method takes an array of characters as input and outputs an array of characters. It does not require any padding to 8 character groups. Note: the <i>ivec</i> variable is changed and the new changed value needs to be passed to the next call to this function. Since this function runs a complete DES ECB encryption per <i>numbits</i>, this function is only suggested for use when sending a small number of characters.</p>
+
+<p>DES_cfb64_encrypt() implements CFB mode of DES with 64-bit feedback. Why is this useful you ask? Because this routine will allow you to encrypt an arbitrary number of bytes, without 8 byte padding. Each call to this routine will encrypt the input bytes to output and then update ivec and num. num contains &#39;how far&#39; we are though ivec. If this does not make much sense, read more about CFB mode of DES.</p>
+
+<p>DES_ede3_cfb64_encrypt() and DES_ede2_cfb64_encrypt() is the same as DES_cfb64_encrypt() except that Triple-DES is used.</p>
+
+<p>DES_ofb_encrypt() encrypts using output feedback mode. This method takes an array of characters as input and outputs an array of characters. It does not require any padding to 8 character groups. Note: the <i>ivec</i> variable is changed and the new changed value needs to be passed to the next call to this function. Since this function runs a complete DES ECB encryption per <i>numbits</i>, this function is only suggested for use when sending a small number of characters.</p>
+
+<p>DES_ofb64_encrypt() is the same as DES_cfb64_encrypt() using Output Feed Back mode.</p>
+
+<p>DES_ede3_ofb64_encrypt() and DES_ede2_ofb64_encrypt() is the same as DES_ofb64_encrypt(), using Triple-DES.</p>
+
+<p>The following functions are included in the DES library for compatibility with the MIT Kerberos library.</p>
+
+<p>DES_cbc_cksum() produces an 8 byte checksum based on the input stream (via CBC encryption). The last 4 bytes of the checksum are returned and the complete 8 bytes are placed in <i>output</i>. This function is used by Kerberos v4. Other applications should use <a href="../man3/EVP_DigestInit.html">EVP_DigestInit(3)</a> etc. instead.</p>
+
+<p>DES_quad_cksum() is a Kerberos v4 function. It returns a 4 byte checksum from the input bytes. The algorithm can be iterated over the input, depending on <i>out_count</i>, 1, 2, 3 or 4 times. If <i>output</i> is non-NULL, the 8 bytes generated by each pass are written into <i>output</i>.</p>
+
+<p>The following are DES-based transformations:</p>
+
+<p>DES_fcrypt() is a fast version of the Unix crypt(3) function. This version takes only a small amount of space relative to other fast crypt() implementations. This is different to the normal crypt() in that the third parameter is the buffer that the return value is written into. It needs to be at least 14 bytes long. This function is thread safe, unlike the normal crypt().</p>
+
+<p>DES_crypt() is a faster replacement for the normal system crypt(). This function calls DES_fcrypt() with a static array passed as the third parameter. This mostly emulates the normal non-thread-safe semantics of crypt(3). The <b>salt</b> must be two ASCII characters.</p>
+
+<p>The values returned by DES_fcrypt() and DES_crypt() are terminated by NUL character.</p>
+
+<p>DES_enc_write() writes <i>len</i> bytes to file descriptor <i>fd</i> from buffer <i>buf</i>. The data is encrypted via <i>pcbc_encrypt</i> (default) using <i>sched</i> for the key and <i>iv</i> as a starting vector. The actual data send down <i>fd</i> consists of 4 bytes (in network byte order) containing the length of the following encrypted data. The encrypted data then follows, padded with random data out to a multiple of 8 bytes.</p>
+
+<h1 id="BUGS">BUGS</h1>
+
+<p>DES_cbc_encrypt() does not modify <b>ivec</b>; use DES_ncbc_encrypt() instead.</p>
+
+<p>DES_cfb_encrypt() and DES_ofb_encrypt() operates on input of 8 bits. What this means is that if you set numbits to 12, and length to 2, the first 12 bits will come from the 1st input byte and the low half of the second input byte. The second 12 bits will have the low 8 bits taken from the 3rd input byte and the top 4 bits taken from the 4th input byte. The same holds for output. This function has been implemented this way because most people will be using a multiple of 8 and because once you get into pulling bytes input bytes apart things get ugly!</p>
+
+<p>DES_string_to_key() is available for backward compatibility with the MIT library. New applications should use a cryptographic hash function. The same applies for DES_string_to_2key().</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The <b>des</b> library was written to be source code compatible with the MIT Kerberos library.</p>
+
+<p>Applications should use the higher level functions <a href="../man3/EVP_EncryptInit.html">EVP_EncryptInit(3)</a> etc. instead of calling these functions directly.</p>
+
+<p>Single-key DES is insecure due to its short key size. ECB mode is not suitable for most applications; see <a href="../man7/des_modes.html">des_modes(7)</a>.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>DES_set_key(), DES_key_sched(), and DES_set_key_checked() return 0 on success or negative values on error.</p>
+
+<p>DES_is_weak_key() returns 1 if the passed key is a weak key, 0 if it is ok.</p>
+
+<p>DES_cbc_cksum() and DES_quad_cksum() return 4-byte integer representing the last 4 bytes of the checksum of the input.</p>
+
+<p>DES_fcrypt() returns a pointer to the caller-provided buffer and DES_crypt() - to a static buffer on success; otherwise they return NULL.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/des_modes.html">des_modes(7)</a>, <a href="../man3/EVP_EncryptInit.html">EVP_EncryptInit(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>All of these functions were deprecated in OpenSSL 3.0.</p>
+
+<p>The requirement that the <b>salt</b> parameter to DES_crypt() and DES_fcrypt() be two ASCII characters was first enforced in OpenSSL 1.1.0. Previous versions tried to use the letter uppercase <b>A</b> if both character were not present, and could crash when given non-ASCII on some platforms.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2020 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

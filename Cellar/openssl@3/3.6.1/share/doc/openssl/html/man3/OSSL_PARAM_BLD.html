@@ -1,0 +1,169 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OSSL_PARAM_BLD</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a>
+    <ul>
+      <li><a href="#Example-1">Example 1</a></li>
+      <li><a href="#Example-2">Example 2</a></li>
+    </ul>
+  </li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OSSL_PARAM_BLD, OSSL_PARAM_BLD_new, OSSL_PARAM_BLD_to_param, OSSL_PARAM_BLD_free, OSSL_PARAM_BLD_push_int, OSSL_PARAM_BLD_push_uint, OSSL_PARAM_BLD_push_long, OSSL_PARAM_BLD_push_ulong, OSSL_PARAM_BLD_push_int32, OSSL_PARAM_BLD_push_uint32, OSSL_PARAM_BLD_push_int64, OSSL_PARAM_BLD_push_uint64, OSSL_PARAM_BLD_push_size_t, OSSL_PARAM_BLD_push_time_t, OSSL_PARAM_BLD_push_double, OSSL_PARAM_BLD_push_BN, OSSL_PARAM_BLD_push_BN_pad, OSSL_PARAM_BLD_push_utf8_string, OSSL_PARAM_BLD_push_utf8_ptr, OSSL_PARAM_BLD_push_octet_string, OSSL_PARAM_BLD_push_octet_ptr - functions to assist in the creation of OSSL_PARAM arrays</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/param_build.h&gt;
+
+typedef struct OSSL_PARAM_BLD;
+
+OSSL_PARAM_BLD *OSSL_PARAM_BLD_new(void);
+OSSL_PARAM *OSSL_PARAM_BLD_to_param(OSSL_PARAM_BLD *bld);
+void OSSL_PARAM_BLD_free(OSSL_PARAM_BLD *bld);
+
+int OSSL_PARAM_BLD_push_TYPE(OSSL_PARAM_BLD *bld, const char *key, TYPE val);
+
+int OSSL_PARAM_BLD_push_BN(OSSL_PARAM_BLD *bld, const char *key,
+                           const BIGNUM *bn);
+int OSSL_PARAM_BLD_push_BN_pad(OSSL_PARAM_BLD *bld, const char *key,
+                               const BIGNUM *bn, size_t sz);
+
+int OSSL_PARAM_BLD_push_utf8_string(OSSL_PARAM_BLD *bld, const char *key,
+                                    const char *buf, size_t bsize);
+int OSSL_PARAM_BLD_push_utf8_ptr(OSSL_PARAM_BLD *bld, const char *key,
+                                 char *buf, size_t bsize);
+int OSSL_PARAM_BLD_push_octet_string(OSSL_PARAM_BLD *bld, const char *key,
+                                     const void *buf, size_t bsize);
+int OSSL_PARAM_BLD_push_octet_ptr(OSSL_PARAM_BLD *bld, const char *key,
+                                  void *buf, size_t bsize);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>A collection of utility functions that simplify the creation of OSSL_PARAM arrays. The <b><i>TYPE</i></b> names are as per <a href="../man3/OSSL_PARAM_int.html">OSSL_PARAM_int(3)</a>.</p>
+
+<p>OSSL_PARAM_BLD_new() allocates and initialises a new OSSL_PARAM_BLD structure so that values can be added. Any existing values are cleared.</p>
+
+<p>OSSL_PARAM_BLD_free() deallocates the memory allocates by OSSL_PARAM_BLD_new(). If the argument is NULL, nothing is done.</p>
+
+<p>OSSL_PARAM_BLD_to_param() converts a built up OSSL_PARAM_BLD structure <i>bld</i> into an allocated OSSL_PARAM array. The OSSL_PARAM array and all associated storage must be freed by calling OSSL_PARAM_free() with the functions return value. OSSL_PARAM_BLD_free() can safely be called any time after this function is.</p>
+
+<p><b>OSSL_PARAM_BLD_push_<i>TYPE</i></b>() are a series of functions which will create OSSL_PARAM objects of the specified size and correct type for the <i>val</i> argument. <i>val</i> is stored by value and an expression or auto variable can be used.</p>
+
+<p>When <b><i>TYPE</i></b> denotes an integer type, signed integer types will normally get the OSSL_PARAM type <b>OSSL_PARAM_INTEGER</b> params. When <b><i>TYPE</i></b> denotes an unsigned integer type will get the OSSL_PARAM type <b>OSSL_PARAM_UNSIGNED_INTEGER</b>.</p>
+
+<p>OSSL_PARAM_BLD_push_BN() is a function that will create an OSSL_PARAM object that holds the specified BIGNUM <i>bn</i>. When the <i>bn</i> is zero or positive, its OSSL_PARAM type becomes <b>OSSL_PARAM_UNSIGNED_INTEGER</b>. When the <i>bn</i> is negative, its OSSL_PARAM type becomes <b>OSSL_PARAM_INTEGER</b>. If <i>bn</i> is marked as being securely allocated, its OSSL_PARAM representation will also be securely allocated. The <i>bn</i> argument is stored by reference and the underlying BIGNUM object must exist until after OSSL_PARAM_BLD_to_param() has been called.</p>
+
+<p>OSSL_PARAM_BLD_push_BN_pad() is a function that will create an OSSL_PARAM object that holds the specified BIGNUM <i>bn</i>. The object will be padded to occupy exactly <i>sz</i> bytes, if insufficient space is specified an error results. When the <i>bn</i> is zero or positive, its OSSL_PARAM type becomes <b>OSSL_PARAM_UNSIGNED_INTEGER</b>. When the <i>bn</i> is negative, its OSSL_PARAM type becomes <b>OSSL_PARAM_INTEGER</b>. If <i>bn</i> is marked as being securely allocated, its OSSL_PARAM representation will also be securely allocated. The <i>bn</i> argument is stored by reference and the underlying BIGNUM object must exist until after OSSL_PARAM_BLD_to_param() has been called.</p>
+
+<p>OSSL_PARAM_BLD_push_utf8_string() is a function that will create an OSSL_PARAM object that references the UTF8 string specified by <i>buf</i>. The length of the string <i>bsize</i> should not include the terminating NUL byte. If it is zero then it will be calculated. The string that <i>buf</i> points to is stored by reference and must remain in scope until after OSSL_PARAM_BLD_to_param() has been called.</p>
+
+<p>OSSL_PARAM_BLD_push_octet_string() is a function that will create an OSSL_PARAM object that references the octet string specified by <i>buf</i> and &lt;bsize&gt;. The memory that <i>buf</i> points to is stored by reference and must remain in scope until after OSSL_PARAM_BLD_to_param() has been called.</p>
+
+<p>OSSL_PARAM_BLD_push_utf8_ptr() is a function that will create an OSSL_PARAM object that references the UTF8 string specified by <i>buf</i>. The length of the string <i>bsize</i> should not include the terminating NUL byte. If it is zero then it will be calculated. The string <i>buf</i> points to is stored by reference and must remain in scope until the OSSL_PARAM array is freed.</p>
+
+<p>OSSL_PARAM_BLD_push_octet_ptr() is a function that will create an OSSL_PARAM object that references the octet string specified by <i>buf</i>. The memory <i>buf</i> points to is stored by reference and must remain in scope until the OSSL_PARAM array is freed.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>OSSL_PARAM_BLD_new() returns the allocated OSSL_PARAM_BLD structure, or NULL on error.</p>
+
+<p>OSSL_PARAM_BLD_to_param() returns the allocated OSSL_PARAM array, or NULL on error.</p>
+
+<p>All of the OSSL_PARAM_BLD_push_TYPE functions return 1 on success and 0 on error.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>OSSL_PARAM_BLD_push_BN() and OSSL_PARAM_BLD_push_BN_pad() only support nonnegative <b>BIGNUM</b>s. They return an error on negative <b>BIGNUM</b>s. To pass signed <b>BIGNUM</b>s, use OSSL_PARAM_BLD_push_signed_BN().</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>Both examples creating an OSSL_PARAM array that contains an RSA key. For both, the predefined key variables are:</p>
+
+<pre><code>BIGNUM *n;           /* modulus */
+unsigned int e;      /* public exponent */
+BIGNUM *d;           /* private exponent */
+BIGNUM *p, *q;       /* first two prime factors */
+BIGNUM *dmp1, *dmq1; /* first two CRT exponents */
+BIGNUM *iqmp;        /* first CRT coefficient */</code></pre>
+
+<h2 id="Example-1">Example 1</h2>
+
+<p>This example shows how to create an OSSL_PARAM array that contains an RSA private key.</p>
+
+<pre><code>OSSL_PARAM_BLD *bld = OSSL_PARAM_BLD_new();
+OSSL_PARAM *params = NULL;
+
+if (bld == NULL
+    || !OSSL_PARAM_BLD_push_BN(bld, &quot;n&quot;, n)
+    || !OSSL_PARAM_BLD_push_uint(bld, &quot;e&quot;, e)
+    || !OSSL_PARAM_BLD_push_BN(bld, &quot;d&quot;, d)
+    || !OSSL_PARAM_BLD_push_BN(bld, &quot;rsa-factor1&quot;, p)
+    || !OSSL_PARAM_BLD_push_BN(bld, &quot;rsa-factor2&quot;, q)
+    || !OSSL_PARAM_BLD_push_BN(bld, &quot;rsa-exponent1&quot;, dmp1)
+    || !OSSL_PARAM_BLD_push_BN(bld, &quot;rsa-exponent2&quot;, dmq1)
+    || !OSSL_PARAM_BLD_push_BN(bld, &quot;rsa-coefficient1&quot;, iqmp)
+    || (params = OSSL_PARAM_BLD_to_param(bld)) == NULL)
+    goto err;
+OSSL_PARAM_BLD_free(bld);
+/* Use params */
+...
+OSSL_PARAM_free(params);</code></pre>
+
+<h2 id="Example-2">Example 2</h2>
+
+<p>This example shows how to create an OSSL_PARAM array that contains an RSA public key.</p>
+
+<pre><code>OSSL_PARAM_BLD *bld = OSSL_PARAM_BLD_new();
+OSSL_PARAM *params = NULL;
+
+if (nld == NULL
+    || !OSSL_PARAM_BLD_push_BN(bld, &quot;n&quot;, n)
+    || !OSSL_PARAM_BLD_push_uint(bld, &quot;e&quot;, e)
+    || (params = OSSL_PARAM_BLD_to_param(bld)) == NULL)
+    goto err;
+OSSL_PARAM_BLD_free(bld);
+/* Use params */
+...
+OSSL_PARAM_free(params);</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/OSSL_PARAM_int.html">OSSL_PARAM_int(3)</a>, <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a>, <a href="../man3/OSSL_PARAM_free.html">OSSL_PARAM_free(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The functions described here were all added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2019-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

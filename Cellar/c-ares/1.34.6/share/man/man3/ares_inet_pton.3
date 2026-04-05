@@ -1,0 +1,35 @@
+.\"
+.\" Copyright (C) 2013 by Daniel Stenberg
+.\" SPDX-License-Identifier: MIT
+.\"
+.TH ARES_INET_PTON 3 "17 Feb 2013"
+.SH NAME
+ares_inet_pton \- convert an IPv4 or IPv6 address from text to binary form
+.SH SYNOPSIS
+.nf
+#include <ares.h>
+
+int ares_inet_pton(int \fIaf\fP, const char *\fIsrc\fP, void *\fIdst\fP);
+.fi
+.SH DESCRIPTION
+This is a portable version with the identical functionality of the commonly
+available \fIinet_pton\fP.
+
+The ares_inet_pton() function converts the address in its standard text
+presentation form into its numeric binary form. The \fBaf\fP argument shall
+specify the family of the address. The AF_INET and AF_INET6 address families
+shall be supported. The \fBsrc\fP argument points to the string being passed
+in. The \fBdst\fP argument points to a buffer into which the function stores
+the numeric address; this shall be large enough to hold the numeric address
+(32 bits for AF_INET, 128 bits for AF_INET6).
+
+It returns 1 if the address was valid for the specified address family, or 0
+if the address was not parseable in the specified address family, or -1 if
+some system error occurred (in which case errno will have been set).
+
+.SH SEE ALSO
+.BR ares_init (3),
+.BR ares_inet_ntop (3)
+.SH AVAILABILITY
+made properly publicly available in c-ares for real in version 1.10.0
+

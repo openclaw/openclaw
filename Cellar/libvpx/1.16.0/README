@@ -1,0 +1,237 @@
+Welcome to the WebM VP8/VP9 Codec SDK!
+
+COMPILING THE APPLICATIONS/LIBRARIES:
+  The build system used is similar to autotools. Building generally consists of
+  "configuring" with your desired build options, then using GNU make to build
+  the application.
+
+  1. Prerequisites
+
+    * All x86 targets require the NASM[0] or Yasm[1] assembler be installed[2].
+    * All Windows builds require that Cygwin[3] or MSYS2[4] be installed.
+    * Building the documentation requires Doxygen[5]. If you do not
+      have this package, the install-docs option will be disabled.
+    * Downloading the data for the unit tests requires curl[6] and sha1sum.
+      sha1sum is provided via the GNU coreutils, installed by default on
+      many *nix platforms, as well as MinGW and Cygwin. If coreutils is not
+      available, a compatible version of sha1sum can be built from
+      source[7]. These requirements are optional if not running the unit
+      tests.
+
+    [0]: https://www.nasm.us/
+    [1]: http://www.tortall.net/projects/yasm
+    [2]: For Visual Studio the base yasm binary (not vsyasm) should be in the
+         PATH for Visual Studio. For VS2017 it is sufficient to rename
+         yasm-<version>-<arch>.exe to yasm.exe and place it in:
+         Program Files (x86)/Microsoft Visual Studio/2017/<level>/Common7/Tools/
+         The MSYS2 version of the yasm binary can also be used and avoids an
+         issue caused by a missing Visual C++ Redistributable install (Visual
+         Studio 2010, MSVCR100.dll).
+    [3]: http://www.cygwin.com
+    [4]: http://www.msys2.org/
+    [5]: http://www.doxygen.org
+    [6]: http://curl.haxx.se
+    [7]: http://www.microbrew.org/tools/md5sha1sum/
+
+  2. Out-of-tree builds
+  Out of tree builds are a supported method of building the application. For
+  an out of tree build, the source tree is kept separate from the object
+  files produced during compilation. For instance:
+
+    $ mkdir build
+    $ cd build
+    $ ../libvpx/configure <options>
+    $ make
+
+  3. Configuration options
+  The 'configure' script supports a number of options. The --help option can be
+  used to get a list of supported options:
+    $ ../libvpx/configure --help
+
+  4. Compiler analyzers
+  Compilers have added sanitizers which instrument binaries with information
+  about address calculation, memory usage, threading, undefined behavior, and
+  other common errors. To simplify building libvpx with some of these features
+  use tools/set_analyzer_env.sh before running configure. It will set the
+  compiler and necessary flags for building as well as environment variables
+  read by the analyzer when testing the binaries.
+    $ source ../libvpx/tools/set_analyzer_env.sh address
+
+  5. Cross development
+  For cross development, the most notable option is the --target option. The
+  most up-to-date list of supported targets can be found at the bottom of the
+  --help output of the configure script. As of this writing, the list of
+  available targets is:
+
+    arm64-android-gcc
+    arm64-darwin-gcc
+    arm64-darwin20-gcc
+    arm64-darwin21-gcc
+    arm64-darwin22-gcc
+    arm64-darwin23-gcc
+    arm64-darwin24-gcc
+    arm64-darwin25-gcc
+    arm64-linux-gcc
+    arm64-win64-gcc
+    arm64-win64-vs15
+    arm64-win64-vs16
+    arm64-win64-vs16-clangcl
+    arm64-win64-vs17
+    arm64-win64-vs17-clangcl
+    armv7-android-gcc
+    armv7-darwin-gcc
+    armv7-linux-rvct
+    armv7-linux-gcc
+    armv7-none-rvct
+    armv7-win32-gcc
+    armv7-win32-vs14
+    armv7-win32-vs15
+    armv7-win32-vs16
+    armv7-win32-vs17
+    armv7s-darwin-gcc
+    armv8-linux-gcc
+    loongarch32-linux-gcc
+    loongarch64-linux-gcc
+    mips32-linux-gcc
+    mips64-linux-gcc
+    ppc64le-linux-gcc
+    sparc-solaris-gcc
+    x86-android-gcc
+    x86-darwin8-gcc
+    x86-darwin8-icc
+    x86-darwin9-gcc
+    x86-darwin9-icc
+    x86-darwin10-gcc
+    x86-darwin11-gcc
+    x86-darwin12-gcc
+    x86-darwin13-gcc
+    x86-darwin14-gcc
+    x86-darwin15-gcc
+    x86-darwin16-gcc
+    x86-darwin17-gcc
+    x86-iphonesimulator-gcc
+    x86-linux-gcc
+    x86-linux-icc
+    x86-os2-gcc
+    x86-solaris-gcc
+    x86-win32-gcc
+    x86-win32-vs14
+    x86-win32-vs15
+    x86-win32-vs16
+    x86-win32-vs17
+    x86_64-android-gcc
+    x86_64-darwin9-gcc
+    x86_64-darwin10-gcc
+    x86_64-darwin11-gcc
+    x86_64-darwin12-gcc
+    x86_64-darwin13-gcc
+    x86_64-darwin14-gcc
+    x86_64-darwin15-gcc
+    x86_64-darwin16-gcc
+    x86_64-darwin17-gcc
+    x86_64-darwin18-gcc
+    x86_64-darwin19-gcc
+    x86_64-darwin20-gcc
+    x86_64-darwin21-gcc
+    x86_64-darwin22-gcc
+    x86_64-darwin23-gcc
+    x86_64-darwin24-gcc
+    x86_64-darwin25-gcc
+    x86_64-iphonesimulator-gcc
+    x86_64-linux-gcc
+    x86_64-linux-icc
+    x86_64-solaris-gcc
+    x86_64-win64-gcc
+    x86_64-win64-vs14
+    x86_64-win64-vs15
+    x86_64-win64-vs16
+    x86_64-win64-vs17
+    generic-gnu
+
+  The generic-gnu target, in conjunction with the CROSS environment variable,
+  can be used to cross compile architectures that aren't explicitly listed, if
+  the toolchain is a cross GNU (gcc/binutils) toolchain. Other POSIX toolchains
+  will likely work as well. For instance, to build using the mipsel-linux-uclibc
+  toolchain, the following command could be used (note, POSIX SH syntax, adapt
+  to your shell as necessary):
+
+    $ CROSS=mipsel-linux-uclibc- ../libvpx/configure
+
+  In addition, the executables to be invoked can be overridden by specifying the
+  environment variables: AR, AS, CC, CXX, LD, STRIP. Additional flags can be
+  passed to these executables with ASFLAGS, CFLAGS, CXXFLAGS, and LDFLAGS.
+
+  6. Configuration errors
+  If the configuration step fails, the first step is to look in the error log.
+  This defaults to config.log. This should give a good indication of what went
+  wrong. If not, contact us for support.
+
+VP8/VP9 TEST VECTORS:
+  The test vectors can be downloaded and verified using the build system after
+  running configure. To specify an alternate directory the
+  LIBVPX_TEST_DATA_PATH environment variable can be used.
+
+  $ ./configure --enable-unit-tests
+  $ LIBVPX_TEST_DATA_PATH=../libvpx-test-data make testdata
+
+CODE STYLE:
+  The coding style used by this project is enforced with clang-format using the
+  configuration contained in the .clang-format file in the root of the
+  repository.
+
+  Before pushing changes for review you can format your code with:
+  # Apply clang-format to modified .c, .h and .cc files
+  $ clang-format -i --style=file \
+    $(git diff --name-only --diff-filter=ACMR '*.[hc]' '*.cc')
+
+  Check the .clang-format file for the version used to generate it if there is
+  any difference between your local formatting and the review system.
+
+  See also: http://clang.llvm.org/docs/ClangFormat.html
+
+PROFILE GUIDED OPTIMIZATION (PGO)
+  Profile Guided Optimization can be enabled for Clang builds using the
+  commands:
+
+  $ export CC=clang
+  $ export CXX=clang++
+  $ ../libvpx/configure  --enable-profile
+  $ make
+
+  Generate one or multiple PGO profile files by running vpxdec or vpxenc. For
+  example:
+
+  $ ./vpxdec ../vpx/out_ful/vp90-2-sintel_1280x546_tile_1x4_1257kbps.webm \
+    -o - > /dev/null
+
+  To convert and merge the raw profile files, use the llvm-profdata tool:
+
+  $ llvm-profdata merge -o perf.profdata default_8382761441159425451_0.profraw
+
+  Then, rebuild the project with the new profile file:
+
+  $ make clean
+  $ ../libvpx/configure --use-profile=perf.profdata
+  $ make
+
+  Note: Always use the llvm-profdata from the toolchain that is used for
+  compiling the PGO-enabled binary.
+
+  To observe the improvements from a PGO-enabled build, enable and compare the
+  list of failed optimizations by using the -Rpass-missed compiler flag. For
+  example, to list the failed loop vectorizations:
+
+  $ ../libvpx/configure --use-profile=perf.profdata \
+    --extra-cflags=-Rpass-missed=loop-vectorize
+
+  For guidance on utilizing PGO files to identify potential optimization
+  opportunities, see: tools/README.pgo.md
+
+SUPPORT
+  This library is an open source project supported by its community. Please
+  email webm-discuss@webmproject.org for help.
+
+BUG REPORTS
+  Bug reports can be filed in the libvpx issue tracker:
+  https://issues.webmproject.org/.
+  For security reports, select 'Security report' from the Template dropdown.

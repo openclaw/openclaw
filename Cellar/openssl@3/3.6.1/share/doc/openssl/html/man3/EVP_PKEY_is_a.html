@@ -1,0 +1,118 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_PKEY_is_a</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a>
+    <ul>
+      <li><a href="#EVP_PKEY_is_a">EVP_PKEY_is_a()</a></li>
+      <li><a href="#EVP_PKEY_can_sign">EVP_PKEY_can_sign()</a></li>
+    </ul>
+  </li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_PKEY_is_a, EVP_PKEY_can_sign, EVP_PKEY_type_names_do_all, EVP_PKEY_get0_type_name, EVP_PKEY_get0_description, EVP_PKEY_get0_provider - key type and capabilities functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+
+int EVP_PKEY_is_a(const EVP_PKEY *pkey, const char *name);
+int EVP_PKEY_can_sign(const EVP_PKEY *pkey);
+int EVP_PKEY_type_names_do_all(const EVP_PKEY *pkey,
+                               void (*fn)(const char *name, void *data),
+                               void *data);
+const char *EVP_PKEY_get0_type_name(const EVP_PKEY *key);
+const char *EVP_PKEY_get0_description(const EVP_PKEY *key);
+const OSSL_PROVIDER *EVP_PKEY_get0_provider(const EVP_PKEY *key);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>EVP_PKEY_is_a() checks if the key type of <i>pkey</i> is <i>name</i>.</p>
+
+<p>EVP_PKEY_can_sign() checks if the functionality for the key type of <i>pkey</i> supports signing. No other check is done, such as whether <i>pkey</i> contains a private key.</p>
+
+<p>EVP_PKEY_type_names_do_all() traverses all names for <i>pkey</i>&#39;s key type, and calls <i>fn</i> with each name and <i>data</i>. For example, an RSA <b>EVP_PKEY</b> may be named both <code>RSA</code> and <code>rsaEncryption</code>. The order of the names depends on the provider implementation that holds the key.</p>
+
+<p>EVP_PKEY_get0_type_name() returns the first key type name that is found for the given <i>pkey</i>. Note that the <i>pkey</i> may have multiple synonyms associated with it. In this case it depends on the provider implementation that holds the key which one will be returned. Ownership of the returned string is retained by the <i>pkey</i> object and should not be freed by the caller.</p>
+
+<p>EVP_PKEY_get0_description() returns a description of the type of <b>EVP_PKEY</b>, meant for display and human consumption. The description is at the discretion of the key type implementation.</p>
+
+<p>EVP_PKEY_get0_provider() returns the provider of the <b>EVP_PKEY</b>&#39;s <a href="../man3/EVP_KEYMGMT.html">EVP_KEYMGMT(3)</a>.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>EVP_PKEY_is_a() returns 1 if <i>pkey</i> has the key type <i>name</i>, otherwise 0.</p>
+
+<p>EVP_PKEY_can_sign() returns 1 if the <i>pkey</i> key type functionality supports signing, otherwise 0.</p>
+
+<p>EVP_PKEY_get0_type_name() returns the name that is found or NULL on error.</p>
+
+<p>EVP_PKEY_get0_description() returns the description if found or NULL if not.</p>
+
+<p>EVP_PKEY_get0_provider() returns the provider if found or NULL if not.</p>
+
+<p>EVP_PKEY_type_names_do_all() returns 1 if the callback was called for all names. A return value of 0 means that the callback was not called for any names.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<h2 id="EVP_PKEY_is_a">EVP_PKEY_is_a()</h2>
+
+<p>The loaded providers and what key types they support will ultimately determine what <i>name</i> is possible to use with EVP_PKEY_is_a(). We do know that the default provider supports RSA, DH, DSA and EC keys, so we can use this as an crude example:</p>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+
+...
+    /* |pkey| is an EVP_PKEY* */
+    if (EVP_PKEY_is_a(pkey, &quot;RSA&quot;)) {
+        BIGNUM *modulus = NULL;
+        if (EVP_PKEY_get_bn_param(pkey, &quot;n&quot;, &amp;modulus))
+            /* do whatever with the modulus */
+        BN_free(modulus);
+    }</code></pre>
+
+<h2 id="EVP_PKEY_can_sign">EVP_PKEY_can_sign()</h2>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+
+...
+    /* |pkey| is an EVP_PKEY* */
+    if (!EVP_PKEY_can_sign(pkey)) {
+        fprintf(stderr, &quot;Not a signing key!&quot;);
+        exit(1);
+    }
+    /* Sign something... */</code></pre>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The functions described here were added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2020-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

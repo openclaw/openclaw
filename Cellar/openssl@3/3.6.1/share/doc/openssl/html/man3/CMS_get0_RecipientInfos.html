@@ -1,0 +1,147 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>CMS_get0_RecipientInfos</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>CMS_get0_RecipientInfos, CMS_RecipientInfo_type, CMS_RecipientInfo_ktri_get0_signer_id, CMS_RecipientInfo_ktri_cert_cmp, CMS_RecipientInfo_set0_pkey, CMS_RecipientInfo_kekri_get0_id, CMS_RecipientInfo_kari_set0_pkey_and_peer, CMS_RecipientInfo_kari_set0_pkey, CMS_RecipientInfo_kari_get0_ctx, CMS_RecipientInfo_kekri_id_cmp, CMS_RecipientInfo_set0_key, CMS_RecipientInfo_kemri_cert_cmp, CMS_RecipientInfo_kemri_set0_pkey, CMS_RecipientInfo_kemri_get0_ctx, CMS_RecipientInfo_kemri_get0_kdf_alg, CMS_RecipientInfo_kemri_set_ukm, CMS_RecipientInfo_decrypt, CMS_RecipientInfo_encrypt - CMS envelopedData RecipientInfo routines</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/cms.h&gt;
+
+STACK_OF(CMS_RecipientInfo) *CMS_get0_RecipientInfos(CMS_ContentInfo *cms);
+int CMS_RecipientInfo_type(CMS_RecipientInfo *ri);
+
+int CMS_RecipientInfo_ktri_get0_signer_id(CMS_RecipientInfo *ri,
+                                          ASN1_OCTET_STRING **keyid,
+                                          X509_NAME **issuer,
+                                          ASN1_INTEGER **sno);
+int CMS_RecipientInfo_ktri_cert_cmp(CMS_RecipientInfo *ri, X509 *cert);
+int CMS_RecipientInfo_set0_pkey(CMS_RecipientInfo *ri, EVP_PKEY *pkey);
+int CMS_RecipientInfo_kari_set0_pkey_and_peer(CMS_RecipientInfo *ri,
+                                              EVP_PKEY *pk, X509 *peer);
+int CMS_RecipientInfo_kari_set0_pkey(CMS_RecipientInfo *ri, EVP_PKEY *pk);
+EVP_CIPHER_CTX *CMS_RecipientInfo_kari_get0_ctx(CMS_RecipientInfo *ri);
+int CMS_RecipientInfo_kekri_get0_id(CMS_RecipientInfo *ri, X509_ALGOR **palg,
+                                    ASN1_OCTET_STRING **pid,
+                                    ASN1_GENERALIZEDTIME **pdate,
+                                    ASN1_OBJECT **potherid,
+                                    ASN1_TYPE **pothertype);
+int CMS_RecipientInfo_kekri_id_cmp(CMS_RecipientInfo *ri,
+                                   const unsigned char *id, size_t idlen);
+int CMS_RecipientInfo_set0_key(CMS_RecipientInfo *ri,
+                               unsigned char *key, size_t keylen);
+int CMS_RecipientInfo_kemri_cert_cmp(CMS_RecipientInfo *ri, X509 *cert);
+int CMS_RecipientInfo_kemri_set0_pkey(CMS_RecipientInfo *ri, EVP_PKEY *pk);
+EVP_CIPHER_CTX *CMS_RecipientInfo_kemri_get0_ctx(CMS_RecipientInfo *ri);
+X509_ALGOR *CMS_RecipientInfo_kemri_get0_kdf_alg(CMS_RecipientInfo *ri);
+int CMS_RecipientInfo_kemri_set_ukm(CMS_RecipientInfo *ri,
+                                    const unsigned char *ukm,
+                                    int ukmLength);
+
+int CMS_RecipientInfo_decrypt(CMS_ContentInfo *cms, CMS_RecipientInfo *ri);
+int CMS_RecipientInfo_encrypt(CMS_ContentInfo *cms, CMS_RecipientInfo *ri);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The function CMS_get0_RecipientInfos() returns all the CMS_RecipientInfo structures associated with a CMS EnvelopedData structure.</p>
+
+<p>CMS_RecipientInfo_type() returns the type of CMS_RecipientInfo structure <b>ri</b>. It will currently return CMS_RECIPINFO_TRANS, CMS_RECIPINFO_AGREE, CMS_RECIPINFO_KEK, CMS_RECIPINFO_PASS, CMS_RECIPINFO_KEM, or CMS_RECIPINFO_OTHER.</p>
+
+<p>CMS_RecipientInfo_ktri_get0_signer_id() retrieves the certificate recipient identifier associated with a specific CMS_RecipientInfo structure <b>ri</b>, which must be of type CMS_RECIPINFO_TRANS. Either the keyidentifier will be set in <b>keyid</b> or <b>both</b> issuer name and serial number in <b>issuer</b> and <b>sno</b>.</p>
+
+<p>CMS_RecipientInfo_ktri_cert_cmp() compares the certificate <b>cert</b> against the CMS_RecipientInfo structure <b>ri</b>, which must be of type CMS_RECIPINFO_TRANS. It returns zero if the comparison is successful and non zero if not.</p>
+
+<p>CMS_RecipientInfo_set0_pkey() associates the private key <b>pkey</b> with the CMS_RecipientInfo structure <b>ri</b>, which must be of type CMS_RECIPINFO_TRANS.</p>
+
+<p>CMS_RecipientInfo_kari_set0_pkey_and_peer() associates the private key <b>pkey</b> and peer certificate <b>peer</b> with the CMS_RecipientInfo structure <b>ri</b>, which must be of type CMS_RECIPINFO_AGREE.</p>
+
+<p>CMS_RecipientInfo_kari_set0_pkey() associates the private key <b>pkey</b> with the CMS_RecipientInfo structure <b>ri</b>, which must be of type CMS_RECIPINFO_AGREE.</p>
+
+<p>CMS_RecipientInfo_kari_get0_ctx() returns the EVP_CIPHER_CTX for the key encryption key, allowing the caller to specify the key wrap cipher. The CMS_RecipientInfo structure <b>ri</b> must be of type CMS_RECIPINFO_AGREE.</p>
+
+<p>CMS_RecipientInfo_kekri_get0_id() retrieves the key information from the CMS_RecipientInfo structure <b>ri</b> which must be of type CMS_RECIPINFO_KEK. Any of the remaining parameters can be NULL if the application is not interested in the value of a field. Where a field is optional and absent NULL will be written to the corresponding parameter. The keyEncryptionAlgorithm field is written to <b>palg</b>, the <b>keyIdentifier</b> field is written to <b>pid</b>, the <b>date</b> field if present is written to <b>pdate</b>, if the <b>other</b> field is present the components <b>keyAttrId</b> and <b>keyAttr</b> are written to parameters <b>potherid</b> and <b>pothertype</b>.</p>
+
+<p>CMS_RecipientInfo_kekri_id_cmp() compares the ID in the <b>id</b> and <b>idlen</b> parameters against the <b>keyIdentifier</b> CMS_RecipientInfo structure <b>ri</b>, which must be of type CMS_RECIPINFO_KEK. It returns zero if the comparison is successful and non zero if not.</p>
+
+<p>CMS_RecipientInfo_set0_key() associates the symmetric key <b>key</b> of length <b>keylen</b> with the CMS_RecipientInfo structure <b>ri</b>, which must be of type CMS_RECIPINFO_KEK.</p>
+
+<p>CMS_RecipientInfo_kemri_cert_cmp() compares the certificate <b>cert</b> against the CMS_RecipientInfo structure <b>ri</b>, which must be of type CMS_RECIPINFO_KEM. It returns zero if the comparison is successful and non zero if not.</p>
+
+<p>CMS_RecipientInfo_kemri_set0_pkey() associates the private key <b>pkey</b> with the CMS_RecipientInfo structure <b>ri</b>, which must be of type CMS_RECIPINFO_KEM.</p>
+
+<p>CMS_RecipientInfo_kemri_get0_ctx() returns the EVP_CIPHER_CTX for the key encryption key, allowing the caller to specify the key wrap cipher. The CMS_RecipientInfo structure <b>ri</b> must be of type CMS_RECIPINFO_KEM.</p>
+
+<p>CMS_RecipientInfo_kemri_get0_kdf_alg() returns the X509_ALGOR for the RecipientInfo&#39;s KDF, allowing the caller to specify the KDF algorithm. The CMS_RecipientInfo structure <b>ri</b> must be of type CMS_RECIPINFO_KEM. If the caller doesn&#39;t specify a KDF algorithm, <b>HKDF-SHA256</b> will be used.</p>
+
+<p>CMS_RecipientInfo_kemri_set_ukm() sets the RecipientInfo&#39;s optional user keying material (UKM). The UKM is encoded, along with other information, into the <b>OSSL_KDF_PARAM_INFO</b> parameter of the RecipientInfo&#39;s KDF. The CMS_RecipientInfo structure <b>ri</b> must be of type CMS_RECIPINFO_KEM.</p>
+
+<p>CMS_RecipientInfo_decrypt() attempts to decrypt CMS_RecipientInfo structure <b>ri</b> in structure <b>cms</b>. A key must have been associated with the structure first.</p>
+
+<p>CMS_RecipientInfo_encrypt() attempts to encrypt CMS_RecipientInfo structure <b>ri</b> in structure <b>cms</b>. A key must have been associated with the structure first and the content encryption key must be available: for example by a previous call to CMS_RecipientInfo_decrypt().</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The main purpose of these functions is to enable an application to lookup recipient keys using any appropriate technique when the simpler method of CMS_decrypt() is not appropriate.</p>
+
+<p>In typical usage and application will retrieve all CMS_RecipientInfo structures using CMS_get0_RecipientInfos() and check the type of each using CMS_RecipientInfo_type(). Depending on the type the CMS_RecipientInfo structure can be ignored or its key identifier data retrieved using an appropriate function. Then if the corresponding secret or private key can be obtained by any appropriate means it can then associated with the structure and CMS_RecipientInfo_decrypt() called. If successful CMS_decrypt() can be called with a NULL key to decrypt the enveloped content.</p>
+
+<p>The CMS_RecipientInfo_encrypt() can be used to add a new recipient to an existing enveloped data structure. Typically an application will first decrypt an appropriate CMS_RecipientInfo structure to make the content encrypt key available, it will then add a new recipient using a function such as CMS_add1_recipient_cert() and finally encrypt the content encryption key using CMS_RecipientInfo_encrypt().</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>CMS_get0_RecipientInfos() returns all CMS_RecipientInfo structures, or NULL if an error occurs.</p>
+
+<p>CMS_RecipientInfo_ktri_get0_signer_id(), CMS_RecipientInfo_set0_pkey(), CMS_RecipientInfo_kekri_get0_id(), CMS_RecipientInfo_set0_key(), CMS_RecipientInfo_kemri_set0_pkey(), CMS_RecipientInfo_kemri_set_ukm(), CMS_RecipientInfo_decrypt() and CMS_RecipientInfo_encrypt() return 1 for success or 0 if an error occurs.</p>
+
+<p>CMS_RecipientInfo_ktri_cert_cmp(), CMS_RecipientInfo_kemri_cert_cmp() and CMS_RecipientInfo_kekri_cmp() return 0 for a successful comparison and non zero otherwise.</p>
+
+<p>CMS_RecipientInfo_kemri_get0_ctx() and CMS_RecipientInfo_kari_get0_ctx return the RecipientInfo&#39;s EVP_CIPHER_CTX or NULL if an error occurred.</p>
+
+<p>CMS_RecipientInfo_kemri_get0_kdf_alg() returns the RecipientInfo&#39;s KDF&#39;s X509_ALGOR or NULL if an error occurred.</p>
+
+<p>Any error can be obtained from <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>, <a href="../man3/CMS_decrypt.html">CMS_decrypt(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p><b>CMS_RecipientInfo_kari_set0_pkey_and_peer</b> and <b>CMS_RecipientInfo_kari_set0_pkey</b> were added in OpenSSL 3.0.</p>
+
+<p><b>CMS_RecipientInfo_kemri_cert_cmp</b>, <b>CMS_RecipientInfo_kemri_set0_pkey</b>, <b>CMS_RecipientInfo_kemri_get0_ctx</b>, <b>CMS_RecipientInfo_kemri_get0_kdf_alg</b> and <b>CMS_RecipientInfo_kemri_set_ukm</b> were added in OpenSSL 3.6.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2008-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

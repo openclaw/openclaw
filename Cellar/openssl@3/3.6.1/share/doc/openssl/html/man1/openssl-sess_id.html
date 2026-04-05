@@ -1,0 +1,188 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>openssl-sess_id</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#OPTIONS">OPTIONS</a></li>
+  <li><a href="#OUTPUT">OUTPUT</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#BUGS">BUGS</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>openssl-sess_id - SSL/TLS session handling command</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<p><b>openssl</b> <b>sess_id</b> [<b>-help</b>] [<b>-inform</b> <b>DER</b>|<b>PEM</b>] [<b>-outform</b> <b>DER</b>|<b>PEM</b>|<b>NSS</b>] [<b>-in</b> <i>filename</i>] [<b>-out</b> <i>filename</i>] [<b>-text</b>] [<b>-cert</b>] [<b>-noout</b>] [<b>-context</b> <i>ID</i>]</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>This command processes the encoded version of the SSL session structure and optionally prints out SSL session details (for example the SSL session master key) in human readable format. Since this is a diagnostic tool that needs some knowledge of the SSL protocol to use properly, most users will not need to use it.</p>
+
+<p>The precise format of the data can vary across OpenSSL versions and is not documented.</p>
+
+<h1 id="OPTIONS">OPTIONS</h1>
+
+<dl>
+
+<dt id="help"><b>-help</b></dt>
+<dd>
+
+<p>Print out a usage message.</p>
+
+</dd>
+<dt id="inform-DER-PEM--outform-DER-PEM-NSS"><b>-inform</b> <b>DER</b>|<b>PEM</b>, <b>-outform</b> <b>DER</b>|<b>PEM</b>|<b>NSS</b></dt>
+<dd>
+
+<p>The input and output formats; the default is PEM. See <a href="../man1/openssl-format-options.html">openssl-format-options(1)</a> for details.</p>
+
+<p>For <b>NSS</b> output, the session ID and master key are reported in NSS &quot;keylog&quot; format.</p>
+
+</dd>
+<dt id="in-filename"><b>-in</b> <i>filename</i></dt>
+<dd>
+
+<p>This specifies the input filename to read session information from or standard input by default.</p>
+
+</dd>
+<dt id="out-filename"><b>-out</b> <i>filename</i></dt>
+<dd>
+
+<p>This specifies the output filename to write session information to or standard output if this option is not specified.</p>
+
+</dd>
+<dt id="text"><b>-text</b></dt>
+<dd>
+
+<p>Prints out the various public or private key components in plain text in addition to the encoded version.</p>
+
+</dd>
+<dt id="cert"><b>-cert</b></dt>
+<dd>
+
+<p>If a certificate is present in the session it will be output using this option, if the <b>-text</b> option is also present then it will be printed out in text form.</p>
+
+</dd>
+<dt id="noout"><b>-noout</b></dt>
+<dd>
+
+<p>This option prevents output of the encoded version of the session.</p>
+
+</dd>
+<dt id="context-ID"><b>-context</b> <i>ID</i></dt>
+<dd>
+
+<p>This option can set the session id so the output session information uses the supplied ID. The ID can be any string of characters. This option won&#39;t normally be used.</p>
+
+</dd>
+</dl>
+
+<h1 id="OUTPUT">OUTPUT</h1>
+
+<p>Typical output:</p>
+
+<pre><code>SSL-Session:
+    Protocol  : TLSv1
+    Cipher    : 0016
+    Session-ID: 871E62626C554CE95488823752CBD5F3673A3EF3DCE9C67BD916C809914B40ED
+    Session-ID-ctx: 01000000
+    Master-Key: A7CEFC571974BE02CAC305269DC59F76EA9F0B180CB6642697A68251F2D2BB57E51DBBB4C7885573192AE9AEE220FACD
+    Key-Arg   : None
+    Start Time: 948459261
+    Timeout   : 300 (sec)
+    Verify return code 0 (ok)</code></pre>
+
+<p>These are described below in more detail.</p>
+
+<dl>
+
+<dt id="Protocol"><b>Protocol</b></dt>
+<dd>
+
+<p>This is the protocol in use TLSv1.3, TLSv1.2, TLSv1.1, TLSv1 or SSLv3.</p>
+
+</dd>
+<dt id="Cipher"><b>Cipher</b></dt>
+<dd>
+
+<p>The cipher used this is the actual raw SSL or TLS cipher code, see the SSL or TLS specifications for more information.</p>
+
+</dd>
+<dt id="Session-ID"><b>Session-ID</b></dt>
+<dd>
+
+<p>The SSL session ID in hex format.</p>
+
+</dd>
+<dt id="Session-ID-ctx"><b>Session-ID-ctx</b></dt>
+<dd>
+
+<p>The session ID context in hex format.</p>
+
+</dd>
+<dt id="Master-Key"><b>Master-Key</b></dt>
+<dd>
+
+<p>This is the SSL session master key.</p>
+
+</dd>
+<dt id="Start-Time"><b>Start Time</b></dt>
+<dd>
+
+<p>This is the session start time represented as an integer in standard Unix format.</p>
+
+</dd>
+<dt id="Timeout"><b>Timeout</b></dt>
+<dd>
+
+<p>The timeout in seconds.</p>
+
+</dd>
+<dt id="Verify-return-code"><b>Verify return code</b></dt>
+<dd>
+
+<p>This is the return code when an SSL client certificate is verified.</p>
+
+</dd>
+</dl>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>Since the SSL session output contains the master key it is possible to read the contents of an encrypted session using this information. Therefore, appropriate security precautions should be taken if the information is being output by a &quot;real&quot; application. This is however strongly discouraged and should only be used for debugging purposes.</p>
+
+<h1 id="BUGS">BUGS</h1>
+
+<p>The cipher and start time should be printed out in human readable form.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man1/openssl.html">openssl(1)</a>, <a href="../man1/openssl-ciphers.html">openssl-ciphers(1)</a>, <a href="../man1/openssl-s_server.html">openssl-s_server(1)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2020 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

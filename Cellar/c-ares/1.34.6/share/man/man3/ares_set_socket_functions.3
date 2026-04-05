@@ -1,0 +1,334 @@
+.\" Copyright (C) Daniel Stenberg
+.\" SPDX-License-Identifier: MIT
+.TH ARES_SET_SOCKET_FUNCTIONS 3 "8 Oct 2024"
+.SH NAME
+ares_set_socket_functions, ares_set_socket_functions_ex \- Set socket io callbacks
+.SH SYNOPSIS
+.nf
+#include <ares.h>
+
+typedef enum {
+  ARES_SOCKFUNC_FLAG_NONBLOCKING = 1 << 0
+} ares_sockfunc_flags_t;
+
+typedef enum {
+  ARES_SOCKET_OPT_SENDBUF_SIZE,
+  ARES_SOCKET_OPT_RECVBUF_SIZE,
+  ARES_SOCKET_OPT_BIND_DEVICE,
+  ARES_SOCKET_OPT_TCP_FASTOPEN
+} ares_socket_opt_t;
+
+typedef enum {
+  ARES_SOCKET_CONN_TCP_FASTOPEN = 1 << 0
+} ares_socket_connect_flags_t;
+
+typedef enum {
+  ARES_SOCKET_BIND_TCP = 1 << 0,
+  ARES_SOCKET_BIND_CLIENT = 1 << 1
+} ares_socket_bind_flags_t;
+
+struct ares_socket_functions_ex {
+  unsigned int version; /* ABI Version: must be "1" */
+  unsigned int flags;
+
+  ares_socket_t (*asocket)(int domain, int type, int protocol, void *user_data);
+  int (*aclose)(ares_socket_t sock, void *user_data);
+  int (*asetsockopt)(ares_socket_t sock, ares_socket_opt_t opt, const void *val,
+                     ares_socklen_t val_size, void *user_data);
+  int (*aconnect)(ares_socket_t sock, const struct sockaddr *address,
+                  ares_socklen_t address_len, unsigned int flags,
+                  void *user_data);
+  ares_ssize_t (*arecvfrom)(ares_socket_t sock, void *buffer, size_t length,
+                            int flags, struct sockaddr *address,
+                            ares_socklen_t *address_len, void *user_data);
+  ares_ssize_t (*asendto)(ares_socket_t sock, const void *buffer, size_t length,
+                          int flags, const struct sockaddr *address,
+                          ares_socklen_t address_len, void *user_data);
+  int (*agetsockname)(ares_socket_t sock, struct sockaddr *address,
+                      ares_socklen_t *address_len, void *user_data);
+  int (*abind)(ares_socket_t sock, unsigned int flags,
+               const struct sockaddr *address, socklen_t address_len,
+               void *user_data);
+  unsigned int (*aif_nametoindex)(const char *ifname, void *user_data);
+  const char *(*aif_indextoname)(unsigned int ifindex, char *ifname_buf,
+                                 size_t ifname_buf_len, void *user_data);
+};
+
+ares_status_t ares_set_socket_functions_ex(ares_channel_t *channel,
+  const struct ares_socket_functions_ex *funcs, void *user_data);
+
+
+struct ares_socket_functions {
+    ares_socket_t (*\fIasocket\fP)(int, int, int, void *);
+    int (*\fIaclose\fP)(ares_socket_t, void *);
+    int (*\fIaconnect\fP)(ares_socket_t, const struct sockaddr *, ares_socklen_t, void *);
+    ares_ssize_t (*\fIarecvfrom\fP)(ares_socket_t, void *, size_t, int,
+                              struct sockaddr *, ares_socklen_t *, void *);
+    ares_ssize_t (*\fIasendv\fP)(ares_socket_t, const struct iovec *, int, void *);
+};
+
+void ares_set_socket_functions(ares_channel_t *\fIchannel\fP,
+                               const struct ares_socket_functions * \fIfunctions\fP,
+                               void *\fIuser_data\fP);
+.fi
+.SH DESCRIPTION
+.PP
+
+\fBares_set_socket_functions_ex(3)\fP sets a set of callback \fIfunctions\fP in
+the given ares channel handle.  Cannot be used when \fBARES_OPT_EVENT_THREAD\fP
+is passed to \fIares_init_options(3)\fP.  This function replaces the now
+deprecated \fBares_set_socket_functions(3)\fP call.
+
+These callback functions will be invoked to create/destroy socket objects and
+perform io, instead of the normal system calls. A client application can
+override normal network operation fully through this functionality, and provide
+its own transport layer.
+
+Some callbacks may be optional and are documented as such below, but failing
+to implement such callbacks will disable certain features within c-ares.  It
+is strongly recommended to implement all callbacks.
+
+All callback functions are expected to operate like their system equivalents,
+and to set \fBerrno(2)\fP or \fBWSASetLastError(2)\fP to an appropriate error
+code on failure. It is strongly recommended that io callbacks are implemented
+to be asynchronous and indicated as such in the \fIflags\fP member.  The io
+callbacks can return error codes of \fBEAGAIN\fP, \fBEWOULDBLOCK\fP, or
+\fBWSAEWOULDBLOCK\fP when they would otherwise block.
+
+The \fIuser_data\fP value is provided to each callback function invocation to
+serve as context.
+
+The \fBares_set_socket_functions_ex(3)\fP must provide the following structure
+members and callbacks (which are different from the
+\fBares_set_socket_functions(3)\fP members and callbacks):
+
+.RS 4
+.TP 8
+.B unsigned int \fIversion\fP
+.br
+ABI Version of structure.  Must be set to a value of "1".
+
+.TP 8
+.B unsigned int \fIflags\fP
+.br
+Flags available are specified in \fIares_sockfunc_flags_t\fP.
+
+.TP 8
+.B ares_socket_t (*\fIasocket\fP)(int \fIdomain\fP, int \fItype\fP, int \fIprotocol\fP, void * \fIuser_data\fP)
+.br
+\fIREQUIRED\fP. Creates an endpoint for communication and returns a descriptor. \fIdomain\fP,
+\fItype\fP, and \fIprotocol\fP each correspond to the parameters of
+\fBsocket(2)\fP. Returns a handle to the newly created socket, or
+\fBARES_SOCKET_BAD\fP on error.
+
+.TP 8
+.B int (*\fIaclose\fP)(ares_socket_t \fIfd\fP, void * \fIuser_data\fP)
+.br
+\fIREQUIRED\fP. Closes the socket endpoint indicated by \fIfd\fP. See \fBclose(2)\fP.
+
+.TP 8
+.B int (*\fIasetsockopt\fP)(ares_socket_t \fIfd\fP, ares_socket_opt_t \fIopt\fP, const void * \fIval\fP, ares_socklen_t \fIval_size\fP, void * \fIuser_data\fP)
+.br
+\fIREQUIRED\fP. Set socket option.  This shares a similar syntax to the BSD \fIsetsockopt(2)\fP
+call, however c-ares uses different options for portability. The value is
+a pointer to the desired value, and each option has its own data type listed
+in the options below defined in \fIares_socket_opt_t\fP.
+
+.TP 8
+.B int (*\fIaconnect\fP)(ares_socket_t \fIfd\fP, const struct sockaddr * \fIaddr\fP, ares_socklen_t \fIaddr_len\fP, unsigned int \fIflags\fP, void * \fIuser_data\fP)
+.br
+\fIREQUIRED\fP. Initiate a connection to the address indicated by \fIaddr\fP on
+a socket. Additional flags controlling behavior are in
+\fIares_socket_connect_flags_t\fP. See \fBconnect(2)\fP.
+
+.TP 8
+.B ares_ssize_t (*\fIarecvfrom\fP)(ares_socket_t \fIfd\fP, void * \fIbuffer\fP, size_t \fIbuf_size\fP, int \fIflags\fP, struct sockaddr * \fIaddr\fP, ares_socklen_t * \fIaddr_len\fP, void * \fIuser_data\fP)
+.br
+\fIREQUIRED\fP. Receives data from remote socket endpoint, if available. If the
+\fIaddr\fP parameter is not NULL and the connection protocol provides the source
+address, the callback should fill this in. The \fIflags\fP parameter is
+currently unused. See \fBrecvfrom(2)\fP.
+
+.TP 8
+.B ares_ssize_t (*\fIasendto\fP)(ares_socket_t \fIfd\fP, const void * \fIbuffer\fP, size_t \fIlength\fP, int \fIflags\fP, const struct sockaddr * \fIaddress\fP, ares_socklen_t \fIaddress_len\fP, void * \fIuser_data\fP)
+.br
+\fIREQUIRED\fP. Send data, as provided by the \fIbuffer\fP, to the socket
+endpoint. The \fIflags\fP member may be used on systems that have
+\fBMSG_NOSIGNAL\fP defined but is otherwise unused.  An \fIaddress\fP is
+provided primarily to support TCP FastOpen scenarios, which will be NULL in
+other circumstances. See \fBsendto(2)\fP.
+
+.TP 8
+.B int (*\fIagetsockname\fP)(ares_socket_t \fIfd\fP, struct sockaddr * \fIaddress\fP, ares_socklen_t * \fIaddress_len\fP, void * \fIuser_data\fP)
+.br
+\fIOptional\fP. Retrieve the local address of a socket and store it into the provided
+\fIaddress\fP buffer. May impact DNS Cookies if not provided. See
+\fBgetsockname(2)\fP.
+
+.TP 8
+.B int (*\fIabind\fP)(ares_socket_t \fIfd\fP, unsigned int \fIflags\fP, const struct sockaddr * \fIaddress\fP, ares_socklen_t \fIaddress_len\fP, void * \fIuser_data\fP)
+.br
+\fIOptional\fP. Bind the socket to an address.  This can be used for client
+connections to bind the source address for packets before connect, or
+for server connections to bind to an address and port before listening.
+Currently c-ares only supports client connections.  \fIflags\fP from
+\fIares_socket_bind_flags_t\fP can be specified.  See \fBbind(2)\fP.
+
+.TP 8
+.B unsigned int (*\fIaif_nametoindex\fP)(const char * \fIifname\fP, void * \fIuser_data\fP)
+.br
+\fIOptional\fP. Convert an interface name into the interface index.  If this
+callback is not specified, then IPv6 Link-Local DNS servers cannot be used.
+See \fBif_nametoindex(2)\fP.
+
+.TP 8
+.B const char * (*\fIaif_indextoname\fP)(unsigned int \fIifindex\fP, char * \fIifname_buf\fP, size_t \fIifname_buf_len\fP, void * \fIuser_data\fP)
+.br
+\fIOptional\fP. Convert an interface index into the interface name.  If this
+callback is not specified, then IPv6 Link-Local DNS servers cannot be used.
+\fIifname_buf\fP must be at least \fBIF_NAMESIZE\fP or \fBIFNAMSIZ\fP in size.
+See \fBif_indextoname(2)\fP.
+.RE
+
+.PP
+\fBares_sockfunc_flags_t\fP values:
+
+.RS 4
+.TP 8
+.B \fIARES_SOCKFUNC_FLAG_NONBLOCKING\fP
+.br
+Used to indicate the implementation of the io functions are asynchronous.
+.RE
+
+.PP
+\fBares_socket_opt_t\fP values:
+
+.RS 4
+.TP 8
+.B \fIARES_SOCKET_OPT_SENDBUF_SIZE\fP
+.br
+Set the Send Buffer size.  Value is a pointer to an int. (SO_SNDBUF).
+
+.TP 8
+.B \fIARES_SOCKET_OPT_RECVBUF_SIZE\fP
+.br
+Set the Receive Buffer size.  Value is a pointer to an int. (SO_RCVBUF).
+
+.TP 8
+.B \fIARES_SOCKET_OPT_BIND_DEVICE\fP
+.br
+Set the network interface to use as the source for communication. Value is a C
+string. (SO_BINDTODEVICE)
+
+.TP 8
+.B \fIARES_SOCKET_OPT_TCP_FASTOPEN\fP
+.br
+Enable TCP Fast Open.  Value is a pointer to an \fIares_bool_t\fP.  On some
+systems this could be a no-op if it is known it is on by default and
+return success.  Other systems may be a no-op if known the system does
+not support the feature and returns failure with errno set to \fBENOSYS\fP or
+\fBWSASetLastError(WSAEOPNOTSUPP);\fP.
+.RE
+
+.PP
+\fBares_socket_connect_flags_t\fP values:
+.RS 4
+.TP 8
+.B \fIARES_SOCKET_CONN_TCP_FASTOPEN\fP
+.br
+Connect using TCP Fast Open.
+.RE
+
+.PP
+\fBares_socket_bind_flags_t\fP values:
+
+.RS 4
+.TP 8
+.B \fIARES_SOCKET_BIND_TCP\fP
+.br
+Bind is for a TCP connection.
+
+.TP 19
+.B \fIARES_SOCKET_BIND_CLIENT\fP
+.br
+Bind is for a client connection, not server.
+.RE
+
+.PP
+
+\fBares_set_socket_functions(3)\fP sets a set of callback \fIfunctions\fP in the
+given ares channel handle.  Cannot be used when \fBARES_OPT_EVENT_THREAD\fP is
+passed to \fIares_init_options(3)\fP.  This function is deprecated as of
+c-ares 1.34.0 in favor of \fIares_set_socket_functions_ex(3)\fP.
+
+\fBares_set_socket_functions(3)\fP allows you to choose to only implement
+some of the socket functions, and provide NULL to any others and c-ares will use
+its built-in system functions in that case.
+
+.PP
+All callback functions are expected to operate like their system equivalents,
+and to set \fBerrno(2)\fP or \fBWSASetLastError(2)\fP to an appropriate error
+code on failure. It is strongly recommended all io functions behave
+asynchronously and return error codes of \fBEAGAIN\fP, \fBEWOULDBLOCK\fP, or
+\fBWSAEWOULDBLOCK\fP when they would otherwise block.
+
+.PP
+The \fIuser_data\fP value is provided to each callback function invocation to
+serve as context.
+.PP
+The \fBares_set_socket_functions(3)\fP must provide the following callbacks (which
+are different from the \fBares_set_socket_functions_ex(3)\fP callbacks):
+
+.RS 4
+.TP 8
+.B ares_socket_t (*\fIasocket\fP)(int \fIdomain\fP, int \fItype\fP, int \fIprotocol\fP, void * \fIuser_data\fP)
+.br
+Creates an endpoint for communication and returns a descriptor. \fIdomain\fP, \fItype\fP, and \fIprotocol\fP
+each correspond to the parameters of \fBsocket(2)\fP. Returns ahandle to the
+newly created socket, or ARES_SOCKET_BAD on error.
+
+.TP 8
+.B int (*\fIaclose\fP)(ares_socket_t \fIfd\fP, void * \fIuser_data\fP)
+.br
+Closes the socket endpoint indicated by \fIfd\fP. See \fBclose(2)\fP.
+
+.TP 8
+.B int (*\fIaconnect\fP)(ares_socket_t \fIfd\fP, const struct sockaddr * \fIaddr\fP, ares_socklen_t \fIaddr_len\fP, void * \fIuser_data\fP)
+.br
+Initiate a connection to the address indicated by \fIaddr\fP on a socket. See
+\fBconnect(2)\fP
+
+.TP 8
+.B ares_ssize_t (*\fIarecvfrom\fP)(ares_socket_t \fIfd\fP, void * \fIbuffer\fP, size_t \fIbuf_size\fP, int \fIflags\fP, struct sockaddr * \fIaddr\fP, ares_socklen_t * \fIaddr_len\fP, void * \fIuser_data\fP)
+.br
+Receives data from remote socket endpoint, if available. If the \fIaddr\fP
+parameter is not NULL and the connection protocol provides the source address,
+the callback should fill this in. See \fBrecvfrom(2)\fP
+
+.TP 8
+.B ares_ssize_t (*\fIasendv\fP)(ares_socket_t \fIfd\fP, const struct iovec * \fIdata\fP, int \fIlen\fP, void * \fIuser_data\fP)
+.br
+Send data, as provided by the iovec array \fIdata\fP, to the socket endpoint.
+See \fBwritev(2)\fP
+.RE
+
+.PP
+The \fBares_set_socket_functions(3)\fP struct provided is not copied but directly
+referenced, and must thus remain valid through out the channels and any created
+socket's lifetime.  However, the \fBares_set_socket_functions_ex(3)\fP struct is
+duplicated and does not need to survive past the call to the function.
+
+.SH AVAILABILITY
+ares_socket_functions added in c-ares 1.13.0, ares_socket_functions_ex added in
+c-ares 1.34.0
+.SH SEE ALSO
+.BR ares_init_options (3),
+.BR socket (2),
+.BR close (2),
+.BR connect (2),
+.BR recvfrom (2),
+.BR sendto (2),
+.BR bind (2),
+.BR getsockname (2),
+.BR setsockopt (2),
+.BR writev (2)

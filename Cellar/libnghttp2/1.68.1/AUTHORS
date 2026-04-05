@@ -1,0 +1,175 @@
+nghttp2 project was started as a fork of spdylay project [1].  Both
+projects were started by Tatsuhiro Tsujikawa, who is still the main
+author of these projects.  Meanwhile, we have many contributions, and
+we are not here without them.  We sincerely thank you to all who made
+a contribution.  Here is the all individuals/organizations who
+contributed to nghttp2 and spdylay project at which we forked.  These
+names are retrieved from git commit log.  If you have made a
+contribution, but you are missing in the list, please let us know via
+github issues [2].
+
+[1] https://github.com/tatsuhiro-t/spdylay
+[2] https://github.com/nghttp2/nghttp2/issues
+
+--------
+
+187j3x1
+Adam Gołębiowski
+Alek Storm
+Alex Nalivko
+Alexandr Vlasov
+Alexandros Konstantinakis-Karmis
+Alexis La Goutte
+Alyssa Ross
+Amir Livneh
+Amir Pakdel
+Anders Bakken
+Andreas Pohl
+Andrew Penkrat
+Andy Davies
+Angus Gratton
+Anna Henningsen
+Ant Bryan
+Anthony Alayo
+Asra Ali
+Benedikt Christoph Wolters
+Benjamin Peterson
+Bernard Spil
+Bernhard Walle
+Brendan Heinonen
+Brian Card
+Brian Suh
+Daniel Bevenius
+Daniel Evers
+Daniel Stenberg
+Dave Reisner
+David Beitey
+David Korczynski
+David Weekly
+Deel
+Deep Chordia
+Dimitris Apostolou
+Dmitri Tikhonov
+Dmitriy Vetutnev
+Don
+Dylan Plecki
+Etienne Cimon
+Fabian Möller
+Fabian Wiesel
+Fred Sundvik
+Gabi Davar
+Gaël PORTAY
+Geoff Hill
+George Liu
+Gitai
+Google Inc.
+Hajime Fujita
+Jacky Tian
+Jacky_Yin
+Jacob Champion
+James M Snell
+Jan Kundrát
+Jan-E
+Janusz Dziemidowicz
+Jay Satiro
+Jeff 'Raid' Baitis
+Jianqing Wang
+Jim Morrison
+Jiwoo Park
+Jonas Kvinge
+Josh Braegger
+José F. Calcerrada
+Kamil Dudka
+Karthik Dasari
+Kazuho Oku
+Kenny (kang-yen) Peng
+Kenny Peng
+Kit Chan
+Kyle Schomp
+LazyHamster
+Leo Neat
+Lorenz Nickel
+Lucas Pardue
+Lukas Märdian
+MATSUMOTO Ryosuke
+Marc Bachmann
+Marcelo Trylesinski
+Mark Boddington
+Matt Rudary
+Matt Way
+Michael Kaufmann
+Mike Conlen
+Mike Frysinger
+Mike Lothian
+Nicholas Hurley
+Nora Shoemaker
+Paweł Wegner
+Pedro Santos
+Peeyush Aggarwal
+Peng-Yu Chen
+Peter Wu
+Piotr Sikora
+PufferOverflow
+Raul Gutierrez Segales
+Remo E
+Renaud
+Reza Tavakoli
+Richard Wolfert
+Rick Lei
+Ross Smith II
+Rudi Heitbaum
+Ryan Carsten Schmidt
+Ryo Ota
+Scott Mitchell
+Sebastiaan Deckers
+Sergei Trofimovich
+Sergey Fedorov
+Shelley Vohr
+Simon Frankenberger
+Simone Basso
+Soham Sinha
+Stefan Eissing
+Stephen Ludin
+Sunpoet Po-Chuan Hsieh
+Svante Signell
+Syohei YOSHIDA
+Tapanito
+Tatsuhiko Kubo
+Tatsuhiro Tsujikawa
+Thomas Devoogdt
+Tobias Geerinckx-Rice
+Tom Harwood
+Tomas Krizek
+Tomasz Buchert
+Tomasz Torcz
+Vernon Tang
+Viacheslav Biriukov
+Viktor Szakats
+Viktor Szépe
+Ville Vesilehto
+Wenfeng Liu
+William A Rowe Jr
+Xiaoguang Sun
+Zachary Turner
+Zhuoyun Wei
+acesso
+ayanamist
+bmarques1995
+bxshi
+clemahieu
+dalf
+dawg
+es
+fangdingjun
+feicong
+hrxi
+jwchoi
+kumagi
+lhuang04
+lstefani
+makovich
+mod-h2-dev
+moparisthebest
+robaho
+snnn
+yuuki-kodama

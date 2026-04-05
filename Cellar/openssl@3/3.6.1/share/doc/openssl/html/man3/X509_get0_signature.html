@@ -1,0 +1,128 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>X509_get0_signature</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>X509_get0_signature, X509_REQ_set0_signature, X509_REQ_set1_signature_algo, X509_get_signature_nid, X509_get0_tbs_sigalg, X509_REQ_get0_signature, X509_REQ_get_signature_nid, X509_CRL_get0_signature, X509_CRL_get_signature_nid, X509_CRL_get0_tbs_sigalg, X509_get_signature_info, X509_SIG_INFO_get, X509_SIG_INFO_set, X509_ACERT_get0_signature, X509_ACERT_get0_info_sigalg, X509_ACERT_get_signature_nid - signature information</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code> #include &lt;openssl/x509.h&gt;
+
+ void X509_get0_signature(const ASN1_BIT_STRING **psig,
+                          const X509_ALGOR **palg,
+                          const X509 *x);
+ void X509_REQ_set0_signature(X509_REQ *req, ASN1_BIT_STRING *psig);
+ int X509_REQ_set1_signature_algo(X509_REQ *req, X509_ALGOR *palg);
+ int X509_get_signature_nid(const X509 *x);
+ const X509_ALGOR *X509_get0_tbs_sigalg(const X509 *x);
+
+ void X509_REQ_get0_signature(const X509_REQ *crl,
+                              const ASN1_BIT_STRING **psig,
+                              const X509_ALGOR **palg);
+ int X509_REQ_get_signature_nid(const X509_REQ *crl);
+
+ const X509_ALGOR *X509_ACERT_get0_info_sigalg(const X509_ACERT *x);
+
+ void X509_CRL_get0_signature(const X509_CRL *crl,
+                              const ASN1_BIT_STRING **psig,
+                              const X509_ALGOR **palg);
+ int X509_CRL_get_signature_nid(const X509_CRL *crl);
+ const X509_ALGOR *X509_CRL_get0_tbs_sigalg(const X509_crl *crl);
+
+ int X509_get_signature_info(X509 *x, int *mdnid, int *pknid, int *secbits,
+                             uint32_t *flags);
+
+ int X509_SIG_INFO_get(const X509_SIG_INFO *siginf, int *mdnid, int *pknid,
+                      int *secbits, uint32_t *flags);
+ void X509_SIG_INFO_set(X509_SIG_INFO *siginf, int mdnid, int pknid,
+                        int secbits, uint32_t flags);
+
+ #include &lt;openssl/x509_acert.h&gt;
+
+ void X509_ACERT_get0_signature(const X509_ACERT *x,
+                                const ASN1_BIT_STRING **psig,
+                                const X509_ALGOR **palg);
+ int X509_ACERT_get_signature_nid(const X509_ACERT *x);
+=head1 DESCRIPTION</code></pre>
+
+<p>X509_get0_signature() sets <b>*psig</b> to the signature of <b>x</b> and <b>*palg</b> to the signature algorithm of <b>x</b>. The values returned are internal pointers which <b>MUST NOT</b> be freed up after the call.</p>
+
+<p>X509_set0_signature() and X509_REQ_set1_signature_algo() are the equivalent setters for the two values of X509_get0_signature().</p>
+
+<p>X509_get0_tbs_sigalg() and X509_CRL_get0_tbs_sigalg() return the signature algorithm in the signed portion of the certificate or CRL.</p>
+
+<p>X509_get_signature_nid() returns the NID corresponding to the signature algorithm of <b>x</b>.</p>
+
+<p>X509_REQ_get0_signature(), X509_REQ_get_signature_nid() X509_CRL_get0_signature() and X509_CRL_get_signature_nid() perform the same function for certificate requests and CRLs.</p>
+
+<p>X509_get_signature_info() retrieves information about the signature of certificate <b>x</b>. The NID of the signing digest is written to <b>*mdnid</b>, the public key algorithm to <b>*pknid</b>, the effective security bits to <b>*secbits</b> and flag details to <b>*flags</b>. Any of the parameters can be set to <b>NULL</b> if the information is not required.</p>
+
+<p>X509_SIG_INFO_get() and X509_SIG_INFO_set() get and set information about a signature in an <b>X509_SIG_INFO</b> structure. They are only used by implementations of algorithms which need to set custom signature information: most applications will never need to call them.</p>
+
+<p>X509_ACERT_get0_signature(), X509_ACERT_get_signature_nid() and X509_ACERT_get0_info_sigalg() perform the same function for attribute certificates.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>These functions provide lower level access to signatures in certificates where an application wishes to analyse or generate a signature in a form where X509_sign() et al is not appropriate (for example a non standard or unsupported format).</p>
+
+<p>The security bits returned by X509_get_signature_info() refers to information available from the certificate signature (such as the signing digest). In some cases the actual security of the signature is less because the signing key is less secure: for example a certificate signed using SHA-512 and a 1024 bit RSA key.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>X509_get_signature_nid(), X509_REQ_get_signature_nid() and X509_CRL_get_signature_nid() return a NID.</p>
+
+<p>X509_get0_signature(), X509_REQ_get0_signature() and X509_CRL_get0_signature() do not return values.</p>
+
+<p>X509_get_signature_info() returns 1 if the signature information returned is valid or 0 if the information is not available (e.g. unknown algorithms or malformed parameters).</p>
+
+<p>X509_REQ_set1_signature_algo() returns 0 on success; or 1 on an error (e.g. null ALGO pointer). X509_REQ_set0_signature does not return an error value.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/d2i_X509.html">d2i_X509(3)</a>, <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>, <a href="../man3/X509_CRL_get0_by_serial.html">X509_CRL_get0_by_serial(3)</a>, <a href="../man3/X509_get_ext_d2i.html">X509_get_ext_d2i(3)</a>, <a href="../man3/X509_get_extension_flags.html">X509_get_extension_flags(3)</a>, <a href="../man3/X509_get_pubkey.html">X509_get_pubkey(3)</a>, <a href="../man3/X509_get_subject_name.html">X509_get_subject_name(3)</a>, <a href="../man3/X509_get_version.html">X509_get_version(3)</a>, <a href="../man3/X509_NAME_add_entry_by_txt.html">X509_NAME_add_entry_by_txt(3)</a>, <a href="../man3/X509_NAME_ENTRY_get_object.html">X509_NAME_ENTRY_get_object(3)</a>, <a href="../man3/X509_NAME_get_index_by_NID.html">X509_NAME_get_index_by_NID(3)</a>, <a href="../man3/X509_NAME_print_ex.html">X509_NAME_print_ex(3)</a>, <a href="../man3/X509_new.html">X509_new(3)</a>, <a href="../man3/X509_sign.html">X509_sign(3)</a>, <a href="../man3/X509V3_get_d2i.html">X509V3_get_d2i(3)</a>, <a href="../man3/X509_verify_cert.html">X509_verify_cert(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The X509_get0_signature() and X509_get_signature_nid() functions were added in OpenSSL 1.0.2.</p>
+
+<p>The X509_REQ_get0_signature(), X509_REQ_get_signature_nid(), X509_CRL_get0_signature() and X509_CRL_get_signature_nid() were added in OpenSSL 1.1.0.</p>
+
+<p>The X509_REQ_set0_signature() and X509_REQ_set1_signature_algo() were added in OpenSSL 1.1.1e.</p>
+
+<p>The X509_ACERT_get0_signature(), X509_ACERT_get0_info_sigalg() and X509_ACERT_get_signature_nid() functions were added in OpenSSL 3.4.</p>
+
+<p>The X509_CRL_get0_tbs_sigalg() function was added in OpenSSL 3.6.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2015-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

@@ -1,0 +1,81 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>X509_cmp</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>X509_cmp, X509_NAME_cmp, X509_issuer_and_serial_cmp, X509_issuer_name_cmp, X509_subject_name_cmp, X509_CRL_cmp, X509_CRL_match - compare X509 certificates and related values</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/x509.h&gt;
+
+int X509_cmp(const X509 *a, const X509 *b);
+int X509_NAME_cmp(const X509_NAME *a, const X509_NAME *b);
+int X509_issuer_and_serial_cmp(const X509 *a, const X509 *b);
+int X509_issuer_name_cmp(const X509 *a, const X509 *b);
+int X509_subject_name_cmp(const X509 *a, const X509 *b);
+int X509_CRL_cmp(const X509_CRL *a, const X509_CRL *b);
+int X509_CRL_match(const X509_CRL *a, const X509_CRL *b);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>This set of functions are used to compare X509 objects, including X509 certificates, X509 CRL objects and various values in an X509 certificate.</p>
+
+<p>The X509_cmp() function compares two <b>X509</b> objects indicated by parameters <i>a</i> and <i>b</i>. The comparison is based on the <b>memcmp</b> result of the hash values of two <b>X509</b> objects and the canonical (DER) encoding values.</p>
+
+<p>The X509_NAME_cmp() function compares two <b>X509_NAME</b> objects indicated by parameters <i>a</i> and <i>b</i>, any of which may be NULL. The comparison is based on the <b>memcmp</b> result of the canonical (DER) encoding values of the two objects using <a href="../man3/i2d_X509_NAME.html">i2d_X509_NAME(3)</a>. This procedure adheres to the matching rules for Distinguished Names (DN) given in RFC 4517 section 4.2.15 and RFC 5280 section 7.1. In particular, the order of Relative Distinguished Names (RDNs) is relevant. On the other hand, if an RDN is multi-valued, i.e., it contains a set of AttributeValueAssertions (AVAs), its members are effectively not ordered.</p>
+
+<p>The X509_issuer_and_serial_cmp() function compares the serial number and issuer values in the given <b>X509</b> objects <i>a</i> and <i>b</i>.</p>
+
+<p>The X509_issuer_name_cmp(), X509_subject_name_cmp() and X509_CRL_cmp() functions are effectively wrappers of the X509_NAME_cmp() function. These functions compare issuer names and subject names of the  objects, or issuers of <b>X509_CRL</b> objects, respectively.</p>
+
+<p>The X509_CRL_match() function compares two <b>X509_CRL</b> objects. Unlike the X509_CRL_cmp() function, this function compares the whole CRL content instead of just the issuer name.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>The <b>X509</b> comparison functions return <b>-1</b>, <b>0</b>, or <b>1</b> if object <i>a</i> is found to be less than, to match, or be greater than object <i>b</i>, respectively.</p>
+
+<p>X509_NAME_cmp(), X509_issuer_and_serial_cmp(), X509_issuer_name_cmp(), X509_subject_name_cmp(), X509_CRL_cmp(), and X509_CRL_match() may return <b>-2</b> to indicate an error.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>These functions in fact utilize the underlying <b>memcmp</b> of the C library to do the comparison job. Data to be compared varies from DER encoding data, hash value or <b>ASN1_STRING</b>. The sign of the comparison can be used to order the objects but it does not have a special meaning in some cases.</p>
+
+<p>X509_NAME_cmp() and wrappers utilize the value <b>-2</b> to indicate errors in some circumstances, which could cause confusion for the applications.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/i2d_X509_NAME.html">i2d_X509_NAME(3)</a>, <a href="../man3/i2d_X509.html">i2d_X509(3)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2019-2022 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

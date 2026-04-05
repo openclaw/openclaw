@@ -1,0 +1,101 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>DTLSv1_listen</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SSL_stateless, DTLSv1_listen - Statelessly listen for incoming connections</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ssl.h&gt;
+
+int SSL_stateless(SSL *s);
+int DTLSv1_listen(SSL *ssl, BIO_ADDR *peer);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>SSL_stateless() statelessly listens for new incoming TLSv1.3 connections. DTLSv1_listen() statelessly listens for new incoming DTLS connections. If a ClientHello is received that does not contain a cookie, then they respond with a request for a new ClientHello that does contain a cookie. If a ClientHello is received with a cookie that is verified then the function returns in order to enable the handshake to be completed (for example by using SSL_accept()).</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>Some transport protocols (such as UDP) can be susceptible to amplification attacks. Unlike TCP there is no initial connection setup in UDP that validates that the client can actually receive messages on its advertised source address. An attacker could forge its source IP address and then send handshake initiation messages to the server. The server would then send its response to the forged source IP. If the response messages are larger than the original message then the amplification attack has succeeded.</p>
+
+<p>If DTLS is used over UDP (or any datagram based protocol that does not validate the source IP) then it is susceptible to this type of attack. TLSv1.3 is designed to operate over a stream-based transport protocol (such as TCP). If TCP is being used then there is no need to use SSL_stateless(). However, some stream-based transport protocols (e.g. QUIC) may not validate the source address. In this case a TLSv1.3 application would be susceptible to this attack.</p>
+
+<p>As a countermeasure to this issue TLSv1.3 and DTLS include a stateless cookie mechanism. The idea is that when a client attempts to connect to a server it sends a ClientHello message. The server responds with a HelloRetryRequest (in TLSv1.3) or a HelloVerifyRequest (in DTLS) which contains a unique cookie. The client then resends the ClientHello, but this time includes the cookie in the message thus proving that the client is capable of receiving messages sent to that address. All of this can be done by the server without allocating any state, and thus without consuming expensive resources.</p>
+
+<p>OpenSSL implements this capability via the SSL_stateless() and DTLSv1_listen() functions. The <b>ssl</b> parameter should be a newly allocated SSL object with its read and write BIOs set, in the same way as might be done for a call to SSL_accept(). Typically, for DTLS, the read BIO will be in an &quot;unconnected&quot; state and thus capable of receiving messages from any peer.</p>
+
+<p>When a ClientHello is received that contains a cookie that has been verified, then these functions will return with the <b>ssl</b> parameter updated into a state where the handshake can be continued by a call to (for example) SSL_accept(). Additionally, for DTLSv1_listen(), the <b>BIO_ADDR</b> pointed to by <b>peer</b> will be filled in with details of the peer that sent the ClientHello. If the underlying BIO is unable to obtain the <b>BIO_ADDR</b> of the peer (for example because the BIO does not support this), then <b>*peer</b> will be cleared and the family set to AF_UNSPEC. Typically user code is expected to &quot;connect&quot; the underlying socket to the peer and continue the handshake in a connected state.</p>
+
+<p>Warning: It is essential that the calling code connects the underlying socket to the peer after making use of DTLSv1_listen(). In the typical case where <a href="../man3/BIO_s_datagram.html">BIO_s_datagram(3)</a> is used, the peer address is updated when receiving a datagram on an unconnected socket. If the socket is not connected, it can receive datagrams from any host on the network, which will cause subsequent outgoing datagrams transmitted by DTLS to be transmitted to that host. In other words, failing to call BIO_connect() or a similar OS-specific function on a socket means that any host on the network can cause outgoing DTLS traffic to be redirected to it by sending a datagram to the socket in question. This does not break the cryptographic protections of DTLS but may facilitate a denial-of-service attack or allow unencrypted information in the DTLS handshake to be learned by an attacker. This is due to the historical design of <a href="../man3/BIO_s_datagram.html">BIO_s_datagram(3)</a>; see <a href="../man3/BIO_s_datagram.html">BIO_s_datagram(3)</a> for details on this issue.</p>
+
+<p>Once a socket has been connected, <a href="../man3/BIO_ctrl_set_connected.html">BIO_ctrl_set_connected(3)</a> should be used to inform the BIO that the socket is to be used in connected mode.</p>
+
+<p>Prior to calling DTLSv1_listen() user code must ensure that cookie generation and verification callbacks have been set up using <a href="../man3/SSL_CTX_set_cookie_generate_cb.html">SSL_CTX_set_cookie_generate_cb(3)</a> and <a href="../man3/SSL_CTX_set_cookie_verify_cb.html">SSL_CTX_set_cookie_verify_cb(3)</a> respectively. For SSL_stateless(), <a href="../man3/SSL_CTX_set_stateless_cookie_generate_cb.html">SSL_CTX_set_stateless_cookie_generate_cb(3)</a> and <a href="../man3/SSL_CTX_set_stateless_cookie_verify_cb.html">SSL_CTX_set_stateless_cookie_verify_cb(3)</a> must be used instead.</p>
+
+<p>Since DTLSv1_listen() operates entirely statelessly whilst processing incoming ClientHellos it is unable to process fragmented messages (since this would require the allocation of state). An implication of this is that DTLSv1_listen() <b>only</b> supports ClientHellos that fit inside a single datagram.</p>
+
+<p>For SSL_stateless() if an entire ClientHello message cannot be read without the &quot;read&quot; BIO becoming empty then the SSL_stateless() call will fail. It is the application&#39;s responsibility to ensure that data read from the &quot;read&quot; BIO during a single SSL_stateless() call is all from the same peer.</p>
+
+<p>SSL_stateless() will fail (with a 0 return value) if some TLS version less than TLSv1.3 is used.</p>
+
+<p>Both SSL_stateless() and DTLSv1_listen() will clear the error queue when they start.</p>
+
+<p>SSL_stateless() cannot be used with QUIC SSL objects and returns an error if called on such an object.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>For SSL_stateless() a return value of 1 indicates success and the <b>ssl</b> object will be set up ready to continue the handshake. A return value of 0 or -1 indicates failure. If the value is 0 then a HelloRetryRequest was sent. A value of -1 indicates any other error. User code may retry the SSL_stateless() call.</p>
+
+<p>For DTLSv1_listen() a return value of &gt;= 1 indicates success. The <b>ssl</b> object will be set up ready to continue the handshake. the <b>peer</b> value will also be filled in.</p>
+
+<p>A return value of 0 indicates a non-fatal error. This could (for example) be because of nonblocking IO, or some invalid message having been received from a peer. Errors may be placed on the OpenSSL error queue with further information if appropriate. Typically user code is expected to retry the call to DTLSv1_listen() in the event of a non-fatal error.</p>
+
+<p>A return value of &lt;0 indicates a fatal error. This could (for example) be because of a failure to allocate sufficient memory for the operation.</p>
+
+<p>For DTLSv1_listen(), prior to OpenSSL 1.1.0, fatal and non-fatal errors both produce return codes &lt;= 0 (in typical implementations user code treats all errors as non-fatal), whilst return codes &gt;0 indicate success.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/SSL_CTX_set_cookie_generate_cb.html">SSL_CTX_set_cookie_generate_cb(3)</a>, <a href="../man3/SSL_CTX_set_cookie_verify_cb.html">SSL_CTX_set_cookie_verify_cb(3)</a>, <a href="../man3/SSL_CTX_set_stateless_cookie_generate_cb.html">SSL_CTX_set_stateless_cookie_generate_cb(3)</a>, <a href="../man3/SSL_CTX_set_stateless_cookie_verify_cb.html">SSL_CTX_set_stateless_cookie_verify_cb(3)</a>, <a href="../man3/SSL_get_error.html">SSL_get_error(3)</a>, <a href="../man3/SSL_accept.html">SSL_accept(3)</a>, <a href="../man7/ssl.html">ssl(7)</a>, <a href="../man7/bio.html">bio(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The SSL_stateless() function was added in OpenSSL 1.1.1.</p>
+
+<p>The DTLSv1_listen() return codes were clarified in OpenSSL 1.1.0. The type of &quot;peer&quot; also changed in OpenSSL 1.1.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2015-2023 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

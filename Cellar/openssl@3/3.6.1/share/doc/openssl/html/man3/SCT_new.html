@@ -1,0 +1,203 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>SCT_new</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>SCT_new, SCT_new_from_base64, SCT_free, SCT_LIST_free, SCT_get_version, SCT_set_version, SCT_get_log_entry_type, SCT_set_log_entry_type, SCT_get0_log_id, SCT_set0_log_id, SCT_set1_log_id, SCT_get_timestamp, SCT_set_timestamp, SCT_get_signature_nid, SCT_set_signature_nid, SCT_get0_signature, SCT_set0_signature, SCT_set1_signature, SCT_get0_extensions, SCT_set0_extensions, SCT_set1_extensions, SCT_get_source, SCT_set_source - A Certificate Transparency Signed Certificate Timestamp</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/ct.h&gt;
+
+typedef enum {
+    CT_LOG_ENTRY_TYPE_NOT_SET = -1,
+    CT_LOG_ENTRY_TYPE_X509 = 0,
+    CT_LOG_ENTRY_TYPE_PRECERT = 1
+} ct_log_entry_type_t;
+
+typedef enum {
+    SCT_VERSION_NOT_SET = -1,
+    SCT_VERSION_V1 = 0
+} sct_version_t;
+
+typedef enum {
+    SCT_SOURCE_UNKNOWN,
+    SCT_SOURCE_TLS_EXTENSION,
+    SCT_SOURCE_X509V3_EXTENSION,
+    SCT_SOURCE_OCSP_STAPLED_RESPONSE
+} sct_source_t;
+
+SCT *SCT_new(void);
+SCT *SCT_new_from_base64(unsigned char version,
+                         const char *logid_base64,
+                         ct_log_entry_type_t entry_type,
+                         uint64_t timestamp,
+                         const char *extensions_base64,
+                         const char *signature_base64);
+
+void SCT_free(SCT *sct);
+void SCT_LIST_free(STACK_OF(SCT) *a);
+
+sct_version_t SCT_get_version(const SCT *sct);
+int SCT_set_version(SCT *sct, sct_version_t version);
+
+ct_log_entry_type_t SCT_get_log_entry_type(const SCT *sct);
+int SCT_set_log_entry_type(SCT *sct, ct_log_entry_type_t entry_type);
+
+size_t SCT_get0_log_id(const SCT *sct, unsigned char **log_id);
+int SCT_set0_log_id(SCT *sct, unsigned char *log_id, size_t log_id_len);
+int SCT_set1_log_id(SCT *sct, const unsigned char *log_id, size_t log_id_len);
+
+uint64_t SCT_get_timestamp(const SCT *sct);
+void SCT_set_timestamp(SCT *sct, uint64_t timestamp);
+
+int SCT_get_signature_nid(const SCT *sct);
+int SCT_set_signature_nid(SCT *sct, int nid);
+
+size_t SCT_get0_signature(const SCT *sct, unsigned char **sig);
+void SCT_set0_signature(SCT *sct, unsigned char *sig, size_t sig_len);
+int SCT_set1_signature(SCT *sct, const unsigned char *sig, size_t sig_len);
+
+size_t SCT_get0_extensions(const SCT *sct, unsigned char **ext);
+void SCT_set0_extensions(SCT *sct, unsigned char *ext, size_t ext_len);
+int SCT_set1_extensions(SCT *sct, const unsigned char *ext, size_t ext_len);
+
+sct_source_t SCT_get_source(const SCT *sct);
+int SCT_set_source(SCT *sct, sct_source_t source);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>Signed Certificate Timestamps (SCTs) are defined by RFC 6962, Section 3.2. They constitute a promise by a Certificate Transparency (CT) log to publicly record a certificate. By cryptographically verifying that a log did indeed issue an SCT, some confidence can be gained that the certificate is publicly known.</p>
+
+<p>An internal representation of an SCT can be created in one of two ways. The first option is to create a blank SCT, using SCT_new(), and then populate it using:</p>
+
+<ul>
+
+<li><p>SCT_set_version() to set the SCT version.</p>
+
+<p>Only SCT_VERSION_V1 is currently supported.</p>
+
+</li>
+<li><p>SCT_set_log_entry_type() to set the type of certificate the SCT was issued for:</p>
+
+<p><b>CT_LOG_ENTRY_TYPE_X509</b> for a normal certificate. <b>CT_LOG_ENTRY_TYPE_PRECERT</b> for a pre-certificate.</p>
+
+</li>
+<li><p>SCT_set0_log_id() or SCT_set1_log_id() to set the LogID of the CT log that the SCT came from.</p>
+
+<p>The former takes ownership, whereas the latter makes a copy. See RFC 6962, Section 3.2 for the definition of LogID.</p>
+
+</li>
+<li><p>SCT_set_timestamp() to set the time the SCT was issued (time in milliseconds since the Unix Epoch).</p>
+
+</li>
+<li><p>SCT_set_signature_nid() to set the NID of the signature.</p>
+
+</li>
+<li><p>SCT_set0_signature() or SCT_set1_signature() to set the raw signature value.</p>
+
+<p>The former takes ownership, whereas the latter makes a copy.</p>
+
+</li>
+<li><p>SCT_set0_extensions() or <b>SCT_set1_extensions</b> to provide SCT extensions.</p>
+
+<p>The former takes ownership, whereas the latter makes a copy.</p>
+
+</li>
+</ul>
+
+<p>Alternatively, the SCT can be pre-populated from the following data using SCT_new_from_base64():</p>
+
+<ul>
+
+<li><p>The SCT version (only SCT_VERSION_V1 is currently supported).</p>
+
+</li>
+<li><p>The LogID (see RFC 6962, Section 3.2), base64 encoded.</p>
+
+</li>
+<li><p>The type of certificate the SCT was issued for: <b>CT_LOG_ENTRY_TYPE_X509</b> for a normal certificate. <b>CT_LOG_ENTRY_TYPE_PRECERT</b> for a pre-certificate.</p>
+
+</li>
+<li><p>The time that the SCT was issued (time in milliseconds since the Unix Epoch).</p>
+
+</li>
+<li><p>The SCT extensions, base64 encoded.</p>
+
+</li>
+<li><p>The SCT signature, base64 encoded.</p>
+
+</li>
+</ul>
+
+<p>SCT_set_source() can be used to record where the SCT was found (TLS extension, X.509 certificate extension or OCSP response). This is not required for verifying the SCT.</p>
+
+<p>SCT_free() frees the specified SCT. If the argument is NULL, nothing is done.</p>
+
+<p>SCT_LIST_free() frees the specified stack of SCTs. If the argument is NULL, nothing is done.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>Some of the setters return int, instead of void. These will all return 1 on success, 0 on failure. They will not make changes on failure.</p>
+
+<p>All of the setters will reset the validation status of the SCT to SCT_VALIDATION_STATUS_NOT_SET (see <a href="../man3/SCT_validate.html">SCT_validate(3)</a>).</p>
+
+<p>SCT_set_source() will call SCT_set_log_entry_type() if the type of certificate the SCT was issued for can be inferred from where the SCT was found. For example, an SCT found in an X.509 extension must have been issued for a pre- certificate.</p>
+
+<p>SCT_set_source() will not refuse unknown values.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>SCT_set_version() returns 1 if the specified version is supported, 0 otherwise.</p>
+
+<p>SCT_set_log_entry_type() returns 1 if the specified log entry type is supported, 0 otherwise.</p>
+
+<p>SCT_set0_log_id() and <b>SCT_set1_log_id</b> return 1 if the specified LogID is a valid SHA-256 hash, 0 otherwise. Additionally, <b>SCT_set1_log_id</b> returns 0 if malloc fails.</p>
+
+<p><b>SCT_set_signature_nid</b> returns 1 if the specified NID is supported, 0 otherwise.</p>
+
+<p><b>SCT_set1_extensions</b> and <b>SCT_set1_signature</b> return 1 if the supplied buffer is copied successfully, 0 otherwise (i.e. if malloc fails).</p>
+
+<p><b>SCT_set_source</b> returns 1 on success, 0 otherwise.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/ct.html">ct(7)</a>, <a href="../man3/SCT_validate.html">SCT_validate(3)</a>, <a href="../man3/OBJ_nid2obj.html">OBJ_nid2obj(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>These functions were added in OpenSSL 1.1.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2016-2024 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

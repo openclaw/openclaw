@@ -1,0 +1,83 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>X509_add_cert</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>X509_add_cert, X509_add_certs - X509 certificate list addition functions</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/x509.h&gt;
+
+int X509_add_cert(STACK_OF(X509) *sk, X509 *cert, int flags);
+int X509_add_certs(STACK_OF(X509) *sk, STACK_OF(X509) *certs, int flags);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>X509_add_cert() adds a certificate <i>cert</i> to the given list <i>sk</i>. It is an error for the <i>cert</i> argument to be NULL.</p>
+
+<p>X509_add_certs() adds a list of certificate <i>certs</i> to the given list <i>sk</i>. The <i>certs</i> argument may be NULL, which implies no effect. It does not modify the list <i>certs</i> but in case the <b>X509_ADD_FLAG_UP_REF</b> flag (described below) is set the reference counters of those of its members added to <i>sk</i> are increased.</p>
+
+<p>Both these functions have a <i>flags</i> parameter, which is used to control details of the operation.</p>
+
+<p>The value <b>X509_ADD_FLAG_DEFAULT</b>, which equals 0, means no special semantics.</p>
+
+<p>If <b>X509_ADD_FLAG_UP_REF</b> is set then the reference counts of those certificates added successfully are increased.</p>
+
+<p>If <b>X509_ADD_FLAG_PREPEND</b> is set then the certificates are prepended to <i>sk</i>. By default they are appended to <i>sk</i>. In both cases the original order of the added certificates is preserved.</p>
+
+<p>If <b>X509_ADD_FLAG_NO_DUP</b> is set then certificates already contained in <i>sk</i>, which is determined using <a href="../man3/X509_cmp.html">X509_cmp(3)</a>, are ignored.</p>
+
+<p>If <b>X509_ADD_FLAG_NO_SS</b> is set then certificates that are marked self-signed, which is determined using <a href="../man3/X509_self_signed.html">X509_self_signed(3)</a>, are ignored.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>Both functions return 1 for success and 0 for failure.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>If X509_add_certs() is used with the flags <b>X509_ADD_FLAG_NO_DUP</b> or <b>X509_ADD_FLAG_NO_SS</b> it is advisable to use also <b>X509_ADD_FLAG_UP_REF</b> because otherwise likely not for all members of the <i>certs</i> list the ownership is transferred to the list of certificates <i>sk</i>.</p>
+
+<p>Care should also be taken in case the <i>certs</i> argument equals <i>sk</i>.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/X509_cmp.html">X509_cmp(3)</a> <a href="../man3/X509_self_signed.html">X509_self_signed(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The functions X509_add_cert() and X509_add_certs() were added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2019-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

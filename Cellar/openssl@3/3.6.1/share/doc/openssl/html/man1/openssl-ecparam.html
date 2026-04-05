@@ -1,0 +1,218 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>openssl-ecparam</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#OPTIONS">OPTIONS</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>openssl-ecparam - EC parameter manipulation and generation</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<p><b>openssl ecparam</b> [<b>-help</b>] [<b>-inform</b> <b>DER</b>|<b>PEM</b>] [<b>-outform</b> <b>DER</b>|<b>PEM</b>] [<b>-in</b> <i>filename</i>] [<b>-out</b> <i>filename</i>] [<b>-noout</b>] [<b>-text</b>] [<b>-check</b>] [<b>-check_named</b>] [<b>-name</b> <i>arg</i>] [<b>-list_curves</b>] [<b>-conv_form</b> <i>arg</i>] [<b>-param_enc</b> <i>arg</i>] [<b>-no_seed</b>] [<b>-genkey</b>] [<b>-engine</b> <i>id</i>] [<b>-rand</b> <i>files</i>] [<b>-writerand</b> <i>file</i>] [<b>-provider</b> <i>name</i>] [<b>-provider-path</b> <i>path</i>] [<b>-provparam</b> <i>[name:]key=value</i>] [<b>-propquery</b> <i>propq</i>]</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>This command is used to manipulate or generate EC parameter files.</p>
+
+<p>OpenSSL is currently not able to generate new groups and therefore this command can only create EC parameters from known (named) curves.</p>
+
+<h1 id="OPTIONS">OPTIONS</h1>
+
+<dl>
+
+<dt id="help"><b>-help</b></dt>
+<dd>
+
+<p>Print out a usage message.</p>
+
+</dd>
+<dt id="inform-DER-PEM"><b>-inform</b> <b>DER</b>|<b>PEM</b></dt>
+<dd>
+
+<p>The EC parameters input format; unspecified by default. See <a href="../man1/openssl-format-options.html">openssl-format-options(1)</a> for details.</p>
+
+</dd>
+<dt id="outform-DER-PEM"><b>-outform</b> <b>DER</b>|<b>PEM</b></dt>
+<dd>
+
+<p>The EC parameters output format; the default is <b>PEM</b>. See <a href="../man1/openssl-format-options.html">openssl-format-options(1)</a> for details.</p>
+
+<p>Parameters are encoded as <b>EcpkParameters</b> as specified in IETF RFC 3279.</p>
+
+</dd>
+<dt id="in-filename"><b>-in</b> <i>filename</i></dt>
+<dd>
+
+<p>This specifies the input file to read parameters from or standard input if this option is not specified.</p>
+
+</dd>
+<dt id="out-filename"><b>-out</b> <i>filename</i></dt>
+<dd>
+
+<p>This specifies the output filename parameters to. Standard output is used if this option is not present. The output filename can be the same as the input filename, which leads to replacing the file contents. Note that file I/O is not atomic. The output file is truncated and then written.</p>
+
+</dd>
+<dt id="noout"><b>-noout</b></dt>
+<dd>
+
+<p>This option inhibits the output of the encoded version of the parameters.</p>
+
+</dd>
+<dt id="text"><b>-text</b></dt>
+<dd>
+
+<p>This option prints out the EC parameters in human readable form.</p>
+
+</dd>
+<dt id="check"><b>-check</b></dt>
+<dd>
+
+<p>Validate the elliptic curve parameters.</p>
+
+</dd>
+<dt id="check_named"><b>-check_named</b></dt>
+<dd>
+
+<p>Validate the elliptic name curve parameters by checking if the curve parameters match any built-in curves.</p>
+
+</dd>
+<dt id="name-arg"><b>-name</b> <i>arg</i></dt>
+<dd>
+
+<p>Use the EC parameters with the specified &#39;short&#39; name. Use <b>-list_curves</b> to get a list of all currently implemented EC parameters.</p>
+
+</dd>
+<dt id="list_curves"><b>-list_curves</b></dt>
+<dd>
+
+<p>Print out a list of all currently implemented EC parameters names and exit.</p>
+
+</dd>
+<dt id="conv_form-arg"><b>-conv_form</b> <i>arg</i></dt>
+<dd>
+
+<p>This specifies how the points on the elliptic curve are converted into octet strings. Possible values are: <b>compressed</b>, <b>uncompressed</b> (the default value) and <b>hybrid</b>. For more information regarding the point conversion forms please read the X9.62 standard. <b>Note</b> Due to patent issues the <b>compressed</b> option is disabled by default for binary curves and can be enabled by defining the preprocessor macro <b>OPENSSL_EC_BIN_PT_COMP</b> at compile time.</p>
+
+</dd>
+<dt id="param_enc-arg"><b>-param_enc</b> <i>arg</i></dt>
+<dd>
+
+<p>This specifies how the elliptic curve parameters are encoded. Possible value are: <b>named_curve</b>, i.e. the ec parameters are specified by an OID, or <b>explicit</b> where the ec parameters are explicitly given (see RFC 3279 for the definition of the EC parameters structures). The default value is <b>named_curve</b>. <b>Note</b> the <b>implicitlyCA</b> alternative, as specified in RFC 3279, is currently not implemented in OpenSSL.</p>
+
+</dd>
+<dt id="no_seed"><b>-no_seed</b></dt>
+<dd>
+
+<p>This option inhibits that the &#39;seed&#39; for the parameter generation is included in the ECParameters structure (see RFC 3279).</p>
+
+</dd>
+<dt id="genkey"><b>-genkey</b></dt>
+<dd>
+
+<p>This option will generate an EC private key using the specified parameters.</p>
+
+</dd>
+<dt id="engine-id"><b>-engine</b> <i>id</i></dt>
+<dd>
+
+<p>See <a href="../man1/openssl.html">&quot;Engine Options&quot; in openssl(1)</a>. This option is deprecated.</p>
+
+</dd>
+<dt id="rand-files--writerand-file"><b>-rand</b> <i>files</i>, <b>-writerand</b> <i>file</i></dt>
+<dd>
+
+<p>See <a href="../man1/openssl.html">&quot;Random State Options&quot; in openssl(1)</a> for details.</p>
+
+</dd>
+<dt id="provider-name"><b>-provider</b> <i>name</i></dt>
+<dd>
+
+</dd>
+<dt id="provider-path-path"><b>-provider-path</b> <i>path</i></dt>
+<dd>
+
+</dd>
+<dt id="provparam-name:-key-value"><b>-provparam</b> <i>[name:]key=value</i></dt>
+<dd>
+
+</dd>
+<dt id="propquery-propq"><b>-propquery</b> <i>propq</i></dt>
+<dd>
+
+<p>See <a href="../man1/openssl.html">&quot;Provider Options&quot; in openssl(1)</a>, <a href="../man7/provider.html">provider(7)</a>, and <a href="../man7/property.html">property(7)</a>.</p>
+
+</dd>
+</dl>
+
+<p>The <a href="../man1/openssl-genpkey.html">openssl-genpkey(1)</a> and <a href="../man1/openssl-pkeyparam.html">openssl-pkeyparam(1)</a> commands are capable of performing all the operations this command can, as well as supporting other public key types.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>The documentation for the <a href="../man1/openssl-genpkey.html">openssl-genpkey(1)</a> and <a href="../man1/openssl-pkeyparam.html">openssl-pkeyparam(1)</a> commands contains examples equivalent to the ones listed here.</p>
+
+<p>To create EC parameters with the group &#39;prime192v1&#39;:</p>
+
+<pre><code>openssl ecparam -out ec_param.pem -name prime192v1</code></pre>
+
+<p>To create EC parameters with explicit parameters:</p>
+
+<pre><code>openssl ecparam -out ec_param.pem -name prime192v1 -param_enc explicit</code></pre>
+
+<p>To validate given EC parameters:</p>
+
+<pre><code>openssl ecparam -in ec_param.pem -check</code></pre>
+
+<p>To create EC parameters and a private key:</p>
+
+<pre><code>openssl ecparam -out ec_key.pem -name prime192v1 -genkey</code></pre>
+
+<p>To change the point encoding to &#39;compressed&#39;:</p>
+
+<pre><code>openssl ecparam -in ec_in.pem -out ec_out.pem -conv_form compressed</code></pre>
+
+<p>To print out the EC parameters to standard output:</p>
+
+<pre><code>openssl ecparam -in ec_param.pem -noout -text</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man1/openssl.html">openssl(1)</a>, <a href="../man1/openssl-pkeyparam.html">openssl-pkeyparam(1)</a>, <a href="../man1/openssl-genpkey.html">openssl-genpkey(1)</a>, <a href="../man1/openssl-ec.html">openssl-ec(1)</a>, <a href="../man1/openssl-dsaparam.html">openssl-dsaparam(1)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The <b>-engine</b> option was deprecated in OpenSSL 3.0.</p>
+
+<p>The <b>-C</b> option was removed in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2003-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

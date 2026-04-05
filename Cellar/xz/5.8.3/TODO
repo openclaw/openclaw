@@ -1,0 +1,88 @@
+
+XZ Utils To-Do List
+===================
+
+Known bugs
+----------
+
+    The test suite is incomplete.
+
+    XZ Utils compress some files significantly worse than LZMA Utils.
+    This is due to faster compression presets used by XZ Utils, and
+    can often be worked around by using "xz --extreme". With some files
+    --extreme isn't enough though: it's most likely with files that
+    compress extremely well, so going from compression ratio of 0.003
+    to 0.004 means big relative increase in the compressed file size.
+
+    tuklib_exit() doesn't block signals => EINTR is possible.
+
+    If liblzma has created threads and fork() gets called, liblzma
+    code will break in the child process unless it calls exec() and
+    doesn't touch liblzma.
+
+
+Missing features
+----------------
+
+    Add support for storing metadata in .xz files. A preliminary
+    idea is to create a new Stream type for metadata. When both
+    metadata and data are wanted in the same .xz file, two or more
+    Streams would be concatenated.
+
+    The state stored in lzma_stream should be cloneable, which would
+    be mostly useful when using a preset dictionary in LZMA2, but
+    it may have other uses too. Compare to deflateCopy() in zlib.
+
+    Adjust dictionary size when the input file size is known.
+    Maybe do this only if an option is given.
+
+    xz doesn't support copying extended attributes, access control
+    lists etc. from source to target file.
+
+    Multithreaded compression:
+      - Reduce memory usage of the current method.
+      - Implement threaded match finders.
+      - Implement pigz-style threading in LZMA2.
+
+    Buffer-to-buffer coding could use less RAM (especially when
+    decompressing LZMA1 or LZMA2).
+
+    I/O library is not implemented (similar to gzopen() in zlib).
+    It will be a separate library that supports uncompressed, .gz,
+    .bz2, .lzma, and .xz files.
+
+    Support changing lzma_options_lzma.mode with lzma_filters_update().
+
+    Support LZMA_FULL_FLUSH for lzma_stream_decoder() to stop at
+    Block and Stream boundaries.
+
+    Error codes from lzma_code() aren't very specific. A more detailed
+    error message (string) could be provided too. It could be returned
+    by a new function or use a currently-reserved member of lzma_stream.
+
+    Make it possible to adjust LZMA2 options in the middle of a Block
+    so that the encoding speed vs. compression ratio can be optimized
+    when the compressed data is streamed over network.
+
+    Improved BCJ filters. The current filters are small but they aren't
+    so great when compressing binary packages that contain various file
+    types. Specifically, they make things worse if there are static
+    libraries or Linux kernel modules. The filtering could also be
+    more effective (without getting overly complex), for example,
+    streamable variant BCJ2 from 7-Zip could be implemented.
+
+    Filter that autodetects specific data types in the input stream
+    and applies appropriate filters for the corrects parts of the input.
+    Perhaps combine this with the BCJ filter improvement point above.
+
+    Long-range LZ77 method as a separate filter or as a new LZMA2
+    match finder.
+
+
+Documentation
+-------------
+
+    More tutorial programs are needed for liblzma.
+
+    Document the LZMA1 and LZMA2 algorithms.
+

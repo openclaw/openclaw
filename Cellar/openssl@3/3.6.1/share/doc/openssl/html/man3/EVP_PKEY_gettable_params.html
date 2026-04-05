@@ -1,0 +1,125 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>EVP_PKEY_gettable_params</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>EVP_PKEY_gettable_params, EVP_PKEY_get_params, EVP_PKEY_get_int_param, EVP_PKEY_get_size_t_param, EVP_PKEY_get_bn_param, EVP_PKEY_get_utf8_string_param, EVP_PKEY_get_octet_string_param - retrieve key parameters from a key</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+
+const OSSL_PARAM *EVP_PKEY_gettable_params(EVP_PKEY *pkey);
+int EVP_PKEY_get_params(const EVP_PKEY *pkey, OSSL_PARAM params[]);
+int EVP_PKEY_get_int_param(const EVP_PKEY *pkey, const char *key_name,
+                           int *out);
+int EVP_PKEY_get_size_t_param(const EVP_PKEY *pkey, const char *key_name,
+                              size_t *out);
+int EVP_PKEY_get_bn_param(const EVP_PKEY *pkey, const char *key_name,
+                          BIGNUM **bn);
+int EVP_PKEY_get_utf8_string_param(const EVP_PKEY *pkey, const char *key_name,
+                                   char *str, size_t max_buf_sz,
+                                   size_t *out_len);
+int EVP_PKEY_get_octet_string_param(const EVP_PKEY *pkey, const char *key_name,
+                                    unsigned char *buf, size_t max_buf_sz,
+                                    size_t *out_len);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>See <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> for information about parameters.</p>
+
+<p>EVP_PKEY_get_params() retrieves parameters from the key <i>pkey</i>, according to the contents of <i>params</i>.</p>
+
+<p>EVP_PKEY_gettable_params() returns a constant list of <i>params</i> indicating the names and types of key parameters that can be retrieved.</p>
+
+<p>An <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a> of type <b>OSSL_PARAM_INTEGER</b> or <b>OSSL_PARAM_UNSIGNED_INTEGER</b> is of arbitrary length. Such a parameter can be obtained using any of the functions EVP_PKEY_get_int_param(), EVP_PKEY_get_size_t_param() or EVP_PKEY_get_bn_param(). Attempting to obtain an integer value that does not fit into a native C <b>int</b> type will cause EVP_PKEY_get_int_param() to fail. Similarly attempting to obtain an integer value that is negative or does not fit into a native C <b>size_t</b> type using EVP_PKEY_get_size_t_param() will also fail.</p>
+
+<p>EVP_PKEY_get_int_param() retrieves a key <i>pkey</i> integer value <i>*out</i> associated with a name of <i>key_name</i> if it fits into <code>int</code> type. For parameters that do not fit into <code>int</code> use EVP_PKEY_get_bn_param().</p>
+
+<p>EVP_PKEY_get_size_t_param() retrieves a key <i>pkey</i> size_t value <i>*out</i> associated with a name of <i>key_name</i> if it fits into <code>size_t</code> type. For parameters that do not fit into <code>size_t</code> use EVP_PKEY_get_bn_param().</p>
+
+<p>EVP_PKEY_get_bn_param() retrieves a key <i>pkey</i> BIGNUM value <i>**bn</i> associated with a name of <i>key_name</i>. If <i>*bn</i> is NULL then the BIGNUM is allocated by the method.</p>
+
+<p>EVP_PKEY_get_utf8_string_param() get a key <i>pkey</i> UTF8 string value into a buffer <i>str</i> of maximum size <i>max_buf_sz</i> associated with a name of <i>key_name</i>. The maximum size must be large enough to accommodate the string value including a terminating NUL byte, or this function will fail. If <i>out_len</i> is not NULL, <i>*out_len</i> is set to the length of the string not including the terminating NUL byte. The required buffer size not including the terminating NUL byte can be obtained from <i>*out_len</i> by calling the function with <i>str</i> set to NULL.</p>
+
+<p>EVP_PKEY_get_octet_string_param() get a key <i>pkey</i>&#39;s octet string value into a buffer <i>buf</i> of maximum size <i>max_buf_sz</i> associated with a name of <i>key_name</i>. If <i>out_len</i> is not NULL, <i>*out_len</i> is set to the length of the contents. The required buffer size can be obtained from <i>*out_len</i> by calling the function with <i>buf</i> set to NULL.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>These functions only work for <b>EVP_PKEY</b>s that contain a provider side key.</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>EVP_PKEY_gettable_params() returns NULL on error or if it is not supported.</p>
+
+<p>All other methods return 1 if a value associated with the key&#39;s <i>key_name</i> was successfully returned, or 0 if there was an error. An error may be returned by methods EVP_PKEY_get_utf8_string_param() and EVP_PKEY_get_octet_string_param() if <i>max_buf_sz</i> is not big enough to hold the value. If <i>out_len</i> is not NULL, <i>*out_len</i> will be assigned the required buffer size to hold the value.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<pre><code>#include &lt;openssl/evp.h&gt;
+
+char curve_name[64];
+unsigned char pub[256];
+BIGNUM *bn_priv = NULL;
+
+/*
+ * NB: assumes &#39;key&#39; is set up before the next step. In this example the key
+ * is an EC key.
+ */
+
+if (!EVP_PKEY_get_utf8_string_param(key, OSSL_PKEY_PARAM_GROUP_NAME,
+                                    curve_name, sizeof(curve_name), &amp;len)) {
+  /* Error */
+}
+if (!EVP_PKEY_get_octet_string_param(key, OSSL_PKEY_PARAM_PUB_KEY,
+                                     pub, sizeof(pub), &amp;len)) {
+    /* Error */
+}
+if (!EVP_PKEY_get_bn_param(key, OSSL_PKEY_PARAM_PRIV_KEY, &amp;bn_priv)) {
+    /* Error */
+}
+
+BN_clear_free(bn_priv);</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_PKEY_CTX_new.html">EVP_PKEY_CTX_new(3)</a>, <a href="../man7/provider-keymgmt.html">provider-keymgmt(7)</a>, <a href="../man3/OSSL_PARAM.html">OSSL_PARAM(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>These functions were added in OpenSSL 3.0.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2020-2022 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

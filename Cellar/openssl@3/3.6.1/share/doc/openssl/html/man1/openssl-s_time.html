@@ -1,0 +1,210 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>openssl-s_time</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#OPTIONS">OPTIONS</a></li>
+  <li><a href="#ENVIRONMENT">ENVIRONMENT</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#BUGS">BUGS</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>openssl-s_time - SSL/TLS performance timing program</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<p><b>openssl</b> <b>s_time</b> [<b>-help</b>] [<b>-connect</b> <i>host</i>:<i>port</i>] [<b>-www</b> <i>page</i>] [<b>-cert</b> <i>filename</i>] [<b>-key</b> <i>filename</i>] [<b>-reuse</b>] [<b>-new</b>] [<b>-verify</b> <i>depth</i>] [<b>-time</b> <i>seconds</i>] [<b>-ssl3</b>] [<b>-tls1</b>] [<b>-tls1_1</b>] [<b>-tls1_2</b>] [<b>-tls1_3</b>] [<b>-bugs</b>] [<b>-cipher</b> <i>cipherlist</i>] [<b>-ciphersuites</b> <i>val</i>] [<b>-nameopt</b> <i>option</i>] [<b>-cafile</b> <i>file</i>] [<b>-CAfile</b> <i>file</i>] [<b>-no-CAfile</b>] [<b>-CApath</b> <i>dir</i>] [<b>-no-CApath</b>] [<b>-CAstore</b> <i>uri</i>] [<b>-no-CAstore</b>] [<b>-provider</b> <i>name</i>] [<b>-provider-path</b> <i>path</i>] [<b>-provparam</b> <i>[name:]key=value</i>] [<b>-propquery</b> <i>propq</i>]</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>This command implements a generic SSL/TLS client which connects to a remote host using SSL/TLS. It can request a page from the server and includes the time to transfer the payload data in its timing measurements. It measures the number of connections within a given timeframe, the amount of data transferred (if any), and calculates the average time spent for one connection.</p>
+
+<h1 id="OPTIONS">OPTIONS</h1>
+
+<dl>
+
+<dt id="help"><b>-help</b></dt>
+<dd>
+
+<p>Print out a usage message.</p>
+
+</dd>
+<dt id="connect-host:port"><b>-connect</b> <i>host</i>:<i>port</i></dt>
+<dd>
+
+<p>This specifies the host and optional port to connect to. If the host string is an IPv6 address, it must be enclosed in <code>[</code> and <code>]</code>.</p>
+
+</dd>
+<dt id="www-page"><b>-www</b> <i>page</i></dt>
+<dd>
+
+<p>This specifies the page to GET from the server. A value of &#39;/&#39; gets the <i>index.html</i> page. If this parameter is not specified, then this command will only perform the handshake to establish SSL connections but not transfer any payload data.</p>
+
+</dd>
+<dt id="cert-certname"><b>-cert</b> <i>certname</i></dt>
+<dd>
+
+<p>The certificate to use, if one is requested by the server. The default is not to use a certificate. The file is in PEM format.</p>
+
+</dd>
+<dt id="key-keyfile"><b>-key</b> <i>keyfile</i></dt>
+<dd>
+
+<p>The private key to use. If not specified then the certificate file will be used. The file is in PEM format.</p>
+
+</dd>
+<dt id="verify-depth"><b>-verify</b> <i>depth</i></dt>
+<dd>
+
+<p>The verify depth to use. This specifies the maximum length of the server certificate chain and turns on server certificate verification. Currently the verify operation continues after errors so all the problems with a certificate chain can be seen. As a side effect the connection will never fail due to a server certificate verify failure.</p>
+
+</dd>
+<dt id="new"><b>-new</b></dt>
+<dd>
+
+<p>Performs the timing test using a new session ID for each connection. If neither <b>-new</b> nor <b>-reuse</b> are specified, they are both on by default and executed in sequence.</p>
+
+</dd>
+<dt id="reuse"><b>-reuse</b></dt>
+<dd>
+
+<p>Performs the timing test using the same session ID; this can be used as a test that session caching is working. If neither <b>-new</b> nor <b>-reuse</b> are specified, they are both on by default and executed in sequence.</p>
+
+</dd>
+<dt id="bugs"><b>-bugs</b></dt>
+<dd>
+
+<p>There are several known bugs in SSL and TLS implementations. Adding this option enables various workarounds.</p>
+
+</dd>
+<dt id="cipher-cipherlist"><b>-cipher</b> <i>cipherlist</i></dt>
+<dd>
+
+<p>This allows the TLSv1.2 and below cipher list sent by the client to be modified. This list will be combined with any TLSv1.3 ciphersuites that have been configured. Although the server determines which cipher suite is used it should take the first supported cipher in the list sent by the client. See <a href="../man1/openssl-ciphers.html">openssl-ciphers(1)</a> for more information.</p>
+
+</dd>
+<dt id="ciphersuites-val"><b>-ciphersuites</b> <i>val</i></dt>
+<dd>
+
+<p>This allows the TLSv1.3 ciphersuites sent by the client to be modified. This list will be combined with any TLSv1.2 and below ciphersuites that have been configured. Although the server determines which cipher suite is used it should take the first supported cipher in the list sent by the client. See <a href="../man1/openssl-ciphers.html">openssl-ciphers(1)</a> for more information. The format for this list is a simple colon (&quot;:&quot;) separated list of TLSv1.3 ciphersuite names.</p>
+
+</dd>
+<dt id="time-length"><b>-time</b> <i>length</i></dt>
+<dd>
+
+<p>Specifies how long (in seconds) this command should establish connections and optionally transfer payload data from a server. Server and client performance and the link speed determine how many connections it can establish.</p>
+
+</dd>
+<dt id="nameopt-option"><b>-nameopt</b> <i>option</i></dt>
+<dd>
+
+<p>This specifies how the subject or issuer names are displayed. See <a href="../man1/openssl-namedisplay-options.html">openssl-namedisplay-options(1)</a> for details.</p>
+
+</dd>
+<dt id="CAfile-file--no-CAfile--CApath-dir--no-CApath--CAstore-uri--no-CAstore"><b>-CAfile</b> <i>file</i>, <b>-no-CAfile</b>, <b>-CApath</b> <i>dir</i>, <b>-no-CApath</b>, <b>-CAstore</b> <i>uri</i>, <b>-no-CAstore</b></dt>
+<dd>
+
+<p>See <a href="../man1/openssl-verification-options.html">&quot;Trusted Certificate Options&quot; in openssl-verification-options(1)</a> for details.</p>
+
+</dd>
+<dt id="provider-name"><b>-provider</b> <i>name</i></dt>
+<dd>
+
+</dd>
+<dt id="provider-path-path"><b>-provider-path</b> <i>path</i></dt>
+<dd>
+
+</dd>
+<dt id="provparam-name:-key-value"><b>-provparam</b> <i>[name:]key=value</i></dt>
+<dd>
+
+</dd>
+<dt id="propquery-propq"><b>-propquery</b> <i>propq</i></dt>
+<dd>
+
+<p>See <a href="../man1/openssl.html">&quot;Provider Options&quot; in openssl(1)</a>, <a href="../man7/provider.html">provider(7)</a>, and <a href="../man7/property.html">property(7)</a>.</p>
+
+</dd>
+<dt id="cafile-file"><b>-cafile</b> <i>file</i></dt>
+<dd>
+
+<p>This is an obsolete synonym for <b>-CAfile</b>.</p>
+
+</dd>
+<dt id="ssl3--tls1--tls1_1--tls1_2--tls1_3"><b>-ssl3</b>, <b>-tls1</b>, <b>-tls1_1</b>, <b>-tls1_2</b>, <b>-tls1_3</b></dt>
+<dd>
+
+<p>See <a href="../man1/openssl.html">&quot;TLS Version Options&quot; in openssl(1)</a>.</p>
+
+</dd>
+</dl>
+
+<h1 id="ENVIRONMENT">ENVIRONMENT</h1>
+
+<dl>
+
+<dt id="SSL_CIPHER"><b>SSL_CIPHER</b></dt>
+<dd>
+
+<p>If the <b>-cipher</b> option is not specified, the contents of this environment variable are used to modify the TLSv1.2 and below cipher list sent by the client the same way the aforementioned option does.</p>
+
+</dd>
+</dl>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>This command can be used to measure the performance of an SSL connection. To connect to an SSL HTTP server and get the default page the command</p>
+
+<pre><code>openssl s_time -connect servername:443 -www / -CApath yourdir -CAfile yourfile.pem -cipher commoncipher [-ssl3]</code></pre>
+
+<p>would typically be used (https uses port 443). <i>commoncipher</i> is a cipher to which both client and server can agree, see the <a href="../man1/openssl-ciphers.html">openssl-ciphers(1)</a> command for details.</p>
+
+<p>If the handshake fails then there are several possible causes, if it is nothing obvious like no client certificate then the <b>-bugs</b> and <b>-ssl3</b> options can be tried in case it is a buggy server. In particular you should play with these options <b>before</b> submitting a bug report to an OpenSSL mailing list.</p>
+
+<p>A frequent problem when attempting to get client certificates working is that a web client complains it has no certificates or gives an empty list to choose from. This is normally because the server is not sending the clients certificate authority in its &quot;acceptable CA list&quot; when it requests a certificate. By using <a href="../man1/openssl-s_client.html">openssl-s_client(1)</a> the CA list can be viewed and checked. However, some servers only request client authentication after a specific URL is requested. To obtain the list in this case it is necessary to use the <b>-prexit</b> option of <a href="../man1/openssl-s_client.html">openssl-s_client(1)</a> and send an HTTP request for an appropriate page.</p>
+
+<p>If a certificate is specified on the command line using the <b>-cert</b> option it will not be used unless the server specifically requests a client certificate. Therefore, merely including a client certificate on the command line is no guarantee that the certificate works.</p>
+
+<h1 id="BUGS">BUGS</h1>
+
+<p>Because this program does not have all the options of the <a href="../man1/openssl-s_client.html">openssl-s_client(1)</a> program to turn protocols on and off, you may not be able to measure the performance of all protocols with all servers.</p>
+
+<p>The <b>-verify</b> option should really exit if the server verification fails.</p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The <b>-cafile</b> option was deprecated in OpenSSL 3.0.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man1/openssl.html">openssl(1)</a>, <a href="../man1/openssl-s_client.html">openssl-s_client(1)</a>, <a href="../man1/openssl-s_server.html">openssl-s_server(1)</a>, <a href="../man1/openssl-ciphers.html">openssl-ciphers(1)</a>, <a href="../man7/ossl_store-file.html">ossl_store-file(7)</a></p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2004-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

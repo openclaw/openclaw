@@ -1,0 +1,335 @@
+Basic Installation
+==================
+
+These are installation instructions for Readline.
+
+The simplest way to compile readline is:
+
+  1. `cd' to the directory containing the readline source code and type
+     `./configure' to configure readline for your system.  If you're
+     using `csh' on an old version of System V, you might need to type
+     `sh ./configure' instead to prevent `csh' from trying to execute
+     `configure' itself.
+
+     Running `configure' takes some time.  While running, it prints some
+     messages telling which features it is checking for.
+
+     If you want to build readline in a directory other than the source
+     directory, just run `configure' using a full pathname, for instance:
+
+		bash /usr/local/src/readline/readline-8.3/configure
+
+  2. Type `make' to compile readline and build the static readline
+     and history libraries. If supported, this will build the shared
+     readline and history libraries also. See below for instructions on
+     compiling the other parts of the distribution. Typing `make everything'
+     will build the static and shared libraries (if supported) and the
+     example programs.
+
+  3. Type `make install' to install the static readline and history
+     libraries, the readline include files, the documentation, and, if
+     supported, the shared readline and history libraries.
+
+  4. You can remove the created libraries and object files from the
+     build directory by typing `make clean'.  To also remove the
+     files that `configure' created (so you can compile readline for
+     a different kind of computer), type `make distclean'.  There is
+     also a `make maintainer-clean' target, but that is intended mainly
+     for the readline developers, and should be used with care.
+
+The `configure' shell script attempts to guess correct values for
+various system-dependent variables used during compilation.  It
+uses those values to create a `Makefile' in the build directory,
+and Makefiles in the `doc', `shlib', and `examples'
+subdirectories.  It also creates a `config.h' file containing
+system-dependent definitions.  Finally, it creates a shell script
+`config.status' that you can run in the future to recreate the
+current configuration, a file `config.cache' that saves the
+results of its tests to speed up reconfiguring, and a file
+`config.log' containing compiler output (useful mainly for
+debugging `configure'). 
+
+To find out more about the options and arguments that the `configure'
+script understands, type
+
+     bash-4.2$ ./configure --help
+
+at a shell prompt in your readline source directory.
+
+If you want to build readline in a directory separate from the source
+directory - to build for multiple architectures, for example - just use
+the full path to the configure script.  The following commands will
+build readline in a directory under `/usr/local/build' from the source code
+in `/usr/local/src/readline/readline-8.3':
+
+     mkdir /usr/local/build/readline-8.3
+     cd /usr/local/build/readline-8.3
+     bash /usr/local/src/readline/readline-8.3/configure
+     make
+
+See `Compiling For Multiple Architectures' below for more information
+about building in a directory separate from the source.
+
+If you need to do unusual things to compile readline, please try
+to figure out how `configure' could check whether to do them, and
+mail diffs or instructions to <bug-readline@gnu.org> so they can
+be considered for the next release.  If at some point
+`config.cache' contains results you don't want to keep, you may
+remove or edit it. 
+
+The file `configure.in' is used to create `configure' by a
+program called `autoconf'.  You only need `configure.in' if you
+want to change it or regenerate `configure' using a newer version
+of `autoconf'.  The readline `configure.in' requires autoconf
+version 2.69 or newer. 
+
+Compilers and Options
+=====================
+
+Some systems require unusual options for compilation or linking that
+the `configure' script does not know about.  You can give `configure'
+initial values for variables by setting them in the environment.  Using
+a Bourne-compatible shell, you can do that on the command line like
+this:
+
+     CC=c89 CFLAGS=-O2 LIBS=-lposix ./configure
+
+Or on systems that have the `env' program, you can do it like this:
+
+     env CPPFLAGS=-I/usr/local/include LDFLAGS=-s ./configure
+
+Compiling For Multiple Architectures
+====================================
+
+You can compile readline for more than one kind of computer at the
+same time, by placing the object files for each architecture in their
+own directory.  To do this, you must use a version of `make' that
+supports the `VPATH' variable, such as GNU `make'.  `cd' to the
+directory where you want the object files and executables to go and run
+the `configure' script.  `configure' automatically checks for the
+source code in the directory that `configure' is in and in `..'.
+
+If you have to use a `make' that does not supports the `VPATH'
+variable, you have to compile readline for one architecture at a
+time in the source code directory.  After you have installed
+readline for one architecture, use `make distclean' before
+reconfiguring for another architecture. 
+
+Installation Names
+==================
+
+By default, `make install' will install the readline libraries in
+`/usr/local/lib', the include files in `/usr/local/include/readline',
+the man pages in `/usr/local/man', and the info files in `/usr/local/info'.
+You can specify an installation prefix other than `/usr/local' by
+giving `configure' the option `--prefix=PATH' or by supplying a value for
+the DESTDIR variable when running `make install'. 
+
+You can specify separate installation prefixes for
+architecture-specific files and architecture-independent files. 
+If you give `configure' the option `--exec-prefix=PATH', the
+readline Makefiles will use PATH as the prefix for installing the
+libraries.  Documentation and other data files will still use the
+regular prefix. 
+
+Specifying the System Type
+==========================
+
+There may be some features `configure' can not figure out
+automatically, but need to determine by the type of host readline
+will run on.  Usually `configure' can figure that out, but if it
+prints a message saying it can not guess the host type, give it
+the `--host=TYPE' option.  TYPE can either be a short name for
+the system type, such as `sun4', or a canonical name with three
+fields: CPU-COMPANY-SYSTEM (e.g., i386-unknown-freebsd4.2). 
+
+See the file `config.sub' for the possible values of each field.
+
+Sharing Defaults
+================
+
+If you want to set default values for `configure' scripts to share,
+you can create a site shell script called `config.site' that gives
+default values for variables like `CC', `cache_file', and `prefix'.
+`configure' looks for `PREFIX/share/config.site' if it exists, then
+`PREFIX/etc/config.site' if it exists.  Or, you can set the
+`CONFIG_SITE' environment variable to the location of the site script.
+A warning: the readline `configure' looks for a site script, but not
+all `configure' scripts do.
+
+Operation Controls
+==================
+
+`configure' recognizes the following options to control how it
+operates.
+
+`--cache-file=FILE'
+     Use and save the results of the tests in FILE instead of
+     `./config.cache'.  Set FILE to `/dev/null' to disable caching, for
+     debugging `configure'.
+
+`--help'
+     Print a summary of the options to `configure', and exit.
+
+`--quiet'
+`--silent'
+`-q'
+     Do not print messages saying which checks are being made.
+
+`--srcdir=DIR'
+     Look for the package's source code in directory DIR.  Usually
+     `configure' can determine that directory automatically.
+
+`--version'
+     Print the version of Autoconf used to generate the `configure'
+     script, and exit.
+
+`configure' also accepts some other, not widely useful, options.
+
+Optional Features
+=================
+
+The readline `configure' recognizes two `--with-PACKAGE' options:
+
+`--with-curses'
+    This tells readline that it can find the termcap library functions
+    (tgetent, et al.) in the curses library, rather than a separate
+    termcap library.  Readline uses the termcap functions, but does not
+    usually link with the termcap or curses library itself, allowing
+    applications which link with readline the to choose an appropriate
+    library. This option tells readline to link the example programs with
+    the curses library rather than libtermcap.
+
+`--with-shared-termcap-library'
+    This tells the readline build process to link the shared version of
+    libreadline against a shared version of the curses or termcap library
+    (see the description of SHLIB_LIBS below under `Shared Libraries').
+    This relieves the application of having to link with curses or termcap
+    itself, but does not allow the application to choose which library to
+    use. This is only effective on systems that build shared libraries (see
+    below; the default for shared libraries is `yes').
+
+`configure' also recognizes several `--enable-FEATURE' options:
+
+`--enable-bracketed-paste-default'
+    Enable bracketed paste by default, so the initial value of the
+    `enable-bracketed-paste' Readline variable is `on'. The default
+    is `yes'.
+
+`--enable-install-examples'
+    Install the readline example programs as part of `make install'.
+
+`--enable-multibyte'
+    Build with support for multibyte characters enabled on systems with the
+    necessary framework (locale definitions, C library functions, etc.). The
+    default is `yes'.
+
+`--enable-shared'
+    Build the shared libraries by default on supported platforms.  The
+    default is `yes'.
+
+`--enable-static'
+    Build the static libraries by default.  The default is `yes'.
+
+Shared Libraries
+================
+
+There is support for building shared versions of the readline and
+history libraries.  The configure script creates a Makefile in
+the `shlib' subdirectory, and typing `make shared' will cause
+shared versions of the readline and history libraries to be built
+on supported platforms.
+
+If `configure' is given the `--enable-shared' option, it will attempt
+to build the shared libraries by default on supported platforms. This
+option is enabled by default.
+
+Configure calls the script support/shobj-conf to test whether or
+not shared library creation is supported and to generate the values
+of variables that are substituted into shlib/Makefile.  If you
+try to build shared libraries on an unsupported platform, `make'
+will display a message asking you to update support/shobj-conf for
+your platform.
+
+If you need to update support/shobj-conf, you will need to create
+a `stanza' for your operating system and compiler.  The script uses
+the value of host_os and ${CC} as determined by configure.  For
+instance, FreeBSD 4.2 with any version of gcc is identified as
+`freebsd4.2-gcc*'.
+
+In the stanza for your operating system-compiler pair, you will need to
+define several variables.  They are:
+
+SHOBJ_CC	The C compiler used to compile source files into shareable
+		object files.  This is normally set to the value of ${CC}
+		by configure, and should not need to be changed.
+
+SHOBJ_CFLAGS	Flags to pass to the C compiler ($SHOBJ_CC) to create
+		position-independent code.  If you are using gcc, this
+		should probably be set to `-fpic'.
+
+SHOBJ_LD	The link editor to be used to create the shared library from
+		the object files created by $SHOBJ_CC.  If you are using
+		gcc, a value of `gcc' will probably work.
+
+SHOBJ_LDFLAGS	Flags to pass to SHOBJ_LD to enable shared object creation.
+		If you are using gcc, `-shared' may be all that is necessary.
+		These should be the flags needed for generic shared object
+		creation.
+
+SHLIB_XLDFLAGS	Additional flags to pass to SHOBJ_LD for shared library
+		creation.  Many systems use the -R option to the link
+		editor to embed a path within the library for run-time
+		library searches.  A reasonable value for such systems would
+		be `-R$(libdir)'.
+
+SHLIB_LIBS	Any additional libraries that shared libraries should be
+		linked against when they are created.
+
+SHLIB_LIBPREF	The prefix to use when generating the filename of the shared
+		library.  The default is `lib'; Cygwin uses `cyg'.
+
+SHLIB_LIBSUFF	The suffix to add to `libreadline' and `libhistory' when
+		generating the filename of the shared library.  Many systems
+		use `so'; HP-UX uses `sl'.
+
+SHLIB_LIBVERSION The string to append to the filename to indicate the version
+		of the shared library.  It should begin with $(SHLIB_LIBSUFF),
+		and possibly include version information that allows the
+		run-time loader to load the version of the shared library
+		appropriate for a particular program.  Systems using shared
+		libraries similar to SunOS 4.x use major and minor library
+		version numbers; for those systems a value of
+		`$(SHLIB_LIBSUFF).$(SHLIB_MAJOR)$(SHLIB_MINOR)' is appropriate.
+		Systems based on System V Release 4 don't use minor version
+		numbers; use `$(SHLIB_LIBSUFF).$(SHLIB_MAJOR)' on those systems.
+		Other Unix versions use different schemes.
+
+SHLIB_DLLVERSION The version number for shared libraries that determines API
+		compatibility between readline versions and the underlying
+		system.  Used only on Cygwin.  Defaults to $SHLIB_MAJOR, but
+		can be overridden at configuration time by defining DLLVERSION
+		in the environment.
+
+SHLIB_DOT	The character used to separate the name of the shared library
+		from the suffix and version information.  The default is `.';
+		systems like Cygwin which don't separate version information
+		from the library name should set this to the empty string.
+
+SHLIB_STATUS	Set this to `supported' when you have defined the other
+		necessary variables.  Make uses this to determine whether
+		or not shared library creation should be attempted.  If
+		shared libraries are not supported, this will be set to
+		`unsupported'.
+
+You should look at the existing stanzas in support/shobj-conf for ideas.
+
+Once you have updated support/shobj-conf, re-run configure and type
+`make shared' or `make'.  The shared libraries will be created in the
+shlib subdirectory.
+
+If shared libraries are created, `make install' will install them. 
+You may install only the shared libraries by running `make
+install-shared' from the top-level build directory.  Running `make
+install' in the shlib subdirectory will also work.  If you don't want
+to install any created shared libraries, run `make install-static'. 

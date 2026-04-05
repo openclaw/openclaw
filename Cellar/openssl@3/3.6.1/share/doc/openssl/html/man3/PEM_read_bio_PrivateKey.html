@@ -1,0 +1,441 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>PEM_read_bio_PrivateKey</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#PEM-FUNCTION-ARGUMENTS">PEM FUNCTION ARGUMENTS</a></li>
+  <li><a href="#NOTES">NOTES</a></li>
+  <li><a href="#PEM-ENCRYPTION-FORMAT">PEM ENCRYPTION FORMAT</a></li>
+  <li><a href="#BUGS">BUGS</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#EXAMPLES">EXAMPLES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>pem_password_cb, PEM_read_bio_PrivateKey_ex, PEM_read_bio_PrivateKey, PEM_read_PrivateKey_ex, PEM_read_PrivateKey, PEM_write_bio_PrivateKey_ex, PEM_write_bio_PrivateKey, PEM_write_bio_PrivateKey_traditional, PEM_write_PrivateKey_ex, PEM_write_PrivateKey, PEM_write_bio_PKCS8PrivateKey, PEM_write_PKCS8PrivateKey, PEM_write_bio_PKCS8PrivateKey_nid, PEM_write_PKCS8PrivateKey_nid, PEM_read_bio_PUBKEY_ex, PEM_read_bio_PUBKEY, PEM_read_PUBKEY_ex, PEM_read_PUBKEY, PEM_write_bio_PUBKEY_ex, PEM_write_bio_PUBKEY, PEM_write_PUBKEY_ex, PEM_write_PUBKEY, PEM_read_bio_RSAPrivateKey, PEM_read_RSAPrivateKey, PEM_write_bio_RSAPrivateKey, PEM_write_RSAPrivateKey, PEM_read_bio_RSAPublicKey, PEM_read_RSAPublicKey, PEM_write_bio_RSAPublicKey, PEM_write_RSAPublicKey, PEM_read_bio_RSA_PUBKEY, PEM_read_RSA_PUBKEY, PEM_write_bio_RSA_PUBKEY, PEM_write_RSA_PUBKEY, PEM_read_bio_DSAPrivateKey, PEM_read_DSAPrivateKey, PEM_write_bio_DSAPrivateKey, PEM_write_DSAPrivateKey, PEM_read_bio_DSA_PUBKEY, PEM_read_DSA_PUBKEY, PEM_write_bio_DSA_PUBKEY, PEM_write_DSA_PUBKEY, PEM_read_bio_Parameters_ex, PEM_read_bio_Parameters, PEM_write_bio_Parameters, PEM_read_bio_DSAparams, PEM_read_DSAparams, PEM_write_bio_DSAparams, PEM_write_DSAparams, PEM_read_bio_DHparams, PEM_read_DHparams, PEM_write_bio_DHparams, PEM_write_DHparams, PEM_read_bio_X509, PEM_read_X509, PEM_write_bio_X509, PEM_write_X509, PEM_read_bio_X509_ACERT, PEM_read_X509_ACERT, PEM_write_bio_X509_ACERT, PEM_write_X509_ACERT, PEM_read_bio_X509_AUX, PEM_read_X509_AUX, PEM_write_bio_X509_AUX, PEM_write_X509_AUX, PEM_read_bio_X509_REQ, PEM_read_X509_REQ, PEM_write_bio_X509_REQ, PEM_write_X509_REQ, PEM_write_bio_X509_REQ_NEW, PEM_write_X509_REQ_NEW, PEM_read_bio_X509_CRL, PEM_read_X509_CRL, PEM_write_bio_X509_CRL, PEM_write_X509_CRL, PEM_read_bio_PKCS7, PEM_read_PKCS7, PEM_write_bio_PKCS7, PEM_write_PKCS7 - PEM routines</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/pem.h&gt;
+
+typedef int pem_password_cb(char *buf, int size, int rwflag, void *u);
+
+EVP_PKEY *PEM_read_bio_PrivateKey_ex(BIO *bp, EVP_PKEY **x,
+                                     pem_password_cb *cb, void *u,
+                                     OSSL_LIB_CTX *libctx, const char *propq);
+EVP_PKEY *PEM_read_bio_PrivateKey(BIO *bp, EVP_PKEY **x,
+                                  pem_password_cb *cb, void *u);
+EVP_PKEY *PEM_read_PrivateKey_ex(FILE *fp, EVP_PKEY **x, pem_password_cb *cb,
+                                 void *u, OSSL_LIB_CTX *libctx,
+                                 const char *propq);
+EVP_PKEY *PEM_read_PrivateKey(FILE *fp, EVP_PKEY **x,
+                              pem_password_cb *cb, void *u);
+int PEM_write_bio_PrivateKey_ex(BIO *bp, const EVP_PKEY *x,
+                                const EVP_CIPHER *enc,
+                                unsigned char *kstr, int klen,
+                                pem_password_cb *cb, void *u,
+                                OSSL_LIB_CTX *libctx, const char *propq);
+int PEM_write_bio_PrivateKey(BIO *bp, const EVP_PKEY *x, const EVP_CIPHER *enc,
+                             unsigned char *kstr, int klen,
+                             pem_password_cb *cb, void *u);
+int PEM_write_bio_PrivateKey_traditional(BIO *bp, EVP_PKEY *x,
+                                         const EVP_CIPHER *enc,
+                                         unsigned char *kstr, int klen,
+                                         pem_password_cb *cb, void *u);
+int PEM_write_PrivateKey_ex(FILE *fp, EVP_PKEY *x, const EVP_CIPHER *enc,
+                            unsigned char *kstr, int klen,
+                            pem_password_cb *cb, void *u,
+                            OSSL_LIB_CTX *libctx, const char *propq);
+int PEM_write_PrivateKey(FILE *fp, EVP_PKEY *x, const EVP_CIPHER *enc,
+                         unsigned char *kstr, int klen,
+                         pem_password_cb *cb, void *u);
+int PEM_write_bio_PKCS8PrivateKey(BIO *bp, EVP_PKEY *x, const EVP_CIPHER *enc,
+                                  char *kstr, int klen,
+                                  pem_password_cb *cb, void *u);
+int PEM_write_PKCS8PrivateKey(FILE *fp, EVP_PKEY *x, const EVP_CIPHER *enc,
+                              char *kstr, int klen,
+                              pem_password_cb *cb, void *u);
+int PEM_write_bio_PKCS8PrivateKey_nid(BIO *bp, const EVP_PKEY *x, int nid,
+                                      char *kstr, int klen,
+                                      pem_password_cb *cb, void *u);
+int PEM_write_PKCS8PrivateKey_nid(FILE *fp, const EVP_PKEY *x, int nid,
+                                  char *kstr, int klen,
+                                  pem_password_cb *cb, void *u);
+
+EVP_PKEY *PEM_read_bio_PUBKEY_ex(BIO *bp, EVP_PKEY **x,
+                                 pem_password_cb *cb, void *u,
+                                 OSSL_LIB_CTX *libctx, const char *propq);
+EVP_PKEY *PEM_read_bio_PUBKEY(BIO *bp, EVP_PKEY **x,
+                              pem_password_cb *cb, void *u);
+EVP_PKEY *PEM_read_PUBKEY_ex(FILE *fp, EVP_PKEY **x,
+                             pem_password_cb *cb, void *u,
+                             OSSL_LIB_CTX *libctx, const char *propq);
+EVP_PKEY *PEM_read_PUBKEY(FILE *fp, EVP_PKEY **x,
+                          pem_password_cb *cb, void *u);
+int PEM_write_bio_PUBKEY_ex(BIO *bp, EVP_PKEY *x,
+                            OSSL_LIB_CTX *libctx, const char *propq);
+int PEM_write_bio_PUBKEY(BIO *bp, EVP_PKEY *x);
+int PEM_write_PUBKEY_ex(FILE *fp, EVP_PKEY *x,
+                        OSSL_LIB_CTX *libctx, const char *propq);
+int PEM_write_PUBKEY(FILE *fp, EVP_PKEY *x);
+
+EVP_PKEY *PEM_read_bio_Parameters_ex(BIO *bp, EVP_PKEY **x,
+                                     OSSL_LIB_CTX *libctx, const char *propq);
+EVP_PKEY *PEM_read_bio_Parameters(BIO *bp, EVP_PKEY **x);
+int PEM_write_bio_Parameters(BIO *bp, const EVP_PKEY *x);
+
+X509 *PEM_read_bio_X509(BIO *bp, X509 **x, pem_password_cb *cb, void *u);
+X509 *PEM_read_X509(FILE *fp, X509 **x, pem_password_cb *cb, void *u);
+int PEM_write_bio_X509(BIO *bp, X509 *x);
+int PEM_write_X509(FILE *fp, X509 *x);
+
+X509_ACERT *PEM_read_bio_X509_ACERT(BIO *bp, X509_ACERT **x,
+                                    pem_password_cb *cb, void *u);
+X509_ACERT *PEM_read_X509_ACERT(FILE *fp, X509_ACERT **x,
+                                    pem_password_cb *cb, void *u);
+int PEM_write_bio_X509_ACERT(BIO *bp, X509_ACERT *x);
+int PEM_write_X509_ACERT(FILE *fp, X509_ACERT *x);
+
+X509 *PEM_read_bio_X509_AUX(BIO *bp, X509 **x, pem_password_cb *cb, void *u);
+X509 *PEM_read_X509_AUX(FILE *fp, X509 **x, pem_password_cb *cb, void *u);
+int PEM_write_bio_X509_AUX(BIO *bp, X509 *x);
+int PEM_write_X509_AUX(FILE *fp, X509 *x);
+
+X509_REQ *PEM_read_bio_X509_REQ(BIO *bp, X509_REQ **x,
+                                pem_password_cb *cb, void *u);
+X509_REQ *PEM_read_X509_REQ(FILE *fp, X509_REQ **x,
+                            pem_password_cb *cb, void *u);
+int PEM_write_bio_X509_REQ(BIO *bp, X509_REQ *x);
+int PEM_write_X509_REQ(FILE *fp, X509_REQ *x);
+int PEM_write_bio_X509_REQ_NEW(BIO *bp, X509_REQ *x);
+int PEM_write_X509_REQ_NEW(FILE *fp, X509_REQ *x);
+
+X509_CRL *PEM_read_bio_X509_CRL(BIO *bp, X509_CRL **x,
+                                pem_password_cb *cb, void *u);
+X509_CRL *PEM_read_X509_CRL(FILE *fp, X509_CRL **x,
+                            pem_password_cb *cb, void *u);
+int PEM_write_bio_X509_CRL(BIO *bp, X509_CRL *x);
+int PEM_write_X509_CRL(FILE *fp, X509_CRL *x);
+
+PKCS7 *PEM_read_bio_PKCS7(BIO *bp, PKCS7 **x, pem_password_cb *cb, void *u);
+PKCS7 *PEM_read_PKCS7(FILE *fp, PKCS7 **x, pem_password_cb *cb, void *u);
+int PEM_write_bio_PKCS7(BIO *bp, PKCS7 *x);
+int PEM_write_PKCS7(FILE *fp, PKCS7 *x);</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>RSA *PEM_read_bio_RSAPrivateKey(BIO *bp, RSA **x,
+                                pem_password_cb *cb, void *u);
+RSA *PEM_read_RSAPrivateKey(FILE *fp, RSA **x,
+                            pem_password_cb *cb, void *u);
+int PEM_write_bio_RSAPrivateKey(BIO *bp, RSA *x, const EVP_CIPHER *enc,
+                                unsigned char *kstr, int klen,
+                                pem_password_cb *cb, void *u);
+int PEM_write_RSAPrivateKey(FILE *fp, RSA *x, const EVP_CIPHER *enc,
+                            unsigned char *kstr, int klen,
+                            pem_password_cb *cb, void *u);
+
+RSA *PEM_read_bio_RSAPublicKey(BIO *bp, RSA **x,
+                               pem_password_cb *cb, void *u);
+RSA *PEM_read_RSAPublicKey(FILE *fp, RSA **x,
+                           pem_password_cb *cb, void *u);
+int PEM_write_bio_RSAPublicKey(BIO *bp, RSA *x);
+int PEM_write_RSAPublicKey(FILE *fp, RSA *x);
+
+RSA *PEM_read_bio_RSA_PUBKEY(BIO *bp, RSA **x,
+                             pem_password_cb *cb, void *u);
+RSA *PEM_read_RSA_PUBKEY(FILE *fp, RSA **x,
+                         pem_password_cb *cb, void *u);
+int PEM_write_bio_RSA_PUBKEY(BIO *bp, RSA *x);
+int PEM_write_RSA_PUBKEY(FILE *fp, RSA *x);
+
+DSA *PEM_read_bio_DSAPrivateKey(BIO *bp, DSA **x,
+                                pem_password_cb *cb, void *u);
+DSA *PEM_read_DSAPrivateKey(FILE *fp, DSA **x,
+                            pem_password_cb *cb, void *u);
+int PEM_write_bio_DSAPrivateKey(BIO *bp, DSA *x, const EVP_CIPHER *enc,
+                                unsigned char *kstr, int klen,
+                                pem_password_cb *cb, void *u);
+int PEM_write_DSAPrivateKey(FILE *fp, DSA *x, const EVP_CIPHER *enc,
+                            unsigned char *kstr, int klen,
+                            pem_password_cb *cb, void *u);
+
+DSA *PEM_read_bio_DSA_PUBKEY(BIO *bp, DSA **x,
+                             pem_password_cb *cb, void *u);
+DSA *PEM_read_DSA_PUBKEY(FILE *fp, DSA **x,
+                         pem_password_cb *cb, void *u);
+int PEM_write_bio_DSA_PUBKEY(BIO *bp, DSA *x);
+int PEM_write_DSA_PUBKEY(FILE *fp, DSA *x);
+DSA *PEM_read_bio_DSAparams(BIO *bp, DSA **x, pem_password_cb *cb, void *u);
+DSA *PEM_read_DSAparams(FILE *fp, DSA **x, pem_password_cb *cb, void *u);
+int PEM_write_bio_DSAparams(BIO *bp, DSA *x);
+int PEM_write_DSAparams(FILE *fp, DSA *x);
+
+DH *PEM_read_bio_DHparams(BIO *bp, DH **x, pem_password_cb *cb, void *u);
+DH *PEM_read_DHparams(FILE *fp, DH **x, pem_password_cb *cb, void *u);
+int PEM_write_bio_DHparams(BIO *bp, DH *x);
+int PEM_write_DHparams(FILE *fp, DH *x);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>All of the functions described on this page that have a <i>TYPE</i> of <b>DH</b>, <b>DSA</b> and <b>RSA</b> are deprecated. Applications should use <a href="../man3/OSSL_ENCODER_to_bio.html">OSSL_ENCODER_to_bio(3)</a> and <a href="../man3/OSSL_DECODER_from_bio.html">OSSL_DECODER_from_bio(3)</a> instead.</p>
+
+<p>The PEM functions read or write structures in PEM format. In this sense PEM format is simply base64 encoded data surrounded by header lines.</p>
+
+<p>For more details about the meaning of arguments see the <b>PEM FUNCTION ARGUMENTS</b> section.</p>
+
+<p>Each operation has four functions associated with it. For brevity the term &quot;<b><i>TYPE</i></b> functions&quot; will be used below to collectively refer to the <b>PEM_read_bio_<i>TYPE</i></b>(), <b>PEM_read_<i>TYPE</i></b>(), <b>PEM_write_bio_<i>TYPE</i></b>(), and <b>PEM_write_<i>TYPE</i></b>() functions.</p>
+
+<p>Some operations have additional variants that take a library context <i>libctx</i> and a property query string <i>propq</i>. The <b>X509</b>, <b>X509_REQ</b> and <b>X509_CRL</b> objects may have an associated library context or property query string but there are no variants of these functions that take a library context or property query string parameter. In this case it is possible to set the appropriate library context or property query string by creating an empty <b>X509</b>, <b>X509_REQ</b> or <b>X509_CRL</b> object using <a href="../man3/X509_new_ex.html">X509_new_ex(3)</a>, <a href="../man3/X509_REQ_new_ex.html">X509_REQ_new_ex(3)</a> or <a href="../man3/X509_CRL_new_ex.html">X509_CRL_new_ex(3)</a> respectively. Then pass the empty object as a parameter to the relevant PEM function. See the <a href="#EXAMPLES">&quot;EXAMPLES&quot;</a> section below.</p>
+
+<p>The <b>PrivateKey</b> functions read or write a private key in PEM format using an EVP_PKEY structure. The write routines use PKCS#8 private key format and are equivalent to PEM_write_bio_PKCS8PrivateKey(). The read functions transparently handle traditional and PKCS#8 format encrypted and unencrypted keys.</p>
+
+<p>PEM_write_bio_PrivateKey_traditional() writes out a private key in the &quot;traditional&quot; format with a simple private key marker and should only be used for compatibility with legacy programs.</p>
+
+<p>PEM_write_bio_PKCS8PrivateKey() and PEM_write_PKCS8PrivateKey() write a private key in an EVP_PKEY structure in PKCS#8 EncryptedPrivateKeyInfo format using PKCS#5 v2.0 password based encryption algorithms. The <i>cipher</i> argument specifies the encryption algorithm to use: unlike some other PEM routines the encryption is applied at the PKCS#8 level and not in the PEM headers. If <i>cipher</i> is NULL then no encryption is used and a PKCS#8 PrivateKeyInfo structure is used instead.</p>
+
+<p>PEM_write_bio_PKCS8PrivateKey_nid() and PEM_write_PKCS8PrivateKey_nid() also write out a private key as a PKCS#8 EncryptedPrivateKeyInfo however it uses PKCS#5 v1.5 or PKCS#12 encryption algorithms instead. The algorithm to use is specified in the <i>nid</i> parameter and should be the NID of the corresponding OBJECT IDENTIFIER (see NOTES section).</p>
+
+<p>The <b>PUBKEY</b> functions process a public key using an EVP_PKEY structure. The public key is encoded as a SubjectPublicKeyInfo structure.</p>
+
+<p>The <b>RSAPrivateKey</b> functions process an RSA private key using an RSA structure. The write routines uses traditional format. The read routines handles the same formats as the <b>PrivateKey</b> functions but an error occurs if the private key is not RSA.</p>
+
+<p>The <b>RSAPublicKey</b> functions process an RSA public key using an RSA structure. The public key is encoded using a PKCS#1 RSAPublicKey structure.</p>
+
+<p>The <b>RSA_PUBKEY</b> functions also process an RSA public key using an RSA structure. However, the public key is encoded using a SubjectPublicKeyInfo structure and an error occurs if the public key is not RSA.</p>
+
+<p>The <b>DSAPrivateKey</b> functions process a DSA private key using a DSA structure. The write routines uses traditional format. The read routines handles the same formats as the <b>PrivateKey</b> functions but an error occurs if the private key is not DSA.</p>
+
+<p>The <b>DSA_PUBKEY</b> functions process a DSA public key using a DSA structure. The public key is encoded using a SubjectPublicKeyInfo structure and an error occurs if the public key is not DSA.</p>
+
+<p>The <b>Parameters</b> functions read or write key parameters in PEM format using an EVP_PKEY structure. The encoding depends on the type of key; for DSA key parameters, it will be a Dss-Parms structure as defined in RFC 3370, and for DH key parameters, it will be a PKCS#3 DHparameter structure. <i>These functions only exist for the <b>BIO</b> type</i>.</p>
+
+<p>The <b>DSAparams</b> functions process DSA parameters using a DSA structure. The parameters are encoded using a Dss-Parms structure as defined in RFC 3370.</p>
+
+<p>The <b>DHparams</b> functions process DH parameters using a DH structure. The parameters are encoded using a PKCS#3 DHparameter structure.</p>
+
+<p>The <b>X509</b> functions process an X509 certificate using an X509 structure. They will also process a trusted X509 certificate but any trust settings are discarded.</p>
+
+<p>The <b>X509_ACERT</b> functions process an X509 attribute certificate using an X509_ACERT structure.</p>
+
+<p>The <b>X509_AUX</b> functions process a trusted X509 certificate using an X509 structure.</p>
+
+<p>The <b>X509_REQ</b> and <b>X509_REQ_NEW</b> functions process a PKCS#10 certificate request using an X509_REQ structure. The <b>X509_REQ</b> write functions use <b>CERTIFICATE REQUEST</b> in the header whereas the <b>X509_REQ_NEW</b> functions use <b>NEW CERTIFICATE REQUEST</b> (as required by some CAs). The <b>X509_REQ</b> read functions will handle either form so there are no <b>X509_REQ_NEW</b> read functions.</p>
+
+<p>The <b>X509_CRL</b> functions process an X509 CRL using an X509_CRL structure.</p>
+
+<p>The <b>PKCS7</b> functions process a PKCS#7 ContentInfo using a PKCS7 structure.</p>
+
+<h1 id="PEM-FUNCTION-ARGUMENTS">PEM FUNCTION ARGUMENTS</h1>
+
+<p>The PEM functions have many common arguments.</p>
+
+<p>The <i>bp</i> BIO parameter (if present) specifies the BIO to read from or write to. The <i>bp</i> BIO parameter <b>MUST NOT</b> be NULL.</p>
+
+<p>The <i>fp</i> FILE parameter (if present) specifies the FILE pointer to read from or write to.</p>
+
+<p>The PEM read functions all take an argument <i><b>TYPE</b> **x</i> and return a <i><b>TYPE</b> *</i> pointer. Where <i><b>TYPE</b></i> is whatever structure the function uses. If <i>x</i> is NULL then the parameter is ignored. If <i>x</i> is not NULL but <i>*x</i> is NULL then the structure returned will be written to <i>*x</i>. If neither <i>x</i> nor <i>*x</i> is NULL then an attempt is made to reuse the structure at <i>*x</i> (but see BUGS and EXAMPLES sections). Irrespective of the value of <i>x</i> a pointer to the structure is always returned (or NULL if an error occurred). The caller retains ownership of the returned object and needs to free it when it is no longer needed, e.g. using X509_free() for X509 objects or EVP_PKEY_free() for EVP_PKEY objects.</p>
+
+<p>The PEM functions which write private keys take an <i>enc</i> parameter which specifies the encryption algorithm to use, encryption is done at the PEM level. If this parameter is set to NULL then the private key is written in unencrypted form.</p>
+
+<p>The <i>cb</i> argument is the callback to use when querying for the pass phrase used for encrypted PEM structures (normally only private keys).</p>
+
+<p>For the PEM write routines if the <i>kstr</i> parameter is not NULL then <i>klen</i> bytes at <i>kstr</i> are used as the passphrase and <i>cb</i> is ignored.</p>
+
+<p>If the <i>cb</i> parameters is set to NULL and the <i>u</i> parameter is not NULL then the <i>u</i> parameter is interpreted as a NUL terminated string to use as the passphrase. If both <i>cb</i> and <i>u</i> are NULL then the default callback routine is used which will typically prompt for the passphrase on the current terminal with echoing turned off.</p>
+
+<p>The default passphrase callback is sometimes inappropriate (for example in a GUI application) so an alternative can be supplied. The callback routine has the following form:</p>
+
+<pre><code>int cb(char *buf, int size, int rwflag, void *u);</code></pre>
+
+<p><i>buf</i> is the buffer to write the passphrase to. <i>size</i> is the maximum length of the passphrase (i.e. the size of buf). <i>rwflag</i> is a flag which is set to 0 when reading and 1 when writing. A typical routine will ask the user to verify the passphrase (for example by prompting for it twice) if <i>rwflag</i> is 1. The <i>u</i> parameter has the same value as the <i>u</i> parameter passed to the PEM routine. It allows arbitrary data to be passed to the callback by the application (for example a window handle in a GUI application). The callback <i>must</i> return the number of characters in the passphrase or -1 if an error occurred. The passphrase can be arbitrary data; in the case where it is a string, it is not NUL terminated. See the <a href="#EXAMPLES">&quot;EXAMPLES&quot;</a> section below.</p>
+
+<p>Some implementations may need to use cryptographic algorithms during their operation. If this is the case and <i>libctx</i> and <i>propq</i> parameters have been passed then any algorithm fetches will use that library context and property query string. Otherwise the default library context and property query string will be used.</p>
+
+<h1 id="NOTES">NOTES</h1>
+
+<p>The PEM reading functions will skip any extraneous content or PEM data of a different type than they expect. This allows for example having a certificate (or multiple certificates) and a key in the PEM format in a single file.</p>
+
+<p>The old <b>PrivateKey</b> write routines are retained for compatibility. New applications should write private keys using the PEM_write_bio_PKCS8PrivateKey() or PEM_write_PKCS8PrivateKey() routines because they are more secure (they use an iteration count of 2048 whereas the traditional routines use a count of 1) unless compatibility with older versions of OpenSSL is important.</p>
+
+<p>The <b>PrivateKey</b> read routines can be used in all applications because they handle all formats transparently.</p>
+
+<p>A frequent cause of problems is attempting to use the PEM routines like this:</p>
+
+<pre><code>X509 *x;
+
+PEM_read_bio_X509(bp, &amp;x, 0, NULL);</code></pre>
+
+<p>this is a bug because an attempt will be made to reuse the data at <i>x</i> which is an uninitialised pointer.</p>
+
+<p>These functions make no assumption regarding the pass phrase received from the password callback. It will simply be treated as a byte sequence.</p>
+
+<h1 id="PEM-ENCRYPTION-FORMAT">PEM ENCRYPTION FORMAT</h1>
+
+<p>These old <b>PrivateKey</b> routines use a non standard technique for encryption.</p>
+
+<p>The private key (or other data) takes the following form:</p>
+
+<pre><code>-----BEGIN RSA PRIVATE KEY-----
+Proc-Type: 4,ENCRYPTED
+DEK-Info: DES-EDE3-CBC,3F17F5316E2BAC89
+
+...base64 encoded data...
+-----END RSA PRIVATE KEY-----</code></pre>
+
+<p>The line beginning with <i>Proc-Type</i> contains the version and the protection on the encapsulated data. The line beginning <i>DEK-Info</i> contains two comma separated values: the encryption algorithm name as used by EVP_get_cipherbyname() and an initialization vector used by the cipher encoded as a set of hexadecimal digits. After those two lines is the base64-encoded encrypted data.</p>
+
+<p>The encryption key is derived using EVP_BytesToKey(). The cipher&#39;s initialization vector is passed to EVP_BytesToKey() as the <i>salt</i> parameter. Internally, <b>PKCS5_SALT_LEN</b> bytes of the salt are used (regardless of the size of the initialization vector). The user&#39;s password is passed to EVP_BytesToKey() using the <i>data</i> and <i>datal</i> parameters. Finally, the library uses an iteration count of 1 for EVP_BytesToKey().</p>
+
+<p>The <i>key</i> derived by EVP_BytesToKey() along with the original initialization vector is then used to decrypt the encrypted data. The <i>iv</i> produced by EVP_BytesToKey() is not utilized or needed, and NULL should be passed to the function.</p>
+
+<p>The pseudo code to derive the key would look similar to:</p>
+
+<pre><code>EVP_CIPHER* cipher = EVP_des_ede3_cbc();
+EVP_MD* md = EVP_md5();
+
+unsigned int nkey = EVP_CIPHER_get_key_length(cipher);
+unsigned int niv = EVP_CIPHER_get_iv_length(cipher);
+unsigned char key[nkey];
+unsigned char iv[niv];
+
+memcpy(iv, HexToBin(&quot;3F17F5316E2BAC89&quot;), niv);
+rc = EVP_BytesToKey(cipher, md, iv /*salt*/, pword, plen, 1, key, NULL /*iv*/);
+if (rc != nkey)
+    /* Error */
+
+/* On success, use key and iv to initialize the cipher */</code></pre>
+
+<h1 id="BUGS">BUGS</h1>
+
+<p>The PEM read routines in some versions of OpenSSL will not correctly reuse an existing structure. Therefore, the following:</p>
+
+<pre><code>PEM_read_bio_X509(bp, &amp;x, 0, NULL);</code></pre>
+
+<p>where <i>x</i> already contains a valid certificate, may not work, whereas:</p>
+
+<pre><code>X509_free(x);
+x = PEM_read_bio_X509(bp, NULL, 0, NULL);</code></pre>
+
+<p>is guaranteed to work. It is always acceptable for <i>x</i> to contain a newly allocated, empty <b>X509</b> object (for example allocated via <a href="../man3/X509_new_ex.html">X509_new_ex(3)</a>).</p>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>The read routines return either a pointer to the structure read or NULL if an error occurred.</p>
+
+<p>The write routines return 1 for success or 0 for failure.</p>
+
+<h1 id="EXAMPLES">EXAMPLES</h1>
+
+<p>Although the PEM routines take several arguments in almost all applications most of them are set to 0 or NULL.</p>
+
+<p>To read a certificate with a library context in PEM format from a BIO:</p>
+
+<pre><code>X509 *x = X509_new_ex(libctx, NULL);
+
+if (x == NULL)
+    /* Error */
+
+if (PEM_read_bio_X509(bp, &amp;x, 0, NULL) == NULL)
+    /* Error */</code></pre>
+
+<p>Read a certificate in PEM format from a BIO:</p>
+
+<pre><code>X509 *x;
+
+x = PEM_read_bio_X509(bp, NULL, 0, NULL);
+if (x == NULL)
+    /* Error */</code></pre>
+
+<p>Alternative method:</p>
+
+<pre><code>X509 *x = NULL;
+
+if (!PEM_read_bio_X509(bp, &amp;x, 0, NULL))
+    /* Error */</code></pre>
+
+<p>Write a certificate to a BIO:</p>
+
+<pre><code>if (!PEM_write_bio_X509(bp, x))
+    /* Error */</code></pre>
+
+<p>Write a private key (using traditional format) to a BIO using triple DES encryption, the pass phrase is prompted for:</p>
+
+<pre><code>if (!PEM_write_bio_PrivateKey(bp, key, EVP_des_ede3_cbc(), NULL, 0, 0, NULL))
+    /* Error */</code></pre>
+
+<p>Write a private key (using PKCS#8 format) to a BIO using triple DES encryption, using the pass phrase &quot;hello&quot;:</p>
+
+<pre><code>if (!PEM_write_bio_PKCS8PrivateKey(bp, key, EVP_des_ede3_cbc(),
+                                   NULL, 0, 0, &quot;hello&quot;))
+    /* Error */</code></pre>
+
+<p>Read a private key from a BIO using a pass phrase callback:</p>
+
+<pre><code>key = PEM_read_bio_PrivateKey(bp, NULL, pass_cb, &quot;My Private Key&quot;);
+if (key == NULL)
+    /* Error */</code></pre>
+
+<p>Skeleton pass phrase callback:</p>
+
+<pre><code>int pass_cb(char *buf, int size, int rwflag, void *u)
+{
+
+    /* We&#39;d probably do something else if &#39;rwflag&#39; is 1 */
+    printf(&quot;Enter pass phrase for \&quot;%s\&quot;\n&quot;, (char *)u);
+
+    /* get pass phrase, length &#39;len&#39; into &#39;tmp&#39; */
+    char *tmp = &quot;hello&quot;;
+    if (tmp == NULL) /* An error occurred */
+        return -1;
+
+    size_t len = strlen(tmp);
+
+    if (len &gt; size)
+        len = size;
+    memcpy(buf, tmp, len);
+    return len;
+}</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/EVP_EncryptInit.html">EVP_EncryptInit(3)</a>, <a href="../man3/EVP_BytesToKey.html">EVP_BytesToKey(3)</a>, <a href="../man7/passphrase-encoding.html">passphrase-encoding(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>The old Netscape certificate sequences were no longer documented in OpenSSL 1.1.0; applications should use the PKCS7 standard instead as they will be formally deprecated in a future releases.</p>
+
+<p>PEM_read_bio_PrivateKey_ex(), PEM_read_PrivateKey_ex(), PEM_read_bio_PUBKEY_ex(), PEM_read_PUBKEY_ex() and PEM_read_bio_Parameters_ex() were introduced in OpenSSL 3.0.</p>
+
+<p>The functions PEM_read_bio_RSAPrivateKey(), PEM_read_RSAPrivateKey(), PEM_write_bio_RSAPrivateKey(), PEM_write_RSAPrivateKey(), PEM_read_bio_RSAPublicKey(), PEM_read_RSAPublicKey(), PEM_write_bio_RSAPublicKey(), PEM_write_RSAPublicKey(), PEM_read_bio_RSA_PUBKEY(), PEM_read_RSA_PUBKEY(), PEM_write_bio_RSA_PUBKEY(), PEM_write_RSA_PUBKEY(), PEM_read_bio_DSAPrivateKey(), PEM_read_DSAPrivateKey(), PEM_write_bio_DSAPrivateKey(), PEM_write_DSAPrivateKey(), PEM_read_bio_DSA_PUBKEY(), PEM_read_DSA_PUBKEY(), PEM_write_bio_DSA_PUBKEY(), PEM_write_DSA_PUBKEY(); PEM_read_bio_DSAparams(), PEM_read_DSAparams(), PEM_write_bio_DSAparams(), PEM_write_DSAparams(), PEM_read_bio_DHparams(), PEM_read_DHparams(), PEM_write_bio_DHparams() and PEM_write_DHparams() were deprecated in 3.0.</p>
+
+<p>PEM_read_bio_X509_ACERT(), PEM_read_X509_ACERT(), PEM_write_bio_X509_ACERT(), PEM_write_X509_ACERT() were added in OpenSSL 3.4.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2001-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

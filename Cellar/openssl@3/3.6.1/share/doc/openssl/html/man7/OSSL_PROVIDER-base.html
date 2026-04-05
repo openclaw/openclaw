@@ -1,0 +1,403 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OSSL_PROVIDER-base</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#Properties">Properties</a></li>
+    </ul>
+  </li>
+  <li><a href="#OPERATIONS-AND-ALGORITHMS">OPERATIONS AND ALGORITHMS</a>
+    <ul>
+      <li><a href="#Random-Number-Generation">Random Number Generation</a></li>
+      <li><a href="#Asymmetric-Key-Encoder">Asymmetric Key Encoder</a></li>
+      <li><a href="#Asymmetric-Key-Decoder">Asymmetric Key Decoder</a></li>
+      <li><a href="#Stores">Stores</a></li>
+    </ul>
+  </li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OSSL_PROVIDER-base - OpenSSL base provider</p>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The OpenSSL base provider supplies the encoding for OpenSSL&#39;s asymmetric cryptography.</p>
+
+<h2 id="Properties">Properties</h2>
+
+<p>The implementations in this provider specifically have this property defined:</p>
+
+<dl>
+
+<dt id="provider-base">&quot;provider=base&quot;</dt>
+<dd>
+
+</dd>
+</dl>
+
+<p>It may be used in a property query string with fetching functions.</p>
+
+<p>It isn&#39;t mandatory to query for this property, except to make sure to get implementations of this provider and none other.</p>
+
+<dl>
+
+<dt id="type-parameters">&quot;type=parameters&quot;</dt>
+<dd>
+
+</dd>
+<dt id="type-private">&quot;type=private&quot;</dt>
+<dd>
+
+</dd>
+<dt id="type-public">&quot;type=public&quot;</dt>
+<dd>
+
+</dd>
+</dl>
+
+<p>These may be used in a property query string with fetching functions to select which data are to be encoded. Either the private key material, the public key material or the domain parameters can be selected.</p>
+
+<dl>
+
+<dt id="format-der">&quot;format=der&quot;</dt>
+<dd>
+
+</dd>
+<dt id="format-pem">&quot;format=pem&quot;</dt>
+<dd>
+
+</dd>
+<dt id="format-text">&quot;format=text&quot;</dt>
+<dd>
+
+</dd>
+</dl>
+
+<p>These may be used in a property query string with fetching functions to select the encoding output format. Either the DER, PEM and plaintext are currently permitted.</p>
+
+<h1 id="OPERATIONS-AND-ALGORITHMS">OPERATIONS AND ALGORITHMS</h1>
+
+<p>The OpenSSL base provider supports these operations and algorithms:</p>
+
+<h2 id="Random-Number-Generation">Random Number Generation</h2>
+
+<dl>
+
+<dt id="SEED-SRC-see-EVP_RAND-SEED-SRC-7">SEED-SRC, see <a href="../man7/EVP_RAND-SEED-SRC.html">EVP_RAND-SEED-SRC(7)</a></dt>
+<dd>
+
+</dd>
+<dt id="JITTER-see-EVP_RAND-JITTER-7">JITTER, see <a href="../man7/EVP_RAND-JITTER.html">EVP_RAND-JITTER(7)</a></dt>
+<dd>
+
+</dd>
+</dl>
+
+<p>In addition to this provider, the &quot;SEED-SRC&quot; and &quot;JITTER&quot; algorithms are also available in the default provider.</p>
+
+<h2 id="Asymmetric-Key-Encoder">Asymmetric Key Encoder</h2>
+
+<dl>
+
+<dt id="RSA">RSA</dt>
+<dd>
+
+</dd>
+<dt id="RSA-PSS">RSA-PSS</dt>
+<dd>
+
+</dd>
+<dt id="DH">DH</dt>
+<dd>
+
+</dd>
+<dt id="DHX">DHX</dt>
+<dd>
+
+</dd>
+<dt id="DSA">DSA</dt>
+<dd>
+
+</dd>
+<dt id="EC">EC</dt>
+<dd>
+
+</dd>
+<dt id="ED25519">ED25519</dt>
+<dd>
+
+</dd>
+<dt id="ED448">ED448</dt>
+<dd>
+
+</dd>
+<dt id="X25519">X25519</dt>
+<dd>
+
+</dd>
+<dt id="X448">X448</dt>
+<dd>
+
+</dd>
+<dt id="SM2">SM2</dt>
+<dd>
+
+</dd>
+<dt id="ML-DSA-44">ML-DSA-44</dt>
+<dd>
+
+</dd>
+<dt id="ML-DSA-65">ML-DSA-65</dt>
+<dd>
+
+</dd>
+<dt id="ML-DSA-87">ML-DSA-87</dt>
+<dd>
+
+</dd>
+<dt id="ML-KEM-512">ML-KEM-512</dt>
+<dd>
+
+</dd>
+<dt id="ML-KEM-768">ML-KEM-768</dt>
+<dd>
+
+</dd>
+<dt id="ML-KEM-1024">ML-KEM-1024</dt>
+<dd>
+
+</dd>
+<dt id="SLH-DSA-SHA2-128s">SLH-DSA-SHA2-128s</dt>
+<dd>
+
+</dd>
+<dt id="SLH-DSA-SHA2-128f">SLH-DSA-SHA2-128f</dt>
+<dd>
+
+</dd>
+<dt id="SLH-DSA-SHA2-192s">SLH-DSA-SHA2-192s</dt>
+<dd>
+
+</dd>
+<dt id="SLH-DSA-SHA2-192f">SLH-DSA-SHA2-192f</dt>
+<dd>
+
+</dd>
+<dt id="SLH-DSA-SHA2-256s">SLH-DSA-SHA2-256s</dt>
+<dd>
+
+</dd>
+<dt id="SLH-DSA-SHA2-256f">SLH-DSA-SHA2-256f</dt>
+<dd>
+
+</dd>
+<dt id="SLH-DSA-SHAKE-128s">SLH-DSA-SHAKE-128s</dt>
+<dd>
+
+</dd>
+<dt id="SLH-DSA-SHAKE-128f">SLH-DSA-SHAKE-128f</dt>
+<dd>
+
+</dd>
+<dt id="SLH-DSA-SHAKE-192s">SLH-DSA-SHAKE-192s</dt>
+<dd>
+
+</dd>
+<dt id="SLH-DSA-SHAKE-192f">SLH-DSA-SHAKE-192f</dt>
+<dd>
+
+</dd>
+<dt id="SLH-DSA-SHAKE-256s">SLH-DSA-SHAKE-256s</dt>
+<dd>
+
+</dd>
+<dt id="SLH-DSA-SHAKE-256f">SLH-DSA-SHAKE-256f</dt>
+<dd>
+
+</dd>
+</dl>
+
+<p>In addition to this provider, all of these encoding algorithms are also available in the default provider. Some of these algorithms may be used in combination with the FIPS provider.</p>
+
+<h2 id="Asymmetric-Key-Decoder">Asymmetric Key Decoder</h2>
+
+<dl>
+
+<dt id="RSA1">RSA</dt>
+<dd>
+
+</dd>
+<dt id="RSA-PSS1">RSA-PSS</dt>
+<dd>
+
+</dd>
+<dt id="DH1">DH</dt>
+<dd>
+
+</dd>
+<dt id="DHX1">DHX</dt>
+<dd>
+
+</dd>
+<dt id="DSA1">DSA</dt>
+<dd>
+
+</dd>
+<dt id="EC1">EC</dt>
+<dd>
+
+</dd>
+<dt id="ED255191">ED25519</dt>
+<dd>
+
+</dd>
+<dt id="ED4481">ED448</dt>
+<dd>
+
+</dd>
+<dt id="X255191">X25519</dt>
+<dd>
+
+</dd>
+<dt id="X4481">X448</dt>
+<dd>
+
+</dd>
+<dt id="SM21">SM2</dt>
+<dd>
+
+</dd>
+<dt id="DER">DER</dt>
+<dd>
+
+</dd>
+<dt id="ML-DSA-441">ML-DSA-44</dt>
+<dd>
+
+</dd>
+<dt id="ML-DSA-651">ML-DSA-65</dt>
+<dd>
+
+</dd>
+<dt id="ML-DSA-871">ML-DSA-87</dt>
+<dd>
+
+</dd>
+<dt id="ML-KEM-5121">ML-KEM-512</dt>
+<dd>
+
+</dd>
+<dt id="ML-KEM-7681">ML-KEM-768</dt>
+<dd>
+
+</dd>
+<dt id="ML-KEM-10241">ML-KEM-1024</dt>
+<dd>
+
+</dd>
+<dt id="SLH-DSA-SHA2-128s1">SLH-DSA-SHA2-128s</dt>
+<dd>
+
+</dd>
+<dt id="SLH-DSA-SHA2-128f1">SLH-DSA-SHA2-128f</dt>
+<dd>
+
+</dd>
+<dt id="SLH-DSA-SHA2-192s1">SLH-DSA-SHA2-192s</dt>
+<dd>
+
+</dd>
+<dt id="SLH-DSA-SHA2-192f1">SLH-DSA-SHA2-192f</dt>
+<dd>
+
+</dd>
+<dt id="SLH-DSA-SHA2-256s1">SLH-DSA-SHA2-256s</dt>
+<dd>
+
+</dd>
+<dt id="SLH-DSA-SHA2-256f1">SLH-DSA-SHA2-256f</dt>
+<dd>
+
+</dd>
+<dt id="SLH-DSA-SHAKE-128s1">SLH-DSA-SHAKE-128s</dt>
+<dd>
+
+</dd>
+<dt id="SLH-DSA-SHAKE-128f1">SLH-DSA-SHAKE-128f</dt>
+<dd>
+
+</dd>
+<dt id="SLH-DSA-SHAKE-192s1">SLH-DSA-SHAKE-192s</dt>
+<dd>
+
+</dd>
+<dt id="SLH-DSA-SHAKE-192f1">SLH-DSA-SHAKE-192f</dt>
+<dd>
+
+</dd>
+<dt id="SLH-DSA-SHAKE-256s1">SLH-DSA-SHAKE-256s</dt>
+<dd>
+
+</dd>
+<dt id="SLH-DSA-SHAKE-256f1">SLH-DSA-SHAKE-256f</dt>
+<dd>
+
+</dd>
+</dl>
+
+<p>In addition to this provider, all of these decoding algorithms are also available in the default provider. Some of these algorithms may be used in combination with the FIPS provider.</p>
+
+<h2 id="Stores">Stores</h2>
+
+<dl>
+
+<dt id="file">file</dt>
+<dd>
+
+</dd>
+<dt id="org.openssl.winstore-see-OSSL_STORE-winstore-7">org.openssl.winstore, see <a href="../man7/OSSL_STORE-winstore.html">OSSL_STORE-winstore(7)</a></dt>
+<dd>
+
+</dd>
+</dl>
+
+<p>In addition to this provider, all of these store algorithms are also available in the default provider.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/OSSL_PROVIDER-default.html">OSSL_PROVIDER-default(7)</a>, <a href="../man7/openssl-core.h.html">openssl-core.h(7)</a>, <a href="../man7/openssl-core_dispatch.h.html">openssl-core_dispatch.h(7)</a>, <a href="../man7/provider.html">provider(7)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>This functionality was added in OpenSSL 3.0.</p>
+
+<p>Support for <b>ML-DSA</b> and &lt;ML-KEM&gt; was added in OpenSSL 3.5.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2020-2025 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

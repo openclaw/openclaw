@@ -1,0 +1,146 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>OSSL_ALGORITHM</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a>
+    <ul>
+      <li><a href="#OSSL_ALGORITHM-fields">OSSL_ALGORITHM fields</a></li>
+    </ul>
+  </li>
+  <li><a href="#NOTES">NOTES</a>
+    <ul>
+      <li><a href="#On-the-subject-of-algorithm-names">On the subject of algorithm names</a></li>
+    </ul>
+  </li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>OSSL_ALGORITHM - OpenSSL Core type to define a fetchable algorithm</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/core.h&gt;
+
+typedef struct ossl_algorithm_st OSSL_ALGORITHM;
+struct ossl_algorithm_st {
+    const char *algorithm_names;     /* key */
+    const char *property_definition; /* key */
+    const OSSL_DISPATCH *implementation;
+    const char *algorithm_description;
+};</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>The <b>OSSL_ALGORITHM</b> type is a <i>public structure</i> that describes an algorithm that a <a href="../man7/provider.html">provider(7)</a> provides. Arrays of this type are returned by providers on demand from the OpenSSL libraries to describe what algorithms the providers provide implementations of, and with what properties.</p>
+
+<p>Arrays of this type must be terminated with a tuple where <i>algorithm_names</i> is NULL.</p>
+
+<p>This type of array is typically returned by the provider&#39;s operation querying function, further described in <a href="../man7/provider-base.html">&quot;Provider Functions&quot; in provider-base(7)</a>.</p>
+
+<h2 id="OSSL_ALGORITHM-fields"><b>OSSL_ALGORITHM</b> fields</h2>
+
+<dl>
+
+<dt id="algorithm_names"><i>algorithm_names</i></dt>
+<dd>
+
+<p>This string is a colon separated set of names / identities, and is used by the appropriate fetching functionality (such as <a href="../man3/EVP_CIPHER_fetch.html">EVP_CIPHER_fetch(3)</a>, <a href="../man3/EVP_MD_fetch.html">EVP_MD_fetch(3)</a>, etc) to find the desired algorithm.</p>
+
+<p>Multiple names / identities allow a specific algorithm implementation to be fetched multiple ways. For example, the RSA algorithm has the following known identities:</p>
+
+<ul>
+
+<li><p><code>RSA</code></p>
+
+</li>
+<li><p><code>rsaEncryption</code></p>
+
+<p>This is the name of the algorithm&#39;s OBJECT IDENTIFIER (OID), as given by the <a href="https://www.rfc-editor.org/rfc/rfc8017#appendix-C">PKCS#1 RFC&#39;s ASN.1 module</a></p>
+
+</li>
+<li><p><code>1.2.840.113549.1.1.1</code></p>
+
+<p>This is the OID itself for <code>rsaEncryption</code>, in canonical decimal text form.</p>
+
+</li>
+</ul>
+
+<p>The resulting <i>algorithm_names</i> string would look like this:</p>
+
+<pre><code>&quot;RSA:rsaEncryption:1.2.840.113549.1.1.1&quot;</code></pre>
+
+<p>The OpenSSL libraries use the first of the algorithm names as the main or canonical name, on a per algorithm implementation basis.</p>
+
+<p>See the notes <a href="#On-the-subject-of-algorithm-names">&quot;On the subject of algorithm names&quot;</a> below for a more in depth discussion on <i>algorithm_names</i> and how that may interact with applications and libraries, including OpenSSL&#39;s.</p>
+
+</dd>
+<dt id="property_definition"><i>property_definition</i></dt>
+<dd>
+
+<p>This string defines a set of properties associated with a particular algorithm implementation, and is used by the appropriate fetching functionality (such as <a href="../man3/EVP_CIPHER_fetch.html">EVP_CIPHER_fetch(3)</a>, <a href="../man3/EVP_MD_fetch.html">EVP_MD_fetch(3)</a>, etc) for a finer grained lookup of an algorithm implementation, which is useful in case multiple implementations of the same algorithm are available.</p>
+
+<p>See <a href="../man7/property.html">property(7)</a> for a further description of the contents of this string.</p>
+
+</dd>
+<dt id="implementation"><i>implementation</i></dt>
+<dd>
+
+<p>Pointer to an <a href="../man3/OSSL_DISPATCH.html">OSSL_DISPATCH(3)</a> array, containing pointers to the functions of a particular algorithm implementation.</p>
+
+</dd>
+<dt id="algorithm_description"><i>algorithm_description</i></dt>
+<dd>
+
+<p>A string with a short human-readable description of the algorithm.</p>
+
+</dd>
+</dl>
+
+<h1 id="NOTES">NOTES</h1>
+
+<h2 id="On-the-subject-of-algorithm-names">On the subject of algorithm names</h2>
+
+<p>Providers may find the need to register ASN.1 OIDs for algorithms using <a href="../man3/OBJ_create.html">OBJ_create(3)</a> (via the <b>core_obj_create</b> upcall described in <a href="../man7/provider-base.html">provider-base(7)</a>, because some application or library -- possibly still the OpenSSL libraries, even -- use NIDs to look up algorithms.</p>
+
+<p>In that scenario, you must make sure that the corresponding <b>OSSL_ALGORITHM</b>&#39;s <i>algorithm_names</i> includes both the short and the long name.</p>
+
+<p>Most of the time, registering ASN.1 OIDs like this shouldn&#39;t be necessary, and applications and libraries are encouraged to use <a href="../man3/OBJ_obj2txt.html">OBJ_obj2txt(3)</a> to get a text representation of the OID, which may be a long or short name for OIDs that are registered, or the OID itself in canonical decimal text form if not (or if <a href="../man3/OBJ_obj2txt.html">OBJ_obj2txt(3)</a> is called with <i>no_name</i> = 1).</p>
+
+<p>It&#39;s recommended to make sure that the corresponding <b>OSSL_ALGORITHM</b>&#39;s <i>algorithm_names</i> include known names as well as the OID itself in canonical decimal text form. That should cover all scenarios.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man7/crypto.html">crypto(7)</a>, <a href="../man7/provider-base.html">provider-base(7)</a>, <a href="../man7/openssl-core.h.html">openssl-core.h(7)</a>, <a href="../man7/openssl-core_dispatch.h.html">openssl-core_dispatch.h(7)</a>, <a href="../man3/OSSL_DISPATCH.html">OSSL_DISPATCH(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p><b>OSSL_ALGORITHM</b> was added in OpenSSL 3.0</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2022 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+

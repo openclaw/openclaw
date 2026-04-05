@@ -1,0 +1,118 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>DSA_generate_parameters</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@nlvzh.p1s.plx.sd.apple.com" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#RETURN-VALUES">RETURN VALUES</a></li>
+  <li><a href="#BUGS">BUGS</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#HISTORY">HISTORY</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>DSA_generate_parameters_ex, DSA_generate_parameters - generate DSA parameters</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<pre><code>#include &lt;openssl/dsa.h&gt;</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 3.0, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>int DSA_generate_parameters_ex(DSA *dsa, int bits,
+                               const unsigned char *seed, int seed_len,
+                               int *counter_ret, unsigned long *h_ret,
+                               BN_GENCB *cb);</code></pre>
+
+<p>The following functions have been deprecated since OpenSSL 0.9.8, and can be hidden entirely by defining <b>OPENSSL_API_COMPAT</b> with a suitable version value, see <a href="../man7/openssl_user_macros.html">openssl_user_macros(7)</a>:</p>
+
+<pre><code>DSA *DSA_generate_parameters(int bits, unsigned char *seed, int seed_len,
+                             int *counter_ret, unsigned long *h_ret,
+                             void (*callback)(int, int, void *), void *cb_arg);</code></pre>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>All of the functions described on this page are deprecated. Applications should instead use <a href="../man3/EVP_PKEY_paramgen_init.html">EVP_PKEY_paramgen_init(3)</a> and <a href="../man3/EVP_PKEY_keygen.html">EVP_PKEY_keygen(3)</a> as described in <a href="../man7/EVP_PKEY-DSA.html">EVP_PKEY-DSA(7)</a>.</p>
+
+<p>DSA_generate_parameters_ex() generates primes p and q and a generator g for use in the DSA and stores the result in <b>dsa</b>.</p>
+
+<p><b>bits</b> is the length of the prime p to be generated. For lengths under 2048 bits, the length of q is 160 bits; for lengths greater than or equal to 2048 bits, the length of q is set to 256 bits.</p>
+
+<p>If <b>seed</b> is NULL, the primes will be generated at random. If <b>seed_len</b> is less than the length of q, an error is returned.</p>
+
+<p>DSA_generate_parameters_ex() places the iteration count in *<b>counter_ret</b> and a counter used for finding a generator in *<b>h_ret</b>, unless these are <b>NULL</b>.</p>
+
+<p>A callback function may be used to provide feedback about the progress of the key generation. If <b>cb</b> is not <b>NULL</b>, it will be called as shown below. For information on the BN_GENCB structure and the BN_GENCB_call function discussed below, refer to <a href="../man3/BN_generate_prime.html">BN_generate_prime(3)</a>.</p>
+
+<p>DSA_generate_parameters() is similar to DSA_generate_parameters_ex() but expects an old-style callback function; see <a href="../man3/BN_generate_prime.html">BN_generate_prime(3)</a> for information on the old-style callback.</p>
+
+<ul>
+
+<li><p>When a candidate for q is generated, <b>BN_GENCB_call(cb, 0, m++)</b> is called (m is 0 for the first candidate).</p>
+
+</li>
+<li><p>When a candidate for q has passed a test by trial division, <b>BN_GENCB_call(cb, 1, -1)</b> is called. While a candidate for q is tested by Miller-Rabin primality tests, <b>BN_GENCB_call(cb, 1, i)</b> is called in the outer loop (once for each witness that confirms that the candidate may be prime); i is the loop counter (starting at 0).</p>
+
+</li>
+<li><p>When a prime q has been found, <b>BN_GENCB_call(cb, 2, 0)</b> and <b>BN_GENCB_call(cb, 3, 0)</b> are called.</p>
+
+</li>
+<li><p>Before a candidate for p (other than the first) is generated and tested, <b>BN_GENCB_call(cb, 0, counter)</b> is called.</p>
+
+</li>
+<li><p>When a candidate for p has passed the test by trial division, <b>BN_GENCB_call(cb, 1, -1)</b> is called. While it is tested by the Miller-Rabin primality test, <b>BN_GENCB_call(cb, 1, i)</b> is called in the outer loop (once for each witness that confirms that the candidate may be prime). i is the loop counter (starting at 0).</p>
+
+</li>
+<li><p>When p has been found, <b>BN_GENCB_call(cb, 2, 1)</b> is called.</p>
+
+</li>
+<li><p>When the generator has been found, <b>BN_GENCB_call(cb, 3, 1)</b> is called.</p>
+
+</li>
+</ul>
+
+<h1 id="RETURN-VALUES">RETURN VALUES</h1>
+
+<p>DSA_generate_parameters_ex() returns a 1 on success, or 0 otherwise. The error codes can be obtained by <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>.</p>
+
+<p>DSA_generate_parameters() returns a pointer to the DSA structure or <b>NULL</b> if the parameter generation fails.</p>
+
+<h1 id="BUGS">BUGS</h1>
+
+<p>Seed lengths greater than 20 are not supported.</p>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<p><a href="../man3/DSA_new.html">DSA_new(3)</a>, <a href="../man3/ERR_get_error.html">ERR_get_error(3)</a>, <a href="../man3/RAND_bytes.html">RAND_bytes(3)</a>, <a href="../man3/DSA_free.html">DSA_free(3)</a>, <a href="../man3/BN_generate_prime.html">BN_generate_prime(3)</a></p>
+
+<h1 id="HISTORY">HISTORY</h1>
+
+<p>DSA_generate_parameters_ex() was deprecated in OpenSSL 3.0.</p>
+
+<p>DSA_generate_parameters() was deprecated in OpenSSL 0.9.8; use DSA_generate_parameters_ex() instead.</p>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p>Copyright 2000-2021 The OpenSSL Project Authors. All Rights Reserved.</p>
+
+<p>Licensed under the Apache License 2.0 (the &quot;License&quot;). You may not use this file except in compliance with the License. You can obtain a copy in the file LICENSE in the source distribution or at <a href="https://www.openssl.org/source/license.html">https://www.openssl.org/source/license.html</a>.</p>
+
+
+</body>
+
+</html>
+
+
