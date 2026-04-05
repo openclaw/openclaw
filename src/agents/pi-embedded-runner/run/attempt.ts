@@ -331,6 +331,20 @@ export async function runEmbeddedAttempt(
     const tools = sanitizeToolsForGoogle({ tools: toolsRaw, provider: params.provider });
     logToolSchemasForGoogle({ tools, provider: params.provider });
 
+    // Debug trace: log tool names sent to LLM (temporary)
+    console.log(
+      "[attempt] tools sent to LLM:",
+      JSON.stringify({
+        count: tools.length,
+        names: tools.map((t) => t.name),
+        senderIsOwner: params.senderIsOwner,
+        senderIsAdmin: params.senderIsAdmin,
+        hasCron: tools.some((t) => t.name === "cron"),
+        hasGateway: tools.some((t) => t.name === "gateway"),
+        hasSelfInfo: tools.some((t) => t.name === "self_info"),
+      }),
+    );
+
     const machineName = await getMachineDisplayName();
     const runtimeChannel = normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
     let runtimeCapabilities = runtimeChannel
