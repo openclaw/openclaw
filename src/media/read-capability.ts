@@ -175,7 +175,7 @@ export function resolveAgentScopedOutboundMediaAccess(
     params.mediaAccess?.readFile ??
     params.mediaReadFile ??
     (hostMediaReadAllowed
-        ? createAgentScopedHostMediaReadFile({
+      ? createAgentScopedHostMediaReadFile({
           cfg: params.cfg,
           agentId: params.agentId,
           workspaceDir: resolvedWorkspaceDir,
