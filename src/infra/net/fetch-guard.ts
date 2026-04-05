@@ -102,9 +102,7 @@ function createPolicyDispatcherWithoutPinnedDns(
   const { Agent, EnvHttpProxyAgent, ProxyAgent } = loadUndiciRuntimeDeps();
 
   if (dispatcherPolicy.mode === "direct") {
-    return new Agent({
-      ...(dispatcherPolicy.connect ? { connect: { ...dispatcherPolicy.connect } } : {}),
-    });
+    return new Agent(dispatcherPolicy.connect ? { connect: { ...dispatcherPolicy.connect } } : {});
   }
 
   if (dispatcherPolicy.mode === "env-proxy") {
@@ -281,10 +279,11 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
         ...(signal ? { signal } : {}),
       };
 
-      // Keep the caller-provided/global fetch implementation on the hot path so
-      // tests can stub network behavior while still receiving the pinned
-      // dispatcher in RequestInit.
-      const fetcher = defaultFetch;
+      // Use caller-provided fetch stubs when present; otherwise fall back to
+      // undici's fetch whenever we attach a dispatcher because the global fetch
+      // path will not honor per-request dispatchers.
+      const fetcher =
+        dispatcher && !params.fetchImpl ? loadUndiciRuntimeDeps().fetch : defaultFetch;
       const response = await fetcher(parsedUrl.toString(), init);
 
       if (isRedirectStatus(response.status)) {
