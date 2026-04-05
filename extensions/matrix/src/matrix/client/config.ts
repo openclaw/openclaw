@@ -1,5 +1,6 @@
-import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/infra-runtime";
+import { formatErrorMessage, type PinnedDispatcherPolicy } from "openclaw/plugin-sdk/infra-runtime";
 import { coerceSecretRef } from "openclaw/plugin-sdk/provider-auth";
+import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import {
   requiresExplicitMatrixDefaultAccount,
@@ -46,6 +47,9 @@ let matrixCredentialsReadDepsPromise: Promise<MatrixCredentialsReadDeps> | undef
 let matrixSecretInputDepsPromise: Promise<MatrixSecretInputDeps> | undefined;
 let matrixAuthClientDepsForTest: MatrixAuthClientDeps | undefined;
 
+const MATRIX_AUTH_REQUEST_RETRY_RE =
+  /\b(fetch failed|econnreset|econnrefused|enotfound|etimedout|ehostunreach|enetunreach|eai_again|und_err_|socket hang up|network|headers timeout|body timeout|connect timeout)\b/i;
+
 export function setMatrixAuthClientDepsForTest(
   deps?:
     | {
@@ -85,6 +89,49 @@ async function loadMatrixSecretInputDeps(): Promise<MatrixSecretInputDeps> {
     resolveConfiguredSecretInputString: runtime.resolveConfiguredSecretInputString,
   }));
   return await matrixSecretInputDepsPromise;
+}
+
+function shouldRetryMatrixAuthRequest(err: unknown): boolean {
+  return MATRIX_AUTH_REQUEST_RETRY_RE.test(formatErrorMessage(err));
+}
+
+async function retryMatrixAuthRequest<T>(label: string, run: () => Promise<T>): Promise<T> {
+  return await retryAsync(run, {
+    attempts: 3,
+    minDelayMs: 250,
+    maxDelayMs: 1_500,
+    jitter: 0.1,
+    label,
+    shouldRetry: (err) => shouldRetryMatrixAuthRequest(err),
+  });
+}
+
+async function fetchMatrixWhoamiIdentity(params: {
+  homeserver: string;
+  accessToken: string;
+  userId?: string;
+  ssrfPolicy?: MatrixResolvedConfig["ssrfPolicy"];
+  dispatcherPolicy?: PinnedDispatcherPolicy;
+}): Promise<{
+  user_id?: string;
+  device_id?: string;
+}> {
+  const { MatrixClient, ensureMatrixSdkLoggingConfigured } = await loadMatrixAuthClientDeps();
+  ensureMatrixSdkLoggingConfigured();
+  const tempClient = new MatrixClient(params.homeserver, params.accessToken, {
+    userId: params.userId,
+    ssrfPolicy: params.ssrfPolicy,
+    dispatcherPolicy: params.dispatcherPolicy,
+  });
+  return (await retryMatrixAuthRequest("matrix auth whoami", async () => {
+    return (await tempClient.doRequest("GET", "/_matrix/client/v3/account/whoami")) as {
+      user_id?: string;
+      device_id?: string;
+    };
+  })) as {
+    user_id?: string;
+    device_id?: string;
+  };
 }
 
 function readEnvSecretRefFallback(params: {
@@ -741,18 +788,16 @@ export async function resolveMatrixAuth(params?: {
       ? cachedCredentials?.deviceId || resolved.deviceId
       : resolved.deviceId;
 
-    if (!userId || !knownDeviceId) {
-      // Fetch whoami when we need to resolve userId and/or deviceId from token auth.
-      const { MatrixClient, ensureMatrixSdkLoggingConfigured } = await loadMatrixAuthClientDeps();
-      ensureMatrixSdkLoggingConfigured();
-      const tempClient = new MatrixClient(homeserver, accessToken, {
+    if (!userId) {
+      // Only block startup on whoami when token auth still needs the user ID.
+      // A missing device ID alone is optional and should not force a network round-trip.
+      const whoami = await fetchMatrixWhoamiIdentity({
+        homeserver,
+        accessToken,
+        userId,
         ssrfPolicy: resolved.ssrfPolicy,
         dispatcherPolicy: resolved.dispatcherPolicy,
       });
-      const whoami = (await tempClient.doRequest("GET", "/_matrix/client/v3/account/whoami")) as {
-        user_id?: string;
-        device_id?: string;
-      };
       if (!userId) {
         const fetchedUserId = whoami.user_id?.trim();
         if (!fetchedUserId) {
@@ -760,9 +805,7 @@ export async function resolveMatrixAuth(params?: {
         }
         userId = fetchedUserId;
       }
-      if (!knownDeviceId) {
-        knownDeviceId = whoami.device_id?.trim() || resolved.deviceId;
-      }
+      knownDeviceId = knownDeviceId || whoami.device_id?.trim() || resolved.deviceId;
     }
 
     const shouldRefreshCachedCredentials =
@@ -847,12 +890,18 @@ export async function resolveMatrixAuth(params?: {
     ssrfPolicy: resolved.ssrfPolicy,
     dispatcherPolicy: resolved.dispatcherPolicy,
   });
-  const login = (await loginClient.doRequest("POST", "/_matrix/client/v3/login", undefined, {
-    type: "m.login.password",
-    identifier: { type: "m.id.user", user: resolved.userId },
-    password,
-    device_id: resolved.deviceId,
-    initial_device_display_name: resolved.deviceName ?? "OpenClaw Gateway",
+  const login = (await retryMatrixAuthRequest("matrix auth login", async () => {
+    return (await loginClient.doRequest("POST", "/_matrix/client/v3/login", undefined, {
+      type: "m.login.password",
+      identifier: { type: "m.id.user", user: resolved.userId },
+      password,
+      device_id: resolved.deviceId,
+      initial_device_display_name: resolved.deviceName ?? "OpenClaw Gateway",
+    })) as {
+      access_token?: string;
+      user_id?: string;
+      device_id?: string;
+    };
   })) as {
     access_token?: string;
     user_id?: string;
@@ -893,4 +942,39 @@ export async function resolveMatrixAuth(params?: {
   );
 
   return auth;
+}
+
+export async function backfillMatrixAuthDeviceIdAfterStartup(params: {
+  auth: MatrixAuth;
+  env?: NodeJS.ProcessEnv;
+}): Promise<string | undefined> {
+  const knownDeviceId = params.auth.deviceId?.trim();
+  if (knownDeviceId) {
+    return knownDeviceId;
+  }
+
+  const whoami = await fetchMatrixWhoamiIdentity({
+    homeserver: params.auth.homeserver,
+    accessToken: params.auth.accessToken,
+    userId: params.auth.userId,
+    ssrfPolicy: params.auth.ssrfPolicy,
+    dispatcherPolicy: params.auth.dispatcherPolicy,
+  });
+  const deviceId = whoami.device_id?.trim();
+  if (!deviceId) {
+    return undefined;
+  }
+
+  const credentialsWriter = await import("../credentials-write.runtime.js");
+  await credentialsWriter.saveMatrixCredentials(
+    {
+      homeserver: params.auth.homeserver,
+      userId: params.auth.userId,
+      accessToken: params.auth.accessToken,
+      deviceId,
+    },
+    params.env ?? process.env,
+    params.auth.accountId,
+  );
+  return deviceId;
 }
