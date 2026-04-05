@@ -185,6 +185,26 @@ function resolveDiscordNativeCommandAllowlistAccess(params: {
   return { configured: true, allowed: match.allowed } as const;
 }
 
+function resolveDiscordChannelPolicyCommandAuthorizer(params: {
+  groupPolicy: "open" | "disabled" | "allowlist";
+  guildInfo?: ReturnType<typeof resolveDiscordGuildEntry> | null;
+  channelConfig?: ReturnType<typeof resolveDiscordChannelConfigWithFallback> | null;
+}) {
+  const channelAllowlistConfigured =
+    Boolean(params.guildInfo?.channels) && Object.keys(params.guildInfo?.channels ?? {}).length > 0;
+  return {
+    configured:
+      params.groupPolicy === "allowlist" &&
+      (Boolean(params.guildInfo) || channelAllowlistConfigured),
+    allowed: isDiscordGroupAllowedByPolicy({
+      groupPolicy: params.groupPolicy,
+      guildAllowlisted: Boolean(params.guildInfo),
+      channelAllowlistConfigured,
+      channelAllowed: params.channelConfig?.allowed !== false,
+    }),
+  } as const;
+}
+
 function buildDiscordCommandOptions(params: {
   command: ChatCommandDefinition;
   cfg: ReturnType<typeof loadConfig>;
@@ -411,21 +431,17 @@ async function resolveDiscordNativeAutocompleteAuthorized(params: {
     return false;
   }
   if (useAccessGroups && interaction.guild) {
-    const channelAllowlistConfigured =
-      Boolean(guildInfo?.channels) && Object.keys(guildInfo?.channels ?? {}).length > 0;
-    const channelAllowed = channelConfig?.allowed !== false;
     const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
       providerConfigPresent: cfg.channels?.discord !== undefined,
       groupPolicy: discordConfig?.groupPolicy,
       defaultGroupPolicy: cfg.channels?.defaults?.groupPolicy,
     });
-    const allowByPolicy = isDiscordGroupAllowedByPolicy({
+    const policyAuthorizer = resolveDiscordChannelPolicyCommandAuthorizer({
       groupPolicy,
-      guildAllowlisted: Boolean(guildInfo),
-      channelAllowlistConfigured,
-      channelAllowed,
+      guildInfo,
+      channelConfig,
     });
-    if (!allowByPolicy) {
+    if (!policyAuthorizer.allowed) {
       return false;
     }
   }
@@ -470,15 +486,29 @@ async function resolveDiscordNativeAutocompleteAuthorized(params: {
       sender,
       allowNameMatching,
     });
+    const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
+      providerConfigPresent: cfg.channels?.discord !== undefined,
+      groupPolicy: discordConfig?.groupPolicy,
+      defaultGroupPolicy: cfg.channels?.defaults?.groupPolicy,
+    });
+    const policyAuthorizer = resolveDiscordChannelPolicyCommandAuthorizer({
+      groupPolicy,
+      guildInfo,
+      channelConfig,
+    });
     const authorizers = useAccessGroups
-      ? [
-          {
-            configured: commandsAllowFromAccess.configured,
-            allowed: commandsAllowFromAccess.allowed,
-          },
-          { configured: ownerAllowList != null, allowed: ownerOk },
-          { configured: hasAccessRestrictions, allowed: memberAllowed },
-        ]
+      ? commandsAllowFromAccess.configured
+        ? [
+            {
+              configured: commandsAllowFromAccess.configured,
+              allowed: commandsAllowFromAccess.allowed,
+            },
+          ]
+        : [
+            policyAuthorizer,
+            { configured: ownerAllowList != null, allowed: ownerOk },
+            { configured: hasAccessRestrictions, allowed: memberAllowed },
+          ]
       : [
           {
             configured: commandsAllowFromAccess.configured,
@@ -810,21 +840,17 @@ async function dispatchDiscordCommandInteraction(params: {
     return;
   }
   if (useAccessGroups && interaction.guild) {
-    const channelAllowlistConfigured =
-      Boolean(guildInfo?.channels) && Object.keys(guildInfo?.channels ?? {}).length > 0;
-    const channelAllowed = channelConfig?.allowed !== false;
     const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
       providerConfigPresent: cfg.channels?.discord !== undefined,
       groupPolicy: discordConfig?.groupPolicy,
       defaultGroupPolicy: cfg.channels?.defaults?.groupPolicy,
     });
-    const allowByPolicy = isDiscordGroupAllowedByPolicy({
+    const policyAuthorizer = resolveDiscordChannelPolicyCommandAuthorizer({
       groupPolicy,
-      guildAllowlisted: Boolean(guildInfo),
-      channelAllowlistConfigured,
-      channelAllowed,
+      guildInfo,
+      channelConfig,
     });
-    if (!allowByPolicy) {
+    if (!policyAuthorizer.allowed) {
       await respond("This channel is not allowed.");
       return;
     }
@@ -900,15 +926,29 @@ async function dispatchDiscordCommandInteraction(params: {
       sender,
       allowNameMatching,
     });
+    const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
+      providerConfigPresent: cfg.channels?.discord !== undefined,
+      groupPolicy: discordConfig?.groupPolicy,
+      defaultGroupPolicy: cfg.channels?.defaults?.groupPolicy,
+    });
+    const policyAuthorizer = resolveDiscordChannelPolicyCommandAuthorizer({
+      groupPolicy,
+      guildInfo,
+      channelConfig,
+    });
     const authorizers = useAccessGroups
-      ? [
-          {
-            configured: commandsAllowFromAccess.configured,
-            allowed: commandsAllowFromAccess.allowed,
-          },
-          { configured: ownerAllowList != null, allowed: ownerOk },
-          { configured: hasAccessRestrictions, allowed: memberAllowed },
-        ]
+      ? commandsAllowFromAccess.configured
+        ? [
+            {
+              configured: commandsAllowFromAccess.configured,
+              allowed: commandsAllowFromAccess.allowed,
+            },
+          ]
+        : [
+            policyAuthorizer,
+            { configured: ownerAllowList != null, allowed: ownerOk },
+            { configured: hasAccessRestrictions, allowed: memberAllowed },
+          ]
       : [
           {
             configured: commandsAllowFromAccess.configured,
