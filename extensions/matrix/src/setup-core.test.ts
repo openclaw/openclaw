@@ -105,6 +105,25 @@ describe("matrixSetupAdapter", () => {
     });
   });
 
+  it("stores avatarUrl from setup input on the target account", () => {
+    const next = matrixSetupAdapter.applyAccountConfig({
+      cfg: {} as CoreConfig,
+      accountId: "ops",
+      input: {
+        homeserver: "https://matrix.example.org",
+        accessToken: "ops-token",
+        avatarUrl: "  mxc://example.org/ops-avatar  ",
+      },
+    }) as CoreConfig;
+
+    expect(next.channels?.matrix?.accounts?.ops).toMatchObject({
+      enabled: true,
+      homeserver: "https://matrix.example.org",
+      accessToken: "ops-token",
+      avatarUrl: "mxc://example.org/ops-avatar",
+    });
+  });
+
   it("stores canonical dangerous private-network opt-in from setup input", () => {
     const next = matrixSetupAdapter.applyAccountConfig({
       cfg: {} as CoreConfig,

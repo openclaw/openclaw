@@ -607,6 +607,49 @@ describe("matrix CLI verification commands", () => {
     );
   });
 
+  it("forwards --avatar-url through account add setup and profile sync", async () => {
+    matrixRuntimeLoadConfigMock.mockReturnValue({ channels: {} });
+    const program = buildProgram();
+
+    await program.parseAsync(
+      [
+        "matrix",
+        "account",
+        "add",
+        "--name",
+        "Ops Bot",
+        "--homeserver",
+        "https://matrix.example.org",
+        "--access-token",
+        "ops-token",
+        "--avatar-url",
+        "mxc://example/ops-avatar",
+      ],
+      { from: "user" },
+    );
+
+    expect(matrixSetupApplyAccountConfigMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "ops-bot",
+        input: expect.objectContaining({
+          name: "Ops Bot",
+          homeserver: "https://matrix.example.org",
+          accessToken: "ops-token",
+          avatarUrl: "mxc://example/ops-avatar",
+        }),
+      }),
+    );
+    expect(updateMatrixOwnProfileMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "ops-bot",
+        displayName: "Ops Bot",
+        avatarUrl: "mxc://example/ops-avatar",
+      }),
+    );
+    expect(console.log).toHaveBeenCalledWith("Saved matrix account: ops-bot");
+    expect(console.log).toHaveBeenCalledWith("Config path: channels.matrix.accounts.ops-bot");
+  });
+
   it("sets profile name and avatar via profile set command", async () => {
     const program = buildProgram();
 

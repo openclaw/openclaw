@@ -92,6 +92,7 @@ export type ChannelSetupInput = {
   accessToken?: string;
   password?: string;
   deviceName?: string;
+  avatarUrl?: string;
   initialSyncLimit?: number;
   ship?: string;
   url?: string;

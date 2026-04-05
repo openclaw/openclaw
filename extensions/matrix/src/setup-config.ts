@@ -82,7 +82,16 @@ function cloneIfObject<T>(value: T): T {
   return value;
 }
 
-function moveSingleMatrixAccountConfigToNamedAccount(cfg: CoreConfig): CoreConfig {
+function resolveSetupAvatarUrl(input: ChannelSetupInput): string | undefined {
+  const avatarUrl = input.avatarUrl;
+  if (typeof avatarUrl !== "string") {
+    return undefined;
+  }
+  const trimmed = avatarUrl.trim();
+  return trimmed || undefined;
+}
+
+export function moveSingleMatrixAccountConfigToNamedAccount(cfg: CoreConfig): CoreConfig {
   const channels = cfg.channels as Record<string, unknown> | undefined;
   const baseConfig = channels?.[channel];
   const base =
@@ -193,7 +202,6 @@ export function applyMatrixSetupAccountConfig(params: {
   cfg: CoreConfig;
   accountId: string;
   input: ChannelSetupInput;
-  avatarUrl?: string;
 }): CoreConfig {
   const normalizedAccountId = normalizeAccountId(params.accountId);
   const migratedCfg =
@@ -238,7 +246,7 @@ export function applyMatrixSetupAccountConfig(params: {
     accessToken: accessToken || (password ? null : undefined),
     password: password || (accessToken ? null : undefined),
     deviceName: params.input.deviceName?.trim(),
-    avatarUrl: params.avatarUrl,
+    avatarUrl: resolveSetupAvatarUrl(params.input),
     initialSyncLimit: params.input.initialSyncLimit,
   });
 }

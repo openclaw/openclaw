@@ -31,13 +31,13 @@ import {
   hasConfiguredSecretInput,
   isPrivateOrLoopbackHost,
   mergeAllowFromEntries,
-  moveSingleAccountChannelSectionToDefaultAccount,
   normalizeAccountId,
   promptChannelAccessConfig,
   promptAccountId,
   type RuntimeEnv,
   type WizardPrompter,
 } from "./runtime-api.js";
+import { moveSingleMatrixAccountConfigToNamedAccount } from "./setup-config.js";
 import type { CoreConfig } from "./types.js";
 
 const channel = "matrix" as const;
@@ -250,10 +250,7 @@ async function runMatrixConfigure(params: {
       await params.prompter.note(`Account id will be "${accountId}".`, "Matrix account");
     }
     if (accountId !== DEFAULT_ACCOUNT_ID) {
-      next = moveSingleAccountChannelSectionToDefaultAccount({
-        cfg: next,
-        channelKey: channel,
-      }) as CoreConfig;
+      next = moveSingleMatrixAccountConfigToNamedAccount(next);
     }
     next = updateMatrixAccountConfig(next, accountId, { name: enteredName, enabled: true });
   } else {
