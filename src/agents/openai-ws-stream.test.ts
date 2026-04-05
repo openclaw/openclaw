@@ -704,7 +704,7 @@ describe("convertMessagesToInputItems", () => {
     ]);
   });
 
-  it("splits legacy unphased text from later phased text during replay", () => {
+  it("inherits message-level phase for untagged blocks, merging with phased text", () => {
     const msg = {
       role: "assistant" as const,
       phase: "final_answer" as const,
@@ -735,12 +735,10 @@ describe("convertMessagesToInputItems", () => {
       {
         type: "message",
         role: "assistant",
-        content: "Legacy. ",
-      },
-      {
-        type: "message",
-        role: "assistant",
-        content: "Done.",
+        // Both blocks share the same effective phase (final_answer):
+        // the untagged block now inherits message-level phase instead
+        // of being forced to undefined (#61476).
+        content: "Legacy. Done.",
         phase: "final_answer",
       },
     ]);
@@ -2025,6 +2023,106 @@ describe("createOpenAIWebSocketStreamFn", () => {
     ]);
   });
 
+  it("keeps buffering text deltas until item phase is defined", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-phase-late-map-undefined");
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+    );
+
+    const events: Array<{
+      type?: string;
+      delta?: string;
+      partial?: { phase?: string; content?: unknown[] };
+    }> = [];
+    const done = (async () => {
+      for await (const ev of await resolveStream(stream)) {
+        events.push(ev as (typeof events)[number]);
+      }
+    })();
+
+    await new Promise((r) => setImmediate(r));
+    const manager = MockManager.lastInstance!;
+    manager.simulateEvent({
+      type: "response.output_text.delta",
+      item_id: "item_late_undefined",
+      output_index: 0,
+      content_index: 0,
+      delta: "Working",
+    });
+    manager.simulateEvent({
+      type: "response.output_item.added",
+      output_index: 0,
+      item: {
+        type: "message",
+        id: "item_late_undefined",
+        role: "assistant",
+        content: [],
+      },
+    });
+    manager.simulateEvent({
+      type: "response.output_text.delta",
+      item_id: "item_late_undefined",
+      output_index: 0,
+      content_index: 0,
+      delta: "...",
+    });
+    manager.simulateEvent({
+      type: "response.output_item.done",
+      output_index: 0,
+      item: {
+        type: "message",
+        id: "item_late_undefined",
+        role: "assistant",
+        phase: "commentary",
+        content: [],
+      },
+    });
+    manager.simulateEvent({
+      type: "response.completed",
+      response: {
+        id: "resp_phase_late_map_undefined",
+        object: "response",
+        created_at: Date.now(),
+        status: "completed",
+        model: "gpt-5.2",
+        output: [
+          {
+            type: "message",
+            id: "item_late_undefined",
+            role: "assistant",
+            phase: "commentary",
+            content: [{ type: "output_text", text: "Working..." }],
+          },
+        ],
+        usage: { input_tokens: 100, output_tokens: 50, total_tokens: 150 },
+      },
+    });
+
+    await done;
+
+    const deltas = events.filter((event) => event.type === "text_delta");
+    expect(deltas).toHaveLength(2);
+    expect(deltas[0]).toMatchObject({ delta: "Working" });
+    expect(deltas[0]?.partial?.phase).toBeUndefined();
+    expect(deltas[0]?.partial?.content).toEqual([
+      {
+        type: "text",
+        text: "Working",
+        textSignature: JSON.stringify({ v: 1, id: "item_late_undefined" }),
+      },
+    ]);
+    expect(deltas[1]).toMatchObject({ delta: "..." });
+    expect(deltas[1]?.partial?.phase).toBe("commentary");
+    expect(deltas[1]?.partial?.content).toEqual([
+      {
+        type: "text",
+        text: "Working...",
+        textSignature: JSON.stringify({ v: 1, id: "item_late_undefined", phase: "commentary" }),
+      },
+    ]);
+  });
+
   it("falls back to HTTP when WebSocket connect fails (session pre-broken via flag)", async () => {
     // Set the class-level flag BEFORE calling streamFn so the new instance
     // fails on connect().  We patch the static default via MockManager directly.
@@ -3059,5 +3157,35 @@ describe("releaseWsSession / hasWsSession", () => {
 
   it("releaseWsSession is a no-op for unknown sessions", () => {
     expect(() => releaseWsSession("nonexistent-session")).not.toThrow();
+  });
+});
+
+describe("convertMessagesToInputItems — phase inheritance", () => {
+  it("untagged text blocks inherit message-level phase when siblings have explicit textSignature", () => {
+    const msg = {
+      role: "assistant" as const,
+      phase: "commentary",
+      content: [
+        { type: "text", text: "Untagged block A" },
+        {
+          type: "text",
+          text: "Explicitly final",
+          textSignature: JSON.stringify({ v: 1, id: "s1", phase: "final_answer" }),
+        },
+        { type: "text", text: "Untagged block B" },
+      ],
+    };
+    const items = convertMessagesToInputItems([msg] as Parameters<
+      typeof convertMessagesToInputItems
+    >[0]);
+    const assistantItems = items.filter(
+      (i: Record<string, unknown>) => i.role === "assistant",
+    );
+    // Should produce 3 separate assistant items because phase changes:
+    // A=commentary, Explicit=final_answer, B=commentary
+    expect(assistantItems).toHaveLength(3);
+    expect((assistantItems[0] as Record<string, unknown>).phase).toBe("commentary");
+    expect((assistantItems[1] as Record<string, unknown>).phase).toBe("final_answer");
+    expect((assistantItems[2] as Record<string, unknown>).phase).toBe("commentary");
   });
 });
