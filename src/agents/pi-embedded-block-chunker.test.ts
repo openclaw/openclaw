@@ -142,4 +142,22 @@ describe("EmbeddedBlockChunker", () => {
     expect(parseSpy).toHaveBeenCalledTimes(1);
     parseSpy.mockRestore();
   });
+
+  it("does not split inside the closing fence marker when clamping at maxChars", () => {
+    const chunker = new EmbeddedBlockChunker({
+      minChars: 10,
+      maxChars: 30,
+      breakPreference: "paragraph",
+    });
+
+    chunker.append(`\`\`\`txt\n${"a".repeat(80)}\n\`\`\``);
+    const chunks = drainChunks(chunker, true);
+
+    expect(chunks.length).toBeGreaterThan(2);
+    for (const chunk of chunks) {
+      expect(chunk.startsWith("```txt")).toBe(true);
+      expect(chunk.match(/```/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
+      expect(chunk).not.toContain("``\n```");
+    }
+  });
 });
