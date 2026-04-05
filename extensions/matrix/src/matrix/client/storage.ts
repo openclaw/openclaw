@@ -91,6 +91,18 @@ function scoreStorageRoot(rootDir: string): number {
   return score;
 }
 
+function hasCurrentTokenStorageState(rootDir: string): boolean {
+  return [
+    "bot-storage.json",
+    "crypto",
+    THREAD_BINDINGS_FILENAME,
+    LEGACY_CRYPTO_MIGRATION_FILENAME,
+    RECOVERY_KEY_FILENAME,
+    IDB_SNAPSHOT_FILENAME,
+    STARTUP_VERIFICATION_FILENAME,
+  ].some((entry) => fs.existsSync(path.join(rootDir, entry)));
+}
+
 function resolveStorageRootMtimeMs(rootDir: string): number {
   try {
     return fs.statSync(rootDir).mtimeMs;
@@ -201,6 +213,18 @@ function resolvePreferredMatrixStorageRoot(params: {
   // Without a confirmed device identity, reusing a populated sibling root after
   // token rotation can silently bind this run to the wrong Matrix device state.
   if (!params.deviceId?.trim()) {
+    return {
+      rootDir: best.rootDir,
+      tokenHash: best.tokenHash,
+    };
+  }
+
+  const canonicalMetadata = readStoredRootMetadata(params.canonicalRootDir);
+  if (
+    canonicalMetadata.accessTokenHash === params.canonicalTokenHash &&
+    canonicalMetadata.deviceId?.trim() === params.deviceId.trim() &&
+    hasCurrentTokenStorageState(params.canonicalRootDir)
+  ) {
     return {
       rootDir: best.rootDir,
       tokenHash: best.tokenHash,

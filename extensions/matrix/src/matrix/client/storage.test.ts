@@ -495,7 +495,7 @@ describe("matrix client storage paths", () => {
     expectCanonicalRootForNewDevice(stateDir);
   });
 
-  it("repairs the current-token storage metadata when deviceId is learned after startup", () => {
+  it("keeps the current-token storage root stable after deviceId backfill when startup wrote new state", () => {
     const stateDir = setupStateDir();
     const canonicalPaths = resolveMatrixAccountStorageRoot({
       stateDir,
@@ -511,7 +511,20 @@ describe("matrix client storage paths", () => {
       accessTokenHash: canonicalPaths.tokenHash,
       deviceId: null,
     });
-    seedExistingStorageRoot({
+    writeJson(canonicalPaths.rootDir, "thread-bindings.json", {
+      version: 1,
+      bindings: [
+        {
+          accountId: "default",
+          conversationId: "$thread-new",
+          targetKind: "subagent",
+          targetSessionKey: "agent:ops:subagent:new",
+          boundAt: 1,
+          lastActivityAt: 1,
+        },
+      ],
+    });
+    const oldStoragePaths = seedExistingStorageRoot({
       accessToken: "secret-token-old",
       deviceId: "DEVICE123",
       storageMeta: {
@@ -521,6 +534,10 @@ describe("matrix client storage paths", () => {
         accessTokenHash: resolveDefaultStoragePaths({ accessToken: "secret-token-old" }).tokenHash,
         deviceId: "DEVICE123",
       },
+    });
+    fs.mkdirSync(oldStoragePaths.cryptoPath, { recursive: true });
+    writeJson(oldStoragePaths.rootDir, "startup-verification.json", {
+      deviceId: "DEVICE123",
     });
 
     repairCurrentTokenStorageMetaDeviceId({
@@ -541,5 +558,10 @@ describe("matrix client storage paths", () => {
       accessToken: "secret-token-new",
     });
     expect(startupPaths.rootDir).toBe(canonicalPaths.rootDir);
+    const restartedPaths = resolveDefaultStoragePaths({
+      accessToken: "secret-token-new",
+      deviceId: "DEVICE123",
+    });
+    expect(restartedPaths.rootDir).toBe(canonicalPaths.rootDir);
   });
 });
