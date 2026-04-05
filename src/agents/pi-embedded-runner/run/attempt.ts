@@ -45,6 +45,7 @@ import {
   resolveChannelMessageToolHints,
   resolveChannelReactionGuidance,
 } from "../../channel-tools.js";
+import { resolveContextWindowInfo } from "../../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { resolveOpenClawDocsPath } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
@@ -880,14 +881,20 @@ export async function runEmbeddedAttempt(
       queueYieldInterruptForSession = () => {
         queueSessionsYieldInterruptMessage(activeSession);
       };
+      const toolResultGuardContextWindowTokens = resolveContextWindowInfo({
+        cfg: params.config,
+        provider: params.provider,
+        modelId: params.modelId,
+        modelContextTokens: (params.model as { contextTokens?: number }).contextTokens,
+        modelContextWindow: params.model.contextWindow,
+        defaultTokens: DEFAULT_CONTEXT_TOKENS,
+      }).tokens;
       removeToolResultContextGuard = installToolResultContextGuard({
         agent: activeSession.agent,
-        contextWindowTokens: Math.max(
-          1,
-          Math.floor(
-            params.model.contextWindow ?? params.model.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
-          ),
-        ),
+        // maxTokens is an output cap for many providers and can be far smaller than
+        // the real context window, which makes the guard compact fresh tool results
+        // immediately. Reuse the normal context-window resolver here instead.
+        contextWindowTokens: toolResultGuardContextWindowTokens,
       });
       const cacheTrace = createCacheTrace({
         cfg: params.config,

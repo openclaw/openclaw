@@ -7,7 +7,6 @@ import {
   estimateContextChars,
   estimateMessageCharsCached,
   getToolResultText,
-  invalidateMessageCharsCacheEntry,
   isToolResultMessage,
 } from "./tool-result-char-estimator.js";
 
@@ -97,22 +96,50 @@ function truncateToolResultToChars(
   return replaceToolResultText(msg, truncatedText);
 }
 
-function compactExistingToolResultsInPlace(params: {
+function findLastAssistantIndex(messages: AgentMessage[]): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]?.role === "assistant") {
+      return i;
+    }
+  }
+  return -1;
+}
+
+function collectProtectedCurrentTurnToolResultIndexes(messages: AgentMessage[]): Set<number> {
+  const lastAssistantIndex = findLastAssistantIndex(messages);
+  if (lastAssistantIndex < 0) {
+    return new Set<number>();
+  }
+
+  const protectedIndexes = new Set<number>();
+  for (let i = lastAssistantIndex + 1; i < messages.length; i++) {
+    if (isToolResultMessage(messages[i])) {
+      protectedIndexes.add(i);
+    }
+  }
+  return protectedIndexes;
+}
+
+function compactExistingToolResults(params: {
   messages: AgentMessage[];
   charsNeeded: number;
   cache: MessageCharEstimateCache;
-}): number {
-  const { messages, charsNeeded, cache } = params;
+  protectedIndexes: ReadonlySet<number>;
+}): AgentMessage[] {
+  const { messages, charsNeeded, cache, protectedIndexes } = params;
   if (charsNeeded <= 0) {
-    return 0;
+    return messages;
   }
 
+  let next: AgentMessage[] | null = null;
   let reduced = 0;
-  // Compact newest-first so more of the cached prefix survives: rewriting
-  // messages[k] for small k invalidates the provider prompt cache from that point onward.
-  // Tradeoff: the model loses recent tool output instead of old.
+  // Compact newest-first among eligible older tool results so more of the cached prefix
+  // survives without stripping the outputs from the active tool loop.
   for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
+    if (protectedIndexes.has(i)) {
+      continue;
+    }
+    const msg = (next ?? messages)[i];
     if (!isToolResultMessage(msg)) {
       continue;
     }
@@ -123,71 +150,65 @@ function compactExistingToolResultsInPlace(params: {
     }
 
     const compacted = replaceToolResultText(msg, PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
-    applyMessageMutationInPlace(msg, compacted, cache);
-    const after = estimateMessageCharsCached(msg, cache);
+    const after = estimateMessageCharsCached(compacted, cache);
     if (after >= before) {
       continue;
     }
 
+    if (!next) {
+      next = messages.slice();
+    }
+    next[i] = compacted;
     reduced += before - after;
     if (reduced >= charsNeeded) {
       break;
     }
   }
 
-  return reduced;
+  return next ?? messages;
 }
 
-function applyMessageMutationInPlace(
-  target: AgentMessage,
-  source: AgentMessage,
-  cache?: MessageCharEstimateCache,
-): void {
-  if (target === source) {
-    return;
-  }
-
-  const targetRecord = target as unknown as Record<string, unknown>;
-  const sourceRecord = source as unknown as Record<string, unknown>;
-  for (const key of Object.keys(targetRecord)) {
-    if (!(key in sourceRecord)) {
-      delete targetRecord[key];
-    }
-  }
-  Object.assign(targetRecord, sourceRecord);
-  if (cache) {
-    invalidateMessageCharsCacheEntry(cache, target);
-  }
-}
-
-function enforceToolResultContextBudgetInPlace(params: {
+function enforceToolResultContextBudget(params: {
   messages: AgentMessage[];
   contextBudgetChars: number;
   maxSingleToolResultChars: number;
-}): void {
+}): AgentMessage[] {
   const { messages, contextBudgetChars, maxSingleToolResultChars } = params;
   const estimateCache = createMessageCharEstimateCache();
+  let next: AgentMessage[] | null = null;
 
   // Ensure each tool result has an upper bound before considering total context usage.
-  for (const message of messages) {
+  for (let i = 0; i < messages.length; i++) {
+    const message = (next ?? messages)[i];
     if (!isToolResultMessage(message)) {
       continue;
     }
     const truncated = truncateToolResultToChars(message, maxSingleToolResultChars, estimateCache);
-    applyMessageMutationInPlace(message, truncated, estimateCache);
+    if (truncated === message) {
+      continue;
+    }
+    if (!next) {
+      next = messages.slice();
+    }
+    next[i] = truncated;
   }
 
-  let currentChars = estimateContextChars(messages, estimateCache);
+  const truncatedMessages = next ?? messages;
+  let currentChars = estimateContextChars(truncatedMessages, estimateCache);
   if (currentChars <= contextBudgetChars) {
-    return;
+    return truncatedMessages;
   }
 
-  // Compact newest tool outputs first so more of the cached prefix survives;
-  // stop once the context is back under budget.
-  compactExistingToolResultsInPlace({
-    messages,
+  const protectedIndexes = collectProtectedCurrentTurnToolResultIndexes(truncatedMessages);
+
+  // Compact older tool outputs first so the active tool loop still sees the
+  // fresh results it just asked for. If that's not enough, the 90% overflow
+  // guard below will still trigger full session compaction.
+  return compactExistingToolResults({
+    messages: truncatedMessages,
     charsNeeded: currentChars - contextBudgetChars,
     cache: estimateCache,
+    protectedIndexes,
   });
 }
 
@@ -222,7 +243,7 @@ export function installToolResultContextGuard(params: {
       : messages;
 
     const contextMessages = Array.isArray(transformed) ? transformed : messages;
-    enforceToolResultContextBudgetInPlace({
+    const guardedMessages = enforceToolResultContextBudget({
       messages: contextMessages,
       contextBudgetChars,
       maxSingleToolResultChars,
@@ -233,14 +254,14 @@ export function installToolResultContextGuard(params: {
     // compaction can reduce context size. Throwing a context overflow error triggers
     // the existing overflow recovery cascade in run.ts.
     const postEnforcementChars = estimateContextChars(
-      contextMessages,
+      guardedMessages,
       createMessageCharEstimateCache(),
     );
     if (postEnforcementChars > preemptiveOverflowChars) {
       throw new Error(PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE);
     }
 
-    return contextMessages;
+    return guardedMessages;
   }) as GuardableTransformContext;
 
   return () => {
