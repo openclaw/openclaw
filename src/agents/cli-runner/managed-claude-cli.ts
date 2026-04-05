@@ -1,10 +1,10 @@
 /**
- * managed-claude-cli: an opinionated Claude CLI backend preset.
+ * claude-cli: an opinionated Claude CLI backend preset.
  *
  * Users configure it with just `command` and (optionally) `token`:
  *
  *   "cliBackends": {
- *     "managed-claude-cli": {
+ *     "claude-cli": {
  *       "command": "/usr/local/bin/claude",
  *       "token": "sk-ant-oat01-..."
  *     }
@@ -181,11 +181,11 @@ function ensureMcpBridge(): string {
 }
 
 // ---------------------------------------------------------------------------
-// Public: inject CLI flags for managed-claude-cli runs
+// Public: inject CLI flags for claude-cli runs
 // ---------------------------------------------------------------------------
 
 /**
- * Auto-injects CLI flags required for the managed Claude CLI integration.
+ * Auto-injects CLI flags required for the claude-cli managed integration.
  * Only injects flags not already present in args so user overrides win.
  */
 export function injectManagedClaudeCliArgs(
@@ -193,7 +193,7 @@ export function injectManagedClaudeCliArgs(
   backendId: string,
   backend?: CliBackendConfig,
 ): string[] {
-  if (backendId !== "managed-claude-cli") {
+  if (backendId !== "claude-cli") {
     return args;
   }
   const joined = args.join(" ");

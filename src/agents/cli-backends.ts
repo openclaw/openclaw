@@ -11,7 +11,7 @@ export type ResolvedCliBackend = {
   pluginId?: string;
 };
 
-const MANAGED_CLAUDE_CLI_ID = "managed-claude-cli";
+const MANAGED_CLAUDE_CLI_ID = "claude-cli";
 
 function isManagedClaudeCliBackend(provider: string): boolean {
   return normalizeProviderId(provider) === MANAGED_CLAUDE_CLI_ID;
@@ -106,7 +106,7 @@ export function resolveCliBackendConfig(
   const configured = cfg?.agents?.defaults?.cliBackends ?? {};
   const override = pickBackendConfig(configured, normalized);
 
-  // managed-claude-cli: opinionated preset that auto-configures everything.
+  // claude-cli: opinionated preset that auto-configures everything.
   // Users only need to provide `command` (and optionally `token`).
   if (isManagedClaudeCliBackend(normalized)) {
     const userConfig = override ?? ({} as Partial<CliBackendConfig>);
@@ -116,7 +116,7 @@ export function resolveCliBackendConfig(
       return null;
     }
     return {
-      id: MANAGED_CLAUDE_CLI_ID,
+      id: MANAGED_CLAUDE_CLI_ID, // "claude-cli"
       config: { ...config, command },
       bundleMcp: true,
     };

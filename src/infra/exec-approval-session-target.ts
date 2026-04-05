@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
+import { type SessionEntry, loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import { normalizeOptionalAccountId } from "../routing/account-id.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
@@ -74,14 +74,10 @@ function normalizeOptionalChannel(value?: string | null): string | undefined {
   return normalizeMessageChannel(value);
 }
 
-export function resolveExecApprovalSessionTarget(params: {
+function loadSessionEntry(params: {
   cfg: OpenClawConfig;
-  request: ExecApprovalRequest;
-  turnSourceChannel?: string | null;
-  turnSourceTo?: string | null;
-  turnSourceAccountId?: string | null;
-  turnSourceThreadId?: string | number | null;
-}): ExecApprovalSessionTarget | null {
+  request: ApprovalRequestLike;
+}): { sessionKey: string; entry: SessionEntry } | null {
   const sessionKey = normalizeOptionalString(params.request.request.sessionKey);
   if (!sessionKey) {
     return null;
@@ -94,9 +90,24 @@ export function resolveExecApprovalSessionTarget(params: {
   if (!entry) {
     return null;
   }
+  return { sessionKey, entry };
+}
+
+export function resolveExecApprovalSessionTarget(params: {
+  cfg: OpenClawConfig;
+  request: ExecApprovalRequest;
+  turnSourceChannel?: string | null;
+  turnSourceTo?: string | null;
+  turnSourceAccountId?: string | null;
+  turnSourceThreadId?: string | number | null;
+}): ExecApprovalSessionTarget | null {
+  const loaded = loadSessionEntry(params);
+  if (!loaded) {
+    return null;
+  }
 
   const target = resolveSessionDeliveryTarget({
-    entry,
+    entry: loaded.entry,
     requestedChannel: "last",
     turnSourceChannel: normalizeOptionalString(params.turnSourceChannel),
     turnSourceTo: normalizeOptionalString(params.turnSourceTo),
@@ -119,21 +130,15 @@ function resolvePersistedApprovalRequestSessionBinding(params: {
   cfg: OpenClawConfig;
   request: ApprovalRequestLike;
 }): ApprovalRequestSessionBinding | null {
-  const sessionKey = normalizeOptionalString(params.request.request.sessionKey);
-  if (!sessionKey) {
-    return null;
-  }
-  const parsed = parseAgentSessionKey(sessionKey);
-  const agentId = parsed?.agentId ?? params.request.request.agentId ?? "main";
-  const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
-  const store = loadSessionStore(storePath);
-  const entry = store[sessionKey];
-  if (!entry) {
+  const loaded = loadSessionEntry(params);
+  if (!loaded) {
     return null;
   }
   return {
-    channel: normalizeOptionalChannel(entry.origin?.provider ?? entry.lastChannel),
-    accountId: normalizeOptionalAccountId(entry.origin?.accountId ?? entry.lastAccountId),
+    channel: normalizeOptionalChannel(loaded.entry.origin?.provider ?? loaded.entry.lastChannel),
+    accountId: normalizeOptionalAccountId(
+      loaded.entry.origin?.accountId ?? loaded.entry.lastAccountId,
+    ),
   };
 }
 

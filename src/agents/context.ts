@@ -369,13 +369,15 @@ function resolveConfiguredProviderContextTokens(
 }
 
 function isAnthropic1MModel(provider: string, model: string): boolean {
-  if (provider !== "anthropic") {
+  // claude-cli routes Anthropic models via the Claude CLI subprocess —
+  // it supports the same 1M-context variants as the direct anthropic provider.
+  if (provider !== "anthropic" && provider !== "claude-cli") {
     return false;
   }
   const normalized = model.trim().toLowerCase();
-  const modelId = normalized.includes("/")
-    ? (normalized.split("/").at(-1) ?? normalized)
-    : normalized;
+  // Strip the [1m] context suffix that Claude CLI accepts natively (e.g. "claude-sonnet-4-6[1m]").
+  const stripped = normalized.replace(/\[1m\]$/, "");
+  const modelId = stripped.includes("/") ? (stripped.split("/").at(-1) ?? stripped) : stripped;
   return ANTHROPIC_1M_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix));
 }
 

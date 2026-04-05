@@ -1,49 +1,10 @@
 import * as fs from "node:fs/promises";
-import path from "node:path";
 import JSON5 from "json5";
-import { INCLUDE_KEY, MAX_INCLUDE_DEPTH } from "./includes.js";
-
-function listDirectIncludes(parsed: unknown): string[] {
-  const out: string[] = [];
-  const visit = (value: unknown) => {
-    if (!value) {
-      return;
-    }
-    if (Array.isArray(value)) {
-      for (const item of value) {
-        visit(item);
-      }
-      return;
-    }
-    if (typeof value !== "object") {
-      return;
-    }
-    const rec = value as Record<string, unknown>;
-    const includeVal = rec[INCLUDE_KEY];
-    if (typeof includeVal === "string") {
-      out.push(includeVal);
-    } else if (Array.isArray(includeVal)) {
-      for (const item of includeVal) {
-        if (typeof item === "string") {
-          out.push(item);
-        }
-      }
-    }
-    for (const v of Object.values(rec)) {
-      visit(v);
-    }
-  };
-  visit(parsed);
-  return out;
-}
-
-function resolveIncludePath(baseConfigPath: string, includePath: string): string {
-  return path.normalize(
-    path.isAbsolute(includePath)
-      ? includePath
-      : path.resolve(path.dirname(baseConfigPath), includePath),
-  );
-}
+import {
+  listDirectIncludePaths,
+  MAX_INCLUDE_DEPTH,
+  resolveIncludedConfigPath,
+} from "./includes.js";
 
 export async function collectIncludePathsRecursive(params: {
   configPath: string;
@@ -56,8 +17,8 @@ export async function collectIncludePathsRecursive(params: {
     if (depth > MAX_INCLUDE_DEPTH) {
       return;
     }
-    for (const raw of listDirectIncludes(parsed)) {
-      const resolved = resolveIncludePath(basePath, raw);
+    for (const raw of listDirectIncludePaths(parsed)) {
+      const resolved = resolveIncludedConfigPath(basePath, raw);
       if (visited.has(resolved)) {
         continue;
       }

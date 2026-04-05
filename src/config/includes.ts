@@ -22,6 +22,48 @@ export const INCLUDE_KEY = "$include";
 export const MAX_INCLUDE_DEPTH = 10;
 export const MAX_INCLUDE_FILE_BYTES = 2 * 1024 * 1024;
 
+export function listDirectIncludePaths(parsed: unknown): string[] {
+  const out: string[] = [];
+  const visit = (value: unknown) => {
+    if (!value) {
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        visit(item);
+      }
+      return;
+    }
+    if (typeof value !== "object") {
+      return;
+    }
+    const rec = value as Record<string, unknown>;
+    const includeVal = rec[INCLUDE_KEY];
+    if (typeof includeVal === "string") {
+      out.push(includeVal);
+    } else if (Array.isArray(includeVal)) {
+      for (const item of includeVal) {
+        if (typeof item === "string") {
+          out.push(item);
+        }
+      }
+    }
+    for (const v of Object.values(rec)) {
+      visit(v);
+    }
+  };
+  visit(parsed);
+  return out;
+}
+
+export function resolveIncludedConfigPath(baseConfigPath: string, includePath: string): string {
+  return path.normalize(
+    path.isAbsolute(includePath)
+      ? includePath
+      : path.resolve(path.dirname(baseConfigPath), includePath),
+  );
+}
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -188,11 +230,7 @@ class IncludeProcessor {
   }
 
   private resolvePath(includePath: string): string {
-    const configDir = path.dirname(this.basePath);
-    const resolved = path.isAbsolute(includePath)
-      ? includePath
-      : path.resolve(configDir, includePath);
-    const normalized = path.normalize(resolved);
+    const normalized = resolveIncludedConfigPath(this.basePath, includePath);
 
     // SECURITY: Reject paths outside top-level config directory (CWE-22: Path Traversal)
     if (!isPathInside(this.rootDir, normalized)) {

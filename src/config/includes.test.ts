@@ -5,8 +5,10 @@ import { describe, expect, it } from "vitest";
 import {
   CircularIncludeError,
   ConfigIncludeError,
+  listDirectIncludePaths,
   MAX_INCLUDE_FILE_BYTES,
   deepMerge,
+  resolveIncludedConfigPath,
   type IncludeResolver,
   resolveConfigIncludes,
 } from "./includes.js";
@@ -62,6 +64,23 @@ function expectResolveIncludeError(
   }
   return thrown as ConfigIncludeError;
 }
+
+describe("include path helpers", () => {
+  it("collects direct include paths from nested objects and arrays", () => {
+    expect(
+      listDirectIncludePaths({
+        top: { $include: "./top.json" },
+        nested: [{ child: { $include: ["./a.json", "./b.json", 3] } }],
+      }),
+    ).toEqual(["./top.json", "./a.json", "./b.json"]);
+  });
+
+  it("resolves include paths relative to the base config", () => {
+    expect(
+      resolveIncludedConfigPath(configPath("sub", "openclaw.json"), "../shared/common.json"),
+    ).toBe(configPath("shared", "common.json"));
+  });
+});
 
 describe("resolveConfigIncludes", () => {
   it.each([

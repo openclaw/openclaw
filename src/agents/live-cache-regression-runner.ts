@@ -1,7 +1,10 @@
 import fs from "node:fs/promises";
 import type { AssistantMessage, Message, Tool } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
-import { LIVE_CACHE_REGRESSION_BASELINE } from "./live-cache-regression-baseline.js";
+import {
+  LIVE_CACHE_REGRESSION_BASELINE,
+  type LiveCacheFloor,
+} from "./live-cache-regression-baseline.js";
 import {
   buildAssistantHistoryTurn,
   buildStableCachePrefix,
@@ -318,8 +321,8 @@ async function runAnthropicDisabledLane(params: {
   return { disabled };
 }
 
-function formatUsage(usage: AssistantMessage["usage"]) {
-  return `cacheRead=${usage.cacheRead ?? 0} cacheWrite=${usage.cacheWrite ?? 0} input=${usage.input ?? 0}`;
+function formatUsage(usage: AssistantMessage["usage"] | undefined) {
+  return `cacheRead=${usage?.cacheRead ?? 0} cacheWrite=${usage?.cacheWrite ?? 0} input=${usage?.input ?? 0}`;
 }
 
 function assertAgainstBaseline(params: {
@@ -328,10 +331,9 @@ function assertAgainstBaseline(params: {
   result: LaneResult;
   regressions: string[];
 }) {
-  const floor =
-    LIVE_CACHE_REGRESSION_BASELINE[params.provider][
-      params.lane as keyof (typeof LIVE_CACHE_REGRESSION_BASELINE)[typeof params.provider]
-    ];
+  const floor = LIVE_CACHE_REGRESSION_BASELINE[params.provider][
+    params.lane as keyof (typeof LIVE_CACHE_REGRESSION_BASELINE)[typeof params.provider]
+  ] as LiveCacheFloor | undefined;
   if (!floor) {
     params.regressions.push(`${params.provider}:${params.lane} missing baseline entry`);
     return;
@@ -407,10 +409,10 @@ export async function runLiveCacheRegression(): Promise<LiveCacheRegressionResul
       pngBase64,
     });
     logLiveCache(
-      `openai ${lane} warmup ${formatUsage(openaiResult.warmup?.usage ?? {})} rate=${openaiResult.warmup?.hitRate.toFixed(3) ?? "0.000"}`,
+      `openai ${lane} warmup ${formatUsage(openaiResult.warmup?.usage)} rate=${openaiResult.warmup?.hitRate.toFixed(3) ?? "0.000"}`,
     );
     logLiveCache(
-      `openai ${lane} best ${formatUsage(openaiResult.best?.usage ?? {})} rate=${openaiResult.best?.hitRate.toFixed(3) ?? "0.000"}`,
+      `openai ${lane} best ${formatUsage(openaiResult.best?.usage)} rate=${openaiResult.best?.hitRate.toFixed(3) ?? "0.000"}`,
     );
     summary.openai[lane] = {
       best: openaiResult.best?.usage,
@@ -433,10 +435,10 @@ export async function runLiveCacheRegression(): Promise<LiveCacheRegressionResul
       pngBase64,
     });
     logLiveCache(
-      `anthropic ${lane} warmup ${formatUsage(anthropicResult.warmup?.usage ?? {})} rate=${anthropicResult.warmup?.hitRate.toFixed(3) ?? "0.000"}`,
+      `anthropic ${lane} warmup ${formatUsage(anthropicResult.warmup?.usage)} rate=${anthropicResult.warmup?.hitRate.toFixed(3) ?? "0.000"}`,
     );
     logLiveCache(
-      `anthropic ${lane} best ${formatUsage(anthropicResult.best?.usage ?? {})} rate=${anthropicResult.best?.hitRate.toFixed(3) ?? "0.000"}`,
+      `anthropic ${lane} best ${formatUsage(anthropicResult.best?.usage)} rate=${anthropicResult.best?.hitRate.toFixed(3) ?? "0.000"}`,
     );
     summary.anthropic[lane] = {
       best: anthropicResult.best?.usage,
@@ -456,7 +458,7 @@ export async function runLiveCacheRegression(): Promise<LiveCacheRegressionResul
     runToken,
     sessionId: `live-cache-regression-${runToken}-anthropic-disabled`,
   });
-  logLiveCache(`anthropic disabled ${formatUsage(disabled.disabled?.usage ?? {})}`);
+  logLiveCache(`anthropic disabled ${formatUsage(disabled.disabled?.usage)}`);
   summary.anthropic.disabled = {
     disabled: disabled.disabled?.usage,
   };

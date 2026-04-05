@@ -223,16 +223,14 @@ export function createSessionsSpawnTool(
           },
         );
         const childSessionKey = result.childSessionKey?.trim();
-        const childRunId = result.runId?.trim();
+        const isAccepted = result.status === "accepted";
+        const childRunId = isAccepted ? result.runId?.trim() : undefined;
         const shouldTrackViaRegistry =
-          result.status === "accepted" &&
-          Boolean(childSessionKey) &&
-          Boolean(childRunId) &&
-          streamTo !== "parent";
+          isAccepted && Boolean(childSessionKey) && Boolean(childRunId) && streamTo !== "parent";
         if (shouldTrackViaRegistry && childSessionKey && childRunId) {
           const cfg = loadConfig();
           const trackedSpawnMode = resolveTrackedSpawnMode({
-            requestedMode: result.mode,
+            requestedMode: isAccepted ? result.mode : undefined,
             threadRequested: thread,
           });
           const trackedCleanup = trackedSpawnMode === "session" ? "keep" : cleanup;
