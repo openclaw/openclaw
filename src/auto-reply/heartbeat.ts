@@ -56,6 +56,9 @@ export function isHeartbeatContentEffectivelyEmpty(content: string | undefined |
     }
 
     if (isHeartbeatScaffoldLine(trimmed)) {
+      // Treat scaffold-only lines as comments even inside ```markdown fences.
+      // The shipped HEARTBEAT scaffold uses fenced markdown with #-prefixed guidance,
+      // and that wrapper must stay effectively empty for backward compatibility.
       continue;
     }
 
