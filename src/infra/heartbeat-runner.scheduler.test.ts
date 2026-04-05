@@ -257,6 +257,38 @@ describe("startHeartbeatRunner", () => {
     runner.stop();
   });
 
+  it("clamps setTimeout delay to prevent 32-bit overflow for large intervals", async () => {
+    useFakeHeartbeatTime();
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+
+    // 30 days = 2_592_000_000 ms, which exceeds the 32-bit signed int max
+    // (2_147_483_647 ms). Without clamping, Node.js sets the timeout to 1 ms.
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: {
+          defaults: { heartbeat: { every: "30d" } },
+        },
+      } as OpenClawConfig,
+      runOnce: runSpy,
+    });
+
+    const delays = (timeoutSpy.mock.calls as Array<[unknown, unknown, ...unknown[]]>)
+      .map(([, delay]) => delay)
+      .filter((d): d is number => typeof d === "number");
+
+    // Every delay passed to setTimeout must be ≤ 2^31 - 1.
+    for (const d of delays) {
+      expect(d).toBeLessThanOrEqual(2_147_483_647);
+    }
+    // The interval should have been clamped, not left at the raw 30-day value.
+    expect(delays.some((d) => d > 0)).toBe(true);
+
+    timeoutSpy.mockRestore();
+    runner.stop();
+  });
+
   it("does not fan out to unrelated agents for session-scoped exec wakes", async () => {
     useFakeHeartbeatTime();
     const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });

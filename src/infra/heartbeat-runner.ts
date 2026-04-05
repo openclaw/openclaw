@@ -91,6 +91,12 @@ export type HeartbeatDeps = OutboundSendDeps &
 
 const log = createSubsystemLogger("gateway/heartbeat");
 
+/** Node.js setTimeout uses a 32-bit signed integer internally; values above
+ *  this threshold are clamped to 1 ms, causing a runaway hot-loop.  Cap any
+ *  computed delay to this value — the timer will re-arm and recompute on wake.
+ */
+const MAX_SAFE_TIMEOUT_MS = 2_147_483_647;
+
 export { areHeartbeatsEnabled, setHeartbeatsEnabled };
 export {
   isHeartbeatEnabledForAgent,
@@ -1009,7 +1015,7 @@ export function startHeartbeatRunner(opts: {
     if (!Number.isFinite(nextDue)) {
       return;
     }
-    const delay = Math.max(0, nextDue - now);
+    const delay = Math.min(Math.max(0, nextDue - now), MAX_SAFE_TIMEOUT_MS);
     state.timer = setTimeout(() => {
       state.timer = null;
       requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });
