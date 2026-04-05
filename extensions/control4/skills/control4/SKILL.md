@@ -41,6 +41,58 @@ When the user asks to control a named room, extract the device IDs from the map 
 ## Querying state
 Use `control4_status(deviceIds=[...])` to read current light level, temperature, or lock state.
 
+## Thermostat variable decoding
+When `control4_status` returns thermostat variables, apply these rules:
+
+**Human-readable (use as-is):**
+- `TEMPERATURE_F`, `HEAT_SETPOINT_F`, `COOL_SETPOINT_F`, `OUTDOOR_TEMPERATURE_F` — already in °F
+- `DISPLAY_TEMPERATURE` — current temp in °F
+- `HVAC_MODE` — mode string (Heat / Cool / Auto / Off)
+- `FAN_MODE`, `HOLD_STATE`, `SCHEDULE_MODE` — text values
+
+**Deci-Kelvin (value > 2500 → convert to °F):**
+- `HEAT_SETPOINT`, `COOL_SETPOINT`, `OUTDOOR_TEMPERATURE` with values like 2909, 2998
+- Formula: `round((value/10 − 273.15) × 9/5 + 32)`
+- Example: 2909 → 64°F, 2998 → 80°F, 2864 → 56°F, 3053 → 91°F
+
+**Ignore (internal encodings with no reliable decode):**
+- `TEMPERATURE` with value < 300 — opaque internal state, discard
+- Any variable not listed above that has a small integer value
+
+**Example thermostat status reply:**
+> Main Thermostat: 64°F (current), heat set 64°F, cool set 80°F, mode: Heat
+
+## Audio and music streaming
+
+### Discovery
+Use `control4_find` to locate audio devices before using commands:
+- `control4_find(query: "audio zone media player")` — finds amplifiers and zone controllers
+- `control4_find(query: "pandora airplay shairbridge")` — finds streaming source devices
+
+### Audio commands reference
+| Action | command | params |
+|---|---|---|
+| Play | `PLAY` | — |
+| Pause | `PAUSE` | — |
+| Stop | `STOP` | — |
+| Next track | `SKIP FWD` | — |
+| Previous track | `SKIP REV` | — |
+| Set volume | `SET_VOLUME_LEVEL` | `{LEVEL: "0"–"100"}` |
+| Mute on | `MUTE_ON` | — |
+| Mute off | `MUTE_OFF` | — |
+| Select input/source | `SELECT_SOURCE` | depends on device |
+
+### AirPlay (ShairBridge)
+- ShairBridge is a Control4 AirPlay receiver device — the user streams from their iPhone to it
+- WhatsApp controls routing and volume; it does **not** trigger AirPlay streaming itself
+- To route AirPlay to a room: find the room's audio zone/amplifier, then send `SELECT_SOURCE` selecting ShairBridge as input
+- Example: "Play AirPlay in the living room" → find living room audio zone ID → `control4_command(deviceIds=[...], command="SELECT_SOURCE", params={...})`
+
+### Pandora (Media Service Proxy / MSP driver)
+- Find the Pandora or MSP device via `control4_find(query: "pandora")`
+- Send `PLAY` to start the current station, `STOP` to stop, `SKIP FWD` to skip track
+- Station selection may require inspecting device variables via `control4_status`
+
 ## Notes
 - "Wireless Dimmer" entries are individual dimmer circuits — send to all in a room to control all lights.
 - Thermostat IDs: Lower Floor [306], Main [652], Library [649/650], Upper [650].

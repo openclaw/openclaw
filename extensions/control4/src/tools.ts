@@ -192,6 +192,59 @@ export function createCommandTool(): AnyAgentTool {
   };
 }
 
+// Thermostat variables that use deci-Kelvin encoding (value / 10 = Kelvin → convert to °F).
+// Values > 2500 are clearly in this range (2500 dK = -23°C; reasonable thermostat temps are 2700–3100 dK).
+const THERMO_DKELVIN_VARS = new Set(["HEAT_SETPOINT", "COOL_SETPOINT", "OUTDOOR_TEMPERATURE"]);
+
+// TEMPERATURE (without _F) is an opaque internal value — drop it to avoid confusing the agent.
+const THERMO_DROP_VARS = new Set(["TEMPERATURE"]);
+
+function deciKelvinToF(dk: number): number {
+  return Math.round((dk / 10 - 273.15) * 9 / 5 + 32);
+}
+
+type C4Var = { name: string; value: string | number | boolean };
+
+/**
+ * Post-process raw thermostat variables:
+ * 1. Synthesise _F variants from deci-Kelvin setpoints when the _F version is absent.
+ * 2. Drop TEMPERATURE (opaque internal encoding, no reliable decode).
+ */
+function decodeThermostatVars(vars: C4Var[]): C4Var[] {
+  // DEBUG: log all raw variable names+values to help diagnose encoding issues
+  process.stderr.write(
+    `[control4] decodeThermostatVars: ${vars.map((v) => `${v.name}=${JSON.stringify(v.value)}`).join(", ")}\n`,
+  );
+  const nameSet = new Set(vars.map((v) => v.name));
+  const out: C4Var[] = [];
+
+  for (const v of vars) {
+    // Drop known-opaque variables unless the _F version is already present.
+    if (THERMO_DROP_VARS.has(v.name) && !nameSet.has(`${v.name}_F`)) continue;
+
+    // Synthesise _F for deci-Kelvin setpoints when not already present.
+    // The API may return values as strings or numbers; handle both.
+    const numVal =
+      typeof v.value === "number"
+        ? v.value
+        : typeof v.value === "string"
+          ? parseFloat(v.value)
+          : NaN;
+    if (
+      THERMO_DKELVIN_VARS.has(v.name) &&
+      !isNaN(numVal) &&
+      numVal > 2500 &&
+      !nameSet.has(`${v.name}_F`)
+    ) {
+      out.push({ name: `${v.name}_F`, value: deciKelvinToF(numVal) });
+      // The original raw variable is kept too; the _F filter below will drop it.
+    }
+
+    out.push(v);
+  }
+  return out;
+}
+
 /** Tool 3: Query current variable state for devices. */
 export function createStatusTool(): AnyAgentTool {
   return {
@@ -219,10 +272,17 @@ export function createStatusTool(): AnyAgentTool {
 
       for (const deviceId of params.deviceIds) {
         try {
-          const vars = await getVariables(deviceId);
+          const rawVars = await getVariables(deviceId);
+          const vars = decodeThermostatVars(rawVars);
+          // When both RAW and RAW_F variants exist (e.g. TEMPERATURE + TEMPERATURE_F),
+          // drop the raw unreadable version — the _F variant is human-readable.
+          const varNames = new Set(vars.map((v) => v.name));
+          const readable = vars.filter(
+            (v) => !(!v.name.endsWith("_F") && varNames.has(`${v.name}_F`)),
+          );
           results.push({
             id: deviceId,
-            variables: vars.map((v) => ({ name: v.name, value: v.value })),
+            variables: readable.map((v) => ({ name: v.name, value: v.value })),
           });
         } catch (err) {
           results.push({
@@ -234,7 +294,7 @@ export function createStatusTool(): AnyAgentTool {
 
       const lines = results.map((r) => {
         if (r.error) return `  [${r.id}] Error: ${r.error}`;
-        if (!r.variables || r.variables.length === 0) return `  [${r.id}] No variables`;
+        if (!r.variables || r.variables.length === 0) return `  [${r.id}] No variables [v2]`;
         const varLines = r.variables.map((v) => `    ${v.name}: ${v.value}`).join("\n");
         return `  [${r.id}]\n${varLines}`;
       });
