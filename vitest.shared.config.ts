@@ -134,28 +134,27 @@ export function resolveLocalVitestScheduling(
     };
   }
 
+  const totalCpuPercentCapacity = Math.max(100, cpuCount * 100);
+  const otherVitestCpuRatio = processStats.otherVitestCpuPercent / totalCpuPercentCapacity;
+  const otherVitestWorkerRatio = processStats.otherVitestWorkerCount / cpuCount;
+
   const highSystemContention =
-    loadRatio >= 1 ||
-    processStats.otherVitestWorkerCount >= 2 ||
-    processStats.otherVitestCpuPercent >= 150 ||
-    processStats.otherVitestRootCount >= 2;
+    loadRatio >= 1 || otherVitestWorkerRatio >= 0.75 || otherVitestCpuRatio >= 0.75;
 
   if (highSystemContention) {
+    const maxWorkers = Math.max(1, Math.floor(inferred / 2));
     return {
-      maxWorkers: 1,
-      fileParallelism: false,
-      throttledBySystem: true,
+      maxWorkers,
+      fileParallelism: maxWorkers > 1,
+      throttledBySystem: maxWorkers < inferred,
     };
   }
 
   const moderateSystemContention =
-    loadRatio >= 0.75 ||
-    processStats.otherVitestWorkerCount >= 1 ||
-    processStats.otherVitestCpuPercent >= 75 ||
-    processStats.otherVitestRootCount >= 1;
+    loadRatio >= 0.75 || otherVitestWorkerRatio >= 0.4 || otherVitestCpuRatio >= 0.4;
 
   if (moderateSystemContention) {
-    const maxWorkers = Math.min(inferred, 2);
+    const maxWorkers = Math.max(2, Math.ceil(inferred * 0.75));
     return {
       maxWorkers,
       fileParallelism: true,

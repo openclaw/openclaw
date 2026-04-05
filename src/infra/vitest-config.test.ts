@@ -107,7 +107,7 @@ describe("resolveLocalVitestMaxWorkers", () => {
         "threads",
         idleVitestStats,
       ),
-    ).toBe(1);
+    ).toBe(2);
   });
 
   it("caps very large hosts at six local workers", () => {
@@ -127,7 +127,7 @@ describe("resolveLocalVitestMaxWorkers", () => {
 });
 
 describe("resolveLocalVitestScheduling", () => {
-  it("falls back to serial when other Vitest workers are already active", () => {
+  it("scales back to half capacity when other Vitest work is already consuming most cores", () => {
     expect(
       resolveLocalVitestScheduling(
         {},
@@ -138,19 +138,19 @@ describe("resolveLocalVitestScheduling", () => {
         },
         "threads",
         {
-          otherVitestRootCount: 1,
-          otherVitestWorkerCount: 3,
-          otherVitestCpuPercent: 120,
+          otherVitestRootCount: 2,
+          otherVitestWorkerCount: 12,
+          otherVitestCpuPercent: 1200,
         },
       ),
     ).toEqual({
-      maxWorkers: 1,
-      fileParallelism: false,
+      maxWorkers: 4,
+      fileParallelism: true,
       throttledBySystem: true,
     });
   });
 
-  it("caps moderate contention to two workers", () => {
+  it("keeps big hosts parallel under moderate contention", () => {
     expect(
       resolveLocalVitestScheduling(
         {},
@@ -162,12 +162,12 @@ describe("resolveLocalVitestScheduling", () => {
         "threads",
         {
           otherVitestRootCount: 1,
-          otherVitestWorkerCount: 0,
-          otherVitestCpuPercent: 10,
+          otherVitestWorkerCount: 7,
+          otherVitestCpuPercent: 700,
         },
       ),
     ).toEqual({
-      maxWorkers: 2,
+      maxWorkers: 6,
       fileParallelism: true,
       throttledBySystem: true,
     });
