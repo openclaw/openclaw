@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.js";
 import { createExecTool } from "./bash-tools.exec.js";
@@ -14,6 +14,7 @@ describe("exec foreground failures", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
+    vi.useRealTimers();
     envSnapshot = captureEnv(["SHELL"]);
     if (!isWin && defaultShell) {
       process.env.SHELL = defaultShell;
@@ -22,6 +23,7 @@ describe("exec foreground failures", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     envSnapshot.restore();
   });
 
