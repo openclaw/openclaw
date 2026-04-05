@@ -10,7 +10,20 @@ type LazyLocaleRegistration = {
 
 export const DEFAULT_LOCALE: Locale = "en";
 
-const LAZY_LOCALES: readonly LazyLocale[] = ["zh-CN", "zh-TW", "pt-BR", "de", "es", "uk"];
+const LAZY_LOCALES: readonly LazyLocale[] = [
+  "zh-CN",
+  "zh-TW",
+  "pt-BR",
+  "de",
+  "es",
+  "ja-JP",
+  "ko",
+  "fr",
+  "tr",
+  "id",
+  "pl",
+  "uk",
+];
 
 const LAZY_LOCALE_REGISTRY: Record<LazyLocale, LazyLocaleRegistration> = {
   "zh-CN": {
@@ -32,6 +45,30 @@ const LAZY_LOCALE_REGISTRY: Record<LazyLocale, LazyLocaleRegistration> = {
   es: {
     exportName: "es",
     loader: () => import("../locales/es.ts"),
+  },
+  "ja-JP": {
+    exportName: "ja_JP",
+    loader: () => import("../locales/ja-JP.ts"),
+  },
+  ko: {
+    exportName: "ko",
+    loader: () => import("../locales/ko.ts"),
+  },
+  fr: {
+    exportName: "fr",
+    loader: () => import("../locales/fr.ts"),
+  },
+  tr: {
+    exportName: "tr",
+    loader: () => import("../locales/tr.ts"),
+  },
+  id: {
+    exportName: "id",
+    loader: () => import("../locales/id.ts"),
+  },
+  pl: {
+    exportName: "pl",
+    loader: () => import("../locales/pl.ts"),
   },
   uk: {
     exportName: "uk",
@@ -61,6 +98,24 @@ export function resolveNavigatorLocale(navLang: string): Locale {
   }
   if (navLang.startsWith("es")) {
     return "es";
+  }
+  if (navLang.startsWith("ja")) {
+    return "ja-JP";
+  }
+  if (navLang.startsWith("ko")) {
+    return "ko";
+  }
+  if (navLang.startsWith("fr")) {
+    return "fr";
+  }
+  if (navLang.startsWith("tr")) {
+    return "tr";
+  }
+  if (navLang.startsWith("id")) {
+    return "id";
+  }
+  if (navLang.startsWith("pl")) {
+    return "pl";
   }
   if (navLang.startsWith("uk")) {
     return "uk";
