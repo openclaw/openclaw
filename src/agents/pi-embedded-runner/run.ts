@@ -12,7 +12,6 @@ import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
-import { resolveSessionKeyForRequest } from "../command/session.js";
 import { hasConfiguredModelFallbacks } from "../agent-scope.js";
 import {
   type AuthProfileFailureReason,
@@ -20,6 +19,7 @@ import {
   markAuthProfileGood,
   markAuthProfileUsed,
 } from "../auth-profiles.js";
+import { resolveSessionKeyForRequest } from "../command/session.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import {
   coerceToFailoverError,
@@ -104,9 +104,9 @@ type ApiKeyInfo = ResolvedProviderAuth;
 
 /**
  * Best-effort backfill of sessionKey from sessionId when not explicitly provided.
- * When resolution succeeds the resolved key is returned; when it fails (corrupt store,
- * sessionId not found, etc.) the original value is returned unchanged. This is a
- * read-only lookup with no side effects.
+ * The return value is normalized: whitespace-only inputs collapse to undefined, and
+ * successful resolution returns a trimmed session key. This is a read-only lookup
+ * with no side effects.
  * See: https://github.com/openclaw/openclaw/issues/60552
  */
 function backfillSessionKey(params: {
@@ -115,8 +115,12 @@ function backfillSessionKey(params: {
   sessionKey?: string;
 }): string | undefined {
   const trimmed = params.sessionKey?.trim() || undefined;
-  if (trimmed) return trimmed;
-  if (!params.config || !params.sessionId) return undefined;
+  if (trimmed) {
+    return trimmed;
+  }
+  if (!params.config || !params.sessionId) {
+    return undefined;
+  }
   try {
     // Intentionally omit agentId to avoid resolveExplicitAgentSessionKey() binding
     // one-off callers (e.g. model probes) to the agent's main session.
@@ -143,7 +147,7 @@ export async function runEmbeddedPiAgent(
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
   });
-  if (effectiveSessionKey && effectiveSessionKey !== params.sessionKey) {
+  if (effectiveSessionKey !== params.sessionKey) {
     params = { ...params, sessionKey: effectiveSessionKey };
   }
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
