@@ -1,10 +1,21 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildHuggingfaceModelDefinition,
   discoverHuggingfaceModels,
   HUGGINGFACE_MODEL_CATALOG,
   isHuggingfacePolicyLocked,
 } from "./api.js";
+import { HUGGINGFACE_DISCOVERY_TIMEOUT_MS } from "./models.js";
+
+const ORIGINAL_VITEST = process.env.VITEST;
+const ORIGINAL_NODE_ENV = process.env.NODE_ENV;
+
+afterEach(() => {
+  process.env.VITEST = ORIGINAL_VITEST;
+  process.env.NODE_ENV = ORIGINAL_NODE_ENV;
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 describe("huggingface models", () => {
   it("buildHuggingfaceModelDefinition returns config with required fields", () => {
@@ -29,6 +40,40 @@ describe("huggingface models", () => {
     const models = await discoverHuggingfaceModels("hf_test_token");
     expect(models).toHaveLength(HUGGINGFACE_MODEL_CATALOG.length);
     expect(models[0].id).toBe("deepseek-ai/DeepSeek-R1");
+  });
+
+  it("uses the default discovery timeout for live Hugging Face fetches", async () => {
+    process.env.VITEST = "false";
+    process.env.NODE_ENV = "development";
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response("{}", { status: 500, headers: { "Content-Type": "application/json" } }),
+      ),
+    );
+
+    await discoverHuggingfaceModels("hf_test_token");
+
+    expect(timeoutSpy).toHaveBeenCalledWith(HUGGINGFACE_DISCOVERY_TIMEOUT_MS);
+  });
+
+  it("accepts a custom discovery timeout override", async () => {
+    process.env.VITEST = "false";
+    process.env.NODE_ENV = "development";
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response("{}", { status: 500, headers: { "Content-Type": "application/json" } }),
+      ),
+    );
+
+    await discoverHuggingfaceModels("hf_test_token", 25_000);
+
+    expect(timeoutSpy).toHaveBeenCalledWith(25_000);
   });
 
   describe("isHuggingfacePolicyLocked", () => {

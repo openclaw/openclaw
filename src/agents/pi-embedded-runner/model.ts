@@ -17,6 +17,7 @@ import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
 import { isSecretRefHeaderValueMarker } from "../model-auth-markers.js";
+import { normalizeStaticProviderModelId } from "../model-ref-shared.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
 import {
   buildSuppressedBuiltInModelError,
@@ -618,7 +619,16 @@ export function resolveModelWithRegistry(params: {
   agentDir?: string;
   runtimeHooks?: ProviderRuntimeHooks;
 }): Model<Api> | undefined {
-  const explicitModel = resolveExplicitModelWithRegistry(params);
+  const normalizedRef = {
+    provider: params.provider,
+    model: normalizeStaticProviderModelId(normalizeProviderId(params.provider), params.modelId),
+  };
+  const normalizedParams = {
+    ...params,
+    provider: normalizedRef.provider,
+    modelId: normalizedRef.model,
+  };
+  const explicitModel = resolveExplicitModelWithRegistry(normalizedParams);
   if (explicitModel?.kind === "suppressed") {
     return undefined;
   }
@@ -626,12 +636,12 @@ export function resolveModelWithRegistry(params: {
     return explicitModel.model;
   }
 
-  const pluginDynamicModel = resolvePluginDynamicModelWithRegistry(params);
+  const pluginDynamicModel = resolvePluginDynamicModelWithRegistry(normalizedParams);
   if (pluginDynamicModel) {
     return pluginDynamicModel;
   }
 
-  return resolveConfiguredFallbackModel(params);
+  return resolveConfiguredFallbackModel(normalizedParams);
 }
 
 export function resolveModel(
@@ -651,13 +661,17 @@ export function resolveModel(
   authStorage: AuthStorage;
   modelRegistry: ModelRegistry;
 } {
+  const normalizedRef = {
+    provider,
+    model: normalizeStaticProviderModelId(normalizeProviderId(provider), modelId),
+  };
   const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
   const authStorage = options?.authStorage ?? discoverAuthStorage(resolvedAgentDir);
   const modelRegistry = options?.modelRegistry ?? discoverModels(authStorage, resolvedAgentDir);
   const runtimeHooks = resolveRuntimeHooks(options);
   const model = resolveModelWithRegistry({
-    provider,
-    modelId,
+    provider: normalizedRef.provider,
+    modelId: normalizedRef.model,
     modelRegistry,
     cfg,
     agentDir: resolvedAgentDir,
@@ -669,8 +683,8 @@ export function resolveModel(
 
   return {
     error: buildUnknownModelError({
-      provider,
-      modelId,
+      provider: normalizedRef.provider,
+      modelId: normalizedRef.model,
       cfg,
       agentDir: resolvedAgentDir,
       runtimeHooks,
@@ -698,13 +712,17 @@ export async function resolveModelAsync(
   authStorage: AuthStorage;
   modelRegistry: ModelRegistry;
 }> {
+  const normalizedRef = {
+    provider,
+    model: normalizeStaticProviderModelId(normalizeProviderId(provider), modelId),
+  };
   const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
   const authStorage = options?.authStorage ?? discoverAuthStorage(resolvedAgentDir);
   const modelRegistry = options?.modelRegistry ?? discoverModels(authStorage, resolvedAgentDir);
   const runtimeHooks = resolveRuntimeHooks(options);
   const explicitModel = resolveExplicitModelWithRegistry({
-    provider,
-    modelId,
+    provider: normalizedRef.provider,
+    modelId: normalizedRef.model,
     modelRegistry,
     cfg,
     agentDir: resolvedAgentDir,
@@ -713,8 +731,8 @@ export async function resolveModelAsync(
   if (explicitModel?.kind === "suppressed") {
     return {
       error: buildUnknownModelError({
-        provider,
-        modelId,
+        provider: normalizedRef.provider,
+        modelId: normalizedRef.model,
         cfg,
         agentDir: resolvedAgentDir,
         runtimeHooks,
@@ -723,26 +741,26 @@ export async function resolveModelAsync(
       modelRegistry,
     };
   }
-  const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
+  const providerConfig = resolveConfiguredProviderConfig(cfg, normalizedRef.provider);
   const resolveDynamicAttempt = async (attemptOptions?: { clearHookCache?: boolean }) => {
     if (attemptOptions?.clearHookCache) {
       runtimeHooks.clearProviderRuntimeHookCache();
     }
     await runtimeHooks.prepareProviderDynamicModel({
-      provider,
+      provider: normalizedRef.provider,
       config: cfg,
       context: {
         config: cfg,
         agentDir: resolvedAgentDir,
-        provider,
-        modelId,
+        provider: normalizedRef.provider,
+        modelId: normalizedRef.model,
         modelRegistry,
         providerConfig,
       },
     });
     return resolveModelWithRegistry({
-      provider,
-      modelId,
+      provider: normalizedRef.provider,
+      modelId: normalizedRef.model,
       modelRegistry,
       cfg,
       agentDir: resolvedAgentDir,
@@ -763,8 +781,8 @@ export async function resolveModelAsync(
 
   return {
     error: buildUnknownModelError({
-      provider,
-      modelId,
+      provider: normalizedRef.provider,
+      modelId: normalizedRef.model,
       cfg,
       agentDir: resolvedAgentDir,
       runtimeHooks,
