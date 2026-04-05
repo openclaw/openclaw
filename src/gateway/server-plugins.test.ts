@@ -87,6 +87,7 @@ const createRegistry = (diagnostics: PluginDiagnostic[]): PluginRegistry => ({
 type ServerPluginsModule = typeof import("./server-plugins.js");
 type ServerPluginBootstrapModule = typeof import("./server-plugin-bootstrap.js");
 type PluginRuntimeModule = typeof import("../plugins/runtime/index.js");
+type PluginRuntimeRegistryModule = typeof import("../plugins/runtime.js");
 type GatewayRequestScopeModule = typeof import("../plugins/runtime/gateway-request-scope.js");
 type MethodScopesModule = typeof import("./method-scopes.js");
 type RuntimeStateModule = typeof import("../plugins/runtime-state.js");
@@ -94,6 +95,7 @@ type RuntimeStateModule = typeof import("../plugins/runtime-state.js");
 let serverPluginsModule: ServerPluginsModule;
 let serverPluginBootstrapModule: ServerPluginBootstrapModule;
 let runtimeModule: PluginRuntimeModule;
+let runtimeRegistryModule: PluginRuntimeRegistryModule;
 let gatewayRequestScopeModule: GatewayRequestScopeModule;
 let methodScopesModule: MethodScopesModule;
 let getActivePluginRegistryWorkspaceDirFromState: typeof import("../plugins/runtime-state.js").getActivePluginRegistryWorkspaceDirFromState;
@@ -131,6 +133,7 @@ async function loadTestModules() {
   serverPluginsModule = await import("./server-plugins.js");
   serverPluginBootstrapModule = await import("./server-plugin-bootstrap.js");
   runtimeModule = await import("../plugins/runtime/index.js");
+  runtimeRegistryModule = await import("../plugins/runtime.js");
   gatewayRequestScopeModule = await import("../plugins/runtime/gateway-request-scope.js");
   methodScopesModule = await import("./method-scopes.js");
   const runtimeStateModule: RuntimeStateModule = await import("../plugins/runtime-state.js");
@@ -230,6 +233,7 @@ beforeEach(() => {
 
 afterEach(() => {
   runtimeModule.clearGatewaySubagentRuntime();
+  runtimeRegistryModule.resetPluginRuntimeStateForTest();
 });
 
 describe("loadGatewayPlugins", () => {
@@ -285,6 +289,20 @@ describe("loadGatewayPlugins", () => {
         onlyPluginIds: ["browser"],
       }),
     );
+  });
+
+  test("pins the initial startup channel registry against later active-registry churn", async () => {
+    const startupRegistry = createRegistry([]);
+    loadOpenClawPlugins.mockReturnValue(startupRegistry);
+
+    loadGatewayStartupPluginsForTest({
+      pluginIds: ["slack"],
+    });
+
+    const replacementRegistry = createRegistry([]);
+    runtimeRegistryModule.setActivePluginRegistry(replacementRegistry);
+
+    expect(runtimeRegistryModule.getActivePluginChannelRegistry()).toBe(startupRegistry);
   });
 
   test("keeps the raw activation source when a precomputed startup scope is reused", async () => {
