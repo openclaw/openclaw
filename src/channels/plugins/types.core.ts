@@ -84,6 +84,8 @@ export type ChannelSetupInput = {
   audience?: string;
   useEnv?: boolean;
   homeserver?: string;
+  dangerouslyAllowPrivateNetwork?: boolean;
+  /** Compatibility alias for legacy setup callers; prefer dangerouslyAllowPrivateNetwork. */
   allowPrivateNetwork?: boolean;
   proxy?: string;
   userId?: string;

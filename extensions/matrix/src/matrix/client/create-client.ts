@@ -47,7 +47,7 @@ export async function createMatrixClient(params: {
   ensureMatrixSdkLoggingConfigured();
   const env = process.env;
   const homeserver = await resolveValidatedMatrixHomeserverUrl(params.homeserver, {
-    allowPrivateNetwork: params.allowPrivateNetwork,
+    dangerouslyAllowPrivateNetwork: params.allowPrivateNetwork,
   });
   const userId = params.userId?.trim() || "unknown";
   const matrixClientUserId = params.userId?.trim() || undefined;

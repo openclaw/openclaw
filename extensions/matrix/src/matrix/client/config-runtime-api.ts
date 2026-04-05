@@ -7,6 +7,7 @@ export { isPrivateOrLoopbackHost } from "./private-network-host.js";
 export {
   assertHttpUrlTargetsPrivateNetwork,
   isPrivateNetworkOptInEnabled,
+  ssrfPolicyFromDangerouslyAllowPrivateNetwork,
   ssrfPolicyFromAllowPrivateNetwork,
   type LookupFn,
   type SsrFPolicy,

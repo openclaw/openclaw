@@ -5,7 +5,7 @@ import { createSettingsManager, type TlonSettingsStore } from "../settings.js";
 import { normalizeShip, parseChannelNest } from "../targets.js";
 import { resolveTlonAccount } from "../types.js";
 import { authenticate } from "../urbit/auth.js";
-import { ssrfPolicyFromAllowPrivateNetwork } from "../urbit/context.js";
+import { ssrfPolicyFromDangerouslyAllowPrivateNetwork } from "../urbit/context.js";
 import type { Foreigns, DmInvite } from "../urbit/foreigns.js";
 import { sendDm, sendGroupMessage } from "../urbit/send.js";
 import { UrbitSSEClient } from "../urbit/sse-client.js";
@@ -73,7 +73,9 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
   const botShipName = normalizeShip(account.ship);
   runtime.log?.(`[tlon] Starting monitor for ${botShipName}`);
 
-  const ssrfPolicy = ssrfPolicyFromAllowPrivateNetwork(account.dangerouslyAllowPrivateNetwork);
+  const ssrfPolicy = ssrfPolicyFromDangerouslyAllowPrivateNetwork(
+    account.dangerouslyAllowPrivateNetwork,
+  );
 
   // Store validated values for use in closures (TypeScript narrowing doesn't propagate)
   const accountUrl = account.url;

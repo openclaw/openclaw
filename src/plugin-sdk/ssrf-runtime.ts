@@ -18,6 +18,7 @@ export {
   hasLegacyFlatAllowPrivateNetworkAlias,
   isPrivateNetworkOptInEnabled,
   migrateLegacyFlatAllowPrivateNetworkAlias,
+  ssrfPolicyFromDangerouslyAllowPrivateNetwork,
   ssrfPolicyFromPrivateNetworkOptIn,
   ssrfPolicyFromAllowPrivateNetwork,
 } from "./ssrf-policy.js";

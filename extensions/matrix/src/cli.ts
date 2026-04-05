@@ -181,7 +181,7 @@ async function addMatrixAccount(params: {
     name: params.name,
     avatarUrl: params.avatarUrl,
     homeserver: params.homeserver,
-    allowPrivateNetwork: params.allowPrivateNetwork,
+    dangerouslyAllowPrivateNetwork: params.allowPrivateNetwork,
     proxy: params.proxy,
     userId: params.userId,
     accessToken: params.accessToken,

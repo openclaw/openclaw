@@ -1,9 +1,9 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
-import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   type ChannelSetupDmPolicy,
   type ChannelSetupWizardAdapter,
 } from "openclaw/plugin-sdk/setup";
+import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { requiresExplicitMatrixDefaultAccount } from "./account-selection.js";
 import { listMatrixDirectoryGroupsLive } from "./directory-live.js";
 import {
@@ -336,7 +336,7 @@ async function runMatrixConfigure(params: {
     throw new Error("Matrix homeserver requires explicit private-network opt-in");
   }
   await resolveValidatedMatrixHomeserverUrl(homeserver, {
-    allowPrivateNetwork,
+    dangerouslyAllowPrivateNetwork: allowPrivateNetwork,
   });
 
   let accessToken = existing.accessToken;

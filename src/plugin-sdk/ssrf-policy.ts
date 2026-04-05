@@ -15,8 +15,9 @@ export type PrivateNetworkOptInInput =
   | undefined
   | Pick<SsrFPolicy, "allowPrivateNetwork" | "dangerouslyAllowPrivateNetwork">
   | {
-      allowPrivateNetwork?: boolean | null;
       dangerouslyAllowPrivateNetwork?: boolean | null;
+      /** Compatibility alias for legacy callers; prefer dangerouslyAllowPrivateNetwork. */
+      allowPrivateNetwork?: boolean | null;
       network?:
         | Pick<SsrFPolicy, "allowPrivateNetwork" | "dangerouslyAllowPrivateNetwork">
         | null
@@ -50,6 +51,12 @@ export function ssrfPolicyFromPrivateNetworkOptIn(
   input: PrivateNetworkOptInInput,
 ): SsrFPolicy | undefined {
   return isPrivateNetworkOptInEnabled(input) ? { allowPrivateNetwork: true } : undefined;
+}
+
+export function ssrfPolicyFromDangerouslyAllowPrivateNetwork(
+  dangerouslyAllowPrivateNetwork: boolean | null | undefined,
+): SsrFPolicy | undefined {
+  return ssrfPolicyFromPrivateNetworkOptIn(dangerouslyAllowPrivateNetwork);
 }
 
 export function hasLegacyFlatAllowPrivateNetworkAlias(value: unknown): boolean {
@@ -103,12 +110,13 @@ export function migrateLegacyFlatAllowPrivateNetworkAlias(params: {
 export function ssrfPolicyFromAllowPrivateNetwork(
   allowPrivateNetwork: boolean | null | undefined,
 ): SsrFPolicy | undefined {
-  return ssrfPolicyFromPrivateNetworkOptIn(allowPrivateNetwork);
+  return ssrfPolicyFromDangerouslyAllowPrivateNetwork(allowPrivateNetwork);
 }
 
 export async function assertHttpUrlTargetsPrivateNetwork(
   url: string,
   params: {
+    dangerouslyAllowPrivateNetwork?: boolean | null;
     allowPrivateNetwork?: boolean | null;
     lookupFn?: LookupFn;
     errorMessage?: string;
@@ -131,15 +139,20 @@ export async function assertHttpUrlTargetsPrivateNetwork(
     return;
   }
 
-  if (params.allowPrivateNetwork !== true) {
+  const allowPrivateNetwork =
+    typeof params.dangerouslyAllowPrivateNetwork === "boolean"
+      ? params.dangerouslyAllowPrivateNetwork
+      : params.allowPrivateNetwork;
+
+  if (allowPrivateNetwork !== true) {
     throw new Error(errorMessage);
   }
 
-  // allowPrivateNetwork is an opt-in for trusted private/internal targets, not
-  // a blanket exemption for cleartext public internet hosts.
+  // Private-network opt-in is for trusted private/internal targets, not a
+  // blanket exemption for cleartext public internet hosts.
   const pinned = await resolvePinnedHostnameWithPolicy(hostname, {
     lookupFn: params.lookupFn,
-    policy: ssrfPolicyFromAllowPrivateNetwork(true),
+    policy: ssrfPolicyFromDangerouslyAllowPrivateNetwork(true),
   });
   if (!pinned.addresses.every((address) => isPrivateIpAddress(address))) {
     throw new Error(errorMessage);

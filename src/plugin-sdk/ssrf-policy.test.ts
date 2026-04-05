@@ -8,6 +8,7 @@ import {
   isHttpsUrlAllowedByHostnameSuffixAllowlist,
   migrateLegacyFlatAllowPrivateNetworkAlias,
   normalizeHostnameSuffixAllowlist,
+  ssrfPolicyFromDangerouslyAllowPrivateNetwork,
   ssrfPolicyFromAllowPrivateNetwork,
   ssrfPolicyFromPrivateNetworkOptIn,
 } from "./ssrf-policy.js";
@@ -20,6 +21,28 @@ function createLookupFn(addresses: Array<{ address: string; family: number }>): 
     return addresses;
   }) as unknown as LookupFn;
 }
+
+describe("ssrfPolicyFromDangerouslyAllowPrivateNetwork", () => {
+  it.each([
+    {
+      name: "returns undefined for missing input",
+      input: undefined,
+      expected: undefined,
+    },
+    {
+      name: "returns undefined when private-network access is disabled",
+      input: false,
+      expected: undefined,
+    },
+    {
+      name: "returns an explicit allow-private-network policy when enabled",
+      input: true,
+      expected: { allowPrivateNetwork: true },
+    },
+  ])("$name", ({ input, expected }) => {
+    expect(ssrfPolicyFromDangerouslyAllowPrivateNetwork(input)).toEqual(expected);
+  });
+});
 
 describe("ssrfPolicyFromAllowPrivateNetwork", () => {
   it.each([
@@ -180,7 +203,7 @@ describe("assertHttpUrlTargetsPrivateNetwork", () => {
       name: "allows https targets without private-network checks",
       url: "https://matrix.example.org",
       policy: {
-        allowPrivateNetwork: false,
+        dangerouslyAllowPrivateNetwork: false,
       },
       outcome: "resolve",
     },
@@ -188,7 +211,7 @@ describe("assertHttpUrlTargetsPrivateNetwork", () => {
       name: "allows internal DNS names only when they resolve exclusively to private IPs",
       url: "http://matrix-synapse:8008",
       policy: {
-        allowPrivateNetwork: true,
+        dangerouslyAllowPrivateNetwork: true,
         lookupFn: createLookupFn([{ address: "10.0.0.5", family: 4 }]),
       },
       outcome: "resolve",
@@ -197,7 +220,7 @@ describe("assertHttpUrlTargetsPrivateNetwork", () => {
       name: "rejects cleartext public hosts even when private-network access is enabled",
       url: "http://matrix.example.org:8008",
       policy: {
-        allowPrivateNetwork: true,
+        dangerouslyAllowPrivateNetwork: true,
         lookupFn: createLookupFn([{ address: "93.184.216.34", family: 4 }]),
         errorMessage:
           "Matrix homeserver must use https:// unless it targets a private or loopback host",
@@ -213,6 +236,16 @@ describe("assertHttpUrlTargetsPrivateNetwork", () => {
       return;
     }
     await expect(result).resolves.toBeUndefined();
+  });
+
+  it("prefers the canonical flag when both canonical and legacy flags are present", async () => {
+    await expect(
+      assertHttpUrlTargetsPrivateNetwork("http://matrix-synapse:8008", {
+        dangerouslyAllowPrivateNetwork: false,
+        allowPrivateNetwork: true,
+        lookupFn: createLookupFn([{ address: "10.0.0.5", family: 4 }]),
+      }),
+    ).rejects.toThrow("HTTP URL must target a trusted private/internal host");
   });
 });
 

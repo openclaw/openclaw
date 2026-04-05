@@ -662,6 +662,7 @@ describe("plugin-sdk subpath exports", () => {
       "resolvePinnedHostnameWithPolicy",
       "formatErrorMessage",
       "assertHttpUrlTargetsPrivateNetwork",
+      "ssrfPolicyFromDangerouslyAllowPrivateNetwork",
       "ssrfPolicyFromAllowPrivateNetwork",
     ]);
 
