@@ -8,7 +8,7 @@ HOST_ROOT="${OPENCLAW_HOST_ROOT:-$HOME/Documents/OpenClaw}"
 CONFIG_DIR="$HOST_ROOT/.openclaw"
 WORKSPACE_DIR="${OPENCLAW_WORKSPACE_ROOT:-$HOST_ROOT/workspace}"
 HOME_BIND_DIR="$CONFIG_DIR/home"
-PLAYWRIGHT_CACHE="${PLAYWRIGHT_BROWSERS_PATH:-/home/node/.openclaw/.playwright-cache}"
+PLAYWRIGHT_CACHE="${PLAYWRIGHT_BROWSERS_PATH:-/home/node/.cache/ms-playwright}"
 
 fail() {
   echo "ERROR: $*" >&2
