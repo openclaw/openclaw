@@ -89,12 +89,40 @@ describe("tasks commands", () => {
           taskFlows: { total: number; byCode: Record<string, number> };
           combined: { total: number; errors: number; warnings: number };
         };
+        findings: Array<{
+          kind: string;
+          code: string;
+          token?: string;
+          lifecycleReason?: {
+            code: string;
+            evidence: string;
+            backing: {
+              kind: string;
+              taskId: string;
+              runId?: string;
+            };
+          };
+        }>;
       };
 
       expect(payload.summary.byCode.stale_running).toBe(1);
       expect(payload.summary.taskFlows.byCode.stale_waiting).toBe(1);
       expect(payload.summary.taskFlows.byCode.missing_linked_tasks).toBe(1);
       expect(payload.summary.combined.total).toBe(3);
+      expect(payload.findings.find((finding) => finding.kind === "task")).toMatchObject({
+        kind: "task",
+        code: "stale_running",
+        token: expect.any(String),
+        lifecycleReason: {
+          code: "stale_running",
+          evidence: "running task appears stuck",
+          backing: {
+            kind: "task",
+            taskId: expect.any(String),
+            runId: "task-stale-queued",
+          },
+        },
+      });
     });
   });
 

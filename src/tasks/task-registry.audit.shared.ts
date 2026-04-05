@@ -9,12 +9,27 @@ export type TaskAuditCode =
   | "missing_cleanup"
   | "inconsistent_timestamps";
 
+export type LifecycleStatusBackingLink = {
+  kind: "task";
+  taskId: string;
+  runId?: string;
+  childSessionKey?: string;
+  parentFlowId?: string;
+};
+
+export type LifecycleStatusReason = {
+  code: TaskAuditCode;
+  evidence: string;
+  backing: LifecycleStatusBackingLink;
+};
+
 export type TaskAuditFinding = {
   severity: TaskAuditSeverity;
   code: TaskAuditCode;
   task: TaskRecord;
   ageMs?: number;
   detail: string;
+  lifecycleReason: LifecycleStatusReason;
 };
 
 export type TaskAuditSummary = {

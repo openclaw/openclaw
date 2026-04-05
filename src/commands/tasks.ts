@@ -21,6 +21,7 @@ import type { TaskFlowRecord } from "../tasks/task-flow-registry.types.js";
 import {
   listTaskAuditFindings,
   summarizeTaskAuditFindings,
+  type LifecycleStatusReason,
   type TaskAuditCode,
   type TaskAuditSeverity,
 } from "../tasks/task-registry.audit.js";
@@ -148,6 +149,7 @@ type TaskSystemAuditFinding = {
   ageMs?: number;
   status?: string;
   token?: string;
+  lifecycleReason?: LifecycleStatusReason;
   task?: TaskRecord;
   flow?: TaskFlowRecord;
 };
@@ -220,6 +222,7 @@ function toSystemAuditFindings(params: {
       ageMs: finding.ageMs,
       status: finding.task.status,
       token: finding.task.taskId,
+      lifecycleReason: finding.lifecycleReason,
       task: finding.task,
     })),
     ...flowFindings.map((finding) => ({
@@ -233,15 +236,17 @@ function toSystemAuditFindings(params: {
       ...(finding.flow ? { flow: finding.flow } : {}),
     })),
   ];
-  const filteredFindings = allFindings.filter((finding) => {
-    if (params.severityFilter && finding.severity !== params.severityFilter) {
-      return false;
-    }
-    if (params.codeFilter && finding.code !== params.codeFilter) {
-      return false;
-    }
-    return true;
-  }).toSorted(compareSystemAuditFindings);
+  const filteredFindings = allFindings
+    .filter((finding) => {
+      if (params.severityFilter && finding.severity !== params.severityFilter) {
+        return false;
+      }
+      if (params.codeFilter && finding.code !== params.codeFilter) {
+        return false;
+      }
+      return true;
+    })
+    .toSorted(compareSystemAuditFindings);
   const sortedAllFindings = [...allFindings].toSorted(compareSystemAuditFindings);
   return {
     allFindings: sortedAllFindings,

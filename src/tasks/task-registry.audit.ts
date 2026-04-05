@@ -1,5 +1,6 @@
 import {
   createEmptyTaskAuditSummary,
+  type LifecycleStatusReason,
   type TaskAuditCode,
   type TaskAuditFinding,
   type TaskAuditSeverity,
@@ -18,7 +19,31 @@ export type TaskAuditOptions = {
 const DEFAULT_STALE_QUEUED_MS = 10 * 60_000;
 const DEFAULT_STALE_RUNNING_MS = 30 * 60_000;
 export { createEmptyTaskAuditSummary };
-export type { TaskAuditCode, TaskAuditFinding, TaskAuditSeverity, TaskAuditSummary };
+export type {
+  LifecycleStatusReason,
+  TaskAuditCode,
+  TaskAuditFinding,
+  TaskAuditSeverity,
+  TaskAuditSummary,
+};
+
+function createLifecycleStatusReason(
+  task: TaskRecord,
+  code: TaskAuditCode,
+  evidence: string,
+): LifecycleStatusReason {
+  return {
+    code,
+    evidence,
+    backing: {
+      kind: "task",
+      taskId: task.taskId,
+      ...(task.runId?.trim() ? { runId: task.runId.trim() } : {}),
+      ...(task.childSessionKey?.trim() ? { childSessionKey: task.childSessionKey.trim() } : {}),
+      ...(task.parentFlowId?.trim() ? { parentFlowId: task.parentFlowId.trim() } : {}),
+    },
+  };
+}
 
 function createFinding(params: {
   severity: TaskAuditSeverity;
@@ -32,6 +57,7 @@ function createFinding(params: {
     code: params.code,
     task: params.task,
     detail: params.detail,
+    lifecycleReason: createLifecycleStatusReason(params.task, params.code, params.detail),
     ...(typeof params.ageMs === "number" ? { ageMs: params.ageMs } : {}),
   };
 }

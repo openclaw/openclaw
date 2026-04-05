@@ -27,6 +27,9 @@ describe("task-registry audit", () => {
         createTask({
           taskId: "stale-running",
           status: "running",
+          runId: "run-stale-running",
+          childSessionKey: "agent:codex:acp:child",
+          parentFlowId: "flow-stale-running",
           startedAt: now - 40 * 60_000,
           lastEventAt: now - 40 * 60_000,
         }),
@@ -50,6 +53,19 @@ describe("task-registry audit", () => {
       ["stale_running", "stale-running"],
       ["missing_cleanup", "missing-cleanup"],
     ]);
+    expect(findings.find((finding) => finding.task.taskId === "stale-running")).toMatchObject({
+      lifecycleReason: {
+        code: "stale_running",
+        evidence: "running task appears stuck",
+        backing: {
+          kind: "task",
+          taskId: "stale-running",
+          runId: "run-stale-running",
+          childSessionKey: "agent:codex:acp:child",
+          parentFlowId: "flow-stale-running",
+        },
+      },
+    });
   });
 
   it("summarizes findings by severity and code", () => {
@@ -59,12 +75,28 @@ describe("task-registry audit", () => {
         code: "stale_running",
         task: createTask({ taskId: "a", status: "running" }),
         detail: "running task appears stuck",
+        lifecycleReason: {
+          code: "stale_running",
+          evidence: "running task appears stuck",
+          backing: {
+            kind: "task",
+            taskId: "a",
+          },
+        },
       },
       {
         severity: "warn",
         code: "delivery_failed",
         task: createTask({ taskId: "b", status: "failed" }),
         detail: "terminal update delivery failed",
+        lifecycleReason: {
+          code: "delivery_failed",
+          evidence: "terminal update delivery failed",
+          backing: {
+            kind: "task",
+            taskId: "b",
+          },
+        },
       },
     ]);
 
