@@ -84,11 +84,18 @@ async function pollOperation(
 
 export async function resolveGoogleOAuthIdentity(accessToken: string): Promise<{
   email?: string;
-  projectId: string;
+  projectId?: string;
 }> {
   const email = await getUserEmail(accessToken);
   const projectId = await discoverProject(accessToken);
   return { email, projectId };
+}
+
+export async function resolveGooglePersonalOAuthIdentity(accessToken: string): Promise<{
+  email?: string;
+  projectId?: string;
+}> {
+  return { email: await getUserEmail(accessToken) };
 }
 
 async function discoverProject(accessToken: string): Promise<string> {

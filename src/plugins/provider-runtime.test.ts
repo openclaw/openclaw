@@ -18,15 +18,10 @@ import type {
 type ResolvePluginProviders = typeof import("./providers.runtime.js").resolvePluginProviders;
 type ResolveCatalogHookProviderPluginIds =
   typeof import("./providers.js").resolveCatalogHookProviderPluginIds;
-type ResolveOwningPluginIdsForProvider =
-  typeof import("./providers.js").resolveOwningPluginIdsForProvider;
 
 const resolvePluginProvidersMock = vi.fn<ResolvePluginProviders>((_) => [] as ProviderPlugin[]);
 const resolveCatalogHookProviderPluginIdsMock = vi.fn<ResolveCatalogHookProviderPluginIds>(
   (_) => [] as string[],
-);
-const resolveOwningPluginIdsForProviderMock = vi.fn<ResolveOwningPluginIdsForProvider>(
-  (_) => undefined as string[] | undefined,
 );
 
 let augmentModelCatalogWithProviderPlugins: typeof import("./provider-runtime.js").augmentModelCatalogWithProviderPlugins;
@@ -141,30 +136,17 @@ function createOpenAiCatalogProviderPlugin(
   };
 }
 
-function expectProviderRuntimePluginLoad(params: {
-  provider: string;
-  expectedPluginId?: string;
-  expectedOnlyPluginIds?: string[];
-}) {
+function expectProviderRuntimePluginLoad(params: { provider: string; expectedPluginId?: string }) {
   const plugin = resolveProviderRuntimePlugin({ provider: params.provider });
 
   expect(plugin?.id).toBe(params.expectedPluginId);
-  expect(resolveOwningPluginIdsForProviderMock).toHaveBeenCalledWith(
+  expect(resolvePluginProvidersMock).toHaveBeenCalledWith(
     expect.objectContaining({
-      provider: params.provider,
+      providerRefs: [params.provider],
+      bundledProviderAllowlistCompat: true,
+      bundledProviderVitestCompat: true,
     }),
   );
-  if (params.expectedOnlyPluginIds) {
-    expect(resolvePluginProvidersMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        onlyPluginIds: params.expectedOnlyPluginIds,
-        bundledProviderAllowlistCompat: true,
-        bundledProviderVitestCompat: true,
-      }),
-    );
-  } else {
-    expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
-  }
 }
 
 function createDemoRuntimeContext<TContext extends Record<string, unknown>>(
@@ -244,8 +226,6 @@ describe("provider-runtime", () => {
     vi.doMock("./providers.js", () => ({
       resolveCatalogHookProviderPluginIds: (params: unknown) =>
         resolveCatalogHookProviderPluginIdsMock(params as never),
-      resolveOwningPluginIdsForProvider: (params: unknown) =>
-        resolveOwningPluginIdsForProviderMock(params as never),
     }));
     vi.doMock("./providers.runtime.js", () => ({
       resolvePluginProviders: (params: unknown) => resolvePluginProvidersMock(params as never),
@@ -302,12 +282,9 @@ describe("provider-runtime", () => {
     resolvePluginProvidersMock.mockReturnValue([]);
     resolveCatalogHookProviderPluginIdsMock.mockReset();
     resolveCatalogHookProviderPluginIdsMock.mockReturnValue([]);
-    resolveOwningPluginIdsForProviderMock.mockReset();
-    resolveOwningPluginIdsForProviderMock.mockReturnValue(undefined);
   });
 
   it("matches providers by alias for runtime hook lookup", () => {
-    resolveOwningPluginIdsForProviderMock.mockReturnValue(["openrouter"]);
     resolvePluginProvidersMock.mockReturnValue([
       {
         id: "openrouter",
@@ -320,11 +297,26 @@ describe("provider-runtime", () => {
     expectProviderRuntimePluginLoad({
       provider: "Open Router",
       expectedPluginId: "openrouter",
-      expectedOnlyPluginIds: ["openrouter"],
     });
   });
 
-  it("skips plugin loading when the provider has no owning plugin", () => {
+  it("matches providers by hook alias for runtime hook lookup", () => {
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: "anthropic",
+        label: "Anthropic",
+        hookAliases: ["claude-cli"],
+        auth: [],
+      },
+    ]);
+
+    expectProviderRuntimePluginLoad({
+      provider: "claude-cli",
+      expectedPluginId: "anthropic",
+    });
+  });
+
+  it("returns no runtime plugin when the provider has no owning plugin", () => {
     expectProviderRuntimePluginLoad({
       provider: "anthropic",
     });
@@ -350,11 +342,6 @@ describe("provider-runtime", () => {
         },
       }),
     ).toBe("gemini-3.1-flash-lite-preview");
-    expect(resolveOwningPluginIdsForProviderMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "google-vertex",
-      }),
-    );
     expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(1);
   });
 
@@ -390,7 +377,6 @@ describe("provider-runtime", () => {
   });
 
   it("resolves provider config defaults through owner plugins", () => {
-    resolveOwningPluginIdsForProviderMock.mockReturnValue(["anthropic"]);
     resolvePluginProvidersMock.mockReturnValue([
       {
         id: "anthropic",
@@ -523,7 +509,6 @@ describe("provider-runtime", () => {
         },
       },
     } as { plugins: { entries: { demo: { enabled: boolean } } } };
-    resolveOwningPluginIdsForProviderMock.mockReturnValue(["demo"]);
     resolvePluginProvidersMock.mockImplementation((params) => {
       const runtimeConfig = params?.config as typeof config | undefined;
       const enabled = runtimeConfig?.plugins?.entries?.demo?.enabled === true;
@@ -560,15 +545,6 @@ describe("provider-runtime", () => {
 
   it("dispatches runtime hooks for the matched provider", async () => {
     resolveCatalogHookProviderPluginIdsMock.mockReturnValue(["openai"]);
-    resolveOwningPluginIdsForProviderMock.mockImplementation((params) => {
-      if (params.provider === "demo") {
-        return ["demo"];
-      }
-      if (params.provider === "openai") {
-        return ["openai"];
-      }
-      return undefined;
-    });
     const prepareDynamicModel = vi.fn(async () => undefined);
     const createStreamFn = vi.fn(() => vi.fn());
     const createEmbeddingProvider = vi.fn(async () => ({
@@ -1126,7 +1102,6 @@ describe("provider-runtime", () => {
   });
 
   it("merges compat contributions from owner and foreign provider plugins", () => {
-    resolveOwningPluginIdsForProviderMock.mockReturnValue(["openrouter"]);
     resolvePluginProvidersMock.mockImplementation((params) => {
       const onlyPluginIds = params.onlyPluginIds ?? [];
       const plugins: ProviderPlugin[] = [

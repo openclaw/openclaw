@@ -312,7 +312,7 @@ export function startTaskRegistryMaintenance() {
   sweeper.unref?.();
 }
 
-export function stopTaskRegistryMaintenanceForTests() {
+export function stopTaskRegistryMaintenance() {
   if (deferredSweep) {
     clearTimeout(deferredSweep);
     deferredSweep = null;
@@ -323,6 +323,8 @@ export function stopTaskRegistryMaintenanceForTests() {
   }
   sweepInProgress = false;
 }
+
+export const stopTaskRegistryMaintenanceForTests = stopTaskRegistryMaintenance;
 
 export function getReconciledTaskById(taskId: string): TaskRecord | undefined {
   const task = getTaskById(taskId);

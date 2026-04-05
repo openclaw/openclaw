@@ -2,7 +2,7 @@
 
 import type { BaseConfigSchemaResponse } from "./schema-base.js";
 
-export const GENERATED_BASE_CONFIG_SCHEMA = {
+export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
   schema: {
     $schema: "http://json-schema.org/draft-07/schema#",
     type: "object",
@@ -2892,60 +2892,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
             title: "Model Providers",
             description:
               "Provider map keyed by provider ID containing connection/auth settings and concrete model definitions. Use stable provider keys so references from agents and tooling remain portable across environments.",
-          },
-          bedrockDiscovery: {
-            type: "object",
-            properties: {
-              enabled: {
-                type: "boolean",
-                title: "Bedrock Discovery Enabled",
-                description:
-                  "Enables periodic Bedrock model discovery and catalog refresh for Bedrock-backed providers. Keep disabled unless Bedrock is actively used and IAM permissions are correctly configured.",
-              },
-              region: {
-                type: "string",
-                title: "Bedrock Discovery Region",
-                description:
-                  "AWS region used for Bedrock discovery calls when discovery is enabled for your deployment. Use the region where your Bedrock models are provisioned to avoid empty discovery results.",
-              },
-              providerFilter: {
-                type: "array",
-                items: {
-                  type: "string",
-                },
-                title: "Bedrock Discovery Provider Filter",
-                description:
-                  "Optional provider allowlist filter for Bedrock discovery so only selected providers are refreshed. Use this to limit discovery scope in multi-provider environments.",
-              },
-              refreshInterval: {
-                type: "integer",
-                minimum: 0,
-                maximum: 9007199254740991,
-                title: "Bedrock Discovery Refresh Interval (s)",
-                description:
-                  "Refresh cadence for Bedrock discovery polling in seconds to detect newly available models over time. Use longer intervals in production to reduce API cost and control-plane noise.",
-              },
-              defaultContextWindow: {
-                type: "integer",
-                exclusiveMinimum: 0,
-                maximum: 9007199254740991,
-                title: "Bedrock Default Context Window",
-                description:
-                  "Fallback context-window value applied to discovered models when provider metadata lacks explicit limits. Use realistic defaults to avoid oversized prompts that exceed true provider constraints.",
-              },
-              defaultMaxTokens: {
-                type: "integer",
-                exclusiveMinimum: 0,
-                maximum: 9007199254740991,
-                title: "Bedrock Default Max Tokens",
-                description:
-                  "Fallback max-token value applied to discovered models without explicit output token limits. Use conservative defaults to reduce truncation surprises and unexpected token spend.",
-              },
-            },
-            additionalProperties: false,
-            title: "Bedrock Model Discovery",
-            description:
-              "Automatic AWS Bedrock model discovery settings used to synthesize provider model entries from account visibility. Keep discovery scoped and refresh intervals conservative to reduce API churn.",
           },
         },
         additionalProperties: false,
@@ -24896,41 +24842,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       help: "Declared model list for a provider including identifiers, metadata, and optional compatibility/cost hints. Keep IDs exact to provider catalog values so selection and fallback resolve correctly.",
       tags: ["models"],
     },
-    "models.bedrockDiscovery": {
-      label: "Bedrock Model Discovery",
-      help: "Automatic AWS Bedrock model discovery settings used to synthesize provider model entries from account visibility. Keep discovery scoped and refresh intervals conservative to reduce API churn.",
-      tags: ["models"],
-    },
-    "models.bedrockDiscovery.enabled": {
-      label: "Bedrock Discovery Enabled",
-      help: "Enables periodic Bedrock model discovery and catalog refresh for Bedrock-backed providers. Keep disabled unless Bedrock is actively used and IAM permissions are correctly configured.",
-      tags: ["models"],
-    },
-    "models.bedrockDiscovery.region": {
-      label: "Bedrock Discovery Region",
-      help: "AWS region used for Bedrock discovery calls when discovery is enabled for your deployment. Use the region where your Bedrock models are provisioned to avoid empty discovery results.",
-      tags: ["models"],
-    },
-    "models.bedrockDiscovery.providerFilter": {
-      label: "Bedrock Discovery Provider Filter",
-      help: "Optional provider allowlist filter for Bedrock discovery so only selected providers are refreshed. Use this to limit discovery scope in multi-provider environments.",
-      tags: ["models"],
-    },
-    "models.bedrockDiscovery.refreshInterval": {
-      label: "Bedrock Discovery Refresh Interval (s)",
-      help: "Refresh cadence for Bedrock discovery polling in seconds to detect newly available models over time. Use longer intervals in production to reduce API cost and control-plane noise.",
-      tags: ["performance", "models"],
-    },
-    "models.bedrockDiscovery.defaultContextWindow": {
-      label: "Bedrock Default Context Window",
-      help: "Fallback context-window value applied to discovered models when provider metadata lacks explicit limits. Use realistic defaults to avoid oversized prompts that exceed true provider constraints.",
-      tags: ["models"],
-    },
-    "models.bedrockDiscovery.defaultMaxTokens": {
-      label: "Bedrock Default Max Tokens",
-      help: "Fallback max-token value applied to discovered models without explicit output token limits. Use conservative defaults to reduce truncation surprises and unexpected token spend.",
-      tags: ["security", "auth", "performance", "models"],
-    },
     "auth.cooldowns.billingBackoffHours": {
       label: "Billing Backoff (hours)",
       help: "Base backoff (hours) when a profile fails due to billing/insufficient credits (default: 5).",
@@ -26882,4 +26793,4 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
   },
   version: "2026.4.4",
   generatedAt: "2026-03-22T21:17:33.302Z",
-} as const satisfies BaseConfigSchemaResponse;
+};

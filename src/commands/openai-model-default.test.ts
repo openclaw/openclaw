@@ -1,14 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
 import {
   applyGoogleGeminiModelDefault,
   GOOGLE_GEMINI_DEFAULT_MODEL,
-} from "../plugin-sdk/google.js";
+} from "../../extensions/google/api.js";
 import {
   applyOpenAIConfig,
   applyOpenAIProviderConfig,
   OPENAI_DEFAULT_MODEL,
-} from "../plugin-sdk/openai.js";
+} from "../../extensions/openai/api.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyDefaultModelChoice } from "./auth-choice.default-model.js";
 import {
@@ -196,7 +196,7 @@ describe("applyOpenAIConfig", () => {
 describe("applyOpencodeZenModelDefault", () => {
   it("no-ops when already legacy opencode-zen default", () => {
     const cfg = {
-      agents: { defaults: { model: "opencode-zen/claude-opus-4-6" } },
+      agents: { defaults: { model: "opencode-zen/claude-opus-4-5" } },
     } as OpenClawConfig;
     const applied = applyOpencodeZenModelDefault(cfg);
     expectConfigUnchanged(applied, cfg);
