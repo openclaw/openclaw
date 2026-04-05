@@ -986,7 +986,10 @@ jobs:
 
       - name: Publish circular dependency summary
         if: always()
-        run: cat .artifacts/dependency-cruiser/step-summary.md >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          if [ -f .artifacts/dependency-cruiser/step-summary.md ]; then
+            cat .artifacts/dependency-cruiser/step-summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Upload circular dependency artifacts
         if: always()

@@ -100,50 +100,72 @@ function buildGraph(modules) {
   return { graph, runtimeEdgeCount };
 }
 
-function tarjan(graph) {
-  let index = 0;
-  const stack = [];
-  const onStack = new Set();
-  const indices = new Map();
-  const lowLinks = new Map();
-  const components = [];
-
-  function visit(node) {
-    indices.set(node, index);
-    lowLinks.set(node, index);
-    index += 1;
-    stack.push(node);
-    onStack.add(node);
-
-    for (const neighbor of graph.get(node) ?? []) {
-      if (!indices.has(neighbor)) {
-        visit(neighbor);
-        lowLinks.set(node, Math.min(lowLinks.get(node), lowLinks.get(neighbor)));
-      } else if (onStack.has(neighbor)) {
-        lowLinks.set(node, Math.min(lowLinks.get(node), indices.get(neighbor)));
+function findStronglyConnectedComponents(graph) {
+  const reverseGraph = new Map([...graph.keys()].map((node) => [node, []]));
+  for (const [from, dependencies] of graph.entries()) {
+    for (const to of dependencies) {
+      const reverseDependencies = reverseGraph.get(to);
+      if (reverseDependencies) {
+        reverseDependencies.push(from);
+      } else {
+        reverseGraph.set(to, [from]);
       }
     }
+  }
 
-    if (lowLinks.get(node) !== indices.get(node)) {
-      return;
+  const visited = new Set();
+  const finishOrder = [];
+  for (const node of graph.keys()) {
+    if (visited.has(node)) {
+      continue;
+    }
+
+    const stack = [[node, false]];
+    while (stack.length > 0) {
+      const [current, expanded] = stack.pop();
+      if (expanded) {
+        finishOrder.push(current);
+        continue;
+      }
+      if (visited.has(current)) {
+        continue;
+      }
+
+      visited.add(current);
+      stack.push([current, true]);
+      const neighbors = graph.get(current) ?? [];
+      for (let index = neighbors.length - 1; index >= 0; index -= 1) {
+        const neighbor = neighbors[index];
+        if (!visited.has(neighbor)) {
+          stack.push([neighbor, false]);
+        }
+      }
+    }
+  }
+
+  const assigned = new Set();
+  const components = [];
+  for (let index = finishOrder.length - 1; index >= 0; index -= 1) {
+    const node = finishOrder[index];
+    if (assigned.has(node)) {
+      continue;
     }
 
     const component = [];
+    const stack = [node];
+    assigned.add(node);
     while (stack.length > 0) {
-      const member = stack.pop();
-      onStack.delete(member);
-      component.push(member);
-      if (member === node) {
-        break;
+      const current = stack.pop();
+      component.push(current);
+      for (const neighbor of reverseGraph.get(current) ?? []) {
+        if (assigned.has(neighbor)) {
+          continue;
+        }
+        assigned.add(neighbor);
+        stack.push(neighbor);
       }
     }
     components.push(component);
-  }
-
-  for (const node of graph.keys()) {
-    if (!indices.has(node)) {
-      visit(node);
-    }
   }
 
   return components;
@@ -232,7 +254,11 @@ function main() {
       "none",
       ...TARGETS,
     ],
-    { encoding: "utf8", maxBuffer: 1024 * 1024 * 64 },
+    {
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024 * 64,
+      shell: process.platform === "win32",
+    },
   );
 
   if (depcruise.error) {
@@ -249,7 +275,7 @@ function main() {
   const { graph, runtimeEdgeCount } = buildGraph(depcruiseJson.modules ?? []);
   const selfImportModules = findSelfImportModules(graph);
   const selfImportModuleSet = new Set(selfImportModules);
-  const cyclicComponents = tarjan(graph).filter(
+  const cyclicComponents = findStronglyConnectedComponents(graph).filter(
     // Treat self-imports as one-module SCCs so they still show up in the cycle summaries.
     (component) => component.length > 1 || selfImportModuleSet.has(component[0]),
   );
