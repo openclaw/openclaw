@@ -27,12 +27,14 @@ jobs:
         with:
           node-version: 22
 
-      - name: Checkout publish repo
-        uses: actions/checkout@v4
-        with:
-          repository: openclaw/docs
-          token: ${{ secrets.OPENCLAW_DOCS_SYNC_TOKEN }}
-          path: publish
+      - name: Clone publish repo
+        env:
+          OPENCLAW_DOCS_SYNC_TOKEN: ${{ secrets.OPENCLAW_DOCS_SYNC_TOKEN }}
+        run: |
+          set -euo pipefail
+          git clone \
+            "https://x-access-token:${OPENCLAW_DOCS_SYNC_TOKEN}@github.com/openclaw/docs.git" \
+            publish
 
       - name: Sync docs into publish repo
         run: |
