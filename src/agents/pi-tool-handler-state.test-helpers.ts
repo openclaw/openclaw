@@ -15,6 +15,8 @@ export function createBaseToolHandlerState() {
     deterministicApprovalPromptSent: false,
     executionIntentReplyBlocked: false,
     executionIntentFallbackSent: false,
+    currentAssistantMessageHasToolActivity: false,
+    pendingToolActivityForNextAssistantMessage: false,
     blockBuffer: "",
   };
 }

@@ -50,6 +50,8 @@ function createTestContext(): {
       deterministicApprovalPromptSent: false,
       executionIntentReplyBlocked: false,
       executionIntentFallbackSent: false,
+      currentAssistantMessageHasToolActivity: false,
+      pendingToolActivityForNextAssistantMessage: false,
     },
     shouldEmitToolResult: () => false,
     shouldEmitToolOutput: () => false,

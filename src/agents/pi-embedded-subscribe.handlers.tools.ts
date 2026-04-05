@@ -282,6 +282,8 @@ async function emitToolResultOutput(params: {
         }),
       );
       ctx.state.deterministicApprovalPromptSent = true;
+      ctx.state.currentAssistantMessageHasToolActivity = true;
+      ctx.state.pendingToolActivityForNextAssistantMessage = true;
     } catch {
       // ignore delivery failures
     }
@@ -303,6 +305,8 @@ async function emitToolResultOutput(params: {
         }),
       );
       ctx.state.deterministicApprovalPromptSent = true;
+      ctx.state.currentAssistantMessageHasToolActivity = true;
+      ctx.state.pendingToolActivityForNextAssistantMessage = true;
     } catch {
       // ignore delivery failures
     }
@@ -357,6 +361,9 @@ export function handleToolExecutionStart(
     const toolCallId = String(evt.toolCallId);
     const args = evt.args;
     const runId = ctx.params.runId;
+
+    ctx.state.currentAssistantMessageHasToolActivity = true;
+    ctx.state.pendingToolActivityForNextAssistantMessage = true;
 
     // Track start time and args for after_tool_call hook
     toolStartData.set(buildToolStartKey(runId, toolCallId), { startTime: Date.now(), args });

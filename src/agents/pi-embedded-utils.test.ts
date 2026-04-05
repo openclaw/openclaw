@@ -580,6 +580,15 @@ exec npx -y @tencent-weixin/openclaw-weixin-cli@latest install
     expect(looksLikeUnbackedExecutionIntentReply(text)).toBe(true);
   });
 
+  it("matches other execution verbs that can start real work", () => {
+    const text = `I'll restart the service now.
+
+\`\`\`bash
+systemctl restart openclaw
+\`\`\``;
+    expect(looksLikeUnbackedExecutionIntentReply(text)).toBe(true);
+  });
+
   it("ignores ordinary command examples without execution-intent phrasing", () => {
     const text = `Run this command locally if you want to install it:
 

@@ -249,6 +249,56 @@ exec npx -y @tencent-weixin/openclaw-weixin-cli@latest install
     expect(payloadTexts.join("\n")).not.toContain("exec npx -y");
   });
 
+  it("replaces previously streamed exec-looking text once the closing fence arrives", async () => {
+    const { session, emit } = createStubSessionHarness();
+    const onAgentEvent = vi.fn();
+    const onPartialReply = vi.fn();
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      onAgentEvent,
+      onPartialReply,
+      blockReplyBreak: "message_end",
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta(emit, "I will install/check this now.\n\n```bash\n");
+    emitAssistantTextDelta(emit, "exec npx -y pkg install\n```");
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: `I will install/check this now.
+
+\`\`\`bash
+exec npx -y pkg install
+\`\`\``,
+          },
+        ],
+      } as AssistantMessage,
+    });
+    await flushBlockReplyCallbacks();
+
+    const assistantPayloads = extractAgentEventPayloads(onAgentEvent.mock.calls).filter(
+      (payload) => payload.delta !== undefined || payload.text !== undefined,
+    );
+    expect(assistantPayloads).toContainEqual(
+      expect.objectContaining({
+        text: UNBACKED_EXECUTION_INTENT_REPLY_FALLBACK,
+        replace: true,
+      }),
+    );
+    expect(onPartialReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: UNBACKED_EXECUTION_INTENT_REPLY_FALLBACK,
+        replace: true,
+      }),
+    );
+  });
+
   it("keeps execution-intent shell replies when real tool activity exists", async () => {
     const { session, emit } = createStubSessionHarness();
     const onBlockReply = vi.fn();
@@ -284,6 +334,61 @@ git status
     await flushBlockReplyCallbacks();
 
     expect(onBlockReply).toHaveBeenCalledWith(expect.objectContaining({ text }));
+  });
+
+  it("does not let prior-turn tool activity bypass the later-turn guard", async () => {
+    const { session, emit } = createStubSessionHarness();
+    const onBlockReply = vi.fn();
+    const subscription = subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      onBlockReply,
+      blockReplyBreak: "message_end",
+    });
+
+    emitToolRun({
+      emit,
+      toolName: "read",
+      toolCallId: "tool-1",
+      args: { path: "/tmp/file.txt" },
+      isError: false,
+      result: { text: "ok" },
+    });
+    emit({
+      type: "message_start",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Here is the result." }],
+      } as AssistantMessage,
+    });
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Here is the result." }],
+      } as AssistantMessage,
+    });
+
+    const fakeExecText = `I'll restart the service now.
+
+\`\`\`bash
+systemctl restart openclaw
+\`\`\``;
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta(emit, fakeExecText);
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: fakeExecText }],
+      } as AssistantMessage,
+    });
+    await flushBlockReplyCallbacks();
+
+    expect(subscription.assistantTexts.at(-1)).toBe(UNBACKED_EXECUTION_INTENT_REPLY_FALLBACK);
+    expect(onBlockReply).toHaveBeenLastCalledWith(
+      expect.objectContaining({ text: UNBACKED_EXECUTION_INTENT_REPLY_FALLBACK }),
+    );
   });
 
   it.each(THINKING_TAG_CASES)(

@@ -75,6 +75,8 @@ export type EmbeddedPiSubscribeState = {
   deterministicApprovalPromptSent: boolean;
   executionIntentReplyBlocked: boolean;
   executionIntentFallbackSent: boolean;
+  currentAssistantMessageHasToolActivity: boolean;
+  pendingToolActivityForNextAssistantMessage: boolean;
   lastAssistant?: AgentMessage;
 };
 
@@ -163,6 +165,8 @@ export type ToolHandlerState = Pick<
   | "deterministicApprovalPromptSent"
   | "executionIntentReplyBlocked"
   | "executionIntentFallbackSent"
+  | "currentAssistantMessageHasToolActivity"
+  | "pendingToolActivityForNextAssistantMessage"
 >;
 
 export type ToolHandlerContext = {

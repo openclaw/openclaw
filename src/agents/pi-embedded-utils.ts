@@ -228,7 +228,7 @@ export const UNBACKED_EXECUTION_INTENT_REPLY_FALLBACK =
   "I didn't actually run that command because no tool call was executed.";
 
 const EXECUTION_INTENT_PHRASE_RE =
-  /\b(?:i(?:'|’)ll|i will|i am going to|i'm going to|let me)\s+(?:run|check|install|execute|verify|inspect|test)\b/i;
+  /\b(?:i(?:'|’)ll|i will|i am going to|i'm going to|let me)\s+(?:run|check|install|execute|verify|inspect|test|update|upgrade|start|deploy|build|restart)\b/i;
 const EXECUTION_INTENT_SHELL_FENCE_RE = /```(?:bash|sh|shell|zsh)\b[^\n]*\n([\s\S]*?)```/i;
 const EXECUTION_INTENT_COMMAND_LINE_RE = /^(?:exec\s+)?[a-z0-9@_.:/-]+(?:\s|$)/i;
 

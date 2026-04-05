@@ -337,10 +337,6 @@ export function handleMessageUpdate(
       shouldEmit = false;
     }
 
-    if (blockedExecutionIntent) {
-      shouldEmit = false;
-    }
-
     if (shouldEmit) {
       const data = buildAssistantStreamData({
         text: cleanedText,
@@ -445,12 +441,18 @@ export function handleMessageEnd(
 
   if (
     !ctx.params.silentExpected &&
-    !ctx.state.emittedAssistantUpdate &&
+    (!ctx.state.emittedAssistantUpdate || blockedExecutionIntent) &&
     (cleanedText || hasMedia)
   ) {
+    const replace = Boolean(
+      blockedExecutionIntent &&
+      ctx.state.lastStreamedAssistantCleaned &&
+      ctx.state.lastStreamedAssistantCleaned !== cleanedText,
+    );
     const data = buildAssistantStreamData({
       text: cleanedText,
-      delta: cleanedText,
+      delta: replace ? "" : cleanedText,
+      replace,
       mediaUrls,
     });
     emitAgentEvent({

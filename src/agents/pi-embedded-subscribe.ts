@@ -93,6 +93,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     deterministicApprovalPromptSent: false,
     executionIntentReplyBlocked: false,
     executionIntentFallbackSent: false,
+    currentAssistantMessageHasToolActivity: false,
+    pendingToolActivityForNextAssistantMessage: false,
   };
   const usageTotals = {
     input: 0,
@@ -176,6 +178,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.suppressBlockChunks = false;
     state.executionIntentReplyBlocked = false;
     state.executionIntentFallbackSent = false;
+    state.currentAssistantMessageHasToolActivity = state.pendingToolActivityForNextAssistantMessage;
+    state.pendingToolActivityForNextAssistantMessage = false;
     state.assistantMessageIndex += 1;
     state.lastAssistantTextMessageIndex = -1;
     state.lastAssistantTextNormalized = undefined;
@@ -220,8 +224,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   };
 
   const hasToolActivityForAssistantReply = () =>
-    state.toolSummaryById.size > 0 ||
-    state.toolMetas.length > 0 ||
+    state.currentAssistantMessageHasToolActivity ||
+    state.pendingToolActivityForNextAssistantMessage ||
     state.deterministicApprovalPromptSent;
 
   const replaceCurrentAssistantMessageText = (text: string) => {
@@ -711,6 +715,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.deterministicApprovalPromptSent = false;
     state.executionIntentReplyBlocked = false;
     state.executionIntentFallbackSent = false;
+    state.currentAssistantMessageHasToolActivity = false;
+    state.pendingToolActivityForNextAssistantMessage = false;
     resetAssistantMessageState(0);
   };
 
