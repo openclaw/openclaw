@@ -38,7 +38,6 @@ import type { createModelSelectionState } from "./model-selection.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { resolveQueueSettings } from "./queue/settings.js";
-import { replyRunRegistry } from "./reply-operation.js";
 import { buildBareSessionResetPrompt } from "./session-reset-prompt.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
 import { resolveTypingMode } from "./typing-mode.js";
@@ -416,18 +415,23 @@ export async function runPreparedReply(
     inlineMode: perMessageQueueMode,
     inlineOptions: perMessageQueueOptions,
   });
-  const { abortEmbeddedPiRun, resolveEmbeddedSessionLane } = await loadPiEmbeddedRuntime();
+  const {
+    abortEmbeddedPiRun,
+    isEmbeddedPiRunActive,
+    isEmbeddedPiRunStreaming,
+    resolveActiveEmbeddedRunSessionId,
+    resolveEmbeddedSessionLane,
+    waitForEmbeddedPiRunEnd,
+  } = await loadPiEmbeddedRuntime();
   const sessionLaneKey = resolveEmbeddedSessionLane(sessionKey ?? sessionIdFinal);
   const laneSize = getQueueSize(sessionLaneKey);
   if (resolvedQueue.mode === "interrupt" && laneSize > 0) {
     const cleared = clearCommandLane(sessionLaneKey);
-    const activeSessionId = replyRunRegistry.resolveSessionId(sessionKey);
-    const aborted =
-      replyRunRegistry.abort(sessionKey) ||
-      abortEmbeddedPiRun(activeSessionId ?? preparedSessionState.sessionId);
+    const activeSessionId = resolveActiveEmbeddedRunSessionId(sessionKey);
+    const aborted = abortEmbeddedPiRun(activeSessionId ?? preparedSessionState.sessionId);
     logVerbose(`Interrupting ${sessionLaneKey} (cleared ${cleared}, aborted=${aborted})`);
   }
-  const authProfileId = await resolveSessionAuthProfileOverride({
+  let authProfileId = await resolveSessionAuthProfileOverride({
     cfg,
     provider,
     agentDir,
@@ -440,8 +444,20 @@ export async function runPreparedReply(
   const { runReplyAgent } = await loadAgentRunnerRuntime();
   const queueKey = sessionKey ?? sessionIdFinal;
   preparedSessionState = resolvePreparedSessionState();
-  const isActive = replyRunRegistry.isActive(sessionKey);
-  const isStreaming = replyRunRegistry.isStreaming(sessionKey);
+  const resolveActiveQueueSessionId = () =>
+    resolveActiveEmbeddedRunSessionId(sessionKey) ?? preparedSessionState.sessionId;
+  const resolveQueueBusyState = () => {
+    const activeSessionId = resolveActiveQueueSessionId();
+    if (!activeSessionId) {
+      return { activeSessionId: undefined, isActive: false, isStreaming: false };
+    }
+    return {
+      activeSessionId,
+      isActive: isEmbeddedPiRunActive(activeSessionId),
+      isStreaming: isEmbeddedPiRunStreaming(activeSessionId),
+    };
+  };
+  let { activeSessionId, isActive, isStreaming } = resolveQueueBusyState();
   const shouldSteer = resolvedQueue.mode === "steer" || resolvedQueue.mode === "steer-backlog";
   const shouldFollowup =
     resolvedQueue.mode === "followup" ||
@@ -454,9 +470,21 @@ export async function runPreparedReply(
     queueMode: resolvedQueue.mode,
   });
   if (isActive && activeRunQueueAction === "run-now") {
-    await replyRunRegistry.waitForIdle(sessionKey);
+    await waitForEmbeddedPiRunEnd(activeSessionId);
     preparedSessionState = resolvePreparedSessionState();
-    if (replyRunRegistry.isActive(sessionKey)) {
+    authProfileId = await resolveSessionAuthProfileOverride({
+      cfg,
+      provider,
+      agentDir,
+      sessionEntry: preparedSessionState.sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      isNewSession,
+    });
+    preparedSessionState = resolvePreparedSessionState();
+    ({ activeSessionId, isActive, isStreaming } = resolveQueueBusyState());
+    if (isActive) {
       typing.cleanup();
       return {
         text: "⚠️ Previous run is still shutting down. Please try again in a moment.",
@@ -545,7 +573,10 @@ export async function runPreparedReply(
     shouldFollowup,
     isActive,
     isRunActive: () => {
-      return replyRunRegistry.isActive(sessionKey);
+      const latestSessionState = resolvePreparedSessionState();
+      const latestActiveSessionId =
+        resolveActiveEmbeddedRunSessionId(sessionKey) ?? latestSessionState.sessionId;
+      return isEmbeddedPiRunActive(latestActiveSessionId);
     },
     isStreaming,
     opts,
