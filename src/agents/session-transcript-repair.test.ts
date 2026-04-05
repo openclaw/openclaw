@@ -411,6 +411,40 @@ describe("sanitizeToolCallInputs", () => {
     expect(ids).toEqual(expectedIds);
   });
 
+  it("drops tool calls with partialJson (streaming artifact from interrupted stream)", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          // complete tool call — should be kept
+          { type: "toolCall", id: "call_ok", name: "read", arguments: { path: "/a" } },
+          // has partialJson — streaming artifact, should be dropped even if arguments is set
+          {
+            type: "toolCall",
+            id: "call_partial",
+            name: "Bash",
+            arguments: { command: "ls" },
+            partialJson: '{"command": "ls"',
+          },
+          // has partialJson and no arguments — also dropped
+          {
+            type: "toolUse",
+            id: "call_partial2",
+            name: "read",
+            input: null,
+            partialJson: '{"path":',
+          },
+        ],
+      },
+      { role: "user", content: "retry" },
+    ]);
+
+    const out = sanitizeToolCallInputs(input);
+    const toolCalls = getAssistantToolCallBlocks(out);
+    const ids = toolCalls.map((t) => (t as { id?: unknown }).id);
+    expect(ids).toEqual(["call_ok"]);
+  });
+
   it("keeps valid tool calls and preserves text blocks", () => {
     const input = castAgentMessages([
       {

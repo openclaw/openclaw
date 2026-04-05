@@ -319,7 +319,11 @@ export function repairToolCallInputs(
     for (const block of msg.content) {
       if (
         isRawToolCallBlock(block) &&
-        (!hasToolCallInput(block) ||
+        // partialJson is a streaming-only assembly field that should be deleted when the
+        // stream completes.  Its presence means the stream was interrupted before the block
+        // was finalized — treat it as an incomplete artifact and drop it.
+        ("partialJson" in block ||
+          !hasToolCallInput(block) ||
           !hasToolCallId(block) ||
           !isAllowedToolCallName((block as RawToolCallBlock).name, allowedToolNames))
       ) {
