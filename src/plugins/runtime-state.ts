@@ -30,3 +30,8 @@ export function getActivePluginChannelRegistryFromState(): PluginRegistry | null
   const state = getPluginRegistryState();
   return state?.channel.registry ?? state?.activeRegistry ?? null;
 }
+
+export function getActivePluginRegistryWorkspaceDirFromState(): string | undefined {
+  const state = getPluginRegistryState();
+  return state?.workspaceDir ?? undefined;
+}

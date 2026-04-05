@@ -19,6 +19,7 @@ import {
   resolveManifestContractPluginIds,
   type PluginManifestRecord,
 } from "./manifest-registry.js";
+import { getActivePluginRegistryWorkspaceDir } from "./runtime.js";
 import type { PluginWebFetchProviderEntry } from "./types.js";
 import {
   resolveBundledWebFetchResolutionConfig,
@@ -127,14 +128,16 @@ function resolveWebFetchLoadOptions(params: {
   origin?: PluginManifestRecord["origin"];
 }) {
   const env = params.env ?? process.env;
+  const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDir();
   const { config, activationSourceConfig, autoEnabledReasons } =
     resolveBundledWebFetchResolutionConfig({
       ...params,
+      workspaceDir,
       env,
     });
   const onlyPluginIds = resolveWebFetchCandidatePluginIds({
     config,
-    workspaceDir: params.workspaceDir,
+    workspaceDir,
     env,
     onlyPluginIds: params.onlyPluginIds,
     origin: params.origin,
@@ -144,7 +147,7 @@ function resolveWebFetchLoadOptions(params: {
     config,
     activationSourceConfig,
     autoEnabledReasons,
-    workspaceDir: params.workspaceDir,
+    workspaceDir,
     cache: params.cache ?? false,
     activate: params.activate ?? false,
     ...(onlyPluginIds ? { onlyPluginIds } : {}),
@@ -180,11 +183,12 @@ export function resolvePluginWebFetchProviders(params: {
   origin?: PluginManifestRecord["origin"];
 }): PluginWebFetchProviderEntry[] {
   const env = params.env ?? process.env;
+  const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDir();
   if (params.mode === "setup") {
     const pluginIds =
       resolveWebFetchCandidatePluginIds({
         config: params.config,
-        workspaceDir: params.workspaceDir,
+        workspaceDir,
         env,
         onlyPluginIds: params.onlyPluginIds,
         origin: params.origin,
@@ -199,7 +203,7 @@ export function resolvePluginWebFetchProviders(params: {
       }),
       activationSourceConfig: params.config,
       autoEnabledReasons: {},
-      workspaceDir: params.workspaceDir,
+      workspaceDir,
       env,
       onlyPluginIds: pluginIds,
       cache: params.cache ?? false,
@@ -213,7 +217,7 @@ export function resolvePluginWebFetchProviders(params: {
     params.activate !== true && params.cache !== true && shouldUsePluginSnapshotCache(env);
   const cacheKey = buildWebFetchSnapshotCacheKey({
     config: cacheOwnerConfig,
-    workspaceDir: params.workspaceDir,
+    workspaceDir,
     bundledAllowlistCompat: params.bundledAllowlistCompat,
     onlyPluginIds: params.onlyPluginIds,
     origin: params.origin,
@@ -227,7 +231,7 @@ export function resolvePluginWebFetchProviders(params: {
       return cached.providers;
     }
   }
-  const loadOptions = resolveWebFetchLoadOptions(params);
+  const loadOptions = resolveWebFetchLoadOptions({ ...params, workspaceDir });
   // Keep repeated runtime reads on the already-compatible active registry when
   // possible, then fall back to a fresh snapshot load only when necessary.
   const resolved = mapRegistryWebFetchProviders({
@@ -266,7 +270,12 @@ export function resolveRuntimeWebFetchProviders(params: {
   origin?: PluginManifestRecord["origin"];
 }): PluginWebFetchProviderEntry[] {
   const runtimeRegistry = resolveRuntimePluginRegistry(
-    params.config === undefined ? undefined : resolveWebFetchLoadOptions(params),
+    params.config === undefined
+      ? undefined
+      : resolveWebFetchLoadOptions({
+          ...params,
+          workspaceDir: params.workspaceDir ?? getActivePluginRegistryWorkspaceDir(),
+        }),
   );
   if (runtimeRegistry) {
     return mapRegistryWebFetchProviders({
