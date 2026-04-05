@@ -92,8 +92,15 @@ export type BedrockDiscoveryConfig = {
   defaultMaxTokens?: number;
 };
 
+export type DiscoveryToggleConfig = {
+  enabled?: boolean;
+};
+
 export type ModelsConfig = {
   mode?: "merge" | "replace";
   providers?: Record<string, ModelProviderConfig>;
   bedrockDiscovery?: BedrockDiscoveryConfig;
+  copilotDiscovery?: DiscoveryToggleConfig;
+  huggingfaceDiscovery?: DiscoveryToggleConfig;
+  ollamaDiscovery?: DiscoveryToggleConfig;
 };

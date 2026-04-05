@@ -102,6 +102,9 @@ export default definePluginEntry({
         run: async (ctx: ProviderDiscoveryContext) => {
           const explicit = ctx.config.models?.providers?.ollama;
           const hasExplicitModels = Array.isArray(explicit?.models) && explicit.models.length > 0;
+          if (!hasExplicitModels && ctx.config.models?.ollamaDiscovery?.enabled === false) {
+            return null;
+          }
           const ollamaKey = ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;
           const explicitApiKey = typeof explicit?.apiKey === "string" ? explicit.apiKey : undefined;
           if (hasExplicitModels && explicit) {

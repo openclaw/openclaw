@@ -41,6 +41,9 @@ export default definePluginEntry({
       catalog: {
         order: "simple",
         run: async (ctx) => {
+          if (ctx.config?.models?.huggingfaceDiscovery?.enabled === false) {
+            return null;
+          }
           const { apiKey, discoveryApiKey } = ctx.resolveProviderApiKey(PROVIDER_ID);
           if (!apiKey) {
             return null;

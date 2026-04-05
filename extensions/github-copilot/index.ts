@@ -125,6 +125,9 @@ export default definePluginEntry({
       catalog: {
         order: "late",
         run: async (ctx) => {
+          if (ctx.config?.models?.copilotDiscovery?.enabled === false) {
+            return null;
+          }
           const { DEFAULT_COPILOT_API_BASE_URL, resolveCopilotApiToken } =
             await loadGithubCopilotRuntime();
           const { githubToken, hasProfile } = resolveFirstGithubToken({
