@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 import { AUTH_PROFILE_FILENAME } from "../agents/auth-profiles/constants.js";
@@ -18,12 +18,12 @@ installGatewayTestHooks({ scope: "suite" });
 let server: Awaited<ReturnType<typeof startGatewayServer>>;
 let port = 0;
 
-beforeAll(async () => {
+beforeEach(async () => {
   port = await getFreePort();
   server = await startGatewayServer(port, { controlUiEnabled: true });
 });
 
-afterAll(async () => {
+afterEach(async () => {
   await server.close();
 });
 
@@ -36,12 +36,15 @@ const openClient = async () => {
 };
 
 const sendConfigApply = async (ws: WebSocket, id: string, raw: unknown) => {
+  const current = await sendConfigGet(ws, `${id}-base`);
+  expect(current.ok).toBe(true);
+  expect(typeof current.payload?.hash).toBe("string");
   ws.send(
     JSON.stringify({
       type: "req",
       id,
       method: "config.apply",
-      params: { raw },
+      params: { raw, baseHash: current.payload?.hash },
     }),
   );
   return onceMessage<{ ok: boolean; error?: { message?: string } }>(ws, (o) => {
