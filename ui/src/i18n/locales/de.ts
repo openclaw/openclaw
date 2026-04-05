@@ -110,6 +110,12 @@ export const de: TranslationMap = {
       stayHttp: "Wenn Sie bei HTTP bleiben müssen, setzen Sie {config} (nur Token).",
     },
   },
+  markdownSidebar: {
+    title: "Tool Output",
+    closeTitle: "Close sidebar",
+    viewRawText: "View Raw Text",
+    empty: "No content available",
+  },
   chat: {
     disconnected: "Verbindung zum Gateway getrennt.",
     refreshTitle: "Chat-Daten aktualisieren",

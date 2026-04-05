@@ -127,6 +127,12 @@ export const es: TranslationMap = {
     de: "Deutsch (Alemán)",
     es: "Español",
   },
+  markdownSidebar: {
+    title: "Tool Output",
+    closeTitle: "Close sidebar",
+    viewRawText: "View Raw Text",
+    empty: "No content available",
+  },
   cron: {
     summary: {
       enabled: "Habilitado",

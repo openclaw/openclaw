@@ -158,6 +158,12 @@ export const pt_BR: TranslationMap = {
     subtitle: "Painel do Gateway",
     passwordPlaceholder: "opcional",
   },
+  markdownSidebar: {
+    title: "Saída da ferramenta",
+    closeTitle: "Fechar barra lateral",
+    viewRawText: "Ver texto bruto",
+    empty: "Nenhum conteúdo disponível",
+  },
   chat: {
     disconnected: "Desconectado do gateway.",
     refreshTitle: "Atualizar dados do chat",

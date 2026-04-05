@@ -155,6 +155,12 @@ export const zh_TW: TranslationMap = {
     subtitle: "閘道儀表板",
     passwordPlaceholder: "可選",
   },
+  markdownSidebar: {
+    title: "Tool Output",
+    closeTitle: "Close sidebar",
+    viewRawText: "View Raw Text",
+    empty: "No content available",
+  },
   chat: {
     disconnected: "已斷開與網關的連接。",
     refreshTitle: "刷新聊天數據",

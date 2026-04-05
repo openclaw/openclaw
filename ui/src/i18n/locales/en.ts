@@ -155,6 +155,12 @@ export const en: TranslationMap = {
       noResults: "No results",
     },
   },
+  markdownSidebar: {
+    title: "Tool Output",
+    closeTitle: "Close sidebar",
+    viewRawText: "View Raw Text",
+    empty: "No content available",
+  },
   usage: {
     page: {
       subtitle: "See where tokens go, when sessions spike, and what drives cost.",
