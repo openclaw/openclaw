@@ -14,15 +14,16 @@ export const makeModel = (id: string): ModelDefinitionConfig => ({
 });
 
 export const OPENAI_CODEX_TEMPLATE_MODEL = {
-  id: "gpt-5.4",
-  name: "GPT-5.2 Codex",
+  id: "gpt-5.3-codex",
+  name: "GPT-5.3 Codex",
   provider: "openai-codex",
   api: "openai-codex-responses",
   baseUrl: "https://chatgpt.com/backend-api",
   reasoning: true,
   input: ["text", "image"] as const,
-  cost: { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
-  contextWindow: 272000,
+  cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
+  contextWindow: 1_050_000,
+  contextTokens: 272_000,
   maxTokens: 128000,
 };
 
@@ -40,7 +41,12 @@ function mockTemplateModel(
 }
 
 export function mockOpenAICodexTemplateModel(discoverModelsMock: DiscoverModelsMock): void {
-  mockTemplateModel(discoverModelsMock, "openai-codex", "gpt-5.4", OPENAI_CODEX_TEMPLATE_MODEL);
+  mockTemplateModel(
+    discoverModelsMock,
+    "openai-codex",
+    OPENAI_CODEX_TEMPLATE_MODEL.id,
+    OPENAI_CODEX_TEMPLATE_MODEL,
+  );
 }
 
 export function buildOpenAICodexForwardCompatExpectation(

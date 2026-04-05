@@ -99,7 +99,7 @@ import {
 } from "./compaction-safety-timeout.js";
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 import { buildEmbeddedExtensionFactories } from "./extensions.js";
-import { applyExtraParamsToAgent, resolveAgentTransportOverride } from "./extra-params.js";
+import { applyExtraParamsToAgent } from "./extra-params.js";
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "./history.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
@@ -113,6 +113,7 @@ import { prewarmSessionFile, trackSessionManagerAccess } from "./session-manager
 import { truncateSessionAfterCompaction } from "./session-truncation.js";
 import { resolveEmbeddedRunSkillEntries } from "./skills-runtime.js";
 import {
+  resolveEmbeddedAgentApiKey,
   resolveEmbeddedAgentBaseStreamFn,
   resolveEmbeddedAgentStreamFn,
 } from "./stream-resolution.js";
@@ -762,7 +763,11 @@ export async function compactEmbeddedPiSessionDirect(
         modelApi: effectiveModel.api,
       });
       const wsApiKey = shouldUseWebSocketTransport
-        ? await authStorage.getApiKey(provider)
+        ? await resolveEmbeddedAgentApiKey({
+            provider,
+            resolvedApiKey: hasRuntimeAuthExchange ? undefined : apiKeyInfo?.apiKey,
+            authStorage,
+          })
         : undefined;
       if (shouldUseWebSocketTransport && !wsApiKey) {
         log.warn(
@@ -779,9 +784,10 @@ export async function compactEmbeddedPiSessionDirect(
         sessionId: params.sessionId,
         signal: runAbortController.signal,
         model: effectiveModel,
+        resolvedApiKey: hasRuntimeAuthExchange ? undefined : apiKeyInfo?.apiKey,
         authStorage,
       });
-      const { effectiveExtraParams } = applyExtraParamsToAgent(
+      applyExtraParamsToAgent(
         session.agent,
         params.config,
         provider,
@@ -793,21 +799,6 @@ export async function compactEmbeddedPiSessionDirect(
         effectiveModel,
         agentDir,
       );
-      const agentTransportOverride = resolveAgentTransportOverride({
-        settingsManager,
-        effectiveExtraParams,
-      });
-      if (
-        agentTransportOverride &&
-        typeof (session.agent as { setTransport?: unknown }).setTransport === "function" &&
-        (session.agent as { transport?: unknown }).transport !== agentTransportOverride
-      ) {
-        (
-          session.agent as {
-            setTransport(nextTransport: string): void;
-          }
-        ).setTransport(agentTransportOverride);
-      }
 
       try {
         const prior = await sanitizeSessionHistory({
@@ -838,7 +829,7 @@ export async function compactEmbeddedPiSessionDirect(
         });
         // Apply validated transcript to the live session even when no history limit is configured,
         // so compaction and hook metrics are based on the same message set.
-        session.agent.replaceMessages(validated);
+        session.agent.state.messages = validated;
         // "Original" compaction metrics should describe the validated transcript that enters
         // limiting/compaction, not the raw on-disk session snapshot.
         const originalMessages = session.messages.slice();
@@ -855,7 +846,7 @@ export async function compactEmbeddedPiSessionDirect(
             })
           : truncated;
         if (limited.length > 0) {
-          session.agent.replaceMessages(limited);
+          session.agent.state.messages = limited;
         }
         const hookRunner = asCompactionHookRunner(getGlobalHookRunner());
         const observedTokenCount = normalizeObservedTokenCount(params.currentTokenCount);

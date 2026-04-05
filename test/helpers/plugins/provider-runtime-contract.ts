@@ -173,11 +173,13 @@ function installRuntimeHooks() {
         const plugin = await fixture.load();
         return {
           fixture,
-          providers: registerProviderPlugin({
-            plugin: plugin.default,
-            id: fixture.pluginId,
-            name: fixture.name,
-          }).providers,
+          providers: (
+            await registerProviderPlugin({
+              plugin: plugin.default,
+              id: fixture.pluginId,
+              name: fixture.name,
+            })
+          ).providers,
         };
       }),
     );

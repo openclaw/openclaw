@@ -1,12 +1,7 @@
 import { hasMeaningfulChannelConfig } from "../channels/config-presence.js";
-import { getBundledChannelContractSurfaceModule } from "../channels/plugins/contract-surfaces.js";
+import { getBootstrapChannelPlugin } from "../channels/plugins/bootstrap-registry.js";
 import { isRecord } from "../utils.js";
 import type { OpenClawConfig } from "./config.js";
-
-type ChannelConfiguredSurface = {
-  hasConfiguredState?: (params: { cfg: OpenClawConfig; env?: NodeJS.ProcessEnv }) => boolean;
-  hasPersistedAuthState?: (params: { cfg: OpenClawConfig; env?: NodeJS.ProcessEnv }) => boolean;
-};
 
 function resolveChannelConfig(
   cfg: OpenClawConfig,
@@ -22,24 +17,17 @@ function isGenericChannelConfigured(cfg: OpenClawConfig, channelId: string): boo
   return hasMeaningfulChannelConfig(entry);
 }
 
-function getChannelConfiguredSurface(channelId: string): ChannelConfiguredSurface | null {
-  return getBundledChannelContractSurfaceModule<ChannelConfiguredSurface>({
-    pluginId: channelId,
-    preferredBasename: "contract-surfaces.ts",
-  });
-}
-
 export function isChannelConfigured(
   cfg: OpenClawConfig,
   channelId: string,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  const surface = getChannelConfiguredSurface(channelId);
-  const pluginConfigured = surface?.hasConfiguredState?.({ cfg, env });
+  const plugin = getBootstrapChannelPlugin(channelId);
+  const pluginConfigured = plugin?.config?.hasConfiguredState?.({ cfg, env });
   if (pluginConfigured) {
     return true;
   }
-  const pluginPersistedAuthState = surface?.hasPersistedAuthState?.({ cfg, env });
+  const pluginPersistedAuthState = plugin?.config?.hasPersistedAuthState?.({ cfg, env });
   if (pluginPersistedAuthState) {
     return true;
   }

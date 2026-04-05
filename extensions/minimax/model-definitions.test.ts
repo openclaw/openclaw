@@ -5,7 +5,10 @@ import {
   DEFAULT_MINIMAX_CONTEXT_WINDOW,
   DEFAULT_MINIMAX_MAX_TOKENS,
   MINIMAX_API_COST,
+  MINIMAX_API_HIGHSPEED_COST,
   MINIMAX_HOSTED_MODEL_ID,
+  MINIMAX_M25_API_COST,
+  MINIMAX_M25_API_HIGHSPEED_COST,
 } from "./model-definitions.js";
 
 describe("minimax model definitions", () => {
@@ -76,10 +79,17 @@ describe("minimax model definitions", () => {
   it("M2.7-highspeed model includes image input", () => {
     const model = buildMinimaxApiModelDefinition("MiniMax-M2.7-highspeed");
     expect(model.input).toEqual(["text", "image"]);
+    expect(model.cost).toEqual(MINIMAX_API_HIGHSPEED_COST);
   });
 
   it("M2.5 model remains text-only", () => {
     const model = buildMinimaxApiModelDefinition("MiniMax-M2.5");
     expect(model.input).toEqual(["text"]);
+    expect(model.cost).toEqual(MINIMAX_M25_API_COST);
+  });
+
+  it("M2.5-highspeed keeps the M2.5 cache-read pricing", () => {
+    const model = buildMinimaxApiModelDefinition("MiniMax-M2.5-highspeed");
+    expect(model.cost).toEqual(MINIMAX_M25_API_HIGHSPEED_COST);
   });
 });

@@ -4,11 +4,9 @@ import {
   adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
 } from "openclaw/plugin-sdk/channel-config-helpers";
-import {
-  formatDocsLink,
-  hasConfiguredSecretInput,
-  patchChannelConfigForAccount,
-} from "openclaw/plugin-sdk/setup";
+import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
+import { patchChannelConfigForAccount } from "openclaw/plugin-sdk/setup-runtime";
+import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { inspectSlackAccount } from "./account-inspect.js";
 import {
   listSlackAccountIds,
@@ -20,6 +18,7 @@ import { getChatChannelMeta, type ChannelPlugin, type OpenClawConfig } from "./c
 import { SlackChannelConfigSchema } from "./config-schema.js";
 import { slackDoctor } from "./doctor.js";
 import { isSlackInteractiveRepliesEnabled } from "./interactive-replies.js";
+import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 
 export const SLACK_CHANNEL = "slack" as const;
 
@@ -176,6 +175,7 @@ export function createSlackPluginBase(params: {
   | "configSchema"
   | "config"
   | "setup"
+  | "secrets"
 > {
   return {
     id: SLACK_CHANNEL,
@@ -227,6 +227,10 @@ export function createSlackPluginBase(params: {
     configSchema: SlackChannelConfigSchema,
     config: {
       ...slackConfigAdapter,
+      hasConfiguredState: ({ env }) =>
+        ["SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "SLACK_USER_TOKEN"].some(
+          (key) => typeof env?.[key] === "string" && env[key]?.trim().length > 0,
+        ),
       isConfigured: (account) => isSlackPluginAccountConfigured(account),
       describeAccount: (account) =>
         describeAccountSnapshot({
@@ -237,6 +241,10 @@ export function createSlackPluginBase(params: {
             appTokenSource: account.appTokenSource,
           },
         }),
+    },
+    secrets: {
+      secretTargetRegistryEntries,
+      collectRuntimeConfigAssignments,
     },
     setup: params.setup,
   } as Pick<
@@ -253,5 +261,6 @@ export function createSlackPluginBase(params: {
     | "configSchema"
     | "config"
     | "setup"
+    | "secrets"
   >;
 }

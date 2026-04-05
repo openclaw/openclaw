@@ -2,6 +2,21 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { discoverModels } from "../pi-model-discovery.js";
 import { createProviderRuntimeTestMock } from "./model.provider-runtime.test-support.js";
 
+vi.mock("../model-suppression.js", () => ({
+  shouldSuppressBuiltInModel: ({ provider, id }: { provider?: string; id?: string }) =>
+    (provider === "openai" || provider === "azure-openai-responses") &&
+    id?.trim().toLowerCase() === "gpt-5.3-codex-spark",
+  buildSuppressedBuiltInModelError: ({ provider, id }: { provider?: string; id?: string }) => {
+    if (
+      (provider !== "openai" && provider !== "azure-openai-responses") ||
+      id?.trim().toLowerCase() !== "gpt-5.3-codex-spark"
+    ) {
+      return undefined;
+    }
+    return `Unknown model: ${provider}/gpt-5.3-codex-spark. gpt-5.3-codex-spark is only supported via openai-codex OAuth. Use openai-codex/gpt-5.3-codex-spark.`;
+  },
+}));
+
 vi.mock("../pi-model-discovery.js", () => ({
   discoverAuthStorage: vi.fn(() => ({ mocked: true })),
   discoverModels: vi.fn(() => ({ find: vi.fn(() => null) })),
@@ -655,6 +670,34 @@ describe("resolveModel", () => {
       provider: "openrouter",
       id: "openrouter/healer-alpha",
       reasoning: false,
+      input: ["text"],
+    });
+  });
+
+  it("matches prefixed Hugging Face ids against discovered registry models", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "huggingface",
+      modelId: "deepseek-ai/DeepSeek-R1",
+      templateModel: {
+        ...makeModel("deepseek-ai/DeepSeek-R1"),
+        provider: "huggingface",
+        baseUrl: "https://router.huggingface.co/v1",
+        reasoning: true,
+        input: ["text"],
+      },
+    });
+
+    const result = resolveModelForTest(
+      "huggingface",
+      "huggingface/deepseek-ai/DeepSeek-R1",
+      "/tmp/agent",
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "huggingface",
+      id: "deepseek-ai/DeepSeek-R1",
+      reasoning: true,
       input: ["text"],
     });
   });

@@ -46,12 +46,10 @@ export function normalizeClaudePermissionArgs(args?: string[]): string[] | undef
     return args;
   }
   const normalized: string[] = [];
-  let sawLegacySkip = false;
   let hasPermissionMode = false;
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
     if (arg === CLAUDE_LEGACY_SKIP_PERMISSIONS_ARG) {
-      sawLegacySkip = true;
       continue;
     }
     if (arg === CLAUDE_PERMISSION_MODE_ARG) {
@@ -69,7 +67,7 @@ export function normalizeClaudePermissionArgs(args?: string[]): string[] | undef
     }
     normalized.push(arg);
   }
-  if (sawLegacySkip && !hasPermissionMode) {
+  if (!hasPermissionMode) {
     normalized.push(CLAUDE_PERMISSION_MODE_ARG, CLAUDE_BYPASS_PERMISSIONS_MODE);
   }
   return normalized;

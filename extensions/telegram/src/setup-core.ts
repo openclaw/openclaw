@@ -7,8 +7,8 @@ import {
   splitSetupEntries,
   type OpenClawConfig,
   type WizardPrompter,
-} from "openclaw/plugin-sdk/setup";
-import type { ChannelSetupAdapter, ChannelSetupDmPolicy } from "openclaw/plugin-sdk/setup";
+} from "openclaw/plugin-sdk/setup-runtime";
+import type { ChannelSetupAdapter, ChannelSetupDmPolicy } from "openclaw/plugin-sdk/setup-runtime";
 import { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { resolveDefaultTelegramAccountId, resolveTelegramAccount } from "./accounts.js";
 import { lookupTelegramChatId } from "./api-fetch.js";

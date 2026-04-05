@@ -240,6 +240,7 @@ function buildEmbeddedRunnerConfig(
       providers: {
         [provider]: {
           api: resolveEmbeddedModelApi(params.model),
+          auth: "api-key",
           apiKey: params.apiKey,
           baseUrl: providerBaseUrl,
           models: [buildEmbeddedModelDefinition(params.model)],

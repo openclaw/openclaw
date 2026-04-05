@@ -30,6 +30,7 @@ Use this skill for Parallels guest workflows and smoke interpretation. Do not lo
 - Flow: fresh snapshot -> install npm package baseline -> smoke -> install current main tgz on the same guest -> smoke again.
 - Same-guest update verification should set the default model explicitly to `openai/gpt-5.4` before the agent turn and use a fresh explicit `--session-id` so old session model state does not leak into the check.
 - The aggregate npm-update wrapper must resolve the Linux VM with the same Ubuntu fallback policy as `parallels-linux-smoke.sh` before both fresh and update lanes. Treat any Ubuntu guest with major version `>= 24` as acceptable when the exact default VM is missing, preferring the closest version match. On Peter's current host today, missing `Ubuntu 24.04.3 ARM64` should fall back to `Ubuntu 25.10`.
+- On macOS same-guest update checks, restart the gateway after the npm upgrade before `gateway status` / `agent`; launchd can otherwise report a loaded service while the old process has exited and the fresh process is not RPC-ready yet.
 - On Windows same-guest update checks, restart the gateway after the npm upgrade before `gateway status` / `agent`; in-place global npm updates can otherwise leave stale hashed `dist/*` module imports alive in the running service.
 - For Windows same-guest update checks, prefer the done-file/log-drain PowerShell runner pattern over one long-lived `prlctl exec ... powershell -EncodedCommand ...` transport. The guest can finish successfully while the outer `prlctl exec` still hangs.
 - The Windows same-guest update helper should write stage markers to its log before long steps like tgz download and `npm install -g` so the outer progress monitor does not sit on `waiting for first log line` during healthy but quiet installs.
@@ -46,6 +47,7 @@ Use this skill for Parallels guest workflows and smoke interpretation. Do not lo
 - Preferred entrypoint: `pnpm test:parallels:macos`
 - Default to the snapshot closest to `macOS 26.3.1 latest`.
 - On Peter's Tahoe VM, `fresh-latest-march-2026` can hang in `prlctl snapshot-switch`; if restore times out there, rerun with `--snapshot-hint 'macOS 26.3.1 latest'` before blaming auth or the harness.
+- `parallels-macos-smoke.sh` now retries `snapshot-switch` once after force-stopping a stuck running/suspended guest. If Tahoe still times out after that recovery path, then treat it as a real Parallels/host issue and rerun manually.
 - The macOS smoke should include a dashboard load phase after gateway health: resolve the tokenized URL with `openclaw dashboard --no-open`, verify the served HTML contains the Control UI title/root shell, then open Safari and require an established localhost TCP connection from Safari to the gateway port.
 - If a packaged install regresses with `500` on `/`, `/healthz`, or `__openclaw/control-ui-config.json` after `fresh.install-main` or `upgrade.install-main`, suspect bundled plugin runtime deps resolving from the package root `node_modules` rather than `dist/extensions/*/node_modules`. Repro quickly with a real `npm pack`/global install lane before blaming dashboard auth or Safari.
 - `prlctl exec` is fine for deterministic repo commands, but use the guest Terminal or `prlctl enter` when installer parity or shell-sensitive behavior matters.
@@ -64,6 +66,7 @@ Use this skill for Parallels guest workflows and smoke interpretation. Do not lo
 - Use PowerShell only as the transport with `-ExecutionPolicy Bypass`, then call the `.cmd` shims from inside it.
 - Multi-word `openclaw agent --message ...` checks should call `& $openclaw ...` inside PowerShell, not `Start-Process ... -ArgumentList` against `openclaw.cmd`, or Commander can see split argv and throw `too many arguments for 'agent'`.
 - Windows installer/tgz phases now retry once after guest-ready recheck; keep new Windows smoke steps idempotent so a transport-flake retry is safe.
+- If a Windows retry sees the VM become `suspended` or `stopped`, resume/start it before the next `prlctl exec`; otherwise the second attempt just repeats the same `rc=255`.
 - Windows global `npm install -g` phases can stay quiet for a minute or more even when healthy; inspect the phase log before calling it hung, and only treat it as a regression once the retry wrapper or timeout trips.
 - Fresh Windows ref-mode onboard should use the same background PowerShell runner plus done-file/log-drain pattern as the npm-update helper, including startup materialization checks, host-side timeouts on short poll `prlctl exec` calls, and retry-on-poll-failure behavior for transient transport flakes.
 - Fresh Windows ref-mode agent verification should set `OPENAI_API_KEY` in the PowerShell environment before invoking `openclaw.cmd agent`, for the same pairing-required fallback reason as macOS.
@@ -82,6 +85,7 @@ Use this skill for Parallels guest workflows and smoke interpretation. Do not lo
 - Fresh `main` tgz smoke still needs the latest-release installer first because the snapshot has no Node or npm before bootstrap.
 - This snapshot does not have a usable `systemd --user` session; managed daemon install is unsupported.
 - The Linux smoke now falls back to a manual `setsid openclaw gateway run --bind loopback --port 18789 --force` launch with `HOME=/root` and the provider secret exported, then verifies `gateway status --deep --require-rpc` when available.
+- The Linux manual gateway launch should wait for `gateway status --deep --require-rpc` inside the `gateway-start` phase; otherwise the first status probe can race the background bind and fail a healthy lane.
 - If Linux gateway bring-up fails, inspect `/tmp/openclaw-parallels-linux-gateway.log` in the guest phase logs first; the common failure mode is a missing provider secret in the launched gateway environment.
 
 ## Discord roundtrip

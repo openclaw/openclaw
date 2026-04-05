@@ -34,7 +34,10 @@ import { upsertPresence } from "../../../infra/system-presence.js";
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
 import { rawDataToString } from "../../../infra/ws.js";
 import type { createSubsystemLogger } from "../../../logging/subsystem.js";
-import type { DeviceBootstrapProfile } from "../../../shared/device-bootstrap-profile.js";
+import {
+  resolveBootstrapProfileScopesForRole,
+  type DeviceBootstrapProfile,
+} from "../../../shared/device-bootstrap-profile.js";
 import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import {
   isBrowserOperatorUiClient,
@@ -735,21 +738,20 @@ export function attachGatewayWsMessageHandler(params: {
           sharedAuthOk,
           authMethod,
         });
-        const skipPairing =
-          shouldSkipLocalBackendSelfPairing({
-            connectParams,
-            locality: pairingLocality,
-            hasBrowserOriginHeader,
-            sharedAuthOk,
-            authMethod,
-          }) ||
-          shouldSkipControlUiPairing(
-            controlUiAuthPolicy,
-            role,
-            trustedProxyAuthOk,
-            resolvedAuth.mode,
-          );
-        if (device && devicePublicKey && !skipPairing) {
+        const skipLocalBackendSelfPairing = shouldSkipLocalBackendSelfPairing({
+          connectParams,
+          locality: pairingLocality,
+          hasBrowserOriginHeader,
+          sharedAuthOk,
+          authMethod,
+        });
+        const skipControlUiPairingForDevice = shouldSkipControlUiPairing(
+          controlUiAuthPolicy,
+          role,
+          trustedProxyAuthOk,
+          resolvedAuth.mode,
+        );
+        if (device && devicePublicKey) {
           const formatAuditList = (items: string[] | undefined): string => {
             if (!items || items.length === 0) {
               return "<none>";
@@ -965,9 +967,15 @@ export function attachGatewayWsMessageHandler(params: {
           const paired = await getPairedDevice(device.id);
           const isPaired = paired?.publicKey === devicePublicKey;
           if (!isPaired) {
-            const ok = await requirePairing("not-paired", paired);
-            if (!ok) {
-              return;
+            if (!(skipLocalBackendSelfPairing || skipControlUiPairingForDevice)) {
+              // Initial local backend/control-ui self-pairing can bypass the
+              // pairing prompt, but only while the device is still unpaired.
+              // Once a device is paired, reconnects must stay inside the
+              // approved role/scope baseline below.
+              const ok = await requirePairing("not-paired", paired);
+              if (!ok) {
+                return;
+              }
             }
           } else {
             const claimedPlatform = connectParams.client.platform;
@@ -998,10 +1006,10 @@ export function attachGatewayWsMessageHandler(params: {
               }
             }
             const pairedRoles = listEffectivePairedDeviceRoles(paired);
-            const pairedScopes = Array.isArray(paired.scopes)
-              ? paired.scopes
-              : Array.isArray(paired.approvedScopes)
-                ? paired.approvedScopes
+            const pairedScopes = Array.isArray(paired.approvedScopes)
+              ? paired.approvedScopes
+              : Array.isArray(paired.scopes)
+                ? paired.scopes
                 : [];
             const allowedRoles = new Set(pairedRoles);
             if (allowedRoles.size === 0) {
@@ -1071,7 +1079,12 @@ export function attachGatewayWsMessageHandler(params: {
               continue;
             }
             const bootstrapRoleScopes =
-              bootstrapRole === "operator" ? bootstrapProfileForHello.scopes : [];
+              bootstrapRole === "operator"
+                ? resolveBootstrapProfileScopesForRole(
+                    bootstrapRole,
+                    bootstrapProfileForHello.scopes,
+                  )
+                : [];
             const extraToken = await ensureDeviceToken({
               deviceId: device.id,
               role: bootstrapRole,

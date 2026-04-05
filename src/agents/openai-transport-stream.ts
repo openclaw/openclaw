@@ -22,7 +22,7 @@ import type {
 import { resolveProviderTransportTurnStateWithPlugin } from "../plugins/provider-runtime.js";
 import type { ProviderRuntimeModel } from "../plugins/types.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
-import { resolveOpenAICompletionsCompatDefaultsFromCapabilities } from "./openai-completions-compat.js";
+import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
 import {
   applyOpenAIResponsesPayloadPolicy,
   resolveOpenAIResponsesPayloadPolicy,
@@ -332,7 +332,7 @@ function convertResponsesTools(
   tools: NonNullable<Context["tools"]>,
   options?: { strict?: boolean | null },
 ): FunctionTool[] {
-  const strict = options?.strict;
+  const strict = resolveStrictToolFlagForInventory(tools, options?.strict);
   if (strict === undefined) {
     return tools.map((tool) => ({
       type: "function",
@@ -348,6 +348,40 @@ function convertResponsesTools(
     parameters: tool.parameters,
     strict,
   }));
+}
+
+function isStrictOpenAIJsonSchemaCompatible(schema: unknown): boolean {
+  if (Array.isArray(schema)) {
+    return schema.every((entry) => isStrictOpenAIJsonSchemaCompatible(entry));
+  }
+  if (!schema || typeof schema !== "object") {
+    return true;
+  }
+
+  const record = schema as Record<string, unknown>;
+  if ("anyOf" in record || "oneOf" in record || "allOf" in record) {
+    return false;
+  }
+  if (Array.isArray(record.type)) {
+    return false;
+  }
+  if (record.type === "object" && record.additionalProperties !== false) {
+    return false;
+  }
+
+  return Object.values(record).every((entry) => isStrictOpenAIJsonSchemaCompatible(entry));
+}
+
+function resolveStrictToolFlagForInventory(
+  tools: NonNullable<Context["tools"]>,
+  strict: boolean | null | undefined,
+): boolean | undefined {
+  if (strict !== true) {
+    return strict === false ? false : undefined;
+  }
+  return tools.every((tool) => isStrictOpenAIJsonSchemaCompatible(tool.parameters))
+    ? true
+    : undefined;
 }
 
 async function processResponsesStream(
@@ -1113,24 +1147,9 @@ async function processOpenAICompletionsStream(
 
 function detectCompat(model: OpenAIModeModel) {
   const provider = model.provider;
-  const capabilities = resolveProviderRequestCapabilities({
-    provider,
-    api: model.api,
-    baseUrl: model.baseUrl,
-    capability: "llm",
-    transport: "stream",
-    modelId: model.id,
-    compat:
-      model.compat && typeof model.compat === "object"
-        ? (model.compat as { supportsStore?: boolean })
-        : undefined,
-  });
+  const { capabilities, defaults: compatDefaults } = detectOpenAICompletionsCompat(model);
   const endpointClass = capabilities.endpointClass;
   const isDefaultRoute = endpointClass === "default";
-  const compatDefaults = resolveOpenAICompletionsCompatDefaultsFromCapabilities({
-    provider,
-    ...capabilities,
-  });
   const isGroq = endpointClass === "groq-native" || (isDefaultRoute && provider === "groq");
   const reasoningEffortMap: Record<string, string> =
     isGroq && model.id === "qwen/qwen3-32b"
@@ -1277,7 +1296,10 @@ function convertTools(
   compat: ReturnType<typeof getCompat>,
   model: OpenAIModeModel,
 ) {
-  const strict = resolveOpenAIStrictToolSetting(model, compat);
+  const strict = resolveStrictToolFlagForInventory(
+    tools,
+    resolveOpenAIStrictToolSetting(model, compat),
+  );
   return tools.map((tool) => ({
     type: "function",
     function: {
