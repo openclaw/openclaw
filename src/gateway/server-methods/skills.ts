@@ -3,6 +3,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
+import { canExecRequestNode } from "../../agents/exec-defaults.js";
 import {
   installSkillFromClawHub,
   searchSkillsFromClawHub,
@@ -92,7 +93,14 @@ export const skillsHandlers: GatewayRequestHandlers = {
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
     const report = buildWorkspaceSkillStatus(workspaceDir, {
       config: cfg,
-      eligibility: { remote: getRemoteSkillEligibility() },
+      eligibility: {
+        remote: getRemoteSkillEligibility({
+          advertiseExecNode: canExecRequestNode({
+            cfg,
+            agentId,
+          }),
+        }),
+      },
     });
     respond(true, report, undefined);
   },

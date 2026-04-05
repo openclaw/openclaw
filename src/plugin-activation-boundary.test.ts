@@ -49,7 +49,6 @@ describe("plugin activation boundary", () => {
   let browserAmbientImportsPromise: Promise<void> | undefined;
   function importAmbientModules() {
     ambientImportsPromise ??= Promise.all([
-      import("./agents/cli-session.js"),
       import("./commands/onboard-custom.js"),
       import("./commands/opencode-go-model-default.js"),
       import("./commands/opencode-zen-model-default.js"),

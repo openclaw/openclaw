@@ -90,7 +90,22 @@ function resolveReferenceUrls(
     .filter((value): value is string => Boolean(value));
 }
 
+function assertQwenReferenceInputsSupported(
+  inputImages: VideoGenerationSourceAsset[] | undefined,
+  inputVideos: VideoGenerationSourceAsset[] | undefined,
+): void {
+  const unsupported = [...(inputImages ?? []), ...(inputVideos ?? [])].some(
+    (asset) => !asset.url?.trim() && asset.buffer,
+  );
+  if (unsupported) {
+    throw new Error(
+      "Qwen video generation currently requires remote http(s) URLs for reference images/videos.",
+    );
+  }
+}
+
 function buildQwenVideoGenerationInput(req: VideoGenerationRequest): Record<string, unknown> {
+  assertQwenReferenceInputsSupported(req.inputImages, req.inputVideos);
   const input: Record<string, unknown> = {
     prompt: req.prompt,
   };

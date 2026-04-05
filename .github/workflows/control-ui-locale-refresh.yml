@@ -6,9 +6,11 @@ on:
       - main
     paths:
       - ui/src/i18n/locales/en.ts
+      - ui/src/i18n/locales/*.ts
+      - ui/src/i18n/.i18n/*
       - ui/src/i18n/lib/types.ts
+      - ui/src/i18n/lib/registry.ts
       - scripts/control-ui-i18n.ts
-      - package.json
       - .github/workflows/control-ui-locale-refresh.yml
   release:
     types:
@@ -25,24 +27,87 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  plan:
+    if: github.repository == 'openclaw/openclaw' && (github.event_name != 'push' || github.actor != 'github-actions[bot]')
+    runs-on: ubuntu-latest
+    outputs:
+      has_locales: ${{ steps.plan.outputs.has_locales }}
+      locales_json: ${{ steps.plan.outputs.locales_json }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: false
+
+      - name: Plan locale matrix
+        id: plan
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+
+          all_locales_json='["zh-CN","zh-TW","pt-BR","de","es","ja-JP","ko","fr","tr","id","pl"]'
+
+          if [ "$EVENT_NAME" != "push" ]; then
+            echo "has_locales=true" >> "$GITHUB_OUTPUT"
+            echo "locales_json=$all_locales_json" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          before_ref="$BEFORE_SHA"
+          if [ -z "$before_ref" ] || [ "$before_ref" = "0000000000000000000000000000000000000000" ]; then
+            before_ref="$(git rev-parse HEAD^)"
+          fi
+
+          changed_files="$(git diff --name-only "$before_ref" HEAD)"
+          echo "changed files:"
+          printf '%s\n' "$changed_files"
+
+          if printf '%s\n' "$changed_files" | grep -Eq '^(ui/src/i18n/locales/en\.ts|ui/src/i18n/lib/types\.ts|ui/src/i18n/lib/registry\.ts|scripts/control-ui-i18n\.ts|\.github/workflows/control-ui-locale-refresh\.yml)$'; then
+            echo "has_locales=true" >> "$GITHUB_OUTPUT"
+            echo "locales_json=$all_locales_json" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          locales_json="$(printf '%s\n' "$changed_files" | node <<'EOF'
+          const fs = require("node:fs");
+          const changed = fs.readFileSync(0, "utf8").split(/\r?\n/).filter(Boolean);
+          const locales = new Set();
+          for (const file of changed) {
+            let match = file.match(/^ui\/src\/i18n\/locales\/(.+)\.ts$/);
+            if (match && match[1] !== "en") {
+              locales.add(match[1]);
+              continue;
+            }
+            match = file.match(/^ui\/src\/i18n\/\.i18n\/(.+)\.(?:meta\.json|tm\.jsonl)$/);
+            if (match) {
+              locales.add(match[1]);
+            }
+          }
+          process.stdout.write(JSON.stringify([...locales]));
+          EOF
+          )"
+
+          if [ "$locales_json" = "[]" ]; then
+            echo "has_locales=false" >> "$GITHUB_OUTPUT"
+            echo "locales_json=[]" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "has_locales=true" >> "$GITHUB_OUTPUT"
+          echo "locales_json=$locales_json" >> "$GITHUB_OUTPUT"
+
   refresh:
-    if: github.repository == 'openclaw/openclaw'
+    needs: plan
+    if: github.repository == 'openclaw/openclaw' && needs.plan.outputs.has_locales == 'true'
     strategy:
       fail-fast: false
       max-parallel: 4
       matrix:
-        locale:
-          - zh-CN
-          - zh-TW
-          - pt-BR
-          - de
-          - es
-          - ja-JP
-          - ko
-          - fr
-          - tr
-          - id
-          - pl
+        locale: ${{ fromJson(needs.plan.outputs.locales_json) }}
     runs-on: ubuntu-latest
     name: Refresh ${{ matrix.locale }}
     steps:

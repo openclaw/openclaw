@@ -376,30 +376,90 @@ Default is DM-only. `match.keyPrefix` matches the normalized session key;
 ## Dreaming (experimental)
 
 Dreaming is configured under `plugins.entries.memory-core.config.dreaming`,
-not under `agents.defaults.memorySearch`. For conceptual details and chat
-commands, see [Dreaming](/concepts/dreaming).
+not under `agents.defaults.memorySearch`. Dreaming uses three cooperative
+phases (light, deep, REM), each with its own schedule and config. For
+conceptual details and chat commands, see [Dreaming](/concepts/dreaming).
 
-| Key                   | Type      | Default        | Description                               |
-| --------------------- | --------- | -------------- | ----------------------------------------- |
-| `mode`                | `string`  | `"off"`        | Preset: `off`, `core`, `rem`, or `deep`   |
-| `cron`                | `string`  | preset default | Cron expression override for the schedule |
-| `timezone`            | `string`  | user timezone  | Timezone for schedule evaluation          |
-| `limit`               | `number`  | preset default | Max candidates to promote per cycle       |
-| `minScore`            | `number`  | preset default | Minimum weighted score for promotion      |
-| `minRecallCount`      | `number`  | preset default | Minimum recall count threshold            |
-| `minUniqueQueries`    | `number`  | preset default | Minimum distinct query count threshold    |
-| `recencyHalfLifeDays` | `number`  | `14`           | Days for recency score to decay by half   |
-| `maxAgeDays`          | `number`  | unset          | Optional max daily-note age for promotion |
-| `verboseLogging`      | `boolean` | `false`        | Emit detailed per-run dreaming logs       |
+### Global settings
 
-### Preset defaults
+| Key                       | Type      | Default    | Description                                      |
+| ------------------------- | --------- | ---------- | ------------------------------------------------ |
+| `enabled`                 | `boolean` | `true`     | Master switch for all phases                     |
+| `timezone`                | `string`  | unset      | Timezone for schedule evaluation and daily notes |
+| `verboseLogging`          | `boolean` | `false`    | Emit detailed per-run dreaming logs              |
+| `storage.mode`            | `string`  | `"inline"` | `inline`, `separate`, or `both`                  |
+| `storage.separateReports` | `boolean` | `false`    | Write separate report files per phase            |
 
-| Mode   | Cadence        | minScore | minRecallCount | minUniqueQueries | recencyHalfLifeDays |
-| ------ | -------------- | -------- | -------------- | ---------------- | ------------------- |
-| `off`  | Disabled       | --       | --             | --               | --                  |
-| `core` | Daily 3 AM     | 0.75     | 3              | 2                | 14                  |
-| `rem`  | Every 6 hours  | 0.85     | 4              | 3                | 14                  |
-| `deep` | Every 12 hours | 0.80     | 3              | 3                | 14                  |
+### Light phase (`phases.light`)
+
+Scans recent traces, dedupes, and stages candidates into the daily note.
+Does **not** write to `MEMORY.md`.
+
+| Key                | Type       | Default                         | Description                 |
+| ------------------ | ---------- | ------------------------------- | --------------------------- |
+| `enabled`          | `boolean`  | `true`                          | Enable light phase          |
+| `cron`             | `string`   | `0 */6 * * *`                   | Schedule (every 6 hours)    |
+| `lookbackDays`     | `number`   | `2`                             | Days of traces to scan      |
+| `limit`            | `number`   | `100`                           | Max candidates to stage     |
+| `dedupeSimilarity` | `number`   | `0.9`                           | Jaccard threshold for dedup |
+| `sources`          | `string[]` | `["daily","sessions","recall"]` | Data sources                |
+
+### Deep phase (`phases.deep`)
+
+Promotes qualified candidates into `MEMORY.md`. The **only** phase that
+writes durable facts. Also owns recovery when memory is thin.
+
+| Key                   | Type       | Default                                         | Description                          |
+| --------------------- | ---------- | ----------------------------------------------- | ------------------------------------ |
+| `enabled`             | `boolean`  | `true`                                          | Enable deep phase                    |
+| `cron`                | `string`   | `0 3 * * *`                                     | Schedule (daily at 3 AM)             |
+| `limit`               | `number`   | `10`                                            | Max candidates to promote per cycle  |
+| `minScore`            | `number`   | `0.8`                                           | Minimum weighted score for promotion |
+| `minRecallCount`      | `number`   | `3`                                             | Minimum recall count threshold       |
+| `minUniqueQueries`    | `number`   | `3`                                             | Minimum distinct query count         |
+| `recencyHalfLifeDays` | `number`   | `14`                                            | Days for recency score to halve      |
+| `maxAgeDays`          | `number`   | `30`                                            | Max daily-note age for promotion     |
+| `sources`             | `string[]` | `["daily","memory","sessions","logs","recall"]` | Data sources                         |
+
+#### Deep recovery (`phases.deep.recovery`)
+
+| Key                      | Type      | Default | Description                                |
+| ------------------------ | --------- | ------- | ------------------------------------------ |
+| `enabled`                | `boolean` | `true`  | Enable automatic recovery                  |
+| `triggerBelowHealth`     | `number`  | `0.35`  | Health score threshold to trigger recovery |
+| `lookbackDays`           | `number`  | `30`    | How far back to look for recovery material |
+| `maxRecoveredCandidates` | `number`  | `20`    | Max candidates to recover per run          |
+| `minRecoveryConfidence`  | `number`  | `0.9`   | Minimum confidence for recovery candidates |
+| `autoWriteMinConfidence` | `number`  | `0.97`  | Auto-write threshold (skip manual review)  |
+
+### REM phase (`phases.rem`)
+
+Writes themes, reflections, and pattern notes into the daily note.
+Does **not** write to `MEMORY.md`.
+
+| Key                  | Type       | Default                     | Description                        |
+| -------------------- | ---------- | --------------------------- | ---------------------------------- |
+| `enabled`            | `boolean`  | `true`                      | Enable REM phase                   |
+| `cron`               | `string`   | `0 5 * * 0`                 | Schedule (weekly, Sunday 5 AM)     |
+| `lookbackDays`       | `number`   | `7`                         | Days of material to reflect on     |
+| `limit`              | `number`   | `10`                        | Max patterns or themes to write    |
+| `minPatternStrength` | `number`   | `0.75`                      | Minimum tag co-occurrence strength |
+| `sources`            | `string[]` | `["memory","daily","deep"]` | Data sources for reflection        |
+
+### Execution overrides
+
+Each phase accepts an `execution` block. There is also a global
+`execution.defaults` block that phases inherit from.
+
+| Key               | Type     | Default      | Description                    |
+| ----------------- | -------- | ------------ | ------------------------------ |
+| `speed`           | `string` | `"balanced"` | `fast`, `balanced`, or `slow`  |
+| `thinking`        | `string` | `"medium"`   | `low`, `medium`, or `high`     |
+| `budget`          | `string` | `"medium"`   | `cheap`, `medium`, `expensive` |
+| `model`           | `string` | unset        | Override model for this phase  |
+| `maxOutputTokens` | `number` | unset        | Cap output tokens              |
+| `temperature`     | `number` | unset        | Sampling temperature (0-2)     |
+| `timeoutMs`       | `number` | unset        | Phase timeout in milliseconds  |
 
 ### Example
 
@@ -410,8 +470,13 @@ commands, see [Dreaming](/concepts/dreaming).
       "memory-core": {
         config: {
           dreaming: {
-            mode: "core",
+            enabled: true,
             timezone: "America/New_York",
+            phases: {
+              light: { cron: "0 */4 * * *", lookbackDays: 3 },
+              deep: { minScore: 0.85, recencyHalfLifeDays: 21 },
+              rem: { lookbackDays: 14 },
+            },
           },
         },
       },

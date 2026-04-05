@@ -32,7 +32,7 @@ import {
   resolveControlUiRootSync,
 } from "../infra/control-ui-assets.js";
 import { isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
-import { logAcceptedEnvOption } from "../infra/env.js";
+import { isTruthyEnvValue, logAcceptedEnvOption } from "../infra/env.js";
 import { createExecApprovalForwarder } from "../infra/exec-approval-forwarder.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner.js";
@@ -179,6 +179,20 @@ function getChannelRuntime() {
   cachedChannelRuntime ??= createPluginRuntime().channel;
   return cachedChannelRuntime;
 }
+
+function pruneSkippedStartupSecretSurfaces(config: OpenClawConfig): OpenClawConfig {
+  const skipChannels =
+    isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
+    isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS);
+  if (!skipChannels || !config.channels) {
+    return config;
+  }
+  return {
+    ...config,
+    channels: undefined,
+  };
+}
+
 const logHealth = log.child("health");
 const logCron = log.child("cron");
 const logReload = log.child("reload");
@@ -464,7 +478,9 @@ export async function startGatewayServer(
   ) =>
     await runWithSecretsActivationLock(async () => {
       try {
-        const prepared = await prepareSecretsRuntimeSnapshot({ config });
+        const prepared = await prepareSecretsRuntimeSnapshot({
+          config: pruneSkippedStartupSecretSurfaces(config),
+        });
         if (params.activate) {
           activateSecretsRuntimeSnapshot(prepared);
           logGatewayAuthSurfaceDiagnostics(prepared);

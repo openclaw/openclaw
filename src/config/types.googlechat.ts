@@ -95,7 +95,7 @@ export type GoogleChatAccountConfig = {
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   mediaMaxMb?: number;
-  /** Control reply threading when reply tags are present (off|first|all). */
+  /** Control reply threading when reply tags are present (off|first|all|batched). */
   replyToMode?: ReplyToMode;
   /** Per-action tool gating (default: true for all). */
   actions?: GoogleChatActionConfig;

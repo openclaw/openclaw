@@ -1,4 +1,3 @@
-import type { AcpTurnAttachment } from "../../acp/control-plane/manager.types.js";
 import { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } from "../../acp/policy.js";
 import { formatAcpRuntimeErrorText } from "../../acp/runtime/error-text.js";
 import { toAcpRuntimeError } from "../../acp/runtime/errors.js";
@@ -18,15 +17,13 @@ import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
 import { resolveConfiguredTtsMode } from "../../tts/tts-config.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import { createAcpReplyProjector } from "./acp-projector.js";
+import { loadDispatchAcpMediaRuntime, resolveAcpAttachments } from "./dispatch-acp-attachments.js";
 import {
   createAcpDispatchDeliveryCoordinator,
   type AcpDispatchDeliveryCoordinator,
 } from "./dispatch-acp-delivery.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 
-let dispatchAcpMediaRuntimePromise: Promise<
-  typeof import("./dispatch-acp-media.runtime.js")
-> | null = null;
 let dispatchAcpManagerRuntimePromise: Promise<
   typeof import("./dispatch-acp-manager.runtime.js")
 > | null = null;
@@ -35,11 +32,6 @@ let dispatchAcpSessionRuntimePromise: Promise<
 > | null = null;
 let dispatchAcpTtsRuntimePromise: Promise<typeof import("./dispatch-acp-tts.runtime.js")> | null =
   null;
-
-function loadDispatchAcpMediaRuntime() {
-  dispatchAcpMediaRuntimePromise ??= import("./dispatch-acp-media.runtime.js");
-  return dispatchAcpMediaRuntimePromise;
-}
 
 function loadDispatchAcpManagerRuntime() {
   dispatchAcpManagerRuntimePromise ??= import("./dispatch-acp-manager.runtime.js");
@@ -97,62 +89,6 @@ function hasInboundMediaForAcp(ctx: FinalizedMsgContext): boolean {
     ctx.MediaUrls?.some((value) => value?.trim()) ||
     ctx.MediaTypes?.length,
   );
-}
-
-const ACP_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
-const ACP_ATTACHMENT_TIMEOUT_MS = 1_000;
-
-async function resolveAcpAttachments(
-  ctx: FinalizedMsgContext,
-  cfg: OpenClawConfig,
-): Promise<AcpTurnAttachment[]> {
-  if (!hasInboundMediaForAcp(ctx)) {
-    return [];
-  }
-  const {
-    MediaAttachmentCache,
-    isMediaUnderstandingSkipError,
-    normalizeAttachments,
-    resolveMediaAttachmentLocalRoots,
-  } = await loadDispatchAcpMediaRuntime();
-  const mediaAttachments = normalizeAttachments(ctx).map((attachment) =>
-    attachment.path?.trim() ? { ...attachment, url: undefined } : attachment,
-  );
-  const cache = new MediaAttachmentCache(mediaAttachments, {
-    localPathRoots: resolveMediaAttachmentLocalRoots({ cfg, ctx }),
-  });
-  const results: AcpTurnAttachment[] = [];
-  for (const attachment of mediaAttachments) {
-    const mediaType = attachment.mime ?? "application/octet-stream";
-    if (!mediaType.startsWith("image/")) {
-      continue;
-    }
-    if (!attachment.path?.trim()) {
-      continue;
-    }
-    try {
-      const { buffer } = await cache.getBuffer({
-        attachmentIndex: attachment.index,
-        maxBytes: ACP_ATTACHMENT_MAX_BYTES,
-        timeoutMs: ACP_ATTACHMENT_TIMEOUT_MS,
-      });
-      results.push({
-        mediaType,
-        data: buffer.toString("base64"),
-      });
-    } catch (error) {
-      if (isMediaUnderstandingSkipError(error)) {
-        logVerbose(`dispatch-acp: skipping attachment #${attachment.index + 1} (${error.reason})`);
-      } else {
-        const errorName = error instanceof Error ? error.name : typeof error;
-        logVerbose(
-          `dispatch-acp: failed to read attachment #${attachment.index + 1} (${errorName})`,
-        );
-      }
-      // Skip unreadable files. Text content should still be delivered.
-    }
-  }
-  return results;
 }
 
 function resolveAcpRequestId(ctx: FinalizedMsgContext): string {
@@ -492,7 +428,9 @@ export async function tryDispatchAcpReply(params: {
     }
 
     const promptText = resolveAcpPromptText(params.ctx);
-    const attachments = await resolveAcpAttachments(params.ctx, params.cfg);
+    const attachments = hasInboundMediaForAcp(params.ctx)
+      ? await resolveAcpAttachments({ ctx: params.ctx, cfg: params.cfg })
+      : [];
     if (!promptText && attachments.length === 0) {
       const counts = params.dispatcher.getQueuedCounts();
       delivery.applyRoutedCounts(counts);

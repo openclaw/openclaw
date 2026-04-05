@@ -119,6 +119,13 @@ const resolveSlackApproverDmTargets = createChannelApproverDmTargetResolver({
 export const slackApprovalCapability = createApproverRestrictedNativeApprovalCapability({
   channel: "slack",
   channelLabel: "Slack",
+  describeExecApprovalSetup: ({ accountId }) => {
+    const prefix =
+      accountId && accountId !== "default"
+        ? `channels.slack.accounts.${accountId}`
+        : "channels.slack";
+    return `Approve it from the Web UI or terminal UI for now. Slack supports native exec approvals for this account. Configure \`${prefix}.execApprovals.approvers\` or \`commands.ownerAllowFrom\`; leave \`${prefix}.execApprovals.enabled\` unset/\`auto\` or set it to \`true\`.`;
+  },
   listAccountIds: listSlackAccountIds,
   hasApprovers: ({ cfg, accountId }) =>
     getSlackExecApprovalApprovers({ cfg, accountId }).length > 0,

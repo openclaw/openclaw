@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
@@ -26,13 +27,54 @@ const resolveRepoPath = (filePath, cwd) => {
   return normalizePath(rawPath);
 };
 
-const isIgnoredWatchPath = (filePath, cwd) =>
-  !isRestartRelevantRunNodePath(resolveRepoPath(filePath, cwd));
+const isDirectoryLikeWatchedPath = (repoPath, watchPaths) => {
+  const normalizedRepoPath = normalizePath(repoPath).replace(/\/$/, "");
+  return watchPaths.some((watchPath) => {
+    const normalizedWatchPath = normalizePath(watchPath).replace(/\/$/, "");
+    if (!normalizedWatchPath) {
+      return false;
+    }
+    return (
+      normalizedRepoPath === normalizedWatchPath ||
+      normalizedRepoPath.startsWith(`${normalizedWatchPath}/`)
+    );
+  });
+};
+
+const isIgnoredWatchPath = (filePath, cwd, watchPaths) => {
+  const repoPath = resolveRepoPath(filePath, cwd);
+  const statPath = path.isAbsolute(String(filePath ?? ""))
+    ? String(filePath ?? "")
+    : path.join(cwd, String(filePath ?? ""));
+  try {
+    if (fs.statSync(statPath).isDirectory() && isDirectoryLikeWatchedPath(repoPath, watchPaths)) {
+      return false;
+    }
+  } catch {
+    // Fall through to path-based filtering for deleted paths and other transient races.
+  }
+  return !isRestartRelevantRunNodePath(repoPath);
+};
 
 const shouldRestartAfterChildExit = (exitCode, exitSignal) =>
   (typeof exitCode === "number" && WATCH_RESTARTABLE_CHILD_EXIT_CODES.has(exitCode)) ||
   (typeof exitSignal === "string" && WATCH_RESTARTABLE_CHILD_SIGNALS.has(exitSignal));
 
+/**
+ * @param {{
+ *   spawn?: typeof spawn;
+ *   process?: NodeJS.Process;
+ *   cwd?: string;
+ *   args?: string[];
+ *   env?: NodeJS.ProcessEnv;
+ *   now?: () => number;
+ *   createWatcher?: (
+ *     watchPaths: string[],
+ *     options: { ignoreInitial: boolean; ignored: (watchPath: string) => boolean },
+ *   ) => { on: (event: string, cb: (...args: unknown[]) => void) => void; close?: () => Promise<void> };
+ *   watchPaths?: string[];
+ * }} [params]
+ */
 export async function runWatchMain(params = {}) {
   const deps = {
     spawn: params.spawn ?? spawn,
@@ -67,7 +109,7 @@ export async function runWatchMain(params = {}) {
 
     const watcher = deps.createWatcher(deps.watchPaths, {
       ignoreInitial: true,
-      ignored: (watchPath) => isIgnoredWatchPath(watchPath, deps.cwd),
+      ignored: (watchPath) => isIgnoredWatchPath(watchPath, deps.cwd, deps.watchPaths),
     });
 
     const settle = (code) => {
@@ -106,7 +148,7 @@ export async function runWatchMain(params = {}) {
     };
 
     const requestRestart = (changedPath) => {
-      if (shuttingDown || isIgnoredWatchPath(changedPath, deps.cwd)) {
+      if (shuttingDown || isIgnoredWatchPath(changedPath, deps.cwd, deps.watchPaths)) {
         return;
       }
       if (!watchProcess) {

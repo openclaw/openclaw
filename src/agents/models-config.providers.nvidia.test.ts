@@ -160,7 +160,7 @@ describe("vLLM provider", () => {
       provider: {
         baseUrl: VLLM_DEFAULT_BASE_URL,
         api: "openai-completions",
-        models: [],
+        models: [createTestModel("meta-llama/Meta-Llama-3-8B-Instruct")],
       },
       env: { VLLM_API_KEY: "test-key" } as NodeJS.ProcessEnv,
       profileApiKey: undefined,
@@ -169,6 +169,6 @@ describe("vLLM provider", () => {
     expect(provider.apiKey).toBe("VLLM_API_KEY");
     expect(provider.baseUrl).toBe(VLLM_DEFAULT_BASE_URL);
     expect(provider.api).toBe("openai-completions");
-    expect(provider.models).toEqual([]);
+    expect(provider.models).toHaveLength(1);
   });
 });

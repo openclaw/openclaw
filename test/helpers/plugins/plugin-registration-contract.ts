@@ -19,7 +19,6 @@ type PluginRegistrationContractParams = {
   mediaUnderstandingProviderIds?: string[];
   imageGenerationProviderIds?: string[];
   videoGenerationProviderIds?: string[];
-  cliBackendIds?: string[];
   toolNames?: string[];
   requireSpeechVoices?: boolean;
   requireDescribeImages?: boolean;
@@ -190,12 +189,6 @@ export function describePluginRegistrationContract(params: PluginRegistrationCon
         expect(findVideoGenerationProviderIds(params.pluginId)).toEqual(
           params.videoGenerationProviderIds,
         );
-      });
-    }
-
-    if (params.cliBackendIds) {
-      it("keeps bundled CLI backend ownership explicit", () => {
-        expect(findRegistration(params.pluginId).cliBackendIds).toEqual(params.cliBackendIds);
       });
     }
 

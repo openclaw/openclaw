@@ -1,0 +1,159 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildMinimaxVideoGenerationProvider } from "./video-generation-provider.js";
+
+const {
+  resolveApiKeyForProviderMock,
+  postJsonRequestMock,
+  fetchWithTimeoutMock,
+  assertOkOrThrowHttpErrorMock,
+  resolveProviderHttpRequestConfigMock,
+} = vi.hoisted(() => ({
+  resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "minimax-key" })),
+  postJsonRequestMock: vi.fn(),
+  fetchWithTimeoutMock: vi.fn(),
+  assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
+  resolveProviderHttpRequestConfigMock: vi.fn((params) => ({
+    baseUrl: params.baseUrl ?? params.defaultBaseUrl,
+    allowPrivateNetwork: false,
+    headers: new Headers(params.defaultHeaders),
+    dispatcherPolicy: undefined,
+  })),
+}));
+
+vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
+  resolveApiKeyForProvider: resolveApiKeyForProviderMock,
+}));
+
+vi.mock("openclaw/plugin-sdk/provider-http", () => ({
+  assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
+  fetchWithTimeout: fetchWithTimeoutMock,
+  postJsonRequest: postJsonRequestMock,
+  resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
+}));
+
+describe("minimax video generation provider", () => {
+  afterEach(() => {
+    resolveApiKeyForProviderMock.mockClear();
+    postJsonRequestMock.mockReset();
+    fetchWithTimeoutMock.mockReset();
+    assertOkOrThrowHttpErrorMock.mockClear();
+    resolveProviderHttpRequestConfigMock.mockClear();
+  });
+
+  it("creates a task, polls status, and downloads the generated video", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          task_id: "task-123",
+          base_resp: { status_code: 0 },
+        }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce({
+        json: async () => ({
+          task_id: "task-123",
+          status: "Success",
+          video_url: "https://example.com/out.mp4",
+          file_id: "file-1",
+          base_resp: { status_code: 0 },
+        }),
+      })
+      .mockResolvedValueOnce({
+        headers: new Headers({ "content-type": "video/mp4" }),
+        arrayBuffer: async () => Buffer.from("mp4-bytes"),
+      });
+
+    const provider = buildMinimaxVideoGenerationProvider();
+    const result = await provider.generateVideo({
+      provider: "minimax",
+      model: "MiniMax-Hailuo-2.3",
+      prompt: "A fox sprints across snowy hills",
+      cfg: {},
+    });
+
+    expect(postJsonRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://api.minimax.io/v1/video_generation",
+      }),
+    );
+    expect(result.videos).toHaveLength(1);
+    expect(result.metadata).toEqual(
+      expect.objectContaining({
+        taskId: "task-123",
+        fileId: "file-1",
+      }),
+    );
+  });
+
+  it("downloads via file_id when the status response omits video_url", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          task_id: "task-456",
+          base_resp: { status_code: 0 },
+        }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce({
+        json: async () => ({
+          task_id: "task-456",
+          status: "Success",
+          file_id: "file-9",
+          base_resp: { status_code: 0 },
+        }),
+      })
+      .mockResolvedValueOnce({
+        json: async () => ({
+          file: {
+            file_id: "file-9",
+            filename: "output_aigc.mp4",
+            download_url: "https://example.com/download.mp4",
+          },
+          base_resp: { status_code: 0 },
+        }),
+      })
+      .mockResolvedValueOnce({
+        headers: new Headers({ "content-type": "video/mp4" }),
+        arrayBuffer: async () => Buffer.from("mp4-bytes"),
+      });
+
+    const provider = buildMinimaxVideoGenerationProvider();
+    const result = await provider.generateVideo({
+      provider: "minimax",
+      model: "MiniMax-Hailuo-2.3",
+      prompt: "A fox sprints across snowy hills",
+      cfg: {},
+    });
+
+    expect(fetchWithTimeoutMock).toHaveBeenNthCalledWith(
+      2,
+      "https://api.minimax.io/v1/files/retrieve?file_id=file-9",
+      expect.objectContaining({
+        method: "GET",
+      }),
+      expect.any(Number),
+      expect.any(Function),
+    );
+    expect(fetchWithTimeoutMock).toHaveBeenNthCalledWith(
+      3,
+      "https://example.com/download.mp4",
+      expect.objectContaining({
+        method: "GET",
+      }),
+      expect.any(Number),
+      expect.any(Function),
+    );
+    expect(result.videos).toHaveLength(1);
+    expect(result.metadata).toEqual(
+      expect.objectContaining({
+        taskId: "task-456",
+        fileId: "file-9",
+        videoUrl: undefined,
+      }),
+    );
+  });
+});

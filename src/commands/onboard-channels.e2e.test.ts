@@ -604,7 +604,7 @@ vi.mock("../plugins/manifest-registry.js", async () => {
   };
 });
 
-vi.mock("../../extensions/matrix/src/matrix/deps.js", () => ({
+vi.mock("../plugin-sdk/matrix-deps.js", () => ({
   ensureMatrixSdkInstalled: vi.fn(async () => {}),
   isMatrixSdkAvailable: vi.fn(() => true),
 }));
