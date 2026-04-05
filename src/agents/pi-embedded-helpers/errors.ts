@@ -210,6 +210,20 @@ function isInvalidStreamingEventOrderError(raw: string): boolean {
   );
 }
 
+function isJsonSyntaxError(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  // Matches Node.js JSON.parse SyntaxError messages produced when a streaming
+  // tool call is truncated mid-argument (e.g. "Expected ',' or ']' after array
+  // element in JSON at position 900").
+  return (
+    /^Expected .+ in JSON at position \d+/i.test(raw) ||
+    /^Unexpected (token|end of JSON input)/i.test(raw) ||
+    /^JSON Parse error:/i.test(raw)
+  );
+}
+
 function hasRateLimitTpmHint(raw: string): boolean {
   const lower = raw.toLowerCase();
   return /\btpm\b/i.test(lower) || lower.includes("tokens per minute");
@@ -964,6 +978,13 @@ export function formatAssistantErrorText(
 
   if (isInvalidStreamingEventOrderError(raw)) {
     return "LLM request failed: provider returned an invalid streaming response. Please try again.";
+  }
+
+  // JSON SyntaxErrors from truncated streaming (e.g. tool call arguments cut off mid-stream).
+  // These are infrastructure errors — the text content was already delivered successfully,
+  // so surfacing the raw parse error to the user is confusing and unhelpful.
+  if (isJsonSyntaxError(raw)) {
+    return "LLM request failed: response was truncated mid-stream. Please try again.";
   }
 
   // Catch role ordering errors - including JSON-wrapped and "400" prefix variants
