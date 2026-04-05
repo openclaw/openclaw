@@ -104,6 +104,7 @@ export const MatrixConfigSchema = z.object({
   autoJoinAllowlist: AllowFromListSchema,
   groupAllowFrom: AllowFromListSchema,
   dm: buildNestedDmConfigSchema({
+    sessionScope: z.enum(["per-user", "per-room"]).optional(),
     threadReplies: z.enum(["off", "inbound", "always"]).optional(),
   }),
   execApprovals: matrixExecApprovalsSchema,

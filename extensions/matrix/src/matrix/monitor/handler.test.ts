@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import {
   __testing as sessionBindingTesting,
   registerSessionBindingAdapter,
@@ -680,6 +683,114 @@ describe("matrix monitor handler pairing account scope", () => {
         sessionKey: "agent:ops:main",
       }),
     );
+  });
+
+  it("posts a one-time notice when another Matrix DM room already owns the shared DM session", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-dm-shared-notice-"));
+    const storePath = path.join(tempDir, "sessions.json");
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        "agent:ops:main": {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+          deliveryContext: {
+            channel: "matrix",
+            to: "room:!other:example.org",
+            accountId: "ops",
+          },
+        },
+      }),
+      "utf8",
+    );
+    const sendNotice = vi.fn(async () => "$notice");
+
+    try {
+      const { handler } = createMatrixHandlerTestHarness({
+        isDirectMessage: true,
+        resolveStorePath: () => storePath,
+        client: {
+          sendMessage: sendNotice,
+        },
+      });
+
+      await handler(
+        "!dm:example.org",
+        createMatrixTextMessageEvent({
+          eventId: "$dm1",
+          body: "follow up",
+        }),
+      );
+
+      expect(sendNotice).toHaveBeenCalledWith(
+        "!dm:example.org",
+        expect.objectContaining({
+          msgtype: "m.notice",
+          body: expect.stringContaining("channels.matrix.dm.sessionScope"),
+        }),
+      );
+
+      await handler(
+        "!dm:example.org",
+        createMatrixTextMessageEvent({
+          eventId: "$dm2",
+          body: "again",
+        }),
+      );
+
+      expect(sendNotice).toHaveBeenCalledTimes(1);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips the shared-session notice when Matrix DMs are isolated per room", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-dm-room-scope-"));
+    const storePath = path.join(tempDir, "sessions.json");
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        "agent:ops:main": {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+          deliveryContext: {
+            channel: "matrix",
+            to: "room:!other:example.org",
+            accountId: "ops",
+          },
+        },
+      }),
+      "utf8",
+    );
+    const sendNotice = vi.fn(async () => "$notice");
+
+    try {
+      const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
+        isDirectMessage: true,
+        dmSessionScope: "per-room",
+        resolveStorePath: () => storePath,
+        client: {
+          sendMessage: sendNotice,
+        },
+      });
+
+      await handler(
+        "!dm:example.org",
+        createMatrixTextMessageEvent({
+          eventId: "$dm1",
+          body: "follow up",
+        }),
+      );
+
+      expect(sendNotice).not.toHaveBeenCalled();
+      expect(recordInboundSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey: "agent:ops:matrix:channel:!dm:example.org",
+        }),
+      );
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("uses stable room ids instead of room-declared aliases in group context", async () => {

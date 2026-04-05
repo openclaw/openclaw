@@ -1,5 +1,9 @@
 import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
-import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/config-runtime";
+import {
+  loadSessionStore,
+  resolveChannelContextVisibilityMode,
+  resolveSessionStoreEntry,
+} from "openclaw/plugin-sdk/config-runtime";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
 import type { CoreConfig, MatrixRoomConfig, ReplyToMode } from "../../types.js";
@@ -68,6 +72,7 @@ import { isMatrixVerificationRoomMessage } from "./verification-utils.js";
 const ALLOW_FROM_STORE_CACHE_TTL_MS = 30_000;
 const PAIRING_REPLY_COOLDOWN_MS = 5 * 60_000;
 const MAX_TRACKED_PAIRING_REPLY_SENDERS = 512;
+const MAX_TRACKED_SHARED_DM_CONTEXT_NOTICES = 512;
 type MatrixAllowBotsMode = "off" | "mentions" | "all";
 
 export type MatrixMonitorHandlerParams = {
@@ -88,6 +93,8 @@ export type MatrixMonitorHandlerParams = {
   threadReplies: "off" | "inbound" | "always";
   /** DM-specific threadReplies override. Falls back to threadReplies when absent. */
   dmThreadReplies?: "off" | "inbound" | "always";
+  /** DM session grouping behavior. */
+  dmSessionScope?: "per-user" | "per-room";
   streaming: "partial" | "off";
   blockStreamingEnabled: boolean;
   dmEnabled: boolean;
@@ -163,6 +170,103 @@ function resolveMatrixInboundBodyText(params: {
   });
 }
 
+function trimMaybeString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function rememberTrackedRoom(set: Set<string>, roomId: string): void {
+  set.add(roomId);
+  if (set.size > MAX_TRACKED_SHARED_DM_CONTEXT_NOTICES) {
+    const oldest = set.keys().next().value;
+    if (typeof oldest === "string") {
+      set.delete(oldest);
+    }
+  }
+}
+
+function extractMatrixRoomIdFromTarget(value: unknown): string | undefined {
+  const trimmed = trimMaybeString(value);
+  if (!trimmed) {
+    return undefined;
+  }
+  return trimmed.startsWith("room:") ? trimMaybeString(trimmed.slice("room:".length)) : undefined;
+}
+
+function resolveMatrixSharedDmContextNotice(params: {
+  storePath: string;
+  sessionKey: string;
+  roomId: string;
+  accountId: string;
+  dmSessionScope?: "per-user" | "per-room";
+  sentRooms: Set<string>;
+  logVerboseMessage: (message: string) => void;
+}): string | null {
+  if ((params.dmSessionScope ?? "per-user") === "per-room") {
+    return null;
+  }
+  if (params.sentRooms.has(params.roomId)) {
+    return null;
+  }
+
+  try {
+    const store = loadSessionStore(params.storePath);
+    const existing = resolveSessionStoreEntry({
+      store,
+      sessionKey: params.sessionKey,
+    }).existing as
+      | {
+          deliveryContext?: { channel?: unknown; to?: unknown; accountId?: unknown };
+          origin?: { provider?: unknown; to?: unknown; accountId?: unknown };
+          lastChannel?: unknown;
+          lastTo?: unknown;
+          lastAccountId?: unknown;
+        }
+      | undefined;
+    if (!existing) {
+      return null;
+    }
+
+    const priorChannel =
+      trimMaybeString(existing.deliveryContext?.channel) ??
+      trimMaybeString(existing.lastChannel) ??
+      trimMaybeString(existing.origin?.provider);
+    if (priorChannel && priorChannel !== "matrix") {
+      return null;
+    }
+
+    const priorAccountId =
+      trimMaybeString(existing.deliveryContext?.accountId) ??
+      trimMaybeString(existing.lastAccountId) ??
+      trimMaybeString(existing.origin?.accountId);
+    if (priorAccountId && priorAccountId !== params.accountId) {
+      return null;
+    }
+
+    const priorRoomId =
+      extractMatrixRoomIdFromTarget(existing.deliveryContext?.to) ??
+      extractMatrixRoomIdFromTarget(existing.lastTo) ??
+      extractMatrixRoomIdFromTarget(existing.origin?.to);
+    if (!priorRoomId || priorRoomId === params.roomId) {
+      return null;
+    }
+
+    return [
+      "This Matrix DM is sharing a session with another Matrix DM room.",
+      "Use /focus here for a one-off isolated thread session when thread bindings are enabled, or set",
+      "channels.matrix.dm.sessionScope to per-room to isolate each Matrix DM room.",
+    ].join(" ");
+  } catch (err) {
+    params.logVerboseMessage(
+      `matrix: failed checking shared DM session notice room=${params.roomId} (${String(err)})`,
+    );
+    return null;
+  }
+}
+
 function resolveMatrixPendingHistoryText(params: {
   mentionPrecheckText: string;
   content: RoomMessageEventContent;
@@ -214,6 +318,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     replyToMode,
     threadReplies,
     dmThreadReplies,
+    dmSessionScope,
     streaming,
     blockStreamingEnabled,
     dmEnabled,
@@ -252,6 +357,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
   });
   const roomHistoryTracker = createRoomHistoryTracker();
   const roomIngressTails = new Map<string, Promise<void>>();
+  const sharedDmContextNoticeRooms = new Set<string>();
 
   const readStoreAllowFrom = async (): Promise<string[]> => {
     const now = Date.now();
@@ -672,6 +778,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           roomId,
           senderId,
           isDirectMessage,
+          dmSessionScope,
           threadId: thread.threadId,
           eventTs: eventTs ?? undefined,
           resolveAgentRoute: core.channel.routing.resolveAgentRoute,
@@ -1023,6 +1130,17 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         storePath,
         sessionKey: _route.sessionKey,
       });
+      const sharedDmContextNotice = isDirectMessage
+        ? resolveMatrixSharedDmContextNotice({
+            storePath,
+            sessionKey: _route.sessionKey,
+            roomId,
+            accountId: _route.accountId,
+            dmSessionScope,
+            sentRooms: sharedDmContextNoticeRooms,
+            logVerboseMessage,
+          })
+        : null;
       const body = core.channel.reply.formatAgentEnvelope({
         channel: "Matrix",
         from: envelopeFrom,
@@ -1089,6 +1207,20 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           });
         },
       });
+
+      if (sharedDmContextNotice) {
+        rememberTrackedRoom(sharedDmContextNoticeRooms, roomId);
+        client
+          .sendMessage(roomId, {
+            msgtype: "m.notice",
+            body: sharedDmContextNotice,
+          })
+          .catch((err) => {
+            logVerboseMessage(
+              `matrix: failed sending shared DM session notice room=${roomId}: ${String(err)}`,
+            );
+          });
+      }
 
       const preview = bodyText.slice(0, 200).replace(/\n/g, "\\n");
       logVerboseMessage(`matrix inbound: room=${roomId} from=${senderId} preview="${preview}"`);

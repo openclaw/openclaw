@@ -655,6 +655,7 @@ Matrix is extension-backed and configured under `channels.matrix`.
   - `sessionFilter`: optional session key patterns (substring or regex).
   - `target`: where to send approval prompts. `"dm"` (default), `"channel"` (originating room), or `"both"`.
   - Per-account overrides: `channels.matrix.accounts.<id>.execApprovals`.
+- `channels.matrix.dm.sessionScope` controls how Matrix DMs group into sessions: `per-user` (default) shares by routed peer, while `per-room` isolates each DM room.
 - Matrix status probes and live directory lookups use the same proxy policy as runtime traffic.
 - Full Matrix configuration, targeting rules, and setup examples are documented in [Matrix](/channels/matrix).
 
