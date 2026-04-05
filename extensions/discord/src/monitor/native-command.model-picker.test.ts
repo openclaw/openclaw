@@ -543,6 +543,113 @@ describe("Discord model picker interactions", () => {
     );
   });
 
+  it("clears routed overrides when reset selects the default model through the fallback path", async () => {
+    const context = createModelPickerContext();
+    context.threadBindings = createBoundThreadBindingManager({
+      accountId: "default",
+      threadId: "thread-bound",
+      targetSessionKey: "agent:worker:subagent:bound",
+      agentId: "worker",
+    });
+    const pickerData = createDefaultModelPickerData();
+    const modelCommand = createModelCommandDefinition();
+    const storePath = resolveStorePath(context.cfg.session?.store, { agentId: "worker" });
+    await saveSessionStore(storePath, {
+      "agent:worker:subagent:bound": {
+        updatedAt: Date.now(),
+        sessionId: "bound-session",
+        providerOverride: "openai",
+        modelOverride: "gpt-4o",
+      },
+    });
+
+    vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
+    mockModelCommandPipeline(modelCommand);
+    createDispatchSpy();
+
+    const button = createDiscordModelPickerFallbackButton(context);
+    const submitInteraction = createInteraction({ userId: "owner" });
+    submitInteraction.channel = {
+      type: ChannelType.PublicThread,
+      id: "thread-bound",
+    };
+
+    await button.run(submitInteraction as unknown as PickerButtonInteraction, {
+      cmd: "model",
+      act: "reset",
+      view: "models",
+      u: "owner",
+      p: "openai",
+      pg: "1",
+    });
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+    expect(store["agent:worker:subagent:bound"]?.providerOverride).toBeUndefined();
+    expect(store["agent:worker:subagent:bound"]?.modelOverride).toBeUndefined();
+    expect(JSON.stringify(submitInteraction.followUp.mock.calls[0]?.[0])).toContain(
+      "✅ Model set to anthropic/claude-sonnet-4-5.",
+    );
+  });
+
+  it("clears stale auth profile state when fallback persists a routed model override", async () => {
+    const context = createModelPickerContext();
+    context.threadBindings = createBoundThreadBindingManager({
+      accountId: "default",
+      threadId: "thread-bound",
+      targetSessionKey: "agent:worker:subagent:bound",
+      agentId: "worker",
+    });
+    const pickerData = createDefaultModelPickerData();
+    const modelCommand = createModelCommandDefinition();
+    const storePath = resolveStorePath(context.cfg.session?.store, { agentId: "worker" });
+    await saveSessionStore(storePath, {
+      "agent:worker:subagent:bound": {
+        updatedAt: Date.now(),
+        sessionId: "bound-session",
+        authProfileOverride: "openai:legacy",
+        authProfileOverrideSource: "user",
+        authProfileOverrideCompactionCount: 3,
+      },
+    });
+
+    vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
+    mockModelCommandPipeline(modelCommand);
+    createDispatchSpy();
+
+    const select = createDiscordModelPickerFallbackSelect(context);
+    const selectInteraction = createInteraction({
+      userId: "owner",
+      values: ["gpt-4o"],
+    });
+    selectInteraction.channel = {
+      type: ChannelType.PublicThread,
+      id: "thread-bound",
+    };
+    await select.run(
+      selectInteraction as unknown as PickerSelectInteraction,
+      createModelsViewSelectData(),
+    );
+
+    const button = createDiscordModelPickerFallbackButton(context);
+    const submitInteraction = createInteraction({ userId: "owner" });
+    submitInteraction.channel = {
+      type: ChannelType.PublicThread,
+      id: "thread-bound",
+    };
+
+    await button.run(
+      submitInteraction as unknown as PickerButtonInteraction,
+      createModelsViewSubmitData(),
+    );
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+    expect(store["agent:worker:subagent:bound"]?.authProfileOverride).toBeUndefined();
+    expect(store["agent:worker:subagent:bound"]?.authProfileOverrideSource).toBeUndefined();
+    expect(
+      store["agent:worker:subagent:bound"]?.authProfileOverrideCompactionCount,
+    ).toBeUndefined();
+  });
+
   it("loads model picker data from the effective bound route", async () => {
     const context = createModelPickerContext();
     context.threadBindings = createBoundThreadBindingManager({
