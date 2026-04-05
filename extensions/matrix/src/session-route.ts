@@ -55,7 +55,7 @@ function resolveMatrixCurrentDmRoomId(params: {
     if (!currentSession) {
       return undefined;
     }
-    if (!currentSession.accountId || currentSession.accountId !== params.accountId) {
+    if (currentSession.accountId && currentSession.accountId !== params.accountId) {
       return undefined;
     }
     if (!currentSession.directUserId || currentSession.directUserId !== params.targetUserId) {
