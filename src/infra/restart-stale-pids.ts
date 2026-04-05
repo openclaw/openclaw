@@ -90,14 +90,17 @@ function parsePidsFromLsofOutput(stdout: string): number[] {
  * Windows: find listening PIDs on the port, then verify each is an openclaw
  * gateway process via command-line inspection. Excludes the current process.
  */
-function findVerifiedWindowsGatewayPidsOnPortSync(port: number): number[] {
-  const rawPids = readWindowsListeningPidsOnPortSync(port);
+function filterVerifiedWindowsGatewayPids(rawPids: number[]): number[] {
   return Array.from(new Set(rawPids))
     .filter((pid) => Number.isFinite(pid) && pid > 0 && pid !== process.pid)
     .filter((pid) => {
       const args = readWindowsProcessArgsSync(pid);
       return args != null && isGatewayArgv(args, { allowGatewayBinary: true });
     });
+}
+
+function findVerifiedWindowsGatewayPidsOnPortSync(port: number): number[] {
+  return filterVerifiedWindowsGatewayPids(readWindowsListeningPidsOnPortSync(port));
 }
 
 function findVerifiedWindowsGatewayPidsOnPortResultSync(port: number): WindowsListeningPidsResult {
@@ -107,12 +110,7 @@ function findVerifiedWindowsGatewayPidsOnPortResultSync(port: number): WindowsLi
   }
   return {
     ok: true,
-    pids: Array.from(new Set(result.pids))
-      .filter((pid) => Number.isFinite(pid) && pid > 0 && pid !== process.pid)
-      .filter((pid) => {
-        const args = readWindowsProcessArgsSync(pid);
-        return args != null && isGatewayArgv(args, { allowGatewayBinary: true });
-      }),
+    pids: filterVerifiedWindowsGatewayPids(result.pids),
   };
 }
 
