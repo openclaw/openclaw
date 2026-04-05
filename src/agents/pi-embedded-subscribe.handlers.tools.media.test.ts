@@ -214,6 +214,33 @@ describe("handleToolExecutionEnd media emission", () => {
     expect(ctx.state.pendingToolAudioAsVoice).toBe(true);
   });
 
+  it("does not queue structured media already emitted from verbose tool output", async () => {
+    const ctx = createMockContext({ shouldEmitToolOutput: true, onToolResult: vi.fn() });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "image_generate",
+      toolCallId: "tc-1",
+      isError: false,
+      result: {
+        content: [
+          {
+            type: "text",
+            text: "Generated 1 image with google/gemini-3.1-flash-image-preview.\nMEDIA:/tmp/generated.png",
+          },
+        ],
+        details: {
+          media: {
+            mediaUrls: ["/tmp/generated.png"],
+          },
+        },
+      },
+    });
+
+    expect(ctx.emitToolOutput).toHaveBeenCalled();
+    expect(ctx.state.pendingToolMediaUrls).toEqual([]);
+  });
+
   it("does NOT emit media for error results", async () => {
     const onToolResult = vi.fn();
     const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });
