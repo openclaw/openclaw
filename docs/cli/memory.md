@@ -34,6 +34,8 @@ openclaw memory status --deep --index
 openclaw memory status --deep --index --verbose
 openclaw memory status --agent main
 openclaw memory index --agent main --verbose
+openclaw memory promote-explain "router vlan"
+openclaw memory rem-harness --json
 ```
 
 ## Options
@@ -89,6 +91,33 @@ Full options:
 - `--apply`: append selected candidates into `MEMORY.md` and mark them promoted.
 - `--include-promoted`: include already promoted candidates in output.
 - `--json`: print JSON output.
+
+`memory promote-explain`:
+
+Explain why a specific candidate would or would not promote, with a full score breakdown.
+
+```bash
+openclaw memory promote-explain "<selector>"
+```
+
+- `<selector>`: candidate key, path fragment, or snippet fragment to match.
+- `--agent <id>`: scope to a single agent (default: the default agent).
+- `--include-promoted`: include already promoted candidates.
+- `--json`: print JSON output.
+
+`memory rem-harness`:
+
+Preview REM reflections, candidate truths, and deep promotion output without writing anything. Useful for staging and debugging the REM phase before it runs for real.
+
+```bash
+openclaw memory rem-harness [--json] [--agent <id>] [--include-promoted]
+```
+
+- `--agent <id>`: scope to a single agent (default: the default agent).
+- `--include-promoted`: include already promoted deep candidates.
+- `--json`: print JSON output.
+
+See [Dreaming](/concepts/dreaming) for the full phase model and how REM fits in.
 
 ## Dreaming (experimental)
 
