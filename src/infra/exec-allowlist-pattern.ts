@@ -82,3 +82,67 @@ export function matchesExecAllowlistPattern(pattern: string, target: string): bo
   normalizedTarget = normalizeMatchTarget(normalizedTarget);
   return compileGlobRegex(normalizedPattern).test(normalizedTarget);
 }
+
+/**
+ * Parse a subcommand pattern like "git *" or "git add:*" into a base pattern
+ * and an argPattern regex.
+ *
+ * Format:
+ *   "git *"        → basePattern="git",          argPattern="^[^\\s]+(\\s+.*)?$"  (any first arg)
+ *   "git add:*"     → basePattern="git add",      argPattern="^git add\\\\s+.*$"    (add + args required)
+ *   "git push:*"     → basePattern="git push",     argPattern="^git push\\\\s+.*$"   (push + args required)
+ *   "git"          → basePattern="git",          argPattern=undefined                 (no restriction)
+ *
+ * Syntax:
+ *   "*"  → any single token as subcommand (may appear with or without args)
+ *   ":*" → specific subcommand, MUST be followed by at least one argument
+ *
+ * The subcommand is the last token before the ":*" or before the lone "*".
+ */
+export function parseSubcommandPattern(pattern: string): {
+  basePattern: string;
+  argPattern?: string;
+} {
+  const trimmed = pattern.trim();
+  if (!trimmed) {
+    return { basePattern: trimmed };
+  }
+
+  const starIndex = trimmed.indexOf("*");
+  if (starIndex === -1) {
+    // No wildcard — no subcommand restriction
+    return { basePattern: trimmed };
+  }
+
+  // Everything before the first "*" is the base
+  const baseRaw = trimmed.slice(0, starIndex);
+  const remainder = trimmed.slice(starIndex + 1);
+
+  // If base ends with ":", the subcommand is specified and requires args
+  const baseHasColon = baseRaw.endsWith(":");
+
+  if (baseHasColon) {
+    // "git add:*" — subcommand specified, args required
+    const subcommand = baseRaw.slice(0, -1); // remove trailing ":"
+    // Escape regex special chars in subcommand
+    const escaped = subcommand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    // Match: subcommand followed by whitespace and >=1 arg token
+    const argPattern = `^${escaped}\\s+.*$`;
+    return { basePattern: subcommand, argPattern };
+  } else {
+    // "git *" — any first argument token (subcommand with optional args)
+    const argPattern = `^[^/\\s]+(\\s+.*)?$`;
+    return { basePattern: baseRaw.trimEnd(), argPattern };
+  }
+}
+
+/**
+ * Convert a subcommand glob pattern (e.g. "git *", "git add:*") to an
+ * expanded ExecAllowlistEntry with base pattern + argPattern.
+ */
+export function expandSubcommandEntry(
+  pattern: string,
+): { pattern: string; argPattern?: string } {
+  const { basePattern, argPattern } = parseSubcommandPattern(pattern);
+  return { pattern: basePattern, argPattern };
+}

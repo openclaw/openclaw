@@ -17,6 +17,7 @@ import {
   detectInterpreterInlineEvalArgv,
 } from "../infra/exec-inline-eval.js";
 import { detectCommandObfuscation } from "../infra/exec-obfuscation-detect.js";
+import { classifyCommandStatic, decideApprovalAction } from "../infra/exec-llm-classifier.js";
 import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
 import { logInfo } from "../logger.js";
 import { markBackgrounded, tail } from "./bash-process-registry.js";
@@ -102,6 +103,29 @@ export async function processGatewayAllowlist(
     ask: params.ask,
     host: "gateway",
   });
+
+  // LLM-based safety classifier for ask="auto" mode.
+  // When ask is "auto", use the LLM classifier to decide whether to allow, deny, or prompt.
+  // "auto" is treated as a "smart on-miss" — the classifier determines the actual risk.
+  let effectiveAsk = hostAsk;
+  if (hostAsk === "auto") {
+    const llmAction = decideApprovalAction(params.command, "auto");
+    if (llmAction === "allow") {
+      effectiveAsk = "off";
+    } else if (llmAction === "deny") {
+      // Auto-deny dangerous commands — return a denied result without showing a prompt
+      return {
+        pendingResult: {
+          ok: false,
+          error: `Auto-denied: command is classified as dangerous (${llmAction}). If this is unexpected, use ask=on-miss to investigate.`,
+        },
+      };
+    } else {
+      // llmAction === "prompt" — treat as "on-miss" (show approval prompt)
+      effectiveAsk = "on-miss";
+    }
+  }
+
   const allowlistEval = evaluateShellAllowlist({
     command: params.command,
     allowlist: approvals.allowlist,
@@ -178,7 +202,7 @@ export async function processGatewayAllowlist(
     allowlistPlanUnavailableReason !== null;
   const requiresAsk =
     requiresExecApproval({
-      ask: hostAsk,
+      ask: effectiveAsk,
       security: hostSecurity,
       analysisOk,
       allowlistSatisfied,

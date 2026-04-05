@@ -337,13 +337,13 @@ export function matchAllowlist(
     return null;
   }
   const resolvedPath = resolution.resolvedPath;
-  // argPattern matching is currently Windows-only.  On other platforms every
-  // path-matched entry is treated as a match regardless of argPattern, which
-  // preserves the pre-existing behaviour.
+  // argPattern matching is now enabled on all platforms.
+  // Previously this was Windows-only, which meant Linux/macOS users could not
+  // declare fine-grained subcommand permissions like "git add:* but not git push".
   // Use the caller-supplied target platform rather than process.platform so that
   // a Linux gateway evaluating a Windows node command applies argPattern correctly.
   const effectivePlatform = platform ?? process.platform;
-  const useArgPattern = String(effectivePlatform).trim().toLowerCase().startsWith("win");
+  const useArgPattern = true;  // Enable on all platforms for subcommand-level control
   let pathOnlyMatch: ExecAllowlistEntry | null = null;
   for (const entry of entries) {
     const pattern = entry.pattern?.trim();
@@ -358,7 +358,8 @@ export function matchAllowlist(
       continue;
     }
     if (!useArgPattern) {
-      // Non-Windows: first path match wins (legacy behaviour).
+      // This branch is now dead since useArgPattern is always true.
+      // Kept for safety but should never trigger.
       return entry;
     }
     if (!entry.argPattern) {

@@ -12,7 +12,7 @@ export * from "./exec-approvals-allowlist.js";
 export type ExecHost = "sandbox" | "gateway" | "node";
 export type ExecTarget = "auto" | ExecHost;
 export type ExecSecurity = "deny" | "allowlist" | "full";
-export type ExecAsk = "off" | "on-miss" | "always";
+export type ExecAsk = "off" | "on-miss" | "always" | "auto";
 
 export function normalizeExecHost(value?: string | null): ExecHost | null {
   const normalized = value?.trim().toLowerCase();
@@ -45,7 +45,7 @@ export function normalizeExecSecurity(value?: string | null): ExecSecurity | nul
 
 export function normalizeExecAsk(value?: string | null): ExecAsk | null {
   const normalized = value?.trim().toLowerCase();
-  if (normalized === "off" || normalized === "on-miss" || normalized === "always") {
+  if (normalized === "off" || normalized === "on-miss" || normalized === "always" || normalized === "auto") {
     return normalized;
   }
   return null;
