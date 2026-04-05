@@ -6692,7 +6692,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           anyOf: [
             {
               type: "string",
-              enum: ["partial", "off"],
+              enum: ["partial", "quiet", "off"],
             },
             {
               type: "boolean",

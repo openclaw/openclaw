@@ -69,7 +69,7 @@ describe("createMatrixDraftStream", () => {
     vi.useRealTimers();
   });
 
-  it("sends a new message on first update", async () => {
+  it("sends a normal text preview on first partial update", async () => {
     const stream = createMatrixDraftStream({
       roomId: "!room:test",
       client,
@@ -81,17 +81,35 @@ describe("createMatrixDraftStream", () => {
 
     expect(sendMessageMock).toHaveBeenCalledTimes(1);
     expect(sendMessageMock.mock.calls[0]?.[1]).toMatchObject({
-      msgtype: "m.notice",
+      msgtype: "m.text",
     });
-    expect(sendMessageMock.mock.calls[0]?.[1]).not.toHaveProperty("m.mentions");
     expect(stream.eventId()).toBe("$evt1");
   });
 
-  it("edits the message on subsequent updates", async () => {
+  it("sends quiet preview notices when quiet mode is enabled", async () => {
     const stream = createMatrixDraftStream({
       roomId: "!room:test",
       client,
       cfg: {} as import("../types.js").CoreConfig,
+      mode: "quiet",
+    });
+
+    stream.update("Hello");
+    await stream.flush();
+
+    expect(sendMessageMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageMock.mock.calls[0]?.[1]).toMatchObject({
+      msgtype: "m.notice",
+    });
+    expect(sendMessageMock.mock.calls[0]?.[1]).not.toHaveProperty("m.mentions");
+  });
+
+  it("edits the message on subsequent quiet updates", async () => {
+    const stream = createMatrixDraftStream({
+      roomId: "!room:test",
+      client,
+      cfg: {} as import("../types.js").CoreConfig,
+      mode: "quiet",
     });
 
     stream.update("Hello");
@@ -112,11 +130,12 @@ describe("createMatrixDraftStream", () => {
     });
   });
 
-  it("coalesces rapid updates within throttle window", async () => {
+  it("coalesces rapid quiet updates within throttle window", async () => {
     const stream = createMatrixDraftStream({
       roomId: "!room:test",
       client,
       cfg: {} as import("../types.js").CoreConfig,
+      mode: "quiet",
     });
 
     stream.update("A");
@@ -191,6 +210,7 @@ describe("createMatrixDraftStream", () => {
       roomId: "!room:test",
       client,
       cfg: {} as import("../types.js").CoreConfig,
+      mode: "quiet",
     });
 
     stream.update("Block 1");

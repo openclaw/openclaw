@@ -5,7 +5,22 @@ import { editMessageMatrix, prepareMatrixSingleText, sendSingleTextMessageMatrix
 import { MsgType } from "./send/types.js";
 
 const DEFAULT_THROTTLE_MS = 1000;
-const DRAFT_PREVIEW_MSGTYPE = MsgType.Notice;
+type MatrixDraftPreviewMode = "partial" | "quiet";
+
+function resolveDraftPreviewOptions(mode: MatrixDraftPreviewMode): {
+  msgtype: typeof MsgType.Text | typeof MsgType.Notice;
+  includeMentions?: boolean;
+} {
+  if (mode === "quiet") {
+    return {
+      msgtype: MsgType.Notice,
+      includeMentions: false,
+    };
+  }
+  return {
+    msgtype: MsgType.Text,
+  };
+}
 
 export type MatrixDraftStream = {
   /** Update the draft with the latest accumulated text for the current block. */
@@ -28,6 +43,7 @@ export function createMatrixDraftStream(params: {
   roomId: string;
   client: MatrixClient;
   cfg: CoreConfig;
+  mode?: MatrixDraftPreviewMode;
   threadId?: string;
   replyToId?: string;
   /** When true, reset() restores the original replyToId instead of clearing it. */
@@ -36,6 +52,7 @@ export function createMatrixDraftStream(params: {
   log?: (message: string) => void;
 }): MatrixDraftStream {
   const { roomId, client, cfg, threadId, accountId, log } = params;
+  const preview = resolveDraftPreviewOptions(params.mode ?? "partial");
 
   let currentEventId: string | undefined;
   let lastSentText = "";
@@ -75,8 +92,8 @@ export function createMatrixDraftStream(params: {
           replyToId,
           threadId,
           accountId,
-          msgtype: DRAFT_PREVIEW_MSGTYPE,
-          includeMentions: false,
+          msgtype: preview.msgtype,
+          includeMentions: preview.includeMentions,
         });
         currentEventId = result.messageId;
         lastSentText = preparedText.trimmedText;
@@ -87,8 +104,8 @@ export function createMatrixDraftStream(params: {
           cfg,
           threadId,
           accountId,
-          msgtype: DRAFT_PREVIEW_MSGTYPE,
-          includeMentions: false,
+          msgtype: preview.msgtype,
+          includeMentions: preview.includeMentions,
         });
         lastSentText = preparedText.trimmedText;
       }

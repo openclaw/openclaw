@@ -178,9 +178,9 @@ This is a practical baseline config with DM pairing, room allowlist, and E2EE en
 
 Matrix reply streaming is opt-in.
 
-Set `channels.matrix.streaming` to `"partial"` when you want OpenClaw to send a single draft reply,
-edit that draft in place while the model is generating text, and then finalize it when the reply is
-done:
+Set `channels.matrix.streaming` to `"partial"` when you want OpenClaw to send a single live preview
+reply, edit that preview in place while the model is generating text, and then finalize it when the
+reply is done:
 
 ```json5
 {
@@ -193,26 +193,26 @@ done:
 ```
 
 - `streaming: "off"` is the default. OpenClaw waits for the final reply and sends it once.
-- `streaming: "partial"` creates one editable preview message for the current assistant block instead of sending multiple partial messages.
-- `blockStreaming: true` enables separate Matrix progress messages. With `streaming: "partial"`, Matrix keeps the live draft for the current block and preserves completed blocks as separate messages.
-- When `streaming: "partial"` and `blockStreaming` is off, Matrix only edits the live draft and sends the completed reply once that block or turn finishes.
-- Draft preview events use quiet Matrix notices. On stock Matrix push rules, notice previews and later edit events are both non-notifying.
+- `streaming: "partial"` creates one editable preview message for the current assistant block using normal Matrix text messages. This preserves Matrix's legacy preview-first notification behavior, so stock clients may notify on the first streamed preview text instead of the finished block.
+- `streaming: "quiet"` creates one editable quiet preview notice for the current assistant block. Use this only when you also configure recipient push rules for finalized preview edits.
+- `blockStreaming: true` enables separate Matrix progress messages. With preview streaming enabled, Matrix keeps the live draft for the current block and preserves completed blocks as separate messages.
+- When preview streaming is on and `blockStreaming` is off, Matrix edits the live draft in place and finalizes that same event when the block or turn finishes.
 - If the preview no longer fits in one Matrix event, OpenClaw stops preview streaming and falls back to normal final delivery.
 - Media replies still send attachments normally. If a stale preview can no longer be reused safely, OpenClaw redacts it before sending the final media reply.
 - Preview edits cost extra Matrix API calls. Leave streaming off if you want the most conservative rate-limit behavior.
 
 `blockStreaming` does not enable draft previews by itself.
-Use `streaming: "partial"` for preview edits; then add `blockStreaming: true` only if you also want completed assistant blocks to remain visible as separate progress messages.
+Use `streaming: "partial"` or `streaming: "quiet"` for preview edits; then add `blockStreaming: true` only if you also want completed assistant blocks to remain visible as separate progress messages.
 
-If you need notifications without custom Matrix push rules, leave `streaming` off. Then:
+If you need stock Matrix notifications without custom push rules, use `streaming: "partial"` for preview-first behavior or leave `streaming` off for final-only delivery. With `streaming: "off"`:
 
 - `blockStreaming: true` sends each finished block as a normal notifying Matrix message.
 - `blockStreaming: false` sends only the final completed reply as a normal notifying Matrix message.
 
-### Self-hosted push rules for finalized previews
+### Self-hosted push rules for quiet finalized previews
 
-If you run your own Matrix infrastructure and want `streaming: "partial"` previews to notify only when a
-block or final reply is done, add a per-user push rule for finalized preview edits.
+If you run your own Matrix infrastructure and want quiet previews to notify only when a block or
+final reply is done, set `streaming: "quiet"` and add a per-user push rule for finalized preview edits.
 
 OpenClaw marks finalized text-only preview edits with:
 
@@ -906,7 +906,7 @@ Live directory lookup uses the logged-in Matrix account:
 - `historyLimit`: max room messages to include as group history context. Falls back to `messages.groupChat.historyLimit`. Set `0` to disable.
 - `replyToMode`: `off`, `first`, or `all`.
 - `markdown`: optional Markdown rendering configuration for outbound Matrix text.
-- `streaming`: `off` (default), `partial`, `true`, or `false`. `partial` and `true` enable single-message draft previews with edit-in-place updates.
+- `streaming`: `off` (default), `partial`, `quiet`, `true`, or `false`. `partial` and `true` enable preview-first draft updates with normal Matrix text messages. `quiet` uses non-notifying preview notices for self-hosted push-rule setups.
 - `blockStreaming`: `true` enables separate progress messages for completed assistant blocks while draft preview streaming is active.
 - `threadReplies`: `off`, `inbound`, or `always`.
 - `threadBindings`: per-channel overrides for thread-bound session routing and lifecycle.
