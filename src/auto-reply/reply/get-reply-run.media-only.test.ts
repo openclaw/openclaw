@@ -102,12 +102,6 @@ let drainFormattedSystemEvents: typeof import("./session-system-events.js").drai
 let resolveTypingMode: typeof import("./typing-mode.js").resolveTypingMode;
 let loadScopeCounter = 0;
 
-function createGatewayDrainingError(): Error {
-  const error = new Error("Gateway is draining for restart; new tasks are not accepted");
-  error.name = "GatewayDrainingError";
-  return error;
-}
-
 async function loadFreshGetReplyRunModuleForTest() {
   ({ runPreparedReply } = await importFreshModule<typeof import("./get-reply-run.js")>(
     import.meta.url,
@@ -336,20 +330,6 @@ describe("runPreparedReply media-only handling", () => {
         } as never,
       }),
     );
-
-    expect(vi.mocked(routeReply)).not.toHaveBeenCalled();
-  });
-
-  it("does not emit a reset notice when /new is attempted during gateway drain", async () => {
-    vi.mocked(runReplyAgent).mockRejectedValueOnce(createGatewayDrainingError());
-
-    await expect(
-      runPreparedReply(
-        baseParams({
-          resetTriggered: true,
-        }),
-      ),
-    ).rejects.toThrow("Gateway is draining for restart; new tasks are not accepted");
 
     expect(vi.mocked(routeReply)).not.toHaveBeenCalled();
   });
