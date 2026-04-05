@@ -48,6 +48,75 @@ function createTestXaiFastModeWrapper(
   };
 }
 
+function stripTestXaiUnsupportedStrictFlag(tool: unknown): unknown {
+  if (!tool || typeof tool !== "object") {
+    return tool;
+  }
+  const toolObj = tool as Record<string, unknown>;
+  const fn = toolObj.function;
+  if (!fn || typeof fn !== "object") {
+    return tool;
+  }
+  const fnObj = fn as Record<string, unknown>;
+  if (typeof fnObj.strict !== "boolean") {
+    return tool;
+  }
+  const nextFunction = { ...fnObj };
+  delete nextFunction.strict;
+  return { ...toolObj, function: nextFunction };
+}
+
+function createTestXaiPayloadCompatibilityWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  return (model, context, options) => {
+    const underlying =
+      baseStreamFn ??
+      (() => {
+        throw new Error("missing stream function");
+      });
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          const payloadObj = payload as Record<string, unknown>;
+          if (Array.isArray(payloadObj.tools)) {
+            payloadObj.tools = payloadObj.tools.map((tool) =>
+              stripTestXaiUnsupportedStrictFlag(tool),
+            );
+          }
+          delete payloadObj.reasoning;
+          delete payloadObj.reasoningEffort;
+          delete payloadObj.reasoning_effort;
+        }
+        return originalOnPayload?.(payload, model);
+      },
+    });
+  };
+}
+
+function createTestToolStreamWrapper(
+  baseStreamFn: StreamFn | undefined,
+  enabled: boolean,
+): StreamFn {
+  return (model, context, options) => {
+    const underlying =
+      baseStreamFn ??
+      (() => {
+        throw new Error("missing stream function");
+      });
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (enabled && payload && typeof payload === "object") {
+          (payload as Record<string, unknown>).tool_stream = true;
+        }
+        return originalOnPayload?.(payload, model);
+      },
+    });
+  };
+}
+
 import { createAnthropicToolPayloadCompatibilityWrapper } from "./pi-embedded-runner/anthropic-family-tool-payload-compat.js";
 import {
   createBedrockNoCacheWrapper,
@@ -180,9 +249,14 @@ beforeEach(() => {
         return createConfiguredOllamaCompatNumCtxWrapper(params.context);
       }
       if (params.provider === "xai") {
-        return createTestXaiFastModeWrapper(
-          params.context.streamFn,
+        let streamFn = createTestXaiPayloadCompatibilityWrapper(params.context.streamFn);
+        streamFn = createTestXaiFastModeWrapper(
+          streamFn,
           params.context.extraParams?.fastMode === true,
+        );
+        return createTestToolStreamWrapper(
+          streamFn,
+          params.context.extraParams?.tool_stream !== false,
         );
       }
       if (params.provider === "anthropic") {
@@ -566,6 +640,36 @@ describe("applyExtraParamsToAgent", () => {
     return payload;
   }
 
+  function runToolPayloadMutationCase(params: {
+    applyProvider: "openai" | "xai";
+    applyModelId: string;
+    model: Model<"openai-completions">;
+  }) {
+    const payload: {
+      tools: Array<{ function?: Record<string, unknown> }>;
+    } = {
+      tools: [
+        {
+          function: {
+            name: "write",
+            description: "write a file",
+            parameters: { type: "object", properties: {} },
+            strict: true,
+          },
+        },
+      ],
+    };
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      options?.onPayload?.(payload as unknown as Record<string, unknown>, model);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+    applyExtraParamsToAgent(agent, undefined, params.applyProvider, params.applyModelId);
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(params.model, context, {});
+    return payload;
+  }
+
   function runAnthropicHeaderCase(params: {
     cfg: Record<string, unknown>;
     modelId: string;
@@ -692,6 +796,29 @@ describe("applyExtraParamsToAgent", () => {
     expect(payloads).toHaveLength(1);
     expect(payloads[0]).not.toHaveProperty("reasoning_effort");
     expect(payloads[0]).not.toHaveProperty("reasoning");
+  });
+
+  it("strips xai Responses reasoning payload fields", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "xai",
+      applyModelId: "grok-4.20-beta-latest-reasoning",
+      model: {
+        api: "openai-responses",
+        provider: "xai",
+        id: "grok-4.20-beta-latest-reasoning",
+      } as Model<"openai-responses">,
+      payload: {
+        model: "grok-4.20-beta-latest-reasoning",
+        input: [],
+        reasoning: { effort: "high", summary: "auto" },
+        reasoningEffort: "high",
+        reasoning_effort: "high",
+      },
+    });
+
+    expect(payload).not.toHaveProperty("reasoning");
+    expect(payload).not.toHaveProperty("reasoningEffort");
+    expect(payload).not.toHaveProperty("reasoning_effort");
   });
 
   it("does not inject effort when payload already has reasoning.max_tokens", () => {
@@ -863,6 +990,34 @@ describe("applyExtraParamsToAgent", () => {
     });
 
     expect(payload.parallel_tool_calls).toBe(true);
+  });
+
+  it("strips function.strict for xai providers", () => {
+    const payload = runToolPayloadMutationCase({
+      applyProvider: "xai",
+      applyModelId: "grok-4-1-fast-reasoning",
+      model: {
+        api: "openai-completions",
+        provider: "xai",
+        id: "grok-4-1-fast-reasoning",
+      } as Model<"openai-completions">,
+    });
+
+    expect(payload.tools[0]?.function).not.toHaveProperty("strict");
+  });
+
+  it("keeps function.strict for non-xai providers", () => {
+    const payload = runToolPayloadMutationCase({
+      applyProvider: "openai",
+      applyModelId: "gpt-5.4",
+      model: {
+        api: "openai-completions",
+        provider: "openai",
+        id: "gpt-5.4",
+      } as Model<"openai-completions">,
+    });
+
+    expect(payload.tools[0]?.function?.strict).toBe(true);
   });
 
   it("injects parallel_tool_calls for azure-openai-responses payloads when configured", () => {
