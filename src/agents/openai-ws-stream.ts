@@ -956,7 +956,15 @@ export function createOpenAIWebSocketStreamFn(
             partial: partialMsg,
           });
         };
-        const emitBufferedTextDelta = (params: { itemId: string; contentIndex: number }) => {
+        const emitBufferedTextDelta = (params: {
+          itemId: string;
+          contentIndex: number;
+          requireKnownPhase?: boolean;
+        }) => {
+          const itemPhase = normalizeAssistantPhase(outputItemPhaseById.get(params.itemId));
+          if (params.requireKnownPhase && !itemPhase) {
+            return;
+          }
           const key = getOutputTextKey(params.itemId, params.contentIndex);
           const fullText = outputTextByPart.get(key) ?? "";
           const emittedText = emittedTextByPart.get(key) ?? "";
@@ -1048,6 +1056,7 @@ export function createOpenAIWebSocketStreamFn(
                       emitBufferedTextDelta({
                         itemId: event.item.id,
                         contentIndex: Number.parseInt(contentIndexText ?? "0", 10) || 0,
+                        requireKnownPhase: event.type === "response.output_item.added",
                       });
                     }
                   }

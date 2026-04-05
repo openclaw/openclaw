@@ -1041,6 +1041,39 @@ describe("buildAssistantMessageFromResponse", () => {
     expect(msg.stopReason).toBe("toolUse");
   });
 
+  it("preserves raw function-call arguments when OpenAI returns malformed JSON", () => {
+    const response = {
+      id: "resp_malformed_tool_args",
+      object: "response",
+      created_at: Date.now(),
+      status: "completed",
+      model: "gpt-5.4",
+      output: [
+        {
+          type: "function_call",
+          id: "item_bad_args",
+          call_id: "call_bad_args",
+          name: "exec",
+          arguments: "not valid json",
+        },
+      ],
+      usage: { input_tokens: 100, output_tokens: 50, total_tokens: 150 },
+    } as unknown as ResponseObject;
+
+    const msg = buildAssistantMessageFromResponse(response, modelInfo);
+    const tc = msg.content.find((c) => c.type === "toolCall") as {
+      type: string;
+      id: string;
+      name: string;
+      arguments: string;
+    };
+
+    expect(tc).toBeDefined();
+    expect(tc.name).toBe("exec");
+    expect(tc.id).toBe("call_bad_args|item_bad_args");
+    expect(tc.arguments).toBe("not valid json");
+  });
+
   it("includes both text and tool calls when both present", () => {
     const response = makeResponseObject("resp_4", "Running...", "exec");
     const msg = buildAssistantMessageFromResponse(response, modelInfo);
@@ -2017,6 +2050,167 @@ describe("createOpenAIWebSocketStreamFn", () => {
         type: "text",
         text: "Working...",
         textSignature: JSON.stringify({ v: 1, id: "item_late", phase: "commentary" }),
+      },
+    ]);
+  });
+
+  it("keeps text buffered when output_item.added has no phase and flushes on output_item.done", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-phase-added-no-phase");
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+    );
+
+    const events: Array<{
+      type?: string;
+      delta?: string;
+      partial?: { phase?: string; content?: unknown[] };
+    }> = [];
+    const done = (async () => {
+      for await (const ev of await resolveStream(stream)) {
+        events.push(ev as (typeof events)[number]);
+      }
+    })();
+
+    await new Promise((r) => setImmediate(r));
+    const manager = MockManager.lastInstance!;
+    manager.simulateEvent({
+      type: "response.output_text.delta",
+      item_id: "item_unknown_phase",
+      output_index: 0,
+      content_index: 0,
+      delta: "Done",
+    });
+    manager.simulateEvent({
+      type: "response.output_item.added",
+      output_index: 0,
+      item: {
+        type: "message",
+        id: "item_unknown_phase",
+        role: "assistant",
+        content: [],
+      },
+    });
+
+    expect(events.filter((event) => event.type === "text_delta")).toHaveLength(0);
+
+    manager.simulateEvent({
+      type: "response.output_item.done",
+      output_index: 0,
+      item: {
+        type: "message",
+        id: "item_unknown_phase",
+        role: "assistant",
+        phase: "final_answer",
+        content: [{ type: "output_text", text: "Done" }],
+      },
+    });
+    manager.simulateEvent({
+      type: "response.completed",
+      response: {
+        id: "resp_phase_added_no_phase",
+        object: "response",
+        created_at: Date.now(),
+        status: "completed",
+        model: "gpt-5.2",
+        output: [
+          {
+            type: "message",
+            id: "item_unknown_phase",
+            role: "assistant",
+            phase: "final_answer",
+            content: [{ type: "output_text", text: "Done" }],
+          },
+        ],
+        usage: { input_tokens: 100, output_tokens: 50, total_tokens: 150 },
+      },
+    });
+
+    await done;
+
+    const deltas = events.filter((event) => event.type === "text_delta");
+    expect(deltas).toHaveLength(1);
+    expect(deltas[0]).toMatchObject({ delta: "Done" });
+    expect(deltas[0]?.partial?.phase).toBe("final_answer");
+    expect(deltas[0]?.partial?.content).toEqual([
+      {
+        type: "text",
+        text: "Done",
+        textSignature: JSON.stringify({ v: 1, id: "item_unknown_phase", phase: "final_answer" }),
+      },
+    ]);
+  });
+
+  it("emits text immediately when output_item.added includes a valid final_answer phase", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-phase-final-added");
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+    );
+
+    const events: Array<{
+      type?: string;
+      delta?: string;
+      partial?: { phase?: string; content?: unknown[] };
+    }> = [];
+    const done = (async () => {
+      for await (const ev of await resolveStream(stream)) {
+        events.push(ev as (typeof events)[number]);
+      }
+    })();
+
+    await new Promise((r) => setImmediate(r));
+    const manager = MockManager.lastInstance!;
+    manager.simulateEvent({
+      type: "response.output_item.added",
+      output_index: 0,
+      item: {
+        type: "message",
+        id: "item_final_immediate",
+        role: "assistant",
+        phase: "final_answer",
+        content: [],
+      },
+    });
+    manager.simulateEvent({
+      type: "response.output_text.delta",
+      item_id: "item_final_immediate",
+      output_index: 0,
+      content_index: 0,
+      delta: "Answer",
+    });
+    manager.simulateEvent({
+      type: "response.completed",
+      response: {
+        id: "resp_phase_final_added",
+        object: "response",
+        created_at: Date.now(),
+        status: "completed",
+        model: "gpt-5.2",
+        output: [
+          {
+            type: "message",
+            id: "item_final_immediate",
+            role: "assistant",
+            phase: "final_answer",
+            content: [{ type: "output_text", text: "Answer" }],
+          },
+        ],
+        usage: { input_tokens: 100, output_tokens: 50, total_tokens: 150 },
+      },
+    });
+
+    await done;
+
+    const deltas = events.filter((event) => event.type === "text_delta");
+    expect(deltas).toHaveLength(1);
+    expect(deltas[0]).toMatchObject({ delta: "Answer" });
+    expect(deltas[0]?.partial?.phase).toBe("final_answer");
+    expect(deltas[0]?.partial?.content).toEqual([
+      {
+        type: "text",
+        text: "Answer",
+        textSignature: JSON.stringify({ v: 1, id: "item_final_immediate", phase: "final_answer" }),
       },
     ]);
   });
