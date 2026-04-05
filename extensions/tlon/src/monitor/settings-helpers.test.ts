@@ -14,7 +14,7 @@ const baseAccount: TlonResolvedAccount = {
   ship: "~sampel-palnet",
   url: "https://example.com",
   code: "lidlut-tabwed-pillex-ridrup",
-  allowPrivateNetwork: false,
+  dangerouslyAllowPrivateNetwork: false,
   groupChannels: ["chat/~host/general"],
   dmAllowlist: ["~zod"],
   groupInviteAllowlist: ["~bus"],

@@ -37,9 +37,9 @@ async function createHttpPokeApi(params: {
   url: string;
   code: string;
   ship: string;
-  allowPrivateNetwork?: boolean;
+  dangerouslyAllowPrivateNetwork?: boolean;
 }) {
-  const ssrfPolicy = ssrfPolicyFromAllowPrivateNetwork(params.allowPrivateNetwork);
+  const ssrfPolicy = ssrfPolicyFromAllowPrivateNetwork(params.dangerouslyAllowPrivateNetwork);
   const cookie = await authenticate(params.url, params.code, { ssrfPolicy });
   const channelId = `${Math.floor(Date.now() / 1000)}-${crypto.randomUUID()}`;
   const channelPath = `/~/channel/${channelId}`;
@@ -119,7 +119,7 @@ async function withHttpPokeAccountApi<T>(
     url: account.url,
     ship: account.ship,
     code: account.code,
-    allowPrivateNetwork: account.allowPrivateNetwork ?? undefined,
+    dangerouslyAllowPrivateNetwork: account.dangerouslyAllowPrivateNetwork ?? undefined,
   });
 
   try {
@@ -167,7 +167,7 @@ export const tlonRuntimeOutbound: ChannelOutboundAdapter = {
       shipName: account.ship.replace(/^~/, ""),
       verbose: false,
       getCode: async () => account.code,
-      allowPrivateNetwork: account.allowPrivateNetwork ?? undefined,
+      dangerouslyAllowPrivateNetwork: account.dangerouslyAllowPrivateNetwork ?? undefined,
     });
 
     const uploadedUrl = mediaUrl ? await uploadImageFromUrl(mediaUrl) : undefined;
@@ -197,7 +197,7 @@ export const tlonRuntimeOutbound: ChannelOutboundAdapter = {
 
 export async function probeTlonAccount(account: ConfiguredTlonAccount) {
   try {
-    const ssrfPolicy = ssrfPolicyFromAllowPrivateNetwork(account.allowPrivateNetwork);
+    const ssrfPolicy = ssrfPolicyFromAllowPrivateNetwork(account.dangerouslyAllowPrivateNetwork);
     const cookie = await authenticate(account.url, account.code, { ssrfPolicy });
     const { response, release } = await urbitFetch({
       baseUrl: account.url,

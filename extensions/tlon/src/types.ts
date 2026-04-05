@@ -5,7 +5,10 @@ import {
   resolveMergedAccountConfig,
 } from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { hasLegacyFlatAllowPrivateNetworkAlias, isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  hasLegacyFlatAllowPrivateNetworkAlias,
+  isPrivateNetworkOptInEnabled,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 
 type TlonAccountConfig = {
   name?: string;
@@ -36,7 +39,7 @@ export type TlonResolvedAccount = {
   ship: string | null;
   url: string | null;
   code: string | null;
-  allowPrivateNetwork: boolean | null;
+  dangerouslyAllowPrivateNetwork: boolean | null;
   groupChannels: string[];
   dmAllowlist: string[];
   /** Ships allowed to invite us to groups (security: prevent malicious group invites) */
@@ -88,7 +91,7 @@ export function resolveTlonAccount(
       ship: null,
       url: null,
       code: null,
-      allowPrivateNetwork: null,
+      dangerouslyAllowPrivateNetwork: null,
       groupChannels: [],
       dmAllowlist: [],
       groupInviteAllowlist: [],
@@ -105,15 +108,14 @@ export function resolveTlonAccount(
   const ship = (merged.ship ?? null) as string | null;
   const url = (merged.url ?? null) as string | null;
   const code = (merged.code ?? null) as string | null;
-  const allowPrivateNetwork =
-    isPrivateNetworkOptInEnabled(merged)
-      ? true
-      : typeof merged.network?.dangerouslyAllowPrivateNetwork === "boolean"
-        ? merged.network.dangerouslyAllowPrivateNetwork
-        : hasLegacyFlatAllowPrivateNetworkAlias(merged) &&
-            typeof merged.allowPrivateNetwork === "boolean"
-          ? merged.allowPrivateNetwork
-          : null;
+  const dangerouslyAllowPrivateNetwork = isPrivateNetworkOptInEnabled(merged)
+    ? true
+    : typeof merged.network?.dangerouslyAllowPrivateNetwork === "boolean"
+      ? merged.network.dangerouslyAllowPrivateNetwork
+      : hasLegacyFlatAllowPrivateNetworkAlias(merged) &&
+          typeof merged.allowPrivateNetwork === "boolean"
+        ? merged.allowPrivateNetwork
+        : null;
   const groupChannels = (merged.groupChannels ?? []) as string[];
   const dmAllowlist = (merged.dmAllowlist ?? []) as string[];
   const groupInviteAllowlist = (merged.groupInviteAllowlist ?? []) as string[];
@@ -133,7 +135,7 @@ export function resolveTlonAccount(
     ship,
     url,
     code,
-    allowPrivateNetwork,
+    dangerouslyAllowPrivateNetwork,
     groupChannels,
     dmAllowlist,
     groupInviteAllowlist,

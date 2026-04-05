@@ -23,7 +23,7 @@ export type TlonSetupInput = ChannelSetupInput & {
   ship?: string;
   url?: string;
   code?: string;
-  allowPrivateNetwork?: boolean;
+  dangerouslyAllowPrivateNetwork?: boolean;
   groupChannels?: string[];
   dmAllowlist?: string[];
   autoDiscoverChannels?: boolean;
