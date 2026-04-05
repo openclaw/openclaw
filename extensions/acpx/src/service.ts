@@ -11,6 +11,7 @@ import {
   toAcpMcpServers,
   type ResolvedAcpxPluginConfig,
 } from "./config.js";
+import { migrateLegacyAcpxSessions } from "./legacy-session-migration.js";
 import {
   ACPX_BACKEND_ID,
   AcpxRuntime,
@@ -76,6 +77,10 @@ export function createAcpxRuntimeService(
         workspaceDir: ctx.workspaceDir,
       });
       await fs.mkdir(pluginConfig.stateDir, { recursive: true });
+      await migrateLegacyAcpxSessions({
+        stateDir: pluginConfig.stateDir,
+        logger: ctx.logger,
+      });
 
       const runtimeFactory = params.runtimeFactory ?? createDefaultRuntime;
       runtime = runtimeFactory({
