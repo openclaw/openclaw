@@ -1,1 +1,1 @@
-export { isSignalSenderAllowed, type SignalSender } from "./src/identity.js";
+export { signalOutbound } from "./src/outbound-adapter.js";
