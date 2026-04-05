@@ -104,19 +104,25 @@ export function renderActivityDetail(props: ActivityDetailProps) {
           ${renderField("Depth", node.depth)} ${renderField("Run ID", node.runId)}
         </div>
 
-        ${node.kind === "tool" && node.metadata.args
+        ${node.kind === "tool"
           ? html`
               <div class="activity-detail__section">
                 <div class="activity-detail__section-title muted">Input</div>
-                <pre class="activity-detail__json">${formatJsonPreview(node.metadata.args)}</pre>
+                ${node.metadata.args
+                  ? html`<pre class="activity-detail__json">
+${formatJsonPreview(node.metadata.args)}</pre
+                    >`
+                  : html`<span class="muted">No input data</span>`}
               </div>
-            `
-          : nothing}
-        ${node.kind === "tool" && node.metadata.result
-          ? html`
               <div class="activity-detail__section">
                 <div class="activity-detail__section-title muted">Output</div>
-                <pre class="activity-detail__json">${formatJsonPreview(node.metadata.result)}</pre>
+                ${node.metadata.result
+                  ? html`<pre class="activity-detail__json">
+${formatJsonPreview(node.metadata.result)}</pre
+                    >`
+                  : html`<span class="muted"
+                      >${node.status === "running" ? "Waiting for result…" : "No output data"}</span
+                    >`}
               </div>
             `
           : nothing}
