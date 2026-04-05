@@ -3,7 +3,7 @@ import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { authenticate } from "./urbit/auth.js";
 import { scryUrbitPath } from "./urbit/channel-ops.js";
-import { ssrfPolicyFromAllowPrivateNetwork } from "./urbit/context.js";
+import { ssrfPolicyFromDangerouslyAllowPrivateNetwork } from "./urbit/context.js";
 
 type ClientConfig = {
   shipUrl: string;
@@ -112,7 +112,7 @@ function sanitizeFileName(fileName: string): string {
 
 async function getAuthCookie(config: ClientConfig): Promise<string> {
   return await authenticate(config.shipUrl, await config.getCode(), {
-    ssrfPolicy: ssrfPolicyFromAllowPrivateNetwork(config.dangerouslyAllowPrivateNetwork),
+    ssrfPolicy: ssrfPolicyFromDangerouslyAllowPrivateNetwork(config.dangerouslyAllowPrivateNetwork),
   });
 }
 
@@ -121,7 +121,9 @@ async function scryJson<T>(config: ClientConfig, cookie: string, path: string): 
     {
       baseUrl: config.shipUrl,
       cookie,
-      ssrfPolicy: ssrfPolicyFromAllowPrivateNetwork(config.dangerouslyAllowPrivateNetwork),
+      ssrfPolicy: ssrfPolicyFromDangerouslyAllowPrivateNetwork(
+        config.dangerouslyAllowPrivateNetwork,
+      ),
     },
     { path, auditContext: "tlon-storage-scry" },
   )) as T;

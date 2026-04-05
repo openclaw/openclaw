@@ -603,6 +603,84 @@ export async function dispatchReplyFromConfig(params: {
     const shouldSendToolStartStatuses = ctx.ChatType !== "group" || ctx.IsForum === true;
     const toolStartStatusesSent = new Set<string>();
     let toolStartStatusCount = 0;
+    const normalizeWorkingLabel = (label: string) => {
+      const collapsed = label.replace(/\s+/g, " ").trim();
+      if (collapsed.length <= 80) {
+        return collapsed;
+      }
+      return `${collapsed.slice(0, 77).trimEnd()}...`;
+    };
+    const formatPlanUpdateText = (payload: { explanation?: string; steps?: string[] }) => {
+      const explanation = payload.explanation?.replace(/\s+/g, " ").trim();
+      const steps = (payload.steps ?? [])
+        .map((step) => step.replace(/\s+/g, " ").trim())
+        .filter(Boolean);
+      const parts: string[] = [];
+      if (explanation) {
+        parts.push(explanation);
+      }
+      if (steps.length > 0) {
+        parts.push(steps.map((step, index) => `${index + 1}. ${step}`).join("\n"));
+      }
+      return parts.join("\n\n").trim() || "Planning next steps.";
+    };
+    const maybeSendWorkingStatus = (label: string) => {
+      const normalizedLabel = normalizeWorkingLabel(label);
+      if (
+        !shouldSendToolStartStatuses ||
+        !normalizedLabel ||
+        toolStartStatusCount >= 2 ||
+        toolStartStatusesSent.has(normalizedLabel)
+      ) {
+        return;
+      }
+      toolStartStatusesSent.add(normalizedLabel);
+      toolStartStatusCount += 1;
+      const payload: ReplyPayload = {
+        text: `Working: ${normalizedLabel}`,
+      };
+      if (shouldRouteToOriginating) {
+        return sendPayloadAsync(payload, undefined, false);
+      }
+      dispatcher.sendToolResult(payload);
+    };
+    const sendPlanUpdate = (payload: { explanation?: string; steps?: string[] }) => {
+      const replyPayload: ReplyPayload = {
+        text: formatPlanUpdateText(payload),
+      };
+      if (shouldRouteToOriginating) {
+        return sendPayloadAsync(replyPayload, undefined, false);
+      }
+      dispatcher.sendToolResult(replyPayload);
+    };
+    const summarizeApprovalLabel = (payload: {
+      status?: string;
+      command?: string;
+      message?: string;
+    }) => {
+      if (payload.status === "pending") {
+        if (payload.command?.trim()) {
+          return normalizeWorkingLabel(`awaiting approval: ${payload.command}`);
+        }
+        return "awaiting approval";
+      }
+      if (payload.status === "unavailable") {
+        if (payload.message?.trim()) {
+          return normalizeWorkingLabel(payload.message);
+        }
+        return "approval unavailable";
+      }
+      return "";
+    };
+    const summarizePatchLabel = (payload: { summary?: string; title?: string }) => {
+      if (payload.summary?.trim()) {
+        return normalizeWorkingLabel(payload.summary);
+      }
+      if (payload.title?.trim()) {
+        return normalizeWorkingLabel(payload.title);
+      }
+      return "";
+    };
     const acpDispatch = await dispatchAcpRuntime.tryDispatchAcpReply({
       ctx,
       cfg,
@@ -701,27 +779,31 @@ export async function dispatchReplyFromConfig(params: {
           };
           return run();
         },
-        onToolStart: ({ name, phase }) => {
-          if (!shouldSendToolStartStatuses || phase !== "start") {
+        onPlanUpdate: ({ phase, explanation, steps }) => {
+          if (phase !== "update") {
             return;
           }
-          const normalizedName = typeof name === "string" ? name.trim() : "";
-          if (
-            !normalizedName ||
-            toolStartStatusCount >= 2 ||
-            toolStartStatusesSent.has(normalizedName)
-          ) {
+          return sendPlanUpdate({ explanation, steps });
+        },
+        onApprovalEvent: ({ phase, status, command, message }) => {
+          if (phase !== "requested") {
             return;
           }
-          toolStartStatusesSent.add(normalizedName);
-          toolStartStatusCount += 1;
-          const payload: ReplyPayload = {
-            text: `Working: ${normalizedName}`,
-          };
-          if (shouldRouteToOriginating) {
-            return sendPayloadAsync(payload, undefined, false);
+          const label = summarizeApprovalLabel({ status, command, message });
+          if (!label) {
+            return;
           }
-          dispatcher.sendToolResult(payload);
+          return maybeSendWorkingStatus(label);
+        },
+        onPatchSummary: ({ phase, summary, title }) => {
+          if (phase !== "end") {
+            return;
+          }
+          const label = summarizePatchLabel({ summary, title });
+          if (!label) {
+            return;
+          }
+          return maybeSendWorkingStatus(label);
         },
         onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => {
           const run = async () => {

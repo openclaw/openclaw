@@ -15,6 +15,10 @@ import {
 } from "./prompt-cache-stability.js";
 import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
+import type {
+  ProviderSystemPromptContribution,
+  ProviderSystemPromptSectionId,
+} from "./system-prompt-contribution.js";
 
 /**
  * Controls which hardcoded sections are included in the system prompt.
@@ -269,6 +273,25 @@ function buildExecutionBiasSection(params: { isMinimal: boolean }) {
   ];
 }
 
+function normalizeProviderPromptBlock(value?: string): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = normalizeStructuredPromptSection(value);
+  return normalized || undefined;
+}
+
+function buildOverridablePromptSection(params: {
+  override?: string;
+  fallback: string[];
+}): string[] {
+  const override = normalizeProviderPromptBlock(params.override);
+  if (override) {
+    return [override, ""];
+  }
+  return params.fallback;
+}
+
 function buildExecApprovalPromptGuidance(params: {
   runtimeChannel?: string;
   inlineButtonsEnabled?: boolean;
@@ -296,7 +319,6 @@ export function buildAgentSystemPrompt(params: {
   ownerDisplaySecret?: string;
   reasoningTagHint?: boolean;
   toolNames?: string[];
-  toolSummaries?: Record<string, string>;
   modelAliasLines?: string[];
   userTimezone?: string;
   userTime?: string;
@@ -333,80 +355,11 @@ export function buildAgentSystemPrompt(params: {
     channel: string;
   };
   memoryCitationsMode?: MemoryCitationsMode;
+  promptContribution?: ProviderSystemPromptContribution;
 }) {
   const acpEnabled = params.acpEnabled !== false;
   const sandboxedRuntime = params.sandboxInfo?.enabled === true;
   const acpSpawnRuntimeEnabled = acpEnabled && !sandboxedRuntime;
-  const execToolSummary =
-    "Run shell commands (pty available for TTY-required CLIs; use for work that starts now, not delayed follow-ups; background completion may wake automatically when enabled)";
-  const processToolSummary =
-    "Manage background exec sessions for commands already started (poll/log for inspection, debugging, input, intervention, or completion confirmation when auto-wake is unavailable)";
-  const cronToolSummary =
-    "Manage cron jobs and wake events (use for reminders, delayed follow-ups, and recurring tasks; for requests like 'check back in 10 minutes' or 'remind me later', use cron instead of exec sleep, yieldMs delays, or process polling; when scheduling a reminder, write the systemEvent text as something that will read like a reminder when it fires, and mention that it is a reminder depending on the time gap between setting and firing; include recent context in reminder text if appropriate)";
-  const coreToolSummaries: Record<string, string> = {
-    read: "Read file contents",
-    write: "Create or overwrite files",
-    edit: "Make precise edits to files",
-    apply_patch: "Apply multi-file patches",
-    grep: "Search file contents for patterns",
-    find: "Find files by glob pattern",
-    ls: "List directory contents",
-    exec: execToolSummary,
-    process: processToolSummary,
-    web_search: "Search the web",
-    web_fetch: "Fetch and extract readable content from a URL",
-    // Channel docking: add login tools here when a channel needs interactive linking.
-    browser: "Control web browser",
-    canvas: "Present/eval/snapshot the Canvas",
-    nodes: "List/describe/notify/camera/screen on paired nodes",
-    cron: cronToolSummary,
-    message: "Send messages and channel actions",
-    gateway: "Restart, apply config, or run updates on the running OpenClaw process",
-    agents_list: acpSpawnRuntimeEnabled
-      ? 'List OpenClaw agent ids allowed for sessions_spawn when runtime="subagent" (not ACP harness ids)'
-      : "List OpenClaw agent ids allowed for sessions_spawn",
-    sessions_list: "List other sessions (incl. sub-agents) with filters/last",
-    sessions_history: "Fetch history for another session/sub-agent",
-    sessions_send: "Send a message to another session/sub-agent",
-    sessions_spawn: acpSpawnRuntimeEnabled
-      ? 'Spawn an isolated sub-agent or ACP coding session (runtime="acp" requires `agentId` unless `acp.defaultAgent` is configured; ACP harness ids follow acp.allowedAgents, not agents_list)'
-      : "Spawn an isolated sub-agent session",
-    subagents: "List, steer, or kill sub-agent runs for this requester session",
-    session_status:
-      "Show a /status-equivalent status card (usage + time + Reasoning/Verbose/Elevated); use for model-use questions (📊 session_status); optional per-session model override",
-    image: "Analyze an image with the configured image model",
-    image_generate: "Generate images with the configured image-generation model",
-  };
-
-  const toolOrder = [
-    "read",
-    "write",
-    "edit",
-    "apply_patch",
-    "grep",
-    "find",
-    "ls",
-    "exec",
-    "process",
-    "code_execution",
-    "web_search",
-    "web_fetch",
-    "browser",
-    "canvas",
-    "nodes",
-    "cron",
-    "message",
-    "gateway",
-    "agents_list",
-    "sessions_list",
-    "sessions_history",
-    "sessions_send",
-    "subagents",
-    "session_status",
-    "image",
-    "image_generate",
-  ];
-
   const rawToolNames = (params.toolNames ?? []).map((tool) => tool.trim());
   const canonicalToolNames = rawToolNames.filter(Boolean);
   // Preserve caller casing while deduping tool names by lowercase.
@@ -423,33 +376,10 @@ export function buildAgentSystemPrompt(params: {
   const normalizedTools = canonicalToolNames.map((tool) => tool.toLowerCase());
   const availableTools = new Set(normalizedTools);
   const hasSessionsSpawn = availableTools.has("sessions_spawn");
+  const hasUpdatePlanTool = availableTools.has("update_plan");
   const acpHarnessSpawnAllowed = hasSessionsSpawn && acpSpawnRuntimeEnabled;
-  const externalToolSummaries = new Map<string, string>();
-  for (const [key, value] of Object.entries(params.toolSummaries ?? {})) {
-    const normalized = key.trim().toLowerCase();
-    if (!normalized || !value?.trim()) {
-      continue;
-    }
-    externalToolSummaries.set(normalized, value.trim());
-  }
-  const extraTools = Array.from(
-    new Set(normalizedTools.filter((tool) => !toolOrder.includes(tool))),
-  );
-  const enabledTools = toolOrder.filter((tool) => availableTools.has(tool));
-  const toolLines = enabledTools.map((tool) => {
-    const summary = coreToolSummaries[tool] ?? externalToolSummaries.get(tool);
-    const name = resolveToolName(tool);
-    return summary ? `- ${name}: ${summary}` : `- ${name}`;
-  });
-  for (const tool of extraTools.toSorted()) {
-    const summary = coreToolSummaries[tool] ?? externalToolSummaries.get(tool);
-    const name = resolveToolName(tool);
-    toolLines.push(summary ? `- ${name}: ${summary}` : `- ${name}`);
-  }
-
-  const usingDefaultToolFallback = toolLines.length === 0;
   const hasGateway = availableTools.has("gateway");
-  const hasCronTool = availableTools.has("cron") || usingDefaultToolFallback;
+  const hasCronTool = availableTools.has("cron") || canonicalToolNames.length === 0;
   const readToolName = resolveToolName("read");
   const execToolName = resolveToolName("exec");
   const processToolName = resolveToolName("process");
@@ -457,6 +387,17 @@ export function buildAgentSystemPrompt(params: {
     typeof params.extraSystemPrompt === "string"
       ? normalizeStructuredPromptSection(params.extraSystemPrompt)
       : undefined;
+  const promptContribution = params.promptContribution;
+  const providerStablePrefix = normalizeProviderPromptBlock(promptContribution?.stablePrefix);
+  const providerDynamicSuffix = normalizeProviderPromptBlock(promptContribution?.dynamicSuffix);
+  const providerSectionOverrides = Object.fromEntries(
+    Object.entries(promptContribution?.sectionOverrides ?? {})
+      .map(([key, value]) => [
+        key,
+        normalizeProviderPromptBlock(typeof value === "string" ? value : undefined),
+      ])
+      .filter(([, value]) => Boolean(value)),
+  ) as Partial<Record<ProviderSystemPromptSectionId, string>>;
   const ownerDisplay = params.ownerDisplay === "hash" ? "hash" : "raw";
   const ownerLine = buildOwnerIdentityLine(
     params.ownerNumbers ?? [],
@@ -545,28 +486,9 @@ export function buildAgentSystemPrompt(params: {
     "You are a personal assistant running inside OpenClaw.",
     "",
     "## Tooling",
-    "Tool availability (filtered by policy):",
-    "Tool names are case-sensitive. Call tools exactly as listed.",
-    toolLines.length > 0
-      ? toolLines.join("\n")
-      : [
-          "Pi lists the standard tools above. This runtime enables:",
-          "- grep: search file contents for patterns",
-          "- find: find files by glob pattern",
-          "- ls: list directory contents",
-          "- apply_patch: apply multi-file patches",
-          `- ${execToolName}: ${execToolSummary.toLowerCase()}`,
-          `- ${processToolName}: ${processToolSummary.toLowerCase()}`,
-          "- browser: control OpenClaw's dedicated browser",
-          "- canvas: present/eval/snapshot the Canvas",
-          "- nodes: list/describe/notify/camera/screen on paired nodes",
-          `- cron: ${cronToolSummary.toLowerCase()}`,
-          "- sessions_list: list sessions",
-          "- sessions_history: fetch session history",
-          "- sessions_send: send to another session",
-          "- subagents: list/steer/kill sub-agent runs",
-          '- session_status: show usage/time/model state and answer "what model are we using?"',
-        ].join("\n"),
+    "Structured tool definitions are the source of truth for tool names, descriptions, and parameters.",
+    "Tool names are case-sensitive. Call tools exactly as listed in the structured tool definitions.",
+    "If a tool is present in the structured tool definitions, it is available unless a later tool call reports a policy/runtime restriction.",
     "TOOLS.md does not control tool availability; it is user guidance for how to use external tools.",
     ...(hasCronTool
       ? [
@@ -579,6 +501,14 @@ export function buildAgentSystemPrompt(params: {
           `For long waits, avoid rapid poll loops: use ${execToolName} with enough yieldMs or ${processToolName}(action=poll, timeout=<ms>).`,
           `For long-running work that starts now, start it once and rely on automatic completion wake when it is enabled and the command emits output or fails; otherwise use ${processToolName} to confirm completion, and use it for logs, status, input, or intervention.`,
         ]),
+    ...(hasUpdatePlanTool
+      ? [
+          "For non-trivial multi-step work, keep a short plan updated with `update_plan`.",
+          "Skip `update_plan` for simple tasks, obvious one-step fixes, or work you can finish in a few direct actions.",
+          "When you use `update_plan`, keep exactly one step `in_progress` until the work is done.",
+          "After calling `update_plan`, continue the work and do not repeat the full plan unless the user asks.",
+        ]
+      : []),
     "If a task is more complex or takes longer, spawn a sub-agent. Completion is push-based: it will auto-announce when done.",
     ...(acpHarnessSpawnAllowed
       ? [
@@ -590,22 +520,38 @@ export function buildAgentSystemPrompt(params: {
       : []),
     "Do not poll `subagents list` / `sessions_list` in a loop; only check status on-demand (for intervention, debugging, or when explicitly asked).",
     "",
-    "## Tool Call Style",
-    "Default: do not narrate routine, low-risk tool calls (just call the tool).",
-    "Narrate only when it helps: multi-step work, complex/challenging problems, sensitive actions (e.g., deletions), or when the user explicitly asks.",
-    "Keep narration brief and value-dense; avoid repeating obvious steps.",
-    "Use plain human language for narration unless in a technical context.",
-    "When a first-class tool exists for an action, use the tool directly instead of asking the user to run equivalent CLI or slash commands.",
-    buildExecApprovalPromptGuidance({
-      runtimeChannel: params.runtimeInfo?.channel,
-      inlineButtonsEnabled,
+    ...buildOverridablePromptSection({
+      override: providerSectionOverrides.interaction_style,
+      fallback: [],
     }),
-    "Never execute /approve through exec or any other shell/tool path; /approve is a user-facing approval command, not a shell command.",
-    "Treat allow-once as single-command only: if another elevated command needs approval, request a fresh /approve and do not claim prior approval covered it.",
-    "When approvals are required, preserve and show the full command/script exactly as provided (including chained operators like &&, ||, |, ;, or multiline shells) so the user can approve what will actually run.",
-    "",
-    ...buildExecutionBiasSection({
-      isMinimal,
+    ...buildOverridablePromptSection({
+      override: providerSectionOverrides.tool_call_style,
+      fallback: [
+        "## Tool Call Style",
+        "Default: do not narrate routine, low-risk tool calls (just call the tool).",
+        "Narrate only when it helps: multi-step work, complex/challenging problems, sensitive actions (e.g., deletions), or when the user explicitly asks.",
+        "Keep narration brief and value-dense; avoid repeating obvious steps.",
+        "Use plain human language for narration unless in a technical context.",
+        "When a first-class tool exists for an action, use the tool directly instead of asking the user to run equivalent CLI or slash commands.",
+        buildExecApprovalPromptGuidance({
+          runtimeChannel: params.runtimeInfo?.channel,
+          inlineButtonsEnabled,
+        }),
+        "Never execute /approve through exec or any other shell/tool path; /approve is a user-facing approval command, not a shell command.",
+        "Treat allow-once as single-command only: if another elevated command needs approval, request a fresh /approve and do not claim prior approval covered it.",
+        "When approvals are required, preserve and show the full command/script exactly as provided (including chained operators like &&, ||, |, ;, or multiline shells) so the user can approve what will actually run.",
+        "",
+      ],
+    }),
+    ...buildOverridablePromptSection({
+      override: providerSectionOverrides.execution_bias,
+      fallback: buildExecutionBiasSection({
+        isMinimal,
+      }),
+    }),
+    ...buildOverridablePromptSection({
+      override: providerStablePrefix,
+      fallback: [],
     }),
     ...safetySection,
     "## OpenClaw CLI Quick Reference",
@@ -795,6 +741,9 @@ export function buildAgentSystemPrompt(params: {
     const contextHeader =
       promptMode === "minimal" ? "## Subagent Context" : "## Group Chat Context";
     lines.push(contextHeader, extraSystemPrompt, "");
+  }
+  if (providerDynamicSuffix) {
+    lines.push(providerDynamicSuffix, "");
   }
 
   // Skip heartbeats for subagent/none modes

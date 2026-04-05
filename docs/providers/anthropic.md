@@ -289,9 +289,11 @@ If the `claude` binary is not on the gateway host PATH:
 
 ### What you get
 
-- Claude subscription auth reused from the local CLI
+- Claude subscription auth reused from the local CLI (read at runtime, not persisted)
 - Normal OpenClaw message/session routing
-- Claude CLI session continuity across turns
+- Claude CLI session continuity across turns (invalidated on auth changes)
+- Gateway tools exposed to Claude CLI via loopback MCP bridge
+- JSONL streaming with live partial-message progress
 
 ### Migrate from Anthropic auth to Claude CLI
 
@@ -347,8 +349,16 @@ you need to.
 ### Important limits
 
 - This is **not** the Anthropic API provider. It is the local CLI runtime.
-- Tools are disabled on the OpenClaw side for CLI backend runs.
-- Text in, text out. No OpenClaw streaming handoff.
+- OpenClaw does not inject tool calls directly. Claude CLI receives gateway
+  tools through a loopback MCP bridge (`bundleMcp: true`, the default).
+- Claude CLI streams replies via JSONL (`stream-json` with
+  `--include-partial-messages`). Prompts are sent over stdin, not argv.
+- Auth is read at runtime from live Claude CLI credentials and is not persisted
+  to OpenClaw profiles. Keychain prompts are suppressed in non-interactive
+  contexts.
+- Session reuse is tracked via `cliSessionBinding` metadata. When Claude CLI
+  login state changes (relogin, token rotation), stored sessions are
+  invalidated and a fresh session starts.
 - Best fit for a personal gateway host, not shared multi-user billing setups.
 
 More details: [/gateway/cli-backends](/gateway/cli-backends)

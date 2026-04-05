@@ -51,22 +51,22 @@ import { BUNDLED_PLUGIN_TEST_GLOB, bundledPluginFile } from "./helpers/bundled-p
 const EXTENSIONS_CHANNEL_GLOB = ["extensions", "channel", "**"].join("/");
 
 describe("resolveVitestIsolation", () => {
-  it("defaults shared scoped configs to isolated workers", () => {
-    expect(resolveVitestIsolation({})).toBe(true);
+  it("defaults shared scoped configs to the non-isolated runner", () => {
+    expect(resolveVitestIsolation({})).toBe(false);
   });
 
   it("ignores the legacy isolation escape hatches", () => {
-    expect(resolveVitestIsolation({ OPENCLAW_TEST_ISOLATE: "1" })).toBe(true);
-    expect(resolveVitestIsolation({ OPENCLAW_TEST_NO_ISOLATE: "0" })).toBe(true);
-    expect(resolveVitestIsolation({ OPENCLAW_TEST_NO_ISOLATE: "false" })).toBe(true);
+    expect(resolveVitestIsolation({ OPENCLAW_TEST_ISOLATE: "1" })).toBe(false);
+    expect(resolveVitestIsolation({ OPENCLAW_TEST_NO_ISOLATE: "0" })).toBe(false);
+    expect(resolveVitestIsolation({ OPENCLAW_TEST_NO_ISOLATE: "false" })).toBe(false);
   });
 });
 
 describe("createScopedVitestConfig", () => {
-  it("applies isolated mode by default", () => {
+  it("applies the non-isolated runner by default", () => {
     const config = createScopedVitestConfig(["src/example.test.ts"], { env: {} });
-    expect(config.test?.isolate).toBe(true);
-    expect(config.test?.runner).toBeUndefined();
+    expect(config.test?.isolate).toBe(false);
+    expect(config.test?.runner).toBe("./test/non-isolated-runner.ts");
     expect(config.test?.setupFiles).toEqual(["test/setup.ts", "test/setup-openclaw-runtime.ts"]);
   });
 
@@ -160,30 +160,34 @@ describe("scoped vitest configs", () => {
   const defaultUtilsConfig = createUtilsVitestConfig({});
   const defaultWizardConfig = createWizardVitestConfig({});
 
-  it("keeps every scoped lane on fork workers with isolation enabled", () => {
+  it("keeps scoped lanes on threads with the shared non-isolated runner", () => {
     for (const config of [
       defaultChannelsConfig,
       defaultAcpConfig,
       defaultExtensionsConfig,
       defaultExtensionChannelsConfig,
       defaultExtensionProvidersConfig,
-      defaultGatewayConfig,
       defaultInfraConfig,
-      defaultCommandsConfig,
       defaultAutoReplyConfig,
-      defaultAgentsConfig,
       defaultToolingConfig,
       defaultUiConfig,
     ]) {
-      expect(config.test?.pool).toBe("forks");
-      expect(config.test?.isolate).toBe(true);
-      expect(config.test?.runner).toBeUndefined();
+      expect(config.test?.pool).toBe("threads");
+      expect(config.test?.isolate).toBe(false);
+      expect(config.test?.runner).toBe("./test/non-isolated-runner.ts");
+    }
+
+    for (const config of [defaultGatewayConfig, defaultCommandsConfig, defaultAgentsConfig]) {
+      expect(config.test?.pool).toBe("threads");
+      expect(config.test?.isolate).toBe(false);
+      expect(config.test?.runner).toBe("./test/non-isolated-runner.ts");
     }
   });
 
-  it("defaults channel tests to isolated fork mode", () => {
-    expect(defaultChannelsConfig.test?.isolate).toBe(true);
-    expect(defaultChannelsConfig.test?.pool).toBe("forks");
+  it("defaults channel tests to threads with the non-isolated runner", () => {
+    expect(defaultChannelsConfig.test?.isolate).toBe(false);
+    expect(defaultChannelsConfig.test?.pool).toBe("threads");
+    expect(defaultChannelsConfig.test?.runner).toBe("./test/non-isolated-runner.ts");
   });
 
   it("keeps the core channel lane limited to non-extension roots", () => {
@@ -217,9 +221,10 @@ describe("scoped vitest configs", () => {
     }
   });
 
-  it("defaults extension tests to isolated fork mode", () => {
-    expect(defaultExtensionsConfig.test?.isolate).toBe(true);
-    expect(defaultExtensionsConfig.test?.pool).toBe("forks");
+  it("defaults extension tests to threads with the non-isolated runner", () => {
+    expect(defaultExtensionsConfig.test?.isolate).toBe(false);
+    expect(defaultExtensionsConfig.test?.pool).toBe("threads");
+    expect(defaultExtensionsConfig.test?.runner).toBe("./test/non-isolated-runner.ts");
   });
 
   it("normalizes extension channel include patterns relative to the scoped dir", () => {

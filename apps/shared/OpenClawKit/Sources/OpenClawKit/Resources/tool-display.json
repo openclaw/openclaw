@@ -361,6 +361,14 @@
         }
       }
     },
+    "update_plan": {
+      "emoji": "🗺️",
+      "title": "Update Plan",
+      "detailKeys": [
+        "explanation",
+        "plan.0.step"
+      ]
+    },
     "gateway": {
       "emoji": "🔌",
       "title": "Gateway",

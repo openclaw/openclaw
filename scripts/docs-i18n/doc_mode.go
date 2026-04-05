@@ -101,20 +101,26 @@ func parseTaggedDocument(text string) (string, string, error) {
 		return "", "", fmt.Errorf("missing %s", bodyTagStart)
 	}
 	bodyStart += frontEnd + len(bodyTagStart)
-	bodyEnd := strings.Index(text[bodyStart:], bodyTagEnd)
-	if bodyEnd == -1 {
-		return "", "", fmt.Errorf("missing %s", bodyTagEnd)
+
+	body := ""
+	suffix := ""
+	if bodyEnd := strings.Index(text[bodyStart:], bodyTagEnd); bodyEnd != -1 {
+		bodyEnd += bodyStart
+		body = trimTagNewlines(text[bodyStart:bodyEnd])
+		suffix = strings.TrimSpace(text[bodyEnd+len(bodyTagEnd):])
+	} else {
+		// Some model replies omit the final closing tag but otherwise return a
+		// valid document. Treat EOF as the end of <body> so doc retries do not
+		// burn through the whole workflow on a recoverable formatting slip.
+		body = trimTagNewlines(text[bodyStart:])
 	}
-	bodyEnd += bodyStart
 
 	prefix := strings.TrimSpace(text[:frontStart-len(frontmatterTagStart)])
-	suffix := strings.TrimSpace(text[bodyEnd+len(bodyTagEnd):])
 	if prefix != "" || suffix != "" {
 		return "", "", fmt.Errorf("unexpected text outside tagged sections")
 	}
 
 	frontMatter := trimTagNewlines(text[frontStart:frontEnd])
-	body := trimTagNewlines(text[bodyStart:bodyEnd])
 	return frontMatter, body, nil
 }
 

@@ -5,7 +5,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth-result";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
-import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream";
+import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
 import { fetchGeminiUsage } from "openclaw/plugin-sdk/provider-usage";
 import { formatGoogleOauthApiKey, parseGoogleUsageToken } from "./oauth-token-shared.js";
@@ -83,8 +83,14 @@ export function registerGoogleGeminiCliProvider(api: OpenClawPluginApi) {
               refresh: result.refresh,
               expires: result.expires,
               email: result.email,
-              credentialExtra: { projectId: result.projectId },
-              notes: ["If requests fail, set GOOGLE_CLOUD_PROJECT or GOOGLE_CLOUD_PROJECT_ID."],
+              ...(result.projectId ? { credentialExtra: { projectId: result.projectId } } : {}),
+              ...(result.projectId
+                ? {
+                    notes: [
+                      "If requests fail, set GOOGLE_CLOUD_PROJECT or GOOGLE_CLOUD_PROJECT_ID.",
+                    ],
+                  }
+                : {}),
             });
           } catch (err) {
             spin.stop("Gemini CLI OAuth failed");
