@@ -65,6 +65,7 @@ import { updateSessionStoreAfterAgentRun } from "./command/session-store.js";
 import { resolveSession } from "./command/session.js";
 import type { AgentCommandIngressOpts, AgentCommandOpts } from "./command/types.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
+import { canExecRequestNode } from "./exec-defaults.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch.js";
 import { loadModelCatalog } from "./model-catalog.js";
@@ -508,7 +509,16 @@ async function agentCommandInternal(
     const skillsSnapshot = needsSkillsSnapshot
       ? buildWorkspaceSkillSnapshot(workspaceDir, {
           config: cfg,
-          eligibility: { remote: getRemoteSkillEligibility() },
+          eligibility: {
+            remote: getRemoteSkillEligibility({
+              advertiseExecNode: canExecRequestNode({
+                cfg,
+                sessionEntry,
+                sessionKey,
+                agentId: sessionAgentId,
+              }),
+            }),
+          },
           snapshotVersion: skillsSnapshotVersion,
           skillFilter,
           agentId: sessionAgentId,

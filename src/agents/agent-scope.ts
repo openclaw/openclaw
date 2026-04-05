@@ -3,6 +3,7 @@ import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import { resolveStateDir } from "../config/paths.js";
+import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   DEFAULT_AGENT_ID,
@@ -37,7 +38,7 @@ type ResolvedAgentConfig = {
   agentDir?: string;
   model?: AgentEntry["model"];
   thinkingDefault?: AgentEntry["thinkingDefault"];
-  verboseDefault?: AgentEntry["verboseDefault"];
+  verboseDefault?: AgentDefaultsConfig["verboseDefault"];
   reasoningDefault?: AgentEntry["reasoningDefault"];
   fastModeDefault?: AgentEntry["fastModeDefault"];
   skills?: AgentEntry["skills"];
@@ -143,7 +144,7 @@ export function resolveAgentConfig(
         ? entry.model
         : undefined,
     thinkingDefault: entry.thinkingDefault,
-    verboseDefault: entry.verboseDefault,
+    verboseDefault: cfg.agents?.defaults?.verboseDefault,
     reasoningDefault: entry.reasoningDefault,
     fastModeDefault: entry.fastModeDefault,
     skills: Array.isArray(entry.skills) ? entry.skills : undefined,

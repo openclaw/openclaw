@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { importFreshModule } from "../../../test/helpers/import-fresh.ts";
+import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
 
 afterEach(() => {
   vi.doUnmock("../../plugins/discovery.js");
@@ -12,6 +13,10 @@ afterEach(() => {
 });
 
 describe("bundled channel entry shape guards", () => {
+  const bundledPluginRoots = loadPluginManifestRegistry({ cache: true, config: {} })
+    .plugins.filter((plugin) => plugin.origin === "bundled")
+    .map((plugin) => plugin.rootDir);
+
   it("treats missing bundled discovery results as empty", async () => {
     vi.doMock("../../plugins/discovery.js", () => ({
       discoverOpenClawPlugins: () => ({
@@ -35,14 +40,9 @@ describe("bundled channel entry shape guards", () => {
     expect(bundled.listBundledChannelSetupPlugins()).toEqual([]);
   });
   it("keeps channel entrypoints on the dedicated entry-contract SDK surface", () => {
-    const extensionRoot = path.resolve("extensions");
     const offenders: string[] = [];
 
-    for (const extensionId of fs.readdirSync(extensionRoot)) {
-      const extensionDir = path.join(extensionRoot, extensionId);
-      if (!fs.statSync(extensionDir).isDirectory()) {
-        continue;
-      }
+    for (const extensionDir of bundledPluginRoots) {
       for (const relativePath of ["index.ts", "channel-entry.ts", "setup-entry.ts"]) {
         const filePath = path.join(extensionDir, relativePath);
         if (!fs.existsSync(filePath)) {
@@ -69,14 +69,9 @@ describe("bundled channel entry shape guards", () => {
   });
 
   it("keeps bundled channel entrypoints free of static src imports", () => {
-    const extensionRoot = path.resolve("extensions");
     const offenders: string[] = [];
 
-    for (const extensionId of fs.readdirSync(extensionRoot)) {
-      const extensionDir = path.join(extensionRoot, extensionId);
-      if (!fs.statSync(extensionDir).isDirectory()) {
-        continue;
-      }
+    for (const extensionDir of bundledPluginRoots) {
       for (const relativePath of ["index.ts", "channel-entry.ts", "setup-entry.ts"]) {
         const filePath = path.join(extensionDir, relativePath);
         if (!fs.existsSync(filePath)) {
@@ -99,14 +94,9 @@ describe("bundled channel entry shape guards", () => {
   });
 
   it("keeps channel implementations off the broad core SDK surface", () => {
-    const extensionRoot = path.resolve("extensions");
     const offenders: string[] = [];
 
-    for (const extensionId of fs.readdirSync(extensionRoot)) {
-      const extensionDir = path.join(extensionRoot, extensionId);
-      if (!fs.statSync(extensionDir).isDirectory()) {
-        continue;
-      }
+    for (const extensionDir of bundledPluginRoots) {
       for (const relativePath of ["src/channel.ts", "src/plugin.ts"]) {
         const filePath = path.join(extensionDir, relativePath);
         if (!fs.existsSync(filePath)) {

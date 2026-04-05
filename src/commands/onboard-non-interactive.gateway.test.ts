@@ -520,6 +520,49 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     });
   }, 60_000);
 
+  it("uses a longer Windows health deadline when daemon install was requested", async () => {
+    await withStateDir("state-local-daemon-health-win-", async (stateDir) => {
+      let capturedDeadlineMs: number | undefined;
+      let capturedProbeTimeoutMs: number | undefined;
+      waitForGatewayReachableMock = vi.fn(
+        async (params: {
+          url: string;
+          token?: string;
+          password?: string;
+          deadlineMs?: number;
+          probeTimeoutMs?: number;
+        }) => {
+          capturedDeadlineMs = params.deadlineMs;
+          capturedProbeTimeoutMs = params.probeTimeoutMs;
+          return { ok: true };
+        },
+      );
+
+      const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      try {
+        await runNonInteractiveSetup(
+          {
+            nonInteractive: true,
+            mode: "local",
+            workspace: path.join(stateDir, "openclaw"),
+            authChoice: "skip",
+            skipSkills: true,
+            skipHealth: false,
+            installDaemon: true,
+            gatewayBind: "loopback",
+          },
+          runtime,
+        );
+      } finally {
+        platformSpy.mockRestore();
+      }
+
+      expect(installGatewayDaemonNonInteractiveMock).toHaveBeenCalledTimes(1);
+      expect(capturedDeadlineMs).toBe(90_000);
+      expect(capturedProbeTimeoutMs).toBe(15_000);
+    });
+  }, 60_000);
+
   it("emits a daemon-install failure when Linux user systemd is unavailable", async () => {
     await withStateDir("state-local-daemon-install-json-fail-", async (stateDir) => {
       installGatewayDaemonNonInteractiveMock.mockResolvedValueOnce({

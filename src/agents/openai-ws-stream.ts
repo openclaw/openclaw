@@ -36,6 +36,11 @@ import {
 } from "../plugins/provider-runtime.js";
 import type { ProviderRuntimeModel, ProviderTransportTurnState } from "../plugins/types.js";
 import {
+  encodeAssistantTextSignature,
+  normalizeAssistantPhase,
+} from "../shared/chat-message-content.js";
+import { resolveOpenAIStrictToolSetting } from "./openai-tool-schema.js";
+import {
   getOpenAIWebSocketErrorDetails,
   OpenAIWebSocketManager,
   type FunctionToolDefinition,
@@ -78,6 +83,18 @@ interface WsSession {
   degradeCooldownMs: number;
 }
 
+function resolveOpenAIWebSocketStrictToolSetting(
+  model: Parameters<StreamFn>[0],
+): boolean | undefined {
+  return resolveOpenAIStrictToolSetting(model, {
+    transport: "websocket",
+    supportsStrictMode:
+      model.compat && typeof model.compat === "object"
+        ? (model.compat as { supportsStrictMode?: boolean }).supportsStrictMode
+        : undefined,
+  });
+}
+
 /** Module-level registry: sessionId → WsSession */
 const wsRegistry = new Map<string, WsSession>();
 
@@ -88,21 +105,6 @@ type OpenAIWsStreamDeps = {
 };
 
 type AssistantMessageWithPhase = AssistantMessage & { phase?: OpenAIResponsesAssistantPhase };
-
-function normalizeAssistantPhase(value: unknown): OpenAIResponsesAssistantPhase | undefined {
-  return value === "commentary" || value === "final_answer" ? value : undefined;
-}
-
-function encodeAssistantTextSignature(params: {
-  id: string;
-  phase?: OpenAIResponsesAssistantPhase;
-}): string {
-  return JSON.stringify({
-    v: 1,
-    id: params.id,
-    ...(params.phase ? { phase: params.phase } : {}),
-  });
-}
 
 const defaultOpenAIWsStreamDeps: OpenAIWsStreamDeps = {
   createManager: (options) => new OpenAIWebSocketManager(options),
@@ -747,7 +749,9 @@ export function createOpenAIWebSocketStreamFn(
             await runWarmUp({
               manager: session.manager,
               modelId: model.id,
-              tools: convertTools(context.tools),
+              tools: convertTools(context.tools, {
+                strict: resolveOpenAIWebSocketStrictToolSetting(model),
+              }),
               instructions: context.systemPrompt
                 ? stripSystemPromptCacheBoundary(context.systemPrompt)
                 : undefined,
@@ -842,7 +846,9 @@ export function createOpenAIWebSocketStreamFn(
           context,
           options: options as WsOptions | undefined,
           turnInput,
-          tools: convertTools(context.tools),
+          tools: convertTools(context.tools, {
+            strict: resolveOpenAIWebSocketStrictToolSetting(model),
+          }),
           metadata: turnState?.metadata,
         }) as Record<string, unknown>;
         const nextPayload = await options?.onPayload?.(payload, model);

@@ -310,6 +310,92 @@ describe("fetchWithSsrFGuard hardening", () => {
     }
   });
 
+  it("ignores dispatcher support markers on ambient global fetch", async () => {
+    const runtimeFetch = vi.fn(async () => okResponse());
+    const originalGlobalFetch = globalThis.fetch;
+    let globalFetchCalls = 0;
+    const flaggedGlobalFetch = Object.assign(
+      async () => {
+        globalFetchCalls += 1;
+        throw new Error("ambient global fetch should not be used when a dispatcher is attached");
+      },
+      { __openclawAcceptsDispatcher: true as const },
+    );
+
+    class MockAgent {
+      constructor(readonly options: unknown) {}
+    }
+    class MockEnvHttpProxyAgent {
+      constructor(readonly options: unknown) {}
+    }
+    class MockProxyAgent {
+      constructor(readonly options: unknown) {}
+    }
+
+    (globalThis as Record<string, unknown>).fetch = flaggedGlobalFetch as typeof fetch;
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: MockAgent,
+      EnvHttpProxyAgent: MockEnvHttpProxyAgent,
+      ProxyAgent: MockProxyAgent,
+      fetch: runtimeFetch,
+    };
+
+    try {
+      const result = await fetchWithSsrFGuard({
+        url: "https://public.example/resource",
+        lookupFn: createPublicLookup(),
+      });
+
+      expect(runtimeFetch).toHaveBeenCalledTimes(1);
+      expect(globalFetchCalls).toBe(0);
+      await result.release();
+    } finally {
+      (globalThis as Record<string, unknown>).fetch = originalGlobalFetch;
+    }
+  });
+
+  it("treats explicit fetchImpl equal to ambient global fetch as non-dispatcher-capable", async () => {
+    const runtimeFetch = vi.fn(async () => okResponse());
+    const originalGlobalFetch = globalThis.fetch;
+    let globalFetchCalls = 0;
+    const globalFetch = async () => {
+      globalFetchCalls += 1;
+      throw new Error("ambient global fetch should not be used when a dispatcher is attached");
+    };
+
+    class MockAgent {
+      constructor(readonly options: unknown) {}
+    }
+    class MockEnvHttpProxyAgent {
+      constructor(readonly options: unknown) {}
+    }
+    class MockProxyAgent {
+      constructor(readonly options: unknown) {}
+    }
+
+    (globalThis as Record<string, unknown>).fetch = globalFetch as typeof fetch;
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: MockAgent,
+      EnvHttpProxyAgent: MockEnvHttpProxyAgent,
+      ProxyAgent: MockProxyAgent,
+      fetch: runtimeFetch,
+    };
+
+    try {
+      const result = await fetchWithSsrFGuard({
+        url: "https://public.example/resource",
+        fetchImpl: globalThis.fetch,
+        lookupFn: createPublicLookup(),
+      });
+
+      expect(runtimeFetch).toHaveBeenCalledTimes(1);
+      expect(globalFetchCalls).toBe(0);
+      await result.release();
+    } finally {
+      (globalThis as Record<string, unknown>).fetch = originalGlobalFetch;
+    }
+  });
+
   it("keeps explicit proxy transport policy when DNS pinning is disabled", async () => {
     const lookupFn = createPublicLookup();
     (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {

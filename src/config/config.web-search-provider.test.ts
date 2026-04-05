@@ -387,7 +387,7 @@ describe("web search provider config", () => {
     expect(res.ok).toBe(false);
   });
 
-  it("rejects legacy scoped provider config for bundled providers until doctor repairs it", () => {
+  it("detects legacy scoped provider config for bundled providers", () => {
     const res = validateConfigObjectWithPlugins({
       tools: {
         web: {

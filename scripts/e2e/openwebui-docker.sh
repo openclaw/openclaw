@@ -88,16 +88,43 @@ config.models = {
     },
   },
 };
+config.gateway = {
+  ...(config.gateway || {}),
+  controlUi: {
+    ...(config.gateway?.controlUi || {}),
+    enabled: false,
+  },
+  mode: "local",
+  bind: "lan",
+  auth: {
+    ...(config.gateway?.auth || {}),
+    mode: "token",
+    token: process.env.OPENCLAW_GATEWAY_TOKEN,
+  },
+  http: {
+    ...(config.gateway?.http || {}),
+    endpoints: {
+      ...(config.gateway?.http?.endpoints || {}),
+      chatCompletions: {
+        ...(config.gateway?.http?.endpoints?.chatCompletions || {}),
+        enabled: true,
+      },
+    },
+  },
+};
+config.agents = {
+  ...(config.agents || {}),
+  defaults: {
+    ...(config.agents?.defaults || {}),
+    model: {
+      ...(config.agents?.defaults?.model || {}),
+      primary: process.env.OPENCLAW_OPENWEBUI_MODEL,
+    },
+  },
+};
 fs.mkdirSync(path.dirname(configPath), { recursive: true });
 fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
 NODE
-    node "$entry" config set gateway.controlUi.enabled false >/dev/null
-    node "$entry" config set gateway.mode local >/dev/null
-    node "$entry" config set gateway.bind lan >/dev/null
-    node "$entry" config set gateway.auth.mode token >/dev/null
-    node "$entry" config set gateway.auth.token "$OPENCLAW_GATEWAY_TOKEN" >/dev/null
-    node "$entry" config set gateway.http.endpoints.chatCompletions.enabled true --strict-json >/dev/null
-    node "$entry" config set agents.defaults.model.primary "$OPENCLAW_OPENWEBUI_MODEL" >/dev/null
 
     exec node "$entry" gateway --port '"$PORT"' --bind lan --allow-unconfigured > /tmp/openwebui-gateway.log 2>&1
   '

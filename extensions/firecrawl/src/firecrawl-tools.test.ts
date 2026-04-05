@@ -176,6 +176,32 @@ describe("firecrawl tools", () => {
     ).rejects.toThrow(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
   });
 
+  it("normalizes Firecrawl authorization headers before requests", async () => {
+    const fetchSpy = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ success: true, data: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    global.fetch = fetchSpy as typeof fetch;
+
+    await firecrawlClientTesting.postFirecrawlJson(
+      {
+        url: "https://api.firecrawl.dev/v2/search",
+        timeoutSeconds: 5,
+        apiKey: "firecrawl-test-\r\nkey",
+        body: { query: "openclaw" },
+        errorLabel: "Firecrawl search",
+      },
+      async () => "ok",
+    );
+
+    const init = fetchSpy.mock.calls[0]?.[1];
+    const authHeader = new Headers(init?.headers).get("Authorization");
+    expect(authHeader).toBe("Bearer firecrawl-test-key");
+  });
+
   it("maps generic provider args into firecrawl search params", async () => {
     const provider = createFirecrawlWebSearchProvider();
     const tool = provider.createTool({

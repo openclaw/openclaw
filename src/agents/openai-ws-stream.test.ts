@@ -503,6 +503,61 @@ describe("convertTools", () => {
       properties: { cmd: { type: "string" } },
     });
   });
+
+  it("adds strict:true and required:[] for native strict-compatible no-param tools", () => {
+    const tools = [
+      {
+        name: "ping",
+        description: "No params",
+        parameters: { type: "object", properties: {}, additionalProperties: false },
+      },
+    ];
+    const result = convertTools(tools as unknown as Parameters<typeof convertTools>[0], {
+      strict: true,
+    });
+
+    expect(result[0]).toEqual({
+      type: "function",
+      name: "ping",
+      description: "No params",
+      parameters: {
+        type: "object",
+        properties: {},
+        additionalProperties: false,
+        required: [],
+      },
+      strict: true,
+    });
+  });
+
+  it("falls back to strict:false for native tools with non-strict-compatible schemas", () => {
+    const tools = [
+      {
+        name: "read",
+        description: "Read file",
+        parameters: {
+          type: "object",
+          properties: { path: { type: "string" } },
+          additionalProperties: false,
+        },
+      },
+    ];
+    const result = convertTools(tools as unknown as Parameters<typeof convertTools>[0], {
+      strict: true,
+    });
+
+    expect(result[0]).toEqual({
+      type: "function",
+      name: "read",
+      description: "Read file",
+      parameters: {
+        type: "object",
+        properties: { path: { type: "string" } },
+        additionalProperties: false,
+      },
+      strict: false,
+    });
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1073,7 +1128,7 @@ describe("buildAssistantMessageFromResponse", () => {
     expect(msg.content[0]?.text).toBe("Final answer");
   });
 
-  it("omits top-level phase when a response contains mixed assistant phases", () => {
+  it("keeps only final-answer text when a response contains mixed assistant phases", () => {
     const response = {
       id: "resp_mixed_phase",
       object: "response",
@@ -1104,13 +1159,8 @@ describe("buildAssistantMessageFromResponse", () => {
       content: Array<{ type: string; text?: string; textSignature?: string }>;
     };
 
-    expect(msg.phase).toBeUndefined();
+    expect(msg.phase).toBe("final_answer");
     expect(msg.content).toMatchObject([
-      {
-        type: "text",
-        text: "Working... ",
-        textSignature: JSON.stringify({ v: 1, id: "item_commentary", phase: "commentary" }),
-      },
       {
         type: "text",
         text: "Done.",
@@ -1119,7 +1169,7 @@ describe("buildAssistantMessageFromResponse", () => {
     ]);
   });
 
-  it("omits top-level phase when unphased legacy text and phased final text coexist", () => {
+  it("keeps only phased final text when unphased legacy text and phased final text coexist", () => {
     const response = {
       id: "resp_unphased_plus_final",
       object: "response",
@@ -1149,19 +1199,52 @@ describe("buildAssistantMessageFromResponse", () => {
       content: Array<{ type: string; text?: string; textSignature?: string }>;
     };
 
-    expect(msg.phase).toBeUndefined();
+    expect(msg.phase).toBe("final_answer");
     expect(msg.content).toMatchObject([
-      {
-        type: "text",
-        text: "Legacy. ",
-        textSignature: JSON.stringify({ v: 1, id: "item_legacy" }),
-      },
       {
         type: "text",
         text: "Done.",
         textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
       },
     ]);
+  });
+
+  it("drops commentary-only text from completed assistant messages but keeps tool calls", () => {
+    const response = {
+      id: "resp_commentary_only_tool",
+      object: "response",
+      created_at: Date.now(),
+      status: "completed",
+      model: "gpt-5.2",
+      output: [
+        {
+          type: "message",
+          id: "item_commentary",
+          role: "assistant",
+          phase: "commentary",
+          content: [{ type: "output_text", text: "Working... " }],
+        },
+        {
+          type: "function_call",
+          id: "item_tool",
+          call_id: "call_abc",
+          name: "exec",
+          arguments: '{"arg":"value"}',
+        },
+      ],
+      usage: { input_tokens: 100, output_tokens: 50, total_tokens: 150 },
+    } as unknown as ResponseObject;
+
+    const msg = buildAssistantMessageFromResponse(response, modelInfo) as {
+      phase?: string;
+      content: Array<{ type: string; text?: string; name?: string }>;
+      stopReason: string;
+    };
+
+    expect(msg.phase).toBeUndefined();
+    expect(msg.content.some((part) => part.type === "text")).toBe(false);
+    expect(msg.content).toMatchObject([{ type: "toolCall", name: "exec" }]);
+    expect(msg.stopReason).toBe("toolUse");
   });
 
   it("maps reasoning output items to thinking blocks with signature", () => {
@@ -1694,7 +1777,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(doneEvent?.message.content[0]?.text).toBe("Hello back!");
   });
 
-  it("keeps assistant phase on completed WebSocket responses", async () => {
+  it("suppresses commentary-only text on completed WebSocket responses", async () => {
     const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-phase");
     const stream = streamFn(
       modelStub as Parameters<typeof streamFn>[0],
@@ -1721,10 +1804,11 @@ describe("createOpenAIWebSocketStreamFn", () => {
       | {
           type: string;
           reason: string;
-          message: { phase?: string; stopReason: string };
+          message: { phase?: string; stopReason: string; content?: Array<{ type?: string }> };
         }
       | undefined;
-    expect(doneEvent?.message.phase).toBe("commentary");
+    expect(doneEvent?.message.phase).toBeUndefined();
+    expect(doneEvent?.message.content?.some((part) => part.type === "text")).toBe(false);
     expect(doneEvent?.message.stopReason).toBe("toolUse");
   });
 

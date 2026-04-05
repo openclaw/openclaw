@@ -244,7 +244,7 @@ type WebFetchRuntimeParams = {
   cacheTtlMs: number;
   userAgent: string;
   readabilityEnabled: boolean;
-  providerFallback: ReturnType<typeof resolveWebFetchDefinition>;
+  resolveProviderFallback: () => ReturnType<typeof resolveWebFetchDefinition>;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -341,16 +341,17 @@ async function maybeFetchProviderWebFetchPayload(
     tookMs: number;
   },
 ): Promise<Record<string, unknown> | null> {
-  if (!params.providerFallback) {
+  const providerFallback = params.resolveProviderFallback();
+  if (!providerFallback) {
     return null;
   }
-  const rawPayload = await params.providerFallback.definition.execute({
+  const rawPayload = await providerFallback.definition.execute({
     url: params.urlToFetch,
     extractMode: params.extractMode,
     maxChars: params.maxChars,
   });
   const payload = normalizeProviderWebFetchPayload({
-    providerId: params.providerFallback.provider.id,
+    providerId: providerFallback.provider.id,
     payload: rawPayload,
     requestedUrl: params.url,
     extractMode: params.extractMode,
@@ -498,7 +499,8 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
             title = basic.title;
             extractor = "raw-html";
           } else {
-            const providerLabel = params.providerFallback?.provider.label ?? "provider fallback";
+            const providerLabel =
+              params.resolveProviderFallback()?.provider.label ?? "provider fallback";
             throw new Error(
               `Web fetch extraction failed: Readability, ${providerLabel}, and basic HTML cleanup returned no content.`,
             );
@@ -572,16 +574,24 @@ export function createWebFetchTool(options?: {
     return null;
   }
   const readabilityEnabled = resolveFetchReadabilityEnabled(fetch);
-  const providerFallback = resolveWebFetchDefinition({
-    config: options?.config,
-    sandboxed: options?.sandboxed,
-    runtimeWebFetch: options?.runtimeWebFetch,
-    preferRuntimeProviders: true,
-  });
   const userAgent =
     (fetch && "userAgent" in fetch && typeof fetch.userAgent === "string" && fetch.userAgent) ||
     DEFAULT_FETCH_USER_AGENT;
   const maxResponseBytes = resolveFetchMaxResponseBytes(fetch);
+  let providerFallbackResolved = false;
+  let providerFallbackCache: ReturnType<typeof resolveWebFetchDefinition>;
+  const resolveProviderFallback = () => {
+    if (!providerFallbackResolved) {
+      providerFallbackCache = resolveWebFetchDefinition({
+        config: options?.config,
+        sandboxed: options?.sandboxed,
+        runtimeWebFetch: options?.runtimeWebFetch,
+        preferRuntimeProviders: true,
+      });
+      providerFallbackResolved = true;
+    }
+    return providerFallbackCache;
+  };
   return {
     label: "Web Fetch",
     name: "web_fetch",
@@ -608,7 +618,7 @@ export function createWebFetchTool(options?: {
         cacheTtlMs: resolveCacheTtlMs(fetch?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
         userAgent,
         readabilityEnabled,
-        providerFallback,
+        resolveProviderFallback,
       });
       return jsonResult(result);
     },

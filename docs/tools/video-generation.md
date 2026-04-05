@@ -1,5 +1,5 @@
 ---
-summary: "Generate videos using configured providers such as Qwen"
+summary: "Generate videos using configured providers such as OpenAI, Google, Qwen, and MiniMax"
 read_when:
   - Generating videos via the agent
   - Configuring video generation providers and models
@@ -17,7 +17,7 @@ The tool only appears when at least one video-generation provider is available. 
 
 ## Quick start
 
-1. Set an API key for at least one provider (for example `QWEN_API_KEY`).
+1. Set an API key for at least one provider (for example `OPENAI_API_KEY`, `GEMINI_API_KEY`, or `QWEN_API_KEY`).
 2. Optionally set your preferred model:
 
 ```json5
@@ -36,9 +36,15 @@ The agent calls `video_generate` automatically. No tool allow-listing needed —
 
 ## Supported providers
 
-| Provider | Default model | Reference inputs | API key                                                    |
-| -------- | ------------- | ---------------- | ---------------------------------------------------------- |
-| Qwen     | `wan2.6-t2v`  | Yes, remote URLs | `QWEN_API_KEY`, `MODELSTUDIO_API_KEY`, `DASHSCOPE_API_KEY` |
+| Provider | Default model                   | Reference inputs   | API key                                                    |
+| -------- | ------------------------------- | ------------------ | ---------------------------------------------------------- |
+| BytePlus | `seedance-1-0-lite-t2v-250428`  | 1 image            | `BYTEPLUS_API_KEY`                                         |
+| fal      | `fal-ai/minimax/video-01-live`  | 1 image            | `FAL_KEY`                                                  |
+| Google   | `veo-3.1-fast-generate-preview` | 1 image or 1 video | `GEMINI_API_KEY`, `GOOGLE_API_KEY`                         |
+| MiniMax  | `MiniMax-Hailuo-2.3`            | 1 image            | `MINIMAX_API_KEY`                                          |
+| OpenAI   | `sora-2`                        | 1 image or 1 video | `OPENAI_API_KEY`                                           |
+| Qwen     | `wan2.6-t2v`                    | Yes, remote URLs   | `QWEN_API_KEY`, `MODELSTUDIO_API_KEY`, `DASHSCOPE_API_KEY` |
+| Together | `Wan-AI/Wan2.2-T2V-A14B`        | 1 image            | `TOGETHER_API_KEY`                                         |
 
 Use `action: "list"` to inspect available providers and models at runtime:
 
@@ -96,6 +102,13 @@ When generating a video, OpenClaw tries providers in this order:
    - remaining registered video-generation providers in provider-id order
 
 If a provider fails, the next candidate is tried automatically. If all fail, the error includes details from each attempt.
+
+## Provider notes
+
+- OpenAI uses the native video endpoint and currently defaults to `sora-2`.
+- Google uses Gemini/Veo and supports a single image or video reference input.
+- MiniMax, Together, BytePlus, and fal currently support a single image reference input.
+- Qwen supports image/video references, but the upstream DashScope video endpoint currently requires remote `http(s)` URLs for those references.
 
 ## Qwen reference inputs
 

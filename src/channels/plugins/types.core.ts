@@ -92,6 +92,7 @@ export type ChannelSetupInput = {
   accessToken?: string;
   password?: string;
   deviceName?: string;
+  avatarUrl?: string;
   initialSyncLimit?: number;
   ship?: string;
   url?: string;
@@ -337,7 +338,7 @@ export type ChannelThreadingAdapter = {
     cfg: OpenClawConfig;
     accountId?: string | null;
     chatType?: string | null;
-  }) => "off" | "first" | "all";
+  }) => "off" | "first" | "all" | "batched";
   /**
    * When replyToMode is "off", allow explicit reply tags/directives to keep replyToId.
    *
@@ -394,7 +395,7 @@ export type ChannelThreadingToolContext = {
   currentChannelProvider?: ChannelId;
   currentThreadTs?: string;
   currentMessageId?: string | number;
-  replyToMode?: "off" | "first" | "all";
+  replyToMode?: "off" | "first" | "all" | "batched";
   hasRepliedRef?: { value: boolean };
   /**
    * When true, skip cross-context decoration (e.g., "[from X]" prefix).
@@ -533,6 +534,7 @@ export type ChannelMessagingAdapter = {
     agentId: string;
     accountId?: string | null;
     target: string;
+    currentSessionKey?: string;
     resolvedTarget?: {
       to: string;
       kind: ChannelDirectoryEntryKind | "channel";

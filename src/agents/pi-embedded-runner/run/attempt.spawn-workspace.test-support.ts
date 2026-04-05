@@ -781,7 +781,10 @@ export async function createContextEngineAttemptRunner(params: {
     provider: "openai",
     modelId: "gpt-test",
     model: testModel,
-    authStorage: {} as never,
+    authStorage: {
+      getApiKey: async () => undefined,
+      setRuntimeApiKey: () => {},
+    } as never,
     modelRegistry: {} as never,
     thinkLevel: "off",
     senderIsOwner: true,

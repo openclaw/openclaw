@@ -36,7 +36,7 @@ describe("legacy provider-shaped config snapshots", () => {
     expect(res.ok).toBe(false);
   });
 
-  it("rejects legacy messages.tts provider keys until doctor repairs them and reports legacyIssues", async () => {
+  it("detects legacy messages.tts provider keys and reports legacyIssues", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
         messages: {
@@ -86,7 +86,7 @@ describe("legacy provider-shaped config snapshots", () => {
     });
   });
 
-  it("rejects legacy plugins.entries.*.config.tts provider keys until doctor repairs them", async () => {
+  it("detects legacy plugins.entries.*.config.tts provider keys", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
         plugins: {
@@ -135,7 +135,7 @@ describe("legacy provider-shaped config snapshots", () => {
     });
   });
 
-  it("rejects legacy discord voice tts provider keys until doctor repairs them and reports legacyIssues", async () => {
+  it("detects legacy discord voice tts provider keys and reports legacyIssues", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
         channels: {

@@ -295,6 +295,30 @@ function collectEmittedToolOutputMediaUrls(
   return filterToolResultMediaUrls(toolName, mediaUrls, result);
 }
 
+const COMPACT_PROVIDER_INVENTORY_TOOLS = new Set(["image_generate", "video_generate"]);
+
+function hasProviderInventoryDetails(result: unknown): boolean {
+  if (!result || typeof result !== "object") {
+    return false;
+  }
+  const details = readToolResultDetailsRecord(result);
+  return Array.isArray(details?.providers);
+}
+
+function shouldEmitCompactToolOutput(params: {
+  toolName: string;
+  result: unknown;
+  outputText?: string;
+}): boolean {
+  if (!COMPACT_PROVIDER_INVENTORY_TOOLS.has(params.toolName)) {
+    return false;
+  }
+  if (!hasProviderInventoryDetails(params.result)) {
+    return false;
+  }
+  return Boolean(params.outputText?.trim());
+}
+
 function readExecApprovalPendingDetails(result: unknown): {
   approvalId: string;
   approvalSlug: string;
@@ -448,8 +472,10 @@ async function emitToolResultOutput(params: {
     return;
   }
 
-  if (ctx.shouldEmitToolOutput()) {
-    const outputText = extractToolResultText(sanitizedResult);
+  const outputText = extractToolResultText(sanitizedResult);
+  const shouldEmitOutput =
+    ctx.shouldEmitToolOutput() || shouldEmitCompactToolOutput({ toolName, result, outputText });
+  if (shouldEmitOutput) {
     if (outputText) {
       if (ctx.params.toolResultFormat === "plain") {
         emittedToolOutputMediaUrls = collectEmittedToolOutputMediaUrls(

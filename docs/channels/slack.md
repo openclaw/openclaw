@@ -338,7 +338,7 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
 
 Reply threading controls:
 
-- `channels.slack.replyToMode`: `off|first|all` (default `off`)
+- `channels.slack.replyToMode`: `off|first|all|batched` (default `off`)
 - `channels.slack.replyToModeByChatType`: per `direct|group|channel`
 - legacy fallback for direct chats: `channels.slack.dm.replyToMode`
 
