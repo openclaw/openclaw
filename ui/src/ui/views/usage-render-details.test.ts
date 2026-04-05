@@ -3,6 +3,7 @@ import {
   computeFilteredUsage,
   CHART_BAR_WIDTH_RATIO,
   CHART_MAX_BAR_WIDTH,
+  buildContextMetadataBadges,
 } from "./usage-render-details.ts";
 import type { TimeSeriesPoint, UsageSessionEntry } from "./usageTypes.ts";
 
@@ -105,6 +106,45 @@ describe("computeFilteredUsage", () => {
     expect(result!.output).toBe(35);
     expect(result!.cacheRead).toBe(55);
     expect(result!.cacheWrite).toBe(75);
+  });
+});
+
+describe("buildContextMetadataBadges", () => {
+  it("includes run snapshot badges and non-none truncation severity", () => {
+    const badges = buildContextMetadataBadges({
+      source: "run",
+      sourceRunId: "run-ctx",
+      sourceMessageId: "leaf-ctx",
+      truncationSeverity: "medium",
+      promptHash: "abc123def456",
+      systemPrompt: { chars: 100, projectContextChars: 40, nonProjectContextChars: 60 },
+      injectedWorkspaceFiles: [],
+      skills: { promptChars: 0, entries: [] },
+      tools: { listChars: 0, schemaChars: 0, entries: [] },
+      generatedAt: 1,
+    } as UsageSessionEntry["contextWeight"]);
+
+    expect(badges).toEqual([
+      "source:run",
+      "run:run-ctx",
+      "leaf:leaf-ctx",
+      "truncation:medium",
+      "hash:abc123def456",
+    ]);
+  });
+
+  it("omits optional badges when fields are absent or severity is none", () => {
+    const badges = buildContextMetadataBadges({
+      source: "estimate",
+      truncationSeverity: "none",
+      systemPrompt: { chars: 100, projectContextChars: 40, nonProjectContextChars: 60 },
+      injectedWorkspaceFiles: [],
+      skills: { promptChars: 0, entries: [] },
+      tools: { listChars: 0, schemaChars: 0, entries: [] },
+      generatedAt: 1,
+    } as UsageSessionEntry["contextWeight"]);
+
+    expect(badges).toEqual(["source:estimate"]);
   });
 });
 

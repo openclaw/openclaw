@@ -797,6 +797,28 @@ function renderTimeSeriesCompact(
   `;
 }
 
+export function buildContextMetadataBadges(
+  contextWeight: UsageSessionEntry["contextWeight"],
+): string[] {
+  if (!contextWeight) {
+    return [];
+  }
+  const badges = [`source:${contextWeight.source}`];
+  if (contextWeight.sourceRunId) {
+    badges.push(`run:${contextWeight.sourceRunId}`);
+  }
+  if (contextWeight.sourceMessageId) {
+    badges.push(`leaf:${contextWeight.sourceMessageId}`);
+  }
+  if (contextWeight.truncationSeverity && contextWeight.truncationSeverity !== "none") {
+    badges.push(`truncation:${contextWeight.truncationSeverity}`);
+  }
+  if (contextWeight.promptHash) {
+    badges.push(`hash:${contextWeight.promptHash}`);
+  }
+  return badges;
+}
+
 function renderContextPanel(
   contextWeight: UsageSessionEntry["contextWeight"],
   usage: UsageSessionEntry["usage"],
@@ -828,6 +850,7 @@ function renderContextPanel(
     }
   }
 
+  const contextBadges = buildContextMetadataBadges(contextWeight);
   const skillsList = contextWeight.skills.entries.toSorted((a, b) => b.blockChars - a.blockChars);
   const toolsList = contextWeight.tools.entries.toSorted(
     (a, b) => b.summaryChars + b.schemaChars - (a.summaryChars + a.schemaChars),
@@ -858,6 +881,11 @@ function renderContextPanel(
           : nothing}
       </div>
       <p class="context-weight-desc">${contextPct || t("usage.details.baseContextPerMessage")}</p>
+      ${contextBadges.length > 0
+        ? html`<div class="usage-badges">
+            ${contextBadges.map((badge) => html`<span class="usage-badge">${badge}</span>`)}
+          </div>`
+        : nothing}
       <div class="context-stacked-bar">
         <div
           class="context-segment system"
