@@ -94,6 +94,16 @@ async function setupPluginOutsideSkills() {
   return { workspaceDir, pluginRoot, outsideSkills };
 }
 
+async function setupBundledRuntimeOverlayPlugin() {
+  const workspaceDir = await tempDirs.make("openclaw-");
+  const packageRoot = await tempDirs.make("openclaw-package-");
+  const builtPluginRoot = path.join(packageRoot, "dist", "extensions", "helper");
+  const runtimePluginRoot = path.join(packageRoot, "dist-runtime", "extensions", "helper");
+  await fs.mkdir(path.join(builtPluginRoot, "skills"), { recursive: true });
+  await fs.mkdir(path.join(runtimePluginRoot, "skills"), { recursive: true });
+  return { workspaceDir, builtPluginRoot, runtimePluginRoot };
+}
+
 afterEach(async () => {
   hoisted.loadPluginManifestRegistry.mockReset();
   await tempDirs.cleanup();
@@ -230,6 +240,31 @@ describe("resolvePluginSkillDirs", () => {
       path.resolve(pluginRoot, "skills"),
       path.resolve(pluginRoot, "commands"),
     ]);
+  });
+
+  it("prefers built skill roots over dist-runtime overlay paths", async () => {
+    const { workspaceDir, builtPluginRoot, runtimePluginRoot } =
+      await setupBundledRuntimeOverlayPlugin();
+
+    hoisted.loadPluginManifestRegistry.mockReturnValue(
+      createSinglePluginRegistry({
+        pluginRoot: runtimePluginRoot,
+        skills: ["./skills"],
+      }),
+    );
+
+    const dirs = resolvePluginSkillDirs({
+      workspaceDir,
+      config: {
+        plugins: {
+          entries: {
+            helper: { enabled: true },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(dirs).toEqual([path.resolve(builtPluginRoot, "skills")]);
   });
 
   it("resolves enabled plugin skills through legacy manifest aliases", async () => {

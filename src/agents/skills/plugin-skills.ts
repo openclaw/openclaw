@@ -43,6 +43,24 @@ function createRegistryPluginIdNormalizer(
   };
 }
 
+function maybeResolveBundledRuntimeSkillDir(candidate: string): string {
+  const normalized = path.normalize(candidate);
+  const runtimeMarker = path.join("dist-runtime", "extensions") + path.sep;
+  const markerIndex = normalized.lastIndexOf(runtimeMarker);
+  if (markerIndex === -1) {
+    return candidate;
+  }
+
+  const packageRoot = normalized.slice(0, markerIndex);
+  const bundledLeaf = normalized.slice(markerIndex + runtimeMarker.length);
+  if (!packageRoot || !bundledLeaf) {
+    return candidate;
+  }
+
+  const builtCandidate = path.join(packageRoot, "dist", "extensions", bundledLeaf);
+  return fs.existsSync(builtCandidate) ? builtCandidate : candidate;
+}
+
 export function resolvePluginSkillDirs(params: {
   workspaceDir: string | undefined;
   config?: OpenClawConfig;
@@ -114,8 +132,12 @@ export function resolvePluginSkillDirs(params: {
       if (seen.has(candidate)) {
         continue;
       }
-      seen.add(candidate);
-      resolved.push(candidate);
+      const preferredCandidate = path.resolve(maybeResolveBundledRuntimeSkillDir(candidate));
+      if (seen.has(preferredCandidate)) {
+        continue;
+      }
+      seen.add(preferredCandidate);
+      resolved.push(preferredCandidate);
     }
   }
 
