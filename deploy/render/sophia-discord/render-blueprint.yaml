@@ -8,9 +8,8 @@
 #   ANTHROPIC_API_KEY, OPENAI_API_KEY, BRAVE_API_KEY
 #
 # Before first deploy:
-#   1. Replace $DISCORD_GUILD_ID and $DISCORD_VOICE_CHANNEL_ID in openclaw.render.json5
-#   2. Copy openclaw.render.json5 to /data/.openclaw/openclaw.json on the Render disk
-#   3. Set all secrets in Render dashboard
+#   1. Copy openclaw.render.json5 to /data/.openclaw/openclaw.json on the Render disk
+#   2. Set all secrets in Render dashboard
 #   4. Create Discord bot with Message Content + Server Members intents
 #   5. Invite bot to private server with Connect, Speak, View Channels,
 #      Send Messages, Read Message History permissions

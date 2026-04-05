@@ -2,9 +2,9 @@
 // Copy to /data/.openclaw/openclaw.json on Render persistent disk.
 // Secrets (API keys, tokens) are resolved from Render env vars at runtime.
 //
-// Placeholders to replace before deploying:
-//   $DISCORD_GUILD_ID       — your private Discord server ID
-//   $DISCORD_VOICE_CHANNEL_ID — the dedicated Sophia voice channel ID
+// Discord IDs (Sophia server):
+//   Guild: 1397938267961430097
+//   Voice channel (Sophia Voice): 1397938269219586225
 {
   "agents": {
     "defaults": {
@@ -121,10 +121,10 @@
       "groupPolicy": "allowlist",
       "dmPolicy": "pairing",
       "guilds": {
-        "$DISCORD_GUILD_ID": {
+        "1397938267961430097": {
           "requireMention": false,
           "channels": {
-            "$DISCORD_VOICE_CHANNEL_ID": {
+            "1397938269219586225": {
               "requireMention": false
             }
           }
