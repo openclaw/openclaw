@@ -1,6 +1,5 @@
 import { LitElement } from "lit";
 import { customElement, state } from "lit/decorators.js";
-import { resolveAgentIdFromSessionKey } from "../../../src/routing/session-key.js";
 import { i18n, I18nController, isSupportedLocale } from "../i18n/index.ts";
 import {
   handleChannelConfigReload as handleChannelConfigReloadInternal,
@@ -61,6 +60,7 @@ import {
 } from "./controllers/agents.ts";
 import { loadAssistantIdentity as loadAssistantIdentityInternal } from "./controllers/assistant-identity.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
+import type { DreamingStatus } from "./controllers/dreaming.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
 import type {
@@ -70,6 +70,7 @@ import type {
 } from "./controllers/skills.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
+import { resolveAgentIdFromSessionKey } from "./session-key.ts";
 import { loadSettings, type UiSettings } from "./storage.ts";
 import { VALID_THEME_NAMES, type ResolvedTheme, type ThemeMode, type ThemeName } from "./theme.ts";
 import type {
@@ -220,6 +221,10 @@ export class OpenClawApp extends LitElement {
   @state() configUiHints: ConfigUiHints = {};
   @state() configForm: Record<string, unknown> | null = null;
   @state() configFormOriginal: Record<string, unknown> | null = null;
+  @state() dreamingStatusLoading = false;
+  @state() dreamingStatusError: string | null = null;
+  @state() dreamingStatus: DreamingStatus | null = null;
+  @state() dreamingModeSaving = false;
   @state() configFormDirty = false;
   @state() configFormMode: "form" | "raw" = "form";
   @state() configSearchQuery = "";

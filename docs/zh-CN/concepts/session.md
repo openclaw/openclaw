@@ -5,7 +5,7 @@ summary: 聊天的会话管理规则、键和持久化
 title: 会话管理
 x-i18n:
   generated_at: "2026-02-03T07:47:44Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 147c8d1a4b6b4864cb16ad942feba80181b6b0e29afa765e7958f8c2483746b5
   source_path: concepts/session.md

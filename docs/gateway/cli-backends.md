@@ -2,7 +2,7 @@
 summary: "CLI backends: text-only fallback via local AI CLIs"
 read_when:
   - You want a reliable fallback when API providers fail
-  - You are running Claude Code CLI or other local AI CLIs and want to reuse them
+  - You are running Claude CLI or other local AI CLIs and want to reuse them
   - You need a text-only, tool-free path that still supports sessions and images
 title: "CLI Backends"
 ---
@@ -13,20 +13,24 @@ OpenClaw can run **local AI CLIs** as a **text-only fallback** when API provider
 rate-limited, or temporarily misbehaving. This is intentionally conservative:
 
 - **Tools are disabled** (no tool calls).
-- **Text in → text out** (reliable).
+- **Text in → text out** (reliable, with Claude CLI partial text streaming when enabled).
 - **Sessions are supported** (so follow-up turns stay coherent).
 - **Images can be passed through** if the CLI accepts image paths.
 
 This is designed as a **safety net** rather than a primary path. Use it when you
 want “always works” text responses without relying on external APIs.
 
+If you want a full harness runtime with ACP session controls, background tasks,
+thread/conversation binding, and persistent external coding sessions, use
+[ACP Agents](/tools/acp-agents) instead. CLI backends are not ACP.
+
 ## Beginner-friendly quick start
 
-You can use Claude Code CLI **without any config** (the bundled Anthropic plugin
+You can use Claude CLI **without any config** (the bundled Anthropic plugin
 registers a default backend):
 
 ```bash
-openclaw agent --message "hi" --model claude-cli/opus-4.6
+openclaw agent --message "hi" --model claude-cli/claude-sonnet-4-6
 ```
 
 Codex CLI also works out of the box (via the bundled OpenAI plugin):
@@ -69,12 +73,12 @@ Add a CLI backend to your fallback list so it only runs when primary models fail
     defaults: {
       model: {
         primary: "anthropic/claude-opus-4-6",
-        fallbacks: ["claude-cli/opus-4.6", "claude-cli/opus-4.5"],
+        fallbacks: ["claude-cli/claude-sonnet-4-6", "claude-cli/claude-opus-4-6"],
       },
       models: {
         "anthropic/claude-opus-4-6": { alias: "Opus" },
-        "claude-cli/opus-4.6": {},
-        "claude-cli/opus-4.5": {},
+        "claude-cli/claude-sonnet-4-6": {},
+        "claude-cli/claude-opus-4-6": {},
       },
     },
   },
@@ -86,6 +90,9 @@ Notes:
 - If you use `agents.defaults.models` (allowlist), you must include `claude-cli/...`.
 - If the primary provider fails (auth, rate limits, timeouts), OpenClaw will
   try the CLI backend next.
+- The bundled Claude CLI backend still accepts shorter aliases like
+  `claude-cli/opus`, `claude-cli/opus-4.6`, or `claude-cli/sonnet`, but docs
+  and config examples use the canonical `claude-cli/claude-*` refs.
 
 ## Configuration overview
 
@@ -158,6 +165,12 @@ The provider id becomes the left side of your model ref:
   - `existing`: only send a session id if one was stored before.
   - `none`: never send a session id.
 
+Serialization notes:
+
+- `serialize: true` keeps same-lane runs ordered.
+- Most CLIs serialize on one provider lane.
+- `claude-cli` is narrower: resumed runs serialize per Claude session id, and fresh runs serialize per workspace path. Independent workspaces can run in parallel.
+
 ## Images (pass-through)
 
 If your CLI accepts image paths, set `imageArg`:
@@ -170,13 +183,16 @@ imageMode: "repeat"
 OpenClaw will write base64 images to temp files. If `imageArg` is set, those
 paths are passed as CLI args. If `imageArg` is missing, OpenClaw appends the
 file paths to the prompt (path injection), which is enough for CLIs that auto-
-load local files from plain paths (Claude Code CLI behavior).
+load local files from plain paths (Claude CLI behavior).
 
 ## Inputs / outputs
 
 - `output: "json"` (default) tries to parse JSON and extract text + session id.
-- `output: "jsonl"` parses JSONL streams (Codex CLI `--json`) and extracts the
-  last agent message plus `thread_id` when present.
+- For Gemini CLI JSON output, OpenClaw reads reply text from `response` and
+  usage from `stats` when `usage` is missing or empty.
+- `output: "jsonl"` parses JSONL streams (for example Claude CLI `stream-json`
+  and Codex CLI `--json`) and extracts the final agent message plus session
+  identifiers when present.
 - `output: "text"` treats stdout as the final response.
 
 Input modes:
@@ -190,8 +206,10 @@ Input modes:
 The bundled Anthropic plugin registers a default for `claude-cli`:
 
 - `command: "claude"`
-- `args: ["-p", "--output-format", "json", "--permission-mode", "bypassPermissions"]`
-- `resumeArgs: ["-p", "--output-format", "json", "--permission-mode", "bypassPermissions", "--resume", "{sessionId}"]`
+- `args: ["-p", "--output-format", "stream-json", "--include-partial-messages", "--verbose", "--permission-mode", "bypassPermissions"]`
+- `resumeArgs: ["-p", "--output-format", "stream-json", "--include-partial-messages", "--verbose", "--permission-mode", "bypassPermissions", "--resume", "{sessionId}"]`
+- `output: "jsonl"`
+- `input: "stdin"`
 - `modelArg: "--model"`
 - `systemPromptArg: "--append-system-prompt"`
 - `sessionArg: "--session-id"`
@@ -218,6 +236,18 @@ The bundled Google plugin also registers a default for `google-gemini-cli`:
 - `sessionMode: "existing"`
 - `sessionIdFields: ["session_id", "sessionId"]`
 
+Prerequisite: the local Gemini CLI must be installed and available as
+`gemini` on `PATH` (`brew install gemini-cli` or
+`npm install -g @google/gemini-cli`).
+
+Gemini CLI JSON notes:
+
+- Reply text is read from the JSON `response` field.
+- Usage falls back to `stats` when `usage` is absent or empty.
+- `stats.cached` is normalized into OpenClaw `cacheRead`.
+- If `stats.input` is missing, OpenClaw derives input tokens from
+  `stats.input_tokens - stats.cached`.
+
 Override only if needed (common: absolute `command` path).
 
 ## Plugin-owned defaults
@@ -230,11 +260,35 @@ CLI backend defaults are now part of the plugin surface:
 - Backend-specific config cleanup stays plugin-owned through the optional
   `normalizeConfig` hook.
 
+## Bundle MCP overlays
+
+CLI backends still do **not** receive OpenClaw tool calls, but a backend can opt
+into a generated MCP config overlay with `bundleMcp: true`.
+
+Current bundled behavior:
+
+- `claude-cli`: `bundleMcp: true`
+- `codex-cli`: no bundle MCP overlay
+- `google-gemini-cli`: no bundle MCP overlay
+
+When bundle MCP is enabled, OpenClaw:
+
+- loads enabled bundle-MCP servers for the current workspace
+- merges them with any existing backend `--mcp-config`
+- rewrites the CLI args to pass `--strict-mcp-config --mcp-config <generated-file>`
+
+If no MCP servers are enabled, OpenClaw still injects a strict empty config.
+That prevents background Claude CLI runs from inheriting ambient user/global MCP
+servers unexpectedly.
+
 ## Limitations
 
 - **No OpenClaw tools** (the CLI backend never receives tool calls). Some CLIs
-  may still run their own agent tooling.
-- **No streaming** (CLI output is collected then returned).
+  may still run their own agent tooling. Backends with `bundleMcp: true`
+  can still receive a generated MCP config overlay for their own CLI-native MCP
+  support.
+- **Streaming is backend-specific**. Claude CLI forwards partial text from
+  `stream-json`; other CLI backends may still be buffered until exit.
 - **Structured outputs** depend on the CLI’s JSON format.
 - **Codex CLI sessions** resume via text output (no JSONL), which is less
   structured than the initial `--json` run. OpenClaw sessions still work

@@ -18,7 +18,7 @@ x-i18n:
 
 Moonshot 提供带有 OpenAI 兼容端点的 Kimi API。配置该
 提供商，并将默认模型设置为 `moonshot/kimi-k2.5`，或者使用
-`kimi-coding/k2p5` 作为 Kimi Coding。
+`kimi/kimi-code` 作为 Kimi Coding。
 
 当前 Kimi K2 模型 ID：
 
@@ -132,9 +132,9 @@ openclaw onboard --auth-choice kimi-code-api-key
   env: { KIMI_API_KEY: "sk-..." },
   agents: {
     defaults: {
-      model: { primary: "kimi-coding/k2p5" },
+      model: { primary: "kimi/kimi-code" },
       models: {
-        "kimi-coding/k2p5": { alias: "Kimi K2.5" },
+        "kimi/kimi-code": { alias: "Kimi" },
       },
     },
   },
@@ -143,7 +143,7 @@ openclaw onboard --auth-choice kimi-code-api-key
 
 ## 说明
 
-- Moonshot 模型引用使用 `moonshot/<modelId>`。Kimi Coding 模型引用使用 `kimi-coding/<modelId>`。
+- Moonshot 模型引用使用 `moonshot/<modelId>`。Kimi Coding 模型引用使用 `kimi/<modelId>`。
 - 如有需要，可在 `models.providers` 中覆盖定价和上下文元数据。
 - 如果 Moonshot 为某个模型发布了不同的上下文限制，请相应调整
   `contextWindow`。

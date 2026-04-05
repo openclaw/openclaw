@@ -38,6 +38,7 @@ export function createMockPluginRegistry(
     speechProviders: [],
     mediaUnderstandingProviders: [],
     imageGenerationProviders: [],
+    videoGenerationProviders: [],
     webSearchProviders: [],
     httpRoutes: [],
     gatewayHandlers: {},

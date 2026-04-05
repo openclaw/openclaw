@@ -1,23 +1,6 @@
 name: Plugin ClawHub Release
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - ".github/workflows/plugin-clawhub-release.yml"
-      - ".github/actions/setup-node-env/**"
-      - "extensions/**"
-      - "package.json"
-      - "pnpm-lock.yaml"
-      - "packages/plugin-package-contract/src/index.ts"
-      - "scripts/lib/npm-publish-plan.mjs"
-      - "scripts/lib/plugin-npm-release.ts"
-      - "scripts/lib/plugin-clawhub-release.ts"
-      - "scripts/openclaw-npm-release-check.ts"
-      - "scripts/plugin-clawhub-publish.sh"
-      - "scripts/plugin-clawhub-release-check.ts"
-      - "scripts/plugin-clawhub-release-plan.ts"
   workflow_dispatch:
     inputs:
       publish_scope:
@@ -40,7 +23,7 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.x"
-  PNPM_VERSION: "10.23.0"
+  PNPM_VERSION: "10.32.1"
   CLAWHUB_REGISTRY: "https://clawhub.ai"
   CLAWHUB_REPOSITORY: "openclaw/clawhub"
   # Pinned to a reviewed ClawHub commit so release behavior stays reproducible.

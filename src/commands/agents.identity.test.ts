@@ -15,8 +15,8 @@ const configMocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("../config/config.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../config/config.js")>()),
+vi.mock("../config/config.js", async () => ({
+  ...(await vi.importActual<typeof import("../config/config.js")>("../config/config.js")),
   readConfigFileSnapshot: configMocks.readConfigFileSnapshot,
   writeConfigFile: configMocks.writeConfigFile,
   replaceConfigFile: configMocks.replaceConfigFile,

@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AuthRateLimiter } from "./auth-rate-limit.js";
+import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import {
   assertGatewayAuthConfigured,
   authorizeGatewayConnect,
   authorizeHttpGatewayConnect,
+  resolveEffectiveSharedGatewayAuth,
   authorizeWsControlUiGatewayConnect,
   resolveGatewayAuth,
 } from "./auth.js";
@@ -102,6 +103,56 @@ describe("gateway auth", () => {
       token: "env-token",
       password: "env-password",
     });
+  });
+
+  it("resolves the active shared token auth only", () => {
+    expect(
+      resolveEffectiveSharedGatewayAuth({
+        authConfig: {
+          mode: "token",
+          token: "config-token",
+          password: "config-password",
+        },
+        env: {} as NodeJS.ProcessEnv,
+      }),
+    ).toEqual({
+      mode: "token",
+      secret: "config-token",
+    });
+  });
+
+  it("resolves the active shared password auth only", () => {
+    expect(
+      resolveEffectiveSharedGatewayAuth({
+        authConfig: {
+          mode: "password",
+          token: "config-token",
+          password: "config-password",
+        },
+        env: {} as NodeJS.ProcessEnv,
+      }),
+    ).toEqual({
+      mode: "password",
+      secret: "config-password",
+    });
+  });
+
+  it("returns null for non-shared gateway auth modes", () => {
+    expect(
+      resolveEffectiveSharedGatewayAuth({
+        authConfig: { mode: "none" },
+        env: {} as NodeJS.ProcessEnv,
+      }),
+    ).toBeNull();
+    expect(
+      resolveEffectiveSharedGatewayAuth({
+        authConfig: {
+          mode: "trusted-proxy",
+          trustedProxy: { userHeader: "x-user" },
+        },
+        env: {} as NodeJS.ProcessEnv,
+      }),
+    ).toBeNull();
   });
 
   it("keeps gateway auth config values ahead of env overrides", () => {
@@ -296,6 +347,50 @@ describe("gateway auth", () => {
     expect(res.ok).toBe(true);
     expect(res.method).toBe("tailscale");
     expect(res.user).toBe("peter");
+  });
+
+  it("serializes async auth attempts per rate-limit key", async () => {
+    const limiter = createAuthRateLimiter({
+      maxAttempts: 1,
+      windowMs: 60_000,
+      lockoutMs: 60_000,
+      exemptLoopback: false,
+    });
+    let releaseWhois!: () => void;
+    const whoisGate = new Promise<void>((resolve) => {
+      releaseWhois = resolve;
+    });
+    let whoisCalls = 0;
+    const tailscaleWhois = async () => {
+      whoisCalls += 1;
+      await whoisGate;
+      return null;
+    };
+
+    const baseParams = {
+      auth: { mode: "token" as const, token: "secret", allowTailscale: true },
+      connectAuth: { token: "wrong" },
+      tailscaleWhois,
+      authSurface: "ws-control-ui" as const,
+      req: createTailscaleForwardedReq(),
+      trustedProxies: ["127.0.0.1"],
+      rateLimiter: limiter,
+    };
+
+    const first = authorizeGatewayConnect(baseParams);
+    const second = authorizeGatewayConnect(baseParams);
+
+    await vi.waitFor(() => {
+      expect(whoisCalls).toBe(1);
+    });
+    releaseWhois();
+
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+    expect(firstResult.ok).toBe(false);
+    expect(firstResult.reason).toBe("token_mismatch");
+    expect(secondResult.ok).toBe(false);
+    expect(secondResult.reason).toBe("rate_limited");
+    expect(whoisCalls).toBe(1);
   });
 
   it("keeps tailscale header auth disabled on HTTP auth wrapper", async () => {

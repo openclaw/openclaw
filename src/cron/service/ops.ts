@@ -8,6 +8,7 @@ import {
 import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
 import {
   applyJobPatch,
+  assertSupportedJobSpec,
   computeJobNextRunAtMs,
   createJob,
   findJobOrThrow,
@@ -101,7 +102,8 @@ export async function start(state: CronServiceState) {
     return;
   }
 
-  const startupInterruptedJobIds = new Set<string>();
+  const interruptedOneShotIds = new Set<string>();
+  let clearedAnyRunningMarker = false;
   await locked(state, async () => {
     await ensureLoaded(state, { skipRecompute: true });
     const jobs = state.store?.jobs ?? [];
@@ -112,15 +114,23 @@ export async function start(state: CronServiceState) {
           "cron: clearing stale running marker on startup",
         );
         job.state.runningAtMs = undefined;
-        startupInterruptedJobIds.add(job.id);
+        clearedAnyRunningMarker = true;
+        // One-shot jobs are not retried after interruption; recurring jobs
+        // (cron/every) are eligible for startup catch-up so they don't
+        // require a second restart to recover (#60495).
+        if (job.schedule.kind === "at") {
+          interruptedOneShotIds.add(job.id);
+        }
       }
     }
-    if (startupInterruptedJobIds.size > 0) {
+    if (clearedAnyRunningMarker) {
       await persist(state);
     }
   });
 
-  await runMissedJobs(state, { skipJobIds: startupInterruptedJobIds });
+  await runMissedJobs(state, {
+    skipJobIds: interruptedOneShotIds.size > 0 ? interruptedOneShotIds : undefined,
+  });
 
   await locked(state, async () => {
     // Startup catch-up already persisted the latest in-memory store state, and
@@ -479,6 +489,7 @@ async function inspectManualRunPreflight(
     // persist does not block manual triggers for up to STUCK_RUN_MS (#17554).
     recomputeNextRunsForMaintenance(state);
     const job = findJobOrThrow(state, id);
+    assertSupportedJobSpec(job);
     if (typeof job.state.runningAtMs === "number") {
       return { ok: true, ran: false, reason: "already-running" as const };
     }

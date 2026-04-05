@@ -6,7 +6,6 @@ export {
   expectChannelInboundContextContract,
   primeChannelOutboundSendMock,
 } from "../channels/plugins/contracts/test-helpers.js";
-export { createSlackOutboundPayloadHarness } from "../channels/plugins/contracts/suites.js";
 export { buildDispatchInboundCaptureMock } from "../channels/plugins/contracts/inbound-testkit.js";
 export {
   createCliRuntimeCapture,
@@ -47,11 +46,17 @@ export { buildCommandTestParams } from "../auto-reply/reply/commands-spawn.test-
 export { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
 export { jsonResponse, requestBodyText, requestUrl } from "../test-helpers/http.js";
 export { mockPinnedHostnameResolution } from "../test-helpers/ssrf.js";
-export {
-  createWhatsAppPollFixture,
-  expectWhatsAppPollSent,
-} from "../test-helpers/whatsapp-outbound.js";
 export { createWindowsCmdShimFixture } from "../test-helpers/windows-cmd-shim.js";
 export { installCommonResolveTargetErrorCases } from "../test-helpers/resolve-target-error-cases.js";
 export { sanitizeTerminalText } from "../terminal/safe-text.js";
 export { withStateDirEnv } from "../test-helpers/state-dir-env.js";
+export { countLines, hasBalancedFences } from "../test-utils/chunk-test-helpers.js";
+export {
+  loadBundledPluginPublicSurfaceSync,
+  loadBundledPluginTestApiSync,
+  resolveRelativeBundledPluginPublicModuleId,
+} from "../test-utils/bundled-plugin-public-surface.js";
+export { expectGeneratedTokenPersistedToGatewayAuth } from "../test-utils/auth-token-assertions.js";
+export { captureEnv, withEnv, withEnvAsync } from "../test-utils/env.js";
+export { withFetchPreconnect, type FetchMock } from "../test-utils/fetch-mock.js";
+export { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";

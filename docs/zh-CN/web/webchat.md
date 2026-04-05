@@ -5,7 +5,7 @@ summary: 用于聊天 UI 的 loopback WebChat 静态主机和 Gateway 网关 WS 
 title: WebChat
 x-i18n:
   generated_at: "2026-02-03T10:13:28Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: b5ee2b462c8c979ac27f80dea0cf12cf62b3c799cf8fd0a7721901e26efeb1a0
   source_path: web/webchat.md

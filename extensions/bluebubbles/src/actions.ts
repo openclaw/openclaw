@@ -72,12 +72,12 @@ const PRIVATE_API_ACTIONS = new Set<ChannelMessageActionName>([
 ]);
 
 export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
-  describeMessageTool: ({ cfg, currentChannelId }) => {
-    const account = resolveBlueBubblesAccount({ cfg: cfg });
+  describeMessageTool: ({ cfg, accountId, currentChannelId }) => {
+    const account = resolveBlueBubblesAccount({ cfg, accountId });
     if (!account.enabled || !account.configured) {
       return null;
     }
-    const gate = createActionGate(cfg.channels?.bluebubbles?.actions);
+    const gate = createActionGate(account.config.actions);
     const actions = new Set<ChannelMessageActionName>();
     const macOS26 = isMacOS26OrHigher(account.accountId);
     const privateApiStatus = getCachedBlueBubblesPrivateApiStatus(account.accountId);

@@ -2,7 +2,7 @@ import {
   buildExecApprovalPendingReplyPayload,
   getExecApprovalApproverDmNoticeText,
   resolveExecApprovalCommandDisplay,
-} from "openclaw/plugin-sdk/approval-runtime";
+} from "openclaw/plugin-sdk/approval-reply-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   createChannelNativeApprovalRuntime,

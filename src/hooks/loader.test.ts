@@ -82,14 +82,36 @@ describe("loader", () => {
     return handlerPath;
   }
 
+  function withLegacyInternalHookHandlers(
+    config: OpenClawConfig,
+    handlers?: Array<{ event: string; module: string; export?: string }>,
+  ): OpenClawConfig {
+    if (!handlers) {
+      return config;
+    }
+    return {
+      ...config,
+      hooks: {
+        ...config.hooks,
+        internal: {
+          ...config.hooks?.internal,
+          handlers,
+        },
+      },
+    } as OpenClawConfig;
+  }
+
   function createEnabledHooksConfig(
     handlers?: Array<{ event: string; module: string; export?: string }>,
   ): OpenClawConfig {
-    return {
-      hooks: {
-        internal: handlers ? { enabled: true, handlers } : { enabled: true },
+    return withLegacyInternalHookHandlers(
+      {
+        hooks: {
+          internal: { enabled: true },
+        },
       },
-    };
+      handlers,
+    );
   }
 
   afterEach(async () => {
@@ -130,14 +152,16 @@ describe("loader", () => {
             },
           },
         } satisfies OpenClawConfig,
-        {
-          hooks: {
-            internal: {
-              enabled: false,
-              handlers: [],
+        withLegacyInternalHookHandlers(
+          {
+            hooks: {
+              internal: {
+                enabled: false,
+              },
             },
-          },
-        } satisfies OpenClawConfig,
+          } satisfies OpenClawConfig,
+          [],
+        ),
       ]) {
         const count = await loadInternalHooks(cfg, tmpDir);
         expect(count).toBe(0);
