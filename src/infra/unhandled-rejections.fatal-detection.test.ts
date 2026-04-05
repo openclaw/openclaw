@@ -159,15 +159,51 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
       );
     });
 
-    it("exits on non-transient Slack request errors", () => {
-      const slackErr = Object.assign(
-        new Error("A request error occurred: invalid request payload"),
-        {
-          code: "slack_webapi_request_error",
-        },
-      );
+    it("exits on string rejection reasons (not undefined/null)", () => {
+      // Ensure we only suppress null/undefined, not arbitrary non-error reasons
+      expectExitCodeFromUnhandled("some string error", [1]);
+    });
+
+    it("exits on non-transient Slack request errors with non-wrapper message", () => {
+      const slackErr = Object.assign(new Error("invalid_auth"), {
+        code: "slack_webapi_request_error",
+      });
 
       expectExitCodeFromUnhandled(slackErr, [1]);
+    });
+
+    it("does not exit on Slack request error with empty original (sleep/wake)", () => {
+      // Reproduces the crash loop from network outages: the SDK wraps a
+      // network error with an empty message, producing "A request error occurred: "
+      const slackErr = Object.assign(new Error("A request error occurred: "), {
+        code: "slack_webapi_request_error",
+        original: new Error(""),
+      });
+
+      expectExitCodeFromUnhandled(slackErr, []);
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        "[openclaw] Non-fatal unhandled rejection (continuing):",
+        expect.stringContaining("A request error occurred"),
+      );
+    });
+
+    it("does not exit on undefined rejection reason", () => {
+      // @slack/socket-mode can call reject() without an argument on WebSocket
+      // TLS errors, producing an undefined reason.
+      // See: https://github.com/openclaw/openclaw/issues/43689
+      expectExitCodeFromUnhandled(undefined, []);
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        "[openclaw] Non-fatal unhandled rejection (undefined reason, continuing):",
+        "undefined",
+      );
+    });
+
+    it("does not exit on null rejection reason", () => {
+      expectExitCodeFromUnhandled(null, []);
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        "[openclaw] Non-fatal unhandled rejection (undefined reason, continuing):",
+        "null",
+      );
     });
 
     it("does not exit on AbortError and logs suppression warning", () => {

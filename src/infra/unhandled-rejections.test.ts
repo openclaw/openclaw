@@ -168,8 +168,36 @@ describe("isTransientNetworkError", () => {
     expect(isTransientNetworkError(error)).toBe(false);
   });
 
-  it("returns false for Slack request errors without network indicators", () => {
-    const error = Object.assign(new Error("A request error occurred"), {
+  it("returns true for Slack request errors with empty original message (sleep/wake crash)", () => {
+    // Reproduces the crash loop observed during prolonged network outages:
+    // the Slack SDK wraps a network error whose .message is empty, producing
+    // "A request error occurred: " with no identifiable network code.
+    // See: https://github.com/openclaw/openclaw/issues/23169
+    const error = Object.assign(new Error("A request error occurred: "), {
+      code: "slack_webapi_request_error",
+      original: new Error(""),
+    });
+    expect(isTransientNetworkError(error)).toBe(true);
+  });
+
+  it("returns true for Slack request errors with no message at all", () => {
+    const error = Object.assign(new Error(""), {
+      code: "slack_webapi_request_error",
+    });
+    expect(isTransientNetworkError(error)).toBe(true);
+  });
+
+  it("returns true for Slack request errors with only the wrapper prefix", () => {
+    const error = Object.assign(new Error("A request error occurred: connect ENETUNREACH"), {
+      code: "slack_webapi_request_error",
+    });
+    expect(isTransientNetworkError(error)).toBe(true);
+  });
+
+  it("returns false for Slack request errors with non-network payload", () => {
+    // Ensure we don't suppress genuine API errors that happen to use the
+    // same error code but have a clearly non-request-wrapper message.
+    const error = Object.assign(new Error("invalid_auth"), {
       code: "slack_webapi_request_error",
     });
     expect(isTransientNetworkError(error)).toBe(false);
@@ -186,6 +214,15 @@ describe("isTransientNetworkError", () => {
       expect(isTransientNetworkError(value)).toBe(false);
     },
   );
+
+  it("returns true for Slack request wrapper code even when original has no code or message", () => {
+    // During macOS sleep/wake, the original error can be completely empty
+    const error = Object.assign(new Error("A request error occurred: "), {
+      code: "slack_webapi_request_error",
+      original: {},
+    });
+    expect(isTransientNetworkError(error)).toBe(true);
+  });
 
   it("returns false for AggregateError with only non-network errors", () => {
     const error = new AggregateError([new Error("regular error")], "Multiple errors");
