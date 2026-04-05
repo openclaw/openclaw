@@ -43,6 +43,8 @@ const QUERY_KEYS = new Set([
   "session",
   "id",
   "has",
+  "source",
+  "truncation",
   "mintokens",
   "maxtokens",
   "mincost",
@@ -139,6 +141,36 @@ const getSessionModels = (session: UsageSessionQueryTarget): string[] => {
 const getSessionTools = (session: UsageSessionQueryTarget): string[] =>
   (session.usage?.toolUsage?.tools ?? []).map((tool) => tool.name.toLowerCase());
 
+const getContextWeightShape = (
+  session: UsageSessionQueryTarget,
+): {
+  source?: string;
+  truncationSeverity?: string;
+  tracked?: unknown;
+} | null => {
+  if (!session.contextWeight || typeof session.contextWeight !== "object") {
+    return null;
+  }
+  return session.contextWeight as {
+    source?: string;
+    truncationSeverity?: string;
+    tracked?: unknown;
+  };
+};
+
+const getSessionContextSource = (session: UsageSessionQueryTarget): string | undefined => {
+  const value = getContextWeightShape(session)?.source;
+  return typeof value === "string" ? value.toLowerCase() : undefined;
+};
+
+const getSessionTruncationSeverity = (session: UsageSessionQueryTarget): string | undefined => {
+  const value = getContextWeightShape(session)?.truncationSeverity;
+  return typeof value === "string" ? value.toLowerCase() : undefined;
+};
+
+const hasTrackedContext = (session: UsageSessionQueryTarget): boolean =>
+  Boolean(getContextWeightShape(session)?.tracked);
+
 export const matchesUsageQuery = (
   session: UsageSessionQueryTarget,
   term: UsageQueryTerm,
@@ -165,6 +197,10 @@ export const matchesUsageQuery = (
       return getSessionModels(session).some((model) => model.includes(value));
     case "tool":
       return getSessionTools(session).some((tool) => tool.includes(value));
+    case "source":
+      return getSessionContextSource(session)?.includes(value) ?? false;
+    case "truncation":
+      return getSessionTruncationSeverity(session)?.includes(value) ?? false;
     case "label":
       return session.label?.toLowerCase().includes(value) ?? false;
     case "key":
@@ -188,6 +224,10 @@ export const matchesUsageQuery = (
           return (session.usage?.messageCounts?.errors ?? 0) > 0;
         case "context":
           return Boolean(session.contextWeight);
+        case "tracked":
+          return hasTrackedContext(session);
+        case "truncation":
+          return (getSessionTruncationSeverity(session) ?? "none") !== "none";
         case "usage":
           return Boolean(session.usage);
         case "model":

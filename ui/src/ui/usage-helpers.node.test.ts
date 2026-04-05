@@ -31,6 +31,42 @@ describe("usage-helpers", () => {
     expect(res.warnings.some((w) => w.includes("Invalid number"))).toBe(true);
   });
 
+  it("filters by context inspector source and truncation severity", () => {
+    const run = {
+      key: "run",
+      contextWeight: { source: "run", truncationSeverity: "medium" },
+      usage: { totalTokens: 10, totalCost: 0 },
+    };
+    const estimate = {
+      key: "estimate",
+      contextWeight: { source: "estimate", truncationSeverity: "none" },
+      usage: { totalTokens: 10, totalCost: 0 },
+    };
+
+    expect(filterSessionsByQuery([run, estimate], "source:run").sessions).toEqual([run]);
+    expect(filterSessionsByQuery([run, estimate], "truncation:medium").sessions).toEqual([run]);
+  });
+
+  it("supports has:tracked and has:truncation", () => {
+    const tracked = {
+      key: "tracked",
+      contextWeight: {
+        source: "run",
+        tracked: { estimatedTokens: 255 },
+        truncationSeverity: "low",
+      },
+      usage: { totalTokens: 10, totalCost: 0 },
+    };
+    const plain = {
+      key: "plain",
+      contextWeight: { source: "estimate", truncationSeverity: "none" },
+      usage: { totalTokens: 10, totalCost: 0 },
+    };
+
+    expect(filterSessionsByQuery([tracked, plain], "has:tracked").sessions).toEqual([tracked]);
+    expect(filterSessionsByQuery([tracked, plain], "has:truncation").sessions).toEqual([tracked]);
+  });
+
   it("parses tool summaries from compact session logs", () => {
     const res = parseToolSummary(
       "[Tool: read]\n[Tool Result]\n[Tool: exec]\n[Tool: read]\n[Tool Result]",
