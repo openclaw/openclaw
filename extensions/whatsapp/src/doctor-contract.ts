@@ -6,7 +6,8 @@ export function normalizeCompatibilityConfig({
 }: {
   cfg: OpenClawConfig;
 }): ChannelDoctorConfigMutation {
-  const legacyAckReaction = cfg.messages?.ackReaction?.trim();
+  const rawAckReaction = cfg.messages?.ackReaction;
+  const legacyAckReaction = typeof rawAckReaction === "string" ? rawAckReaction.trim() : undefined;
   if (!legacyAckReaction || cfg.channels?.whatsapp === undefined) {
     return { config: cfg, changes: [] };
   }

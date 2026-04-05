@@ -110,6 +110,15 @@ describe("normalizeCompatibilityConfig (whatsapp ackReaction migration)", () => 
     expect(changes).toHaveLength(0);
   });
 
+  it("no-ops when ackReaction is not a string", () => {
+    const cfg = baseCfg({
+      messages: { ackReaction: false },
+    } as unknown as Partial<Cfg>);
+    const { config, changes } = normalizeCompatibilityConfig({ cfg });
+    expect(config).toBe(cfg);
+    expect(changes).toHaveLength(0);
+  });
+
   it("trims whitespace from legacy ackReaction value", () => {
     const cfg = baseCfg({
       messages: { ackReaction: "  👍  " },
