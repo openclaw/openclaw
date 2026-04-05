@@ -2,7 +2,7 @@
 summary: "Plan for unifying preflight work, aborts, and restart behavior under one reply lifecycle"
 read_when:
   - You are fixing stuck sessions, drain behavior, or inconsistent /new UX
-  - You want the long-term architecture behind the current targeted bugfixes
+  - You want the long-term architecture behind the reply lifecycle refactor
 title: "Reply Lifecycle Unification"
 ---
 
@@ -10,7 +10,7 @@ title: "Reply Lifecycle Unification"
 
 This page describes the end-state fix for a class of reply lifecycle bugs where OpenClaw treats preflight work, active runs, restarts, and user-visible reset notices as separate flows instead of one session operation.
 
-This is an engineering plan, not committed product behavior. The current production fix path can stay smaller. The design here is the cleaner long-term model.
+This is an engineering plan for the full refactor, not committed product behavior.
 
 ## Problem statement
 
@@ -35,7 +35,9 @@ The immediate bugs are symptoms of the same design gap: there is no single abort
 
 Treat the entire reply path as one session operation from the moment work is admitted until it completes, fails, or is canceled.
 
-That operation should own:
+This page is normative for the refactor. If the implementation diverges from this document, update the document in the same change or align the code to it.
+
+The operation owns:
 
 - lifecycle state
 - cancellation
@@ -43,90 +45,24 @@ That operation should own:
 - phase transitions
 - restart and drain semantics
 
-## Desired model
+## Non-negotiable invariants
 
-Each accepted inbound turn creates a `SessionOperation`.
+The refactor must satisfy all of the following:
 
-The operation is registered immediately and stays active across all phases:
+- each reply-producing inbound turn creates exactly one `ReplyOperation`
+- the operation is created before any eager reset-success notice or preflight work
+- the operation is registered in the active-run registry immediately and stays registered until the turn reaches a terminal outcome
+- `/stop` targets that same operation in every phase
+- preflight compaction, memory flush, and main reply execution all run under the same operation-owned `AbortController`
+- there is never a window where reply work exists for a session but `abortEmbeddedPiRun(sessionId)` cannot see it
+- reply-producing `/new` and `/reset` turns never emit a standalone success notice before the turn is admitted and reaches the normal reply path
+- restart and drain rejections are represented as typed lifecycle outcomes, not generic run failures
 
-1. `queued`
-2. `preflight_compacting`
-3. `memory_flushing`
-4. `running`
-5. `completed` or `failed` or `aborted`
+## Exact operation model
 
-The operation owns one `AbortController` and one externally visible identity for the session. `/stop`, restart, and queue clear behavior all target that same operation.
+Each reply-producing inbound turn creates exactly one `ReplyOperation`.
 
-## Exact placement
-
-The `SessionOperation` abstraction should live in the auto-reply reply orchestration layer, not in the embedded runner and not in the generic command queue.
-
-Recommended module:
-
-- `src/auto-reply/reply/reply-operation.ts`
-
-Recommended owners:
-
-- `src/auto-reply/reply/get-reply-run.ts`
-  Creates the operation before any eager reset UX or run admission side effects.
-- `src/auto-reply/reply/agent-runner.ts`
-  Advances the operation through phases and owns high-level orchestration.
-- `src/auto-reply/reply/agent-runner-memory.ts`
-  Runs preflight compaction and memory flush under the operation abort signal.
-- `src/auto-reply/reply/agent-runner-execution.ts`
-  Maps typed lifecycle failures to user-facing replies.
-
-Supporting infrastructure should stay thin:
-
-- `src/agents/pi-embedded-runner/runs.ts`
-  Remains the shared active-run registry and abort primitive. It can store phase metadata or temporary handles, but it should not become the primary reply orchestrator.
-- `src/process/command-queue.ts`
-  Remains a generic queue and drain primitive. It may expose tiny helpers such as `isGatewayDraining()` or `isGatewayDrainingError()`, but it should not own session UX or reply lifecycle policy.
-
-## Exact ownership boundaries
-
-The split should be:
-
-- auto-reply owns session operation lifecycle
-- embedded runner owns model execution and active-run registration primitives
-- command queue owns admission and drain mechanics
-
-That means:
-
-- auto-reply decides when a reply operation starts
-- auto-reply decides which phase is active
-- auto-reply decides which user-visible message corresponds to each lifecycle outcome
-- embedded runner does not learn about `/new` UX semantics
-- command queue does not learn about session reset semantics
-
-## What should not move
-
-Do not put the new abstraction in:
-
-- `src/agents/pi-embedded-runner/run/attempt.ts`
-  That would couple preflight auto-reply policy to the embedded runtime boundary.
-- `src/process/command-queue.ts`
-  That would leak reply-specific lifecycle policy into generic infrastructure.
-- `src/auto-reply/reply/session.ts`
-  That file is about persisted session state, not live in-flight operations.
-
-## Concrete shape
-
-The operation object should be small and explicit.
-
-Suggested responsibilities:
-
-- `sessionId`
-- `sessionKey`
-- `phase`
-- `abortController`
-- `registerActiveHandle()`
-- `replaceWithEmbeddedRunHandle()`
-- `complete()`
-- `fail(code)`
-- `abort(reason)`
-
-Suggested phase union:
+`ReplyOperation` has exactly these phases:
 
 - `queued`
 - `preflight_compacting`
@@ -136,128 +72,248 @@ Suggested phase union:
 - `failed`
 - `aborted`
 
-Suggested failure code union:
+`ReplyOperation` owns exactly one `AbortController`, exactly one active-run registry entry, and exactly one terminal result.
+
+`ReplyOperation` exposes exactly these failure codes:
 
 - `gateway_draining`
-- `lane_cleared`
+- `command_lane_cleared`
 - `aborted_by_user`
 - `session_corruption_reset`
-- `generic_run_failure`
+- `run_failed`
+
+The exact result shape is:
+
+```ts
+type ReplyOperationPhase =
+  | "queued"
+  | "preflight_compacting"
+  | "memory_flushing"
+  | "running"
+  | "completed"
+  | "failed"
+  | "aborted";
+
+type ReplyOperationFailureCode =
+  | "gateway_draining"
+  | "command_lane_cleared"
+  | "aborted_by_user"
+  | "session_corruption_reset"
+  | "run_failed";
+
+type ReplyOperationResult =
+  | { kind: "completed" }
+  | { kind: "failed"; code: ReplyOperationFailureCode; cause?: unknown }
+  | { kind: "aborted"; code: "aborted_by_user" };
+```
+
+`reply-operation.ts` exports exactly one factory and exactly these operation members:
+
+```ts
+type ReplyOperation = {
+  readonly sessionId: string;
+  readonly sessionKey?: string;
+  readonly abortSignal: AbortSignal;
+  readonly resetTriggered: boolean;
+  readonly phase: ReplyOperationPhase;
+  readonly result: ReplyOperationResult | null;
+  readonly registryHandle: EmbeddedPiQueueHandle;
+  setPhase(next: "queued" | "preflight_compacting" | "memory_flushing" | "running"): void;
+  attachEmbeddedHandle(handle: EmbeddedPiQueueHandle): void;
+  detachEmbeddedHandle(handle: EmbeddedPiQueueHandle): void;
+  complete(): void;
+  fail(code: Exclude<ReplyOperationFailureCode, "aborted_by_user">, cause?: unknown): void;
+  abortByUser(): void;
+};
+```
+
+No second lifecycle object is introduced for reply turns.
+
+## Exact placement
+
+The new lifecycle abstraction lives in exactly one new module:
+
+- `src/auto-reply/reply/reply-operation.ts`
+
+No other module becomes a second lifecycle owner.
+
+## Exact ownership boundaries
+
+The split is fixed:
+
+- `src/auto-reply/reply/get-reply-run.ts`
+  Creates the `ReplyOperation` before any eager reset-success side effect and passes it through the full reply flow.
+- `src/auto-reply/reply/agent-runner.ts`
+  Advances the phase and owns the lifetime of the operation.
+- `src/auto-reply/reply/agent-runner-memory.ts`
+  Runs preflight compaction and memory flush under `operation.abortSignal` and updates the phase before invoking each phase.
+- `src/auto-reply/reply/agent-runner-execution.ts`
+  Converts thrown errors into `ReplyOperationFailureCode` and maps result codes to user-facing reply classes.
+- `src/agents/pi-embedded-runner/runs.ts`
+  Remains only the shared active-run registry and abort primitive.
+- `src/process/command-queue.ts`
+  Remains only queue and drain infrastructure.
+
+The responsibility split is also fixed:
+
+- auto-reply owns lifecycle state and user-visible outcome
+- the embedded runner owns actual model execution
+- the command queue owns generic lane mechanics only
+
+## What will not move
+
+The refactor will not put lifecycle ownership in:
+
+- `src/agents/pi-embedded-runner/run/attempt.ts`
+- `src/process/command-queue.ts`
+- `src/auto-reply/reply/session.ts`
+
+The embedded runner and command queue keep their generic responsibilities. They do not become reply-lifecycle coordinators.
+
+## Exact registry design
+
+`ReplyOperation` owns one stable registry handle for the entire lifetime of the turn.
+
+That handle is created in `reply-operation.ts`, registered once through `setActiveEmbeddedRun(sessionId, handle, sessionKey)`, and cleared once when the operation reaches a terminal state.
+
+`run/attempt.ts` does not become the registry owner for reply-driven turns. When a `ReplyOperation` is present, the embedded runner attaches its transient streaming handle to the already-registered operation handle instead of registering a second lifecycle in `runs.ts`.
+
+The embedded-runner seam is fixed:
+
+- `RunEmbeddedPiAgentParams` gains `replyOperation?: ReplyOperation`
+- reply-driven calls from auto-reply pass that field through
+- when `replyOperation` is present, `run/attempt.ts` calls `replyOperation.attachEmbeddedHandle(queueHandle)` when the transient runner handle becomes available
+- when `replyOperation` is present, `run/attempt.ts` calls `replyOperation.detachEmbeddedHandle(queueHandle)` in its terminal cleanup path
+- when `replyOperation` is present, `run/attempt.ts` does not call `setActiveEmbeddedRun()` or `clearActiveEmbeddedRun()` directly for that turn
+
+The stable registry handle follows these exact rules:
+
+- `queueMessage()` delegates to the attached embedded-run handle only when one is attached and the operation phase is `running`
+- `isStreaming()` returns `true` only when an embedded-run handle is attached and actively streaming
+- `isCompacting()` returns `true` in phases `preflight_compacting` and `memory_flushing`; during `running` it delegates to the attached embedded-run handle
+- `abort()` aborts the operation-owned `AbortController` and also aborts the attached embedded-run handle when one is present
+
+This design means `abortEmbeddedPiRun(sessionId)` always targets the same registry entry for the full turn.
+
+## Exact queue behavior
+
+The command queue is not getting a reply-specific API in this refactor.
+
+Queue behavior is fixed as follows:
+
+- `ReplyOperation` is created before queue admission and enters phase `queued`
+- if queue admission rejects immediately with `GatewayDrainingError`, the operation fails with `gateway_draining`
+- if the lane later rejects the task with `CommandLaneClearedError`, the operation fails with `command_lane_cleared`
+- if `/stop` aborts the operation while it is still queued, the operation transitions to `aborted`, clears its registry handle immediately, and the queued closure becomes a no-op when it is eventually dequeued
+
+The queue continues to be generic infrastructure. No reply-specific state or UX logic moves into `command-queue.ts`.
 
 ## What changes
 
 ### 1. Register the operation before preflight work
 
-Preflight compaction and memory flush should not run outside the active-run registry.
+Preflight compaction and memory flush do not run outside the active-run registry.
 
-Instead:
+The exact flow is:
 
-- create the operation before preflight work starts
-- register it as the active handler for the session immediately
-- mark the phase as `preflight_compacting` or `memory_flushing`
-- pass the operation abort signal into those phases
-- clear the operation only after the full turn exits
+- `get-reply-run.ts` creates `ReplyOperation`
+- `ReplyOperation` registers its stable handle immediately
+- `agent-runner.ts` moves the phase from `queued` to `preflight_compacting`
+- `agent-runner-memory.ts` passes `operation.abortSignal` into preflight compaction
+- if memory flush is needed, `agent-runner-memory.ts` moves the phase to `memory_flushing` before starting it
+- before the main assistant turn begins, `agent-runner.ts` moves the phase to `running`
+- only terminal completion clears the stable handle
 
-This removes the window where session work exists but `/stop` cannot see it.
+There is no allowed preflight window outside the registry.
 
-### 2. Make every phase abortable through one handle
+### 2. Use the same operation for preflight, memory flush, and main run
 
-All long-running phases should honor the same abort signal:
+Every abortable phase uses `operation.abortSignal`.
 
-- queue wait
+That includes:
+
 - preflight compaction
 - memory flush
-- main model run
-- post-run cleanup that must be cancel-safe
+- main assistant run
+- any cleanup in auto-reply that must not outlive the session operation
 
-The system should not need special-case abort code for “real run” versus “preflight work”. If the operation is active, it is abortable.
+There is no phase-specific abort path for “real run” versus “preflight work”.
 
-### 3. Move user-visible reset success to the operation outcome
+### 3. Remove eager reset-success notices from reply-producing turns
 
-`/new` should not send a success-style notice just because session state was reset locally.
+Reply-producing `/new` and `/reset` turns do not emit a standalone `✅ New session started ...` notice before execution.
 
-Instead:
+The exact rule is:
 
-- if the new session turn is accepted and reaches reply execution, the response path may include the reset UX
-- if the gateway is draining or the turn is rejected before execution, the user should receive a restart-specific failure, not `✅ New session started`
+- bare command-only `/new` and `/reset` acknowledgments are unchanged and are outside this refactor
+- `/new` or `/reset` turns that also produce a reply do not call `sendResetSessionNotice()` before the reply operation runs
+- any reset-specific UX for reply-producing turns is delivered only through the normal assistant reply path after the operation has been admitted
 
-This ties user-facing status to admitted work, not optimistic local state changes.
+This removes optimistic success UI from turns that later fail admission or execution.
 
-### 4. Surface lifecycle-specific failures
+### 4. Use typed lifecycle outcomes
 
-External chat should distinguish lifecycle failures from generic model failures.
+`agent-runner-execution.ts` maps errors to `ReplyOperationFailureCode` exactly as follows:
 
-Examples:
+- `GatewayDrainingError` -> `gateway_draining`
+- `CommandLaneClearedError` -> `command_lane_cleared`
+- user-triggered operation abort -> `aborted_by_user`
+- session corruption reset path -> `session_corruption_reset`
+- everything else -> `run_failed`
 
-- gateway draining or restarting
-- command lane cleared during restart
-- operation aborted by `/stop`
-- operation reset due to session corruption
+User-visible mapping is fixed as follows:
 
-These are not “something went wrong” cases. They are known lifecycle outcomes and should be presented as such.
+- `gateway_draining` and `command_lane_cleared` map to the restart-specific external reply class
+- `aborted_by_user` does not produce a generic assistant failure reply
+- `session_corruption_reset` does not fall through the generic failure text
+- only `run_failed` uses the generic assistant failure path
 
 ## Why this fixes the current bugs
 
 ### Stuck large-session compaction
 
-The bug happens because preflight compaction begins before the session is visible as an active run. Under the unified model, compaction is already part of the active session operation, so `/stop` cancels the same operation that owns compaction.
+The bug happens because preflight compaction begins before the session is visible as an active run. Under this design, the operation registers its stable handle before preflight starts, so `/stop` hits the same operation that owns compaction.
 
 ### Misleading `/new` during restart or drain
 
-The bug happens because reset UX is emitted before admission and execution outcome are known. Under the unified model, `/new` success UX is emitted only from the accepted operation path, while drain rejection returns a restart-specific lifecycle reply.
+The bug happens because reset UX is emitted before admission and execution outcome are known. Under this design, reply-producing `/new` does not emit a standalone success notice before the operation runs, and drain rejection returns the restart-specific lifecycle reply class instead of the generic failure.
 
 ## Non-goals
 
-This plan does not require:
+This refactor does not do any of the following:
 
-- changing user-facing `/new` semantics beyond tying success notices to accepted work
-- redesigning queue strategy for all channels
-- rewriting the embedded runner or compaction engine
-- changing session storage format as a prerequisite
+- redesign the generic command queue
+- introduce a second active-run registry
+- rewrite the embedded runner or compaction engine
+- change session storage format
+- define final copy for every user-visible string; this plan fixes outcome classes and ownership, not wording
 
-## Incremental delivery plan
+## Implementation plan
 
-This architecture can be reached in stages.
+This is implemented in one coherent refactor.
 
-### Stage 1
-
-Land the narrow bugfixes:
-
-- make preflight compaction abortable through the existing active-run path
-- return a restart-specific external-chat message for drain rejection
-- suppress eager reset success notices while draining
-
-This fixes the current user-visible bugs with low risk.
-
-### Stage 2
-
-Introduce an internal session operation wrapper around:
-
-- preflight compaction
-- memory flush
-- main run
-
-This can initially be a thin orchestration layer that reuses existing run registry and abort semantics.
-
-The preferred implementation path is:
+The implementation order is fixed:
 
 1. add `reply-operation.ts` in `src/auto-reply/reply`
-2. create the operation in `get-reply-run.ts` before eager reset notice logic
-3. thread the operation through `agent-runner.ts`
-4. run preflight compaction and memory flush under `operation.abortSignal`
-5. register a temporary active handle in `runs.ts` immediately
-6. replace that temporary handle with the real embedded run handle when model execution starts
-7. emit lifecycle-specific user-facing outcomes from operation result codes
+2. create the operation in `get-reply-run.ts` before any eager reset-success side effect
+3. register the stable operation handle immediately
+4. thread the operation through `agent-runner.ts`, `agent-runner-memory.ts`, and `agent-runner-execution.ts`
+5. pass `operation.abortSignal` into preflight compaction and memory flush
+6. add `replyOperation?: ReplyOperation` to `RunEmbeddedPiAgentParams` and thread it through reply-driven embedded-runner calls
+7. update `run/attempt.ts` so reply-driven turns attach transient streaming handles to the existing operation handle instead of registering a second lifecycle
+8. remove eager `sendResetSessionNotice()` from reply-producing `/new` and `/reset` turns
+9. normalize drain, lane-clear, abort, reset-corruption, and generic-run failures into `ReplyOperationFailureCode`
+10. map lifecycle result codes to the correct reply class in `agent-runner-execution.ts`
+11. keep bare command-only `/new` and `/reset` acknowledgments unchanged
 
-### Stage 3
+The refactor is not done until all of the following are true:
 
-Move lifecycle-specific user-visible replies onto operation outcomes instead of early side effects.
-
-At that point:
-
-- `/new` success UX is outcome-driven
-- drain and restart replies are typed lifecycle results
-- `/stop` has one target across all phases
+- `/stop` aborts the same operation during `queued`, `preflight_compacting`, `memory_flushing`, and `running`
+- `abortEmbeddedPiRun(sessionId)` never returns `no_active_run` for a turn that is already inside the reply lifecycle
+- reply-producing `/new` does not emit a standalone success notice before execution
+- drain and lane-clear failures do not use the generic external failure message
+- only one stable registry handle exists per reply turn
+- the registry handle is registered once and cleared once
 
 ## Tradeoffs
 
@@ -271,20 +327,18 @@ At that point:
 ### Costs
 
 - reply runner control flow becomes more explicit and stateful
-- tests need to cover operation phases, not just final run behavior
-- temporary overlap may exist while old and new lifecycle hooks coexist
+- tests need to cover phase transitions and stable-handle behavior
+- `run/attempt.ts` needs a new attach/detach seam for reply-driven turns
 
-## Recommended implementation shape
+## Exact implementation shape
 
-Prefer a small internal `SessionOperation` abstraction owned by auto-reply rather than adding more special-case flags to the existing embedded-run registry.
+The implementation uses a small internal `ReplyOperation` abstraction owned by auto-reply and backed by the existing `runs.ts` registry.
 
-The registry can remain the backing mechanism for “is active / abort / wait”, but the reply runner should become phase-aware and operation-driven.
+The registry remains the single source of truth for “is active / abort / wait”, but auto-reply becomes the single source of truth for reply lifecycle phase and terminal outcome.
 
-Best design summary:
+The architecture is locked to these decisions:
 
-- `SessionOperation` lives in `src/auto-reply/reply`
+- `ReplyOperation` lives in `src/auto-reply/reply`
 - `runs.ts` stays a registry, not the orchestrator
 - `command-queue.ts` stays generic infrastructure
 - user-visible `/new` and restart behavior is derived from operation outcomes, not eager side effects
-
-That keeps the production bugfix path small while still pointing toward a coherent long-term architecture.
