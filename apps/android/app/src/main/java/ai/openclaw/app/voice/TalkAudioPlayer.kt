@@ -165,44 +165,49 @@ internal class TalkAudioPlayer(
         writeBytes(bytes)
       }
     }
-    val finished = CompletableDeferred<Unit>()
-    val player =
-      withContext(Dispatchers.Main) {
-        MediaPlayer().apply {
-          setAudioAttributes(
-            AudioAttributes.Builder()
-              .setUsage(AudioAttributes.USAGE_MEDIA)
-              .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-              .build(),
-          )
-          setDataSource(tempFile.absolutePath)
-          setOnCompletionListener {
-            finished.complete(Unit)
+    try {
+      val finished = CompletableDeferred<Unit>()
+      val player =
+        withContext(Dispatchers.Main) {
+          MediaPlayer().apply {
+            setAudioAttributes(
+              AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_MEDIA)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                .build(),
+            )
+            setDataSource(tempFile.absolutePath)
+            setOnCompletionListener {
+              finished.complete(Unit)
+            }
+            setOnErrorListener { _, what, extra ->
+              finished.completeExceptionally(IllegalStateException("MediaPlayer error ($what/$extra)"))
+              true
+            }
+            prepare()
           }
-          setOnErrorListener { _, what, extra ->
-            finished.completeExceptionally(IllegalStateException("MediaPlayer error ($what/$extra)"))
-            true
-          }
-          prepare()
-          start()
+        }
+      val playback =
+        ActivePlayback(
+          cancel = {
+            finished.completeExceptionally(CancellationException("assistant speech cancelled"))
+            runCatching { player.stop() }
+          },
+        )
+      register(playback)
+      try {
+        withContext(Dispatchers.Main) {
+          player.start()
+        }
+        finished.await()
+      } finally {
+        clear(playback)
+        withContext(Dispatchers.Main) {
+          runCatching { player.stop() }
+          player.release()
         }
       }
-    val playback =
-      ActivePlayback(
-        cancel = {
-          finished.completeExceptionally(CancellationException("assistant speech cancelled"))
-          runCatching { player.stop() }
-        },
-      )
-    register(playback)
-    try {
-      finished.await()
     } finally {
-      clear(playback)
-      withContext(Dispatchers.Main) {
-        runCatching { player.stop() }
-        player.release()
-      }
       withContext(Dispatchers.IO) {
         tempFile.delete()
       }
