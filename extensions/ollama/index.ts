@@ -31,6 +31,17 @@ const OPENAI_COMPATIBLE_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
   family: "openai-compatible",
 });
 
+function resolveOllamaDiscoveryApiKey(params: {
+  env: NodeJS.ProcessEnv;
+  explicitApiKey?: string;
+  resolvedApiKey?: string;
+}): string {
+  const envApiKey = params.env.OLLAMA_API_KEY?.trim() ? "OLLAMA_API_KEY" : undefined;
+  const explicitApiKey = params.explicitApiKey?.trim() || undefined;
+  const resolvedApiKey = params.resolvedApiKey?.trim() || undefined;
+  return envApiKey ?? explicitApiKey ?? resolvedApiKey ?? DEFAULT_API_KEY;
+}
+
 function shouldSkipAmbientOllamaDiscovery(env: NodeJS.ProcessEnv): boolean {
   return Boolean(env.VITEST) || env.NODE_ENV === "test";
 }
@@ -92,6 +103,7 @@ export default definePluginEntry({
           const explicit = ctx.config.models?.providers?.ollama;
           const hasExplicitModels = Array.isArray(explicit?.models) && explicit.models.length > 0;
           const ollamaKey = ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;
+          const explicitApiKey = typeof explicit?.apiKey === "string" ? explicit.apiKey : undefined;
           if (hasExplicitModels && explicit) {
             return {
               provider: {
@@ -101,7 +113,11 @@ export default definePluginEntry({
                     ? resolveOllamaApiBase(explicit.baseUrl)
                     : OLLAMA_DEFAULT_BASE_URL,
                 api: explicit.api ?? "ollama",
-                apiKey: ollamaKey ?? explicit.apiKey ?? DEFAULT_API_KEY,
+                apiKey: resolveOllamaDiscoveryApiKey({
+                  env: ctx.env,
+                  explicitApiKey,
+                  resolvedApiKey: ollamaKey,
+                }),
               },
             };
           }
@@ -118,7 +134,11 @@ export default definePluginEntry({
           return {
             provider: {
               ...provider,
-              apiKey: ollamaKey ?? explicit?.apiKey ?? DEFAULT_API_KEY,
+              apiKey: resolveOllamaDiscoveryApiKey({
+                env: ctx.env,
+                explicitApiKey,
+                resolvedApiKey: ollamaKey,
+              }),
             },
           };
         },

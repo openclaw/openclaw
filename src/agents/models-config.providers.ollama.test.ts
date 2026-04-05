@@ -254,7 +254,7 @@ describe("Ollama provider", () => {
       expect(providers?.ollama?.models).toEqual(explicitModels);
       expect(providers?.ollama?.baseUrl).toBe("http://remote-ollama:11434");
       expect(providers?.ollama?.api).toBe("ollama");
-      expect(providers?.ollama?.apiKey).toBe("ollama-local");
+      expect(providers?.ollama?.apiKey).toBe("config-ollama-key");
     });
   });
 
@@ -274,7 +274,7 @@ describe("Ollama provider", () => {
         },
       });
 
-      expect(providers?.ollama?.apiKey).toBe("ollama-local");
+      expect(providers?.ollama?.apiKey).toBe("config-ollama-key");
     });
   });
 });
