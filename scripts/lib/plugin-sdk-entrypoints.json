@@ -90,6 +90,7 @@
   "command-surface",
   "collection-runtime",
   "compat",
+  "discord",
   "direct-dm",
   "device-bootstrap",
   "diagnostic-runtime",
