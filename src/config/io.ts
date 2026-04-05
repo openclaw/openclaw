@@ -1840,7 +1840,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       if (pathPrepend && pathPrepend.length > 0) {
         const existing = deps.env.PATH ?? "";
         const existingParts = new Set(existing.split(path.delimiter).filter(Boolean));
-        const newParts = pathPrepend.filter((p) => p.trim() && !existingParts.has(p));
+        const newParts = pathPrepend.map((p) => p.trim()).filter((p) => p && !existingParts.has(p));
         if (newParts.length > 0) {
           deps.env.PATH = [...newParts, existing].filter(Boolean).join(path.delimiter);
         }
