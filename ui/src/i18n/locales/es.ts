@@ -127,6 +127,22 @@ export const es: TranslationMap = {
     de: "Deutsch (Alemán)",
     es: "Español",
   },
+  skillsPage: {
+    title: "Skills",
+    subtitle: "Installed skills and their status.",
+    loading: "Loading…",
+    searchPlaceholder: "Filter installed skills",
+    shownCount: "{count} shown",
+    clawHubTitle: "ClawHub",
+    clawHubSubtitle: "Search and install skills from the registry",
+    clawHubSearchPlaceholder: "Search ClawHub skills…",
+    clawHubSearching: "Searching…",
+    notConnected: "Not connected to gateway.",
+    noSkillsFound: "No skills found.",
+    noClawHubSkillsFound: "No skills found on ClawHub.",
+    install: "Install",
+    installing: "Installing…",
+  },
   cron: {
     summary: {
       enabled: "Habilitado",
