@@ -27,6 +27,7 @@ export async function loginWeb(
   const account = resolveWhatsAppAccount({ cfg, accountId });
   const sock = await createWaSocket(true, verbose, {
     authDir: account.authDir,
+    proxy: account.proxy,
   });
   logInfo("Waiting for WhatsApp connection...", runtime);
   try {
@@ -46,6 +47,7 @@ export async function loginWeb(
       await waitForCredsSaveQueueWithTimeout(account.authDir);
       const retry = await createWaSocket(false, verbose, {
         authDir: account.authDir,
+        proxy: account.proxy,
       });
       try {
         await wait(retry);

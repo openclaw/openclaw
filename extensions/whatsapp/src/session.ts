@@ -1,5 +1,7 @@
+import type { Agent } from "https";
 import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
+import type { URL } from "url";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { VERSION } from "openclaw/plugin-sdk/cli-runtime";
 import { danger, success } from "openclaw/plugin-sdk/runtime-env";
@@ -101,7 +103,7 @@ async function safeSaveCreds(
 export async function createWaSocket(
   printQr: boolean,
   verbose: boolean,
-  opts: { authDir?: string; onQr?: (qr: string) => void } = {},
+  opts: { authDir?: string; onQr?: (qr: string) => void; proxy?: string } = {},
 ): Promise<ReturnType<typeof makeWASocket>> {
   const baseLogger = getChildLogger(
     { module: "baileys" },
@@ -116,6 +118,15 @@ export async function createWaSocket(
   maybeRestoreCredsFromBackup(authDir);
   const { state, saveCreds } = await useMultiFileAuthState(authDir);
   const { version } = await fetchLatestBaileysVersion();
+
+  // Create proxy agent if proxy URL is provided
+  let agent: Agent | undefined;
+  if (opts.proxy) {
+    const { HttpsProxyAgent } = await import("https-proxy-agent");
+    agent = new HttpsProxyAgent(opts.proxy) as Agent;
+    sessionLogger.info({ proxy: opts.proxy }, "Using proxy for WhatsApp WebSocket connection");
+  }
+
   const sock = makeWASocket({
     auth: {
       creds: state.creds,
@@ -127,6 +138,8 @@ export async function createWaSocket(
     browser: ["openclaw", "cli", VERSION],
     syncFullHistory: false,
     markOnlineOnConnect: false,
+    agent,
+    fetchAgent: agent,
   });
 
   sock.ev.on("creds.update", () => enqueueSaveCreds(authDir, saveCreds, sessionLogger));

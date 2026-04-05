@@ -117,6 +117,8 @@ export const WhatsAppAccountSchema = WhatsAppSharedSchema.extend({
   /** Override auth directory for this WhatsApp account (Baileys multi-file auth state). */
   authDir: z.string().optional(),
   mediaMaxMb: z.number().int().positive().optional(),
+  /** HTTP/HTTPS proxy URL for WebSocket connections (e.g., http://127.0.0.1:7890) */
+  proxy: z.string().url().optional(),
 }).strict();
 
 export const WhatsAppConfigSchema = WhatsAppSharedSchema.extend({

@@ -95,6 +95,7 @@ async function restartLoginSocket(login: ActiveLogin, runtime: RuntimeEnv) {
   try {
     const sock = await createWaSocket(false, login.verbose, {
       authDir: login.authDir,
+      proxy: account.proxy,
     });
     login.sock = sock;
     login.connected = false;
@@ -159,6 +160,7 @@ export async function startWebLoginWithQr(
   try {
     sock = await createWaSocket(false, Boolean(opts.verbose), {
       authDir: account.authDir,
+      proxy: account.proxy,
       onQr: (qr: string) => {
         if (pendingQr) {
           return;

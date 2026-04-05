@@ -37,6 +37,7 @@ export async function monitorWebInbox(options: {
   verbose: boolean;
   accountId: string;
   authDir: string;
+  proxy?: string;
   onMessage: (msg: WebInboundMessage) => Promise<void>;
   mediaMaxMb?: number;
   /** Keep the global presence unavailable so self-chat sessions do not mute phone pushes. */
@@ -52,6 +53,7 @@ export async function monitorWebInbox(options: {
   const inboundConsoleLog = createSubsystemLogger("gateway/channels/whatsapp").child("inbound");
   const sock = await createWaSocket(false, options.verbose, {
     authDir: options.authDir,
+    proxy: options.proxy,
   });
   await waitForWaConnection(sock);
   const connectedAtMs = Date.now();
