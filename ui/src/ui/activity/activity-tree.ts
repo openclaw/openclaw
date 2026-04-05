@@ -246,6 +246,33 @@ export function applyActivityEvent(tree: ActivityTree, event: IncomingEvent): Ac
     return tree;
   }
 
+  // Handle subagent.completed — merge outcome into the existing subagent node.
+  if (kind === "subagent.completed") {
+    // Find the subagent node by runId match.
+    const subagentNodeId = `${event.runId}:subagent:${data.agentId ?? "unknown"}`;
+    let target = tree.nodeById.get(subagentNodeId);
+    // Fallback: find any subagent node with matching runId.
+    if (!target) {
+      for (const node of tree.nodeById.values()) {
+        if (node.kind === "subagent" && node.runId === event.runId) {
+          target = node;
+          break;
+        }
+      }
+    }
+    if (target) {
+      target.status = data.isError || data.error ? "error" : "completed";
+      target.endedAt = event.ts;
+      target.durationMs = event.ts - target.startedAt;
+      target.isError = Boolean(data.isError || data.error);
+      target.error = typeof data.error === "string" ? data.error : null;
+      if (data.metadata) {
+        target.metadata = { ...target.metadata, ...data.metadata };
+      }
+    }
+    return tree;
+  }
+
   return tree;
 }
 

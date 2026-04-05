@@ -9,7 +9,8 @@ export type ActivityEventKind =
   | "thinking.start"
   | "thinking.end"
   | "subagent.start"
-  | "subagent.end";
+  | "subagent.end"
+  | "subagent.completed";
 
 export type ActivityEventData = {
   kind: ActivityEventKind;

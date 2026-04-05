@@ -1,3 +1,4 @@
+import { emitActivityEvent } from "../infra/activity-events.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { SubagentRunOutcome } from "./subagent-announce.js";
 import {
@@ -90,6 +91,19 @@ export async function emitSubagentEndedHookOnce(params: {
     }
     params.entry.endedHookEmittedAt = Date.now();
     params.persist();
+    emitActivityEvent(
+      runId,
+      {
+        kind: "subagent.completed",
+        metadata: {
+          outcome: params.outcome,
+          error: params.error,
+          reason: params.reason,
+          childSessionKey: params.entry.childSessionKey,
+        },
+      },
+      params.entry.requesterSessionKey,
+    );
     return true;
   } catch {
     return false;

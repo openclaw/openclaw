@@ -48,7 +48,19 @@ function formatJsonPreview(value: unknown): string {
 
 function renderMetadataBlock(metadata: Record<string, unknown>) {
   const entries = Object.entries(metadata).filter(
-    ([k, v]) => v !== undefined && v !== null && k !== "args" && k !== "result",
+    ([k, v]) =>
+      v !== undefined &&
+      v !== null &&
+      ![
+        "args",
+        "result",
+        "outcome",
+        "reason",
+        "task",
+        "_sessionKey",
+        "childSessionKey",
+        "parentSessionKey",
+      ].includes(k),
   );
   if (entries.length === 0) {
     return nothing;
@@ -105,6 +117,35 @@ export function renderActivityDetail(props: ActivityDetailProps) {
               <div class="activity-detail__section">
                 <div class="activity-detail__section-title muted">Output</div>
                 <pre class="activity-detail__json">${formatJsonPreview(node.metadata.result)}</pre>
+              </div>
+            `
+          : nothing}
+        ${node.kind === "subagent" && node.metadata.outcome
+          ? html`
+              <div class="activity-detail__section">
+                <div class="activity-detail__section-title muted">Outcome</div>
+                ${renderField(
+                  "Status",
+                  typeof node.metadata.outcome === "string"
+                    ? node.metadata.outcome
+                    : JSON.stringify(node.metadata.outcome),
+                )}
+                ${renderField(
+                  "Reason",
+                  typeof node.metadata.reason === "string" ? node.metadata.reason : null,
+                )}
+              </div>
+            `
+          : nothing}
+        ${node.kind === "subagent" && node.metadata.task
+          ? html`
+              <div class="activity-detail__section">
+                <div class="activity-detail__section-title muted">Task</div>
+                <pre class="activity-detail__json">
+${typeof node.metadata.task === "string"
+                    ? node.metadata.task
+                    : JSON.stringify(node.metadata.task)}</pre
+                >
               </div>
             `
           : nothing}
