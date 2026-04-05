@@ -2,6 +2,10 @@ import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import { createSubscribedSessionHarness } from "./pi-embedded-subscribe.e2e-harness.js";
 
+type AssistantMessageWithPhase = AssistantMessage & {
+  phase?: "commentary" | "final_answer";
+};
+
 describe("subscribeEmbeddedPiSession", () => {
   it("suppresses commentary-phase assistant messages before tool use", () => {
     const onBlockReply = vi.fn();
@@ -18,7 +22,7 @@ describe("subscribeEmbeddedPiSession", () => {
       phase: "commentary",
       content: [{ type: "text", text: "Need send." }],
       stopReason: "toolUse",
-    } as AssistantMessage;
+    } as AssistantMessageWithPhase;
 
     emit({ type: "message_start", message: commentaryMessage });
     emit({ type: "message_end", message: commentaryMessage });
