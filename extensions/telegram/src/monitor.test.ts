@@ -324,6 +324,8 @@ vi.mock("./webhook.js", () => ({
 
 vi.mock("./fetch.js", () => ({
   resolveTelegramTransport: resolveTelegramTransportSpy,
+  resolveTelegramApiBase: (apiRoot?: string) => apiRoot ?? "https://api.telegram.org",
+  resolveTelegramFetch: () => globalThis.fetch,
 }));
 
 vi.mock("./update-offset-store.js", () => ({
