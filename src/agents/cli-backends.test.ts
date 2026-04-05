@@ -36,6 +36,8 @@ beforeEach(() => {
           "stream-json",
           "--include-partial-messages",
           "--verbose",
+          "--setting-sources",
+          "user",
           "--permission-mode",
           "bypassPermissions",
         ],
@@ -43,6 +45,8 @@ beforeEach(() => {
           "stream-json",
           "--include-partial-messages",
           "--verbose",
+          "--setting-sources",
+          "user",
           "--permission-mode",
           "bypassPermissions",
           "--resume",
@@ -50,6 +54,30 @@ beforeEach(() => {
         ],
         output: "jsonl",
         input: "stdin",
+        env: {
+          CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: "1",
+        },
+        clearEnv: [
+          "ANTHROPIC_API_KEY",
+          "ANTHROPIC_API_KEY_OLD",
+          "ANTHROPIC_AUTH_TOKEN",
+          "ANTHROPIC_BASE_URL",
+          "ANTHROPIC_UNIX_SOCKET",
+          "CLAUDE_CONFIG_DIR",
+          "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
+          "CLAUDE_CODE_ENTRYPOINT",
+          "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+          "CLAUDE_CODE_OAUTH_SCOPES",
+          "CLAUDE_CODE_OAUTH_TOKEN",
+          "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
+          "CLAUDE_CODE_PLUGIN_CACHE_DIR",
+          "CLAUDE_CODE_PLUGIN_SEED_DIR",
+          "CLAUDE_CODE_REMOTE",
+          "CLAUDE_CODE_USE_COWORK_PLUGINS",
+          "CLAUDE_CODE_USE_BEDROCK",
+          "CLAUDE_CODE_USE_FOUNDRY",
+          "CLAUDE_CODE_USE_VERTEX",
+        ],
       },
       normalizeConfig: normalizeClaudeBackendConfig,
     }),
@@ -178,6 +206,8 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
     expect(resolved?.config.args).toContain("stream-json");
     expect(resolved?.config.args).toContain("--include-partial-messages");
     expect(resolved?.config.args).toContain("--verbose");
+    expect(resolved?.config.args).toContain("--setting-sources");
+    expect(resolved?.config.args).toContain("user");
     expect(resolved?.config.args).toContain("--permission-mode");
     expect(resolved?.config.args).toContain("bypassPermissions");
     expect(resolved?.config.args).not.toContain("--dangerously-skip-permissions");
@@ -185,6 +215,8 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
     expect(resolved?.config.resumeArgs).toContain("stream-json");
     expect(resolved?.config.resumeArgs).toContain("--include-partial-messages");
     expect(resolved?.config.resumeArgs).toContain("--verbose");
+    expect(resolved?.config.resumeArgs).toContain("--setting-sources");
+    expect(resolved?.config.resumeArgs).toContain("user");
     expect(resolved?.config.resumeArgs).toContain("--permission-mode");
     expect(resolved?.config.resumeArgs).toContain("bypassPermissions");
     expect(resolved?.config.resumeArgs).not.toContain("--dangerously-skip-permissions");
@@ -207,10 +239,22 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
 
     expect(resolved).not.toBeNull();
     expect(resolved?.config.command).toBe("/usr/local/bin/claude");
+    expect(resolved?.config.args).toContain("--setting-sources");
+    expect(resolved?.config.args).toContain("user");
     expect(resolved?.config.args).toContain("--permission-mode");
     expect(resolved?.config.args).toContain("bypassPermissions");
+    expect(resolved?.config.resumeArgs).toContain("--setting-sources");
+    expect(resolved?.config.resumeArgs).toContain("user");
     expect(resolved?.config.resumeArgs).toContain("--permission-mode");
     expect(resolved?.config.resumeArgs).toContain("bypassPermissions");
+    expect(resolved?.config.env).toEqual({ CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: "1" });
+    expect(resolved?.config.clearEnv).toContain("ANTHROPIC_BASE_URL");
+    expect(resolved?.config.clearEnv).toContain("CLAUDE_CONFIG_DIR");
+    expect(resolved?.config.clearEnv).toContain("CLAUDE_CODE_OAUTH_TOKEN");
+    expect(resolved?.config.clearEnv).toContain("CLAUDE_CODE_PLUGIN_CACHE_DIR");
+    expect(resolved?.config.clearEnv).toContain("CLAUDE_CODE_PLUGIN_SEED_DIR");
+    expect(resolved?.config.clearEnv).toContain("CLAUDE_CODE_REMOTE");
+    expect(resolved?.config.clearEnv).toContain("CLAUDE_CODE_USE_COWORK_PLUGINS");
   });
 
   it("normalizes legacy skip-permissions overrides to permission-mode bypassPermissions", () => {
@@ -271,16 +315,140 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
 
     expect(resolved).not.toBeNull();
     expect(resolved?.config.args).not.toContain("--dangerously-skip-permissions");
-    expect(resolved?.config.args).toEqual(["-p", "--permission-mode", "acceptEdits"]);
+    expect(resolved?.config.args).toEqual([
+      "-p",
+      "--permission-mode",
+      "acceptEdits",
+      "--setting-sources",
+      "user",
+    ]);
     expect(resolved?.config.resumeArgs).not.toContain("--dangerously-skip-permissions");
     expect(resolved?.config.resumeArgs).toEqual([
       "-p",
       "--permission-mode=acceptEdits",
       "--resume",
       "{sessionId}",
+      "--setting-sources",
+      "user",
     ]);
     expect(resolved?.config.args).not.toContain("bypassPermissions");
     expect(resolved?.config.resumeArgs).not.toContain("bypassPermissions");
+  });
+
+  it("forces project or local setting-source overrides back to user-only", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": {
+              command: "claude",
+              args: ["-p", "--setting-sources", "project", "--permission-mode", "acceptEdits"],
+              resumeArgs: [
+                "-p",
+                "--setting-sources=local,user",
+                "--resume",
+                "{sessionId}",
+                "--permission-mode=acceptEdits",
+              ],
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const resolved = resolveCliBackendConfig("claude-cli", cfg);
+
+    expect(resolved).not.toBeNull();
+    expect(resolved?.config.args).toEqual([
+      "-p",
+      "--setting-sources",
+      "user",
+      "--permission-mode",
+      "acceptEdits",
+    ]);
+    expect(resolved?.config.resumeArgs).toEqual([
+      "-p",
+      "--setting-sources=user",
+      "--resume",
+      "{sessionId}",
+      "--permission-mode=acceptEdits",
+    ]);
+  });
+
+  it("falls back to user-only setting sources when a custom override leaves the flag without a value", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": {
+              command: "claude",
+              args: ["-p", "--setting-sources", "--output-format", "stream-json"],
+              resumeArgs: ["-p", "--setting-sources", "--resume", "{sessionId}"],
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const resolved = resolveCliBackendConfig("claude-cli", cfg);
+
+    expect(resolved).not.toBeNull();
+    expect(resolved?.config.args).toEqual([
+      "-p",
+      "--output-format",
+      "stream-json",
+      "--setting-sources",
+      "user",
+      "--permission-mode",
+      "bypassPermissions",
+    ]);
+    expect(resolved?.config.resumeArgs).toEqual([
+      "-p",
+      "--resume",
+      "{sessionId}",
+      "--setting-sources",
+      "user",
+      "--permission-mode",
+      "bypassPermissions",
+    ]);
+  });
+
+  it("falls back to bypassPermissions when a custom override leaves permission-mode without a value", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": {
+              command: "claude",
+              args: ["-p", "--permission-mode", "--output-format", "stream-json"],
+              resumeArgs: ["-p", "--permission-mode", "--resume", "{sessionId}"],
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const resolved = resolveCliBackendConfig("claude-cli", cfg);
+
+    expect(resolved).not.toBeNull();
+    expect(resolved?.config.args).toEqual([
+      "-p",
+      "--output-format",
+      "stream-json",
+      "--setting-sources",
+      "user",
+      "--permission-mode",
+      "bypassPermissions",
+    ]);
+    expect(resolved?.config.resumeArgs).toEqual([
+      "-p",
+      "--resume",
+      "{sessionId}",
+      "--setting-sources",
+      "user",
+      "--permission-mode",
+      "bypassPermissions",
+    ]);
   });
 
   it("injects bypassPermissions when custom args omit any permission flag", () => {
@@ -308,10 +476,48 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
     const resolved = resolveCliBackendConfig("claude-cli", cfg);
 
     expect(resolved).not.toBeNull();
+    expect(resolved?.config.args).toContain("--setting-sources");
+    expect(resolved?.config.args).toContain("user");
     expect(resolved?.config.args).toContain("--permission-mode");
     expect(resolved?.config.args).toContain("bypassPermissions");
+    expect(resolved?.config.resumeArgs).toContain("--setting-sources");
+    expect(resolved?.config.resumeArgs).toContain("user");
     expect(resolved?.config.resumeArgs).toContain("--permission-mode");
     expect(resolved?.config.resumeArgs).toContain("bypassPermissions");
+  });
+
+  it("keeps hardened clearEnv defaults when custom claude env overrides are merged", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": {
+              command: "claude",
+              env: {
+                SAFE_CUSTOM: "ok",
+                ANTHROPIC_BASE_URL: "https://evil.example.com/v1",
+              },
+              clearEnv: ["EXTRA_CLEAR"],
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const resolved = resolveCliBackendConfig("claude-cli", cfg);
+
+    expect(resolved).not.toBeNull();
+    expect(resolved?.config.env).toEqual({
+      CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: "1",
+      SAFE_CUSTOM: "ok",
+      ANTHROPIC_BASE_URL: "https://evil.example.com/v1",
+    });
+    expect(resolved?.config.clearEnv).toContain("ANTHROPIC_BASE_URL");
+    expect(resolved?.config.clearEnv).toContain("CLAUDE_CONFIG_DIR");
+    expect(resolved?.config.clearEnv).toContain("CLAUDE_CODE_OAUTH_TOKEN");
+    expect(resolved?.config.clearEnv).toContain("CLAUDE_CODE_PLUGIN_CACHE_DIR");
+    expect(resolved?.config.clearEnv).toContain("CLAUDE_CODE_PLUGIN_SEED_DIR");
+    expect(resolved?.config.clearEnv).toContain("EXTRA_CLEAR");
   });
 
   it("normalizes override-only claude-cli config when the plugin registry is absent", () => {
@@ -340,6 +546,8 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
       "-p",
       "--output-format",
       "json",
+      "--setting-sources",
+      "user",
       "--permission-mode",
       "bypassPermissions",
     ]);
@@ -349,6 +557,8 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
       "json",
       "--resume",
       "{sessionId}",
+      "--setting-sources",
+      "user",
       "--permission-mode",
       "bypassPermissions",
     ]);

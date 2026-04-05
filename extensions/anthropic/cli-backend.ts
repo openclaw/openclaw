@@ -6,6 +6,7 @@ import {
 import {
   CLAUDE_CLI_BACKEND_ID,
   CLAUDE_CLI_CLEAR_ENV,
+  CLAUDE_CLI_HOST_MANAGED_ENV,
   CLAUDE_CLI_MODEL_ALIASES,
   CLAUDE_CLI_SESSION_ID_FIELDS,
   normalizeClaudeBackendConfig,
@@ -23,6 +24,8 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
         "stream-json",
         "--include-partial-messages",
         "--verbose",
+        "--setting-sources",
+        "user",
         "--permission-mode",
         "bypassPermissions",
       ],
@@ -32,6 +35,8 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
         "stream-json",
         "--include-partial-messages",
         "--verbose",
+        "--setting-sources",
+        "user",
         "--permission-mode",
         "bypassPermissions",
         "--resume",
@@ -47,6 +52,7 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
       systemPromptArg: "--append-system-prompt",
       systemPromptMode: "append",
       systemPromptWhen: "first",
+      env: { ...CLAUDE_CLI_HOST_MANAGED_ENV },
       clearEnv: [...CLAUDE_CLI_CLEAR_ENV],
       reliability: {
         watchdog: {

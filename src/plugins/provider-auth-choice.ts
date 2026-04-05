@@ -11,8 +11,8 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { enablePluginInConfig } from "./enable.js";
 import {
+  applyProviderAuthConfigPatch,
   applyDefaultModel,
-  mergeConfigPatch,
   pickAuthMethod,
   resolveProviderMatch,
 } from "./provider-auth-choice-helpers.js";
@@ -129,7 +129,7 @@ export async function runProviderPluginAuthMethod(params: {
 
   let nextConfig = params.config;
   if (result.configPatch) {
-    nextConfig = mergeConfigPatch(nextConfig, result.configPatch);
+    nextConfig = applyProviderAuthConfigPatch(nextConfig, result.configPatch);
   }
 
   for (const profile of result.profiles) {

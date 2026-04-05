@@ -242,6 +242,66 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     );
   });
 
+  it("replaces provider-owned default model maps during auth migrations", async () => {
+    const method: ProviderAuthMethod = {
+      id: "local",
+      label: "Local",
+      kind: "custom",
+      run: async () => ({
+        profiles: [],
+        configPatch: {
+          agents: {
+            defaults: {
+              model: {
+                primary: "claude-cli/claude-sonnet-4-6",
+                fallbacks: ["claude-cli/claude-opus-4-6", "openai/gpt-5.2"],
+              },
+              models: {
+                "claude-cli/claude-sonnet-4-6": { alias: "Sonnet" },
+                "claude-cli/claude-opus-4-6": { alias: "Opus" },
+                "openai/gpt-5.2": {},
+              },
+            },
+          },
+        },
+        defaultModel: "claude-cli/claude-sonnet-4-6",
+      }),
+    };
+
+    const result = await runProviderPluginAuthMethod({
+      config: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "anthropic/claude-sonnet-4-6",
+              fallbacks: ["anthropic/claude-opus-4-6", "openai/gpt-5.2"],
+            },
+            models: {
+              "anthropic/claude-sonnet-4-6": { alias: "Sonnet" },
+              "anthropic/claude-opus-4-6": { alias: "Opus" },
+              "openai/gpt-5.2": {},
+            },
+          },
+        },
+      },
+      runtime: {} as ApplyAuthChoiceParams["runtime"],
+      prompter: {
+        note: vi.fn(async () => {}),
+      } as unknown as ApplyAuthChoiceParams["prompter"],
+      method,
+    });
+
+    expect(result.config.agents?.defaults?.model).toEqual({
+      primary: "claude-cli/claude-sonnet-4-6",
+      fallbacks: ["claude-cli/claude-opus-4-6", "openai/gpt-5.2"],
+    });
+    expect(result.config.agents?.defaults?.models).toEqual({
+      "claude-cli/claude-sonnet-4-6": { alias: "Sonnet" },
+      "claude-cli/claude-opus-4-6": { alias: "Opus" },
+      "openai/gpt-5.2": {},
+    });
+  });
+
   it("returns an agent-scoped override for plugin auth choices when default model application is deferred", async () => {
     const provider = buildProvider();
     resolvePluginProviders.mockReturnValue([provider]);
