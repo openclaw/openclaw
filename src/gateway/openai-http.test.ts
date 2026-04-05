@@ -193,6 +193,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
 
       {
+        mockAgentOnce([{ text: "hello" }]);
         const res = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
           method: "POST",
           headers: {
@@ -200,7 +201,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           },
           body: JSON.stringify({ messages: [{ role: "user", content: "hi" }] }),
         });
-        expect(res.status).toBe(403);
+        expect(res.status).toBe(200);
+        expect(agentCommand).toHaveBeenCalledTimes(1);
         await res.text();
       }
 

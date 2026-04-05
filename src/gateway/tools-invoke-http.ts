@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { runBeforeToolCallHook } from "../agents/pi-tools.before-tool-call.js";
 import { resolveToolLoopDetectionConfig } from "../agents/pi-tools.js";
+import { isKnownCoreToolId } from "../agents/tool-catalog.js";
 import { applyOwnerOnlyToolPolicy } from "../agents/tool-policy.js";
 import { ToolInputError } from "../agents/tools/common.js";
 import { loadConfig } from "../config/config.js";
@@ -236,6 +237,7 @@ export async function handleToolsInvokeHttpRequest(
     agentThreadId,
     allowGatewaySubagentBinding: true,
     allowMediaInvokeCommands: true,
+    disablePluginTools: isKnownCoreToolId(toolName),
   });
   // Owner semantics intentionally follow the same shared-secret HTTP contract
   // on this direct tool surface; SECURITY.md documents this as designed-as-is.

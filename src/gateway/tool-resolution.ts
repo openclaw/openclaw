@@ -30,6 +30,7 @@ export function resolveGatewayScopedTools(params: {
   allowGatewaySubagentBinding?: boolean;
   allowMediaInvokeCommands?: boolean;
   excludeToolNames?: Iterable<string>;
+  disablePluginTools?: boolean;
 }) {
   const {
     agentId,
@@ -71,6 +72,7 @@ export function resolveGatewayScopedTools(params: {
     agentThreadId: params.agentThreadId,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
     allowMediaInvokeCommands: params.allowMediaInvokeCommands,
+    disablePluginTools: params.disablePluginTools,
     config: params.cfg,
     workspaceDir,
     pluginToolAllowlist: collectExplicitAllowlist([
