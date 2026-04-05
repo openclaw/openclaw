@@ -118,6 +118,14 @@ export function installSessionToolResultGuard(
     beforeMessageWriteHook?: (
       event: PluginHookBeforeMessageWriteEvent,
     ) => PluginHookBeforeMessageWriteResult | undefined;
+    /**
+     * Optional callback fired after a user message is successfully persisted.
+     * This is used by model-fallback orchestration to suppress duplicate
+     * persistence on later retries once the current turn is already on disk.
+     */
+    onUserMessagePersisted?: (
+      message: Extract<AgentMessage, { role: "user" }>,
+    ) => void;
   },
 ): {
   flushPendingToolResults: () => void;
@@ -269,6 +277,10 @@ export function installSessionToolResultGuard(
         message: finalMessage,
         messageId: typeof result === "string" ? result : undefined,
       });
+    }
+
+    if (finalMessage.role === "user") {
+      opts?.onUserMessagePersisted?.(finalMessage as Extract<AgentMessage, { role: "user" }>);
     }
 
     if (toolCalls.length > 0) {

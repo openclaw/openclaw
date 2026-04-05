@@ -1,6 +1,6 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 import { castAgentMessage } from "./test-helpers/agent-message-fixtures.js";
 
@@ -460,6 +460,47 @@ describe("installSessionToolResultGuard", () => {
       kind: "inter_session",
       sourceTool: "sessions_send",
     });
+  });
+
+  it("fires onUserMessagePersisted only after the user message is written", () => {
+    const sm = SessionManager.inMemory();
+    const onUserMessagePersisted = vi.fn();
+    installSessionToolResultGuard(sm, {
+      onUserMessagePersisted,
+    });
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "user",
+        content: "retry prompt",
+        timestamp: Date.now(),
+      }),
+    );
+
+    expect(onUserMessagePersisted).toHaveBeenCalledTimes(1);
+    expect(onUserMessagePersisted.mock.calls[0]?.[0]).toMatchObject({
+      role: "user",
+      content: "retry prompt",
+    });
+  });
+
+  it("does not fire onUserMessagePersisted when the user message is blocked", () => {
+    const sm = SessionManager.inMemory();
+    const onUserMessagePersisted = vi.fn();
+    installSessionToolResultGuard(sm, {
+      beforeMessageWriteHook: () => ({ block: true }),
+      onUserMessagePersisted,
+    });
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "user",
+        content: "blocked retry prompt",
+        timestamp: Date.now(),
+      }),
+    );
+
+    expect(onUserMessagePersisted).not.toHaveBeenCalled();
   });
 
   // When an assistant message with toolCalls is aborted, no synthetic toolResult

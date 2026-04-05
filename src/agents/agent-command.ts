@@ -748,8 +748,10 @@ async function agentCommandInternal(
       });
 
       // Track model fallback attempts so retries on an existing session don't
-      // re-inject the original prompt as a duplicate user message.
+      // re-inject the original prompt as a duplicate user message once the
+      // current turn is already on disk.
       let fallbackAttemptIndex = 0;
+      let currentTurnUserMessagePersisted = false;
       const fallbackResult = await runWithModelFallback({
         cfg,
         provider,
@@ -787,6 +789,11 @@ async function agentCommandInternal(
             storePath,
             allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
             sessionHasHistory: !isNewSession || (await sessionFileHasContent(sessionFile)),
+            suppressPromptPersistenceOnRetry:
+              isFallbackRetry && currentTurnUserMessagePersisted,
+            onUserMessagePersisted: () => {
+              currentTurnUserMessagePersisted = true;
+            },
             onAgentEvent: (evt) => {
               // Track lifecycle end for fallback emission below.
               if (
