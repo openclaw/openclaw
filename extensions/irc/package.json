@@ -22,7 +22,11 @@
       "aliases": [
         "internet-relay-chat"
       ],
-      "systemImage": "network"
+      "systemImage": "network",
+      "configuredState": {
+        "specifier": "./configured-state",
+        "exportName": "hasIrcConfiguredState"
+      }
     }
   }
 }

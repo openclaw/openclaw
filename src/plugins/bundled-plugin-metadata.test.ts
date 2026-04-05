@@ -107,6 +107,45 @@ describe("bundled plugin metadata", () => {
     });
   });
 
+  it("keeps bundled configured-state metadata on channel package manifests", () => {
+    const configuredChannels = listBundledPluginMetadata()
+      .filter((entry) => ["discord", "irc", "slack", "telegram"].includes(entry.dirName))
+      .map((entry) => ({
+        dir: entry.dirName,
+        configuredState: entry.packageManifest?.channel?.configuredState,
+      }));
+    expect(configuredChannels).toEqual([
+      {
+        dir: "discord",
+        configuredState: {
+          specifier: "./configured-state",
+          exportName: "hasDiscordConfiguredState",
+        },
+      },
+      {
+        dir: "irc",
+        configuredState: {
+          specifier: "./configured-state",
+          exportName: "hasIrcConfiguredState",
+        },
+      },
+      {
+        dir: "slack",
+        configuredState: {
+          specifier: "./configured-state",
+          exportName: "hasSlackConfiguredState",
+        },
+      },
+      {
+        dir: "telegram",
+        configuredState: {
+          specifier: "./configured-state",
+          exportName: "hasTelegramConfiguredState",
+        },
+      },
+    ]);
+  });
+
   it("excludes test-only public surface artifacts", () => {
     listBundledPluginMetadata().forEach((entry) =>
       expectTestOnlyArtifactsExcluded(entry.publicSurfaceArtifacts ?? []),
