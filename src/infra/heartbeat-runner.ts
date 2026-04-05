@@ -674,29 +674,6 @@ export async function runHeartbeatOnce(opts: {
   // sending the full conversation history (~100K tokens) to the LLM.
   // Delivery routing still uses the main session entry (lastChannel, lastTo).
   const useIsolatedSession = heartbeat?.isolatedSession === true;
-  let runSessionKey = sessionKey;
-  let runStorePath = storePath;
-  if (useIsolatedSession) {
-    const configuredSession = resolveHeartbeatSession(cfg, agentId, heartbeat);
-    // Collapse only the repeated `:heartbeat` suffixes introduced by wake-triggered
-    // re-entry, while preserving legitimate base session keys that already end with
-    // `:heartbeat` (see https://github.com/openclaw/openclaw/issues/59493).
-    const isolatedKey = resolveIsolatedHeartbeatSessionKey({
-      sessionKey,
-      configuredSessionKey: configuredSession.sessionKey,
-    });
-    const cronSession = resolveCronSession({
-      cfg,
-      sessionKey: isolatedKey,
-      agentId,
-      nowMs: startedAt,
-      forceNew: true,
-    });
-    cronSession.store[isolatedKey] = cronSession.sessionEntry;
-    await saveSessionStore(cronSession.storePath, cronSession.store);
-    runSessionKey = isolatedKey;
-    runStorePath = cronSession.storePath;
-  }
   const delivery = resolveHeartbeatDeliveryTarget({
     cfg,
     entry,
@@ -751,6 +728,30 @@ export async function runHeartbeatOnce(opts: {
   // If no tasks are due, skip heartbeat entirely
   if (prompt === null) {
     return { status: "skipped", reason: "no-tasks-due" };
+  }
+
+  let runSessionKey = sessionKey;
+  let runStorePath = storePath;
+  if (useIsolatedSession) {
+    const configuredSession = resolveHeartbeatSession(cfg, agentId, heartbeat);
+    // Collapse only the repeated `:heartbeat` suffixes introduced by wake-triggered
+    // re-entry, while preserving legitimate base session keys that already end with
+    // `:heartbeat` (see https://github.com/openclaw/openclaw/issues/59493).
+    const isolatedKey = resolveIsolatedHeartbeatSessionKey({
+      sessionKey,
+      configuredSessionKey: configuredSession.sessionKey,
+    });
+    const cronSession = resolveCronSession({
+      cfg,
+      sessionKey: isolatedKey,
+      agentId,
+      nowMs: startedAt,
+      forceNew: true,
+    });
+    cronSession.store[isolatedKey] = cronSession.sessionEntry;
+    await saveSessionStore(cronSession.storePath, cronSession.store);
+    runSessionKey = isolatedKey;
+    runStorePath = cronSession.storePath;
   }
 
   // Update task last run times AFTER successful heartbeat completion
