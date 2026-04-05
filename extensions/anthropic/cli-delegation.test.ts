@@ -124,3 +124,104 @@ describe("findDeep", () => {
     expect(findDeep({ subscriptionType: "" }, ["subscriptionType"])).toBeUndefined();
   });
 });
+
+describe("adaptSdkMessage", () => {
+  it("adapts a text_delta stream event", async () => {
+    const { adaptSdkMessage } = await import("./cli-delegation.js");
+
+    const msg = {
+      type: "stream_event" as const,
+      event: {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text: "Hello" },
+      },
+      parent_tool_use_id: null,
+      uuid: "test-uuid",
+      session_id: "test-session",
+    };
+
+    const adapted = adaptSdkMessage(msg as any);
+    expect(adapted).toEqual({ kind: "text_delta", text: "Hello" });
+  });
+
+  it("adapts a thinking_delta stream event", async () => {
+    const { adaptSdkMessage } = await import("./cli-delegation.js");
+
+    const msg = {
+      type: "stream_event" as const,
+      event: {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "thinking_delta", thinking: "Let me think..." },
+      },
+      parent_tool_use_id: null,
+      uuid: "test-uuid",
+      session_id: "test-session",
+    };
+
+    const adapted = adaptSdkMessage(msg as any);
+    expect(adapted).toEqual({ kind: "thinking_delta", text: "Let me think..." });
+  });
+
+  it("adapts a result message", async () => {
+    const { adaptSdkMessage } = await import("./cli-delegation.js");
+
+    const msg = {
+      type: "result" as const,
+      subtype: "success",
+      uuid: "test-uuid",
+      session_id: "test-session",
+      duration_ms: 1000,
+      duration_api_ms: 800,
+      is_error: false,
+      num_turns: 3,
+      result: "Done",
+      stop_reason: "end_turn",
+      total_cost_usd: 0.05,
+      usage: {
+        input_tokens: 100,
+        output_tokens: 50,
+        cache_read_input_tokens: 20,
+        cache_creation_input_tokens: 0,
+      },
+      modelUsage: {},
+      permission_denials: [],
+    };
+
+    const adapted = adaptSdkMessage(msg as any);
+    expect(adapted.kind).toBe("result");
+    if (adapted.kind === "result") {
+      expect(adapted.status).toBe("success");
+      expect(adapted.sessionId).toBe("test-session");
+      expect(adapted.usage).toEqual({
+        inputTokens: 100,
+        outputTokens: 50,
+        cacheReadTokens: 20,
+      });
+    }
+  });
+
+  it("returns ignored for unhandled message types", async () => {
+    const { adaptSdkMessage } = await import("./cli-delegation.js");
+
+    const msg = { type: "system", subtype: "init", uuid: "u", session_id: "s" };
+    const adapted = adaptSdkMessage(msg as any);
+    expect(adapted.kind).toBe("ignored");
+  });
+
+  it("adapts a non-delta stream event as ignored", async () => {
+    const { adaptSdkMessage } = await import("./cli-delegation.js");
+
+    const msg = {
+      type: "stream_event" as const,
+      event: { type: "message_start" },
+      parent_tool_use_id: null,
+      uuid: "test-uuid",
+      session_id: "test-session",
+    };
+
+    const adapted = adaptSdkMessage(msg as any);
+    expect(adapted.kind).toBe("ignored");
+  });
+});
