@@ -19,7 +19,7 @@ Generated zh-CN pages and the live zh-CN translation memory live in the publish 
 2. Push to `main`.
 3. `openclaw/openclaw/.github/workflows/docs-sync-publish.yml` mirrors the docs tree into `openclaw/docs`.
 4. The sync script rewrites the publish `docs/docs.json` so `zh-Hans` navigation exists there even though it is no longer committed in the source repo.
-5. `openclaw/docs/.github/workflows/translate-zh-cn.yml` refreshes `docs/zh-CN/**` on push and hourly.
+5. `openclaw/docs/.github/workflows/translate-zh-cn.yml` refreshes `docs/zh-CN/**` once a day, on demand, and after source-repo release dispatches.
 
 ## Why the split exists
 
@@ -61,6 +61,7 @@ Fields:
 - If the pending count is `0`, the expensive translation step is skipped entirely.
 - If there are pending files, the workflow translates only those files.
 - The publish workflow retries transient model-format failures, but unchanged files stay skipped because the same hash check runs on each retry.
+- The source repo also dispatches a zh-CN refresh after published GitHub releases so release docs can catch up without waiting for the daily cron.
 
 ## Operational notes
 
