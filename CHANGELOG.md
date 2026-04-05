@@ -37,7 +37,7 @@ Docs: https://docs.openclaw.ai
 - Providers/CLI: remove bundled CLI text-provider backends and the `agents.defaults.cliBackends` surface, while keeping ACP harness sessions and Gemini media understanding on the native bundled providers.
 - Matrix/exec approvals: clarify unavailable-approval replies so Matrix no longer claims chat approvals are unsupported when native exec approvals are merely unconfigured. (#61424) Thanks @gumadeiras.
 - Docs/IRC: replace public IRC hostname examples with `irc.example.com` and recommend private servers for bot coordination while listing common public networks for intentional use.
-- Memory/dreaming: write dreaming trail content to top-level `dreams.md` instead of daily memory notes, update `/dreaming` help text to point there, and keep `dreams.md` available for explicit reads without pulling it into default recall. Thanks @davemorin.
+- Memory/dreaming: write dreaming trail content to top-level `DREAMS.md` instead of daily memory notes, update `/dreaming` help text to point there, and keep `DREAMS.md` available for explicit reads without pulling it into default recall. Thanks @davemorin.
 
 ### Fixes
 
