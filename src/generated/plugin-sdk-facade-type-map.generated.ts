@@ -412,31 +412,6 @@ export interface PluginSdkFacadeTypeMap {
     };
     types: {};
   };
-  ollama: {
-    module: typeof import("@openclaw/ollama/runtime-api.js");
-    sourceModules: {
-      source1: {
-        module: typeof import("@openclaw/ollama/runtime-api.js");
-      };
-    };
-    types: {
-      OllamaEmbeddingClient: import("@openclaw/ollama/runtime-api.js").OllamaEmbeddingClient;
-      OllamaEmbeddingProvider: import("@openclaw/ollama/runtime-api.js").OllamaEmbeddingProvider;
-    };
-  };
-  "ollama-surface": {
-    module: typeof import("@openclaw/ollama/api.js");
-    sourceModules: {
-      source1: {
-        module: typeof import("@openclaw/ollama/api.js");
-      };
-    };
-    types: {
-      OllamaModelWithContext: import("@openclaw/ollama/api.js").OllamaModelWithContext;
-      OllamaTagModel: import("@openclaw/ollama/api.js").OllamaTagModel;
-      OllamaTagsResponse: import("@openclaw/ollama/api.js").OllamaTagsResponse;
-    };
-  };
   openai: {
     module: typeof import("@openclaw/openai/api.js");
     sourceModules: {

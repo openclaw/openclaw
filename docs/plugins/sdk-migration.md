@@ -325,7 +325,7 @@ The same rule applies to other generated bundled-helper families such as:
   `plugin-sdk/chutes`, `plugin-sdk/deepseek`, `plugin-sdk/google`,
   `plugin-sdk/huggingface`, `plugin-sdk/kimi-coding`,
   `plugin-sdk/kilocode`, `plugin-sdk/minimax`, `plugin-sdk/mistral`,
-  `plugin-sdk/nvidia`, `plugin-sdk/ollama*`, `plugin-sdk/opencode`,
+  `plugin-sdk/nvidia`, `plugin-sdk/opencode`,
   `plugin-sdk/opencode-go`, `plugin-sdk/qianfan`, `plugin-sdk/sglang`,
   `plugin-sdk/synthetic`, `plugin-sdk/venice`, `plugin-sdk/vllm`,
   `plugin-sdk/xai`, `plugin-sdk/volcengine`,

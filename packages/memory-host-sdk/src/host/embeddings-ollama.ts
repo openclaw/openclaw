@@ -1,5 +1,5 @@
-export type { OllamaEmbeddingClient } from "../../../../src/plugin-sdk/ollama.js";
+export type { OllamaEmbeddingClient } from "../../../../extensions/ollama/runtime-api.js";
 export {
   createOllamaEmbeddingProvider,
   DEFAULT_OLLAMA_EMBEDDING_MODEL,
-} from "../../../../src/plugin-sdk/ollama.js";
+} from "../../../../extensions/ollama/runtime-api.js";
