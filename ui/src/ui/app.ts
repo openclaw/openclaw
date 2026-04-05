@@ -64,6 +64,8 @@ import type { DreamingStatus } from "./controllers/dreaming.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
 import type {
+  ClawArtifactEntry,
+  ClawAuditEntry,
   ClawControlState,
   ClawInboxItem,
   ClawMissionDetail,
@@ -218,6 +220,10 @@ export class OpenClawApp extends LitElement {
   @state() clawActionBusy = false;
   @state() clawControl: ClawControlState | null = null;
   @state() clawInbox: ClawInboxItem[] = [];
+  @state() clawAuditLoading = false;
+  @state() clawAuditEntries: ClawAuditEntry[] = [];
+  @state() clawArtifactsLoading = false;
+  @state() clawArtifacts: ClawArtifactEntry[] = [];
   @state() pendingGatewayUrl: string | null = null;
   pendingGatewayToken: string | null = null;
 

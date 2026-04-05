@@ -12,6 +12,7 @@ import type { AgentInternalEvent } from "../../internal-events.js";
 import type { BlockReplyPayload } from "../../pi-embedded-payloads.js";
 import type { BlockReplyChunking, ToolResultFormat } from "../../pi-embedded-subscribe.js";
 import type { SkillSnapshot } from "../../skills.js";
+import type { ClawPromptRole } from "../../system-prompt.js";
 
 // Simplified tool definition for client-provided tools (OpenResponses hosted tools)
 export type ClientToolDefinition = {
@@ -127,6 +128,7 @@ export type RunEmbeddedPiAgentParams = {
   enqueue?: typeof enqueueCommand;
   extraSystemPrompt?: string;
   internalEvents?: AgentInternalEvent[];
+  clawRole?: ClawPromptRole;
   inputProvenance?: InputProvenance;
   streamParams?: AgentStreamParams;
   ownerNumbers?: string[];

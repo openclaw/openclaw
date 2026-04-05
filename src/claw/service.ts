@@ -5,9 +5,14 @@ import path from "node:path";
 import { runEmbeddedPiAgent, type EmbeddedPiRunResult } from "../agents/pi-embedded.js";
 import { ensureSessionHeader } from "../agents/pi-embedded-helpers.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveEffectiveToolPolicy } from "../agents/pi-tools.policy.js";
+import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import { loadConfig, type OpenClawConfig } from "../config/config.js";
+import { getGatewayBroadcastRuntime } from "../gateway/server-broadcast-runtime.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
+  buildClawHelperExtraSystemPrompt,
+  buildClawHelperPrompt,
   buildClawRunnerExtraSystemPrompt,
   buildClawRunnerPrompt,
   buildClawVerifierExtraSystemPrompt,
@@ -134,7 +139,7 @@ function resolveQueuedCurrentStep(control: ClawControlState): string {
   return "Queued for execution.";
 }
 
-function buildCycleRunId(kind: "runner" | "verifier", missionId: string): string {
+function buildCycleRunId(kind: "runner" | "verifier" | "helper", missionId: string): string {
   return `claw-${kind}-${missionId}-${crypto.randomUUID().slice(0, 8)}`;
 }
 
@@ -208,6 +213,14 @@ type ClawVerifierDecision = {
   evidence: string[];
 };
 
+type ClawHelperDecision = {
+  outcome: "continue" | "blocked";
+  summary: string;
+  nextStep?: string | null;
+  blockerSummary?: string | null;
+  evidence: string[];
+};
+
 function parseRunnerDecision(text: string): ClawRunnerDecision {
   const parsed = extractJsonObject(text);
   if (!parsed) {
@@ -259,6 +272,29 @@ function parseVerifierDecision(text: string): ClawVerifierDecision {
     summary,
     nextStep: typeof parsed.nextStep === "string" ? parsed.nextStep.trim() : null,
     unmetCriteria: normalizeEvidence(parsed.unmetCriteria),
+    blockerSummary:
+      typeof parsed.blockerSummary === "string" ? parsed.blockerSummary.trim() : null,
+    evidence: normalizeEvidence(parsed.evidence),
+  };
+}
+
+function parseHelperDecision(text: string): ClawHelperDecision {
+  const parsed = extractJsonObject(text);
+  if (!parsed) {
+    throw new Error("Helper did not return a valid JSON object.");
+  }
+  const outcome = parsed.outcome;
+  if (outcome !== "continue" && outcome !== "blocked") {
+    throw new Error(`Helper returned an unsupported outcome: ${String(outcome)}`);
+  }
+  const summary = typeof parsed.summary === "string" ? parsed.summary.trim() : "";
+  if (!summary) {
+    throw new Error("Helper response must include summary.");
+  }
+  return {
+    outcome,
+    summary,
+    nextStep: typeof parsed.nextStep === "string" ? parsed.nextStep.trim() : null,
     blockerSummary:
       typeof parsed.blockerSummary === "string" ? parsed.blockerSummary.trim() : null,
     evidence: normalizeEvidence(parsed.evidence),
@@ -428,15 +464,136 @@ function isBrowserPluginEnabled(cfg: OpenClawConfig): boolean {
   return cfg.plugins?.entries?.browser?.enabled === true;
 }
 
+type ClawMissionCapabilityNeeds = {
+  browserRequired: boolean;
+  helperSessionsUseful: boolean;
+  manualAuthRequired: boolean;
+  likelyAuthDomains: string[];
+  likelyExternalSystems: string[];
+  schedulingLikely: boolean;
+};
+
+function goalMentionsAny(goal: string, patterns: readonly RegExp[]): boolean {
+  return patterns.some((pattern) => pattern.test(goal));
+}
+
+function inferMissionCapabilityNeeds(goal: string): ClawMissionCapabilityNeeds {
+  const normalizedGoal = goal.trim().toLowerCase();
+  const browserRequired = goalMentionsAny(normalizedGoal, [
+    /\bbrowser\b/,
+    /\bchrome\b/,
+    /\bwebsite\b/,
+    /\bweb app\b/,
+    /\bwebpage\b/,
+    /\blogin\b/,
+    /\bsign in\b/,
+    /\bcaptcha\b/,
+    /\bmfa\b/,
+    /\b2fa\b/,
+    /\boauth\b/,
+    /\btab\b/,
+    /\bpage\b/,
+    /\bgmail\b/,
+  ]);
+  const manualAuthRequired = goalMentionsAny(normalizedGoal, [
+    /\blogin\b/,
+    /\bsign in\b/,
+    /\bcaptcha\b/,
+    /\bmfa\b/,
+    /\b2fa\b/,
+    /\botp\b/,
+    /\boauth\b/,
+    /\bmanual auth\b/,
+  ]);
+  const helperSessionsUseful = goalMentionsAny(normalizedGoal, [
+    /\bresearch\b/,
+    /\binvestigat/,
+    /\bcompare\b/,
+    /\banalyz/,
+    /\breplan\b/,
+  ]);
+  const schedulingLikely = goalMentionsAny(normalizedGoal, [
+    /\bschedule\b/,
+    /\brecurring\b/,
+    /\bremind\b/,
+    /\bfollow up\b/,
+    /\blater\b/,
+    /\btomorrow\b/,
+  ]);
+
+  const likelyAuthDomains = new Set<string>();
+  const likelyExternalSystems = new Set<string>();
+  const providers: Array<{ key: string; pattern: RegExp }> = [
+    { key: "GitHub", pattern: /\bgithub\b|\bpull request\b|\bpr\b|\bbranch\b|\bcommit\b|\bpush\b/ },
+    { key: "AWS", pattern: /\baws\b|\bec2\b|\bs3\b|\blambda\b/ },
+    { key: "Cloudflare", pattern: /\bcloudflare\b|\bworkers\b/ },
+    { key: "Vercel", pattern: /\bvercel\b/ },
+    { key: "Render", pattern: /\brender\b/ },
+    { key: "Netlify", pattern: /\bnetlify\b/ },
+    { key: "Stripe", pattern: /\bstripe\b/ },
+    { key: "Supabase", pattern: /\bsupabase\b/ },
+  ];
+  for (const provider of providers) {
+    if (provider.pattern.test(normalizedGoal)) {
+      likelyExternalSystems.add(provider.key);
+      likelyAuthDomains.add(provider.key);
+    }
+  }
+  if (browserRequired || manualAuthRequired) {
+    likelyExternalSystems.add("browser");
+  }
+  if (manualAuthRequired) {
+    likelyAuthDomains.add("interactive browser session");
+  }
+
+  return {
+    browserRequired,
+    helperSessionsUseful,
+    manualAuthRequired,
+    likelyAuthDomains: [...likelyAuthDomains],
+    likelyExternalSystems: [...likelyExternalSystems],
+    schedulingLikely,
+  };
+}
+
+function isToolExposedForMission(cfg: OpenClawConfig, toolName: string): boolean {
+  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const policy = resolveEffectiveToolPolicy({
+    config: cfg,
+    agentId: defaultAgentId,
+  });
+  return isToolAllowedByPolicies(toolName, [
+    policy.globalPolicy,
+    policy.globalProviderPolicy,
+    policy.agentPolicy,
+    policy.agentProviderPolicy,
+  ]);
+}
+
 async function buildPreflightChecks(params: {
+  goal: string;
   workspaceDir: string;
   missionDir: string;
   cfg: OpenClawConfig;
 }): Promise<ClawPreflightCheck[]> {
+  const capabilityNeeds = inferMissionCapabilityNeeds(params.goal);
   const [workspaceReady, missionDirReady] = await Promise.all([
     canReadWritePath(params.workspaceDir),
     canReadWritePath(params.missionDir),
   ]);
+  const defaultModelReady = hasConfiguredDefaultModel(params.cfg);
+  const execToolReady = isToolExposedForMission(params.cfg, "exec");
+  const processToolReady = isToolExposedForMission(params.cfg, "process");
+  const browserToolReady = isToolExposedForMission(params.cfg, "browser");
+  const gatewayToolReady = isToolExposedForMission(params.cfg, "gateway");
+  const cronToolReady = isToolExposedForMission(params.cfg, "cron");
+  const helperToolsReady =
+    isToolExposedForMission(params.cfg, "sessions_spawn") &&
+    isToolExposedForMission(params.cfg, "subagents");
+  const browserPluginReady = isBrowserPluginEnabled(params.cfg);
+  const gatewayRuntimeReady = getGatewayBroadcastRuntime() != null;
+  const browserReady = browserToolReady && browserPluginReady;
+
   return [
     {
       id: "workspace-root",
@@ -462,11 +619,11 @@ async function buildPreflightChecks(params: {
       id: "default-model",
       category: "runtime",
       title: "Default model available",
-      status: hasConfiguredDefaultModel(params.cfg) ? "ready" : "needs_setup",
-      summary: hasConfiguredDefaultModel(params.cfg)
+      status: defaultModelReady ? "ready" : "needs_setup",
+      summary: defaultModelReady
         ? "A default agent model is configured for mission execution."
         : "Configure agents.defaults.model before starting a mission.",
-      blocker: !hasConfiguredDefaultModel(params.cfg),
+      blocker: !defaultModelReady,
     },
     {
       id: "task-flow-runtime",
@@ -476,13 +633,118 @@ async function buildPreflightChecks(params: {
       summary: "Mission state is mirrored through the managed Task Flow registry for restart safety.",
     },
     {
+      id: "gateway-runtime",
+      category: "runtime",
+      title: "Gateway runtime ready",
+      status: gatewayRuntimeReady ? "ready" : "info",
+      summary: gatewayRuntimeReady
+        ? "The mission runner is attached to the live gateway runtime."
+        : "Gateway runtime signals are not yet attached; mission persistence still works, but live runtime broadcasts may not be available in this context.",
+    },
+    {
+      id: "exec-tool",
+      category: "tool",
+      title: "Exec tool exposure",
+      status: execToolReady ? "ready" : "blocked",
+      summary: execToolReady
+        ? "The exec tool is exposed for mission execution."
+        : "The exec tool is blocked by current tool policy. Claw needs exec for full-access mission work.",
+      blocker: !execToolReady,
+    },
+    {
+      id: "process-tool",
+      category: "tool",
+      title: "Process tool exposure",
+      status: processToolReady ? "ready" : "blocked",
+      summary: processToolReady
+        ? "The process tool is exposed for background command handling."
+        : "The process tool is blocked by current tool policy. Claw needs process for full-access mission work.",
+      blocker: !processToolReady,
+    },
+    {
+      id: "gateway-tool",
+      category: "tool",
+      title: "Gateway control tool exposure",
+      status: gatewayToolReady ? "ready" : "info",
+      summary: gatewayToolReady
+        ? "Gateway control actions are available to Claw."
+        : "Gateway control actions are not currently exposed. Mission execution can still proceed, but runtime control-plane actions will be limited.",
+    },
+    {
+      id: "helper-tools",
+      category: "tool",
+      title: "Optional helper-session tools",
+      status:
+        capabilityNeeds.helperSessionsUseful && !helperToolsReady
+          ? "info"
+          : helperToolsReady
+            ? "ready"
+            : "info",
+      summary: helperToolsReady
+        ? "Sessions/subagent tools are available for bounded helper work when useful."
+        : capabilityNeeds.helperSessionsUseful
+          ? "The mission may benefit from helper sessions, but sessions_spawn/subagents are not fully exposed. Claw will stay single-runner only."
+          : "Helper-session tools are optional for this mission.",
+    },
+    {
       id: "browser-runtime",
       category: "browser",
       title: "Browser automation availability",
-      status: isBrowserPluginEnabled(params.cfg) ? "ready" : "info",
-      summary: isBrowserPluginEnabled(params.cfg)
-        ? "The browser plugin is enabled for browser-dependent mission work."
-        : "The browser plugin is not explicitly enabled; browser-dependent mission steps may still need setup.",
+      status: capabilityNeeds.browserRequired
+        ? browserReady
+          ? "ready"
+          : "needs_setup"
+        : browserReady
+          ? "ready"
+          : "info",
+      summary: capabilityNeeds.browserRequired
+        ? browserReady
+          ? "Browser automation is available for this mission."
+          : !browserPluginReady
+            ? "This goal appears to require browser work, but the browser plugin is not enabled."
+            : "This goal appears to require browser work, but the browser tool is blocked by current tool policy."
+        : browserReady
+          ? "Browser automation is available if the mission later needs it."
+          : "The browser runtime is not fully exposed; browser-dependent steps would require additional setup.",
+      blocker: capabilityNeeds.browserRequired && !browserReady,
+    },
+    {
+      id: "cron-tool",
+      category: "tool",
+      title: "Scheduling tool exposure",
+      status:
+        capabilityNeeds.schedulingLikely && !cronToolReady
+          ? "info"
+          : cronToolReady
+            ? "ready"
+            : "info",
+      summary: cronToolReady
+        ? "Cron is available if the mission needs scheduled follow-up work."
+        : capabilityNeeds.schedulingLikely
+          ? "This goal mentions delayed or recurring work, but the cron tool is not exposed."
+          : "Cron is optional for this mission.",
+    },
+    {
+      id: "likely-auth",
+      category: "auth",
+      title: "Likely authentication blockers",
+      status: capabilityNeeds.manualAuthRequired ? "needs_setup" : "info",
+      summary: capabilityNeeds.manualAuthRequired
+        ? "This goal explicitly mentions login, CAPTCHA, MFA, or similar manual authentication. Expect operator intervention before autonomous progress continues."
+        : capabilityNeeds.likelyAuthDomains.length > 0
+          ? `This mission may depend on existing authentication for: ${capabilityNeeds.likelyAuthDomains.join(", ")}.`
+          : "No obvious authentication blocker was inferred from the goal text.",
+      blocker: capabilityNeeds.manualAuthRequired,
+    },
+    {
+      id: "external-systems",
+      category: "external",
+      title: "Likely external systems",
+      status: capabilityNeeds.likelyExternalSystems.length > 0 ? "info" : "ready",
+      summary:
+        capabilityNeeds.likelyExternalSystems.length > 0
+          ? `The mission likely touches: ${capabilityNeeds.likelyExternalSystems.join(", ")}.`
+          : "No obvious external system dependencies were inferred from the goal text.",
     },
   ];
 }
@@ -587,7 +849,10 @@ function renderBlockersMarkdown(state: ClawMissionStateRecord): string {
   ].join("\n");
 }
 
-function renderArtifactsMarkdown(state: ClawMissionStateRecord): string {
+function renderArtifactsMarkdown(
+  state: ClawMissionStateRecord,
+  artifacts: readonly ClawArtifactEntry[],
+): string {
   return [
     "# Artifacts",
     "",
@@ -595,6 +860,17 @@ function renderArtifactsMarkdown(state: ClawMissionStateRecord): string {
     `- Artifacts directory: ${state.artifactsDir}`,
     `- Logs directory: ${state.logsDir}`,
     `- Audit log: ${state.auditLogPath}`,
+    "",
+    "## Recorded Artifacts",
+    "",
+    ...(artifacts.length > 0
+      ? artifacts.map(
+          (artifact) =>
+            `- ${artifact.name} (${artifact.kind})${
+              typeof artifact.sizeBytes === "number" ? ` - ${artifact.sizeBytes} bytes` : ""
+            }`,
+        )
+      : ["- No artifacts recorded yet."]),
   ].join("\n");
 }
 
@@ -640,26 +916,72 @@ function renderScopeMarkdown(state: ClawMissionStateRecord): string {
 }
 
 function renderPlanMarkdown(state: ClawMissionStateRecord): string {
+  const nextCheckpoint =
+    state.status === "awaiting_setup"
+      ? "Resolve the blocking preflight items and rerun preflight."
+      : state.status === "awaiting_approval"
+        ? "Review the packet and approve mission start."
+        : state.status === "queued"
+          ? "Wait for the runner to claim the mission and begin execution."
+          : state.status === "verifying"
+            ? "Run the required fresh-context verification pass."
+            : state.status === "blocked"
+              ? state.blockedSummary ?? "Unblock the mission and continue."
+              : state.status === "done"
+                ? "Mission is complete."
+                : state.currentStep ?? "Continue execution from the current repository state.";
+  const recentEvidence =
+    state.recentEvidence.length > 0
+      ? state.recentEvidence.map((item) => `- ${item}`)
+      : ["- No durable evidence recorded yet."];
   return [
     "# Project Plan",
     "",
-    "1. Review the goal and preflight results.",
-    "2. Decompose the goal into tasks and checkpoints.",
-    "3. Execute the next best task until done or truly blocked.",
-    "4. Verify the outcome against done criteria before marking complete.",
+    "## Mission Goal",
     "",
-    `Current state: ${state.status}`,
+    state.goal,
+    "",
+    "## Current Strategy",
+    "",
+    `- Drive the repository and runtime toward the approved goal for "${state.title}".`,
+    `- Keep the mission packet current so execution can resume from durable state after interruption.`,
+    `- Current checkpoint: ${nextCheckpoint}`,
+    "",
+    "## Current Phase Plan",
+    "",
+    `1. Maintain a clean preflight and approval state for the mission.`,
+    `2. Execute the next best repository/runtime step for the current objective: ${state.currentStep ?? "Pending mission execution."}`,
+    "3. Capture durable evidence and update PROJECT_STATUS.md after every meaningful change.",
+    "4. Pass the required verifier check before claiming completion.",
+    "",
+    "## Recent Evidence",
+    "",
+    ...recentEvidence,
   ].join("\n");
 }
 
-function renderTasksMarkdown(): string {
+function renderTasksMarkdown(state: ClawMissionStateRecord): string {
+  const preflightReady = !hasBlockingPreflight(state.preflight);
+  const executionStarted =
+    state.startedAt != null ||
+    state.status === "running" ||
+    state.status === "recovering" ||
+    state.status === "verifying" ||
+    state.status === "done" ||
+    state.status === "failed";
+  const verificationDone = state.status === "done";
+  const executionLine =
+    state.status === "blocked"
+      ? `${state.currentStep ?? "Mission blocked"}${state.blockedSummary ? ` (${state.blockedSummary})` : ""}`
+      : state.currentStep ?? "Execute the current mission step.";
   return [
     "# Project Tasks",
     "",
     "- [x] Generate mission packet",
-    "- [ ] Approve mission start",
-    "- [ ] Execute the project plan",
-    "- [ ] Verify done criteria",
+    `- [${preflightReady ? "x" : " "}] Clear required preflight blockers`,
+    `- [${state.approvedAt ? "x" : " "}] Approve mission start`,
+    `- [${executionStarted ? "x" : " "}] Execute the current mission objective: ${executionLine}`,
+    `- [${verificationDone ? "x" : " "}] Pass the fresh verification check against PROJECT_DONE_CRITERIA.md`,
   ].join("\n");
 }
 
@@ -837,6 +1159,7 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
   function resolveClawExecutionConfig(): {
     autonomyDefault: boolean;
     maxActiveMissions: number;
+    requiredVerifier: boolean;
   } {
     const cfg = loadClawConfig();
     return {
@@ -847,6 +1170,7 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
         cfg.claw.maxActiveMissions > 0
           ? Math.floor(cfg.claw.maxActiveMissions)
           : CLAW_MAX_ACTIVE_MISSIONS,
+      requiredVerifier: cfg.claw?.requiredVerifier !== false,
     };
   }
 
@@ -918,8 +1242,6 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
   async function writeStaticMissionDocs(state: ClawMissionStateRecord): Promise<void> {
     await Promise.all([
       fs.writeFile(path.join(state.missionDir, "PROJECT_SCOPE.md"), renderScopeMarkdown(state), "utf-8"),
-      fs.writeFile(path.join(state.missionDir, "PROJECT_PLAN.md"), renderPlanMarkdown(state), "utf-8"),
-      fs.writeFile(path.join(state.missionDir, "PROJECT_TASKS.md"), renderTasksMarkdown(), "utf-8"),
       fs.writeFile(
         path.join(state.missionDir, "PROJECT_DONE_CRITERIA.md"),
         renderDoneCriteriaMarkdown(state),
@@ -929,11 +1251,18 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
   }
 
   async function writeDynamicMissionDocs(state: ClawMissionStateRecord): Promise<void> {
+    const artifactEntries = await listArtifactEntriesForState(state);
     await Promise.all([
       fs.writeFile(path.join(state.missionDir, "MISSION.md"), renderMissionMarkdown(state), "utf-8"),
       fs.writeFile(
         path.join(state.missionDir, "PROJECT_STATUS.md"),
         renderStatusMarkdown(state),
+        "utf-8",
+      ),
+      fs.writeFile(path.join(state.missionDir, "PROJECT_PLAN.md"), renderPlanMarkdown(state), "utf-8"),
+      fs.writeFile(
+        path.join(state.missionDir, "PROJECT_TASKS.md"),
+        renderTasksMarkdown(state),
         "utf-8",
       ),
       fs.writeFile(
@@ -953,7 +1282,7 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
       ),
       fs.writeFile(
         path.join(state.missionDir, "ARTIFACTS.md"),
-        renderArtifactsMarkdown(state),
+        renderArtifactsMarkdown(state, artifactEntries),
         "utf-8",
       ),
     ]);
@@ -980,6 +1309,29 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
       })),
     );
     return files;
+  }
+
+  async function listArtifactEntriesForState(
+    state: ClawMissionStateRecord,
+  ): Promise<ClawArtifactEntry[]> {
+    if (!(await fileExists(state.artifactsDir))) {
+      return [];
+    }
+    const entries = await fs.readdir(state.artifactsDir, { withFileTypes: true });
+    const artifacts = await Promise.all(
+      entries.map(async (entry) => {
+        const entryPath = path.join(state.artifactsDir, entry.name);
+        const stats = await fs.stat(entryPath);
+        return {
+          name: entry.name,
+          path: entryPath,
+          kind: entry.isDirectory() ? "directory" : "file",
+          updatedAt: stats.mtime.toISOString(),
+          sizeBytes: entry.isDirectory() ? null : stats.size,
+        } satisfies ClawArtifactEntry;
+      }),
+    );
+    return artifacts.toSorted((left, right) => left.name.localeCompare(right.name));
   }
 
   async function recordAudit(
@@ -1572,7 +1924,99 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
     await writeDynamicMissionDocs(state);
   }
 
+  async function executeHelperCycle(params: {
+    state: ClawMissionStateRecord;
+    reason: "no_progress" | "verifier_rejection";
+    summary: string;
+  }): Promise<void> {
+    const { state } = params;
+    const promptFiles = await readMissionPromptFiles(state);
+    const sessionId = `claw-helper-${state.id}-${crypto.randomUUID().slice(0, 8)}`;
+    const sessionFile = path.join(
+      state.logsDir,
+      `helper-${state.runCycleCount + state.verifyCycleCount + 1}-${crypto.randomUUID().slice(0, 8)}.jsonl`,
+    );
+    await ensureSessionHeader({
+      sessionFile,
+      sessionId,
+      cwd: state.workspaceDir,
+    });
+    const result = await runMissionAgent({
+      sessionId,
+      sessionFile,
+      workspaceDir: state.workspaceDir,
+      config: loadClawConfig(),
+      trigger: "manual",
+      senderIsOwner: true,
+      clawRole: "helper",
+      prompt: buildClawHelperPrompt({
+        missionId: state.id,
+        title: state.title,
+        goal: state.goal,
+        currentStep: state.currentStep,
+        summary: params.summary,
+        reason: params.reason,
+        recentEvidence: state.recentEvidence,
+        files: promptFiles,
+      }),
+      extraSystemPrompt: buildClawHelperExtraSystemPrompt(),
+      runId: buildCycleRunId("helper", state.id),
+      timeoutMs: 120_000,
+      execOverrides: {
+        host: "gateway",
+        security: "full",
+        ask: "off",
+      },
+      bashElevated: {
+        enabled: true,
+        allowed: true,
+        defaultLevel: "full",
+      },
+    });
+    const helperText = joinPayloadText(result);
+    const decision = parseHelperDecision(helperText);
+    state.recentEvidence = decision.evidence.length > 0 ? decision.evidence : state.recentEvidence;
+    await recordAudit(state, {
+      actor: "system",
+      type: "mission.helperCycle",
+      summary: decision.summary,
+      detail: helperText || null,
+    });
+
+    if (decision.outcome === "blocked") {
+      moveMissionToWaiting({
+        state,
+        status: "blocked",
+        currentStep: "Helper session surfaced a concrete blocker.",
+        waitKind: "helper_blocker",
+        blockedSummary: decision.blockerSummary ?? decision.summary,
+      });
+      await recordAudit(state, {
+        actor: "system",
+        type: "mission.blocked",
+        summary: decision.blockerSummary ?? decision.summary,
+      });
+      await persistRuntimeState(state);
+      return;
+    }
+
+    state.consecutiveNoProgressCount = 0;
+    state.consecutiveVerifierRejectCount = 0;
+    state.lastVerifierRejectionSignature = null;
+    moveMissionToRunning(
+      state,
+      decision.nextStep?.trim() || decision.summary || "Continue mission execution.",
+    );
+    await recordAudit(state, {
+      actor: "system",
+      type: "mission.replanned",
+      summary: decision.summary,
+    });
+    await persistRuntimeState(state);
+  }
+
   async function executeRunnerCycle(state: ClawMissionStateRecord): Promise<void> {
+    const clawConfig = resolveClawExecutionConfig();
     const promptFiles = await readMissionPromptFiles(state);
     const session = ensureRunnerSession(state);
     await ensureSessionHeader({
@@ -1587,6 +2031,7 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
       config: loadClawConfig(),
       trigger: "manual",
       senderIsOwner: true,
+      clawRole: "runner",
       prompt: buildClawRunnerPrompt({
         missionId: state.id,
         title: state.title,
@@ -1632,33 +2077,35 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
     }
 
     if (!decision.progress && state.consecutiveNoProgressCount >= CLAW_RUNNER_MAX_NO_PROGRESS) {
-      moveMissionToWaiting({
+      await executeHelperCycle({
         state,
-        status: "blocked",
-        currentStep: "Mission paused after repeated no-progress cycles.",
-        waitKind: "no_progress",
-        blockedSummary:
+        reason: "no_progress",
+        summary:
           decision.nextStep?.trim() || "Mission made no progress across repeated runner cycles.",
       });
-      await recordAudit(state, {
-        actor: "system",
-        type: "mission.blocked",
-        summary: "Mission blocked after repeated no-progress cycles.",
-      });
-      await persistRuntimeState(state);
       return;
     }
 
     if (decision.outcome === "verify") {
-      moveMissionToVerifying(
-        state,
-        decision.nextStep?.trim() || "Run the required fresh-context verification pass.",
-      );
-      await recordAudit(state, {
-        actor: "system",
-        type: "mission.verifying",
-        summary: "Mission requested a fresh verification pass.",
-      });
+      if (clawConfig.requiredVerifier) {
+        moveMissionToVerifying(
+          state,
+          decision.nextStep?.trim() || "Run the required fresh-context verification pass.",
+        );
+        await recordAudit(state, {
+          actor: "system",
+          type: "mission.verifying",
+          summary: "Mission requested a fresh verification pass.",
+        });
+      } else {
+        moveMissionToDone(state, decision.summary);
+        await recordAudit(state, {
+          actor: "system",
+          type: "mission.done",
+          summary: "Mission completed without a required verifier pass.",
+          detail: decision.summary,
+        });
+      }
       await persistRuntimeState(state);
       return;
     }
@@ -1721,6 +2168,7 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
       config: loadClawConfig(),
       trigger: "manual",
       senderIsOwner: true,
+      clawRole: "verifier",
       prompt: buildClawVerifierPrompt({
         missionId: state.id,
         title: state.title,
@@ -1793,20 +2241,11 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
     }
 
     if (state.consecutiveVerifierRejectCount >= CLAW_VERIFIER_MAX_REJECTIONS) {
-      moveMissionToWaiting({
+      await executeHelperCycle({
         state,
-        status: "blocked",
-        currentStep: "Verification repeatedly rejected the same unmet criteria.",
-        waitKind: "verification_rejected",
-        blockedSummary: decision.summary,
+        reason: "verifier_rejection",
+        summary: decision.summary,
       });
-      await recordAudit(state, {
-        actor: "system",
-        type: "mission.blocked",
-        summary: "Verification rejected the same unmet criteria repeatedly.",
-        detail: rejectionSignature,
-      });
-      await persistRuntimeState(state);
       return;
     }
 
@@ -1937,7 +2376,7 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
     }
 
     if (mission.status === "recovering") {
-      if (mission.recoveryTargetStatus === "verifying") {
+      if (mission.recoveryTargetStatus === "verifying" && clawConfig.requiredVerifier) {
         moveMissionToVerifying(mission, "Retrying verification after recovery.");
       } else {
         moveMissionToRunning(mission, "Mission execution resumed after recovery.");
@@ -1975,19 +2414,12 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
     await fs.mkdir(artifactsDir, { recursive: true });
     await fs.mkdir(logsDir, { recursive: true });
 
-    const preflight = await buildPreflightChecks({
-      workspaceDir,
-      missionDir,
-      cfg: loadClawConfig(),
-    });
-    const awaitingSetup = hasBlockingPreflight(preflight);
-    const blockedSummary = summarizeBlockingPreflight(preflight);
     const stateBase = {
       version: 1 as const,
       id: missionId,
       title,
       goal,
-      status: (awaitingSetup ? "awaiting_setup" : "awaiting_approval") as ClawMissionStatus,
+      status: "draft" as ClawMissionStatus,
       createdAt: createdAtIso,
       updatedAt: createdAtIso,
       approvedAt: null,
@@ -1998,14 +2430,10 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
       flowId: null,
       flowRevision: null,
       flowStatus: null,
-      currentStep: awaitingSetup
-        ? "Resolve preflight blockers before mission approval."
-        : "Awaiting mission start approval.",
-      blockedSummary,
-      preflight,
-      decisions: awaitingSetup
-        ? [buildPreflightDecision(createdAtIso, blockedSummary ?? "Resolve preflight blockers.")]
-        : [buildStartApprovalDecision(createdAtIso)],
+      currentStep: "Creating mission packet.",
+      blockedSummary: null,
+      preflight: [] as ClawPreflightCheck[],
+      decisions: [] as ClawPendingDecision[],
       files: [] as ClawMissionFileEntry[],
       artifactsDir,
       logsDir,
@@ -2024,36 +2452,68 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
       verifyCycleCount: 0,
     };
 
+    const state: ClawMissionStateRecord = {
+      ...stateBase,
+      files: [],
+    };
+
+    state.files = missionFilesForState(state);
+    await saveMissionState(state);
+    await writeStaticMissionDocs(state);
+    await writeDynamicMissionDocs(state);
+    await recordAudit(state, {
+      actor: "system",
+      type: "mission.created",
+      summary: "Mission packet created from the requested goal.",
+    });
+    state.status = "preflighting";
+    state.currentStep = "Running mission preflight checks.";
+    await saveMissionState(state);
+    await writeDynamicMissionDocs(state);
+    await recordAudit(state, {
+      actor: "system",
+      type: "mission.preflighting",
+      summary: "Mission preflight started.",
+    });
+
+    const preflight = await buildPreflightChecks({
+      goal,
+      workspaceDir,
+      missionDir,
+      cfg: loadClawConfig(),
+    });
+    const awaitingSetup = hasBlockingPreflight(preflight);
+    const blockedSummary = summarizeBlockingPreflight(preflight);
+    state.preflight = preflight;
+    state.blockedSummary = blockedSummary;
+    state.status = awaitingSetup ? "awaiting_setup" : "awaiting_approval";
+    state.currentStep = awaitingSetup
+      ? "Resolve preflight blockers before mission approval."
+      : "Awaiting mission start approval.";
+    state.decisions = awaitingSetup
+      ? [buildPreflightDecision(createdAtIso, blockedSummary ?? "Resolve preflight blockers.")]
+      : [buildStartApprovalDecision(createdAtIso)];
+
     const flow = createManagedTaskFlow({
       ownerKey: `claw:${missionId}`,
       controllerId: "claw/mission",
       status: awaitingSetup ? "blocked" : "waiting",
       goal,
-      currentStep: stateBase.currentStep,
+      currentStep: state.currentStep,
       stateJson: {
         missionId,
-        missionStatus: stateBase.status,
+        missionStatus: state.status,
       },
       waitJson: {
         kind: awaitingSetup ? "preflight_setup" : "approval",
       },
       blockedSummary: blockedSummary ?? undefined,
     });
-
-    const state: ClawMissionStateRecord = {
-      ...stateBase,
-      flowId: flow.flowId,
-      flowRevision: flow.revision,
-      flowStatus: flow.status as ClawManagedFlowStatus,
-      files: [],
-    };
-
+    state.flowId = flow.flowId;
+    state.flowRevision = flow.revision;
+    state.flowStatus = flow.status as ClawManagedFlowStatus;
     state.files = missionFilesForState(state);
-    await recordAudit(state, {
-      actor: "system",
-      type: "mission.created",
-      summary: "Mission packet created from the requested goal.",
-    });
+
     await recordAudit(state, {
       actor: "system",
       type: "decision.requested",
@@ -2062,7 +2522,6 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
         : "Mission start approval requested.",
     });
     await saveMissionState(state);
-    await writeStaticMissionDocs(state);
     await writeDynamicMissionDocs(state);
     return await getMissionSnapshot(missionId, workspaceDir);
   }
@@ -2288,6 +2747,7 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
   async function rerunPreflight(missionId: string): Promise<ClawMissionDetailSnapshot> {
     return await updateMission(missionId, async (state) => {
       state.preflight = await buildPreflightChecks({
+        goal: state.goal,
         workspaceDir: state.workspaceDir,
         missionDir: state.missionDir,
         cfg: loadClawConfig(),
@@ -2332,24 +2792,7 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
     if (!mission) {
       throw new Error(`Unknown mission: ${missionId}`);
     }
-    if (!(await fileExists(mission.artifactsDir))) {
-      return [];
-    }
-    const entries = await fs.readdir(mission.artifactsDir, { withFileTypes: true });
-    const artifacts = await Promise.all(
-      entries.map(async (entry) => {
-        const entryPath = path.join(mission.artifactsDir, entry.name);
-        const stats = await fs.stat(entryPath);
-        return {
-          name: entry.name,
-          path: entryPath,
-          kind: entry.isDirectory() ? "directory" : "file",
-          updatedAt: stats.mtime.toISOString(),
-          sizeBytes: entry.isDirectory() ? null : stats.size,
-        } satisfies ClawArtifactEntry;
-      }),
-    );
-    return artifacts.toSorted((left, right) => left.name.localeCompare(right.name));
+    return await listArtifactEntriesForState(mission);
   }
 
   async function getAudit(missionId: string, limit?: number): Promise<ClawAuditEntry[]> {

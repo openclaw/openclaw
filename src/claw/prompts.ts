@@ -113,3 +113,58 @@ export function buildClawVerifierPrompt(params: {
     '```json\n{"outcome":"done|reject|blocked","summary":"verification result","nextStep":"optional next step","unmetCriteria":["criterion still unmet"],"blockerSummary":"optional","evidence":["short evidence item"]}\n```',
   ].join("\n");
 }
+
+export function buildClawHelperExtraSystemPrompt(): string {
+  return [
+    "You are a bounded Claw helper session.",
+    "You do not own the mission. Your job is to produce the next best recovery, replanning, or research step for the current mission problem.",
+    "Use mission files and repository state as the source of truth.",
+    "Prefer a concrete next step over abstract advice.",
+    "If the issue is truly blocked, say so explicitly with the blocker summary.",
+    "End the turn with exactly one JSON object and no extra prose.",
+  ].join("\n");
+}
+
+export function buildClawHelperPrompt(params: {
+  missionId: string;
+  title: string;
+  goal: string;
+  currentStep?: string | null;
+  summary: string;
+  reason: "no_progress" | "verifier_rejection";
+  recentEvidence: readonly string[];
+  files: readonly MissionFileContent[];
+}): string {
+  const evidenceSection =
+    params.recentEvidence.length > 0
+      ? params.recentEvidence.map((item) => `- ${item}`).join("\n")
+      : "- None captured.";
+  return [
+    "Produce a bounded helper result for this Claw mission.",
+    "",
+    `Mission ID: ${params.missionId}`,
+    `Title: ${params.title}`,
+    `Reason: ${params.reason}`,
+    `Current step: ${params.currentStep ?? "n/a"}`,
+    "",
+    "Goal:",
+    params.goal,
+    "",
+    "Problem summary:",
+    params.summary,
+    "",
+    "Recent evidence:",
+    evidenceSection,
+    "",
+    "Mission files:",
+    renderMissionFiles(params.files),
+    "",
+    "Helper contract:",
+    "- Use tools if needed to inspect repository state and propose the next best recovery step.",
+    "- Prefer a concrete next step the runner can execute immediately.",
+    "- If the mission is truly blocked, return outcome \"blocked\" with the blocker summary.",
+    "",
+    "Return exactly one JSON object with this shape:",
+    '```json\n{"outcome":"continue|blocked","summary":"helper result","nextStep":"optional next step","blockerSummary":"optional","evidence":["short evidence item"]}\n```',
+  ].join("\n");
+}

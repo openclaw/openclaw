@@ -4,12 +4,11 @@ import {
 } from "../../claw/gateway-events.js";
 import { ensureClawRuntimeStarted, wakeClawRuntime } from "../../claw/runtime.js";
 import { clawMissionService } from "../../claw/service.js";
+import { loadConfig } from "../../config/config.js";
 import type { ClawDecisionAction } from "../../shared/claw-types.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
-
-ensureClawRuntimeStarted();
 
 function respondInvalidRequest(respond: RespondFn, message: string): void {
   respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
@@ -29,6 +28,22 @@ function requireAdminScope(scopes: unknown, respond: RespondFn): boolean {
     return true;
   }
   respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${ADMIN_SCOPE}`));
+  return false;
+}
+
+function requireClawEnabled(respond: RespondFn): boolean {
+  if (loadConfig().claw?.enabled === true) {
+    ensureClawRuntimeStarted();
+    return true;
+  }
+  respond(
+    false,
+    undefined,
+    errorShape(
+      ErrorCodes.UNAVAILABLE,
+      "Claw is disabled. Enable claw.enabled in config before using mission controls.",
+    ),
+  );
   return false;
 }
 
@@ -105,6 +120,9 @@ function readDecisionAction(
 
 export const clawHandlers: GatewayRequestHandlers = {
   "claw.missions.list": async ({ respond }) => {
+    if (!requireClawEnabled(respond)) {
+      return;
+    }
     try {
       respond(true, await clawMissionService.buildDashboard(), undefined);
     } catch (error) {
@@ -113,6 +131,9 @@ export const clawHandlers: GatewayRequestHandlers = {
   },
 
   "claw.missions.get": async ({ params, respond }) => {
+    if (!requireClawEnabled(respond)) {
+      return;
+    }
     const missionId = readRequiredString(params, "missionId", respond);
     if (!missionId) {
       return;
@@ -125,6 +146,9 @@ export const clawHandlers: GatewayRequestHandlers = {
   },
 
   "claw.missions.create": async ({ params, respond, context, client }) => {
+    if (!requireClawEnabled(respond)) {
+      return;
+    }
     if (!requireAdminScope(client?.connect?.scopes, respond)) {
       return;
     }
@@ -144,6 +168,9 @@ export const clawHandlers: GatewayRequestHandlers = {
   },
 
   "claw.missions.approveStart": async ({ params, respond, context, client }) => {
+    if (!requireClawEnabled(respond)) {
+      return;
+    }
     if (!requireAdminScope(client?.connect?.scopes, respond)) {
       return;
     }
@@ -168,6 +195,9 @@ export const clawHandlers: GatewayRequestHandlers = {
   },
 
   "claw.missions.pause": async ({ params, respond, context, client }) => {
+    if (!requireClawEnabled(respond)) {
+      return;
+    }
     if (!requireAdminScope(client?.connect?.scopes, respond)) {
       return;
     }
@@ -188,6 +218,9 @@ export const clawHandlers: GatewayRequestHandlers = {
   },
 
   "claw.missions.resume": async ({ params, respond, context, client }) => {
+    if (!requireClawEnabled(respond)) {
+      return;
+    }
     if (!requireAdminScope(client?.connect?.scopes, respond)) {
       return;
     }
@@ -208,6 +241,9 @@ export const clawHandlers: GatewayRequestHandlers = {
   },
 
   "claw.missions.cancel": async ({ params, respond, context, client }) => {
+    if (!requireClawEnabled(respond)) {
+      return;
+    }
     if (!requireAdminScope(client?.connect?.scopes, respond)) {
       return;
     }
@@ -232,6 +268,9 @@ export const clawHandlers: GatewayRequestHandlers = {
   },
 
   "claw.decisions.reply": async ({ params, respond, context, client }) => {
+    if (!requireClawEnabled(respond)) {
+      return;
+    }
     if (!requireAdminScope(client?.connect?.scopes, respond)) {
       return;
     }
@@ -270,6 +309,9 @@ export const clawHandlers: GatewayRequestHandlers = {
   },
 
   "claw.control.pauseAll": async ({ params, respond, context, client }) => {
+    if (!requireClawEnabled(respond)) {
+      return;
+    }
     if (!requireAdminScope(client?.connect?.scopes, respond)) {
       return;
     }
@@ -287,6 +329,9 @@ export const clawHandlers: GatewayRequestHandlers = {
   },
 
   "claw.control.stopAllNow": async ({ respond, context, client }) => {
+    if (!requireClawEnabled(respond)) {
+      return;
+    }
     if (!requireAdminScope(client?.connect?.scopes, respond)) {
       return;
     }
@@ -300,6 +345,9 @@ export const clawHandlers: GatewayRequestHandlers = {
   },
 
   "claw.control.setAutonomy": async ({ params, respond, context, client }) => {
+    if (!requireClawEnabled(respond)) {
+      return;
+    }
     if (!requireAdminScope(client?.connect?.scopes, respond)) {
       return;
     }
@@ -318,6 +366,9 @@ export const clawHandlers: GatewayRequestHandlers = {
   },
 
   "claw.audit.get": async ({ params, respond }) => {
+    if (!requireClawEnabled(respond)) {
+      return;
+    }
     const missionId = readRequiredString(params, "missionId", respond);
     const limit = readOptionalPositiveNumber(params, "limit", respond);
     if (!missionId || ("limit" in params && params.limit !== undefined && limit === undefined)) {
@@ -335,6 +386,9 @@ export const clawHandlers: GatewayRequestHandlers = {
   },
 
   "claw.artifacts.list": async ({ params, respond }) => {
+    if (!requireClawEnabled(respond)) {
+      return;
+    }
     const missionId = readRequiredString(params, "missionId", respond);
     if (!missionId) {
       return;
@@ -351,6 +405,9 @@ export const clawHandlers: GatewayRequestHandlers = {
   },
 
   "claw.preflight.rerun": async ({ params, respond, context, client }) => {
+    if (!requireClawEnabled(respond)) {
+      return;
+    }
     if (!requireAdminScope(client?.connect?.scopes, respond)) {
       return;
     }

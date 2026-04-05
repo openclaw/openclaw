@@ -156,6 +156,27 @@ describe("createClawMissionService", () => {
     expect(created.inbox[0]?.title).toBe("Resolve preflight blockers");
   });
 
+  it("blocks mission start when exec/process tool exposure is missing", async () => {
+    const service = createClawMissionService({
+      resolveWorkspaceDir: () => workspaceDir,
+      loadConfig: () =>
+        createConfig({
+          tools: {
+            deny: ["exec", "process"],
+          },
+        }),
+    });
+
+    const created = await service.createMission({
+      goal: "Run a mission with full-access runtime tools available.",
+    });
+
+    expect(created.mission?.status).toBe("awaiting_setup");
+    expect(created.mission?.blockedSummary).toContain("exec tool");
+    expect(created.mission?.preflight.some((check) => check.id === "exec-tool")).toBe(true);
+    expect(created.mission?.preflight.some((check) => check.id === "process-tool")).toBe(true);
+  });
+
   it("applies global pause to active missions", async () => {
     const service = createClawMissionService({
       resolveWorkspaceDir: () => workspaceDir,
@@ -272,6 +293,77 @@ describe("createClawMissionService", () => {
         "mission.done",
       ]),
     );
+  });
+
+  it("honors claw.requiredVerifier=false and completes without a verifier run", async () => {
+    const runEmbeddedPiAgent = vi.fn().mockResolvedValueOnce(
+      agentResult(
+        JSON.stringify({
+          outcome: "verify",
+          summary: "The runner completed the mission and does not need a verifier.",
+          currentStep: "Ready to complete.",
+          nextStep: "Mark the mission done.",
+          progress: true,
+          evidence: ["Completed the requested work."],
+        }),
+      ),
+    );
+
+    const service = createClawMissionService({
+      resolveWorkspaceDir: () => workspaceDir,
+      loadConfig: () =>
+        createConfig({
+          claw: {
+            requiredVerifier: false,
+          },
+        }),
+      runEmbeddedPiAgent,
+    });
+
+    const created = await service.createMission({
+      goal: "Finish a mission without requiring a verifier pass.",
+    });
+    const missionId = created.mission!.id;
+    await service.approveMissionStart(missionId);
+
+    const cycle = await service.runNextMissionCycle();
+    expect(cycle?.mission?.status).toBe("done");
+    expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps plan and task files in sync with mission progress", async () => {
+    const runEmbeddedPiAgent = vi.fn().mockResolvedValueOnce(
+      agentResult(
+        JSON.stringify({
+          outcome: "continue",
+          summary: "The runner updated the implementation and should keep going.",
+          currentStep: "Update the mission packet with the latest checkpoint.",
+          nextStep: "Continue implementing the next repository change.",
+          progress: true,
+          evidence: ["Checkpointed the latest progress."],
+        }),
+      ),
+    );
+
+    const service = createClawMissionService({
+      resolveWorkspaceDir: () => workspaceDir,
+      loadConfig: () => createConfig(),
+      runEmbeddedPiAgent,
+    });
+
+    const created = await service.createMission({
+      goal: "Keep the mission packet aligned with the current execution state.",
+    });
+    const mission = created.mission!;
+    await service.approveMissionStart(mission.id);
+    await service.runNextMissionCycle();
+
+    const plan = await fs.readFile(path.join(mission.missionDir, "PROJECT_PLAN.md"), "utf-8");
+    const tasks = await fs.readFile(path.join(mission.missionDir, "PROJECT_TASKS.md"), "utf-8");
+
+    expect(plan).toContain("Continue implementing the next repository change.");
+    expect(tasks).toContain("Execute the current mission objective");
+    expect(tasks).toContain("Continue implementing the next repository change.");
   });
 
   it("marks running missions as recovering and resumes them on the next cycle", async () => {
