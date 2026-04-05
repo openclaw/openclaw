@@ -57,6 +57,11 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Write",
       detailKeys: ["path"],
     },
+    update_plan: {
+      emoji: "🗺️",
+      title: "Update plan",
+      detailKeys: ["explanation"],
+    },
     edit: {
       emoji: "📝",
       title: "Edit",
