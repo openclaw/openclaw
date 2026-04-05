@@ -1,10 +1,27 @@
 import { describe, expect, it } from "vitest";
-import {
-  applyMoonshotNativeStreamingUsageCompat,
-  buildMoonshotProvider,
-  MOONSHOT_CN_BASE_URL,
-} from "../../extensions/moonshot/api.js";
+import { applyProviderNativeStreamingUsageCompat } from "../plugin-sdk/provider-catalog-shared.js";
 import { resolveMissingProviderApiKey } from "./models-config.providers.secrets.js";
+
+const MOONSHOT_BASE_URL = "https://api.moonshot.ai/v1";
+const MOONSHOT_CN_BASE_URL = "https://api.moonshot.cn/v1";
+
+function buildMoonshotProvider() {
+  return {
+    baseUrl: MOONSHOT_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: "kimi-k2.5",
+        name: "Kimi K2.5",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 262144,
+        maxTokens: 262144,
+      },
+    ],
+  };
+}
 
 describe("moonshot implicit provider (#33637)", () => {
   it("uses explicit CN baseUrl when provided", () => {
@@ -16,8 +33,10 @@ describe("moonshot implicit provider (#33637)", () => {
     expect(provider.baseUrl).toBe(MOONSHOT_CN_BASE_URL);
     expect(provider.models?.[0]?.compat?.supportsUsageInStreaming).toBeUndefined();
     expect(
-      applyMoonshotNativeStreamingUsageCompat(provider).models?.[0]?.compat
-        ?.supportsUsageInStreaming,
+      applyProviderNativeStreamingUsageCompat({
+        providerId: "moonshot",
+        providerConfig: provider,
+      }).models?.[0]?.compat?.supportsUsageInStreaming,
     ).toBe(true);
   });
 
@@ -30,8 +49,10 @@ describe("moonshot implicit provider (#33637)", () => {
     expect(provider.baseUrl).toBe("https://proxy.example.com/v1");
     expect(provider.models?.[0]?.compat?.supportsUsageInStreaming).toBeUndefined();
     expect(
-      applyMoonshotNativeStreamingUsageCompat(provider).models?.[0]?.compat
-        ?.supportsUsageInStreaming,
+      applyProviderNativeStreamingUsageCompat({
+        providerId: "moonshot",
+        providerConfig: provider,
+      }).models?.[0]?.compat?.supportsUsageInStreaming,
     ).toBeUndefined();
   });
 

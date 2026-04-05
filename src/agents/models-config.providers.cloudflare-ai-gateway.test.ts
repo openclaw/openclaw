@@ -1,10 +1,40 @@
 import { describe, expect, it } from "vitest";
-import { buildCloudflareAiGatewayCatalogProvider } from "../../extensions/cloudflare-ai-gateway/api.js";
 import { captureEnv } from "../test-utils/env.js";
 import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
+import { resolveApiKeyFromCredential } from "./models-config.providers.secrets.js";
 
 function expectedCloudflareGatewayBaseUrl(accountId: string, gatewayId: string): string {
   return `https://gateway.ai.cloudflare.com/v1/${accountId}/${gatewayId}/anthropic`;
+}
+
+function buildCloudflareAiGatewayCatalogProvider(params: {
+  credential:
+    | Parameters<typeof resolveApiKeyFromCredential>[0]
+    | {
+        metadata?: {
+          accountId?: string;
+          gatewayId?: string;
+        };
+      }
+    | undefined;
+  envApiKey?: string;
+}) {
+  const apiKey =
+    params.envApiKey?.trim() ||
+    resolveApiKeyFromCredential(
+      params.credential as Parameters<typeof resolveApiKeyFromCredential>[0],
+    )?.apiKey;
+  const accountId = params.credential?.metadata?.accountId?.trim();
+  const gatewayId = params.credential?.metadata?.gatewayId?.trim();
+  if (!apiKey || !accountId || !gatewayId) {
+    return null;
+  }
+  return {
+    baseUrl: expectedCloudflareGatewayBaseUrl(accountId, gatewayId),
+    api: "anthropic-messages",
+    apiKey,
+    models: [{ id: "cloudflare-ai-gateway" }],
+  };
 }
 
 describe("cloudflare-ai-gateway profile provenance", () => {

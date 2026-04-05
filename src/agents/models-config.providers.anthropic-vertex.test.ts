@@ -2,19 +2,16 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import {
-  buildAnthropicVertexProvider,
-  mergeImplicitAnthropicVertexProvider,
-  resolveImplicitAnthropicVertexProvider,
-} from "../../extensions/anthropic-vertex/api.js";
 import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.js";
 
 describe("anthropic-vertex implicit provider", () => {
-  it("offers Claude models when GOOGLE_CLOUD_PROJECT_ID is set", () => {
-    const provider = resolveImplicitAnthropicVertexProvider({
+  it("does not auto-enable from GOOGLE_CLOUD_PROJECT_ID alone", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const providers = await resolveImplicitProvidersForTest({
+      agentDir,
       env: { GOOGLE_CLOUD_PROJECT_ID: "vertex-project" },
     });
-    expect(provider).toBeNull();
+    expect(providers?.["anthropic-vertex"]).toBeUndefined();
   });
 
   it("accepts ADC credentials when the file includes a project_id", async () => {
@@ -127,32 +124,41 @@ describe("anthropic-vertex implicit provider", () => {
     }
   });
 
-  it("accepts explicit metadata auth opt-in without local credential files", () => {
-    const provider = resolveImplicitAnthropicVertexProvider({
+  it("accepts explicit metadata auth opt-in without local credential files", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const providers = await resolveImplicitProvidersForTest({
+      agentDir,
       env: {
         ANTHROPIC_VERTEX_USE_GCP_METADATA: "true",
         GOOGLE_CLOUD_LOCATION: "us-east5",
       },
     });
-    expect(provider?.baseUrl).toBe("https://us-east5-aiplatform.googleapis.com");
+    expect(providers?.["anthropic-vertex"]?.baseUrl).toBe(
+      "https://us-east5-aiplatform.googleapis.com",
+    );
   });
 
   it("merges the bundled catalog into explicit anthropic-vertex provider overrides", async () => {
-    const provider = mergeImplicitAnthropicVertexProvider({
-      existing: {
-        baseUrl: "https://europe-west4-aiplatform.googleapis.com",
-        headers: { "x-test-header": "1" },
+    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const providers = await resolveImplicitProvidersForTest({
+      agentDir,
+      env: {
+        ANTHROPIC_VERTEX_USE_GCP_METADATA: "true",
+        GOOGLE_CLOUD_LOCATION: "us-east5",
       },
-      implicit: buildAnthropicVertexProvider({
-        env: {
-          GOOGLE_CLOUD_LOCATION: "us-east5",
+      explicitProviders: {
+        "anthropic-vertex": {
+          baseUrl: "https://europe-west4-aiplatform.googleapis.com",
+          headers: { "x-test-header": "1" },
         },
-      }),
+      },
     });
 
-    expect(provider.baseUrl).toBe("https://europe-west4-aiplatform.googleapis.com");
-    expect(provider.headers).toEqual({ "x-test-header": "1" });
-    expect(provider.models?.map((model) => model.id)).toEqual([
+    expect(providers?.["anthropic-vertex"]?.baseUrl).toBe(
+      "https://europe-west4-aiplatform.googleapis.com",
+    );
+    expect(providers?.["anthropic-vertex"]?.headers).toEqual({ "x-test-header": "1" });
+    expect(providers?.["anthropic-vertex"]?.models?.map((model) => model.id)).toEqual([
       "claude-opus-4-6",
       "claude-sonnet-4-6",
     ]);
