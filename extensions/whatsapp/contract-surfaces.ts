@@ -3,7 +3,7 @@ type UnsupportedSecretRefConfigCandidate = {
   value: unknown;
 };
 
-export { normalizeCompatibilityConfig } from "./src/doctor-contract.js";
+export { normalizeCompatibilityConfig } from "./src/doctor.js";
 import { hasAnyWhatsAppAuth } from "./src/accounts.js";
 export { canonicalizeLegacySessionKey, isLegacyGroupSessionKey } from "./src/session-contract.js";
 
