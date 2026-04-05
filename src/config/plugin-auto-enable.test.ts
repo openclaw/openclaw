@@ -861,9 +861,9 @@ describe("applyPluginAutoEnable", () => {
     it("prefers bluebubbles: skips imessage auto-configure when both are configured", () => {
       const result = applyWithBluebubblesImessageConfig();
 
-      expect(result.config.plugins?.entries?.bluebubbles?.enabled).toBe(true);
+      expect(result.config.channels?.bluebubbles?.enabled).toBe(true);
       expect(result.config.plugins?.entries?.imessage?.enabled).toBeUndefined();
-      expect(result.changes.join("\n")).toContain("bluebubbles configured, enabled automatically.");
+      expect(result.changes.join("\n")).toContain("BlueBubbles configured, enabled automatically.");
       expect(result.changes.join("\n")).not.toContain(
         "iMessage configured, enabled automatically.",
       );
@@ -874,7 +874,7 @@ describe("applyPluginAutoEnable", () => {
         plugins: { entries: { imessage: { enabled: true } } },
       });
 
-      expect(result.config.plugins?.entries?.bluebubbles?.enabled).toBe(true);
+      expect(result.config.channels?.bluebubbles?.enabled).toBe(true);
       expect(result.config.plugins?.entries?.imessage?.enabled).toBe(true);
     });
 

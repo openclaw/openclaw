@@ -1,17 +1,17 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
-import { resolveBundledWebFetchPluginId } from "../plugins/bundled-web-fetch-provider-ids.js";
-import { listBundledWebSearchPluginIds } from "../plugins/bundled-web-search-ids.js";
-import { resolveBundledWebSearchPluginId } from "../plugins/bundled-web-search-provider-ids.js";
+import {
+  resolveManifestContractOwnerPluginId,
+  resolveManifestContractPluginIds,
+} from "../plugins/manifest-registry.js";
 import type {
   PluginWebFetchProviderEntry,
   PluginWebSearchProviderEntry,
   WebFetchCredentialResolutionSource,
   WebSearchCredentialResolutionSource,
 } from "../plugins/types.js";
-import { resolveBundledPluginWebFetchProviders } from "../plugins/web-fetch-providers.js";
+import { resolvePluginWebFetchProviders } from "../plugins/web-fetch-providers.runtime.js";
 import { sortWebFetchProvidersForAutoDetect } from "../plugins/web-fetch-providers.shared.js";
-import { resolveBundledPluginWebSearchProviders } from "../plugins/web-search-providers.js";
 import { resolvePluginWebSearchProviders } from "../plugins/web-search-providers.runtime.js";
 import { sortWebSearchProvidersForAutoDetect } from "../plugins/web-search-providers.shared.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
@@ -101,7 +101,14 @@ function hasCustomWebSearchPluginRisk(config: OpenClawConfig): boolean {
     return true;
   }
 
-  const bundledPluginIds = new Set<string>(listBundledWebSearchPluginIds());
+  const bundledPluginIds = new Set<string>(
+    resolveManifestContractPluginIds({
+      contract: "webSearchProviders",
+      origin: "bundled",
+      config,
+      env: process.env,
+    }),
+  );
   const hasNonBundledPluginId = (pluginId: string) => !bundledPluginIds.has(pluginId.trim());
   if (Array.isArray(plugins.allow) && plugins.allow.some(hasNonBundledPluginId)) {
     return true;
@@ -364,7 +371,13 @@ export async function resolveRuntimeWebTools(params: {
   const search = isRecord(web?.search) ? web.search : undefined;
   const rawProvider =
     typeof search?.provider === "string" ? search.provider.trim().toLowerCase() : "";
-  const configuredBundledPluginId = resolveBundledWebSearchPluginId(rawProvider);
+  const configuredBundledPluginId = resolveManifestContractOwnerPluginId({
+    contract: "webSearchProviders",
+    value: rawProvider,
+    origin: "bundled",
+    config: params.sourceConfig,
+    env: { ...process.env, ...params.context.env },
+  });
 
   const searchMetadata: RuntimeWebSearchMetadata = {
     providerSource: "none",
@@ -373,17 +386,19 @@ export async function resolveRuntimeWebTools(params: {
 
   const searchProviders = sortWebSearchProvidersForAutoDetect(
     configuredBundledPluginId
-      ? resolveBundledPluginWebSearchProviders({
+      ? resolvePluginWebSearchProviders({
           config: params.sourceConfig,
           env: { ...process.env, ...params.context.env },
           bundledAllowlistCompat: true,
           onlyPluginIds: [configuredBundledPluginId],
+          origin: "bundled",
         })
       : !hasCustomWebSearchPluginRisk(params.sourceConfig)
-        ? resolveBundledPluginWebSearchProviders({
+        ? resolvePluginWebSearchProviders({
             config: params.sourceConfig,
             env: { ...process.env, ...params.context.env },
             bundledAllowlistCompat: true,
+            origin: "bundled",
           })
         : resolvePluginWebSearchProviders({
             config: params.sourceConfig,
@@ -664,23 +679,31 @@ export async function resolveRuntimeWebTools(params: {
   const fetch = isRecord(web?.fetch) ? (web.fetch as FetchConfig) : undefined;
   const rawFetchProvider =
     typeof fetch?.provider === "string" ? fetch.provider.trim().toLowerCase() : "";
-  const configuredBundledFetchPluginId = resolveBundledWebFetchPluginId(rawFetchProvider);
+  const configuredBundledFetchPluginId = resolveManifestContractOwnerPluginId({
+    contract: "webFetchProviders",
+    value: rawFetchProvider,
+    origin: "bundled",
+    config: params.sourceConfig,
+    env: { ...process.env, ...params.context.env },
+  });
   const fetchMetadata: RuntimeWebFetchMetadata = {
     providerSource: "none",
     diagnostics: [],
   };
   const fetchProviders = sortWebFetchProvidersForAutoDetect(
     configuredBundledFetchPluginId
-      ? resolveBundledPluginWebFetchProviders({
+      ? resolvePluginWebFetchProviders({
           config: params.sourceConfig,
           env: { ...process.env, ...params.context.env },
           bundledAllowlistCompat: true,
           onlyPluginIds: [configuredBundledFetchPluginId],
+          origin: "bundled",
         })
-      : resolveBundledPluginWebFetchProviders({
+      : resolvePluginWebFetchProviders({
           config: params.sourceConfig,
           env: { ...process.env, ...params.context.env },
           bundledAllowlistCompat: true,
+          origin: "bundled",
         }),
   );
   const hasConfiguredFetchSurface =

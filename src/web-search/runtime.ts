@@ -5,7 +5,6 @@ import type {
   PluginWebSearchProviderEntry,
   WebSearchProviderToolDefinition,
 } from "../plugins/types.js";
-import { resolveBundledPluginWebSearchProviders } from "../plugins/web-search-providers.js";
 import { resolvePluginWebSearchProviders } from "../plugins/web-search-providers.runtime.js";
 import { resolveRuntimeWebSearchProviders } from "../plugins/web-search-providers.runtime.js";
 import { sortWebSearchProvidersForAutoDetect } from "../plugins/web-search-providers.shared.js";
@@ -130,9 +129,10 @@ export function resolveWebSearchProviderId(params: {
 }): string {
   const providers = sortWebSearchProvidersForAutoDetect(
     params.providers ??
-      resolveBundledPluginWebSearchProviders({
+      resolvePluginWebSearchProviders({
         config: params.config,
         bundledAllowlistCompat: true,
+        origin: "bundled",
       }),
   );
   const raw =
@@ -188,9 +188,10 @@ export function resolveWebSearchDefinition(
           config: options?.config,
           bundledAllowlistCompat: true,
         })
-      : resolveBundledPluginWebSearchProviders({
+      : resolvePluginWebSearchProviders({
           config: options?.config,
           bundledAllowlistCompat: true,
+          origin: "bundled",
         }),
   ).filter(Boolean);
   if (providers.length === 0) {

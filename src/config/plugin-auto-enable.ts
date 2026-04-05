@@ -7,12 +7,8 @@ import {
 } from "../channels/config-presence.js";
 import { getChatChannelMeta, normalizeChatChannelId } from "../channels/registry.js";
 import {
-  BUNDLED_AUTO_ENABLE_PROVIDER_PLUGIN_IDS,
-  BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS,
-} from "../plugins/bundled-capability-metadata.js";
-import { resolveBundledWebFetchPluginId } from "../plugins/bundled-web-fetch-provider-ids.js";
-import {
   loadPluginManifestRegistry,
+  resolveManifestContractOwnerPluginId,
   type PluginManifestRegistry,
 } from "../plugins/manifest-registry.js";
 import { resolveOwningPluginIdsForModelRef } from "../plugins/providers.js";
@@ -81,7 +77,7 @@ const ENV_CATALOG_PATHS = ["OPENCLAW_PLUGIN_CATALOG_PATHS", "OPENCLAW_MPM_CATALO
 function resolveAutoEnableProviderPluginIds(
   registry: PluginManifestRegistry,
 ): Readonly<Record<string, string>> {
-  const entries = new Map<string, string>(Object.entries(BUNDLED_AUTO_ENABLE_PROVIDER_PLUGIN_IDS));
+  const entries = new Map<string, string>();
   for (const plugin of registry.plugins) {
     for (const providerId of plugin.autoEnableWhenConfiguredProviders ?? []) {
       if (!entries.has(providerId)) {
@@ -214,11 +210,7 @@ function hasPluginOwnedToolConfig(cfg: OpenClawConfig, pluginId: string): boolea
 function resolveProviderPluginsWithOwnedWebSearch(
   registry: PluginManifestRegistry,
 ): ReadonlySet<string> {
-  const pluginIds = new Set(
-    BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.filter(
-      (entry) => entry.providerIds.length > 0 && entry.webSearchProviderIds.length > 0,
-    ).map((entry) => entry.pluginId),
-  );
+  const pluginIds = new Set<string>();
   for (const plugin of registry.plugins) {
     if (plugin.providers.length > 0 && (plugin.contracts?.webSearchProviders?.length ?? 0) > 0) {
       pluginIds.add(plugin.id);
@@ -227,26 +219,25 @@ function resolveProviderPluginsWithOwnedWebSearch(
   return pluginIds;
 }
 
-const BUNDLED_WEB_FETCH_OWNER_PLUGIN_IDS = new Set(
-  BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.filter((entry) => entry.webFetchProviderIds.length > 0).map(
-    (entry) => entry.pluginId,
-  ),
-);
-
-function resolveProviderPluginsWithOwnedWebFetch(): ReadonlySet<string> {
+function resolveProviderPluginsWithOwnedWebFetch(
+  registry: PluginManifestRegistry,
+): ReadonlySet<string> {
   return new Set(
-    BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.filter((entry) => entry.webFetchProviderIds.length > 0).map(
-      (entry) => entry.pluginId,
-    ),
+    registry.plugins
+      .filter((plugin) => (plugin.contracts?.webFetchProviders?.length ?? 0) > 0)
+      .map((plugin) => plugin.id),
   );
 }
 
 function resolvePluginIdForConfiguredWebFetchProvider(
   providerId: string | undefined,
 ): string | undefined {
-  return resolveBundledWebFetchPluginId(
-    typeof providerId === "string" ? providerId.trim().toLowerCase() : "",
-  );
+  return resolveManifestContractOwnerPluginId({
+    contract: "webFetchProviders",
+    value: typeof providerId === "string" ? providerId.trim().toLowerCase() : "",
+    origin: "bundled",
+    env: process.env,
+  });
 }
 
 function buildChannelToPluginIdMap(registry: PluginManifestRegistry): Map<string, string> {
@@ -378,16 +369,19 @@ function hasConfiguredWebFetchPluginEntry(cfg: OpenClawConfig): boolean {
   if (!entries || typeof entries !== "object") {
     return false;
   }
-  return Object.entries(entries).some(
-    ([pluginId, entry]) =>
-      BUNDLED_WEB_FETCH_OWNER_PLUGIN_IDS.has(pluginId) &&
-      isRecord(entry) &&
-      isRecord(entry.config) &&
-      isRecord(entry.config.webFetch),
+  return Object.values(entries).some(
+    (entry) => isRecord(entry) && isRecord(entry.config) && isRecord(entry.config.webFetch),
   );
 }
 
 function configMayNeedPluginManifestRegistry(cfg: OpenClawConfig): boolean {
+  const pluginEntries = cfg.plugins?.entries;
+  if (
+    pluginEntries &&
+    Object.values(pluginEntries).some((entry) => isRecord(entry) && isRecord(entry.config))
+  ) {
+    return true;
+  }
   if (cfg.auth?.profiles && Object.keys(cfg.auth.profiles).length > 0) {
     return true;
   }
@@ -601,7 +595,7 @@ function resolveConfiguredPlugins(
       });
     }
   }
-  for (const pluginId of resolveProviderPluginsWithOwnedWebFetch()) {
+  for (const pluginId of resolveProviderPluginsWithOwnedWebFetch(registry)) {
     if (hasPluginOwnedWebFetchConfig(cfg, pluginId)) {
       changes.push({
         pluginId,

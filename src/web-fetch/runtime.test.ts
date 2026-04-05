@@ -9,18 +9,15 @@ type TestPluginWebFetchConfig = {
   };
 };
 
-const { resolveBundledPluginWebFetchProvidersMock, resolveRuntimeWebFetchProvidersMock } =
-  vi.hoisted(() => ({
-    resolveBundledPluginWebFetchProvidersMock: vi.fn<() => PluginWebFetchProviderEntry[]>(() => []),
+const { resolvePluginWebFetchProvidersMock, resolveRuntimeWebFetchProvidersMock } = vi.hoisted(
+  () => ({
+    resolvePluginWebFetchProvidersMock: vi.fn<() => PluginWebFetchProviderEntry[]>(() => []),
     resolveRuntimeWebFetchProvidersMock: vi.fn<() => PluginWebFetchProviderEntry[]>(() => []),
-  }));
-
-vi.mock("../plugins/web-fetch-providers.js", () => ({
-  resolveBundledPluginWebFetchProviders: resolveBundledPluginWebFetchProvidersMock,
-}));
+  }),
+);
 
 vi.mock("../plugins/web-fetch-providers.runtime.js", () => ({
-  resolvePluginWebFetchProviders: resolveRuntimeWebFetchProvidersMock,
+  resolvePluginWebFetchProviders: resolvePluginWebFetchProvidersMock,
   resolveRuntimeWebFetchProviders: resolveRuntimeWebFetchProvidersMock,
 }));
 
@@ -69,9 +66,9 @@ describe("web fetch runtime", () => {
 
   beforeEach(() => {
     vi.unstubAllEnvs();
-    resolveBundledPluginWebFetchProvidersMock.mockReset();
+    resolvePluginWebFetchProvidersMock.mockReset();
     resolveRuntimeWebFetchProvidersMock.mockReset();
-    resolveBundledPluginWebFetchProvidersMock.mockReturnValue([]);
+    resolvePluginWebFetchProvidersMock.mockReturnValue([]);
     resolveRuntimeWebFetchProvidersMock.mockReturnValue([]);
   });
 
@@ -92,7 +89,7 @@ describe("web fetch runtime", () => {
         return pluginConfig?.webFetch?.apiKey;
       },
     });
-    resolveBundledPluginWebFetchProvidersMock.mockReturnValue([provider]);
+    resolvePluginWebFetchProvidersMock.mockReturnValue([provider]);
 
     const config: OpenClawConfig = {
       plugins: {
@@ -133,7 +130,7 @@ describe("web fetch runtime", () => {
         }),
       }),
     });
-    resolveBundledPluginWebFetchProvidersMock.mockReturnValue([provider]);
+    resolvePluginWebFetchProvidersMock.mockReturnValue([provider]);
     resolveRuntimeWebFetchProvidersMock.mockReturnValue([provider]);
 
     const runtimeWebFetch: RuntimeWebFetchMetadata = {
@@ -171,7 +168,7 @@ describe("web fetch runtime", () => {
       credentialPath: "plugins.entries.firecrawl.config.webFetch.apiKey",
       autoDetectOrder: 1,
     });
-    resolveBundledPluginWebFetchProvidersMock.mockReturnValue([provider]);
+    resolvePluginWebFetchProvidersMock.mockReturnValue([provider]);
     vi.stubEnv("FIRECRAWL_API_KEY", "firecrawl-env-key");
 
     const resolved = resolveWebFetchDefinition({
@@ -189,7 +186,7 @@ describe("web fetch runtime", () => {
       autoDetectOrder: 1,
       getConfiguredCredentialValue: () => "firecrawl-key",
     });
-    resolveBundledPluginWebFetchProvidersMock.mockReturnValue([provider]);
+    resolvePluginWebFetchProvidersMock.mockReturnValue([provider]);
 
     const resolved = resolveWebFetchDefinition({
       config: {
@@ -221,7 +218,7 @@ describe("web fetch runtime", () => {
       autoDetectOrder: 0,
       getConfiguredCredentialValue: () => "runtime-key",
     });
-    resolveBundledPluginWebFetchProvidersMock.mockReturnValue([bundled]);
+    resolvePluginWebFetchProvidersMock.mockReturnValue([bundled]);
     resolveRuntimeWebFetchProvidersMock.mockReturnValue([runtimeOnly]);
 
     const resolved = resolveWebFetchDefinition({
@@ -248,7 +245,7 @@ describe("web fetch runtime", () => {
       autoDetectOrder: 0,
       getConfiguredCredentialValue: () => "runtime-key",
     });
-    resolveBundledPluginWebFetchProvidersMock.mockReturnValue([bundled]);
+    resolvePluginWebFetchProvidersMock.mockReturnValue([bundled]);
     resolveRuntimeWebFetchProvidersMock.mockReturnValue([runtimeOnly]);
 
     const resolved = resolveWebFetchDefinition({

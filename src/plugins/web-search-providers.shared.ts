@@ -1,7 +1,7 @@
 import { resolveBundledPluginCompatibleActivationInputs } from "./activation-context.js";
-import { resolveBundledWebSearchPluginIds } from "./bundled-web-search.js";
 import { type NormalizedPluginsConfig } from "./config-state.js";
 import type { PluginLoadOptions } from "./loader.js";
+import { resolveManifestContractPluginIds } from "./manifest-registry.js";
 import type { PluginWebSearchProviderEntry } from "./types.js";
 
 function resolveBundledWebSearchCompatPluginIds(params: {
@@ -9,7 +9,9 @@ function resolveBundledWebSearchCompatPluginIds(params: {
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
 }): string[] {
-  return resolveBundledWebSearchPluginIds({
+  return resolveManifestContractPluginIds({
+    contract: "webSearchProviders",
+    origin: "bundled",
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,

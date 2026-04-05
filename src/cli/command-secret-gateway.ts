@@ -2,8 +2,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { callGateway } from "../gateway/call.js";
 import { validateSecretsResolveResult } from "../gateway/protocol/index.js";
-import { resolveBundledWebFetchPluginId } from "../plugins/bundled-web-fetch-provider-ids.js";
-import { resolveBundledWebSearchPluginId } from "../plugins/bundled-web-search-provider-ids.js";
+import { resolveManifestContractOwnerPluginId } from "../plugins/manifest-registry.js";
 import {
   analyzeCommandSecretAssignmentsFromSnapshot,
   type UnresolvedCommandSecretAssignment,
@@ -118,7 +117,12 @@ function classifyRuntimeWebTargetPathState(params: {
       if (!configuredProvider) {
         return "active";
       }
-      return resolveBundledWebFetchPluginId(configuredProvider) === pluginId
+      return resolveManifestContractOwnerPluginId({
+        contract: "webFetchProviders",
+        value: configuredProvider,
+        origin: "bundled",
+        config: params.config,
+      }) === pluginId
         ? "active"
         : "inactive";
     }
@@ -131,7 +135,14 @@ function classifyRuntimeWebTargetPathState(params: {
     if (!configuredProvider) {
       return "active";
     }
-    return resolveBundledWebSearchPluginId(configuredProvider) === pluginId ? "active" : "inactive";
+    return resolveManifestContractOwnerPluginId({
+      contract: "webSearchProviders",
+      value: configuredProvider,
+      origin: "bundled",
+      config: params.config,
+    }) === pluginId
+      ? "active"
+      : "inactive";
   }
 
   const match = /^tools\.web\.search\.([^.]+)\.apiKey$/.exec(params.path);
@@ -184,7 +195,12 @@ function describeInactiveRuntimeWebTargetPath(params: {
     const configuredProvider =
       typeof search?.provider === "string" ? search.provider.trim().toLowerCase() : "";
     const configuredPluginId = configuredProvider
-      ? resolveBundledWebSearchPluginId(configuredProvider)
+      ? resolveManifestContractOwnerPluginId({
+          contract: "webSearchProviders",
+          value: configuredProvider,
+          origin: "bundled",
+          config: params.config,
+        })
       : undefined;
     if (configuredPluginId && configuredPluginId !== pluginId) {
       return `tools.web.search.provider is "${configuredProvider}".`;

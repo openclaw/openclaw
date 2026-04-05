@@ -11,29 +11,14 @@ const { resolvePluginWebSearchProvidersMock } = vi.hoisted(() => ({
   resolvePluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
 }));
 
-const { resolveBundledPluginWebSearchProvidersMock } = vi.hoisted(() => ({
-  resolveBundledPluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
-}));
-
 const { resolvePluginWebFetchProvidersMock } = vi.hoisted(() => ({
   resolvePluginWebFetchProvidersMock: vi.fn(() => buildTestWebFetchProviders()),
 }));
-
-const { resolveBundledPluginWebFetchProvidersMock } = vi.hoisted(() => ({
-  resolveBundledPluginWebFetchProvidersMock: vi.fn(() => buildTestWebFetchProviders()),
-}));
-
-let bundledWebSearchProviders: typeof import("../plugins/web-search-providers.js");
 let runtimeWebSearchProviders: typeof import("../plugins/web-search-providers.runtime.js");
-let bundledWebFetchProviders: typeof import("../plugins/web-fetch-providers.js");
 let runtimeWebFetchProviders: typeof import("../plugins/web-fetch-providers.runtime.js");
 let secretResolve: typeof import("./resolve.js");
 let createResolverContext: typeof import("./runtime-shared.js").createResolverContext;
 let resolveRuntimeWebTools: typeof import("./runtime-web-tools.js").resolveRuntimeWebTools;
-
-vi.mock("../plugins/web-search-providers.js", () => ({
-  resolveBundledPluginWebSearchProviders: resolveBundledPluginWebSearchProvidersMock,
-}));
 
 vi.mock("../plugins/web-search-providers.runtime.js", async () => {
   const actual = await vi.importActual<typeof import("../plugins/web-search-providers.runtime.js")>(
@@ -44,10 +29,6 @@ vi.mock("../plugins/web-search-providers.runtime.js", async () => {
     resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
   };
 });
-
-vi.mock("../plugins/web-fetch-providers.js", () => ({
-  resolveBundledPluginWebFetchProviders: resolveBundledPluginWebFetchProvidersMock,
-}));
 
 vi.mock("../plugins/web-fetch-providers.runtime.js", async () => {
   const actual = await vi.importActual<typeof import("../plugins/web-fetch-providers.runtime.js")>(
@@ -264,9 +245,7 @@ function expectInactiveWebFetchProviderSecretRef(params: {
 
 describe("runtime web tools resolution", () => {
   beforeAll(async () => {
-    bundledWebSearchProviders = await import("../plugins/web-search-providers.js");
     runtimeWebSearchProviders = await import("../plugins/web-search-providers.runtime.js");
-    bundledWebFetchProviders = await import("../plugins/web-fetch-providers.js");
     runtimeWebFetchProviders = await import("../plugins/web-fetch-providers.runtime.js");
     secretResolve = await import("./resolve.js");
     ({ createResolverContext } = await import("./runtime-shared.js"));
@@ -275,9 +254,7 @@ describe("runtime web tools resolution", () => {
 
   beforeEach(() => {
     runtimeWebSearchProviders.__testing.resetWebSearchProviderSnapshotCacheForTests();
-    vi.mocked(bundledWebSearchProviders.resolveBundledPluginWebSearchProviders).mockClear();
     vi.mocked(runtimeWebSearchProviders.resolvePluginWebSearchProviders).mockClear();
-    vi.mocked(bundledWebFetchProviders.resolveBundledPluginWebFetchProviders).mockClear();
     vi.mocked(runtimeWebFetchProviders.resolvePluginWebFetchProviders).mockClear();
   });
 
@@ -665,9 +642,8 @@ describe("runtime web tools resolution", () => {
     );
   });
 
-  it("uses bundled provider resolution for configured bundled providers", async () => {
-    const bundledSpy = vi.mocked(bundledWebSearchProviders.resolveBundledPluginWebSearchProviders);
-    const genericSpy = vi.mocked(runtimeWebSearchProviders.resolvePluginWebSearchProviders);
+  it("uses bundled-only runtime provider resolution for configured bundled providers", async () => {
+    const runtimeSpy = vi.mocked(runtimeWebSearchProviders.resolvePluginWebSearchProviders);
 
     const { metadata } = await runRuntimeWebTools({
       config: asConfig({
@@ -698,13 +674,13 @@ describe("runtime web tools resolution", () => {
     });
 
     expect(metadata.search.selectedProvider).toBe("gemini");
-    expect(bundledSpy).toHaveBeenCalledWith(
+    expect(runtimeSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         bundledAllowlistCompat: true,
         onlyPluginIds: ["google"],
+        origin: "bundled",
       }),
     );
-    expect(genericSpy).not.toHaveBeenCalled();
   });
 
   it("does not resolve web fetch provider SecretRef when web fetch is inactive", async () => {
@@ -955,7 +931,6 @@ describe("runtime web tools resolution", () => {
   });
 
   it("keeps web fetch provider discovery bundled-only during runtime secret resolution", async () => {
-    const bundledSpy = vi.mocked(bundledWebFetchProviders.resolveBundledPluginWebFetchProviders);
     const runtimeSpy = vi.mocked(runtimeWebFetchProviders.resolvePluginWebFetchProviders);
 
     const { metadata } = await runRuntimeWebTools({
@@ -986,7 +961,11 @@ describe("runtime web tools resolution", () => {
     });
 
     expect(metadata.fetch.selectedProvider).toBe("firecrawl");
-    expect(bundledSpy).toHaveBeenCalled();
-    expect(runtimeSpy).not.toHaveBeenCalled();
+    expect(runtimeSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bundledAllowlistCompat: true,
+        origin: "bundled",
+      }),
+    );
   });
 });

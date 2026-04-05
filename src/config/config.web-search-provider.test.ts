@@ -33,6 +33,7 @@ const getConfiguredPluginWebSearchCredential =
 const mockWebSearchProviders = [
   {
     id: "brave",
+    pluginId: "brave",
     envVars: ["BRAVE_API_KEY"],
     credentialPath: "plugins.entries.brave.config.webSearch.apiKey",
     getCredentialValue: (search?: Record<string, unknown>) => search?.apiKey,
@@ -40,6 +41,7 @@ const mockWebSearchProviders = [
   },
   {
     id: "firecrawl",
+    pluginId: "firecrawl",
     envVars: ["FIRECRAWL_API_KEY"],
     credentialPath: "plugins.entries.firecrawl.config.webSearch.apiKey",
     getCredentialValue: getScopedWebSearchCredential("firecrawl"),
@@ -47,6 +49,7 @@ const mockWebSearchProviders = [
   },
   {
     id: "gemini",
+    pluginId: "google",
     envVars: ["GEMINI_API_KEY"],
     credentialPath: "plugins.entries.google.config.webSearch.apiKey",
     getCredentialValue: getScopedWebSearchCredential("gemini"),
@@ -54,6 +57,7 @@ const mockWebSearchProviders = [
   },
   {
     id: "grok",
+    pluginId: "xai",
     envVars: ["XAI_API_KEY"],
     credentialPath: "plugins.entries.xai.config.webSearch.apiKey",
     getCredentialValue: getScopedWebSearchCredential("grok"),
@@ -61,6 +65,7 @@ const mockWebSearchProviders = [
   },
   {
     id: "kimi",
+    pluginId: "moonshot",
     envVars: ["KIMI_API_KEY", "MOONSHOT_API_KEY"],
     credentialPath: "plugins.entries.moonshot.config.webSearch.apiKey",
     getCredentialValue: getScopedWebSearchCredential("kimi"),
@@ -68,6 +73,7 @@ const mockWebSearchProviders = [
   },
   {
     id: "minimax",
+    pluginId: "minimax",
     envVars: ["MINIMAX_CODE_PLAN_KEY", "MINIMAX_CODING_API_KEY"],
     credentialPath: "plugins.entries.minimax.config.webSearch.apiKey",
     getCredentialValue: getScopedWebSearchCredential("minimax"),
@@ -75,6 +81,7 @@ const mockWebSearchProviders = [
   },
   {
     id: "perplexity",
+    pluginId: "perplexity",
     envVars: ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"],
     credentialPath: "plugins.entries.perplexity.config.webSearch.apiKey",
     getCredentialValue: getScopedWebSearchCredential("perplexity"),
@@ -82,6 +89,7 @@ const mockWebSearchProviders = [
   },
   {
     id: "searxng",
+    pluginId: "searxng",
     envVars: ["SEARXNG_BASE_URL"],
     credentialPath: "plugins.entries.searxng.config.webSearch.baseUrl",
     getCredentialValue: (search?: Record<string, unknown>) =>
@@ -91,6 +99,7 @@ const mockWebSearchProviders = [
   },
   {
     id: "tavily",
+    pluginId: "tavily",
     envVars: ["TAVILY_API_KEY"],
     credentialPath: "plugins.entries.tavily.config.webSearch.apiKey",
     getCredentialValue: getScopedWebSearchCredential("tavily"),
@@ -98,9 +107,8 @@ const mockWebSearchProviders = [
   },
 ] as const;
 
-vi.mock("../plugins/web-search-providers.js", () => {
+vi.mock("../plugins/web-search-providers.runtime.js", () => {
   return {
-    resolveBundledPluginWebSearchProviders: () => mockWebSearchProviders,
     resolvePluginWebSearchProviders: () => mockWebSearchProviders,
   };
 });
@@ -158,6 +166,9 @@ vi.mock("../plugins/manifest-registry.js", () => {
           origin: "bundled",
           channels: [],
           providers: [],
+          contracts: {
+            webSearchProviders: ["brave"],
+          },
           cliBackends: [],
           skills: [],
           hooks: [],
@@ -181,6 +192,9 @@ vi.mock("../plugins/manifest-registry.js", () => {
           origin: "bundled",
           channels: [],
           providers: [],
+          contracts: {
+            webSearchProviders: [id],
+          },
           cliBackends: [],
           skills: [],
           hooks: [],
@@ -193,6 +207,17 @@ vi.mock("../plugins/manifest-registry.js", () => {
       ],
       diagnostics: [],
     }),
+    resolveManifestContractPluginIds: (params?: { contract?: string; origin?: string }) =>
+      params?.contract === "webSearchProviders" && params.origin === "bundled"
+        ? mockWebSearchProviders
+            .map((provider) => provider.pluginId)
+            .filter((value, index, array) => array.indexOf(value) === index)
+            .toSorted((left, right) => left.localeCompare(right))
+        : [],
+    resolveManifestContractOwnerPluginId: (params?: { contract?: string; value?: string }) =>
+      params?.contract === "webSearchProviders"
+        ? mockWebSearchProviders.find((provider) => provider.id === params.value)?.pluginId
+        : undefined,
   };
 });
 
