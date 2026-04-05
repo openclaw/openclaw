@@ -150,8 +150,12 @@ export function resetBedrockDiscoveryCacheForTest(): void {
   hasLoggedBedrockError = false;
 }
 
-export function resolveBedrockConfigApiKey(env: NodeJS.ProcessEnv = process.env): string {
-  return resolveAwsSdkEnvVarName(env) ?? "AWS_PROFILE";
+export function resolveBedrockConfigApiKey(
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  // When no AWS auth env marker is present, Bedrock should fall back to the
+  // AWS SDK default credential chain instead of persisting a fake apiKey marker.
+  return resolveAwsSdkEnvVarName(env);
 }
 
 export async function discoverBedrockModels(params: {
