@@ -1,9 +1,4 @@
 import {
-  ELEVENLABS_TALK_LEGACY_CONFIG_RULES,
-  hasLegacyTalkFields,
-} from "../plugin-sdk/elevenlabs.js";
-import { runPluginSetupLegacyConfigMigrations } from "../plugins/setup-registry.js";
-import {
   buildDefaultControlUiAllowedOrigins,
   hasConfiguredControlUiAllowedOrigins,
   isGatewayNonLoopbackBindMode,
@@ -327,17 +322,6 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME: LegacyConfigMigrationSpec[] = [
         }
         migrateLegacySandboxPerSession(sandbox, `agents.list.${index}.sandbox`, changes);
       }
-    },
-  }),
-  defineLegacyConfigMigration({
-    id: "talk.legacy-fields->talk.providers",
-    describe: "Move legacy Talk flat fields into talk.providers.<provider>",
-    legacyRules: ELEVENLABS_TALK_LEGACY_CONFIG_RULES,
-    apply: (raw, changes) => {
-      if (!hasLegacyTalkFields(raw.talk)) {
-        return;
-      }
-      runPluginSetupLegacyConfigMigrations({ raw, changes });
     },
   }),
   defineLegacyConfigMigration({

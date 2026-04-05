@@ -8,7 +8,6 @@ import { migrateLegacyWebSearchConfig } from "../config/legacy-web-search.js";
 import { migrateLegacyXSearchConfig } from "../config/legacy-x-search.js";
 import { normalizeTalkSection } from "../config/talk.js";
 import { DEFAULT_GOOGLE_API_BASE_URL } from "../infra/google-api-base-url.js";
-import { normalizeCompatibilityConfig as normalizeElevenLabsCompatibilityConfig } from "../plugin-sdk/elevenlabs.js";
 import { runPluginSetupConfigMigrations } from "../plugins/setup-registry.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 
@@ -355,13 +354,6 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
   const normalizeLegacyTalkConfig = () => {
     const rawTalk = next.talk;
     if (!isRecord(rawTalk)) {
-      return;
-    }
-
-    const legacyMigration = normalizeElevenLabsCompatibilityConfig({ cfg: next });
-    if (legacyMigration.changes.length > 0) {
-      next = legacyMigration.config;
-      changes.push(...legacyMigration.changes);
       return;
     }
 
