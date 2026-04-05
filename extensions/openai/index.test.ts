@@ -252,6 +252,10 @@ describe("openai plugin", () => {
     expect(openaiResult).toEqual({
       appendSystemContext: OPENAI_FRIENDLY_PROMPT_OVERLAY,
     });
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain("This is a live chat, not a memo.");
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+      "Avoid walls of text, long preambles, and repetitive restatement.",
+    );
 
     const codexResult = await beforePromptBuild?.(
       { prompt: "hello", messages: [] },
