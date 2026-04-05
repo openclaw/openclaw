@@ -229,7 +229,7 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
   var manualTls by rememberSaveable { mutableStateOf(false) }
   var gatewayError by rememberSaveable { mutableStateOf<String?>(null) }
   var attemptedConnect by rememberSaveable { mutableStateOf(false) }
-  val canFinishOnboarding = canFinishOnboarding(isConnected = isConnected, isNodeConnected = isNodeConnected)
+  val canFinishOnboarding = canFinishOnboarding(isNodeConnected = isNodeConnected)
 
   val lifecycleOwner = LocalLifecycleOwner.current
   val qrScannerOptions =
@@ -927,8 +927,10 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
   }
 }
 
-internal fun canFinishOnboarding(isConnected: Boolean, isNodeConnected: Boolean): Boolean {
-  return isConnected && isNodeConnected
+internal fun canFinishOnboarding(isNodeConnected: Boolean): Boolean {
+  // Operator connectivity can legitimately lag or be offline after pairing.
+  // Finishing onboarding only needs to prove this device node reached the gateway.
+  return isNodeConnected
 }
 
 @Composable
