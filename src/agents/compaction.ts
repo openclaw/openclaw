@@ -40,6 +40,54 @@ export type CompactionSummarizationInstructions = {
   identifierInstructions?: string;
 };
 
+export type CompactionStage =
+  | "boundary"
+  | "prune_history"
+  | "summarize_history"
+  | "summarize_split_turn"
+  | "quality_retry"
+  | "finalize";
+
+export type CompactionStageReason =
+  | "no_real_messages"
+  | "new_content_exceeds_history_budget"
+  | "messages_to_summarize_present"
+  | "split_turn_prefix_present"
+  | "quality_guard_enabled"
+  | "quality_feedback_requested"
+  | "summary_ready";
+
+export type CompactionStageDecision = {
+  stage: CompactionStage;
+  reason: CompactionStageReason;
+};
+
+export type CompactionStagePlanningParams = {
+  boundaryOnly?: boolean;
+  historyPruned?: boolean;
+  historySummaryRequested?: boolean;
+  splitTurnSummaryRequested?: boolean;
+  qualityRetryRequested?: boolean;
+  qualityGuardEnabled?: boolean;
+};
+
+export type CompactionStageTelemetry = {
+  entryStage: CompactionStage;
+  entryReason: CompactionStageReason;
+  outcomeStage: CompactionStage;
+  outcomeReason: CompactionStageReason;
+  plan: CompactionStageDecision[];
+  historyPruned: boolean;
+  splitTurn: boolean;
+  recentTurnsPreserve: number;
+  qualityGuardEnabled: boolean;
+  qualityRetriesPlanned: number;
+  qualityRetriesUsed: number;
+  droppedChunks: number;
+  droppedMessages: number;
+  droppedSummaryUsed: boolean;
+};
+
 type GenerateSummaryCompat = {
   (
     currentMessages: AgentMessage[],
@@ -521,6 +569,74 @@ export function pruneHistoryForContextShare(params: {
     keptTokens: estimateMessagesTokens(keptMessages),
     budgetTokens,
   };
+}
+
+export function planCompactionStage(
+  params: CompactionStagePlanningParams,
+): CompactionStageDecision {
+  if (params.boundaryOnly) {
+    return { stage: "boundary", reason: "no_real_messages" };
+  }
+  if (params.qualityRetryRequested) {
+    return { stage: "quality_retry", reason: "quality_feedback_requested" };
+  }
+  if (params.historyPruned) {
+    return { stage: "prune_history", reason: "new_content_exceeds_history_budget" };
+  }
+  if (params.historySummaryRequested) {
+    return { stage: "summarize_history", reason: "messages_to_summarize_present" };
+  }
+  if (params.splitTurnSummaryRequested) {
+    return { stage: "summarize_split_turn", reason: "split_turn_prefix_present" };
+  }
+  return { stage: "finalize", reason: "summary_ready" };
+}
+
+export function planCompactionStages(
+  params: CompactionStagePlanningParams,
+): CompactionStageDecision[] {
+  if (params.boundaryOnly) {
+    return [planCompactionStage(params)];
+  }
+
+  const plan: CompactionStageDecision[] = [];
+  if (params.historyPruned) {
+    plan.push({ stage: "prune_history", reason: "new_content_exceeds_history_budget" });
+  }
+  if (params.historySummaryRequested) {
+    plan.push({ stage: "summarize_history", reason: "messages_to_summarize_present" });
+  }
+  if (params.splitTurnSummaryRequested) {
+    plan.push({ stage: "summarize_split_turn", reason: "split_turn_prefix_present" });
+  }
+  if (params.qualityGuardEnabled) {
+    plan.push({ stage: "quality_retry", reason: "quality_guard_enabled" });
+  }
+  plan.push({ stage: "finalize", reason: "summary_ready" });
+  return plan;
+}
+
+export function extractCompactionStageTelemetry(
+  details: unknown,
+): CompactionStageTelemetry | undefined {
+  if (!details || typeof details !== "object") {
+    return undefined;
+  }
+  const telemetry = (details as { stageTelemetry?: unknown }).stageTelemetry;
+  if (!telemetry || typeof telemetry !== "object") {
+    return undefined;
+  }
+  const candidate = telemetry as Partial<CompactionStageTelemetry>;
+  if (
+    typeof candidate.entryStage !== "string" ||
+    typeof candidate.entryReason !== "string" ||
+    typeof candidate.outcomeStage !== "string" ||
+    typeof candidate.outcomeReason !== "string" ||
+    !Array.isArray(candidate.plan)
+  ) {
+    return undefined;
+  }
+  return candidate as CompactionStageTelemetry;
 }
 
 export function resolveContextWindowTokens(model?: ExtensionContext["model"]): number {

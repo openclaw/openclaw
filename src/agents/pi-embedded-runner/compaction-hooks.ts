@@ -8,6 +8,24 @@ import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveMemorySearchConfig } from "../memory-search.js";
 import { log } from "./logger.js";
 
+function extractCompactionStageTelemetry(
+  details: unknown,
+): { outcomeStage?: string; outcomeReason?: string } | undefined {
+  if (!details || typeof details !== "object") {
+    return undefined;
+  }
+  const telemetry = (details as { stageTelemetry?: unknown }).stageTelemetry;
+  if (!telemetry || typeof telemetry !== "object") {
+    return undefined;
+  }
+  const candidate = telemetry as { outcomeStage?: unknown; outcomeReason?: unknown };
+  return {
+    outcomeStage: typeof candidate.outcomeStage === "string" ? candidate.outcomeStage : undefined,
+    outcomeReason:
+      typeof candidate.outcomeReason === "string" ? candidate.outcomeReason : undefined,
+  };
+}
+
 function resolvePostCompactionIndexSyncMode(config?: OpenClawConfig): "off" | "async" | "await" {
   const mode = config?.agents?.defaults?.compaction?.postIndexSync;
   if (mode === "off" || mode === "async" || mode === "await") {
@@ -260,8 +278,10 @@ export async function runAfterCompactionHooks(params: {
   summaryLength?: number;
   tokensBefore?: number;
   firstKeptEntryId?: string;
+  details?: unknown;
 }) {
   try {
+    const stageTelemetry = extractCompactionStageTelemetry(params.details);
     const hookEvent = createInternalHookEvent("session", "compact:after", params.hookSessionKey, {
       sessionId: params.sessionId,
       missingSessionKey: params.missingSessionKey,
@@ -272,6 +292,8 @@ export async function runAfterCompactionHooks(params: {
       tokensBefore: params.tokensBefore,
       tokensAfter: params.tokensAfter,
       firstKeptEntryId: params.firstKeptEntryId,
+      compactionStage: stageTelemetry?.outcomeStage,
+      compactionReason: stageTelemetry?.outcomeReason,
     });
     await triggerInternalHook(hookEvent);
   } catch (err) {

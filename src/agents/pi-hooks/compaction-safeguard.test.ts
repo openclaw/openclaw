@@ -173,6 +173,7 @@ async function runCompactionScenario(params: {
       summary: string;
       firstKeptEntryId: string;
       tokensBefore: number;
+      details?: unknown;
     };
   };
   return { result, getApiKeyAndHeadersMock };
@@ -184,6 +185,7 @@ function expectCompactionResult(result: {
     summary: string;
     firstKeptEntryId: string;
     tokensBefore: number;
+    details?: unknown;
   };
 }) {
   expect(result.cancel).not.toBe(true);
@@ -1279,6 +1281,17 @@ describe("compaction-safeguard recent-turn preservation", () => {
     );
     expect(droppedCall?.customInstructions).toContain("## Decisions");
     expect(droppedCall?.customInstructions).toContain("Keep security caveats.");
+    expect(result.compaction?.details).toMatchObject({
+      stageTelemetry: {
+        entryStage: "prune_history",
+        outcomeStage: "prune_history",
+        droppedSummaryUsed: true,
+      },
+    });
+    expect(
+      (result.compaction?.details as { stageTelemetry?: { droppedChunks?: number } })
+        ?.stageTelemetry?.droppedChunks ?? 0,
+    ).toBeGreaterThan(0);
   });
 
   it("does not retry summaries unless quality guard is explicitly enabled", async () => {
@@ -1417,6 +1430,14 @@ describe("compaction-safeguard recent-turn preservation", () => {
     const secondCall = mockSummarizeInStages.mock.calls[1]?.[0];
     expect(secondCall?.customInstructions).toContain("Quality check feedback");
     expect(secondCall?.customInstructions).toContain("missing_section:## Decisions");
+    expect(result.compaction?.details).toMatchObject({
+      stageTelemetry: {
+        entryStage: "summarize_history",
+        outcomeStage: "quality_retry",
+        qualityRetriesPlanned: 1,
+        qualityRetriesUsed: 1,
+      },
+    });
   });
 
   it("does not treat preserved latest asks as satisfying overlap checks", async () => {
@@ -1720,6 +1741,14 @@ describe("compaction-safeguard double-compaction guard", () => {
     expect(compaction.summary).toContain("## Open TODOs");
     expect(compaction.firstKeptEntryId).toBe("entry-1");
     expect(compaction.tokensBefore).toBe(1500);
+    expect(compaction.details).toMatchObject({
+      stageTelemetry: {
+        entryStage: "boundary",
+        outcomeStage: "boundary",
+        entryReason: "no_real_messages",
+        outcomeReason: "no_real_messages",
+      },
+    });
     expect(getApiKeyAndHeadersMock).not.toHaveBeenCalled();
   });
 

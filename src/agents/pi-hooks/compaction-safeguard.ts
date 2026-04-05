@@ -17,6 +17,8 @@ import {
   computeAdaptiveChunkRatio,
   estimateMessagesTokens,
   isOversizedForSummary,
+  planCompactionStage,
+  planCompactionStages,
   pruneHistoryForContextShare,
   resolveContextWindowTokens,
   summarizeInStages,
@@ -557,6 +559,59 @@ async function readWorkspaceContextForSummary(): Promise<string> {
   }
 }
 
+function buildCompactionStageTelemetry(params: {
+  boundaryOnly?: boolean;
+  historyPruned?: boolean;
+  historySummaryRequested?: boolean;
+  splitTurnSummaryRequested?: boolean;
+  qualityGuardEnabled?: boolean;
+  qualityRetriesPlanned?: number;
+  qualityRetriesUsed?: number;
+  recentTurnsPreserve: number;
+  droppedChunks?: number;
+  droppedMessages?: number;
+  droppedSummaryUsed?: boolean;
+}) {
+  const qualityRetriesUsed = Math.max(0, params.qualityRetriesUsed ?? 0);
+  const entryDecision = planCompactionStage({
+    boundaryOnly: params.boundaryOnly,
+    historyPruned: params.historyPruned,
+    historySummaryRequested: params.historySummaryRequested,
+    splitTurnSummaryRequested: params.splitTurnSummaryRequested,
+    qualityRetryRequested: false,
+  });
+  const outcomeDecision = planCompactionStage({
+    boundaryOnly: params.boundaryOnly,
+    historyPruned: params.historyPruned,
+    historySummaryRequested: params.historySummaryRequested,
+    splitTurnSummaryRequested: params.splitTurnSummaryRequested,
+    qualityRetryRequested: qualityRetriesUsed > 0,
+  });
+
+  return {
+    entryStage: entryDecision.stage,
+    entryReason: entryDecision.reason,
+    outcomeStage: outcomeDecision.stage,
+    outcomeReason: outcomeDecision.reason,
+    plan: planCompactionStages({
+      boundaryOnly: params.boundaryOnly,
+      historyPruned: params.historyPruned,
+      historySummaryRequested: params.historySummaryRequested,
+      splitTurnSummaryRequested: params.splitTurnSummaryRequested,
+      qualityGuardEnabled: params.qualityGuardEnabled,
+    }),
+    historyPruned: params.historyPruned === true,
+    splitTurn: params.splitTurnSummaryRequested === true,
+    recentTurnsPreserve: resolveRecentTurnsPreserve(params.recentTurnsPreserve),
+    qualityGuardEnabled: params.qualityGuardEnabled === true,
+    qualityRetriesPlanned: Math.max(0, params.qualityRetriesPlanned ?? 0),
+    qualityRetriesUsed,
+    droppedChunks: Math.max(0, params.droppedChunks ?? 0),
+    droppedMessages: Math.max(0, params.droppedMessages ?? 0),
+    droppedSummaryUsed: params.droppedSummaryUsed === true,
+  };
+}
+
 export default function compactionSafeguardExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", async (event, ctx) => {
     const { preparation, customInstructions: eventInstructions, signal } = event;
@@ -567,6 +622,14 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       isRealConversationMessage(message, messages, index),
     );
     setCompactionSafeguardCancelReason(ctx.sessionManager, undefined);
+    const { readFiles, modifiedFiles } = computeFileLists(preparation.fileOps);
+
+    // Model resolution: ctx.model is undefined in compact.ts workflow (extensionRunner.initialize() is never called).
+    // Fall back to runtime.model which is explicitly passed when building extension paths.
+    const runtime = getCompactionSafeguardRuntime(ctx.sessionManager);
+    const recentTurnsPreserve = resolveRecentTurnsPreserve(runtime?.recentTurnsPreserve);
+    const qualityGuardEnabled = runtime?.qualityGuardEnabled ?? false;
+    const qualityGuardMaxRetries = resolveQualityGuardMaxRetries(runtime?.qualityGuardMaxRetries);
     if (!hasRealSummarizable && !hasRealTurnPrefix) {
       // When there are no summarizable messages AND no real turn-prefix content,
       // cancelling compaction leaves context unchanged but the SDK re-triggers
@@ -589,10 +652,19 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           summary: fallbackSummary,
           firstKeptEntryId: preparation.firstKeptEntryId,
           tokensBefore: preparation.tokensBefore,
+          details: {
+            readFiles,
+            modifiedFiles,
+            stageTelemetry: buildCompactionStageTelemetry({
+              boundaryOnly: true,
+              recentTurnsPreserve,
+              qualityGuardEnabled,
+              qualityRetriesPlanned: qualityGuardMaxRetries,
+            }),
+          },
         },
       };
     }
-    const { readFiles, modifiedFiles } = computeFileLists(preparation.fileOps);
     const fileOpsSummary = formatFileOperations(readFiles, modifiedFiles);
     const toolFailures = collectToolFailures([
       ...preparation.messagesToSummarize,
@@ -600,9 +672,6 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     ]);
     const toolFailureSection = formatToolFailuresSection(toolFailures);
 
-    // Model resolution: ctx.model is undefined in compact.ts workflow (extensionRunner.initialize() is never called).
-    // Fall back to runtime.model which is explicitly passed when building extension paths.
-    const runtime = getCompactionSafeguardRuntime(ctx.sessionManager);
     const customInstructions = resolveCompactionInstructions(
       eventInstructions,
       runtime?.customInstructions,
@@ -677,9 +746,6 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       const contextWindowTokens = runtime?.contextWindowTokens ?? modelContextWindow;
       const turnPrefixMessages = preparation.turnPrefixMessages ?? [];
       let messagesToSummarize = preparation.messagesToSummarize;
-      const recentTurnsPreserve = resolveRecentTurnsPreserve(runtime?.recentTurnsPreserve);
-      const qualityGuardEnabled = runtime?.qualityGuardEnabled ?? false;
-      const qualityGuardMaxRetries = resolveQualityGuardMaxRetries(runtime?.qualityGuardMaxRetries);
       const structuredInstructions = buildCompactionStructureInstructions(
         customInstructions,
         summarizationInstructions,
@@ -693,6 +759,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           : undefined;
 
       let droppedSummary: string | undefined;
+      let droppedChunks = 0;
+      let droppedMessages = 0;
 
       if (tokensBefore !== undefined) {
         const summarizableTokens =
@@ -709,6 +777,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             parts: 2,
           });
           if (pruned.droppedChunks > 0) {
+            droppedChunks = pruned.droppedChunks;
+            droppedMessages = pruned.droppedMessages;
             const newContentRatio = (newContentTokens / contextWindowTokens) * 100;
             log.warn(
               `Compaction safeguard: new content uses ${newContentRatio.toFixed(
@@ -763,6 +833,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         recentTurnsPreserve,
       });
       messagesToSummarize = summaryTargetMessages;
+      const historySummaryRequested = messagesToSummarize.length > 0;
+      const splitTurnSummaryRequested = preparation.isSplitTurn && turnPrefixMessages.length > 0;
       const preservedTurnsSection = formatPreservedTurnsSection(preservedRecentMessages);
       const latestUserAsk = extractLatestUserAsk([...messagesToSummarize, ...turnPrefixMessages]);
       const identifierSeedText = [...messagesToSummarize, ...turnPrefixMessages]
@@ -793,8 +865,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       let currentInstructions = structuredInstructions;
       const totalAttempts = qualityGuardEnabled ? qualityGuardMaxRetries + 1 : 1;
       let lastSuccessfulSummary: string | null = null;
+      let summarizationAttemptsUsed = 0;
 
       for (let attempt = 0; attempt < totalAttempts; attempt += 1) {
+        summarizationAttemptsUsed = attempt + 1;
         let summaryWithoutPreservedTurns = "";
         let summaryWithPreservedTurns = "";
         let splitTurnSection = "";
@@ -918,12 +992,26 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       const bodyToCap = lastHistorySummary || summary;
       summary = capCompactionSummaryPreservingSuffix(bodyToCap, normalizedSuffix ?? "");
 
+      const qualityRetriesUsed = Math.max(0, summarizationAttemptsUsed - 1);
+      const stageTelemetry = buildCompactionStageTelemetry({
+        historyPruned: droppedChunks > 0,
+        historySummaryRequested,
+        splitTurnSummaryRequested,
+        qualityGuardEnabled,
+        qualityRetriesPlanned: qualityGuardMaxRetries,
+        qualityRetriesUsed,
+        recentTurnsPreserve,
+        droppedChunks,
+        droppedMessages,
+        droppedSummaryUsed: Boolean(droppedSummary),
+      });
+
       return {
         compaction: {
           summary,
           firstKeptEntryId: preparation.firstKeptEntryId,
           tokensBefore: preparation.tokensBefore,
-          details: { readFiles, modifiedFiles },
+          details: { readFiles, modifiedFiles, stageTelemetry },
         },
       };
     } catch (error) {

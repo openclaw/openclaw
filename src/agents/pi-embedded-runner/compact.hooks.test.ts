@@ -95,7 +95,11 @@ const sessionHook = (action: string): SessionHookEvent | undefined =>
     return event?.type === "session" && event.action === action;
   })?.[0] as SessionHookEvent | undefined;
 
-async function runCompactionHooks(params: { sessionKey?: string; messageProvider?: string }) {
+async function runCompactionHooks(params: {
+  sessionKey?: string;
+  messageProvider?: string;
+  details?: unknown;
+}) {
   const originalMessages = sessionMessages.slice(1) as AgentMessage[];
   const currentMessages = sessionMessages.slice(1) as AgentMessage[];
   const beforeMetrics = compactTesting.buildBeforeCompactionHookMetrics({
@@ -129,6 +133,7 @@ async function runCompactionHooks(params: { sessionKey?: string; messageProvider
     summaryLength: "summary".length,
     tokensBefore: 120,
     firstKeptEntryId: "entry-1",
+    details: params.details,
   });
 }
 
@@ -253,6 +258,35 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       },
       expect.objectContaining({ sessionKey: "agent:main:session-1", messageProvider: "telegram" }),
     );
+  });
+
+  it("includes compaction stage telemetry in internal after-hook context when available", async () => {
+    await runCompactionHooks({
+      sessionKey: TEST_SESSION_KEY,
+      details: {
+        stageTelemetry: {
+          entryStage: "prune_history",
+          entryReason: "new_content_exceeds_history_budget",
+          outcomeStage: "quality_retry",
+          outcomeReason: "quality_feedback_requested",
+          plan: [{ stage: "finalize", reason: "summary_ready" }],
+          historyPruned: true,
+          splitTurn: false,
+          recentTurnsPreserve: 3,
+          qualityGuardEnabled: true,
+          qualityRetriesPlanned: 1,
+          qualityRetriesUsed: 1,
+          droppedChunks: 1,
+          droppedMessages: 2,
+          droppedSummaryUsed: true,
+        },
+      },
+    });
+
+    expect(sessionHook("compact:after")?.context).toMatchObject({
+      compactionStage: "quality_retry",
+      compactionReason: "quality_feedback_requested",
+    });
   });
 
   it("uses sessionId as hook session key fallback when sessionKey is missing", async () => {

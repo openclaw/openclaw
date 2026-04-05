@@ -3,6 +3,9 @@ import type { AssistantMessage, ToolResultMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
   estimateMessagesTokens,
+  extractCompactionStageTelemetry,
+  planCompactionStage,
+  planCompactionStages,
   pruneHistoryForContextShare,
   splitMessagesByTokenShare,
 } from "./compaction.js";
@@ -75,6 +78,67 @@ describe("splitMessagesByTokenShare", () => {
 
     const parts = splitMessagesByTokenShare(messages, 3);
     expect(parts.flat().map((msg) => msg.timestamp)).toEqual(messages.map((msg) => msg.timestamp));
+  });
+});
+
+describe("planCompactionStage", () => {
+  it("prioritizes quality retries over earlier stages when feedback is requested", () => {
+    expect(
+      planCompactionStage({
+        historyPruned: true,
+        historySummaryRequested: true,
+        splitTurnSummaryRequested: true,
+        qualityRetryRequested: true,
+      }),
+    ).toEqual({
+      stage: "quality_retry",
+      reason: "quality_feedback_requested",
+    });
+  });
+
+  it("builds a conservative stage plan in execution order", () => {
+    expect(
+      planCompactionStages({
+        historyPruned: true,
+        historySummaryRequested: true,
+        splitTurnSummaryRequested: true,
+        qualityGuardEnabled: true,
+      }),
+    ).toEqual([
+      { stage: "prune_history", reason: "new_content_exceeds_history_budget" },
+      { stage: "summarize_history", reason: "messages_to_summarize_present" },
+      { stage: "summarize_split_turn", reason: "split_turn_prefix_present" },
+      { stage: "quality_retry", reason: "quality_guard_enabled" },
+      { stage: "finalize", reason: "summary_ready" },
+    ]);
+  });
+
+  it("extracts stage telemetry from compaction result details", () => {
+    expect(
+      extractCompactionStageTelemetry({
+        stageTelemetry: {
+          entryStage: "prune_history",
+          entryReason: "new_content_exceeds_history_budget",
+          outcomeStage: "quality_retry",
+          outcomeReason: "quality_feedback_requested",
+          plan: [{ stage: "finalize", reason: "summary_ready" }],
+          historyPruned: true,
+          splitTurn: false,
+          recentTurnsPreserve: 3,
+          qualityGuardEnabled: true,
+          qualityRetriesPlanned: 1,
+          qualityRetriesUsed: 1,
+          droppedChunks: 1,
+          droppedMessages: 2,
+          droppedSummaryUsed: true,
+        },
+      }),
+    ).toMatchObject({
+      entryStage: "prune_history",
+      outcomeStage: "quality_retry",
+      qualityRetriesUsed: 1,
+      droppedChunks: 1,
+    });
   });
 });
 

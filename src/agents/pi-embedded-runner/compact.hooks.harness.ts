@@ -241,6 +241,7 @@ export async function loadCompactHooksHarness(): Promise<{
       create: vi.fn(() => ({})),
     },
     estimateTokens: estimateTokensMock,
+    generateSummary: vi.fn(async () => "summary"),
   }));
 
   vi.doMock("../session-tool-result-guard-wrapper.js", () => ({
@@ -334,6 +335,7 @@ export async function loadCompactHooksHarness(): Promise<{
     logToolSchemasForGoogle: vi.fn(),
     sanitizeSessionHistory: sanitizeSessionHistoryMock,
     sanitizeToolsForGoogle: vi.fn(({ tools }: { tools: unknown[] }) => tools),
+    validateReplayTurns: vi.fn(async ({ messages }: { messages: unknown[] }) => messages),
   }));
 
   vi.doMock("./tool-split.js", () => ({
