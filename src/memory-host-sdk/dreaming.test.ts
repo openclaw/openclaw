@@ -54,6 +54,7 @@ describe("memory dreaming host helpers", () => {
       },
     });
 
+    expect(resolved.mode).toBe("core");
     expect(resolved.enabled).toBe(true);
     expect(resolved.timezone).toBe("Europe/London");
     expect(resolved.storage).toEqual({
@@ -85,12 +86,13 @@ describe("memory dreaming host helpers", () => {
       cfg,
     });
 
-    expect(resolved.enabled).toBe(true);
+    expect(resolved.mode).toBe("off");
+    expect(resolved.enabled).toBe(false);
     expect(resolved.timezone).toBe("America/Los_Angeles");
     expect(resolved.phases.deep).toMatchObject({
       cron: "0 3 * * *",
       limit: 10,
-      minScore: 0.8,
+      minScore: 0.75,
       recencyHalfLifeDays: 14,
       maxAgeDays: 30,
     });

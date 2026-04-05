@@ -1,7 +1,7 @@
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ConfigSnapshot } from "../types.ts";
 
-export type DreamingPhaseId = "light" | "deep" | "rem";
+export type DreamingMode = "off" | "core" | "rem" | "deep";
 
 type DreamingPhaseStatusBase = {
   enabled: boolean;
@@ -31,6 +31,7 @@ type RemDreamingStatus = DreamingPhaseStatusBase & {
 };
 
 export type DreamingStatus = {
+  mode: DreamingMode;
   enabled: boolean;
   timezone?: string;
   verboseLogging: boolean;
@@ -105,6 +106,19 @@ function normalizeStorageMode(value: unknown): DreamingStatus["storageMode"] {
   return "inline";
 }
 
+function normalizeDreamingMode(value: unknown): DreamingMode | undefined {
+  const normalized = normalizeTrimmedString(value)?.toLowerCase();
+  if (
+    normalized === "off" ||
+    normalized === "core" ||
+    normalized === "rem" ||
+    normalized === "deep"
+  ) {
+    return normalized;
+  }
+  return undefined;
+}
+
 function normalizeNextRun(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
@@ -132,9 +146,13 @@ function normalizeDreamingStatus(raw: unknown): DreamingStatus | null {
   const timezone = normalizeTrimmedString(record.timezone);
   const storePath = normalizeTrimmedString(record.storePath);
   const storeError = normalizeTrimmedString(record.storeError);
+  const explicitMode = normalizeDreamingMode(record.mode);
+  const enabled = normalizeBoolean(record.enabled, false);
+  const mode = explicitMode ?? (enabled ? "core" : "off");
 
   return {
-    enabled: normalizeBoolean(record.enabled, false),
+    mode,
+    enabled,
     ...(timezone ? { timezone } : {}),
     verboseLogging: normalizeBoolean(record.verboseLogging, false),
     storageMode: normalizeStorageMode(record.storageMode),
@@ -230,32 +248,12 @@ export async function updateDreamingEnabled(
   state: DreamingState,
   enabled: boolean,
 ): Promise<boolean> {
-  const ok = await writeDreamingPatch(state, {
-    plugins: {
-      entries: {
-        "memory-core": {
-          config: {
-            dreaming: {
-              enabled,
-            },
-          },
-        },
-      },
-    },
-  });
-  if (ok && state.dreamingStatus) {
-    state.dreamingStatus = {
-      ...state.dreamingStatus,
-      enabled,
-    };
-  }
-  return ok;
+  return updateDreamingMode(state, enabled ? "core" : "off");
 }
 
-export async function updateDreamingPhaseEnabled(
+export async function updateDreamingMode(
   state: DreamingState,
-  phase: DreamingPhaseId,
-  enabled: boolean,
+  mode: DreamingMode,
 ): Promise<boolean> {
   const ok = await writeDreamingPatch(state, {
     plugins: {
@@ -263,11 +261,7 @@ export async function updateDreamingPhaseEnabled(
         "memory-core": {
           config: {
             dreaming: {
-              phases: {
-                [phase]: {
-                  enabled,
-                },
-              },
+              mode,
             },
           },
         },
@@ -277,13 +271,8 @@ export async function updateDreamingPhaseEnabled(
   if (ok && state.dreamingStatus) {
     state.dreamingStatus = {
       ...state.dreamingStatus,
-      phases: {
-        ...state.dreamingStatus.phases,
-        [phase]: {
-          ...state.dreamingStatus.phases[phase],
-          enabled,
-        },
-      },
+      mode,
+      enabled: mode !== "off",
     };
   }
   return ok;

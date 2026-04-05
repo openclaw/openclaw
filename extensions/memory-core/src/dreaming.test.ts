@@ -120,7 +120,7 @@ describe("short-term dreaming config", () => {
       cfg,
     });
     expect(resolved).toEqual({
-      enabled: true,
+      enabled: false,
       cron: constants.DEFAULT_DREAMING_CRON_EXPR,
       timezone: "America/Los_Angeles",
       limit: constants.DEFAULT_DREAMING_LIMIT,
@@ -141,6 +141,7 @@ describe("short-term dreaming config", () => {
     const resolved = resolveShortTermPromotionDreamingConfig({
       pluginConfig: {
         dreaming: {
+          mode: "core",
           timezone: "UTC",
           verboseLogging: true,
           phases: {
@@ -179,6 +180,7 @@ describe("short-term dreaming config", () => {
     const resolved = resolveShortTermPromotionDreamingConfig({
       pluginConfig: {
         dreaming: {
+          mode: "core",
           phases: {
             deep: {
               cron: "5 1 * * *",
@@ -214,6 +216,7 @@ describe("short-term dreaming config", () => {
     const resolved = resolveShortTermPromotionDreamingConfig({
       pluginConfig: {
         dreaming: {
+          mode: "core",
           phases: {
             deep: {
               limit: " ",
@@ -248,6 +251,7 @@ describe("short-term dreaming config", () => {
     const resolved = resolveShortTermPromotionDreamingConfig({
       pluginConfig: {
         dreaming: {
+          mode: "core",
           phases: {
             deep: {
               limit: 0,
@@ -263,6 +267,7 @@ describe("short-term dreaming config", () => {
     const enabled = resolveShortTermPromotionDreamingConfig({
       pluginConfig: {
         dreaming: {
+          mode: "core",
           verboseLogging: true,
         },
       },
@@ -270,6 +275,7 @@ describe("short-term dreaming config", () => {
     const disabled = resolveShortTermPromotionDreamingConfig({
       pluginConfig: {
         dreaming: {
+          mode: "core",
           verboseLogging: "false",
         },
       },
@@ -283,6 +289,7 @@ describe("short-term dreaming config", () => {
     const resolved = resolveShortTermPromotionDreamingConfig({
       pluginConfig: {
         dreaming: {
+          mode: "core",
           phases: {
             deep: {
               minScore: -0.2,
@@ -305,15 +312,11 @@ describe("short-term dreaming config", () => {
     expect(resolved.maxAgeDays).toBe(30);
   });
 
-  it("keeps deep sleep disabled when the phase is off", () => {
+  it("keeps deep sleep disabled when mode is off", () => {
     const resolved = resolveShortTermPromotionDreamingConfig({
       pluginConfig: {
         dreaming: {
-          phases: {
-            deep: {
-              enabled: false,
-            },
-          },
+          mode: "off",
         },
       },
     });
