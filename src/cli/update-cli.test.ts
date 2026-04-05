@@ -132,6 +132,7 @@ vi.mock("../utils.js", () => ({
   isRecord: (value: unknown) =>
     typeof value === "object" && value !== null && !Array.isArray(value),
   pathExists: (...args: unknown[]) => pathExists(...args),
+  resolveConfigDir: () => "/tmp/openclaw-config",
 }));
 
 vi.mock("../plugins/update.js", () => ({
@@ -1004,6 +1005,34 @@ describe("update-cli", () => {
       | { nextConfig?: { update?: { channel?: string } } }
       | undefined;
     expect(lastWrite?.nextConfig?.update?.channel).toBe("beta");
+  });
+
+  it("skips plugin sync in the old process after switching from package to git", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    mockPackageInstallStatus(tempDir);
+    vi.mocked(runGatewayUpdate).mockResolvedValue(
+      makeOkUpdateResult({
+        mode: "git",
+        root: path.join(tempDir, "..", "openclaw"),
+        after: { version: "2026.4.5" },
+      }),
+    );
+    syncPluginsForUpdateChannel.mockRejectedValue(
+      new Error("Config validation failed: old host version"),
+    );
+
+    await updateCommand({ channel: "dev", yes: true });
+
+    expect(syncPluginsForUpdateChannel).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+    expect(
+      vi
+        .mocked(defaultRuntime.log)
+        .mock.calls.map((call) => String(call[0]))
+        .join("\n"),
+    ).toContain(
+      "Skipped plugin update sync in the pre-update CLI process after switching to a git install.",
+    );
   });
 
   it.each([

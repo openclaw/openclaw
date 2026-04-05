@@ -1061,12 +1061,26 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     }
   }
 
-  await updatePluginsAfterCoreUpdate({
-    root,
-    channel,
-    configSnapshot: postUpdateConfigSnapshot,
-    opts,
-  });
+  // A package -> git switch still runs inside the pre-update CLI process.
+  // Plugin sync/validation can then compare new bundled plugin minima against
+  // the old host version and fail even though the install itself succeeded.
+  const deferPluginSync = switchToGit && result.mode === "git";
+  if (deferPluginSync) {
+    if (!opts.json) {
+      defaultRuntime.log(
+        theme.muted(
+          "Skipped plugin update sync in the pre-update CLI process after switching to a git install.",
+        ),
+      );
+    }
+  } else {
+    await updatePluginsAfterCoreUpdate({
+      root,
+      channel,
+      configSnapshot: postUpdateConfigSnapshot,
+      opts,
+    });
+  }
 
   await tryWriteCompletionCache(root, Boolean(opts.json));
   await tryInstallShellCompletion({
