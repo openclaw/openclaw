@@ -9,6 +9,7 @@ import {
   resolveTextChunksWithFallback,
   sendMediaWithLeadingCaption,
 } from "openclaw/plugin-sdk/reply-payload";
+import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import {
   resolveRetryConfig,
   retryAsync,
@@ -38,6 +39,8 @@ export type DiscordThreadBindingLookup = {
 };
 
 type ResolvedRetryConfig = Required<RetryConfig>;
+
+const DISCORD_VIDEO_MEDIA_EXTENSIONS = new Set([".avi", ".m4v", ".mkv", ".mov", ".mp4", ".webm"]);
 
 const DISCORD_DELIVERY_RETRY_DEFAULTS: ResolvedRetryConfig = {
   attempts: 3,
@@ -72,6 +75,31 @@ function getDiscordRetryAfterMs(err: unknown): number | undefined {
 
 function resolveDeliveryRetryConfig(retry?: RetryConfig): ResolvedRetryConfig {
   return resolveRetryConfig(DISCORD_DELIVERY_RETRY_DEFAULTS, retry);
+}
+
+function normalizeMediaPathForExtension(mediaUrl: string): string {
+  const trimmed = mediaUrl.trim();
+  if (!trimmed) {
+    return "";
+  }
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.pathname.toLowerCase();
+  } catch {
+    const withoutHash = trimmed.split("#", 1)[0] ?? trimmed;
+    const withoutQuery = withoutHash.split("?", 1)[0] ?? withoutHash;
+    return withoutQuery.toLowerCase();
+  }
+}
+
+function isLikelyDiscordVideoMedia(mediaUrl: string): boolean {
+  const normalized = normalizeMediaPathForExtension(mediaUrl);
+  for (const ext of DISCORD_VIDEO_MEDIA_EXTENSIONS) {
+    if (normalized.endsWith(ext)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 async function sendWithRetry(
@@ -263,8 +291,7 @@ export async function deliverDiscordReply(params: {
   const chunkLimit = Math.min(params.textLimit, 2000);
   const replyTo = params.replyToId?.trim() || undefined;
   const replyToMode = params.replyToMode ?? "all";
-  // replyToMode=first should only apply to the first physical send.
-  const replyOnce = replyToMode === "first";
+  const replyOnce = isSingleUseReplyToMode(replyToMode);
   let replyUsed = false;
   const resolveReplyTo = () => {
     if (!replyTo) {
@@ -399,6 +426,51 @@ export async function deliverDiscordReply(params: {
           );
         },
       });
+      continue;
+    }
+
+    const shouldSplitVideoMediaReply =
+      reply.text.trim().length > 0 &&
+      reply.mediaUrls.some((mediaUrl) => isLikelyDiscordVideoMedia(mediaUrl));
+    if (shouldSplitVideoMediaReply) {
+      await sendDiscordChunkWithFallback({
+        cfg: params.cfg,
+        target: params.target,
+        text: reply.text,
+        token: params.token,
+        rest: params.rest,
+        accountId: params.accountId,
+        maxLinesPerMessage: params.maxLinesPerMessage,
+        replyTo: resolvePayloadReplyTo(),
+        binding,
+        chunkMode: params.chunkMode,
+        username: persona.username,
+        avatarUrl: persona.avatarUrl,
+        channelId,
+        request,
+        retryConfig,
+      });
+      await sendMediaWithLeadingCaption({
+        mediaUrls: reply.mediaUrls,
+        caption: "",
+        send: async ({ mediaUrl }) => {
+          const replyTo = resolvePayloadReplyTo();
+          await sendWithRetry(
+            () =>
+              sendMessageDiscord(params.target, "", {
+                cfg: params.cfg,
+                token: params.token,
+                rest: params.rest,
+                mediaUrl,
+                accountId: params.accountId,
+                mediaLocalRoots: params.mediaLocalRoots,
+                replyTo,
+              }),
+            retryConfig,
+          );
+        },
+      });
+      deliveredAny = true;
       continue;
     }
 

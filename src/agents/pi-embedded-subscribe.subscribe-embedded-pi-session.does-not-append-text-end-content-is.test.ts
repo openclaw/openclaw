@@ -45,6 +45,7 @@ describe("subscribeEmbeddedPiSession", () => {
 
     emitDelta(delta);
     emitTextEnd(content);
+    await Promise.resolve();
 
     await vi.waitFor(() => {
       expect(onBlockReply).toHaveBeenCalledTimes(1);

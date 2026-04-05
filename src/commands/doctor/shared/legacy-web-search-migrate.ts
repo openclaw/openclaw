@@ -1,6 +1,9 @@
 import type { OpenClawConfig } from "../../../config/config.js";
 import { mergeMissing } from "../../../config/legacy.shared.js";
-import { BUNDLED_WEB_SEARCH_PROVIDER_PLUGIN_IDS } from "../../../plugins/bundled-capability-metadata.js";
+import {
+  loadPluginManifestRegistry,
+  resolveManifestContractOwnerPluginId,
+} from "../../../plugins/manifest-registry.js";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -9,12 +12,11 @@ const MODERN_SCOPED_WEB_SEARCH_KEYS = new Set(["openaiCodex"]);
 // Tavily only ever used the plugin-owned config path, so there is no legacy
 // `tools.web.search.tavily.*` shape to migrate.
 const NON_MIGRATED_LEGACY_WEB_SEARCH_PROVIDER_IDS = new Set(["tavily"]);
-const LEGACY_WEB_SEARCH_PROVIDER_PLUGIN_IDS = Object.fromEntries(
-  Object.entries(BUNDLED_WEB_SEARCH_PROVIDER_PLUGIN_IDS).filter(
-    ([providerId]) => !NON_MIGRATED_LEGACY_WEB_SEARCH_PROVIDER_IDS.has(providerId),
-  ),
-);
-const LEGACY_WEB_SEARCH_PROVIDER_IDS = Object.keys(LEGACY_WEB_SEARCH_PROVIDER_PLUGIN_IDS);
+const LEGACY_WEB_SEARCH_PROVIDER_IDS = loadPluginManifestRegistry({ cache: true })
+  .plugins.filter((plugin) => plugin.origin === "bundled")
+  .flatMap((plugin) => plugin.contracts?.webSearchProviders ?? [])
+  .filter((providerId) => !NON_MIGRATED_LEGACY_WEB_SEARCH_PROVIDER_IDS.has(providerId))
+  .toSorted((left, right) => left.localeCompare(right));
 const LEGACY_WEB_SEARCH_PROVIDER_ID_SET = new Set(LEGACY_WEB_SEARCH_PROVIDER_IDS);
 const LEGACY_GLOBAL_WEB_SEARCH_PROVIDER_ID = "brave";
 
@@ -84,8 +86,11 @@ function resolveLegacyGlobalWebSearchMigration(search: JsonRecord): {
     return null;
   }
   const pluginId =
-    LEGACY_WEB_SEARCH_PROVIDER_PLUGIN_IDS[LEGACY_GLOBAL_WEB_SEARCH_PROVIDER_ID] ??
-    LEGACY_GLOBAL_WEB_SEARCH_PROVIDER_ID;
+    resolveManifestContractOwnerPluginId({
+      contract: "webSearchProviders",
+      value: LEGACY_GLOBAL_WEB_SEARCH_PROVIDER_ID,
+      origin: "bundled",
+    }) ?? LEGACY_GLOBAL_WEB_SEARCH_PROVIDER_ID;
   return {
     pluginId,
     payload,
@@ -233,7 +238,11 @@ function normalizeLegacyWebSearchConfigRecord<T extends JsonRecord>(
     if (!scoped || Object.keys(scoped).length === 0) {
       continue;
     }
-    const pluginId = LEGACY_WEB_SEARCH_PROVIDER_PLUGIN_IDS[providerId];
+    const pluginId = resolveManifestContractOwnerPluginId({
+      contract: "webSearchProviders",
+      value: providerId,
+      origin: "bundled",
+    });
     if (!pluginId) {
       continue;
     }

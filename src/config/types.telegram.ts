@@ -120,7 +120,7 @@ export type TelegramAccountConfig = {
   botToken?: string;
   /** Path to a regular file containing the bot token; symlinks are rejected. */
   tokenFile?: string;
-  /** Control reply threading when reply tags are present (off|first|all). */
+  /** Control reply threading when reply tags are present (off|first|all|batched). */
   replyToMode?: ReplyToMode;
   groups?: Record<string, TelegramGroupConfig>;
   /** Per-DM configuration for Telegram DM topics (key is chat ID). */

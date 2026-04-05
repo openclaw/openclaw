@@ -3,10 +3,10 @@ import type { OpenClawConfig } from "../../../config/config.js";
 import { listBundledChannelPlugins, setBundledChannelRuntime } from "../bundled.js";
 import type { ChannelPlugin } from "../types.js";
 import { channelPluginSurfaceKeys, type ChannelPluginSurface } from "./manifest.js";
-
-function buildBundledPluginModuleId(pluginId: string, artifactBasename: string): string {
-  return ["..", "..", "..", "..", "extensions", pluginId, artifactBasename].join("/");
-}
+import {
+  importBundledChannelContractArtifact,
+  resolveBundledChannelContractArtifactUrl,
+} from "./runtime-artifacts.js";
 
 type SurfaceContractEntry = {
   id: string;
@@ -45,7 +45,11 @@ const sendMessageMatrixMock = vi.hoisted(() =>
   })),
 );
 
-const lineContractApi = await import(buildBundledPluginModuleId("line", "contract-api.js"));
+const lineContractApi = await importBundledChannelContractArtifact<{
+  listLineAccountIds: () => string[];
+  resolveDefaultLineAccountId: (cfg: OpenClawConfig) => string | undefined;
+  resolveLineAccount: (params: { cfg: OpenClawConfig; accountId?: string }) => unknown;
+}>("line", "contract-api");
 
 setBundledChannelRuntime("line", {
   channel: {
@@ -58,8 +62,11 @@ setBundledChannelRuntime("line", {
   },
 } as never);
 
-vi.mock(buildBundledPluginModuleId("matrix", "runtime-api.js"), async () => {
-  const matrixRuntimeApiModuleId = buildBundledPluginModuleId("matrix", "runtime-api.js");
+vi.mock(resolveBundledChannelContractArtifactUrl("matrix", "runtime-api"), async () => {
+  const matrixRuntimeApiModuleId = resolveBundledChannelContractArtifactUrl(
+    "matrix",
+    "runtime-api",
+  );
   const actual = await vi.importActual(matrixRuntimeApiModuleId);
   return {
     ...actual,

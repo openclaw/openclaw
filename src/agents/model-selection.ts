@@ -6,7 +6,6 @@ import {
   toAgentModelListLike,
 } from "../config/model-input.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
 import { sanitizeForLog, stripAnsi } from "../terminal/ansi.js";
 import {
   resolveAgentConfig,
@@ -86,16 +85,6 @@ export {
   normalizeProviderId,
   normalizeProviderIdForAuth,
 };
-
-export function isCliProvider(provider: string, cfg?: OpenClawConfig): boolean {
-  const normalized = normalizeProviderId(provider);
-  const cliBackends = resolveRuntimeCliBackends();
-  if (cliBackends.some((backend) => normalizeProviderId(backend.id) === normalized)) {
-    return true;
-  }
-  const backends = cfg?.agents?.defaults?.cliBackends ?? {};
-  return Object.keys(backends).some((key) => normalizeProviderId(key) === normalized);
-}
 
 function normalizeProviderModelId(provider: string, model: string): string {
   const staticModelId = normalizeStaticProviderModelId(provider, model);

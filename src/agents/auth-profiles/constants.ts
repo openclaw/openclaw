@@ -6,7 +6,6 @@ export const LEGACY_AUTH_FILENAME = "auth.json";
 
 export const CODEX_CLI_PROFILE_ID = "openai-codex:codex-cli";
 export const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai-codex:default";
-export const MINIMAX_CLI_PROFILE_ID = "minimax-portal:minimax-cli";
 
 export const AUTH_STORE_LOCK_OPTIONS = {
   retries: {
@@ -18,8 +17,5 @@ export const AUTH_STORE_LOCK_OPTIONS = {
   },
   stale: 30_000,
 } as const;
-
-export const EXTERNAL_CLI_SYNC_TTL_MS = 15 * 60 * 1000;
-export const EXTERNAL_CLI_NEAR_EXPIRY_MS = 10 * 60 * 1000;
 
 export const log = createSubsystemLogger("agents/auth-profiles");

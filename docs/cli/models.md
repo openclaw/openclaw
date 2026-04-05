@@ -31,6 +31,8 @@ Current usage-window providers: Anthropic, GitHub Copilot, Gemini CLI, OpenAI
 Codex, MiniMax, Xiaomi, and z.ai. Usage auth comes from provider-specific hooks
 when available; otherwise OpenClaw falls back to matching OAuth/API-key
 credentials from auth profiles, env, or config.
+In `--json` output, `auth.providers` is the env/config/store-aware provider
+overview, while `auth.oauth` is auth-store profile health only.
 Add `--probe` to run live auth probes against each configured provider profile.
 Probes are real requests (may consume tokens and trigger rate limits).
 Use `--agent <id>` to inspect a configured agent’s model/auth state. When omitted,

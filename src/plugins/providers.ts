@@ -203,14 +203,8 @@ export function resolveOwningPluginIdsForProvider(params: {
 
   const registry = resolveManifestRegistry(params);
   const pluginIds = registry.plugins
-    .filter(
-      (plugin) =>
-        plugin.providers.some(
-          (providerId) => normalizeProviderId(providerId) === normalizedProvider,
-        ) ||
-        plugin.cliBackends.some(
-          (backendId) => normalizeProviderId(backendId) === normalizedProvider,
-        ),
+    .filter((plugin) =>
+      plugin.providers.some((providerId) => normalizeProviderId(providerId) === normalizedProvider),
     )
     .map((plugin) => plugin.id);
 

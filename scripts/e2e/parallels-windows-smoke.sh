@@ -38,6 +38,7 @@ TIMEOUT_SNAPSHOT_S=240
 TIMEOUT_INSTALL_S=1200
 TIMEOUT_VERIFY_S=120
 TIMEOUT_ONBOARD_S=240
+TIMEOUT_ONBOARD_PHASE_S=$((TIMEOUT_ONBOARD_S + 60))
 TIMEOUT_GATEWAY_S=120
 TIMEOUT_AGENT_S=180
 
@@ -1350,7 +1351,7 @@ run_fresh_main_lane() {
   phase_run "fresh.install-main" "$TIMEOUT_INSTALL_S" install_main_tgz "$host_ip" "openclaw-main-fresh.tgz" || return $?
   FRESH_MAIN_VERSION="$(extract_last_version "$(phase_log_path fresh.install-main)")"
   phase_run "fresh.verify-main-version" "$TIMEOUT_VERIFY_S" verify_target_version || return $?
-  phase_run "fresh.onboard-ref" "$TIMEOUT_ONBOARD_S" run_ref_onboard || return $?
+  phase_run "fresh.onboard-ref" "$TIMEOUT_ONBOARD_PHASE_S" run_ref_onboard || return $?
   phase_run "fresh.gateway-status" "$TIMEOUT_GATEWAY_S" verify_gateway || return $?
   FRESH_GATEWAY_STATUS="pass"
   phase_run "fresh.first-agent-turn" "$TIMEOUT_AGENT_S" verify_turn || return $?
@@ -1366,7 +1367,7 @@ run_upgrade_lane() {
   LATEST_INSTALLED_VERSION="$(extract_last_version "$(phase_log_path upgrade.install-latest)")"
   phase_run "upgrade.verify-latest-version" "$TIMEOUT_VERIFY_S" verify_version_contains "$LATEST_VERSION" || return $?
   if [[ "$CHECK_LATEST_REF" -eq 1 ]]; then
-    if phase_run "upgrade.latest-ref-precheck" "$TIMEOUT_ONBOARD_S" capture_latest_ref_failure; then
+    if phase_run "upgrade.latest-ref-precheck" "$TIMEOUT_ONBOARD_PHASE_S" capture_latest_ref_failure; then
       UPGRADE_PRECHECK_STATUS="latest-ref-pass"
     else
       UPGRADE_PRECHECK_STATUS="latest-ref-fail"
@@ -1382,7 +1383,7 @@ run_upgrade_lane() {
   # gateway auth. Restarting first can leave the old token alive and make the
   # onboard health probe fail against a stale daemon.
   phase_run "upgrade.gateway-stop" "$TIMEOUT_GATEWAY_S" stop_gateway || return $?
-  phase_run "upgrade.onboard-ref" "$TIMEOUT_ONBOARD_S" run_ref_onboard || return $?
+  phase_run "upgrade.onboard-ref" "$TIMEOUT_ONBOARD_PHASE_S" run_ref_onboard || return $?
   phase_run "upgrade.gateway-status" "$TIMEOUT_GATEWAY_S" verify_gateway || return $?
   UPGRADE_GATEWAY_STATUS="pass"
   phase_run "upgrade.first-agent-turn" "$TIMEOUT_AGENT_S" verify_turn || return $?

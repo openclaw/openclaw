@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { TALK_TEST_PROVIDER_ID } from "../test-utils/talk-test-provider.js";
 import { createConfigIO } from "./io.js";
 import { buildTalkConfigResponse, normalizeTalkSection } from "./talk.js";
 
@@ -94,18 +95,18 @@ describe("talk normalization", () => {
 
   it("preserves SecretRef apiKey values during normalization", () => {
     const normalized = normalizeTalkSection({
-      provider: "elevenlabs",
+      provider: TALK_TEST_PROVIDER_ID,
       providers: {
-        elevenlabs: {
+        [TALK_TEST_PROVIDER_ID]: {
           apiKey: { source: "env", provider: "default", id: "ELEVENLABS_API_KEY" },
         },
       },
     });
 
     expect(normalized).toEqual({
-      provider: "elevenlabs",
+      provider: TALK_TEST_PROVIDER_ID,
       providers: {
-        elevenlabs: {
+        [TALK_TEST_PROVIDER_ID]: {
           apiKey: { source: "env", provider: "default", id: "ELEVENLABS_API_KEY" },
         },
       },

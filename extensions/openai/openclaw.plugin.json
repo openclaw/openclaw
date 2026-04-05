@@ -5,7 +5,6 @@
   "modelSupport": {
     "modelPrefixes": ["gpt-", "o1", "o3", "o4"]
   },
-  "cliBackends": ["codex-cli"],
   "providerAuthEnvVars": {
     "openai": ["OPENAI_API_KEY"]
   },
@@ -40,7 +39,8 @@
     "realtimeTranscriptionProviders": ["openai"],
     "realtimeVoiceProviders": ["openai"],
     "mediaUnderstandingProviders": ["openai", "openai-codex"],
-    "imageGenerationProviders": ["openai"]
+    "imageGenerationProviders": ["openai"],
+    "videoGenerationProviders": ["openai"]
   },
   "configSchema": {
     "type": "object",

@@ -46,6 +46,9 @@ vi.mock("./tools/gateway-tool.js", () => ({
 vi.mock("./tools/image-generate-tool.js", () => ({
   createImageGenerateTool: mockToolFactory("image_generate_stub"),
 }));
+vi.mock("./tools/video-generate-tool.js", () => ({
+  createVideoGenerateTool: mockToolFactory("video_generate_stub"),
+}));
 vi.mock("./tools/image-tool.js", () => ({
   createImageTool: mockToolFactory("image_stub"),
 }));

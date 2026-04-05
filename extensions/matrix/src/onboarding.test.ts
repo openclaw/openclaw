@@ -102,6 +102,7 @@ describe("matrix onboarding", () => {
             homeserver: "https://matrix.main.example.org",
             userId: "@main:example.org",
             accessToken: "main-token",
+            avatarUrl: "mxc://matrix.main.example.org/main-avatar",
           },
         },
       } as CoreConfig,
@@ -117,10 +118,12 @@ describe("matrix onboarding", () => {
 
     expect(result.cfg.channels?.matrix?.homeserver).toBeUndefined();
     expect(result.cfg.channels?.matrix?.accessToken).toBeUndefined();
+    expect(result.cfg.channels?.matrix?.avatarUrl).toBeUndefined();
     expect(result.cfg.channels?.matrix?.accounts?.default).toMatchObject({
       homeserver: "https://matrix.main.example.org",
       userId: "@main:example.org",
       accessToken: "main-token",
+      avatarUrl: "mxc://matrix.main.example.org/main-avatar",
     });
     expect(result.cfg.channels?.matrix?.accounts?.ops).toMatchObject({
       name: "ops",
