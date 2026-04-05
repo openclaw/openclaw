@@ -45,6 +45,8 @@ Use this skill for Parallels guest workflows and smoke interpretation. Do not lo
 ## macOS flow
 
 - Preferred entrypoint: `pnpm test:parallels:macos`
+- Default upgrade coverage on macOS should now include: fresh snapshot -> site installer pinned to the latest stable tag -> `openclaw update --channel dev` on the guest. Treat this as part of the default Tahoe regression plan, not an optional side quest.
+- If that release-to-dev lane fails with `reason=preflight-no-good-commit` and repeated `sh: pnpm: command not found` tails from `preflight build`, treat it as an updater regression first. The fix belongs in the git/dev updater bootstrap path, not in Parallels retry logic.
 - Default to the snapshot closest to `macOS 26.3.1 latest`.
 - On Peter's Tahoe VM, `fresh-latest-march-2026` can hang in `prlctl snapshot-switch`; if restore times out there, rerun with `--snapshot-hint 'macOS 26.3.1 latest'` before blaming auth or the harness.
 - `parallels-macos-smoke.sh` now retries `snapshot-switch` once after force-stopping a stuck running/suspended guest. If Tahoe still times out after that recovery path, then treat it as a real Parallels/host issue and rerun manually.
