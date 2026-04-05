@@ -16,6 +16,8 @@ const DAILY_PHASE_LABELS: Record<Exclude<MemoryDreamingPhaseName, "deep">, strin
   rem: "rem",
 };
 
+const DREAMS_FILENAME = "dreams.md";
+
 function resolvePhaseMarkers(phase: Exclude<MemoryDreamingPhaseName, "deep">): {
   start: string;
   end: string;
@@ -57,9 +59,8 @@ function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function resolveDailyMemoryPath(workspaceDir: string, epochMs: number, timezone?: string): string {
-  const isoDay = formatMemoryDreamingDay(epochMs, timezone);
-  return path.join(workspaceDir, "memory", `${isoDay}.md`);
+function resolveDreamsPath(workspaceDir: string): string {
+  return path.join(workspaceDir, DREAMS_FILENAME);
 }
 
 function resolveSeparateReportPath(
@@ -94,7 +95,7 @@ export async function writeDailyDreamingPhaseBlock(params: {
   let reportPath: string | undefined;
 
   if (shouldWriteInline(params.storage)) {
-    inlinePath = resolveDailyMemoryPath(params.workspaceDir, nowMs, params.timezone);
+    inlinePath = resolveDreamsPath(params.workspaceDir);
     await fs.mkdir(path.dirname(inlinePath), { recursive: true });
     const original = await fs.readFile(inlinePath, "utf-8").catch((err: unknown) => {
       if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {

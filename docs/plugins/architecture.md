@@ -1454,7 +1454,10 @@ Useful `openclaw.channel` fields beyond the minimal example:
 - `preferOver`: lower-priority plugin/channel ids this catalog entry should outrank
 - `selectionDocsPrefix`, `selectionDocsOmitLabel`, `selectionExtras`: selection-surface copy controls
 - `markdownCapable`: marks the channel as markdown-capable for outbound formatting decisions
-- `showConfigured`: hide the channel from configured-channel listing surfaces when set to `false`
+- `exposure.configured`: hide the channel from configured-channel listing surfaces when set to `false`
+- `exposure.setup`: hide the channel from interactive setup/configure pickers when set to `false`
+- `exposure.docs`: mark the channel as internal/private for docs navigation surfaces
+- `showConfigured` / `showInSetup`: legacy aliases still accepted for compatibility; prefer `exposure`
 - `quickstartAllowFrom`: opt the channel into the standard quickstart `allowFrom` flow
 - `forceAccountBinding`: require explicit account binding even when only one account exists
 - `preferSessionLookupForAnnounceTarget`: prefer session lookup when resolving announce targets

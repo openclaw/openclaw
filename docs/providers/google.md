@@ -100,6 +100,50 @@ The bundled `google` image-generation provider defaults to
 Image generation, media understanding, and Gemini Grounding all stay on the
 `google` provider id.
 
+To use Google as the default image provider:
+
+```json5
+{
+  agents: {
+    defaults: {
+      imageGenerationModel: {
+        primary: "google/gemini-3.1-flash-image-preview",
+      },
+    },
+  },
+}
+```
+
+See [Image Generation](/tools/image-generation) for the shared tool
+parameters, provider selection, and failover behavior.
+
+## Video generation
+
+The bundled `google` plugin also registers video generation through the shared
+`video_generate` tool.
+
+- Default video model: `google/veo-3.1-fast-generate-preview`
+- Modes: text-to-video, image-to-video, and single-video reference flows
+- Supports `aspectRatio`, `resolution`, and `audio`
+- Current duration clamp: **4 to 8 seconds**
+
+To use Google as the default video provider:
+
+```json5
+{
+  agents: {
+    defaults: {
+      videoGenerationModel: {
+        primary: "google/veo-3.1-fast-generate-preview",
+      },
+    },
+  },
+}
+```
+
+See [Video Generation](/tools/video-generation) for the shared tool
+parameters, provider selection, and failover behavior.
+
 ## Environment note
 
 If the Gateway runs as a daemon (launchd/systemd), make sure `GEMINI_API_KEY`

@@ -540,9 +540,6 @@ implemented in `src/gateway/server-methods/*.ts`.
 - Pairing auto-approval is centered on direct local loopback connects.
 - OpenClaw also has a narrow backend/container-local self-connect path for
   trusted shared-secret helper flows.
-- Local auto-approval for operator devices seeds a bounded per-device token
-  baseline instead of persisting arbitrary requested operator scopes. A shared-
-  secret session may still be broader than the silently issued device token.
 - Same-host tailnet or LAN connects are still treated as remote for pairing and
   require approval.
 - All WS clients must include `device` identity during `connect` (operator + node).

@@ -90,14 +90,6 @@ export type ApproveDevicePairingResult =
   | { status: "forbidden"; missingScope: string }
   | null;
 
-export const LOCAL_SILENT_OPERATOR_SCOPES = [
-  "operator.approvals",
-  "operator.pairing",
-  "operator.read",
-  "operator.talk.secrets",
-  "operator.write",
-] as const;
-
 type DevicePairingStateFile = {
   pendingById: Record<string, DevicePairingPendingRequest>;
   pairedByDeviceId: Record<string, PairedDevice>;
@@ -601,88 +593,6 @@ export async function approveDevicePairing(
     state.pairedByDeviceId[device.deviceId] = device;
     await persistState(state, baseDir);
     return { status: "approved", requestId, device };
-  });
-}
-
-async function approveProfileDevicePairing(params: {
-  requestId: string;
-  approvedRoles: readonly string[];
-  approvedScopes: readonly string[];
-  baseDir?: string;
-}): Promise<ApproveDevicePairingResult> {
-  const approvedRoles = mergeRoles(Array.from(params.approvedRoles)) ?? [];
-  const approvedScopes = normalizeDeviceAuthScopes(Array.from(params.approvedScopes));
-  return await withLock(async () => {
-    const state = await loadState(params.baseDir);
-    const pending = state.pendingById[params.requestId];
-    if (!pending) {
-      return null;
-    }
-    const requestedRoles = resolveRequestedRoles(pending);
-    const missingRole = requestedRoles.find((role) => !approvedRoles.includes(role));
-    if (missingRole) {
-      return { status: "forbidden", missingScope: missingRole };
-    }
-    // Silent local pairing is compatibility UX, not scope approval. Persist the
-    // server-owned profile and ignore any broader operator scopes in the request.
-    const now = Date.now();
-    const existing = state.pairedByDeviceId[pending.deviceId];
-    const roles = mergeRoles(
-      existing?.roles,
-      existing?.role,
-      pending.roles,
-      pending.role,
-      approvedRoles,
-    );
-    const nextApprovedScopes = mergeScopes(
-      existing?.approvedScopes ?? existing?.scopes,
-      approvedScopes,
-    );
-    const tokens = existing?.tokens ? { ...existing.tokens } : {};
-    for (const roleForToken of approvedRoles) {
-      const existingToken = tokens[roleForToken];
-      tokens[roleForToken] = buildDeviceAuthToken({
-        role: roleForToken,
-        scopes: resolveRoleScopedDeviceTokenScopes(roleForToken, nextApprovedScopes),
-        existing: existingToken,
-        now,
-        ...(existingToken ? { rotatedAtMs: now } : {}),
-      });
-    }
-
-    const device: PairedDevice = {
-      deviceId: pending.deviceId,
-      publicKey: pending.publicKey,
-      displayName: pending.displayName,
-      platform: pending.platform,
-      deviceFamily: pending.deviceFamily,
-      clientId: pending.clientId,
-      clientMode: pending.clientMode,
-      role: pending.role,
-      roles,
-      scopes: nextApprovedScopes,
-      approvedScopes: nextApprovedScopes,
-      remoteIp: pending.remoteIp,
-      tokens,
-      createdAtMs: existing?.createdAtMs ?? now,
-      approvedAtMs: now,
-    };
-    delete state.pendingById[params.requestId];
-    state.pairedByDeviceId[device.deviceId] = device;
-    await persistState(state, params.baseDir);
-    return { status: "approved", requestId: params.requestId, device };
-  });
-}
-
-export async function approveSilentLocalOperatorDevicePairing(
-  requestId: string,
-  baseDir?: string,
-): Promise<ApproveDevicePairingResult> {
-  return await approveProfileDevicePairing({
-    requestId,
-    approvedRoles: [OPERATOR_ROLE],
-    approvedScopes: LOCAL_SILENT_OPERATOR_SCOPES,
-    baseDir,
   });
 }
 

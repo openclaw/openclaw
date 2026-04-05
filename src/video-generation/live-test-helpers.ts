@@ -2,6 +2,7 @@ import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
 
 export const DEFAULT_LIVE_VIDEO_MODELS: Record<string, string> = {
+  alibaba: "alibaba/wan2.6-t2v",
   byteplus: "byteplus/seedance-1-0-lite-t2v-250428",
   fal: "fal/fal-ai/minimax/video-01-live",
   google: "google/veo-3.1-fast-generate-preview",
@@ -9,6 +10,7 @@ export const DEFAULT_LIVE_VIDEO_MODELS: Record<string, string> = {
   openai: "openai/sora-2",
   qwen: "qwen/wan2.6-t2v",
   together: "together/Wan-AI/Wan2.2-T2V-A14B",
+  xai: "xai/grok-imagine-video",
 };
 
 export function redactLiveApiKey(value: string | undefined): string {

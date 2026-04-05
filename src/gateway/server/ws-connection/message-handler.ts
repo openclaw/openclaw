@@ -15,12 +15,10 @@ import {
 } from "../../../infra/device-identity.js";
 import {
   approveBootstrapDevicePairing,
-  approveSilentLocalOperatorDevicePairing,
-  type ApproveDevicePairingResult,
+  approveDevicePairing,
   ensureDeviceToken,
   getPairedDevice,
   hasEffectivePairedDeviceRole,
-  LOCAL_SILENT_OPERATOR_SCOPES,
   listDevicePairing,
   listEffectivePairedDeviceRoles,
   requestDevicePairing,
@@ -758,7 +756,6 @@ export function attachGatewayWsMessageHandler(params: {
           trustedProxyAuthOk,
           resolvedAuth.mode,
         );
-        let issuedDeviceTokenScopes = scopes;
         if (device && devicePublicKey) {
           const formatAuditList = (items: string[] | undefined): string => {
             if (!items || items.length === 0) {
@@ -833,14 +830,6 @@ export function attachGatewayWsMessageHandler(params: {
                 allowedScopes: pairedScopes,
               });
             };
-            const pairingStateAllowsSilentLocalSession = (
-              pairedCandidate: Awaited<ReturnType<typeof getPairedDevice>>,
-            ): boolean => {
-              if (!pairedCandidate || pairedCandidate.publicKey !== devicePublicKey) {
-                return false;
-              }
-              return hasEffectivePairedDeviceRole(pairedCandidate, role);
-            };
             if (
               boundBootstrapProfile === null &&
               authMethod === "bootstrap-token" &&
@@ -890,7 +879,7 @@ export function attachGatewayWsMessageHandler(params: {
                   : allowSilentLocalPairing || allowSilentBootstrapPairing,
             });
             const context = buildRequestContext();
-            let approved: ApproveDevicePairingResult | undefined;
+            let approved: Awaited<ReturnType<typeof approveDevicePairing>> | undefined;
             let resolvedByConcurrentApproval = false;
             let recoveryRequestId: string | undefined = pairing.request.requestId;
             const resolveLivePendingRequestId = async (): Promise<string | undefined> => {
@@ -913,11 +902,10 @@ export function attachGatewayWsMessageHandler(params: {
                     pairing.request.requestId,
                     bootstrapProfileForSilentApproval,
                   )
-                : await approveSilentLocalOperatorDevicePairing(pairing.request.requestId);
+                : await approveDevicePairing(pairing.request.requestId, {
+                    callerScopes: scopes,
+                  });
               if (approved?.status === "approved") {
-                if (!bootstrapProfileForSilentApproval && role === "operator") {
-                  issuedDeviceTokenScopes = [...LOCAL_SILENT_OPERATOR_SCOPES];
-                }
                 if (bootstrapProfileForSilentApproval) {
                   handoffBootstrapProfile = bootstrapProfileForSilentApproval;
                 }
@@ -935,13 +923,9 @@ export function attachGatewayWsMessageHandler(params: {
                   { dropIfSlow: true },
                 );
               } else {
-                const pairedCandidate = await getPairedDevice(device.id);
-                resolvedByConcurrentApproval =
-                  !bootstrapProfileForSilentApproval &&
-                  reason === "not-paired" &&
-                  role === "operator"
-                    ? pairingStateAllowsSilentLocalSession(pairedCandidate)
-                    : pairingStateAllowsRequestedAccess(pairedCandidate);
+                resolvedByConcurrentApproval = pairingStateAllowsRequestedAccess(
+                  await getPairedDevice(device.id),
+                );
                 let requestStillPending = false;
                 if (!resolvedByConcurrentApproval) {
                   recoveryRequestId = await resolveLivePendingRequestId();
@@ -1078,7 +1062,7 @@ export function attachGatewayWsMessageHandler(params: {
         }
 
         const deviceToken = device
-          ? await ensureDeviceToken({ deviceId: device.id, role, scopes: issuedDeviceTokenScopes })
+          ? await ensureDeviceToken({ deviceId: device.id, role, scopes })
           : null;
         const bootstrapDeviceTokens: Array<{
           deviceToken: string;

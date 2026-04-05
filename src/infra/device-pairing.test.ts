@@ -7,12 +7,10 @@ import { issueDeviceBootstrapToken, verifyDeviceBootstrapToken } from "./device-
 import {
   approveBootstrapDevicePairing,
   approveDevicePairing,
-  approveSilentLocalOperatorDevicePairing,
   clearDevicePairing,
   ensureDeviceToken,
   getPairedDevice,
   hasEffectivePairedDeviceRole,
-  LOCAL_SILENT_OPERATOR_SCOPES,
   listEffectivePairedDeviceRoles,
   listDevicePairing,
   removePairedDevice,
@@ -431,28 +429,6 @@ describe("device pairing tokens", () => {
         requestId: request.request.requestId,
       }),
     );
-  });
-
-  test("silent local operator pairing seeds a bounded non-admin token baseline", async () => {
-    const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
-    const request = await requestDevicePairing(
-      {
-        deviceId: "device-local-1",
-        publicKey: "public-key-local-1",
-        role: "operator",
-        scopes: ["operator.admin"],
-        silent: true,
-      },
-      baseDir,
-    );
-
-    await expect(
-      approveSilentLocalOperatorDevicePairing(request.request.requestId, baseDir),
-    ).resolves.toEqual(expect.objectContaining({ status: "approved" }));
-
-    const paired = await getPairedDevice("device-local-1", baseDir);
-    expect(paired?.approvedScopes).toEqual([...LOCAL_SILENT_OPERATOR_SCOPES]);
-    expect(paired?.tokens?.operator?.scopes).toEqual([...LOCAL_SILENT_OPERATOR_SCOPES]);
   });
 
   test("generates base64url device tokens with 256-bit entropy output length", async () => {

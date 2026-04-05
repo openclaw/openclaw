@@ -577,6 +577,18 @@ importers:
 
   extensions/perplexity: {}
 
+  extensions/qa-channel:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
+  extensions/qa-lab:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/qianfan: {}
 
   extensions/qqbot:

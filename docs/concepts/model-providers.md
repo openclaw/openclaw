@@ -162,10 +162,14 @@ Current bundled examples:
   OpenAI/Codex catalog rows, thinking/live-model policy, usage-token alias
   normalization (`input` / `output` and `prompt` / `completion` families), the
   shared `openai-responses-defaults` stream family for native OpenAI/Codex
-  wrappers, and provider-family metadata
+  wrappers, provider-family metadata, bundled image-generation provider
+  registration for `gpt-image-1`, and bundled video-generation provider
+  registration for `sora-2`
 - `google`: Gemini 3.1 forward-compat fallback, native Gemini replay
-  validation, bootstrap replay sanitation, tagged reasoning-output mode, and
-  modern-model matching
+  validation, bootstrap replay sanitation, tagged reasoning-output mode,
+  modern-model matching, bundled image-generation provider registration for
+  Gemini image-preview models, and bundled video-generation provider
+  registration for Veo models
 - `moonshot`: shared transport, plugin-owned thinking payload normalization
 - `kilocode`: shared transport, plugin-owned request headers, reasoning payload
   normalization, proxy-Gemini thought-signature sanitation, and cache-TTL
@@ -174,20 +178,32 @@ Current bundled examples:
   policy, binary-thinking/live-model policy, and usage auth + quota fetching;
   unknown `glm-5*` ids synthesize from the bundled `glm-4.7` template
 - `xai`: native Responses transport normalization, `/fast` alias rewrites for
-  Grok fast variants, default `tool_stream`, and xAI-specific tool-schema /
-  reasoning-payload cleanup
+  Grok fast variants, default `tool_stream`, xAI-specific tool-schema /
+  reasoning-payload cleanup, and bundled video-generation provider
+  registration for `grok-imagine-video`
 - `mistral`: plugin-owned capability metadata
 - `opencode` and `opencode-go`: plugin-owned capability metadata plus
   proxy-Gemini thought-signature sanitation
-- `byteplus`, `cloudflare-ai-gateway`, `huggingface`, `kimi`,
-  `nvidia`, `qianfan`, `stepfun`, `synthetic`, `together`, `venice`,
-  `vercel-ai-gateway`, and `volcengine`: plugin-owned catalogs only
+- `alibaba`: plugin-owned video-generation catalog for direct Wan model refs
+  such as `alibaba/wan2.6-t2v`
+- `byteplus`: plugin-owned catalogs plus bundled video-generation provider
+  registration for Seedance text-to-video/image-to-video models
+- `fal`: bundled video-generation provider registration for hosted third-party
+  image-generation provider registration for FLUX image models plus bundled
+  video-generation provider registration for hosted third-party video models
+- `cloudflare-ai-gateway`, `huggingface`, `kimi`, `nvidia`, `qianfan`,
+  `stepfun`, `synthetic`, `venice`, `vercel-ai-gateway`, and `volcengine`:
+  plugin-owned catalogs only
 - `qwen`: plugin-owned catalogs for text models plus shared
   media-understanding and video-generation provider registrations for its
   multimodal surfaces; Qwen video generation uses the Standard DashScope video
   endpoints with bundled Wan models such as `wan2.6-t2v` and `wan2.7-r2v`
-- `minimax`: plugin-owned catalogs, hybrid Anthropic/OpenAI replay-policy
+- `minimax`: plugin-owned catalogs, bundled video-generation provider
+  registration for Hailuo video models, bundled image-generation provider
+  registration for `image-01`, hybrid Anthropic/OpenAI replay-policy
   selection, and usage auth/snapshot logic
+- `together`: plugin-owned catalogs plus bundled video-generation provider
+  registration for Wan video models
 - `xiaomi`: plugin-owned catalogs plus usage auth/snapshot logic
 
 The bundled `openai` plugin now owns both provider ids: `openai` and

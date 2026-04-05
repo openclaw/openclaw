@@ -428,7 +428,13 @@ export type PluginPackageChannel = {
   selectionDocsOmitLabel?: boolean;
   selectionExtras?: readonly string[];
   markdownCapable?: boolean;
+  exposure?: {
+    configured?: boolean;
+    setup?: boolean;
+    docs?: boolean;
+  };
   showConfigured?: boolean;
+  showInSetup?: boolean;
   quickstartAllowFrom?: boolean;
   forceAccountBinding?: boolean;
   preferSessionLookupForAnnounceTarget?: boolean;

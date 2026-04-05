@@ -63,6 +63,35 @@ The built-in bundled MiniMax text catalog itself stays text-only metadata until
 that explicit provider config exists. Image understanding is exposed separately
 through the plugin-owned `MiniMax-VL-01` media provider.
 
+See [Image Generation](/tools/image-generation) for the shared tool
+parameters, provider selection, and failover behavior.
+
+## Video generation
+
+The bundled `minimax` plugin also registers video generation through the shared
+`video_generate` tool.
+
+- Default video model: `minimax/MiniMax-Hailuo-2.3`
+- Modes: text-to-video and single-image reference flows
+- Supports `aspectRatio` and `resolution`
+
+To use MiniMax as the default video provider:
+
+```json5
+{
+  agents: {
+    defaults: {
+      videoGenerationModel: {
+        primary: "minimax/MiniMax-Hailuo-2.3",
+      },
+    },
+  },
+}
+```
+
+See [Video Generation](/tools/video-generation) for the shared tool
+parameters, provider selection, and failover behavior.
+
 ## Image understanding
 
 The MiniMax plugin registers image understanding separately from the text

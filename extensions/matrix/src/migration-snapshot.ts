@@ -100,10 +100,12 @@ export async function maybeCreateMatrixMigrationSnapshot(params: {
   trigger: string;
   env?: NodeJS.ProcessEnv;
   outputDir?: string;
+  createBackupArchive?: typeof import("openclaw/plugin-sdk/runtime").createBackupArchive;
   log?: { info?: (message: string) => void; warn?: (message: string) => void };
 }): Promise<MatrixMigrationSnapshotResult> {
-  const { createBackupArchive } = await import("openclaw/plugin-sdk/runtime");
   const env = params.env ?? process.env;
+  const createBackupArchive =
+    params.createBackupArchive ?? (await import("openclaw/plugin-sdk/runtime")).createBackupArchive;
   const markerPath = resolveMatrixMigrationSnapshotMarkerPath(env);
   const existingMarker = loadSnapshotMarker(markerPath);
   if (existingMarker?.archivePath && fs.existsSync(existingMarker.archivePath)) {

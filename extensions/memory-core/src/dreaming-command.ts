@@ -99,9 +99,9 @@ function formatEnabled(value: boolean): string {
 
 function formatPhaseGuide(): string {
   return [
-    "- light: sorts recent memory traces into the daily note.",
+    "- light: sorts recent memory traces into dreams.md.",
     "- deep: promotes durable memories into MEMORY.md and handles recovery when memory is thin.",
-    "- rem: writes reflection and pattern notes into the daily note.",
+    "- rem: writes reflection and pattern notes into dreams.md.",
   ].join("\n");
 }
 

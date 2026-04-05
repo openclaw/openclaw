@@ -24,7 +24,9 @@ The tool only appears when at least one image generation provider is available. 
 {
   agents: {
     defaults: {
-      imageGenerationModel: "openai/gpt-image-1",
+      imageGenerationModel: {
+        primary: "openai/gpt-image-1",
+      },
     },
   },
 }
@@ -74,10 +76,6 @@ Not all providers support all parameters. The tool passes what each provider sup
 {
   agents: {
     defaults: {
-      // String form: primary model only
-      imageGenerationModel: "google/gemini-3.1-flash-image-preview",
-
-      // Object form: primary + ordered fallbacks
       imageGenerationModel: {
         primary: "openai/gpt-image-1",
         fallbacks: ["google/gemini-3.1-flash-image-preview", "fal/fal-ai/flux/dev"],
@@ -135,5 +133,9 @@ MiniMax image generation is available through both bundled MiniMax auth paths:
 ## Related
 
 - [Tools Overview](/tools) — all available agent tools
+- [fal](/providers/fal) — fal image and video provider setup
+- [Google (Gemini)](/providers/google) — Gemini image provider setup
+- [MiniMax](/providers/minimax) — MiniMax image provider setup
+- [OpenAI](/providers/openai) — OpenAI Images provider setup
 - [Configuration Reference](/gateway/configuration-reference#agent-defaults) — `imageGenerationModel` config
 - [Models](/concepts/models) — model configuration and failover

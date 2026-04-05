@@ -1,16 +1,6 @@
-import {
-  defineBundledChannelEntry,
-  loadBundledEntryExportSync,
-} from "openclaw/plugin-sdk/channel-entry-contract";
+import { defineBundledChannelEntry } from "openclaw/plugin-sdk/channel-entry-contract";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-entry-contract";
-
-function registerMatrixCliMetadata(api: OpenClawPluginApi) {
-  const register = loadBundledEntryExportSync<(api: OpenClawPluginApi) => void>(import.meta.url, {
-    specifier: "./cli-metadata.js",
-    exportName: "registerMatrixCliMetadata",
-  });
-  register(api);
-}
+import { registerMatrixCliMetadata } from "./src/cli-metadata.js";
 
 export default defineBundledChannelEntry({
   id: "matrix",

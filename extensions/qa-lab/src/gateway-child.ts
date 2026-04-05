@@ -1,0 +1,210 @@
+import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
+import net from "node:net";
+import os from "node:os";
+import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import { seedQaAgentWorkspace } from "./qa-agent-workspace.js";
+import { buildQaGatewayConfig } from "./qa-gateway-config.js";
+
+async function getFreePort() {
+  return await new Promise<number>((resolve, reject) => {
+    const server = net.createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        reject(new Error("failed to allocate port"));
+        return;
+      }
+      server.close((error) => (error ? reject(error) : resolve(address.port)));
+    });
+  });
+}
+
+async function waitForGatewayReady(baseUrl: string, logs: () => string, timeoutMs = 30_000) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      const response = await fetch(`${baseUrl}/readyz`);
+      if (response.ok) {
+        return;
+      }
+    } catch {
+      // retry until timeout
+    }
+    await sleep(250);
+  }
+  throw new Error(`gateway failed to become healthy:\n${logs()}`);
+}
+
+async function runCliJson(params: { cwd: string; env: NodeJS.ProcessEnv; args: string[] }) {
+  const stdout: Buffer[] = [];
+  const stderr: Buffer[] = [];
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(process.execPath, params.args, {
+      cwd: params.cwd,
+      env: params.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    child.stdout.on("data", (chunk) => stdout.push(Buffer.from(chunk)));
+    child.stderr.on("data", (chunk) => stderr.push(Buffer.from(chunk)));
+    child.once("error", reject);
+    child.once("exit", (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(
+        new Error(
+          `gateway cli failed (${code ?? "unknown"}): ${Buffer.concat(stderr).toString("utf8")}`,
+        ),
+      );
+    });
+  });
+  const text = Buffer.concat(stdout).toString("utf8").trim();
+  return text ? (JSON.parse(text) as unknown) : {};
+}
+
+export async function startQaGatewayChild(params: {
+  repoRoot: string;
+  providerBaseUrl: string;
+  qaBusBaseUrl: string;
+}) {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-qa-suite-"));
+  const workspaceDir = path.join(tempRoot, "workspace");
+  const stateDir = path.join(tempRoot, "state");
+  const homeDir = path.join(tempRoot, "home");
+  const xdgConfigHome = path.join(tempRoot, "xdg-config");
+  const xdgDataHome = path.join(tempRoot, "xdg-data");
+  const xdgCacheHome = path.join(tempRoot, "xdg-cache");
+  const configPath = path.join(tempRoot, "openclaw.json");
+  const gatewayPort = await getFreePort();
+  const gatewayToken = `qa-suite-${randomUUID()}`;
+  await seedQaAgentWorkspace({
+    workspaceDir,
+    repoRoot: params.repoRoot,
+  });
+  await Promise.all([
+    fs.mkdir(stateDir, { recursive: true }),
+    fs.mkdir(homeDir, { recursive: true }),
+    fs.mkdir(xdgConfigHome, { recursive: true }),
+    fs.mkdir(xdgDataHome, { recursive: true }),
+    fs.mkdir(xdgCacheHome, { recursive: true }),
+  ]);
+  const cfg = buildQaGatewayConfig({
+    bind: "loopback",
+    gatewayPort,
+    gatewayToken,
+    providerBaseUrl: params.providerBaseUrl,
+    qaBusBaseUrl: params.qaBusBaseUrl,
+    workspaceDir,
+  });
+  await fs.writeFile(configPath, `${JSON.stringify(cfg, null, 2)}\n`, "utf8");
+
+  const stdout: Buffer[] = [];
+  const stderr: Buffer[] = [];
+  const env = {
+    ...process.env,
+    HOME: homeDir,
+    OPENCLAW_HOME: homeDir,
+    OPENCLAW_CONFIG_PATH: configPath,
+    OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_OAUTH_DIR: path.join(stateDir, "credentials"),
+    OPENCLAW_GATEWAY_TOKEN: gatewayToken,
+    OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+    OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+    OPENCLAW_SKIP_CANVAS_HOST: "1",
+    OPENCLAW_NO_RESPAWN: "1",
+    OPENCLAW_TEST_FAST: "1",
+    XDG_CONFIG_HOME: xdgConfigHome,
+    XDG_DATA_HOME: xdgDataHome,
+    XDG_CACHE_HOME: xdgCacheHome,
+  };
+
+  const child = spawn(
+    process.execPath,
+    [
+      "dist/index.js",
+      "gateway",
+      "run",
+      "--port",
+      String(gatewayPort),
+      "--bind",
+      "loopback",
+      "--allow-unconfigured",
+    ],
+    {
+      cwd: params.repoRoot,
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  child.stdout.on("data", (chunk) => stdout.push(Buffer.from(chunk)));
+  child.stderr.on("data", (chunk) => stderr.push(Buffer.from(chunk)));
+
+  const baseUrl = `http://127.0.0.1:${gatewayPort}`;
+  const wsUrl = `ws://127.0.0.1:${gatewayPort}`;
+  const logs = () =>
+    `${Buffer.concat(stdout).toString("utf8")}\n${Buffer.concat(stderr).toString("utf8")}`.trim();
+
+  try {
+    await waitForGatewayReady(baseUrl, logs);
+  } catch (error) {
+    child.kill("SIGTERM");
+    throw error;
+  }
+
+  return {
+    cfg,
+    baseUrl,
+    wsUrl,
+    token: gatewayToken,
+    workspaceDir,
+    tempRoot,
+    configPath,
+    logs,
+    async call(
+      method: string,
+      rpcParams?: unknown,
+      opts?: { expectFinal?: boolean; timeoutMs?: number },
+    ) {
+      return await runCliJson({
+        cwd: params.repoRoot,
+        env,
+        args: [
+          "dist/index.js",
+          "gateway",
+          "call",
+          method,
+          "--url",
+          wsUrl,
+          "--token",
+          gatewayToken,
+          "--json",
+          "--timeout",
+          String(opts?.timeoutMs ?? 20_000),
+          ...(opts?.expectFinal ? ["--expect-final"] : []),
+          "--params",
+          JSON.stringify(rpcParams ?? {}),
+        ],
+      });
+    },
+    async stop() {
+      if (!child.killed) {
+        child.kill("SIGTERM");
+        await Promise.race([
+          new Promise<void>((resolve) => child.once("exit", () => resolve())),
+          sleep(5_000).then(() => {
+            if (!child.killed) {
+              child.kill("SIGKILL");
+            }
+          }),
+        ]);
+      }
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    },
+  };
+}

@@ -78,4 +78,13 @@ describe("MatrixConfigSchema SecretInput", () => {
     }
     expect(result.data.rooms?.["!room:example.org"]?.account).toBe("axis");
   });
+
+  it("accepts quiet Matrix streaming mode", () => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      streaming: "quiet",
+    });
+    expect(result.success).toBe(true);
+  });
 });
