@@ -502,14 +502,23 @@ export function createSessionStatusTool(opts?: {
         ...(providerForCard ? {} : { modelAuthOverride: undefined }),
         includeTranscriptUsage: true,
       });
-      const fullStatusText =
-        taskLine && !statusText.includes(taskLine) ? `${statusText}\n${taskLine}` : statusText;
+      const sessionIdLine = resolved.entry.sessionId?.trim()
+        ? `🆔 Session ID: ${resolved.entry.sessionId.trim()}`
+        : undefined;
+      const fullStatusText = [
+        statusText,
+        sessionIdLine,
+        taskLine && !statusText.includes(taskLine) ? taskLine : undefined,
+      ]
+        .filter(Boolean)
+        .join("\n");
 
       return {
         content: [{ type: "text", text: fullStatusText }],
         details: {
           ok: true,
           sessionKey: resolved.key,
+          sessionId: resolved.entry.sessionId,
           changedModel,
           statusText: fullStatusText,
         },

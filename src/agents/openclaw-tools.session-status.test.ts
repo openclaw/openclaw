@@ -344,6 +344,35 @@ describe("session_status tool", () => {
     expect(details.statusText).not.toContain("OAuth/token status");
   });
 
+  it("includes the unique session ID in session_status output", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "sess-unique",
+        updatedAt: 10,
+      },
+    });
+
+    const tool = getSessionStatusTool();
+
+    const result = await tool.execute("call-session-id", {});
+    const details = result.details as {
+      ok?: boolean;
+      sessionId?: string;
+      statusText?: string;
+    };
+    expect(details.ok).toBe(true);
+    expect(details.sessionId).toBe("sess-unique");
+    expect(details.statusText).toContain("🆔 Session ID: sess-unique");
+    expect(result.content).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "text",
+          text: expect.stringContaining("🆔 Session ID: sess-unique"),
+        }),
+      ]),
+    );
+  });
+
   it("enables transcript usage fallback for session_status", async () => {
     resetSessionStore({
       main: {
