@@ -127,6 +127,48 @@ describe("gateway sessions patch", () => {
     expect(entry.thinkingLevel).toBeUndefined();
   });
 
+  test("persists modelFallbacksOverride arrays", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        patch: {
+          key: MAIN_SESSION_KEY,
+          modelFallbacksOverride: ["openai/gpt-5.4-mini", "anthropic/claude-sonnet-4-6"],
+        },
+      }),
+    );
+    expect(entry.modelFallbacksOverride).toEqual([
+      "openai/gpt-5.4-mini",
+      "anthropic/claude-sonnet-4-6",
+    ]);
+  });
+
+  test("persists empty modelFallbacksOverride arrays", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        patch: {
+          key: MAIN_SESSION_KEY,
+          modelFallbacksOverride: [],
+        },
+      }),
+    );
+    expect(entry.modelFallbacksOverride).toEqual([]);
+  });
+
+  test("clears modelFallbacksOverride when patch sets null", async () => {
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: {
+        modelFallbacksOverride: ["openai/gpt-5.4-mini"],
+      } as SessionEntry,
+    };
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, modelFallbacksOverride: null },
+      }),
+    );
+    expect(entry.modelFallbacksOverride).toBeUndefined();
+  });
+
   test("persists reasoningLevel=off (does not clear)", async () => {
     const entry = expectPatchOk(
       await runPatch({

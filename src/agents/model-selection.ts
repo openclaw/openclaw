@@ -445,6 +445,37 @@ export function resolveSubagentConfiguredModelSelection(params: {
   );
 }
 
+export function resolveSubagentConfiguredFallbackSelection(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+}): string[] | undefined {
+  const agentConfig = resolveAgentConfig(params.cfg, params.agentId);
+  if (agentConfig?.subagents?.model && typeof agentConfig.subagents.model === "object") {
+    return "fallbacks" in agentConfig.subagents.model
+      ? resolveAgentModelFallbackValues(agentConfig.subagents.model)
+      : undefined;
+  }
+  if (agentConfig?.model && typeof agentConfig.model === "object") {
+    return "fallbacks" in agentConfig.model
+      ? resolveAgentModelFallbackValues(agentConfig.model)
+      : undefined;
+  }
+  if (
+    params.cfg.agents?.defaults?.subagents?.model &&
+    typeof params.cfg.agents.defaults.subagents.model === "object"
+  ) {
+    return "fallbacks" in params.cfg.agents.defaults.subagents.model
+      ? resolveAgentModelFallbackValues(params.cfg.agents.defaults.subagents.model)
+      : undefined;
+  }
+  if (params.cfg.agents?.defaults?.model && typeof params.cfg.agents.defaults.model === "object") {
+    return "fallbacks" in params.cfg.agents.defaults.model
+      ? resolveAgentModelFallbackValues(params.cfg.agents.defaults.model)
+      : undefined;
+  }
+  return undefined;
+}
+
 export function resolveSubagentSpawnModelSelection(params: {
   cfg: OpenClawConfig;
   agentId: string;

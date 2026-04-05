@@ -1,4 +1,5 @@
 import { vi, type Mock } from "vitest";
+import type { SessionEntry } from "../config/sessions.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 import {
   __testing as subagentAnnounceDeliveryTesting,
@@ -89,6 +90,7 @@ const hoisted = vi.hoisted(() => {
     hookRunnerOverride: null as SessionsSpawnHookRunner,
     defaultRunSubagentAnnounceFlow,
     runSubagentAnnounceFlowOverride: defaultRunSubagentAnnounceFlow,
+    sessionStore: {} as Record<string, SessionEntry>,
   };
   return { callGatewayMock, defaultConfigOverride, state };
 });
@@ -111,6 +113,15 @@ export function findGatewayRequest(method: string): GatewayRequest | undefined {
 
 export function resetSessionsSpawnConfigOverride(): void {
   hoisted.state.configOverride = hoisted.defaultConfigOverride;
+}
+
+export function resetSessionsSpawnPersistedStore(): void {
+  hoisted.state.sessionStore = {};
+}
+
+export function getSessionsSpawnPersistedEntry(key: string): Record<string, unknown> | undefined {
+  const entry = hoisted.state.sessionStore[key];
+  return entry && typeof entry === "object" ? (entry as Record<string, unknown>) : undefined;
 }
 
 export function setSessionsSpawnConfigOverride(next: SessionsSpawnTestConfig): void {
@@ -138,7 +149,7 @@ export async function getSessionsSpawnTool(opts: CreateOpenClawToolsOpts) {
     callGateway: (optsUnknown) => hoisted.callGatewayMock(optsUnknown),
     getGlobalHookRunner: () => hoisted.state.hookRunnerOverride,
     loadConfig: () => hoisted.state.configOverride,
-    updateSessionStore: async (_storePath, mutator) => mutator({}),
+    updateSessionStore: async (_storePath, mutator) => mutator(hoisted.state.sessionStore),
   });
   subagentAnnounceTesting.setDepsForTest({
     callGateway: (optsUnknown) => hoisted.callGatewayMock(optsUnknown),

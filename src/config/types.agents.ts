@@ -3,6 +3,7 @@ import type { AgentDefaultsConfig } from "./types.agent-defaults.js";
 import type { AgentModelConfig, AgentSandboxConfig } from "./types.agents-shared.js";
 import type { HumanDelayConfig, IdentityConfig } from "./types.base.js";
 import type { GroupChatConfig } from "./types.messages.js";
+import type { SubagentTaskRouteConfig } from "./types.subagent-task-routing.js";
 import type { AgentToolsConfig, MemorySearchConfig } from "./types.tools.js";
 
 export type AgentRuntimeAcpConfig = {
@@ -87,6 +88,8 @@ export type AgentConfig = {
     allowAgents?: string[];
     /** Per-agent default model for spawned sub-agents (string or {primary,fallbacks}). */
     model?: AgentModelConfig;
+    thinking?: string;
+    taskRoutes?: SubagentTaskRouteConfig[];
     /** Require explicit agentId in sessions_spawn (no default same-as-caller). */
     requireAgentId?: boolean;
   };

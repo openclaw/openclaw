@@ -13,6 +13,15 @@ import {
   TypingModeSchema,
 } from "./zod-schema.core.js";
 
+const SubagentTaskRouteSchema = z
+  .object({
+    whenTaskIncludes: z.array(z.string()).min(1),
+    agentId: z.string().optional(),
+    model: AgentModelSchema.optional(),
+    thinking: z.string().optional(),
+  })
+  .strict();
+
 export const AgentDefaultsSchema = z
   .object({
     /** Global default provider params applied to all models before per-model and per-agent overrides. */
@@ -207,6 +216,7 @@ export const AgentDefaultsSchema = z
         model: AgentModelSchema.optional(),
         thinking: z.string().optional(),
         runTimeoutSeconds: z.number().int().min(0).optional(),
+        taskRoutes: z.array(SubagentTaskRouteSchema).optional(),
         announceTimeoutMs: z.number().int().positive().optional(),
         requireAgentId: z.boolean().optional(),
       })

@@ -259,7 +259,11 @@ export function resolveEffectiveModelFallbacks(params: {
   cfg: OpenClawConfig;
   agentId: string;
   hasSessionModelOverride: boolean;
+  sessionFallbacksOverride?: string[];
 }): string[] | undefined {
+  if (params.sessionFallbacksOverride !== undefined) {
+    return params.sessionFallbacksOverride;
+  }
   const agentFallbacksOverride = resolveAgentModelFallbacksOverride(params.cfg, params.agentId);
   if (!params.hasSessionModelOverride) {
     return agentFallbacksOverride;

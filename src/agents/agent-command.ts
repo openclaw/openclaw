@@ -643,6 +643,14 @@ async function agentCommandInternal(
         provider = normalizedStored.provider;
         model = normalizedStored.model;
       }
+    } else {
+      const persistedProvider = sessionEntry?.modelProvider?.trim() || defaultProvider;
+      const persistedModel = sessionEntry?.model?.trim();
+      if (persistedModel) {
+        const normalizedPersisted = normalizeModelRef(persistedProvider, persistedModel);
+        provider = normalizedPersisted.provider;
+        model = normalizedPersisted.model;
+      }
     }
     let providerForAuthProfileValidation = provider;
     if (hasExplicitRunOverride) {
@@ -762,6 +770,7 @@ async function agentCommandInternal(
           cfg,
           agentId: sessionAgentId,
           hasSessionModelOverride: Boolean(storedModelOverride),
+          sessionFallbacksOverride: sessionEntry?.modelFallbacksOverride,
         });
 
         let fallbackAttemptIndex = 0;

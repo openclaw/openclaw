@@ -804,6 +804,18 @@ export const AgentEntrySchema = z
           ])
           .optional(),
         thinking: z.string().optional(),
+        taskRoutes: z
+          .array(
+            z
+              .object({
+                whenTaskIncludes: z.array(z.string()).min(1),
+                agentId: z.string().optional(),
+                model: AgentModelSchema.optional(),
+                thinking: z.string().optional(),
+              })
+              .strict(),
+          )
+          .optional(),
         requireAgentId: z.boolean().optional(),
       })
       .strict()

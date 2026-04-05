@@ -2,8 +2,10 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import "./test-helpers/fast-core-tools.js";
 import {
+  getSessionsSpawnPersistedEntry,
   getCallGatewayMock,
   getSessionsSpawnTool,
+  resetSessionsSpawnPersistedStore,
   resetSessionsSpawnConfigOverride,
   setSessionsSpawnConfigOverride,
 } from "./openclaw-tools.subagents.sessions-spawn.test-harness.js";
@@ -66,6 +68,7 @@ async function expectSpawnUsesConfiguredModel(params: {
   runId: string;
   callId: string;
   expectedModel: string;
+  expectedFallbacks?: string[];
 }) {
   if (params.config) {
     setSessionsSpawnConfigOverride(params.config);
@@ -91,14 +94,34 @@ async function expectSpawnUsesConfiguredModel(params: {
   const patchCall = calls.find(
     (call) => call.method === "sessions.patch" && (call.params as { model?: string })?.model,
   );
-  expect(patchCall?.params).toMatchObject({
-    model: params.expectedModel,
+  expect(patchCall).toBeUndefined();
+  const agentCall = calls.find((call) => call.method === "agent");
+  const childSessionKey = (agentCall?.params as { sessionKey?: string } | undefined)?.sessionKey;
+  expect(childSessionKey).toBeTruthy();
+  const persisted = getSessionsSpawnPersistedEntry(String(childSessionKey));
+  const [expectedProvider, ...expectedModelParts] = params.expectedModel.split("/");
+  expect(persisted).toMatchObject({
+    modelProvider: expectedModelParts.length > 0 ? expectedProvider : undefined,
+    model: expectedModelParts.length > 0 ? expectedModelParts.join("/") : expectedProvider,
   });
+  if (params.expectedFallbacks !== undefined) {
+    const fallbackPatch = calls.find(
+      (call) =>
+        call.method === "sessions.patch" &&
+        Array.isArray(
+          (call.params as { modelFallbacksOverride?: unknown } | undefined)?.modelFallbacksOverride,
+        ),
+    );
+    expect(fallbackPatch?.params).toMatchObject({
+      modelFallbacksOverride: params.expectedFallbacks,
+    });
+  }
 }
 
 describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
   beforeEach(() => {
     resetSessionsSpawnConfigOverride();
+    resetSessionsSpawnPersistedStore();
     resetSubagentRegistryForTests();
     callGatewayMock.mockClear();
   });
@@ -229,6 +252,53 @@ describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
     });
   });
 
+  it("sessions_spawn preserves defaults subagent model fallbacks", async () => {
+    await expectSpawnUsesConfiguredModel({
+      config: {
+        session: { mainKey: "main", scope: "per-sender" },
+        agents: {
+          defaults: {
+            subagents: {
+              model: {
+                primary: "minimax/MiniMax-M2.7",
+                fallbacks: ["openai/gpt-5.4-mini"],
+              },
+            },
+          },
+        },
+      },
+      runId: "run-default-fallbacks",
+      callId: "call-default-fallbacks",
+      expectedModel: "minimax/MiniMax-M2.7",
+      expectedFallbacks: ["openai/gpt-5.4-mini"],
+    });
+  });
+
+  it("sessions_spawn preserves per-agent subagent model fallbacks", async () => {
+    await expectSpawnUsesConfiguredModel({
+      config: {
+        session: { mainKey: "main", scope: "per-sender" },
+        agents: {
+          list: [
+            {
+              id: "research",
+              subagents: {
+                model: {
+                  primary: "opencode/claude",
+                  fallbacks: ["openai/gpt-5.4-mini"],
+                },
+              },
+            },
+          ],
+        },
+      },
+      runId: "run-agent-fallbacks",
+      callId: "call-agent-fallbacks",
+      expectedModel: "opencode/claude",
+      expectedFallbacks: ["openai/gpt-5.4-mini"],
+    });
+  });
+
   it("sessions_spawn prefers target agent primary model over global default", async () => {
     await expectSpawnUsesConfiguredModel({
       config: {
@@ -241,6 +311,50 @@ describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
       runId: "run-agent-primary-model",
       callId: "call-agent-primary-model",
       expectedModel: "opencode/claude",
+    });
+  });
+
+  it("sessions_spawn preserves target agent primary model fallbacks", async () => {
+    await expectSpawnUsesConfiguredModel({
+      config: {
+        session: { mainKey: "main", scope: "per-sender" },
+        agents: {
+          defaults: { model: { primary: "minimax/MiniMax-M2.7" } },
+          list: [
+            {
+              id: "research",
+              model: {
+                primary: "opencode/claude",
+                fallbacks: ["openai/gpt-5.4-mini"],
+              },
+            },
+          ],
+        },
+      },
+      runId: "run-agent-primary-fallbacks",
+      callId: "call-agent-primary-fallbacks",
+      expectedModel: "opencode/claude",
+      expectedFallbacks: ["openai/gpt-5.4-mini"],
+    });
+  });
+
+  it("sessions_spawn preserves global default model fallbacks when they supply the child model", async () => {
+    await expectSpawnUsesConfiguredModel({
+      config: {
+        session: { mainKey: "main", scope: "per-sender" },
+        agents: {
+          defaults: {
+            model: {
+              primary: "minimax/MiniMax-M2.7",
+              fallbacks: ["openai/gpt-5.4-mini"],
+            },
+          },
+        },
+      },
+      runId: "run-global-default-fallbacks",
+      callId: "call-global-default-fallbacks",
+      expectedModel: "minimax/MiniMax-M2.7",
+      expectedFallbacks: ["openai/gpt-5.4-mini"],
     });
   });
 

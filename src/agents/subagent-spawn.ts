@@ -40,6 +40,7 @@ import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
   resolveSandboxRuntimeStatus,
+  resolveSubagentConfiguredFallbackSelection,
   resolveSubagentSpawnModelSelection,
   updateSessionStore,
   isAdminOnlyMethod,
@@ -216,9 +217,11 @@ function sanitizeMountPathHint(value?: string): string | undefined {
     return undefined;
   }
   // Prevent prompt injection via control/newline characters in system prompt hints.
-  // eslint-disable-next-line no-control-regex
-  if (/[\r\n\u0000-\u001F\u007F\u0085\u2028\u2029]/.test(trimmed)) {
-    return undefined;
+  for (const char of trimmed) {
+    const code = char.charCodeAt(0);
+    if (code <= 0x1f || code === 0x7f || code === 0x85 || code === 0x2028 || code === 0x2029) {
+      return undefined;
+    }
   }
   if (!/^[A-Za-z0-9._\-/:]+$/.test(trimmed)) {
     return undefined;
@@ -286,6 +289,61 @@ function summarizeError(err: unknown): string {
     return err;
   }
   return "error";
+}
+
+type ResolvedSubagentTaskRoute = {
+  agentId?: string;
+  model?: unknown;
+  fallbacks?: string[];
+  thinking?: string;
+};
+
+function resolveConfiguredSubagentTaskRoute(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  requesterAgentId: string;
+  task: string;
+}): ResolvedSubagentTaskRoute | undefined {
+  const requesterAgentId = normalizeAgentId(params.requesterAgentId);
+  const requesterConfig = resolveAgentConfig(params.cfg, requesterAgentId);
+  const taskText = params.task.trim().toLowerCase();
+  if (!taskText) {
+    return undefined;
+  }
+
+  const routes = [
+    ...(requesterConfig?.subagents?.taskRoutes ?? []),
+    ...(params.cfg.agents?.defaults?.subagents?.taskRoutes ?? []),
+  ];
+
+  for (const route of routes) {
+    const keywords = Array.isArray(route?.whenTaskIncludes) ? route.whenTaskIncludes : [];
+    const matched = keywords.some((value) => {
+      const keyword = value.trim().toLowerCase();
+      return keyword ? taskText.includes(keyword) : false;
+    });
+    if (!matched) {
+      continue;
+    }
+
+    const modelObject =
+      route.model && typeof route.model === "object"
+        ? (route.model as Record<string, unknown>)
+        : undefined;
+    const fallbacks = Array.isArray(modelObject?.fallbacks)
+      ? modelObject.fallbacks.filter((value): value is string => typeof value === "string")
+      : undefined;
+    return {
+      agentId:
+        typeof route.agentId === "string" && route.agentId.trim()
+          ? normalizeAgentId(route.agentId)
+          : undefined,
+      model: route.model,
+      fallbacks,
+      thinking: typeof route.thinking === "string" ? route.thinking.trim() || undefined : undefined,
+    };
+  }
+
+  return undefined;
 }
 
 async function ensureThreadBindingForSubagentSpawn(params: {
@@ -448,6 +506,11 @@ export async function spawnSubagentDirect(
   const requesterAgentId = normalizeAgentId(
     ctx.requesterAgentIdOverride ?? parseAgentSessionKey(requesterInternalKey)?.agentId,
   );
+  const configuredTaskRoute = resolveConfiguredSubagentTaskRoute({
+    cfg,
+    requesterAgentId,
+    task,
+  });
   const requireAgentId =
     resolveAgentConfig(cfg, requesterAgentId)?.subagents?.requireAgentId ??
     cfg.agents?.defaults?.subagents?.requireAgentId ??
@@ -459,7 +522,9 @@ export async function spawnSubagentDirect(
         "sessions_spawn requires explicit agentId when requireAgentId is configured. Use agents_list to see allowed agent ids.",
     };
   }
-  const targetAgentId = requestedAgentId ? normalizeAgentId(requestedAgentId) : requesterAgentId;
+  const targetAgentId = requestedAgentId
+    ? normalizeAgentId(requestedAgentId)
+    : (configuredTaskRoute?.agentId ?? requesterAgentId);
   if (targetAgentId !== requesterAgentId) {
     const allowAgents =
       resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ??
@@ -510,10 +575,15 @@ export async function spawnSubagentDirect(
     maxSpawnDepth,
   });
   const targetAgentConfig = resolveAgentConfig(cfg, targetAgentId);
+  const shouldPatchModelOverride = modelOverride !== undefined;
   const resolvedModel = resolveSubagentSpawnModelSelection({
     cfg,
     agentId: targetAgentId,
-    modelOverride,
+    modelOverride: modelOverride ?? configuredTaskRoute?.model,
+  });
+  const configuredModelFallbacks = resolveSubagentConfiguredFallbackSelection({
+    cfg,
+    agentId: targetAgentId,
   });
 
   const resolvedThinkingDefaultRaw =
@@ -521,7 +591,8 @@ export async function spawnSubagentDirect(
     readStringParam(cfg.agents?.defaults?.subagents ?? {}, "thinking");
 
   let thinkingOverride: string | undefined;
-  const thinkingCandidateRaw = thinkingOverrideRaw || resolvedThinkingDefaultRaw;
+  const thinkingCandidateRaw =
+    thinkingOverrideRaw || configuredTaskRoute?.thinking || resolvedThinkingDefaultRaw;
   if (thinkingCandidateRaw) {
     const normalized = normalizeThinkLevel(thinkingCandidateRaw);
     if (!normalized) {
@@ -552,11 +623,16 @@ export async function spawnSubagentDirect(
     subagentRole: childCapabilities.role === "main" ? null : childCapabilities.role,
     subagentControlScope: childCapabilities.controlScope,
   };
-  if (resolvedModel) {
+  if (resolvedModel && shouldPatchModelOverride) {
     initialChildSessionPatch.model = resolvedModel;
   }
+  if (configuredTaskRoute?.fallbacks !== undefined) {
+    initialChildSessionPatch.modelFallbacksOverride = configuredTaskRoute.fallbacks;
+  } else if (configuredModelFallbacks !== undefined) {
+    initialChildSessionPatch.modelFallbacksOverride = configuredModelFallbacks;
+  }
   if (thinkingOverride !== undefined) {
-    initialChildSessionPatch.thinkingLevel = thinkingOverride === "off" ? null : thinkingOverride;
+    initialChildSessionPatch.thinkingLevel = thinkingOverride;
   }
 
   const initialPatchError = await patchChildSession(initialChildSessionPatch);

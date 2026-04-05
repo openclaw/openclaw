@@ -4504,6 +4504,51 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     minimum: 0,
                     maximum: 9007199254740991,
                   },
+                  taskRoutes: {
+                    type: "array",
+                    items: {
+                      type: "object",
+                      properties: {
+                        whenTaskIncludes: {
+                          minItems: 1,
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        agentId: {
+                          type: "string",
+                        },
+                        model: {
+                          anyOf: [
+                            {
+                              type: "string",
+                            },
+                            {
+                              type: "object",
+                              properties: {
+                                primary: {
+                                  type: "string",
+                                },
+                                fallbacks: {
+                                  type: "array",
+                                  items: {
+                                    type: "string",
+                                  },
+                                },
+                              },
+                              additionalProperties: false,
+                            },
+                          ],
+                        },
+                        thinking: {
+                          type: "string",
+                        },
+                      },
+                      required: ["whenTaskIncludes"],
+                      additionalProperties: false,
+                    },
+                  },
                   announceTimeoutMs: {
                     type: "integer",
                     exclusiveMinimum: 0,
@@ -5721,6 +5766,51 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     },
                     thinking: {
                       type: "string",
+                    },
+                    taskRoutes: {
+                      type: "array",
+                      items: {
+                        type: "object",
+                        properties: {
+                          whenTaskIncludes: {
+                            minItems: 1,
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                          agentId: {
+                            type: "string",
+                          },
+                          model: {
+                            anyOf: [
+                              {
+                                type: "string",
+                              },
+                              {
+                                type: "object",
+                                properties: {
+                                  primary: {
+                                    type: "string",
+                                  },
+                                  fallbacks: {
+                                    type: "array",
+                                    items: {
+                                      type: "string",
+                                    },
+                                  },
+                                },
+                                additionalProperties: false,
+                              },
+                            ],
+                          },
+                          thinking: {
+                            type: "string",
+                          },
+                        },
+                        required: ["whenTaskIncludes"],
+                        additionalProperties: false,
+                      },
                     },
                     requireAgentId: {
                       type: "boolean",

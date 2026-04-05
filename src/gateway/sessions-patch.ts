@@ -415,6 +415,22 @@ export async function applySessionsPatchToStore(params: {
     }
   }
 
+  if ("modelFallbacksOverride" in patch) {
+    const raw = patch.modelFallbacksOverride;
+    if (raw === null) {
+      delete next.modelFallbacksOverride;
+    } else if (raw !== undefined) {
+      if (!Array.isArray(raw)) {
+        return invalid("invalid modelFallbacksOverride: expected array");
+      }
+      const normalized = raw.map((value) => String(value).trim());
+      if (normalized.some((value) => !value)) {
+        return invalid("invalid modelFallbacksOverride: empty fallback");
+      }
+      next.modelFallbacksOverride = normalized;
+    }
+  }
+
   if (next.thinkingLevel === "xhigh") {
     const effectiveProvider = next.providerOverride ?? resolvedDefault.provider;
     const effectiveModel = next.modelOverride ?? resolvedDefault.model;

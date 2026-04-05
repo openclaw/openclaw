@@ -1,5 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionEntry } from "../config/sessions.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch.js";
+
+type ResolveSessionResult = {
+  sessionId: string;
+  sessionKey: string;
+  sessionEntry: SessionEntry;
+  sessionStore: Record<string, SessionEntry>;
+  storePath: string;
+  isNewSession: boolean;
+  persistedThinking: string | undefined;
+  persistedVerbose: string | undefined;
+};
 
 const state = vi.hoisted(() => ({
   runWithModelFallbackMock: vi.fn(),
@@ -9,6 +21,16 @@ const state = vi.hoisted(() => ({
   clearAgentRunContextMock: vi.fn(),
   updateSessionStoreAfterAgentRunMock: vi.fn(),
   deliverAgentCommandResultMock: vi.fn(),
+  resolveSessionResult: {
+    sessionId: "session-1",
+    sessionKey: "agent:main",
+    sessionEntry: { sessionId: "session-1", updatedAt: Date.now() } as SessionEntry,
+    sessionStore: {},
+    storePath: "/tmp/store.json",
+    isNewSession: true,
+    persistedThinking: undefined,
+    persistedVerbose: undefined,
+  } as ResolveSessionResult,
 }));
 
 vi.mock("./model-fallback.js", () => ({
@@ -53,16 +75,7 @@ vi.mock("./command/session-store.js", () => ({
 }));
 
 vi.mock("./command/session.js", () => ({
-  resolveSession: () => ({
-    sessionId: "session-1",
-    sessionKey: "agent:main",
-    sessionEntry: { sessionId: "session-1", updatedAt: Date.now() },
-    sessionStore: {},
-    storePath: "/tmp/store.json",
-    isNewSession: true,
-    persistedThinking: undefined,
-    persistedVerbose: undefined,
-  }),
+  resolveSession: () => state.resolveSessionResult,
 }));
 
 vi.mock("./command/types.js", () => ({}));
@@ -296,6 +309,16 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     vi.clearAllMocks();
     state.deliverAgentCommandResultMock.mockResolvedValue(undefined);
     state.updateSessionStoreAfterAgentRunMock.mockResolvedValue(undefined);
+    state.resolveSessionResult = {
+      sessionId: "session-1",
+      sessionKey: "agent:main",
+      sessionEntry: { sessionId: "session-1", updatedAt: Date.now() } as SessionEntry,
+      sessionStore: {},
+      storePath: "/tmp/store.json",
+      isNewSession: true,
+      persistedThinking: undefined,
+      persistedVerbose: undefined,
+    };
   });
 
   afterEach(() => {
@@ -483,6 +506,48 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(resolveEffectiveModelFallbacksMock.mock.calls[1][0]).toMatchObject({
       hasSessionModelOverride: true,
     });
+  });
+
+  it("uses persisted session model/provider when no explicit override exists", async () => {
+    state.resolveSessionResult = {
+      sessionId: "session-1",
+      sessionKey: "agent:main",
+      sessionEntry: {
+        sessionId: "session-1",
+        updatedAt: Date.now(),
+        modelProvider: "openai",
+        model: "gpt-5.4",
+      } as SessionEntry,
+      sessionStore: {},
+      storePath: "/tmp/store.json",
+      isNewSession: false,
+      persistedThinking: undefined,
+      persistedVerbose: undefined,
+    };
+
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      const result = await params.run(params.provider, params.model);
+      return {
+        result,
+        provider: params.provider,
+        model: params.model,
+        attempts: [],
+      };
+    });
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
+
+    const agentCommand = await getAgentCommand();
+    await agentCommand({
+      message: "hello",
+      to: "+1234567890",
+      senderIsOwner: true,
+    });
+
+    const call = state.runWithModelFallbackMock.mock.calls[0]?.[0] as
+      | FallbackRunnerParams
+      | undefined;
+    expect(call?.provider).toBe("openai");
+    expect(call?.model).toBe("gpt-5.4");
   });
 
   it("does not flip hasSessionModelOverride on auth-only switch with same model", async () => {
